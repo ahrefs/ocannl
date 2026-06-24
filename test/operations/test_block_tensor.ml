@@ -3,12 +3,10 @@ open Ocannl
 open Nn_blocks.DSL_modules
 open Stdio
 
-(* Block tensor literal syntax tests.
-   Disambiguation: first-leaf heuristic.
-   - Numeric literal first leaf → ndarray constant (existing behavior).
-   - Non-numeric first leaf → block tensor (unsqueeze + concat).
-   - Computed-number expressions like [Float.sin 1.0; 2.0] are reclassified as block tensors
-     (accepted compatibility break; such patterns don't exist in the project). *)
+(* Block tensor literal syntax tests. Disambiguation: first-leaf heuristic. - Numeric literal first
+   leaf → ndarray constant (existing behavior). - Non-numeric first leaf → block tensor (unsqueeze +
+   concat). - Computed-number expressions like [Float.sin 1.0; 2.0] are reclassified as block
+   tensors (accepted compatibility break; such patterns don't exist in the project). *)
 
 let () =
   printf "=== Block Tensor Literal Tests ===\n\n%!";
@@ -17,12 +15,14 @@ let () =
   (* --- Test 1: List — output axis stacking [x1; x2] --- *)
   printf "--- Test 1: List output axis [x1; x2] ---\n%!";
   let x1 =
-    PDSL.ndarray [| 1.0; 2.0; 3.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 1.0; 2.0; 3.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 3 ] ()
   in
   let x2 =
-    PDSL.ndarray [| 4.0; 5.0; 6.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 4.0; 5.0; 6.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 3 ] ()
   in
-  let%op stacked = [x1; x2] in
+  let%op stacked = [ x1; x2 ] in
   let ctx = Context.auto () in
   Train.set_materialized stacked.value;
   let ctx = Train.forward_once ctx stacked in
@@ -31,12 +31,14 @@ let () =
   (* --- Test 2: Array — batch axis stacking [|x1; x2|] --- *)
   printf "\n--- Test 2: Array batch axis [|x1; x2|] ---\n%!";
   let x3 =
-    PDSL.ndarray [| 10.0; 20.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 10.0; 20.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
   in
   let x4 =
-    PDSL.ndarray [| 30.0; 40.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 30.0; 40.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
   in
-  let%op batched = [|x3; x4|] in
+  let%op batched = [| x3; x4 |] in
   Train.set_materialized batched.value;
   let ctx = Train.forward_once ctx batched in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx batched;
@@ -51,35 +53,35 @@ let () =
   (* --- Test 4: 3-way list [x1; x2; x3] --- *)
   printf "\n--- Test 4: 3-way list [x1; x2; x3] ---\n%!";
   let x5 =
-    PDSL.ndarray [| 7.0; 8.0; 9.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 7.0; 8.0; 9.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 3 ] ()
   in
-  let%op triple = [x1; x2; x5] in
+  let%op triple = [ x1; x2; x5 ] in
   Train.set_materialized triple.value;
   let ctx = Train.forward_once ctx triple in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx triple;
 
-  (* --- Test 5: Nested block matrix [[x1; x2]; [x1; x2]] (same-kind 2-level output nest) ---
-     Two output-axis concat levels: the result reproduces the nested ndarray literal's shape,
-     output axes 2; 2; 3 (two fresh size-2 stack axes ahead of the operand's 3). *)
+  (* --- Test 5: Nested block matrix [[x1; x2]; [x1; x2]] (same-kind 2-level output nest) --- Two
+     output-axis concat levels: the result reproduces the nested ndarray literal's shape, output
+     axes 2; 2; 3 (two fresh size-2 stack axes ahead of the operand's 3). *)
   printf "\n--- Test 5: Nested [[x1; x2]; [x1; x2]] ---\n%!";
   let%op nested = [ [ x1; x2 ]; [ x1; x2 ] ] in
   Train.set_materialized nested.value;
   let ctx = Train.forward_once ctx nested in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx nested;
 
-  (* --- Test 5b: Deeper same-kind nest (3 output-axis levels) ---
-     [[[x1; x2]; [x1; x2]]; [[x1; x2]; [x1; x2]]] reproduces the nested literal at depth 3:
-     output axes 2; 2; 2; 3. *)
+  (* --- Test 5b: Deeper same-kind nest (3 output-axis levels) --- [[[x1; x2]; [x1; x2]]; [[x1; x2];
+     [x1; x2]]] reproduces the nested literal at depth 3: output axes 2; 2; 2; 3. *)
   printf "\n--- Test 5b: Deeper nest [[[..]]] (3 levels) ---\n%!";
   let%op nested3 = [ [ [ x1; x2 ]; [ x1; x2 ] ]; [ [ x1; x2 ]; [ x1; x2 ] ] ] in
   Train.set_materialized nested3.value;
   let ctx = Train.forward_once ctx nested3 in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx nested3;
 
-  (* --- Test 5c: Cross-kind nest, output over input [ (x1, x2); (x1, x2) ] ---
-     The proposal's canonical cross-kind form with the tuple INNERMOST: inner tuple introduces a new
-     INPUT axis (size 2), outer list a new OUTPUT axis (size 2). Operand output 3, so the result has
-     output axes 2; 3 and input axis 2 (memory order batch @ output @ input), reproducing the nested
+  (* --- Test 5c: Cross-kind nest, output over input [ (x1, x2); (x1, x2) ] --- The proposal's
+     canonical cross-kind form with the tuple INNERMOST: inner tuple introduces a new INPUT axis
+     (size 2), outer list a new OUTPUT axis (size 2). Operand output 3, so the result has output
+     axes 2; 3 and input axis 2 (memory order batch @ output @ input), reproducing the nested
      ndarray literal. Exercises a tuple nested inside a list (input-axis stacking below the top
      level). *)
   printf "\n--- Test 5c: Cross-kind output/input [ (x1, x2); (x1, x2) ] ---\n%!";
@@ -88,31 +90,31 @@ let () =
   let ctx = Train.forward_once ctx cross in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx cross;
 
-  (* --- Test 5c2: Cross-kind nest, batch over output [| [x1; x2]; [x1; x2] |] ---
-     Outer array introduces a new BATCH axis (size 2); inner list a new OUTPUT axis (size 2). Result:
-     batch 2, output axes 2; 3. *)
+  (* --- Test 5c2: Cross-kind nest, batch over output [| [x1; x2]; [x1; x2] |] --- Outer array
+     introduces a new BATCH axis (size 2); inner list a new OUTPUT axis (size 2). Result: batch 2,
+     output axes 2; 3. *)
   printf "\n--- Test 5c2: Cross-kind batch/output [| [x1; x2]; [x1; x2] |] ---\n%!";
   let%op cross_b = [| [ x1; x2 ]; [ x1; x2 ] |] in
   Train.set_materialized cross_b.value;
   let ctx = Train.forward_once ctx cross_b in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx cross_b;
 
-  (* --- Test 5c3: Three-way cross-kind nest [| [ (x1, x2); (x1, x2) ]; [ (x1, x2); (x1, x2) ] |] ---
-     All three kinds in one literal, in the canonical delimiter order array > list > tuple = batch >
-     output > input (memory order batch @ output @ input): array → BATCH axis (size 2, outermost),
-     list → OUTPUT axis (size 2, middle), tuple → INPUT axis (size 2, innermost). Operand output 3,
-     so the result is batch 2, output 2; 3, input 2 — the same shape the corresponding three-way
-     nested ndarray literal would produce. *)
+  (* --- Test 5c3: Three-way cross-kind nest [| [ (x1, x2); (x1, x2) ]; [ (x1, x2); (x1, x2) ] |]
+     --- All three kinds in one literal, in the canonical delimiter order array > list > tuple =
+     batch > output > input (memory order batch @ output @ input): array → BATCH axis (size 2,
+     outermost), list → OUTPUT axis (size 2, middle), tuple → INPUT axis (size 2, innermost).
+     Operand output 3, so the result is batch 2, output 2; 3, input 2 — the same shape the
+     corresponding three-way nested ndarray literal would produce. *)
   printf "\n--- Test 5c3: Three-way [| [ (x1, x2); (x1, x2) ]; ... |] ---\n%!";
   let%op cross3 = [| [ (x1, x2); (x1, x2) ]; [ (x1, x2); (x1, x2) ] |] in
   Train.set_materialized cross3.value;
   let ctx = Train.forward_once ctx cross3 in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx cross3;
 
-  (* --- Test 5d: Mixed-rank row [[x1; x2]; {c}] (AC #2) ---
-     The first row [x1; x2] has output axes 2; 3; the bare sibling [c] is under-specified, so shape
-     inference forces it to the sibling's stacked rank — c is inferred with output axes 2; 3 (it
-     acquires the leading stack axis), rather than erroring or auto-unsqueezing. *)
+  (* --- Test 5d: Mixed-rank row [[x1; x2]; {c}] (AC #2) --- The first row [x1; x2] has output axes
+     2; 3; the bare sibling [c] is under-specified, so shape inference forces it to the sibling's
+     stacked rank — c is inferred with output axes 2; 3 (it acquires the leading stack axis), rather
+     than erroring or auto-unsqueezing. *)
   printf "\n--- Test 5d: Mixed-rank [[x1; x2]; {c}] ---\n%!";
   let%op mixed = [ [ x1; x2 ]; { c } ] in
   Train.set_materialized mixed.value;
@@ -123,26 +125,29 @@ let () =
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx c;
 
   (* --- Test 5e: Concat residual — subtract solved components from a 3-component concat (action
-     item 2) ---
-     A 3-component concatenated output axis ii^jj^kk: a_e is a SOLVED size 2 and b_e a SOLVED size 3,
-     while c_e (kk) is under-specified; the whole axis is forced to 7 by a broadcast add against a
-     fixed output[7]. The solver must subtract the solved components (2 + 3) from the size-7 concat
-     axis to infer kk = 2 (result output axis 2 + 3 + 2 = 7), exercising the [Concat = Dim] solved-
-     component subtraction in [unify_dim]. (The strictly >1-remaining-component `_` branch is only
-     reached transiently: once enough siblings are solved to make the axis determinate, re-
-     substitution routes it through this single-residual case — so this is the determinate guard for
-     the subtraction arithmetic.) *)
+     item 2) --- A 3-component concatenated output axis ii^jj^kk: a_e is a SOLVED size 2 and b_e a
+     SOLVED size 3, while c_e (kk) is under-specified; the whole axis is forced to 7 by a broadcast
+     add against a fixed output[7]. The solver must subtract the solved components (2 + 3) from the
+     size-7 concat axis to infer kk = 2 (result output axis 2 + 3 + 2 = 7), exercising the [Concat =
+     Dim] solved- component subtraction in [unify_dim]. (The strictly >1-remaining-component `_`
+     branch is only reached transiently: once enough siblings are solved to make the axis
+     determinate, re- substitution routes it through this single-residual case — so this is the
+     determinate guard for the subtraction arithmetic.) *)
   printf "\n--- Test 5e: Concat residual ii^jj^kk = 7 (a_e=2, b_e=3 => kk=2) ---\n%!";
-  let a_e = PDSL.ndarray [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
+  let a_e =
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
+  in
   let b_e =
-    PDSL.ndarray [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 3 ] ()
   in
   let fixed7 =
-    PDSL.ndarray
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad
       [| 0.0; 0.0; 0.0; 0.0; 0.0; 0.0; 0.0 |]
       ~batch_dims:[] ~input_dims:[] ~output_dims:[ 7 ] ()
   in
-  let%op concat_resid = ((a_e, b_e, { c_e }) ++^ "ii; jj; kk => ii^jj^kk") + fixed7 in
+  let%op concat_resid = (a_e, b_e, { c_e }) ++^ "ii; jj; kk => ii^jj^kk" + fixed7 in
   Train.set_materialized concat_resid.value;
   let ctx = Train.forward_once ctx concat_resid in
   printf "concat_resid (output axis 7 = 2 + 3 + kk, so kk inferred = 2):\n%!";
@@ -152,26 +157,30 @@ let () =
    Array.iter vals ~f:(fun v -> printf " %.2f" v);
    printf "\n%!");
 
-  (* --- Test 5e2: Concrete middle component restored ---
-     Mirrors the proposal's Case D/F: a=[10,20], b=[30,40,50] (middle), c=[60,70], Dim zeros.
-     Pre-fix, the middle component b was silently dropped, producing 10 20 0 0 0 60 70 (or
-     c values leaking into b's position). The exact flat-value print enforces all seven positions,
-     including positions 2-4 which are the middle component. *)
+  (* --- Test 5e2: Concrete middle component restored --- Mirrors the proposal's Case D/F:
+     a=[10,20], b=[30,40,50] (middle), c=[60,70], Dim zeros. Pre-fix, the middle component b was
+     silently dropped, producing 10 20 0 0 0 60 70 (or c values leaking into b's position). The
+     exact flat-value print enforces all seven positions, including positions 2-4 which are the
+     middle component. *)
   printf "\n--- Test 5e2: Concrete middle component (positions 2-4 must equal [30,40,50]) ---\n%!";
   let a_mc =
-    PDSL.ndarray [| 10.0; 20.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 10.0; 20.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
   in
   let b_mc =
-    PDSL.ndarray [| 30.0; 40.0; 50.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 30.0; 40.0; 50.0 |] ~batch_dims:[]
+      ~input_dims:[] ~output_dims:[ 3 ] ()
   in
   let c_mc =
-    PDSL.ndarray [| 60.0; 70.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 60.0; 70.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
   in
   let fixed7_mc =
-    PDSL.ndarray [| 0.0; 0.0; 0.0; 0.0; 0.0; 0.0; 0.0 |]
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad
+      [| 0.0; 0.0; 0.0; 0.0; 0.0; 0.0; 0.0 |]
       ~batch_dims:[] ~input_dims:[] ~output_dims:[ 7 ] ()
   in
-  let%op concat_mc = ((a_mc, b_mc, c_mc) ++^ "ii; mm; kk => ii^mm^kk") + fixed7_mc in
+  let%op concat_mc = (a_mc, b_mc, c_mc) ++^ "ii; mm; kk => ii^mm^kk" + fixed7_mc in
   Train.set_materialized concat_mc.value;
   let ctx = Train.forward_once ctx concat_mc in
   (let vals = Context.get_values ctx concat_mc.value in
@@ -183,14 +192,16 @@ let () =
   (* Exercises the 2-component case and the Dim-on-LHS operand order for concat+Dim coverage. *)
   printf "\n--- Test 5f: 2-component Concat + Dim (Dim on LHS) ---\n%!";
   let pf1 =
-    PDSL.ndarray [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
   in
   let pf2 =
-    PDSL.ndarray [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 3 ] ()
   in
   let fixed5 =
-    PDSL.ndarray [| 0.0; 0.0; 0.0; 0.0; 0.0 |]
-      ~batch_dims:[] ~input_dims:[] ~output_dims:[ 5 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 0.0; 0.0; 0.0; 0.0; 0.0 |] ~batch_dims:[]
+      ~input_dims:[] ~output_dims:[ 5 ] ()
   in
   let%op concat_2c = fixed5 + ((pf1, pf2) ++^ "ii; jj => ii^jj") in
   Train.set_materialized concat_2c.value;
@@ -205,16 +216,20 @@ let () =
      against [fixed7g] (Dim 7) forces the solver to flatten and solve 2+3+2=7. *)
   printf "\n--- Test 5g: Nested concat (flatten-concat) + Dim ---\n%!";
   let ng1 =
-    PDSL.ndarray [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
   in
   let ng2 =
-    PDSL.ndarray [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 3 ] ()
   in
   let ng3 =
-    PDSL.ndarray [| 6.0; 7.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 6.0; 7.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
   in
   let fixed7g =
-    PDSL.ndarray [| 0.0; 0.0; 0.0; 0.0; 0.0; 0.0; 0.0 |]
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad
+      [| 0.0; 0.0; 0.0; 0.0; 0.0; 0.0; 0.0 |]
       ~batch_dims:[] ~input_dims:[] ~output_dims:[ 7 ] ()
   in
   let%op bc_g = (ng2, ng3) ++^ "jj; kk => jj^kk" in
@@ -234,19 +249,23 @@ let () =
      (from a sum-to-scalar loss), showing that the backward concat-offset routing is correct. *)
   printf "\n--- Test 5h: Gradient through Concat + Dim ---\n%!";
   let q1 =
-    PDSL.ndarray [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
   in
   let q2 =
-    PDSL.ndarray [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 3 ] ()
   in
   let q3 =
-    PDSL.ndarray [| 6.0; 7.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 6.0; 7.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
   in
   let fixed7h =
-    PDSL.ndarray [| 0.0; 0.0; 0.0; 0.0; 0.0; 0.0; 0.0 |]
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad
+      [| 0.0; 0.0; 0.0; 0.0; 0.0; 0.0; 0.0 |]
       ~batch_dims:[] ~input_dims:[] ~output_dims:[ 7 ] ()
   in
-  let%op concat_g = ((q1, q2, q3) ++^ "ii; jj; kk => ii^jj^kk") + fixed7h in
+  let%op concat_g = (q1, q2, q3) ++^ "ii; jj; kk => ii^jj^kk" + fixed7h in
   let%op loss_g = concat_g ++ "...|... => 0" in
   Train.set_materialized loss_g.value;
   Train.set_materialized concat_g.value;
@@ -267,35 +286,41 @@ let () =
   printf "\nGradient of q3 (expected [1.0 1.0]):\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx q3;
 
-  (* --- Test 5i: AC1 GLB-merge — two same-shape concats added (pointwise-add-of-two-stacked-tensors) ---
-     Two 3-component [++^] results with matching component sizes are pointwise-added, forcing the
-     shape solver through [solve_dim_ineq]'s GLB merge between two [Concat] bounds (AC1 from
-     task-887c4062 / PR #66). Previously had no reliable high-level fixture because the forward
-     propagation was broken (see task-e5df793f); now that the virtualizer correctly propagates all
-     concat components, the values are a reliable witness. Different spec names ([ii;jj;kk] vs
-     [pp;qq;rr]) ensure two independent Concat bounds, triggering the GLB merge path. *)
+  (* --- Test 5i: AC1 GLB-merge — two same-shape concats added
+     (pointwise-add-of-two-stacked-tensors) --- Two 3-component [++^] results with matching
+     component sizes are pointwise-added, forcing the shape solver through [solve_dim_ineq]'s GLB
+     merge between two [Concat] bounds (AC1 from task-887c4062 / PR #66). Previously had no reliable
+     high-level fixture because the forward propagation was broken (see task-e5df793f); now that the
+     virtualizer correctly propagates all concat components, the values are a reliable witness.
+     Different spec names ([ii;jj;kk] vs [pp;qq;rr]) ensure two independent Concat bounds,
+     triggering the GLB merge path. *)
   printf "\n--- Test 5i: AC1 GLB-merge (two same-shape 3-component concats added) ---\n%!";
   let r1 =
-    PDSL.ndarray [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
   in
   let r2 =
-    PDSL.ndarray [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 3.0; 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 3 ] ()
   in
   let r3 =
-    PDSL.ndarray [| 6.0; 7.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 6.0; 7.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
   in
   let s1 =
-    PDSL.ndarray [| 10.0; 20.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 10.0; 20.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
   in
   let s2 =
-    PDSL.ndarray [| 30.0; 40.0; 50.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 30.0; 40.0; 50.0 |] ~batch_dims:[]
+      ~input_dims:[] ~output_dims:[ 3 ] ()
   in
   let s3 =
-    PDSL.ndarray [| 60.0; 70.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 60.0; 70.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
   in
   let%op glb_result =
-    ((r1, r2, r3) ++^ "ii; jj; kk => ii^jj^kk")
-    + ((s1, s2, s3) ++^ "pp; qq; rr => pp^qq^rr")
+    (r1, r2, r3) ++^ "ii; jj; kk => ii^jj^kk" + ((s1, s2, s3) ++^ "pp; qq; rr => pp^qq^rr")
   in
   Train.set_materialized glb_result.value;
   let ctx = Train.forward_once ctx glb_result in
@@ -308,7 +333,7 @@ let () =
 
   (* --- Test 6: Single element [x1] — unsqueeze --- *)
   printf "\n--- Test 6: Single element [x1] ---\n%!";
-  let%op unsqueezed = [x1] in
+  let%op unsqueezed = [ x1 ] in
   Train.set_materialized unsqueezed.value;
   let ctx = Train.forward_once ctx unsqueezed in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx unsqueezed;
@@ -316,12 +341,14 @@ let () =
   (* --- Test 7: Gradient flow (2-way) --- *)
   printf "\n--- Test 7: Gradient flow (2-way) ---\n%!";
   let g1 =
-    PDSL.ndarray [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
   in
   let g2 =
-    PDSL.ndarray [| 3.0; 4.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 3.0; 4.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
   in
-  let%op grad_result = sin [g1; g2] in
+  let%op grad_result = sin [ g1; g2 ] in
   let%op loss = grad_result ++ "...|... => 0" in
   Train.set_materialized loss.value;
   Train.set_materialized grad_result.value;
@@ -339,15 +366,18 @@ let () =
   (* --- Test 8: Gradient flow (3-way) --- *)
   printf "\n--- Test 8: Gradient flow (3-way) ---\n%!";
   let h1 =
-    PDSL.ndarray [| 0.5; 1.5 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 0.5; 1.5 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
   in
   let h2 =
-    PDSL.ndarray [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 1.0; 2.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
   in
   let h3 =
-    PDSL.ndarray [| 3.0; 0.1 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 3.0; 0.1 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
   in
-  let%op grad3_result = sin [h1; h2; h3] in
+  let%op grad3_result = sin [ h1; h2; h3 ] in
   let%op loss3 = grad3_result ++ "...|... => 0" in
   Train.set_materialized loss3.value;
   Train.set_materialized grad3_result.value;
@@ -365,14 +395,26 @@ let () =
   printf "\nGradient of h3:\n%!";
   Train.printf ~here:[%here] ~with_code:false ~with_grad:true ctx h3;
 
-  (* --- Test 8b: Nested gradient flow ([[n1; n2]; [n3; n4]]) ---
-     Backward through a 2-level nested stack must reach every leaf operand. Extends the Test 8
-     precedent to the nested case: grad of each leaf is cos of its original (sum-of-sin loss). *)
+  (* --- Test 8b: Nested gradient flow ([[n1; n2]; [n3; n4]]) --- Backward through a 2-level nested
+     stack must reach every leaf operand. Extends the Test 8 precedent to the nested case: grad of
+     each leaf is cos of its original (sum-of-sin loss). *)
   printf "\n--- Test 8b: Nested gradient flow [[n1; n2]; [n3; n4]] ---\n%!";
-  let n1 = PDSL.ndarray [| 0.2; 0.4 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
-  let n2 = PDSL.ndarray [| 0.6; 0.8 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
-  let n3 = PDSL.ndarray [| 1.0; 1.2 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
-  let n4 = PDSL.ndarray [| 1.4; 1.6 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
+  let n1 =
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 0.2; 0.4 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
+  in
+  let n2 =
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 0.6; 0.8 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
+  in
+  let n3 =
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 1.0; 1.2 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
+  in
+  let n4 =
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 1.4; 1.6 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
+  in
   let%op grad_nested = sin [ [ n1; n2 ]; [ n3; n4 ] ] in
   let%op loss_nested = grad_nested ++ "...|... => 0" in
   Train.set_materialized loss_nested.value;
@@ -398,14 +440,14 @@ let () =
 
   (* --- Test 10: ndarray constant list [1.0; 2.0; 3.0] --- *)
   printf "\n--- Test 10: ndarray constant list [1.0; 2.0; 3.0] ---\n%!";
-  let%op nd_list = [1.0; 2.0; 3.0] in
+  let%op nd_list = [ 1.0; 2.0; 3.0 ] in
   Train.set_materialized nd_list.value;
   let ctx = Train.forward_once ctx nd_list in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx nd_list;
 
   (* --- Test 11: ndarray constant array [|1.0; 2.0|] --- *)
   printf "\n--- Test 11: ndarray constant array [|1.0; 2.0|] ---\n%!";
-  let%op nd_array = [|1.0; 2.0|] in
+  let%op nd_array = [| 1.0; 2.0 |] in
   Train.set_materialized nd_array.value;
   let ctx = Train.forward_once ctx nd_array in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx nd_array;
@@ -423,12 +465,14 @@ let () =
   (* Verifies output-axis concat spec preserves input axes via broadcast. *)
   printf "\n--- Test 13: List block tensor with input dims ---\n%!";
   let m1 =
-    PDSL.ndarray [| 1.0; 2.0; 3.0; 4.0 |] ~batch_dims:[] ~input_dims:[ 2 ] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 1.0; 2.0; 3.0; 4.0 |] ~batch_dims:[]
+      ~input_dims:[ 2 ] ~output_dims:[ 2 ] ()
   in
   let m2 =
-    PDSL.ndarray [| 5.0; 6.0; 7.0; 8.0 |] ~batch_dims:[] ~input_dims:[ 2 ] ~output_dims:[ 2 ] ()
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 5.0; 6.0; 7.0; 8.0 |] ~batch_dims:[]
+      ~input_dims:[ 2 ] ~output_dims:[ 2 ] ()
   in
-  let%op stacked_mat = [m1; m2] in
+  let%op stacked_mat = [ m1; m2 ] in
   Train.set_materialized stacked_mat.value;
   let ctx = Train.forward_once ctx stacked_mat in
   Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx stacked_mat;
@@ -461,7 +505,8 @@ let () =
   let%op tuple_elem_translated = sin ([%oc fst] (x1 + x2, x1)) in
   Train.set_materialized tuple_elem_translated.value;
   let ctx = Train.forward_once ctx tuple_elem_translated in
-  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx tuple_elem_translated;
+  Train.printf ~here:[%here] ~with_code:false ~with_grad:false ~style:`Default ctx
+    tuple_elem_translated;
 
   (* --- Test 17: Inline style on a beg_dims shape (regression for crash) --- *)
   (* stacked has a non-empty beg_dims row (output-axis concat), which previously caused

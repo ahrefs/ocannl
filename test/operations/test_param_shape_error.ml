@@ -7,7 +7,7 @@ let default_lone_param () =
   Tensor.unsafe_reinitialize ();
   (* This should raise an error because we have a parameter with unspecified dimensions *)
   try
-    let w_o = PDSL.param "w_o" () in
+    let w_o = TDSL.param "w_o" () in
     let _ctx : Context.t = Train.init_params (Context.auto ()) Train.IDX.empty w_o in
     Train.printf _ctx w_o;
     Stdio.print_endline "\nERROR: Should have raised an exception"

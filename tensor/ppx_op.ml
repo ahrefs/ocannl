@@ -2,7 +2,7 @@ open Base
 open Ppxlib
 open Ppx_shared
 
-let make_p ~no_grad ~opt_label ~loc ?value ?values ?param_init ~extra_args name =
+let make_p ~opt_label ~loc ?value ?values ?param_init ~extra_args name =
   let more_label =
     match opt_label with
     | Some label_pat -> [%expr Some [%e pat2expr label_pat]]
@@ -12,9 +12,7 @@ let make_p ~no_grad ~opt_label ~loc ?value ?values ?param_init ~extra_args name 
   let values = match values with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
   let param_init =
     match param_init with
-    | Some c ->
-        let module_name = if no_grad then "NTDSL" else "PDSL" in
-        [%expr Some [%e add_module_qualifier_to_applied_function ~module_name c]]
+    | Some c -> [%expr Some [%e add_module_qualifier_to_applied_function ~module_name:"NTDSL" c]]
     | None -> [%expr None]
   in
   let extra_args =
@@ -31,7 +29,7 @@ let make_p ~no_grad ~opt_label ~loc ?value ?values ?param_init ~extra_args name 
                    "inline-definition fields must be simple identifiers" ))
   in
   let name = Ast_helper.Exp.constant ~loc (Pconst_string (name.txt, name.loc, None)) in
-  let param_op = if no_grad then [%expr NTDSL.param] else [%expr TDSL.param] in
+  let param_op = [%expr TDSL.param] in
   let base_expr =
     [%expr
       [%e param_op] ?more_label:[%e more_label] ?value:[%e value] ?values:[%e values]
@@ -42,13 +40,13 @@ let make_p ~no_grad ~opt_label ~loc ?value ?values ?param_init ~extra_args name 
   in
   [%expr [%e with_extra_args] ()]
 
-let make_vb ~no_grad ~opt_label ?value ?param_init ~extra_args ~loc name =
+let make_vb ~opt_label ?value ?param_init ~extra_args ~loc name =
   let pat = Ast_helper.Pat.var ~loc:name.loc name in
-  let v = make_p ~no_grad ~opt_label ~loc ?value ?param_init ~extra_args name in
+  let v = make_p ~opt_label ~loc ?value ?param_init ~extra_args name in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
-let make_vb_nd ~no_grad ~opt_label ~init_nd ~extra_args ~loc name =
+let make_vb_nd ~opt_label ~init_nd ~extra_args ~loc name =
   let pat = Ast_helper.Pat.var ~loc:name.loc name in
   let values, batch_dims, output_dims, input_dims = ndarray_constant init_nd in
   let v =
@@ -65,7 +63,7 @@ let make_vb_nd ~no_grad ~opt_label ~init_nd ~extra_args ~loc name =
         :: ({ txt = Lident output_name; loc }, output_expr)
         :: extra_args
       in
-      make_p ~no_grad ~opt_label ~loc ~values ~extra_args name
+      make_p ~opt_label ~loc ~values ~extra_args name
   in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
@@ -109,16 +107,13 @@ let translate_block_tensor ~loc ~loop ~label ~opt_label:_ axis_kind elems =
       ( reduce_vbss vbss,
         [%expr stack ?label:[%e opt_expr ~loc label] [%e axis_expr] [%e rhses_array]] )
 
-let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ?(in_block = false) ~opt_label
-    ?label expr =
+let rec translate ~num_configs ~is_toplevel ?(in_block = false) ~opt_label ?label expr =
   let loc = expr.pexp_loc in
-  let loop = translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel:false ~opt_label in
+  let loop = translate ~num_configs ~is_toplevel:false ~opt_label in
   (* Block-element loop: like [loop] but flags that the immediate sub-expression sits in
      block-tensor element position, so a bare tuple there denotes an input-axis stack (not OCaml
      tuple grouping). Used only for the operands of a block-tensor stack. *)
-  let block_loop =
-    translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel:false ~in_block:true ~opt_label
-  in
+  let block_loop = translate ~num_configs ~is_toplevel:false ~in_block:true ~opt_label in
   match expr with
   | { pexp_desc = Pexp_extension ({ txt = "oc"; _ }, payload); _ } -> (
       (* %oc anti-quotation: preserve the expression without transformation *)
@@ -324,9 +319,7 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ?(in_block
       match first_label.txt with
       | Lident tensor_name ->
           let name = { loc = first_label.loc; txt = tensor_name } in
-          let pat, vb =
-            make_vb ~no_grad:no_grads_for_inline_defs ~opt_label ~value ~extra_args ~loc name
-          in
+          let pat, vb = make_vb ~opt_label ~value ~extra_args ~loc name in
           ([ vb ], pat2expr pat)
       | _ ->
           ( no_vbs,
@@ -345,9 +338,7 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ?(in_block
       | Lident tensor_name ->
           let value = [%expr Float.of_int [%e int_val]] in
           let name = { loc = first_label.loc; txt = tensor_name } in
-          let pat, vb =
-            make_vb ~no_grad:no_grads_for_inline_defs ~opt_label ~value ~extra_args ~loc name
-          in
+          let pat, vb = make_vb ~opt_label ~value ~extra_args ~loc name in
           ([ vb ], pat2expr pat)
       | _ ->
           ( no_vbs,
@@ -368,9 +359,7 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ?(in_block
       match first_label.txt with
       | Lident tensor_name ->
           let name = { loc = first_label.loc; txt = tensor_name } in
-          let pat, vb =
-            make_vb_nd ~no_grad:no_grads_for_inline_defs ~opt_label ~init_nd ~extra_args ~loc name
-          in
+          let pat, vb = make_vb_nd ~opt_label ~init_nd ~extra_args ~loc name in
           (* Note: expect a type error if batch_dims exist or extra_args modify the shape *)
           ([ vb ], pat2expr pat)
       | _ ->
@@ -394,9 +383,7 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ?(in_block
                 (vbs, Some e)
           in
           let name = { loc = first_label.loc; txt = tensor_name } in
-          let pat, vb =
-            make_vb ~no_grad:no_grads_for_inline_defs ~opt_label ?param_init ~extra_args ~loc name
-          in
+          let pat, vb = make_vb ~opt_label ?param_init ~extra_args ~loc name in
           (* Combine with any bindings from the initialization *)
           let all_vbs = reduce_vbss [ init_vbs; [ vb ] ] in
           (all_vbs, pat2expr pat)
@@ -419,16 +406,16 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ?(in_block
       if is_ndarray_constant_expr arr_expr then
         (no_vbs, ndarray_op ?label ~ndarray_fn:[%expr TDSL.ndarray] arr_expr)
       else translate_block_tensor ~loc ~loop:block_loop ~label ~opt_label `Batch elems
-  (* A tensor literal whose outermost axis container carries an axis-label annotation,
-     e.g. [([ 1.; 2.; 3. ] : rgb)] or [([| … |] : batch)]. *)
+  (* A tensor literal whose outermost axis container carries an axis-label annotation, e.g. [([ 1.;
+     2.; 3. ] : rgb)] or [([| … |] : batch)]. *)
   | {
-      pexp_desc =
-        Pexp_constraint
-          ( ( { pexp_desc = Pexp_array _; _ }
-            | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ),
-            _ );
-      _;
-    } ->
+   pexp_desc =
+     Pexp_constraint
+       ( ( { pexp_desc = Pexp_array _; _ }
+         | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ),
+         _ );
+   _;
+  } ->
       (no_vbs, ndarray_op ?label ~ndarray_fn:[%expr TDSL.ndarray] expr)
   | [%expr !.[%e? expr1]] ->
       (* Hardcoding the patterns for (!.), (!..), and ( **. ) to avoid treating the constants as
@@ -540,8 +527,7 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ?(in_block
               | [], Pfunction_body body -> body
               | _ -> { expr with pexp_desc = Pexp_function (after_unit, constr, body) }
             in
-            translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel:false ~opt_label ?label
-              body
+            translate ~num_configs ~is_toplevel:false ~opt_label ?label body
           in
           let inner_body = let_opt ~loc vbs inner_body in
           ( no_vbs,
@@ -685,9 +671,9 @@ let rec translate ~no_grads_for_inline_defs ~num_configs ~is_toplevel ?(in_block
       (no_vbs, [%expr [%e expr] ?label:[%e opt_expr ~loc label]])
   | expr -> (no_vbs, expr)
 
-let translate ?(no_grads_for_inline_defs = false) ?ident_label expr =
+let translate ?ident_label expr =
   let vbs, expr =
-    translate ~no_grads_for_inline_defs ~num_configs:(ref 0) ~is_toplevel:true ~opt_label:None
+    translate ~num_configs:(ref 0) ~is_toplevel:true ~opt_label:None
       ~label:(opt_pat2string_list ~loc:expr.pexp_loc ident_label)
       expr
   in
@@ -704,8 +690,5 @@ let translate ?(no_grads_for_inline_defs = false) ?ident_label expr =
           let open! TDSL.O in
           [%e expr]] )
 
-let expr_expander ~loc ~path =
-  expr_expander_with_punning (translate ?no_grads_for_inline_defs:None) ~loc ~path
-
-let str_expander ~loc ~path =
-  str_expander_with_punning (translate ?no_grads_for_inline_defs:None) ~loc ~path
+let expr_expander ~loc ~path = expr_expander_with_punning translate ~loc ~path
+let str_expander ~loc ~path = str_expander_with_punning translate ~loc ~path

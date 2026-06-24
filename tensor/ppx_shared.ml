@@ -727,7 +727,7 @@ let operators =
       ("<>", "ne");
     ]
 
-let add_module_qualifier_to_applied_function ?(module_name = "PDSL") expr =
+let add_module_qualifier_to_applied_function ?(module_name = "NTDSL") expr =
   let qualify_if_needed fn =
     match fn.pexp_desc with
     | Pexp_ident { txt = Lident name; loc } ->

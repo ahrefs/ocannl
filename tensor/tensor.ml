@@ -667,14 +667,34 @@ let term_init ?grad_spec values ?(label = []) ?top_down_prec ?batch_dims ?batch_
   term ?init_data ?fetch_op ?grad_spec ?batch_dims ?batch_axes ~label ?top_down_prec ?input_dims
     ?output_dims ?input_axes ?output_axes ?deduced ()
 
-let%debug7_sexp param ~t (name : string) ?(more_label = []) ?input_dims ?output_dims ?input_axes
-    ?output_axes ?deduced () : t =
+let force_param_diff t =
+  Option.iter t.diff ~f:(fun _ -> remove_bprop_root t);
+  let grad_id = session_state.next_id in
+  session_state.next_id <- session_state.next_id + 1;
+  let g =
+    Tn.create (Tn.Default !default_grad_prec) ~id:grad_id ~label:("grad" :: t.value.label)
+      ~unpadded_dims:(lazy_to_dims t.shape)
+      ~padding:(lazy (Shape.to_padding t.shape))
+      ()
+  in
+  let diff = { grad = g; zero_grads = fetch_zeros g t.shape; backprop = Asgns.empty_comp } in
+  let t = { t with diff = Some diff } in
+  session_state.backprop_roots <- Map.set session_state.backprop_roots ~key:t.id ~data:t;
+  t
+
+let strip_param_diff t =
+  Option.iter t.diff ~f:(fun _ -> remove_bprop_root t);
+  { t with diff = None }
+
+let%debug7_sexp param ?(require_grad = true) ~t (name : string) ?(more_label = []) ?input_dims
+    ?output_dims ?input_axes ?output_axes ?deduced () : t =
   let t =
     t
       ?label:(Some (name :: more_label))
       ?top_down_prec:(Some true) ?batch_dims:(Some []) ?batch_axes:None ?input_dims ?output_dims
       ?input_axes ?output_axes ?deduced ()
   in
+  let t = if require_grad then force_param_diff t else strip_param_diff t in
   let v = t.value in
   (* Parameters live on device and are materialized; CPU access (init, inspection) is on-demand via
      the context (gh-ocannl-333). *)
@@ -997,7 +1017,9 @@ let%debug5_sexp to_doc ?ctx ~force ~with_grad ~with_code ?(with_low_level = fals
   let open PPrint in
   (* Create document for tensor value *)
   let has_grad = with_grad && Option.is_some t.diff in
-  let retrieve tn = Option.bind ctx ~f:(fun ctx -> try Some (Context.to_host ctx tn) with _ -> None) in
+  let retrieve tn =
+    Option.bind ctx ~f:(fun ctx -> try Some (Context.to_host ctx tn) with _ -> None)
+  in
   let value_doc =
     match retrieve t.value with
     | None ->
@@ -1010,7 +1032,8 @@ let%debug5_sexp to_doc ?ctx ~force ~with_grad ~with_code ?(with_low_level = fals
             ^^ Nd.to_doc_inline ~num_batch_axes ~num_input_axes ~num_output_axes ?axes_spec arr
             ^^ if has_grad then break 1 else empty
         | _ ->
-            Nd.to_doc ~prefix:prefix_str ~labels ~indices arr ^^ if has_grad then break 1 else empty)
+            Nd.to_doc ~prefix:prefix_str ~labels ~indices arr ^^ if has_grad then break 1 else empty
+        )
   in
 
   (* Create document for gradient *)

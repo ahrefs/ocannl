@@ -33,7 +33,7 @@ let () =
 
   (* Use scaled initialization to prevent activation explosion. Default uniform1() in [0,1] causes
      logits to grow to millions. *)
-  TDSL.default_param_init := PDSL.xavier ~scale_sq:0.06 TDSL.O.uniform1;
+  TDSL.default_param_init := NTDSL.xavier ~scale_sq:0.06 TDSL.O.uniform1;
 
   (* Configuration for circle dataset *)
   let image_size = 16 in

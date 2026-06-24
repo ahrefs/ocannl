@@ -39,10 +39,9 @@ In OCANNL, we call a tensor that is prohibited from propagating gradients, does 
 
 - `%cd` assumes that any extension point will be in the scope of a module `NTDSL` that provides at least the functionality of `Operation.NTDSL`.
 - `%op` assumes that any extension point will be in the scope of a module `TDSL` that provides at least the functionality of `Operation.TDSL`.
-- `%op` with inline definitions with inintialization expressions assumes that a module `PDSL` is in scope with at least the functionality of `Operation.PDSL`.
 - Both extensions assume `Tensor` (from the `Ocannl` wrapper) is in scope.
 
-Functions inside `Operation.NTDSL` use `~grad_spec:Prohibit_grad` when calling into `Tensor`, making the resulting tensors non-differentiable. Functions inside `Operation.TDSL` use `~grad_spec:If_needed`, which will make the tensors non-differentiable when the gradient is not needed -- except for `TDSL.param`, which internally sets `~grad_spec:Require_grad`. Functions inside `Operation.PDSL` use `~grad_spec:Require_grad`.
+Functions inside `Operation.NTDSL` use `~grad_spec:Prohibit_grad` when calling into `Tensor`, making the resulting tensors non-differentiable. Functions inside `Operation.TDSL` use `~grad_spec:If_needed`, which will make the tensors non-differentiable when the gradient is not needed -- except for `TDSL.param`, which makes the final parameter tensor differentiable after evaluating its initializer as forward-only code.
 
 The extension points open `NTDSL.O`, resp. `TDSL.O`, for the scope of the extension point, to expose the corresponding operators.
 
@@ -358,7 +357,7 @@ Both syntaxes support additional record fields that map directly to labeled argu
 - `batch_dims` or shorthand `b`: specifies batch dimensions
 - Any other labeled argument accepted by `TDSL.param` (for `%op`) or `NTDSL.term` (for `%cd`)
 
-Note: for the `%op` declarations, if the root operation comes from `TDSL.O` and is not qualified with a module name, it becomes qualified with `PDSL` which ensures that the created tensor will be differentiable (will have gradients), and will be able to take the additional argumetns. There are also special cases for literal constants to ensure the resulting tensor is initialized with these constants but is differentiable.
+Note: for `%op` inline parameter declarations, initialization expressions are forward-only. If the root operation is not qualified with a module name, it is qualified with `NTDSL`; `TDSL.param` then makes only the final parameter tensor differentiable. There are also special cases for literal constants so the resulting tensor is initialized with those constants and the final parameter remains differentiable.
 
 Examples:
 
@@ -404,7 +403,7 @@ let%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = [ hid_dim ] }
 
 ### Implementation strategy for the initialization syntax
 
-To maintain the familiar concise syntax, yet allow for configurability during initialization, the `%op` syntax substitutes the operator function applied at the root of the initialization expression by prefixing the function identifier with `PDSL` (or by `NTDSL` when invoked from [the `%%extend_dsl` syntax](#the-syntax-extension-extend_dsls)). Only unqualified identifiers get prefixed, and `%oc` is an escape hatch to prevent perfixing even for unqualified identifiers.
+To maintain the familiar concise syntax, yet allow for configurability during initialization, the `%op` syntax substitutes the operator function applied at the root of the initialization expression by prefixing the function identifier with `NTDSL`. Only unqualified identifiers get prefixed, and `%oc` is an escape hatch to prevent prefixing even for unqualified identifiers.
 
 ## Using OCANNL's generalized einsum notation
 
@@ -588,7 +587,7 @@ For example, `[ta; tb]` desugars to ``stack `Output [| ta; tb |]``, which genera
 - All components must have the same trailing shape (stacking requires shape compatibility).
 - Single-element block tensors like `[ta]` act as unsqueeze (add a size-1 leading axis).
 - A tuple introduces an input axis at the top level of a `%op` expression *and* in block-tensor element position (nested inside a list, array, or another tuple), e.g. `(ta, tb)` or the inner tuples of `[ (ta, tb); (tc, td) ]`. Tuples used as function arguments (e.g., `f (ta, tb)`) are still preserved as regular OCaml tuples, since those are applications rather than bare tuples.
-- The named operation is also callable directly: ``TDSL.O.stack `Output [| ta; tb |]`` (and the `NTDSL` / `PDSL` variants).
+- The named operation is also callable directly: ``TDSL.O.stack `Output [| ta; tb |]`` (and the `NTDSL` variant).
 - Nested block tensors are supported at arbitrary depth, including three-way across all axis kinds: a nested literal reproduces the shape the corresponding nested ndarray literal would have. The delimiters nest in the canonical memory order `batch @ output @ input` — array (batch) outermost, list (output) middle, tuple (input) innermost. For example `[[ta; tb]; [tc; td]]` stacks two output-axis levels (rank+2); `[ (ta, tb); (tc, td) ]` introduces an output axis over an input axis; and `[| [ (ta, tb); (tc, td) ]; [ (te, tf); (tg, th) ] |]` introduces all three (batch over output over input). Mixed-rank rows like `[[ta; tb]; tc]` are well-formed: shape inference forces the under-specified sibling (`tc`) to acquire the matching stacked rank rather than erroring.
 
 ### Capturing the dimensions of selected axes for further computation or to add shape constraints
@@ -716,7 +715,7 @@ let mlp ~label ~hid_dims () =
 
 ## The syntax extension %%extend_dsls
 
-This syntax extension creates a module `DSL_modules` with the same submodules as `Operation.DSL_modules`. It removes the boilerplate associated with introducing new operators into the modules `TDSL`, `NTDSL`, `PDSL` and their `O` submodules. The payload (i.e. content) of `%%extend_dsls` must be non-recursive let-bindings. They are parsed using a slight variant of the `%op` syntax, and are inserted into the DSL modules. The identifiers of the root operator functions of the definitions, if unqualified, are prefixed with the appropriate module, similarly to the behavior of inline definitions. Another unique feature of `%%extend_dsls` parsing is that inline tensor definitions, like in `%cd`, do not introduce gradients for the tensors, but, like `%op`, they do introduce initialization for the inline-defined tensors.
+This syntax extension creates a module `DSL_modules` with the same submodules as `Operation.DSL_modules`. It removes the boilerplate associated with introducing new operators into the modules `TDSL`, `NTDSL` and their `O` submodules. The payload (i.e. content) of `%%extend_dsls` must be non-recursive let-bindings. They are parsed using a slight variant of the `%op` syntax, and are inserted into the DSL modules. The identifiers of the root operator functions of the definitions, if unqualified, are prefixed with the appropriate module, similarly to the behavior of inline definitions. Initialization expressions remain forward-only.
 
 The DSL modules expose the value `grad_spec` that can be useful for defining operators via a "scheme" function. See the example using the `box_muller` helper at the beginning of `lib/nn_blocks.ml`. The definitions there use the `%oc` escape extension to avoid the prefixing mentioned above.
 

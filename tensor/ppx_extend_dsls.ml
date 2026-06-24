@@ -6,8 +6,7 @@ open Ppx_shared
 let transform_dsl_binding ~loc ~dsl_name binding =
   let transform_expr expr =
     let vbs, result =
-      Ppx_op.translate ~no_grads_for_inline_defs:true
-      @@ add_module_qualifier_to_applied_function ~module_name:dsl_name expr
+      Ppx_op.translate @@ add_module_qualifier_to_applied_function ~module_name:dsl_name expr
     in
     if List.is_empty vbs then result
     else
@@ -22,7 +21,7 @@ let transform_dsl_binding ~loc ~dsl_name binding =
   in
   (params, { binding with pvb_expr })
 
-(* Module-level expansion: create module bindings for TDSL, NTDSL, PDSL *)
+(* Module-level expansion: create module bindings for TDSL and NTDSL. *)
 let str_expander ~loc:pstr_loc ~path:_ str_items =
   let transform_op_binding params binding =
     let loc = binding.pvb_loc in
@@ -71,7 +70,6 @@ let str_expander ~loc:pstr_loc ~path:_ str_items =
   let loc = pstr_loc in
   let item_TDSL, op_item_TDSL = items_for_dsl "TDSL" in
   let item_NTDSL, op_item_NTDSL = items_for_dsl "NTDSL" in
-  let item_PDSL, op_item_PDSL = items_for_dsl "PDSL" in
   [%stri
     module DSL_modules = struct
       module Ir = Ir
@@ -99,18 +97,6 @@ let str_expander ~loc:pstr_loc ~path:_ str_items =
           include NTDSL.O
 
           [%%i op_item_NTDSL]
-        end
-      end
-
-      module PDSL = struct
-        include PDSL
-
-        [%%i item_PDSL]
-
-        module O = struct
-          include PDSL.O
-
-          [%%i op_item_PDSL]
         end
       end
     end]
