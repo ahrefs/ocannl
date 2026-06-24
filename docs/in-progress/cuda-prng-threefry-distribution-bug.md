@@ -41,7 +41,7 @@ across output elements on CUDA (values come out correlated), rather than a wrong
 export PATH="/usr/lib/wsl/lib:$PATH"        # WSL: exposes nvidia-smi / libcuda
 eval $(opam env)
 OCANNL_BACKEND=cuda dune build test/operations/test_random_histograms.exe
-OCANNL_BACKEND=cuda (cd test/operations && ../../_build/default/test/operations/test_random_histograms.exe)
+(cd test/operations && OCANNL_BACKEND=cuda ../../_build/default/test/operations/test_random_histograms.exe)
 # or the whole fast suite:
 OCANNL_BACKEND=cuda dune runtest test/operations test/einsum
 ```
