@@ -114,20 +114,43 @@ Ordered method, on minipc-wsl:
    values, confirming the static narrowing holds on the real device (CC/Metal correct,
    CUDA wrong on identical deterministic inputs).
 
-2. **First probe — the user's init-effectiveness hypothesis, reframed.** The
-   elaboration statically ruled out *naive* init-divergence (buffers are un-zeroed on
-   **every** backend; correctness depends on the **shared emitted** `Zero_out` /
-   `reset_padding` IR, not on alloc-time zeroing). **But static "the IR is emitted" ≠
-   runtime "nvcc actually ran it."** So the concrete first on-device probe is: verify
-   whether that shared `Zero_out` / `reset_padding_regions` IR **actually executes on
-   CUDA** for these specific virtual / guarded / padded nodes — i.e. is it
-   emitted-but-nvcc-elided, skipped for virtual producers, or running against an
-   off-by-one / wrong-extent region — versus the CC/Metal builds where it evidently
-   takes effect. If real, the gap is **"emitted-but-not-effective on CUDA,"** not
-   "never emitted," and the fix lands there. Probe by inspecting the generated `.cu`
-   for the zeroing/padding loops, and instrument the buffer pre-state on-device (e.g.
-   read back the virtual/padded buffer before the producing loop) to see whether the
-   neutral fill took effect.
+2. **First probe — stack-local zero-init under nvcc (the user's hypothesis, made
+   precise).** This is the *leading* hypothesis, ahead of the generic "nvcc miscompiles
+   shared source." The codegen relies on a **stack-vs-global** distinction that exactly
+   partitions the passing and failing cases:
+   - `compile_proc`'s `local_decls` (`c_syntax.ml:1138-1153`) emits each **non-virtual,
+     non-materialized** node as a **function-scope C array** — i.e. stack / per-thread
+     CUDA *local memory*, not a global buffer:
+     `TYPE vNN_ident[size] = {0};` when `zero_initialized_by_code`, else
+     `TYPE vNN_ident[size];` (**uninitialized**).
+   - When `zero_initialized_by_code` is true, the explicit `Zero_out` loop is
+     **deliberately dropped** as redundant (`zero_out_loop_redundant`,
+     `c_syntax.ml:388-396`), trusting the C `= {0}` aggregate initializer to zero it.
+     This declaration path is in the **shared** C emitter, so CUDA inherits the same
+     `= {0}` stack arrays. **Materialized** (global-buffer) nodes go the other way (no
+     `= {0}`; alloc/`Zero_out` handles it) — and those are exactly the matmul/training
+     kernels that PASS on CUDA. The failing diagonal / einsum3-reduce / conv lean on
+     the stack-local arrays.
+
+   Two ways this diverges on CUDA: **(a)** these locals are **dynamically indexed**
+   (loop vars), forcing them out of registers into CUDA local memory — exactly where
+   nvcc's handling of aggregate `= {0}` init is historically fragile/partial; **(b)**
+   the no-init `TYPE v[N];` case is plain UB — a guarded write that assumes the rest
+   stays zero (the diagonal's `Where(Cmpeq(i,j),…)` writes only the diagonal and
+   **assumes off-diagonal is zero**) reads stale local memory on CUDA where the host
+   stack happened to be benign. Both produce **deterministic, structurally-shifted**
+   wrong values (diagonal at `[2,2]` reading a neighbour) — matching the symptom, and
+   distinguishing it from random garbage.
+
+   **Cheap confirming experiment (do this first):** force explicit zeroing of those
+   local arrays on CUDA — defeat `zero_out_loop_redundant` (keep the `Zero_out` loop)
+   and/or replace `= {0}` with an explicit `memset`/init loop — and re-run the three
+   tests. If they go green, the hypothesis is **confirmed** and the fix is "don't rely
+   on the stack-local `= {0}` (drop the `Zero_out`-redundant optimization, or emit
+   explicit init) on the CUDA backend." Also inspect the generated `.cu` to confirm
+   the `= {0}` / no-init local declarations are present for these kernels, and (cheaply)
+   read back a stack-local node's pre-state where observable. If the experiment does
+   **not** fix it, the stack-local-init hypothesis is falsified — proceed to step 3.
 
 3. **Minimal-reproducer bisection on the diagonal case** (if the first probe comes up
    empty). Reduce `test_virtual_diagonal` to the smallest failing kernel, then **diff
