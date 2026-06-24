@@ -29,6 +29,11 @@ across output elements on CUDA (values come out correlated), rather than a wrong
 4. `test/operations/test_block_tensor` — random-init values differ (downstream).
 5. `test/operations/test_param_shape_error` — random-init param render differs (downstream).
 6. `test/einsum/moons_demo_variant` — random weight init differs (downstream).
+7. `test/training/transformer_names` — random weight init is corrupted, so the model does not learn
+   on CUDA: `Epoch 0, loss below threshold=false` where the CPU baseline expects `true` (epochs 0,
+   5, 9 all `true`); generated text also diverges. This is a **downstream training casualty** of the
+   PRNG bug, not a separate defect — fixing the distribution should restore it. (It is also
+   GPU-kernel-launch-overhead-slow on a laptop GPU: minutes per epoch.)
 
 ## Reproduction
 
