@@ -26,4 +26,6 @@ let () =
   let open! DSL_modules.NTDSL.O in
   let x = uniform () in
   let result = my_complex_op (my_tensor x) (my_random_op ()) x in
+  if Set.exists result.Tensor.params ~f:(fun p -> Option.is_some p.Tensor.diff) then
+    failwith "NTDSL %%extend_dsls helper unexpectedly created gradient-bearing inline params";
   Tensor.print ~here:[%here] ~force:false ~with_code:false ~with_grad:true `Inline result
