@@ -112,6 +112,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name to_routine_embedded_init)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules to_routine_embedded_init)
+ (libraries base ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name row_beg_dims_regression)
  (package neural_nets_lib)
  (modules row_beg_dims_regression)
