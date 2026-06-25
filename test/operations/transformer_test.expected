@@ -4,29 +4,29 @@ Testing transformer with teacher forcing
 Loss shape:
 ((batch
   ((beg_dims ()) (dims ()) (bcast Broadcastable)
-   (prov (((sh_id 463) (kind Batch))))))
+   (prov (((sh_id 547) (kind Batch))))))
  (input
   ((beg_dims ()) (dims ()) (bcast Broadcastable)
-   (prov (((sh_id 463) (kind Input))))))
+   (prov (((sh_id 547) (kind Input))))))
  (output
   ((beg_dims ())
    (dims ((Dim ((d 1) (basis default) (proj_id ((Proj_id 1)))))))
-   (bcast Broadcastable) (prov (((sh_id 463) (kind Output))))))
+   (bcast Broadcastable) (prov (((sh_id 547) (kind Output))))))
  (batch_padding ()) (input_padding ()) (output_padding ()) (padding_elem ())
- (id 463) (debug_name loss))
+ (id 547) (debug_name loss))
 Logits shape:
 ((batch
   ((beg_dims ())
    (dims
     ((Dim ((d 2) (basis default) (proj_id ((Proj_id 93)))))
      (Dim ((d 7) (basis default) (proj_id ((Proj_id 94)))))))
-   (bcast Broadcastable) (prov (((sh_id 437) (kind Batch))))))
+   (bcast Broadcastable) (prov (((sh_id 521) (kind Batch))))))
  (input
   ((beg_dims ()) (dims ()) (bcast Broadcastable)
-   (prov (((sh_id 437) (kind Input))))))
+   (prov (((sh_id 521) (kind Input))))))
  (output
   ((beg_dims ())
    (dims ((Dim ((d 100) (basis default) (proj_id ((Proj_id 95)))))))
-   (bcast Broadcastable) (prov (((sh_id 437) (kind Output))))))
+   (bcast Broadcastable) (prov (((sh_id 521) (kind Output))))))
  (batch_padding ()) (input_padding ()) (output_padding ()) (padding_elem ())
- (id 437) (debug_name transformer))
+ (id 521) (debug_name transformer))

@@ -18,6 +18,11 @@ let train_once ~seed () : run_result =
      of dependencies. The 3-seed retry and epsilon=0.1 threshold ensure convergence on every host. *)
   Utils.settings.fixed_state_for_init <- Some seed;
   Tensor.unsafe_reinitialize ();
+  (* The global default param init is a centered, scaled uniform [-0.25, 0.25) with low signal
+     energy. This relu-MLP hinge-loss recipe needs |f(x)| ~ 1 to separate the half-moons, so we pin a
+     higher-energy fan-scaled init locally (mirroring the conv training tests, which likewise override
+     the global default). *)
+  TDSL.default_param_init := NTDSL.xavier ~scale_sq:2.0 TDSL.O.uniform1;
   let ctx = Context.auto () in
   let open Operation.At in
   (* Sensitive to batch size -- smaller batch sizes are better. *)
