@@ -22,8 +22,9 @@ let check name t ~batch ~input ~output =
       Stdio.printf "%s: PASS (batch=[%s] input=[%s] output=[%s])\n" name (str b) (str i) (str o)
     else
       Stdio.printf
-        "%s: FAIL\n  got      batch=[%s] input=[%s] output=[%s]\n  expected batch=[%s] input=[%s] \
-         output=[%s]\n"
+        "%s: FAIL\n\
+        \  got      batch=[%s] input=[%s] output=[%s]\n\
+        \  expected batch=[%s] input=[%s] output=[%s]\n"
         name (str b) (str i) (str o) (str batch) (str input) (str output)
   with Row.Shape_error (msg, _) -> Stdio.printf "%s: FAIL Shape_error: %s\n" name msg
 

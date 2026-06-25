@@ -24,7 +24,9 @@ let () =
   let%op f = e **. 2 in
   let%op g = f /. 2 in
   let%op g = g + (10. /. f) in
-  List.iter ~f:(Option.iter ~f:(fun diff -> Train.set_materialized diff.Tensor.grad)) [ a.diff; b.diff ];
+  List.iter
+    ~f:(Option.iter ~f:(fun diff -> Train.set_materialized diff.Tensor.grad))
+    [ a.diff; b.diff ];
   (* FIXME(#351): this is a good test for common subexpression elimination. *)
   Utils.capture_stdout_logs @@ fun () ->
   let ctx = Train.update_once ctx g in

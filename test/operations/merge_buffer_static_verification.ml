@@ -32,8 +32,8 @@ let () =
   let stream = Backend.new_stream device in
   let root = Backend.make_context ~optimize_ctx:(Backend.empty_optimize_ctx ()) stream in
 
-  (* Three hosted tensors with identical shapes. [b] carries the data to transfer; [out] starts at
-     a distinct value so an inert (non-copying) pipeline would be observable. *)
+  (* Three hosted tensors with identical shapes. [b] carries the data to transfer; [out] starts at a
+     distinct value so an inert (non-copying) pipeline would be observable. *)
   let a = make_tensor "a" [| 1.0; 2.0 |] in
   let b = make_tensor "b" [| 3.0; 4.0 |] in
   let out = make_tensor "out" [| 9.0; 9.0 |] in

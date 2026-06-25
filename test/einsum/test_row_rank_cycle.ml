@@ -49,9 +49,9 @@ let () =
   let r1 = Row.get_row_for_var (Row.provenance ~sh_id:3 ~kind:`Output) rho1 in
   let r2 = Row.get_row_for_var (Row.provenance ~sh_id:4 ~kind:`Output) rho2 in
   let r3 = Row.get_row_for_var (Row.provenance ~sh_id:5 ~kind:`Output) rho3 in
-  (* This one used to diverge: each round of the deficit rule presented a fresh template variable
-     to the (res_v, deficit)-keyed memoization, and the rank facts kept moving between the
-     [Bounds_row] adjacency lists and the in-flight re-emitted constraints. *)
+  (* This one used to diverge: each round of the deficit rule presented a fresh template variable to
+     the (res_v, deficit)-keyed memoization, and the rank facts kept moving between the [Bounds_row]
+     adjacency lists and the in-flight re-emitted constraints. *)
   check "three-variable rank cycle"
     [
       Row.Row_ineq { res = r1; opnd = { r2 with dims = [ dim 2 ] }; origin };

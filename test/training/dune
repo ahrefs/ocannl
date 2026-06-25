@@ -44,6 +44,7 @@
   (pps ppx_here ppx_ocannl)))
 
 ; mlp_names is a slow training run: gated behind the `slow` alias (see cifar_conv).
+
 (executable
  (name mlp_names)
  (modules mlp_names)
@@ -68,6 +69,7 @@
     (diff mlp_names.expected mlp_names.actual)))))
 
 ; mlp_bn_names is a slow training run: gated behind the `slow` alias (see cifar_conv).
+
 (executable
  (name mlp_bn_names)
  (modules mlp_bn_names)
@@ -91,6 +93,7 @@
     (diff mlp_bn_names.expected mlp_bn_names.actual)))))
 
 ; circles_conv is a slow training run: gated behind the `slow` alias (see cifar_conv).
+
 (executable
  (name circles_conv)
  (modules circles_conv)
@@ -120,6 +123,7 @@
  (libraries unix))
 
 ; mnist_conv is a slow training run: gated behind the `slow` alias (see cifar_conv).
+
 (executable
  (name mnist_conv)
  (modules mnist_conv)
@@ -145,6 +149,7 @@
 ; cifar_conv is a slow training run: gated behind the `slow` alias instead of
 ; `runtest` so `dune runtest` stays fast. Still compiled by `dune build @check`.
 ; Run with: dune build @slow (or `dune build @runtest @slow` for everything).
+
 (executable
  (name cifar_conv)
  (modules cifar_conv)

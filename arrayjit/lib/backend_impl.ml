@@ -15,8 +15,9 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 open Backend_intf
 
 (* The backend's concrete buffer handle (`'base`) and its helpers live here, in the implementation-
-   facing layer -- NOT in the shared {!Backend_intf}, which only ever speaks {!Backend_intf.buffer_loc}.
-   These are used by the raw allocator and the backend-private pool tables. *)
+   facing layer -- NOT in the shared {!Backend_intf}, which only ever speaks
+   {!Backend_intf.buffer_loc}. These are used by the raw allocator and the backend-private pool
+   tables. *)
 type 'buffer_ptr buffer = { ptr : 'buffer_ptr; size_in_bytes : int } [@@deriving sexp_of]
 
 module Buffer_types (Buffer_ptr : sig
@@ -49,9 +50,9 @@ module type No_device_buffer_and_copying = sig
   val memset_zero_raw : buffer_ptr -> offset:int -> size_in_bytes:int -> unit
 
   val offset_buffer : buffer_ptr -> bytes:int -> buffer_ptr
-  (** Returns a handle for the slab pointer advanced by [bytes]. Used by {!Make_slab.resolve_pool} to
-      turn a [{ pool_id; offset }] into the concrete pointer for a sub-region of a multi-tenant pool.
-      For [bytes = 0] this must return the base unchanged. *)
+  (** Returns a handle for the slab pointer advanced by [bytes]. Used by {!Make_slab.resolve_pool}
+      to turn a [{ pool_id; offset }] into the concrete pointer for a sub-region of a multi-tenant
+      pool. For [bytes = 0] this must return the base unchanged. *)
 
   val buffer_to_buffer : dst:buffer_ptr -> src:buffer_ptr -> size_in_bytes:int -> unit
   val host_to_buffer : Ndarray.t -> dst:buffer_ptr -> unit
@@ -81,17 +82,16 @@ module No_device_buffer_and_copying () :
     ptr
 
   let memset_zero_raw (ptr : buffer_ptr) ~(offset : int) ~(size_in_bytes : int) : unit =
-    if size_in_bytes > 0 then (
+    if size_in_bytes > 0 then
       let arr = Ctypes.from_voidp Ctypes.uint8_t ptr in
       for i = offset to offset + size_in_bytes - 1 do
         Ctypes.(arr +@ i <-@ Unsigned.UInt8.zero)
-      done)
+      done
 
   let free_pool_raw = None
 
   let offset_buffer (base : buffer_ptr) ~(bytes : int) : buffer_ptr =
-    if bytes = 0 then base
-    else Ctypes.(to_voidp (from_voidp uint8_t base +@ bytes))
+    if bytes = 0 then base else Ctypes.(to_voidp (from_voidp uint8_t base +@ bytes))
 
   type void_buffer_ptr = (Stdlib.Obj.t option, unit Ctypes_static.typ) Ctypes_ptr.Fat.t
 
@@ -169,9 +169,10 @@ module Make_slab (Device_types : Device_types) (Raw : No_device_buffer_and_copyi
     Hashtbl.set pools ~key ~data:ptr
 
   (* Always [Some]: even backends whose raw allocations are reclaimed by GC ([free_pool_raw = None])
-     must drop the private table entry on finalization, otherwise [pools] keeps a strong reference to
-     every tnode buffer for the lifetime of the backend module and the GC finalizer never runs.
-     Removing the entry releases that reference (and eagerly frees via the raw deallocator if any). *)
+     must drop the private table entry on finalization, otherwise [pools] keeps a strong reference
+     to every tnode buffer for the lifetime of the backend module and the GC finalizer never runs.
+     Removing the entry releases that reference (and eagerly frees via the raw deallocator if
+     any). *)
   let free_pool =
     Some
       (fun device ~pool_id ->
@@ -185,8 +186,8 @@ module Make_slab (Device_types : Device_types) (Raw : No_device_buffer_and_copyi
     Raw.memset_zero_raw ptr ~offset ~size_in_bytes
 
   let resolve_pool device { pool_id; offset } =
-    (* Pooled policy: many tnodes share a pool at distinct byte offsets. Resolve to the slab base and
-       advance by [offset] via the backend's raw pointer arithmetic. *)
+    (* Pooled policy: many tnodes share a pool at distinct byte offsets. Resolve to the slab base
+       and advance by [offset] via the backend's raw pointer arithmetic. *)
     Raw.offset_buffer (Hashtbl.find_exn pools (device.device_id, pool_id)) ~bytes:offset
 end
 
@@ -230,9 +231,7 @@ struct
   let make_child ?ctx_buffers ?optimize_ctx ?merge_buffer_node parent =
     let ctx_buffers = Option.value ctx_buffers ~default:parent.ctx_buffers in
     let optimize_ctx = Option.value optimize_ctx ~default:parent.optimize_ctx in
-    let merge_buffer_node =
-      Option.value merge_buffer_node ~default:parent.merge_buffer_node
-    in
+    let merge_buffer_node = Option.value merge_buffer_node ~default:parent.merge_buffer_node in
     {
       device = parent.device;
       parent = Some parent;
@@ -287,9 +286,9 @@ module type Lowered_no_device_backend = sig
   include No_device_buffer_and_copying with type buffer_ptr := buffer_ptr
 end
 
-(** The transfer/sync seam the shared {!Backends} layer consumes. It speaks {!Backend_intf.buffer_loc}
-    only -- the concrete backend pointer never crosses this boundary; each backend resolves
-    [buffer_loc -> base] internally. *)
+(** The transfer/sync seam the shared {!Backends} layer consumes. It speaks
+    {!Backend_intf.buffer_loc} only -- the concrete backend pointer never crosses this boundary;
+    each backend resolves [buffer_loc -> base] internally. *)
 module type No_buffer_retrieval_or_syncing = sig
   include Backend_impl_common
   include Backend_device_common
@@ -354,8 +353,8 @@ module type Lowered_backend = sig
     code_batch
 
   val link : context -> code -> ctx_buffers -> Indexing.lowered_bindings * Task.t
-  (** [context] is the prior context, while [ctx_buffers] are the locations of the resulting context.
-      The results correspond to the fields {!field:Backend_intf.bindings} and
+  (** [context] is the prior context, while [ctx_buffers] are the locations of the resulting
+      context. The results correspond to the fields {!field:Backend_intf.bindings} and
       {!field:Backend_intf.schedule} of {!Backend_intf.routine}. *)
 
   val link_batch :

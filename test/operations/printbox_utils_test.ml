@@ -44,9 +44,9 @@ let () =
   assert (String.is_substring s ~substring:"MB")
 
 let () =
-  (* Per-group speedup/mem_gain: group A (times 1,2,4) and group B (times 10,20,40).
-     With per-group max: both groups' speedups are [4.000; 2.000; 1.000].
-     With global max (40): group A's first speedup would be 40.000 -- the falsifier. *)
+  (* Per-group speedup/mem_gain: group A (times 1,2,4) and group B (times 10,20,40). With per-group
+     max: both groups' speedups are [4.000; 2.000; 1.000]. With global max (40): group A's first
+     speedup would be 40.000 -- the falsifier. *)
   let rows =
     [
       bench ~bench_title:"a1" ~time_in_sec:1.0 ~mem_in_bytes:10 ~result_label:"ms";
@@ -65,10 +65,10 @@ let () =
   assert (not (String.is_substring s ~substring:"40.000"))
 
 let () =
-  (* Non-consecutive same label: rows [ms, MB, ms] must be merged into one ms group,
-     not split into two. Merged ms group has times [1.0; 3.0], max=3.0, so first-row
-     speedup = 3.000. If split into two consecutive groups, each has max=its-only-row,
-     so all speedups would be 1.000 and "3.000" would never appear -- the falsifier. *)
+  (* Non-consecutive same label: rows [ms, MB, ms] must be merged into one ms group, not split into
+     two. Merged ms group has times [1.0; 3.0], max=3.0, so first-row speedup = 3.000. If split into
+     two consecutive groups, each has max=its-only-row, so all speedups would be 1.000 and "3.000"
+     would never appear -- the falsifier. *)
   let rows =
     [
       bench ~bench_title:"a" ~time_in_sec:1.0 ~mem_in_bytes:10 ~result_label:"ms";

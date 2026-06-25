@@ -396,8 +396,8 @@ let%track3_sexp link_compiled ~merge_buffer ~resolve ~runner_label ctx_buffers (
         | bs, Log_file_name :: ps ->
             Param_1 (ref (Some log_file_name), link bs ps Ctypes.(string @-> cs))
         | bs, Merge_buffer :: ps ->
-            (* The device's merge buffer is a [buffer_loc] set (lazily) by a transfer routine; resolve
-               it to the backend pointer at execution time. *)
+            (* The device's merge buffer is a [buffer_loc] set (lazily) by a transfer routine;
+               resolve it to the backend pointer at execution time. *)
             Param_2f (resolve, merge_buffer, link bs ps Ctypes.(ptr void @-> cs))
         | bs, Kparam_ptr tn :: ps ->
             let c_ptr =

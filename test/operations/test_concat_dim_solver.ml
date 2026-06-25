@@ -8,9 +8,9 @@
     [Concat = Concat] of unequal arity only reaches [unify_dim]'s generalized pairing arm. Building
     the constraints by hand and calling [solve_inequalities] pins the exact arm.
 
-    Before this task both AC1 GLB arms ([Affine]/[Concat]) raised [assert false]; the AC3 pairing arm
-    fired only at equal arity. The tests below would fault (Assert_failure) or fail to link on the
-    pre-task code. *)
+    Before this task both AC1 GLB arms ([Affine]/[Concat]) raised [assert false]; the AC3 pairing
+    arm fired only at equal arity. The tests below would fault (Assert_failure) or fail to link on
+    the pre-task code. *)
 
 open! Base
 open Ocannl
@@ -35,34 +35,37 @@ let ineq res v : Row.constraint_ =
 let eq d1 d2 : Row.constraint_ = Row.Dim_eq { d1; d2; origin = dummy_origin }
 
 (* Run a solve over [env], classifying the outcome so an [assert false] regression (any
-   non-[Shape_error] exception) is distinguished from a legitimate [Shape_error] and from success. *)
+   non-[Shape_error] exception) is distinguished from a legitimate [Shape_error] and from
+   success. *)
 let run_solve_env ~stage cs env =
   try `Ok (Row.solve_inequalities ~stage cs env) with
   | Row.Shape_error (m, _) -> `Shape m
   | e -> `Other (Exn.to_string e)
 
 let run_solve ~stage cs = run_solve_env ~stage cs Row.empty_env
-
 let has_dim_ineq cs = List.exists cs ~f:(function Row.Dim_ineq _ -> true | _ -> false)
 
 (* [v] forced through a size-[n] GLB iff equating it to [n] is consistent but to [n+1] conflicts. *)
 let forced_to_size ~env v n =
-  (match run_solve_env ~stage:Stage4 [ eq (Row.Var v) (dim n) ] env with `Ok _ -> true | _ -> false)
-  && match run_solve_env ~stage:Stage4 [ eq (Row.Var v) (dim (n + 1)) ] env with
-     | `Shape _ -> true
-     | _ -> false
+  (match run_solve_env ~stage:Stage4 [ eq (Row.Var v) (dim n) ] env with
+    | `Ok _ -> true
+    | _ -> false)
+  &&
+  match run_solve_env ~stage:Stage4 [ eq (Row.Var v) (dim (n + 1)) ] env with
+  | `Shape _ -> true
+  | _ -> false
 
 (* AC1 — GLB merge of two COMPATIBLE Concat bounds (stage 4) COMMITS: it forces the operand var
    through the merged GLB (and does not merely avoid raising). First inequality banks [Concat 2^3]
    (size 5) as the glb of a fresh operand var; the second feeds [Concat 1^4] (also size 5) into the
-   merge, which [unify_dim] reconciles, so at stage >= 4 the merge commits. Pre-task: [assert false].
+   merge, which [unify_dim] reconciles, so at stage >= 4 the merge commits. Pre-task: [assert
+   false].
 
-   The PASS condition pins the recipe, not just "Ok":
-   - no residual [Dim_ineq] survives — a Stage4 RE-DEFER mutation would leave one (this is exactly the
-     residual the postpone test below asserts IS present at Stage1);
-   - the operand is forced to size 5 — equating v = 5 is consistent, v = 6 conflicts. A mutation that
-     succeeds without forcing the operand through the GLB (drops the bound, or demotes to bcast-top)
-     fails [forced_to_size] (under bcast-top v = 5 itself would conflict). *)
+   The PASS condition pins the recipe, not just "Ok": - no residual [Dim_ineq] survives — a Stage4
+   RE-DEFER mutation would leave one (this is exactly the residual the postpone test below asserts
+   IS present at Stage1); - the operand is forced to size 5 — equating v = 5 is consistent, v = 6
+   conflicts. A mutation that succeeds without forcing the operand through the GLB (drops the bound,
+   or demotes to bcast-top) fails [forced_to_size] (under bcast-top v = 5 itself would conflict). *)
 let test_ac1_glb_merge_compatible () =
   Stdio.printf "AC1: GLB merge of two compatible Concat bounds (stage 4) commits (forces operand)\n";
   let v = Row.get_var () in
@@ -71,7 +74,9 @@ let test_ac1_glb_merge_compatible () =
       [ ineq (Row.Concat [ dim 2; dim 3 ]) v; ineq (Row.Concat [ dim 1; dim 4 ]) v ]
   with
   | `Ok (remaining, env) ->
-      let no_residual = (not (has_dim_ineq remaining)) && not (has_dim_ineq (Row.unsolved_constraints env)) in
+      let no_residual =
+        (not (has_dim_ineq remaining)) && not (has_dim_ineq (Row.unsolved_constraints env))
+      in
       let forced = forced_to_size ~env v 5 in
       if no_residual && forced then
         Stdio.printf "  PASS: operand committed to the merged size-5 GLB; no residual deferral\n"
@@ -85,10 +90,10 @@ let test_ac1_glb_merge_compatible () =
    committing to either bound. [Concat 2^3] (size 5) vs [Concat 2^4] (size 6): [unify_dim] fails.
    Pre-task: [assert false].
 
-   The PASS condition pins demotion specifically: the operand is solved to size 1 — the broadcast-top
-   that is distinct from BOTH bounds (5 and 6). A mutation that commits to either bound (5 or 6), or
-   re-defers (operand unsolved), or drops the GLB yields [get_dim_val <> Some 1] and flips the
-   assertion; merely "not raising" is not enough. *)
+   The PASS condition pins demotion specifically: the operand is solved to size 1 — the
+   broadcast-top that is distinct from BOTH bounds (5 and 6). A mutation that commits to either
+   bound (5 or 6), or re-defers (operand unsolved), or drops the GLB yields [get_dim_val <> Some 1]
+   and flips the assertion; merely "not raising" is not enough. *)
 let test_ac1_glb_merge_incompatible_demotes () =
   Stdio.printf "AC1: GLB merge of two incompatible Concat bounds (stage 4) demotes to bcast-top\n";
   let v = Row.get_var () in
@@ -107,9 +112,9 @@ let test_ac1_glb_merge_incompatible_demotes () =
   | `Other e -> Stdio.printf "  FAIL: regression (expected no assert false): %s\n" e
 
 (* AC1 — below stage 4 the merge POSTPONES: it neither crashes, commits, nor demotes — it re-defers
-   the inequality so the two bounds can still resolve equal later. PASS pins both halves: a [Dim_ineq]
-   survives in the residual AND the operand is left UNSOLVED (a Stage1 demote/commit mutation would
-   solve it — [get_dim_val] would be [Some _]). Pre-task: [assert false]. *)
+   the inequality so the two bounds can still resolve equal later. PASS pins both halves: a
+   [Dim_ineq] survives in the residual AND the operand is left UNSOLVED (a Stage1 demote/commit
+   mutation would solve it — [get_dim_val] would be [Some _]). Pre-task: [assert false]. *)
 let test_ac1_glb_merge_postpone_below_stage4 () =
   Stdio.printf "AC1: GLB merge below stage 4 postpones (defers, operand left unsolved)\n";
   let v = Row.get_var () in
@@ -164,8 +169,8 @@ let test_ac3_unequal_arity_all_var () =
 
 (* AC3 — the pairing arm fires even when the OTHER side carries a solved [Dim] (the guard is "one
    side all-Var", not "overlap all-Var", and must take precedence over the arithmetic-cancellation
-   arm). [Concat a^b] = [Concat (Dim 4)^e] with a,b,e variables: the all-Var left side fires the arm,
-   the oldest residual variables a and e are equated, and the leftover binds b to the solved 4
+   arm). [Concat a^b] = [Concat (Dim 4)^e] with a,b,e variables: the all-Var left side fires the
+   arm, the oldest residual variables a and e are equated, and the leftover binds b to the solved 4
    (a+b = 4+e with a=e ⟹ b=4). We verify b = 4. *)
 let test_ac3_one_side_all_var_other_has_solved () =
   Stdio.printf "AC3: one side all-Var, other carries a solved Dim — pairing arm still fires\n";
@@ -181,7 +186,8 @@ let test_ac3_one_side_all_var_other_has_solved () =
     | Row.Shape_error (m, _) -> `Shape m
     | ex -> `Other (Exn.to_string ex)
   with
-  | `Ok (Some 4) -> Stdio.printf "  PASS: leftover bound b = 4 (solved Dim crossed into all-Var side)\n"
+  | `Ok (Some 4) ->
+      Stdio.printf "  PASS: leftover bound b = 4 (solved Dim crossed into all-Var side)\n"
   | `Ok other ->
       Stdio.printf "  FAIL: expected b = 4, got %s\n"
         (match other with Some n -> Int.to_string n | None -> "?")
@@ -190,11 +196,11 @@ let test_ac3_one_side_all_var_other_has_solved () =
 
 (* Nested-[Concat] component (beyond the proposal, per user request): a component that is itself a
    [Concat] must be flattened (concatenation is associative — sum semantics) so the oldest-variable
-   pairing aligns by flat position, not by nesting level. [Concat [Concat [a; b]; c]] =
-   [Concat [d; e; f]] (all distinct vars) must link a=d, b=e, c=f. Without flattening the residual
-   [Concat[a;b]; c] is not all-`Var` (its first component is a nested `Concat`), so the pairing would
-   mis-align — its only top-level var c would pair with the other side's oldest var d — giving wrong
-   linkage (or a deferral). We force a:=2, b:=3, c:=4 and require d, e, f to read back 2, 3, 4. *)
+   pairing aligns by flat position, not by nesting level. [Concat [Concat [a; b]; c]] = [Concat [d;
+   e; f]] (all distinct vars) must link a=d, b=e, c=f. Without flattening the residual [Concat[a;b];
+   c] is not all-`Var` (its first component is a nested `Concat`), so the pairing would mis-align —
+   its only top-level var c would pair with the other side's oldest var d — giving wrong linkage (or
+   a deferral). We force a:=2, b:=3, c:=4 and require d, e, f to read back 2, 3, 4. *)
 let test_nested_concat_flattened () =
   Stdio.printf "Nested Concat: Concat[Concat[a;b];c] = Concat[d;e;f] flattens, links a=d,b=e,c=f\n";
   let a = Row.get_var () and b = Row.get_var () and c = Row.get_var () in
@@ -226,9 +232,10 @@ let test_nested_concat_flattened () =
    variable, non-solved component (an unresolved `Affine` from a strided axis) must NOT enter the
    pairing arm. [Concat [a; c]] = [Concat [Affine{2,w}; b]] is an underdetermined sum equality; the
    buggy "one side all-Var" guard equated the oldest variables (a=b) and forced the leftover (c) to
-   the affine, over-constraining. The fix requires BOTH residuals to be variables-only, so this falls
-   through to arithmetic deferral and leaves a and b INDEPENDENT. We detect the spurious a=b link: if
-   it were present, forcing a:=5 then b:=7 would conflict; it must instead be consistent. *)
+   the affine, over-constraining. The fix requires BOTH residuals to be variables-only, so this
+   falls through to arithmetic deferral and leaves a and b INDEPENDENT. We detect the spurious a=b
+   link: if it were present, forcing a:=5 then b:=7 would conflict; it must instead be
+   consistent. *)
 let test_ac3_affine_residual_not_overconstrained () =
   Stdio.printf "AC3: all-Var side vs Affine-bearing side — pairing must NOT over-constrain\n";
   let a = Row.get_var () and c = Row.get_var () and b = Row.get_var () and w = Row.get_var () in

@@ -23,7 +23,8 @@ let () =
   done;
   let ok = ref true in
   for i = 0 to 5 do
-    if Float.(abs (At.((ctx, x_deint).@{[| i |]}) - At.((ctx, roundtrip).@{[| i |]})) > 1e-5) then ok := false
+    if Float.(abs (At.((ctx, x_deint).@{[| i |]}) - At.((ctx, roundtrip).@{[| i |]})) > 1e-5) then
+      ok := false
   done;
   Stdio.printf "\nMatch: %b\n\n" !ok
 

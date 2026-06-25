@@ -6,10 +6,10 @@ module IDX = Train.IDX
 
 (* Regression test for the data-parallel training driver (task-2445dd1c, subtask 293c).
 
-   A small linear-regression step is run two ways and the resulting parameters are compared:
-   - n_shards = 1: the whole logical batch on a single shard (the single-shard baseline);
-   - n_shards = 2: the same logical batch split along the batch axis across two shards, with the
-     per-shard gradients all-reduced via merge-buffer transfer routines before one optimizer step.
+   A small linear-regression step is run two ways and the resulting parameters are compared: -
+   n_shards = 1: the whole logical batch on a single shard (the single-shard baseline); - n_shards =
+   2: the same logical batch split along the batch axis across two shards, with the per-shard
+   gradients all-reduced via merge-buffer transfer routines before one optimizer step.
 
    With a sum-over-batch loss and Sum reduction, the all-reduced gradient over the two half-batches
    equals the full-batch gradient exactly, so the two runs must land on identical parameters. The
@@ -36,8 +36,8 @@ let run ~n_shards : float array =
   (* Deterministic, id-independent parameter init so the two runs start identically regardless of
      how sharding changes tnode creation order. *)
   let learning_rate = NTDSL.param ~value:0.05 "lr" () in
-  (* Sum-over-batch squared error. [loss_of] creates its own parameter per call, so each shard gets a
-     distinct (but identically-initialized) replica, as the driver requires. *)
+  (* Sum-over-batch squared error. [loss_of] creates its own parameter per call, so each shard gets
+     a distinct (but identically-initialized) replica, as the driver requires. *)
   let loss_of x y =
     let w = TDSL.param ~values:[| 0.5 |] "w" ~output_dims:[ 1 ] () in
     [%op (((w *. x) - y) *. ((w *. x) - y)) ++ "...|... => 0"]
@@ -67,7 +67,8 @@ let multistep_ok () : bool =
       h.Parallel.step ();
       let l1 = h.Parallel.owner_loss_value () in
       (* Feed a fresh batch and step again. *)
-      h.Parallel.set_batch ~inputs:(make_batch "b2" [ [| 5. |]; [| 6. |]; [| 7. |]; [| 8. |] ])
+      h.Parallel.set_batch
+        ~inputs:(make_batch "b2" [ [| 5. |]; [| 6. |]; [| 7. |]; [| 8. |] ])
         ~targets:(make_batch "t2" [ [| 10. |]; [| 12. |]; [| 14. |]; [| 16. |] ]);
       h.Parallel.step ();
       let l2 = h.Parallel.owner_loss_value () in
@@ -102,12 +103,12 @@ let driver_routes_seed_into_shards () : bool =
   let l_b = owner_loss_with_base_seed 1000 in
   not (Float.equal l_a l_b)
 
-(* Shard-to-shard divergence: the driver must seed shard 0 and shard 1 *differently* (base_seed + i),
-   not all with base_seed. The handle reports the exact per-shard seeds it used; this asserts they
-   are pairwise distinct (specifically shard 0 <> shard 1, and equal to base_seed + i). Flips if the
-   driver seeds every shard with base_seed (the reviewer's mutation target: dropping the [+ i]). A
-   draw comparison cannot stand in here because shards already diverge through distinct [self_id]s
-   regardless of the seed. *)
+(* Shard-to-shard divergence: the driver must seed shard 0 and shard 1 *differently* (base_seed +
+   i), not all with base_seed. The handle reports the exact per-shard seeds it used; this asserts
+   they are pairwise distinct (specifically shard 0 <> shard 1, and equal to base_seed + i). Flips
+   if the driver seeds every shard with base_seed (the reviewer's mutation target: dropping the [+
+   i]). A draw comparison cannot stand in here because shards already diverge through distinct
+   [self_id]s regardless of the seed. *)
 let shards_seeded_distinctly () : bool =
   let learning_rate = NTDSL.param ~value:0.0 "lr" () in
   let loss_of x y =

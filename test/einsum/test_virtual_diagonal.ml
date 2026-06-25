@@ -3,9 +3,9 @@
 
    Each case builds a diagonal/partially-diagonal producer with an einsum and consumes it WITHOUT
    materializing the producer, so the producer virtualizes and inlines (with an equality guard) into
-   the consumer. The printed values must match materialized execution: off-diagonal cells stay at the
-   zero/init value and the diagonal cells carry the producer value. The optimized-IR structure (guard
-   present for distinct symbols, folded for equal indices) is pinned separately by
+   the consumer. The printed values must match materialized execution: off-diagonal cells stay at
+   the zero/init value and the diagonal cells carry the producer value. The optimized-IR structure
+   (guard present for distinct symbols, folded for equal indices) is pinned separately by
    test/operations/virtual_diagonal. *)
 
 open Base
@@ -14,8 +14,8 @@ module IDX = Train.IDX
 module CDSL = Train.CDSL
 open Nn_blocks.DSL_modules
 
-(* Diagonal producer read by a generic consumer: diagonal i=>ii, then (diagonal + 1).
-   Expected 5x5: ones everywhere except the diagonal, which is [1;2;3;4;5]. *)
+(* Diagonal producer read by a generic consumer: diagonal i=>ii, then (diagonal + 1). Expected 5x5:
+   ones everywhere except the diagonal, which is [1;2;3;4;5]. *)
 let test_diagonal_generic () =
   Stdio.printf "\nDiagonal i=>ii inlined into a generic consumer (diagonal + 1):\n";
   Tensor.unsafe_reinitialize ();

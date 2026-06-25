@@ -22,32 +22,37 @@ let leq ~opnd ~res : bool =
   with Row.Shape_error _ -> false
 
 let d ~basis n = Row.get_dim ~d:n ~basis ()
+
 let report name ~expect actual =
   if Bool.equal expect actual then Stdio.printf "  PASS: %s\n" name
   else Stdio.printf "  FAIL: %s (expected %b, got %b)\n" name expect actual
 
 (* The basis a dim variable resolves to in [env] (or "" if unsolved/unnamed). *)
 let var_basis env v =
-  let row = { Row.beg_dims = []; dims = [ Row.Var v ]; bcast = Broadcastable; prov = Row.empty_provenance } in
+  let row =
+    { Row.beg_dims = []; dims = [ Row.Var v ]; bcast = Broadcastable; prov = Row.empty_provenance }
+  in
   let bases = Row.row_to_bases env row in
   if Array.length bases > 0 then bases.(0) else ""
 
-(* AC#10 — transitivity: under the old [None] wildcard, [3_default ⊑ 3_rgb] and
-   [3_xyz ⊑ 3_default] both held (the bridge) while [3_xyz ⊑ 3_rgb] did not — a non-transitive
-   relation. With the total basis the bridge links themselves reject, so no chain relates two
-   directly-unrelated dims. *)
+(* AC#10 — transitivity: under the old [None] wildcard, [3_default ⊑ 3_rgb] and [3_xyz ⊑ 3_default]
+   both held (the bridge) while [3_xyz ⊑ 3_rgb] did not — a non-transitive relation. With the total
+   basis the bridge links themselves reject, so no chain relates two directly-unrelated dims. *)
 let test_transitivity () =
   Stdio.printf "Transitivity: bridging through default no longer relates rgb and xyz\n";
   (* The two former "bridge" links now reject. *)
-  report "3_default ⊑ 3_rgb rejects" ~expect:false (leq ~opnd:(d ~basis:"rgb" 3) ~res:(d ~basis:"default" 3));
-  report "3_xyz ⊑ 3_default rejects" ~expect:false (leq ~opnd:(d ~basis:"default" 3) ~res:(d ~basis:"xyz" 3));
+  report "3_default ⊑ 3_rgb rejects" ~expect:false
+    (leq ~opnd:(d ~basis:"rgb" 3) ~res:(d ~basis:"default" 3));
+  report "3_xyz ⊑ 3_default rejects" ~expect:false
+    (leq ~opnd:(d ~basis:"default" 3) ~res:(d ~basis:"xyz" 3));
   (* The endpoints never related directly, and still do not. *)
-  report "3_xyz ⊑ 3_rgb rejects" ~expect:false (leq ~opnd:(d ~basis:"rgb" 3) ~res:(d ~basis:"xyz" 3));
+  report "3_xyz ⊑ 3_rgb rejects" ~expect:false
+    (leq ~opnd:(d ~basis:"rgb" 3) ~res:(d ~basis:"xyz" 3));
   (* Same tag still relates reflexively. *)
   report "3_rgb ⊑ 3_rgb accepts" ~expect:true (leq ~opnd:(d ~basis:"rgb" 3) ~res:(d ~basis:"rgb" 3))
 
-(* AC#3 — top vs atom-unit order oppositely. [1_(bcast_if_1)] (top) is above everything;
-   [1_default] (a size-1 atom) is above only itself. *)
+(* AC#3 — top vs atom-unit order oppositely. [1_(bcast_if_1)] (top) is above everything; [1_default]
+   (a size-1 atom) is above only itself. *)
 let test_top_asymmetry () =
   Stdio.printf "Top asymmetry: 1_(bcast_if_1) broadcasts, 1_default does not\n";
   report "5_rgb ⊑ 1_(bcast_if_1) accepts" ~expect:true
@@ -69,9 +74,9 @@ let test_advertisable_affordance () =
   report "5_(bcast_if_1) ⊑ 5_(bcast_if_1) accepts (equal atom)" ~expect:true
     (leq ~opnd:(d ~basis:Row.bcast_if_1 5) ~res:(d ~basis:Row.bcast_if_1 5))
 
-(* AC#4 / brief §Technical-issue-1 — an explicit user size-1 axis ([1_default]) is an atom that
-   does NOT stretch, in contrast to the broadcast top [1_(bcast_if_1)]. This pins the provenance
-   split at the order level: only the top is above a larger axis. *)
+(* AC#4 / brief §Technical-issue-1 — an explicit user size-1 axis ([1_default]) is an atom that does
+   NOT stretch, in contrast to the broadcast top [1_(bcast_if_1)]. This pins the provenance split at
+   the order level: only the top is above a larger axis. *)
 let test_explicit_one_does_not_stretch () =
   Stdio.printf "Explicit user 1_default does not stretch; only 1_(bcast_if_1) does\n";
   report "5_default ⊑ 1_default rejects (no stretch)" ~expect:false

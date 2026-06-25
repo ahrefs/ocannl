@@ -22,9 +22,10 @@ type settings = {
           (2 rounds). Defaults to "light" for better performance. *)
   mutable large_models : bool;
       (** If true, use uint64 for indexing arithmetic. If false, use uint32 for indexing arithmetic.
-          This affects all backends' kernel index parameters and local index variables, and gates the
-          per-pool offset width (uint32 caps a pool at 4 GB; see the pool allocator). Decoupled in
-          intent from element indexing within a single tensor, though both currently follow it. *)
+          This affects all backends' kernel index parameters and local index variables, and gates
+          the per-pool offset width (uint32 caps a pool at 4 GB; see the pool allocator). Decoupled
+          in intent from element indexing within a single tensor, though both currently follow it.
+      *)
 }
 [@@deriving sexp]
 
@@ -49,33 +50,71 @@ let known_config_keys =
     (module String)
     [
       (* Bootstrap keys (read before config file via read_cmdline_or_env_var directly) *)
-      "suppress_welcome_message"; "no_config_file";
+      "suppress_welcome_message";
+      "no_config_file";
       (* Utils.settings *)
-      "log_level"; "debug_log_from_routines"; "output_debug_files_in_build_directory";
-      "fixed_state_for_init"; "print_decimals_precision"; "check_half_prec_constants_cutoff";
-      "default_prng_variant"; "large_models"; "big_models" (* deprecated alias for large_models *);
+      "log_level";
+      "debug_log_from_routines";
+      "output_debug_files_in_build_directory";
+      "fixed_state_for_init";
+      "print_decimals_precision";
+      "check_half_prec_constants_cutoff";
+      "default_prng_variant";
+      "large_models";
+      "big_models" (* deprecated alias for large_models *);
       (* Cleanup / startup *)
-      "build_files_prefix"; "clean_up_build_files_on_startup"; "clean_up_log_files_on_startup";
+      "build_files_prefix";
+      "clean_up_build_files_on_startup";
+      "clean_up_log_files_on_startup";
       "never_capture_stdout";
       (* ppx_minidebug *)
-      "snapshot_every_sec"; "time_tagged"; "elapsed_times"; "location_format"; "debug_backend";
-      "hyperlink_prefix"; "logs_print_scope_ids"; "logs_verbose_scope_ids";
-      "log_main_domain_to_stdout"; "log_file_stem"; "prev_run_prefix"; "toc_entry_minimal_depth";
-      "toc_entry_minimal_size"; "toc_entry_minimal_span"; "debug_highlights";
-      "debug_highlight_pcre"; "diff_ignore_pattern_pcre"; "diff_max_distance_factor";
-      "debug_scope_id_pairs"; "debug_log_truncate_children"; "debug_log_prune_upto";
+      "snapshot_every_sec";
+      "time_tagged";
+      "elapsed_times";
+      "location_format";
+      "debug_backend";
+      "hyperlink_prefix";
+      "logs_print_scope_ids";
+      "logs_verbose_scope_ids";
+      "log_main_domain_to_stdout";
+      "log_file_stem";
+      "prev_run_prefix";
+      "toc_entry_minimal_depth";
+      "toc_entry_minimal_size";
+      "toc_entry_minimal_span";
+      "debug_highlights";
+      "debug_highlight_pcre";
+      "diff_ignore_pattern_pcre";
+      "diff_max_distance_factor";
+      "debug_scope_id_pairs";
+      "debug_log_truncate_children";
+      "debug_log_prune_upto";
       "debug_log_to_stream_files";
       (* Backends *)
-      "backend"; "prefer_backend_uniformity"; "cc_backend_optimization_level";
-      "cc_backend_compiler_command"; "cc_backend_arch_flags"; "cc_backend_fast_math";
-      "cc_backend_post_compile_timeout"; "cc_backend_verify_codesign";
-      "output_dlls_in_build_directory"; "cuda_printf_fifo_size";
+      "backend";
+      "prefer_backend_uniformity";
+      "cc_backend_optimization_level";
+      "cc_backend_compiler_command";
+      "cc_backend_arch_flags";
+      "cc_backend_fast_math";
+      "cc_backend_post_compile_timeout";
+      "cc_backend_verify_codesign";
+      "output_dlls_in_build_directory";
+      "cuda_printf_fifo_size";
       (* Low-level / optimization *)
-      "virtualize_max_visits"; "virtualize_max_tracing_dim"; "enable_device_only";
-      "inline_scalar_constexprs"; "inline_simple_computations"; "inline_complex_computations";
-      "output_prec_in_ll_files"; "stack_threshold_in_bytes";
+      "virtualize_max_visits";
+      "virtualize_max_tracing_dim";
+      "enable_device_only";
+      "inline_scalar_constexprs";
+      "inline_simple_computations";
+      "inline_complex_computations";
+      "output_prec_in_ll_files";
+      "stack_threshold_in_bytes";
       (* Identifiers and other *)
-      "ll_ident_style"; "cd_ident_style"; "default_prec"; "limit_constant_fill_size";
+      "ll_ident_style";
+      "cd_ident_style";
+      "default_prec";
+      "limit_constant_fill_size";
       "max_shape_error_origins";
     ]
 
@@ -183,8 +222,8 @@ let config_file_args =
       in
       if String.length fname > 0 then
         Hashtbl.iter_keys result ~f:(fun key ->
-          if not (Set.mem known_config_keys key) then
-            Stdio.eprintf "OCANNL warning: unknown config key %S in %s\n%!" key fname);
+            if not (Set.mem known_config_keys key) then
+              Stdio.eprintf "OCANNL warning: unknown config key %S in %s\n%!" key fname);
       if
         String.length fname > 0
         && (not (suppress_welcome_message ()))
@@ -263,11 +302,12 @@ let clean_filename fname =
       ~f:(fun c -> if List.exists ~f:(equal_char c) [ '/'; '\\'; ':' ] then '-' else c)
       fname
   in
-  (* Reject bare "."/".." (and the empty string): otherwise
-     filename_concat "build_files" cleaned can resolve to build_files/..
-     and the startup cleanup (clean_up_build_files_on_startup=true) would
-     recursively delete the parent directory. *)
-  match fname with "" | "." | ".." -> "_" | _ -> fname
+  (* Reject bare "."/".." (and the empty string): otherwise filename_concat "build_files" cleaned
+     can resolve to build_files/.. and the startup cleanup (clean_up_build_files_on_startup=true)
+     would recursively delete the parent directory. *)
+  match fname with
+  | "" | "." | ".." -> "_"
+  | _ -> fname
 
 let build_file fname =
   let prefix = get_global_arg ~default:"" ~arg_name:"build_files_prefix" in
@@ -296,32 +336,29 @@ let () =
      follows symlinks, so a symlink inside build_files/log_files pointing outside
      the tree would cause recursion to delete unrelated files. We unlink the link
      itself instead of descending. *)
-  let lstat_kind path =
-    try Some (Unix.lstat path).st_kind with Unix.Unix_error _ -> None
-  in
+  let lstat_kind path = try Some (Unix.lstat path).st_kind with Unix.Unix_error _ -> None in
   let rec remove_dir_if_exists dirname =
     match lstat_kind dirname with
     | None -> ()
-    | Some Unix.S_DIR ->
-        (try
-           Array.iter (Stdlib.Sys.readdir dirname) ~f:(fun fname ->
-               let path = Stdlib.Filename.concat dirname fname in
-               match lstat_kind path with
-               | Some Unix.S_DIR -> remove_dir_if_exists path
-               | Some _ | None ->
-                   (* Regular file, symlink (to file or dir), socket, etc.:
-                      unlink the entry, do not follow. *)
-                   (try Stdlib.Sys.remove path with Stdlib.Sys_error _ -> ()));
-           Stdlib.Sys.rmdir dirname
-         with exn ->
-           Stdio.eprintf "Failed to delete directory %s: %s\n%!" dirname
-             (Exn.to_string exn))
-    | Some _ ->
+    | Some Unix.S_DIR -> (
+        try
+          Array.iter (Stdlib.Sys.readdir dirname) ~f:(fun fname ->
+              let path = Stdlib.Filename.concat dirname fname in
+              match lstat_kind path with
+              | Some Unix.S_DIR -> remove_dir_if_exists path
+              | Some _ | None -> (
+                  (* Regular file, symlink (to file or dir), socket, etc.: unlink the entry, do not
+                     follow. *)
+                  try Stdlib.Sys.remove path with Stdlib.Sys_error _ -> ()));
+          Stdlib.Sys.rmdir dirname
+        with exn ->
+          Stdio.eprintf "Failed to delete directory %s: %s\n%!" dirname (Exn.to_string exn))
+    | Some _ -> (
         (* Symlink (even to a dir), regular file, etc.: unlink the entry. *)
-        (try Stdlib.Sys.remove dirname
-         with exn ->
-           Stdio.eprintf "Failed to delete %s (expected a directory): %s\n%!" dirname
-             (Exn.to_string exn))
+        try Stdlib.Sys.remove dirname
+        with exn ->
+          Stdio.eprintf "Failed to delete %s (expected a directory): %s\n%!" dirname
+            (Exn.to_string exn))
   in
   let clean_up_log_files_on_startup =
     get_global_flag ~default:true ~arg_name:"clean_up_log_files_on_startup"
@@ -330,10 +367,10 @@ let () =
   let clean_up_build_files_on_startup =
     get_global_flag ~default:true ~arg_name:"clean_up_build_files_on_startup"
   in
-  if clean_up_build_files_on_startup then (
+  if clean_up_build_files_on_startup then
     let prefix = get_global_arg ~default:"" ~arg_name:"build_files_prefix" in
     if String.is_empty prefix then remove_dir_if_exists "build_files"
-    else remove_dir_if_exists (filename_concat "build_files" (clean_filename prefix)))
+    else remove_dir_if_exists (filename_concat "build_files" (clean_filename prefix))
 
 let get_local_debug_runtime =
   let snapshot_every_sec =
@@ -529,7 +566,8 @@ let restore_settings () =
     @@ get_global_arg ~arg_name:"check_half_prec_constants_cutoff" ~default:"16384.0";
   settings.default_prng_variant <- get_global_arg ~default:"light" ~arg_name:"default_prng_variant";
   (* [big_models] is the pre-gh-ocannl-344 name; read it as a fallback so existing configs / CLI /
-     OCANNL_BIG_MODELS still enable 64-bit index and pool-offset widths when [large_models] is unset. *)
+     OCANNL_BIG_MODELS still enable 64-bit index and pool-offset widths when [large_models] is
+     unset. *)
   settings.large_models <-
     get_global_flag
       ~default:(get_global_flag ~default:false ~arg_name:"big_models")
@@ -540,14 +578,14 @@ let () = restore_settings ()
 let () =
   let ocannl_prefixes = [ "--ocannl_"; "--ocannl-"; "-ocannl_"; "-ocannl-" ] in
   Array.iter Stdlib.Sys.argv ~f:(fun arg ->
-    match List.find ocannl_prefixes ~f:(fun p -> String.is_prefix ~prefix:p arg) with
-    | None -> ()
-    | Some prefix ->
-        let rest = String.drop_prefix arg (String.length prefix) in
-        let raw_key = match String.lsplit2 rest ~on:'=' with Some (k, _) -> k | None -> rest in
-        let key = String.tr ~target:'-' ~replacement:'_' @@ String.lowercase raw_key in
-        if not (Set.mem known_config_keys key) then
-          Stdio.eprintf "OCANNL warning: unknown commandline argument %S\n%!" arg)
+      match List.find ocannl_prefixes ~f:(fun p -> String.is_prefix ~prefix:p arg) with
+      | None -> ()
+      | Some prefix ->
+          let rest = String.drop_prefix arg (String.length prefix) in
+          let raw_key = match String.lsplit2 rest ~on:'=' with Some (k, _) -> k | None -> rest in
+          let key = String.tr ~target:'-' ~replacement:'_' @@ String.lowercase raw_key in
+          if not (Set.mem known_config_keys key) then
+            Stdio.eprintf "OCANNL warning: unknown commandline argument %S\n%!" arg)
 
 let with_runtime_debug () = settings.output_debug_files_in_build_directory && settings.log_level > 1
 let debug_log_from_routines () = settings.debug_log_from_routines && settings.log_level > 1

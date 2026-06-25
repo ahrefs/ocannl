@@ -3,13 +3,12 @@ module Train = Ocannl.Train
 open Ocannl.Nn_blocks.DSL_modules
 module Tn = Ir.Tnode
 
-(* Falsifier: tensors whose labels match C keywords or C math function names must get
-   disambiguated code names (n<id>_<label>) rather than the bare name.  A bare keyword
-   would produce ill-formed C like [float float[1] = ...] or [return return[1] = ...].
-   A bare math-function name would shadow the callee in the same generated routine. *)
+(* Falsifier: tensors whose labels match C keywords or C math function names must get disambiguated
+   code names (n<id>_<label>) rather than the bare name. A bare keyword would produce ill-formed C
+   like [float float[1] = ...] or [return return[1] = ...]. A bare math-function name would shadow
+   the callee in the same generated routine. *)
 
-let mk label =
-  Tensor.term ~label:[ label ] ~grad_spec:Prohibit_grad ~output_dims:[ 1 ] ()
+let mk label = Tensor.term ~label:[ label ] ~grad_spec:Prohibit_grad ~output_dims:[ 1 ] ()
 
 let print_code_name label tn =
   match tn.Tn.code_name with
@@ -39,10 +38,10 @@ let () =
   print_code_name "int" t_int.value;
   print_code_name "float" t_float.value;
 
-  (* ── Test 2: C math function name labels ──
-     exp/log exercise the direct (non-nested) unop extraction path.
-     floorf/fabsf exercise the Satur01_gate binop path where the old remove_paren approach
-     produced the wrong combined string "fabsffloorf" instead of two entries "fabsf" and "floorf". *)
+  (* ── Test 2: C math function name labels ── exp/log exercise the direct (non-nested) unop
+     extraction path. floorf/fabsf exercise the Satur01_gate binop path where the old remove_paren
+     approach produced the wrong combined string "fabsffloorf" instead of two entries "fabsf" and
+     "floorf". *)
   Tensor.unsafe_reinitialize ();
   let ctx2 = Context.auto () in
   let t_exp = mk "exp" in

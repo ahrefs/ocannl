@@ -23,7 +23,10 @@ let plan_pool_segments ~(cap : int) ~(what : string) ~(debug_name : int -> strin
     (items : (int * int) list) : (int * int) list * int list =
   let align_up off a = if a <= 1 then off else (off + a - 1) / a * a in
   let seg = ref 0 and bump = ref 0 in
-  let closed = ref [] (* completed segment sizes, reversed *) in
+  let closed =
+    ref []
+    (* completed segment sizes, reversed *)
+  in
   let assignments =
     List.mapi items ~f:(fun i (size, align) ->
         if size > cap then
@@ -66,8 +69,8 @@ let check_merge_buffer device ~code_node =
 (* Static counterpart of [check_merge_buffer]: verifies at link time -- before any schedule runs --
    that the merge-buffer node statically recorded on the linked [context] (by a [device_to_device]
    transfer routine, see {!Add_buffer_retrieval_and_syncing.device_to_device}) matches the node the
-   linked [code] expects. This is the "static verification in the right direction" of
-   gh-ocannl-288: the transfer routine's context chains naturally into the consumer's link. *)
+   linked [code] expects. This is the "static verification in the right direction" of gh-ocannl-288:
+   the transfer routine's context chains naturally into the consumer's link. *)
 let check_merge_buffer_static ~merge_buffer_node ~code_node =
   let name = function Some tn -> Tnode.debug_name tn | None -> "none" in
   match (merge_buffer_node, code_node) with
@@ -77,7 +80,7 @@ let check_merge_buffer_static ~merge_buffer_node ~code_node =
       raise
       @@ Utils.User_error
            ("Merge buffer mismatch at link time: the linked context provides "
-           ^ name merge_buffer_node ^ ", but the linked code expects " ^ name code_node)
+          ^ name merge_buffer_node ^ ", but the linked code expects " ^ name code_node)
 
 module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncing) = struct
   let wait_for_ready ~dst ~src tn =
@@ -90,16 +93,18 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
 
   (* Shared allocator seam: mints a deterministic per-device [pool_id] (advancing
      [device.next_pool_id] in the caller's tnode-iteration order), allocates the slab through the
-     backend's int-in/int-out API, and returns the [buffer_loc]. Phase-1 policy is one pool per tnode
-     at offset 0 -- byte-for-byte equivalent to the old per-tnode allocation. [zero_init] selects the
-     old [alloc_zeros] vs [alloc_array] behavior. *)
+     backend's int-in/int-out API, and returns the [buffer_loc]. Phase-1 policy is one pool per
+     tnode at offset 0 -- byte-for-byte equivalent to the old per-tnode allocation. [zero_init]
+     selects the old [alloc_zeros] vs [alloc_array] behavior. *)
   let allocate (device : _ Backend_intf.device) (tn : Tn.t) ~zero_init : Backend_intf.buffer_loc =
     let pool_id = device.next_pool_id in
     device.next_pool_id <- pool_id + 1;
     let prec = Lazy.force tn.Tn.prec in
     (* Compute the byte size from dims*prec rather than forcing [tn.size_in_bytes], to keep the
        node's debug printout (and lazy-forcing behavior) byte-for-byte as before. *)
-    let size_in_bytes = Array.fold (Lazy.force tn.Tn.dims) ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
+    let size_in_bytes =
+      Array.fold (Lazy.force tn.Tn.dims) ~init:1 ~f:( * ) * Ops.prec_in_bytes prec
+    in
     let mode = Option.map tn.Tn.memory_mode ~f:fst in
     Backend.alloc_pool ?mode device ~pool_id ~size_in_bytes ~alignment:(Ops.prec_in_bytes prec);
     if zero_init then Backend.memset_zero device ~pool_id ~offset:0 ~size_in_bytes;
@@ -110,8 +115,8 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     | Some loc ->
         [%log "copying", Tn.debug_name tn, "at", (loc : Backend_intf.buffer_loc), "to host"];
         (* No cross-stream writer synchronization needed: multi-streaming was removed
-           (gh-ocannl-341). Only one stream exists per device, so there are no
-           concurrent cross-stream writes to wait for before this device-to-host copy. *)
+           (gh-ocannl-341). Only one stream exists per device, so there are no concurrent
+           cross-stream writes to wait for before this device-to-host copy. *)
         Backend.to_host ~src:ctx ~src_loc:loc hosted;
         true
     | None -> false
@@ -189,9 +194,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
                       "to",
                       Backend.get_name dst.device]
                   in
-                  let schedule =
-                    Task.Task { context_lifetime = (src, dst); description; work }
-                  in
+                  let schedule = Task.Task { context_lifetime = (src, dst); description; work } in
                   Some
                     {
                       context;
@@ -324,9 +327,7 @@ let%debug3_sexp verify_prior_context ~ctx_arrays ~from_prior_context : unit =
 let%debug3_sexp from_prior_context_batch (comps : Assignments.comp option array) : Tn.t_set =
   Array.filter_map comps ~f:(fun comp ->
       Option.map comp ~f:(fun comp ->
-          Set.diff
-            (Assignments.context_nodes comp.Assignments.asgns)
-            comp.embedded_nodes))
+          Set.diff (Assignments.context_nodes comp.Assignments.asgns) comp.embedded_nodes))
   |> Array.fold ~init:(Set.empty (module Tnode)) ~f:Set.union
 
 (** Adds a scheduler and brings a lowered no-device backend on par with lowered device backends. *)
@@ -365,9 +366,9 @@ struct
   let link context (code : code) ctx_buffers : Indexing.lowered_bindings * Task.t =
     let runner_label = get_name context.device in
     let merge_buffer = context.device.merge_buffer in
-    (* [resolve] is the device's backend-private [buffer_loc -> base] lookup; [link_compiled] does the
-       (eager) [ctx_buffers] and (lazy) merge-buffer resolution with it, backend-side. The generic
-       shared layer never sees a raw pointer. *)
+    (* [resolve] is the device's backend-private [buffer_loc -> base] lookup; [link_compiled] does
+       the (eager) [ctx_buffers] and (lazy) merge-buffer resolution with it, backend-side. The
+       generic shared layer never sees a raw pointer. *)
     let resolve = resolve_pool context.device in
     let bindings, to_schedule =
       link_compiled ~merge_buffer ~resolve ~runner_label ctx_buffers code.proc
@@ -398,7 +399,8 @@ struct
     (Option.value_exn ~here:[%here] bindings, schedules)
 
   (* Transfers take {!Backend_intf.buffer_loc} and resolve to the backend pointer here, against the
-     device's private pool table -- the resolution is backend-side, not in the generic shared layer. *)
+     device's private pool table -- the resolution is backend-side, not in the generic shared
+     layer. *)
   let from_host ~dst ~dst_loc hosted =
     let dst_ptr = resolve_pool dst.device dst_loc in
     let work () = host_to_buffer hosted ~dst:dst_ptr in
@@ -516,14 +518,14 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     let prec = Lazy.force key.Tn.prec in
     Array.fold (Lazy.force key.Tn.dims) ~init:1 ~f:( * ) * Ops.prec_in_bytes prec
 
-  (* gh-ocannl-344 Phase B/C: allocate a context's delta -- the in-context tnodes not already present
-     in [context.ctx_buffers]. Working (non-constant) and constant/read-only nodes are EACH packed
-     into pools sized to their group and bump-assigned increasing byte offsets, replacing the
+  (* gh-ocannl-344 Phase B/C: allocate a context's delta -- the in-context tnodes not already
+     present in [context.ctx_buffers]. Working (non-constant) and constant/read-only nodes are EACH
+     packed into pools sized to their group and bump-assigned increasing byte offsets, replacing the
      one-pool-per-tnode policy. Working pools belong to the context (freed at its [finalize]);
-     constant pools are deduped per-device via [constant_buffer_cache] and outlive the context (freed
-     at device teardown). Enumeration follows [traced_store] order so pool ids and offsets stay
-     deterministic across runs. The per-pool 4 GB cap (uint32 offsets unless large_models) is enforced
-     by {!Backend_utils.plan_pool_segments}. *)
+     constant pools are deduped per-device via [constant_buffer_cache] and outlive the context
+     (freed at device teardown). Enumeration follows [traced_store] order so pool ids and offsets
+     stay deterministic across runs. The per-pool 4 GB cap (uint32 offsets unless large_models) is
+     enforced by {!Backend_utils.plan_pool_segments}. *)
   let%track3_sexp allocate_delta (context : context) (traced_store : Low_level.traced_store) :
       ctx_buffers =
     let device = context.device in
@@ -531,8 +533,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     (* Pass 1: partition the delta, preserving [traced_store] iteration order. Slice-alias views own
        no buffer and are excluded automatically: [is_in_context_force] returns false for them
        (gh-ocannl-293 293a). Their parent is materialized and is allocated here (or already present
-       from a prior context) like any other node, since the alias's redirected reads/writes reference
-       the parent in the lowered code. *)
+       from a prior context) like any other node, since the alias's redirected reads/writes
+       reference the parent in the lowered code. *)
     let working = ref [] and constants = ref [] in
     Hashtbl.iteri traced_store ~f:(fun ~key ~data:node ->
         if Tnode.is_in_context_force key 43 && not (Map.mem context.ctx_buffers key) then
@@ -578,8 +580,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
             let size_in_bytes = size_in_bytes_of key in
             let alloc () : buffer_loc =
               let host_init = Host_inits.find key in
-              (* Zero-initialize unless the node will be copied from host immediately, or the lowered
-                 code already zero-initializes it. *)
+              (* Zero-initialize unless the node will be copied from host immediately, or the
+                 lowered code already zero-initializes it. *)
               let zero_init =
                 not (Option.is_some host_init || node.Low_level.zero_initialized_by_code)
               in
@@ -597,10 +599,10 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
         ctx_buffers := Map.add_exn !ctx_buffers ~key ~data:(alloc ()));
     (* Pass 2b: constants / read-only -> per-device constant pool(s). Constants already allocated on
        this device (a hit in [constant_buffer_cache], possibly from another context tree) resolve
-       directly and are excluded from the new slab, so the freshly-minted constant pool holds exactly
-       this device's genuinely-new constants -- no wasted holes. The remaining new constants pack
-       into one constant pool (or more, past the cap), deduped into the cache. Constant pools outlive
-       the context and are skipped by context [finalize] (freed at device teardown). *)
+       directly and are excluded from the new slab, so the freshly-minted constant pool holds
+       exactly this device's genuinely-new constants -- no wasted holes. The remaining new constants
+       pack into one constant pool (or more, past the cap), deduped into the cache. Constant pools
+       outlive the context and are skipped by context [finalize] (freed at device teardown). *)
     let new_constants = ref [] in
     List.iter constants ~f:(fun (key, node) ->
         match Hashtbl.find device.constant_buffer_cache key with
@@ -612,11 +614,10 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     !ctx_buffers
 
   let%debug3_sexp link context (code : code) =
-    verify_prior_context ~ctx_arrays:context.ctx_buffers
-      ~from_prior_context:code.from_prior_context;
-    (* Static merge-buffer verification "in the right direction" (gh-ocannl-288): the linked
-       context carries the merge-buffer node of the producing [device_to_device] transfer routine;
-       a mismatch with the consuming code raises here, at link time, before any schedule runs. *)
+    verify_prior_context ~ctx_arrays:context.ctx_buffers ~from_prior_context:code.from_prior_context;
+    (* Static merge-buffer verification "in the right direction" (gh-ocannl-288): the linked context
+       carries the merge-buffer node of the producing [device_to_device] transfer routine; a
+       mismatch with the consuming code raises here, at link time, before any schedule runs. *)
     check_merge_buffer_static ~merge_buffer_node:context.merge_buffer_node
       ~code_node:code.expected_merge_node;
     let (inputs, outputs), merge_buffer_input = Low_level.input_and_output_nodes code.lowered in

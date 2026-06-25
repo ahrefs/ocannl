@@ -1,6 +1,6 @@
-(* Regression test for gh-ocannl-340: Local_scope and Declare_local declarations should omit the
-   [= 0] initializer when the body writes the local before any read (non-recurrent case), and keep
-   it when the body reads the local before the first write (recurrent/accumulator case).
+(* Regression test for gh-ocannl-340: Local_scope and Declare_local declarations should omit the [=
+   0] initializer when the body writes the local before any read (non-recurrent case), and keep it
+   when the body reads the local before the first write (recurrent/accumulator case).
 
    This exercises [reads_scope_before_set] directly and checks generated C via [compile_main]. *)
 
@@ -32,7 +32,8 @@ let pp llc =
 
     let procs = [| optimized |]
     let full_printf_support = true
-  end)) in
+  end))
+  in
   PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (Syntax.compile_main llc)
 
 (* ===== reads_scope_before_set unit tests ===== *)
@@ -57,8 +58,7 @@ let () =
     LL.Seq
       ( LL.Set_local (id, LL.Constant 0.),
         LL.Set_local
-          ( id,
-            LL.Binop (Ops.Add, (LL.Get_local id, Ops.single), (LL.Constant 1., Ops.single)) ) )
+          (id, LL.Binop (Ops.Add, (LL.Get_local id, Ops.single), (LL.Constant 1., Ops.single))) )
   in
   assert (not (LL.reads_scope_before_set id body_write_then_use));
 
@@ -85,21 +85,20 @@ let () =
         to_ = 3;
         body =
           LL.Set_local
-            ( id,
-              LL.Binop (Ops.Add, (LL.Get_local id, Ops.single), (LL.Constant 1., Ops.single)) );
+            (id, LL.Binop (Ops.Add, (LL.Get_local id, Ops.single), (LL.Constant 1., Ops.single)));
         trace_it = false;
       }
   in
   assert (LL.reads_scope_before_set id loop_with_read);
 
-  (* Noop body: the local is never written -- needs initialization so the Local_scope
-     expression value is not an uninitialized C local. scan returns `Neither`, which
-     must map to true (needs init). *)
+  (* Noop body: the local is never written -- needs initialization so the Local_scope expression
+     value is not an uninitialized C local. scan returns `Neither`, which must map to true (needs
+     init). *)
   assert (LL.reads_scope_before_set id LL.Noop);
 
-  (* Empty loop (from_ > to_): write is NOT definite (loop never runs), so the local
-     may be uninitialized after the body -- needs initialization.  scan returns `Neither`
-     for the same reason as Noop, so this must also return true. *)
+  (* Empty loop (from_ > to_): write is NOT definite (loop never runs), so the local may be
+     uninitialized after the body -- needs initialization. scan returns `Neither` for the same
+     reason as Noop, so this must also return true. *)
   let empty_loop_write =
     LL.For_loop
       {
@@ -112,10 +111,10 @@ let () =
   in
   assert (LL.reads_scope_before_set id empty_loop_write);
 
-  (* Empty loop followed by accumulator read: scan returns `Read` (the accumulator step
-     reads the local after the non-definite empty-loop write), which also maps to true.
-     A mutation that treats the empty-loop write as definite would make scan return
-     `Written` after the Seq's first component and suppress this `Read`, failing here. *)
+  (* Empty loop followed by accumulator read: scan returns `Read` (the accumulator step reads the
+     local after the non-definite empty-loop write), which also maps to true. A mutation that treats
+     the empty-loop write as definite would make scan return `Written` after the Seq's first
+     component and suppress this `Read`, failing here. *)
   let empty_loop_then_acc =
     LL.Seq
       ( empty_loop_write,
@@ -168,8 +167,7 @@ let () =
   in
   let local_scope = LL.Local_scope { id; body; orig_indices = [||] } in
   let llc =
-    LL.Set
-      { tn = tn_out; idcs = [| Idx.Fixed_idx 0 |]; llsc = local_scope; debug = "accumulator" }
+    LL.Set { tn = tn_out; idcs = [| Idx.Fixed_idx 0 |]; llsc = local_scope; debug = "accumulator" }
   in
   Stdio.printf "=== Local_scope read-before-write (needs init): ===\n";
   pp llc;
@@ -218,7 +216,12 @@ let () =
   let local_scope = LL.Local_scope { id; body; orig_indices = [||] } in
   let llc =
     LL.Set
-      { tn = tn_out; idcs = [| Idx.Fixed_idx 0 |]; llsc = local_scope; debug = "empty-loop-then-acc" }
+      {
+        tn = tn_out;
+        idcs = [| Idx.Fixed_idx 0 |];
+        llsc = local_scope;
+        debug = "empty-loop-then-acc";
+      }
   in
   Stdio.printf "=== Local_scope empty-loop-write then accumulator (needs init): ===\n";
   pp llc;
@@ -282,10 +285,12 @@ let () =
       }
   in
   let stmt1 =
-    LL.Set { tn = tn_out1; idcs = [| Idx.Fixed_idx 0 |]; llsc = make_acc_scope scope1 idx1; debug = "" }
+    LL.Set
+      { tn = tn_out1; idcs = [| Idx.Fixed_idx 0 |]; llsc = make_acc_scope scope1 idx1; debug = "" }
   in
   let stmt2 =
-    LL.Set { tn = tn_out2; idcs = [| Idx.Fixed_idx 0 |]; llsc = make_acc_scope scope2 idx2; debug = "" }
+    LL.Set
+      { tn = tn_out2; idcs = [| Idx.Fixed_idx 0 |]; llsc = make_acc_scope scope2 idx2; debug = "" }
   in
   let hoisted = LL.hoist_cross_statement_cse (LL.Seq (stmt1, stmt2)) in
   Stdio.printf "=== Hoisted Declare_local read-before-write (needs init): ===\n";

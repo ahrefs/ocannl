@@ -84,13 +84,12 @@ let one_hot_of_ids ~num_classes ids =
     Bigarray. See {!dense_one_hot_of_int_list} if a materialized host one-hot is genuinely required.
     @param num_classes The number of classes (size of the one-hot dimension)
     @param lst List of integer class indices (0-based) *)
-let one_hot_of_int_list ~num_classes lst =
-  one_hot_of_ids ~num_classes (class_ids_of_int_list lst)
+let one_hot_of_int_list ~num_classes lst = one_hot_of_ids ~num_classes (class_ids_of_int_list lst)
 
 (** Convert a list of integers to a dense, host-materialized one-hot Bigarray-backed tensor of shape
-    [len; num_classes]. Prefer {!one_hot_of_int_list} (logical) unless a dense host fixture is needed;
-    a materialized Bigarray carries no proof that it is one-hot, so it cannot be optimized into an
-    embedding gather. *)
+    [len; num_classes]. Prefer {!one_hot_of_int_list} (logical) unless a dense host fixture is
+    needed; a materialized Bigarray carries no proof that it is one-hot, so it cannot be optimized
+    into an embedding gather. *)
 let dense_one_hot_of_int_list ~num_classes lst =
   let open Bigarray in
   let len = List.length lst in
@@ -249,7 +248,6 @@ let%op multi_head_att_workshop ~num_heads ~d_k ~d_v () x =
   let attn_weights = softmax ~spec:" ... | t -> ..." () scores in
   { w_o } * (attn_weights +* v " ... s | t -> h; ... t | h e => ... s | h e" [ "e" ])
 
-  
 let%op layer_norm ~label ?(epsilon = 1e-5) () x =
   let mean = x ++ " ... | ..d..  => ... | 0 " [ "d" ] in
   let centered = (x - mean) /. dim d in

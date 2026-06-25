@@ -306,7 +306,8 @@ let () =
   Train.set_materialized infer_logits.value;
   Train.set_materialized infer_input.value;
   let infer_step = Train.to_routine (Context.context eval_step) infer_bindings infer_comp in
-  let ctx = Context.context infer_step in  let counter_ref = IDX.find_exn (Context.bindings infer_step) counter_n in
+  let ctx = Context.context infer_step in
+  let counter_ref = IDX.find_exn (Context.bindings infer_step) counter_n in
   counter_ref := 0;
 
   let dot_idx = Dataprep.Names.char_index '.' in

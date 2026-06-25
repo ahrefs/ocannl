@@ -20,15 +20,15 @@ let dim_spec_to_string = function
   | `Batch_dims (dim, _) -> "batch (array) of dim " ^ Int.to_string dim
 
 (* Extract a tensor-literal axis-label basis from a type annotation: only a bare type-constructor
-   name (e.g. [rgb], [heads]) is a label; anything else (qualified / parameterised / arrow / tuple
-   / variant) is not, and the annotation is ignored. *)
+   name (e.g. [rgb], [heads]) is a label; anything else (qualified / parameterised / arrow / tuple /
+   variant) is not, and the annotation is ignored. *)
 let axis_basis_of_type (typ : core_type) : string option =
   match typ.ptyp_desc with Ptyp_constr ({ txt = Lident b; _ }, []) -> Some b | _ -> None
 
 let ndarray_constant expr =
   let loc = expr.pexp_loc in
-  (* Traverse the backbone of the ndarray to collect the dimensions and any per-axis basis labels.
-     A [(container : tag)] type-annotation labels that axis's dimension basis: [([…] : rgb)] for an
+  (* Traverse the backbone of the ndarray to collect the dimensions and any per-axis basis labels. A
+     [(container : tag)] type-annotation labels that axis's dimension basis: [([…] : rgb)] for an
      output (list) axis, [((…) : feat)] for an input (tuple) axis, [([|…|] : batch)] for a batch
      (array) axis. [?basis] carries the label of the container currently being matched. *)
   let rec loop_dims ?basis accu = function
@@ -53,69 +53,69 @@ let ndarray_constant expr =
     (* See through an axis-label type-annotation to the container it wraps. *)
     match expr with
     | { pexp_desc = Pexp_constraint (inner, _); _ } -> loop_values depth accu inner
-    | _ ->
-    if depth >= Array.length dims_spec then
-      match expr with
-      | { pexp_desc = Pexp_constant (Pconst_float _); _ } -> expr :: accu
-      | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
-          [%expr Float.of_int [%e expr]] :: accu
-      | { pexp_desc = Pexp_tuple _; pexp_loc = loc; _ } ->
-          (pexp_extension ~loc
-          @@ Location.error_extensionf ~loc
-               "Arrayjit: ndarray literal found input axis (tuple), expected number")
-          :: accu
-      | { pexp_desc = Pexp_array _; pexp_loc = loc; _ } ->
-          (pexp_extension ~loc
-          @@ Location.error_extensionf ~loc
-               "Arrayjit: ndarray literal found batch axis (array), expected number")
-          :: accu
-      | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
-          (pexp_extension ~loc
-          @@ Location.error_extensionf ~loc
-               "Arrayjit: ndarray literal found output axis (list), expected number")
-          :: accu
-      | expr -> expr :: accu (* it either computes a number, or becomes a type error *)
-    else
-      match expr with
-      | { pexp_desc = Pexp_tuple exps; _ } -> (
-          match dims_spec.(depth) with
-          | `Input_dims (dim, _) when dim = List.length exps ->
-              List.fold_left exps ~init:accu ~f:(loop_values @@ (depth + 1))
-          | dim_spec ->
+    | _ -> (
+        if depth >= Array.length dims_spec then
+          match expr with
+          | { pexp_desc = Pexp_constant (Pconst_float _); _ } -> expr :: accu
+          | { pexp_desc = Pexp_constant (Pconst_integer _); _ } ->
+              [%expr Float.of_int [%e expr]] :: accu
+          | { pexp_desc = Pexp_tuple _; pexp_loc = loc; _ } ->
               (pexp_extension ~loc
               @@ Location.error_extensionf ~loc
-                   "Arrayjit: ndarray literal axis mismatch, got %s, expected %s"
-                   (dim_spec_to_string @@ `Input_dims (List.length exps, None))
-                   (dim_spec_to_string dim_spec))
-              :: accu)
-      | { pexp_desc = Pexp_array exps; _ } -> (
-          match dims_spec.(depth) with
-          | `Batch_dims (dim, _) when dim = List.length exps ->
-              List.fold_left exps ~init:accu ~f:(loop_values @@ (depth + 1))
-          | dim_spec ->
+                   "Arrayjit: ndarray literal found input axis (tuple), expected number")
+              :: accu
+          | { pexp_desc = Pexp_array _; pexp_loc = loc; _ } ->
               (pexp_extension ~loc
               @@ Location.error_extensionf ~loc
-                   "Arrayjit: ndarray literal axis mismatch, got %s, expected %s"
-                   (dim_spec_to_string @@ `Batch_dims (List.length exps, None))
-                   (dim_spec_to_string dim_spec))
-              :: accu)
-      | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } -> (
-          let exps = collect_list [] expr in
-          match dims_spec.(depth) with
-          | `Output_dims (dim, _) when dim = List.length exps ->
-              List.fold_left exps ~init:accu ~f:(loop_values @@ (depth + 1))
-          | dim_spec ->
+                   "Arrayjit: ndarray literal found batch axis (array), expected number")
+              :: accu
+          | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } ->
               (pexp_extension ~loc
               @@ Location.error_extensionf ~loc
-                   "Arrayjit: ndarray literal axis mismatch, got %s, expected %s"
-                   (dim_spec_to_string @@ `Output_dims (List.length exps, None))
-                   (dim_spec_to_string dim_spec))
+                   "Arrayjit: ndarray literal found output axis (list), expected number")
+              :: accu
+          | expr -> expr :: accu (* it either computes a number, or becomes a type error *)
+        else
+          match expr with
+          | { pexp_desc = Pexp_tuple exps; _ } -> (
+              match dims_spec.(depth) with
+              | `Input_dims (dim, _) when dim = List.length exps ->
+                  List.fold_left exps ~init:accu ~f:(loop_values @@ (depth + 1))
+              | dim_spec ->
+                  (pexp_extension ~loc
+                  @@ Location.error_extensionf ~loc
+                       "Arrayjit: ndarray literal axis mismatch, got %s, expected %s"
+                       (dim_spec_to_string @@ `Input_dims (List.length exps, None))
+                       (dim_spec_to_string dim_spec))
+                  :: accu)
+          | { pexp_desc = Pexp_array exps; _ } -> (
+              match dims_spec.(depth) with
+              | `Batch_dims (dim, _) when dim = List.length exps ->
+                  List.fold_left exps ~init:accu ~f:(loop_values @@ (depth + 1))
+              | dim_spec ->
+                  (pexp_extension ~loc
+                  @@ Location.error_extensionf ~loc
+                       "Arrayjit: ndarray literal axis mismatch, got %s, expected %s"
+                       (dim_spec_to_string @@ `Batch_dims (List.length exps, None))
+                       (dim_spec_to_string dim_spec))
+                  :: accu)
+          | { pexp_desc = Pexp_construct ({ txt = Lident "::"; _ }, _); _ } -> (
+              let exps = collect_list [] expr in
+              match dims_spec.(depth) with
+              | `Output_dims (dim, _) when dim = List.length exps ->
+                  List.fold_left exps ~init:accu ~f:(loop_values @@ (depth + 1))
+              | dim_spec ->
+                  (pexp_extension ~loc
+                  @@ Location.error_extensionf ~loc
+                       "Arrayjit: ndarray literal axis mismatch, got %s, expected %s"
+                       (dim_spec_to_string @@ `Output_dims (List.length exps, None))
+                       (dim_spec_to_string dim_spec))
+                  :: accu)
+          | { pexp_loc = loc; _ } ->
+              (pexp_extension ~loc
+              @@ Location.error_extensionf ~loc
+                   "Arrayjit: ndarray literal: expected an axis (tuple, list or array)")
               :: accu)
-      | { pexp_loc = loc; _ } ->
-          (pexp_extension ~loc
-          @@ Location.error_extensionf ~loc
-               "Arrayjit: ndarray literal: expected an axis (tuple, list or array)")
-          :: accu
   in
   let result = loop_values 0 [] expr in
   let values = { expr with pexp_desc = Pexp_array (List.rev result) } in

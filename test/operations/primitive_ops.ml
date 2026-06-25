@@ -48,13 +48,14 @@ let%expect_test "relu" =
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect.unreachable]
-[@@expect.uncaught_exn {|
+[@@expect.uncaught_exn
+  {|
   (* CR expect_test_collector: This test expectation appears to contain a backtrace.
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 362-365, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 407, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
@@ -67,17 +68,18 @@ let%expect_test "sat01" =
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect.unreachable]
-[@@expect.uncaught_exn {|
+[@@expect.uncaught_exn
+  {|
   (* CR expect_test_collector: This test expectation appears to contain a backtrace.
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 362-365, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 407, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 67, characters 17-32
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 68, characters 17-32
   Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
   |}]
 
@@ -86,17 +88,18 @@ let%expect_test "exp(x)" =
   let plot_box = plot_unop ~f ~x_max:1.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect.unreachable]
-[@@expect.uncaught_exn {|
+[@@expect.uncaught_exn
+  {|
   (* CR expect_test_collector: This test expectation appears to contain a backtrace.
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 362-365, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 407, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 86, characters 17-43
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 88, characters 17-43
   Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
   |}]
 
@@ -105,17 +108,18 @@ let%expect_test "log(x)" =
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect.unreachable]
-[@@expect.uncaught_exn {|
+[@@expect.uncaught_exn
+  {|
   (* CR expect_test_collector: This test expectation appears to contain a backtrace.
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 362-365, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 407, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 105, characters 17-54
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 108, characters 17-54
   Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
   |}]
 
@@ -124,17 +128,18 @@ let%expect_test "log2(x)" =
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect.unreachable]
-[@@expect.uncaught_exn {|
+[@@expect.uncaught_exn
+  {|
   (* CR expect_test_collector: This test expectation appears to contain a backtrace.
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 362-365, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 407, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 124, characters 17-54
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 128, characters 17-54
   Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
   |}]
 
@@ -143,17 +148,18 @@ let%expect_test "sin(x)" =
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect.unreachable]
-[@@expect.uncaught_exn {|
+[@@expect.uncaught_exn
+  {|
   (* CR expect_test_collector: This test expectation appears to contain a backtrace.
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 362-365, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 407, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 143, characters 17-32
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 148, characters 17-32
   Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
   |}]
 
@@ -162,17 +168,18 @@ let%expect_test "cos(x)" =
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect.unreachable]
-[@@expect.uncaught_exn {|
+[@@expect.uncaught_exn
+  {|
   (* CR expect_test_collector: This test expectation appears to contain a backtrace.
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 362-365, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 407, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 162, characters 17-32
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 168, characters 17-32
   Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
   |}]
 
@@ -181,17 +188,18 @@ let%expect_test "neg(x)" =
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect.unreachable]
-[@@expect.uncaught_exn {|
+[@@expect.uncaught_exn
+  {|
   (* CR expect_test_collector: This test expectation appears to contain a backtrace.
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 362-365, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 407, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 181, characters 17-32
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 188, characters 17-32
   Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
   |}]
 
@@ -200,17 +208,18 @@ let%expect_test "fma(x, 2, 1)" =
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect.unreachable]
-[@@expect.uncaught_exn {|
+[@@expect.uncaught_exn
+  {|
   (* CR expect_test_collector: This test expectation appears to contain a backtrace.
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 362-365, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 407, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 200, characters 17-32
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 208, characters 17-32
   Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
   |}]
 
@@ -219,17 +228,18 @@ let%expect_test "sqrt(x)" =
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect.unreachable]
-[@@expect.uncaught_exn {|
+[@@expect.uncaught_exn
+  {|
   (* CR expect_test_collector: This test expectation appears to contain a backtrace.
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 362-365, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 407, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 219, characters 17-54
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 228, characters 17-54
   Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
   |}]
 
@@ -238,17 +248,18 @@ let%expect_test "recip(x)" =
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect.unreachable]
-[@@expect.uncaught_exn {|
+[@@expect.uncaught_exn
+  {|
   (* CR expect_test_collector: This test expectation appears to contain a backtrace.
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 362-365, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 407, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 238, characters 17-54
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 248, characters 17-54
   Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
   |}]
 
@@ -257,17 +268,18 @@ let%expect_test "recip_sqrt(x)" =
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect.unreachable]
-[@@expect.uncaught_exn {|
+[@@expect.uncaught_exn
+  {|
   (* CR expect_test_collector: This test expectation appears to contain a backtrace.
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 362-365, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 407, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 257, characters 17-54
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 268, characters 17-54
   Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
   |}]
 
@@ -276,17 +288,18 @@ let%expect_test "tanh(x)" =
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect.unreachable]
-[@@expect.uncaught_exn {|
+[@@expect.uncaught_exn
+  {|
   (* CR expect_test_collector: This test expectation appears to contain a backtrace.
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 362-365, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 407, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 276, characters 17-32
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 288, characters 17-32
   Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
   |}]
 
@@ -295,17 +308,18 @@ let%expect_test "uint4x32_to_prec_uniform(x)" =
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect.unreachable]
-[@@expect.uncaught_exn {|
+[@@expect.uncaught_exn
+  {|
   (* CR expect_test_collector: This test expectation appears to contain a backtrace.
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 362-365, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 407, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 295, characters 17-32
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 308, characters 17-32
   Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
   |}]
 
@@ -314,16 +328,17 @@ let%expect_test "where(x < 0, sin(x), cos(x))" =
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect.unreachable]
-[@@expect.uncaught_exn {|
+[@@expect.uncaught_exn
+  {|
   (* CR expect_test_collector: This test expectation appears to contain a backtrace.
      This is strongly discouraged as backtraces are fragile.
      Please change this test to not include a backtrace. *)
   ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 362-365, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 407, characters 11-25
+  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
+  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
   Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
   Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
   Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 314, characters 17-32
+  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 328, characters 17-32
   Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
   |}]

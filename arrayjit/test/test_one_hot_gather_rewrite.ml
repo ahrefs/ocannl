@@ -1,10 +1,10 @@
 (* gh-ocannl-343: structural unit tests for [Low_level.rewrite_one_hot_reductions].
 
-   We hand-build the lowered low-level IR for the one-hot embedding reduction
-   [result[b,d] = sum_k (k == ids[b]) * C[k,d]] in both the scalar-local (virtualized) and the
-   materialized accumulator shapes, and assert the pass collapses the vocabulary loop into a guarded
-   [Get_dynamic]. Negative cases (loop variable used twice / under an affine index, partial loop
-   bounds) must be left unchanged. *)
+   We hand-build the lowered low-level IR for the one-hot embedding reduction [result[b,d] = sum_k
+   (k == ids[b]) * C[k,d]] in both the scalar-local (virtualized) and the materialized accumulator
+   shapes, and assert the pass collapses the vocabulary loop into a guarded [Get_dynamic]. Negative
+   cases (loop variable used twice / under an affine index, partial loop bounds) must be left
+   unchanged. *)
 
 open Base
 module Idx = Ir.Indexing
@@ -17,8 +17,10 @@ let next_id = ref 7000
 
 let mk ~dims label =
   Int.incr next_id;
-  Tn.create (Tn.Specified single) ~id:!next_id ~label:[ label ] ~unpadded_dims:(lazy dims)
-    ~padding:(lazy None) ()
+  Tn.create (Tn.Specified single) ~id:!next_id ~label:[ label ]
+    ~unpadded_dims:(lazy dims)
+    ~padding:(lazy None)
+    ()
 
 (* Count [Get_dynamic] occurrences and surviving [For_loop] nodes in a proc tree. *)
 let summarize (llc : LL.t) : int * int =
@@ -70,8 +72,7 @@ let make_local_scope_reduction ~table ~ids ~result ~table_idcs ~vocab ~bounds ~r
   let cmpeq =
     let kside = (LL.Embed_index (Idx.Iterator k), iprec) in
     let idside = (LL.Get (ids, [| Idx.Iterator b |]), iprec) in
-    if reversed then LL.Binop (Ops.Cmpeq, idside, kside)
-    else LL.Binop (Ops.Cmpeq, kside, idside)
+    if reversed then LL.Binop (Ops.Cmpeq, idside, kside) else LL.Binop (Ops.Cmpeq, kside, idside)
   in
   let table_get = LL.Get (table, table_idcs) in
   let contribution =
@@ -105,7 +106,8 @@ let () =
   (* Positive: Where form. *)
   let pos_where =
     make_local_scope_reduction ~table ~ids ~result ~table_idcs:plain_table_idcs ~vocab
-      ~bounds:(0, vocab - 1) ~reversed:false ~use_mul:false
+      ~bounds:(0, vocab - 1)
+      ~reversed:false ~use_mul:false
   in
   let dyn, loops = summarize (LL.rewrite_one_hot_reductions pos_where) in
   p "scalar-local Where form rewrites to Get_dynamic" (dyn = 1);
@@ -114,16 +116,21 @@ let () =
   (* Positive: multiply form, reversed equality operands. *)
   let pos_mul =
     make_local_scope_reduction ~table ~ids ~result ~table_idcs:plain_table_idcs ~vocab
-      ~bounds:(0, vocab - 1) ~reversed:true ~use_mul:true
+      ~bounds:(0, vocab - 1)
+      ~reversed:true ~use_mul:true
   in
   let dyn, loops = summarize (LL.rewrite_one_hot_reductions pos_mul) in
   p "scalar-local multiply form (reversed Cmpeq) rewrites to Get_dynamic" (dyn = 1 && loops = 0);
 
   (* Negative: loop variable used twice in the table access. *)
   let neg_twice =
-    make_local_scope_reduction ~table:(mk ~dims:[| vocab; vocab |] "Csq") ~ids ~result
+    make_local_scope_reduction
+      ~table:(mk ~dims:[| vocab; vocab |] "Csq")
+      ~ids ~result
       ~table_idcs:(fun k _d -> [| Idx.Iterator k; Idx.Iterator k |])
-      ~vocab ~bounds:(0, vocab - 1) ~reversed:false ~use_mul:false
+      ~vocab
+      ~bounds:(0, vocab - 1)
+      ~reversed:false ~use_mul:false
   in
   let dyn, loops = summarize (LL.rewrite_one_hot_reductions neg_twice) in
   p "double-use of loop var is not rewritten" (dyn = 0 && loops = 1);
@@ -131,7 +138,8 @@ let () =
   (* Negative: partial loop bounds (does not span the full vocabulary axis). *)
   let neg_partial =
     make_local_scope_reduction ~table ~ids ~result ~table_idcs:plain_table_idcs ~vocab
-      ~bounds:(0, vocab - 2) ~reversed:false ~use_mul:false
+      ~bounds:(0, vocab - 2)
+      ~reversed:false ~use_mul:false
   in
   let dyn, loops = summarize (LL.rewrite_one_hot_reductions neg_partial) in
   p "partial loop bounds are not rewritten" (dyn = 0 && loops = 1);
@@ -140,7 +148,9 @@ let () =
   let neg_affine =
     make_local_scope_reduction ~table ~ids ~result
       ~table_idcs:(fun k d -> [| Idx.Affine { symbols = [ (1, k) ]; offset = 0 }; Idx.Iterator d |])
-      ~vocab ~bounds:(0, vocab - 1) ~reversed:false ~use_mul:false
+      ~vocab
+      ~bounds:(0, vocab - 1)
+      ~reversed:false ~use_mul:false
   in
   let dyn, loops = summarize (LL.rewrite_one_hot_reductions neg_affine) in
   p "affine table index is not rewritten" (dyn = 0 && loops = 1)

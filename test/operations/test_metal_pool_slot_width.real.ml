@@ -5,9 +5,9 @@
    the Metal pool path.
 
    This compiles a pooled Metal kernel with [large_models = true] and inspects the emitted shader.
-   The invariant pinned: the generated source declares [ulong* __pool_slots] and NOT
-   [uint* __pool_slots]. If the slot table regressed to [uint] under [large_models], the first line
-   would print [false] (and the second [true]). The harness condition that instantiates the AC is
+   The invariant pinned: the generated source declares [ulong* __pool_slots] and NOT [uint*
+   __pool_slots]. If the slot table regressed to [uint] under [large_models], the first line would
+   print [false] (and the second [true]). The harness condition that instantiates the AC is
    [large_models = true] set before compilation -- the same kernel under the default setting emits
    [uint], so the setting is what the assertion actually exercises. *)
 
@@ -21,8 +21,8 @@ let make_const label v =
   Genarray.set ga [| 0 |] v;
   Genarray.set ga [| 1 |] (v +. 0.5);
   let nd = Ir.Ndarray.as_array Ir.Ops.Single ga in
-  Tensor.term ~init_data:(Reshape nd) ~grad_spec:Tensor.Prohibit_grad ~label:[ label ] ~batch_dims:[]
-    ~input_dims:[] ~output_dims:[ 2 ] ()
+  Tensor.term ~init_data:(Reshape nd) ~grad_spec:Tensor.Prohibit_grad ~label:[ label ]
+    ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
 
 let read_metal_sources () =
   (try Stdlib.Sys.readdir "build_files" |> Array.to_list with _ -> [])

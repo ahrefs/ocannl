@@ -88,6 +88,7 @@
 ; `metal_backend_impl`): where `metal` + `arrayjit.metal_backend` are available
 ; the real test runs; elsewhere a stub (`*.missing.ml`, linking neither) is
 ; selected and reproduces the recorded golden so the test passes trivially.
+
 (test
  (name test_metal_storage_mode)
  (package arrayjit)
@@ -99,7 +100,10 @@
   (select
    test_metal_storage_mode.ml
    from
-   (metal arrayjit.metal_backend arrayjit.ir ->
+   (metal
+    arrayjit.metal_backend
+    arrayjit.ir
+    ->
     test_metal_storage_mode.real.ml)
    (-> test_metal_storage_mode.missing.ml))))
 

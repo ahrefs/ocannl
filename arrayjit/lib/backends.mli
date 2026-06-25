@@ -12,8 +12,9 @@ val plan_pool_segments :
 (** gh-ocannl-344 pool-allocator planner. Lays out [(size, alignment)] allocations (in order) into
     pools so no pool's bumped extent exceeds [cap] bytes (the uint32 4 GB per-pool ceiling when
     [large_models = false]). Returns each item's [(segment_index, byte_offset)] and the byte size of
-    each segment. Raises {!Ir.Utils.User_error} (naming [what] and [debug_name i]) when a single item
-    exceeds [cap]. Exposed for unit testing the segmenting/cap behavior with synthetic sizes. *)
+    each segment. Raises {!Ir.Utils.User_error} (naming [what] and [debug_name i]) when a single
+    item exceeds [cap]. Exposed for unit testing the segmenting/cap behavior with synthetic sizes.
+*)
 
 val finalize :
   'dev 'runner 'event 'optimize_ctx.
@@ -22,7 +23,8 @@ val finalize :
       and type event = 'event
       and type runner = 'runner
       and type optimize_ctx = 'optimize_ctx) ->
-  ('dev, 'runner, 'event, 'optimize_ctx) Ir.Backend_intf.context -> unit
+  ('dev, 'runner, 'event, 'optimize_ctx) Ir.Backend_intf.context ->
+  unit
 (** Frees the pools that are specific to the context -- not contained in the parent context. Note:
     use [finalize] to optimize memory, it is not obligatory because all pools are freed when their
     backend buffers are garbage-collected. *)

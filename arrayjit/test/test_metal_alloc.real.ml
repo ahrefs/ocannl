@@ -1,7 +1,7 @@
 (* Regression test for gh-ocannl-344: exercises the *real* Metal allocator paths (not just a
-   classifier). It allocates pools through [alloc_pool] and asserts the storage mode of the resulting
-   slab via [storage_mode_of_pool] -- after gh-ocannl-344 every pool is [Shared], regardless of the
-   tnode memory mode.
+   classifier). It allocates pools through [alloc_pool] and asserts the storage mode of the
+   resulting slab via [storage_mode_of_pool] -- after gh-ocannl-344 every pool is [Shared],
+   regardless of the tnode memory mode.
 
    It then drives data through a *multi-tenant* pool (two 4-element regions in one slab) end to end:
    [from_host] in and [to_host] back out of the region at byte offset > 0, plus a [memset_zero] at

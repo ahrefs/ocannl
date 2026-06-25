@@ -83,32 +83,35 @@ let main () =
   in
   match winning with
   | None ->
-    Stdio.eprintf "moons_demo: FAILED to converge in %d seeds\n%!" (List.length seeds);
-    Stdlib.exit 1
-  | Some result ->
-    Stdio.printf "moons_demo: converged (final epoch loss < %.2g)\n%!" epsilon;
-    Stdio.printf "\nLearning rate:\n%!";
-    let plot_lr =
-      PrintBox_utils.plot ~x_label:"step" ~y_label:"learning rate" ~small:true
-        [ Line_plot { points = Array.of_list_rev result.learning_rates; content = PrintBox.line "-" } ]
-    in
-    PrintBox_text.output Stdio.stdout plot_lr;
-    (* Testing how the syntax extension %op creates labels for the resulting tensors: *)
-    Stdio.printf "mlp_result's name: %s\n%!" @@ Tensor.debug_name result.mlp_result;
-    (* Note: mlp_result is not included in the resulting tensor's label, because the identifier label
-       does not propagate across function calls. *)
-    Stdio.printf "(mlp moons_input) name: %s\n%!"
-    @@ Tensor.debug_name
-    @@
-    (match result.margin_loss.children with
-    | [
-     {
-       subtensor =
-         { children = [ _; { subtensor = { children = [ _; { subtensor; _ } ]; _ }; _ } ]; _ };
-       _;
-     };
-    ] ->
-        subtensor
-    | _ -> assert false)
+      Stdio.eprintf "moons_demo: FAILED to converge in %d seeds\n%!" (List.length seeds);
+      Stdlib.exit 1
+  | Some result -> (
+      Stdio.printf "moons_demo: converged (final epoch loss < %.2g)\n%!" epsilon;
+      Stdio.printf "\nLearning rate:\n%!";
+      let plot_lr =
+        PrintBox_utils.plot ~x_label:"step" ~y_label:"learning rate" ~small:true
+          [
+            Line_plot
+              { points = Array.of_list_rev result.learning_rates; content = PrintBox.line "-" };
+          ]
+      in
+      PrintBox_text.output Stdio.stdout plot_lr;
+      (* Testing how the syntax extension %op creates labels for the resulting tensors: *)
+      Stdio.printf "mlp_result's name: %s\n%!" @@ Tensor.debug_name result.mlp_result;
+      (* Note: mlp_result is not included in the resulting tensor's label, because the identifier
+         label does not propagate across function calls. *)
+      Stdio.printf "(mlp moons_input) name: %s\n%!"
+      @@ Tensor.debug_name
+      @@
+      match result.margin_loss.children with
+      | [
+       {
+         subtensor =
+           { children = [ _; { subtensor = { children = [ _; { subtensor; _ } ]; _ }; _ } ]; _ };
+         _;
+       };
+      ] ->
+          subtensor
+      | _ -> assert false)
 
 let () = main ()

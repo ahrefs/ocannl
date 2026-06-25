@@ -197,10 +197,10 @@ type ternary_type =
   | Defined_by_cd_logic
       (** A placeholder for operations where the shape logic is defined by the %cd extension. *)
   | Einsum_tern of string * delayed_var_ref list
-      (** Ternary einsum contraction. The spec string has three RHS slots separated by [;] and one LHS
-          slot after [=>]. Axis labels absent from the LHS become reduction axes. E.g. ["ij;jk;km=>im"]
-          for a chain contraction (note: O(N⁴) — prefer binary chains for chain contractions;
-          ["p;a;b=>out"] for select-before-reduce with [where]. *)
+      (** Ternary einsum contraction. The spec string has three RHS slots separated by [;] and one
+          LHS slot after [=>]. Axis labels absent from the LHS become reduction axes. E.g.
+          ["ij;jk;km=>im"] for a chain contraction (note: O(N⁴) — prefer binary chains for chain
+          contractions; ["p;a;b=>out"] for select-before-reduce with [where]. *)
 [@@deriving equal, sexp_of]
 
 (** Extracts any available shape information from the initialization or fetch. *)
@@ -223,8 +223,8 @@ val make :
     [batch_dims], [batch_axes] etc. should be given: if none, the corresponding row will be
     inferred. [batch_axes] etc. provide bases (semantic annotations) for the dimensions of the
     corresponding axes. Note that these are dimension bases and not axis labels: they need not be
-    unique for a row, are inferred when provided, and must match whenever the axis sizes must
-    match. *)
+    unique for a row, are inferred when provided, and must match whenever the axis sizes must match.
+*)
 
 val to_string_hum : ?style:Row.print_style -> t -> string
 
@@ -304,8 +304,8 @@ val default_display_indices : t -> int array
 
 val to_bases : t -> string array
 (** The per-axis dimension bases (semantic annotations); the basis is total, so unannotated axes
-    read back as ["default"] and the broadcast top as ["bcast_if_1"]. Uses the matrix convention
-    of putting the input axes last. *)
+    read back as ["default"] and the broadcast top as ["bcast_if_1"]. Uses the matrix convention of
+    putting the input axes last. *)
 
 val to_bases_bio : t -> string array * string array * string array
 (** Per-kind dimension bases [(batch, input, output)], so callers can check which row a basis landed

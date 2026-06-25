@@ -4,14 +4,14 @@
 
 open Base
 
+type buffer_loc = { pool_id : int; offset : int } [@@deriving sexp, compare, equal]
 (** A backend-agnostic, deterministic per-device buffer location: a [pool_id] into the device's
     backend-private [pool_id -> 'base] pool table, plus a byte [offset] within that pool. The
     concrete backend pointer ([Metal.Buffer.t] / [CUdeviceptr] / [void*]) lives only in that private
-    table -- it never appears in any type of this shared interface -- so [buffer_loc] (pure integers)
-    is stable across runs, diffable, and meaningful in logs and [.expected] files. Phase-1 policy is
-    one pool per tnode at [offset = 0], byte-for-byte equivalent to per-tnode allocation. An alias
-    (future work) is the parent's [{ pool_id; offset = offset + delta }]. *)
-type buffer_loc = { pool_id : int; offset : int } [@@deriving sexp, compare, equal]
+    table -- it never appears in any type of this shared interface -- so [buffer_loc] (pure
+    integers) is stable across runs, diffable, and meaningful in logs and [.expected] files. Phase-1
+    policy is one pool per tnode at [offset = 0], byte-for-byte equivalent to per-tnode allocation.
+    An alias (future work) is the parent's [{ pool_id; offset = offset + delta }]. *)
 
 type ctx_buffers = buffer_loc Map.M(Tnode).t [@@deriving sexp_of]
 
@@ -23,18 +23,14 @@ module type Slab_alloc = sig
   type device
 
   val alloc_pool :
-    ?mode:Tnode.memory_mode ->
-    device ->
-    pool_id:int ->
-    size_in_bytes:int ->
-    alignment:int ->
-    unit
+    ?mode:Tnode.memory_mode -> device -> pool_id:int -> size_in_bytes:int -> alignment:int -> unit
   (** Allocates the slab for [pool_id] on [device]. The optional [?mode] carries the tnode's memory
       mode so backends can pick a storage mode (Metal private vs. shared); backends that do not care
       ignore it. *)
 
   val free_pool : (device -> pool_id:int -> unit) option
-  (** Frees the slab for [pool_id] and drops its table entry. [None] for backends that rely on GC. *)
+  (** Frees the slab for [pool_id] and drops its table entry. [None] for backends that rely on GC.
+  *)
 
   val memset_zero : device -> pool_id:int -> offset:int -> size_in_bytes:int -> unit
   (** Zero-initializes [size_in_bytes] at [base_of pool_id + offset]. *)
@@ -49,14 +45,14 @@ type kparam_source =
   | Kparam_pool_slab of int
       (** gh-ocannl-344: the [i]-th pool base-pointer parameter of a pooled kernel (Metal). A fixed
           number of these is emitted; at link the backend binds slab [i] to the pool assigned index
-          [i] (or a duplicate of an in-use pool for the unused tail). Lets a kernel reach hundreds of
-          tensor nodes through a handful of bound pools, staying under Metal's ~31 binding limit. *)
+          [i] (or a duplicate of an in-use pool for the unused tail). Lets a kernel reach hundreds
+          of tensor nodes through a handful of bound pools, staying under Metal's ~31 binding limit.
+      *)
   | Kparam_pool_slots of Tnode.t list
       (** gh-ocannl-344: the per-routine slot table accompanying {!Kparam_pool_slab}. For the [k]-th
           tnode in this list the backend writes (pool_index, byte_offset); the shader reads it to
           form the typed pointer by casting (pools at pool_index) + byte_offset. Emitted only by
-          pooled (Metal) codegen;
-          per-tnode pointer backends (C, CUDA) never produce it. *)
+          pooled (Metal) codegen; per-tnode pointer backends (C, CUDA) never produce it. *)
   | Static_idx of Indexing.static_symbol
 [@@deriving sexp_of]
 
@@ -98,11 +94,6 @@ module type Device_config = sig
   val empty_optimize_ctx : unit -> optimize_ctx
 end
 
-(** A device folds in the (formerly per-stream) single compute runner and its buffer/event tracking:
-    with one compute stream per device, the surviving [runner] / [merge_buffer] / [updating_for] /
-    [updating_for_merge_buffer] fields live on the device. The [updating_for] writer-event tracking
-    and {!Backend.device_to_device} coherence are preserved (relocated here), now for cross-device
-    coherence, and are forward-compatible with a future fixed-role prefetch/transfer runner. *)
 type ('dev, 'runner, 'event) device = {
   dev : 'dev;
   ordinal : int;
@@ -128,6 +119,11 @@ type ('dev, 'runner, 'event) device = {
       (** Deterministic per-device pool-id counter, advanced by the shared allocator seam in tnode
           iteration order. Pool id 0 is reserved for the merge buffer; tnode pools start at 1. *)
 }
+(** A device folds in the (formerly per-stream) single compute runner and its buffer/event tracking:
+    with one compute stream per device, the surviving [runner] / [merge_buffer] / [updating_for] /
+    [updating_for_merge_buffer] fields live on the device. The [updating_for] writer-event tracking
+    and {!Backend.device_to_device} coherence are preserved (relocated here), now for cross-device
+    coherence, and are forward-compatible with a future fixed-role prefetch/transfer runner. *)
 
 let sexp_of_device _ _ _ device = [%sexp_of: string * int] ("device_id", device.device_id)
 let equal_device d1 d2 = d1.device_id = d2.device_id
@@ -322,7 +318,6 @@ end
 
 module type Backend = sig
   include Backend_common
-
   include Backend_device_common with type optimize_ctx := optimize_ctx
 
   val link : context -> code -> context routine

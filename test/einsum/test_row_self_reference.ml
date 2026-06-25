@@ -2,22 +2,22 @@
     sides, and the closed-closed base case (the gh-ocannl-247 family).
 
     With equal total flank lengths but shifted splits, the residue rotates through the shared
-    variable's value (the word equation x ++ t = s ++ x for equality; pointwise chains through x
-    for inequality). These cases used to be silently dropped: the unsatisfiable
-    [3].<v> = <v>.[5] and [3].<v> <= <v>.[5] passed without a single dimension check, and so did
-    the closed-closed [3].<closed> <= <closed>.[5] at equal ranks (where broadcast inserts no
-    padding, so the operand's explicit dim must pin the result's position).
+    variable's value (the word equation x ++ t = s ++ x for equality; pointwise chains through x for
+    inequality). These cases used to be silently dropped: the unsatisfiable [3].<v> = <v>.[5] and
+    [3].<v> <= <v>.[5] passed without a single dimension check, and so did the closed-closed
+    [3].<closed> <= <closed>.[5] at equal ranks (where broadcast inserts no padding, so the
+    operand's explicit dim must pin the result's position).
 
     The resolution is deferral into the closing policy: the constraint stays in flight; if the
-    variable is solved by other constraints the substituted closed-closed check is exact;
-    otherwise stage 6/7 closes the variable upward — the least-material disjunct — and the
-    constraint reduces to comparing the surplus words directly (equal for =; pointwise <= for
-    inequality, where an operand-side claim-free dim can still absorb). Closed-closed
-    inequalities compare the operand's explicit material against the result's flat axis list
-    from the outer edges; only broadcast-inserted middle positions are unconstrained.
+    variable is solved by other constraints the substituted closed-closed check is exact; otherwise
+    stage 6/7 closes the variable upward — the least-material disjunct — and the constraint reduces
+    to comparing the surplus words directly (equal for =; pointwise <= for inequality, where an
+    operand-side claim-free dim can still absorb). Closed-closed inequalities compare the operand's
+    explicit material against the result's flat axis list from the outer edges; only
+    broadcast-inserted middle positions are unconstrained.
 
-    Each check drives the constraint through Stage1 (where rotational cases defer) and then
-    Stage7 (where surviving row variables are closed upward and the residue is checked). *)
+    Each check drives the constraint through Stage1 (where rotational cases defer) and then Stage7
+    (where surviving row variables are closed upward and the residue is checked). *)
 
 open! Base
 open Ocannl
@@ -119,23 +119,23 @@ let () =
     (Row.Row_ineq
        { res = { r1 with beg_dims = [ dim 3 ] }; opnd = { r2 with dims = [ dim 3 ] }; origin })
 
-(* Two-variable cross-surplus equalities (the split-surplus case of the formal core's
-   Def. 4.3(c)): one side's leading flank and the other side's trailing flank are both in
-   surplus. The flat residue is the two-variable word equation s.x1 = x2.t, whose solutions are
-   the principal family (x2 = s.w, x1 = w.t) PLUS sporadic cross-overlap solutions (x2 a proper
-   prefix of s). Binding with a fresh variable would commit the family only — exact under the
-   former marked semantics but losing the sporadic solutions under the adopted flat-equivalence
-   semantics. The implementation instead DEFERS (unify_row's beg_handled=false branch re-emits
-   the residual equation): exact once a variable is pinned by other constraints, and the upward
-   close at stage 6 picks the least-material disjunct, which here IS the sporadic solution.
+(* Two-variable cross-surplus equalities (the split-surplus case of the formal core's Def. 4.3(c)):
+   one side's leading flank and the other side's trailing flank are both in surplus. The flat
+   residue is the two-variable word equation s.x1 = x2.t, whose solutions are the principal family
+   (x2 = s.w, x1 = w.t) PLUS sporadic cross-overlap solutions (x2 a proper prefix of s). Binding
+   with a fresh variable would commit the family only — exact under the former marked semantics but
+   losing the sporadic solutions under the adopted flat-equivalence semantics. The implementation
+   instead DEFERS (unify_row's beg_handled=false branch re-emits the residual equation): exact once
+   a variable is pinned by other constraints, and the upward close at stage 6 picks the
+   least-material disjunct, which here IS the sporadic solution.
 
-   We pin the orientation [5].<rho1> ~ <rho2>.[5,3] (family: x2 = [5].w, x1 = w.[5,3]; sporadic:
-   x2 = [], x1 = [3]). All three cases succeed: the deferral finds the sporadic solution whether
-   rho2 ~ [] arrives before or after the cross equality. The mirror orientation
-   <rho1>.[5] ~ [3,5].<rho2> pins the OTHER conservative deviation: once rho2 is pinned empty,
-   the closed side's material sits entirely in beg_dims, and the asymmetric trailing guard
-   (open trailing flank longer than the closed side's structural trailing flank) rejects a
-   flat-satisfiable store — a placement-sensitive policy rejection. *)
+   We pin the orientation [5].<rho1> ~ <rho2>.[5,3] (family: x2 = [5].w, x1 = w.[5,3]; sporadic: x2
+   = [], x1 = [3]). All three cases succeed: the deferral finds the sporadic solution whether rho2 ~
+   [] arrives before or after the cross equality. The mirror orientation <rho1>.[5] ~ [3,5].<rho2>
+   pins the OTHER conservative deviation: once rho2 is pinned empty, the closed side's material sits
+   entirely in beg_dims, and the asymmetric trailing guard (open trailing flank longer than the
+   closed side's structural trailing flank) rejects a flat-satisfiable store — a placement-sensitive
+   policy rejection. *)
 
 let check_list name constrs =
   match

@@ -3,14 +3,13 @@
    table, and a context's working (non-constant) delta is packed into a SINGLE pool at increasing
    byte offsets rather than one pool per tnode.
 
-   Two invariants are pinned:
-   1. Determinism / reproducibility: linking the same graph into two independently-created fresh
-      [sync_cc] backends yields identical [{ pool_id; offset }] values (the debuggability win).
-   2. Pooling: when a single routine materializes several non-constant tnodes, they share one
-      [pool_id] with distinct, increasing offsets; read-only inputs (constants) live in separate
-      per-device pools. If the allocator regressed to one-pool-per-tnode, the two outputs below would
-      print different pool ids (and all offsets 0); if it stopped honoring offsets, the computed
-      values would be wrong. *)
+   Two invariants are pinned: 1. Determinism / reproducibility: linking the same graph into two
+   independently-created fresh [sync_cc] backends yields identical [{ pool_id; offset }] values (the
+   debuggability win). 2. Pooling: when a single routine materializes several non-constant tnodes,
+   they share one [pool_id] with distinct, increasing offsets; read-only inputs (constants) live in
+   separate per-device pools. If the allocator regressed to one-pool-per-tnode, the two outputs
+   below would print different pool ids (and all offsets 0); if it stopped honoring offsets, the
+   computed values would be wrong. *)
 
 open Base
 open Ocannl
@@ -27,8 +26,8 @@ let make_tensor label vals =
   let ga = Genarray.create Float32 c_layout [| n |] in
   Array.iteri vals ~f:(fun i v -> Genarray.set ga [| i |] v);
   let nd = Ir.Ndarray.as_array Ir.Ops.Single ga in
-  Tensor.term ~init_data:(Reshape nd) ~grad_spec:Tensor.Prohibit_grad ~label:[ label ] ~batch_dims:[]
-    ~input_dims:[] ~output_dims:[ n ] ()
+  Tensor.term ~init_data:(Reshape nd) ~grad_spec:Tensor.Prohibit_grad ~label:[ label ]
+    ~batch_dims:[] ~input_dims:[] ~output_dims:[ n ] ()
 
 let run_once tag =
   Tensor.unsafe_reinitialize ();
@@ -48,7 +47,7 @@ let run_once tag =
   |> List.map ~f:(fun (tn, (loc : BI.buffer_loc)) -> (Tn.debug_name tn, loc.pool_id, loc.offset))
   |> List.sort ~compare:(fun (a, _, _) (b, _, _) -> String.compare a b)
   |> List.iter ~f:(fun (name, pool_id, offset) ->
-         Stdio.printf "%s: %-14s -> { pool_id = %d; offset = %d }\n" tag name pool_id offset)
+      Stdio.printf "%s: %-14s -> { pool_id = %d; offset = %d }\n" tag name pool_id offset)
 
 (* A routine that materializes two non-constant outputs in one link, to demonstrate that the working
    delta packs into a single pool. *)
@@ -72,7 +71,7 @@ let run_packed () =
   let loc name =
     Map.to_alist routine.BI.context.BI.ctx_buffers
     |> List.find_map ~f:(fun (tn, (l : BI.buffer_loc)) ->
-           if String.is_prefix (Tn.debug_name tn) ~prefix:name then Some l else None)
+        if String.is_prefix (Tn.debug_name tn) ~prefix:name then Some l else None)
   in
   match (loc "p", loc "q", loc "a", loc "b") with
   | Some lp, Some lq, Some la, Some lb ->
@@ -85,15 +84,13 @@ let run_packed () =
          separate from the working pool. *)
       Stdio.printf "two constants share a pool = %b\n" (la.pool_id = lb.pool_id);
       Stdio.printf "two constants have distinct offsets = %b\n" (la.offset <> lb.offset);
-      Stdio.printf "constant pool is separate from working pool = %b\n"
-        (la.pool_id <> lp.pool_id)
+      Stdio.printf "constant pool is separate from working pool = %b\n" (la.pool_id <> lp.pool_id)
   | _ -> Stdio.printf "outputs/constants = MISSING\n"
 
-(* Value-correctness check for pooled sub-region addressing.
-   Two non-constant working outputs (p, q) sharing a pool at distinct byte offsets must hold
-   independent values after the computation runs. The exact assertion that catches the broken
-   `ignore offset; ptr` stub: with both p and q pointing to offset 0, q's write clobbers p's
-   slot, so reading p returns [3.0; 8.0] instead of [4.0; 6.0].
+(* Value-correctness check for pooled sub-region addressing. Two non-constant working outputs (p, q)
+   sharing a pool at distinct byte offsets must hold independent values after the computation runs.
+   The exact assertion that catches the broken `ignore offset; ptr` stub: with both p and q pointing
+   to offset 0, q's write clobbers p's slot, so reading p returns [3.0; 8.0] instead of [4.0; 6.0].
    Run with OCANNL_BACKEND=cuda to exercise the CUDA pool-addressing path on minipc-wsl. *)
 let run_pooled_values_correct () =
   Tensor.unsafe_reinitialize ();
@@ -115,12 +112,12 @@ let run_pooled_values_correct () =
   let loc name =
     Map.to_alist ctx.BI.ctx_buffers
     |> List.find_map ~f:(fun (tn, (l : BI.buffer_loc)) ->
-           if String.is_prefix (Tn.debug_name tn) ~prefix:name then Some l else None)
+        if String.is_prefix (Tn.debug_name tn) ~prefix:name then Some l else None)
   in
   let lp = Option.value_exn ~here:[%here] (loc "p") in
   let lq = Option.value_exn ~here:[%here] (loc "q") in
-  Stdio.printf "pooled p.offset=%d q.offset=%d share_pool=%b\n"
-    lp.offset lq.offset (lp.pool_id = lq.pool_id);
+  Stdio.printf "pooled p.offset=%d q.offset=%d share_pool=%b\n" lp.offset lq.offset
+    (lp.pool_id = lq.pool_id);
   Task.run routine.BI.schedule;
   Backend.await device;
   let read_back tnode =
@@ -133,9 +130,9 @@ let run_pooled_values_correct () =
   in
   let pv = read_back p.Tensor.value in
   let qv = read_back q.Tensor.value in
-  (* p = a+b = [4.0; 6.0]; q = a*b = [3.0; 8.0].
-     With broken offset both point to offset 0: q overwrites p's slot, reading p gives [3.0; 8.0].
-     The assertion below would then print false and the expected diff would catch the regression. *)
+  (* p = a+b = [4.0; 6.0]; q = a*b = [3.0; 8.0]. With broken offset both point to offset 0: q
+     overwrites p's slot, reading p gives [3.0; 8.0]. The assertion below would then print false and
+     the expected diff would catch the regression. *)
   Stdio.printf "pooled p (a+b expect [4.0;6.0]) correct = %b\n"
     (Array.equal Float.equal pv [| 4.0; 6.0 |]);
   Stdio.printf "pooled q (a*b expect [3.0;8.0]) correct = %b\n"

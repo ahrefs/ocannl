@@ -14,14 +14,14 @@ module Tn = Tnode
 type t = PPrint.document
 
 (* gh-ocannl-344: integer width of the Metal pooled slot table (pool_index, byte_offset per node).
-   With [large_models] the per-pool 4 GB cap is lifted (see {!Backends.plan_pool_segments}), so a byte
-   offset can exceed [UINT32_MAX] and the slot table -- together with the MSL type the shader declares
-   -- must be 64-bit to avoid silent truncation; otherwise 32-bit suffices (offsets are capped under
-   4 GB). This is the single source of truth shared by the codegen (the [const ... * __pool_slots]
-   MSL type) and the backend (the [Ctypes] element type), so the two cannot drift. [large_models] is a
-   startup-fixed global, read identically when the source is generated and when the table is filled. *)
+   With [large_models] the per-pool 4 GB cap is lifted (see {!Backends.plan_pool_segments}), so a
+   byte offset can exceed [UINT32_MAX] and the slot table -- together with the MSL type the shader
+   declares -- must be 64-bit to avoid silent truncation; otherwise 32-bit suffices (offsets are
+   capped under 4 GB). This is the single source of truth shared by the codegen (the [const ... *
+   __pool_slots] MSL type) and the backend (the [Ctypes] element type), so the two cannot drift.
+   [large_models] is a startup-fixed global, read identically when the source is generated and when
+   the table is filled. *)
 let pool_slot_is_64 () = Utils.settings.large_models
-
 let pool_slot_msl_typ () = if pool_slot_is_64 () then "ulong" else "uint"
 
 module type C_syntax_config = sig
@@ -124,9 +124,9 @@ struct
 
   let ident_blacklist =
     (* Extract all maximal identifier-like substrings (starting with a letter or underscore,
-       consisting of alphanumeric chars and underscores) from an op syntax prefix string.
-       This correctly decomposes composite prefixes like "(fabsf(floorf(" into ["fabsf"; "floorf"]
-       rather than the old remove_paren approach that produced the wrong concatenation "fabsffloorf". *)
+       consisting of alphanumeric chars and underscores) from an op syntax prefix string. This
+       correctly decomposes composite prefixes like "(fabsf(floorf(" into ["fabsf"; "floorf"] rather
+       than the old remove_paren approach that produced the wrong concatenation "fabsffloorf". *)
     let extract_fn_names s =
       let n = String.length s in
       let result = ref [] in
@@ -139,7 +139,8 @@ struct
           done;
           result := String.sub s ~pos:!i ~len:(!j - !i) :: !result;
           i := !j
-        end else Int.incr i
+        end
+        else Int.incr i
       done;
       !result
     in
@@ -213,14 +214,49 @@ struct
     let c_keywords =
       [
         (* C89 keywords *)
-        "auto"; "break"; "case"; "char"; "const"; "continue"; "default"; "do"; "double"; "else";
-        "enum"; "extern"; "float"; "for"; "goto"; "if"; "int"; "long"; "register"; "return";
-        "short"; "signed"; "sizeof"; "static"; "struct"; "switch"; "typedef"; "union"; "unsigned";
-        "void"; "volatile"; "while";
+        "auto";
+        "break";
+        "case";
+        "char";
+        "const";
+        "continue";
+        "default";
+        "do";
+        "double";
+        "else";
+        "enum";
+        "extern";
+        "float";
+        "for";
+        "goto";
+        "if";
+        "int";
+        "long";
+        "register";
+        "return";
+        "short";
+        "signed";
+        "sizeof";
+        "static";
+        "struct";
+        "switch";
+        "typedef";
+        "union";
+        "unsigned";
+        "void";
+        "volatile";
+        "while";
         (* C99 additions *)
-        "inline"; "restrict"; "_Bool"; "_Complex"; "_Imaginary";
+        "inline";
+        "restrict";
+        "_Bool";
+        "_Complex";
+        "_Imaginary";
         (* Scaffolding names emitted by generated code that must not clash with variable names *)
-        "log_file"; "log_file_name"; "uint32_t"; "uint64_t";
+        "log_file";
+        "log_file_name";
+        "uint32_t";
+        "uint64_t";
       ]
     in
     Set.to_list !functions @ c_keywords
@@ -380,10 +416,10 @@ module C_syntax (B : C_syntax_config) = struct
      [Zero_out] loop that the declaration's [= {0}] already covers). *)
   let current_traced_store : Low_level.traced_store option ref = ref None
 
-  (* A [Zero_out] loop is redundant when the array's declaration already initializes it with
-     [= {0}]. That happens for local (non-virtual, non-materialized) declarations whose traced
-     node has [zero_initialized_by_code = true]; see [compile_proc]'s [local_decls]. Materialized
-     nodes do NOT get [= {0}] (allocation handles zeroing, and is skipped exactly when
+  (* A [Zero_out] loop is redundant when the array's declaration already initializes it with [=
+     {0}]. That happens for local (non-virtual, non-materialized) declarations whose traced node has
+     [zero_initialized_by_code = true]; see [compile_proc]'s [local_decls]. Materialized nodes do
+     NOT get [= {0}] (allocation handles zeroing, and is skipped exactly when
      [zero_initialized_by_code] is true), so their [Zero_out] loop must be kept. *)
   let zero_out_loop_redundant tn =
     match !current_traced_store with
@@ -396,10 +432,10 @@ module C_syntax (B : C_syntax_config) = struct
         | None -> false)
 
   (* Tensor node ids whose [Zero_out] has already been encountered during the current [pp_ll]
-     traversal. Only the *first-touch* [Zero_out tn] is made redundant by the declaration's
-     [= {0}]; any later [Zero_out tn] (e.g. in [Zero_out tn; Set tn; Zero_out tn], or any
-     [Zero_out] reached inside a loop body) is a genuine re-zero and must still emit its loop.
-     Cleared per [compile_proc]. *)
+     traversal. Only the *first-touch* [Zero_out tn] is made redundant by the declaration's [= {0}];
+     any later [Zero_out tn] (e.g. in [Zero_out tn; Set tn; Zero_out tn], or any [Zero_out] reached
+     inside a loop body) is a genuine re-zero and must still emit its loop. Cleared per
+     [compile_proc]. *)
   let zero_out_seen : int Hash_set.t = Hash_set.create (module Int)
 
   let rec pp_ll ?(log_set_locals = true) ?(in_loop = false) (c : Low_level.t) : PPrint.document =
@@ -433,9 +469,9 @@ module C_syntax (B : C_syntax_config) = struct
         let first_touch = not (Hash_set.mem zero_out_seen tn.Tn.id) in
         Hash_set.add zero_out_seen tn.Tn.id;
         if first_touch && (not in_loop) && zero_out_loop_redundant tn then
-          (* First-touch, executed once at function scope: the declaration's [= {0}] already
-             covers it. A later [Zero_out tn], or one reached inside a loop, is a real re-zero
-             and falls through to emit the zeroing loop below. *)
+          (* First-touch, executed once at function scope: the declaration's [= {0}] already covers
+             it. A later [Zero_out tn], or one reached inside a loop, is a real re-zero and falls
+             through to emit the zeroing loop below. *)
           empty
         else
           pp_ll ~log_set_locals ~in_loop
@@ -656,7 +692,7 @@ module C_syntax (B : C_syntax_config) = struct
         else
           let block_content = local_defs ^^ hardline ^^ assignment in
           lbrace ^^ nest 2 (hardline ^^ block_content) ^^ hardline ^^ rbrace
-    | Declare_local { id = ({ tn = { prec; _ }; _ } as id); needs_init } ->
+    | Declare_local { id = { tn = { prec; _ }; _ } as id; needs_init } ->
         let scope_prec = Lazy.force prec in
         let num_typ = string (B.typ_of_prec scope_prec) in
         let init_zero =
@@ -824,8 +860,8 @@ module C_syntax (B : C_syntax_config) = struct
     (* Returns (value expression doc, list of arguments for printf).
 
        [guard] (task-9658aac9): when [Some cond_c] (a real C boolean expression), any array
-       dereference produced here is only safe when [cond_c] holds, so its printf [`Value] argument is
-       short-circuited as [(cond_c ? read : 0)]. This mirrors the runtime [Where] ternary's
+       dereference produced here is only safe when [cond_c] holds, so its printf [`Value] argument
+       is short-circuited as [(cond_c ? read : 0)]. This mirrors the runtime [Where] ternary's
        short-circuiting and closes the only debug-logging path that would otherwise dereference a
        conditionally-evaluated branch (e.g. the Stage B unit-solve then-branch producer read) out of
        bounds -- the same hazard gh-343 fixed for the sibling [Get_dynamic] gather. Only the
@@ -877,10 +913,11 @@ module C_syntax (B : C_syntax_config) = struct
         in
         (expr_doc, [ `Accessor (idcs, dims); `Value (guarded_value access_doc) ])
     | Get_dynamic { tn; dyn_value = iv, iprec; _ } ->
-        (* gh-343: do NOT dereference the table in debug logs. A [Where]'s [debug_float] collects all
-           three branch values as printf arguments evaluated unconditionally, so returning the raw
-           [table[((idx_typ)(idx))]] access here would read out of bounds for ids the surrounding
-           guard is meant to exclude. Log the (always-safe) dynamic index value instead. *)
+        (* gh-343: do NOT dereference the table in debug logs. A [Where]'s [debug_float] collects
+           all three branch values as printf arguments evaluated unconditionally, so returning the
+           raw [table[((idx_typ)(idx))]] access here would read out of bounds for ids the
+           surrounding guard is meant to exclude. Log the (always-safe) dynamic index value
+           instead. *)
         let prefix, postfix = B.convert_precision ~from:iprec ~to_:prec in
         let _defs, idx_e = pp_scalar iprec iv in
         let idx_doc = string prefix ^^ idx_e ^^ string postfix in
@@ -924,13 +961,14 @@ module C_syntax (B : C_syntax_config) = struct
                    for the sibling [Get_dynamic]). The displayed ternary is unchanged -- only the
                    dereferencing printf arguments are gated: then-reads under [cond], else-reads
                    under [!cond], each AND-composed with any enclosing [guard] so nested/triangular
-                   range guards compose. [cond_c] is rendered twice -- via [pp_scalar] for the real C
-                   guard expression here, and via [debug_float] for the annotated display below. *)
+                   range guards compose. [cond_c] is rendered twice -- via [pp_scalar] for the real
+                   C guard expression here, and via [debug_float] for the annotated display
+                   below. *)
                 let _cond_defs, cond_c = pp_scalar v1_prec v1 in
                 (* Conditions reaching a Where here are pure index/value comparisons (range guards,
                    in_range) with no Local_scope, so [_cond_defs] is empty. Even if a future
-                   condition inlined a Local_scope, dropping the redundant re-definition is safe: the
-                   local is already bound by the assignment computation that precedes the log
+                   condition inlined a Local_scope, dropping the redundant re-definition is safe:
+                   the local is already bound by the assignment computation that precedes the log
                    statement (the same invariant debug_float's Local_scope arm relies on). *)
                 let compose outer c =
                   match outer with None -> c | Some g -> parens (g ^^ string " && " ^^ c)
@@ -938,9 +976,9 @@ module C_syntax (B : C_syntax_config) = struct
                 let then_guard = compose guard cond_c in
                 let else_guard = compose guard (parens (string "!" ^^ parens cond_c)) in
                 let v1_doc, idcs1 = debug_float ?guard v1_prec v1 in
-                (* condition: no precision conversion. It is evaluated whenever the enclosing branch is
-                   reached, so its array reads (a nested [Where] condition may contain a [Get]) are
-                   gated by the incoming [guard] -- not by [cond_c], which the condition itself
+                (* condition: no precision conversion. It is evaluated whenever the enclosing branch
+                   is reached, so its array reads (a nested [Where] condition may contain a [Get])
+                   are gated by the incoming [guard] -- not by [cond_c], which the condition itself
                    computes. At the top level [guard = None], so this is a no-op for the common
                    pure-index-comparison case. *)
                 let v2_doc, idcs2 = debug_float ~guard:then_guard prec v2 in
@@ -985,8 +1023,8 @@ module C_syntax (B : C_syntax_config) = struct
     let open PPrint in
     current_traced_store := Some traced_store;
     Hash_set.clear zero_out_seen;
-    (* The materialized in-context nodes, in deterministic [traced_store] order, with their per-param
-       pointer declaration (used by the [`Per_param] style). *)
+    (* The materialized in-context nodes, in deterministic [traced_store] order, with their
+       per-param pointer declaration (used by the [`Per_param] style). *)
     let ptr_params : (string * Tn.t) list =
       List.rev
       @@ Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:_ acc ->
@@ -1003,8 +1041,8 @@ module C_syntax (B : C_syntax_config) = struct
           if is_param then (B.typ_of_prec (Lazy.force tn.Tn.prec) ^ " *" ^ get_ident tn, tn) :: acc
           else acc)
     in
-    (* [`Per_param]: one typed pointer param per node (C/CUDA, byte-identical to before).
-       [`Pooled n]: [n] byte-pointer pool params + one slot table (Metal binding fix). *)
+    (* [`Per_param]: one typed pointer param per node (C/CUDA, byte-identical to before). [`Pooled
+       n]: [n] byte-pointer pool params + one slot table (Metal binding fix). *)
     let kparams : (string * kparam_source) list =
       match B.ptr_param_style with
       | `Per_param -> List.map ptr_params ~f:(fun (decl, tn) -> (decl, Kparam_ptr tn))
@@ -1112,10 +1150,10 @@ module C_syntax (B : C_syntax_config) = struct
        in
        body := !body ^^ debug_init_doc ^^ hardline);
 
-    (* Pooled (Metal) prologue: build the local pool-base array from the bound pool params, then form
-       each materialized node's typed pointer from its slot. Indices match the [Kparam_pool_slots]
-       order (= [ptr_params]). The rest of the body indexes [get_ident tn] exactly as in the per-param
-       style. *)
+    (* Pooled (Metal) prologue: build the local pool-base array from the bound pool params, then
+       form each materialized node's typed pointer from its slot. Indices match the
+       [Kparam_pool_slots] order (= [ptr_params]). The rest of the body indexes [get_ident tn]
+       exactly as in the per-param style. *)
     (match B.ptr_param_style with
     | `Per_param -> ()
     | `Pooled n_pools when not (List.is_empty ptr_params) ->
@@ -1127,10 +1165,13 @@ module C_syntax (B : C_syntax_config) = struct
           List.mapi ptr_params ~f:(fun k (_decl, tn) ->
               let typ = B.typ_of_prec (Lazy.force tn.Tn.prec) in
               Printf.sprintf "%s%s* %s = (%s%s*)(__pools[__pool_slots[%d]] + __pool_slots[%d]);"
-                B.buffer_prefix typ (get_ident tn) B.buffer_prefix typ (2 * k) ((2 * k) + 1))
+                B.buffer_prefix typ (get_ident tn) B.buffer_prefix typ (2 * k)
+                ((2 * k) + 1))
         in
         body :=
-          !body ^^ string "/* Pool base pointers. */" ^^ hardline
+          !body
+          ^^ string "/* Pool base pointers. */"
+          ^^ hardline
           ^^ separate_map hardline string (pools_decl :: defs)
           ^^ hardline
     | `Pooled _ -> ());

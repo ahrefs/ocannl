@@ -10,10 +10,11 @@ val save : ctx:Context.t -> appending:bool -> Ocannl_tensor.Tensor.tn_set -> str
     [~appending:true] and the file exists, replaces tensors with matching IDs and keeps
     non-overlapping entries from the existing file.
 
-    Each tensor's data is retrieved on demand from its device buffer in [ctx] via
-    {!Context.to_host} (gh-ocannl-333). Raises if any tnode in [t_set] is not present in [ctx]. *)
+    Each tensor's data is retrieved on demand from its device buffer in [ctx] via {!Context.to_host}
+    (gh-ocannl-333). Raises if any tnode in [t_set] is not present in [ctx]. *)
 
-val load : ctx:Context.t -> ?prefix_namespace:string -> string -> Context.t * Ocannl_tensor.Tensor.tn_set
+val load :
+  ctx:Context.t -> ?prefix_namespace:string -> string -> Context.t * Ocannl_tensor.Tensor.tn_set
 (** [load ~ctx ?prefix_namespace path] reads tensors from a checkpoint file, creates new tnodes,
     uploads their data into [ctx] via {!Context.from_host}, and returns the updated context together
     with the loaded set (gh-ocannl-333).

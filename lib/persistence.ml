@@ -198,9 +198,7 @@ let save ~ctx ~appending t_set path =
   (* Retrieve each tnode's data from its device buffer on demand (gh-ocannl-333). *)
   let host_of = Hashtbl.create (module Int) in
   List.iter tn_list ~f:(fun tn ->
-      match
-        try Some (Context.to_host ctx tn) with _ -> None
-      with
+      match try Some (Context.to_host ctx tn) with _ -> None with
       | None ->
           failwith
             ("save: tensor " ^ Int.to_string tn.Tn.id ^ " is not present in the given context")
@@ -340,9 +338,7 @@ let load ~ctx ?prefix_namespace path =
       (* Bump session ID floor *)
       if !max_id >= 0 then Ocannl_tensor.Tensor.bump_next_id !max_id;
       (* Upload each loaded node into the context, returning the updated context. *)
-      let ctx =
-        List.fold loaded ~init:ctx ~f:(fun ctx (tn, nd) -> Context.from_host ctx tn nd)
-      in
+      let ctx = List.fold loaded ~init:ctx ~f:(fun ctx (tn, nd) -> Context.from_host ctx tn nd) in
       (ctx, Set.of_list (module Tn) (List.map loaded ~f:fst))
     with
     | result ->

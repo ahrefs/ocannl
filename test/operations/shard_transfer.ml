@@ -8,8 +8,8 @@ module Tn = Ir.Tnode
 
 (* Regression test for the data-parallel sharding primitives (task-2445dd1c).
 
-   Part 1 exercises the host-level [Parallel.shard_along] / [Parallel.gather] round-trip: splitting a
-   batch tensor into shards and gathering must reconstruct the original row order exactly, and
+   Part 1 exercises the host-level [Parallel.shard_along] / [Parallel.gather] round-trip: splitting
+   a batch tensor into shards and gathering must reconstruct the original row order exactly, and
    invalid configurations must raise.
 
    Part 2 exercises the raw-backend merge-buffer all-reduce that [Parallel.grad_sync] is built on:
@@ -57,7 +57,12 @@ let () =
   Stdio.printf "round-trip identity = %b\n" (Array.equal Float.equal original gv);
 
   (* Invalid configurations must raise. *)
-  let raises f = try f (); false with Invalid_argument _ -> true in
+  let raises f =
+    try
+      f ();
+      false
+    with Invalid_argument _ -> true
+  in
   Stdio.printf "n_shards<=0 raises = %b\n"
     (raises (fun () -> ignore (Parallel.shard_along ~axis:0 ~n_shards:0 batch)));
   Stdio.printf "uneven batch raises = %b\n"
@@ -80,7 +85,8 @@ let () =
   let host_vec vals =
     let nd =
       Ir.Ndarray.create_array ~debug:"shard_transfer host" Ir.Ops.single
-        ~dims:[| Array.length vals |] ~padding:None
+        ~dims:[| Array.length vals |]
+        ~padding:None
     in
     Ir.Ndarray.set_flat_values nd vals;
     nd

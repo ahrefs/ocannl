@@ -69,8 +69,8 @@ module Slab = struct
     set_ctx device.dev.primary_context;
     let key = (device.device_id, pool_id) in
     (* Free any prior allocation under this key before replacing it, so device memory stays
-       equivalent to the pre-refactor path. Unique tnode pool ids never pre-exist; this only fires on
-       the reserved merge pool growing in place. *)
+       equivalent to the pre-refactor path. Unique tnode pool ids never pre-exist; this only fires
+       on the reserved merge pool growing in place. *)
     Option.iter (Hashtbl.find pools key) ~f:Cu.Deviceptr.mem_free;
     let ptr = Cu.Deviceptr.mem_alloc ~size_in_bytes:(max 1 size_in_bytes) in
     Hashtbl.set pools ~key ~data:ptr
@@ -144,7 +144,7 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
     |> List.map ~f:(fun (loc : Backend_intf.buffer_loc) -> loc.pool_id)
     |> List.dedup_and_sort ~compare:Int.compare
     |> List.iter ~f:(fun pool_id ->
-           Option.iter Slab.free_pool ~f:(fun free -> free device ~pool_id))
+        Option.iter Slab.free_pool ~f:(fun free -> free device ~pool_id))
 
   let%diagn2_sexp cuda_to_ptx ~name cu_src =
     let name_cu = name ^ ".cu" in
@@ -260,18 +260,18 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
   let is_idle (device : device) = Cu.Stream.is_ready device.runner
 
   (* Transfers take {!Backend_intf.buffer_loc} and resolve to the concrete [CUdeviceptr] here,
-     against the device's private pool table.
-     We pass [~length] explicitly to [memcpy_H_to_D] / [memcpy_D_to_H]: without it the cudajit
-     impl computes [size_in_bytes = full_size - offset], which would reduce the copy to 0 bytes
-     when the tensor is placed at an offset equal to its own size (the common bump-packed case). *)
+     against the device's private pool table. We pass [~length] explicitly to [memcpy_H_to_D] /
+     [memcpy_D_to_H]: without it the cudajit impl computes [size_in_bytes = full_size - offset],
+     which would reduce the copy to 0 bytes when the tensor is placed at an offset equal to its own
+     size (the common bump-packed case). *)
   let from_host ~dst ~dst_loc hosted =
     set_ctx @@ ctx_of dst;
     let base = Slab.resolve_pool dst.device dst_loc in
     let f src =
       let full_bytes = Bigarray.Genarray.size_in_bytes src in
       let elem_bytes = Bigarray.kind_size_in_bytes (Bigarray.Genarray.kind src) in
-      Cu.Stream.memcpy_H_to_D ~length:(full_bytes / elem_bytes) ~dst_offset:dst_loc.offset
-        ~dst:base ~src dst.device.runner
+      Cu.Stream.memcpy_H_to_D ~length:(full_bytes / elem_bytes) ~dst_offset:dst_loc.offset ~dst:base
+        ~src dst.device.runner
     in
     Ndarray.apply { f } hosted
 
@@ -281,8 +281,8 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
     let f dst =
       let full_bytes = Bigarray.Genarray.size_in_bytes dst in
       let elem_bytes = Bigarray.kind_size_in_bytes (Bigarray.Genarray.kind dst) in
-      Cu.Stream.memcpy_D_to_H ~length:(full_bytes / elem_bytes) ~src_offset:src_loc.offset
-        ~dst ~src:base src.device.runner
+      Cu.Stream.memcpy_D_to_H ~length:(full_bytes / elem_bytes) ~src_offset:src_loc.offset ~dst
+        ~src:base src.device.runner
     in
     Ndarray.apply { f } hosted
 
@@ -347,7 +347,11 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
       ident_blacklist
       @ [
           (* CUDA built-in variables — would shadow per-thread or per-block context *)
-          "threadIdx"; "blockIdx"; "blockDim"; "gridDim"; "warpSize";
+          "threadIdx";
+          "blockIdx";
+          "blockDim";
+          "gridDim";
+          "warpSize";
         ]
 
     let main_kernel_prefix = "extern \"C\" __global__"
@@ -869,7 +873,8 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
       group
         (string "printf("
         ^^ dquotes (string format_string_literal)
-        ^^ comma ^^ nest 4 (break 1 ^^ separate (comma ^^ break 1) all_args)
+        ^^ comma
+        ^^ nest 4 (break 1 ^^ separate (comma ^^ break 1) all_args)
         ^^ rparen ^^ semi)
   end
 
@@ -963,8 +968,8 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
     let func = Cu.Module.get_function run_module ~name in
     let device = prior_context.device in
     let stream_name = get_name device in
-    (* Pre-resolve slab bases to keep the owning [Deviceptr.t]'s alive for the lifetime of the
-       task closure; region views ([Tensor_at]) are non-owning and must not outlive the slab base. *)
+    (* Pre-resolve slab bases to keep the owning [Deviceptr.t]'s alive for the lifetime of the task
+       closure; region views ([Tensor_at]) are non-owning and must not outlive the slab base. *)
     let ctx_bases = Map.map ctx_buffers ~f:(Slab.resolve_pool device) in
     let%diagn3_sexp work () : unit =
       let log_id = get_global_run_id () in
@@ -1009,7 +1014,8 @@ module Fresh () : Ir.Backend_impl.Lowered_backend = struct
           | _name, (Kparam_pool_slab _ | Kparam_pool_slots _) ->
               (* The CUDA backend uses per-tnode pointer params ([`Per_param] codegen); only the
                  Metal backend emits the pooled slab / slot parameters. *)
-              invalid_arg "Cuda_backend.link: unexpected pooled kparam (CUDA uses per-tnode pointers)")
+              invalid_arg
+                "Cuda_backend.link: unexpected pooled kparam (CUDA uses per-tnode pointers)")
       in
       set_ctx @@ ctx_of prior_context;
       [%log "launching the kernel"];

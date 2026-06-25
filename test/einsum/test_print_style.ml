@@ -19,8 +19,8 @@ let test_print_styles () =
     match row_with_proj.dims with [ Dim sd ] -> sd | _ -> failwith "Expected single dimension"
   in
 
-  (* Create a solved dimension with minimal attributes (the unannotated [default] tag, the
-     totality analog of the old [None]). *)
+  (* Create a solved dimension with minimal attributes (the unannotated [default] tag, the totality
+     analog of the old [None]). *)
   let solved_dim_minimal = { d = 64; basis = default_basis; proj_id = None } in
 
   (* The reserved broadcast-top tag is visible in Only_bases but prints bare (no prefix) in

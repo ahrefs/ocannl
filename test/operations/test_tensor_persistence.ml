@@ -26,7 +26,8 @@ let make_tn ctx ~id ~label ?(padding = None) prec dims values =
 
 let show ctx tn =
   String.concat ~sep:"; "
-    (Array.to_list (Array.map (Context.get_values ctx tn) ~f:(fun v -> Stdlib.Printf.sprintf "%.1f" v)))
+    (Array.to_list
+       (Array.map (Context.get_values ctx tn) ~f:(fun v -> Stdlib.Printf.sprintf "%.1f" v)))
 
 let () =
   (* === Test 1: Round-trip save/load === *)
@@ -48,7 +49,8 @@ let () =
   Stdio.printf "Loaded %d tensors\n" (List.length loaded_list);
   List.iter loaded_list ~f:(fun tn ->
       Stdio.printf "  id=%d label=%s values=[%s]\n" tn.Tn.id
-        (String.concat ~sep:"." tn.Tn.label) (show ctx tn));
+        (String.concat ~sep:"." tn.Tn.label)
+        (show ctx tn));
   cleanup "roundtrip";
 
   (* === Test 2: Restore === *)

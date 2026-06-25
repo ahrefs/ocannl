@@ -7,54 +7,48 @@
    documents (as comments) the ones OCANNL cannot currently express, naming the missing capability.
 
    The output is a deterministic, human-checkable trace (tiny inputs) committed as
-   [tensor_puzzles.expected]. Run under the sync_cc backend:
-     OCANNL_BACKEND=sync_cc dune build test/einsum/tensor_puzzles.exe.output
+   [tensor_puzzles.expected]. Run under the sync_cc backend: OCANNL_BACKEND=sync_cc dune build
+   test/einsum/tensor_puzzles.exe.output
 
    ============================================================================================
-   CLASSIFICATION (this doubles as the GitHub issue #308 comment source)
-   Summary: 8 einsum + 10 op-level workaround = 18 solvable; 3 not expressible today (21 total).
-   Key principle: any STATIC, data-independent index map (permutation, reshape, prefix, convolution)
-   is a dense selector/operator matrix S[i,o] built from index-grid comparisons and contracted via
-   einsum -- O(size^2) but expressible. Only DATA-DEPENDENT index maps (the index is a runtime
-   tensor value) genuinely need gather/scatter, which OCANNL lacks.
+   CLASSIFICATION (this doubles as the GitHub issue #308 comment source) Summary: 8 einsum + 10
+   op-level workaround = 18 solvable; 3 not expressible today (21 total). Key principle: any STATIC,
+   data-independent index map (permutation, reshape, prefix, convolution) is a dense
+   selector/operator matrix S[i,o] built from index-grid comparisons and contracted via einsum --
+   O(size^2) but expressible. Only DATA-DEPENDENT index maps (the index is a runtime tensor value)
+   genuinely need gather/scatter, which OCANNL lacks.
    ============================================================================================
 
-   A. Solvable with OCANNL einsum / %op (pure contraction / pointwise / fixed-index reshaping):
-      1  ones        -- broadcast a constant
-      2  sum         -- unary reduction: a ++ "i => 0"
-      3  outer       -- a +* "i; j => i->j" b
-      4  diag        -- repeated-label extraction: m ++ "ii => i"  (einsum1 extracts diagonals)
-      9  vstack      -- block-literal stacking: [ a; b ]
-      19 heaviside   -- nested pointwise where
-      20 repeat      -- block-literal stacking of d copies (broadcast)
-      21 bucketize   -- broadcast compare + reduce: (not (v < bnd)) ++ "ij => i"
+   A. Solvable with OCANNL einsum / %op (pure contraction / pointwise / fixed-index reshaping): 1
+   ones -- broadcast a constant 2 sum -- unary reduction: a ++ "i => 0" 3 outer -- a +* "i; j =>
+   i->j" b 4 diag -- repeated-label extraction: m ++ "ii => i" (einsum1 extracts diagonals) 9 vstack
+   -- block-literal stacking: [ a; b ] 19 heaviside -- nested pointwise where 20 repeat --
+   block-literal stacking of d copies (broadcast) 21 bucketize -- broadcast compare + reduce: (not
+   (v < bnd)) ++ "ij => i"
 
    B. Solvable with OCANNL ops / workarounds (index-grid selector matrices, concatenation) -- all
-      for STATICALLY known sizes:
-      5  eye          -- index grids + equality: (r ++ "i=>i0") = (r ++ "j=>0j")
-      6  triu         -- index grids + comparison: not ((r ++ "j=>0j") < (r ++ "i=>i0"))
-      7  cumsum       -- lower-triangular selector (i <= o), contracted: a +* "i; i o => o" L
-      8  diff         -- finite-difference operator matrix D[i,o]=(i=o+1)-(i=o), contracted: a +* D
-      10 roll         -- circular permutation selector (i = o+1, plus wrap), contracted
-      11 flip         -- anti-diagonal selector (i + o = n-1), contracted
-      13 pad_to       -- pad via concatenation; truncate via rectangular selection matmul (static j)
-      14 sequence_mask-- column index grid vs per-row length + where
-      17 flatten      -- reshape selector S[i,j,k]=(i*cols+j = k) via range_of_shape, contract i,j
-      18 linspace     -- affine arithmetic on a range tensor
+   for STATICALLY known sizes: 5 eye -- index grids + equality: (r ++ "i=>i0") = (r ++ "j=>0j") 6
+   triu -- index grids + comparison: not ((r ++ "j=>0j") < (r ++ "i=>i0")) 7 cumsum --
+   lower-triangular selector (i <= o), contracted: a +* "i; i o => o" L 8 diff -- finite-difference
+   operator matrix D[i,o]=(i=o+1)-(i=o), contracted: a +* D 10 roll -- circular permutation selector
+   (i = o+1, plus wrap), contracted 11 flip -- anti-diagonal selector (i + o = n-1), contracted 13
+   pad_to -- pad via concatenation; truncate via rectangular selection matmul (static j) 14
+   sequence_mask-- column index grid vs per-row length + where 17 flatten -- reshape selector
+   S[i,j,k]=(i*cols+j = k) via range_of_shape, contract i,j 18 linspace -- affine arithmetic on a
+   range tensor
 
-   C. Not expressible today -- DATA-DEPENDENT indexing (index = a runtime tensor value):
-      12 compress   -- left-align kept entries: output position = prefix-count of mask, then SCATTER
-      15 bincount   -- out[a[i]] += 1: SCATTER with values-as-indices (+ integer index tensors)
-      16 scatter_add-- out[link[j]] += values[j]: the canonical SCATTER
+   C. Not expressible today -- DATA-DEPENDENT indexing (index = a runtime tensor value): 12 compress
+   -- left-align kept entries: output position = prefix-count of mask, then SCATTER 15 bincount --
+   out[a[i]] += 1: SCATTER with values-as-indices (+ integer index tensors) 16 scatter_add--
+   out[link[j]] += values[j]: the canonical SCATTER
 
-   Most impactful missing capabilities (gap analysis):
-      1. Gather / scatter (dynamic indexing) -- the ONLY fundamental gap; unlocks compress(12),
-         bincount(15), scatter_add(16); needed for embedding lookup, variable-length masking, and
-         many real ML ops. Related: gh-ocannl-293 (sharding & slicing).
-      2. Scan / prefix-sum -- not needed for EXPRESSIBILITY (cumsum is the triangular-selector matmul
-         above), but the O(n) streaming way; the selector matmul is O(n^2).
-      3. Native reshape/view, reverse, and modular/affine indexing -- ergonomic/efficient
-         replacements for the O(size^2) selector-matrix workarounds for flatten/flip/roll.
+   Most impactful missing capabilities (gap analysis): 1. Gather / scatter (dynamic indexing) -- the
+   ONLY fundamental gap; unlocks compress(12), bincount(15), scatter_add(16); needed for embedding
+   lookup, variable-length masking, and many real ML ops. Related: gh-ocannl-293 (sharding &
+   slicing). 2. Scan / prefix-sum -- not needed for EXPRESSIBILITY (cumsum is the
+   triangular-selector matmul above), but the O(n) streaming way; the selector matmul is O(n^2). 3.
+   Native reshape/view, reverse, and modular/affine indexing -- ergonomic/efficient replacements for
+   the O(size^2) selector-matrix workarounds for flatten/flip/roll.
 
    DISCOVERED LIMITATION (diff): the valid-convolution einsum [a +* "o<+k; k => o" kernel] hangs
    OCANNL's shape inference even on a length-5 vector with a length-2 kernel (no error, just spins).
@@ -68,8 +62,8 @@
 
    NOTE on per-axis index grids: a number in an einsum axis spec is a FIXED INDEX (it selects /
    creates a particular slot), not "axis N". So [range n ++ "i=>i0"] is a [n,1] row grid (value
-   varies along axis 0) and [range n ++ "j=>0j"] is a [1,n] column grid (value varies along the
-   last axis). Comparing the two broadcasts to an [n,n] grid. *)
+   varies along axis 0) and [range n ++ "j=>0j"] is a [1,n] column grid (value varies along the last
+   axis). Comparing the two broadcasts to an [n,n] grid. *)
 
 open Base
 open Ocannl
@@ -139,7 +133,7 @@ let () =
   (* 21 bucketize ([i],[j])->[i]: count boundaries <= v. With only (<), v>=b is not(v<b). *)
   let%op v21 = [ 0.5; 2.5; 5.0 ] in
   let%op bnd21 = [ 1.; 3.; 5. ] in
-  let%op p21 = not ((v21 ++ "i=>i0") < (bnd21 ++ "j=>0j")) ++ "ij => i" in
+  let%op p21 = (not (v21 ++ "i=>i0" < bnd21 ++ "j=>0j")) ++ "ij => i" in
   let ctx = Train.forward_once ctx p21 in
   show ctx "21 bucketize" "einsum" p21;
 
@@ -147,12 +141,12 @@ let () =
 
   (* 5 eye (j)->[j,j]: row grid [n,1] vs column grid [1,n], equality. *)
   let r3 = TDSL.range 3 in
-  let%op p5 = (r3 ++ "i=>i0") = (r3 ++ "j=>0j") in
+  let%op p5 = r3 ++ "i=>i0" = r3 ++ "j=>0j" in
   let ctx = Train.forward_once ctx p5 in
   show ctx "5 eye" "workaround" p5;
 
   (* 6 triu (j)->[j,j]: i <= j is not (j < i). *)
-  let%op p6 = not ((r3 ++ "j=>0j") < (r3 ++ "i=>i0")) in
+  let%op p6 = not (r3 ++ "j=>0j" < r3 ++ "i=>i0") in
   let ctx = Train.forward_once ctx p6 in
   show ctx "6 triu" "workaround" p6;
 
@@ -165,13 +159,13 @@ let () =
   let%op a_diff = [ 0.; 1.; 3.; 6.; 10. ] in
   let ri5 = TDSL.range 5 and ro4 = TDSL.range 4 in
   (* D[i,o] = (i = o+1) - (i = o) is the finite-difference operator [5,4]; then contract i. *)
-  let%op diffmat = ((ri5 ++ "i=>i0") = ((ro4 ++ "j=>0j") + 1)) - ((ri5 ++ "i=>i0") = (ro4 ++ "j=>0j")) in
+  let%op diffmat = (ri5 ++ "i=>i0" = ro4 ++ "j=>0j" + 1) - (ri5 ++ "i=>i0" = ro4 ++ "j=>0j") in
   let%op p8 = a_diff +* "i; i o => o" diffmat in
   let ctx = Train.forward_once ctx p8 in
   show ctx "8 diff" "workaround" p8;
 
-  (* 13 pad_to ([i],j)->[j]: both directions, for STATICALLY known target sizes.
-     Pad: a=[1;2;3] -> length 5 = [1;2;3;0;0] via concatenation with a zero block. *)
+  (* 13 pad_to ([i],j)->[j]: both directions, for STATICALLY known target sizes. Pad: a=[1;2;3] ->
+     length 5 = [1;2;3;0;0] via concatenation with a zero block. *)
   let%op a13 = [ 1.; 2.; 3. ] in
   let%op z13 = [ 0.; 0. ] in
   let%op p13 = (a13, z13) ++^ "i; j => i^j" [ "i"; "j" ] in
@@ -179,10 +173,11 @@ let () =
   show ctx "13 pad_to/pad" "workaround" p13;
   (* Truncate: a=[1;2;3;4;5] -> first 3 = [1;2;3] via a rectangular selection matmul, sel[i,o]=(i=o)
      with i in 5, o in 3, contracting i. (A runtime target size j would need a dynamic/range-slice
-     op; here the target size is a static shape, so this is the puzzle in the static-shape regime.) *)
+     op; here the target size is a static shape, so this is the puzzle in the static-shape
+     regime.) *)
   let%op a13t = [ 1.; 2.; 3.; 4.; 5. ] in
   let ri5t = TDSL.range 5 and ro3t = TDSL.range 3 in
-  let%op sel13 = (ri5t ++ "i=>i0") = (ro3t ++ "j=>0j") in
+  let%op sel13 = ri5t ++ "i=>i0" = ro3t ++ "j=>0j" in
   let%op p13t = a13t +* "i; i o => o" sel13 in
   let ctx = Train.forward_once ctx p13t in
   show ctx "13 pad_to/trunc" "workaround" p13t;
@@ -191,12 +186,12 @@ let () =
   let v14 = TDSL.range_of_shape ~output_dims:[ 2; 3 ] () in
   let%op lens14 = [ 2.; 1. ] in
   let r3c = TDSL.range 3 in
-  let%op p14 = where ((r3c ++ "j=>0j") < (lens14 ++ "i=>i0")) v14 0 in
+  let%op p14 = where (r3c ++ "j=>0j" < lens14 ++ "i=>i0") v14 0 in
   let ctx = Train.forward_once ctx p14 in
   show ctx "14 seq_mask" "workaround" p14;
 
-  (* 18 linspace (lo,hi,n)->[n]: out[k] = lo + (hi-lo)*k/(n-1). Here lo=2, hi=10, n=5 => step 2.
-     The n=1 case is special (the formula divides by n-1=0) and would be handled separately. *)
+  (* 18 linspace (lo,hi,n)->[n]: out[k] = lo + (hi-lo)*k/(n-1). Here lo=2, hi=10, n=5 => step 2. The
+     n=1 case is special (the formula divides by n-1=0) and would be handled separately. *)
   let n18 = 5 and lo18 = 2. and hi18 = 10. in
   let r5 = TDSL.range n18 in
   let step18 = (hi18 -. lo18) /. Float.of_int (n18 - 1) in
@@ -213,7 +208,7 @@ let () =
   (* 7 cumsum ([i])->[i]: out[o] = sum_{i<=o} a[i] = lower-triangular ones matrix times a. *)
   let%op a7 = [ 1.; 2.; 3.; 4. ] in
   let ri7 = TDSL.range 4 and co7 = TDSL.range 4 in
-  let%op tri7 = not ((co7 ++ "j=>0j") < (ri7 ++ "i=>i0")) in
+  let%op tri7 = not (co7 ++ "j=>0j" < ri7 ++ "i=>i0") in
   (* L[i,o] = (i <= o) *)
   let%op p7 = a7 +* "i; i o => o" tri7 in
   let ctx = Train.forward_once ctx p7 in
@@ -222,18 +217,17 @@ let () =
   (* 11 flip ([i])->[i]: out[o] = a[n-1-o] via the anti-diagonal selector (i + o = n-1). *)
   let%op a11 = [ 1.; 2.; 3.; 4. ] in
   let ri11 = TDSL.range 4 and co11 = TDSL.range 4 in
-  let%op anti11 = (ri11 ++ "i=>i0") + (co11 ++ "j=>0j") = 3 in
+  let%op anti11 = ri11 ++ "i=>i0" + (co11 ++ "j=>0j") = 3 in
   let%op p11 = a11 +* "i; i o => o" anti11 in
   let ctx = Train.forward_once ctx p11 in
   show ctx "11 flip" "workaround" p11;
 
-  (* 10 roll ([i])->[i]: circular shift, out[o] = a[(o+1) mod n]. Static circular selector:
-     S[i,o] = (i = o+1) plus the wrap case (i = 0 and o = n-1). *)
+  (* 10 roll ([i])->[i]: circular shift, out[o] = a[(o+1) mod n]. Static circular selector: S[i,o] =
+     (i = o+1) plus the wrap case (i = 0 and o = n-1). *)
   let%op a10 = [ 1.; 2.; 3.; 4. ] in
   let ri10 = TDSL.range 4 and co10 = TDSL.range 4 in
   let%op circ10 =
-    ((ri10 ++ "i=>i0") = ((co10 ++ "j=>0j") + 1))
-    + (((ri10 ++ "i=>i0") = 0) *. ((co10 ++ "j=>0j") = 3))
+    (ri10 ++ "i=>i0" = co10 ++ "j=>0j" + 1) + ((ri10 ++ "i=>i0" = 0) *. (co10 ++ "j=>0j" = 3))
   in
   let%op p10 = a10 +* "i; i o => o" circ10 in
   let ctx = Train.forward_once ctx p10 in
@@ -245,7 +239,7 @@ let () =
   let%op a17 = [ [ 10.; 20.; 30. ]; [ 40.; 50.; 60. ] ] in
   let pos17 = TDSL.range_of_shape ~output_dims:[ 2; 3 ] () in
   let ck17 = TDSL.range 6 in
-  let%op sel17 = (pos17 ++ "i j => i j 0") = (ck17 ++ "k => 0 0 k") in
+  let%op sel17 = pos17 ++ "i j => i j 0" = ck17 ++ "k => 0 0 k" in
   let%op p17 = a17 +* "i j; i j k => k" sel17 in
   let ctx = Train.forward_once ctx p17 in
   show ctx "17 flatten" "workaround" p17;
@@ -263,5 +257,6 @@ let () =
 (* 13 pad_to, note on the runtime-size limitation: both directions above use a STATICALLY known
    target length. The only part not covered is a *runtime* integer target j -- concatenation needs a
    statically known pad width and the selection matmul needs a statically known output axis, so a
-   data-dependent j would require a dynamic/range-slice op OCANNL does not yet have. OCANNL's slicing
-   operator [@|] selects a single index of the leftmost batch axis, not a contiguous prefix range. *)
+   data-dependent j would require a dynamic/range-slice op OCANNL does not yet have. OCANNL's
+   slicing operator [@|] selects a single index of the leftmost batch axis, not a contiguous prefix
+   range. *)

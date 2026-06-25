@@ -10,8 +10,8 @@ module Tn = Tnode
     The table is:
     - {b weak in the key}: an entry is reclaimed by the GC once its tensor node becomes unreachable,
       so constructing-but-never-compiling a literal does not leak its buffer;
-    - {b read, not consumed}: linking a node into a context {e reads} (does not remove) the entry, so
-      the same node can be initialized into multiple independent contexts / devices;
+    - {b read, not consumed}: linking a node into a context {e reads} (does not remove) the entry,
+      so the same node can be initialized into multiple independent contexts / devices;
     - {b lazy in the value}: the buffer is shaped only when forced, i.e. after shape inference. *)
 
 module Init_table = Stdlib.Ephemeron.K1.Make (struct

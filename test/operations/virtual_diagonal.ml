@@ -3,20 +3,21 @@
    positions.
 
    High-level lowering never produces a [Get] of a virtual diagonal with two distinct call-site
-   symbols in one place (each assignment lowers to its own loop nest), so -- like [virtual_shared_loop]
-   -- these cases are built directly as [Ir.Low_level.t] and run through [Ir.Low_level.optimize], the
-   same pipeline (visit_llc -> virtual_llc -> cleanup_virtual_llc -> simplify -> CSE -> hoist) the
-   backends use. We assert structurally on the optimized form: that the diagonal producer virtualizes,
-   that its reads are inlined, and that an equality guard ([Where (Cmpeq ...)]) is emitted exactly when
-   the read uses distinct/dynamic indices and folded away when the read indices are syntactically
-   equal.
+   symbols in one place (each assignment lowers to its own loop nest), so -- like
+   [virtual_shared_loop] -- these cases are built directly as [Ir.Low_level.t] and run through
+   [Ir.Low_level.optimize], the same pipeline (visit_llc -> virtual_llc -> cleanup_virtual_llc ->
+   simplify -> CSE -> hoist) the backends use. We assert structurally on the optimized form: that
+   the diagonal producer virtualizes, that its reads are inlined, and that an equality guard ([Where
+   (Cmpeq ...)]) is emitted exactly when the read uses distinct/dynamic indices and folded away when
+   the read indices are syntactically equal.
 
    [Concat] virtualization stays out of scope: a [Concat] index is eliminated during lowering and
-   [visit_llc] raises if one ever reaches this pass, so it cannot be exercised through [optimize] here.
-   The "Concat remains rejected" criterion is the unchanged [check_idcs] [Non_virtual 52] branch plus
-   the existing test_concat_graph / test_block_tensor coverage.
+   [visit_llc] raises if one ever reaches this pass, so it cannot be exercised through [optimize]
+   here. The "Concat remains rejected" criterion is the unchanged [check_idcs] [Non_virtual 52]
+   branch plus the existing test_concat_graph / test_block_tensor coverage.
 
-   End-to-end numeric correctness of the guarded inline is covered by test/einsum/test_virtual_diagonal. *)
+   End-to-end numeric correctness of the guarded inline is covered by
+   test/einsum/test_virtual_diagonal. *)
 
 open Base
 module LL = Ir.Low_level
@@ -29,8 +30,10 @@ let next_id = ref 2000
 
 let mk ?(dims = [| 3; 3 |]) label =
   Int.incr next_id;
-  Tn.create (Tn.Specified single) ~id:!next_id ~label:[ label ] ~unpadded_dims:(lazy dims)
-    ~padding:(lazy None) ()
+  Tn.create (Tn.Specified single) ~id:!next_id ~label:[ label ]
+    ~unpadded_dims:(lazy dims)
+    ~padding:(lazy None)
+    ()
 
 let materialize tn = Tn.update_memory_mode tn Tn.Materialized 99
 
@@ -65,7 +68,8 @@ let rec walk_t ~on_get ~on_where (llc : LL.t) =
 
 and walk_s ~on_get ~on_where (s : LL.scalar_t) =
   match s with
-  | LL.Constant _ | LL.Constant_bits _ | LL.Get_local _ | LL.Embed_index _ | LL.Get_merge_buffer _ ->
+  | LL.Constant _ | LL.Constant_bits _ | LL.Get_local _ | LL.Embed_index _ | LL.Get_merge_buffer _
+    ->
       ()
   | LL.Get (tn, _) -> on_get tn
   | LL.Get_dynamic { tn; dyn_value = v, _; _ } ->
@@ -89,17 +93,14 @@ let count_get (o : LL.optimized) tn =
 
 let count_where (o : LL.optimized) =
   let n = ref 0 in
-  walk_t
-    ~on_get:(fun _ -> ())
-    ~on_where:(function Ops.Where -> Int.incr n | _ -> ())
-    o.llc;
+  walk_t ~on_get:(fun _ -> ()) ~on_where:(function Ops.Where -> Int.incr n | _ -> ()) o.llc;
   !n
 
 let p name b = Stdio.printf "%s: %b\n" name b
 
-(* === Case 1: diagonal producer read by a generic (distinct-symbol) consumer ===
-   d[i,i] = i (off-diagonal zero); a materialized consumer reads d[j,k]. The diagonal must virtualize,
-   its read must be inlined, and exactly one equality guard must survive (j = k). *)
+(* === Case 1: diagonal producer read by a generic (distinct-symbol) consumer === d[i,i] = i
+   (off-diagonal zero); a materialized consumer reads d[j,k]. The diagonal must virtualize, its read
+   must be inlined, and exactly one equality guard must survive (j = k). *)
 let case_diagonal_generic () =
   let d = mk "d" and o = mk "o" in
   materialize o;
@@ -125,8 +126,8 @@ let case_diagonal_equal () =
   p "diagonal-equal: read inlined (no array read of d)" (count_get opt d = 0);
   p "diagonal-equal: guard folded away (no Where)" (count_where opt = 0)
 
-(* === Case 3: partially-diagonal producer [i;j;i] read generically ===
-   d[i,j,i] = i; consumer reads d[a,b,cc]. Repeated i guards (a = cc); j substituted normally. *)
+(* === Case 3: partially-diagonal producer [i;j;i] read generically === d[i,j,i] = i; consumer reads
+   d[a,b,cc]. Repeated i guards (a = cc); j substituted normally. *)
 let case_partial_diagonal () =
   let d = mk ~dims:[| 3; 3; 3 |] "pd" and o = mk ~dims:[| 3; 3; 3 |] "po" in
   materialize o;
@@ -143,9 +144,9 @@ let case_partial_diagonal () =
   p "partial-diagonal: read inlined (no array read of d)" (count_get opt d = 0);
   p "partial-diagonal: one equality guard survives" (count_where opt >= 1)
 
-(* === Case 4: static-vs-dynamic read of a diagonal producer ===
-   Read d[0, j] (a row slice): the first position is bound to Fixed_idx 0, the second is dynamic; the
-   consistency must become a guard (0 = j), NOT a Non_virtual 13 rejection. *)
+(* === Case 4: static-vs-dynamic read of a diagonal producer === Read d[0, j] (a row slice): the
+   first position is bound to Fixed_idx 0, the second is dynamic; the consistency must become a
+   guard (0 = j), NOT a Non_virtual 13 rejection. *)
 let case_static_dynamic () =
   let d = mk "d" and o = mk ~dims:[| 3 |] "o" in
   materialize o;
@@ -157,9 +158,9 @@ let case_static_dynamic () =
   p "static-dynamic: read inlined (no array read of d)" (count_get opt d = 0);
   p "static-dynamic: one equality guard survives" (count_where opt >= 1)
 
-(* === Case 5: covered single-symbol affine producer position ===
-   Producer d[i, i+1] (single-symbol affine, covered by the bare iterator i) read at d[j, j+1]; this
-   must validate after substitution (no Non_virtual 13) and inline with no surviving guard. *)
+(* === Case 5: covered single-symbol affine producer position === Producer d[i, i+1] (single-symbol
+   affine, covered by the bare iterator i) read at d[j, j+1]; this must validate after substitution
+   (no Non_virtual 13) and inline with no surviving guard. *)
 let case_single_symbol_affine () =
   let d = mk "d" and o = mk ~dims:[| 3 |] "o" in
   materialize o;
@@ -172,11 +173,11 @@ let case_single_symbol_affine () =
   p "single-affine: read inlined (no array read of d)" (count_get opt d = 0);
   p "single-affine: no guard for matching affine" (count_where opt = 0)
 
-(* === Case 5b: covered single-symbol affine producer read at a MISMATCHED offset ===
-   Producer d[i, i+1] read at d[j, j+2]: the substituted producer index (j+1) does not equal the
-   call-site index (j+2), but the position is covered (symbol j is bound), so it must virtualize with a
-   SURVIVING equality guard (j+1 = j+2, which folds to the init value) -- NOT a Non_virtual 13
-   deferral to materialization. *)
+(* === Case 5b: covered single-symbol affine producer read at a MISMATCHED offset === Producer d[i,
+   i+1] read at d[j, j+2]: the substituted producer index (j+1) does not equal the call-site index
+   (j+2), but the position is covered (symbol j is bound), so it must virtualize with a SURVIVING
+   equality guard (j+1 = j+2, which folds to the init value) -- NOT a Non_virtual 13 deferral to
+   materialization. *)
 let case_single_symbol_affine_mismatch () =
   let d = mk "d" and o = mk ~dims:[| 3 |] "o" in
   materialize o;

@@ -81,9 +81,10 @@ val mem : t -> Ir.Tnode.t -> bool
 (** Whether the node has a device buffer allocated in this context. *)
 
 val register_for_print : src:Ir.Tnode.t -> proxy:Ir.Tnode.t -> unit
-(** Registers [proxy] as a for-print copy of [src] (gh-ocannl-333 AC 5): when [src] is not present in
-    a context, {!to_host}/{!get_values} on [src] read through [proxy] instead. Used by [Train.printf]
-    to render the value of a tensor that is not directly materialized in the context. *)
+(** Registers [proxy] as a for-print copy of [src] (gh-ocannl-333 AC 5): when [src] is not present
+    in a context, {!to_host}/{!get_values} on [src] read through [proxy] instead. Used by
+    [Train.printf] to render the value of a tensor that is not directly materialized in the context.
+*)
 
 val to_host : t -> Ir.Tnode.t -> Ir.Ndarray.t
 (** Transfers the node's device buffer into a fresh host [Ndarray] and returns it. Raises if the

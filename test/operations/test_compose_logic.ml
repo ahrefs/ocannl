@@ -2,8 +2,8 @@ open Base
 open Ocannl
 open Ocannl.Nn_blocks.DSL_modules
 
-(* Positive test: ~logic:"@" with * (matrix multiply) must still work after the
-   prohibition of ~logic:"@" with / and **. *)
+(* Positive test: ~logic:"@" with * (matrix multiply) must still work after the prohibition of
+   ~logic:"@" with / and **. *)
 
 let make_tensor ?(input_dims = []) ~output_dims label vals =
   let open Bigarray in
@@ -16,8 +16,8 @@ let make_tensor ?(input_dims = []) ~output_dims label vals =
 let () =
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
-  (* a is 2x3 (output=2, input=3); b is 3x1 (output=3, input=1).
-     c[i] = sum_k a[i,k] * b[k] = matrix-vector multiply. *)
+  (* a is 2x3 (output=2, input=3); b is 3x1 (output=3, input=1). c[i] = sum_k a[i,k] * b[k] =
+     matrix-vector multiply. *)
   let a = make_tensor ~input_dims:[ 3 ] ~output_dims:[ 2 ] "a" [| 1.0; 2.0; 3.0; 4.0; 5.0; 6.0 |] in
   let b = make_tensor ~input_dims:[ 1 ] ~output_dims:[ 3 ] "b" [| 1.0; 0.0; 1.0 |] in
   let%cd fwd = { c } =:+ a * b ~logic:"@" in

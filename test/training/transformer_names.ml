@@ -160,11 +160,15 @@ let () =
 
   (* Compile training routine *)
   let train_comp = Asgns.sequence [ update; sgd ] in
-  Set.iter (snd @@ Asgns.collect_nodes_guess_output train_comp.Asgns.asgns) ~f:Train.set_materialized;
+  Set.iter
+    (snd @@ Asgns.collect_nodes_guess_output train_comp.Asgns.asgns)
+    ~f:Train.set_materialized;
   let ctx, sgd_step = Context.compile ctx train_comp bindings in
 
   (* Compile inference routine *)
-  Set.iter (snd @@ Asgns.collect_nodes_guess_output infer_comp.Asgns.asgns) ~f:Train.set_materialized;
+  Set.iter
+    (snd @@ Asgns.collect_nodes_guess_output infer_comp.Asgns.asgns)
+    ~f:Train.set_materialized;
   let infer_comp =
     { infer_comp with Asgns.embedded_nodes = Set.add infer_comp.Asgns.embedded_nodes mask.value }
   in
@@ -185,8 +189,12 @@ let () =
     let epoch_loss = ref 0. in
     for batch = 0 to n_batches - 1 do
       let offset = batch * batch_size in
-      ignore (Context.set_values ctx input_batch.value (seqs_to_flat_one_hot train_inputs ~offset) : Context.t);
-      ignore (Context.set_values ctx target_batch.value (seqs_to_flat_one_hot train_targets ~offset) : Context.t);
+      ignore
+        (Context.set_values ctx input_batch.value (seqs_to_flat_one_hot train_inputs ~offset)
+          : Context.t);
+      ignore
+        (Context.set_values ctx target_batch.value (seqs_to_flat_one_hot train_targets ~offset)
+          : Context.t);
       let ctx' = Context.run ctx sgd_step in
       ignore (ctx' : Context.t);
       epoch_loss := !epoch_loss +. (ctx, batch_loss).@[0];
@@ -232,7 +240,9 @@ let () =
 
         (* Compute softmax probabilities at position (pos-1) in the output (the model predicts token
            at position pos given input up to pos-1). *)
-        let logits = Array.init vocab_size ~f:(fun v -> (ctx, infer_logits).@{[| 0; pos - 1; v |]}) in
+        let logits =
+          Array.init vocab_size ~f:(fun v -> (ctx, infer_logits).@{[| 0; pos - 1; v |]})
+        in
         let max_logit = Array.fold logits ~init:Float.neg_infinity ~f:Float.max in
         let exp_logits = Array.map logits ~f:(fun l -> Float.exp (l -. max_logit)) in
         let sum_exp = Array.fold exp_logits ~init:0. ~f:( +. ) in

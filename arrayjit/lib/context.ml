@@ -80,9 +80,7 @@ let create_from_backend_name ~device_id backend_name =
   let device = Backend.get_device ~ordinal:device_id in
   let context = Backend.make_context ~optimize_ctx:(Backend.empty_optimize_ctx ()) device in
 
-  let backend_wrapper =
-    Wrapper { backend = (module Backend); device; device_id; context }
-  in
+  let backend_wrapper = Wrapper { backend = (module Backend); device; device_id; context } in
 
   {
     backend_wrapper;
@@ -216,20 +214,19 @@ let compile ctx comp bindings =
 
 let run ctx routine =
   (* Check that all required inputs are initialized. A node counts as initialized if it was produced
-     by a prior routine ([initialized_nodes]) or is already allocated in the running context's device
-     buffers ([in_backend]): such inputs are either user-set via [set_values]/[from_host] (which
-     write the allocated buffer in place) or zero-initialized at allocation, which is the correct
-     identity for read-only accumulators (e.g. gradients). NOTE (Codex P1): this does not distinguish
-     a forgotten non-zero data input from a zero-valid accumulator — both are [alloc_zeros]'d
-     read-only buffers — so a forgotten data input reads zeros rather than failing. Catching that
-     precisely needs per-node "needs-nonzero-init" metadata OCANNL does not currently carry; a
-     stricter check produces false positives on read-only accumulator gradients (zero2hero_1of7,
-     primitive_ops). *)
+     by a prior routine ([initialized_nodes]) or is already allocated in the running context's
+     device buffers ([in_backend]): such inputs are either user-set via [set_values]/[from_host]
+     (which write the allocated buffer in place) or zero-initialized at allocation, which is the
+     correct identity for read-only accumulators (e.g. gradients). NOTE (Codex P1): this does not
+     distinguish a forgotten non-zero data input from a zero-valid accumulator — both are
+     [alloc_zeros]'d read-only buffers — so a forgotten data input reads zeros rather than failing.
+     Catching that precisely needs per-node "needs-nonzero-init" metadata OCANNL does not currently
+     carry; a stricter check produces false positives on read-only accumulator gradients
+     (zero2hero_1of7, primitive_ops). *)
   let (Wrapper run_wrapper) = ctx.backend_wrapper in
   let in_backend tn = Map.mem run_wrapper.context.BI.ctx_buffers tn in
   let missing_inputs =
-    Set.filter routine.inputs ~f:(fun tn ->
-        not (Set.mem ctx.initialized_nodes tn || in_backend tn))
+    Set.filter routine.inputs ~f:(fun tn -> not (Set.mem ctx.initialized_nodes tn || in_backend tn))
   in
   (if not (Set.is_empty missing_inputs) then
      let missing_names =
@@ -323,10 +320,10 @@ let copy_nd (src : Nd.t) : Nd.t =
 (** Transfers [tn]'s device buffer into a fresh host [Ndarray] and returns it. Raises if the node is
     not present in the context (and has no host-init data or for-print proxy). *)
 let to_host ctx (tn : Tn.t) : Nd.t =
-  (* An [\@|] slice view is addressed through its parent (gh-ocannl-293 293a): an eligible slice owns
-     no buffer, and an ineligible (copy) slice's value is recomputed from the parent each run. Reject
-     direct host reads uniformly -- read the parent tensor instead. [slice_of] is set eagerly at
-     construction, so this also covers the window before lowering decides eligibility. *)
+  (* An [\@|] slice view is addressed through its parent (gh-ocannl-293 293a): an eligible slice
+     owns no buffer, and an ineligible (copy) slice's value is recomputed from the parent each run.
+     Reject direct host reads uniformly -- read the parent tensor instead. [slice_of] is set eagerly
+     at construction, so this also covers the window before lowering decides eligibility. *)
   (match Tn.slice_of tn with
   | Some (parent, _) ->
       raise
@@ -367,8 +364,8 @@ let to_host ctx (tn : Tn.t) : Nd.t =
 (** Uploads the host buffer [nd] into [tn]'s device buffer, allocating it if needed, and returns a
     context in which [tn] is marked initialized (so a subsequent {!run} reading [tn] succeeds). *)
 let from_host ctx (tn : Tn.t) (nd : Nd.t) : t =
-  (* Reject direct host writes to an [\@|] slice view (gh-ocannl-293 293a). Critically, [slice_of] is
-     set eagerly at construction, so this fires even when the slice has not been lowered yet and
+  (* Reject direct host writes to an [\@|] slice view (gh-ocannl-293 293a). Critically, [slice_of]
+     is set eagerly at construction, so this fires even when the slice has not been lowered yet and
      [alias_of] is still [None] -- without it the [init_from_host] fallback below would allocate a
      fresh detached buffer for the slice that later alias lowering orphans (the host write would
      update neither the parent nor any buffer the kernels read). Write the parent instead. *)
@@ -413,8 +410,8 @@ let get_value ctx (tn : Tn.t) (idx : int array) : float =
   in
   Nd.get_as_float ?padding nd idx
 
-(* Reads the current device buffer, sets one element, and uploads the whole buffer back, so that
-   the other elements are preserved. *)
+(* Reads the current device buffer, sets one element, and uploads the whole buffer back, so that the
+   other elements are preserved. *)
 let set_value ctx (tn : Tn.t) (idx : int array) (v : float) : t =
   let nd = to_host ctx tn in
   let padding = Option.map ~f:fst (Lazy.force tn.Tn.padding) in

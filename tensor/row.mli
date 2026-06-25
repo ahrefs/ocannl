@@ -20,10 +20,10 @@ val proj_var_set_empty : proj_var_set
 val proj_map_empty : 'a proj_map
 
 val bcast_if_1 : string
-(** The reserved basis tag of the claim-free broadcast top. An axis tagged [bcast_if_1]
-    broadcasts to any size while it remains size 1 ([1_(bcast_if_1)] is the top of the broadcast
-    order), and is an ordinary inert atom at sizes > 1. Scalars and rank-broadening fill carry it;
-    a user may also write it deliberately as an explicit stretch-when-1 affordance. *)
+(** The reserved basis tag of the claim-free broadcast top. An axis tagged [bcast_if_1] broadcasts
+    to any size while it remains size 1 ([1_(bcast_if_1)] is the top of the broadcast order), and is
+    an ordinary inert atom at sizes > 1. Scalars and rank-broadening fill carry it; a user may also
+    write it deliberately as an explicit stretch-when-1 affordance. *)
 
 val default_basis : string
 (** The basis tag the frontend supplies for any axis the user writes without naming a basis. It is
@@ -37,9 +37,8 @@ type solved_dim = { d : int; basis : string; proj_id : proj_id option }
 [@@deriving equal, hash, compare, sexp]
 (** A single axis in a shape. [basis] is the (total) semantic annotation on the dimension (e.g.
     ["rgb"] on a size-3 axis); two dimensions that must agree in size must also agree on [basis].
-    Unannotated user axes carry [default_basis]; the broadcast top carries [bcast_if_1].
-    [proj_id] is used for projection inference, and abused for provenance tracking during shape
-    inference. *)
+    Unannotated user axes carry [default_basis]; the broadcast top carries [bcast_if_1]. [proj_id]
+    is used for projection inference, and abused for provenance tracking during shape inference. *)
 
 type convolution = { dilation : int; kernel : dim; use_padding : bool }
 [@@deriving equal, hash, compare, sexp]
@@ -61,8 +60,8 @@ val get_dim : d:int -> basis:string -> ?proj_id:int -> unit -> dim
 (** Mint a dimension with an explicit (required) basis tag. *)
 
 val get_bcast_dim : d:int -> ?proj_id:int -> unit -> dim
-(** Mint the claim-free broadcast top [d_(bcast_if_1)] (at [d = 1] the top of the broadcast
-    order; at sizes > 1 an inert atom). Use at scalar / rank-broadening / GLB-demotion sites. *)
+(** Mint the claim-free broadcast top [d_(bcast_if_1)] (at [d = 1] the top of the broadcast order;
+    at sizes > 1 an inert atom). Use at scalar / rank-broadening / GLB-demotion sites. *)
 
 val get_default_dim : d:int -> ?proj_id:int -> unit -> dim
 (** Mint an unannotated user/derived atom [d_(default)]. *)
@@ -234,8 +233,8 @@ val solve_inequalities :
   constraint_ list ->
   environment ->
   constraint_ list * environment
-(** [discardable_vars] are safe to guess dimension = 0, they do not participate in projections for the
-    update step the constraints were derived for. *)
+(** [discardable_vars] are safe to guess dimension = 0, they do not participate in projections for
+    the update step the constraints were derived for. *)
 
 val row_to_bases : environment -> t -> string array
 

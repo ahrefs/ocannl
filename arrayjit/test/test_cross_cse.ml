@@ -120,15 +120,12 @@ let () =
         from_ = 0;
         to_ = 3;
         body =
-          LL.Set
-            { tn = tn_src; idcs = [| Idx.Iterator k |]; llsc = LL.Constant 1.0; debug = "" };
+          LL.Set { tn = tn_src; idcs = [| Idx.Iterator k |]; llsc = LL.Constant 1.0; debug = "" };
         trace_it = false;
       }
   in
   let d_prog =
-    LL.Seq
-      ( make_set ~tn_out:tn_out1 d_scope0,
-        LL.Seq (d_loop, make_set ~tn_out:tn_out2 d_scope2) )
+    LL.Seq (make_set ~tn_out:tn_out1 d_scope0, LL.Seq (d_loop, make_set ~tn_out:tn_out2 d_scope2))
   in
   report "D.forloop-hazard" ~hoisted_expected:false (LL.hoist_cross_statement_cse d_prog);
   Stdio.printf "\n";

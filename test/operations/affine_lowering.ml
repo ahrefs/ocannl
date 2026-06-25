@@ -1,10 +1,10 @@
 (* gh-ocannl-133 Stage B: lowering payoff (AC4) and executable virtual-vs-materialized parity (AC6).
 
    AC4 -- an injective + surjective affine scatter (pool-backward [2*oh+wh] with stride = window)
-   lowers to a plain setter with no neutral-init [Zero_out] and no read-modify-write accumulation. We
-   build the [Accum_op] directly (the einsum grammar has no result-side affine scatter) and inspect
-   [Ir.Assignments.to_low_level]. A non-injective [i+j] scatter is the contrast: it DOES emit a
-   [Zero_out] and a read-modify-write, proving the AC4 assertion is non-vacuous.
+   lowers to a plain setter with no neutral-init [Zero_out] and no read-modify-write accumulation.
+   We build the [Accum_op] directly (the einsum grammar has no result-side affine scatter) and
+   inspect [Ir.Assignments.to_low_level]. A non-injective [i+j] scatter is the contrast: it DOES
+   emit a [Zero_out] and a read-modify-write, proving the AC4 assertion is non-vacuous.
 
    AC6 -- the same [2*oh+wh] scatter, consumed at a plain iterator, virtualizes (Stage B
    unit-coefficient solving) and, executed on the configured backend, matches both the materialized
@@ -22,8 +22,10 @@ let next_id = ref 3000
 
 let mk ~dims label =
   Int.incr next_id;
-  Tn.create (Tn.Specified single) ~id:!next_id ~label:[ label ] ~unpadded_dims:(lazy dims)
-    ~padding:(lazy None) ()
+  Tn.create (Tn.Specified single) ~id:!next_id ~label:[ label ]
+    ~unpadded_dims:(lazy dims)
+    ~padding:(lazy None)
+    ()
 
 let dbg : Idx.projections_debug = { spec = ""; derived_for = Sexp.Atom ""; trace = [] }
 
@@ -54,7 +56,9 @@ let scatter_asgn ~dst ~src proj =
 let count_zero_out (llc : LL.t) tn =
   let n = ref 0 in
   let rec t = function
-    | LL.Seq (a, b) -> t a; t b
+    | LL.Seq (a, b) ->
+        t a;
+        t b
     | LL.For_loop { body; _ } -> t body
     | LL.Zero_out z -> if z.Tn.id = tn.Tn.id then Int.incr n
     | LL.Comment _ | LL.Noop -> ()
@@ -74,12 +78,19 @@ let setter_reads_self (llc : LL.t) tn =
         if g.Tn.id = tn.Tn.id then found := true;
         scal v
     | LL.Local_scope { body; _ } -> t body
-    | LL.Ternop (_, (a, _), (b, _), (c, _)) -> scal a; scal b; scal c
-    | LL.Binop (_, (a, _), (b, _)) -> scal a; scal b
+    | LL.Ternop (_, (a, _), (b, _), (c, _)) ->
+        scal a;
+        scal b;
+        scal c
+    | LL.Binop (_, (a, _), (b, _)) ->
+        scal a;
+        scal b
     | LL.Unop (_, (a, _)) -> scal a
     | _ -> ()
   and t = function
-    | LL.Seq (a, b) -> t a; t b
+    | LL.Seq (a, b) ->
+        t a;
+        t b
     | LL.For_loop { body; _ } -> t body
     | LL.Set { tn = stn; llsc; _ } -> if stn.Tn.id = tn.Tn.id then scal llsc
     | LL.Set_local (_, s) -> scal s
@@ -96,20 +107,17 @@ let ac4 () =
   let dst_i = mk ~dims:[| 6 |] "dst_inj" and src_i = mk ~dims:[| 3; 2 |] "src_inj" in
   let llc_inj =
     Asgns.to_low_level
-      (scatter_asgn ~dst:dst_i ~src:src_i
-         (scatter_proj oh wh ~n1:3 ~n2:2 ~c1:2 ~c2:1 ~lhs_dim:6))
+      (scatter_asgn ~dst:dst_i ~src:src_i (scatter_proj oh wh ~n1:3 ~n2:2 ~c1:2 ~c2:1 ~lhs_dim:6))
   in
   p "injective scatter: no neutral-init Zero_out" (count_zero_out llc_inj dst_i = 0);
-  p "injective scatter: plain setter (no read-modify-write)"
-    (not (setter_reads_self llc_inj dst_i));
+  p "injective scatter: plain setter (no read-modify-write)" (not (setter_reads_self llc_inj dst_i));
 
   (* Non-injective contrast: i + j, both in [0,3) -- the assertion above is non-vacuous. *)
   let i = Idx.get_symbol () and j = Idx.get_symbol () in
   let dst_n = mk ~dims:[| 5 |] "dst_ni" and src_n = mk ~dims:[| 3; 3 |] "src_ni" in
   let llc_ni =
     Asgns.to_low_level
-      (scatter_asgn ~dst:dst_n ~src:src_n
-         (scatter_proj i j ~n1:3 ~n2:3 ~c1:1 ~c2:1 ~lhs_dim:5))
+      (scatter_asgn ~dst:dst_n ~src:src_n (scatter_proj i j ~n1:3 ~n2:3 ~c1:1 ~c2:1 ~lhs_dim:5))
   in
   p "non-injective scatter: emits neutral-init Zero_out" (count_zero_out llc_ni dst_n >= 1);
   p "non-injective scatter: read-modify-write accumulation" (setter_reads_self llc_ni dst_n)
@@ -138,7 +146,8 @@ let copy_asgn ~dst ~src proj =
       projections_debug = "copy";
     }
 
-(* Returns (out values, dst known_virtual). [materialize_dst] forces the intermediate to a buffer. *)
+(* Returns (out values, dst known_virtual). [materialize_dst] forces the intermediate to a
+   buffer. *)
 let run_scatter_then_copy ~materialize_dst =
   let oh = Idx.get_symbol () and wh = Idx.get_symbol () and t = Idx.get_symbol () in
   let src = mk ~dims:[| 3; 2 |] "src" in
@@ -151,9 +160,7 @@ let run_scatter_then_copy ~materialize_dst =
   (* The backend derives the routine name from a block comment. *)
   let asgns = Asgns.Block_comment ("affine_scatter_copy", Asgns.Seq (scatter, copy)) in
   (* [dst] and [out] are produced by the comp (embedded); [src] is the only external input. *)
-  let comp =
-    { Asgns.asgns; embedded_nodes = Set.of_list (module Tn) [ dst; out ] }
-  in
+  let comp = { Asgns.asgns; embedded_nodes = Set.of_list (module Tn) [ dst; out ] } in
   let ctx = Context.auto () in
   let ctx = Context.set_values ctx src [| 10.; 11.; 12.; 13.; 14.; 15. |] in
   let ctx, routine = Context.compile ctx comp Idx.Empty in
@@ -161,9 +168,9 @@ let run_scatter_then_copy ~materialize_dst =
   (Context.get_values ctx out, Tn.known_virtual dst)
 
 (* Triangular scatter dst[s1, s1+s2] = src[s1,s2], s1 in [0,3), s2 in [0,2), consumed at plain
-   [out[a,b] = dst[a,b]]. Unit-coefficient solving binds s1<-a then solves s2 = b - a with range guard
-   [0 <= b-a < 2]; off-region cells fall back to the prepended init (0). Exercises a non-trivial [rest]
-   (= s1) and the init fallback. *)
+   [out[a,b] = dst[a,b]]. Unit-coefficient solving binds s1<-a then solves s2 = b - a with range
+   guard [0 <= b-a < 2]; off-region cells fall back to the prepended init (0). Exercises a
+   non-trivial [rest] (= s1) and the init fallback. *)
 let tri_scatter_proj s1 s2 : Idx.projections =
   {
     product_space = [| [ 3 ]; [ 2 ] |];
@@ -212,10 +219,12 @@ let ac6 () =
   let out_mat, _ = run_scatter_then_copy ~materialize_dst:true in
   (* dst index 2*oh+wh and src row-major index oh*2+wh coincide, so out = src flat. *)
   let expected = [| 10.; 11.; 12.; 13.; 14.; 15. |] in
-  Stdio.printf "AC6 unit-solve(plain): virtual=[%s] expected=[%s]\n" (show out_virtual) (show expected);
+  Stdio.printf "AC6 unit-solve(plain): virtual=[%s] expected=[%s]\n" (show out_virtual)
+    (show expected);
   p "AC6 unit-solve(plain) dst virtualized (Stage B path exercised)" dst_virtual;
   p "AC6 unit-solve(plain) virtual matches expected" (Array.equal Float.equal out_virtual expected);
-  p "AC6 unit-solve(plain) virtual matches materialized" (Array.equal Float.equal out_virtual out_mat);
+  p "AC6 unit-solve(plain) virtual matches materialized"
+    (Array.equal Float.equal out_virtual out_mat);
 
   (* Triangular: out[a,b] = src[a, b-a] when 0 <= b-a < 2, else 0 (init). *)
   let tri_virtual, tri_dst_virtual = run_triangular ~materialize_dst:false in

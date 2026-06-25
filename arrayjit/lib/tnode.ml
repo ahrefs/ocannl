@@ -48,10 +48,10 @@ type t = {
   mutable memory_mode : (memory_mode * int) option;
   mutable alias_of : ((t * Indexing.static_symbol) option[@sexp.opaque]);
       (** When [Some (parent, batch_idx)], this node is a zero-copy slice-alias *view* of [parent]:
-          it owns no buffer of its own, and every read/write of it is redirected (during lowering) to
-          [parent] with [batch_idx] prepended as the leading index. Set by {!Assignments.lower} for
-          alias-eligible [Fetch.Slice]s; orthogonal to {!field-memory_mode}. The strong reference to
-          [parent] also keeps it reachable for as long as the alias is. *)
+          it owns no buffer of its own, and every read/write of it is redirected (during lowering)
+          to [parent] with [batch_idx] prepended as the leading index. Set by {!Assignments.lower}
+          for alias-eligible [Fetch.Slice]s; orthogonal to {!field-memory_mode}. The strong
+          reference to [parent] also keeps it reachable for as long as the alias is. *)
   mutable slice_of : ((t * Indexing.static_symbol) option[@sexp.opaque]);
       (** When [Some (parent, batch_idx)], this node is an [\@|] sub-tensor slice of [parent]. Set
           *eagerly at construction* (independent of alias eligibility), so it is a superset of
@@ -196,12 +196,12 @@ let is_alias tn = Option.is_some tn.alias_of
 
 let alias_of tn = tn.alias_of
 
-(** Marks [tn] as a zero-copy slice-alias view of [parent] with leading index [batch_idx]. Idempotent
-    when re-marked with the same parent. *)
+(** Marks [tn] as a zero-copy slice-alias view of [parent] with leading index [batch_idx].
+    Idempotent when re-marked with the same parent. *)
 let set_alias_of tn ~parent ~batch_idx = tn.alias_of <- Some (parent, batch_idx)
 
-(** Whether [tn] is an [\@|] sub-tensor slice (see {!field-slice_of}) -- set eagerly at construction,
-    independent of alias eligibility. A superset of {!is_alias}. *)
+(** Whether [tn] is an [\@|] sub-tensor slice (see {!field-slice_of}) -- set eagerly at
+    construction, independent of alias eligibility. A superset of {!is_alias}. *)
 let is_slice tn = Option.is_some tn.slice_of
 
 let slice_of tn = tn.slice_of
@@ -217,12 +217,12 @@ let%debug3_sexp rec is_in_context_force (tn : t) (provenance : int) : bool =
      redirected to its parent (gh-ocannl-293 subtask 293a). *)
   if is_alias tn then false
   else
-  match tn.memory_mode with
-  | Some ((Virtual | Local), _) -> false
-  | Some (On_device, _) -> true
-  | None | Some ((Materialized | Effectively_constant | Never_virtual | Device_only), _) ->
-      default_to_most_local tn provenance;
-      is_in_context_force tn provenance
+    match tn.memory_mode with
+    | Some ((Virtual | Local), _) -> false
+    | Some (On_device, _) -> true
+    | None | Some ((Materialized | Effectively_constant | Never_virtual | Device_only), _) ->
+        default_to_most_local tn provenance;
+        is_in_context_force tn provenance
 
 let known_not_materialized tn =
   match tn.memory_mode with Some ((Virtual | Local), _) -> true | _ -> false
@@ -253,8 +253,8 @@ let update_memory_mode tn mode provenance =
   | Some (Virtual, _), Effectively_constant -> ()
   | Some ((Never_virtual | Materialized), _), Effectively_constant
   | Some (Effectively_constant, _), (Never_virtual | Materialized) ->
-      (* A constant that must be persisted is just a materialized (device-resident) node now;
-         there is no separate hosted-constant state. *)
+      (* A constant that must be persisted is just a materialized (device-resident) node now; there
+         is no separate hosted-constant state. *)
       tn.memory_mode <- Some (Materialized, provenance)
   | Some (Effectively_constant, _), Virtual -> tn.memory_mode <- Some (mode, provenance)
   | Some (Effectively_constant, _), On_device -> tn.memory_mode <- Some (On_device, provenance)

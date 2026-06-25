@@ -1,7 +1,7 @@
-(* Regression test for the ternary ~logic branch of ppx_cd: [fma ... ~logic:"."] and
-   [fma ... ~logic:"@"] inside [%cd] used to expand to [Shape.Pointwise_bin] / [Shape.Compose]
-   (compose_type constructors) where [Tensor.raw_ternop] expects [Shape.ternary_type], i.e.
-   [Shape.Pointwise_tern] / [Shape.Compose_accumulate] -- producing ill-typed OCaml code. *)
+(* Regression test for the ternary ~logic branch of ppx_cd: [fma ... ~logic:"."] and [fma ...
+   ~logic:"@"] inside [%cd] used to expand to [Shape.Pointwise_bin] / [Shape.Compose] (compose_type
+   constructors) where [Tensor.raw_ternop] expects [Shape.ternary_type], i.e. [Shape.Pointwise_tern]
+   / [Shape.Compose_accumulate] -- producing ill-typed OCaml code. *)
 
 open Base
 module Train = Ocannl.Train
@@ -33,7 +33,8 @@ let () =
   let%cd fwd = { out } =: fma a x b ~logic:"." in
   Train.set_materialized out.value;
   let routine = Train.to_routine ctx Train.IDX.empty fwd in
-  let ctx = Context.context routine in  Train.run ctx routine;
+  let ctx = Context.context routine in
+  Train.run ctx routine;
   print_values ctx "fma pointwise (a*x + b)" out;
   Stdio.printf "expected = [10.5 40.5 90.5 160.5]\n";
 
@@ -44,6 +45,7 @@ let () =
   let%cd fwd2 = { out2 } =: fma p q r ~logic:"@" in
   Train.set_materialized out2.value;
   let routine2 = Train.to_routine ctx Train.IDX.empty fwd2 in
-  let ctx = Context.context routine2 in  Train.run ctx routine2;
+  let ctx = Context.context routine2 in
+  Train.run ctx routine2;
   print_values ctx "fma compose-accumulate (p @ q + r)" out2;
   Stdio.printf "expected = [16]\n"

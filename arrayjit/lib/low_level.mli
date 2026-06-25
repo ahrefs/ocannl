@@ -122,12 +122,12 @@ type traced_array = {
           expressions. *)
   mutable is_complex : bool;
       (** True only if the tensor node is built from a genuinely complex scalar computation (one
-          that accesses other non-constexpr computations). Sharing a loop symbol with another
-          tensor does not, by itself, make a node complex (see #134). *)
+          that accesses other non-constexpr computations). Sharing a loop symbol with another tensor
+          does not, by itself, make a node complex (see #134). *)
   mutable prefers_virtual_one_hot : bool;
       (** True when at least one setter for this tensor is a one-hot selector assignment, i.e. a
-          [Cmpeq] between the embedded range iterator and a loop-variable-free expression.
-          When [has_non_one_hot_setter] is false this tensor is exempt from the visit-count
+          [Cmpeq] between the embedded range iterator and a loop-variable-free expression. When
+          [has_non_one_hot_setter] is false this tensor is exempt from the visit-count
           [Never_virtual] rule (task-73617488). *)
   mutable has_non_one_hot_setter : bool;
       (** True when at least one setter is NOT a one-hot selector (including [Set_from_vec]). A
@@ -181,9 +181,9 @@ val reads_scope_before_set : scope_id -> t -> bool
 
 val rewrite_one_hot_reductions : t -> t
 (** gh-343: rewrites the narrow one-hot embedding pattern -- an [Add] reduction over a loop variable
-    [k] whose body selects an embedding-table row via [k == index_expr] (a logical one-hot) -- into a
-    guarded dynamic gather ({!Get_dynamic}) that reads the table row at [index_expr] directly, with
-    an in-range guard returning 0 out of [\[0, vocab_size)] to preserve the one-hot semantics.
+    [k] whose body selects an embedding-table row via [k == index_expr] (a logical one-hot) -- into
+    a guarded dynamic gather ({!Get_dynamic}) that reads the table row at [index_expr] directly,
+    with an in-range guard returning 0 out of [\[0, vocab_size)] to preserve the one-hot semantics.
     Unmatched or unsupported reductions are left unchanged. Called internally by [optimize] between
     [simplify_llc] and [eliminate_common_subexpressions]; exposed for testing. *)
 

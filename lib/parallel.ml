@@ -28,8 +28,8 @@ let host_get (tn : Tn.t) =
   | None ->
       invalid_arg
         (Printf.sprintf
-           "Parallel: tensor %s has no host-side data; only ndarray-backed (literal) tensors can be \
-            sharded/gathered at the host level"
+           "Parallel: tensor %s has no host-side data; only ndarray-backed (literal) tensors can \
+            be sharded/gathered at the host level"
            (Tn.debug_name tn))
 
 (** Reads all (unpadded) values of an ndarray-backed (literal) tensor from its host initialization
@@ -109,16 +109,13 @@ let gather ~axis (shards : Tensor.t array) : Tensor.t =
   in
   TDSL.rebatch ~l:"gathered" nd ()
 
-(** A handle to a live data-parallel training session. All raw-backend state (the shared backend
-    module, the per-shard streams/contexts, the parameter replicas, and the compiled per-shard /
-    gradient-sync / optimizer / broadcast routines) is captured by these closures; there is no hidden
-    global tensor-to-context lookup. Obtain one via {!data_parallel}. *)
 type handle = {
   n_shards : int;
   step : unit -> unit;
       (** Run one synchronized optimizer step: every shard's forward+backward, an all-reduce of the
           parameter gradients across shards via merge-buffer transfer routines, one optimizer update
-          on the owner shard, then a broadcast of the updated parameters back to the other shards. *)
+          on the owner shard, then a broadcast of the updated parameters back to the other shards.
+      *)
   grad_sync : unit -> unit;
       (** All-reduce the parameter gradients across shards onto the owner via merge-buffer transfer
           routines (with the configured {!reduction}). Run after the shards' backward passes and
@@ -142,27 +139,30 @@ type handle = {
           exact values passed to [set_random_seed] when building the shards, so distinct entries
           witness that the per-shard RNG seeding diverges. *)
 }
+(** A handle to a live data-parallel training session. All raw-backend state (the shared backend
+    module, the per-shard streams/contexts, the parameter replicas, and the compiled per-shard /
+    gradient-sync / optimizer / broadcast routines) is captured by these closures; there is no
+    hidden global tensor-to-context lookup. Obtain one via {!data_parallel}. *)
 
 let schedule (r : _ Ir.Backend_intf.routine) = Task.run r.Ir.Backend_intf.schedule
 
 (* [data_parallel] splits one logical batch ([inputs]/[targets]) along the batch axis across
-   [n_shards] *fully independent* per-shard backend contexts (one stream/queue/domain per shard, each
-   owning disjoint tnode buffers), and drives synchronized data-parallel SGD.
+   [n_shards] *fully independent* per-shard backend contexts (one stream/queue/domain per shard,
+   each owning disjoint tnode buffers), and drives synchronized data-parallel SGD.
 
    The model is supplied as [loss_of input target]; it is rebuilt once per shard over that shard's
    slice, so each shard has its own parameter tnodes (single-device unified memory means a single
    shared tnode could not hold distinct per-shard data). The replicas are kept identical: parameters
    are broadcast from the owner after init and after every optimizer step, and the per-shard
    gradients are all-reduced onto the owner between backward and the optimizer step. Gradients and
-   parameters move across shards only through per-stream merge buffers
-   ([device_to_device ~into_merge_buffer:Copy], internally gated by [wait_for_ready]) -- the one
-   cross-stream channel that survived gh-ocannl-341.
+   parameters move across shards only through per-stream merge buffers ([device_to_device
+   ~into_merge_buffer:Copy], internally gated by [wait_for_ready]) -- the one cross-stream channel
+   that survived gh-ocannl-341.
 
-   Per-shard RNG streams diverge by default: shard i's graph is built after
-   [set_random_seed ~seed:(base_seed + i)], so randomized ops (dropout, [uniform_at]) draw
-   differently per shard while the data slices are themselves distinct. The seed mutation is
-   scoped by [Tensor.with_saved_random_seed], so the caller's global random seed is restored on
-   return. *)
+   Per-shard RNG streams diverge by default: shard i's graph is built after [set_random_seed
+   ~seed:(base_seed + i)], so randomized ops (dropout, [uniform_at]) draw differently per shard
+   while the data slices are themselves distinct. The seed mutation is scoped by
+   [Tensor.with_saved_random_seed], so the caller's global random seed is restored on return. *)
 let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(momentum = 0.0)
     ?(base_seed = 0) ~n_shards ~(bindings : Idx.unit_bindings) ~(learning_rate : Tensor.t)
     ~(inputs : Tensor.t) ~(targets : Tensor.t) ~(loss_of : Tensor.t -> Tensor.t -> Tensor.t) ~f () =
@@ -176,8 +176,8 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
   Array.iter ys ~f:(fun y -> Train.set_materialized y.Tensor.value);
   Train.set_materialized learning_rate.Tensor.value;
   (* Distinct RNG seed per shard so randomized ops diverge across shards: shard i uses
-     [shard_seeds.(i) = base_seed + i]. The same value is passed to [set_random_seed] and recorded in
-     [shard_seeds], so the recorded seeds are exactly the ones the shards were built with. The
+     [shard_seeds.(i) = base_seed + i]. The same value is passed to [set_random_seed] and recorded
+     in [shard_seeds], so the recorded seeds are exactly the ones the shards were built with. The
      mutation is scoped: [with_saved_random_seed] restores the caller's global random-seed singleton
      afterwards, so a caller-selected seed is not perturbed; each built loss keeps referencing the
      seed tensor that was current when it was constructed. *)
@@ -220,7 +220,9 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
         (* Stage the shard's input/target slices: upload the literal shards' host data into the
            freshly-allocated device buffers (gh-ocannl-333). *)
         let init_literal ctx (t : Tensor.t) =
-          let nd = Lazy.force (Option.value_exn ~here:[%here] (Ir.Host_inits.find t.Tensor.value)) in
+          let nd =
+            Lazy.force (Option.value_exn ~here:[%here] (Ir.Host_inits.find t.Tensor.value))
+          in
           Backend.init_from_host ctx t.Tensor.value nd
         in
         let ctx = init_literal ctx xs.(i) in
@@ -230,8 +232,9 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
   in
   let shard_ctx = Array.map grad_routines ~f:(fun r -> r.Ir.Backend_intf.context) in
   let owner_ctx = shard_ctx.(0) in
-  (* A merge-buffer transfer of [tn] from shard [i] into [dst], followed by running [consumer] (which
-     reads [tn]'s merge buffer) on [dst]'s stream. Returns whether anything was transferred. *)
+  (* A merge-buffer transfer of [tn] from shard [i] into [dst], followed by running [consumer]
+     (which reads [tn]'s merge buffer) on [dst]'s stream. Returns whether anything was
+     transferred. *)
   let merge_transfer ~dst ~src tn consumer_code =
     match Backend.device_to_device tn ~into_merge_buffer:Copy ~dst ~src with
     | None -> ()
@@ -247,7 +250,8 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
             let dst_p = params.(i).(k) and owner_p = params.(0).(k) in
             let code = [%cd dst_p =: owner_p.merge] in
             Backend.compile shard_ctx.(i).optimize_ctx
-              ~name:(Printf.sprintf "param_bcast_%d_%d" i k) bindings code))
+              ~name:(Printf.sprintf "param_bcast_%d_%d" i k)
+              bindings code))
   in
   let broadcast_params () =
     for k = 0 to n_params - 1 do
@@ -261,15 +265,16 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
   (* Replicate the owner's freshly-initialized parameters to the other shards. *)
   broadcast_params ();
   (* Gradient all-reduce: for each parameter, accumulate every other shard's gradient into the
-     owner's gradient through the merge buffer. [accum_codes.(i).(k)] computes
-     [owner_grad += src_shard_grad.merge]. *)
+     owner's gradient through the merge buffer. [accum_codes.(i).(k)] computes [owner_grad +=
+     src_shard_grad.merge]. *)
   let accum_codes =
     Array.init n_shards ~f:(fun i ->
         Array.init n_params ~f:(fun k ->
             let owner_p = params.(0).(k) and src_p = params.(i).(k) in
             let code = [%cd owner_p.grad =+ src_p.grad.merge] in
             Backend.compile owner_ctx.optimize_ctx
-              ~name:(Printf.sprintf "grad_allreduce_%d_%d" i k) bindings code))
+              ~name:(Printf.sprintf "grad_allreduce_%d_%d" i k)
+              bindings code))
   in
   let mean_codes =
     match reduction with
@@ -287,7 +292,8 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
   let grad_sync () =
     for k = 0 to n_params - 1 do
       for i = 1 to n_shards - 1 do
-        merge_transfer ~dst:owner_ctx ~src:shard_ctx.(i) (grad_of params.(i).(k))
+        merge_transfer ~dst:owner_ctx ~src:shard_ctx.(i)
+          (grad_of params.(i).(k))
           accum_codes.(i).(k)
       done
     done;
@@ -305,8 +311,8 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
       owner_loss
   in
   (* After gh-ocannl-333 there is no host array on a tensor node; host access goes through explicit
-     device transfers with a caller-supplied [Ndarray]. These helpers wrap that for the raw per-shard
-     backend contexts. *)
+     device transfers with a caller-supplied [Ndarray]. These helpers wrap that for the raw
+     per-shard backend contexts. *)
   let host_buffer_of (tn : Tn.t) =
     Nd.create_array
       ~debug:("parallel host buffer for " ^ Tn.debug_name tn)
@@ -321,7 +327,9 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
   in
   (* Upload a literal (ndarray-backed) tensor's host data into an existing device buffer. *)
   let upload_literal ~ctx ~stream ~(dst : Tn.t) (src : Tensor.t) =
-    let src_nd = Lazy.force (Option.value_exn ~here:[%here] (Ir.Host_inits.find src.Tensor.value)) in
+    let src_nd =
+      Lazy.force (Option.value_exn ~here:[%here] (Ir.Host_inits.find src.Tensor.value))
+    in
     ignore (Backend.from_host ctx dst src_nd : bool);
     Backend.await stream
   in

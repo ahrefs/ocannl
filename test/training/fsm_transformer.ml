@@ -166,12 +166,16 @@ let () =
   (* Compile the training routine. This adds all training nodes (including the shared mask constant)
      to the context via Context.compile. *)
   let train_comp = Asgns.sequence [ update; sgd ] in
-  Set.iter (snd @@ Asgns.collect_nodes_guess_output train_comp.Asgns.asgns) ~f:Train.set_materialized;
+  Set.iter
+    (snd @@ Asgns.collect_nodes_guess_output train_comp.Asgns.asgns)
+    ~f:Train.set_materialized;
   let ctx, sgd_step = Context.compile ctx train_comp bindings in
   (* Compile the inference routine using the context from training compilation, which already
      contains the mask constant and all model weight buffers. This is forward-only: no backprop, no
      SGD update. *)
-  Set.iter (snd @@ Asgns.collect_nodes_guess_output infer_comp.Asgns.asgns) ~f:Train.set_materialized;
+  Set.iter
+    (snd @@ Asgns.collect_nodes_guess_output infer_comp.Asgns.asgns)
+    ~f:Train.set_materialized;
   (* The mask constant is embedded in the training compilation but not in the inference compilation
      (because consume_forward_code builds embedded_nodes independently for each tensor). Add mask to
      the inference comp's embedded_nodes so Context.compile treats it as an embedded constant rather

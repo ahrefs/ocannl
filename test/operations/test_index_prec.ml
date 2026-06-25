@@ -9,8 +9,8 @@ let () =
   assert (String.equal (Ops.prec_string idx_prec) "uint32");
   (* gh-ocannl-344: the Metal pooled slot table widens with the SAME setting -- 32-bit (uint) when
      large_models=false (offsets capped under 4 GB), 64-bit (ulong) when true (cap lifted, so a byte
-     offset can exceed UINT32_MAX). This is the type the shader declares and the backend fills; if it
-     stayed uint under large_models=true, large-model pool offsets would silently truncate. *)
+     offset can exceed UINT32_MAX). This is the type the shader declares and the backend fills; if
+     it stayed uint under large_models=true, large-model pool offsets would silently truncate. *)
   Stdio.printf "With large_models=false, pool slot type: %s\n" (Ir.C_syntax.pool_slot_msl_typ ());
   assert (String.equal (Ir.C_syntax.pool_slot_msl_typ ()) "uint");
 

@@ -198,15 +198,13 @@ let is_surjective proj =
       let product_symbol_set =
         Set.of_list (module Symbol) (Array.to_list proj.product_iterators |> List.concat)
       in
-      (* Count only LHS axes that need coverage by iterator symbols. [Fixed_idx 0] on a
-         trivial (dim <= 1) axis is already covered: there is a single position and it is
-         written. Counting such axes would spuriously fail the symbol-count check below for
-         scalar / all-dims-1 tensors, falsely reporting them as non-surjective. *)
+      (* Count only LHS axes that need coverage by iterator symbols. [Fixed_idx 0] on a trivial (dim
+         <= 1) axis is already covered: there is a single position and it is written. Counting such
+         axes would spuriously fail the symbol-count check below for scalar / all-dims-1 tensors,
+         falsely reporting them as non-surjective. *)
       let non_trivial_lhs_count =
         Array.foldi proj.project_lhs ~init:0 ~f:(fun i acc idx ->
-            match idx with
-            | Fixed_idx 0 when proj.lhs_dims.(i) <= 1 -> acc
-            | _ -> acc + 1)
+            match idx with Fixed_idx 0 when proj.lhs_dims.(i) <= 1 -> acc | _ -> acc + 1)
       in
 
       (* All lhs symbols must be from product iterators (no bound symbols) *)
@@ -271,17 +269,19 @@ let coalesce_affine_terms symbols =
    This is sufficient, not necessary (e.g. [3·a + 4·b] over ranges [(3, 2)] is rejected though
    distinct), matching the proposal's known-incomplete case.
 
-   The whole-LHS criterion is a pinning fixpoint: pin static/range-1 symbols, then repeatedly pin the
-   residual symbols of any position that passes the per-position criterion once already-pinned terms
-   are removed. The map is injective iff every non-static symbol is eventually pinned. This accepts
-   triangular maps such as [(s1, s1 + s2)] (position 1 pins s1, then position 2 pins s2).
+   The whole-LHS criterion is a pinning fixpoint: pin static/range-1 symbols, then repeatedly pin
+   the residual symbols of any position that passes the per-position criterion once already-pinned
+   terms are removed. The map is injective iff every non-static symbol is eventually pinned. This
+   accepts triangular maps such as [(s1, s1 + s2)] (position 1 pins s1, then position 2 pins s2).
 
    [Concat] axes partition their range across disjoint sub-ranges, so each concat symbol is pinned
    directly (preserving the pre-Stage-B treatment); [Fixed_idx]/[Sub_axis] carry no symbol. *)
 let affine_injective ~symbol_range (project_lhs : axis_index array) : bool =
   let dyn s = symbol_range s > 1 in
   (* Every non-static symbol that must be pinned for the map to be injective. *)
-  let add_dyn acc ss = List.fold ss ~init:acc ~f:(fun acc s -> if dyn s then Set.add acc s else acc) in
+  let add_dyn acc ss =
+    List.fold ss ~init:acc ~f:(fun acc s -> if dyn s then Set.add acc s else acc)
+  in
   let all_syms =
     Array.fold project_lhs
       ~init:(Set.empty (module Symbol))
@@ -346,8 +346,8 @@ let is_injective proj =
   in
   let symbol_range s = Map.find symbol_range_map s |> Option.value ~default:1 in
   (* gh-133 Stage B: the affine LHS map must be injective over its non-static symbols (mixed-radix
-     per-position criterion + whole-LHS pinning fixpoint). Previously any [Affine] position with more
-     than one product iterator was rejected outright. *)
+     per-position criterion + whole-LHS pinning fixpoint). Previously any [Affine] position with
+     more than one product iterator was rejected outright. *)
   let is_injective_mapping = affine_injective ~symbol_range proj.project_lhs in
   (* Symbols (product iterators only) appearing on the LHS, for the block-coverage check below. *)
   let lhs_symbols =

@@ -1,18 +1,18 @@
 (* Regression test for gh-ocannl-134: multiple virtual tensors sharing one traced for-loop.
 
    High-level lowering never places two distinct tensors in the same for-loop (each assignment
-   lowers to its own [loop_over_dims]), so these cases are built directly as [Ir.Low_level.t] and run
-   through [Ir.Low_level.optimize] -- the same pipeline (visit_llc -> virtual_llc ->
+   lowers to its own [loop_over_dims]), so these cases are built directly as [Ir.Low_level.t] and
+   run through [Ir.Low_level.optimize] -- the same pipeline (visit_llc -> virtual_llc ->
    cleanup_virtual_llc -> simplify -> CSE -> hoist) the backends use. We assert structurally on the
    optimized form and on the resulting [traced_array]/memory-mode facts, which precisely pin the
    #134 invariants:
 
-   - shared loop symbols no longer force [is_complex];
-   - each candidate tensor in a shared loop gets its own stored computation and inlines downstream;
-   - a surviving (materialized) sibling setter inlines a virtualized provider from the same loop;
-   - a forward virtual->virtual chain is fully inlined, leaving no read of a dropped virtual node;
-   - a reverse/read-before-write sibling read stays materialized (existing safety mechanism);
-   - cleanup keeps non-virtual residual setters instead of dropping the whole loop.
+   - shared loop symbols no longer force [is_complex]; - each candidate tensor in a shared loop gets
+   its own stored computation and inlines downstream; - a surviving (materialized) sibling setter
+   inlines a virtualized provider from the same loop; - a forward virtual->virtual chain is fully
+   inlined, leaving no read of a dropped virtual node; - a reverse/read-before-write sibling read
+   stays materialized (existing safety mechanism); - cleanup keeps non-virtual residual setters
+   instead of dropping the whole loop.
 
    End-to-end numeric correctness of virtual inlining is covered by the existing suite that still
    passes (test_cse, test_block_tensor, test_concat_graph, primitive_ops). *)
@@ -27,8 +27,10 @@ let next_id = ref 1000
 
 let mk ?(dims = [| 3 |]) label =
   Int.incr next_id;
-  Tn.create (Tn.Specified single) ~id:!next_id ~label:[ label ] ~unpadded_dims:(lazy dims)
-    ~padding:(lazy None) ()
+  Tn.create (Tn.Specified single) ~id:!next_id ~label:[ label ]
+    ~unpadded_dims:(lazy dims)
+    ~padding:(lazy None)
+    ()
 
 let materialize tn = Tn.update_memory_mode tn Tn.Materialized 99
 
@@ -66,7 +68,8 @@ let rec walk_t ~on_set ~on_get (llc : LL.t) =
 
 and walk_s ~on_set ~on_get (s : LL.scalar_t) =
   match s with
-  | LL.Constant _ | LL.Constant_bits _ | LL.Get_local _ | LL.Embed_index _ | LL.Get_merge_buffer _ ->
+  | LL.Constant _ | LL.Constant_bits _ | LL.Get_local _ | LL.Embed_index _ | LL.Get_merge_buffer _
+    ->
       ()
   | LL.Get (tn, _) -> on_get tn
   | LL.Get_dynamic { tn; dyn_value = v, _; _ } ->
@@ -106,8 +109,7 @@ let case_independent () =
   let use_b = loop k (set k ob (get k b)) in
   let o = optimize (seq shared (seq use_a use_b)) in
   p "independent siblings both virtual" (Tn.known_virtual a && Tn.known_virtual b);
-  p "independent siblings setters dropped"
-    (count_set o a = 0 && count_set o b = 0);
+  p "independent siblings setters dropped" (count_set o a = 0 && count_set o b = 0);
   p "independent siblings inlined at use sites (no array reads survive)"
     (count_get o a = 0 && count_get o b = 0);
   (* Sharing symbol [i] alone must not make either sibling complex. *)
@@ -148,14 +150,17 @@ let case_chain () =
   let o = optimize (seq shared use_b) in
   p "forward virtual-to-virtual chain both virtual" (Tn.known_virtual a && Tn.known_virtual b);
   p "forward virtual-to-virtual chain fully inlined"
-    (count_set o a = 0 && count_set o b = 0 && count_get o a = 0 && count_get o b = 0
-   && Tn.known_non_virtual out)
+    (count_set o a = 0
+    && count_set o b = 0
+    && count_get o a = 0
+    && count_get o b = 0
+    && Tn.known_non_virtual out)
 
-(* === Case 5: loop-carried / read-before-write sibling read stays materialized ===
-   [a] is written at [i] but read at [i+1] in the same loop, so the read of [a[i+1]] precedes its
-   write in trace order (read-before-write). The existing access analysis records this as a
-   recurrent access and forces [a] materialized; the later writer must NOT be used to rewrite the
-   earlier read. This is the safety mechanism the proposal relies on (#134). *)
+(* === Case 5: loop-carried / read-before-write sibling read stays materialized === [a] is written
+   at [i] but read at [i+1] in the same loop, so the read of [a[i+1]] precedes its write in trace
+   order (read-before-write). The existing access analysis records this as a recurrent access and
+   forces [a] materialized; the later writer must NOT be used to rewrite the earlier read. This is
+   the safety mechanism the proposal relies on (#134). *)
 let case_reverse () =
   let a = mk "a" and b = mk "b" in
   materialize b;
@@ -177,9 +182,9 @@ let case_complex () =
   let o = optimize l in
   p "is_complex from genuine complex scalar" (is_complex o z)
 
-(* === Case 7: two virtual providers + an in-loop materialized consumer (Codex P1) ===
-   c (materialized) reads BOTH a and b in the same loop. The storage pass for the first candidate
-   (a) walks c's setter, which reads the not-yet-stored b; it must not call inline_computation on b
+(* === Case 7: two virtual providers + an in-loop materialized consumer (Codex P1) === c
+   (materialized) reads BOTH a and b in the same loop. The storage pass for the first candidate (a)
+   walks c's setter, which reads the not-yet-stored b; it must not call inline_computation on b
    before b is stored (that raised a stale optimize_ctx error). Both providers must virtualize and
    inline into c, and c's setter must survive. *)
 let case_inloop_consumer () =

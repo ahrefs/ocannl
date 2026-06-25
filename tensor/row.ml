@@ -60,9 +60,9 @@ let proj_map_empty = Map.empty (module Proj_id)
 let dim_var_set_empty = Set.empty (module Dim_var)
 let dim_map_empty = Map.empty (module Dim_var)
 
-(* The reserved basis tag of the claim-free broadcast top: an axis with this tag broadcasts to
-   any size while it remains size 1, and is an ordinary fixed axis otherwise. The top of the
-   broadcast order is precisely [1_(bcast_if_1)]. Scalars and rank-broadening fill carry it. *)
+(* The reserved basis tag of the claim-free broadcast top: an axis with this tag broadcasts to any
+   size while it remains size 1, and is an ordinary fixed axis otherwise. The top of the broadcast
+   order is precisely [1_(bcast_if_1)]. Scalars and rank-broadening fill carry it. *)
 let bcast_if_1 = "bcast_if_1"
 
 (* The default basis tag the frontend supplies for any axis the user writes without naming a basis.
@@ -111,9 +111,9 @@ let get_default_dim ~d ?proj_id () = get_dim ~d ~basis:default_basis ?proj_id ()
 (* The reserved tags ([default], [bcast_if_1]) carry no naming claim. *)
 let is_reserved_basis b = String.equal b default_basis || String.equal b bcast_if_1
 
-(* Combine the bases of two dimensions fused into one derived dimension (e.g. a convolution's
-   stride and kernel). A named tag wins over a reserved (claim-free) tag; two distinct named tags
-   are a conflict handled by [on_conflict]. *)
+(* Combine the bases of two dimensions fused into one derived dimension (e.g. a convolution's stride
+   and kernel). A named tag wins over a reserved (claim-free) tag; two distinct named tags are a
+   conflict handled by [on_conflict]. *)
 let merge_derived_basis ~on_conflict b1 b2 =
   if String.equal b1 b2 then b1
   else if is_reserved_basis b1 then b2
@@ -194,11 +194,10 @@ type row_var = Row_var.t [@@deriving equal, hash, compare, sexp]
 
 let get_row_var = Row_var.get
 
-(** A bcast specifies how axes of a single kind in a shape (i.e. the row) can adapt to other
-    shapes. [Row_var v] absorbs only the middle gap between [t.beg_dims] and [t.dims];
-    [Broadcastable] means no rank-broadening slack. *)
-type bcast = Row_var of row_var | Broadcastable
-[@@deriving equal, hash, compare, sexp, variants]
+(** A bcast specifies how axes of a single kind in a shape (i.e. the row) can adapt to other shapes.
+    [Row_var v] absorbs only the middle gap between [t.beg_dims] and [t.dims]; [Broadcastable] means
+    no rank-broadening slack. *)
+type bcast = Row_var of row_var | Broadcastable [@@deriving equal, hash, compare, sexp, variants]
 
 type kind = [ `Batch | `Input | `Output ] [@@deriving equal, compare, sexp, hash, variants]
 type provenance_origin = { sh_id : int; kind : kind } [@@deriving sexp, compare, equal, hash]
@@ -216,11 +215,11 @@ let merge_provenance p1 p2 = List.dedup_and_sort ~compare:compare_provenance_ori
 let provenance_shapes prov =
   List.map prov ~f:(fun origin -> origin.sh_id) |> List.dedup_and_sort ~compare:Int.compare
 
-(** The row of axes of a single kind. [beg_dims] is the outer-left anchored flank (the first
-    axes), [dims] is the outer-right anchored flank (the last axes). Both flanks may be non-empty
-    for closed ([Broadcastable]) and open ([Row_var]) rows alike. *)
 type t = { beg_dims : dim list; dims : dim list; bcast : bcast; prov : provenance }
 [@@deriving equal, hash, compare, sexp]
+(** The row of axes of a single kind. [beg_dims] is the outer-left anchored flank (the first axes),
+    [dims] is the outer-right anchored flank (the last axes). Both flanks may be non-empty for
+    closed ([Broadcastable]) and open ([Row_var]) rows alike. *)
 
 type row = t [@@deriving equal, sexp]
 
@@ -465,7 +464,7 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
       | [ single ] -> single
       | res when keep_affine -> Concat res
       | _ ->
-          if List.for_all dims ~f:(function Dim _ -> true | _ -> false) then (
+          if List.for_all dims ~f:(function Dim _ -> true | _ -> false) then
             let solved_dims = List.filter_map dims ~f:(function Dim s -> Some s | _ -> None) in
             let total_d = List.sum (module Int) solved_dims ~f:(fun s -> s.d) in
             (* Reserved (claim-free) tags don't constrain the concat basis; all named tags must
@@ -485,7 +484,7 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
                        ( "concat: conflicting dimension bases",
                          [ Dim_mismatch (List.map solved_dims ~f:(fun s -> Dim s)) ] )
             in
-            Dim { d = total_d; basis; proj_id = None })
+            Dim { d = total_d; basis; proj_id = None }
           else Concat dims)
   | Dim _ | Var _ -> in_
 
@@ -581,7 +580,9 @@ let rec row_conjunction ~prov ~origin stage constr1 constr2 =
           (* So var = n * denom / coeff *)
           if n * denom % coeff_val = 0 then
             Some
-              ( [ Dim_eq { d1 = Var var; d2 = get_default_dim ~d:(n * denom / coeff_val) (); origin } ],
+              ( [
+                  Dim_eq { d1 = Var var; d2 = get_default_dim ~d:(n * denom / coeff_val) (); origin };
+                ],
                 constr1 )
           else
             (* n * denom is not divisible by coeff - this is a mismatch *)
@@ -823,12 +824,16 @@ let rec row_conjunction ~prov ~origin stage constr1 constr2 =
                 else if List.is_empty divided_by && List.length vars = 1 && reminder > 0 then
                   (* divided_by is empty and there is only one dim variable in Exact dims *)
                   let v = List.hd_exn vars in
-                  Some ([ Dim_eq { d1 = Var v; d2 = get_default_dim ~d:reminder (); origin } ], Exact dims)
+                  Some
+                    ( [ Dim_eq { d1 = Var v; d2 = get_default_dim ~d:reminder (); origin } ],
+                      Exact dims )
                 else if List.is_empty vars && List.length divided_by = 1 && reminder > 0 then
                   (* Exact dims contain only known dimensions and divided_by has exactly one
                      variable *)
                   let v = List.hd_exn divided_by in
-                  Some ([ Dim_eq { d1 = Var v; d2 = get_default_dim ~d:reminder (); origin } ], Exact dims)
+                  Some
+                    ( [ Dim_eq { d1 = Var v; d2 = get_default_dim ~d:reminder (); origin } ],
+                      Exact dims )
                 else None
           | Strided_var { coeff; var; denom } ->
               if known_product = 0 then
@@ -1091,21 +1096,15 @@ let rows_to_row_or_vars (rows : row list) : (row, dim list * (row_var * provenan
         | row :: remaining_rows -> (
             match row.bcast with
             | Broadcastable ->
-                let acc =
-                  List.rev_append row.dims (List.rev_append row.beg_dims before_dims)
-                in
+                let acc = List.rev_append row.dims (List.rev_append row.beg_dims before_dims) in
                 reconstruct_single_var acc remaining_rows
             | Row_var found_v when equal_row_var found_v v ->
                 let new_beg_dims = List.rev_append before_dims row.beg_dims in
-                let after_dims =
-                  List.concat_map remaining_rows ~f:(fun r -> r.beg_dims @ r.dims)
-                in
+                let after_dims = List.concat_map remaining_rows ~f:(fun r -> r.beg_dims @ r.dims) in
                 let new_dims = row.dims @ after_dims in
                 { beg_dims = new_beg_dims; dims = new_dims; bcast = Row_var v; prov }
             | Row_var _ ->
-                let acc =
-                  List.rev_append row.dims (List.rev_append row.beg_dims before_dims)
-                in
+                let acc = List.rev_append row.dims (List.rev_append row.beg_dims before_dims) in
                 reconstruct_single_var acc remaining_rows)
       in
       Either.First (reconstruct_single_var [] rows)
@@ -1142,9 +1141,7 @@ let check_empty_row ~origin r =
   | Broadcastable ->
       if List.is_empty r.beg_dims then []
       else
-        raise
-        @@ Shape_error
-             ("check_empty_row: row is not empty (beg_dims)", [ Row_mismatch [ r ] ])
+        raise @@ Shape_error ("check_empty_row: row is not empty (beg_dims)", [ Row_mismatch [ r ] ])
   | Row_var v ->
       if List.is_empty r.beg_dims then
         [
@@ -1302,7 +1299,8 @@ let subst_dim ?(keep_affine = false) env dim =
 
     If [in_]'s middle row variable matches [v], the result is
 
-    [{ beg_dims = in_.beg_dims @ value.beg_dims; dims = value.dims @ in_.dims; bcast = value.bcast }]
+    [{ beg_dims = in_.beg_dims @ value.beg_dims; dims = value.dims @ in_.dims; bcast = value.bcast
+     }]
 
     which preserves [in_]'s pinned leading flank whether [value] is closed or open. *)
 let s_row_one v ~value:{ beg_dims = value_beg; dims = more_dims; bcast; prov = _ } ~in_ =
@@ -1369,13 +1367,7 @@ let subst_row env ({ beg_dims; dims; bcast; prov } : t) : t =
           match bcast with
           | Broadcastable ->
               { beg_dims = beg_dims @ more_beg; dims = more_dims @ dims; bcast; prov }
-          | Row_var _ ->
-              {
-                beg_dims = beg_dims @ more_beg;
-                dims = more_dims @ dims;
-                bcast;
-                prov;
-              }))
+          | Row_var _ -> { beg_dims = beg_dims @ more_beg; dims = more_dims @ dims; bcast; prov }))
 
 let subst_row_constraint stage env constr =
   subst_row_constraint_impl ~subst_in_dim:(subst_dim env) ~get_dim_val:(get_dim_val env) stage
@@ -1470,8 +1462,7 @@ let%track5_sexp rec apply_rows_constraint ~depth ~stage origin (rows : row list)
                 ( Row_eq
                     {
                       r1 = row_of_var v prov;
-                      r2 =
-                        { beg_dims = []; dims = [ single_dim ]; bcast = Broadcastable; prov };
+                      r2 = { beg_dims = []; dims = [ single_dim ]; bcast = Broadcastable; prov };
                       origin;
                     }
                   :: List.concat_map ~f:(check_empty_row ~origin) more_rows,
@@ -1568,7 +1559,8 @@ and apply_row_constraint ~depth stage origin (r : row) (constr : row_constraint)
         let (d : int), _ = Option.value_exn (collect_factors dims) in
         let coeff : int = Utils.safe_force coeff in
         if denom * d % coeff = 0 then
-          (Dim_eq { d1 = Var var; d2 = get_default_dim ~d:(denom * d / coeff) (); origin } :: extras, env)
+          ( Dim_eq { d1 = Var var; d2 = get_default_dim ~d:(denom * d / coeff) (); origin } :: extras,
+            env )
         else
           raise
           @@ Shape_error
@@ -1599,7 +1591,8 @@ and apply_row_constraint ~depth stage origin (r : row) (constr : row_constraint)
               (Dim_eq { d1 = Var v; d2 = get_default_dim ~d:n (); origin } :: extras, env)
           | Num_elems 1, vs1, vs2 ->
               ( List.map
-                  ~f:(fun v -> Dim_eq { d1 = Var v; d2 = get_bcast_dim ~d:1 ~proj_id:46 (); origin })
+                  ~f:(fun v ->
+                    Dim_eq { d1 = Var v; d2 = get_bcast_dim ~d:1 ~proj_id:46 (); origin })
                   (vs1 @ vs2)
                 @ extras,
                 env )
@@ -1607,7 +1600,12 @@ and apply_row_constraint ~depth stage origin (r : row) (constr : row_constraint)
             when equal_dim_var var v && (Utils.is_safe_val coeff || is_stage2_up stage) ->
               (* Total = (coeff * v / denom) / v = coeff / denom *)
               if Utils.safe_force coeff % denom = 0 then
-                ( Dim_eq { d1 = Var v; d2 = get_default_dim ~d:(Utils.safe_force coeff / denom) (); origin }
+                ( Dim_eq
+                    {
+                      d1 = Var v;
+                      d2 = get_default_dim ~d:(Utils.safe_force coeff / denom) ();
+                      origin;
+                    }
                   :: extras,
                   env )
               else if
@@ -1673,8 +1671,7 @@ and apply_row_constraint ~depth stage origin (r : row) (constr : row_constraint)
             env (* Wait for more shape inference. *) )
     | { beg_dims; dims; bcast = Broadcastable; _ }, Exact exact_dims ->
         assert (not stored);
-        ( List.map2_exn exact_dims (beg_dims @ dims) ~f:(fun d1 d2 ->
-              Dim_eq { d1; d2; origin })
+        ( List.map2_exn exact_dims (beg_dims @ dims) ~f:(fun d1 d2 -> Dim_eq { d1; d2; origin })
           @ extras,
           env )
 
@@ -1693,13 +1690,13 @@ let rec dim_var_occurs_in_dim (v : dim_var) (d : dim) : bool =
    equal-arity structural matching. --- *)
 
 (* Flatten nested [Concat] components: a concatenated axis is the SUM of its components, and
-   concatenation is associative, so [Concat [Concat [a; b]; c]] denotes the same axis as
-   [Concat [a; b; c]]. Flattening before cancellation / solved-partition / variable-pairing keeps
-   those steps operating on a flat component multiset, so a nested concat cannot mis-align the
-   oldest-variable pairing or hide a structurally-equal component from cancellation. (The proposal
-   only considered [Dim] and [Var] components; this normalizes the nested-[Concat] case the user
-   flagged. [Affine] components are left intact — they are opaque atoms here and are handled by the
-   solved-size arithmetic / single-component peeling below.) *)
+   concatenation is associative, so [Concat [Concat [a; b]; c]] denotes the same axis as [Concat [a;
+   b; c]]. Flattening before cancellation / solved-partition / variable-pairing keeps those steps
+   operating on a flat component multiset, so a nested concat cannot mis-align the oldest-variable
+   pairing or hide a structurally-equal component from cancellation. (The proposal only considered
+   [Dim] and [Var] components; this normalizes the nested-[Concat] case the user flagged. [Affine]
+   components are left intact — they are opaque atoms here and are handled by the solved-size
+   arithmetic / single-component peeling below.) *)
 let rec flatten_concat (dims : dim list) : dim list =
   List.concat_map dims ~f:(function Concat inner -> flatten_concat inner | d -> [ d ])
 
@@ -1734,13 +1731,12 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
   match (dim1, dim2) with
   | Dim { basis = b1; _ }, Dim { basis = b2; _ } when not (String.equal b1 b2) ->
       raise
-      @@ Shape_error
-           ("solved dimensions for axis: different bases", [ Dim_mismatch [ dim1; dim2 ] ])
+      @@ Shape_error ("solved dimensions for axis: different bases", [ Dim_mismatch [ dim1; dim2 ] ])
   | Dim { d = d1; basis = _; _ }, Dim { d = d2; basis = _; _ } when d1 = d2 ->
-      (* Basis is total now: equality of two solved dims requires both equal size and equal tag
-         (the preceding arm already rejected unequal tags). There is no unspecified ([None]) side
-         to propagate a basis onto, so the old upgrade-var pass is gone — variable solving records
-         the already-total [Dim] exactly. *)
+      (* Basis is total now: equality of two solved dims requires both equal size and equal tag (the
+         preceding arm already rejected unequal tags). There is no unspecified ([None]) side to
+         propagate a basis onto, so the old upgrade-var pass is gone — variable solving records the
+         already-total [Dim] exactly. *)
       ([], env)
   | Var v1, Var v2 when equal_dim_var v1 v2 -> ([], env)
   | ( Affine { stride = 1; over; conv = Some { use_padding = true; _ } | None; stride_offset = _ },
@@ -2045,13 +2041,14 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
   | Concat [ x ], d | d, Concat [ x ] ->
       (* Single-component concat erases to its component. *)
       unify_dim ~stage origin (x, d) env
-  | Concat xs, Concat ys ->
+  | Concat xs, Concat ys -> (
       (* Arithmetic equality of two concatenated axes. Cancel structurally-equal components, then
          reconcile the residual sums: a fully-solved side reduces to a [Dim] comparison; mixed
          solved/unsolved subtracts the solved part; an all-unsolved equal-length residual (the pure
          nested-stacking case, where corresponding fresh stack axes match positionally) pairs
          element-wise; anything still ambiguous is deferred until substitution resolves more. *)
-      let xs = flatten_concat xs and ys = flatten_concat ys in
+      let xs = flatten_concat xs
+      and ys = flatten_concat ys in
       let xs, ys = cancel_common_dims xs ys in
       let solved_x, rest_x = partition_solved_dims xs in
       let solved_y, rest_y = partition_solved_dims ys in
@@ -2070,7 +2067,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
         @@ Shape_error
              ("concat: components exceed the concatenated size", [ Dim_mismatch [ dim1; dim2 ] ])
       in
-      (match (rest_x, rest_y) with
+      match (rest_x, rest_y) with
       | [], [] ->
           unify_dim ~stage origin
             (get_dim ~d:sum_x ~basis:basis_x (), get_dim ~d:sum_y ~basis:basis_y ())
@@ -2084,37 +2081,39 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
           if residual < 0 then exceed ();
           unify_dim ~stage origin (Concat rest_x, get_dim ~d:residual ~basis:basis_y ()) env
       | _, _
-        when (let is_var = function Var _ -> true | _ -> false in
-              (* The pairing arm requires BOTH residuals to be variables-only. Solved [Dim]s are
-                 already partitioned into [solved_x]/[solved_y] (handled by the arithmetic-cancellation
-                 arm below), so "the other side carries a solved [Dim]" still reaches here with an
-                 all-[Var] residual. But a residual that still holds a NON-variable, NON-solved
-                 component (e.g. an unresolved [Affine] from a strided/conv axis) must NOT be paired:
-                 equating oldest variables and forcing the leftover to the affine over-constrains a sum
-                 equality that is genuinely underdetermined (Codex P2). Such cases fall through to the
-                 arithmetic-cancellation arm, which cancels the common solved size and defers. *)
-              List.for_all rest_x ~f:is_var
-              && List.for_all rest_y ~f:is_var
-              && (* Original pure-nested-stacking case (PR #64): equal arity, no solved component on
-                    either side. Fires at ANY stage — the nested-stacking concat components are linked
-                    ONLY through this equation, and the incremental Stage1 solver (propagate_shapes /
-                    derive_projections) relies on it resolving early; gating it to stage 4 makes
-                    inference loop (Test 5 [[x1;x2];[x1;x2]]). *)
-                 ((List.is_empty solved_x && List.is_empty solved_y
-                  && List.length rest_x = List.length rest_y)
-                 (* AC3 generalization: at stage >= 4 extend to UNEQUAL arity and to a solved [Dim] on
-                    either side (still variables-only residuals). The same-arity and [solved_*]-empty
-                    restrictions are dropped. *)
-                 || is_stage4_up stage)) ->
+        when let is_var = function Var _ -> true | _ -> false in
+             (* The pairing arm requires BOTH residuals to be variables-only. Solved [Dim]s are
+                already partitioned into [solved_x]/[solved_y] (handled by the
+                arithmetic-cancellation arm below), so "the other side carries a solved [Dim]" still
+                reaches here with an all-[Var] residual. But a residual that still holds a
+                NON-variable, NON-solved component (e.g. an unresolved [Affine] from a strided/conv
+                axis) must NOT be paired: equating oldest variables and forcing the leftover to the
+                affine over-constrains a sum equality that is genuinely underdetermined (Codex P2).
+                Such cases fall through to the arithmetic-cancellation arm, which cancels the common
+                solved size and defers. *)
+             List.for_all rest_x ~f:is_var && List.for_all rest_y ~f:is_var
+             &&
+             (* Original pure-nested-stacking case (PR #64): equal arity, no solved component on
+                either side. Fires at ANY stage — the nested-stacking concat components are linked
+                ONLY through this equation, and the incremental Stage1 solver (propagate_shapes /
+                derive_projections) relies on it resolving early; gating it to stage 4 makes
+                inference loop (Test 5 [[x1;x2];[x1;x2]]). *)
+             (List.is_empty solved_x && List.is_empty solved_y
+              && List.length rest_x = List.length rest_y
+             (* AC3 generalization: at stage >= 4 extend to UNEQUAL arity and to a solved [Dim] on
+                either side (still variables-only residuals). The same-arity and [solved_*]-empty
+                restrictions are dropped. *)
+             || is_stage4_up stage) ->
           (* Link the two concat axes by equating their oldest (lowest-id) residual variables and
              re-running the unification on the two original concats under the resulting env.
-             [cancel_common_dims] then sees the freshly-equated components as common, so unequal arity
-             and any further progress fall out of the re-run — no leftover-variable bookkeeping or
-             reduced-sides construction is needed. This takes precedence over the arithmetic-
-             cancellation arm below. Both residuals are non-empty here (the empty cases are handled by
-             the earlier arms), so each side has an oldest variable. Termination: post-cancellation no
-             variable appears on both sides, so the two oldest variables are distinct, and each
-             re-entry equates one more pair — strictly shrinking the free-variable count. *)
+             [cancel_common_dims] then sees the freshly-equated components as common, so unequal
+             arity and any further progress fall out of the re-run — no leftover-variable
+             bookkeeping or reduced-sides construction is needed. This takes precedence over the
+             arithmetic- cancellation arm below. Both residuals are non-empty here (the empty cases
+             are handled by the earlier arms), so each side has an oldest variable. Termination:
+             post-cancellation no variable appears on both sides, so the two oldest variables are
+             distinct, and each re-entry equates one more pair — strictly shrinking the
+             free-variable count. *)
           let oldest rest =
             List.filter_map rest ~f:(function Var v -> Some v | _ -> None)
             |> List.min_elt ~compare:compare_dim_var
@@ -2125,13 +2124,13 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
           let more, env = unify_dim ~stage origin (dim1, dim2) env in
           (eq_constr @ more, env)
       | _, _ ->
-          (* Both sides still have unsolved residuals (and at least one side carries a solved size or
-             a non-variable residual). Normalize the solved [Dim] components by cancelling the common
-             solved size from both sides, so at most one side carries the remaining solved size
-             (proposal: "normalize solved Dim components so that only one side carries the remaining
-             solved size"). The surviving non-neutral basis carries onto the residual; distinct
-             non-neutral bases conflict. No negative size can arise here since the cancelled amount is
-             the smaller of the two sums. *)
+          (* Both sides still have unsolved residuals (and at least one side carries a solved size
+             or a non-variable residual). Normalize the solved [Dim] components by cancelling the
+             common solved size from both sides, so at most one side carries the remaining solved
+             size (proposal: "normalize solved Dim components so that only one side carries the
+             remaining solved size"). The surviving non-neutral basis carries onto the residual;
+             distinct non-neutral bases conflict. No negative size can arise here since the
+             cancelled amount is the smaller of the two sums. *)
           let common = Int.min sum_x sum_y in
           let residual_basis =
             merge_derived_basis basis_x basis_y ~on_conflict:(fun () ->
@@ -2143,12 +2142,9 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
             let r = sum - common in
             if r = 0 then Concat rest else Concat (rest @ [ get_dim ~d:r ~basis:residual_basis () ])
           in
-          ( [
-              Dim_eq
-                { d1 = with_residual rest_x sum_x; d2 = with_residual rest_y sum_y; origin };
-            ],
+          ( [ Dim_eq { d1 = with_residual rest_x sum_x; d2 = with_residual rest_y sum_y; origin } ],
             env ))
-  | Concat xs, (Dim n as d) | (Dim n as d), Concat xs ->
+  | Concat xs, (Dim n as d) | (Dim n as d), Concat xs -> (
       (* A concatenated axis equals a solved size: subtract the solved components and bind/defer the
          residual. *)
       let xs = flatten_concat xs in
@@ -2171,15 +2167,17 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
             raise
             @@ Shape_error ("concat: conflicting dimension bases", [ Dim_mismatch [ dim1; dim2 ] ]))
       in
-      (match rest with
+      match rest with
       | [] -> unify_dim ~stage origin (get_dim ~d:sum ~basis:solved_basis (), d) env
       | [ c ] -> unify_dim ~stage origin (c, get_dim ~d:residual ~basis:residual_basis ()) env
       | _ ->
           (* Multiple unsolved components remain: defer the NORMALIZED residual (solved components
              subtracted), not the original equation, so the arithmetic progress is not lost and the
              same unsolved form is not requeued. *)
-          ([ Dim_eq { d1 = Concat rest; d2 = get_dim ~d:residual ~basis:residual_basis (); origin } ],
-            env))
+          ( [
+              Dim_eq { d1 = Concat rest; d2 = get_dim ~d:residual ~basis:residual_basis (); origin };
+            ],
+            env ))
   | Concat _, _ | _, Concat _ ->
       (* Concat against a not-yet-reducible dimension (e.g. an unresolved affine): defer rather than
          reject, so a later substitution can make progress. *)
@@ -2198,13 +2196,13 @@ let add_used_in_spec_or_compose v = Hash_set.add used_in_spec_or_compose v
 let add_used_in_pointwise v = Hash_set.add used_in_pointwise v
 
 (* Persistent rank-relation graph, global like [global_template_cache] (row variable ids are never
-   reused, so entries from unrelated inference problems are unreachable). An edge [v -> (w, k)]
-   with [k >= 0] records the entailed fact [rank v >= rank w + k]: from solving
-   [v := <w> ++ k known dims], from equal-flank row inequalities [<v>+flanks ⊑ <w>+flanks]
-   (k = 0), and from the deficit (template) rule (k = the rank deficit > 0).
-   Such facts are never retracted, unlike the [Bounds_row] res/opnd adjacency lists which drop
-   entries when a variable is substituted away — mutually-growing row variables ping-pong between
-   the store and the in-flight constraint list, so divergence detection needs this side table. *)
+   reused, so entries from unrelated inference problems are unreachable). An edge [v -> (w, k)] with
+   [k >= 0] records the entailed fact [rank v >= rank w + k]: from solving [v := <w> ++ k known
+   dims], from equal-flank row inequalities [<v>+flanks ⊑ <w>+flanks] (k = 0), and from the deficit
+   (template) rule (k = the rank deficit > 0). Such facts are never retracted, unlike the
+   [Bounds_row] res/opnd adjacency lists which drop entries when a variable is substituted away —
+   mutually-growing row variables ping-pong between the store and the in-flight constraint list, so
+   divergence detection needs this side table. *)
 let global_rank_edges = Hashtbl.create (module Row_var)
 
 (* Would adding [rank v >= rank w + k] close a cycle of positive total weight? A path [w ~> v] of
@@ -2219,15 +2217,16 @@ let closes_positive_rank_cycle ~src:v ~dst:w k =
     ||
     let visited = if need_positive then visited_need else visited_done in
     (not (Hash_set.mem visited u))
-    && (Hash_set.add visited u;
-        List.exists (Hashtbl.find_multi global_rank_edges u) ~f:(fun (u', k') ->
-            dfs u' (need_positive && k' = 0)))
+    &&
+    (Hash_set.add visited u;
+     List.exists (Hashtbl.find_multi global_rank_edges u) ~f:(fun (u', k') ->
+         dfs u' (need_positive && k' = 0)))
   in
   dfs w (k = 0)
 
-(* Record the entailed fact [rank v >= rank w + k]; raise if it makes the ranks unsatisfiable,
-   which would otherwise diverge by minting ever-fresh template variables (rank-cycle check,
-   transitive generalization of the one-step self-reference check). *)
+(* Record the entailed fact [rank v >= rank w + k]; raise if it makes the ranks unsatisfiable, which
+   would otherwise diverge by minting ever-fresh template variables (rank-cycle check, transitive
+   generalization of the one-step self-reference check). *)
 let add_rank_edge ~rows v w k =
   if equal_row_var v w then (
     if k > 0 then
@@ -2279,21 +2278,21 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
         raise
         @@ Shape_error ("Infinite number of axes by self-reference", [ Row_mismatch [ r1; r2 ] ])
       else if beg_dims1_l <> beg_dims2_l then
-        (* Equal total flank lengths but shifted splits: the equation is l1.<v>.r1 = l2.<v>.r2
-           whose surplus flank words rotate through [v]'s value (the word equation
-           x ++ t = s ++ x), so the residue depends on [v]'s eventual length. Resolve by
-           deferral into the closing policy: keep the equation in flight; if [v] is solved by
-           other constraints, the substituted closed-closed (flat) check is exact; otherwise
-           stage 6 closes [v] upward -- the least-material disjunct -- after which the
-           re-emitted equation requires the two surplus words to be equal. Eagerly binding
-           [v] to the empty row here would be unsound: a later [v = [3]] is jointly satisfiable
-           with [3].<v> = <v>.[3]. (This case was once silently dropped, accepting the
-           unsatisfiable [3].<v> = <v>.[5] with no dimension checked.) *)
+        (* Equal total flank lengths but shifted splits: the equation is l1.<v>.r1 = l2.<v>.r2 whose
+           surplus flank words rotate through [v]'s value (the word equation x ++ t = s ++ x), so
+           the residue depends on [v]'s eventual length. Resolve by deferral into the closing
+           policy: keep the equation in flight; if [v] is solved by other constraints, the
+           substituted closed-closed (flat) check is exact; otherwise stage 6 closes [v] upward --
+           the least-material disjunct -- after which the re-emitted equation requires the two
+           surplus words to be equal. Eagerly binding [v] to the empty row here would be unsound: a
+           later [v = [3]] is jointly satisfiable with [3].<v> = <v>.[3]. (This case was once
+           silently dropped, accepting the unsatisfiable [3].<v> = <v>.[5] with no dimension
+           checked.) *)
         if is_stage6_up stage then
           (* Emission order matters: the driver reverses the accumulated list each round, so the
-             closing binding must come SECOND here to be processed FIRST next round (same idiom
-             as [solve_row_ineq]'s stage-6 branch); otherwise the re-emitted equation reproduces
-             the pair against the still-unsolved variable and the fixpoint stalls. *)
+             closing binding must come SECOND here to be processed FIRST next round (same idiom as
+             [solve_row_ineq]'s stage-6 branch); otherwise the re-emitted equation reproduces the
+             pair against the still-unsolved variable and the fixpoint stalls. *)
           ( [
               Row_eq { r1; r2; origin };
               Row_eq
@@ -2342,9 +2341,7 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
               let dims = drop_from_end r2.dims dims1_l in
               if equal_row_var v v2 then
                 if List.is_empty dims && l beg_dims2 = l beg_dims1 then
-                  let value : row =
-                    { beg_dims = []; dims; bcast = Row_var v; prov }
-                  in
+                  let value : row = { beg_dims = []; dims; bcast = Row_var v; prov } in
                   ( true,
                     unify_suffix result (List.rev beg_dims1) (List.rev beg_dims2) @@ l beg_dims2,
                     value )
@@ -2357,21 +2354,16 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
                   unify_suffix result (List.rev beg_dims1) (List.rev beg_dims2) beg_dims_l
                 in
                 let value : row =
-                  {
-                    beg_dims = List.drop beg_dims2 beg_dims_l;
-                    dims;
-                    bcast = Row_var v2;
-                    prov;
-                  }
+                  { beg_dims = List.drop beg_dims2 beg_dims_l; dims; bcast = Row_var v2; prov }
                 in
                 (beg_dims_l = l beg_dims1, result, value)
           | Broadcastable ->
               (* r2 is closed with structural flanks beg_dims2/dims2. We match r1.beg_dims1
-                 outer-left and r1.dims1 outer-right against r2's flat axis list. The middle
-                 (axes absorbed by v) preserves r2's structural split: anything remaining in
-                 r2.beg_dims becomes value.beg_dims; anything remaining in r2.dims becomes
-                 value.dims. r1's flanks may spill over into r2's other flank if r1's flank
-                 length exceeds r2's matching flank length — handled below. *)
+                 outer-left and r1.dims1 outer-right against r2's flat axis list. The middle (axes
+                 absorbed by v) preserves r2's structural split: anything remaining in r2.beg_dims
+                 becomes value.beg_dims; anything remaining in r2.dims becomes value.dims. r1's
+                 flanks may spill over into r2's other flank if r1's flank length exceeds r2's
+                 matching flank length — handled below. *)
               let r2_flat = r2.beg_dims @ r2.dims in
               let r2_l = beg_dims2_l + dims2_l in
               if dims1_l + beg_dims1_l > r2_l then
@@ -2382,14 +2374,10 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
                 let beg_spill = beg_dims1_l - beg_overlap in
                 let end_spill = dims1_l - end_overlap in
                 let value_beg_dims =
-                  r2.beg_dims
-                  |> Fn.flip List.drop beg_overlap
-                  |> Fn.flip drop_from_end end_spill
+                  r2.beg_dims |> Fn.flip List.drop beg_overlap |> Fn.flip drop_from_end end_spill
                 in
                 let value_dims =
-                  r2.dims
-                  |> Fn.flip List.drop beg_spill
-                  |> Fn.flip drop_from_end end_overlap
+                  r2.dims |> Fn.flip List.drop beg_spill |> Fn.flip drop_from_end end_overlap
                 in
                 let result =
                   List.zip_exn beg_dims1 (List.take r2_flat beg_dims1_l)
@@ -2467,8 +2455,7 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
             in
             let _bound_elim_ineqs : constraint_ list = !ineqs in
             result env)
-  | ( ({ bcast = Broadcastable; _ } as r1),
-      ({ bcast = Broadcastable; _ } as r2) ) -> (
+  | ({ bcast = Broadcastable; _ } as r1), ({ bcast = Broadcastable; _ } as r2) -> (
       (* Two closed rows must equal axis-by-axis, including both flanks. *)
       let r1_flat = r1.beg_dims @ r1.dims in
       let r2_flat = r2.beg_dims @ r2.dims in
@@ -2503,10 +2490,10 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(res : dim) ~(opnd : dim
   (* The relation enforced here is [res ⊑ opnd] (res the result side that refines, opnd the
      broadcastable operand side). The broadcast order is now a flat partial order: [res ⊑ opnd] iff
      they are equal as dims (same size AND same tag) or [opnd = 1_(bcast_if_1)] (the claim-free top,
-     above everything). There is no longer a
-     wildcard that matches any same-size dim. Inequality records no basis update by design: every
-     dimension carries a concrete tag at construction time, so there is no unspecified ([None]) side
-     to propagate onto — the leak that was latent under [None] is closed by construction. *)
+     above everything). There is no longer a wildcard that matches any same-size dim. Inequality
+     records no basis update by design: every dimension carries a concrete tag at construction time,
+     so there is no unspecified ([None]) side to propagate onto — the leak that was latent under
+     [None] is closed by construction. *)
   match (res, opnd) with
   | res, opnd when equal_dim res opnd -> ([], env)
   | _, Dim { d = 1; basis; _ } when String.equal basis bcast_if_1 ->
@@ -2776,11 +2763,12 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(res : dim) ~(opnd : dim
                constr = constr2;
                origin = origin2;
                _;
-             }) ->
+             }) -> (
           let origin = merge_origins origin origin2 in
-          (* Commit the merged GLB [glb] for [opnd_v], threading [extra] constraints (the GLB-forcing
-             equation plus any constraints produced by an equality attempt). [env] is the environment
-             to extend, so a successful [unify_dim] attempt can thread its updated env through here. *)
+          (* Commit the merged GLB [glb] for [opnd_v], threading [extra] constraints (the
+             GLB-forcing equation plus any constraints produced by an equality attempt). [env] is
+             the environment to extend, so a successful [unify_dim] attempt can thread its updated
+             env through here. *)
           let commit ~glb ~extra env =
             let from_constr, constr2 = apply_dim_constraint ~source:Res ~stage res constr2 env in
             ( from_constr @ extra,
@@ -2801,35 +2789,38 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(res : dim) ~(opnd : dim
                          });
               } )
           in
-          (* Demote the bound to the broadcast top 1_(bcast_if_1): the two bounds are incompatible, so
-             these axes broadcast. *)
+          (* Demote the bound to the broadcast top 1_(bcast_if_1): the two bounds are incompatible,
+             so these axes broadcast. *)
           let demote () =
             let glb = get_bcast_dim ~d:1 ~proj_id:47 () in
             commit ~glb ~extra:[ Dim_eq { d1 = opnd; d2 = glb; origin } ] env
           in
           (* Equality-attempt-first GLB merge for non-[Dim] bounds (AC1): try to unify the incoming
-             bound [res] with the existing GLB [glb2]. On failure the two are irreconcilable -> demote
-             to broadcast-top (mirroring the differing-[Dim] arm). On success keep the possibility that
-             they resolve equal-as-sizes: below stage 4 postpone (re-defer the inequality, leaving the
-             bound un-demoted, using the same idiom as the [discardable_vars] concat case); at stage 4+
-             commit the unification (the GLB stays [glb2], i.e. [res = glb2]) and force [res = opnd],
-             threading the unification's own constraints through alongside. *)
+             bound [res] with the existing GLB [glb2]. On failure the two are irreconcilable ->
+             demote to broadcast-top (mirroring the differing-[Dim] arm). On success keep the
+             possibility that they resolve equal-as-sizes: below stage 4 postpone (re-defer the
+             inequality, leaving the bound un-demoted, using the same idiom as the
+             [discardable_vars] concat case); at stage 4+ commit the unification (the GLB stays
+             [glb2], i.e. [res = glb2]) and force [res = opnd], threading the unification's own
+             constraints through alongside. *)
           let merge_by_equality () =
-            match try `Ok (unify_dim ~stage origin (res, glb2) env) with Shape_error _ -> `Failed with
+            match
+              try `Ok (unify_dim ~stage origin (res, glb2) env) with Shape_error _ -> `Failed
+            with
             | `Failed -> demote ()
             | `Ok (more, env') ->
                 if is_stage4_up stage then
                   commit ~glb:glb2 ~extra:(Dim_eq { d1 = opnd; d2 = glb2; origin } :: more) env'
                 else ([ Dim_ineq { res; opnd; from_ = Sexp.List []; origin } ], env)
           in
-          (match (res, glb2) with
+          match (res, glb2) with
           | Dim _, Dim _ when equal_dim res glb2 ->
-              (* Same size and same tag: keep the existing bound. (Basis is total now, so there is no
-                 wildcard "one side unspecified, prefer the other" case to handle here.) *)
+              (* Same size and same tag: keep the existing bound. (Basis is total now, so there is
+                 no wildcard "one side unspecified, prefer the other" case to handle here.) *)
               commit ~glb:res ~extra:[] env
           | Dim _, Dim _ (* different size or different basis *) ->
-              (* Intentional broadcast semantics: conflicting bases (or different sizes) demote to the
-                 broadcast top 1_(bcast_if_1), meaning these axes are incompatible and should be
+              (* Intentional broadcast semantics: conflicting bases (or different sizes) demote to
+                 the broadcast top 1_(bcast_if_1), meaning these axes are incompatible and should be
                  broadcast. This is NOT a bug — do not tighten to raise Shape_error. *)
               demote ()
           | Var _, _ | _, Var _ -> assert false
@@ -2875,8 +2866,8 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(res : dim) ~(opnd : dim
   | _, Concat dims
     when List.count dims ~f:(function Var v -> Set.mem env.discardable_vars v | _ -> false)
          >= List.length dims - 1 ->
-      (* Concat in opnd position with all-but-one (or all) components being discardable vars: preserve
-         inequality so the solver can infer the variables *)
+      (* Concat in opnd position with all-but-one (or all) components being discardable vars:
+         preserve inequality so the solver can infer the variables *)
       ([ Dim_ineq { res; opnd; from_ = Sexp.List []; origin } ], env)
   | Concat _, _ | _, Concat _ ->
       (* Defer to dimension equality for concat with non-concat *)
@@ -2914,8 +2905,8 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
         (take_from_end res.dims dims_l) (take_from_end opnd.dims dims_l)
   in
   match (res, opnd) with
-  | { bcast = Row_var v; prov; _ }, _ | _, { bcast = Row_var v; prov; _ }
-    when is_stage6_up stage ->
+  | ({ bcast = Row_var v; prov; _ }, _ | _, { bcast = Row_var v; prov; _ }) when is_stage6_up stage
+    ->
       ( Row_ineq { res; opnd; origin }
         :: Row_eq
              {
@@ -2926,8 +2917,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
         :: ineqs,
         env )
   | res, opnd when equal_row res opnd -> ([], env)
-  | { bcast = Row_var res_v; _ }, { bcast = Row_var opnd_v; _ }
-    when equal_row_var res_v opnd_v ->
+  | { bcast = Row_var res_v; _ }, { bcast = Row_var opnd_v; _ } when equal_row_var res_v opnd_v ->
       if res_dims_l + res_beg_dims_l <> opnd_dims_l + opnd_beg_dims_l then
         raise
         @@ Shape_error ("Infinite number of axes by self-reference", [ Row_mismatch [ res; opnd ] ])
@@ -2936,8 +2926,8 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
            chain through the variable's value, so it cannot be finalized here. Defer: if the
            variable is solved by other constraints the substituted check applies; otherwise the
            stage-6 branch above closes it upward (the least-material disjunct) and the constraint
-           reduces to the closed-closed check below. (This case was once silently dropped,
-           accepting the unsatisfiable [3].<v> <= <v>.[5].) *)
+           reduces to the closed-closed check below. (This case was once silently dropped, accepting
+           the unsatisfiable [3].<v> <= <v>.[5].) *)
         (Row_ineq { res; opnd; origin } :: ineqs, env)
       else (ineqs, env)
   | { bcast = Row_var res_v; _ }, { bcast = Row_var opnd_v; _ }
@@ -3129,8 +3119,8 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
       | Some (Solved_row _), _ | _, Some (Solved_row _) -> assert false)
   | { bcast = Row_var res_v; dims; _ }, _
     when res_dims_l + res_beg_dims_l < opnd_dims_l + opnd_beg_dims_l ->
-      (* The template below commits [rank res_v >= rank opnd_v + deficit] with [deficit > 0]:
-         record it (and detect rank cycles) before minting fresh template variables. *)
+      (* The template below commits [rank res_v >= rank opnd_v + deficit] with [deficit > 0]: record
+         it (and detect rank cycles) before minting fresh template variables. *)
       (match opnd.bcast with
       | Broadcastable -> ()
       | Row_var opnd_v ->
@@ -3252,7 +3242,8 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
             match (d1, d2) with
             | Dim { d = 1; basis; _ }, _ when String.equal basis bcast_if_1 -> d1
             | _, Dim { d = 1; basis; _ } when String.equal basis bcast_if_1 -> d2
-            | Dim { d = n1; _ }, Dim { d = n2; _ } when n1 <> n2 -> get_bcast_dim ~d:1 ~proj_id:48 ()
+            | Dim { d = n1; _ }, Dim { d = n2; _ } when n1 <> n2 ->
+                get_bcast_dim ~d:1 ~proj_id:48 ()
             | Dim { basis = b1; _ }, Dim { basis = b2; _ } when not (String.equal b1 b2) ->
                 get_bcast_dim ~d:1 ~proj_id:63 ()
             | ( Affine
@@ -3281,8 +3272,8 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
                     stride_offset = _;
                   },
                 Dim s' )
-              when (stride * (s.d - 1)) + effective_kernel_span ~dilation ~kernel_size:k.d
-                   <> s'.d ->
+              when (stride * (s.d - 1)) + effective_kernel_span ~dilation ~kernel_size:k.d <> s'.d
+              ->
                 get_bcast_dim ~d:1 ~proj_id:50 ()
             | ( Dim s',
                 Affine
@@ -3292,8 +3283,8 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
                     conv = Some { kernel = Dim k; dilation; use_padding = false };
                     stride_offset = _;
                   } )
-              when (stride * (s.d - 1)) + effective_kernel_span ~dilation ~kernel_size:k.d
-                   <> s'.d ->
+              when (stride * (s.d - 1)) + effective_kernel_span ~dilation ~kernel_size:k.d <> s'.d
+              ->
                 get_bcast_dim ~d:1 ~proj_id:50 ()
             | ( Affine
                   {
@@ -3357,8 +3348,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
           let glb_dims =
             List.map2_exn
               (take_from_end r_res.dims glb_len)
-              (take_from_end glb2.dims glb_len)
-              ~f:join_dim
+              (take_from_end glb2.dims glb_len) ~f:join_dim
           in
           let glb =
             { beg_dims = glb_beg_dims; dims = glb_dims; bcast = glb_bcast; prov = glb_prov }
@@ -3378,12 +3368,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
                       })
           in
           match glb with
-          | {
-              beg_dims = [];
-              dims = [] | [ Dim { d = 1; _ } ];
-              bcast = Broadcastable;
-              prov = _;
-            } ->
+          | { beg_dims = []; dims = [] | [ Dim { d = 1; _ } ]; bcast = Broadcastable; prov = _ } ->
               ( Row_eq { r1 = row_of_var opnd_v opnd.prov; r2 = glb; origin } :: ineqs,
                 { env with row_env } )
           | _ -> (ineqs, { env with row_env }))
@@ -3392,13 +3377,13 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
       (Row_ineq { res; opnd; origin } :: ineqs, env)
   | { bcast = Broadcastable; _ }, { bcast = Broadcastable; _ }
     when opnd_dims_l + opnd_beg_dims_l <= res_dims_l + res_beg_dims_l ->
-      (* Both closed: the operand broadcasts only by inserting claim-free padding at its marker,
-         so its EXPLICIT material always pins the corresponding result positions, aligned on the
+      (* Both closed: the operand broadcasts only by inserting claim-free padding at its marker, so
+         its EXPLICIT material always pins the corresponding result positions, aligned on the
          result's flat axis list from the outer edges; only the inserted middle positions are
          unconstrained. The structural beg-to-beg/dims-to-dims overlap pairs (in [ineqs]) are a
-         subset of these flat pairs, so we emit the flat pairs alone. This replaces a vacuous
-         accept that never compared cross-flank material, accepting the unsatisfiable
-         [3].<closed> <= <closed>.[5] at equal ranks where no padding is inserted at all. *)
+         subset of these flat pairs, so we emit the flat pairs alone. This replaces a vacuous accept
+         that never compared cross-flank material, accepting the unsatisfiable [3].<closed> <=
+         <closed>.[5] at equal ranks where no padding is inserted at all. *)
       let res_flat = res.beg_dims @ res.dims in
       ( List.map2_exn
           ~f:(fun res opnd -> Dim_ineq { res; opnd; from_; origin })
@@ -3413,8 +3398,8 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
     when opnd_dims_l + opnd_beg_dims_l <= res_dims_l + res_beg_dims_l
          && (opnd_beg_dims_l > beg_dims_l || opnd_dims_l > dims_l) ->
       (* Open result, closed operand with explicit material outside the structural-flank overlap:
-         the residual pairings depend on the variable's value. Defer -- at stage 6 the result row
-         is closed upward and the constraint reduces to the closed-closed check above. *)
+         the residual pairings depend on the variable's value. Defer -- at stage 6 the result row is
+         closed upward and the constraint reduces to the closed-closed check above. *)
       (Row_ineq { res; opnd; origin } :: ineqs, env)
   | _, { bcast = Broadcastable; _ }
     when opnd_dims_l + opnd_beg_dims_l <= res_dims_l + res_beg_dims_l ->
@@ -3473,7 +3458,6 @@ let%debug5_sexp rec close_dim_terminal ~(stage : stage) ~is_param origin env (di
       | _ -> [])
 
 let last_dim_is dims p = match List.last dims with Some (Dim { d; _ }) -> p d | _ -> false
-
 let _r_dims r = r.beg_dims @ r.dims
 
 let row_var_is_in_param v env =
@@ -3538,8 +3522,7 @@ let%track5_sexp rec eliminate_rows_constraint ~depth stage origin ~glb (rows : r
               let rows =
                 List.map rows ~f:(function
                   | { bcast = Row_var v'; _ } as r when equal_row_var v' v -> r
-                  | r ->
-                      { r with beg_dims = []; dims = r.beg_dims @ r.dims; bcast = Broadcastable })
+                  | r -> { r with beg_dims = []; dims = r.beg_dims @ r.dims; bcast = Broadcastable })
               in
               let ineqs, env =
                 eliminate_rows_constraint ~depth:(depth + 1) stage origin ~glb rows constr env
@@ -3593,12 +3576,7 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
         if guess then opt_row_error ();
         (* Close the bare row variable to empty Broadcastable; the original row's beg_dims is
            preserved at substitution time by s_row_one's uniform composition. *)
-        Row_eq
-          {
-            r1;
-            r2 = { beg_dims = []; dims = []; bcast = Broadcastable; prov };
-            origin;
-          }
+        Row_eq { r1; r2 = { beg_dims = []; dims = []; bcast = Broadcastable; prov }; origin }
       in
       (* Note: the reduced constraint applies to just the row variable. *)
       match reduce_row_constraint constr ~beg_dims ~dims with
@@ -3727,15 +3705,7 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
               keep_constr ()
           | _ -> keep_constr ())
       | Exact dims ->
-          ( [
-              Row_eq
-                {
-                  r1;
-                  r2 = { beg_dims = []; dims; bcast = Broadcastable; prov };
-                  origin;
-                };
-            ],
-            env )
+          ([ Row_eq { r1; r2 = { beg_dims = []; dims; bcast = Broadcastable; prov }; origin } ], env)
       | Unconstrained -> ([], env))
 
 let%track5_sexp close_row_terminal ~(stage : stage) ~is_param origin env
@@ -3745,8 +3715,7 @@ let%track5_sexp close_row_terminal ~(stage : stage) ~is_param origin env
   match bcast with
   | Broadcastable ->
       if is_stage6_up stage then []
-      else
-        List.map beg_dims ~f:(fun d -> Terminal_dim (is_param, d, origin)) @ suffix ()
+      else List.map beg_dims ~f:(fun d -> Terminal_dim (is_param, d, origin)) @ suffix ()
   | Row_var v -> (
       let term_dims () =
         List.map beg_dims ~f:(fun d -> Terminal_dim (is_param, d, origin)) @ suffix ()
@@ -3755,12 +3724,7 @@ let%track5_sexp close_row_terminal ~(stage : stage) ~is_param origin env
       (* Close the bare row variable to empty Broadcastable; the original row's beg_dims is
          preserved through substitution via s_row_one's uniform composition. *)
       let no_further_axes =
-        Row_eq
-          {
-            r1;
-            r2 = { beg_dims = []; dims = []; bcast = Broadcastable; prov };
-            origin;
-          }
+        Row_eq { r1; r2 = { beg_dims = []; dims = []; bcast = Broadcastable; prov }; origin }
       in
       match find_row env.row_env v with
       | Some (Bounds_row { is_in_param; glb = None; constr = Unconstrained; _ })
@@ -3797,7 +3761,8 @@ let%track5_sexp close_row_terminal ~(stage : stage) ~is_param origin env
 
 let%debug5_sexp eliminate_dim_entry stage origin env v ~glb constr =
   let guess_dim () =
-    if Set.mem env.discardable_vars v then get_default_dim ~d:0 ~proj_id:56 () else get_bcast_dim ~d:1 ~proj_id:59 ()
+    if Set.mem env.discardable_vars v then get_default_dim ~d:0 ~proj_id:56 ()
+    else get_bcast_dim ~d:1 ~proj_id:59 ()
   in
   match (glb, constr) with
   | Some (Dim { d; _ } as glb), At_least_dim d2 when d2 > d ->
@@ -3808,7 +3773,8 @@ let%debug5_sexp eliminate_dim_entry stage origin env v ~glb constr =
   | Some _, At_least_dim 1 ->
       (* Direct access at 0 is a strong heuristic for dimension 1 axis (e.g. result of a
          reduction). *)
-      if is_stage7 stage then Some (Dim_eq { d1 = Var v; d2 = get_bcast_dim ~d:1 ~proj_id:57 (); origin })
+      if is_stage7 stage then
+        Some (Dim_eq { d1 = Var v; d2 = get_bcast_dim ~d:1 ~proj_id:57 (); origin })
       else None
   | Some glb, (At_least_dim _ | Unconstrained_dim) when is_stage6_up stage ->
       Some (Dim_eq { d1 = Var v; d2 = glb; origin })
@@ -3865,9 +3831,7 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env
   | Row_var v -> (
       let dim_eqs = process_dims beg_dims @ process_dims dims in
       let r1 : row = row_of_var v prov in
-      let empty_broadcastable : row =
-        { beg_dims = []; dims = []; bcast = Broadcastable; prov }
-      in
+      let empty_broadcastable : row = { beg_dims = []; dims = []; bcast = Broadcastable; prov } in
       match find_row env.row_env v with
       | Some (Bounds_row { glb = Some glb; constr = Unconstrained; _ }) when is_stage6_up stage ->
           (Row_eq { r1; r2 = glb; origin } :: dim_eqs, env)
@@ -3898,8 +3862,7 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env
           let keep = if not final then [ Shape_row (r, origin) ] else [] in
           (keep @ ineqs @ dim_eqs, env)
       | Some (Solved_row _) -> assert false
-      | _ when final ->
-          (Row_eq { r1; r2 = empty_broadcastable; origin } :: dim_eqs, env)
+      | _ when final -> (Row_eq { r1; r2 = empty_broadcastable; origin } :: dim_eqs, env)
       | _ -> (Shape_row (r, origin) :: dim_eqs, env))
 
 let empty_env =
@@ -4078,15 +4041,8 @@ let rec row_to_bases env =
       match find_row env.row_env v with
       | None | Some (Bounds_row _) -> Array.of_list_map (beg_dims @ dims) ~f
       | Some (Solved_row { beg_dims = beg_dims2; dims = dims2; bcast; _ }) ->
-          row_to_bases env
-            {
-              beg_dims = beg_dims @ beg_dims2;
-              dims = dims2 @ dims;
-              bcast;
-              prov;
-            })
-  | { beg_dims; dims; bcast = Broadcastable; prov = _ } ->
-      Array.of_list_map (beg_dims @ dims) ~f
+          row_to_bases env { beg_dims = beg_dims @ beg_dims2; dims = dims2 @ dims; bcast; prov })
+  | { beg_dims; dims; bcast = Broadcastable; prov = _ } -> Array.of_list_map (beg_dims @ dims) ~f
 
 (** *** Projection inference *** *)
 
@@ -4102,11 +4058,7 @@ let fresh_row_proj r =
         Affine { stride; over = fresh_dim over; conv; stride_offset }
     | Concat dims -> Concat (List.map dims ~f:fresh_dim)
   in
-  {
-    r with
-    beg_dims = List.map r.beg_dims ~f:fresh_dim;
-    dims = List.map r.dims ~f:fresh_dim;
-  }
+  { r with beg_dims = List.map r.beg_dims ~f:fresh_dim; dims = List.map r.dims ~f:fresh_dim }
 
 let populate_dim_proj_in_solved env =
   let rec fresh_dim = function
@@ -4190,10 +4142,7 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
     | Dim { d; basis; proj_id = None } ->
         raise
         @@ Shape_error
-             ( "to_proj: Dim without proj_id (d=" ^ Int.to_string d ^ ", basis="
-               ^ basis
-               ^ ")",
-               [] )
+             ("to_proj: Dim without proj_id (d=" ^ Int.to_string d ^ ", basis=" ^ basis ^ ")", [])
     | Affine { stride; over; conv = None; stride_offset } ->
         (* Strided iteration: no convolution *)
         Conv_input { stride; over = to_proj over; conv = None; stride_offset; target_id = None }
@@ -4235,8 +4184,7 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
         | Dim { d; basis; proj_id = None } ->
             raise
             @@ Shape_error
-                 ( "to_proj (subst): Dim without proj_id (d=" ^ Int.to_string d ^ ", basis="
-                   ^ basis
+                 ( "to_proj (subst): Dim without proj_id (d=" ^ Int.to_string d ^ ", basis=" ^ basis
                    ^ ")",
                    [] )
         | Var v when Map.mem proj_axis_env v -> Solved (Map.find_exn proj_axis_env v)

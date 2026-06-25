@@ -1565,16 +1565,16 @@ let translate ?ident_label (expr : expression) : result =
         let logic =
           let loc = s_loc in
           if String.equal spec "." then [%expr Shape.Pointwise_bin]
-          else if String.equal spec "@" then (
+          else if String.equal spec "@" then
             match bin_op with
             | "/" | "div" | "**" | "pow" ->
-              Ast_builder.Default.pexp_extension ~loc
-              @@ Location.error_extensionf ~loc
-                   "ppx_ocannl %%cd: `~logic:\"@\"` (Compose) with `%s` looks like matrix \
-                    inverse/power but computes neither; use `~logic:\".\"` for pointwise \
-                    `%s`, or einsum notation for a custom contraction"
-                   bin_op bin_op
-            | _ -> [%expr Shape.Compose])
+                Ast_builder.Default.pexp_extension ~loc
+                @@ Location.error_extensionf ~loc
+                     "ppx_ocannl %%cd: `~logic:\"@\"` (Compose) with `%s` looks like matrix \
+                      inverse/power but computes neither; use `~logic:\".\"` for pointwise `%s`, \
+                      or einsum notation for a custom contraction"
+                     bin_op bin_op
+            | _ -> [%expr Shape.Compose]
           else [%expr Shape.Einsum ([%e logic], [])]
         in
         let _, bin_op = binary_op bin_op in

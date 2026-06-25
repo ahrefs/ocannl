@@ -204,12 +204,7 @@ let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
   in
   let to_row kind v dims beg_dims =
     let bcast, beg_dims = to_bcast kind v beg_dims in
-    {
-      Row.beg_dims;
-      dims = to_dim kind dims;
-      bcast;
-      prov = Row.provenance ~sh_id ~kind;
-    }
+    { Row.beg_dims; dims = to_dim kind dims; bcast; prov = Row.provenance ~sh_id ~kind }
   in
   let batch = to_row `Batch labels.bcast_batch b_dims beg_b_dims in
   let input = to_row `Input labels.bcast_input i_dims beg_i_dims in
@@ -308,8 +303,8 @@ let add_var_used_in_pointwise row =
 
 (** Shared helper: bind each [delayed_var_ref] to the dim/row variable resolved for its label in
     [dim_var_env]/[row_var_env]. Returns the additional constraints implied by any pre-solved dims.
-    Extracted to eliminate duplication across the unary-permute, binary-einsum, block, and ternary-einsum
-    branches of [get_inequalities]. *)
+    Extracted to eliminate duplication across the unary-permute, binary-einsum, block, and
+    ternary-einsum branches of [get_inequalities]. *)
 let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~error_shapes
     dim_refs =
   List.filter_map dim_refs ~f:(fun delayed_ref ->
@@ -344,8 +339,7 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
                   Row.Rows_constr
                     {
                       r = [ Row.get_row_for_var Row.empty_provenance var ];
-                      constr =
-                        Row.Total_elems { numerator = Num_elems solved_dim; divided_by = [] };
+                      constr = Row.Total_elems { numerator = Num_elems solved_dim; divided_by = [] };
                       origin =
                         [
                           {
@@ -366,18 +360,17 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
 
 (** Shared n-ary einsum constraint builder used by [Broadcast (Einsum ...)],
     [Broadcast_tern (Einsum_tern ...)], and [Block]. Handles per-shape
-    [einsum_slot_spec_to_dims_bio] calls, name-clash check, delayed-var binding,
-    proj-env merge, and [Row_eq] emission.
+    [einsum_slot_spec_to_dims_bio] calls, name-clash check, delayed-var binding, proj-env merge, and
+    [Row_eq] emission.
 
-    [rhs_slots] is a list of [(parsed_axis_labels, shape)] pairs, one per RHS.
-    [result_label] is the operation string for LHS [Row_eq] origins (e.g.
-    ["Broadcast RESULT"] or ["Block RESULT"]). [arg_label_prefix] is the prefix
-    for RHS [Row_eq] origins; the index (1-based) is appended, yielding e.g.
-    ["Broadcast ARGUMENT 1"]. [error_shapes] is the shape list for error context.
+    [rhs_slots] is a list of [(parsed_axis_labels, shape)] pairs, one per RHS. [result_label] is the
+    operation string for LHS [Row_eq] origins (e.g. ["Broadcast RESULT"] or ["Block RESULT"]).
+    [arg_label_prefix] is the prefix for RHS [Row_eq] origins; the index (1-based) is appended,
+    yielding e.g. ["Broadcast ARGUMENT 1"]. [error_shapes] is the shape list for error context.
 
-    Returns [(proj_env, bio_lhs, bio_rhs_list, inequalities)] where [bio_lhs] and
-    [bio_rhs_list] are the batch/input/output row triples for the LHS and each
-    RHS — needed by [Block] to compute discardable vars. *)
+    Returns [(proj_env, bio_lhs, bio_rhs_list, inequalities)] where [bio_lhs] and [bio_rhs_list] are
+    the batch/input/output row triples for the LHS and each RHS — needed by [Block] to compute
+    discardable vars. *)
 let einsum_n_constraints ~for_projections ~spec ~(rhs_slots : (parsed_axis_labels * t) list)
     ~(cur_sh : t) ~ls_lhs ~dim_refs ~result_label ~arg_label_prefix ~(error_shapes : t list)
     ?(lhs_constraints_first = false) () =
@@ -395,9 +388,8 @@ let einsum_n_constraints ~for_projections ~spec ~(rhs_slots : (parsed_axis_label
     einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:(cur_sh : t).id ~row_var_env
       ~dim_var_env ls_lhs
   in
-  check_dim_row_var_name_clash ~spec
-    ~error_trace:[ Shape_mismatch error_shapes ]
-    dim_var_env row_var_env;
+  check_dim_row_var_name_clash ~spec ~error_trace:[ Shape_mismatch error_shapes ] dim_var_env
+    row_var_env;
   let extras_dim_refs =
     bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~error_shapes
       dim_refs
@@ -513,22 +505,17 @@ let einsum_n_constraints ~for_projections ~spec ~(rhs_slots : (parsed_axis_label
     if lhs_constraints_first then lhs_constraints @ rhs_constraints
     else rhs_constraints @ lhs_constraints
   in
-  ( proj_env,
-    bio_lhs,
-    bio_rhs_list,
-    extras_dim_refs @ extras_lhs @ ordered_constraints )
+  (proj_env, bio_lhs, bio_rhs_list, extras_dim_refs @ extras_lhs @ ordered_constraints)
 
 (* For Block specs, compute discardable_vars: variables that are allowed to be 0. A variable v is
-   discardable if: 1. v appears in a component of a Concat dimension on one side 2. For ALL shapes on
-   the other side, there EXISTS an axis such that for ALL components of that axis, the complement of
-   v's component has non-empty intersection. This is a four-quantifier condition: ∀shapes ∃axis
+   discardable if: 1. v appears in a component of a Concat dimension on one side 2. For ALL shapes
+   on the other side, there EXISTS an axis such that for ALL components of that axis, the complement
+   of v's component has non-empty intersection. This is a four-quantifier condition: ∀shapes ∃axis
    ∀components: complement ∩ component ≠ ∅ *)
-let compute_block_discardable_vars ~(this_side_rows : Row.t list) ~(other_side_shapes : Row.t list list)
-    : Row.dim_var_set =
+let compute_block_discardable_vars ~(this_side_rows : Row.t list)
+    ~(other_side_shapes : Row.t list list) : Row.dim_var_set =
   (* Extract all dims from rows (both flanks; bcast no longer carries beg_dims). *)
-  let dims_of_rows rows =
-    List.concat_map rows ~f:(fun (row : Row.t) -> row.beg_dims @ row.dims)
-  in
+  let dims_of_rows rows = List.concat_map rows ~f:(fun (row : Row.t) -> row.beg_dims @ row.dims) in
   (* Get component var sets for each axis. For non-Concat dims, there's one component with all vars
      of that dim. For Concat dims, each element is a separate component. *)
   let axis_components_of_dim (dim : Row.dim) : Row.dim_var_set list =
@@ -541,8 +528,8 @@ let compute_block_discardable_vars ~(this_side_rows : Row.t list) ~(other_side_s
     List.map other_side_shapes ~f:(fun shape_rows ->
         List.map (dims_of_rows shape_rows) ~f:axis_components_of_dim)
   in
-  (* For each Concat on this side, find discardable vars. Non-Concat dims cannot contribute discardable vars
-     since their complement is empty. *)
+  (* For each Concat on this side, find discardable vars. Non-Concat dims cannot contribute
+     discardable vars since their complement is empty. *)
   let this_side_dims = dims_of_rows this_side_rows in
   List.fold this_side_dims ~init:Row.dim_var_set_empty ~f:(fun acc dim ->
       match dim with
@@ -630,7 +617,9 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                  r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
                  constr =
                    Exact
-                     (Ir.Ndarray.dims nd |> Array.map ~f:(fun d -> get_default_dim ~d ()) |> Array.to_list);
+                     (Ir.Ndarray.dims nd
+                     |> Array.map ~f:(fun d -> get_default_dim ~d ())
+                     |> Array.to_list);
                  origin =
                    [
                      {
@@ -657,7 +646,9 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                  r = [ cur_sh.batch; cur_sh.output; cur_sh.input ];
                  constr =
                    Exact
-                     (Ir.Ndarray.dims data |> Array.map ~f:(fun d -> get_default_dim ~d ()) |> Array.to_list);
+                     (Ir.Ndarray.dims data
+                     |> Array.map ~f:(fun d -> get_default_dim ~d ())
+                     |> Array.to_list);
                  origin =
                    [
                      {
@@ -1237,10 +1228,8 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
       let proj_env, _, _, inequalities =
         einsum_n_constraints ~for_projections ~spec
           ~rhs_slots:[ (ls_rhs1, sh1); (ls_rhs2, sh2) ]
-          ~cur_sh ~ls_lhs ~dim_refs
-          ~result_label:"Broadcast RESULT"
-          ~arg_label_prefix:"Broadcast ARGUMENT"
-          ~error_shapes:[ cur_sh; sh1; sh2 ]
+          ~cur_sh ~ls_lhs ~dim_refs ~result_label:"Broadcast RESULT"
+          ~arg_label_prefix:"Broadcast ARGUMENT" ~error_shapes:[ cur_sh; sh1; sh2 ]
           ~lhs_constraints_first:true ()
       in
       (proj_env, dim_var_set_empty, inequalities)
@@ -1259,13 +1248,9 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                    [ Shape_mismatch (cur_sh :: rhses) ] )
       in
       let proj_env, (b_lhs, i_lhs, o_lhs), bio_rhs_list, inequalities =
-        einsum_n_constraints ~for_projections ~spec
-          ~rhs_slots:(List.zip_exn ls_rhses rhses)
-          ~cur_sh ~ls_lhs ~dim_refs:delayed_vars
-          ~result_label:"Block RESULT"
-          ~arg_label_prefix:"Block ARGUMENT"
-          ~error_shapes:(cur_sh :: rhses)
-          ()
+        einsum_n_constraints ~for_projections ~spec ~rhs_slots:(List.zip_exn ls_rhses rhses) ~cur_sh
+          ~ls_lhs ~dim_refs:delayed_vars ~result_label:"Block RESULT"
+          ~arg_label_prefix:"Block ARGUMENT" ~error_shapes:(cur_sh :: rhses) ()
       in
       (* Compute discardable_vars for concat semantics: variables allowed to be 0. *)
       let rhs_shapes : Row.t list list =
@@ -1301,11 +1286,8 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
       let proj_env, _, _, inequalities =
         einsum_n_constraints ~for_projections ~spec
           ~rhs_slots:[ (ls_rhs1, sh1); (ls_rhs2, sh2); (ls_rhs3, sh3) ]
-          ~cur_sh ~ls_lhs ~dim_refs
-          ~result_label:"Broadcast RESULT"
-          ~arg_label_prefix:"Broadcast ARGUMENT"
-          ~error_shapes:[ cur_sh; sh1; sh2; sh3 ]
-          ()
+          ~cur_sh ~ls_lhs ~dim_refs ~result_label:"Broadcast RESULT"
+          ~arg_label_prefix:"Broadcast ARGUMENT" ~error_shapes:[ cur_sh; sh1; sh2; sh3 ] ()
       in
       (proj_env, dim_var_set_empty, inequalities)
 
@@ -1343,7 +1325,8 @@ let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
       raise
       @@ Row.Shape_error
            ( "Cannot set dimension for variable reference with label " ^ ref_label,
-             [ Row.Dim_mismatch [ Row.get_default_dim ~d:dim2 (); Row.get_default_dim ~d:dim () ] ] )
+             [ Row.Dim_mismatch [ Row.get_default_dim ~d:dim2 (); Row.get_default_dim ~d:dim () ] ]
+           )
   | { var_ref = { solved_dim = None; _ }; var = `Not_set_yet } ->
       delayed_var_ref.var_ref.solved_dim <- Some dim
   | { var_ref = { solved_dim = None; _ }; var = `Dim dim_var } ->
@@ -1397,7 +1380,9 @@ let set_equal delayed_ref1 delayed_ref2 =
         raise
         @@ Row.Shape_error
              ( "Cannot set equal dimensions for variable references with different values",
-               [ Row.Dim_mismatch [ Row.get_default_dim ~d:dim1 (); Row.get_default_dim ~d:dim2 () ] ] )
+               [
+                 Row.Dim_mismatch [ Row.get_default_dim ~d:dim1 (); Row.get_default_dim ~d:dim2 () ];
+               ] )
   | { var_ref = { solved_dim = Some dim; _ }; _ }, delayed_ref2 ->
       (* First is solved, second is not - set the second to match the first *)
       set_dim delayed_ref2 dim
@@ -1511,7 +1496,10 @@ let set_scale ~factor delayed_ref_large delayed_ref_small =
                ( "Shape.set_scale: dimensions do not satisfy d_large = factor * d_small",
                  [
                    Row.Dim_mismatch
-                     [ Row.get_default_dim ~d:d_large (); Row.get_default_dim ~d:(factor * d_small) () ];
+                     [
+                       Row.get_default_dim ~d:d_large ();
+                       Row.get_default_dim ~d:(factor * d_small) ();
+                     ];
                  ] )
     | { var_ref = { solved_dim = Some d_large; ref_label; _ }; _ }, delayed_ref_small ->
         if d_large % factor <> 0 then
@@ -1696,8 +1684,7 @@ let%debug4_sexp row_to_dims (row : Row.t) : int array =
            ( "Not enough shape information: unresolved row variable "
              ^ Sexp.to_string_hum ([%sexp_of: row_var] v),
              [ Row_mismatch [ row ] ] )
-  | { beg_dims; dims; bcast = Broadcastable; prov = _ } ->
-      Array.of_list_map (beg_dims @ dims) ~f
+  | { beg_dims; dims; bcast = Broadcastable; prov = _ } -> Array.of_list_map (beg_dims @ dims) ~f
 
 let to_dims_impl (sh : t) : int array =
   try Array.concat_map ~f:row_to_dims [| sh.batch; sh.output; sh.input |]
@@ -1714,8 +1701,8 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   (* We will not use the old inferred padding so that we can derive precisely the padding
      contributed by this step. *)
   let _debug_update_step : update_step = update_step in
-  let (proj_axis_env, discardable_vars, ineqs) : proj_axis_env * Row.dim_var_set * Row.constraint_ list
-      =
+  let (proj_axis_env, discardable_vars, ineqs) :
+      proj_axis_env * Row.dim_var_set * Row.constraint_ list =
     get_inequalities ~for_projections:true update_step
   in
   (* We need to solve the equations/inequalities one last time because of fresh row variables
@@ -1765,8 +1752,8 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
     Row.solve_proj_equations ~resolved_padding ~inferred_padding:[] proj_eqs
   in
   let dims_of (sh : t) =
-    sh.batch.beg_dims @ sh.batch.dims @ sh.output.beg_dims @ sh.output.dims
-    @ sh.input.beg_dims @ sh.input.dims
+    sh.batch.beg_dims @ sh.batch.dims @ sh.output.beg_dims @ sh.output.dims @ sh.input.beg_dims
+    @ sh.input.dims
   in
   let lhs = update_step.shape in
   let lhs_dims = to_dims_impl lhs in
@@ -2108,8 +2095,7 @@ let%track4_sexp to_padding (sh : t) : (Ir.Ops.axis_padding array * float option)
     let get_padding_array row_opt row =
       match row_opt with
       | Some padding -> padding
-      | None ->
-          Array.create ~len:(List.length (row.Row.beg_dims @ row.Row.dims)) no_padding
+      | None -> Array.create ~len:(List.length (row.Row.beg_dims @ row.Row.dims)) no_padding
     in
     let has_any_padding : bool =
       Option.is_some sh.batch_padding || Option.is_some sh.output_padding
@@ -2168,8 +2154,8 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
        is a [default] atom at every size, INCLUDING size 1 — an explicit user [1] does not stretch
        (it flags a forgotten/hidden dimension rather than silently broadcasting). Only scalar
        helpers, internal broadcast fill (e.g. [embed_self_id]), and rank-broadening synthesizers
-       mint the claim-free broadcast top [1_(bcast_if_1)], and they do so explicitly via
-       [~*_axes] / [get_bcast_dim], not through this default path. *)
+       mint the claim-free broadcast top [1_(bcast_if_1)], and they do so explicitly via [~*_axes] /
+       [get_bcast_dim], not through this default path. *)
     get_default_dim ~d ()
   in
   let make_dims kind ds =

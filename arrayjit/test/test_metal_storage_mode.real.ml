@@ -6,8 +6,8 @@
 
    The invariant pinned here: [storage_mode_of_pool] returns [Shared] for a pool allocated under ANY
    memory mode (including the GPU-only modes that previously selected [Private]). If a backend edit
-   reintroduced per-mode selection, the GPU-only lines below would print [Private] and the test would
-   fail. *)
+   reintroduced per-mode selection, the GPU-only lines below would print [Private] and the test
+   would fail. *)
 
 open Base
 module Tn = Ir.Tnode
@@ -22,12 +22,16 @@ let string_of_storage_mode = function
 
 let () =
   let device = B.get_device ~ordinal:0 in
-  let next_pool = ref 1 (* pool 0 is the reserved merge buffer *) in
+  let next_pool =
+    ref 1
+    (* pool 0 is the reserved merge buffer *)
+  in
   let check label (mode : Tn.memory_mode option) =
     let pool_id = !next_pool in
     Int.incr next_pool;
     B.alloc_pool ?mode device ~pool_id ~size_in_bytes:16 ~alignment:1;
-    Stdio.printf "%-22s -> %s\n" label (string_of_storage_mode (B.storage_mode_of_pool device ~pool_id))
+    Stdio.printf "%-22s -> %s\n" label
+      (string_of_storage_mode (B.storage_mode_of_pool device ~pool_id))
   in
   (* GPU-only modes that used to select Private now allocate Shared like everything else. *)
   check "Local" (Some Tn.Local);

@@ -107,9 +107,7 @@ let can_skip_accumulation ~projections =
 let%debug3_sexp context_nodes (asgns : t) : Tn.t_set =
   let open Utils.Set_O in
   let empty = Set.empty (module Tn) in
-  let one tn =
-    if Tn.is_in_context_force tn 34 then Set.singleton (module Tn) tn else empty
-  in
+  let one tn = if Tn.is_in_context_force tn 34 then Set.singleton (module Tn) tn else empty in
   let of_node = function Node rhs -> one rhs | Merge_buffer _ -> empty in
   let rec loop = function
     | Noop -> empty
@@ -134,8 +132,8 @@ let%debug3_sexp context_nodes (asgns : t) : Tn.t_set =
   loop asgns
 
 (** In the second set, returns the nodes that are not read from after being written to. In the first
-    set, returns the nodes that are ever read from. The second set is also used as the set of nodes to
-    materialize; for a [Fetch.Slice] the parent is included there so it is materialized to back a
+    set, returns the nodes that are ever read from. The second set is also used as the set of nodes
+    to materialize; for a [Fetch.Slice] the parent is included there so it is materialized to back a
     potential zero-copy alias view (gh-ocannl-293 293a). *)
 let%debug3_sexp collect_nodes_guess_output (asgns : t) : Tn.t_set * Tn.t_set =
   let open Utils.Set_O in
@@ -162,9 +160,10 @@ let%debug3_sexp collect_nodes_guess_output (asgns : t) : Tn.t_set * Tn.t_set =
         in
         (inputs, outputs)
     | Set_vec_unop { lhs; rhs; _ } -> (of_node rhs, one lhs)
-    (* Materialize the slice parent too, so it can back a zero-copy alias view of [array]; harmless in
-       the copy-fallback case where the parent is read by the copy loop (gh-ocannl-293 293a). *)
-    | Fetch { array; fetch_op = Slice { sliced; _ }; _ } -> (empty, Set.of_list (module Tn) [ array; sliced ])
+    (* Materialize the slice parent too, so it can back a zero-copy alias view of [array]; harmless
+       in the copy-fallback case where the parent is read by the copy loop (gh-ocannl-293 293a). *)
+    | Fetch { array; fetch_op = Slice { sliced; _ }; _ } ->
+        (empty, Set.of_list (module Tn) [ array; sliced ])
     | Fetch { array; _ } -> (empty, one array)
   in
   loop asgns
@@ -220,12 +219,12 @@ let%track4_sexp to_low_level code =
   in
   let is_padded tn = Option.is_some (Tn.get_padding tn) in
   (* Redirect a slice-alias view to its parent: a read/write of the alias at [idcs] becomes a
-     read/write of the parent at [batch_idx :: idcs] -- exactly the index the materializing copy loop
-     used to build for its RHS. Recursive to cover (currently impossible) alias chains. The parent is
-     unpadded by alias eligibility, so the downstream padding logic runs correctly against it
-     (gh-ocannl-293 293a). *)
-  let rec resolve_alias (tn : Tn.t) (idcs : Indexing.axis_index array) : Tn.t * Indexing.axis_index array
-      =
+     read/write of the parent at [batch_idx :: idcs] -- exactly the index the materializing copy
+     loop used to build for its RHS. Recursive to cover (currently impossible) alias chains. The
+     parent is unpadded by alias eligibility, so the downstream padding logic runs correctly against
+     it (gh-ocannl-293 293a). *)
+  let rec resolve_alias (tn : Tn.t) (idcs : Indexing.axis_index array) :
+      Tn.t * Indexing.axis_index array =
     match Tn.alias_of tn with
     | Some (parent, { static_symbol; _ }) ->
         resolve_alias parent (Array.append [| Iterator static_symbol |] idcs)
@@ -332,9 +331,8 @@ let%track4_sexp to_low_level code =
               | None ->
                   raise
                   @@ Utils.User_error
-                       ("concat_offset_for: iterator symbol "
-                       ^ Indexing.symbol_ident s
-                       ^ " absent from projection iter_sizes; a projection component was dropped")
+                       ("concat_offset_for: iterator symbol " ^ Indexing.symbol_ident s
+                      ^ " absent from projection iter_sizes; a projection component was dropped")
             in
             if Indexing.equal_symbol s active then (cumul + size, Some cumul)
             else (cumul + size, found))
@@ -522,9 +520,8 @@ let%track4_sexp to_low_level code =
               | None ->
                   raise
                   @@ Utils.User_error
-                       ("concat_offset_for: iterator symbol "
-                       ^ Indexing.symbol_ident s
-                       ^ " absent from projection iter_sizes; a projection component was dropped")
+                       ("concat_offset_for: iterator symbol " ^ Indexing.symbol_ident s
+                      ^ " absent from projection iter_sizes; a projection component was dropped")
             in
             if Indexing.equal_symbol s active then (cumul + size, Some cumul)
             else (cumul + size, found))
@@ -734,10 +731,10 @@ let%track4_sexp to_low_level code =
                 | Ops.Void_prec -> failwith "Cannot use vector operation with void precision")
           in
           (* Redirect a vector store through a slice-alias view to the parent, mirroring [set] for
-             scalar stores (gh-ocannl-293 293a). Without this the alias [lhs] -- which owns no buffer
-             and is excluded from [ctx_buffers] -- would be a write target the backend cannot link.
-             The parent is unpadded by alias eligibility, and its precision matches the slice's, so
-             [length] (computed from [lhs.prec] above) stays correct. *)
+             scalar stores (gh-ocannl-293 293a). Without this the alias [lhs] -- which owns no
+             buffer and is excluded from [ctx_buffers] -- would be a write target the backend cannot
+             link. The parent is unpadded by alias eligibility, and its precision matches the
+             slice's, so [length] (computed from [lhs.prec] above) stays correct. *)
           let lhs, lhs_idcs = resolve_alias lhs lhs_idcs in
           Set_from_vec
             {
@@ -827,14 +824,13 @@ let%track4_sexp to_low_level code =
   (* Pre-pass: mark alias-eligible [Fetch.Slice]s before lowering, so [get]/[set] redirect them and
      the [Slice] lowering emits no copy loop. Eligibility needs forced shapes, which are available
      here (shape inference is forced before [lower]/[to_low_level]). Idempotent across re-lowerings.
-     A slice falls back to the materializing copy loop unless ALL hold:
-     - leading-axis, rank-drop-by-one (the only shape [Slice] produces): parent rank = child rank + 1
-       and the trailing dims match elementwise;
-     - parent and child share the same precision: the copy loop silently converts precision (e.g. a
-       float buffer sliced then reinterpreted as uint4x32), which a shared-storage alias cannot do;
-     - the parent has backing storage (not [Virtual] / [Effectively_constant]);
-     - parent and child are both unpadded (aliasing would otherwise break the padding contract).
-     (gh-ocannl-293 subtask 293a.) *)
+     A slice falls back to the materializing copy loop unless ALL hold: - leading-axis,
+     rank-drop-by-one (the only shape [Slice] produces): parent rank = child rank + 1 and the
+     trailing dims match elementwise; - parent and child share the same precision: the copy loop
+     silently converts precision (e.g. a float buffer sliced then reinterpreted as uint4x32), which
+     a shared-storage alias cannot do; - the parent has backing storage (not [Virtual] /
+     [Effectively_constant]); - parent and child are both unpadded (aliasing would otherwise break
+     the padding contract). (gh-ocannl-293 subtask 293a.) *)
   let slice_alias_eligible ~(array : Tn.t) ~(sliced : Tn.t) : bool =
     let pdims = Lazy.force sliced.Tn.dims and cdims = Lazy.force array.Tn.dims in
     Array.length pdims = Array.length cdims + 1

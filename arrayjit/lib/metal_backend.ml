@@ -18,9 +18,9 @@ type ullong = Unsigned.ULLong.t
 let sexp_of_ullong x = Sexp.Atom (Unsigned.ULLong.to_string x)
 
 (* gh-ocannl-344: number of pool base-pointer parameters every pooled kernel declares. A routine may
-   reach at most this many distinct pools (working delta + ancestor deltas + constant pools + merge);
-   together with the slot table, static-index and merge params this stays well under Metal's ~31
-   argument-buffer binding limit, independently of the tensor-node count. A routine needing more
+   reach at most this many distinct pools (working delta + ancestor deltas + constant pools +
+   merge); together with the slot table, static-index and merge params this stays well under Metal's
+   ~31 argument-buffer binding limit, independently of the tensor-node count. A routine needing more
    distinct pools raises a clear error at link time. *)
 let metal_max_pools = 16
 
@@ -76,7 +76,8 @@ let track_allocation (buffer : Me.Buffer.t) =
    storage modes. Hazards are Untracked: at pool granularity Metal's automatic tracking would
    serialize kernels touching *disjoint* tnodes in the same slab (false dependencies); OCANNL's own
    writer-event machinery ([updating_for]) already expresses the true cross-kernel ordering. The
-   per-tnode private/shared selection (gh-ocannl-320) is retired -- there is no replacement config. *)
+   per-tnode private/shared selection (gh-ocannl-320) is retired -- there is no replacement
+   config. *)
 let shared_resource_options =
   Me.ResourceOptions.(
     storage_mode_shared + cpu_cache_mode_write_combined + hazard_tracking_mode_untracked)
@@ -98,9 +99,10 @@ module Slab = struct
     track_allocation buffer;
     Hashtbl.set pools ~key:(device.device_id, pool_id) ~data:buffer
 
-  (* Rely on ARC and the finalizer attached in track_allocation for the actual reclamation, but still
-     drop the private table entry on finalization so the strong reference is released (otherwise ARC
-     can never reclaim a context's tnode buffers). Re-allocating a pool also overwrites the entry. *)
+  (* Rely on ARC and the finalizer attached in track_allocation for the actual reclamation, but
+     still drop the private table entry on finalization so the strong reference is released
+     (otherwise ARC can never reclaim a context's tnode buffers). Re-allocating a pool also
+     overwrites the entry. *)
   let free_pool =
     Some (fun (device : device) ~pool_id -> Hashtbl.remove pools (device.device_id, pool_id))
 
@@ -357,9 +359,9 @@ module Fresh () = struct
     if Ctypes_ptr.Fat.compare src_fatptr host_fatptr <> 0 then
       Ctypes_memory_stubs.memcpy ~dst:host_fatptr ~src:src_fatptr ~size:size_in_bytes
 
-  (* The merge buffer is the device's reserved single-tenant pool (id [merge_buffer_pool_id]); grow it
-     in place when a larger node arrives ([Slab.alloc_pool] overwrites the reserved entry). The merge
-     buffer holds a copy of [tn], so it inherits [tn]'s storage-mode classification. *)
+  (* The merge buffer is the device's reserved single-tenant pool (id [merge_buffer_pool_id]); grow
+     it in place when a larger node arrives ([Slab.alloc_pool] overwrites the reserved entry). The
+     merge buffer holds a copy of [tn], so it inherits [tn]'s storage-mode classification. *)
   let opt_alloc_merge_buffer ?mode ~size_in_bytes (device : device) : unit =
     if device.merge_buffer_capacity < size_in_bytes then (
       Slab.alloc_pool ?mode device ~pool_id:merge_buffer_pool_id ~size_in_bytes ~alignment:1;
@@ -386,9 +388,7 @@ module Fresh () = struct
     | No, Some dst_loc ->
         memcpy ~dst_ptr:(Slab.resolve_pool dst.device dst_loc) ~dst_offset:dst_loc.offset
     | Copy, _ ->
-        opt_alloc_merge_buffer
-          ?mode:(Option.map tn.Tn.memory_mode ~f:fst)
-          ~size_in_bytes dst.device;
+        opt_alloc_merge_buffer ?mode:(Option.map tn.Tn.memory_mode ~f:fst) ~size_in_bytes dst.device;
         let loc = Option.value_exn ~here:[%here] !(dst.device.merge_buffer) in
         memcpy ~dst_ptr:(Slab.resolve_pool dst.device loc) ~dst_offset:loc.offset
 
@@ -433,9 +433,10 @@ module Fresh () = struct
     let arg_int_prefix =
       if Utils.settings.large_models then "const uint64_t& " else "const uint32_t& "
 
-    (* gh-ocannl-344: pass materialized tensor nodes through [metal_max_pools] bound pool buffers + a
-       slot table instead of one buffer per tnode, so a kernel reaching hundreds of nodes stays under
-       Metal's ~31 argument-buffer binding limit. [link_proc] binds the pools and fills the slots. *)
+    (* gh-ocannl-344: pass materialized tensor nodes through [metal_max_pools] bound pool buffers +
+       a slot table instead of one buffer per tnode, so a kernel reaching hundreds of nodes stays
+       under Metal's ~31 argument-buffer binding limit. [link_proc] binds the pools and fills the
+       slots. *)
     let ptr_param_style = `Pooled metal_max_pools
 
     let extra_args =
@@ -446,12 +447,24 @@ module Fresh () = struct
     let ident_blacklist =
       ident_blacklist
       @ [
-          (* MSL address-space qualifiers and function attributes — highly plausible tensor labels *)
-          "kernel"; "device"; "constant"; "thread"; "threadgroup"; "threadgroup_imageblock";
+          (* MSL address-space qualifiers and function attributes — highly plausible tensor
+             labels *)
+          "kernel";
+          "device";
+          "constant";
+          "thread";
+          "threadgroup";
+          "threadgroup_imageblock";
           (* MSL primitive types that differ from C and would shadow type declarations *)
-          "half"; "uint"; "ushort"; "uchar"; "ulong"; "bfloat";
+          "half";
+          "uint";
+          "ushort";
+          "uchar";
+          "ulong";
+          "bfloat";
           (* MSL built-in variables *)
-          "gid"; "lid";
+          "gid";
+          "lid";
         ]
 
     let metal_log_object_name = "os_log_default"
@@ -664,8 +677,8 @@ module Fresh () = struct
         string metal_log_object_name ^^ string ".log_debug(" ^^ base_doc ^^ rparen ^^ semi
       else
         group
-          (string metal_log_object_name ^^ string ".log_debug(" ^^ base_doc
-          ^^ comma ^^ nest 4 (break 1 ^^ separate (comma ^^ break 1) args_docs)
+          (string metal_log_object_name ^^ string ".log_debug(" ^^ base_doc ^^ comma
+          ^^ nest 4 (break 1 ^^ separate (comma ^^ break 1) args_docs)
           ^^ rparen ^^ semi)
   end
 
@@ -750,10 +763,10 @@ using namespace metal;|} in
     }
 
   (* gh-ocannl-344: from the routine's materialized nodes, assign each distinct pool an index (first
-     use order), build the [(pool_index, byte_offset)] slot table (one [uint] pair per node, matching
-     the kernel prologue order), and return [index_to_pool] for binding [__pool<i>]. Raises if the
-     routine touches more than [metal_max_pools] distinct pools. The returned [CArray] is kept alive
-     by the caller so its backing store outlives the buffer copy. *)
+     use order), build the [(pool_index, byte_offset)] slot table (one [uint] pair per node,
+     matching the kernel prologue order), and return [index_to_pool] for binding [__pool<i>]. Raises
+     if the routine touches more than [metal_max_pools] distinct pools. The returned [CArray] is
+     kept alive by the caller so its backing store outlives the buffer copy. *)
   let build_pool_binding (dev : device) (ctx_buffers : ctx_buffers) (tns : Tn.t list) =
     let tbl = Hashtbl.create (module Int) and index_to_pool = ref [] and next = ref 0 in
     let idx_of pool_id =
@@ -781,7 +794,8 @@ using namespace metal;|} in
               !next metal_max_pools);
     (* The slot-table element width must match the MSL type [C_syntax.pool_slot_msl_typ] declared in
        the shader: 64-bit under [large_models] (offsets may exceed UINT32_MAX once the 4 GB per-pool
-       cap is lifted), else 32-bit. [keep] holds the backing [CArray] so it outlives the buffer copy. *)
+       cap is lifted), else 32-bit. [keep] holds the backing [CArray] so it outlives the buffer
+       copy. *)
     let slots_buf, keep =
       let make (type a) (elem : a Ctypes.typ) (of_int : int -> a) =
         let vals = List.concat_map pairs ~f:(fun (p, o) -> [ of_int p; of_int o ]) in
@@ -800,8 +814,8 @@ using namespace metal;|} in
     (Array.of_list (List.rev !index_to_pool), slots_buf, keep)
 
   let%debug4_sexp link_proc ~prior_context ~library ~func_name
-      ~(kparams : (string * kparam_source) list) ~lowered_bindings
-      ~(ctx_buffers : ctx_buffers) : Task.t =
+      ~(kparams : (string * kparam_source) list) ~lowered_bindings ~(ctx_buffers : ctx_buffers) :
+      Task.t =
     let dev = prior_context.device in
     let metal_device = dev.dev in
     let queue = dev.runner.queue in
@@ -809,7 +823,8 @@ using namespace metal;|} in
     let func = Me.Library.new_function_with_name library func_name in
     let pso, _ = Me.ComputePipelineState.on_device_with_function metal_device func in
     (* Precompute the pool-index assignment + slot table once (addresses/offsets are stable after
-       allocation). [Some (index_to_pool, slots_buf, arr)] iff this routine uses the pooled params. *)
+       allocation). [Some (index_to_pool, slots_buf, arr)] iff this routine uses the pooled
+       params. *)
     let pool_binding =
       List.find_map kparams ~f:(function _, Kparam_pool_slots tns -> Some tns | _ -> None)
       |> Option.map ~f:(build_pool_binding dev ctx_buffers)
@@ -843,10 +858,10 @@ using namespace metal;|} in
                   [%string
                     "Kparam_ptr %{Tn.debug_name tn} not found in ctx_buffers for %{func_name}"]
             | Kparam_pool_slab i ->
-                (* Bind pool param [i] to the slab assigned index [i]; the unused tail (i >= number of
-                   distinct pools) duplicates pool 0 so the shader's local pool array is fully bound
-                   without extra bindings. Pools are bound at offset 0 -- the per-node byte offset is
-                   applied in-shader via the slot table. *)
+                (* Bind pool param [i] to the slab assigned index [i]; the unused tail (i >= number
+                   of distinct pools) duplicates pool 0 so the shader's local pool array is fully
+                   bound without extra bindings. Pools are bound at offset 0 -- the per-node byte
+                   offset is applied in-shader via the slot table. *)
                 let index_to_pool, _, _ = Option.value_exn ~here:[%here] pool_binding in
                 let pool_id =
                   if i < Array.length index_to_pool then index_to_pool.(i) else index_to_pool.(0)

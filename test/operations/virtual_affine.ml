@@ -7,14 +7,12 @@
    backends use). We assert structurally on the optimized form (which producers virtualize, that no
    intermediate array read/setter survives, and which stay materialized).
 
-   Cases:
-   - structural affine match: producer [2*oh+wh] consumed at the same affine structure inlines with
-     no intermediate buffer;
-   - unit-coefficient solving at a plain iterator: producer [2*oh+wh] consumed at [t] inlines (the
-     residual [oh] loop is kept and range-guarded);
-   - triangular [(s1, s1+s2)]: unit-coefficient solving after pinning s1;
-   - non-injective [i+j] (both ranges > 1) stays non-virtual, preserving a producer array read;
-   - Stage A diagonal [i;i] still virtualizes (no regression).
+   Cases: - structural affine match: producer [2*oh+wh] consumed at the same affine structure
+   inlines with no intermediate buffer; - unit-coefficient solving at a plain iterator: producer
+   [2*oh+wh] consumed at [t] inlines (the residual [oh] loop is kept and range-guarded); -
+   triangular [(s1, s1+s2)]: unit-coefficient solving after pinning s1; - non-injective [i+j] (both
+   ranges > 1) stays non-virtual, preserving a producer array read; - Stage A diagonal [i;i] still
+   virtualizes (no regression).
 
    End-to-end numeric correctness of the injective-scatter lowering payoff and affine inlining is
    covered by the high-level [test/einsum/test_max_pool2d.ml] suite. *)
@@ -30,8 +28,10 @@ let next_id = ref 2000
 
 let mk ?(dims = [| 6 |]) label =
   Int.incr next_id;
-  Tn.create (Tn.Specified single) ~id:!next_id ~label:[ label ] ~unpadded_dims:(lazy dims)
-    ~padding:(lazy None) ()
+  Tn.create (Tn.Specified single) ~id:!next_id ~label:[ label ]
+    ~unpadded_dims:(lazy dims)
+    ~padding:(lazy None)
+    ()
 
 let materialize tn = Tn.update_memory_mode tn Tn.Materialized 99
 
@@ -45,7 +45,9 @@ let c x : LL.scalar_t = LL.Constant x
 let zero tn : LL.t = LL.Zero_out tn
 
 (* [from_ = 0, to_ = n - 1] gives a loop of width [n]. *)
-let loop_r s n body : LL.t = LL.For_loop { index = s; from_ = 0; to_ = n - 1; body; trace_it = true }
+let loop_r s n body : LL.t =
+  LL.For_loop { index = s; from_ = 0; to_ = n - 1; body; trace_it = true }
+
 let seq a b : LL.t = LL.Seq (a, b)
 
 let optimize llc : LL.optimized =
@@ -71,7 +73,8 @@ let rec walk_t ~on_set ~on_get (llc : LL.t) =
 
 and walk_s ~on_set ~on_get (s : LL.scalar_t) =
   match s with
-  | LL.Constant _ | LL.Constant_bits _ | LL.Get_local _ | LL.Embed_index _ | LL.Get_merge_buffer _ ->
+  | LL.Constant _ | LL.Constant_bits _ | LL.Get_local _ | LL.Embed_index _ | LL.Get_merge_buffer _
+    ->
       ()
   | LL.Get (tn, _) -> on_get tn
   | LL.Get_dynamic { tn; dyn_value = v, _; _ } ->
@@ -164,8 +167,8 @@ let case_unit_solve_plain () =
   p "unit-solve(plain) producer inlined (no array reads survive)" (count_get o tgt = 0);
   p "unit-solve(plain) producer setter dropped" (count_set o tgt = 0);
   p "unit-solve(plain) consumer setter kept" (count_set o out = 1);
-  (* Solving [wh = t - 2*oh] keeps the [oh] loop and range-guards [0 <= t-2*oh < 2]: a [Where] over an
-     [And] of two [Cmplt] bounds. *)
+  (* Solving [wh = t - 2*oh] keeps the [oh] loop and range-guards [0 <= t-2*oh < 2]: a [Where] over
+     an [And] of two [Cmplt] bounds. *)
   let wh, lt = count_guard_ops o in
   p "unit-solve(plain) emits a range guard (Where + 2 Cmplt)" (wh >= 1 && lt >= 2)
 
@@ -176,7 +179,8 @@ let case_triangular () =
   let s1 = sym () and s2 = sym () and a = sym () and b = sym () in
   (* Triangular map is injective but not surjective, so it carries a zero-init. *)
   let prod =
-    seq (zero tgt) (loop_r s1 3 (loop_r s2 2 (set tgt [| iter s1; aff [ (1, s1); (1, s2) ] 0 |] (c 9.))))
+    seq (zero tgt)
+      (loop_r s1 3 (loop_r s2 2 (set tgt [| iter s1; aff [ (1, s1); (1, s2) ] 0 |] (c 9.))))
   in
   let cons =
     loop_r a 3 (loop_r b 4 (set out [| iter a; iter b |] (get tgt [| iter a; iter b |])))
@@ -196,7 +200,8 @@ let case_noninjective () =
   let i = sym () and j = sym () and a = sym () and b = sym () in
   let prod = loop_r i 3 (loop_r j 3 (set tgt [| aff [ (1, i); (1, j) ] 0 |] (c 1.))) in
   let cons =
-    loop_r a 3 (loop_r b 3 (set out [| aff [ (1, a); (1, b) ] 0 |] (get tgt [| aff [ (1, a); (1, b) ] 0 |])))
+    loop_r a 3
+      (loop_r b 3 (set out [| aff [ (1, a); (1, b) ] 0 |] (get tgt [| aff [ (1, a); (1, b) ] 0 |])))
   in
   let o = optimize (seq prod cons) in
   (* i+j with both ranges > 1 is not injective: the dropped producer loops fold over a fiber, so the
@@ -210,9 +215,7 @@ let case_stage_a_diagonal () =
   materialize out;
   let i = sym () and a = sym () and b = sym () in
   let prod = seq (zero d) (loop_r i 3 (set d [| iter i; iter i |] (c 4.))) in
-  let cons =
-    loop_r a 3 (loop_r b 3 (set out [| iter a; iter b |] (get d [| iter a; iter b |])))
-  in
+  let cons = loop_r a 3 (loop_r b 3 (set out [| iter a; iter b |] (get d [| iter a; iter b |]))) in
   let o = optimize (seq prod cons) in
   p "stage-a diagonal producer virtual" (Tn.known_virtual d);
   p "stage-a diagonal inlined (no array reads survive)" (count_get o d = 0)

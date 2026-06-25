@@ -274,9 +274,9 @@ let is_complex_comp traced_store llsc =
 let is_scalar_dims tn = Array.for_all ~f:(( = ) 1) @@ Lazy.force tn.Tn.dims
 
 (* Records [tn] as a candidate owner of each loop symbol appearing in its assignment indices.
-   Multiple tensors may share a symbol (e.g. Block/concat lowering): all are recorded, in
-   first-seen (trace) order and deduplicated, so that [virtual_llc] can store one computation per
-   candidate. See #134. *)
+   Multiple tensors may share a symbol (e.g. Block/concat lowering): all are recorded, in first-seen
+   (trace) order and deduplicated, so that [virtual_llc] can store one computation per candidate.
+   See #134. *)
 let track_symbol reverse_node_map tn idcs =
   let add s =
     let existing = Hashtbl.find reverse_node_map s |> Option.value ~default:[] in
@@ -335,9 +335,7 @@ let count_plain_iterator (s : Indexing.symbol) (idcs : Indexing.axis_index array
   Array.iteri idcs ~f:(fun i idx ->
       if axis_index_mentions_symbol s idx then (
         Int.incr count;
-        match idx with
-        | Indexing.Iterator _ -> axis := Some i
-        | _ -> only_plain := false));
+        match idx with Indexing.Iterator _ -> axis := Some i | _ -> only_plain := false));
   (!count, !axis, !only_plain)
 
 (* task-73617488: true when [expr] is an embedded loop iterator [k] in either plain or unit-affine
@@ -349,14 +347,13 @@ let is_embedded_range_iterator (k : Indexing.symbol) (expr : scalar_t) : bool =
       Indexing.equal_symbol k k'
   | _ -> false
 
-(* task-73617488: true when a [Set] assignment is a one-hot selector producer.
-   Recognises two forms:
-   - Direct: the [llsc] is [Cmpeq(Embed_index (Iterator k), expr_free_of_k)] (or unit-affine).
-   - Indirect: one side is [Get(range_tn, [|Iterator k|])] where [range_tn.is_range_producer] is
-     true, meaning it was set from a bare [Embed_index] (the [Range_over_offsets] lowering).
-     [virtual_llc] will inline such a tensor to [Embed_index k] so the gather rewrite fires.
-   [traced_store] is consulted to classify the indirect case.  [Set_from_vec] is never a one-hot
-   selector (the caller sets [has_non_one_hot_setter] instead). *)
+(* task-73617488: true when a [Set] assignment is a one-hot selector producer. Recognises two forms:
+   - Direct: the [llsc] is [Cmpeq(Embed_index (Iterator k), expr_free_of_k)] (or unit-affine). -
+   Indirect: one side is [Get(range_tn, [|Iterator k|])] where [range_tn.is_range_producer] is true,
+   meaning it was set from a bare [Embed_index] (the [Range_over_offsets] lowering). [virtual_llc]
+   will inline such a tensor to [Embed_index k] so the gather rewrite fires. [traced_store] is
+   consulted to classify the indirect case. [Set_from_vec] is never a one-hot selector (the caller
+   sets [has_non_one_hot_setter] instead). *)
 let is_one_hot_selector_assignment traced_store ~(idcs : Indexing.axis_index array)
     (llsc : scalar_t) : bool =
   let is_range_side k expr =
@@ -367,7 +364,7 @@ let is_one_hot_selector_assignment traced_store ~(idcs : Indexing.axis_index arr
         match inner_idcs.(0) with
         | Indexing.Iterator k' when Indexing.equal_symbol k k' ->
             (* Only accept a tensor that was itself assigned from Embed_index (a real range
-               producer).  Read-only inputs and arbitrary computed tensors are NOT range producers
+               producer). Read-only inputs and arbitrary computed tensors are NOT range producers
                even if they happen to be non-complex and non-accessing. *)
             let rt = get_node traced_store rtn in
             rt.is_range_producer
@@ -437,13 +434,15 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
           traced.is_accessing <- traced.is_accessing || is_accessing_comp traced_store llsc;
           traced.is_complex <- traced.is_complex || is_complex_comp traced_store llsc);
         Hash_set.add traced.assignments (lookup env idcs);
-        (* task-73617488: track range producers (assigned purely from Embed_index) so the
-           indirect arm of is_one_hot_selector_assignment can identify them precisely. *)
-        (match llsc with Embed_index _ -> traced.is_range_producer <- true | _ -> ());
+        (* task-73617488: track range producers (assigned purely from Embed_index) so the indirect
+           arm of is_one_hot_selector_assignment can identify them precisely. *)
+        (match llsc with
+        | Embed_index _ -> traced.is_range_producer <- true
+        | _ -> ());
         (* task-73617488: track whether all setters are one-hot selector assignments so the
            virtualizer can exempt this tensor from the visit-count Never_virtual rule. *)
-        if is_one_hot_selector_assignment traced_store ~idcs llsc
-        then traced.prefers_virtual_one_hot <- true
+        if is_one_hot_selector_assignment traced_store ~idcs llsc then
+          traced.prefers_virtual_one_hot <- true
         else traced.has_non_one_hot_setter <- true;
         (* Track which tensors use which loop symbol. Multiple tensors may legitimately share a
            symbol (e.g. Block/concat lowering); all of them are recorded as candidate owners in
@@ -546,8 +545,8 @@ let visit_llc traced_store ~merge_node_id reverse_node_map ~max_visits llc =
       if
         (not skip_simple) && Option.is_none tn.memory_mode
         && Hashtbl.exists traced.accesses ~f:is_too_many
-        (* task-73617488: one-hot selector producers are exempt from the visit-count cap.
-           The ordinary [virtual_llc]/[cleanup_virtual_llc] path will inline them so that
+        (* task-73617488: one-hot selector producers are exempt from the visit-count cap. The
+           ordinary [virtual_llc]/[cleanup_virtual_llc] path will inline them so that
            [rewrite_one_hot_reductions] can fire at default [max_visits = 1]. *)
         && not (traced.prefers_virtual_one_hot && not traced.has_non_one_hot_setter)
       then Tn.update_memory_mode tn Never_virtual 1;
@@ -587,13 +586,13 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
         if not @@ [%equal: Indexing.axis_index array] at indices then raise @@ Non_virtual 4);
     (* gh-133 Stage A: repeated non-static symbols (diagonal [i;i] / partially-diagonal [i;j;i]) and
        covered single-symbol affine positions are supported. gh-133 Stage B: multi-symbol affine
-       positions ([stride*oh+kh], [K*i+k], triangular [(s1, s1+s2)]) are also supported, but only when
-       the whole LHS index map is proven injective over the producer loop widths -- otherwise dropping
-       the producer loops in [inline_computation] would lose fold contributions. [Concat]
+       positions ([stride*oh+kh], [K*i+k], triangular [(s1, s1+s2)]) are also supported, but only
+       when the whole LHS index map is proven injective over the producer loop widths -- otherwise
+       dropping the producer loops in [inline_computation] would lose fold contributions. [Concat]
        ([Non_virtual 52]) remains rejected. *)
     let symbol_range s = Map.find loop_ranges s |> Option.value ~default:1 in
-    (* Non-static symbols per position; a position with more than one non-static affine symbol is only
-       admissible when the whole vector is injective. *)
+    (* Non-static symbols per position; a position with more than one non-static affine symbol is
+       only admissible when the whole vector is injective. *)
     let has_multi_affine = ref false in
     let syms =
       Array.fold indices
@@ -615,27 +614,29 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
     let injective = lazy (Indexing.affine_injective ~symbol_range indices) in
     (* A multi-symbol affine position is sound to drop only if the LHS map is injective. *)
     if !has_multi_affine && not (Lazy.force injective) then raise @@ Non_virtual 51;
-    (* Non-static symbols appearing in a bare [Iterator] position. [inline_computation]'s pass 1 binds
-       only such positions from the call args; pass 2 grounds any affine occurrence via [subst]. *)
+    (* Non-static symbols appearing in a bare [Iterator] position. [inline_computation]'s pass 1
+       binds only such positions from the call args; pass 2 grounds any affine occurrence via
+       [subst]. *)
     let iter_syms =
       Set.of_array (module Indexing.Symbol)
       @@ Array.filter_map indices ~f:(function
-           | Indexing.Iterator s when not @@ Set.mem static_indices s -> Some s
-           | _ -> None)
+        | Indexing.Iterator s when not @@ Set.mem static_indices s -> Some s
+        | _ -> None)
     in
     (* Coverage check (replaces the old uniqueness check): every non-static symbol used must be
-       groundable by [inline_computation]. A symbol that appears in a bare [Iterator] position is bound
-       from the call args; otherwise (a symbol that occurs only inside affine positions, Stage B) the
-       whole map must be affine-injective so its symbols are pinned/solvable. Repeated [Iterator]
-       positions are allowed and produce equality guards. [inline_computation] re-validates per call
-       site, so over-accepting here only risks a later [Non_virtual 13] fall back to materialization. *)
+       groundable by [inline_computation]. A symbol that appears in a bare [Iterator] position is
+       bound from the call args; otherwise (a symbol that occurs only inside affine positions, Stage
+       B) the whole map must be affine-injective so its symbols are pinned/solvable. Repeated
+       [Iterator] positions are allowed and produce equality guards. [inline_computation]
+       re-validates per call site, so over-accepting here only risks a later [Non_virtual 13] fall
+       back to materialization. *)
     if (not (Lazy.force injective)) && not (Set.is_subset syms ~of_:iter_syms) then
       raise @@ Non_virtual 5
   in
   (* A sibling tensor's access is fine as long as its indices are bound within the candidate's
-     computation; only an escaping (unbound) non-static symbol disqualifies (see #134). gh-133 Stage B:
-     inspect symbols hidden inside [Affine]/[Concat] too, not just bare [Iterator], so the relaxed
-     affine path cannot admit an escaping symbol concealed in an affine index. *)
+     computation; only an escaping (unbound) non-static symbol disqualifies (see #134). gh-133 Stage
+     B: inspect symbols hidden inside [Affine]/[Concat] too, not just bare [Iterator], so the
+     relaxed affine path cannot admit an escaping symbol concealed in an affine index. *)
   let check_sibling_escaping ~env_dom ~code idcs =
     Array.iter idcs ~f:(fun idx ->
         let syms =
@@ -663,8 +664,7 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
         loop c2
     | For_loop { trace_it = false; _ } -> raise @@ Non_virtual 6
     | For_loop { index; body; from_; to_; trace_it = true } ->
-        loop_proc
-          ~env_dom:(Set.add env_dom index)
+        loop_proc ~env_dom:(Set.add env_dom index)
           ~loop_ranges:(Map.set loop_ranges ~key:index ~data:(to_ - from_ + 1))
           body
     | Zero_out tn -> if Tn.equal tn top_tn then has_setter := true
@@ -684,8 +684,8 @@ let%diagn2_sexp check_and_store_virtual computations_table traced static_indices
     (* #296: defensive/unreachable on the fresh-lowering path. [Declare_local] is produced only by
        [hoist_cross_statement_cse], which runs last in [optimize_proc]; [check_and_store_virtual]
        captures computations during [virtual_llc] (before hoisting), so a stored computation never
-       contains one. The arm guards the not-currently-exercised case of a hoisted program re-entering
-       virtualization. *)
+       contains one. The arm guards the not-currently-exercised case of a hoisted program
+       re-entering virtualization. *)
     | Declare_local _ -> raise @@ Non_virtual 19
     | Comment _ -> ()
     | Staged_compilation _ -> raise @@ Non_virtual 8
@@ -780,15 +780,16 @@ let%track7_sexp inline_computation ~id
   in
   (* For Block/Concat virtual nodes with multiple Set computations (each writing a distinct slice),
      a single init local is shared across all component computations so that each guarded update
-     sees the preceding component's value via [Get_local id] rather than a per-component reset to
-     0. [None] entries are [Zero_out] computations and are excluded from the count. *)
+     sees the preceding component's value via [Get_local id] rather than a per-component reset to 0.
+     [None] entries are [Zero_out] computations and are excluded from the count. *)
   let set_computation_count =
     List.count computations ~f:(fun (def_args, _) -> Option.is_some def_args)
   in
   let global_needs_init = ref false in
   (* In the order of computation. *)
   let loop_proc ((def_args : Indexing.axis_index array option), (def : t)) : t option =
-    (* One substitution step: replace env-bound symbols, folding nested affine/fixed contributions. *)
+    (* One substitution step: replace env-bound symbols, folding nested affine/fixed
+       contributions. *)
     let subst_step env (idx : Indexing.axis_index) : Indexing.axis_index =
       match idx with
       | Indexing.Iterator s when Map.mem env s -> Map.find_exn env s
@@ -849,9 +850,10 @@ let%track7_sexp inline_computation ~id
       scan (Map.empty (module Indexing.Symbol)) def
     in
     let symbol_range s = Map.find def_loop_ranges s |> Option.value ~default:1 in
-    (* gh-133 Stage A/B: build the substitution environment and guards in several passes, so a producer
-       index vector that repeats a non-static symbol (diagonal [i;i] / partially-diagonal [i;j;i]) does
-       not crash on duplicate keys, and so multi-symbol affine positions (Stage B) can be solved. *)
+    (* gh-133 Stage A/B: build the substitution environment and guards in several passes, so a
+       producer index vector that repeats a non-static symbol (diagonal [i;i] / partially-diagonal
+       [i;j;i]) does not crash on duplicate keys, and so multi-symbol affine positions (Stage B) can
+       be solved. *)
     let def_args_arr = Option.value def_args ~default:[||] in
     let n = Array.length def_args_arr in
     if n > Array.length call_args then
@@ -860,14 +862,15 @@ let%track7_sexp inline_computation ~id
           "inline_computation: call_args too short, maybe stale optimization context? Tnode: \
            %{Tn.debug_name traced.tn} #%{traced.tn.Tn.id#Int} n: %{n#Int}"];
     (* [bound_pos.(i)] marks positions that DEFINE bindings (no consistency guard for them).
-       [range_guards] collects [(solved_symbol, range)] pairs whose value must fall in [0, range). *)
+       [range_guards] collects [(solved_symbol, range)] pairs whose value must fall in [0,
+       range). *)
     let bound_pos = Array.create ~len:n false in
     let env = ref (Map.empty (module Indexing.Symbol)) in
     let range_guards = ref [] in
-    (* Pass 1: bind the first bare non-static [Iterator] occurrence of each symbol. For
-       Block/Concat virtual nodes with multiple Set computations, also emit a range guard: the
-       producer's loop covers [0, range) while the consumer iterates a wider range, so
-       out-of-range consumer iterations must fall back to [Get_local id]. *)
+    (* Pass 1: bind the first bare non-static [Iterator] occurrence of each symbol. For Block/Concat
+       virtual nodes with multiple Set computations, also emit a range guard: the producer's loop
+       covers [0, range) while the consumer iterates a wider range, so out-of-range consumer
+       iterations must fall back to [Get_local id]. *)
     Array.iteri def_args_arr ~f:(fun i lhs_ind ->
         match lhs_ind with
         | Indexing.Iterator s when (not (Set.mem static_indices s)) && not (Map.mem !env s) ->
@@ -877,14 +880,15 @@ let%track7_sexp inline_computation ~id
               range_guards :=
                 (1, Indexing.Fixed_idx 0, call_args.(i), symbol_range s) :: !range_guards
         | _ -> ());
-    (* gh-133 Stage B: structural affine match -- producer [Σ cₖ·sₖ + off] read at a call-site affine
-       with the same canonical (distinct) coefficient list and equal offset binds producer symbols
-       pairwise to the call-site symbols, no inversion and no guard. *)
+    (* gh-133 Stage B: structural affine match -- producer [Σ cₖ·sₖ + off] read at a call-site
+       affine with the same canonical (distinct) coefficient list and equal offset binds producer
+       symbols pairwise to the call-site symbols, no inversion and no guard. *)
     let try_structural_match i lhs_ind =
       if bound_pos.(i) then false
       else
         match (lhs_ind, canon call_args.(i)) with
-        | Indexing.Affine { symbols = psyms; offset = poff }, Some (cterms, coff) when poff = coff ->
+        | Indexing.Affine { symbols = psyms; offset = poff }, Some (cterms, coff) when poff = coff
+          ->
             let pterms = Indexing.coalesce_affine_terms psyms in
             let pcoeffs = List.map pterms ~f:fst in
             let ccoeffs = List.map cterms ~f:fst in
@@ -907,10 +911,11 @@ let%track7_sexp inline_computation ~id
             else false
         | _ -> false
     in
-    (* gh-133 Stage B: unit-coefficient solving -- after substituting already-bound symbols, if exactly
-       one unbound producer symbol has coefficient ±1, bind it to the residual affine expression and
-       emit a range guard. Other unbound symbols stay free; their producer loops are kept (and
-       range-guarded indirectly via injectivity), guaranteeing exactly one matching iteration. *)
+    (* gh-133 Stage B: unit-coefficient solving -- after substituting already-bound symbols, if
+       exactly one unbound producer symbol has coefficient ±1, bind it to the residual affine
+       expression and emit a range guard. Other unbound symbols stay free; their producer loops are
+       kept (and range-guarded indirectly via injectivity), guaranteeing exactly one matching
+       iteration. *)
     let try_unit_solve i lhs_ind =
       if bound_pos.(i) then false
       else
@@ -931,16 +936,15 @@ let%track7_sexp inline_computation ~id
                     let value_terms =
                       List.map rterms ~f:(fun (rc, rs) -> (uc * rc, rs))
                       @ List.filter_map terms ~f:(fun (c, s) ->
-                            if Indexing.equal_symbol s us then None else Some (-uc * c, s))
+                          if Indexing.equal_symbol s us then None else Some (-uc * c, s))
                     in
                     let value =
-                      Indexing.Affine
-                        { symbols = value_terms; offset = uc * (roff - offset) }
+                      Indexing.Affine { symbols = value_terms; offset = uc * (roff - offset) }
                     in
                     env := Map.set !env ~key:us ~data:value;
-                    (* Range guard [0 <= us < range], reformulated with NON-NEGATIVE operands so it is
-                       correct under unsigned index precision (a negative [rhs - rest] would underflow):
-                       [rest := Σ_{s≠us} c·s + offset], [rhs := call index]. uc=+1 needs
+                    (* Range guard [0 <= us < range], reformulated with NON-NEGATIVE operands so it
+                       is correct under unsigned index precision (a negative [rhs - rest] would
+                       underflow): [rest := Σ_{s≠us} c·s + offset], [rhs := call index]. uc=+1 needs
                        [rest <= rhs < rest+range]; uc=-1 needs [rhs <= rest < rhs+range]. *)
                     let rest_axis =
                       Indexing.Affine
@@ -950,8 +954,7 @@ let%track7_sexp inline_computation ~id
                           offset;
                         }
                     in
-                    range_guards :=
-                      (uc, rest_axis, call_args.(i), symbol_range us) :: !range_guards;
+                    range_guards := (uc, rest_axis, call_args.(i), symbol_range us) :: !range_guards;
                     bound_pos.(i) <- true;
                     true)
             | _ -> false)
@@ -963,14 +966,14 @@ let%track7_sexp inline_computation ~id
     while !progress do
       progress := false;
       Array.iteri def_args_arr ~f:(fun i lhs_ind ->
-          if (not bound_pos.(i)) && (try_structural_match i lhs_ind || try_unit_solve i lhs_ind) then
-            progress := true)
+          if (not bound_pos.(i)) && (try_structural_match i lhs_ind || try_unit_solve i lhs_ind)
+          then progress := true)
     done;
     let env = !env in
     (* Remaining non-binding positions become consistency guards: [subst(producer_pos) = call_site].
-       [Fixed_idx]/[Sub_axis] carry no symbol, so a static mismatch there is a genuine sparse-producer
-       mismatch and stays materialized via [Non_virtual 13]. Guards are materialized at the [Set] node
-       with the live (freshened) env. *)
+       [Fixed_idx]/[Sub_axis] carry no symbol, so a static mismatch there is a genuine
+       sparse-producer mismatch and stays materialized via [Non_virtual 13]. Guards are materialized
+       at the [Set] node with the live (freshened) env. *)
     let depends_on_symbol (idx : Indexing.axis_index) =
       match idx with
       | Indexing.Iterator s -> not (Set.mem static_indices s)
@@ -991,8 +994,8 @@ let%track7_sexp inline_computation ~id
     in
     let guards = List.rev guards in
     let range_guards = List.rev !range_guards in
-    (* Set when a guard is introduced but the producer emitted no [Zero_out]: an explicit init local is
-       then prepended before the (possibly loop-nested) guarded updates. *)
+    (* Set when a guard is introduced but the producer emitted no [Zero_out]: an explicit init local
+       is then prepended before the (possibly loop-nested) guarded updates. *)
     let needs_init = ref false in
     let rec loop env llc : t option =
       match llc with
@@ -1014,11 +1017,11 @@ let%track7_sexp inline_computation ~id
           let inlined = loop_scalar env llsc in
           let value_prec = Lazy.force traced.tn.Tn.prec in
           let index_prec = Ops.index_prec () in
-          (* gh-133 Stage A: consistency (equality) guards for repeated / covered single-symbol affine
-             positions -- the substituted producer index must equal the call-site index. Indices are
-             resolved with the live (freshened) env so kept-loop symbols match the loop body. Index
-             comparison uses index precision (Cmpeq is homogeneous); the [Where] keeps value precision
-             on its then/else arms. *)
+          (* gh-133 Stage A: consistency (equality) guards for repeated / covered single-symbol
+             affine positions -- the substituted producer index must equal the call-site index.
+             Indices are resolved with the live (freshened) env so kept-loop symbols match the loop
+             body. Index comparison uses index precision (Cmpeq is homogeneous); the [Where] keeps
+             value precision on its then/else arms. *)
           let eq_conds =
             List.map guards ~f:(fun (lhs_ind, rhs_ind) ->
                 Binop
@@ -1026,17 +1029,18 @@ let%track7_sexp inline_computation ~id
                     (Embed_index (subst env lhs_ind), index_prec),
                     (Embed_index rhs_ind, index_prec) ))
           in
-          (* gh-133 Stage B: range guards -- a unit-solved symbol's value must fall within its producer
-             loop range [0, range). Index precision is UNSIGNED, so the guard must never form a negative
-             intermediate: we compare [rest] and [rhs] (both non-negative) rather than [rhs - rest].
-             uc=+1: [rest <= rhs] & [rhs < rest+range]; uc=-1: [rhs <= rest] & [rest < rhs+range].
-             [a <= b] is encoded as [a < b+1]. *)
+          (* gh-133 Stage B: range guards -- a unit-solved symbol's value must fall within its
+             producer loop range [0, range). Index precision is UNSIGNED, so the guard must never
+             form a negative intermediate: we compare [rest] and [rhs] (both non-negative) rather
+             than [rhs - rest]. uc=+1: [rest <= rhs] & [rhs < rest+range]; uc=-1: [rhs <= rest] &
+             [rest < rhs+range]. [a <= b] is encoded as [a < b+1]. *)
           let add_offset (idx : Indexing.axis_index) d : Indexing.axis_index =
             if d = 0 then idx
             else
               match idx with
               | Indexing.Iterator s -> Indexing.Affine { symbols = [ (1, s) ]; offset = d }
-              | Indexing.Affine { symbols; offset } -> Indexing.Affine { symbols; offset = offset + d }
+              | Indexing.Affine { symbols; offset } ->
+                  Indexing.Affine { symbols; offset = offset + d }
               | Indexing.Fixed_idx i -> Indexing.Fixed_idx (i + d)
               | Indexing.Sub_axis | Indexing.Concat _ -> idx
           in
@@ -1053,11 +1057,12 @@ let%track7_sexp inline_computation ~id
                 Binop (Ops.And, (lower, index_prec), (upper, index_prec)))
           in
           let conds = eq_conds @ range_conds in
-          (* Off-condition reads fall back to [Get_local id] -- the init local emitted by the producer's
-             [Zero_out] ([has_zero_init]) or, when absent (an injective+surjective scatter that skipped
-             neutral init -- Stage B), the explicit init prepended below. The no-[Zero_out] case implies
-             the map is surjective, so every read cell IS written by exactly one iteration (injectivity)
-             and the init value is always overwritten -- 0. is a safe neutral. *)
+          (* Off-condition reads fall back to [Get_local id] -- the init local emitted by the
+             producer's [Zero_out] ([has_zero_init]) or, when absent (an injective+surjective
+             scatter that skipped neutral init -- Stage B), the explicit init prepended below. The
+             no-[Zero_out] case implies the map is surjective, so every read cell IS written by
+             exactly one iteration (injectivity) and the init value is always overwritten -- 0. is a
+             safe neutral. *)
           if (not (List.is_empty conds)) && not has_zero_init then needs_init := true;
           (* task-9658aac9: the then-arm [acc] structurally contains the producer read at the
              unit-solved index, so for a non-matching kept-loop iteration that index (hence the flat
@@ -1095,7 +1100,12 @@ let%track7_sexp inline_computation ~id
       | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, prec } ->
           (* gh-343: defensive -- [Get_dynamic] is produced after virtualization. *)
           Get_dynamic
-            { tn; idcs = Array.map ~f:(subst env) idcs; dyn_axis; dyn_value = (loop_scalar env v, prec) }
+            {
+              tn;
+              idcs = Array.map ~f:(subst env) idcs;
+              dyn_axis;
+              dyn_value = (loop_scalar env v, prec);
+            }
       | Local_scope { id; body; orig_indices } ->
           Local_scope
             {
@@ -1126,13 +1136,12 @@ let%track7_sexp inline_computation ~id
     let body = List.rev_filter_map ~f:loop_proc computations in
     if List.is_empty body then raise @@ Non_virtual 14
     else
-      (* Prepend a single init local when any component computation has guards but the producer
-         has no [Zero_out] to supply the initial value. For multi-computation nodes (Block/Concat)
-         this emits exactly one reset rather than one per component, so each component's guarded
-         update sees the preceding component's value via [Get_local id] rather than 0. *)
+      (* Prepend a single init local when any component computation has guards but the producer has
+         no [Zero_out] to supply the initial value. For multi-computation nodes (Block/Concat) this
+         emits exactly one reset rather than one per component, so each component's guarded update
+         sees the preceding component's value via [Get_local id] rather than 0. *)
       let body =
-        if !global_needs_init && not has_zero_init then
-          Set_local (id, Constant 0.0) :: body
+        if !global_needs_init && not has_zero_init then Set_local (id, Constant 0.0) :: body
         else body
       in
       Some (unflat_lines body)
@@ -1169,9 +1178,10 @@ let virtual_llc computations_table traced_store reverse_node_map static_indices 
         let c1 = loop c1 in
         let c2 = loop c2 in
         Seq (c1, c2)
-    | For_loop ({ index; body; _ } as for_config) ->
+    | For_loop ({ index; body; _ } as for_config) -> (
         if in_storage_pass then
-          For_loop { for_config with body = loop_proc ~process_for ~owned ~in_storage_pass:true body }
+          For_loop
+            { for_config with body = loop_proc ~process_for ~owned ~in_storage_pass:true body }
         else
           let tns = Hashtbl.find reverse_node_map index |> Option.value ~default:[] in
           let candidates =
@@ -1182,28 +1192,26 @@ let virtual_llc computations_table traced_store reverse_node_map static_indices 
                 && (not @@ Set.mem owned tn)
                 && (not @@ Tn.known_non_virtual tn))
           in
-          (match candidates with
+          match candidates with
           | [] ->
               For_loop
                 { for_config with body = loop_proc ~process_for ~owned ~in_storage_pass:false body }
           | _ ->
               let owned' = List.fold candidates ~init:owned ~f:Set.add in
-              (* Phase 1 -- store, sequentially in source order. For candidate [k], its stored loop is
-                 processed with [process_for] containing [k] AND every later (not-yet-stored)
-                 candidate. Keeping the not-yet-stored candidates in [process_for] leaves their [Get]s
-                 intact, so a sibling setter (e.g. an in-loop materialized consumer) that reads a
-                 later candidate does NOT trigger [inline_computation] before that candidate is stored
-                 (which would raise the stale optimize_ctx error). Earlier candidates are already
-                 stored and are left OUT, so [k]'s own setter can inline them (forward provider
-                 chains). [owned'] suppresses per-statement auto-store for every shared-loop candidate;
-                 [in_storage_pass] stops nested re-storage. [check_and_store]/[inline_computation]
-                 filter the stored body to [k]'s own setters, so the irrelevant sibling setters left
-                 un-rewritten here are dropped. *)
+              (* Phase 1 -- store, sequentially in source order. For candidate [k], its stored loop
+                 is processed with [process_for] containing [k] AND every later (not-yet-stored)
+                 candidate. Keeping the not-yet-stored candidates in [process_for] leaves their
+                 [Get]s intact, so a sibling setter (e.g. an in-loop materialized consumer) that
+                 reads a later candidate does NOT trigger [inline_computation] before that candidate
+                 is stored (which would raise the stale optimize_ctx error). Earlier candidates are
+                 already stored and are left OUT, so [k]'s own setter can inline them (forward
+                 provider chains). [owned'] suppresses per-statement auto-store for every
+                 shared-loop candidate; [in_storage_pass] stops nested re-storage.
+                 [check_and_store]/[inline_computation] filter the stored body to [k]'s own setters,
+                 so the irrelevant sibling setters left un-rewritten here are dropped. *)
               List.iteri candidates ~f:(fun k tn ->
                   let node : traced_array = get_node traced_store tn in
-                  let store_pf =
-                    List.fold (List.drop candidates k) ~init:process_for ~f:Set.add
-                  in
+                  let store_pf = List.fold (List.drop candidates k) ~init:process_for ~f:Set.add in
                   let stored =
                     For_loop
                       {
@@ -1219,7 +1227,10 @@ let virtual_llc computations_table traced_store reverse_node_map static_indices 
                  keeps its own self-references via the per-Set [next]. Candidate setters are emitted
                  intact and removed later by [cleanup_virtual_llc]. *)
               For_loop
-                { for_config with body = loop_proc ~process_for ~owned:owned' ~in_storage_pass:false body })
+                {
+                  for_config with
+                  body = loop_proc ~process_for ~owned:owned' ~in_storage_pass:false body;
+                })
     | Zero_out tn ->
         let traced : traced_array = get_node traced_store tn in
         if
@@ -1332,9 +1343,9 @@ let cleanup_virtual_llc ~static_indices (llc : t) : t =
         else Some llc
     | Set { tn; idcs; llsc; debug } ->
         if not @@ Tn.known_non_virtual tn then (
-          (* #296: same default-to-[Virtual] policy as the [Zero_out] arm above -- an undecided tnode
-             has no materialized reader left after inlining, so commit it [Virtual] and drop the
-             store. Provenance 152 = dropped from the [Set]/[Set_from_vec] cleanup arms. *)
+          (* #296: same default-to-[Virtual] policy as the [Zero_out] arm above -- an undecided
+             tnode has no materialized reader left after inlining, so commit it [Virtual] and drop
+             the store. Provenance 152 = dropped from the [Set]/[Set_from_vec] cleanup arms. *)
           Tn.update_memory_mode tn Virtual 152;
           None)
         else (
@@ -1377,10 +1388,10 @@ let cleanup_virtual_llc ~static_indices (llc : t) : t =
     | Get (a, indices) ->
         (* #296: keep [update_memory_mode] rather than [assert (Tn.known_non_virtual a)]. A [Get]
            surviving into cleaned code reads a materialized array, but its target's mode is not
-           guaranteed finalized before this point: cleanup is itself the phase that commits surviving
-           reads to [Never_virtual] (a node read here but only written under a virtualized setter is
-           decided right now), so this update is the commitment point, not a redundant re-assertion.
-           Mirrors the [Get_dynamic] arm just below. Provenance 17. *)
+           guaranteed finalized before this point: cleanup is itself the phase that commits
+           surviving reads to [Never_virtual] (a node read here but only written under a virtualized
+           setter is decided right now), so this update is the commitment point, not a redundant
+           re-assertion. Mirrors the [Get_dynamic] arm just below. Provenance 17. *)
         Tn.update_memory_mode a Never_virtual 17;
         assert (
           Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
@@ -1506,7 +1517,8 @@ let simplify_llc llc =
     | Get (tn, _indices) -> (llsc, Lazy.force tn.Tn.prec)
     | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, vprec } ->
         (* gh-343: defensive -- simplify runs before the one-hot rewrite, so this is unreachable in
-           practice; still simplify the dynamic index sub-expression and never fold to a constant. *)
+           practice; still simplify the dynamic index sub-expression and never fold to a
+           constant. *)
         let v', vprec' = loop_scalar (v, vprec) in
         (Get_dynamic { tn; idcs; dyn_axis; dyn_value = (v', vprec') }, Lazy.force tn.Tn.prec)
     | Local_scope { id; body = Set_local (id2, v); _ } when equal_scope_id id id2 ->
@@ -1625,8 +1637,7 @@ let simplify_llc llc =
         let v2 = loop_scalar llv2 in
         let result = (Binop (op, v1, v2), prec) in
         if equal_scalar_arg llv1 v1 && equal_scalar_arg llv2 v2 then result else loop_scalar result
-    | Ternop
-        (Where, (Binop (Cmpeq, (Embed_index a, _), (Embed_index b, _)), _), then_, _)
+    | Ternop (Where, (Binop (Cmpeq, (Embed_index a, _), (Embed_index b, _)), _), then_, _)
       when Indexing.equal_axis_index a b ->
         (* gh-133 Stage A: a repeated-symbol equality guard whose two embedded indices are
            syntactically identical is always taken; fold it to its then-branch. *)
@@ -1693,13 +1704,13 @@ let simplify_llc llc =
     maps. *)
 let cse_equal_scalar s1 s2 =
   (* The renaming maps must be partial bijections, not just functions: alpha-equivalence requires an
-     injective correspondence between bound variables. We therefore keep a reverse map alongside each
-     forward map and reject when a target is already claimed by a different source (Bug 1: a
+     injective correspondence between bound variables. We therefore keep a reverse map alongside
+     each forward map and reject when a target is already claimed by a different source (Bug 1: a
      forward-only map judged [t[i;j]] equal to [t[i;i]]). The maps are persistent for the whole
-     comparison (no scope push/pop on entering [For_loop] / [Local_scope] binders): [Indexing.get_symbol]
-     and [get_scope] are global counters, so symbols and scope ids are globally unique and no binder
-     shadows another within a single tree. If the IR ever starts reusing symbol/scope ids, this
-     assumption breaks and the maps would need scoping. *)
+     comparison (no scope push/pop on entering [For_loop] / [Local_scope] binders):
+     [Indexing.get_symbol] and [get_scope] are global counters, so symbols and scope ids are
+     globally unique and no binder shadows another within a single tree. If the IR ever starts
+     reusing symbol/scope ids, this assumption breaks and the maps would need scoping. *)
   let scope_renaming = Hashtbl.create (module Int) in
   let scope_renaming_rev = Hashtbl.create (module Int) in
   let sym_renaming = Hashtbl.create (module Indexing.Symbol) in
@@ -2004,8 +2015,8 @@ let reads_scope_before_set (target : scope_id) (body : t) : bool =
     | Set_from_vec { arg = s, _; _ } -> scalar_has_read s
     | Set_local (_, llsc) -> scalar_has_read llsc
   in
-  (* Three-valued scan: Read (found a get before first definite set),
-     Written (found a definite set before any get), Neither. *)
+  (* Three-valued scan: Read (found a get before first definite set), Written (found a definite set
+     before any get), Neither. *)
   let rec scan (llc : t) : [ `Read | `Written | `Neither ] =
     match llc with
     | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ -> `Neither
@@ -2145,12 +2156,10 @@ let input_and_output_nodes optimized =
     optimized.merge_node )
 
 (* gh-343: recognize the in-range guard's reduction body. Matches the two semantically-equivalent
-   one-hot selectors over loop variable [k]:
-   - [Where (Cmpeq (Embed_index (Iterator k), index_expr), table_get, Constant 0.)] (either operand
-     order of [Cmpeq]);
-   - the multiply form [Binop (Mul, <cmpeq 0/1>, table_get)] (either factor order).
-   On success returns [Some (table, table_idcs, index_expr)] where [index_expr] is the scalar value
-   used as the dynamic index. *)
+   one-hot selectors over loop variable [k]: - [Where (Cmpeq (Embed_index (Iterator k), index_expr),
+   table_get, Constant 0.)] (either operand order of [Cmpeq]); - the multiply form [Binop (Mul,
+   <cmpeq 0/1>, table_get)] (either factor order). On success returns [Some (table, table_idcs,
+   index_expr)] where [index_expr] is the scalar value used as the dynamic index. *)
 let match_one_hot_contribution (k : Indexing.symbol) (contribution : scalar_t) :
     (Tn.t * Indexing.axis_index array * scalar_arg) option =
   (* Match a Cmpeq comparing [Embed_index (Iterator k)] against an index expression free of [k].
@@ -2163,10 +2172,7 @@ let match_one_hot_contribution (k : Indexing.symbol) (contribution : scalar_t) :
         else None
     | _ -> None
   in
-  let as_table_get = function
-    | Get (table, table_idcs) -> Some (table, table_idcs)
-    | _ -> None
-  in
+  let as_table_get = function Get (table, table_idcs) -> Some (table, table_idcs) | _ -> None in
   match contribution with
   | Ternop (Ops.Where, cond, (then_, _), (Constant 0., _)) -> (
       match (match_cmpeq (fst cond), as_table_get then_) with
@@ -2189,11 +2195,13 @@ let build_guarded_gather ~table ~table_idcs ~dyn_axis ~(index_expr : scalar_arg)
   let iv, _iprec = index_expr in
   (* The bounds comparison must NOT be evaluated in the unsigned index precision: [-1] would wrap to
      UINT_MAX and the guard would always be false (gh: unsigned-index-precision). We do the whole
-     guard in a signed precision ([double], exact for the integer-valued indices in scope). [0 <= idx]
-     is encoded as [-1 < idx] (there is no [Cmple]); the upper bound is [idx < class_count]. *)
+     guard in a signed precision ([double], exact for the integer-valued indices in scope). [0 <=
+     idx] is encoded as [-1 < idx] (there is no [Cmple]); the upper bound is [idx < class_count]. *)
   let guard_prec = Ops.double in
   let lower = Binop (Ops.Cmplt, (Constant (-1.), guard_prec), (iv, guard_prec)) in
-  let upper = Binop (Ops.Cmplt, (iv, guard_prec), (Constant (Float.of_int class_count), guard_prec)) in
+  let upper =
+    Binop (Ops.Cmplt, (iv, guard_prec), (Constant (Float.of_int class_count), guard_prec))
+  in
   (* The backend casts [iv] to int when gathering. To preserve one-hot semantics for non-integer
      indices (e.g. 1.5, where every [k == idx] is false so the reduction is 0), the gather must only
      fire when [idx] is exactly integral: [idx == trunc(idx)]. Otherwise return 0. *)
@@ -2215,8 +2223,8 @@ let strip_zero_init_for_local (id : scope_id) (body : t) : t option =
 
 (* gh-343: extract the per-iteration one-hot contribution from an accumulation [acc] in which the
    running total is recognized by [acc_is]. Handles the [Binop (Add, total, contribution)] form
-   (either operand order) and the fused [Ternop (FMA, a, b, total)] form, where FMA(a,b,total) =
-   a*b + total so the contribution is the product [a*b]. *)
+   (either operand order) and the fused [Ternop (FMA, a, b, total)] form, where FMA(a,b,total) = a*b
+   + total so the contribution is the product [a*b]. *)
 let accumulation_contribution ~(acc_is : scalar_t -> bool) (acc : scalar_t) : scalar_t option =
   match acc with
   | Binop (Ops.Add, (total, _), (contribution, _)) when acc_is total -> Some contribution
@@ -2225,12 +2233,12 @@ let accumulation_contribution ~(acc_is : scalar_t -> bool) (acc : scalar_t) : sc
       Some (Binop (Ops.Mul, (a, pa), (b, pb)))
   | _ -> None
 
-(* gh-343: shared core -- given a reduction over [k] with bounds [\[from_, to_\]] and a per-iteration
-   [contribution], check the narrow one-hot side conditions and build the guarded gather. *)
+(* gh-343: shared core -- given a reduction over [k] with bounds [\[from_, to_\]] and a
+   per-iteration [contribution], check the narrow one-hot side conditions and build the guarded
+   gather. *)
 let gather_of_reduction ~(k : Indexing.symbol) ~from_ ~to_ (contribution : scalar_t) :
     scalar_t option =
-  Option.bind (match_one_hot_contribution k contribution)
-    ~f:(fun (table, table_idcs, index_expr) ->
+  Option.bind (match_one_hot_contribution k contribution) ~f:(fun (table, table_idcs, index_expr) ->
       let count, axis, only_plain = count_plain_iterator k table_idcs in
       match if count = 1 && only_plain then axis else None with
       | None -> None
@@ -2245,7 +2253,9 @@ let gather_of_reduction ~(k : Indexing.symbol) ~from_ ~to_ (contribution : scala
             (* Neutralize the now-dead loop symbol at the dynamic axis. *)
             let table_idcs = Array.copy table_idcs in
             table_idcs.(dyn_axis) <- Indexing.Fixed_idx 0;
-            Some (build_guarded_gather ~table ~table_idcs ~dyn_axis ~index_expr ~class_count ~value_prec))
+            Some
+              (build_guarded_gather ~table ~table_idcs ~dyn_axis ~index_expr ~class_count
+                 ~value_prec))
 
 (* gh-343: scalar-local form -- Local_scope { id; body = [init;] For k { Set_local (id, acc) } }. *)
 let try_rewrite_local_scope (id : scope_id) (body : t) : scalar_t option =
@@ -2253,16 +2263,16 @@ let try_rewrite_local_scope (id : scope_id) (body : t) : scalar_t option =
   | Some (For_loop { index = k; from_; to_; body = Set_local (id', acc); _ })
     when equal_scope_id id id' ->
       let acc_is = function Get_local id' -> equal_scope_id id id' | _ -> false in
-      Option.bind (accumulation_contribution ~acc_is acc)
-        ~f:(fun contribution -> gather_of_reduction ~k ~from_ ~to_ contribution)
+      Option.bind (accumulation_contribution ~acc_is acc) ~f:(fun contribution ->
+          gather_of_reduction ~k ~from_ ~to_ contribution)
   | _ -> None
 
 (* gh-343: materialized form -- a reduction loop [For k { Set lhs idcs acc }] at any nesting depth,
    where [acc] accumulates the one-hot contribution into [lhs\[idcs\]] (and [k] does not index
    [lhs]). The loop is replaced with a single read-accumulate of the guarded gather, dropping the
    vocabulary loop. Reading-and-adding [lhs\[idcs\]] keeps the rewrite sound regardless of any
-   preceding zero-init: sum_k contribution == gather, so [lhs += gather] equals the original
-   [lhs + sum_k contribution]. *)
+   preceding zero-init: sum_k contribution == gather, so [lhs += gather] equals the original [lhs +
+   sum_k contribution]. *)
 let try_rewrite_materialized_loop (llc : t) : t option =
   match llc with
   | For_loop { index = k; from_; to_; body = Set { tn; idcs; llsc; _ }; _ }
@@ -2295,7 +2305,8 @@ let rewrite_one_hot_reductions (llc : t) : t =
         | Set_from_vec { tn; idcs; length; vec_unop; arg = s, p; debug } ->
             Set_from_vec { tn; idcs; length; vec_unop; arg = (loop_scalar s, p); debug }
         | Set_local (id, llsc) -> Set_local (id, loop_scalar llsc)
-        | (Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _) as other -> other)
+        | (Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _) as other -> other
+        )
   and loop_scalar (llsc : scalar_t) : scalar_t =
     match llsc with
     | Local_scope { id; body; orig_indices } -> (
@@ -2502,7 +2513,8 @@ let to_doc_cstyle ?name ?static_indices () llc =
     | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))
     | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, vprec } ->
         group
-          (doc_ident tn ^^ brackets (pp_indices idcs)
+          (doc_ident tn
+          ^^ brackets (pp_indices idcs)
           ^^ string (Printf.sprintf "@dyn[%d]=" dyn_axis)
           ^^ parens (doc_of_float vprec v))
     | Constant c -> string (Printf.sprintf "%.16g" c)
@@ -2602,7 +2614,8 @@ let to_doc ?name ?static_indices () llc =
     | Get (tn, idcs) -> group (doc_ident tn ^^ brackets (pp_indices idcs))
     | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, _ } ->
         group
-          (doc_ident tn ^^ brackets (pp_indices idcs)
+          (doc_ident tn
+          ^^ brackets (pp_indices idcs)
           ^^ string (Printf.sprintf "@dyn[%d]=" dyn_axis)
           ^^ parens (doc_of_float v))
     | Constant c -> string (Printf.sprintf "%.16g" c)

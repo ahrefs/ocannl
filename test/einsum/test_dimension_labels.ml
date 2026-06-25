@@ -18,9 +18,7 @@ let dummy_origin : Row.constraint_origin list =
    (including [default] / [bcast_if_1]). *)
 let get_var_basis env (v : Row.dim_var) : string =
   let prov = Row.empty_provenance in
-  let row =
-    { Row.beg_dims = []; dims = [ Row.Var v ]; bcast = Broadcastable; prov }
-  in
+  let row = { Row.beg_dims = []; dims = [ Row.Var v ]; bcast = Broadcastable; prov } in
   let bases = Row.row_to_bases env row in
   if Array.length bases > 0 then bases.(0) else ""
 
@@ -93,7 +91,8 @@ let test_one_based_one_unbased () =
    no longer silently upgrades (the old [unify_dim] basis propagation is gone — see brief
    §Technical-issue-6); it conflicts. *)
 let test_variable_mediated_unbased_then_based () =
-  Stdio.printf "Test 4: Variable-mediated: unbased (default) first, based later -- now incompatible\n";
+  Stdio.printf
+    "Test 4: Variable-mediated: unbased (default) first, based later -- now incompatible\n";
   Tensor.unsafe_reinitialize ();
   try
     let%cd x = { x } in
@@ -114,7 +113,8 @@ let test_variable_mediated_unbased_then_based () =
    wildcard this size-1 silently broadcast; now a user [1] meeting a [5_rgb] axis is a genuine
    mismatch. (Only scalars / internal broadcast fill mint the stretchable [1_(bcast_if_1)].) *)
 let test_explicit_one_does_not_stretch () =
-  Stdio.printf "Test 4b: Explicit user 1_default does not stretch to a named larger axis -- raises\n";
+  Stdio.printf
+    "Test 4b: Explicit user 1_default does not stretch to a named larger axis -- raises\n";
   Tensor.unsafe_reinitialize ();
   try
     let one = unbased_tensor [ 1 ] in
@@ -497,20 +497,10 @@ let test_glb_conflicting_bases () =
   try
     let prov = Row.empty_provenance in
     let r1 =
-      {
-        Row.beg_dims = [];
-        dims = [ Row.get_dim ~d:4 ~basis:"x" () ];
-        bcast = Broadcastable;
-        prov;
-      }
+      { Row.beg_dims = []; dims = [ Row.get_dim ~d:4 ~basis:"x" () ]; bcast = Broadcastable; prov }
     in
     let r2 =
-      {
-        Row.beg_dims = [];
-        dims = [ Row.get_dim ~d:4 ~basis:"y" () ];
-        bcast = Broadcastable;
-        prov;
-      }
+      { Row.beg_dims = []; dims = [ Row.get_dim ~d:4 ~basis:"y" () ]; bcast = Broadcastable; prov }
     in
     let constraints =
       [

@@ -129,8 +129,8 @@ let%track7_sexp to_routine (ctx : Context.t) ?(output_cd_file = false) bindings 
     match cd_source with
     | None -> ()
     | Some callback -> callback (Asgns.to_doc ~name ~static_indices () comp.Asgns.asgns));
-  (* Materialize the guessed output nodes so they persist across calls and are inspectable on
-     demand via the context (gh-ocannl-333). *)
+  (* Materialize the guessed output nodes so they persist across calls and are inspectable on demand
+     via the context (gh-ocannl-333). *)
   Set.iter (snd @@ Asgns.collect_nodes_guess_output comp.Asgns.asgns) ~f:set_materialized;
   let _ctx, routine = Context.compile ctx comp bindings in
   (* Return just the routine for backward compatibility - ctx is discarded here *)
@@ -198,8 +198,7 @@ let%track3_sexp run_once ?(output_cd_file = false) ?(skip_init = false) ?reinit_
     | None -> ()
     | Some callback -> callback (Asgns.to_doc ~name ~static_indices () update.Asgns.asgns));
   let ctx =
-    if skip_init || Set.is_empty t.params then ctx
-    else init_params ?reinit_all ctx bindings t
+    if skip_init || Set.is_empty t.params then ctx else init_params ?reinit_all ctx bindings t
   in
   let ctx, routine = Context.compile ctx update bindings in
   Context.run ctx routine
@@ -219,9 +218,9 @@ let update_once ?output_cd_file ?(skip_init = false) ?reinit_all ?(bindings = ID
   run_once ?output_cd_file ~skip_init ?reinit_all ~bindings ~f:grad_update ctx t
 
 (* For-print materialization (gh-ocannl-333 AC 5): the [%cd "for_print" =: t] trick. When a tensor's
-   value is not already materialized in the printing context, recompile a copy of it
-   ([for_print = t + 0]) into a fresh device-resident node and register that node as a for-print
-   proxy, so the printer reads the tensor's value through it.
+   value is not already materialized in the printing context, recompile a copy of it ([for_print = t
+   + 0]) into a fresh device-resident node and register that node as a for-print proxy, so the
+   printer reads the tensor's value through it.
 
    This is best-effort: it works for recomputable (e.g. virtual / fetch-defined) tensors. For a
    tensor that is materialized elsewhere but simply absent from this context, the copy cannot be

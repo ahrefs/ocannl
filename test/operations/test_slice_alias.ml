@@ -1,21 +1,21 @@
 (* Regression test for gh-ocannl-293 subtask 293a: [Fetch.Slice] ([@|]) is lowered as a zero-copy
    alias *view* of its parent for unpadded leading-axis slices, instead of materializing a copy.
 
-   Invariants pinned here (each would break a specific acceptance criterion if it regressed):
-   - AC1 (no fresh allocation): an alias-eligible slice owns NO buffer -- it is absent from the
-     routine context's [ctx_buffers], while its parent is present. If the alias path silently fell
-     back to a copy (or allocated a fresh pool), the slice would appear in [ctx_buffers].
-   - AC2 (mutation visibility, both directions), proved with kernels, not host slice access:
-       * read-through (parent -> slice): running the slice's consumer with different runtime
-         [batch_idx] values reads different parent rows -- proving the slice indexes into the parent's
-         storage at the *runtime* binding value (a static byte-offset alias could not do this).
-       * write-through (slice -> parent): a kernel assignment THROUGH the slice mutates the parent's
-         backing buffer, observed by reading the parent.
-   - R2 host-access contract: direct [Context.get_values]/[set_values] on an alias view raise a clear
-     [User_error] (no silent fresh allocation), since the view has no buffer of its own.
+   Invariants pinned here (each would break a specific acceptance criterion if it regressed): - AC1
+   (no fresh allocation): an alias-eligible slice owns NO buffer -- it is absent from the routine
+   context's [ctx_buffers], while its parent is present. If the alias path silently fell back to a
+   copy (or allocated a fresh pool), the slice would appear in [ctx_buffers]. - AC2 (mutation
+   visibility, both directions), proved with kernels, not host slice access: * read-through (parent
+   -> slice): running the slice's consumer with different runtime [batch_idx] values reads different
+   parent rows -- proving the slice indexes into the parent's storage at the *runtime* binding value
+   (a static byte-offset alias could not do this). * write-through (slice -> parent): a kernel
+   assignment THROUGH the slice mutates the parent's backing buffer, observed by reading the parent.
+   - R2 host-access contract: direct [Context.get_values]/[set_values] on an alias view raise a
+   clear [User_error] (no silent fresh allocation), since the view has no buffer of its own.
 
-   AC3 (ineligible slices still work via the copy fallback) is covered by [check_slice_shapes], whose
-   slice is conv-padded -> ineligible -> materialized copy, and which stays byte-for-byte green. *)
+   AC3 (ineligible slices still work via the copy fallback) is covered by [check_slice_shapes],
+   whose slice is conv-padded -> ineligible -> materialized copy, and which stays byte-for-byte
+   green. *)
 
 open Base
 open Ocannl
@@ -93,7 +93,8 @@ let () =
     (not (Context.mem ctx bv.value));
   Stdio.printf "parent present in ctx_buffers: %b\n" (Context.mem ctx images.value);
 
-  (* --- AC2 read-through: the slice reads the parent row selected by the runtime batch index. --- *)
+  (* --- AC2 read-through: the slice reads the parent row selected by the runtime batch index.
+     --- *)
   bref := 0;
   Train.run ctx routine;
   let out0 = Context.get_values ctx out.value in
@@ -105,7 +106,8 @@ let () =
   Stdio.printf "read-through batch 1: out=%s (expect [8 10 12]): %b\n" (arr_to_string out1)
     (Array.equal Float.equal out1 [| 8.; 10.; 12. |]);
 
-  (* --- R2: direct host read/write of the alias view is rejected (no silent fresh allocation). --- *)
+  (* --- R2: direct host read/write of the alias view is rejected (no silent fresh allocation).
+     --- *)
   let raised_get =
     try
       ignore (Context.get_values ctx bv.value : float array);
@@ -123,9 +125,10 @@ let () =
   Stdio.printf "alias still absent from ctx_buffers after rejected host access: %b\n"
     (not (Context.mem ctx bv.value));
 
-  (* --- AC2 write-through: a kernel write THROUGH the slice mutates the parent's buffer. The slice's
-     [alias_of] is already set (persisted on the tnode from the forward lowering above), so this write
-     routine redirects to the parent. We write row [batch_n=0] to 99 and observe it via the parent. --- *)
+  (* --- AC2 write-through: a kernel write THROUGH the slice mutates the parent's buffer. The
+     slice's [alias_of] is already set (persisted on the tnode from the forward lowering above), so
+     this write routine redirects to the parent. We write row [batch_n=0] to 99 and observe it via
+     the parent. --- *)
   let%cd writer = bv =: !.99.0 in
   let wroutine = Train.to_routine ctx bindings writer in
   let ctx = Context.context wroutine in
@@ -133,11 +136,12 @@ let () =
   wref := 0;
   Train.run ctx wroutine;
   let parent_after = Context.get_values ctx images.value in
-  Stdio.printf "write-through: parent=%s (expect [99 99 99 4 5 6]): %b\n" (arr_to_string parent_after)
+  Stdio.printf "write-through: parent=%s (expect [99 99 99 4 5 6]): %b\n"
+    (arr_to_string parent_after)
     (Array.equal Float.equal parent_after [| 99.; 99.; 99.; 4.; 5.; 6. |]);
 
-  (* --- AC1 (no copy loop): lower an eligible slice's forward and confirm its [Fetch.Slice] became a
-     [Noop] -- the slice node is written ZERO times in the lowered code. Inspecting the lowered
+  (* --- AC1 (no copy loop): lower an eligible slice's forward and confirm its [Fetch.Slice] became
+     a [Noop] -- the slice node is written ZERO times in the lowered code. Inspecting the lowered
      [Low_level.t] directly (via [Ir.Assignments.to_low_level], pre-optimization) is the non-vacuous
      part: the "absent from ctx_buffers" check above only proves no allocation, not the absence of a
      copy loop. This uses a fresh slice so the forward code is not the consumed one above. --- *)
@@ -179,8 +183,7 @@ let () =
   let vec_fwd = Train.forward vs in
   let%cd vecwrite = vs =: uniform () in
   let vec_llc =
-    Ir.Assignments.to_low_level
-      (Ir.Assignments.sequence [ vec_fwd; vecwrite ]).Ir.Assignments.asgns
+    Ir.Assignments.to_low_level (Ir.Assignments.sequence [ vec_fwd; vecwrite ]).Ir.Assignments.asgns
   in
   Stdio.printf "vec-store slice is aliased: %b\n" (Ir.Tnode.is_alias vs.value);
   Stdio.printf "vec-store redirected: 0 vector writes to slice: %b\n"

@@ -1,22 +1,21 @@
-(* Regression test for the reserved merge-pool grow path (AC6/AC7): when [alloc_pool] is called for a
-   pool id that already has a slab (only the reserved merge pool, id 0, is ever re-allocated in
+(* Regression test for the reserved merge-pool grow path (AC6/AC7): when [alloc_pool] is called for
+   a pool id that already has a slab (only the reserved merge pool, id 0, is ever re-allocated in
    place), the previous backend allocation must be freed before it is replaced -- otherwise device
    memory grows without bound on every merge-buffer grow.
 
    The CUDA backend ([cuda_backend.ml] [Slab.alloc_pool]) and the shared [Make_slab.alloc_pool] use
-   the identical free-on-overwrite pattern. CUDA is not buildable in this harness (no cudajit), so we
-   pin the invariant through [Make_slab] with a mock raw backend whose [free_pool_raw] is [Some]
-   (i.e. a backend that owns explicitly-freed pointers, like CUDA). The assertion
-   "grow freed the old pool = true" would print [false] if [alloc_pool] overwrote the table entry
-   without freeing -- the exact bug this fixes. A unique tnode pool id (never pre-existing) must free
-   nothing. *)
+   the identical free-on-overwrite pattern. CUDA is not buildable in this harness (no cudajit), so
+   we pin the invariant through [Make_slab] with a mock raw backend whose [free_pool_raw] is [Some]
+   (i.e. a backend that owns explicitly-freed pointers, like CUDA). The assertion "grow freed the
+   old pool = true" would print [false] if [alloc_pool] overwrote the table entry without freeing --
+   the exact bug this fixes. A unique tnode pool id (never pre-existing) must free nothing. *)
 
 open Base
 module Backend_impl = Ir.Backend_impl
 module Backend_intf = Ir.Backend_intf
 
-(* A raw backend whose "pointers" are integer ids and whose [free_pool_raw] records frees -- standing
-   in for a backend (like CUDA) that owns explicitly-released device pointers. *)
+(* A raw backend whose "pointers" are integer ids and whose [free_pool_raw] records frees --
+   standing in for a backend (like CUDA) that owns explicitly-released device pointers. *)
 module Mock_raw = struct
   type buffer_ptr = int
 
@@ -61,7 +60,8 @@ module Mock_dt = Backend_impl.Device_types_ll (Mock_config)
 module Mock_slab = Backend_impl.Make_slab (Mock_dt) (Mock_raw)
 module Mock_dev = Backend_impl.Device (Mock_dt) (Mock_slab)
 
-(* A raw backend that relies on GC (no explicit deallocator), like the sync/multicore CPU backends. *)
+(* A raw backend that relies on GC (no explicit deallocator), like the sync/multicore CPU
+   backends. *)
 module Mock_raw_gc = struct
   type buffer_ptr = int
 

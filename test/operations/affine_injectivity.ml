@@ -1,20 +1,17 @@
 (* gh-133 Stage B: unit coverage for affine injectivity analysis.
 
-   [Ir.Indexing.affine_injective] implements the proposal's mixed-radix per-position criterion plus a
-   whole-LHS pinning fixpoint; [Ir.Indexing.is_injective] wraps it with the product-iterator coverage
-   check (a contraction symbol absent from the LHS makes the map non-injective regardless of the
-   affine analysis). We assert both the accept/reject cases from the acceptance criteria and the
-   known-incomplete [3*a + 4*b] case. *)
+   [Ir.Indexing.affine_injective] implements the proposal's mixed-radix per-position criterion plus
+   a whole-LHS pinning fixpoint; [Ir.Indexing.is_injective] wraps it with the product-iterator
+   coverage check (a contraction symbol absent from the LHS makes the map non-injective regardless
+   of the affine analysis). We assert both the accept/reject cases from the acceptance criteria and
+   the known-incomplete [3*a + 4*b] case. *)
 
 open Base
 module Idx = Ir.Indexing
 
 let sym () = Idx.get_symbol ()
 let aff terms offset = Idx.Affine { symbols = terms; offset }
-
-let ranges pairs s =
-  List.Assoc.find pairs s ~equal:Idx.equal_symbol |> Option.value ~default:1
-
+let ranges pairs s = List.Assoc.find pairs s ~equal:Idx.equal_symbol |> Option.value ~default:1
 let p name b = Stdio.printf "%s: %b\n" name b
 
 (* Minimal projections: one single-symbol product axis per [product_axes] entry, [project_lhs] over
@@ -44,9 +41,7 @@ let () =
   (* Accept: K*i + k, k range <= K (K=3, k range 3). *)
   let i = sym () and k = sym () in
   p "K*i+k (k range <= K) injective"
-    (Idx.affine_injective
-       ~symbol_range:(ranges [ (i, 5); (k, 3) ])
-       [| aff [ (3, i); (1, k) ] 0 |]);
+    (Idx.affine_injective ~symbol_range:(ranges [ (i, 5); (k, 3) ]) [| aff [ (3, i); (1, k) ] 0 |]);
 
   (* Accept: 3*i + j, j range <= 3. *)
   let i2 = sym () and j2 = sym () in
@@ -65,9 +60,7 @@ let () =
   (* Reject: i + j, both ranges > 1. *)
   let a = sym () and b = sym () in
   p "i+j (both ranges > 1) injective"
-    (Idx.affine_injective
-       ~symbol_range:(ranges [ (a, 3); (b, 3) ])
-       [| aff [ (1, a); (1, b) ] 0 |]);
+    (Idx.affine_injective ~symbol_range:(ranges [ (a, 3); (b, 3) ]) [| aff [ (1, a); (1, b) ] 0 |]);
 
   (* Reject: stride*o + k, k range > stride (stride=2, k range 3). *)
   let o = sym () and kk = sym () in
@@ -95,9 +88,9 @@ let () =
   p "is_injective i+j"
     (Idx.is_injective (mk_proj [ (a3, 3); (b3, 3) ] [| aff [ (1, a3); (1, b3) ] 0 |]));
 
-  (* Reject through is_injective: a contraction symbol [c] is a product iterator but never appears on
-     the LHS, so multiple product points collapse to one cell. The affine analysis alone would accept
-     [Iterator i], but coverage must reject the whole map. *)
+  (* Reject through is_injective: a contraction symbol [c] is a product iterator but never appears
+     on the LHS, so multiple product points collapse to one cell. The affine analysis alone would
+     accept [Iterator i], but coverage must reject the whole map. *)
   let i4 = sym () and c4 = sym () in
   p "is_injective with uncovered contraction symbol"
     (Idx.is_injective (mk_proj [ (i4, 4); (c4, 3) ] [| Idx.Iterator i4 |]));
@@ -108,7 +101,9 @@ let () =
      covers [0, 6) exactly. Both injective and surjective, so the lowering in [assignments.ml] skips
      the neutral-init pass and uses a plain setter. *)
   let oh5 = sym () and wh5 = sym () in
-  let pool_back = mk_proj ~lhs_dims:[| 6 |] [ (oh5, 3); (wh5, 2) ] [| aff [ (2, oh5); (1, wh5) ] 0 |] in
+  let pool_back =
+    mk_proj ~lhs_dims:[| 6 |] [ (oh5, 3); (wh5, 2) ] [| aff [ (2, oh5); (1, wh5) ] 0 |]
+  in
   p "pool-backward scatter injective" (Idx.is_injective pool_back);
   p "pool-backward scatter surjective" (Idx.is_surjective pool_back);
   p "pool-backward scatter skips neutral-init (surjective && injective)"

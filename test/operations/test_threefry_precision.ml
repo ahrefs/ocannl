@@ -20,7 +20,7 @@ let () =
     (Ir.Ops.prec_string (Lazy.force uniform_result.value.prec));
   let ctx = Context.auto () in
   try
-     let _ctx = Train.forward_once ctx uniform_result in
+    let _ctx = Train.forward_once ctx uniform_result in
     Stdlib.Printf.printf "Compilation successful!\n";
     (* Also check the actual value precision in the context *)
     let tn = rng_result.value in

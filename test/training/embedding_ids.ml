@@ -19,7 +19,9 @@ let () =
 
   let vocab = 6 and embed = 4 and n = 4 in
   (* Token IDs (one per example) and a target scalar per example. *)
-  let ids = TDSL.ndarray [| 1.; 3.; 5.; 0. |] ~label:[ "ids" ] ~batch_dims:[ n ] ~output_dims:[] () in
+  let ids =
+    TDSL.ndarray [| 1.; 3.; 5.; 0. |] ~label:[ "ids" ] ~batch_dims:[ n ] ~output_dims:[] ()
+  in
   let target =
     TDSL.ndarray [| 1.; 0.; 1.; 0. |] ~label:[ "target" ] ~batch_dims:[ n ] ~output_dims:[ 1 ] ()
   in
@@ -39,7 +41,6 @@ let () =
   let sgd_step = Train.to_routine ctx IDX.empty (Asgns.sequence [ update; sgd ]) in
   let ctx = Context.context sgd_step in
   let open Operation.At in
-
   Train.run ctx sgd_step;
   let initial = (ctx, batch_loss).@[0] in
   for _ = 1 to 60 do

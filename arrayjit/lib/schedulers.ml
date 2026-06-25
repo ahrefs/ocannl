@@ -203,7 +203,6 @@ module Multicore (Backend : For_add_scheduler) :
         device
 
   let new_stream device = device
-
   let num_devices () = 1
 
   let static_properties =

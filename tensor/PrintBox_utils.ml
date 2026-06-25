@@ -130,21 +130,21 @@ let table rows =
        duplicate sub-tables with metrics computed against different local maxima. *)
     let groups =
       let map, order_rev =
-        List.fold rows ~init:(Map.empty (module String), []) ~f:(fun (acc, order) row ->
-          let (Benchmark { result_label; _ }) = row in
-          let label = nolines result_label in
-          let order' = if Map.mem acc label then order else label :: order in
-          let acc' =
-            Map.update acc label ~f:(function None -> [ row ] | Some rs -> row :: rs)
-          in
-          (acc', order'))
+        List.fold rows
+          ~init:(Map.empty (module String), [])
+          ~f:(fun (acc, order) row ->
+            let (Benchmark { result_label; _ }) = row in
+            let label = nolines result_label in
+            let order' = if Map.mem acc label then order else label :: order in
+            let acc' =
+              Map.update acc label ~f:(function None -> [ row ] | Some rs -> row :: rs)
+            in
+            (acc', order'))
       in
       List.rev_map order_rev ~f:(fun label -> (label, List.rev (Map.find_exn map label)))
     in
-    let group_boxes = List.map groups ~f:(fun (label, group_rows) -> render_group label group_rows) in
+    let group_boxes =
+      List.map groups ~f:(fun (label, group_rows) -> render_group label group_rows)
+    in
     PrintBox.(
-      frame
-      @@
-      match group_boxes with
-      | [ single ] -> single
-      | multiple -> vlist ~bars:true multiple)
+      frame @@ match group_boxes with [ single ] -> single | multiple -> vlist ~bars:true multiple)

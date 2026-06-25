@@ -1,6 +1,7 @@
-(* Regression test for gh-ocannl-344 AC 6: the pool allocator's per-pool 4 GB (uint32-offset) cap and
-   its segmenting/error behavior, exercised on the pure planner [Backends.plan_pool_segments] with
-   synthetic byte sizes (no real device memory needed -- a real >4 GB tensor is impractical to back).
+(* Regression test for gh-ocannl-344 AC 6: the pool allocator's per-pool 4 GB (uint32-offset) cap
+   and its segmenting/error behavior, exercised on the pure planner [Backends.plan_pool_segments]
+   with synthetic byte sizes (no real device memory needed -- a real >4 GB tensor is impractical to
+   back).
 
    The invariants pinned: (1) items whose bumped extent stays under [cap] share one pool with
    increasing, alignment-respecting offsets; (2) an item that would push the running extent past

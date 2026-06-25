@@ -33,8 +33,12 @@ let () =
   let input_size = List.length int_input in
   Stdio.printf "input_size: %d\n%!" input_size;
 
-  let inputs = Nn_blocks.dense_one_hot_of_int_list ~num_classes:Dataprep.Names.dict_size int_input in
-  let outputs = Nn_blocks.dense_one_hot_of_int_list ~num_classes:Dataprep.Names.dict_size int_output in
+  let inputs =
+    Nn_blocks.dense_one_hot_of_int_list ~num_classes:Dataprep.Names.dict_size int_input
+  in
+  let outputs =
+    Nn_blocks.dense_one_hot_of_int_list ~num_classes:Dataprep.Names.dict_size int_output
+  in
 
   let n_batches = input_size / batch_size in
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
@@ -63,7 +67,8 @@ let () =
   let ctx = Context.auto () in
   let ctx = Train.init_params ctx bindings batch_loss in
   let sgd_step = Train.to_routine ctx bindings (Asgns.sequence [ update; sgd ]) in
-  let ctx = Context.context sgd_step in  (* Train.printf w ~with_grad:false; *)
+  let ctx = Context.context sgd_step in
+  (* Train.printf w ~with_grad:false; *)
 
   let open Operation.At in
   let batch_ref = IDX.find_exn (Context.bindings sgd_step) batch_n in
@@ -88,7 +93,8 @@ let () =
   in
   Train.set_materialized infer_probs.value;
   let infer_step = Train.to_routine (Context.context sgd_step) bindings infer_step in
-  let ctx = Context.context infer_step in  let counter_ref = IDX.find_exn (Context.bindings infer_step) counter_n in
+  let ctx = Context.context infer_step in
+  let counter_ref = IDX.find_exn (Context.bindings infer_step) counter_n in
   counter_ref := 0;
 
   let infer c =
