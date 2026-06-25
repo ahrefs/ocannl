@@ -26,16 +26,16 @@ RoPE attention output shape: ((batch
    (dims
     ((Dim ((d 1) (basis default) (proj_id ((Proj_id 95)))))
      (Dim ((d 4) (basis default) (proj_id ((Proj_id 96)))))))
-   (bcast Broadcastable) (prov (((sh_id 110) (kind Batch))))))
+   (bcast Broadcastable) (prov (((sh_id 126) (kind Batch))))))
  (input
   ((beg_dims ()) (dims ()) (bcast Broadcastable)
-   (prov (((sh_id 110) (kind Input))))))
+   (prov (((sh_id 126) (kind Input))))))
  (output
   ((beg_dims ())
    (dims ((Dim ((d 16) (basis default) (proj_id ((Proj_id 97)))))))
-   (bcast Broadcastable) (prov (((sh_id 110) (kind Output))))))
+   (bcast Broadcastable) (prov (((sh_id 126) (kind Output))))))
  (batch_padding ()) (input_padding ()) (output_padding ()) (padding_elem ())
- (id 110) (debug_name out))
+ (id 126) (debug_name out))
 
 === Test 5: Gradient flow ===
 Loss: 2016.0000

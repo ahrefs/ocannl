@@ -3,120 +3,140 @@ Found 0, in the config file
 Tnode: collecting accessible arrays...
 n0 moons_flat as moons_flat: On-dev/49046; single prec 40x10x2; mem in bytes: <not-in-yet>
 n1 moons_classes as moons_classes: On-dev/49046; single prec 40x10x1; mem in bytes: <not-in-yet>
-n2 range_over_offsets as range_over_offsets: Virt/152; uint4x32 prec 1x16; mem in bytes: <not-in-yet>
+n2 range_over_offsets as range_over_offsets: Virt/152; uint4x32 prec 1; mem in bytes: <not-in-yet>
 n3 42_random_seed as random_seed_42: Virt/40; uint4x32 prec 1; mem in bytes: <not-in-yet>
 n4 !@self_id as n4: Virt/40; uint4x32 prec 1; mem in bytes: <not-in-yet>
-n5 threefry4x32_light as threefry4x32_light: Virt/152; uint4x32 prec 1x16; mem in bytes: <not-in-yet>
+n5 threefry4x32_light as threefry4x32_light: Virt/40; uint4x32 prec 1; mem in bytes: <not-in-yet>
 n6 threefry4x32_light as threefry4x32_light: Virt/152; uint4x32 prec 1x16; mem in bytes: <not-in-yet>
-n7 w2 as w2: On-dev/241046; single prec 1x16; mem in bytes: <not-in-yet>
-n8 grad_w2 as w2.grad: Local/26046; single prec 1x16; mem in bytes: <not-in-yet>
-n9 range_over_offsets as range_over_offsets: Virt/152; uint4x32 prec 16; mem in bytes: <not-in-yet>
-n10 !@self_id as n10: Virt/40; uint4x32 prec 1; mem in bytes: <not-in-yet>
-n11 threefry4x32_light as threefry4x32_light: Virt/152; uint4x32 prec 16; mem in bytes: <not-in-yet>
-n12 threefry4x32_light as threefry4x32_light: Virt/152; uint4x32 prec 16; mem in bytes: <not-in-yet>
-n13 b1 as b1: On-dev/241046; single prec 16; mem in bytes: <not-in-yet>
-n14 grad_b1 as b1.grad: Local/26046; single prec 16; mem in bytes: <not-in-yet>
-n15 range_over_offsets as range_over_offsets: Virt/152; uint4x32 prec 16x2; mem in bytes: <not-in-yet>
-n16 !@self_id as n16: Virt/40; uint4x32 prec 1; mem in bytes: <not-in-yet>
-n17 threefry4x32_light as threefry4x32_light: Virt/152; uint4x32 prec 16x2; mem in bytes: <not-in-yet>
-n18 threefry4x32_light as threefry4x32_light: Virt/152; uint4x32 prec 16x2; mem in bytes: <not-in-yet>
-n19 w1 as w1: On-dev/241046; single prec 16x2; mem in bytes: <not-in-yet>
-n20 grad_w1 as w1.grad: Local/26046; single prec 16x2; mem in bytes: <not-in-yet>
-n21 @|_moons_input as moons_input: unknown; single prec 10x2; mem in bytes: <not-in-yet>
-n24 @|_moons_class as moons_class: unknown; single prec 10x1; mem in bytes: <not-in-yet>
-n27 * as n27: Virt/151; single prec 10x16; mem in bytes: <not-in-yet>
-n28 grad_* as n27.grad: Local/1046; single prec 10x16; mem in bytes: <not-in-yet>
-n29 + as n29: Virt/152; single prec 10x16; mem in bytes: <not-in-yet>
-n30 grad_+ as n29.grad: Virt/151; single prec 10x16; mem in bytes: <not-in-yet>
-n31 relu as relu: Local/1046; single prec 10x16; mem in bytes: <not-in-yet>
-n32 grad_relu as relu.grad: Virt/151; single prec 10x16; mem in bytes: <not-in-yet>
-n33 *_mlp_@|_moons_input as mlp_moons_input: Virt/151; single prec 10x1; mem in bytes: <not-in-yet>
-n34 grad_*_mlp_@|_moons_input as mlp_moons_input.grad: Local/1046; single prec 10x1; mem in bytes: <not-in-yet>
-n35 *. as n35: Virt/152; single prec 10x1; mem in bytes: <not-in-yet>
-n36 grad_*. as n35.grad: Virt/151; single prec 10x1; mem in bytes: <not-in-yet>
-n37 1 as _1: Virt/40; single prec 1; mem in bytes: <not-in-yet>
-n38 - as n38: Virt/152; single prec 10x1; mem in bytes: <not-in-yet>
-n39 grad_- as n38.grad: Virt/151; single prec 10x1; mem in bytes: <not-in-yet>
-n40 relu_margin_loss as relu_margin_loss: Virt/152; single prec 10x1; mem in bytes: <not-in-yet>
-n41 grad_relu_margin_loss as relu_margin_loss.grad: Virt/151; single prec 10x1; mem in bytes: <not-in-yet>
-n42 10 as _10: Virt/40; single prec 1; mem in bytes: <not-in-yet>
-n43 => as n43: Local/9046; single prec 1; mem in bytes: <not-in-yet>
-n44 grad_=> as n43.grad: Virt/40; single prec 1; mem in bytes: <not-in-yet>
-n45 /._scalar_loss as scalar_loss: On-dev/28046; single prec 1; mem in bytes: <not-in-yet>
-n46 grad_/._scalar_loss as scalar_loss.grad: Virt/40; single prec 1; mem in bytes: <not-in-yet>
-n47 1 as _1: Virt/40; single prec 1; mem in bytes: <not-in-yet>
-n48 200 as _200: Virt/40; single prec 1; mem in bytes: <not-in-yet>
-n49 !@ as n49: Virt/152; single prec 1; mem in bytes: <not-in-yet>
-n50 200 as _200: Virt/40; single prec 1; mem in bytes: <not-in-yet>
-n51 2 as _2: Virt/40; single prec 1; mem in bytes: <not-in-yet>
-n52 *. as n52: Virt/40; single prec 1; mem in bytes: <not-in-yet>
-n53 - as n53: Virt/152; single prec 1; mem in bytes: <not-in-yet>
-n54 0.1 as n54: Virt/40; single prec 1; mem in bytes: <not-in-yet>
-n55 *. as n55: Virt/152; single prec 1; mem in bytes: <not-in-yet>
-n56 /._learning_rate as learning_rate: On-dev/28046; single prec 1; mem in bytes: <not-in-yet>
-n57 sgd_delta_w2 as sgd_delta_w2: Virt/152; single prec 1x16; mem in bytes: <not-in-yet>
-n58 sgd_momentum_w2 as sgd_momentum_w2: unknown; single prec <not-in-yet>; mem in bytes: <not-in-yet>
-n59 0.0001 as n59: Virt/40; single prec 1; mem in bytes: <not-in-yet>
-n60 *. as n60: Virt/152; single prec 1x16; mem in bytes: <not-in-yet>
-n61 sgd_delta_b1 as sgd_delta_b1: Virt/152; single prec 16; mem in bytes: <not-in-yet>
-n62 sgd_momentum_b1 as sgd_momentum_b1: unknown; single prec <not-in-yet>; mem in bytes: <not-in-yet>
-n63 0.0001 as n63: Virt/40; single prec 1; mem in bytes: <not-in-yet>
-n64 *. as n64: Virt/152; single prec 16; mem in bytes: <not-in-yet>
-n65 sgd_delta_w1 as sgd_delta_w1: Virt/152; single prec 16x2; mem in bytes: <not-in-yet>
-n66 sgd_momentum_w1 as sgd_momentum_w1: unknown; single prec <not-in-yet>; mem in bytes: <not-in-yet>
-n67 0.0001 as n67: Virt/40; single prec 1; mem in bytes: <not-in-yet>
-n68 *. as n68: Virt/152; single prec 16x2; mem in bytes: <not-in-yet>
+n7  as n7: Virt/152; single prec 1x16; mem in bytes: <not-in-yet>
+n8 0.5 as n8: Virt/40; single prec 1; mem in bytes: <not-in-yet>
+n9 - as n9: Virt/152; single prec 1x16; mem in bytes: <not-in-yet>
+n10 0.5 as n10: Virt/40; single prec 1; mem in bytes: <not-in-yet>
+n11 *._w2 as w2: On-dev/241046; single prec 1x16; mem in bytes: <not-in-yet>
+n12 grad_*._w2 as w2.grad: Local/26046; single prec 1x16; mem in bytes: <not-in-yet>
+n13 range_over_offsets as range_over_offsets: Virt/152; uint4x32 prec 16; mem in bytes: <not-in-yet>
+n14 !@self_id as n14: Virt/40; uint4x32 prec 1; mem in bytes: <not-in-yet>
+n15 threefry4x32_light as threefry4x32_light: Virt/152; uint4x32 prec 16; mem in bytes: <not-in-yet>
+n16 threefry4x32_light as threefry4x32_light: Virt/152; uint4x32 prec 16; mem in bytes: <not-in-yet>
+n17  as n17: Virt/152; single prec 16; mem in bytes: <not-in-yet>
+n18 0.5 as n18: Virt/40; single prec 1; mem in bytes: <not-in-yet>
+n19 - as n19: Virt/152; single prec 16; mem in bytes: <not-in-yet>
+n20 0.5 as n20: Virt/40; single prec 1; mem in bytes: <not-in-yet>
+n21 *._b1 as b1: On-dev/241046; single prec 16; mem in bytes: <not-in-yet>
+n22 grad_*._b1 as b1.grad: Local/26046; single prec 16; mem in bytes: <not-in-yet>
+n23 range_over_offsets as range_over_offsets: Virt/152; uint4x32 prec 16; mem in bytes: <not-in-yet>
+n24 !@self_id as n24: Virt/40; uint4x32 prec 1; mem in bytes: <not-in-yet>
+n25 threefry4x32_light as threefry4x32_light: Virt/152; uint4x32 prec 16; mem in bytes: <not-in-yet>
+n26 threefry4x32_light as threefry4x32_light: Virt/152; uint4x32 prec 16x2; mem in bytes: <not-in-yet>
+n27  as n27: Virt/152; single prec 16x2; mem in bytes: <not-in-yet>
+n28 0.5 as n28: Virt/40; single prec 1; mem in bytes: <not-in-yet>
+n29 - as n29: Virt/152; single prec 16x2; mem in bytes: <not-in-yet>
+n30 0.5 as n30: Virt/40; single prec 1; mem in bytes: <not-in-yet>
+n31 *._w1 as w1: On-dev/241046; single prec 16x2; mem in bytes: <not-in-yet>
+n32 grad_*._w1 as w1.grad: Local/26046; single prec 16x2; mem in bytes: <not-in-yet>
+n33 @|_moons_input as moons_input: unknown; single prec 10x2; mem in bytes: <not-in-yet>
+n36 @|_moons_class as moons_class: unknown; single prec 10x1; mem in bytes: <not-in-yet>
+n39 * as n39: Virt/151; single prec 10x16; mem in bytes: <not-in-yet>
+n40 grad_* as n39.grad: Local/1046; single prec 10x16; mem in bytes: <not-in-yet>
+n41 + as n41: Virt/152; single prec 10x16; mem in bytes: <not-in-yet>
+n42 grad_+ as n41.grad: Virt/151; single prec 10x16; mem in bytes: <not-in-yet>
+n43 relu as relu: Local/1046; single prec 10x16; mem in bytes: <not-in-yet>
+n44 grad_relu as relu.grad: Virt/151; single prec 10x16; mem in bytes: <not-in-yet>
+n45 *_mlp_@|_moons_input as mlp_moons_input: Virt/151; single prec 10x1; mem in bytes: <not-in-yet>
+n46 grad_*_mlp_@|_moons_input as mlp_moons_input.grad: Local/1046; single prec 10x1; mem in bytes: <not-in-yet>
+n47 *. as n47: Virt/152; single prec 10x1; mem in bytes: <not-in-yet>
+n48 grad_*. as n47.grad: Virt/151; single prec 10x1; mem in bytes: <not-in-yet>
+n49 1 as _1: Virt/40; single prec 1; mem in bytes: <not-in-yet>
+n50 - as n50: Virt/152; single prec 10x1; mem in bytes: <not-in-yet>
+n51 grad_- as n50.grad: Virt/151; single prec 10x1; mem in bytes: <not-in-yet>
+n52 relu_margin_loss as relu_margin_loss: Virt/152; single prec 10x1; mem in bytes: <not-in-yet>
+n53 grad_relu_margin_loss as relu_margin_loss.grad: Virt/151; single prec 10x1; mem in bytes: <not-in-yet>
+n54 10 as _10: Virt/40; single prec 1; mem in bytes: <not-in-yet>
+n55 => as n55: Local/9046; single prec 1; mem in bytes: <not-in-yet>
+n56 grad_=> as n55.grad: Virt/40; single prec 1; mem in bytes: <not-in-yet>
+n57 /._scalar_loss as scalar_loss: On-dev/28046; single prec 1; mem in bytes: <not-in-yet>
+n58 grad_/._scalar_loss as scalar_loss.grad: Virt/40; single prec 1; mem in bytes: <not-in-yet>
+n59 1 as _1: Virt/40; single prec 1; mem in bytes: <not-in-yet>
+n60 200 as _200: Virt/40; single prec 1; mem in bytes: <not-in-yet>
+n61 !@ as n61: Virt/152; single prec 1; mem in bytes: <not-in-yet>
+n62 200 as _200: Virt/40; single prec 1; mem in bytes: <not-in-yet>
+n63 2 as _2: Virt/40; single prec 1; mem in bytes: <not-in-yet>
+n64 *. as n64: Virt/40; single prec 1; mem in bytes: <not-in-yet>
+n65 - as n65: Virt/152; single prec 1; mem in bytes: <not-in-yet>
+n66 0.1 as n66: Virt/40; single prec 1; mem in bytes: <not-in-yet>
+n67 *. as n67: Virt/152; single prec 1; mem in bytes: <not-in-yet>
+n68 /._learning_rate as learning_rate: On-dev/28046; single prec 1; mem in bytes: <not-in-yet>
+n69 sgd_delta_*._w2 as sgd_delta_w2: Virt/152; single prec 1x16; mem in bytes: <not-in-yet>
+n70 sgd_momentum_*._w2 as sgd_momentum_w2: unknown; single prec <not-in-yet>; mem in bytes: <not-in-yet>
+n71 0.0001 as n71: Virt/40; single prec 1; mem in bytes: <not-in-yet>
+n72 *. as n72: Virt/152; single prec 1x16; mem in bytes: <not-in-yet>
+n73 sgd_delta_*._b1 as sgd_delta_b1: Virt/152; single prec 16; mem in bytes: <not-in-yet>
+n74 sgd_momentum_*._b1 as sgd_momentum_b1: unknown; single prec <not-in-yet>; mem in bytes: <not-in-yet>
+n75 0.0001 as n75: Virt/40; single prec 1; mem in bytes: <not-in-yet>
+n76 *. as n76: Virt/152; single prec 16; mem in bytes: <not-in-yet>
+n77 sgd_delta_*._w1 as sgd_delta_w1: Virt/152; single prec 16x2; mem in bytes: <not-in-yet>
+n78 sgd_momentum_*._w1 as sgd_momentum_w1: unknown; single prec <not-in-yet>; mem in bytes: <not-in-yet>
+n79 0.0001 as n79: Virt/40; single prec 1; mem in bytes: <not-in-yet>
+n80 *. as n80: Virt/152; single prec 16x2; mem in bytes: <not-in-yet>
 Tnode: Finished printing headers.
-                                                                                                                                                 #45 /._scalar_loss On-dev/28046
-                                                                                                                                                 <not-in-context>
-                                                                                                                                                 #46 grad_/._scalar_loss Virt/40
-                                                                                                                                                 <not-in-context>
-                                                                                                                                              #43 => Local/9046                                                                                                                                                 │#42 10 Virt/40
-                                                                                                                                              <not-in-context>                                                                                                                                                  │<not-in-context>
-                                                                                                                                              #44 grad_=> Virt/40                                                                                                                                               │
-                                                                                                                                              <not-in-context>                                                                                                                                                  │
-                                                                                                                                       #40 relu_margin_loss Virt/152                                                                                                                                            │
-                                                                                                                                       <not-in-context>                                                                                                                                                         │
-                                                                                                                                       #41 grad_relu_margin_loss Virt/151                                                                                                                                       │
-                                                                                                                                       <not-in-context>                                                                                                                                                         │
-                                                                                                                                              #38 - Virt/152                                                                                                                                                    │
-                                                                                                                                              <not-in-context>                                                                                                                                                  │
-                                                                                                                                              #39 grad_- Virt/151                                                                                                                                               │
-                                                                                                                                              <not-in-context>                                                                                                                                                  │
-#37 1 Virt/40   │                                                                                                                                     #35 *. Virt/152                                                                                                                                           │
-<not-in-context>│                                                                                                                                     <not-in-context>                                                                                                                                          │
-                │                                                                                                                                     #36 grad_*. Virt/151                                                                                                                                      │
-                │                                                                                                                                     <not-in-context>                                                                                                                                          │
-                │     #24 @|_moons_class unknown      │                                                                                                        #33 *_mlp_@|_moons_input Virt/151                                                                                                                │
-                │     <not-in-context>                │                                                                                                        <not-in-context>                                                                                                                                 │
-                │#1 moons_classes                     │                                                                                                        #34 grad_*_mlp_@|_moons_input Local/1046                                                                                                         │
-                │ 1.00  │ 1.00  │ ... │ 1.00  │ 1.00  │                                                                                                        <not-in-context>                                                                                                                                 │
-                │ -1.00 │ -1.00 │     │ -1.00 │ -1.00 │                 #7 w2 non-emb                                               │                                                                          #31 relu Local/1046                                                                              │
-                │ ...   │ ...   │     │ ...   │ ...   │                  -5.35e-2  9.06e-2  ...  2.52e-1  3.03e-1                   │                                                                          <not-in-context>                                                                                 │
-                │ 1.00  │ 1.00  │     │ 1.00  │ 1.00  │                 #8 grad_w2 Local/26046                                      │                                                                          #32 grad_relu Virt/151                                                                           │
-                │ -1.00 │ -1.00 │     │ -1.00 │ -1.00 │                 <not-in-context>                                            │                                                                          <not-in-context>                                                                                 │
-                │                                     │                       #6 threefry4x32_light Virt/152                        │                                                                            #29 + Virt/152                                                                                 │
-                │                                     │                       <not-in-context>                                      │                                                                            <not-in-context>                                                                               │
-                │                                     │        #5 threefry4x32_light Virt/152        │#2 range_over_offsets Virt/152│                                                                            #30 grad_+ Virt/151                                                                            │
-                │                                     │        <not-in-context>                      │<not-in-context>              │                                                                            <not-in-context>                                                                               │
-                │                                     │#4 !@self_id Virt/40│#3 42_random_seed Virt/40│                              │#13 b1 non-emb                           │                                                      #27 * Virt/151                                                             │
-                │                                     │<not-in-context>    │<not-in-context>         │                              │ 8.40e-1  2.86e-1  ...  1.11e-1  1.78e-1 │                                                      <not-in-context>                                                           │
-                │                                     │                    │                         │                              │#14 grad_b1 Local/26046                  │                                                      #28 grad_* Local/1046                                                      │
-                │                                     │                    │                         │                              │<not-in-context>                         │                                                      <not-in-context>                                                           │
-                │                                     │                    │                         │                              │#12 threefry4x32_light Virt/152          │#19 w1 non-emb                       │#21 @|_moons_input unknown                                                                 │
-                │                                     │                    │                         │                              │<not-in-context>                         │ 5.13e-1  6.73e-1                    │<not-in-context>                                                                           │
-                │                                     │                    │                         │                              │├─#11 threefry4x32_light Virt/152        │ 7.47e-2  2.77e-2                    │└─#0 moons_flat                                                                            │
-                │                                     │                    │                         │                              ││ <not-in-context>                       │ ...      ...                        │   9.44e-1   3.22e-2  │ 9.34e-1   1.33e-1  │ ... │ -9.33e-1  1.64e-2 │ -9.78e-1  -1.39e-1  │
-                │                                     │                    │                         │                              ││ ├─#10 !@self_id Virt/40                │ 6.08e-1  5.24e-1                    │   -1.66e-1  5.42e-1  │ 6.02e-2   1.67e-1  │     │ 1.96      2.98e-1 │ 1.82      2.55e-1   │
-                │                                     │                    │                         │                              ││ │ <not-in-context>                     │ 2.56e-1  3.09e-1                    │   ...       ...      │ ...       ...      │     │ ...       ...     │ ...       ...       │
-                │                                     │                    │                         │                              ││ └─[#3 42_random_seed]                  │#20 grad_w1 Local/26046              │   1.07      -1.52e-1 │ 9.09e-1   -8.51e-2 │     │ -1.24     1.02e-1 │ -9.39e-1  6.62e-2   │
-                │                                     │                    │                         │                              │└─#9 range_over_offsets Virt/152         │<not-in-context>                     │   -2.67e-1  4.14e-1  │ -1.25e-1  6.30e-2  │     │ 1.93      2.44e-1 │ 1.77      4.79e-1   │
-                │                                     │                    │                         │                              │  <not-in-context>                       │└─#18 threefry4x32_light Virt/152    │                                                                                           │
-                │                                     │                    │                         │                              │                                         │  <not-in-context>                   │                                                                                           │
-                │                                     │                    │                         │                              │                                         │  ├─#17 threefry4x32_light Virt/152  │                                                                                           │
-                │                                     │                    │                         │                              │                                         │  │ <not-in-context>                 │                                                                                           │
-                │                                     │                    │                         │                              │                                         │  │ ├─#16 !@self_id Virt/40          │                                                                                           │
-                │                                     │                    │                         │                              │                                         │  │ │ <not-in-context>               │                                                                                           │
-                │                                     │                    │                         │                              │                                         │  │ └─[#3 42_random_seed]            │                                                                                           │
-                │                                     │                    │                         │                              │                                         │  └─#15 range_over_offsets Virt/152  │                                                                                           │
-                │                                     │                    │                         │                              │                                         │    <not-in-context>                 │                                                                                           │
+                                                                                                                                                       #57 /._scalar_loss On-dev/28046
+                                                                                                                                                       <not-in-context>
+                                                                                                                                                       #58 grad_/._scalar_loss Virt/40
+                                                                                                                                                       <not-in-context>
+                                                                                                                                                    #55 => Local/9046                                                                                                                                                       │#54 10 Virt/40
+                                                                                                                                                    <not-in-context>                                                                                                                                                        │<not-in-context>
+                                                                                                                                                    #56 grad_=> Virt/40                                                                                                                                                     │
+                                                                                                                                                    <not-in-context>                                                                                                                                                        │
+                                                                                                                                             #52 relu_margin_loss Virt/152                                                                                                                                                  │
+                                                                                                                                             <not-in-context>                                                                                                                                                               │
+                                                                                                                                             #53 grad_relu_margin_loss Virt/151                                                                                                                                             │
+                                                                                                                                             <not-in-context>                                                                                                                                                               │
+                                                                                                                                                    #50 - Virt/152                                                                                                                                                          │
+                                                                                                                                                    <not-in-context>                                                                                                                                                        │
+                                                                                                                                                    #51 grad_- Virt/151                                                                                                                                                     │
+                                                                                                                                                    <not-in-context>                                                                                                                                                        │
+#49 1 Virt/40   │                                                                                                                                           #47 *. Virt/152                                                                                                                                                 │
+<not-in-context>│                                                                                                                                           <not-in-context>                                                                                                                                                │
+                │                                                                                                                                           #48 grad_*. Virt/151                                                                                                                                            │
+                │                                                                                                                                           <not-in-context>                                                                                                                                                │
+                │     #36 @|_moons_class unknown      │                                                                                                              #45 *_mlp_@|_moons_input Virt/151                                                                                                                      │
+                │     <not-in-context>                │                                                                                                              <not-in-context>                                                                                                                                       │
+                │#1 moons_classes                     │                                                                                                              #46 grad_*_mlp_@|_moons_input Local/1046                                                                                                               │
+                │ 1.00  │ 1.00  │ ... │ 1.00  │ 1.00  │                                                                                                              <not-in-context>                                                                                                                                       │
+                │ -1.00 │ -1.00 │     │ -1.00 │ -1.00 │           #11 *._w2 non-emb                                       │                                                                                     #43 relu Local/1046                                                                                         │
+                │ ...   │ ...   │     │ ...   │ ...   │            -2.17e-1  -2.12e-1  ...  -2.24e-1  -2.12e-1            │                                                                                     <not-in-context>                                                                                            │
+                │ 1.00  │ 1.00  │     │ 1.00  │ 1.00  │           #12 grad_*._w2 Local/26046                              │                                                                                     #44 grad_relu Virt/151                                                                                      │
+                │ -1.00 │ -1.00 │     │ -1.00 │ -1.00 │           <not-in-context>                                        │                                                                                     <not-in-context>                                                                                            │
+                │                                     │#10 0.5 Virt/40 │                 #9 - Virt/152                    │                                                                                       #41 + Virt/152                                                                                            │
+                │                                     │<not-in-context>│                 <not-in-context>                 │                                                                                       <not-in-context>                                                                                          │
+                │                                     │                │        #7  Virt/152             │#8 0.5 Virt/40  │                                                                                       #42 grad_+ Virt/151                                                                                       │
+                │                                     │                │        <not-in-context>         │<not-in-context>│                                                                                       <not-in-context>                                                                                          │
+                │                                     │                │#6 threefry4x32_light Virt/152   │                │      #21 *._b1 non-emb                                  │                                                         #39 * Virt/151                                                                │
+                │                                     │                │<not-in-context>                 │                │       -1.45e-1  -8.93e-2  ...  2.19e-2  -5.83e-2        │                                                         <not-in-context>                                                              │
+                │                                     │                │├─#5 threefry4x32_light Virt/40  │                │      #22 grad_*._b1 Local/26046                         │                                                         #40 grad_* Local/1046                                                         │
+                │                                     │                ││ <not-in-context>               │                │      <not-in-context>                                   │                                                         <not-in-context>                                                              │
+                │                                     │                ││ ├─#4 !@self_id Virt/40         │                │#20 0.5 Virt/40 │#19 - Virt/152                          │#31 *._w1 non-emb                          │#33 @|_moons_input unknown                                                                 │
+                │                                     │                ││ │ <not-in-context>             │                │<not-in-context>│<not-in-context>                        │ 1.81e-1   2.05e-1                         │<not-in-context>                                                                           │
+                │                                     │                ││ └─#3 42_random_seed Virt/40    │                │                │├─#17  Virt/152                         │ 1.91e-1   2.21e-1                         │└─#0 moons_flat                                                                            │
+                │                                     │                ││   <not-in-context>             │                │                ││ <not-in-context>                      │ ...       ...                             │   9.44e-1   3.22e-2  │ 9.34e-1   1.33e-1  │ ... │ -9.33e-1  1.64e-2 │ -9.78e-1  -1.39e-1  │
+                │                                     │                │└─#2 range_over_offsets Virt/152 │                │                ││ └─#16 threefry4x32_light Virt/152     │ -1.39e-1  -1.37e-1                        │   -1.66e-1  5.42e-1  │ 6.02e-2   1.67e-1  │     │ 1.96      2.98e-1 │ 1.82      2.55e-1   │
+                │                                     │                │  <not-in-context>               │                │                ││   <not-in-context>                    │ 1.71e-1   2.01e-1                         │   ...       ...      │ ...       ...      │     │ ...       ...     │ ...       ...       │
+                │                                     │                │                                 │                │                ││   ├─#15 threefry4x32_light Virt/152   │#32 grad_*._w1 Local/26046                 │   1.07      -1.52e-1 │ 9.09e-1   -8.51e-2 │     │ -1.24     1.02e-1 │ -9.39e-1  6.62e-2   │
+                │                                     │                │                                 │                │                ││   │ <not-in-context>                  │<not-in-context>                           │   -2.67e-1  4.14e-1  │ -1.25e-1  6.30e-2  │     │ 1.93      2.44e-1 │ 1.77      4.79e-1   │
+                │                                     │                │                                 │                │                ││   │ ├─#14 !@self_id Virt/40           │├─#30 0.5 Virt/40                          │                                                                                           │
+                │                                     │                │                                 │                │                ││   │ │ <not-in-context>                ││ <not-in-context>                         │                                                                                           │
+                │                                     │                │                                 │                │                ││   │ └─[#3 42_random_seed]             │└─#29 - Virt/152                           │                                                                                           │
+                │                                     │                │                                 │                │                ││   └─#13 range_over_offsets Virt/152   │  <not-in-context>                         │                                                                                           │
+                │                                     │                │                                 │                │                ││     <not-in-context>                  │  ├─#27  Virt/152                          │                                                                                           │
+                │                                     │                │                                 │                │                │└─#18 0.5 Virt/40                       │  │ <not-in-context>                       │                                                                                           │
+                │                                     │                │                                 │                │                │  <not-in-context>                      │  │ └─#26 threefry4x32_light Virt/152      │                                                                                           │
+                │                                     │                │                                 │                │                │                                        │  │   <not-in-context>                     │                                                                                           │
+                │                                     │                │                                 │                │                │                                        │  │   ├─#25 threefry4x32_light Virt/152    │                                                                                           │
+                │                                     │                │                                 │                │                │                                        │  │   │ <not-in-context>                   │                                                                                           │
+                │                                     │                │                                 │                │                │                                        │  │   │ ├─#24 !@self_id Virt/40            │                                                                                           │
+                │                                     │                │                                 │                │                │                                        │  │   │ │ <not-in-context>                 │                                                                                           │
+                │                                     │                │                                 │                │                │                                        │  │   │ └─[#3 42_random_seed]              │                                                                                           │
+                │                                     │                │                                 │                │                │                                        │  │   └─#23 range_over_offsets Virt/152    │                                                                                           │
+                │                                     │                │                                 │                │                │                                        │  │     <not-in-context>                   │                                                                                           │
+                │                                     │                │                                 │                │                │                                        │  └─#28 0.5 Virt/40                        │                                                                                           │
+                │                                     │                │                                 │                │                │                                        │    <not-in-context>                       │                                                                                           │
