@@ -1,15 +1,15 @@
 Retrieving commandline, environment, or config file variable ocannl_log_level
 Found 0, in the config file
 Testing default lone parameter -- corner case
-┌───────────────────┐
-│[5]: w_o shape 0:1 │
-│┌┬─────────┐       │
-│││axis 0   │       │
-│├┼─────────┤       │
-│││ 4.49e-1 │       │
-│└┴─────────┘       │
-└───────────────────┘
-grad_w_o <not-in-context>
+┌──────────────────────┐
+│[9]: *._w_o shape 0:1 │
+│┌┬──────────┐         │
+│││axis 0    │         │
+│├┼──────────┤         │
+│││ -2.50e-2 │         │
+│└┴──────────┘         │
+└──────────────────────┘
+grad_*._w_o <not-in-context>
 
 ERROR: Should have raised an exception
 Testing lone parameter 1D -- corner case
