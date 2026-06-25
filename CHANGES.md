@@ -135,7 +135,8 @@
 ### Changed
 
 - Padding is now reset by tracking neutral elements through shape inference
-- Changed default random initialization to `uniform1` which doesn't impose shape constraints
+- Changed default random initialization to centered scaled `uniform1` over `[-0.25, 0.25)`,
+  which doesn't impose shape constraints
 - Refactored `vbs` from Map to list for order-preserving let bindings in syntax extensions
 - Infer the shape of inline definitions assigned a slot for `%cd` expressions with `projections` in scope
 

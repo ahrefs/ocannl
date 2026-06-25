@@ -117,24 +117,11 @@ later lectures.
 
 ### Weight initialization
 
-OCANNL's default `uniform1` init produces values in `[0, 1)`, i.e. all
-positive. For an MLP with `tanh` that saturates the preactivation and traps
-SGD at a high-loss plateau. We mitigate post-hoc by recentering every
-parameter to `[-0.25, 0.25)`, matching the pattern
-[`transformer_names.ml`](../test/training/transformer_names.ml) uses:
-
-```ocaml
-(* Value access is context-mediated after gh-ocannl-333: read/write through the context that holds
-   the parameters, threading the updated context. *)
-let ctx =
-  Set.fold batch_loss.Tensor.params ~init:ctx ~f:(fun ctx p ->
-      let tn = p.Tensor.value in
-      Train.set_materialized tn;
-      let vals = Context.get_values ctx tn in
-      Array.iteri vals ~f:(fun i v -> vals.(i) <- 0.5 *. (v -. 0.5));
-      Context.set_values ctx tn vals)
-in
-```
+OCANNL's default parameter initializer is a centered, scaled `uniform1`
+distribution over `[-0.25, 0.25)`. It keeps the arbitrary-shape behavior of the
+non-vectorized `uniform1` path while avoiding all-positive weights. For an MLP
+with `tanh`, that centered default avoids saturating the preactivation and
+trapping SGD at a high-loss plateau.
 
 Karpathy's lecture handles the same pain point a different way, which is
 itself the entry point to Part 3.
@@ -187,10 +174,10 @@ let hidden = mk_hidden ()
 `let%op mk_hidden () ~train_step x = ...` lifts the inline `{ w1 = … }` and
 `{ b1 }` parameters to the `()` closure scope — they are constructed *once*
 when `mk_hidden ()` is called, and shared across every subsequent invocation
-(training, dev/test eval, inference generation). The post-init recentering
-pass (inherited from Part 2) explicitly skips `w1` so Kaiming's scale is
-preserved; `c`, `b1`, `w2`, `b2` are still recentered from uniform `[0,1)`
-to roughly centered.
+(training, dev/test eval, inference generation). The explicit Kaiming
+initializer on `w1` overrides the default centered `uniform1` initializer so
+Kaiming's fan-in scale is preserved; `c`, `b1`, `w2`, and `b2` use the default
+`[-0.25, 0.25)` range.
 
 ### Known limitation — running statistics
 

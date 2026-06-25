@@ -521,6 +521,10 @@ let%op _ = w_raw ++ "...|..i.. -> ..o.. => 0" [ "i"; "o" ] in
 
 ### Parameter Initialization
 
+By default, `%op` parameters use a centered, scaled `uniform1` initializer with
+values in `[-0.25, 0.25)`. This keeps the non-vectorized arbitrary-shape
+behavior of `uniform1` while avoiding all-positive initial weights.
+
 Usage example:
 ```ocaml
 (* Set kaiming initialization as default. Initializers are forward-only. *)

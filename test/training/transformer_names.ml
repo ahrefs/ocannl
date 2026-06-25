@@ -1,7 +1,6 @@
 open Base
 open Ocannl
 open Stdio
-module Tn = Ir.Tnode
 module IDX = Train.IDX
 open Nn_blocks.DSL_modules
 module Asgns = Ir.Assignments
@@ -146,15 +145,6 @@ let () =
   let ctx = Train.init_params ctx bindings batch_loss in
   Train.set_materialized input_batch.value;
   Train.set_materialized target_batch.value;
-  (* Recenter all model parameters from uniform [0,1) to [-0.25, 0.25). OCANNL's default uniform1
-     init produces all-positive weights; through the transformer's Q*K^T attention scores this
-     causes extreme values and exp overflow. Same mitigation as fsm_transformer.ml. *)
-  Set.iter batch_loss.Tensor.params ~f:(fun p ->
-      let tn = p.Tensor.value in
-      Train.set_materialized tn;
-      let vals = Context.get_values ctx tn in
-      Array.iteri vals ~f:(fun i v -> vals.(i) <- 0.5 *. (v -. 0.5));
-      ignore (Context.set_values ctx tn vals : Context.t));
   Train.set_materialized infer_logits.value;
   Train.set_materialized infer_input.value;
 

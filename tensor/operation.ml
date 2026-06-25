@@ -725,6 +725,17 @@ let uniform1 ?grad_spec () =
           ~label:[ "range_over_offsets" ] ())
        ())
 
+let default_uniform1_param_init () ?label ?top_down_prec ?batch_dims ?batch_axes ?input_dims
+    ?output_dims ?input_axes ?output_axes ?deduced () =
+  let number = Tensor.number ~grad_spec:Prohibit_grad in
+  let u =
+    uniform1 ~grad_spec:Prohibit_grad () ?top_down_prec ?batch_dims ?batch_axes ?input_dims
+      ?output_dims ?input_axes ?output_axes ?deduced ()
+  in
+  let centered = sub ~grad_spec:Prohibit_grad u (number 0.5) () in
+  pointmul ~grad_spec:Prohibit_grad (number 0.5) centered ?label ?top_down_prec ?batch_dims
+    ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ()
+
 (** A wasteful variant of {!uniform_at} that produces a single value from each 4x32 random bits. The
     bit-spreading in int32_to_uint4x32/uint32_to_uint4x32 ensures good entropy even with the 2-round
     "light" threefry variant. *)
@@ -792,11 +803,12 @@ struct
 
   (** The default initialization operation for {!param} calls.
 
-      To avoid user surprises, this defaults to {!uniform1} which does not impose constraints on the
-      shape of the tensor, but for efficiency, consider setting this to [uniform] or [normal]
-      instead. Initialization expressions are forward-only; {!param} adds the final parameter
+      To avoid user surprises, this defaults to a centered, scaled {!uniform1} distribution from
+      -0.25 inclusive to 0.25 exclusive. This keeps the non-vectorized arbitrary-shape behavior of
+      {!uniform1}; for efficiency, consider setting this to [uniform] or [normal] instead when
+      shapes allow. Initialization expressions are forward-only; {!param} adds the final parameter
       gradient when needed. *)
-  let default_param_init = ref (uniform1 ~grad_spec:Prohibit_grad)
+  let default_param_init = ref default_uniform1_param_init
   (* Useful for debugging: *)
   (* let default_param_init =
     ref (fun () -> Tensor.term ~grad_spec:Require_grad ?init_data:None ~fetch_op:(Constant 0.)) *)
