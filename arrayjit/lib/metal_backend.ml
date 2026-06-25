@@ -333,51 +333,29 @@ module Fresh () = struct
 
   (* --- Copy Operations --- (transfers take {!Backend_intf.buffer_loc} and resolve to the concrete
      [Metal.Buffer.t] here, against the device's private pool table.) *)
+  let offset_contents buffer ~offset =
+    let contents = Me.Buffer.contents buffer in
+    if offset = 0 then contents else Ctypes.(to_voidp (from_voidp uint8_t contents +@ offset))
+
   let from_host ~dst ~dst_loc hosted =
-    (* Copy from host memory to Metal buffer *)
+    (* Pools are Shared, so host transfer is a direct offset-aware memcpy. Avoid an asynchronous
+       no-copy staging buffer here: the wrapped host pointer's lifetime/cache visibility is fragile
+       and used to drop the non-zero pool offset round-trip on some systems. *)
     let dst_ptr = Slab.resolve_pool dst.device dst_loc in
     let size_in_bytes = Ndarray.size_in_bytes hosted in
-    let command_buffer = Me.CommandBuffer.on_queue dst.device.runner.queue in
-
-    (* Get host memory pointer *)
-    let host_ptr = Ndarray.get_fatptr_not_managed hosted in
-    let (Ctypes_static.CPointer dst_fatptr) = Me.Buffer.contents dst_ptr in
-    if Ctypes_ptr.Fat.compare dst_fatptr host_ptr <> 0 then (
-      (* Create a temporary host buffer to bridge the gap *)
-      let temp_buffer =
-        Me.Buffer.on_device_with_bytes_no_copy dst.device.dev
-          ~bytes:(Ctypes_static.CPointer host_ptr) ~length:size_in_bytes
-          Me.ResourceOptions.(storage_mode_shared + cpu_cache_mode_default_cache)
-      in
-      let blit_encoder = Me.BlitCommandEncoder.on_buffer command_buffer in
-      Me.BlitCommandEncoder.copy_from_buffer blit_encoder ~source_buffer:temp_buffer
-        ~source_offset:0 ~destination_buffer:dst_ptr ~destination_offset:dst_loc.offset
-        ~size:size_in_bytes;
-      Me.BlitCommandEncoder.end_encoding blit_encoder;
-      Me.CommandBuffer.commit command_buffer)
+    let host_fatptr = Ndarray.get_fatptr_not_managed hosted in
+    let (Ctypes_static.CPointer dst_fatptr) = offset_contents dst_ptr ~offset:dst_loc.offset in
+    if Ctypes_ptr.Fat.compare dst_fatptr host_fatptr <> 0 then
+      Ctypes_memory_stubs.memcpy ~dst:dst_fatptr ~src:host_fatptr ~size:size_in_bytes
 
   let to_host ~src ~src_loc hosted =
-    (* Copy from Metal buffer to host memory *)
+    (* Pools are Shared, so host transfer is a direct offset-aware memcpy. *)
     let src_ptr = Slab.resolve_pool src.device src_loc in
     let size_in_bytes = Ndarray.size_in_bytes hosted in
-    let command_buffer = Me.CommandBuffer.on_queue src.device.runner.queue in
-
-    (* Get host memory pointer *)
-    let host_ptr = Ndarray.get_fatptr_not_managed hosted in
-    let (Ctypes_static.CPointer src_fatptr) = Me.Buffer.contents src_ptr in
-    if Ctypes_ptr.Fat.compare src_fatptr host_ptr <> 0 then (
-      (* Create a temporary host buffer to bridge the gap *)
-      let temp_buffer =
-        Me.Buffer.on_device_with_bytes_no_copy src.device.dev
-          ~bytes:(Ctypes_static.CPointer host_ptr) ~length:size_in_bytes
-          Me.ResourceOptions.(storage_mode_shared + cpu_cache_mode_default_cache)
-      in
-      let blit_encoder = Me.BlitCommandEncoder.on_buffer command_buffer in
-      Me.BlitCommandEncoder.copy_from_buffer blit_encoder ~source_buffer:src_ptr
-        ~source_offset:src_loc.offset ~destination_buffer:temp_buffer ~destination_offset:0
-        ~size:size_in_bytes;
-      Me.BlitCommandEncoder.end_encoding blit_encoder;
-      Me.CommandBuffer.commit command_buffer)
+    let host_fatptr = Ndarray.get_fatptr_not_managed hosted in
+    let (Ctypes_static.CPointer src_fatptr) = offset_contents src_ptr ~offset:src_loc.offset in
+    if Ctypes_ptr.Fat.compare src_fatptr host_fatptr <> 0 then
+      Ctypes_memory_stubs.memcpy ~dst:host_fatptr ~src:src_fatptr ~size:size_in_bytes
 
   (* The merge buffer is the device's reserved single-tenant pool (id [merge_buffer_pool_id]); grow it
      in place when a larger node arrives ([Slab.alloc_pool] overwrites the reserved entry). The merge

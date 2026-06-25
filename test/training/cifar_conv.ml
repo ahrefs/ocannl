@@ -38,7 +38,7 @@ let () =
   (* Xavier init -- same as circles_conv.ml and mnist_conv.ml. CIFAR data is centered to [-0.5, 0.5]
      in Conv_data.cifar_images_to_float32 so that all-positive Xavier-uniform weights produce
      zero-centered conv outputs. *)
-  TDSL.default_param_init := PDSL.xavier ~scale_sq:0.06 TDSL.O.uniform1;
+  TDSL.default_param_init := NTDSL.xavier ~scale_sq:0.06 TDSL.O.uniform1;
 
   (* --- Configuration --- Regression mode (default): fast, loose thresholds, used by dune runtest.
      Full-run mode: change these constants for issue acceptance targets (>60% accuracy). *)

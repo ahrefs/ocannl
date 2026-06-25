@@ -60,12 +60,12 @@ Testing notes:
 ## DSL Usage (%op and %cd)
 For code outside the core implementation (tests/examples/user code), start with:
 `open Ocannl.Operation.DSL_modules`
-This brings in Tensor, Shape, TDSL/NTDSL/PDSL, and Ir.
+This brings in Tensor, Shape, TDSL/NTDSL, and Ir.
 
 Key points:
 - %op builds Tensor.t; %cd builds Assignments.comp.
-- %op requires TDSL in scope; %cd requires NTDSL in scope; inline parameter init in %op
-  requires PDSL in scope.
+- %op requires TDSL in scope; %cd requires NTDSL in scope. Inline parameter init in %op is
+  forward-only and uses NTDSL internally; TDSL.param adds the final parameter gradient.
 - Inline params: `{ w }` or `{ w = init }`; dims via `o`/`i`/`b` fields.
 - `%op` uses a unit-parameter `()` boundary to lift parameter creation; bind layers at `()`
   before applying to inputs to avoid mis-scoped parameters.

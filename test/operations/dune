@@ -101,6 +101,17 @@
   (pps ppx_here ppx_ocannl ppx_expect)))
 
 (test
+ (name test_composite_param_init)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules test_composite_param_init)
+ (libraries base ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name row_beg_dims_regression)
  (package neural_nets_lib)
  (modules row_beg_dims_regression)
@@ -725,9 +736,7 @@
  (alias runtest)
  (package neural_nets_lib)
  (action
-  (diff
-   "test_log_stmt_format.c.expected"
-   "test_log_stmt_format.c.actual")))
+  (diff "test_log_stmt_format.c.expected" "test_log_stmt_format.c.actual")))
 
 (test
  (name test_debug_name_collapse)
@@ -757,6 +766,7 @@
  (libraries base ocannl stdio)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
 (library
  (name operations_tutorials)
  (package neural_nets_lib)
@@ -780,7 +790,8 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (action
-  (with-stdout-to %{target}
+  (with-stdout-to
+   %{target}
    (run
     %{dep:test_config_consistency.exe}
     %{dep:../../ocannl_config.reference}
@@ -799,7 +810,8 @@
 (rule
  (alias runtest)
  (package neural_nets_lib)
- (action (diff test_config_consistency.expected test_config_consistency.actual)))
+ (action
+  (diff test_config_consistency.expected test_config_consistency.actual)))
 
 (test
  (name test_metal_pool_bindings)

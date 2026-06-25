@@ -32,7 +32,7 @@ let () =
   Tensor.unsafe_reinitialize ();
 
   (* Xavier init to prevent activation explosion -- same as circles_conv.ml *)
-  TDSL.default_param_init := PDSL.xavier ~scale_sq:0.06 TDSL.O.uniform1;
+  TDSL.default_param_init := NTDSL.xavier ~scale_sq:0.06 TDSL.O.uniform1;
 
   (* --- Configuration --- Regression mode (default): fast, loose thresholds, used by dune runtest.
      Full-run mode: change these constants for issue acceptance targets (>95% accuracy). *)

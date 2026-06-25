@@ -8,21 +8,21 @@ x2 = [4.0, 5.0] (dim 2)
 
 --- Forward pass: sin((x1, x2) ++^ "a; b => a^b") ---
 Concatenated result (after sin):
-HERE: test/operations/test_concat_graph.ml:40:21
+HERE: test/operations/test_concat_graph.ml:46:21
 [6]: sin_result shape 0:5  <not-in-context>
 
 --- Backward pass: gradients ---
 Loss (sum of all sin values):
-HERE: test/operations/test_concat_graph.ml:44:21
+HERE: test/operations/test_concat_graph.ml:50:21
 [9]: =>_loss shape 0:1  <not-in-context>
 
 Gradient of x1 (cos of original values):
-HERE: test/operations/test_concat_graph.ml:47:21
+HERE: test/operations/test_concat_graph.ml:53:21
 [0]: 1,2,3 shape 0:3  <not-in-context>
 grad_1,2,3 <not-in-context>
 
 Gradient of x2:
-HERE: test/operations/test_concat_graph.ml:50:21
+HERE: test/operations/test_concat_graph.ml:56:21
 [2]: 4,5 shape 0:2  <not-in-context>
 grad_4,5 <not-in-context>
 
@@ -35,26 +35,26 @@ x3_3 = [6.0, 7.0] (dim 2)
 
 --- Forward pass: sin((x1_3, x2_3, x3_3) ++^ "a; b; c => a^b^c") ---
 Concatenated result (after sin):
-HERE: test/operations/test_concat_graph.ml:82:21
+HERE: test/operations/test_concat_graph.ml:97:21
 [32]: sin_result3 shape 0:7  <not-in-context>
 
 --- Backward pass: gradients ---
 Loss (sum of all sin values):
-HERE: test/operations/test_concat_graph.ml:86:21
+HERE: test/operations/test_concat_graph.ml:101:21
 [35]: =>_loss3 shape 0:1  <not-in-context>
 
 Gradient of x1_3 (cos of original values):
-HERE: test/operations/test_concat_graph.ml:89:21
+HERE: test/operations/test_concat_graph.ml:104:21
 [24]: 1,2 shape 0:2  <not-in-context>
 grad_1,2 <not-in-context>
 
 Gradient of x2_3:
-HERE: test/operations/test_concat_graph.ml:92:21
+HERE: test/operations/test_concat_graph.ml:107:21
 [26]: 3,4,5 shape 0:3  <not-in-context>
 grad_3,4,5 <not-in-context>
 
 Gradient of x3_3:
-HERE: test/operations/test_concat_graph.ml:95:21
+HERE: test/operations/test_concat_graph.ml:110:21
 [28]: 6,7 shape 0:2  <not-in-context>
 grad_6,7 <not-in-context>
 
@@ -67,26 +67,26 @@ x3_u = [4.0, 5.0] (dim 2)
 
 --- Forward pass: sin((x1_u, x2_u, x3_u) ++^ "a; b; c => a^b^c") ---
 Concatenated result (after sin):
-HERE: test/operations/test_concat_graph.ml:130:23
+HERE: test/operations/test_concat_graph.ml:154:23
 [61]: sin_result_u shape 0:5  <not-in-context>
 
 --- Backward pass: gradients ---
 Loss (sum of all sin values):
-HERE: test/operations/test_concat_graph.ml:134:23
+HERE: test/operations/test_concat_graph.ml:158:23
 [64]: =>_loss_u shape 0:1  <not-in-context>
 
 Gradient of x1_u (cos of original values):
-HERE: test/operations/test_concat_graph.ml:137:23
+HERE: test/operations/test_concat_graph.ml:161:23
 [53]: 1,2 shape 0:2  <not-in-context>
 grad_1,2 <not-in-context>
 
 Gradient of x2_u:
-HERE: test/operations/test_concat_graph.ml:140:23
+HERE: test/operations/test_concat_graph.ml:164:23
 [55]: 3 shape 0:1  <not-in-context>
 grad_3 <not-in-context>
 
 Gradient of x3_u:
-HERE: test/operations/test_concat_graph.ml:143:23
+HERE: test/operations/test_concat_graph.ml:167:23
 [57]: 4,5 shape 0:2  <not-in-context>
 grad_4,5 <not-in-context>
 
@@ -99,26 +99,26 @@ n3 = [6.0, 7.0] (dim 2)
 
 --- Forward pass: sin(((n1, n2) ++^ "a; b => a^b", n3) ++^ "a; b => a^b") ---
 Nested concatenation result (after sin):
-HERE: test/operations/test_concat_graph.ml:172:21
+HERE: test/operations/test_concat_graph.ml:205:21
 [92]: sin_nested shape 0:7  <not-in-context>
 
 --- Backward pass: gradients ---
 Loss:
-HERE: test/operations/test_concat_graph.ml:176:21
+HERE: test/operations/test_concat_graph.ml:209:21
 [95]: =>_loss_n shape 0:1  <not-in-context>
 
 Gradient of n1:
-HERE: test/operations/test_concat_graph.ml:179:21
+HERE: test/operations/test_concat_graph.ml:212:21
 [82]: 1,2 shape 0:2  <not-in-context>
 grad_1,2 <not-in-context>
 
 Gradient of n2:
-HERE: test/operations/test_concat_graph.ml:182:21
+HERE: test/operations/test_concat_graph.ml:215:21
 [84]: 3,4,5 shape 0:3  <not-in-context>
 grad_3,4,5 <not-in-context>
 
 Gradient of n3:
-HERE: test/operations/test_concat_graph.ml:185:21
+HERE: test/operations/test_concat_graph.ml:218:21
 [86]: 6,7 shape 0:2  <not-in-context>
 grad_6,7 <not-in-context>
 
@@ -131,23 +131,23 @@ b3 = [5.0, 6.0] (dim 2)
 
 --- Forward pass ---
 Concatenated result (after sin):
-HERE: test/operations/test_concat_graph.ml:212:21
+HERE: test/operations/test_concat_graph.ml:254:21
 [121]: sin_result_b1 shape 0:6  <not-in-context>
 
 --- Backward pass: gradients ---
 
 Gradient of b1:
-HERE: test/operations/test_concat_graph.ml:216:21
+HERE: test/operations/test_concat_graph.ml:258:21
 [113]: 1 shape 0:1  <not-in-context>
 grad_1 <not-in-context>
 
 Gradient of b2:
-HERE: test/operations/test_concat_graph.ml:219:21
+HERE: test/operations/test_concat_graph.ml:261:21
 [115]: 2,3,4 shape 0:3  <not-in-context>
 grad_2,3,4 <not-in-context>
 
 Gradient of b3:
-HERE: test/operations/test_concat_graph.ml:222:21
+HERE: test/operations/test_concat_graph.ml:264:21
 [117]: 5,6 shape 0:2  <not-in-context>
 grad_5,6 <not-in-context>
 
@@ -160,23 +160,23 @@ l3 = [6.0] (dim 1)
 
 --- Forward pass ---
 Concatenated result (after sin):
-HERE: test/operations/test_concat_graph.ml:249:21
+HERE: test/operations/test_concat_graph.ml:300:21
 [147]: sin_result_l shape 0:6  <not-in-context>
 
 --- Backward pass: gradients ---
 
 Gradient of l1:
-HERE: test/operations/test_concat_graph.ml:253:21
+HERE: test/operations/test_concat_graph.ml:304:21
 [139]: 1,2 shape 0:2  <not-in-context>
 grad_1,2 <not-in-context>
 
 Gradient of l2:
-HERE: test/operations/test_concat_graph.ml:256:21
+HERE: test/operations/test_concat_graph.ml:307:21
 [141]: 3,4,5 shape 0:3  <not-in-context>
 grad_3,4,5 <not-in-context>
 
 Gradient of l3:
-HERE: test/operations/test_concat_graph.ml:259:21
+HERE: test/operations/test_concat_graph.ml:310:21
 [143]: 6 shape 0:1  <not-in-context>
 grad_6 <not-in-context>
 

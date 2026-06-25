@@ -226,9 +226,8 @@ type grad_spec = Require_grad | Prohibit_grad | If_needed
 
 The DSL modules set appropriate defaults:
 
-- `TDSL` uses `If_needed` (automatic gradient propagation)
+- `TDSL` uses `If_needed` (automatic gradient propagation; `TDSL.param` adds the final parameter gradient)
 - `NTDSL` uses `Prohibit_grad` (non-differentiable)
-- `PDSL` uses `Require_grad` (parameters)
 
 ### Tensor Precision
 
@@ -524,14 +523,14 @@ let%op _ = w_raw ++ "...|..i.. -> ..o.. => 0" [ "i"; "o" ] in
 
 Usage example:
 ```ocaml
-(* Set kaiming initialization as default: PDSL outside, TDSL inside *)
-TDSL.default_param_init := PDSL.kaiming TDSL.O.uniform1;
+(* Set kaiming initialization as default. Initializers are forward-only. *)
+TDSL.default_param_init := NTDSL.kaiming TDSL.O.uniform1;
 
 (* Or use directly in parameter definition *)
 let%op layer x = { w = kaiming uniform1 () } * x + { b = 0. }
 ```
 
-When setting `default_param_init`, we call `PDSL.kaiming` so that the result is differentiable, but `TDSL.O.uniform1` or `NTDSL.O.uniform1` so the intermediate values are not differentiable.
+When setting `default_param_init`, use `NTDSL` helpers: initialization is a one-shot forward computation. `TDSL.param` makes the final parameter tensor differentiable after the initializer has produced its value.
 
 ## Memory Management
 

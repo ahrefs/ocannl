@@ -218,14 +218,15 @@ val ndarray : ?grad_spec:grad_spec -> float array -> op_fun
     given values must fill the tensor's [value] node precisely; otherwise, the values will be looped
     over to populate the [value] node. *)
 
-val param : t:op_fun -> string -> ?more_label:string list -> param_op_fun
+val param : ?require_grad:bool -> t:op_fun -> string -> ?more_label:string list -> param_op_fun
 (** [param] is intended for all tensors with initialization; these typically are parameters, but
     [param] is also used for non-differentiable tensors that need to be initialized. For proper
-    parameters, [t] should produce a tensor with no batch axes; input and output axes should by
-    default be inferred; [grad_spec] should be [Require_grad]. [t]'s label is the passed string,
-    appended by [more_label] if any, other parameters are forwarded to [t]. This function returns
-    [t]'s result with the field {!field:params} replaced by a singleton set containing that result,
-    and it also updates the memory modes. *)
+    parameters, pass [require_grad:true]. [t] should produce a tensor with no batch axes; input and
+    output axes should by default be inferred. [t]'s label is the passed string, appended by
+    [more_label] if any, other parameters are forwarded to [t]. This function returns [t]'s result
+    with the field {!field:params} replaced by a singleton set containing that result, and it also
+    updates the memory modes. If [require_grad] is true, any gradient structure inherited from the
+    initialization expression is replaced by a fresh gradient for the final parameter value only. *)
 
 val term_init : ?grad_spec:grad_spec -> float array -> op_fun
 (** A {!term} wrapper that sets up the value node initialization (it generalizes {!ndarray} to
@@ -346,9 +347,6 @@ val to_doc :
   t ->
   PPrint.document
 
-(** [print] renders a tensor's metadata and, when an explicit [?ctx] is supplied, its values via an
-    on-demand device-to-host transfer (gh-ocannl-333). Without [?ctx] (the default) values are shown
-    as a placeholder. *)
 val print :
   ?here:Ppx_here_lib.position ->
   ?force:bool ->
@@ -359,6 +357,9 @@ val print :
   array_print_style ->
   t ->
   unit
+(** [print] renders a tensor's metadata and, when an explicit [?ctx] is supplied, its values via an
+    on-demand device-to-host transfer (gh-ocannl-333). Without [?ctx] (the default) values are shown
+    as a placeholder. *)
 
 val print_forward_roots : with_grad:bool -> with_code:bool -> array_print_style -> unit
 

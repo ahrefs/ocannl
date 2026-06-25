@@ -18,7 +18,8 @@ module At = struct
 
   let ( .@%{} ) (ctx, t) idx = Context.get_value ctx (grad t) idx
 
-  (** Set the value at the given indices: [At.((ctx, t).@{idx} <- v)]; returns the updated context. *)
+  (** Set the value at the given indices: [At.((ctx, t).@{idx} <- v)]; returns the updated context.
+  *)
   let ( .@{}<- ) (ctx, t) idx v = Context.set_value ctx t.Tensor.value idx v
 
   let ( .@%{}<- ) (ctx, t) idx v = Context.set_value ctx (grad t) idx v
@@ -28,7 +29,8 @@ module At = struct
 
   let ( .@%[] ) (ctx, t) indx = Context.get_value ctx (grad t) [| indx |]
 
-  (** Set the value at the given index for a single-axis shape tensor; returns the updated context. *)
+  (** Set the value at the given index for a single-axis shape tensor; returns the updated context.
+  *)
   let ( .@[]<- ) (ctx, t) indx v = Context.set_value ctx (grad t) [| indx |] v
 
   let ( .@%[]<- ) (ctx, t) indx v = Context.set_value ctx (grad t) [| indx |] v
@@ -447,17 +449,15 @@ let fma ~grad_spec t1 t2 t3 =
     Gradient: flows to [a] masked by the predicate and to [b] masked by its complement; no gradient
     to the predicate.
 
-    Documented caveat: when a reduced axis is absent from a branch (branch broadcasts along it),
-    the broadcast value is accumulated once per selected reduction iteration ("count-weighted") —
-    this is the honest semantics of reduce-after-select. For example, with spec ["p;a;b=>out"] and
-    [a] broadcasting along a reduced axis, [a]'s scalar value is summed once for each reduction
-    step where the predicate is 1. *)
+    Documented caveat: when a reduced axis is absent from a branch (branch broadcasts along it), the
+    broadcast value is accumulated once per selected reduction iteration ("count-weighted") — this
+    is the honest semantics of reduce-after-select. For example, with spec ["p;a;b=>out"] and [a]
+    broadcasting along a reduced axis, [a]'s scalar value is summed once for each reduction step
+    where the predicate is 1. *)
 let where ?spec ?(capture_dims = []) ~grad_spec t1 t2 t3 =
   let module NTDSL = NTDSL_before_div in
   let ternary_op =
-    match spec with
-    | None -> Shape.Pointwise_tern
-    | Some s -> Shape.Einsum_tern (s, capture_dims)
+    match spec with None -> Shape.Pointwise_tern | Some s -> Shape.Einsum_tern (s, capture_dims)
   in
   let%cd op_asn ~t ~t1 ~t2 ~t3 ~projections = v =:+ where v1 v2 v3 in
   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~t3 ~projections =
@@ -476,15 +476,14 @@ let einsum ?(capture_dims = []) spec = pointmul ~spec ~capture_dims
 (** Like [einsum], but adds instead than multiplying the resulting values. *)
 let outer_sum ?(capture_dims = []) spec = add ~spec ~capture_dims
 
-(** Ternary einsum: contracts three tensors under a three-RHS spec
-    [rhs1 ; rhs2 ; rhs3 => lhs]. The forward pass computes
-    [v[lhs] =+ mul3(v1[rhs1], v2[rhs2], v3[rhs3])] over the product space of all axis labels.
-    Axis labels present in any RHS but absent from the LHS become reduction axes.
+(** Ternary einsum: contracts three tensors under a three-RHS spec [rhs1 ; rhs2 ; rhs3 => lhs]. The
+    forward pass computes [v[lhs] =+ mul3(v1[rhs1], v2[rhs2], v3[rhs3])] over the product space of
+    all axis labels. Axis labels present in any RHS but absent from the LHS become reduction axes.
 
     WARNING: for chain-structured contractions such as ["ij;jk;km=>im"] the fused kernel iterates
-    the full product space (O(N⁴) for N-dimensional operands), which is less efficient than a
-    binary chain (O(N³)). Use ternary einsum for patterns where all three operands share reduction
-    axes, e.g. bilinear forms. *)
+    the full product space (O(N⁴) for N-dimensional operands), which is less efficient than a binary
+    chain (O(N³)). Use ternary einsum for patterns where all three operands share reduction axes,
+    e.g. bilinear forms. *)
 let einsum3 ?(capture_dims = []) spec =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~t ~t1 ~t2 ~t3 ~projections = v =:+ mul3 v1 v2 v3 in
@@ -493,7 +492,8 @@ let einsum3 ?(capture_dims = []) spec =
     g2 =+ mul3 v1 g v3;
     g3 =+ mul3 v1 v2 g
   in
-  Tensor.ternop ~op_label:"einsum3" ~ternary_op:(Shape.Einsum_tern (spec, capture_dims))
+  Tensor.ternop ~op_label:"einsum3"
+    ~ternary_op:(Shape.Einsum_tern (spec, capture_dims))
     ~op_asn ~grad_asn
 
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract
@@ -539,8 +539,8 @@ let concat_sum ?(capture_dims = []) ?(negated = false) spec ?grad_spec rhses =
 
 let concat = concat_sum
 
-(** The axis kind along which {!stack} introduces the fresh leading axis. *)
 type stack_axis = [ `Output | `Batch | `Input ]
+(** The axis kind along which {!stack} introduces the fresh leading axis. *)
 
 (** Stack [rhses] along a fresh leading axis of kind [axis] (result rank = operand rank + 1, true
     stacking rather than concatenation along an existing axis). Each operand is unsqueezed with a
@@ -659,9 +659,9 @@ let stop_gradient ?spec ?(capture_dims = []) =
 let slice (batch_idx : Idx.static_symbol) =
   let module NTDSL = Initial_NTDSL in
   let op_asn ~t ~t1 ~projections =
-    (* Mark the slice eagerly (before lowering decides alias eligibility) so direct host access of the
-       slice is rejected from birth -- otherwise a host write before any lowering would allocate a
-       detached buffer that the later alias redirect orphans (gh-ocannl-293 293a). *)
+    (* Mark the slice eagerly (before lowering decides alias eligibility) so direct host access of
+       the slice is rejected from birth -- otherwise a host write before any lowering would allocate
+       a detached buffer that the later alias redirect orphans (gh-ocannl-293 293a). *)
     Tn.set_slice_of t.Tensor.value ~parent:t1.Tensor.value ~batch_idx;
     Asgns.to_comp
     @@ Fetch
@@ -675,20 +675,25 @@ let slice (batch_idx : Idx.static_symbol) =
 
   Tensor.unop ~transpose_op:(Batch_slice batch_idx) ~op_asn ~grad_asn ~op_label:"@|"
 
-(* The embedded size-1 output axes below are internal broadcast fill (a scalar id / symbol that
-   must multiply into a value of any shape), so they mint the claim-free broadcast top
-   [1_(bcast_if_1)] explicitly — not [default] (which is reserved for unannotated user axes). *)
+(* The embedded size-1 output axes below are internal broadcast fill (a scalar id / symbol that must
+   multiply into a value of any shape), so they mint the claim-free broadcast top [1_(bcast_if_1)]
+   explicitly — not [default] (which is reserved for unannotated user axes). *)
 let embed_symbol ?grad_spec ?(label = []) static_sym =
   Tensor.term ~fetch_op:(Embed_symbol static_sym) ?grad_spec ~label:("!@" :: label) ~batch_dims:[]
-    ~input_dims:[] ~output_axes:[ (Row.bcast_if_1, 1) ] ()
+    ~input_dims:[]
+    ~output_axes:[ (Row.bcast_if_1, 1) ]
+    ()
 
 let embed_self_id ?grad_spec ?(label = []) () =
   Tensor.term ~fetch_op:Embed_self_id ?grad_spec ~label:("!@self_id" :: label) ~batch_dims:[]
-    ~input_dims:[] ~output_axes:[ (Row.bcast_if_1, 1) ] ()
+    ~input_dims:[]
+    ~output_axes:[ (Row.bcast_if_1, 1) ]
+    ()
 
 let embed_dim ?grad_spec ?(label = []) variable_ref =
   Tensor.term ~fetch_op:(Embed_dim variable_ref.Shape.var_ref) ?grad_spec
-    ~label:("!@self_id" :: label) ~batch_dims:[] ~input_dims:[] ~output_axes:[ (Row.bcast_if_1, 1) ]
+    ~label:("!@self_id" :: label) ~batch_dims:[] ~input_dims:[]
+    ~output_axes:[ (Row.bcast_if_1, 1) ]
     ()
 
 let uniform ?grad_spec () =
@@ -788,21 +793,20 @@ struct
   (** The default initialization operation for {!param} calls.
 
       To avoid user surprises, this defaults to {!uniform1} which does not impose constraints on the
-      shape of the tensor, but for efficiency, consider setting this to
-      [uniform ~grad_spec:Require_grad] or [normal ~grad_spec:Require_grad] instead. *)
-  let default_param_init = ref (uniform1 ~grad_spec:Require_grad)
+      shape of the tensor, but for efficiency, consider setting this to [uniform] or [normal]
+      instead. Initialization expressions are forward-only; {!param} adds the final parameter
+      gradient when needed. *)
+  let default_param_init = ref (uniform1 ~grad_spec:Prohibit_grad)
   (* Useful for debugging: *)
   (* let default_param_init =
     ref (fun () -> Tensor.term ~grad_spec:Require_grad ?init_data:None ~fetch_op:(Constant 0.)) *)
 
   let param ?value ?values ?param_init =
-    let grad_spec =
-      if Tensor.is_prohibit_grad Grad_spec.grad_spec then Tensor.Prohibit_grad else Require_grad
-    in
+    let require_grad = Fn.non Tensor.is_prohibit_grad Grad_spec.grad_spec in
     let t =
       match (value, values, param_init) with
-      | Some value, None, None -> Tensor.term_init ~grad_spec [| value |]
-      | None, Some values, None -> Tensor.term_init ~grad_spec values
+      | Some value, None, None -> Tensor.term_init ~grad_spec:Prohibit_grad [| value |]
+      | None, Some values, None -> Tensor.term_init ~grad_spec:Prohibit_grad values
       | None, None, Some param_init -> param_init
       | None, None, None ->
           if Tensor.is_prohibit_grad Grad_spec.grad_spec then
@@ -813,7 +817,7 @@ struct
           else !default_param_init ()
       | _ -> invalid_arg "TDSL.param: at most one of value, values, and param_init can be set"
     in
-    Tensor.param ~t
+    Tensor.param ~require_grad ~t
 
   let einsum = einsum ~grad_spec
   let outer_sum = outer_sum ~grad_spec
@@ -836,15 +840,17 @@ struct
 
   (** The input and output dimensions will be inferred if omitted. See {!reshape}. *)
   let reshape_param ~l ?i ?o ndarray =
-    let t = Tensor.term ~grad_spec:Require_grad ~init_data:(Reshape ndarray) ?fetch_op:None in
-    Tensor.param ~t ?input_dims:i ?output_dims:o l
+    let t = Tensor.term ~grad_spec:Prohibit_grad ~init_data:(Reshape ndarray) ?fetch_op:None in
+    let require_grad = Fn.non Tensor.is_prohibit_grad Grad_spec.grad_spec in
+    Tensor.param ~require_grad ~t ?input_dims:i ?output_dims:o l
 
   (** See {!wrap}. *)
   let wrap_param ~l ?i ?o ndarray =
     let t =
-      Tensor.term ~grad_spec:Require_grad ~init_data:(Keep_shape_no_padding ndarray) ?fetch_op:None
+      Tensor.term ~grad_spec:Prohibit_grad ~init_data:(Keep_shape_no_padding ndarray) ?fetch_op:None
     in
-    Tensor.param ?input_dims:i ?output_dims:o ~t l
+    let require_grad = Fn.non Tensor.is_prohibit_grad Grad_spec.grad_spec in
+    Tensor.param ~require_grad ?input_dims:i ?output_dims:o ~t l
 
   let matmul = matmul ~grad_spec
   let pointmul ?spec ?capture_dims = pointmul ?spec ?capture_dims ~grad_spec
@@ -853,8 +859,7 @@ struct
   let relu ?spec ?capture_dims = relu ?spec ?capture_dims ~grad_spec
   let sat01 ?spec ?capture_dims = sat01 ?spec ?capture_dims ~grad_spec
   let fma = fma ~grad_spec
-  let number_int ?label ?axis_basis i =
-    Tensor.number ?label ?axis_basis ~grad_spec (Float.of_int i)
+  let number_int ?label ?axis_basis i = Tensor.number ?label ?axis_basis ~grad_spec (Float.of_int i)
   let embed_symbol = embed_symbol ~grad_spec
   let embed_dim = embed_dim ~grad_spec
   let sub ?spec ?capture_dims = sub ?spec ?capture_dims ~grad_spec
@@ -931,7 +936,6 @@ struct
       concat ?label ?capture_dims ?negated spec rhses ()
 
     let stack ?label axis rhses = stack axis rhses ?label ()
-
     let offsets ?label () = offsets ?label ()
     let uniform ?label () = uniform () ?label ()
     let uniform_at ?label counter = uniform_at ?label counter ()
@@ -955,9 +959,5 @@ module DSL_modules = struct
 
   module NTDSL = Make_DSL (struct
     let grad_spec = Tensor.Prohibit_grad
-  end)
-
-  module PDSL = Make_DSL (struct
-    let grad_spec = Tensor.Require_grad
   end)
 end

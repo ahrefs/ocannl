@@ -15,7 +15,7 @@ HERE: test/operations/test_block_tensor.ml:29:21
 └───────────────────────────────┘
 
 --- Test 2: Array batch axis [|x1; x2|] ---
-HERE: test/operations/test_block_tensor.ml:42:21
+HERE: test/operations/test_block_tensor.ml:44:21
 ┌────────────────────────────────┐
 │[18]: ++^_batched shape 0:2|1:2 │
 │┌──────┬──────────────────┐     │
@@ -27,7 +27,7 @@ HERE: test/operations/test_block_tensor.ml:42:21
 └────────────────────────────────┘
 
 --- Test 3: Tuple input axis (x1, x2) ---
-HERE: test/operations/test_block_tensor.ml:49:21
+HERE: test/operations/test_block_tensor.ml:51:21
 ┌─────────────────────────────────────┐
 │[24]: ++^_input_stack shape 1:2->0:3 │
 │┌──────┬────────────┐                │
@@ -40,7 +40,7 @@ HERE: test/operations/test_block_tensor.ml:49:21
 └─────────────────────────────────────┘
 
 --- Test 4: 3-way list [x1; x2; x3] ---
-HERE: test/operations/test_block_tensor.ml:59:21
+HERE: test/operations/test_block_tensor.ml:62:21
 ┌───────────────────────────────┐
 │[34]: ++^_triple shape 0:3,1:3 │
 │┌──────┬──────────────────┐    │
@@ -53,7 +53,7 @@ HERE: test/operations/test_block_tensor.ml:59:21
 └───────────────────────────────┘
 
 --- Test 5: Nested [[x1; x2]; [x1; x2]] ---
-HERE: test/operations/test_block_tensor.ml:68:21
+HERE: test/operations/test_block_tensor.ml:71:21
 ┌───────────────────────────────────┐
 │[52]: ++^_nested shape 0:2,1:2,2:3 │
 │┌──────┬──────────────────┐        │
@@ -68,7 +68,7 @@ HERE: test/operations/test_block_tensor.ml:68:21
 └───────────────────────────────────┘
 
 --- Test 5b: Deeper nest [[[..]]] (3 levels) ---
-HERE: test/operations/test_block_tensor.ml:77:21
+HERE: test/operations/test_block_tensor.ml:79:21
 ┌────────────────────────────────────────┐
 │[94]: ++^_nested3 shape 0:2,1:2,2:2,3:3 │
 │┌──────┬──────────────────┐             │
@@ -93,7 +93,7 @@ HERE: test/operations/test_block_tensor.ml:77:21
 └────────────────────────────────────────┘
 
 --- Test 5c: Cross-kind output/input [ (x1, x2); (x1, x2) ] ---
-HERE: test/operations/test_block_tensor.ml:89:21
+HERE: test/operations/test_block_tensor.ml:91:21
 ┌────────────────────────────────────┐
 │[112]: ++^_cross shape 2:2->0:2,1:3 │
 │┌──────┬────────────┬────────────┐  │
@@ -107,7 +107,7 @@ HERE: test/operations/test_block_tensor.ml:89:21
 └────────────────────────────────────┘
 
 --- Test 5c2: Cross-kind batch/output [| [x1; x2]; [x1; x2] |] ---
-HERE: test/operations/test_block_tensor.ml:98:21
+HERE: test/operations/test_block_tensor.ml:100:21
 ┌──────────────────────────────────────────────┐
 │[130]: ++^_cross_b shape 0:2|1:2,2:3          │
 │┌──────┬──────────────────┬──────────────────┐│
@@ -120,7 +120,7 @@ HERE: test/operations/test_block_tensor.ml:98:21
 └──────────────────────────────────────────────┘
 
 --- Test 5c3: Three-way [| [ (x1, x2); (x1, x2) ]; ... |] ---
-HERE: test/operations/test_block_tensor.ml:110:21
+HERE: test/operations/test_block_tensor.ml:112:21
 ┌─────────────────────────────────────────┐
 │[172]: ++^_cross3 shape 0:2|3:2->1:2,2:3 │
 │┌──────┬────────────┬────────────┐       │
@@ -139,7 +139,7 @@ HERE: test/operations/test_block_tensor.ml:110:21
 
 --- Test 5d: Mixed-rank [[x1; x2]; {c}] ---
 mixed (shape 2; 2; 3):
-HERE: test/operations/test_block_tensor.ml:121:21
+HERE: test/operations/test_block_tensor.ml:123:21
 ┌────────────────────────────────────┐
 │[191]: ++^_mixed shape 0:2,1:2,2:3  │
 │┌──────┬───────────────────────────┐│
@@ -153,7 +153,7 @@ HERE: test/operations/test_block_tensor.ml:121:21
 │└──────┴───────────────────────────┘│
 └────────────────────────────────────┘
 c (rank inferred up to output 2; 3):
-HERE: test/operations/test_block_tensor.ml:123:21
+HERE: test/operations/test_block_tensor.ml:125:21
 ┌────────────────────────────────────┐
 │[179]: c shape 0:2,1:3              │
 │┌──────┬───────────────────────────┐│
@@ -166,7 +166,7 @@ HERE: test/operations/test_block_tensor.ml:123:21
 
 --- Test 5e: Concat residual ii^jj^kk = 7 (a_e=2, b_e=3 => kk=2) ---
 concat_resid (output axis 7 = 2 + 3 + kk, so kk inferred = 2):
-HERE: test/operations/test_block_tensor.ml:149:21
+HERE: test/operations/test_block_tensor.ml:154:21
 ┌──────────────────────────────────────┐
 │[207]: +_concat_resid shape 0:7       │
 │┌┬───────────────────────────────────┐│
@@ -182,7 +182,7 @@ concat_mc exact (expected 10 20 30 40 50 60 70): 10.00 20.00 30.00 40.00 50.00 6
 
 --- Test 5f: 2-component Concat + Dim (Dim on LHS) ---
 concat_2c (Dim on LHS; expected 1.0 2.0 3.0 4.0 5.0):
-HERE: test/operations/test_block_tensor.ml:199:21
+HERE: test/operations/test_block_tensor.ml:210:21
 ┌─────────────────────────────────┐
 │[229]: +_concat_2c shape 0:5     │
 │┌┬──────────────────────────────┐│
@@ -194,7 +194,7 @@ HERE: test/operations/test_block_tensor.ml:199:21
 
 --- Test 5g: Nested concat (flatten-concat) + Dim ---
 nested_dim (nested (2+(3+2)) + Dim; expected 1.0 2.0 3.0 4.0 5.0 6.0 7.0):
-HERE: test/operations/test_block_tensor.ml:226:21
+HERE: test/operations/test_block_tensor.ml:241:21
 ┌────────────────────────────────┐
 │[243]: +_nested_dim shape 0:7   │
 │┌┬─────────────────────────────┐│
@@ -207,7 +207,7 @@ nested_dim exact: 1.00 2.00 3.00 4.00 5.00 6.00 7.00
 
 --- Test 5h: Gradient through Concat + Dim ---
 concat_g forward (expected 1.0 2.0 3.0 4.0 5.0 6.0 7.0):
-HERE: test/operations/test_block_tensor.ml:258:21
+HERE: test/operations/test_block_tensor.ml:277:21
 ┌────────────────────────────────┐
 │[255]: +_concat_g shape 0:7     │
 │┌┬─────────────────────────────┐│
@@ -219,7 +219,7 @@ HERE: test/operations/test_block_tensor.ml:258:21
 concat_g exact: 1.00 2.00 3.00 4.00 5.00 6.00 7.00
 
 Gradient of q1 (expected [1.0 1.0]):
-HERE: test/operations/test_block_tensor.ml:264:21
+HERE: test/operations/test_block_tensor.ml:283:21
 ┌─────────────────────┐
 │[245]: 1,2 shape 0:2 │
 │┌┬────────────┐      │
@@ -238,7 +238,7 @@ HERE: test/operations/test_block_tensor.ml:264:21
 └──────────────────────────────┘
 
 Gradient of q2 (expected [1.0 1.0 1.0]):
-HERE: test/operations/test_block_tensor.ml:266:21
+HERE: test/operations/test_block_tensor.ml:285:21
 ┌───────────────────────┐
 │[247]: 3,4,5 shape 0:3 │
 │┌┬──────────────────┐  │
@@ -257,7 +257,7 @@ HERE: test/operations/test_block_tensor.ml:266:21
 └──────────────────────────────────┘
 
 Gradient of q3 (expected [1.0 1.0]):
-HERE: test/operations/test_block_tensor.ml:268:21
+HERE: test/operations/test_block_tensor.ml:287:21
 ┌─────────────────────┐
 │[249]: 6,7 shape 0:2 │
 │┌┬────────────┐      │
@@ -277,7 +277,7 @@ HERE: test/operations/test_block_tensor.ml:268:21
 
 --- Test 5i: AC1 GLB-merge (two same-shape 3-component concats added) ---
 glb_result (AC1 GLB-merge; expected 11.0 22.0 33.0 44.0 55.0 66.0 77.0):
-HERE: test/operations/test_block_tensor.ml:303:21
+HERE: test/operations/test_block_tensor.ml:328:21
 ┌────────────────────────────────────────────┐
 │[276]: +_glb_result shape 0:7               │
 │┌┬─────────────────────────────────────────┐│
@@ -289,7 +289,7 @@ HERE: test/operations/test_block_tensor.ml:303:21
 glb_result exact: 11.00 22.00 33.00 44.00 55.00 66.00 77.00
 
 --- Test 6: Single element [x1] ---
-HERE: test/operations/test_block_tensor.ml:314:21
+HERE: test/operations/test_block_tensor.ml:339:21
 ┌────────────────────────────────────┐
 │[280]: ++^_unsqueezed shape 0:1,1:3 │
 │┌──────┬──────────────────┐         │
@@ -301,42 +301,42 @@ HERE: test/operations/test_block_tensor.ml:314:21
 
 --- Test 7: Gradient flow (2-way) ---
 grad_result (sin of stacked):
-HERE: test/operations/test_block_tensor.ml:333:21
+HERE: test/operations/test_block_tensor.ml:360:21
 [292]: sin_grad_result shape 0:2,1:2  <not-in-context>
 
 Gradient of g1 (should be cos of original):
-HERE: test/operations/test_block_tensor.ml:335:21
+HERE: test/operations/test_block_tensor.ml:362:21
 [282]: 1,2 shape 0:2  <not-in-context>
 grad_1,2 <not-in-context>
 
 Gradient of g2:
-HERE: test/operations/test_block_tensor.ml:337:21
+HERE: test/operations/test_block_tensor.ml:364:21
 [284]: 3,4 shape 0:2  <not-in-context>
 grad_3,4 <not-in-context>
 
 --- Test 8: Gradient flow (3-way) ---
 grad3_result (sin of 3-way stacked):
-HERE: test/operations/test_block_tensor.ml:360:21
+HERE: test/operations/test_block_tensor.ml:390:21
 [321]: sin_grad3_result shape 0:3,1:2  <not-in-context>
 
 Gradient of h1:
-HERE: test/operations/test_block_tensor.ml:362:21
+HERE: test/operations/test_block_tensor.ml:392:21
 [307]: 0.5,1.5 shape 0:2  <not-in-context>
 grad_0.5,1.5 <not-in-context>
 
 Gradient of h2:
-HERE: test/operations/test_block_tensor.ml:364:21
+HERE: test/operations/test_block_tensor.ml:394:21
 [309]: 1,2 shape 0:2  <not-in-context>
 grad_1,2 <not-in-context>
 
 Gradient of h3:
-HERE: test/operations/test_block_tensor.ml:366:21
+HERE: test/operations/test_block_tensor.ml:396:21
 [311]: 3,0.1 shape 0:2  <not-in-context>
 grad_3,0.1 <not-in-context>
 
 --- Test 8b: Nested gradient flow [[n1; n2]; [n3; n4]] ---
 grad_nested (sin of nested stacked):
-HERE: test/operations/test_block_tensor.ml:386:21
+HERE: test/operations/test_block_tensor.ml:428:21
 ┌─────────────────────────────────────────┐
 │[365]: sin_grad_nested shape 0:2,1:2,2:2 │
 │┌──────┬──────────────────┐              │
@@ -351,7 +351,7 @@ HERE: test/operations/test_block_tensor.ml:386:21
 └─────────────────────────────────────────┘
 
 Gradient of n1 (should be cos of [0.2; 0.4] = [0.980; 0.921]):
-HERE: test/operations/test_block_tensor.ml:388:21
+HERE: test/operations/test_block_tensor.ml:430:21
 ┌─────────────────────────┐
 │[339]: 0.2,0.4 shape 0:2 │
 │┌┬──────────────────┐    │
@@ -370,7 +370,7 @@ HERE: test/operations/test_block_tensor.ml:388:21
 └──────────────────────────────────────┘
 
 Gradient of n4 (should be cos of [1.4; 1.6] = [0.170; -0.029]):
-HERE: test/operations/test_block_tensor.ml:390:21
+HERE: test/operations/test_block_tensor.ml:432:21
 ┌─────────────────────────┐
 │[345]: 1.4,1.6 shape 0:2 │
 │┌┬────────────┐          │
@@ -389,7 +389,7 @@ HERE: test/operations/test_block_tensor.ml:390:21
 └──────────────────────────────────────┘
 
 --- Test 9: ndarray constant tuple (1.0, 2.0) ---
-HERE: test/operations/test_block_tensor.ml:397:21
+HERE: test/operations/test_block_tensor.ml:439:21
 ┌────────────────────────────────┐
 │[371]: 1,2_nd_tuple shape 0:2-> │
 │┌┬────────────┐                 │
@@ -400,7 +400,7 @@ HERE: test/operations/test_block_tensor.ml:397:21
 └────────────────────────────────┘
 
 --- Test 10: ndarray constant list [1.0; 2.0; 3.0] ---
-HERE: test/operations/test_block_tensor.ml:404:21
+HERE: test/operations/test_block_tensor.ml:446:21
 ┌───────────────────────────────┐
 │[372]: 1,2,3_nd_list shape 0:3 │
 │┌┬──────────────────┐          │
@@ -411,7 +411,7 @@ HERE: test/operations/test_block_tensor.ml:404:21
 └───────────────────────────────┘
 
 --- Test 11: ndarray constant array [|1.0; 2.0|] ---
-HERE: test/operations/test_block_tensor.ml:411:21
+HERE: test/operations/test_block_tensor.ml:453:21
 ┌───────────────────────────────┐
 │[373]: 1,2_nd_array shape 0:2| │
 │┌┬────────────┐                │
@@ -422,7 +422,7 @@ HERE: test/operations/test_block_tensor.ml:411:21
 └───────────────────────────────┘
 
 --- Test 12: Tuple in apply preserved ---
-HERE: test/operations/test_block_tensor.ml:420:21
+HERE: test/operations/test_block_tensor.ml:462:21
 ┌─────────────────────────────────────┐
 │[374]: sin_preserved_tuple shape 0:3 │
 │┌┬───────────────────────────┐       │
@@ -433,7 +433,7 @@ HERE: test/operations/test_block_tensor.ml:420:21
 └─────────────────────────────────────┘
 
 --- Test 13: List block tensor with input dims ---
-HERE: test/operations/test_block_tensor.ml:434:21
+HERE: test/operations/test_block_tensor.ml:478:21
 ┌──────────────────────────────────────────┐
 │[385]: ++^_stacked_mat shape 2:2->0:2,1:2 │
 │┌──────┬────────────┬────────────┐        │
@@ -446,7 +446,7 @@ HERE: test/operations/test_block_tensor.ml:434:21
 └──────────────────────────────────────────┘
 
 --- Test 14: Callable TDSL.O.stack `Output [| x1; x2 |] ---
-HERE: test/operations/test_block_tensor.ml:443:21
+HERE: test/operations/test_block_tensor.ml:487:21
 ┌───────────────────────────┐
 │[391]: ++^ shape 0:2,1:3   │
 │┌──────┬──────────────────┐│
@@ -461,7 +461,7 @@ HERE: test/operations/test_block_tensor.ml:443:21
 raised Invalid_argument: Operation.stack: empty rhses
 
 --- Test 16: Tuple arg element translated ([%oc fst] (x1 + x2, x1)) ---
-HERE: test/operations/test_block_tensor.ml:464:21
+HERE: test/operations/test_block_tensor.ml:508:21
 ┌───────────────────────────────────────────┐
 │[395]: sin_tuple_elem_translated shape 0:3 │
 │┌┬────────────────────────────┐            │
@@ -472,7 +472,7 @@ HERE: test/operations/test_block_tensor.ml:464:21
 └───────────────────────────────────────────┘
 
 --- Test 17: Inline style on beg_dims shape (was crash) ---
-HERE: test/operations/test_block_tensor.ml:470:21
+HERE: test/operations/test_block_tensor.ml:515:21
 [8]: ++^_stacked shape 0:2,1:3  [
   [ 1.00 ; 2.00 ; 3.00 ]
   ; [ 4.00 ; 5.00 ; 6.00 ]

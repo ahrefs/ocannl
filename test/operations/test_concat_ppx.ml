@@ -26,8 +26,14 @@ let () =
   let r3 = concat_capture t1 t2 in
   Stdio.printf "concat_capture id: %d\n" r3.Tensor.id;
 
-  let p1 = PDSL.ndarray [| 1.0; 2.0; 3.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3 ] () in
-  let p2 = PDSL.ndarray [| 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] () in
+  let p1 =
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 1.0; 2.0; 3.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 3 ] ()
+  in
+  let p2 =
+    Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 4.0; 5.0 |] ~batch_dims:[] ~input_dims:[]
+      ~output_dims:[ 2 ] ()
+  in
   let loss = sum_all (concat2 p1 p2) in
   let ctx = Context.auto () in
   let _ctx = Train.update_once ctx loss in
