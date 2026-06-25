@@ -26,13 +26,14 @@ let plot_unop ?(x_min = -5.) ?(x_max = 5.) ~f () =
   let ctx = Train.init_params ctx IDX.empty fx in
   let update = Train.grad_update fx in
   let fx_routine = Train.to_routine ctx bindings update in
-  Train.run ctx fx_routine;
+  let ctx = Context.context fx_routine in
+  let ctx = Context.run ctx fx_routine in
   let step_ref = IDX.find_exn (Context.bindings fx_routine) step_sym in
   let ys, dys =
     Array.unzip
     @@ Array.mapi xs ~f:(fun i _ ->
         step_ref := i;
-        Train.run ctx fx_routine;
+        let ctx = Context.run ctx fx_routine in
         ((ctx, fx).@[0], (ctx, x).@%[0]))
   in
   (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
@@ -47,298 +48,778 @@ let%expect_test "relu" =
   let%op f x = relu x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect.unreachable]
-[@@expect.uncaught_exn
-  {|
-  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
-     This is strongly discouraged as backtraces are fragile.
-     Please change this test to not include a backtrace. *)
-  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
-  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
-  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
-  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 48, characters 17-32
-  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
-  |}]
+  [%expect {|
+    ┌─────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ 5.00│                                                                                                   #│
+    │     │                                                                                                  # │
+    │     │                                                                                                 #  │
+    │     │                                                                                                #   │
+    │     │                                                                                              #     │
+    │     │                                                                                             #      │
+    │     │                                                                                            #       │
+    │     │                                                                                           #        │
+    │     │                                                                                         ##         │
+    │     │                                                                                        #           │
+    │     │                                                                                      #             │
+    │     │                                                                                      #             │
+    │     │                                                                                    ##              │
+    │     │                                                                                   #                │
+    │     │                                                                                 #                  │
+    │     │                                                                                ##                  │
+    │     │                                                                               #                    │
+    │     │                                                                              #                     │
+    │f    │                                                                             #                      │
+    │(    │                                                                           ##                       │
+    │x    │                                                                          #                         │
+    │)    │                                                                         #                          │
+    │     │                                                                        #                           │
+    │     │                                                                      ##                            │
+    │     │                                                                     #                              │
+    │     │                                                                    #                               │
+    │     │                                                                   #                                │
+    │     │                                                                 ##                                 │
+    │     │                                                                #                                   │
+    │     │                                                               #                                    │
+    │     │                                                             ##                                     │
+    │     │                                                            #                                       │
+    │     │                                                 * ******************************* **** ******* ****│
+    │     │                                                          #                                         │
+    │     │                                                        ##                                          │
+    │     │                                                       #                                            │
+    │     │                                                      #                                             │
+    │     │                                                     #                                              │
+    │     │                                                   ##                                               │
+    │ 0.00│**** *** *** *** ********-*************** ********-    -    -    -    -    -    -    -    -    -    │
+    ├─────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+    │     │-5.00                                                                                           5.00│
+    │     │                                                 x                                                  │
+    └─────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    |}]
 
 let%expect_test "sat01" =
   let%op f x = sat01 x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect.unreachable]
-[@@expect.uncaught_exn
-  {|
-  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
-     This is strongly discouraged as backtraces are fragile.
-     Please change this test to not include a backtrace. *)
-  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
-  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
-  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
-  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 68, characters 17-32
-  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
-  |}]
+  [%expect {|
+    ┌─────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ 1.00│                                                 * *********###################### #### ####### ####│
+    │     │                                                                                                    │
+    │     │                                                           #                                        │
+    │     │                                                                                                    │
+    │     │                                                                                                    │
+    │     │                                                                                                    │
+    │     │                                                          #                                         │
+    │     │                                                                                                    │
+    │     │                                                                                                    │
+    │     │                                                                                                    │
+    │     │                                                         #                                          │
+    │     │                                                                                                    │
+    │     │                                                                                                    │
+    │     │                                                                                                    │
+    │     │                                                        #                                           │
+    │     │                                                                                                    │
+    │     │                                                                                                    │
+    │     │                                                                                                    │
+    │f    │                                                       #                                            │
+    │(    │                                                                                                    │
+    │x    │                                                                                                    │
+    │)    │                                                                                                    │
+    │     │                                                      #                                             │
+    │     │                                                                                                    │
+    │     │                                                                                                    │
+    │     │                                                                                                    │
+    │     │                                                     #                                              │
+    │     │                                                                                                    │
+    │     │                                                                                                    │
+    │     │                                                                                                    │
+    │     │                                                    #                                               │
+    │     │                                                                                                    │
+    │     │                                                                                                    │
+    │     │                                                                                                    │
+    │     │                                                   #                                                │
+    │     │                                                                                                    │
+    │     │                                                                                                    │
+    │     │                                                                                                    │
+    │     │                                                 #                                                  │
+    │ 0.00│**** *** *** *** ********-*************** ********-    -    ********************** **** *******-****│
+    ├─────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+    │     │-5.00                                                                                           5.00│
+    │     │                                                 x                                                  │
+    └─────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    |}]
 
 let%expect_test "exp(x)" =
   let%op f x = exp x in
   let plot_box = plot_unop ~f ~x_max:1.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect.unreachable]
-[@@expect.uncaught_exn
-  {|
-  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
-     This is strongly discouraged as backtraces are fragile.
-     Please change this test to not include a backtrace. *)
-  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
-  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
-  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
-  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 88, characters 17-43
-  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
-  |}]
+  [%expect {|
+    ┌─────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ 2.71│                                                                                                   *│
+    │     │                                                                                                    │
+    │     │                                                                                                    │
+    │     │                                                                                                  * │
+    │     │                                                                                                    │
+    │     │                                                                                                 *  │
+    │     │                                                                                                    │
+    │     │                                                                                                *   │
+    │     │                                                                                                    │
+    │     │                                                                                               *    │
+    │     │                                                                                                    │
+    │     │                                                                                              *     │
+    │     │                                                                                             *      │
+    │     │                                                                                                    │
+    │     │                                                                                            *       │
+    │     │                                                                                           *        │
+    │     │                                                                                                    │
+    │     │                                                                                          *         │
+    │f    │                                                                                         *          │
+    │(    │                                                                                        *           │
+    │x    │                                                                                                    │
+    │)    │                                                                                       *            │
+    │     │                                                                                      *             │
+    │     │                                                                                     *              │
+    │     │                                                                                    *               │
+    │     │                                                                                   *                │
+    │     │                                                                                 **                 │
+    │     │                                                                                *                   │
+    │     │                                                                               *                    │
+    │     │                                                                             **                     │
+    │     │                                                                           **                       │
+    │     │                                                                        **                          │
+    │     │                                                                       *                            │
+    │     │                                                                     **                             │
+    │     │                                                                  ***                               │
+    │     │                                                              ****                                  │
+    │     │                                                         *****                                      │
+    │     │                                                  *******                                           │
+    │     │                                       ***********                                                  │
+    │ 0.00│********* ************ ************** * -    -    -    -    -    -    -    -    -    -    -    -    │
+    ├─────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+    │     │-5.00                                                                                           1.00│
+    │     │                                                 x                                                  │
+    └─────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    |}]
 
 let%expect_test "log(x)" =
   let%op f x = log x in
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect.unreachable]
-[@@expect.uncaught_exn
-  {|
-  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
-     This is strongly discouraged as backtraces are fragile.
-     Please change this test to not include a backtrace. *)
-  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
-  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
-  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
-  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 108, characters 17-54
-  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
-  |}]
+  [%expect {|
+    ┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ 1.00e+1│*                                                                                                   │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │ *                                                                                                  │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │  *                                                                                                 │
+    │        │                                                                                                    │
+    │f       │                                                                                                    │
+    │(       │   *                                                                                                │
+    │x       │                                                                                                    │
+    │)       │                                                                                                    │
+    │        │    *                                                                                               │
+    │        │     *                                                                                              │
+    │        │      *                                                                                             │
+    │        │       *                                                                                            │
+    │        │        **                                                                                          │
+    │        │          **                                                                           #############│
+    │        │            ***                                                ################### ####             │
+    │        │                ******                        ######### #### ##                                     │
+    │        │                      ******** *****##### ####                                                      │
+    │        │                        ###### ##   ***** ************* **** ********************* *******          │
+    │        │-    -    -    - ####### -    -    -    -    -    -    -    -    -    -    -    -    -    **********│
+    │        │            ### #                                                                                   │
+    │        │        ####                                                                                        │
+    │        │      ##                                                                                            │
+    │        │    ##                                                                                              │
+    │        │  ##                                                                                                │
+    │        │ #                                                                                                  │
+    │ -2.30  │#                                                                                                   │
+    ├────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+    │        │1.00e-1                                                                                         5.00│
+    │        │                                                 x                                                  │
+    └────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    |}]
 
 let%expect_test "log2(x)" =
   let%op f x = log2 x in
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect.unreachable]
-[@@expect.uncaught_exn
-  {|
-  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
-     This is strongly discouraged as backtraces are fragile.
-     Please change this test to not include a backtrace. *)
-  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
-  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
-  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
-  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 128, characters 17-54
-  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
-  |}]
+  [%expect {|
+    ┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ 1.44e+1│*                                                                                                   │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │ *                                                                                                  │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │  *                                                                                                 │
+    │        │                                                                                                    │
+    │f       │                                                                                                    │
+    │(       │   *                                                                                                │
+    │x       │                                                                                                    │
+    │)       │                                                                                                    │
+    │        │    *                                                                                               │
+    │        │     *                                                                                              │
+    │        │      *                                                                                             │
+    │        │       *                                                                                            │
+    │        │        **                                                                                          │
+    │        │          **                                                                           #############│
+    │        │            ***                                                ################### ####             │
+    │        │                ******                        ######### #### ##                                     │
+    │        │                      ******** *****##### ####                                                      │
+    │        │                        ###### ##   ***** ************* **** ********************* *******          │
+    │        │-    -    -    - ####### -    -    -    -    -    -    -    -    -    -    -    -    -    **********│
+    │        │            ### #                                                                                   │
+    │        │        ####                                                                                        │
+    │        │      ##                                                                                            │
+    │        │    ##                                                                                              │
+    │        │  ##                                                                                                │
+    │        │ #                                                                                                  │
+    │ -3.32  │#                                                                                                   │
+    ├────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+    │        │1.00e-1                                                                                         5.00│
+    │        │                                                 x                                                  │
+    └────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    |}]
 
 let%expect_test "sin(x)" =
   let%op f x = sin x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect.unreachable]
-[@@expect.uncaught_exn
-  {|
-  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
-     This is strongly discouraged as backtraces are fragile.
-     Please change this test to not include a backtrace. *)
-  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
-  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
-  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
-  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 148, characters 17-32
-  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
-  |}]
+  [%expect {|
+    ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ 9.99e-1 │                                                                 #                                  │
+    │         │#### ##                                        *** **         ### ###                               │
+    │         │      #                                      **      **      #       #                              │
+    │         │       #                                    *          *    #         #                             │
+    │         │         #                                                 #           #                            │
+    │         │          #                                *            * #             #                           │
+    │         │                                          *              *               #                          │
+    │         │           #                            *                #*                                         │
+    │         │           #                                            #                 #                         │
+    │         │                                        *                  *                                        │
+    │         │             #                         *               #    *              #                        │
+    │         │                                                      #                     #                       │
+    │         │              #                       *                      *                                      │
+    │         │               #                                     #                       #                      │
+    │         │*                                    *                        *                                    *│
+    │         │               #                                    #                         #                     │
+    │         │ *                                  *                          *                                  * │
+    │         │                 #                                 #                           #                    │
+    │f        │  *                                *                            *                                *  │
+    │(        │                  #                              #                              #                   │
+    │x        │- *  -    -    -    -    -    -   *-    -    -    -    -    -    *    -    -    -    -    -    -*   │
+    │)        │                   #                             #                               #                  │
+    │         │   *                             *                                *                           *     │
+    │         │                    #                           #                                #                  │
+    │         │     *                          *                                  *                          *     │
+    │         │                     #                         #                                   #                │
+    │         │      *                        *                                    *                        *      │
+    │         │                      #                       #                                     #               │
+    │         │      *                       *                                      *               #      *       │
+    │         │                       #     *               #                        *                             │
+    │         │       *                #                   #                                         #    *        │
+    │         │         *                  *                                          *                  *         │
+    │         │                        #                  #                                          #             │
+    │         │          *                *              #                             *               #*          │
+    │         │           *              *                                              *              *           │
+    │         │                        *  #            #                                 *              #          │
+    │         │           *            *   #           #                                  *          *   #         │
+    │         │             *         *     #         #                                    *         *    #        │
+    │         │              **      *       #       #                                      *      **      #       │
+    │ -9.99e-1│               * *****         #######                                        **** *         ## ####│
+    ├─────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+    │         │-5.00                                                                                           5.00│
+    │         │                                                 x                                                  │
+    └─────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    |}]
 
 let%expect_test "cos(x)" =
   let%op f x = cos x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect.unreachable]
-[@@expect.uncaught_exn
-  {|
-  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
-     This is strongly discouraged as backtraces are fragile.
-     Please change this test to not include a backtrace. *)
-  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
-  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
-  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
-  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 168, characters 17-32
-  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
-  |}]
+  [%expect {|
+    ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ 9.99e-1 │                                  *                                                                 │
+    │         │                               *** ***         ### ##                                        ** ****│
+    │         │                              *       *      ##      ##                                     *       │
+    │         │                             *         *    #          #                                   *        │
+    │         │                            *           *                                                 *         │
+    │         │                           *            *  #            #                                *          │
+    │         │                          *               #              #                                          │
+    │         │                                        # *               #                             *           │
+    │         │                        *                  *                                          *             │
+    │         │                                        #                  #                                        │
+    │         │                        *              #    *               #                         *             │
+    │         │                       *                     *                                                      │
+    │         │                                      #                      #                       *              │
+    │         │                      *                       *                                     *               │
+    │         │#                                    #                        #                                    #│
+    │         │                     *                         *                                   *                │
+    │         │ #                                  #                          #                                  # │
+    │         │                    *                           *                                *                  │
+    │f        │  #                                #                            #                                #  │
+    │(        │                   *                             *                               *                  │
+    │x        │- #  -    -    -    -    -    -   #-    -    -    -    -    -    #    -    -    -    -    -    -#   │
+    │)        │                  *                              *                              *                   │
+    │         │   #                             #                                #                           #     │
+    │         │                 *                                 *                           *                    │
+    │         │     #                          #                                  #                          #     │
+    │         │               *                                    *                         *                     │
+    │         │      #                        #                                    #                        #      │
+    │         │               *                                     *                       *                      │
+    │         │      #       *               #                                      #                      #       │
+    │         │                             #                        *               #     *                       │
+    │         │       #     *                                         *                   *               #        │
+    │         │         #                  #                                          #                  #         │
+    │         │           *                                            *                 *                         │
+    │         │          #*               #                             *              #                #          │
+    │         │           #              #                                              *              #           │
+    │         │          *             #                                 *             * #                         │
+    │         │         * #            #                                  *           *   #          #             │
+    │         │       *     #         #                                    *         *     #         #             │
+    │         │      *       ##      #                                      *       *       #      ##              │
+    │ -9.99e-1│**** **        # #####                                        *******         #### #                │
+    ├─────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+    │         │-5.00                                                                                           5.00│
+    │         │                                                 x                                                  │
+    └─────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    |}]
 
 let%expect_test "neg(x)" =
   let%op f x = neg x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect.unreachable]
-[@@expect.uncaught_exn
-  {|
-  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
-     This is strongly discouraged as backtraces are fragile.
-     Please change this test to not include a backtrace. *)
-  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
-  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
-  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
-  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 188, characters 17-32
-  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
-  |}]
+  [%expect {|
+    ┌──────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ 5.00 │#                                                                                                   │
+    │      │ ##                                                                                                 │
+    │      │  ## #                                                                                              │
+    │      │      #                                                                                             │
+    │      │       # ##                                                                                         │
+    │      │           #                                                                                        │
+    │      │             ###                                                                                    │
+    │      │               # #                                                                                  │
+    │      │                  ###                                                                               │
+    │      │                     ##                                                                             │
+    │      │                       ##                                                                           │
+    │      │                          ##                                                                        │
+    │      │                            ###                                                                     │
+    │      │                               ##                                                                   │
+    │      │                                 ###                                                                │
+    │      │                                    ###                                                             │
+    │      │                                       ##                                                           │
+    │      │                                        # ##                                                        │
+    │f     │                                            ##                                                      │
+    │(     │                                              ###                                                   │
+    │x     │-    -    -    -    -    -    -    -    -    -   #-    -    -    -    -    -    -    -    -    -    │
+    │)     │                                                   ###                                              │
+    │      │                                                      ##                                            │
+    │      │                                                        ###                                         │
+    │      │**** *** *** *** ******** *************** ******** ******************************* **** ******* ****│
+    │      │                                                             ###                                    │
+    │      │                                                                ###                                 │
+    │      │                                                                   ##                               │
+    │      │                                                                     ###                            │
+    │      │                                                                        ##                          │
+    │      │                                                                          ###                       │
+    │      │                                                                             ##                     │
+    │      │                                                                               ###                  │
+    │      │                                                                                 # #                │
+    │      │                                                                                    ###             │
+    │      │                                                                                      # #           │
+    │      │                                                                                         ###        │
+    │      │                                                                                            ##      │
+    │      │                                                                                              # #   │
+    │ -5.00│                                                                                                 ###│
+    ├──────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+    │      │-5.00                                                                                           5.00│
+    │      │                                                 x                                                  │
+    └──────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    |}]
 
 let%expect_test "fma(x, 2, 1)" =
   let%op f x = fma x !.2. !.1. in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect.unreachable]
-[@@expect.uncaught_exn
-  {|
-  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
-     This is strongly discouraged as backtraces are fragile.
-     Please change this test to not include a backtrace. *)
-  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
-  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
-  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
-  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 208, characters 17-32
-  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
-  |}]
+  [%expect {|
+    ┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ 1.10e+1│                                                                                                   #│
+    │        │                                                                                                 ## │
+    │        │                                                                                              # #   │
+    │        │                                                                                            ##      │
+    │        │                                                                                         ###        │
+    │        │                                                                                      # #           │
+    │        │                                                                                    ###             │
+    │        │                                                                                 # #                │
+    │        │                                                                               ###                  │
+    │        │                                                                             ##                     │
+    │        │                                                                          ###                       │
+    │        │                                                                        ##                          │
+    │        │                                                                     ###                            │
+    │        │                                                                   ##                               │
+    │        │                                                                ###                                 │
+    │        │                                                             ###                                    │
+    │        │                                                           ##                                       │
+    │        │                                                        ###                                         │
+    │f       │**** *** *** *** ******** *************** ******** ******************************* **** ******* ****│
+    │(       │                                                   ###                                              │
+    │x       │                                                 #                                                  │
+    │)       │                                              ###                                                   │
+    │        │-    -    -    -    -    -    -    -    -   ##    -    -    -    -    -    -    -    -    -    -    │
+    │        │                                        # ##                                                        │
+    │        │                                       ##                                                           │
+    │        │                                    ###                                                             │
+    │        │                                 ###                                                                │
+    │        │                               ##                                                                   │
+    │        │                            ###                                                                     │
+    │        │                          ##                                                                        │
+    │        │                       ##                                                                           │
+    │        │                     ##                                                                             │
+    │        │                  ###                                                                               │
+    │        │               # #                                                                                  │
+    │        │             ###                                                                                    │
+    │        │           #                                                                                        │
+    │        │       # ##                                                                                         │
+    │        │      #                                                                                             │
+    │        │  ## #                                                                                              │
+    │ -9.00  │###                                                                                                 │
+    ├────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+    │        │-5.00                                                                                           5.00│
+    │        │                                                 x                                                  │
+    └────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    |}]
 
 let%expect_test "sqrt(x)" =
   let%op f x = sqrt x in
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect.unreachable]
-[@@expect.uncaught_exn
-  {|
-  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
-     This is strongly discouraged as backtraces are fragile.
-     Please change this test to not include a backtrace. *)
-  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
-  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
-  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
-  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 228, characters 17-54
-  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
-  |}]
+  [%expect {|
+    ┌─────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ 2.23│                                                                                                   #│
+    │     │                                                                                              ##### │
+    │     │                                                                                         #####      │
+    │     │                                                                                     ####           │
+    │     │                                                                                ## ##               │
+    │     │                                                                           #####                    │
+    │     │                                                                       ####                         │
+    │     │                                                                  #####                             │
+    │     │                                                              ####                                  │
+    │     │                                                          ## #                                      │
+    │     │                                                      # ##                                          │
+    │     │                                                   ###                                              │
+    │     │*                                              ####                                                 │
+    │     │                                           ####                                                     │
+    │     │                                        # #                                                         │
+    │     │                                     ###                                                            │
+    │     │                                  ###                                                               │
+    │     │ *                             ###                                                                  │
+    │f    │                            ##                                                                      │
+    │(    │                         ###                                                                        │
+    │x    │  *                   ###                                                                           │
+    │)    │                    ##                                                                              │
+    │     │   *              ##                                                                                │
+    │     │              # ##                                                                                  │
+    │     │    *        ##                                                                                     │
+    │     │     *     ##                                                                                       │
+    │     │      **  #                                                                                         │
+    │     │        *#                                                                                          │
+    │     │       # **                                                                                         │
+    │     │     ##    ***                                                                                      │
+    │     │    #         * *                                                                                   │
+    │     │   #             *****                                                                              │
+    │     │  #                   ********                                                                      │
+    │     │ #                           * **********                                                           │
+    │     │#                                       * ************* ****                                        │
+    │     │                                                           * ********************* ************     │
+    │     │                                                                                               *****│
+    │     │                                                                                                    │
+    │     │                                                                                                    │
+    │ 0.00│-    -    -    -    -    -    -    -    -    -    -    -    -    -    -    -    -    -    -    -    │
+    ├─────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+    │     │1.00e-1                                                                                         5.00│
+    │     │                                                 x                                                  │
+    └─────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    |}]
 
 let%expect_test "recip(x)" =
   let%op f x = recip x in
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect.unreachable]
-[@@expect.uncaught_exn
-  {|
-  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
-     This is strongly discouraged as backtraces are fragile.
-     Please change this test to not include a backtrace. *)
-  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
-  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
-  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
-  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 248, characters 17-54
-  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
-  |}]
+  [%expect {|
+    ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ 1.00e+1 │#                                                                                                   │
+    │         │                                                                                                    │
+    │         │ ##                                                                                                 │
+    │         │   #########                                                                                        │
+    │         │-    -    - ###-**************-********** *************-****-********************* *****************│
+    │         │        *******                                                                                     │
+    │         │      **                                                                                            │
+    │         │     *                                                                                              │
+    │         │    *                                                                                               │
+    │         │                                                                                                    │
+    │         │   *                                                                                                │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │  *                                                                                                 │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │f        │                                                                                                    │
+    │(        │                                                                                                    │
+    │x        │ *                                                                                                  │
+    │)        │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │ -1.00e+2│*                                                                                                   │
+    ├─────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+    │         │1.00e-1                                                                                         5.00│
+    │         │                                                 x                                                  │
+    └─────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    |}]
 
 let%expect_test "recip_sqrt(x)" =
   let%op f x = recip_sqrt x in
   let plot_box = plot_unop ~f ~x_min:0.1 ~x_max:5.0 () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect.unreachable]
-[@@expect.uncaught_exn
-  {|
-  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
-     This is strongly discouraged as backtraces are fragile.
-     Please change this test to not include a backtrace. *)
-  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
-  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
-  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
-  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 268, characters 17-54
-  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
-  |}]
+  [%expect {|
+    ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ 3.16    │#                                                                                                   │
+    │         │                                                                                                    │
+    │         │ ##                                                                                                 │
+    │         │   ##                                                                                               │
+    │         │     #######                                                                                        │
+    │         │            ### ############## #####                                                                │
+    │         │                                    ##### ############# #### ##################### #################│
+    │         │-    -    -    -    -    -    -********** *************-****-********************* *****************│
+    │         │              * **************                                                                      │
+    │         │          ****                                                                                      │
+    │         │       ***                                                                                          │
+    │         │      *                                                                                             │
+    │         │     *                                                                                              │
+    │         │    *                                                                                               │
+    │         │                                                                                                    │
+    │         │   *                                                                                                │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │f        │                                                                                                    │
+    │(        │  *                                                                                                 │
+    │x        │                                                                                                    │
+    │)        │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │ *                                                                                                  │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │         │                                                                                                    │
+    │ -1.58e+1│*                                                                                                   │
+    ├─────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+    │         │1.00e-1                                                                                         5.00│
+    │         │                                                 x                                                  │
+    └─────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    |}]
 
 let%expect_test "tanh(x)" =
   let%op f x = tanh x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect.unreachable]
-[@@expect.uncaught_exn
-  {|
-  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
-     This is strongly discouraged as backtraces are fragile.
-     Please change this test to not include a backtrace. *)
-  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
-  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
-  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
-  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 288, characters 17-32
-  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
-  |}]
+  [%expect {|
+    ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ 9.99e-1 │                                                                                                   #│
+    │         │                                                ** *                ############## #### ####### ### │
+    │         │                                               *    *           ####                                │
+    │         │                                              *      *        ##                                    │
+    │         │                                             *        *      #                                      │
+    │         │                                            *          *   ##                                       │
+    │         │                                                          #                                         │
+    │         │                                           *            *                                           │
+    │         │                                          *              *                                          │
+    │         │                                                        #                                           │
+    │         │                                        *              #  *                                         │
+    │         │                                        *                  *                                        │
+    │         │                                                      #                                             │
+    │         │                                       *             #      *                                       │
+    │         │                                      *                      *                                      │
+    │         │                                     *              #         *                                     │
+    │         │                                   **                          **                                   │
+    │         │                                 **                #             **                                 │
+    │f        │                               **                                  **                               │
+    │(        │                        * *****                  #                   ******                         │
+    │x        │**** *** *** *** ********-    -    -    -    -    -    -    -    -    -    ******* **** *******-****│
+    │)        │                                                 #                                                  │
+    │         │                                                                                                    │
+    │         │                                                #                                                   │
+    │         │                                                                                                    │
+    │         │                                               #                                                    │
+    │         │                                                                                                    │
+    │         │                                              #                                                     │
+    │         │                                             #                                                      │
+    │         │                                                                                                    │
+    │         │                                            #                                                       │
+    │         │                                           #                                                        │
+    │         │                                          #                                                         │
+    │         │                                                                                                    │
+    │         │                                        #                                                           │
+    │         │                                       ##                                                           │
+    │         │                                      #                                                             │
+    │         │                                    ##                                                              │
+    │         │                                ####                                                                │
+    │ -9.99e-1│#### ### ### ### ######## ######                                                                    │
+    ├─────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+    │         │-5.00                                                                                           5.00│
+    │         │                                                 x                                                  │
+    └─────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    |}]
 
 let%expect_test "uint4x32_to_prec_uniform(x)" =
   let%op f x = uint4x32_to_prec_uniform x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect.unreachable]
-[@@expect.uncaught_exn
-  {|
-  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
-     This is strongly discouraged as backtraces are fragile.
-     Please change this test to not include a backtrace. *)
-  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
-  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
-  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
-  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 308, characters 17-32
-  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
-  |}]
+  [%expect {|
+    ┌────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ 7.52e-1│#                                                                                                   │
+    │        │ ### ### ### ### ######## ############### ########                                                  │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │f       │                                                                                                    │
+    │(       │                                                                                                    │
+    │x       │                                                                                                    │
+    │)       │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                              #### #### ####### ####│
+    │        │                                                 # ###########################                      │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │        │                                                                                                    │
+    │ 0.00   │**** *** *** *** ********-*************** ********-******************************* **** *******-****│
+    ├────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+    │        │-5.00                                                                                           5.00│
+    │        │                                                 x                                                  │
+    └────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    |}]
 
 let%expect_test "where(x < 0, sin(x), cos(x))" =
   let%op f x = where (x < !.0.) (sin x) (cos x) in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
-  [%expect.unreachable]
-[@@expect.uncaught_exn
-  {|
-  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
-     This is strongly discouraged as backtraces are fragile.
-     Please change this test to not include a backtrace. *)
-  ("Utils.User_error(\"Context.to_host: node x.grad is not present in context (backend sync_cc)\")")
-  Raised at Context.to_host in file "arrayjit/lib/context.ml", lines 359-362, characters 12-56
-  Called from Context.get_value in file "arrayjit/lib/context.ml", line 404, characters 11-25
-  Called from Operations_tutorials__Primitive_ops.plot_unop.(fun) in file "test/operations/primitive_ops.ml", line 36, characters 25-39
-  Called from Base__Array0.mapi in file "src/array0.ml", line 142, characters 24-46
-  Called from Operations_tutorials__Primitive_ops.plot_unop in file "test/operations/primitive_ops.ml", lines 33-36, characters 7-41
-  Called from Operations_tutorials__Primitive_ops.(fun) in file "test/operations/primitive_ops.ml", line 328, characters 17-32
-  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 142, characters 10-28
-  |}]
+  [%expect {|
+    ┌─────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ 9.99e-1 │  #                                                                                             *   │
+    │         │#### ##                                        *** ##                                        **  ***│
+    │         │      #                                      **      ##                                     *       │
+    │         │       #                                    *          #                                   *        │
+    │         │         #                                                                                *         │
+    │         │          #                                *            #                                *          │
+    │         │                                          *              #                                          │
+    │         │           #                            *                 #                             *           │
+    │         │           #                                                                          *             │
+    │         │                                        *                  #                                        │
+    │         │             #                         *                    #                         *             │
+    │         │                                                                                                    │
+    │         │              #                       *                      #                       *              │
+    │         │               #                                                                    *               │
+    │         │*                                    *                        #                                    #│
+    │         │               #                                                                   *                │
+    │         │ *                                  *                          #                                  # │
+    │         │                 #                                                               *                  │
+    │f        │  *                                *                            #                                #  │
+    │(        │                  #                                                              *                  │
+    │x        │- *  -    -    -    -    -    -   *-    -    -    -    -    -    #    -    -    -    -    -    -#   │
+    │)        │                   #                             *                              *                   │
+    │         │   *                             *                                #                           #     │
+    │         │                    #                           #  *                           *                    │
+    │         │     *                          *                                  #                          #     │
+    │         │                     #                         #    *                         *                     │
+    │         │      *                        *                                    #                        #      │
+    │         │                      #                       #      *                       *                      │
+    │         │      *                       *                                      #                      #       │
+    │         │                       #     *               #        *               #     *                       │
+    │         │       *                #                   #          *                   *               #        │
+    │         │         *                  *                                          #                  #         │
+    │         │                        #                  #            *                 *                         │
+    │         │          *                *              #              *              #                #          │
+    │         │           *              *                                              *              #           │
+    │         │                        *  #            #                 *             * #                         │
+    │         │           *            *   #           #                  *           *   #          #             │
+    │         │             *         *     #         #                    *         *     #         #             │
+    │         │              **      *       #       #                      *       *       #      ##              │
+    │ -9.99e-1│               * *****         #######                        *******         #### #                │
+    ├─────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+    │         │-5.00                                                                                           5.00│
+    │         │                                                 x                                                  │
+    └─────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    |}]
