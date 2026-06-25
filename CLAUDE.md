@@ -196,7 +196,7 @@ opam install cudajit  # for CUDA backend
 - See `docs/syntax_extensions.md` for comprehensive documentation
 
 **Record syntax features**:
-- OCaml punning: `{ x }` expands to default initialization (uniform1() for parameters in %op, but configurable via `TDSL.default_param_init`)
+- OCaml punning: `{ x }` expands to default initialization (centered scaled `uniform1()` over `[-0.25, 0.25)` for parameters in %op, but configurable via `TDSL.default_param_init`)
 - Shorthand field names: `o` → `output_dims`, `i` → `input_dims`, `b` → `batch_dims`
 - Additional fields map to labeled arguments of tensor creation functions `Tensor.op_fun`
 - Dimension specification for tensor literals: lists `[...]` for output, tuples `(...)` for input, arrays `[|...|]` for batch

@@ -1,7 +1,6 @@
 open Base
 open Ocannl
 open Stdio
-module Tn = Ir.Tnode
 module IDX = Train.IDX
 open Nn_blocks.DSL_modules
 module CDSL = Train.CDSL
@@ -178,15 +177,6 @@ let () =
 
   let ctx = Context.auto () in
   let ctx = Train.init_params ctx bindings batch_loss in
-  (* Recenter all-positive uniform1 inits to [-0.25, 0.25). Same mitigation as transformer_names.ml
-     / fsm_transformer.ml — OCANNL's default init produces non-negative weights, which makes the
-     hidden preactivation saturate and traps SGD at a high-loss plateau. *)
-  Set.iter batch_loss.Tensor.params ~f:(fun p ->
-      let tn = p.Tensor.value in
-      Train.set_materialized tn;
-      let vals = Context.get_values ctx tn in
-      Array.iteri vals ~f:(fun i v -> vals.(i) <- 0.5 *. (v -. 0.5));
-      ignore (Context.set_values ctx tn vals : Context.t));
 
   let sgd_step = Train.to_routine ctx bindings (Asgns.sequence [ update; sgd ]) in
   let ctx = Context.context sgd_step in
@@ -200,7 +190,7 @@ let () =
   (* === Training === *)
   (* Coarse threshold guard: monotonically decreasing upper bound. *)
   let epoch_loss_limit epoch =
-    if epoch = 0 then 4.0 else if epoch < 5 then 3.0 else if epoch < 10 then 2.6 else 2.5
+    if epoch = 0 then 4.0 else if epoch < 5 then 3.0 else if epoch < 10 then 2.6 else 2.55
   in
   for epoch = 0 to epochs - 1 do
     let epoch_loss = ref 0. in

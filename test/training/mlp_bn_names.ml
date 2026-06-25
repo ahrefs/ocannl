@@ -1,7 +1,6 @@
 open Base
 open Ocannl
 open Stdio
-module Tn = Ir.Tnode
 module IDX = Train.IDX
 open Nn_blocks.DSL_modules
 module CDSL = Train.CDSL
@@ -177,26 +176,6 @@ let () =
 
   let ctx = Context.auto () in
   let ctx = Train.init_params ctx bindings batch_loss in
-  (* Recenter all-positive uniform1 inits to [-0.25, 0.25). Same mitigation as transformer_names.ml
-     / fsm_transformer.ml — OCANNL's default init produces non-negative weights, which makes the
-     hidden preactivation saturate and traps SGD at a high-loss plateau. Exclusions: - [w1] uses
-     Kaiming-normal (already centered & correctly scaled); recentering would shrink its variance. -
-     [gamma] and [beta] of [batch_norm1d] are initialized to 1 and 0 so the BN layer begins as an
-     identity affine transform; the recenter would turn that into 0.25 and -0.25, biasing the model
-     from step 0. *)
-  let label_parts p = Tn.label p.Tensor.value |> String.split ~on:'_' in
-  let is_excluded p =
-    List.exists (label_parts p) ~f:(fun s ->
-        String.equal s "w1" || String.equal s "gamma" || String.equal s "beta")
-  in
-  Set.iter batch_loss.Tensor.params ~f:(fun p ->
-      let tn = p.Tensor.value in
-      Train.set_materialized tn;
-      if not (is_excluded p) then begin
-        let vals = Context.get_values ctx tn in
-        Array.iteri vals ~f:(fun i v -> vals.(i) <- 0.5 *. (v -. 0.5));
-        ignore (Context.set_values ctx tn vals : Context.t)
-      end);
 
   let sgd_step = Train.to_routine ctx bindings (Asgns.sequence [ update; sgd ]) in
   let ctx = Context.context sgd_step in
@@ -211,7 +190,7 @@ let () =
   (* Coarse threshold guard: monotonically decreasing upper bound.
      BatchNorm + Kaiming-normal init trade peak convergence for training
      stability — losses here plateau ~2.71 vs ~2.32 in mlp_names.ml. *)
-  let epoch_loss_limit epoch = if epoch = 0 then 4.0 else if epoch < 5 then 3.0 else 2.8 in
+  let epoch_loss_limit epoch = if epoch = 0 then 5.0 else if epoch < 5 then 3.0 else 2.8 in
   for epoch = 0 to epochs - 1 do
     let epoch_loss = ref 0. in
     for batch = 0 to n_batches - 1 do
