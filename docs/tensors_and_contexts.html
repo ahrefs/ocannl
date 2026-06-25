@@ -433,10 +433,10 @@ required by the computation graph</li>
 <p>The DSL modules set appropriate defaults:</p>
 <ul>
 <li><code>TDSL</code> uses <code>If_needed</code> (automatic gradient
-propagation)</li>
+propagation; <code>TDSL.param</code> adds the final parameter
+gradient)</li>
 <li><code>NTDSL</code> uses <code>Prohibit_grad</code>
 (non-differentiable)</li>
-<li><code>PDSL</code> uses <code>Require_grad</code> (parameters)</li>
 </ul>
 <h3 id="tensor-precision">Tensor Precision</h3>
 <p>OCANNL supports multiple numeric precisions:</p>
@@ -748,16 +748,21 @@ fan_out:</p>
 <span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op _ = w_raw ++ <span class="st">&quot;...|..i.. -&gt; ..o.. =&gt; 0&quot;</span> [ <span class="st">&quot;i&quot;</span>; <span class="st">&quot;o&quot;</span> ] <span class="kw">in</span></span>
 <span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>... <span class="dt">sqrt</span> (!.scale_sq /. (dim i + dim o))</span></code></pre></div>
 <h3 id="parameter-initialization-1">Parameter Initialization</h3>
+<p>By default, <code>%op</code> parameters use a centered, scaled
+<code>uniform1</code> initializer with values in
+<code>[-0.25, 0.25)</code>. This keeps the non-vectorized
+arbitrary-shape behavior of <code>uniform1</code> while avoiding
+all-positive initial weights.</p>
 <p>Usage example:</p>
-<div class="sourceCode" id="cb24"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Set kaiming initialization as default: PDSL outside, TDSL inside *)</span></span>
-<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>TDSL.default_param_init := PDSL.kaiming TDSL.O.uniform1;</span>
+<div class="sourceCode" id="cb24"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Set kaiming initialization as default. Initializers are forward-only. *)</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>TDSL.default_param_init := NTDSL.kaiming TDSL.O.uniform1;</span>
 <span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Or use directly in parameter definition *)</span></span>
 <span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op layer x = { w = kaiming uniform1 () } * x + { b = <span class="dv">0</span>. }</span></code></pre></div>
-<p>When setting <code>default_param_init</code>, we call
-<code>PDSL.kaiming</code> so that the result is differentiable, but
-<code>TDSL.O.uniform1</code> or <code>NTDSL.O.uniform1</code> so the
-intermediate values are not differentiable.</p>
+<p>When setting <code>default_param_init</code>, use <code>NTDSL</code>
+helpers: initialization is a one-shot forward computation.
+<code>TDSL.param</code> makes the final parameter tensor differentiable
+after the initializer has produced its value.</p>
 <h2 id="memory-management">Memory Management</h2>
 <p>OCANNL manages tensor memory through memory modes:</p>
 <div class="sourceCode" id="cb25"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Make a tensor&#39;s value persisted on-device and inspectable on demand via the context.</span></span>

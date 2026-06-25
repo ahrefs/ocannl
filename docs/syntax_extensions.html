@@ -272,9 +272,6 @@ functionality of <code>Operation.NTDSL</code>.</li>
 <li><code>%op</code> assumes that any extension point will be in the
 scope of a module <code>TDSL</code> that provides at least the
 functionality of <code>Operation.TDSL</code>.</li>
-<li><code>%op</code> with inline definitions with inintialization
-expressions assumes that a module <code>PDSL</code> is in scope with at
-least the functionality of <code>Operation.PDSL</code>.</li>
 <li>Both extensions assume <code>Tensor</code> (from the
 <code>Ocannl</code> wrapper) is in scope.</li>
 </ul>
@@ -284,10 +281,9 @@ least the functionality of <code>Operation.PDSL</code>.</li>
 Functions inside <code>Operation.TDSL</code> use
 <code>~grad_spec:If_needed</code>, which will make the tensors
 non-differentiable when the gradient is not needed – except for
-<code>TDSL.param</code>, which internally sets
-<code>~grad_spec:Require_grad</code>. Functions inside
-<code>Operation.PDSL</code> use
-<code>~grad_spec:Require_grad</code>.</p>
+<code>TDSL.param</code>, which makes the final parameter tensor
+differentiable after evaluating its initializer as forward-only
+code.</p>
 <p>The extension points open <code>NTDSL.O</code>, resp.
 <code>TDSL.O</code>, for the scope of the extension point, to expose the
 corresponding operators.</p>
@@ -962,13 +958,13 @@ dimensions</li>
 <li>Any other labeled argument accepted by <code>TDSL.param</code> (for
 <code>%op</code>) or <code>NTDSL.term</code> (for <code>%cd</code>)</li>
 </ul>
-<p>Note: for the <code>%op</code> declarations, if the root operation
-comes from <code>TDSL.O</code> and is not qualified with a module name,
-it becomes qualified with <code>PDSL</code> which ensures that the
-created tensor will be differentiable (will have gradients), and will be
-able to take the additional argumetns. There are also special cases for
-literal constants to ensure the resulting tensor is initialized with
-these constants but is differentiable.</p>
+<p>Note: for <code>%op</code> inline parameter declarations,
+initialization expressions are forward-only. If the root operation is
+not qualified with a module name, it is qualified with
+<code>NTDSL</code>; <code>TDSL.param</code> then makes only the final
+parameter tensor differentiable. There are also special cases for
+literal constants so the resulting tensor is initialized with those
+constants and the final parameter remains differentiable.</p>
 <p>Examples:</p>
 <ul>
 <li><code>%op</code>: <code>{ x = 5.0 }</code>,
@@ -1038,9 +1034,8 @@ strategy for the initialization syntax</h3>
 configurability during initialization, the <code>%op</code> syntax
 substitutes the operator function applied at the root of the
 initialization expression by prefixing the function identifier with
-<code>PDSL</code> (or by <code>NTDSL</code> when invoked from <a href="#the-syntax-extension-extend_dsls">the <code>%%extend_dsl</code>
-syntax</a>). Only unqualified identifiers get prefixed, and
-<code>%oc</code> is an escape hatch to prevent perfixing even for
+<code>NTDSL</code>. Only unqualified identifiers get prefixed, and
+<code>%oc</code> is an escape hatch to prevent prefixing even for
 unqualified identifiers.</p>
 <h2 id="using-ocannls-generalized-einsum-notation">Using OCANNL’s
 generalized einsum notation</h2>
@@ -1428,7 +1423,7 @@ e.g. <code>(ta, tb)</code> or the inner tuples of
 tuples, since those are applications rather than bare tuples.</li>
 <li>The named operation is also callable directly:
 <code>TDSL.O.stack `Output [| ta; tb |]</code> (and the
-<code>NTDSL</code> / <code>PDSL</code> variants).</li>
+<code>NTDSL</code> variant).</li>
 <li>Nested block tensors are supported at arbitrary depth, including
 three-way across all axis kinds: a nested literal reproduces the shape
 the corresponding nested ndarray literal would have. The delimiters nest
@@ -1628,17 +1623,14 @@ architectures:</p>
 <p>This syntax extension creates a module <code>DSL_modules</code> with
 the same submodules as <code>Operation.DSL_modules</code>. It removes
 the boilerplate associated with introducing new operators into the
-modules <code>TDSL</code>, <code>NTDSL</code>, <code>PDSL</code> and
-their <code>O</code> submodules. The payload (i.e. content) of
-<code>%%extend_dsls</code> must be non-recursive let-bindings. They are
-parsed using a slight variant of the <code>%op</code> syntax, and are
-inserted into the DSL modules. The identifiers of the root operator
-functions of the definitions, if unqualified, are prefixed with the
-appropriate module, similarly to the behavior of inline definitions.
-Another unique feature of <code>%%extend_dsls</code> parsing is that
-inline tensor definitions, like in <code>%cd</code>, do not introduce
-gradients for the tensors, but, like <code>%op</code>, they do introduce
-initialization for the inline-defined tensors.</p>
+modules <code>TDSL</code>, <code>NTDSL</code> and their <code>O</code>
+submodules. The payload (i.e. content) of <code>%%extend_dsls</code>
+must be non-recursive let-bindings. They are parsed using a slight
+variant of the <code>%op</code> syntax, and are inserted into the DSL
+modules. The identifiers of the root operator functions of the
+definitions, if unqualified, are prefixed with the appropriate module,
+similarly to the behavior of inline definitions. Initialization
+expressions remain forward-only.</p>
 <p>The DSL modules expose the value <code>grad_spec</code> that can be
 useful for defining operators via a “scheme” function. See the example
 using the <code>box_muller</code> helper at the beginning of
