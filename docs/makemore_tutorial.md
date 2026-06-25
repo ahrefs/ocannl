@@ -127,7 +127,7 @@ Karpathy's lecture handles the same pain point a different way, which is
 itself the entry point to Part 3.
 
 Under the fixed seed, `mlp_names.ml` converges to a final train/dev/test NLL
-of ~2.32 over 15 epochs. The three sampled names (`ahla`, `nilia`, `gatro`)
+of ~2.49 over 15 epochs. The three sampled names (`hadasi`, `koun`, `kinre`)
 are recognizably Names-like.
 
 ## Part 3 — BatchNorm MLP
@@ -188,9 +188,9 @@ from *batch* statistics rather than population statistics. For a single-
 example inference batch, `mean == x`, `centered == 0`, `normalized == 0`, so
 the output collapses to `beta` regardless of input. Generation quality
 degrades accordingly — `mlp_bn_names.ml`'s three sampled names are noticeably
-noisier than Part 2's. The tutorial leaves this as a pedagogical demonstration
-of why running statistics matter; the framework-level fix is tracked as a
-follow-up to this task.
+noisier than Part 2's (`ria`, `ehnlk`, `lc` under the fixed seed). The tutorial
+leaves this as a pedagogical demonstration of why running statistics matter;
+the framework-level fix is tracked as a follow-up to this task.
 
 ## Part 4 — How OCANNL compiles gradients
 
