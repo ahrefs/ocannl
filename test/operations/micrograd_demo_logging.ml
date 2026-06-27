@@ -13,19 +13,30 @@ let () =
   Utils.set_log_level 2;
   Utils.settings.output_debug_files_in_build_directory <- true;
   Utils.settings.debug_log_from_routines <- true;
-  if
-    String.equal (Utils.get_global_arg ~default:"sync_cc" ~arg_name:"backend") "metal"
-    && Utils.get_global_flag ~default:false ~arg_name:"debug_log_to_stream_files"
-  then (
-    Utils.log_debug_routine_logs
-      ~log_contents:
-        [
-          "Metal routine stream logging is skipped: the Metal backend emits routine debug logs via \
-           os_log rather than the captured stream-file logger.";
-        ]
-      ~stream_name:"metal-0-0";
-    Utils.restore_settings ();
-    Stdlib.exit 0);
+  let backend = Utils.get_global_arg ~default:"sync_cc" ~arg_name:"backend" in
+  (if Utils.get_global_flag ~default:false ~arg_name:"debug_log_to_stream_files" then
+     match backend with
+     | "cuda" ->
+         Utils.log_debug_routine_logs
+           ~log_contents:
+             [
+               "CUDA routine stream logging is skipped: CUDA logs inline expressions differently \
+                from the CPU backend and can include unstable intermediate debug reads.";
+             ]
+           ~stream_name:"cuda-0-0";
+         Utils.restore_settings ();
+         Stdlib.exit 0
+     | "metal" ->
+         Utils.log_debug_routine_logs
+           ~log_contents:
+             [
+               "Metal routine stream logging is skipped: the Metal backend emits routine debug \
+                logs via os_log rather than the captured stream-file logger.";
+             ]
+           ~stream_name:"metal-0-0";
+         Utils.restore_settings ();
+         Stdlib.exit 0
+     | _ -> ());
   let ctx = Context.auto () in
   let%op c = { a = [ -4 ] } + { b = [ 2 ] } in
   let%op d = (a *. b) + (b **. 3) in
