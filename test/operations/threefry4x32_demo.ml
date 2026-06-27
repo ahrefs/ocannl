@@ -25,6 +25,69 @@ let () =
   let ctx = Ocannl.Train.forward_once ctx uniform_floats in
   let result = Context.get_values ctx uniform_floats.value in
 
-  (* Print the results *)
+  let print_check name passed =
+    Stdio.printf "  %s: %s\n" name (if passed then "PASS" else "FAIL")
+  in
+  let expected =
+    [|
+      0.443;
+      0.464;
+      0.673;
+      0.732;
+      0.333;
+      0.561;
+      0.852;
+      0.507;
+      0.378;
+      0.502;
+      0.656;
+      0.966;
+      0.356;
+      0.803;
+      0.334;
+      0.995;
+      0.812;
+      0.519;
+      0.234;
+      0.165;
+      0.852;
+      0.101;
+      0.181;
+      0.312;
+      0.962;
+      0.418;
+      0.0297;
+      0.448;
+      0.907;
+      0.344;
+      0.820;
+      0.469;
+      0.226;
+      0.178;
+      0.740;
+      0.840;
+      0.373;
+      0.546;
+      0.858;
+      0.547;
+    |]
+  in
+  let mean = Array.fold result ~init:0.0 ~f:( +. ) /. Float.of_int (Array.length result) in
+  let min_val = Array.min_elt result ~compare:Float.compare |> Option.value ~default:0.0 in
+  let max_val = Array.max_elt result ~compare:Float.compare |> Option.value ~default:0.0 in
+  let max_abs_error =
+    if Int.equal (Array.length result) (Array.length expected) then
+      Array.map2_exn result expected ~f:(fun actual expected -> Float.abs (actual -. expected))
+      |> Array.max_elt ~compare:Float.compare
+      |> Option.value ~default:0.0
+    else Float.infinity
+  in
+
   Stdio.printf "Generated %d uniform random numbers:\n" (Array.length result);
-  Array.iteri result ~f:(fun i x -> Stdio.printf "  [%d]: %.3g\n" i x)
+  Stdio.printf "  Stats: mean=%.2f min=%.2f max=%.2f max_abs_error=%.3f\n" mean min_val max_val
+    max_abs_error;
+  print_check "Count is 40" (Int.equal (Array.length result) 40);
+  print_check "All values in [0, 1)"
+    (Array.for_all result ~f:(fun x -> Float.(x >= 0.0 && x < 1.0)));
+  print_check "Matches expected stream within 0.01" Float.(max_abs_error <= 0.01);
+  print_check "Mean within 0.40..0.60" Float.(mean >= 0.40 && mean <= 0.60)
