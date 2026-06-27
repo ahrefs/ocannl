@@ -24,15 +24,19 @@ let make_const label v =
   Tensor.term ~init_data:(Reshape nd) ~grad_spec:Tensor.Prohibit_grad ~label:[ label ]
     ~batch_dims:[] ~input_dims:[] ~output_dims:[ 2 ] ()
 
+let build_prefix = "test_metal_pool_slot_width"
+
 let read_metal_sources () =
-  (try Stdlib.Sys.readdir "build_files" |> Array.to_list with _ -> [])
+  let dir = Stdlib.Filename.concat "build_files" build_prefix in
+  (try Stdlib.Sys.readdir dir |> Array.to_list with _ -> [])
   |> List.filter ~f:(String.is_suffix ~suffix:".metal")
-  |> List.map ~f:(fun f -> Stdio.In_channel.read_all (Stdlib.Filename.concat "build_files" f))
+  |> List.map ~f:(fun f -> Stdio.In_channel.read_all (Stdlib.Filename.concat dir f))
 
 let () =
   Tensor.unsafe_reinitialize ();
   Utils.settings.large_models <- true;
   Utils.settings.output_debug_files_in_build_directory <- true;
+  Unix.putenv "OCANNL_BUILD_FILES_PREFIX" build_prefix;
   let ctx = Context.metal () in
   let sum = TDSL.O.(make_const "a" 1. + make_const "b" 2.) in
   let _ctx = Train.forward_once ctx sum in

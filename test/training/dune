@@ -21,16 +21,29 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-(test
+; bigram is a training integration run: gated behind the `slow` alias so default runtest stays
+; bounded on the Metal backend.
+
+(executable
  (name bigram)
- (package neural_nets_lib)
  (modules bigram)
- (deps
-  ocannl_config
-  (env_var OCANNL_BACKEND))
  (libraries ocannl dataprep)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(rule
+ (alias slow)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     bigram.actual
+     (run %{dep:bigram.exe}))
+    (diff bigram.expected bigram.actual)))))
 
 (test
  (name embedding_ids)
@@ -172,24 +185,51 @@
      (run %{dep:cifar_conv.exe}))
     (diff cifar_conv.expected cifar_conv.actual)))))
 
-(test
+; fsm_transformer is a larger transformer training integration test. Keep it compiled during
+; normal builds, but run it only through @slow so Metal runtest does not depend on a long pipeline
+; compilation that can fail with Metal's XPC compiler service under load.
+
+(executable
  (name fsm_transformer)
- (package neural_nets_lib)
  (modules fsm_transformer)
- (deps
-  ocannl_config
-  (env_var OCANNL_BACKEND))
  (libraries ocannl)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-(test
- (name transformer_names)
+(rule
+ (alias slow)
  (package neural_nets_lib)
- (modules transformer_names)
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     fsm_transformer.actual
+     (run %{dep:fsm_transformer.exe}))
+    (diff fsm_transformer.expected fsm_transformer.actual)))))
+
+; transformer_names is a slow training run: gated behind the `slow` alias so default runtest stays
+; bounded on the Metal backend.
+
+(executable
+ (name transformer_names)
+ (modules transformer_names)
  (libraries ocannl dataprep)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(rule
+ (alias slow)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     transformer_names.actual
+     (run %{dep:transformer_names.exe}))
+    (diff transformer_names.expected transformer_names.actual)))))
