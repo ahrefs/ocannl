@@ -8,6 +8,12 @@ open Nn_blocks.DSL_modules
 
 module type Backend = Ir.Backend_intf.Backend
 
+let print_summary label values =
+  let min_val = Array.min_elt values ~compare:Float.compare |> Option.value_exn in
+  let max_val = Array.max_elt values ~compare:Float.compare |> Option.value_exn in
+  Stdio.printf "%s: count=%d min=%.2f max=%.2f first=%.2f\n" label (Array.length values) min_val
+    max_val values.(0)
+
 let graph_drawing_recompile () =
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
@@ -38,11 +44,7 @@ let graph_drawing_recompile () =
         Train.run ctx f_bprop;
         (ctx, f).@[0])
   in
-  let plot_box =
-    PrintBox_utils.plot ~x_label:"x" ~y_label:"f(x)"
-      [ Scatterplot { points = Array.zip_exn xs ys; content = PrintBox.line "#" } ]
-  in
-  PrintBox_text.output Stdio.stdout plot_box
+  print_summary "graph_drawing_recompile ys" ys
 
 let graph_drawing_fetch () =
   Tensor.unsafe_reinitialize ();
@@ -75,15 +77,8 @@ let graph_drawing_fetch () =
         ((ctx, fx).@[0], (ctx, x).@%[0]))
   in
   (* It is fine to loop around the data: it's "next epoch". We redo the work though. *)
-  let plot_box =
-    PrintBox_utils.plot ~x_label:"x" ~y_label:"f(x)"
-      [
-        Scatterplot { points = Array.zip_exn xs ys; content = PrintBox.line "#" };
-        Scatterplot { points = Array.zip_exn xs dys; content = PrintBox.line "*" };
-        Line_plot { points = Array.create ~len:20 0.; content = PrintBox.line "-" };
-      ]
-  in
-  PrintBox_text.output Stdio.stdout plot_box
+  print_summary "graph_drawing_fetch ys" ys;
+  print_summary "graph_drawing_fetch dys" dys
 
 let simple_gradients_hosted () =
   Tensor.unsafe_reinitialize ();

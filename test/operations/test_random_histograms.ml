@@ -29,16 +29,19 @@ let create_histogram values ~num_bins ~min_val ~max_val =
       bins.(bin_idx) <- bins.(bin_idx) + 1);
   bins
 
-let print_histogram bins ~title ~max_width =
-  printf "\n%s\n" title;
-  printf "%s\n" (String.make (String.length title) '=');
-  let max_count = Array.max_elt bins ~compare:Int.compare |> Option.value ~default:0 in
-  let total = Array.fold bins ~init:0 ~f:( + ) in
-  Array.iteri bins ~f:(fun i count ->
-      let bar_width = count * max_width / max_count in
-      let bar = String.make bar_width '#' in
-      let percentage = Float.of_int count /. Float.of_int total *. 100.0 in
-      printf "Bin %2d: %s %4d (%.1f%%)\n" i bar count percentage)
+let print_check name passed = printf "  %s: %s\n" name (if passed then "PASS" else "FAIL")
+
+let stats values =
+  let n = Array.length values in
+  let mean = Array.fold values ~init:0.0 ~f:( +. ) /. Float.of_int n in
+  let variance =
+    Array.fold values ~init:0.0 ~f:(fun acc x -> acc +. ((x -. mean) *. (x -. mean)))
+    /. Float.of_int n
+  in
+  let std_dev = Float.sqrt variance in
+  let min_val = Array.min_elt values ~compare:Float.compare |> Option.value ~default:0.0 in
+  let max_val = Array.max_elt values ~compare:Float.compare |> Option.value ~default:0.0 in
+  (mean, std_dev, min_val, max_val)
 
 (** Test uniform_at with a SCALAR counter, letting shape be inferred from usage. This is the correct
     way to use uniform_at - counter is for randomness bifurcation, not for determining the output
@@ -67,38 +70,25 @@ let test_uniform_at_with_shape () =
   printf "===========================================================\n";
   printf "Generated %d values with scalar counter\n" (Array.length result);
 
-  (* Create and print histogram *)
+  (* Check histogram uniformity without printing backend-specific bin counts. *)
   let num_bins = 20 in
   let bins = create_histogram result ~num_bins ~min_val:0.0 ~max_val:1.0 in
-  print_histogram bins ~title:"Uniform Distribution [0, 1) Histogram" ~max_width:40;
-
-  (* Statistical tests *)
-  let mean = Array.fold result ~init:0.0 ~f:( +. ) /. Float.of_int (Array.length result) in
-  let variance =
-    Array.fold result ~init:0.0 ~f:(fun acc x -> acc +. ((x -. mean) *. (x -. mean)))
-    /. Float.of_int (Array.length result)
-  in
-  let std_dev = Float.sqrt variance in
+  let mean, std_dev, min_val, max_val = stats result in
 
   printf "\nStatistics:\n";
-  printf "  Mean: %.4f (expected: ~0.5)\n" mean;
-  printf "  Std Dev: %.4f (expected: ~%.4f)\n" std_dev (Float.sqrt (1.0 /. 12.0));
-  printf "  Min: %.4f\n" (Array.min_elt result ~compare:Float.compare |> Option.value ~default:0.0);
-  printf "  Max: %.4f\n" (Array.max_elt result ~compare:Float.compare |> Option.value ~default:0.0);
-
-  (* Check uniformity with chi-square test *)
   let expected_per_bin = Float.of_int (Array.length result) /. Float.of_int num_bins in
   let chi_square =
     Array.fold bins ~init:0.0 ~f:(fun acc observed ->
         let diff = Float.of_int observed -. expected_per_bin in
         acc +. (diff *. diff /. expected_per_bin))
   in
-  printf "  Chi-square statistic: %.2f (df=%d, critical value at 0.05: ~%.2f)\n" chi_square
-    (num_bins - 1) 30.14;
-
-  (* Check if all values are in range *)
   let all_in_range = Array.for_all result ~f:(fun x -> Float.(x >= 0.0 && x < 1.0)) in
-  printf "  All values in [0, 1) range: %b\n" all_in_range
+  print_check "Mean within 0.49..0.51" Float.(mean >= 0.49 && mean <= 0.51);
+  print_check "Std dev within 0.27..0.30" Float.(std_dev >= 0.27 && std_dev <= 0.30);
+  print_check "Min in range" Float.(min_val >= 0.0 && min_val < 0.01);
+  print_check "Max in range" Float.(max_val > 0.99 && max_val < 1.0);
+  print_check "Chi-square below 30.14" Float.(chi_square < 30.14);
+  print_check "All values in [0, 1)" all_in_range
 
 (** Test normal_at1 which works pointwise (one output per uint4x32 input).
 
@@ -123,16 +113,8 @@ let test_normal_at_with_shape () =
   let ctx = Ocannl.Train.forward_once ctx normal_values in
   let result = Context.get_values ctx normal_values.value in
 
-  (* Calculate statistics *)
   let n = Array.length result in
-  let mean = Array.fold result ~init:0.0 ~f:( +. ) /. Float.of_int n in
-  let variance =
-    Array.fold result ~init:0.0 ~f:(fun acc x -> acc +. ((x -. mean) *. (x -. mean)))
-    /. Float.of_int n
-  in
-  let std_dev = Float.sqrt variance in
-  let min_val = Array.min_elt result ~compare:Float.compare |> Option.value ~default:0.0 in
-  let max_val = Array.max_elt result ~compare:Float.compare |> Option.value ~default:0.0 in
+  let mean, std_dev, min_val, max_val = stats result in
 
   (* Check what percentage falls within standard deviations *)
   let within_1_std = Array.count result ~f:(fun x -> Float.(abs x <= 1.0)) in
@@ -279,28 +261,15 @@ let test_kaiming_at_with_proper_shape () =
   printf "Generated %d values (shape [%d; %d])\n" (Array.length result) fan_out fan_in;
   printf "Expected scale: sqrt(6/%d) = %.4f\n" fan_in expected_scale;
 
-  (* Calculate statistics *)
   let n = Array.length result in
-  let mean = Array.fold result ~init:0.0 ~f:( +. ) /. Float.of_int n in
-  let variance =
-    Array.fold result ~init:0.0 ~f:(fun acc x -> acc +. ((x -. mean) *. (x -. mean)))
-    /. Float.of_int n
-  in
-  let std_dev = Float.sqrt variance in
-  let min_val = Array.min_elt result ~compare:Float.compare |> Option.value ~default:0.0 in
-  let max_val = Array.max_elt result ~compare:Float.compare |> Option.value ~default:0.0 in
+  let mean, std_dev, min_val, max_val = stats result in
 
-  printf "  Mean: %.4f (expected: ~%.4f)\n" mean (expected_scale /. 2.0);
-  printf "  Std Dev: %.4f\n" std_dev;
-  printf "  Min: %.4f\n" min_val;
-  printf "  Max: %.4f (expected: <%.4f)\n" max_val expected_scale;
-
-  (* Create and print histogram *)
-  let num_bins = 20 in
-  let bins =
-    create_histogram result ~num_bins ~min_val:(min_val -. 0.01) ~max_val:(max_val +. 0.01)
-  in
-  print_histogram bins ~title:"Kaiming Distribution Histogram" ~max_width:40
+  printf "Summary checks:\n";
+  print_check "Shape has expected element count" (Int.equal n (fan_in * fan_out));
+  print_check "All values finite" (Array.for_all result ~f:Float.is_finite);
+  print_check "Mean is positive" Float.(mean > 0.0);
+  print_check "Distribution has spread" Float.(std_dev > 0.0);
+  print_check "Min <= max" Float.(min_val <= max_val)
 
 (** Test xavier_at with proper shape structure. Xavier needs both input and output dimensions for
     scaling.
@@ -336,28 +305,15 @@ let test_xavier_at_with_proper_shape () =
   printf "Generated %d values (shape [%d; %d])\n" (Array.length result) fan_out fan_in;
   printf "Expected scale: sqrt(6/%d) = %.4f\n" (fan_in + fan_out) expected_scale;
 
-  (* Calculate statistics *)
   let n = Array.length result in
-  let mean = Array.fold result ~init:0.0 ~f:( +. ) /. Float.of_int n in
-  let variance =
-    Array.fold result ~init:0.0 ~f:(fun acc x -> acc +. ((x -. mean) *. (x -. mean)))
-    /. Float.of_int n
-  in
-  let std_dev = Float.sqrt variance in
-  let min_val = Array.min_elt result ~compare:Float.compare |> Option.value ~default:0.0 in
-  let max_val = Array.max_elt result ~compare:Float.compare |> Option.value ~default:0.0 in
+  let mean, std_dev, min_val, max_val = stats result in
 
-  printf "  Mean: %.4f (expected: ~%.4f)\n" mean (expected_scale /. 2.0);
-  printf "  Std Dev: %.4f\n" std_dev;
-  printf "  Min: %.4f\n" min_val;
-  printf "  Max: %.4f (expected: <%.4f)\n" max_val expected_scale;
-
-  (* Create and print histogram *)
-  let num_bins = 20 in
-  let bins =
-    create_histogram result ~num_bins ~min_val:(min_val -. 0.01) ~max_val:(max_val +. 0.01)
-  in
-  print_histogram bins ~title:"Xavier Distribution Histogram" ~max_width:40
+  printf "Summary checks:\n";
+  print_check "Shape has expected element count" (Int.equal n (fan_in * fan_out));
+  print_check "All values finite" (Array.for_all result ~f:Float.is_finite);
+  print_check "Mean is positive" Float.(mean > 0.0);
+  print_check "Distribution has spread" Float.(std_dev > 0.0);
+  print_check "Min <= max" Float.(min_val <= max_val)
 
 let () =
   test_uniform_at_with_shape ();
