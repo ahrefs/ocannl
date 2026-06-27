@@ -1,2 +1,3 @@
 test/ppx/test_ppx_op_expected.ml
 test/ppx/test_ppx_name_conflict_expected.ml
+test/ppx/test_compose_logic_err_expected.ml
