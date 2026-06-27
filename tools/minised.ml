@@ -27,15 +27,9 @@ let () =
 
   let ic = open_in !input_filename in
   let content =
-    let rec read_lines acc =
-      try
-        let line = input_line ic in
-        read_lines (line :: acc)
-      with End_of_file ->
-        close_in ic;
-        List.rev acc
-    in
-    String.concat "\n" (read_lines [])
+    Fun.protect
+      ~finally:(fun () -> close_in ic)
+      (fun () -> really_input_string ic (in_channel_length ic))
   in
 
   let re = Str.regexp !regexp_str in
