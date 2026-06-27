@@ -849,6 +849,7 @@
  (libraries
   base
   stdio
+  unix
   ocannl
   arrayjit.utils
   (select

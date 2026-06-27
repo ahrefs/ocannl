@@ -652,6 +652,10 @@ module Fresh () = struct
       (* Uint4x32 conversions - special handling *)
       | Ops.Uint4x32_prec _, _ -> ("uint4x32_to_" ^ Ops.prec_string to_ ^ "_uniform(", ")")
       | _, Ops.Uint4x32_prec _ -> (Ops.prec_string from ^ "_to_uint4x32(", ")")
+      (* Metal has no native double. Keep double tensor storage unsupported in [typ_of_prec], but
+         allow scalar guard expressions that are typed as double in the shared lowering to compile
+         as float. This is used by guarded dynamic gathers for bounds/integrality checks. *)
+      | _, Ops.Double_prec _ -> ("(float)(", ")")
       (* Default case for all other conversions *)
       | _ -> ("(" ^ typ_of_prec to_ ^ ")(", ")")
 

@@ -1,13 +1,32 @@
 #include <metal_stdlib>
 using namespace metal;
 kernel void where_fwd(
-    device bfloat *b_else_val [[buffer(0)]],
-    device float *where [[buffer(1)]],
-    device half *a_then_val [[buffer(2)]],
-    device uchar *cond_condition [[buffer(3)]],
+    device char* __pool0 [[buffer(0)]],
+    device char* __pool1 [[buffer(1)]],
+    device char* __pool10 [[buffer(2)]],
+    device char* __pool11 [[buffer(3)]],
+    device char* __pool12 [[buffer(4)]],
+    device char* __pool13 [[buffer(5)]],
+    device char* __pool14 [[buffer(6)]],
+    device char* __pool15 [[buffer(7)]],
+    device char* __pool2 [[buffer(8)]],
+    device char* __pool3 [[buffer(9)]],
+    device char* __pool4 [[buffer(10)]],
+    device char* __pool5 [[buffer(11)]],
+    device char* __pool6 [[buffer(12)]],
+    device char* __pool7 [[buffer(13)]],
+    device char* __pool8 [[buffer(14)]],
+    device char* __pool9 [[buffer(15)]],
+    device const uint* __pool_slots [[buffer(16)]],
     uint3 gid [[threadgroup_position_in_grid]],
     uint3 lid [[thread_position_in_threadgroup]]) {
 
+  /* Pool base pointers. */
+  device char* __pools[16] = { __pool0, __pool1, __pool2, __pool3, __pool4, __pool5, __pool6, __pool7, __pool8, __pool9, __pool10, __pool11, __pool12, __pool13, __pool14, __pool15 };
+  device uchar* cond_condition = (device uchar*)(__pools[__pool_slots[0]] + __pool_slots[1]);
+  device bfloat* b_else_val = (device bfloat*)(__pools[__pool_slots[2]] + __pool_slots[3]);
+  device float* where = (device float*)(__pools[__pool_slots[4]] + __pool_slots[5]);
+  device half* a_then_val = (device half*)(__pools[__pool_slots[6]] + __pool_slots[7]);
   /* Local declarations and initialization. */
 
   /* Main logic. */
