@@ -56,6 +56,7 @@
     "--ocannl_clean_up_log_files_on_startup=true")
    (run
     %{dep:../../tools/minised.exe}
+    "--normalize-eol"
     " = 0x[0-9a-fA-F]+"
     " = 0xNNNN"
     "log_files/%{read:config/ocannl_backend.txt}-0-0.log"
@@ -241,7 +242,9 @@
     (copy
      build_files/top_down_prec/d_fwd-unoptimized.ll
      top_down_prec-unoptimized.ll.actual)
-    (copy
+    (run
+     %{dep:../../tools/minised.exe}
+     "--normalize-eol-only"
      build_files/top_down_prec/d_fwd.%{read:config/ocannl_backend_extension.txt}
      top_down_prec.extension.actual)))))
 
@@ -264,7 +267,9 @@
     (copy
      build_files/out_fwd-unoptimized.ll
      zero_out_local_decl-unoptimized.ll.actual)
-    (copy
+    (run
+     %{dep:../../tools/minised.exe}
+     "--normalize-eol-only"
      build_files/out_fwd.%{read:config/ocannl_backend_extension.txt}
      zero_out_local_decl.extension.actual)))))
 
@@ -288,7 +293,9 @@
     (copy
      build_files/test_where_precision/where_fwd-unoptimized.ll
      test_where_precision-unoptimized.ll.actual)
-    (copy
+    (run
+     %{dep:../../tools/minised.exe}
+     "--normalize-eol-only"
      build_files/test_where_precision/where_fwd.%{read:config/ocannl_backend_extension.txt}
      test_where_precision.extension.actual)))))
 

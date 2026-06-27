@@ -19,6 +19,6 @@ extern "C" __global__ void where_fwd(
 
   /* Main logic. */
   /* where fwd */
-  where[0] = (cond_condition[0]) ? (float)(a_then_val[0]) : (float)(b_else_val[0]);
+  where[0] = ((cond_condition[0]) ? (float)(a_then_val[0]) : (float)(b_else_val[0]));
   /* end */
 }
