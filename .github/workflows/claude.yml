@@ -32,7 +32,7 @@ jobs:
 
       - uses: ocaml/setup-ocaml@v3
         with:
-          ocaml-compiler: 5.3.x
+          ocaml-compiler: 5.4.x
           dune-cache: true
           allow-prerelease-opam: true
 
@@ -43,7 +43,7 @@ jobs:
 
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@beta
+        uses: anthropics/claude-code-action@v1.0.159
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
@@ -51,22 +51,13 @@ jobs:
           additional_permissions: |
             actions: read
           
-          # Optional: Specify model (defaults to Claude Sonnet, uncomment for Claude Opus 4.1)
-          # model: "claude-opus-4-1-20250805"
-          
-          # Optional: Customize the trigger phrase (default: @claude)
-          # trigger_phrase: "@claude-opus"
-          
           # Optional: Trigger when specific user is assigned to an issue
           assignee_trigger: "claude-bot"
           
-          # Allow Claude to run all opam and dune commands
-          allowed_tools: "Bash(opam:*),Bash(dune:*),Bash(git checkout:*),Bash(find:*),Bash(grep:*),Bash(ls:*),Bash(cat:*),Bash(mv:*),Bash(cp:*),Bash(cc:*),Bash(git check-ignore:*),Bash(git config:*)"
-          
-          # Optional: Add custom instructions for Claude to customize its behavior for your project
-          custom_instructions: |
-            The OCANNL build system and dependencies are already installed;
-            you can verify this by running `opam switch`, and `dune build @check` or `opam exec -- dune build @check`.
+          claude_args: |
+            --model "opus"
+            --system-prompt "The OCANNL build system and dependencies are already installed; you can verify this by running `opam switch`, and `dune build @check` or `opam exec -- dune build @check`."
+            --allowedTools "Bash(opam:*),Bash(dune:*),Bash(git checkout:*),Bash(find:*),Bash(grep:*),Bash(ls:*),Bash(cat:*),Bash(mv:*),Bash(cp:*),Bash(cc:*),Bash(git check-ignore:*),Bash(git config:*)"
           
           # Optional: Custom environment variables for Claude
           # claude_env: |
