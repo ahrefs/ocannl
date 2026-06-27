@@ -19,10 +19,18 @@
 - Common subexpression elimination after inlining (gh-ocannl-351).
 - Virtual-node inlining extended to non-scalar constants and ranges (gh-ocannl-142).
 - `Uint32`/`Uint64` precisions, with index-embedding operations selecting precision per
-  the `big_models` setting to avoid unnecessary conversions (gh-ocannl-349, gh-ocannl-177).
+  the `large_models` setting (formerly `big_models`, still accepted as a deprecated alias)
+  to avoid unnecessary conversions and to select Metal pool-slot width
+  (gh-ocannl-349, gh-ocannl-177, gh-ocannl-344).
 - `-march=native` C-compiler flag (gh-ocannl-311); restored CUDA pre-loaded builtins
   referenced by pointer via a cudajit helper (gh-ocannl-353).
 - Sasha Rush Tensor Puzzles expressed in the extended einsum notation (gh-ocannl-308).
+- Universal pool allocator across backends (gh-ocannl-344): tensors are addressed by
+  `{ pool_id; offset }`; working tensors are bump-packed into per-context-delta pools,
+  constants into per-device constant pools, and merge buffers stay in their reserved pool.
+  Metal now binds pool slabs plus a slot table instead of one buffer per tensor node, staying
+  below the backend's binding limit for large routines. CUDA and C keep per-tnode pointer
+  kernel parameters resolved from the same pooled locations.
 - Data-parallel training: `shard_along` / `gather` sharding primitives and a driver
   with merge-buffer gradient all-reduce (part of gh-ocannl-293).
 - Zero-copy slice views (`@|` / `Fetch.Slice`, gh-ocannl-293 subtask 293a): an
@@ -70,6 +78,8 @@
   rewritten as a true multi-character-context Bengio MLP. The old file's name
   misrepresented its architecture (bigram-width input but "MLP" label); the
   new file is the makemore Part 2 example (see `docs/makemore_tutorial.md`).
+- Default `%op` parameter initialization now uses centered, scaled `uniform1` over
+  `[-0.25, 0.25)` while preserving `uniform1`'s flexible shape behavior.
 - Parser updated to allow n-ary einsum specs (e.g., `a;b;c;d=>result`)
 - Concat symbols are now grouped into connected components for iteration using union-find
 - Product space and product iterators now use list arrays to handle concatenated dimensions
@@ -85,6 +95,9 @@
 - Removed remaining unnecessary buffer zeroing-out in backend code (gh-ocannl-382).
 - Upgraded slipshow presentation rendering to v0.11.0, with Mermaid diagrams
   (gh-ocannl-425).
+- Heavy training integration tests are now gated behind Dune's `slow` alias, while
+  backend-divergent goldens and CUDA/Metal generated-source expectations were normalized
+  for release testing.
 - **Breaking:** `Backend.device_to_device` now returns `context routine option` instead of `bool`.
   Instead of scheduling the copy as a side effect, it builds a transfer *routine*: callers run
   `r.schedule` (or link a consumer against `r.context`). `None` replaces the old `false` ("nothing
@@ -99,6 +112,9 @@
 ### Fixed
 
 - Detect rank cycles among row variables during shape inference (gh-ocannl-247).
+- CUDA `Where` expression codegen now parenthesizes ternaries correctly, and
+  `Uint32`/`Uint64` to `uint4x32` PRNG-counter conversions spread bits rather than
+  collapsing entropy.
 - Prohibit `~logic:"@"` (`Compose`) with `/` and `**` in the `%cd` extension, and fixed
   ternary `~logic` being mapped to `compose_type` instead of `ternary_type`
   (gh-ocannl-192).
@@ -135,8 +151,7 @@
 ### Changed
 
 - Padding is now reset by tracking neutral elements through shape inference
-- Changed default random initialization to centered scaled `uniform1` over `[-0.25, 0.25)`,
-  which doesn't impose shape constraints
+- Changed default random initialization to `uniform1`, which doesn't impose shape constraints
 - Refactored `vbs` from Map to list for order-preserving let bindings in syntax extensions
 - Infer the shape of inline definitions assigned a slot for `%cd` expressions with `projections` in scope
 

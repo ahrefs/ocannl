@@ -24,7 +24,7 @@ OCANNL is sponsored by [Ahrefs](https://ocaml.org/success-stories/peta-byte-scal
 * Fully supports mixed-precision computations, with bidirectional precision inference.
   * E.g. higher-precision network components, or gradients at a higher precision than values.
 * Should be easily extensible.
-* Model surgery should be starightforward (not sure if we are there yet).
+* Model surgery should be straightforward (not sure if we are there yet).
 
 ## Usage
 
@@ -36,7 +36,7 @@ A possible route to learning OCANNL:
 
 1. Read [the introductory slides](https://ahrefs.github.io/ocannl/docs/basics_backprop_training_codegen.html).
 2. Read: [shapes and the generalized einsum beginner-to-advanced slides](https://ahrefs.github.io/ocannl/docs/shapes_and_einsum.html).
-3. Upcoming in v0.7: slides about [`Context`](arrayjit/lib/context.mli).
+3. Read [Tensors and Contexts](docs/tensors_and_contexts.md) and, for the runtime API, [`Context`](arrayjit/lib/context.mli).
 4. Read [the migration guide](docs/migration_guide.md).
 5. Read the syntax extensions documentation [docs/syntax_extensions.md](docs/syntax_extensions.md).
 6. Read the NN building blocks file [lib/nn_blocks.ml](lib/nn_blocks.ml) and the training recipes [lib/train.ml](lib/train.ml).
@@ -67,8 +67,8 @@ See [ROADMAP.md](ROADMAP.md) for the detailed schedule. Headline target: **ICFP 
   - [x] Axis concatenation in the einsum syntax (`a^b`), generalizing tensor stacking; shifting (`1^i=>i`) and padding (`i=>1^i`) as fixed-index special cases (#49).
   - [x] RoPE and other non-learned position embeddings (#398); decoder-only autoregressive transformer toy (#57).
   - [x] Ternary einsum notation (#305); loop-invariant hoisting (#350) and common subexpression elimination (#351).
-  - [ ] Universal Pool Allocator across backends (#344).
-  - [ ] Sharding and slicing with minimal copying (#293).
+  - [x] Universal Pool Allocator across backends (#344): per-context-delta working pools, per-device constant pools, reserved merge pool, and pooled Metal bindings.
+  - [x] Sharding primitives, data-parallel training driver, and zero-copy leading-axis slice views (#293).
 * **0.8 (Summer 2026): GPU-style performance -- low hanging fruit; AMD HIP backend.**
   - [ ] First harvested from [Fast Multidimensional Matrix Multiplication on CPU from Scratch](https://siboehm.com/articles/22/Fast-MMM-on-CPU).
   - [ ] Then harvested from [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance: a Worklog](https://siboehm.com/articles/22/CUDA-MMM).
@@ -188,6 +188,6 @@ The codebase is organized to separate user-facing recipes from framework interna
 
 ## Development
 
-NOTE TO POTENTIAL CONTRIBUTORS: while I ~~am~~ might be slowly starting to work with PRs in separate branches rather than just a stream of commits on the main branch, design migrations will be broken into small PRs to avoid main (master) branch staleness; and many changes will still be commits on the main branch. We allow for failing tests on the main branch, although going forward this would hopefully be happening less. Tagged i.e. released versions of the code are guaranteed to work as well as the given stage of the project permitted, the policy is that all tests must pass for releases with the backend `sync_cc` and must have the behavior excpected of a backend with all other backends. We try to minimize discrepancy across backends but prefer more stringent tests even if some backends only pass them "in spirit" rather than with exact expectations of the `sync_cc` backend.
+NOTE TO POTENTIAL CONTRIBUTORS: while I ~~am~~ might be slowly starting to work with PRs in separate branches rather than just a stream of commits on the main branch, design migrations will be broken into small PRs to avoid main (master) branch staleness; and many changes will still be commits on the main branch. We allow for failing tests on the main branch, although going forward this would hopefully be happening less. Tagged i.e. released versions of the code are guaranteed to work as well as the given stage of the project permitted, the policy is that all tests must pass for releases with the backend `sync_cc` and must have the behavior expected of a backend with all other backends. We try to minimize discrepancy across backends but prefer more stringent tests even if some backends only pass them "in spirit" rather than with exact expectations of the `sync_cc` backend.
 
 OCANNL uses [`ppx_minidebug`](https://github.com/lukstafi/ppx_minidebug) for debugging. Currently, we migrated to a per-file opt-in scheme for enabling ppx_minidebug at compile time (via environment variables, see the top of `.ml` files in question), and then a unified log level configuration (`ocannl_log_level`) for tuning logging at runtime. Due to the compile-time nature of the per-file settings, run `dune clean` after setting/exporting one of these environment variables.
