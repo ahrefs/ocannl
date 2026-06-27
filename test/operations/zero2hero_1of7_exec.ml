@@ -9,10 +9,13 @@ open Nn_blocks.DSL_modules
 module type Backend = Ir.Backend_intf.Backend
 
 let print_summary label values =
-  let min_val = Array.min_elt values ~compare:Float.compare |> Option.value_exn in
-  let max_val = Array.max_elt values ~compare:Float.compare |> Option.value_exn in
-  Stdio.printf "%s: count=%d min=%.2f max=%.2f first=%.2f\n" label (Array.length values) min_val
-    max_val values.(0)
+  match values with
+  | [||] -> Stdio.printf "%s: count=0\n" label
+  | _ ->
+      let min_val = Array.min_elt values ~compare:Float.compare |> Option.value_exn in
+      let max_val = Array.max_elt values ~compare:Float.compare |> Option.value_exn in
+      Stdio.printf "%s: count=%d min=%.2f max=%.2f first=%.2f\n" label (Array.length values) min_val
+        max_val values.(0)
 
 let graph_drawing_recompile () =
   Tensor.unsafe_reinitialize ();

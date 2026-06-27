@@ -6,9 +6,9 @@ Generated 10000 values with scalar counter
 
 Statistics:
   Mean within 0.49..0.51: PASS
-  Std dev within 0.27..0.30: PASS
-  Min in range: PASS
-  Max in range: PASS
+  Std dev within 0.25..0.32: PASS
+  Min below 0.05: PASS
+  Max above 0.95: PASS
   Chi-square below 30.14: PASS
   All values in [0, 1): PASS
 

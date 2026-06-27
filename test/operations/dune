@@ -842,6 +842,25 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name test_metal_guarded_gather_codegen)
+ (package neural_nets_lib)
+ (modules test_metal_guarded_gather_codegen)
+ (deps ocannl_config test_metal_guarded_gather_codegen.expected)
+ (libraries
+  base
+  stdio
+  unix
+  ocannl
+  arrayjit.utils
+  (select
+   test_metal_guarded_gather_codegen.ml
+   from
+   (metal -> test_metal_guarded_gather_codegen.real.ml)
+   (-> test_metal_guarded_gather_codegen.missing.ml)))
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name test_metal_pool_slot_width)
  (package neural_nets_lib)
  (modules test_metal_pool_slot_width)

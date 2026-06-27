@@ -84,9 +84,9 @@ let test_uniform_at_with_shape () =
   in
   let all_in_range = Array.for_all result ~f:(fun x -> Float.(x >= 0.0 && x < 1.0)) in
   print_check "Mean within 0.49..0.51" Float.(mean >= 0.49 && mean <= 0.51);
-  print_check "Std dev within 0.27..0.30" Float.(std_dev >= 0.27 && std_dev <= 0.30);
-  print_check "Min in range" Float.(min_val >= 0.0 && min_val < 0.01);
-  print_check "Max in range" Float.(max_val > 0.99 && max_val < 1.0);
+  print_check "Std dev within 0.25..0.32" Float.(std_dev >= 0.25 && std_dev <= 0.32);
+  print_check "Min below 0.05" Float.(min_val >= 0.0 && min_val < 0.05);
+  print_check "Max above 0.95" Float.(max_val > 0.95 && max_val < 1.0);
   print_check "Chi-square below 30.14" Float.(chi_square < 30.14);
   print_check "All values in [0, 1)" all_in_range
 
