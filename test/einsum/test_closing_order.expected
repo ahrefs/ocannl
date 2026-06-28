@@ -4,3 +4,11 @@ alpha terminal first, ineqs forward: no error, alpha = 3, beta = 1
 beta terminal first, ineqs forward: no error, alpha = 3, beta = 1
 alpha terminal first, ineqs reversed: no error, alpha = 3, beta = 1
 beta terminal first, ineqs reversed: no error, alpha = 3, beta = 1
+upper alpha terminal first, ineqs forward: no error, alpha = 3, beta = 3
+upper beta terminal first, ineqs forward: no error, alpha = 3, beta = 3
+upper alpha terminal first, ineqs reversed: no error, alpha = 3, beta = 3
+upper beta terminal first, ineqs reversed: no error, alpha = 3, beta = 3
+incompatible alpha terminal first, ineqs forward: Shape_error: solved dimensions for axis: mismatch
+incompatible beta terminal first, ineqs forward: Shape_error: solved dimensions for axis: mismatch
+incompatible alpha terminal first, ineqs reversed: Shape_error: solved dimensions for axis: mismatch
+incompatible beta terminal first, ineqs reversed: Shape_error: solved dimensions for axis: mismatch

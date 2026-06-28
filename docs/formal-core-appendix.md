@@ -13,7 +13,7 @@ Status of the core's obligations after this appendix:
 | Confluence across fair strategies (Thm. 5.6 caveat) | **discharged by decision** — strategy fixed (A.4) |
 | Prop. 6.2 re-solve termination case split | **proved, strengthened** — re-solves always terminate (A.5) |
 | Prop. 6.4(iii) $\sqsubseteq^1$-greatestness | **proved**, with a rank-policy qualification (A.6) |
-| Remark 6.7(i) order-robustness of closing | **proved** at dimension sort (A.7) |
+| Remark 6.7(i) deterministic dimension closing | **counterexample to no-spurious-failure; order-independence fragment proved** (A.7) |
 | Remark 2.15(iv) inference-policy-vs-checking | **proved** (A.8) |
 | Detection Lemma (Thm. 5.2(b)) | **open** — structured reduction, D1 proved, D3 the residual gap (A.9) |
 | Marker-provenance invariant; surface discharge | **open** — statement recorded (A.10) |
@@ -160,15 +160,19 @@ Placement commitments need no exclusion — $\sqsubseteq^1$ is marker-blind on i
 
 ---
 
-## A.7 Remark 6.7(i) — order-robustness of closing, written out
+## A.7 Remark 6.7(i) — deterministic dimension closing, and the counterexample
 
-**Statement.** At dimension sort, with cap stores transitively closed at commitment time (the fixpoint-before-commit discipline: every ground bound has been forwarded across the variable–variable adjacency to fixpoint) and no holes among the committed variables' caps, the leaf-downward closing of Def. 6.1 never fails on a store whose pre-closing denotation is satisfiable — in any commitment order consistent with the discipline.
+**Corrected statement.** At dimension sort, with $\mathrm{glb}$ stores transitively closed at commitment time (every ground lower bound has been forwarded across the variable–variable adjacency to fixpoint), the value assigned by leaf-downward closing is independent of constraint and terminal emission order. The stronger statement formerly written here — that such closing cannot spuriously fail on a satisfiable hole-free store — is false.
 
-*Proof.* By the discipline, for each leaf $v$ the cap set $\mathrm{caps}(v)$ at commitment time contains every ground bound reachable into $v$: in particular, $u \sqsubseteq v$ in the adjacency implies $\mathrm{caps}(u) \subseteq \mathrm{caps}(v)$ (each ground bound arriving at $u$ was forwarded), and a *later* commitment of $u$ adds nothing new to $v$'s caps, because $u$'s committed value is $J_u := \bigvee \mathrm{caps}(u)$, and the fact $J_u \sqsubseteq v$ is implied by $\mathrm{caps}(u) \subseteq \mathrm{caps}(v)$ ($J_u \sqsubseteq J_v \sqsubseteq \gamma(v)$ for any candidate). So the commitments are order-independent in value: each leaf gets $J_v$, regardless of sequence — closing under the discipline *is* the simultaneous assignment $\gamma_J(v) = J_v$ on leaves.
+*Order-independence proof.* By the discipline, for each leaf $v$ the stored $\mathrm{glb}$ is
+$$J_v := \bigvee\{d \mid d \sqsubseteq u \text{ was recorded and } u \sqsubseteq^* v\}.$$
+Thus $J_v$ is a function of the solved store, not of the order in which terminal constraints are revisited. If $u \sqsubseteq v$ in the adjacency, then the reachable-cap set of $u$ is included in that of $v$, hence $J_u \sqsubseteq J_v$ by monotonicity of join. An uncapped constrained terminal is not guessed at the capped-leaf stage in the implementation; it is re-emitted until re-solving pins it or later stages prove it guessable. Therefore no terminal emission order can produce the partial-view commitment from Remark 6.3. $\square$
 
-It remains to show $\gamma_J$ extends to a solution when one exists, i.e. no re-check fails. Let $\gamma$ be a solution of the pre-closing denotation. Constraint forms at dimension sort after solving (Def. 5.3): ground caps $c \sqsubseteq v$ — satisfied, $c \sqsubseteq J_v$ by the join; adjacencies $u \sqsubseteq v$ — satisfied, $J_u \sqsubseteq J_v$ by monotonicity of join under $\mathrm{caps}(u) \subseteq \mathrm{caps}(v)$; pins of either direction do not survive into solved form (Def. 5.3: no pending pins — DI-pin and DI-pin-top fire during solving). Mixed leaf–interior adjacencies: a leaf-commitment re-emission against an interior variable is a ground cap or a ground pin on the interior, handled by the (semantic) solving rules before step 3; step 3's upward closes then discharge against tops as in Prop. 6.2. Holes are excluded by hypothesis; with holes the commitment is a guess and Prop. 6.5's caveat applies instead. $\square$
+*Counterexample to no-spurious-failure.* Let
+$$\Phi = \{3_b \sqsubseteq \alpha,\ 5_b \sqsubseteq \beta,\ \gamma \sqsubseteq \alpha,\ \gamma \sqsubseteq \beta\},$$
+with $\alpha,\beta$ leaf dimensions and $\gamma$ interior. The store is satisfiable: for example $\alpha=\beta=1_\emptyset,\gamma=3_b$ satisfies all four inequalities. The saturated lower-bound stores are $J_\alpha=3_b$, $J_\beta=5_b$, and no lower bound for $\gamma$. Leaf-downward closing commits $\alpha \mapsto 3_b$ and $\beta \mapsto 5_b$. Re-solving the two upper constraints then emits $\gamma \sqsubseteq 3_b$ and $\gamma \sqsubseteq 5_b$, pinning $\gamma$ to two distinct atoms, hence finite failure. This is a policy rejection introduced by the leaf commitments, not unsatisfiability of $\Phi$. The implementation exhibits exactly this behavior in `test/einsum/test_closing_order.ml`.
 
-*(Row sort: the same argument gives the flat content — cap-set inclusion and join monotonicity hold per Prop. 2.7 on ground parts — but the row join must additionally choose a placement and an extent beyond the caps (no-further-axes), both policy coordinates; route them to Remark 6.7(ii)(a). The implementation's discipline is architectural — Stage 1 only propagates; commitments are confined to stages 2–7 — per `docs/shape_inference.md` and the §10 audit.)*
+*(Row sort: cap-set inclusion and join monotonicity still describe the flat content per Prop. 2.7 on ground parts, but the row join must additionally choose placement and extent beyond the caps (no-further-axes), both policy coordinates; route them to Remark 6.7(ii)(a). The implementation's discipline is architectural — Stage 1 only propagates; commitments are confined to stages 2–7 — per `docs/shape_inference.md` and the §10 audit.)*
 
 ---
 
