@@ -13,7 +13,7 @@ Status of the core's obligations after this appendix:
 | Confluence across fair strategies (Thm. 5.6 caveat) | **discharged by decision** — strategy fixed (A.4) |
 | Prop. 6.2 re-solve termination case split | **proved, strengthened** — re-solves always terminate (A.5) |
 | Prop. 6.4(iii) $\sqsubseteq^1$-greatestness | **proved**, with a rank-policy qualification (A.6) |
-| Remark 6.7(i) deterministic dimension closing | **counterexample to no-spurious-failure; order-independence fragment proved** (A.7) |
+| Remark 6.6(i) deterministic dimension closing | **counterexample to no-spurious-failure; order-independence fragment proved** (A.7) |
 | Remark 2.15(iv) inference-policy-vs-checking | **proved** (A.8) |
 | Detection Lemma (Thm. 5.2(b)) | **open** — structured reduction, D1 proved, D3 the residual gap (A.9) |
 | Marker-provenance invariant; surface discharge | **open** — statement recorded (A.10) |
@@ -123,7 +123,7 @@ It remains to bound storage/re-emission multiplicity per lineage: a cap is store
 
 The core's Thm. 5.6 caveat offered two routes: a Newman-style local-confluence argument, or fixing one strategy. **The paper fixes the strategy**: the implementation's — a per-round queue fixpoint over the constraint list with per-round accumulation reversal, wrapped in the staged pipeline of §10 (Stage 1 online unify/propagate; commitments confined to on-demand stages 2–7). With the strategy fixed, Thm. 5.6's uniqueness-up-to-renaming needs no cross-strategy argument, and the policy commitments (placements, deferred-equation resolutions, closing) are *deterministic functions of the input constraint order* — which is the precise content of Remark 2.15(v)'s "principality up to $\approx$, placement as order-sensitive policy."
 
-Cross-strategy confluence (up to $\approx$ and modulo policy) remains true-by-expectation and **[open]**; nothing in the paper depends on it. The semantic-step core is confluent for satisfiability outright by Lemma 5.1 (each semantic step preserves $\mathrm{Sol}$ exactly, so any two runs preserve the same invariant); what varies across strategies is only which policy representative is reached — Remark 6.7(iii) in the core.
+Cross-strategy confluence (up to $\approx$ and modulo policy) remains true-by-expectation and **[open]**; nothing in the paper depends on it. The semantic-step core is confluent for satisfiability outright by Lemma 5.1 (each semantic step preserves $\mathrm{Sol}$ exactly, so any two runs preserve the same invariant); what varies across strategies is only which policy representative is reached — Remark 6.6(iii) in the core.
 
 ---
 
@@ -160,7 +160,7 @@ Placement commitments need no exclusion — $\sqsubseteq^1$ is marker-blind on i
 
 ---
 
-## A.7 Remark 6.7(i) — deterministic dimension closing, and the counterexample
+## A.7 Remark 6.6(i) — deterministic dimension closing, and the counterexample
 
 **Corrected statement.** At dimension sort, with $\mathrm{glb}$ stores transitively closed at commitment time (every ground lower bound has been forwarded across the variable–variable adjacency to fixpoint), the value assigned by leaf-downward closing is independent of constraint and terminal emission order. The stronger statement formerly written here — that such closing cannot spuriously fail on a satisfiable hole-free store — is false.
 
@@ -172,7 +172,7 @@ Thus $J_v$ is a function of the solved store, not of the order in which terminal
 $$\Phi = \{3_b \sqsubseteq \alpha,\ 5_b \sqsubseteq \beta,\ \gamma \sqsubseteq \alpha,\ \gamma \sqsubseteq \beta\},$$
 with $\alpha,\beta$ leaf dimensions and $\gamma$ interior. The store is satisfiable: for example $\alpha=\beta=1_\emptyset,\gamma=3_b$ satisfies all four inequalities. The saturated lower-bound stores are $J_\alpha=3_b$, $J_\beta=5_b$, and no lower bound for $\gamma$. Leaf-downward closing commits $\alpha \mapsto 3_b$ and $\beta \mapsto 5_b$. Re-solving the two upper constraints then emits $\gamma \sqsubseteq 3_b$ and $\gamma \sqsubseteq 5_b$, pinning $\gamma$ to two distinct atoms, hence finite failure. This is a policy rejection introduced by the leaf commitments, not unsatisfiability of $\Phi$. The implementation exhibits exactly this behavior in `test/einsum/test_closing_order.ml`.
 
-*(Row sort: cap-set inclusion and join monotonicity still describe the flat content per Prop. 2.7 on ground parts, but the row join must additionally choose placement and extent beyond the caps (no-further-axes), both policy coordinates; route them to Remark 6.7(ii)(a). The implementation's discipline is architectural — Stage 1 only propagates; commitments are confined to stages 2–7 — per `docs/shape_inference.md` and the §10 audit.)*
+*(Row sort: cap-set inclusion and join monotonicity still describe the flat content per Prop. 2.7 on ground parts, but the row join must additionally choose placement and extent beyond the caps (no-further-axes), both policy coordinates; route them to Remark 6.6(ii)(a). The implementation's discipline is architectural — Stage 1 only propagates; commitments are confined to stages 2–7 — per `docs/shape_inference.md` and the §10 audit.)*
 
 ---
 
