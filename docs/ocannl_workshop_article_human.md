@@ -152,7 +152,7 @@ The implementation does not use the observational equivalence of rows-as-operand
 **Remark 2.15 (Einsum constraints: kind-indexed ellipsis, checking vs inference, and the one-shot order).** TODO: re-introduce once we know what's needed by later sections.
 
 
-### 3. Terms and substitutions
+### 3. Terms, substitutions, and constraint derivation
 
 **Definition 3.1 (Terms).** Dimension terms $t ::= \alpha \mid n_b \mid 1_\emptyset$. Row terms $R ::= l \cdot \diamond \cdot r \mid l \cdot \langle\rho\rangle \cdot r$ with $l, r$ sequences of dimension terms; we identify a bare row variable $\rho$ with $[\,]\cdot\langle\rho\rangle\cdot[\,]$. A term is *ground* if variable-free. Each row term contains **at most one** row variable, at the marker — an invariant preserved by everything below.
 
@@ -168,6 +168,31 @@ where ground *dimension* equalities are identity, ground *row* equalities are ju
 **Example 3.5 (No principal model exists in general).** Let $\Phi = \{3_b \sqsubseteq \alpha\}$. The identity does not model $\Phi$ (ground $\alpha \mapsto 5_b$ falsifies it). Any model must map $\alpha$ to a term all of whose groundings lie above $3_b$, i.e. to $3_b$ or $1_\emptyset$ (a variable target fails as the identity did). The two models $\sigma_1 = [\alpha \mapsto 3_b]$ and $\sigma_2 = [\alpha \mapsto 1_\emptyset]$ are $\le$-incomparable: a witness $u$ for either direction would have to send a ground dimension to a different ground dimension, which substitutions cannot do. Hence $\Phi$ has models but **no $\le$-least model**.
 
 *Consequence.* The solver's answer is a pair — a substitution *and a residual bound store* — and the correct theorem is about solution-set representation and most-generality (Theorem 5.6 below).
+
+**Compact rule table (constraint derivation).** Let $C$ be the result shape and
+$A,B,D$ operand shapes, with $S_k$ denoting the row of kind
+$k \in \{B,I,O\}$ (batch, input, output). For spec-based rules, let
+$T^{\mathrm{lhs}}_k$ and $T^{\mathrm{rhs}}_{i,k}$ be the rows obtained by
+elaborating the result and operand slots of the specification. The generated
+core constraints are:
+
+| Operation logic | Generated constraints |
+|---|---|
+| transpose | $C_B \sqsubseteq A_B,\quad C_I \sqsubseteq A_O,\quad C_O \sqsubseteq A_I$ |
+| pointwise unary | $C_k \sqsubseteq A_k$ for every $k$ |
+| pointwise binary | $C_k \sqsubseteq A_k,\quad C_k \sqsubseteq B_k$ for every $k$ |
+| pointwise ternary | $C_k \sqsubseteq A_k,\quad C_k \sqsubseteq B_k,\quad C_k \sqsubseteq D_k$ for every $k$ |
+| compose | $A_I \sqsubseteq B_O,\quad C_B \sqsubseteq A_B,\quad C_B \sqsubseteq B_B,\quad C_I \sqsubseteq B_I,\quad C_O \sqsubseteq A_O$ |
+| compose accumulate | the compose constraints, plus $C_k \sqsubseteq D_k$ for every $k$ |
+| batch slice | $(s \cdot C_B) \approx A_B,\quad C_I \approx A_I,\quad C_O \approx A_O$, where $s$ is the sliced outer batch axis |
+| permute | $C_k \approx T^{\mathrm{lhs}}_k,\quad T^{\mathrm{rhs}}_{1,k} \approx A_k$ for every $k$ |
+| einsum | $C_k \approx T^{\mathrm{lhs}}_k,\quad T^{\mathrm{rhs}}_{i,k} \approx A_{i,k}$ for every operand $i$ and kind $k$ |
+
+Here $\sqsubseteq$ is the broadcast/refinement order, while $\approx$ is flat row
+equivalence. Thus pointwise, transpose, and compose operations generate the
+broadcast-checking constraints of the core; permute and einsum deliberately
+generate equalities, the stronger inference policy used to recover labels and
+row variables bidirectionally.
 
 ### 4. The solver: configurations and rules
 
