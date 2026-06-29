@@ -1,0 +1,1967 @@
+% Mirror of docs/ocannl-formal-core-technical-report.md.
+% Regenerate or update alongside the Markdown report when the proof text changes.
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+\documentclass[
+]{article}
+\usepackage{xcolor}
+\usepackage{amsmath,amssymb}
+\setcounter{secnumdepth}{-\maxdimen} % remove section numbering
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math} % this also loads fontspec
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+\usepackage{lmodern}
+\ifPDFTeX\else
+  % xetex/luatex font selection
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{color}
+\usepackage{fancyvrb}
+\newcommand{\VerbBar}{|}
+\newcommand{\VERB}{\Verb[commandchars=\\\{\}]}
+\DefineVerbatimEnvironment{Highlighting}{Verbatim}{commandchars=\\\{\}}
+% Add ',fontsize=\small' for more characters per line
+\newenvironment{Shaded}{}{}
+\newcommand{\AlertTok}[1]{\textcolor[rgb]{1.00,0.00,0.00}{\textbf{#1}}}
+\newcommand{\AnnotationTok}[1]{\textcolor[rgb]{0.38,0.63,0.69}{\textbf{\textit{#1}}}}
+\newcommand{\AttributeTok}[1]{\textcolor[rgb]{0.49,0.56,0.16}{#1}}
+\newcommand{\BaseNTok}[1]{\textcolor[rgb]{0.25,0.63,0.44}{#1}}
+\newcommand{\BuiltInTok}[1]{\textcolor[rgb]{0.00,0.50,0.00}{#1}}
+\newcommand{\CharTok}[1]{\textcolor[rgb]{0.25,0.44,0.63}{#1}}
+\newcommand{\CommentTok}[1]{\textcolor[rgb]{0.38,0.63,0.69}{\textit{#1}}}
+\newcommand{\CommentVarTok}[1]{\textcolor[rgb]{0.38,0.63,0.69}{\textbf{\textit{#1}}}}
+\newcommand{\ConstantTok}[1]{\textcolor[rgb]{0.53,0.00,0.00}{#1}}
+\newcommand{\ControlFlowTok}[1]{\textcolor[rgb]{0.00,0.44,0.13}{\textbf{#1}}}
+\newcommand{\DataTypeTok}[1]{\textcolor[rgb]{0.56,0.13,0.00}{#1}}
+\newcommand{\DecValTok}[1]{\textcolor[rgb]{0.25,0.63,0.44}{#1}}
+\newcommand{\DocumentationTok}[1]{\textcolor[rgb]{0.73,0.13,0.13}{\textit{#1}}}
+\newcommand{\ErrorTok}[1]{\textcolor[rgb]{1.00,0.00,0.00}{\textbf{#1}}}
+\newcommand{\ExtensionTok}[1]{#1}
+\newcommand{\FloatTok}[1]{\textcolor[rgb]{0.25,0.63,0.44}{#1}}
+\newcommand{\FunctionTok}[1]{\textcolor[rgb]{0.02,0.16,0.49}{#1}}
+\newcommand{\ImportTok}[1]{\textcolor[rgb]{0.00,0.50,0.00}{\textbf{#1}}}
+\newcommand{\InformationTok}[1]{\textcolor[rgb]{0.38,0.63,0.69}{\textbf{\textit{#1}}}}
+\newcommand{\KeywordTok}[1]{\textcolor[rgb]{0.00,0.44,0.13}{\textbf{#1}}}
+\newcommand{\NormalTok}[1]{#1}
+\newcommand{\OperatorTok}[1]{\textcolor[rgb]{0.40,0.40,0.40}{#1}}
+\newcommand{\OtherTok}[1]{\textcolor[rgb]{0.00,0.44,0.13}{#1}}
+\newcommand{\PreprocessorTok}[1]{\textcolor[rgb]{0.74,0.48,0.00}{#1}}
+\newcommand{\RegionMarkerTok}[1]{#1}
+\newcommand{\SpecialCharTok}[1]{\textcolor[rgb]{0.25,0.44,0.63}{#1}}
+\newcommand{\SpecialStringTok}[1]{\textcolor[rgb]{0.73,0.40,0.53}{#1}}
+\newcommand{\StringTok}[1]{\textcolor[rgb]{0.25,0.44,0.63}{#1}}
+\newcommand{\VariableTok}[1]{\textcolor[rgb]{0.10,0.09,0.49}{#1}}
+\newcommand{\VerbatimStringTok}[1]{\textcolor[rgb]{0.25,0.44,0.63}{#1}}
+\newcommand{\WarningTok}[1]{\textcolor[rgb]{0.38,0.63,0.69}{\textbf{\textit{#1}}}}
+\usepackage{longtable,booktabs,array}
+\usepackage{calc} % for calculating minipage widths
+% Correct order of tables after \paragraph or \subparagraph
+\usepackage{etoolbox}
+\makeatletter
+\patchcmd\longtable{\par}{\if@noskipsec\mbox{}\fi\par}{}{}
+\makeatother
+% Allow footnotes in longtable head/foot
+\IfFileExists{footnotehyper.sty}{\usepackage{footnotehyper}}{\usepackage{footnote}}
+\makesavenoteenv{longtable}
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\usepackage{bookmark}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\urlstyle{same}
+\hypersetup{
+  hidelinks,
+  pdfcreator={LaTeX via pandoc}}
+
+\title{The Formal Core of OCANNL Shape and Projection Inference}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+This report is a standalone companion to the OCANNL workshop article,
+\texttt{docs/ocannl\_workshop\_article\_human.md}. It consolidates the
+working notes in \texttt{docs/blog/ocannl-formal-core.md} and
+\texttt{docs/formal-core-appendix.md} into one coherent account. The
+scope is the core shape language used by the current proof effort:
+dimensions, row variables, broadcasting, flat row equality, solving,
+closing, and core projection inference. The staged extensions for affine
+indexing, convolution padding, concatenation, and total-element
+constraints are discussed only to delimit what is already part of the
+core proof and what is outside that core.
+
+The main result is deliberately not overstated. The core semantic rules
+are proved sound; finite solving terminates with the persistent
+rank-cycle guard; successful closing produces a real solution; and
+projection inference over closed core shapes is canonical and
+address-safe.
+
+What is proved here:
+
+\begin{itemize}
+\tightlist
+\item
+  The rank-cycle guard is sound and exact for the facts it records.
+\item
+  The Detection Lemma is proved: every divergent rank-unsatisfiable run
+  eventually records a positive cycle.
+\item
+  Projection inference is fully proved for the core projection language.
+\end{itemize}
+
+The remaining caveats are separate from those proved core results:
+
+\begin{itemize}
+\tightlist
+\item
+  The deterministic solver commits policy choices for marker placement
+  and for deferred word equations. These choices are sound but
+  incomplete for the abstract \texttt{approx} semantics. The conjecture
+  that surface OCANNL programs do not observe the placement
+  incompleteness remains open.
+\item
+  The affine, convolution, and concatenation strata used by the
+  implementation need a separate staged soundness proof.
+\end{itemize}
+
+The implementation was checked against the formal rules while preparing
+this report, especially \texttt{tensor/row.ml} and
+\texttt{tensor/shape.ml}. The current code already implements the key
+corrections discovered by the formalization: flat closed-row equality,
+deferred shifted self equations/inequalities, explicit closed-closed
+inequality checks across structural flanks, and the persistent rank
+graph. No code change was required for this report.
+
+\subsection{1. Dimensions}\label{1-dimensions}
+
+Fix a set \texttt{B} of basis tags with a distinguished ordinary basis
+\texttt{default}. There is also a special claim-free unit written
+\texttt{1\_empty}; in the implementation it is represented by a
+dimension of size \texttt{1} with basis \texttt{bcast\_if\_1}. The
+mathematical presentation keeps it separate from ordinary atoms,
+including the ordinary atom \texttt{1\_default}.
+
+\textbf{Definition 1.1 (Dimensions).} The set of dimensions is
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{D = \{ 1\_empty \} union \{ n\_b | n \textgreater{}= 1 and b in B \}.}
+\end{Highlighting}
+\end{Shaded}
+
+Elements \texttt{n\_b} are atoms. Adjoin a fresh bottom element
+\texttt{bottom} and write
+\texttt{D\_bottom\ =\ D\ union\ \{\ bottom\ \}}.
+
+\textbf{Definition 1.2 (Broadcast order).} On \texttt{D},
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{d1 \textless{}= d2    iff    d2 = 1\_empty or d1 = d2.}
+\end{Highlighting}
+\end{Shaded}
+
+Extend this to \texttt{D\_bottom} by \texttt{bottom\ \textless{}=\ d}
+for every \texttt{d}.
+
+Thus \texttt{1\_empty} is the greatest element, atoms are pairwise
+incomparable, and \texttt{bottom} is only a proof device for meets.
+
+\textbf{Proposition 1.3 (Dimension lattice).} \texttt{D\_bottom} is a
+bounded lattice of height two. Its top is \texttt{1\_empty}, its bottom
+is \texttt{bottom}, and the atoms form an antichain between them. Meets
+and joins are:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{d meet d = d}
+\NormalTok{d meet 1\_empty = d}
+\NormalTok{d1 meet d2 = bottom        for distinct atoms d1, d2}
+
+\NormalTok{d join d = d}
+\NormalTok{d join bottom = d}
+\NormalTok{d1 join d2 = 1\_empty       for distinct atoms d1, d2.}
+\end{Highlighting}
+\end{Shaded}
+
+\textbf{Proof.} Reflexivity follows from equality in Definition 1.2. For
+antisymmetry, if \texttt{d1\ \textless{}=\ d2} and
+\texttt{d2\ \textless{}=\ d1} and \texttt{d1\ !=\ d2}, then the first
+inequality forces \texttt{d2\ =\ 1\_empty}, while the second forces
+\texttt{d1\ =\ 1\_empty}, a contradiction. For transitivity, if the
+rightmost element is \texttt{1\_empty} the claim is immediate; otherwise
+the second inequality is equality, and the first inequality gives the
+result.
+
+The displayed meet and join equations exhaust all cases: equal
+arguments, a top or bottom argument, and two distinct atoms. In each
+case the candidate is checked directly from the order. A distinct pair
+of atoms has no common lower bound above \texttt{bottom} and no common
+upper bound below \texttt{1\_empty}. Therefore the displayed operations
+are the greatest lower bounds and least upper bounds. \texttt{square}
+
+\textbf{Proposition 1.4 (Non-distributivity).} If there are at least
+three atoms, \texttt{D\_bottom} is not distributive. It is, however,
+modular; the earlier working claim that the lattice is not modular was
+false.
+
+\textbf{Proof.} Let \texttt{a}, \texttt{b}, and \texttt{c} be distinct
+atoms. The sublattice \texttt{\{bottom,\ a,\ b,\ c,\ 1\_empty\}} is the
+diamond lattice \texttt{M\_3}. It violates distributivity:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{a meet (b join c) = a meet 1\_empty = a}
+\NormalTok{(a meet b) join (a meet c) = bottom join bottom = bottom.}
+\end{Highlighting}
+\end{Shaded}
+
+So any lattice containing it as a sublattice is not distributive. The
+same argument cannot show non-modularity because \texttt{M\_3} is
+modular. In fact the height-two atom lattice is modular: if
+\texttt{x\ \textless{}=\ z}, then the only non-trivial case is
+\texttt{x\ =\ bottom} or \texttt{z\ =\ 1\_empty}, and the modular law
+reduces to the defining equations for meet and join. \texttt{square}
+
+\subsection{2. Rows}\label{2-rows}
+
+A row is a sequence of axes with a distinguished insertion point. The
+marker is not syntax trivia: it is where broadcasting inserts implicit
+axes and where a row variable absorbs axes during inference.
+
+\textbf{Definition 2.1 (Rows).} A ground row is a triple
+\texttt{l\ .\ diamond\ .\ r} with \texttt{l,\ r\ in\ D*}. The lists are
+the leading and trailing flanks. Its rank is
+\texttt{\textbar{}l\textbar{}\ +\ \textbar{}r\textbar{}}. Row identity
+is marker-sensitive:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{[3] . diamond . [4] != [3,4] . diamond . [].}
+\end{Highlighting}
+\end{Shaded}
+
+\textbf{Definition 2.2 (Expansion).} For
+\texttt{R\ =\ l\ .\ diamond\ .\ r} and
+\texttt{n\ \textgreater{}=\ rank(R)},
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{R up n = l . 1\_empty\^{}(n {-} rank(R)) . r.}
+\end{Highlighting}
+\end{Shaded}
+
+The expansion inserts claim-free broadcast axes at the marker.
+
+\textbf{Definition 2.3 (Row order).} Write
+\texttt{R2\ =\ l2\ .\ diamond\ .\ r2} and
+\texttt{R1\ =\ l1\ .\ diamond\ .\ r1}. Then
+\texttt{R2\ \textless{}=\ R1} iff:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \texttt{\textbar{}l1\textbar{}\ \textless{}=\ \textbar{}l2\textbar{}}
+  and
+  \texttt{\textbar{}r1\textbar{}\ \textless{}=\ \textbar{}r2\textbar{}};
+\item
+  for every position \texttt{i\ \textless{}\ rank(R2)},
+  \texttt{(l2\ .\ r2){[}i{]}\ \textless{}=\ (R1\ up\ rank(R2)){[}i{]}}.
+\end{enumerate}
+
+The left row is the more material row. A shorter row can sit above a
+longer one because the shorter row has more broadcast credit at its
+marker.
+
+\textbf{Lemma 2.4 (Expansion monotonicity).} If
+\texttt{R2\ \textless{}=\ R1}, then for every
+\texttt{n\ \textgreater{}=\ rank(R2)} and every position
+\texttt{i\ \textless{}\ n},
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{(R2 up n)[i] \textless{}= (R1 up n)[i].}
+\end{Highlighting}
+\end{Shaded}
+
+\textbf{Proof.} Write \texttt{Rj\ =\ lj\ .\ diamond\ .\ rj}. There are
+three regions.
+
+If \texttt{i\ \textless{}\ \textbar{}l2\textbar{}}, the left side is
+\texttt{l2{[}i{]}}. When
+\texttt{i\ \textless{}\ \textbar{}l1\textbar{}}, the defining pointwise
+condition gives \texttt{l2{[}i{]}\ \textless{}=\ l1{[}i{]}}. When
+\texttt{i\ \textgreater{}=\ \textbar{}l1\textbar{}}, the position lies
+in the middle of \texttt{R1\ up\ n} unless it is already in the trailing
+region; but
+\texttt{i\ \textless{}\ \textbar{}l2\textbar{}\ \textless{}=\ n\ -\ \textbar{}r2\textbar{}\ \textless{}=\ n\ -\ \textbar{}r1\textbar{}},
+so it is not trailing. Hence the right side is \texttt{1\_empty}, and
+the inequality is automatic.
+
+If
+\texttt{\textbar{}l2\textbar{}\ \textless{}=\ i\ \textless{}\ n\ -\ \textbar{}r2\textbar{}},
+the left side is \texttt{1\_empty}. By the flank-fit conditions,
+\texttt{i} also lies in the middle of \texttt{R1\ up\ n}, so the right
+side is \texttt{1\_empty}.
+
+If \texttt{i\ \textgreater{}=\ n\ -\ \textbar{}r2\textbar{}}, the proof
+is symmetric to the leading-flank case, using the outer-right alignment
+of trailing flanks. \texttt{square}
+
+\textbf{Proposition 2.5 (Partial order).} The row relation
+\texttt{\textless{}=} is a partial order.
+
+\textbf{Proof.} Reflexivity is immediate. For antisymmetry, mutual
+flank-fit gives equal leading and trailing flank lengths. The expansions
+at that common rank are the rows\textquotesingle{} flat contents, so
+pointwise antisymmetry in \texttt{D} gives equal flanks.
+
+For transitivity, suppose
+\texttt{R3\ \textless{}=\ R2\ \textless{}=\ R1} and let
+\texttt{n\ =\ rank(R3)}. Flank-fit conditions compose. The pointwise
+condition follows from \texttt{R3\ up\ n\ \textless{}=\ R2\ up\ n} by
+the first inequality and \texttt{R2\ up\ n\ \textless{}=\ R1\ up\ n} by
+Lemma 2.4 applied to \texttt{R2\ \textless{}=\ R1}. Transitivity in
+\texttt{D} completes the proof. \texttt{square}
+
+\textbf{Proposition 2.6 (Top row).} The empty marked row
+\texttt{{[}{]}\ .\ diamond\ .\ {[}{]}} is the greatest row, and it is
+the unique greatest row.
+
+\textbf{Proof.} Its flank lengths are zero and its expansion to any rank
+is all \texttt{1\_empty}, so every row refines it. If some row is above
+the empty row, the flank-fit inequalities force both of its flanks to
+have length zero. \texttt{square}
+
+\textbf{Proposition 2.7 (Row joins).} Rows form a join-semilattice with
+top. The least upper bound of \texttt{R1\ =\ l1\ .\ diamond\ .\ r1} and
+\texttt{R2\ =\ l2\ .\ diamond\ .\ r2} is
+\texttt{Rj\ =\ lj\ .\ diamond\ .\ rj}, where:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{|lj| = min(|l1|, |l2|)}
+\NormalTok{lj[i] = l1[i] join l2[i]}
+\end{Highlighting}
+\end{Shaded}
+
+and similarly for the trailing flank, aligned from the right.
+
+\textbf{Proof.} \texttt{Rj} is an upper bound because its flanks are no
+longer than either input flank. On positions retained in \texttt{Rj},
+the dimension join is an upper bound; positions outside the retained
+flanks expand to \texttt{1\_empty}.
+
+Now let \texttt{U} be any upper bound. Since
+\texttt{R1\ \textless{}=\ U} and \texttt{R2\ \textless{}=\ U}, the
+flanks of \texttt{U} are no longer than the corresponding flanks of both
+inputs, hence no longer than the flanks of \texttt{Rj}. Thus the
+flank-fit condition for \texttt{Rj\ \textless{}=\ U} holds. At each
+retained leading position of \texttt{U}, both \texttt{l1{[}i{]}} and
+\texttt{l2{[}i{]}} are below \texttt{U}\textquotesingle s dimension
+there, so their join is below it. The trailing side is symmetric.
+Positions in the middle of \texttt{U} are \texttt{1\_empty}. Therefore
+\texttt{Rj\ \textless{}=\ U}. \texttt{square}
+
+\textbf{Definition 2.8 (Flat equivalence).} The flat content of
+\texttt{l\ .\ diamond\ .\ r} is \texttt{l\ .\ r}. Define
+\texttt{R\ approx\ R\textquotesingle{}} iff their flat contents are
+equal. Equivalently, they have equal rank and equal expansion at that
+rank.
+
+\texttt{approx} is not the identity of row elements. It is the equality
+relation used for row equality constraints, including einsum template
+matching.
+
+\textbf{Proposition 2.9 (\texttt{approx} versus \texttt{\textless{}=}).}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  The equivalence induced by mutual \texttt{\textless{}=} is identity.
+\item
+  Distinct rows related by \texttt{approx} are incomparable under
+  \texttt{\textless{}=}.
+\item
+  \texttt{approx} is not a congruence for the marked row order.
+\end{enumerate}
+
+\textbf{Proof.} Item 1 is antisymmetry. For item 2, two flat-equal but
+distinct rows must place the marker at different positions. If one has a
+longer leading flank, it has a shorter trailing flank because total rank
+is equal. The leading flank-fit condition fails in one direction and the
+trailing flank-fit condition fails in the other.
+
+For item 3, take
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{R  = [3] . diamond . [2,4]}
+\NormalTok{S  = [3] . diamond . [4]}
+\NormalTok{S\textquotesingle{} = [3,4] . diamond . [].}
+\end{Highlighting}
+\end{Shaded}
+
+Then \texttt{S\ approx\ S\textquotesingle{}}, and
+\texttt{R\ \textless{}=\ S}: the expansion of \texttt{S} to rank three
+is \texttt{{[}3,\ 1\_empty,\ 4{]}}. But
+\texttt{R\ \textless{}=\ S\textquotesingle{}} fails because the upper
+row would need a leading flank of length at most one, while
+\texttt{S\textquotesingle{}} has leading length two. Thus replacing an
+\texttt{approx}-equivalent row inside an inequality can change truth.
+\texttt{square}
+
+This is the first non-principality point. Flat equality is needed for
+useful spec matching, but marker placement remains a real policy choice
+whenever an equality binds a row variable.
+
+\subsubsection{2.1 Rigid Rows and One-Shot
+Checking}\label{21-rigid-rows-and-one-shot-checking}
+
+It is useful to name the marker-free interpretation of a flat row.
+
+\textbf{Definition 2.10 (Rigid rows).} A rigid row is
+\texttt{F\^{}bullet} for \texttt{F\ in\ D\^{}n}. Its expansion is
+defined only at rank \texttt{n} and equals \texttt{F}. Extend the order
+by:
+
+\begin{itemize}
+\tightlist
+\item
+  marked-marked: Definition 2.3;
+\item
+  rigid-rigid: equal rank and pointwise refinement;
+\item
+  rigid below marked: \texttt{F\^{}bullet\ \textless{}=\ R} iff
+  \texttt{rank(F)\ \textgreater{}=\ rank(R)} and
+  \texttt{F{[}i{]}\ \textless{}=\ (R\ up\ rank(F)){[}i{]}} pointwise;
+\item
+  marked below rigid: never.
+\end{itemize}
+
+\textbf{Proposition 2.11 (Two-sorted order).} The extended relation is a
+partial order. The empty marked row remains the unique top. Rigid row
+equality is flat content equality.
+
+\textbf{Proof.} Reflexivity and antisymmetry hold within each sort as
+before; a cross-sort mutual comparison is impossible because marked rows
+are never below rigid rows. For transitivity, the all-marked case is
+Proposition 2.5, the all-rigid case is pointwise transitivity, and the
+mixed cases are:
+
+\begin{itemize}
+\tightlist
+\item
+  rigid \texttt{\textless{}=} rigid \texttt{\textless{}=} marked, where
+  the equal rigid ranks and pointwise inequalities compose;
+\item
+  rigid \texttt{\textless{}=} marked \texttt{\textless{}=} marked, where
+  Lemma 2.4 transports the second marked inequality to the rigid rank.
+\end{itemize}
+
+No other mixed chain is possible because marked-below-rigid comparisons
+are forbidden. Topness of the empty marked row follows as in Proposition
+2.6. \texttt{square}
+
+The forbidden marked-below-rigid clause is forced. If even rank-equal
+marked rows were allowed below their rigidifications, then
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{[5] . diamond . [3] \textless{}= [] . diamond . [3] \textless{}= [3]\^{}bullet}
+\end{Highlighting}
+\end{Shaded}
+
+would require
+\texttt{{[}5{]}\ .\ diamond\ .\ {[}3{]}\ \textless{}=\ {[}3{]}\^{}bullet},
+impossible by rank.
+
+\textbf{Definition 2.12 (One-shot order).} Write
+\texttt{R\ \textless{}=1\ S} when
+\texttt{flat(R)\^{}bullet\ \textless{}=\ S} in the two-sorted order.
+This is the marker-erasing, single-check relation used to state results
+that should not depend on the solver\textquotesingle s marker-placement
+policy.
+
+\subsection{3. Terms, Substitutions, and
+Constraints}\label{3-terms-substitutions-and-constraints}
+
+\textbf{Definition 3.1 (Terms).} Dimension terms are:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{t ::= alpha | n\_b | 1\_empty.}
+\end{Highlighting}
+\end{Shaded}
+
+Row terms are:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{R ::= l . diamond . r | l . \textless{}rho\textgreater{} . r}
+\end{Highlighting}
+\end{Shaded}
+
+where \texttt{l} and \texttt{r} are sequences of dimension terms. A term
+is ground if it is variable-free. Each row term contains at most one row
+variable, at the marker.
+
+\textbf{Definition 3.2 (Substitution).} A substitution is a finite
+sort-respecting map from variables to terms. It is kept idempotent:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{dom(sigma) cap vars(range(sigma)) = empty.}
+\end{Highlighting}
+\end{Shaded}
+
+Application to row variables splices at the marker. If
+\texttt{sigma(rho)\ =\ l\textquotesingle{}\ .\ \textless{}rho\textquotesingle{}\textgreater{}\ .\ r\textquotesingle{}},
+then
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{sigma(l . \textless{}rho\textgreater{} . r) = sigma(l) . l\textquotesingle{} . \textless{}rho\textquotesingle{}\textgreater{} . r\textquotesingle{} . sigma(r).}
+\end{Highlighting}
+\end{Shaded}
+
+If
+\texttt{sigma(rho)\ =\ l\textquotesingle{}\ .\ diamond\ .\ r\textquotesingle{}},
+the result is the closed row
+\texttt{sigma(l)\ .\ l\textquotesingle{}\ .\ diamond\ .\ r\textquotesingle{}\ .\ sigma(r)}.
+
+\textbf{Lemma 3.3 (Composition).} With this splice definition,
+\texttt{(sigma\ o\ tau)(X)\ =\ sigma(tau(X))} for all terms \texttt{X}.
+
+\textbf{Proof.} Dimension terms are immediate. For rows, the only
+non-structural case is a row variable at the marker. Applying
+\texttt{tau} splices \texttt{tau(rho)} into the outer row; applying
+\texttt{sigma} then splices any row variable in \texttt{tau(rho)} at the
+same marker and maps the flank dimensions. This is exactly the row-term
+component of the composite substitution. \texttt{square}
+
+\textbf{Definition 3.4 (Constraint semantics).} Atomic constraints are:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{t1 = t2}
+\NormalTok{t1 \textless{}= t2}
+\NormalTok{R1 approx R2}
+\NormalTok{R1 \textless{}= R2.}
+\end{Highlighting}
+\end{Shaded}
+
+A ground substitution \texttt{gamma} satisfies dimension equality by
+identity, dimension inequality by Definition 1.2, row equality by flat
+equivalence \texttt{approx}, and row inequality by Definition 2.3. Write
+\texttt{Sol(Phi)} for the set of ground substitutions satisfying every
+constraint in \texttt{Phi}.
+
+The row equality choice is the important one: equality constraints are
+marker-blind, while inequality constraints use the marked order.
+
+\textbf{Definition 3.5 (Substitution models and order).} A substitution
+\texttt{sigma} models \texttt{Phi}, written \texttt{sigma\ models\ Phi},
+iff every ground substitution \texttt{gamma} makes
+\texttt{gamma\ o\ sigma} a solution. The substitution preorder is
+\texttt{sigma1\ \textless{}=\ sigma2} iff there exists \texttt{u} with
+\texttt{u\ o\ sigma1\ =\ sigma2}.
+
+\textbf{Example 3.6 (No principal model).} For
+\texttt{Phi\ =\ \{\ 3\_b\ \textless{}=\ alpha\ \}}, the identity
+substitution is not a model because \texttt{alpha} could be grounded to
+a different atom. The substitutions
+\texttt{{[}alpha\ -\textgreater{}\ 3\_b{]}} and
+\texttt{{[}alpha\ -\textgreater{}\ 1\_empty{]}} are both models, and
+neither factors through the other: ground dimensions cannot be rewritten
+by a later substitution. Thus solvable constraint sets need not have a
+least substitution model. The solver must return a substitution plus a
+residual bound store.
+
+\subsubsection{3.1 Constraint
+Generation}\label{31-constraint-generation}
+
+The core operation rules generate row inequalities for ordinary
+broadcasting and row equalities for spec-based operations. Let
+\texttt{C} be the result shape; \texttt{A}, \texttt{B}, and \texttt{D}
+operands; and \texttt{S\_k} the row of kind
+\texttt{k\ in\ \{Batch,\ Input,\ Output\}}.
+
+\begin{longtable}[]{@{}ll@{}}
+\toprule\noalign{}
+Operation & Generated row constraints \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+transpose & \texttt{C\_B\ \textless{}=\ A\_B},
+\texttt{C\_I\ \textless{}=\ A\_O}, \texttt{C\_O\ \textless{}=\ A\_I} \\
+pointwise unary & \texttt{C\_k\ \textless{}=\ A\_k} for every kind
+\texttt{k} \\
+pointwise binary & \texttt{C\_k\ \textless{}=\ A\_k},
+\texttt{C\_k\ \textless{}=\ B\_k} for every kind \texttt{k} \\
+pointwise ternary & result row below each operand row for every kind \\
+compose & \texttt{A\_I\ \textless{}=\ B\_O},
+\texttt{C\_B\ \textless{}=\ A\_B}, \texttt{C\_B\ \textless{}=\ B\_B},
+\texttt{C\_I\ \textless{}=\ B\_I}, \texttt{C\_O\ \textless{}=\ A\_O} \\
+compose accumulate & compose constraints plus
+\texttt{C\_k\ \textless{}=\ D\_k} \\
+batch slice & \texttt{(s\ .\ C\_B)\ approx\ A\_B},
+\texttt{C\_I\ approx\ A\_I}, \texttt{C\_O\ approx\ A\_O} \\
+permute & \texttt{C\_k\ approx\ T\_lhs,k},
+\texttt{T\_rhs,k\ approx\ A\_k} \\
+einsum & \texttt{C\_k\ approx\ T\_lhs,k},
+\texttt{T\_rhs,i,k\ approx\ A\_i,k} \\
+\end{longtable}
+
+This table matches the implementation in \texttt{tensor/shape.ml}:
+ordinary pointwise and compose rules emit \texttt{Row\_ineq}, while
+batch slice, permute, and einsum emit \texttt{Row\_eq}. Batch slice is
+the canonical source of a non-empty leading flank; it prepends the slice
+axis to the result batch row.
+
+\subsection{4. The Solver}\label{4-the-solver}
+
+\textbf{Definition 4.1 (Configurations).} A configuration is
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{\textless{} Phi ; sigma ; B \textgreater{}}
+\end{Highlighting}
+\end{Shaded}
+
+where \texttt{Phi} is the pending constraint list, \texttt{sigma} is the
+idempotent substitution, and \texttt{B} is a bound store. The store
+records, for dimension variables, atom lower bounds and variable
+adjacencies; for row variables, row caps and row adjacencies. A failure
+configuration is written \texttt{fail}.
+
+Binding a variable moves the equality into \texttt{sigma}, substitutes
+through \texttt{Phi} and \texttt{B}, and re-emits all stored bounds for
+the bound variable, instantiated at its new value. This single
+re-emission discipline is the reason stored facts can be interpreted as
+constraints in the metatheory.
+
+\subsubsection{4.1 Dimension Rules}\label{41-dimension-rules}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{DE-refl:} \texttt{t\ =\ t}; discard.
+\item
+  \textbf{DE-clash:} distinct ground dimensions; \texttt{fail}.
+\item
+  \textbf{DE-bind:} \texttt{alpha\ =\ t}, \texttt{t\ !=\ alpha}; bind
+  \texttt{alpha\ -\textgreater{}\ t}.
+\item
+  \textbf{DI-top:} \texttt{t\ \textless{}=\ 1\_empty}; discard.
+\item
+  \textbf{DI-refl:} \texttt{t\ \textless{}=\ t}; discard.
+\item
+  \textbf{DI-ground:} ground
+  \texttt{d\ \textless{}=\ d\textquotesingle{}}; check Definition 1.2,
+  else \texttt{fail}.
+\item
+  \textbf{DI-pin:} \texttt{alpha\ \textless{}=\ d}, with \texttt{d} an
+  atom; replace by \texttt{alpha\ =\ d}.
+\item
+  \textbf{DI-pin-top:} \texttt{1\_empty\ \textless{}=\ alpha}; replace
+  by \texttt{alpha\ =\ 1\_empty}.
+\item
+  \textbf{DI-cap:} \texttt{d\ \textless{}=\ alpha}, with \texttt{d} an
+  atom; record the lower bound. If a distinct atom is already recorded,
+  bind \texttt{alpha\ -\textgreater{}\ 1\_empty}.
+\item
+  \textbf{DI-adj:} \texttt{alpha\ \textless{}=\ beta},
+  \texttt{alpha\ !=\ beta}; record the adjacency and forward existing
+  caps.
+\end{itemize}
+
+\textbf{Lemma 4.2 (Dimension rules preserve solutions).} Each
+non-failing dimension rule preserves the denoted solution set. Each
+failing dimension rule fires only on an unsatisfiable denotation.
+
+\textbf{Proof.} The reflexive and top rules remove valid constraints.
+DE-clash and failed DI-ground are unsatisfiable by Definition 1.2.
+DE-bind is the standard substitution-preserving move from a pending
+equality into \texttt{sigma}.
+
+For DI-pin, the only dimension below an atom is the atom itself. For
+DI-pin-top, the only dimension above the top is the top. For DI-cap,
+storing a first lower bound only moves the constraint into \texttt{B}.
+If a distinct atom is already stored, any common upper bound of the two
+atoms is \texttt{1\_empty}, so the two caps are equivalent to
+\texttt{alpha\ =\ 1\_empty}. DI-adj only records and forwards the
+transitive consequence
+\texttt{d\ \textless{}=\ alpha\ \textless{}=\ beta}. \texttt{square}
+
+\subsubsection{4.2 Row Rules}\label{42-row-rules}
+
+Definition 4.3 uses the mnemonic layout from the workshop article. In
+all row rules, leading flanks are aligned from the outer-left edge and
+trailing flanks from the outer-right edge. Overlapping aligned
+dimensions emit the corresponding dimension equalities or inequalities.
+
+\textbf{Definition 4.3 (Row equality rules).}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{RE-closed:} both sides closed. Fail iff ranks differ;
+  otherwise zip flat rows and emit dimension equalities.
+\item
+  \textbf{RE-open-closed:} one side open with \texttt{rho}, the other
+  closed. Fail iff the open side\textquotesingle s total explicit flank
+  length exceeds the closed rank; otherwise bind \texttt{rho} to the
+  uncovered middle of the closed flat row, using the inherit-the-split
+  placement policy.
+\item
+  \textbf{RE-nested:} both sides open, distinct variables, and both
+  surpluses are on \texttt{rho2}\textquotesingle s side. Bind
+  \texttt{rho1\ -\textgreater{}\ m\_l\ .\ \textless{}rho2\textgreater{}\ .\ m\_r}.
+\item
+  \textbf{RE-cross:} both sides open, distinct variables, with split
+  surpluses. Defer the residual word equation
+  \texttt{s\ .\ x1\ =\ x2\ .\ t} into closing.
+\item
+  \textbf{RE-same-empty:} same variable and no surplus; discard.
+\item
+  \textbf{RE-same-occurs:} same variable and unequal total flank
+  lengths; fail.
+\item
+  \textbf{RE-same-rot:} same variable, equal total flank length, but
+  shifted split. Defer the rotational word equation
+  \texttt{x\ .\ t\ =\ s\ .\ x} into closing.
+\end{itemize}
+
+\textbf{Explanation.} RE-closed is flat equality, so marker placement is
+ignored. RE-open-closed forces the flat content of the row variable, but
+not its marker placement. The implementation chooses the closed
+side\textquotesingle s split when available and the left edge otherwise.
+That choice is a policy commitment: sound, but not complete for all
+\texttt{approx}-solutions. RE-nested is the same phenomenon with another
+row variable in the middle.
+
+RE-cross is a two-variable word equation. Its solutions are the
+principal family
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{x2 = s . w}
+\NormalTok{x1 = w . t}
+\end{Highlighting}
+\end{Shaded}
+
+plus finitely many sporadic crossover solutions where \texttt{x2} is a
+proper prefix of \texttt{s}. Eagerly binding a fresh middle variable
+would keep only the principal family and would be a rank commitment not
+entailed by \texttt{approx}. Therefore the correct core rule defers.
+
+RE-same-rot is governed by the classical conjugacy equation
+\texttt{x\ .\ t\ =\ s\ .\ x}. Non-empty periodic solutions exist when
+\texttt{s} and \texttt{t} are conjugate. The deterministic solver does
+not represent that family; it defers until either other constraints
+solve the variable or closing chooses the least-material branch.
+
+\textbf{Definition 4.4 (Row inequality rules).}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{RI-cap:} operand open and result supplies at least the operand
+  flanks. Record the result\textquotesingle s interior residue as a cap
+  on the operand row variable.
+\item
+  \textbf{RI-closed-op:} operand closed and result rank is at least the
+  operand flanks. Compare explicit operand material against the result
+  flat row; inserted operand middle positions are unconstrained.
+\item
+  \textbf{RI-short-closed:} result closed and shorter than the
+  operand\textquotesingle s known flanks; fail.
+\item
+  \textbf{RI-deficit:} result open and shorter than operand known flanks
+  by \texttt{k\ \textgreater{}\ 0}. Grow the result variable by a
+  template with fresh dimensions and a fresh row variable, then
+  reprocess.
+\end{itemize}
+
+RI-closed-op is easy to state incorrectly. The operand\textquotesingle s
+inserted broadcast positions are unconstrained because they are
+\texttt{1\_empty}, but the operand\textquotesingle s explicit axes still
+pin corresponding result positions, even across structural flanks. The
+current implementation performs this flat comparison.
+
+\textbf{Lemma 4.5 (Row rule preservation).} Every semantic row rule
+preserves solutions exactly up to extension on fresh variables. Semantic
+failures occur only when the denotation has no solution. The placement
+and deferred-equation steps are policy steps: every new solution
+restricts to an old solution, but some old solutions can be lost.
+
+\textbf{Proof.}
+
+For RE-closed, flat equality of equal-length closed words is equivalent
+to the pointwise dimension equalities. Unequal ranks are unsatisfiable.
+
+For RE-open-closed, write the open side as
+\texttt{l\ .\ \textless{}rho\textgreater{}\ .\ r} and the closed flat
+word as \texttt{w}. The flat equation is
+\texttt{gamma(l)\ .\ x\ .\ gamma(r)\ =\ w}, where
+\texttt{x\ =\ flat(gamma\ rho)}. Since the flank lengths are fixed, a
+solution exists iff
+\texttt{\textbar{}l\textbar{}\ +\ \textbar{}r\textbar{}\ \textless{}=\ \textbar{}w\textbar{}};
+then \texttt{x} is the unique middle segment and the outer segments emit
+exact dimension equalities. Only the split of \texttt{x} around a marker
+is policy.
+
+For RE-nested, cancellation of common outer flanks leaves
+\texttt{x1\ =\ m\_l\ .\ x2\ .\ m\_r}. The flat content of the binding is
+entailed. The inherited split is policy, for the same reason as
+RE-open-closed.
+
+For RE-cross, cancellation leaves \texttt{s\ .\ x1\ =\ x2\ .\ t} with
+non-empty split surpluses. If
+\texttt{\textbar{}x2\textbar{}\ \textgreater{}=\ \textbar{}s\textbar{}},
+then \texttt{x2\ =\ s\ .\ w} and \texttt{x1\ =\ w\ .\ t}. If
+\texttt{\textbar{}x2\textbar{}\ \textless{}\ \textbar{}s\textbar{}},
+then \texttt{x2} is a proper prefix of \texttt{s}; the remaining suffix
+of \texttt{s} must be a prefix of \texttt{t}, and \texttt{x1} is forced
+to the complementary suffix of \texttt{t}. These cases are exhaustive,
+so deferral preserves the denotation. Any later closing choice is
+policy.
+
+RE-same-empty removes a reflexive equation. RE-same-occurs with unequal
+total flank lengths is unsatisfiable by length. RE-same-rot is a
+deferred word equation; deferral is exact, while the eventual
+least-material resolution is policy.
+
+For row inequalities, the aligned explicit overlaps are exactly the
+pointwise requirements of Definition 2.3. RI-cap packages the remaining
+interior requirement as a stored cap. RI-closed-op discards only
+positions where the operand expansion inserts \texttt{1\_empty}, and
+emits comparisons for explicit operand axes. RI-short-closed violates
+flank-fit with a fixed-rank result. RI-deficit is exact because any
+solution must give the result variable at least the missing \texttt{k}
+axes; those axes decompose uniquely around the marker according to the
+template. Fresh dimensions and the fresh row variable are assigned from
+that decomposition, and conversely every solution after the template
+binding restricts to a solution before it. \texttt{square}
+
+\subsubsection{4.3 Rank-Fact Graph}\label{43-rank-fact-graph}
+
+The row rules without an extra check can diverge on rank-unsatisfiable
+inputs:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{rho1 \textless{}= [a] . \textless{}rho2\textgreater{}}
+\NormalTok{rho2 \textless{}= [b] . \textless{}rho1\textgreater{}}
+\end{Highlighting}
+\end{Shaded}
+
+The first constraint forces
+\texttt{rank(rho1)\ \textgreater{}=\ rank(rho2)\ +\ 1}; the second
+forces the reverse strict inequality. Operationally, each RI-deficit
+step grows one row variable and lengthens the other
+constraint\textquotesingle s operand side.
+
+\textbf{Definition 4.6 (Rank graph).} Maintain a persistent directed
+graph \texttt{G} on row variables. An edge
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{rho {-}{-}k{-}{-}\textgreater{} rho\textquotesingle{}}
+\end{Highlighting}
+\end{Shaded}
+
+with \texttt{k\ \textgreater{}=\ 0} records the entailed fact
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{rank(gamma rho) \textgreater{}= rank(gamma rho\textquotesingle{}) + k.}
+\end{Highlighting}
+\end{Shaded}
+
+Edges are recorded at three points:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{RG-bind:} solving
+  \texttt{rho\ -\textgreater{}\ l\ .\ \textless{}rho\textquotesingle{}\textgreater{}\ .\ r}
+  records
+  \texttt{rho\ -\/-(\textbar{}l\textbar{}+\textbar{}r\textbar{})-\/-\textgreater{}\ rho\textquotesingle{}};
+\item
+  \textbf{RG-equal-flanks:} processing
+  \texttt{R\_res\ \textless{}=\ R\_op} with both sides open and equal
+  known flank lengths records
+  \texttt{rho\_res\ -\/-0-\/-\textgreater{}\ rho\_op};
+\item
+  \textbf{RG-deficit:} RI-deficit with deficit
+  \texttt{k\ \textgreater{}\ 0} and open operand records
+  \texttt{rho\_res\ -\/-k-\/-\textgreater{}\ rho\_op} before growing the
+  result.
+\end{enumerate}
+
+Every insertion is guarded. If the new edge closes a directed cycle of
+total positive weight, the solver fails.
+
+No edge is recorded in RI-cap when the result already has surplus known
+flanks. That situation entails only
+\texttt{rank(rho\_res)\ \textgreater{}=\ rank(rho\_op)\ -\ s}, a
+non-positive lower-bound difference. Recording it as a zero or positive
+edge is unsound and rejects valid programs.
+
+\textbf{Proposition 4.7 (Exactness for recorded facts).} A finite set of
+recorded rank facts is satisfiable over natural-number ranks iff
+\texttt{G} has no positive cycle. Therefore the guard fails exactly when
+the recorded facts are jointly unsatisfiable.
+
+\textbf{Proof.} If there is a positive cycle, summing the inequalities
+around it gives \texttt{rank(rho)\ \textgreater{}=\ rank(rho)\ +\ w} for
+\texttt{w\ \textgreater{}\ 0}, impossible.
+
+Conversely, assume there is no positive cycle. For each vertex
+\texttt{rho}, define \texttt{r(rho)} as the supremum of the total
+weights of directed walks starting at \texttt{rho}. Any walk that
+revisits a vertex contains a cycle of weight zero, since all weights are
+non-negative and positive cycles are absent. Removing such a cycle does
+not decrease the walk weight, so the supremum is attained on a simple
+path and is finite. For every edge
+\texttt{rho\ -\/-k-\/-\textgreater{}\ rho\textquotesingle{}}, prefixing
+that edge to an optimal walk from \texttt{rho\textquotesingle{}} shows
+\texttt{r(rho)\ \textgreater{}=\ r(rho\textquotesingle{})\ +\ k}. Thus
+\texttt{r} satisfies every recorded fact. \texttt{square}
+
+This proposition proves the guard sound. It does not prove that the
+graph records enough facts to catch every possible divergence.
+
+\subsection{5. Solver Metatheory}\label{5-solver-metatheory}
+
+Let the denotation of a configuration be
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{Chat = Phi union eqns(sigma) union constr(B).}
+\end{Highlighting}
+\end{Shaded}
+
+At row sort, \texttt{eqns(sigma)} is read using \texttt{approx}.
+
+\textbf{Lemma 5.1 (Solution preservation with policy coordinate).} For
+every solver step:
+
+\begin{itemize}
+\tightlist
+\item
+  semantic steps preserve \texttt{Sol(Chat)} exactly, up to extension to
+  fresh variables;
+\item
+  semantic failures imply \texttt{Sol(Chat)\ =\ empty};
+\item
+  policy steps refine the solution set: every new solution is an old
+  solution, but not every old solution necessarily survives.
+\end{itemize}
+
+\textbf{Proof.} Dimension rules are Lemma 4.2 and row rules are Lemma
+4.5. Moving constraints between \texttt{Phi}, \texttt{sigma}, and
+\texttt{B} preserves the denotation because the moved equality or bound
+is retained in \texttt{eqns(sigma)} or \texttt{constr(B)}, and
+re-emitted constraints are the stored constraints instantiated through a
+binding already present in the denotation.
+
+The only non-semantic components are exactly:
+
+\begin{itemize}
+\tightlist
+\item
+  marker placement in RE-open-closed and RE-nested;
+\item
+  closing-stage resolution of RE-cross and RE-same-rot.
+\end{itemize}
+
+These choose one representative or branch from a family of
+\texttt{approx}-solutions. The committed representative satisfies the
+original flat equality, so the step is sound. It can lose solutions
+because marked row inequalities can distinguish
+\texttt{approx}-equivalent marker placements, and because the deferred
+word equations can have non-selected rank branches. \texttt{square}
+
+\textbf{Definition 5.2 (Rank abstraction).} The rank abstraction of
+\texttt{Chat} is the finite set of rank facts obtained from row
+constraints. For an open-open row constraint comparing
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{l . \textless{}rho\textgreater{} . r}
+\NormalTok{l\textquotesingle{} . \textless{}rho\textquotesingle{}\textgreater{} . r\textquotesingle{}}
+\end{Highlighting}
+\end{Shaded}
+
+as result/operand of \texttt{\textless{}=}, the fact is
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{rank(rho) \textgreater{}= rank(rho\textquotesingle{}) + (|l\textquotesingle{}| + |r\textquotesingle{}|) {-} (|l| + |r|).}
+\end{Highlighting}
+\end{Shaded}
+
+An equality contributes both directions. Open-closed constraints
+contribute the corresponding absolute rank bounds. A rank model is a map
+from row variables to natural numbers satisfying these facts.
+
+Every concrete solution induces a rank model. The converse fails because
+rank abstraction forgets dimensions and bases.
+
+\textbf{Lemma 5.3 (Rank conservativity).} Every non-failing rule maps a
+configuration with a rank model to one with a rank model agreeing on the
+old variables and extended to fresh variables.
+
+\textbf{Proof.} Dimension rules do not change row ranks. RE-closed emits
+only dimension constraints. RE-open-closed and RE-nested replace a row
+equality by a binding whose rank equation is the consumed rank equation.
+RE-cross and RE-same-rot defer, so the denotation is unchanged.
+
+RI-cap stores the same rank condition that the original inequality
+contributed. RI-closed-op and RI-short-closed are ground-sided; the
+non-fail case contributes no new open-open rank obligation. RI-deficit
+with deficit \texttt{k} is triggered only when the consumed rank fact
+entails \texttt{rank(rho\_res)\ \textgreater{}=\ k}; extend the model by
+\texttt{rank(rho\_fresh)\ =\ rank(rho\_res)\ -\ k}. Binding re-emission
+substitutes a term whose explicit flank length accounts for exactly the
+rank removed from the bound variable, so numeric rank facts are
+preserved. \texttt{square}
+
+\textbf{Theorem 5.4 (Termination on rank-satisfiable inputs).} If finite
+\texttt{Phi0} has a rank model, then every fair run terminates, with or
+without the rank cycle check. The check never fires on such an input.
+
+\textbf{Proof.} Fix a rank model of the initial problem and extend it
+along the run using Lemma 5.3. Track each row-inequality lineage through
+storage, re-emission, substitution, and reprocessing. If the current
+result side of a lineage is
+\texttt{l\ .\ \textless{}rho\textgreater{}\ .\ r}, assign the potential
+\texttt{psi\ =\ rank(rho)} from the extended rank model; if the result
+side is closed, assign \texttt{psi\ =\ 0}.
+
+An RI-deficit step on that lineage with deficit
+\texttt{k\ \textgreater{}\ 0} binds the result variable to a template
+with a fresh row variable whose rank is \texttt{rank(rho)\ -\ k}, so the
+lineage potential strictly decreases. Other row bindings can only
+preserve or decrease the potential because their rank facts are entailed
+by the model. Therefore each lineage fires RI-deficit finitely many
+times.
+
+No row rule forks a row-sort lineage: a consumed row constraint produces
+at most one row-sort continuation. Thus the number of lineages is
+bounded by the initial finite set plus continuations created by finite
+closing commitments; within the solving phase considered here, it is
+finite. Since deficit steps are finite, fresh row variables are finite.
+Each variable binds at most once, so binding events are finite. Between
+binding events, processing pending constraints strictly decreases the
+lexicographic measure consisting of the number of pending row
+constraints and then dimension constraints, because storing a bound
+moves it out of \texttt{Phi} and non-storing rules consume their
+trigger. Hence the run terminates.
+
+Every rank-graph edge is an entailed rank fact. The fixed rank model
+satisfies all entailed facts, so by Proposition 4.7 no positive cycle
+can be recorded. \texttt{square}
+
+\textbf{Lemma 5.5 (Detection Lemma).} Every infinite run inserts, at
+some finite stage, an edge that closes a positive cycle in the
+persistent rank graph.
+
+\textbf{Proof.} We use the rank abstraction of Definition 5.2 and the
+operational facts already used in Theorem 5.4: row-sort lineages are
+finite in number and do not fork; every variable binds at most once; and
+a fair run eventually processes every re-emitted row inequality.
+
+First, an infinite run must perform infinitely many RI-deficit steps
+with open operands. If only finitely many binding events occurred, then
+after the last one the pending-constraint measure would strictly
+decrease to solved form or failure. Infinitely many bindings require
+infinitely many RI-deficit steps, because the equality rules mint only
+along existing finite lineages and do not fork them. Deficits against
+closed operands are bounded: a closed operand has fixed rank, so after
+finitely many result-side growth steps the result is large enough or the
+constraint fails. Therefore infinitely many deficits have open operands,
+and each records an RG-deficit edge.
+
+Now consider the signed rank abstraction restricted to the finite set of
+row-inequality lineages that participate in infinitely many such
+deficits. If this restricted abstraction had a rank model, the potential
+proof of Theorem 5.4 would bound all deficits on those lineages,
+contradiction. Hence it has no rank model. Difference-constraint duality
+gives a directed cycle of lineages
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{L\_1, ..., L\_n}
+\end{Highlighting}
+\end{Shaded}
+
+whose signed weights have positive total \texttt{W\ \textgreater{}\ 0}.
+Write the current live variable for the vertex of \texttt{L\_i} as
+\texttt{x\_i}, and write \texttt{h\_i\ \textgreater{}=\ 0} for the
+amount of explicit rank already peeled off by substitutions from the
+cycle\textquotesingle s original variable to \texttt{x\_i}. The
+persistent rank graph contains a binding path from the original variable
+to \texttt{x\_i} of weight \texttt{h\_i}.
+
+If the original signed weight on edge
+\texttt{L\_i\ :\ i\ -\textgreater{}\ i+1} is \texttt{c\_i}, then after
+the current substitutions the live weight is
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{c\_i\textquotesingle{} = c\_i + h\_\{i+1\} {-} h\_i.}
+\end{Highlighting}
+\end{Shaded}
+
+This is just substitution algebra: replacing the source by a template
+with \texttt{h\_i} explicit axes subtracts \texttt{h\_i} from the edge
+weight, while replacing the target by a template with
+\texttt{h\_\{i+1\}} explicit axes adds \texttt{h\_\{i+1\}}. The cycle
+sum is invariant:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{sum\_i c\_i\textquotesingle{} = sum\_i c\_i = W \textgreater{} 0.}
+\end{Highlighting}
+\end{Shaded}
+
+Consequently at least one live edge on the cycle is non-negative at
+every time. If a live edge has weight zero, fair processing records the
+RG-equal-flanks edge. If it has weight \texttt{k\ \textgreater{}\ 0},
+fair processing records the RG-deficit edge and then binds the source
+variable to a template with \texttt{k} explicit axes. In terms of the
+live weights, this sets that edge\textquotesingle s weight to zero and
+adds the same \texttt{k} to the preceding edge\textquotesingle s weight.
+Thus positive surplus is never destroyed; it is transported backwards
+around the finite cycle. Negative slack on an RI-cap edge is finite, so
+repeated transport into that edge eventually exhausts the slack and
+turns the edge into a zero or positive live edge, which is then
+recorded. This is the negative-edge discharge case: a hidden fact
+\texttt{rank(x)\ \textgreater{}=\ rank(y)\ -\ s} becomes recorded once
+operand-side substitution has inserted at least \texttt{s} axes.
+
+Because the cycle is finite and the run is fair, some full circulation
+occurs: for each lineage edge on the positive signed cycle, choose a
+time after the previous chosen edge\textquotesingle s target variable
+has advanced to the source variable used by the next chosen edge, and at
+which the edge is processed with non-negative live weight. Such times
+exist by the surplus-transport argument above. At the chosen processing
+of edge \texttt{i}, the graph records an edge
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{x\_i\^{}t {-}{-}(c\_i + h\_\{i+1\}\^{}t {-} h\_i\^{}t){-}{-}\textgreater{} x\_\{i+1\}\^{}t.}
+\end{Highlighting}
+\end{Shaded}
+
+Between this target \texttt{x\_\{i+1\}\^{}t} and the source chosen for
+the next edge, the persistent binding graph contains a path of weight
+\texttt{h\_\{i+1\}\^{}\{next\}\ -\ h\_\{i+1\}\^{}t}, since bindings only
+move from older variables to descendants and offsets only increase.
+Composing the recorded lineage edges with these binding paths gives a
+directed closed walk in \texttt{G}. Its total weight telescopes:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{sum\_i (c\_i + h\_\{i+1\}\^{}\{edge i\} {-} h\_i\^{}\{edge i\})}
+\NormalTok{  + sum\_i (h\_i\^{}\{edge i\} {-} h\_i\^{}\{edge i{-}1\})}
+\NormalTok{= sum\_i c\_i}
+\NormalTok{= W \textgreater{} 0.}
+\end{Highlighting}
+\end{Shaded}
+
+Thus the closed walk contains a positive cycle. The edge that completes
+this walk is guarded by Definition 4.6, so the solver fails at that
+finite stage. This contradicts the assumption that the run was infinite
+without recording a positive cycle. \texttt{square}
+
+Combining Theorem 5.4 with Lemma 5.5 gives total termination of the core
+solving phase on finite inputs: rank-satisfiable inputs terminate by the
+potential argument, and rank-unsatisfiable divergence is converted into
+finite rank-cycle failure by the persistent graph guard. This is a
+termination result for solving, not a completeness result for the later
+policy choices: placement commitments, deferred word-equation closure,
+and leaf closing can still reject satisfiable \texttt{approx}-systems as
+described below.
+
+\textbf{Definition 5.6 (Solved form).} A final configuration
+\texttt{\textless{}\ empty\ ;\ sigma\_star\ ;\ B\_star\ \textgreater{}}
+is solved when \texttt{sigma\_star} is idempotent, every variable in
+\texttt{B\_star} is unsolved, each dimension variable has at most one
+atom cap, and all stored row caps and adjacencies have no pending rule
+that can fire.
+
+\textbf{Proposition 5.7 (Residual store has a greatest solution).}
+Define \texttt{gamma\_up} on unsolved variables by
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{gamma\_up(alpha) = 1\_empty}
+\NormalTok{gamma\_up(rho)   = [] . diamond . []}
+\end{Highlighting}
+\end{Shaded}
+
+and extend through \texttt{sigma\_star}. Then \texttt{gamma\_up}
+satisfies \texttt{constr(B\_star)\ union\ eqns(sigma\_star)} and is the
+pointwise greatest solution of that final configuration.
+
+\textbf{Proof.} Atom caps \texttt{d\ \textless{}=\ alpha} hold because
+\texttt{d\ \textless{}=\ 1\_empty}. Dimension adjacencies hold because
+both sides are \texttt{1\_empty}. Row caps and row adjacencies hold
+because every row is below the empty row by Proposition 2.6. Bindings
+hold by extension through \texttt{sigma\_star}.
+
+For greatestness, any solution maps unsolved dimension variables below
+\texttt{1\_empty} and unsolved row variables below the empty row. For
+solved variables, use structural induction on the solved term. Ground
+dimensions and ground flanks compare by equality; variable occurrences
+use the unsolved case; an open row term under \texttt{gamma\_up} has an
+empty middle, so any material that another solution inserts at the
+marker compares against \texttt{1\_empty} in the expanded middle.
+\texttt{square}
+
+\textbf{Corollary 5.8 (Decision status).} Successful solving implies
+\texttt{Sol(Phi0)} is non-empty. Semantic failure implies
+\texttt{Sol(Phi0)} is empty. Policy failure implies only that the
+policy-strengthened problem is empty. On satisfiable,
+placement-undiscriminated inputs, every fair run terminates and
+succeeds. On rank-unsatisfiable inputs, the Detection Lemma converts the
+only possible divergence mode into finite rank-cycle failure.
+
+\textbf{Theorem 5.9 (Representation and most generality,
+policy-qualified).} Let a fair run on finite \texttt{Phi0} terminate in
+solved form
+\texttt{\textless{}\ empty\ ;\ sigma\_star\ ;\ B\_star\ \textgreater{}}.
+For the fragment of the run consisting only of semantic steps:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \texttt{gamma\ in\ Sol(Phi0)} iff \texttt{gamma} extends to a ground
+  \texttt{hat\_gamma} over fresh variables such that
+  \texttt{hat\_gamma\ =\ hat\_gamma\ o\ sigma\_star} and
+  \texttt{hat\_gamma} satisfies \texttt{constr(B\_star)};
+\item
+  every binding in \texttt{sigma\_star} is entailed by \texttt{Phi0};
+\item
+  for every substitution \texttt{sigma\ models\ Phi0}, there is
+  \texttt{u} with \texttt{u\ o\ sigma\_star\ =\ sigma} on the original
+  variables.
+\end{enumerate}
+
+For full deterministic runs, these statements hold for the
+policy-strengthened system. Up to flat row content, \texttt{sigma\_star}
+is still most general; marker placements are the
+solver\textquotesingle s deterministic policy, not canonical semantics.
+
+\textbf{Proof.} For semantic steps, Lemma 5.1 gives a chain of exact
+solution-preserving rewrites from the initial denotation to the final
+denotation. This proves the representation statement. A binding moved
+into \texttt{sigma\_star} was introduced only when the corresponding
+equality or exact row-content equation was entailed by the current
+denotation; composing the preservation chain back to \texttt{Phi0} gives
+entailment. If \texttt{sigma\ models\ Phi0}, then every grounding of
+\texttt{sigma} is represented by the final configuration. Thus applying
+\texttt{sigma} to the residual variables witnesses
+\texttt{sigma\ =\ sigma\ o\ sigma\_star} on the original variables.
+
+Policy steps are one-way refinements by Lemma 5.1, so the same proof
+applies after adding the policy commitments to the initial system.
+\texttt{square}
+
+\textbf{Corollary 5.10 (Principal model recovered when no caps remain).}
+If the final bound store contains no atom caps and no row caps, then
+\texttt{sigma\_star} itself is a least model of \texttt{Phi0} in the
+substitution preorder, modulo the same policy qualification for marker
+placement.
+
+\textbf{Proof.} With no caps, the residual store contains only
+adjacencies, which are valid under universally quantified free variables
+at top or are represented by remaining variables. The representation
+theorem therefore says \texttt{sigma\_star\ models\ Phi0}, and Theorem
+5.9 gives the factoring property for every other model. \texttt{square}
+
+\subsection{6. Closing}\label{6-closing}
+
+Solving intentionally stops with residual caps. Closing turns a solved
+configuration into a total ground substitution. This is a policy stage,
+not a principal unification theorem.
+
+\textbf{Definition 6.1 (Closing policy).}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  Close leaf variables downward. A leaf dimension gets its saturated
+  atom cap if any, otherwise \texttt{1\_empty}; a parameter leaf without
+  a cap errors. A leaf row gets the join of the ground parts of its row
+  caps, holes filled with \texttt{1\_empty}, and no further axes beyond
+  cap extent; parameter holes error.
+\item
+  Re-solve after those bindings, because stored constraints are
+  re-emitted.
+\item
+  Close all remaining interior variables upward to top
+  (\texttt{1\_empty} or the empty row) and re-solve once more.
+\end{enumerate}
+
+The row join in step 1 is Proposition 2.7. Hole filling and "no further
+axes" are policy commitments.
+
+\textbf{Proposition 6.2 (Closing terminates and is sound).} Every
+re-solve launched by a closing commitment terminates. If closing
+finishes without \texttt{error} or \texttt{fail}, the resulting total
+ground substitution satisfies \texttt{Phi0}.
+
+\textbf{Proof.} A closing commitment binds a variable to a ground value.
+After such a binding, split the rank abstraction into variable-variable
+facts and facts with at least one ground side. Ground substitution
+cannot create new variable-variable rank facts; it only removes
+variables from constraints or turns constraints into absolute facts.
+Therefore the variable-variable fragment keeps the rank model supplied
+by Proposition 5.7 and Lemma 5.3.
+
+The termination proof of Theorem 5.4 needs rank potentials only for
+lineages whose result side is still open. Those potentials live in the
+variable-variable fragment. Absolute facts can cause finite failure, but
+they cannot create the open-open feeding cycle responsible for unbounded
+growth. Thus each re-solve has finitely many deficits, finitely many
+mints, finitely many bindings, and terminates by the same
+pending-constraint measure.
+
+Soundness follows from Lemma 5.1 for each re-solve and from the fact
+that each committed ground value is then checked by re-emission of its
+stored constraints. If no re-solve fails, all committed values satisfy
+the final denotation, which composes back to \texttt{Phi0} along the
+sound direction of Lemma 5.1. \texttt{square}
+
+\textbf{Example 6.3 (Incomplete but intentional leaf closing).} Let
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{Phi = \{}
+\NormalTok{  3\_b \textless{}= alpha,}
+\NormalTok{  5\_b \textless{}= beta,}
+\NormalTok{  gamma \textless{}= alpha,}
+\NormalTok{  gamma \textless{}= beta}
+\NormalTok{\}}
+\end{Highlighting}
+\end{Shaded}
+
+with \texttt{alpha} and \texttt{beta} leaves and \texttt{gamma}
+interior. The store is satisfiable: \texttt{alpha\ =\ beta\ =\ 1\_empty}
+and \texttt{gamma\ =\ 3\_b} is one solution. The deterministic leaf
+policy commits \texttt{alpha\ =\ 3\_b} and \texttt{beta\ =\ 5\_b}.
+Re-solving then forces \texttt{gamma} below two distinct atoms and
+fails. This is a policy rejection, not semantic unsatisfiability. It is
+useful behavior for OCANNL because it avoids silently broadening a leaf
+tensor with a concrete lower bound unless the user asks for that shape.
+
+\textbf{Proposition 6.4 (Upward closing greatestness).} The
+uniform-upward solution \texttt{gamma\_up} of Proposition 5.7 is a
+solution of the final configuration. It is pointwise greatest among
+solutions of the policy-strengthened system in the marked order.
+Moreover, for every solution of the rank-policy-strengthened initial
+system, \texttt{gamma(x)\ \textless{}=1\ gamma\_up(x)} at row sort and
+\texttt{gamma(x)\ \textless{}=\ gamma\_up(x)} at dimension sort.
+
+\textbf{Proof.} Membership and marked greatestness for the final
+configuration are Proposition 5.7. The policy-strengthened initial
+system maps exactly to the final configuration by Lemma 5.1 and Theorem
+5.9.
+
+For the \texttt{\textless{}=1} statement, dimensions are immediate from
+topness or entailed ground bindings. For rows, if \texttt{x} is
+unsolved, \texttt{gamma\_up(x)} is the empty row, and every rigidified
+flat row is below it. If \texttt{x} is solved by a term \texttt{T}, the
+flat content of \texttt{T} is entailed for every solution that respects
+the rank-policy commitments. Induct on \texttt{T}. For a closed row,
+compare equal-rank rigid flat content pointwise, using the dimension
+case. For an open row \texttt{l\ .\ \textless{}rho\textgreater{}\ .\ r},
+the rigid flat content under \texttt{gamma} is
+\texttt{gamma(l)\ .\ flat(gamma\ rho)\ .\ gamma(r)}, while
+\texttt{gamma\_up(T)} is
+\texttt{gamma\_up(l)\ .\ diamond\ .\ gamma\_up(r)} with the middle
+expanded by \texttt{1\_empty}; flank positions compare by induction and
+middle positions compare against \texttt{1\_empty}. \texttt{square}
+
+The unqualified marked-order greatestness over \texttt{Sol(Phi0)} is
+false. The single constraint
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{\textless{}rho\textgreater{} approx [] . diamond . [3,5]}
+\end{Highlighting}
+\end{Shaded}
+
+has a solution with \texttt{rho\ =\ {[}3{]}\ .\ diamond\ .\ {[}5{]}},
+incomparable with the implementation\textquotesingle s inherited-split
+choice.
+
+\subsubsection{6.1 Marker Provenance and Surface
+Discharge}\label{61-marker-provenance-and-surface-discharge}
+
+The abstract calculus admits placement-sensitive counterexamples because
+row equality is flat while row inequality is marked. The two-constraint
+witness is
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{\textless{}rho\textgreater{} approx [] . diamond . [3,5]}
+\NormalTok{[3] . diamond . [9,5] \textless{}= \textless{}rho\textgreater{}.}
+\end{Highlighting}
+\end{Shaded}
+
+The flat equality permits
+\texttt{rho\ =\ {[}3{]}\ .\ diamond\ .\ {[}5{]}}, which satisfies the
+inequality, but the deterministic inherited-split policy commits
+\texttt{rho\ =\ {[}{]}\ .\ diamond\ .\ {[}3,5{]}}, after which the
+inequality fails.
+
+It is tempting to try to prove that this cannot happen for surface
+OCANNL programs. That claim should be split into two smaller statements.
+
+\textbf{Syntactic marker provenance.} Every marker position appearing in
+a surface-generated constraint has a declared syntactic origin:
+
+\begin{itemize}
+\tightlist
+\item
+  external tensor rows and literal shapes are left-marked closed rows
+  (\texttt{beg\_dims\ =\ {[}{]}}, all axes in \texttt{dims});
+\item
+  spec axes before an ellipsis become leading flanks and axes after an
+  ellipsis become trailing flanks;
+\item
+  batch slice prepends the sliced axis as a leading flank;
+\item
+  substitution preserves provenance by splicing solved row values at the
+  marker;
+\item
+  closing uses explicit policies: inherited split, cap join, hole fill,
+  or upward empty-row close.
+\end{itemize}
+
+This is an implementation-checkable invariant, and
+\texttt{tensor/shape.ml} supports it: batch slice is the only ordinary
+operation that manufactures a non-empty leading flank outside spec
+parsing; permute and einsum obtain leading flanks from axes written
+before an ellipsis.
+
+\textbf{Surface discharge.} The stronger claim would say that
+provenance-respecting constraints never observe the
+solver\textquotesingle s marker-placement choice. That is not a purely
+formal statement about the current core language. It depends on which
+surface programs are considered meaningful, and in particular on whether
+a user intended an equality to be a strict inference policy or merely a
+broadcast-checking condition. A formal proof can only target a specified
+surface fragment.
+
+The defensible version is therefore conditional:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{If a surface fragment uses row equalities only as inference{-}strengthening}
+\NormalTok{constraints for spec matching, and never later compares the same inferred}
+\NormalTok{flat content under a distinct declared marker split, then placement policy}
+\NormalTok{failures cannot occur in that fragment.}
+\end{Highlighting}
+\end{Shaded}
+
+The proof is by provenance induction. Each equality binding inherits a
+marker split from one of the declared origins above. A later marked
+inequality can distinguish another split only if the same flat content
+is reintroduced with a different declared origin. Pointwise/compose
+inequalities reuse tensor-row origins; spec equalities reuse spec
+ellipsis origins; slice is the only construct that can deliberately
+shift an origin by prepending a leading axis. Thus slice and
+axes-before-ellipsis are the cases to audit for any concrete fragment.
+Without that fragment restriction, the abstract witness above can be
+encoded directly at the row-constraint level and is a real
+incompleteness.
+
+\subsection{7. Projection Inference for the
+Core}\label{7-projection-inference-for-the-core}
+
+After shape solving and closing, each operation re-derives its own local
+constraints with fresh projection identifiers. Projection inference
+turns row and dimension constraints into co-iteration classes and fixed
+indices for code generation.
+
+The proof in this section covers the core projection language. The
+current implementation also contains affine, convolution, and
+concatenation handling; those are staged extensions discussed in Section
+8.
+
+\textbf{Definition 7.1 (Projection language).} Projection atoms are:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{Proj(p)          an axis projection id}
+\NormalTok{Sol(idx)         an externally supplied fixed index or symbol}
+\end{Highlighting}
+\end{Shaded}
+
+Core equations are:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{Eq(q1, q2)}
+\NormalTok{Iter(q).}
+\end{Highlighting}
+\end{Shaded}
+
+Each projection id has a solved positive size.
+
+\textbf{Definition 7.2 (Elaboration from closed core constraints).}
+
+\begin{itemize}
+\tightlist
+\item
+  \texttt{d1\ =\ d2} emits \texttt{Eq(d1,\ d2)}.
+\item
+  \texttt{d\_res\ \textless{}=\ d\_op} with \texttt{size(d\_op)\ =\ 1}
+  emits \texttt{Eq(d\_op,\ Fix\ 0)}: the operand broadcasts and is
+  pinned.
+\item
+  Other \texttt{d\_res\ \textless{}=\ d\_op} emits
+  \texttt{Eq(d\_res,\ d\_op)}.
+\item
+  \texttt{R1\ approx\ R2} aligns flat rows and emits equality equations
+  per pair.
+\item
+  \texttt{R\_res\ \textless{}=\ R\_op} aligns explicit material from the
+  outer edges; surplus result axes are iterated; operand axes of size
+  one are pinned to zero as above.
+\item
+  Every terminal axis emits \texttt{Iter(axis)}.
+\end{itemize}
+
+The side condition for fixed indices is
+\texttt{0\ \textless{}=\ c\ \textless{}\ size(axis)}.
+
+\textbf{Definition 7.3 (Projection solver).} The core solver maintains:
+
+\begin{itemize}
+\tightlist
+\item
+  a union-find partition of projection ids;
+\item
+  a partial pin map from classes to fixed indices;
+\item
+  a set of classes required to iterate.
+\end{itemize}
+
+\texttt{Eq(Proj\ p,\ Proj\ q)} unions equal-size classes and fails on
+size mismatch. \texttt{Eq(Proj\ p,\ Sol\ i)} pins the class and fails on
+conflicting pins. \texttt{Eq(Sol\ i,\ Sol\ j)} checks equality.
+\texttt{Iter(Proj\ p)} marks the class. At the end, pinned classes use
+their pin; unpinned iterated classes of size greater than one get fresh
+iterator symbols; all remaining classes use \texttt{Fix\ 0}.
+
+\textbf{Theorem 7.4 (Projection canonicity).} For a finite core
+projection equation set, the partition, pin map, iteration set, and
+final labels are independent of processing order. The solver fails
+exactly when an equality class contains different sizes, receives
+conflicting pins, or contains a false equality between two solved
+indices.
+
+\textbf{Proof.} The partition is the least equivalence relation
+generated by projection-projection equations, restricted by equal-size
+checks. Union-find processing order cannot change the least equivalence
+closure. Pins are a partial function on equivalence classes; order can
+only change which conflicting pin is observed first, not whether a
+conflict exists. The iterate set is the union of all classes mentioned
+by \texttt{Iter}, transported through the same equivalence closure.
+Labeling is a deterministic function of these three objects, up to
+bijective renaming of freshly allocated iterator symbols.
+\texttt{square}
+
+\textbf{Definition 7.5 (Product space and reductions).} For every fresh
+iterator symbol \texttt{s\_j} assigned to a class of size \texttt{n\_j},
+the product space contains the factor \texttt{\{0,\ ...,\ n\_j\ -\ 1\}}.
+A factor is a reduction axis iff no component of the left-hand-side
+index map uses its iterator.
+
+\textbf{Proposition 7.6 (Coverage and reduction characterization).}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  The LHS index map is injective iff every product factor appears in
+  some LHS component.
+\item
+  The LHS index map is surjective onto the LHS index domain iff every
+  LHS axis of size greater than one is iterated and no two such LHS axes
+  use the same iterator.
+\item
+  Accumulating read-modify-write is required iff a reduction axis
+  exists. Pre-initialization is required iff the LHS map is
+  non-surjective, or iff an erasing accumulator is used with a
+  non-injective LHS map.
+\end{enumerate}
+
+\textbf{Proof.} With only \texttt{Iter} and \texttt{Fix}, two product
+points differ exactly in at least one product factor. If a factor
+appears in an LHS component, changing it changes the address; if a
+factor appears nowhere on the LHS, two product points differing only
+there map to the same LHS address. This proves injectivity and the
+reduction characterization.
+
+For surjectivity, an LHS axis of size greater than one cannot be covered
+by \texttt{Fix\ 0}; it must be labeled by an iterator ranging over the
+same size. If two LHS axes share an iterator, the image is diagonal and
+misses off-diagonal addresses. If every non-unit LHS axis has a distinct
+iterator, every LHS address is realized by choosing those iterator
+values and arbitrary values for non-LHS factors. The initialization
+statement follows from whether every LHS cell is written exactly once,
+at least once, or potentially multiple times. \texttt{square}
+
+\textbf{Lemma 7.7 (Local re-solve and locality, core statement).} If
+global shape solving and closing succeed, then for each core operation
+the per-operation re-derivation against the closed participating shapes
+has a solution, and all spec variables are eliminated. The resulting
+projection equivalence depends only on that operation\textquotesingle s
+re-derived constraints.
+
+\textbf{Proof.} The operation\textquotesingle s local constraints are
+the same schema that contributed to the global constraints, but with
+closed shapes and fresh projection identifiers. Restrict the successful
+global ground substitution to the participating shapes and rename the
+local spec variables accordingly; this is a solution of the local shape
+constraints. At closed shapes, flat row equalities have fixed rank and
+row variables in specs are pinned by their surrounding concrete rows.
+Dimension label variables are then unified with closed operand axes.
+Locality follows because projection identifiers are freshened per
+operation, and no constraint from another operation mentions them.
+\texttt{square}
+
+The proof above is complete for the mathematical core. The
+implementation bookkeeping in \texttt{tensor/shape.ml} should still be
+audited line-by-line for the full staged language; this is one of the
+remaining engineering proof obligations, not a known bug.
+
+\textbf{Theorem 7.8 (Projection soundness).} For a closed core operation
+whose local projection solve succeeds:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  every generated tensor address is within the solved shape bounds;
+\item
+  co-iteration classes are size-uniform;
+\item
+  co-iteration is local to the operation.
+\end{enumerate}
+
+\textbf{Proof.} For an iterator class, Theorem 7.4 only creates a
+product factor with the class size; all class members have that size by
+the failure condition of union. Thus
+\texttt{0\ \textless{}=\ s\_j\ \textless{}\ size(axis)} for every
+iterated axis using that symbol. Pinned \texttt{Fix\ c} indices satisfy
+the side condition in Definition 7.2, and unpinned uniterated classes
+use \texttt{Fix\ 0}, which is valid for every positive axis size.
+
+Size-uniformity is exactly the successful projection-projection union
+check. Leastness of co-iteration follows because the partition is the
+least equivalence generated by this operation\textquotesingle s
+equations. Locality is Lemma 7.7: fresh projection ids prevent
+constraints from other operations from entering the closure.
+\texttt{square}
+
+\subsection{8. Staged Extensions and Remaining Proof
+Obligations}\label{8-staged-extensions-and-remaining-proof-obligations}
+
+The core excludes several constructs used by OCANNL\textquotesingle s
+implementation. The current status is:
+
+\textbf{Proposition 8.1 (Padding fold canonicity).} The padding margin
+accumulated for an axis is the maximum over finitely many
+operation-local padding demands. Because \texttt{max} is associative,
+commutative, and idempotent, the accumulated margin is independent of
+processing order. \texttt{square}
+
+\textbf{Open 8.2 (Affine and convolution projection determinacy).} The
+implementation evaluates affine and convolution projection terms after
+the core classes are known. The expected proof is stratified: core
+classes are canonical by Theorem 7.4, derived affine terms are
+deterministic functions of those classes, and deferred affine equality
+checks are pure checks. The proof still needs the exact equations for
+valid convolution and size-preserving padding modes and an invariant
+saying generation, stored terms, and final checking use the same mode.
+
+\textbf{Open 8.3 (Concat projection determinacy).} The implementation
+has a connected-component style coupling for \texttt{Concat}
+projections. A proof should show that structural concat equations
+generate an order-independent closure and that concat targets receive
+deterministic composite indices after their components are solved. This
+is plausible from the current \texttt{solve\_proj\_equations} structure,
+but it is not covered by the core Theorem 7.4.
+
+\textbf{Open 8.4 (Two-unit shape closing).} Full OCANNL has discardable
+variables that can close to a size-zero additive unit, while ordinary
+broadcast holes close to \texttt{1\_empty}. Soundness should follow if
+the discardability test proves that every zero-closed occurrence is
+projected away. The interaction with row instantiation remains to be
+formalized.
+
+\textbf{Open 8.5 (Relative completeness of staged solving).}
+Unrestricted completeness is not expected. The right theorem is
+relative: characterize the surface fragment where stage triggers guess
+only forced or solution-irrelevant values, and exhibit counterexamples
+just outside it.
+
+\subsection{9. Counterexamples to Broad
+Completeness}\label{9-counterexamples-to-broad-completeness}
+
+Rather than trying to prove a broad relative-completeness theorem, the
+current evidence points to a boundary: OCANNL\textquotesingle s
+deterministic policies are useful, but there are small programs or
+solver inputs where the intended solution is clear and the solver either
+rejects it or requires an additional user constraint.
+
+\subsubsection{9.1 Periodic Row-Permutation
+Shape}\label{91-periodic-row-permutation-shape}
+
+The probe in \texttt{test/einsum/test\_inference\_counterexamples.ml}
+compares two programs:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\KeywordTok{let}\NormalTok{\%op x = \{ x = uniform1 (); o = [ }\DecValTok{3}\NormalTok{; }\DecValTok{5}\NormalTok{; }\DecValTok{3}\NormalTok{ ] \} }\KeywordTok{in}
+\KeywordTok{let}\NormalTok{\%op y = x + (x ++ }\StringTok{"a,b,..r.. =\textgreater{} ..r..,b,a"}\NormalTok{ [ }\StringTok{"a"}\NormalTok{; }\StringTok{"b"}\NormalTok{; }\StringTok{"r"}\NormalTok{ ])}
+\end{Highlighting}
+\end{Shaded}
+
+and
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\KeywordTok{let}\NormalTok{\%op x = \{ x = uniform1 () \} }\KeywordTok{in}
+\KeywordTok{let}\NormalTok{\%op y = x + (x ++ }\StringTok{"a,b,..r.. =\textgreater{} ..r..,b,a"}\NormalTok{ [ }\StringTok{"a"}\NormalTok{; }\StringTok{"b"}\NormalTok{; }\StringTok{"r"}\NormalTok{ ]) }\KeywordTok{in}
+\NormalTok{Shape.set\_dim a }\DecValTok{3}\NormalTok{;}
+\NormalTok{Shape.set\_dim b }\DecValTok{5}
+\end{Highlighting}
+\end{Shaded}
+
+The concrete program succeeds: the input has shape \texttt{{[}3,5,3{]}},
+so the row variable can be \texttt{..r..\ =\ {[}3{]}} and the
+permutation is shape-preserving. The abstract-parameter version
+currently fails with
+\texttt{Shape\_error:\ solved\ dimensions\ for\ axis:\ mismatch}, even
+though the same solution is evident: infer the parameter shape as
+\texttt{{[}3,5,3{]}}.
+
+This is not a marker-provenance failure. It is the RE-same-rot policy
+showing through a surface program. The equation induced by adding the
+tensor to its cyclic permutation has a non-empty periodic solution for
+\texttt{..r..}; the deterministic solver\textquotesingle s
+least-material closure does not search that periodic family.
+
+A user can make the program inferable by providing more shape
+information, for example by using a concrete input shape or otherwise
+pinning the row. That is exactly the intended relative-completeness
+boundary: the code conveys a natural intent, but the current inference
+policy does not solve the associated word equation.
+
+\subsubsection{9.2 Leaf Downward
+Closing}\label{92-leaf-downward-closing}
+
+The lower-level probe in \texttt{test/einsum/test\_closing\_order.ml}
+contains the dimension store
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{3\_b \textless{}= alpha}
+\NormalTok{5\_b \textless{}= beta}
+\NormalTok{gamma \textless{}= alpha}
+\NormalTok{gamma \textless{}= beta}
+\end{Highlighting}
+\end{Shaded}
+
+with \texttt{alpha} and \texttt{beta} treated as leaves. The store is
+satisfiable by raising at least one leaf to the broadcast top, for
+example \texttt{alpha\ =\ beta\ =\ 1\_empty}. Deterministic leaf closing
+instead commits the capped leaves downward to \texttt{alpha\ =\ 3\_b}
+and \texttt{beta\ =\ 5\_b}, then fails when \texttt{gamma} is forced
+below two incompatible atoms.
+
+This is not a likely tensor-literal program when the leaf shapes come
+from actual arrays, because actual array extents are exact. It is
+nevertheless a real policy counterexample for generated or
+parameter-like leaves whose caps are lower bounds rather than exact
+facts. The user\textquotesingle s intent can be clear in contexts such
+as "choose a common broadcastable shape for these two partially
+specified leaves"; deterministic downward closing chooses parsimony
+instead.
+
+\subsubsection{9.3 Cross-Surplus and Placement
+Policy}\label{93-cross-surplus-and-placement-policy}
+
+\texttt{test/einsum/test\_row\_self\_reference.ml} records a row-level
+mirror cross-surplus case that is flat-satisfiable but rejected by the
+implementation because the inherited split and the conservative trailing
+guard select the wrong representative. This remains a row-constraint
+counterexample rather than a confirmed ordinary \texttt{\%op}
+counterexample. To lift it to the surface, one would need a spec or
+slice program that both:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  pins a row variable\textquotesingle s flat content through a
+  split-surplus equality; and
+\item
+  later compares the same flat content under a different declared marker
+  split.
+\end{enumerate}
+
+That is precisely the marker-provenance audit target from Section 6.1.
+
+\subsection{10. Implementation
+Correspondence}\label{10-implementation-correspondence}
+
+The current implementation aligns with the core formalism in the
+following places:
+
+\begin{itemize}
+\tightlist
+\item
+  \texttt{tensor/row.ml} represents rows as \texttt{beg\_dims},
+  \texttt{dims}, and \texttt{bcast}, exactly the two flanks plus marker.
+\item
+  \texttt{unify\_row} compares closed rows by flattened content
+  (\texttt{beg\_dims\ @\ dims}), matching \texttt{approx}.
+\item
+  Open-vs-closed row equality matches explicit open flanks against the
+  closed flat list and then commits an inherited split for the bound row
+  variable.
+\item
+  Shifted same-variable equality and inequality are deferred until
+  another constraint solves the variable or stage-6 upward closing
+  supplies the empty middle.
+\item
+  \texttt{solve\_row\_ineq} records a persistent rank graph with
+  non-negative edges for RG-bind, RG-equal-flanks, and RG-deficit. It
+  deliberately records no edge for the RI-cap surplus case.
+\item
+  Closed-closed row inequality compares the operand\textquotesingle s
+  explicit leading and trailing material against the
+  result\textquotesingle s flat row from the outer edges, so shifted
+  explicit axes are checked rather than silently accepted.
+\item
+  \texttt{tensor/shape.ml} emits row inequalities for pointwise,
+  transpose, and compose-style broadcasting, and emits row equalities
+  for batch slice, permute, and einsum templates.
+\item
+  Batch slice prepends the slice dimension to \texttt{beg\_dims},
+  confirming the formal motivation for leading flanks.
+\item
+  Projection identifiers are freshened for solved dimensions before
+  local projection solving, supporting the locality theorem for the
+  core.
+\end{itemize}
+
+The code also implements constructs outside this
+report\textquotesingle s core: affine dimensions, convolution padding,
+concatenation, total element constraints, discardable zero dimensions,
+and staged closing heuristics. These are not known to contradict the
+core formalism, but the full soundness theorem for them remains future
+work as described in Section 8.
+
+\subsection{11. Summary of Proved and Open
+Results}\label{11-summary-of-proved-and-open-results}
+
+Proved in this report:
+
+\begin{itemize}
+\tightlist
+\item
+  dimension lattice facts and non-distributivity;
+\item
+  row partial order, top, joins, and expansion monotonicity;
+\item
+  incompatibility of flat equality with the marked order;
+\item
+  two-sorted rigid-row order and one-shot checking relation;
+\item
+  solution preservation for all semantic dimension and row rules;
+\item
+  soundness and exactness of the rank graph for recorded facts;
+\item
+  termination for finite inputs under the persistent rank-cycle guard;
+\item
+  the Detection Lemma for rank-unsatisfiable divergent runs;
+\item
+  satisfiability and greatestness of the residual solved store;
+\item
+  representation and most-generality for semantic runs, policy-qualified
+  for deterministic runs;
+\item
+  termination and soundness of closing;
+\item
+  core projection canonicity, coverage, and address safety.
+\end{itemize}
+
+Open or deliberately incomplete:
+
+\begin{itemize}
+\tightlist
+\item
+  the syntactic marker-provenance invariant is plausible and
+  implementation checkable, but the broader surface-discharge claim is
+  only meaningful after choosing a precise surface fragment;
+\item
+  unconditional completeness for RE-cross and RE-same-rot, unless the
+  solver is extended with finite branching over the relevant
+  word-equation choices;
+\item
+  full implementation-level audit of per-operation re-derivation for the
+  staged language;
+\item
+  soundness and determinacy proofs for affine, convolution,
+  concatenation, total-element, and zero-discard extensions;
+\item
+  broad relative completeness of the staged closing heuristics; Section
+  9 records current counterexamples instead.
+\end{itemize}
+
+\end{document}
