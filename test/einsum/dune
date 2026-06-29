@@ -33,6 +33,17 @@
  (libraries base einsum_parser stdio))
 
 (test
+ (name test_inference_counterexamples)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules test_inference_counterexamples)
+ (libraries base ocannl stdio)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name test_beg_dims_alignment)
  (package neural_nets_lib)
  (deps

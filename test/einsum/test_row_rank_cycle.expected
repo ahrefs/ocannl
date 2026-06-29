@@ -3,3 +3,4 @@ Found 0, in the config file
 two-variable rank cycle: Shape_error: Infinite number of axes by rank cycle among row variables
 three-variable rank cycle: Shape_error: Infinite number of axes by rank cycle among row variables
 two-variable rank cycle via leading flank: Shape_error: Infinite number of axes by rank cycle among row variables
+mixed-sign rank cycle via cap discharge: Shape_error: Infinite number of axes by rank cycle among row variables
