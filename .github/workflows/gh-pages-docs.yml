@@ -62,6 +62,20 @@ jobs:
       - name: Blog contexts and compilation
         run: pandoc --from=markdown+tex_math_dollars+tex_math_single_backslash --to=html5 --section-divs --katex --toc -s --embed-resources --css=docs/html/style.css docs/blog/a-tensor-is-not-its-storage.md -o docs/html/a-tensor-is-not-its-storage.html
 
+      - name: Install LaTeX
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y latexmk lmodern texlive-fonts-recommended texlive-latex-extra texlive-latex-recommended texlive-xetex
+
+      - name: Formal core technical report PDF
+        run: |
+          mkdir -p docs/html/pdfs /tmp/ocannl-formal-core-latex-build
+          latexmk -xelatex -interaction=nonstopmode -halt-on-error \
+            -outdir=/tmp/ocannl-formal-core-latex-build \
+            docs/ocannl-formal-core-technical-report.latex
+          cp /tmp/ocannl-formal-core-latex-build/ocannl-formal-core-technical-report.pdf \
+            docs/html/pdfs/ocannl-formal-core-technical-report.pdf
+
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v4
         with:
