@@ -157,11 +157,25 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
        [(wmma-bf16)] marker is emitted by [mma_syntax] for bf16 fragments (sm_80+). *)
     let uses_wmma = String.is_substring cu_src ~substring:"nvcuda::wmma" in
     let cu_src = if uses_wmma then "#include <mma.h>\n" ^ cu_src else cu_src in
+    (* Half/bf16 ARITHMETIC intrinsics (unlike the conversions, which cuda_fp16.h/cuda_bf16.h
+       emulate on any arch) are only declared for __CUDA_ARCH__ >= 530 (halfs) resp. >= 800
+       (bfloat16s), while nvrtc's default target is compute_52 — e.g. [__hfma] in a serial half
+       matmul fails with "identifier undefined" unless we raise the floor. The bf16 overloads share
+       the half intrinsics' names, so a bf16 kernel is recognized by the type name appearing
+       alongside the arithmetic tokens; a kernel mixing half arithmetic with bf16 storage-only is
+       conservatively floored at compute_80 too. *)
+    let has s = String.is_substring cu_src ~substring:s in
+    let uses_h_arith =
+      List.exists ~f:has
+        [ "__hadd"; "__hsub"; "__hmul"; "__hdiv"; "__hmax"; "__hmin"; "__hgt"; "__hfma"; "hexp";
+          "hlog"; "hsqrt"; "htanh_approx" ]
+    in
     let wmma_arch_opts =
-      if not uses_wmma then []
-      else if String.is_substring cu_src ~substring:"(wmma-bf16)" then
-        [ "--gpu-architecture=compute_80" ]
-      else [ "--gpu-architecture=compute_70" ]
+      if uses_wmma && has "(wmma-bf16)" then [ "--gpu-architecture=compute_80" ]
+      else if uses_wmma then [ "--gpu-architecture=compute_70" ]
+      else if uses_h_arith && has "__nv_bfloat16" then [ "--gpu-architecture=compute_80" ]
+      else if uses_h_arith then [ "--gpu-architecture=compute_53" ]
+      else []
     in
     let name_cu = name ^ ".cu" in
     if Utils.settings.output_debug_files_in_build_directory then (
@@ -1024,8 +1038,6 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
       | Byte_prec _, Half_prec _ -> ("__ushort2half_rn((unsigned short int)", ")")
       | Double_prec _, Uint4x32_prec _ -> ("double_to_uint4x32(", ")")
       | Single_prec _, Uint4x32_prec _ -> ("single_to_uint4x32(", ")")
-      | Int32_prec _, Uint4x32_prec _ -> ("int32_to_uint4x32(", ")")
-      | Int64_prec _, Uint4x32_prec _ -> ("int64_to_uint4x32(", ")")
       | Uint4x32_prec _, _ -> ("", ".v[0]")
       | Byte_prec _, Uint4x32_prec _ -> ("byte_to_uint4x32(", ")")
       | Uint16_prec _, Uint4x32_prec _ -> ("uint16_to_uint4x32(", ")")

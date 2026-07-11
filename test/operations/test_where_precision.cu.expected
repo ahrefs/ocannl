@@ -9,11 +9,10 @@
 #define NAN __int_as_float(0x7fffffff)
 #endif
 extern "C" __global__ void where_fwd(
-    __half *a_then_val,
-    __nv_bfloat16 *b_else_val,
-    float *where,
-    unsigned char *cond_condition) {
-  /* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; };
+    __half *__restrict__ a_then_val,
+    __nv_bfloat16 *__restrict__ b_else_val,
+    float *__restrict__ where,
+    unsigned char *__restrict__ cond_condition) {
 
   /* Local declarations and initialization. */
 

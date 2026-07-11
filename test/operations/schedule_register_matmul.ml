@@ -125,9 +125,10 @@ let () =
           String.substr_index_all src ~may_overlap:false ~pattern:sub |> List.length
         in
         (* TM * TN fma statements from the materialized unrolls, two shared tiles, and only the
-           two thread-0 load guards survive. *)
+           two thread-0 load guards survive. Metal spells single-precision FMA [fma(], CUDA
+           [fmaf(]; the patterns are disjoint so the counts add. *)
         p "unrolled register tile structure (GPU) or rejected (CPU)"
-          (count_sub "fma(" = tm * tn
+          (count_sub "fma(" + count_sub "fmaf(" = tm * tn
           && count_sub "if (" = 2
           && String.is_substring src ~substring:"acc_mc1"
           &&

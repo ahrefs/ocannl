@@ -9,11 +9,10 @@
 #define NAN __int_as_float(0x7fffffff)
 #endif
 extern "C" __global__ void d_fwd(
-    __half *a,
-    __half *b,
-    __nv_bfloat16 *c,
-    __nv_bfloat16 *d) {
-  /* FIXME: single-threaded for now. */if (threadIdx.x != 0 || blockIdx.x != 0) { return; };
+    __half *__restrict__ a,
+    __half *__restrict__ b,
+    __nv_bfloat16 *__restrict__ c,
+    __nv_bfloat16 *__restrict__ d) {
 
   /* Local declarations and initialization. */
 

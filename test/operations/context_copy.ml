@@ -63,11 +63,13 @@ let scenario_cross_backend () =
   printf "=== 4. Cross-backend copy (cc -> multidev_cc) ===\n";
   Tensor.unsafe_reinitialize ();
   let ctx = Context.cpu () in
-  let%op t = [ 1.; 2. ] + [ 0.5; 0.25 ] in
+  (* 0.4 rather than 0.25: 2.25 is a representable %.1f tie, which glibc rounds to even ("2.2")
+     but the Windows CRT rounds away from zero ("2.3"), making the output platform-dependent. *)
+  let%op t = [ 1.; 2. ] + [ 0.5; 0.4 ] in
   let src = Train.forward_once ctx t in
   let dst = Context.cpu ~threads:4 () in
   let dst = Context.copy ~src ~dst t.Tensor.value in
-  show "copied (expect 1.5 2.2)" dst t.Tensor.value;
+  show "copied (expect 1.5 2.4)" dst t.Tensor.value;
   printf "backends: %s -> %s\n" (Context.backend_name src) (Context.backend_name dst)
 
 let scenario_merge_buffer () =
