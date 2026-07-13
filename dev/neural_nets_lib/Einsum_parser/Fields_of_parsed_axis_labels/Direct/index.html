@@ -25,6 +25,18 @@
       <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
       <span><span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.option</span> <span class="arrow">&#45;&gt;</span></span>
       unit)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">implicit_batch</span>:
+    <span>(<span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span class="xref-unresolved">Base</span>.bool)</span>
+       <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
+      <span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+      unit)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">implicit_input</span>:
+    <span>(<span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span class="xref-unresolved">Base</span>.bool)</span>
+       <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
+      <span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+      unit)</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">given_batch</span>:
     <span>(<span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span>)</span>
        <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
@@ -97,56 +109,70 @@
       <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
       <span><span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.option</span> <span class="arrow">&#45;&gt;</span></span>
       <span class="type-var">'d</span>)</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="label">given_batch</span>:
+  <span><span class="label">implicit_batch</span>:
     <span>(<span><span class="type-var">'d</span> <span class="arrow">&#45;&gt;</span></span>
-      <span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span>)</span>
+      <span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span class="xref-unresolved">Base</span>.bool)</span>
         <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
       <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
-      <span><span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
       <span class="type-var">'e</span>)</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="label">given_input</span>:
+  <span><span class="label">implicit_input</span>:
     <span>(<span><span class="type-var">'e</span> <span class="arrow">&#45;&gt;</span></span>
-      <span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span>)</span>
+      <span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span class="xref-unresolved">Base</span>.bool)</span>
         <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
       <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
-      <span><span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
       <span class="type-var">'f</span>)</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="label">given_output</span>:
+  <span><span class="label">given_batch</span>:
     <span>(<span><span class="type-var">'f</span> <span class="arrow">&#45;&gt;</span></span>
       <span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span>)</span>
         <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
       <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
       <span><span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
       <span class="type-var">'g</span>)</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="label">given_beg_batch</span>:
+  <span><span class="label">given_input</span>:
     <span>(<span><span class="type-var">'g</span> <span class="arrow">&#45;&gt;</span></span>
       <span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span>)</span>
         <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
       <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
       <span><span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
       <span class="type-var">'h</span>)</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="label">given_beg_input</span>:
+  <span><span class="label">given_output</span>:
     <span>(<span><span class="type-var">'h</span> <span class="arrow">&#45;&gt;</span></span>
       <span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span>)</span>
         <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
       <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
       <span><span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
       <span class="type-var">'i</span>)</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="label">given_beg_output</span>:
+  <span><span class="label">given_beg_batch</span>:
     <span>(<span><span class="type-var">'i</span> <span class="arrow">&#45;&gt;</span></span>
       <span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span>)</span>
         <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
       <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
       <span><span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
       <span class="type-var">'j</span>)</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="label">labels</span>:
+  <span><span class="label">given_beg_input</span>:
     <span>(<span><span class="type-var">'j</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span>)</span>
+        <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
+      <span><span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+      <span class="type-var">'k</span>)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">given_beg_output</span>:
+    <span>(<span><span class="type-var">'k</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span>)</span>
+        <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
+      <span><span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+      <span class="type-var">'l</span>)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">labels</span>:
+    <span>(<span><span class="type-var">'l</span> <span class="arrow">&#45;&gt;</span></span>
       <span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span><a href="../../index.html#type-axis_spec">axis_spec</a> <a href="../../index.html#type-axis_map">axis_map</a></span>)</span>
         <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
       <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
       <span><span><a href="../../index.html#type-axis_spec">axis_spec</a> <a href="../../index.html#type-axis_map">axis_map</a></span> <span class="arrow">&#45;&gt;</span></span>
-      <span class="type-var">'k</span>)</span> <span class="arrow">&#45;&gt;</span></span>
-  <span class="type-var">'k</span></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-for_all"><a href="#val-for_all" class="anchor"></a><code><span><span class="keyword">val</span> for_all : 
+      <span class="type-var">'m</span>)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span class="type-var">'m</span></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-for_all"><a href="#val-for_all" class="anchor"></a><code><span><span class="keyword">val</span> for_all : 
   <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">bcast_batch</span>:
     <span>(<span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>,
@@ -171,6 +197,18 @@
        <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
       <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
       <span><span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.option</span> <span class="arrow">&#45;&gt;</span></span>
+      <span class="xref-unresolved">Base</span>.bool)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">implicit_batch</span>:
+    <span>(<span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span class="xref-unresolved">Base</span>.bool)</span>
+       <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
+      <span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+      <span class="xref-unresolved">Base</span>.bool)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">implicit_input</span>:
+    <span>(<span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span class="xref-unresolved">Base</span>.bool)</span>
+       <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
+      <span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
       <span class="xref-unresolved">Base</span>.bool)</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">given_batch</span>:
     <span>(<span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span>)</span>
@@ -240,6 +278,18 @@
       <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
       <span><span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.option</span> <span class="arrow">&#45;&gt;</span></span>
       <span class="xref-unresolved">Base</span>.bool)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">implicit_batch</span>:
+    <span>(<span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span class="xref-unresolved">Base</span>.bool)</span>
+       <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
+      <span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+      <span class="xref-unresolved">Base</span>.bool)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">implicit_input</span>:
+    <span>(<span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span class="xref-unresolved">Base</span>.bool)</span>
+       <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
+      <span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+      <span class="xref-unresolved">Base</span>.bool)</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">given_batch</span>:
     <span>(<span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span>)</span>
        <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
@@ -307,6 +357,18 @@
        <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
       <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
       <span><span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.option</span> <span class="arrow">&#45;&gt;</span></span>
+      <span class="type-var">'a</span>)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">implicit_batch</span>:
+    <span>(<span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span class="xref-unresolved">Base</span>.bool)</span>
+       <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
+      <span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+      <span class="type-var">'a</span>)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">implicit_input</span>:
+    <span>(<span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span class="xref-unresolved">Base</span>.bool)</span>
+       <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
+      <span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
       <span class="type-var">'a</span>)</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">given_batch</span>:
     <span>(<span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span>)</span>
@@ -376,6 +438,18 @@
       <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
       <span><span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.option</span> <span class="arrow">&#45;&gt;</span></span>
       <span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.option</span>)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">implicit_batch</span>:
+    <span>(<span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span class="xref-unresolved">Base</span>.bool)</span>
+       <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
+      <span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+      <span class="xref-unresolved">Base</span>.bool)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">implicit_input</span>:
+    <span>(<span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span class="xref-unresolved">Base</span>.bool)</span>
+       <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
+      <span><a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a> <span class="arrow">&#45;&gt;</span></span>
+      <span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+      <span class="xref-unresolved">Base</span>.bool)</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">given_batch</span>:
     <span>(<span><span><span>(<span>[&lt; `Read <span>| `Set_and_create</span> ]</span>, <a href="../../index.html#type-parsed_axis_labels">parsed_axis_labels</a>, <span><a href="../../index.html#type-axis_spec">axis_spec</a> <span class="xref-unresolved">Base</span>.list</span>)</span>
        <span class="xref-unresolved">Fieldslib</span>.Field.t_with_perm</span> <span class="arrow">&#45;&gt;</span></span>
