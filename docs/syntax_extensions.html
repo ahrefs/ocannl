@@ -1068,10 +1068,12 @@ can find examples of <code>+*</code> and <code>++</code> behavior in the
 test suite <a href="test/einsum_trivia.ml">einsum_trivia.ml</a> and in
 <a href="lib/nn_blocks.ml">nn_blocks.ml</a>. A frequent use-case for
 <code>++</code> is to sum out all axes of a tensor:</p>
-<div class="sourceCode" id="cb15"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%op scalar_loss = (margin_loss ++ <span class="st">&quot;...|... =&gt; 0&quot;</span>) /. !..batch_size <span class="kw">in</span></span>
+<div class="sourceCode" id="cb15"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%op scalar_loss = (margin_loss ++ <span class="st">&quot;...|... =&gt; |-&gt;0&quot;</span>) /. !..batch_size <span class="kw">in</span></span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>  ...</span></code></pre></div>
-<p>where <code>(!..)</code> converts an integer into a constant
-tensor.</p>
+<p>where <code>(!..)</code> converts an integer into a constant tensor.
+Note the <code>|-&gt;0</code> result spec: the bare separators close the
+result’s batch and input rows, so the batch axes are reduced rather than
+broadcast through (see below).</p>
 <h3 id="syntax-of-the-generalized-einsum-notation">Syntax of the
 generalized einsum notation</h3>
 <p>The specification syntax has two modes:</p>
@@ -1101,6 +1103,12 @@ Correspondingly, a shape spec in the notation can be:</p>
 <li>the input row to the left of <code>-&gt;</code>, if given,</li>
 <li>the batch row to the left of <code>|</code>, if given.</li>
 </ul>
+<p>A row whose kind separator is omitted altogether reads as the context
+ellipsis: <code>x</code> is equivalent to <code>...|...-&gt;x</code>, so
+batch and input axes broadcast through terse specs by default. To
+require an empty row, write the separator with an empty row spec:
+<code>| -&gt;x</code> means no batch and no input axes, <code>|x</code>
+no batch axes, <code>-&gt;x</code> no input axes.</p>
 <p>The notation for a row is composed of sequences of row specs, and an
 optional <em>row variable</em> spec. A row variable tracks broadcasting.
 The syntax of a row:</p>
@@ -1116,9 +1124,13 @@ rightmost axes specs.</li>
 <ul>
 <li><code>..</code>variable_id<code>..</code>: variable_id stands for
 the row variable identifier,</li>
-<li>ellipsis <code>...</code> is context dependent: in the batch row it
-means <code>..batch..</code>, in the input row <code>..input..</code>,
-in the output row <code>..output..</code>.</li>
+<li>ellipsis <code>...</code> is context dependent: it stands for a
+reserved row variable specific to the kind of the row it appears in
+(batch, input or output), shared by every <code>...</code> of that kind
+within one spec. The reserved variables cannot be named, so
+<code>batch</code>, <code>input</code>, <code>output</code> remain
+available as ordinary labels and <code>..batch..</code> is an ordinary
+user row variable.</li>
 </ul>
 <p>The syntax of an axis spec:</p>
 <ul>
@@ -1158,45 +1170,68 @@ padding is used:
 </ul>
 <p>Examples:</p>
 <ul>
-<li><code>...|...-&gt;... =&gt; 0</code>: reduce all axes of the
+<li><code>...|...-&gt;... =&gt; |-&gt;0</code>: reduce all axes of the
 argument into a single number. Useful e.g. for reducing losses to a
-single number.</li>
-<li><code>...|... =&gt; 0</code>, <code>...-&gt;... =&gt; 0</code>,
-<code>... =&gt; 0</code> do the same but will fail if the argument has
-axes of the kind for which the ellipsis is missing.</li>
+single number. The bare separators <code>|-&gt;</code> close the
+result’s batch and input rows; with a plain <code>0</code> result the
+batch and input axes would broadcast through instead (they are shared
+with the argument’s ellipses).</li>
+<li><code>... =&gt; |-&gt;0</code> does the same: a row whose kind
+separator is omitted reads as the context ellipsis, so
+<code>... =&gt; |-&gt;0</code> is equivalent to
+<code>...|...-&gt;... =&gt; |-&gt;0</code>.</li>
 <li><code>...|...-&gt;... =&gt; ...|...-&gt;...</code>: fully pointwise
 unary operation.</li>
-<li><code>...-&gt;... =&gt; ...-&gt;...</code>,
-<code>...|... =&gt; ...|...</code>, <code>... =&gt; ...</code>: fully
-pointwise but will fail if the argument has axes of the kind for which
-the ellipsis is missing.</li>
+<li><code>... =&gt; ...</code>, or the same operation written out:
+<code>...-&gt;... =&gt; ...-&gt;...</code>,
+<code>...|... =&gt; ...|...</code>: fully pointwise — omitted rows read
+as the context ellipsis shared between argument and result, so all axes
+broadcast through.</li>
 <li><code>...|...-&gt;... ; ...|...-&gt;... =&gt; ...|...-&gt;...</code>:
-fully pointwise binary operation.</li>
-<li><code>...|...-&gt;... =&gt; ...-&gt;...</code>: reduce the batch
-axes into the result.</li>
+fully pointwise binary operation. Note that omitted rows of the same
+kind share one row variable across operands, forcing those rows equal:
+in <code>ij;jk=&gt;ik</code> the two operands’ batch rows must match
+(close a row, e.g. <code>ij;|jk=&gt;ik</code>, when one operand must
+stay batch-free). This exact pairing is einsum’s long-standing semantics
+for shared row variables (explicit <code>...</code> behaves the same);
+it differs from operations built on the broadcasting shape logics
+(<code>Pointwise_*</code>, <code>Compose</code> — see
+<code>tensor/operation.ml</code>, which user code can extend with
+further such operations), which have subtyping rather than equivalence
+semantics: <code>*</code> relates each operand’s batch row to the result
+independently, so <code>w * x</code> distributes an unbatched matrix
+over batched inputs where the terse einsum spelling requires the
+explicit <code>|</code>. This is also why the broadcasting shape logics
+are not reducible to einsum specs.</li>
+<li><code>...|...-&gt;... =&gt; |...-&gt;...</code>: reduce the batch
+axes into the result (the leading <code>|</code> closes the result’s
+batch row; with an omitted batch row the batch axes would pass
+through).</li>
 <li><code>2...|...-&gt;... =&gt; ...|...-&gt;...</code>: slice the
 tensor at dimension 2 of the leftmost batch axis. Note that the tensor
 operation <code>@|</code> implements slicing at the leftmost batch axis
 for arbitrary dimension.</li>
 <li><code>...|... =&gt; ...|...2</code>: expand the tensor by putting
-the argument at leftmost output dimension 2 of the result (and reduce
-input axes if any). <code>rhs ++ &quot;...|... =&gt; ...|...2&quot;</code> will
-fill the other cells of the new tensor with zeroes;
+the argument at leftmost output dimension 2 of the result (input axes,
+if any, broadcast through). <code>rhs ++ &quot;...|... =&gt; ...|...2&quot;</code>
+will fill the other cells of the new tensor with zeroes;
 <code>[%cd lhs =:* rhs ~logic:&quot;...|... =&gt; ...|...2&quot;]</code> will fill
 the other cells of <code>lhs</code> with ones since it’s the neutral
 element of the assignment (reduction) operator, here with ones.</li>
-<li><code>ijk =&gt; kji</code>: reverse the three output axes, fails if
-the argument has any other axes.</li>
+<li><code>ijk =&gt; kji</code>: reverse the three output axes (exactly
+three output axes required; batch and input axes broadcast through).
+Write <code>|-&gt;kji</code> as the result (and/or
+<code>|-&gt;ijk</code> as the argument) to require no batch and no input
+axes.</li>
 <li><code>ijk =&gt; ki</code>: as above but also reduce the
 second-leftmost output axis.</li>
 <li><code>..v..|...ijk =&gt; ..v..kji</code>: reverse the three
 rightmost output axes, reduce any other output axes, pointwise for batch
 axes, pairing the batch axes with the leftmost output axes of the
-result. Fails if the argument has input axes.</li>
+result. Input axes broadcast through.</li>
 <li><code>2..v..|... =&gt; ..v..</code>: slice the tensor at dimension 2
 of the leftmost batch axis, reduce all its output axes, preserve its
-other batch axes as output axes. Fails if the argument has input
-axes.</li>
+other batch axes as output axes. Input axes broadcast through.</li>
 </ul>
 <h4 id="affine-indexing-for-convolutions-and-pooling">Affine indexing
 for convolutions and pooling</h4>

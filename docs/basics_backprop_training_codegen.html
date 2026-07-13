@@ -1200,7 +1200,7 @@ relevance:0},{begin:/-&gt;/}]})})();hljs.registerLanguage(&quot;ocaml&quot;,e)})
   let%op margin_loss =
     relu (1 - (moons_class *. mlp moons_input)) in
   let%op scalar_loss =
-    (margin_loss ++ &amp;quot;...|... =&amp;gt; 0&amp;quot;) /. !..batch_size in
+    (margin_loss ++ &amp;quot;...|... =&amp;gt; |-&amp;gt;0&amp;quot;) /. !..batch_size in
 &lt;/code&gt;&lt;/pre&gt;
 &lt;div down-at-unpause unfocus-at-unpause pause&gt;&lt;/div&gt;
 &lt;pre focus-at-unpause=def-gradient pause&gt;&lt;code class=&quot;language-ocaml&quot;&gt;let grad_update loss =
@@ -1596,7 +1596,7 @@ flowchart LR
 &lt;ul&gt;
 &lt;li&gt;&lt;code&gt;~logic:&amp;quot;...=&amp;gt;...&amp;quot;&lt;/code&gt;&lt;span&gt; where &lt;/span&gt;&lt;code&gt;...=&amp;gt;...&lt;/code&gt;&lt;span&gt; uses &lt;/span&gt;&lt;em&gt;&lt;span&gt;generalized einsum notation&lt;/span&gt;&lt;/em&gt;&lt;span&gt;, is the most general case of providing projections in OCANNL.&lt;/span&gt;
 &lt;ul&gt;
-&lt;li&gt;&lt;span&gt;For example, &lt;/span&gt;&lt;code&gt;~logic:&amp;quot;...|... =&amp;gt; 0&amp;quot;&lt;/code&gt;&lt;span&gt; assumes there are no input axes in RHS1 and LHS has only one  axis, and reduces all batch and output axes of RHS1 onto dimension 0 of LHS.&lt;/span&gt;&lt;/li&gt;
+&lt;li&gt;&lt;span&gt;For example, &lt;/span&gt;&lt;code&gt;~logic:&amp;quot;...|... =&amp;gt; |-&amp;gt;0&amp;quot;&lt;/code&gt;&lt;span&gt; requires that LHS has only one axis, and reduces all axes of RHS1 onto dimension 0 of LHS (the bare &lt;/span&gt;&lt;code&gt;|-&amp;gt;&lt;/code&gt;&lt;span&gt; closes the LHS rows; with a plain &lt;/span&gt;&lt;code&gt;0&lt;/code&gt;&lt;span&gt; the batch and input axes would broadcast through instead).&lt;/span&gt;&lt;/li&gt;
 &lt;/ul&gt;
 &lt;/li&gt;
 &lt;/ul&gt;

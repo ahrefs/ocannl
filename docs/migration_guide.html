@@ -497,10 +497,11 @@ mode)</li>
 </table>
 <h3 id="row-variables">Row Variables</h3>
 <ul>
-<li><code>...</code> context-dependent ellipsis: expands to
-<code>..batch..</code> in batch position, <code>..input..</code> before
-<code>-&gt;</code>, <code>..output..</code> after
-<code>-&gt;</code></li>
+<li><code>...</code> context-dependent ellipsis: expands to a reserved
+per-kind row variable (batch position, before <code>-&gt;</code>, after
+<code>-&gt;</code>), shared by every <code>...</code> of that kind in
+the spec; not nameable, so <code>batch</code> etc. remain ordinary
+labels</li>
 <li>Single-char mode example: <code>..b..|</code> for batch axes
 (arbitrary number)</li>
 <li>Multi-char mode examples: <code>h, w, ..ic..</code>,

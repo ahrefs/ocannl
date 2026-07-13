@@ -105,6 +105,7 @@ Concepts</a></li>
 <ul>
 <li><a href="#tensor-structure" id="toc-tensor-structure">Tensor
 Structure</a></li>
+<li><a href="#tensor-node-namespaces" id="toc-tensor-node-namespaces">Tensor Node Namespaces</a></li>
 <li><a href="#roots-embedded-nodes-and-params" id="toc-roots-embedded-nodes-and-params">Roots, Embedded Nodes, and
 Params</a></li>
 <li><a href="#creating-tensors" id="toc-creating-tensors">Creating
@@ -161,6 +162,7 @@ contexts in OCANNL. It covers the core <code>Tensor</code> module, the
 <li><a href="#tensors">Tensors</a>
 <ul>
 <li><a href="#tensor-structure">Tensor Structure</a></li>
+<li><a href="#tensor-node-namespaces">Tensor Node Namespaces</a></li>
 <li><a href="#roots-embedded-nodes-and-params">Roots, Embedded Nodes,
 and Params</a></li>
 <li><a href="#creating-tensors">Creating Tensors</a></li>
@@ -224,22 +226,41 @@ concerns</p>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  params : (t, comparator_witness) Base.<span class="dt">Set</span>.t;  <span class="co">(* Learnable parameters *)</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  forward : comp;                                <span class="co">(* Forward computation *)</span></span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  diff : diff <span class="dt">option</span>;                            <span class="co">(* Gradient info if differentiable *)</span></span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  id : <span class="dt">int</span>;                                      <span class="co">(* Unique identifier *)</span></span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>  value : tn;                                    <span class="co">(* The underlying tensor node *)</span></span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>  shape : Shape.t;                               <span class="co">(* Shape with inference state *)</span></span>
-<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>  children : subtensor <span class="dt">list</span>;                     <span class="co">(* Sub-tensors in the computation *)</span></span>
-<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* ... *)</span></span>
-<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  value : tn;                                    <span class="co">(* The underlying tensor node *)</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>  shape : Shape.t;                               <span class="co">(* Shape with inference state *)</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>  children : subtensor <span class="dt">list</span>;                     <span class="co">(* Sub-tensors in the computation *)</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* ... *)</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
 <p>Key fields: - <strong><code>value</code></strong>: The tensor node
-(<code>Ir.Tnode.t</code>) holding the actual data -
-<strong><code>diff</code></strong>: Contains gradient node and
-backpropagation code (if differentiable) -
+(<code>Ir.Tnode.t</code>) holding the actual data; the tensor’s
+identifiers live here: <code>value.id</code> is the consecutive session
+id, <code>value.namespace</code> qualifies it (see below), and
+<code>value.uid</code> is the process-unique identity used for
+comparison - <strong><code>diff</code></strong>: Contains gradient node
+and backpropagation code (if differentiable) -
 <strong><code>params</code></strong>: Set of tensors requiring separate
 initialization (see <a href="#roots-embedded-nodes-and-params">Roots,
 Embedded Nodes, and Params</a>) - <strong><code>forward</code></strong>:
 Computation to produce this tensor’s value, including embedded subtensor
 computations - <strong><code>shape</code></strong>: Shape information,
 progressively refined during inference</p>
+<h3 id="tensor-node-namespaces">Tensor Node Namespaces</h3>
+<p>Every tensor node carries a <code>namespace</code> string alongside
+its session <code>id</code> (gh-ocannl-372). Within a session all nodes
+share the ambient namespace — <code>&quot;ocannl&quot;</code> by default — and
+only <code>Tensor.unsafe_reinitialize ~namespace:&quot;my_ns&quot; ()</code>
+changes it. Namespaces must be legal identifiers
+(<code>[A-Za-z_][A-Za-z0-9_]*</code>); non-default namespaces show up as
+a prefix in debug names and generated code (<code>my_ns__n42</code>
+instead of <code>n42</code>).</p>
+<p>Namespaces exist for “model surgery”:
+<code>Persistence.load ~prefix_namespace</code> rewrites the namespaces
+of the tensors stored in a checkpoint file (to
+<code>prefix ^ &quot;__&quot; ^ file_namespace</code>) while keeping their session
+ids, so weights of independently developed models — or two snapshots of
+the same model — can coexist in one registry and one routine without id
+clashes. Since <code>Embed_self_id</code> embeds only the session id,
+its values are invariant under namespace prefixing.</p>
 <h3 id="roots-embedded-nodes-and-params">Roots, Embedded Nodes, and
 Params</h3>
 <p>Understanding how OCANNL manages computation inclusion is essential
@@ -741,11 +762,11 @@ that use shape inference to determine the scaling factor:</p>
 <p>These functions use einsum dimension capture to extract fan_in and
 fan_out:</p>
 <div class="sourceCode" id="cb23"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* kaiming_impl captures input dimension *)</span></span>
-<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op _ = w_raw ++ <span class="st">&quot;...|..i.. -&gt; ... =&gt; 0&quot;</span> [ <span class="st">&quot;i&quot;</span> ] <span class="kw">in</span></span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op _ = w_raw ++ <span class="st">&quot;...|..i.. -&gt; ... =&gt; |-&gt;0&quot;</span> [ <span class="st">&quot;i&quot;</span> ] <span class="kw">in</span></span>
 <span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>... <span class="dt">sqrt</span> (!.scale_sq /. dim i)</span>
 <span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a><span class="co">(* xavier_impl captures both input and output dimensions *)</span></span>
-<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op _ = w_raw ++ <span class="st">&quot;...|..i.. -&gt; ..o.. =&gt; 0&quot;</span> [ <span class="st">&quot;i&quot;</span>; <span class="st">&quot;o&quot;</span> ] <span class="kw">in</span></span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op _ = w_raw ++ <span class="st">&quot;...|..i.. -&gt; ..o.. =&gt; |-&gt;0&quot;</span> [ <span class="st">&quot;i&quot;</span>; <span class="st">&quot;o&quot;</span> ] <span class="kw">in</span></span>
 <span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>... <span class="dt">sqrt</span> (!.scale_sq /. (dim i + dim o))</span></code></pre></div>
 <h3 id="parameter-initialization-1">Parameter Initialization</h3>
 <p>By default, <code>%op</code> parameters use a centered, scaled
