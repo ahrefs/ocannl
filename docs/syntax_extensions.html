@@ -133,6 +133,7 @@ tensor syntax</a></li>
 <li><a href="#capturing-the-dimensions-of-selected-axes-for-further-computation-or-to-add-shape-constraints" id="toc-capturing-the-dimensions-of-selected-axes-for-further-computation-or-to-add-shape-constraints">Capturing
 the dimensions of selected axes for further computation or to add shape
 constraints</a></li>
+<li><a href="#einsum-gotchas-and-idioms" id="toc-einsum-gotchas-and-idioms">Einsum gotchas and idioms</a></li>
 </ul></li>
 <li><a href="#further-features-of-the-syntax-extension-cd" id="toc-further-features-of-the-syntax-extension-cd">Further features of
 the syntax extension %cd</a>
@@ -1490,6 +1491,53 @@ later be used with <code>Operation.embed_dim</code> or its alias
 corresponding variable (as a number) into a tensor expression. For a row
 variable, the number will be the product of the dimensions it resolved
 into.</p>
+<h3 id="einsum-gotchas-and-idioms">Einsum gotchas and idioms</h3>
+<p>Recurring stumbling points, each verified against the sources:</p>
+<ul>
+<li><strong>Unary sum-reduction is <code>++</code> (einsum1), not
+<code>+++</code>.</strong> <code>+++</code> is the <em>binary</em>
+<code>outer_sum</code> (add-reduce with add); writing
+<code>a +++ &quot;i =&gt; 0&quot;</code> where <code>a ++ &quot;i =&gt; 0&quot;</code> was
+meant is a common error, including in older docs and proposals. The
+operator table lives in <code>tensor/ppx_shared.ml</code>.</li>
+<li><strong><code>einsum1</code> extracts diagonals and traces</strong>:
+<code>m ++ &quot;ii =&gt; i&quot;</code> is a working <code>diag</code>, and
+<code>&quot;i =&gt; ii&quot;</code> embeds a vector on the diagonal (see
+<code>Operation.einsum1</code>’s docstring and
+<code>test/einsum/surjectivity.ml</code>).</li>
+<li><strong>Comparisons in the <code>%op</code>/<code>%cd</code>
+operator scope are <code>&lt;</code>, <code>=</code>, and
+<code>&lt;&gt;</code> only</strong> (plus <code>not</code> and
+<code>where</code>). Derive the rest: <code>a &gt; b</code> is
+<code>b &lt; a</code>; <code>a &lt;= b</code> is
+<code>not (b &lt; a)</code>; <code>a &gt;= b</code> is
+<code>not (a &lt; b)</code>.</li>
+<li><strong>A number in an einsum axis spec is a fixed-index
+placement</strong> (an axis of size <code>k+1</code> with the value
+placed at slot <code>k</code>), <em>not</em> a reference to “axis N”.
+This gives a per-axis index-grid idiom:
+<code>range n ++ &quot;i =&gt; i0&quot;</code> yields shape <code>[n, 1]</code>
+and <code>range n ++ &quot;j =&gt; 0j&quot;</code> yields <code>[1, n]</code>;
+comparing them broadcasts to an <code>[n, n]</code> grid — the building
+block for <code>eye</code>, <code>triu</code>, and similar masks. Note
+<code>range_of_shape</code> gives row-major <em>flattened</em> offsets,
+not per-axis indices.</li>
+<li><strong>Only numeric literals auto-lift to tensors in
+<code>%op</code>.</strong> A <code>let</code>-bound float needs explicit
+embedding: <code>r *. !.step</code>, not <code>r *. step</code>.</li>
+<li><strong>Inline-declaration initializers resolve at the unit
+parameter.</strong> In
+<code>let%op f x = ... { w = kaiming normal1 () } ...</code>, the lifted
+binding for <code>w</code> lands at the enclosing unit parameter
+<code>()</code>; with no unit parameter in scope the binding lands
+outside any <code>open TDSL.O</code> and identifiers like
+<code>normal1</code> fail with “Unbound value”. Write
+<code>let%op mk_f () x = ...</code> and apply <code>mk_f ()</code>. A
+labeled argument inside the initializer
+(<code>kaiming ~scale_sq:2.0 normal1 ()</code>) breaks the lifting the
+same way — bind a specialized helper outside <code>%op</code>
+instead.</li>
+</ul>
 <h2 id="further-features-of-the-syntax-extension-cd">Further features of
 the syntax extension %cd</h2>
 <h3 id="referencing-arrays-tensor-value-tensor-gradient-merge-buffer-of-a-tensor-node">Referencing
