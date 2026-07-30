@@ -985,17 +985,21 @@ Details</h2>
 <p>OCANNL’s random initialization has some important nuances:</p>
 <ol type="1">
 <li><p><strong>Default initialization is configurable</strong> - There
-is a global reference that defaults to the <code>uniform1</code>
-operation but can be changed to any nullary operation.</p></li>
-<li><p><strong>Divisibility requirements</strong> - Functions like
-<code>uniform</code> require the total number of elements to be
-divisible by certain values (they work with <code>uint4x32</code> for
-efficiency):</p>
+is a global reference that defaults to a centered, scaled packed
+<code>uniform</code> and can be changed to any nullary operation
+(<code>default_uniform1_param_init</code> reproduces pre-0.9
+streams).</p></li>
+<li><p><strong>Packed vs. pointwise conversion</strong> -
+<code>uniform</code> and <code>uniform1</code> both consume
+<code>uint4x32</code> 128-bit random blocks, differently:</p>
 <ul>
-<li><code>uniform()</code> - requires specific size divisibility for
-efficient bit usage</li>
-<li><code>uniform1()</code> - works pointwise on <code>uint4x32</code>
-arrays, allows any size but wastes random bits</li>
+<li><code>uniform()</code> - packed: each block yields
+<code>16 / bytes-per-element</code> values; works with any shape (a
+final partial block is consumed partially, and growing a tensor
+preserves the value-stream prefix)</li>
+<li><code>uniform1()</code> - pointwise: one value per block; deprecated
+since packed <code>uniform</code> became total over shapes
+(gh-ocannl-509)</li>
 </ul></li>
 <li><p><strong>Deterministic PRNG</strong> - OCANNL uses counter-based
 pseudo-random generation:</p>

@@ -419,7 +419,7 @@ call site:</p>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> scaled = pointmul x scale ~output_dims:[hidden_dim] ()</span>
 <span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* The kaiming/xavier functions return op_fun for deferred shape binding *)</span></span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> weights = kaiming uniform1 ~input_dims:[<span class="dv">784</span>] ~output_dims:[<span class="dv">256</span>] ()</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> weights = kaiming uniform ~input_dims:[<span class="dv">784</span>] ~output_dims:[<span class="dv">256</span>] ()</span>
 <span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Term creates a terminal tensor with shape *)</span></span>
 <span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> <span class="dt">input</span> = TDSL.term ~batch_dims:[batch_size] ~input_dims:[<span class="dv">784</span>] ()</span>
@@ -694,12 +694,12 @@ that:</p>
 <tr>
 <td><code>uniform ()</code></td>
 <td>Uniform [0,1) using global seed</td>
-<td>Efficient, requires shape divisibility</td>
+<td>Efficient, works with any shape</td>
 </tr>
 <tr>
 <td><code>uniform1 ()</code></td>
 <td>Uniform [0,1), pointwise</td>
-<td>Works with any shape, less efficient</td>
+<td>Deprecated (gh-ocannl-509); one value per 128-bit block</td>
 </tr>
 <tr>
 <td><code>uniform_at counter</code></td>
@@ -741,11 +741,25 @@ shaped tensors) 2. <strong>Explicit dimensions</strong> via
 <span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>      <span class="co">(* Shape is inferred from pointwise comparison with x *)</span></span>
 <span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>      x *. (!.rate &lt; uniform_at !@train_step) /. (<span class="fl">1.0</span> - !.rate)</span>
 <span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>  | _ -&gt; x</span></code></pre></div>
-<p><strong>Note on shape constraints</strong>: The <code>uniform</code>
-function (without <code>1</code>) requires the total number of elements
-to be appropriately divisible, e.g. by 4 for single precision (due to
-<code>uint4x32</code> efficiency). Use <code>uniform1</code> for
-arbitrary shapes at the cost of some efficiency.</p>
+<p><strong>Note on shapes</strong>: The packed <code>uniform</code>
+function (without <code>1</code>) is total over shapes: element
+<code>i</code> of the result is lane <code>i mod k</code> of the 128-bit
+random block <code>i / k</code>, where
+<code>k = 16 / bytes-per-element</code> (4 for single precision). When
+the total element count is not a multiple of <code>k</code>, the final
+block is consumed partially, so growing a tensor keeps the existing
+prefix of its value stream unchanged. <code>uniform1</code> remains
+available as a pointwise variant (one value per 128-bit block).</p>
+<p><strong>Virtual (inlined) uniforms</strong>: a packed
+<code>uniform</code> result does not need to be materialized — when the
+optimizer virtualizes it (e.g. a dropout mask read once by an
+elementwise consumer), each read cell inlines as lane
+<code>i mod k</code> of the conversion of counter block
+<code>i / k</code>, which is bitwise-identical to the materialized value
+stream. The uniform’s internal counter tensor then stays materialized
+(usually as routine-local scratch) because it is read at a
+runtime-computed block index; the conversion is recomputed per cell, but
+the threefry chain still runs once per 128-bit block.</p>
 <h3 id="kaiming-and-xavier-scaling-operations">Kaiming and Xavier
 Scaling Operations</h3>
 <p>For weight matrices, OCANNL provides scaled initialization functions
@@ -769,17 +783,19 @@ fan_out:</p>
 <span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op _ = w_raw ++ <span class="st">&quot;...|..i.. -&gt; ..o.. =&gt; |-&gt;0&quot;</span> [ <span class="st">&quot;i&quot;</span>; <span class="st">&quot;o&quot;</span> ] <span class="kw">in</span></span>
 <span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>... <span class="dt">sqrt</span> (!.scale_sq /. (dim i + dim o))</span></code></pre></div>
 <h3 id="parameter-initialization-1">Parameter Initialization</h3>
-<p>By default, <code>%op</code> parameters use a centered, scaled
-<code>uniform1</code> initializer with values in
-<code>[-0.25, 0.25)</code>. This keeps the non-vectorized
-arbitrary-shape behavior of <code>uniform1</code> while avoiding
-all-positive initial weights.</p>
+<p>By default, <code>%op</code> parameters use a centered, scaled packed
+<code>uniform</code> initializer with values in
+<code>[-0.25, 0.25)</code>. The packed <code>uniform</code> is total
+over shapes (see the note above), so no pointwise fallback is needed;
+set
+<code>TDSL.default_param_init := Operation.default_uniform1_param_init</code>
+to reproduce pre-0.9 random streams.</p>
 <p>Usage example:</p>
 <div class="sourceCode" id="cb24"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Set kaiming initialization as default. Initializers are forward-only. *)</span></span>
-<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>TDSL.default_param_init := NTDSL.kaiming TDSL.O.uniform1;</span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>TDSL.default_param_init := NTDSL.kaiming TDSL.O.uniform;</span>
 <span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Or use directly in parameter definition *)</span></span>
-<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op layer x = { w = kaiming uniform1 () } * x + { b = <span class="dv">0</span>. }</span></code></pre></div>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op layer x = { w = kaiming uniform () } * x + { b = <span class="dv">0</span>. }</span></code></pre></div>
 <p>When setting <code>default_param_init</code>, use <code>NTDSL</code>
 helpers: initialization is a one-shot forward computation.
 <code>TDSL.param</code> makes the final parameter tensor differentiable

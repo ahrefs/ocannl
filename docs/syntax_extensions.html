@@ -505,6 +505,13 @@ it needs to pick the accumulation operation.</p>
 <td>none</td>
 </tr>
 <tr>
+<td><code>le</code></td>
+<td><code>&lt;=</code></td>
+<td>pointwise</td>
+<td><code>Cmple</code></td>
+<td>none</td>
+</tr>
+<tr>
 <td><code>eq</code></td>
 <td><code>=</code></td>
 <td>pointwise</td>
@@ -625,15 +632,16 @@ it needs to pick the accumulation operation.</p>
 <span id="cb3-38"><a href="#cb3-38" aria-hidden="true" tabindex="-1"></a>  | Min -&gt; <span class="dt">min</span> v1 v2</span>
 <span id="cb3-39"><a href="#cb3-39" aria-hidden="true" tabindex="-1"></a>  | Mod -&gt; v1 % v2</span>
 <span id="cb3-40"><a href="#cb3-40" aria-hidden="true" tabindex="-1"></a>  | Cmplt -&gt; <span class="kw">if</span> v1 &lt; v2 <span class="kw">then</span> <span class="dv">1</span>. <span class="kw">else</span> <span class="dv">0</span>.</span>
-<span id="cb3-41"><a href="#cb3-41" aria-hidden="true" tabindex="-1"></a>  | Cmpeq -&gt; <span class="kw">if</span> v1 = v2 <span class="kw">then</span> <span class="dv">1</span>. <span class="kw">else</span> <span class="dv">0</span>.</span>
-<span id="cb3-42"><a href="#cb3-42" aria-hidden="true" tabindex="-1"></a>  | Cmpne -&gt; <span class="kw">if</span> v1 &lt;&gt; v2 <span class="kw">then</span> <span class="dv">1</span>. <span class="kw">else</span> <span class="dv">0</span>.</span>
-<span id="cb3-43"><a href="#cb3-43" aria-hidden="true" tabindex="-1"></a>  | Or -&gt; <span class="kw">if</span> v1 &lt;&gt; <span class="dv">0</span>. || v2 &lt;&gt; <span class="dv">0</span>. <span class="kw">then</span> <span class="dv">1</span>. <span class="kw">else</span> <span class="dv">0</span>.</span>
-<span id="cb3-44"><a href="#cb3-44" aria-hidden="true" tabindex="-1"></a>  | And -&gt; <span class="kw">if</span> v1 &lt;&gt; <span class="dv">0</span>. &amp;&amp; v2 &lt;&gt; <span class="dv">0</span>. <span class="kw">then</span> <span class="dv">1</span>. <span class="kw">else</span> <span class="dv">0</span>.</span>
-<span id="cb3-45"><a href="#cb3-45" aria-hidden="true" tabindex="-1"></a>  | Threefry4x32 -&gt; ...</span>
-<span id="cb3-46"><a href="#cb3-46" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-47"><a href="#cb3-47" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> interpret_ternop op v1 v2 v3 =</span>
-<span id="cb3-48"><a href="#cb3-48" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> <span class="kw">open</span> Float <span class="kw">in</span></span>
-<span id="cb3-49"><a href="#cb3-49" aria-hidden="true" tabindex="-1"></a>  <span class="kw">match</span> op <span class="kw">with</span> Where -&gt; <span class="kw">if</span> v1 &lt;&gt; <span class="dv">0</span>. <span class="kw">then</span> v2 <span class="kw">else</span> v3 | FMA -&gt; (v1 * v2) + v3</span></code></pre></div>
+<span id="cb3-41"><a href="#cb3-41" aria-hidden="true" tabindex="-1"></a>  | Cmple -&gt; <span class="kw">if</span> v1 &lt;= v2 <span class="kw">then</span> <span class="dv">1</span>. <span class="kw">else</span> <span class="dv">0</span>.</span>
+<span id="cb3-42"><a href="#cb3-42" aria-hidden="true" tabindex="-1"></a>  | Cmpeq -&gt; <span class="kw">if</span> v1 = v2 <span class="kw">then</span> <span class="dv">1</span>. <span class="kw">else</span> <span class="dv">0</span>.</span>
+<span id="cb3-43"><a href="#cb3-43" aria-hidden="true" tabindex="-1"></a>  | Cmpne -&gt; <span class="kw">if</span> v1 &lt;&gt; v2 <span class="kw">then</span> <span class="dv">1</span>. <span class="kw">else</span> <span class="dv">0</span>.</span>
+<span id="cb3-44"><a href="#cb3-44" aria-hidden="true" tabindex="-1"></a>  | Or -&gt; <span class="kw">if</span> v1 &lt;&gt; <span class="dv">0</span>. || v2 &lt;&gt; <span class="dv">0</span>. <span class="kw">then</span> <span class="dv">1</span>. <span class="kw">else</span> <span class="dv">0</span>.</span>
+<span id="cb3-45"><a href="#cb3-45" aria-hidden="true" tabindex="-1"></a>  | And -&gt; <span class="kw">if</span> v1 &lt;&gt; <span class="dv">0</span>. &amp;&amp; v2 &lt;&gt; <span class="dv">0</span>. <span class="kw">then</span> <span class="dv">1</span>. <span class="kw">else</span> <span class="dv">0</span>.</span>
+<span id="cb3-46"><a href="#cb3-46" aria-hidden="true" tabindex="-1"></a>  | Threefry4x32 -&gt; ...</span>
+<span id="cb3-47"><a href="#cb3-47" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-48"><a href="#cb3-48" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> interpret_ternop op v1 v2 v3 =</span>
+<span id="cb3-49"><a href="#cb3-49" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> <span class="kw">open</span> Float <span class="kw">in</span></span>
+<span id="cb3-50"><a href="#cb3-50" aria-hidden="true" tabindex="-1"></a>  <span class="kw">match</span> op <span class="kw">with</span> Where -&gt; <span class="kw">if</span> v1 &lt;&gt; <span class="dv">0</span>. <span class="kw">then</span> v2 <span class="kw">else</span> v3 | FMA -&gt; (v1 * v2) + v3</span></code></pre></div>
 <h2 id="the-syntax-for-op">The syntax for %op</h2>
 <p>The <code>%op</code> syntax is simpler than the <code>%cd</code>
 syntax since it relies more on regular OCaml expressions. For example,
@@ -794,6 +802,11 @@ patterns. This is essential when defining backpropagation code that
 needs intermediate tensors with specific projections and shapes.</p>
 <p>The naming convention patterns:</p>
 <table>
+<colgroup>
+<col style="width: 32%" />
+<col style="width: 34%" />
+<col style="width: 32%" />
+</colgroup>
 <thead>
 <tr>
 <th>Prefix/Suffix</th>
@@ -827,6 +840,11 @@ needs intermediate tensors with specific projections and shapes.</p>
 <td>RHS3</td>
 <td>third input shape (from <code>t3</code>)</td>
 </tr>
+<tr>
+<td><code>pspace_*</code> or <code>*_pspace</code></td>
+<td>product space</td>
+<td>the operation’s projections (see below)</td>
+</tr>
 </tbody>
 </table>
 <p>This applies to: - <strong>Inline tensor definitions</strong>:
@@ -834,31 +852,49 @@ needs intermediate tensors with specific projections and shapes.</p>
 <code>t1</code> - <strong>Identifier references</strong>: When
 <code>sum_rhs1</code> is used in an expression, it’s recognized as
 having slot RHS1</p>
+<p><strong>The product-space slot</strong> (<code>*_pspace</code>): the
+tensor is laid out over the operation’s full product space — the
+result’s axes followed by the reduced-over (contracted) axes — and is
+indexed by the identity projection over the product iterators. This is
+the index space in which per-(result, reduced position) facts live. The
+inline-declared tensor’s shape is unified with the operation’s
+product-space proxy shape (<code>Shape.product_space_shape</code>): the
+result’s rows with the contracted axes appended (fixed-index axes pinned
+to dimension 1 — their projections are pinned, so they are never product
+axes). At most one whole row variable may be reduced over (it becomes
+the row variable of the appended flank); otherwise, or for a non-einsum
+operation, a shape-inference error is raised. The identity projection
+(<code>Ir.Indexing.prod_project_for</code>) skips dimension-1 axes and
+pairs the rest with product components by extent (first-fit, so the
+layout order may deviate from the product order); a leftover on either
+side raises at lowering.</p>
 <p><strong>Why this matters for gradient computation</strong>: In
 operations like max pooling or tropical convolution, the gradient must
-flow back to positions that achieved the argmax. Using an intermediate
-tensor with the wrong shape causes incorrect gradients. For example, in
-a 4×4 → 2×2 max pooling: - <code>*_lhs</code> suffix gives shape 2×2
-(output shape) — wrong for tracking per-input-position gradients -
-<code>*_rhs1</code> suffix gives shape 4×4 (input shape) — correct for
-sparse gradient at argmax positions</p>
+flow back to exactly the (window, position) pairs that achieved the
+argmax. A gate materialized over an operand’s index space is lossy
+whenever reduction windows overlap (stride &lt; window): several windows
+write conflicting bits through a non-accumulating assignment and the
+last write wins, silently corrupting gradients (gh-ocannl-512). The
+product-space gate has one cell per (result position, reduced position)
+pair, where the equality check is single-writer and therefore exact.</p>
 <p>Example from the <code>tropical</code> operation’s gradient
 computation:</p>
 <div class="sourceCode" id="cb11"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%cd grad_asn ~t ~g ~t1 ~t2 ~projections =</span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Use _rhs1 suffix: gives input shape to track which positions achieved argmax *)</span></span>
-<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>  { sum_rhs1 } =:@^ add (t1, t2);   <span class="co">(* max over each input position&#39;s window *)</span></span>
-<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>  { cond_rhs1 } =: eq (t, sum_rhs1); <span class="co">(* true where input+kernel achieved the argmax *)</span></span>
-<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>  g1 =+ where cond_rhs1 g <span class="dv">0</span>;         <span class="co">(* gradient flows to argmax input positions *)</span></span>
-<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>  g2 =+ where cond_rhs1 g <span class="dv">0</span>          <span class="co">(* gradient flows to argmax kernel positions *)</span></span>
-<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="kw">in</span></span></code></pre></div>
-<p>For convolution-like operations with einsum
-<code>&quot;...|stride*oh&lt;+wh, stride*ow&lt;+ww, ..c..; wh, ww =&gt; ...|oh, ow, ..c..&quot;</code>,
-the RHS1 index space (ih, iw) effectively encodes the outer product of
-output (oh, ow) and kernel (wh, ww) dimensions via
-<code>ih = stride*oh + wh</code>. This means using <code>_rhs1</code>
-for intermediate condition tensors correctly tracks which (input
-position, kernel position) pair achieved the argmax for each output
-position.</p>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Product-space intermediates: one cell per (output, kernel-position) pair. *)</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>  { sum_pspace } =:@^ add (t1, t2);      <span class="co">(* the candidate value of each pair *)</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>  { cond_pspace } =: eq (t, sum_pspace); <span class="co">(* true where the pair achieved the argmax *)</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>  { valid_pspace } =:|| eq (t1, t1);     <span class="co">(* false only for clamped-out (padded) accesses *)</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>  cond_pspace =&amp;&amp; valid_pspace;</span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>  g1 =+ where cond_pspace g <span class="dv">0</span>;           <span class="co">(* gradient flows to argmax input positions *)</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>  g2 =+ where cond_pspace g <span class="dv">0</span>            <span class="co">(* gradient flows to argmax kernel positions *)</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a><span class="kw">in</span></span></code></pre></div>
+<p>(The initializing max-accumulation <code>=:@^</code> gives pairs
+whose <code>t1</code> access is clamped out of range by a padded window
+spec the max-neutral <code>-inf</code>; the <code>=:||</code> validity
+mask handles the corner where <code>t</code> itself is <code>-inf</code>
+— an out-of-range read substitutes the statement’s accumulation neutral,
+which for <code>Or</code> is 0 where an in-range read contributes
+1.)</p>
 <p><strong>Important</strong>: The naming convention affects both
 projection slot assignment and shape inference. In addition to
 determining which projection from <code>~projections</code> to use when
@@ -867,7 +903,10 @@ the inline-defined tensor and the corresponding operation tensor assumed
 to be in scope: <code>t</code> for <code>*_lhs</code>, <code>t1</code>
 for <code>*_rhs</code> and <code>*_rhs1</code>, <code>t2</code> for
 <code>*_rhs2</code>, etc. This means the shape from the tensor’s
-initialization is unified with the shape of the operation component.</p>
+initialization is unified with the shape of the operation component. For
+<code>*_pspace</code> the unification target is the operation’s
+product-space proxy shape instead, and the declared tensor should not be
+given explicit dimensions.</p>
 <h2 id="numeric-and-n-dimensional-array-literals">Numeric and
 N-dimensional array literals</h2>
 <p>Both <code>%cd</code> and <code>%op</code> extensions use a shared
@@ -1505,13 +1544,18 @@ operator table lives in <code>tensor/ppx_shared.ml</code>.</li>
 <code>&quot;i =&gt; ii&quot;</code> embeds a vector on the diagonal (see
 <code>Operation.einsum1</code>’s docstring and
 <code>test/einsum/surjectivity.ml</code>).</li>
-<li><strong>Comparisons in the <code>%op</code>/<code>%cd</code>
-operator scope are <code>&lt;</code>, <code>=</code>, and
-<code>&lt;&gt;</code> only</strong> (plus <code>not</code> and
-<code>where</code>). Derive the rest: <code>a &gt; b</code> is
-<code>b &lt; a</code>; <code>a &lt;= b</code> is
-<code>not (b &lt; a)</code>; <code>a &gt;= b</code> is
-<code>not (a &lt; b)</code>.</li>
+<li><strong>The <code>%op</code> operator scope has the full comparison
+set</strong>: <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>,
+<code>&gt;=</code>, <code>=</code>, <code>&lt;&gt;</code> (plus
+<code>not</code> and <code>where</code>); <code>%cd</code> additionally
+accepts <code>&lt;=</code>/<code>le</code> for <code>Cmple</code>.
+<code>&gt;</code> and <code>&gt;=</code> are operand swaps of
+<code>&lt;</code> and <code>&lt;=</code>. Do NOT rewrite
+<code>a &lt;= b</code> as <code>not (b &lt; a)</code> — that negation is
+wrong for NaN operands (it yields 1 where <code>&lt;=</code> yields 0),
+which is why <code>Cmple</code> is a primitive. Note that
+<code>&gt;</code> denotes tensor comparison inside <code>%op</code>, so
+compare integers there with <code>Int.( &gt; )</code>.</li>
 <li><strong>A number in an einsum axis spec is a fixed-index
 placement</strong> (an axis of size <code>k+1</code> with the value
 placed at slot <code>k</code>), <em>not</em> a reference to “axis N”.
@@ -1525,18 +1569,15 @@ not per-axis indices.</li>
 <li><strong>Only numeric literals auto-lift to tensors in
 <code>%op</code>.</strong> A <code>let</code>-bound float needs explicit
 embedding: <code>r *. !.step</code>, not <code>r *. step</code>.</li>
-<li><strong>Inline-declaration initializers resolve at the unit
-parameter.</strong> In
-<code>let%op f x = ... { w = kaiming normal1 () } ...</code>, the lifted
-binding for <code>w</code> lands at the enclosing unit parameter
-<code>()</code>; with no unit parameter in scope the binding lands
-outside any <code>open TDSL.O</code> and identifiers like
-<code>normal1</code> fail with “Unbound value”. Write
-<code>let%op mk_f () x = ...</code> and apply <code>mk_f ()</code>. A
-labeled argument inside the initializer
-(<code>kaiming ~scale_sq:2.0 normal1 ()</code>) breaks the lifting the
-same way — bind a specialized helper outside <code>%op</code>
-instead.</li>
+<li><strong>Inline declarations without a unit parameter are
+shared.</strong> In
+<code>let%op f x = ... { w = kaiming normal1 () } ...</code>,
+<code>w</code> is created once when <code>f</code> is defined and shared
+by every application of <code>f</code>. To create a fresh parameter for
+each model instance, make the construction point explicit with
+<code>let%op mk_f () x = ...</code> and apply <code>mk_f ()</code> once
+per instance. Initializers may use labeled arguments, for example
+<code>kaiming ~scale_sq:2.0 normal1 ()</code>.</li>
 </ul>
 <h2 id="further-features-of-the-syntax-extension-cd">Further features of
 the syntax extension %cd</h2>
