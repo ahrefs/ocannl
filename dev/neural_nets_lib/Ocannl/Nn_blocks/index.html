@@ -79,13 +79,14 @@
   <span><span class="label">freqs</span>:<a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">positions</span>:<a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Apply RoPE rotation to tensor <code>x</code> whose last output axis has even size <code>d</code>. Rotates within the last output axis (per-head width <code>d</code>) without crossing head boundaries. <code>freqs</code> has output=<code>d/2</code>, <code>positions</code> has batch=<code>seq_len</code>.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-multi_head_attention"><a href="#val-multi_head_attention" class="anchor"></a><code><span><span class="keyword">val</span> multi_head_attention : 
+  <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Apply RoPE rotation to tensor <code>x</code> whose last output axis has even size <code>d</code>. Rotates within the last output axis (per-head width <code>d</code>) without crossing head boundaries. <code>freqs</code> has output=<code>d/2</code>, <code>positions</code> has batch=<code>seq_len</code>.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-default_mask_fill"><a href="#val-default_mask_fill" class="anchor"></a><code><span><span class="keyword">val</span> default_mask_fill : <span class="xref-unresolved">Base</span>.Float.t</span></code></div><div class="spec-doc"><p>The score a masked-out attention position is filled with before the softmax: <code>Float.neg_infinity</code>, so that <code>exp (fill - max)</code> is exactly zero.</p><p>This is deliberately not a large finite magic number. A finite sentinel has to be chosen against a storage precision — the long-standing <code>-1e9</code> is four orders of magnitude past fp16's largest finite value, so it tripped <code>Ops.exceeds_fp16_cutoff</code> and made every masked attention unlowerable at half precision. Negative infinity is exactly representable in every float format OCANNL supports, and says what is meant: this position is below anything the format can hold.</p><p>The one behavior a finite fill bought is that a <em>fully</em> masked row (no live position at all) degrades to a uniform distribution rather than to NaN — with an all-<code>-inf</code> row the softmax's max-subtraction yields <code>-inf - -inf = nan</code>. Causal masks always leave the diagonal live and are unaffected; a padding mask that can mask a whole row should pass a finite <code>?mask_fill</code> (e.g. <code>-1e4</code>, which still underflows <code>exp</code> to zero at every precision).</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-multi_head_attention"><a href="#val-multi_head_attention" class="anchor"></a><code><span><span class="keyword">val</span> multi_head_attention : 
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_k</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_v</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?temperature</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?dropout_rate</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?mask_fill</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?pos_embed</span>:<a href="#type-position_embedding">position_embedding</a> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><a href="../../../arrayjit/Ir/Indexing/index.html#type-static_symbol">Ir.Indexing.static_symbol</a> option</span> <span class="arrow">&#45;&gt;</span></span>
@@ -121,6 +122,7 @@
   <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?dropout_rate</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?mask_fill</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?pos_embed</span>:<a href="#type-position_embedding">position_embedding</a> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><a href="../../../arrayjit/Ir/Indexing/index.html#type-static_symbol">Ir.Indexing.static_symbol</a> option</span> <span class="arrow">&#45;&gt;</span></span>
@@ -135,6 +137,7 @@
   <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?dropout_rate</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?mask_fill</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?pos_embed</span>:<a href="#type-position_embedding">position_embedding</a> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><a href="../../../arrayjit/Ir/Indexing/index.html#type-static_symbol">Ir.Indexing.static_symbol</a> option</span> <span class="arrow">&#45;&gt;</span></span>
@@ -158,6 +161,7 @@
   <span><span class="label">d_v</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?mask_fill</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?pos_embed</span>:<a href="#type-position_embedding">position_embedding</a> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><a href="../../../arrayjit/Ir/Indexing/index.html#type-static_symbol">Ir.Indexing.static_symbol</a> option</span> <span class="arrow">&#45;&gt;</span></span>
@@ -184,6 +188,7 @@
   <span><span class="label">d_v</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?mask_fill</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?pos_embed</span>:<a href="#type-position_embedding">position_embedding</a> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><a href="../../../arrayjit/Ir/Indexing/index.html#type-static_symbol">Ir.Indexing.static_symbol</a> option</span> <span class="arrow">&#45;&gt;</span></span>
@@ -199,6 +204,7 @@
   <span><span class="label">d_dec</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?mask_fill</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?pos_embed</span>:<a href="#type-position_embedding">position_embedding</a> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><a href="../../../arrayjit/Ir/Indexing/index.html#type-static_symbol">Ir.Indexing.static_symbol</a> option</span> <span class="arrow">&#45;&gt;</span></span>
