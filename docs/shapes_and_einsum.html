@@ -1329,7 +1329,7 @@ let%op block = [a; b]
 &lt;p&gt;&lt;span&gt;Need a tensor of ones that matches another tensor's shape?&lt;/span&gt;&lt;/p&gt;
 &lt;pre&gt;&lt;code class=&quot;language-ocaml&quot;&gt;(* Used in pooling to propagate dimensions *)
 let%op avg_pool2d ~window () x =
-  let kernel = 0.5 + 0.5 in  (* Shape-inferred 1s *)
+  let kernel = stretch 1.0 in  (* Shape-inferred 1s *)
   x +* &amp;quot;... | stride*oh+kh, stride*ow+kw, c; 
         kh, kw =&amp;gt; ... | oh, ow, c&amp;quot; kernel
   /. !.(window * window)

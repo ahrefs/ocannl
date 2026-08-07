@@ -1569,6 +1569,17 @@ not per-axis indices.</li>
 <li><strong>Only numeric literals auto-lift to tensors in
 <code>%op</code>.</strong> A <code>let</code>-bound float needs explicit
 embedding: <code>r *. !.step</code>, not <code>r *. step</code>.</li>
+<li><strong>An operation result’s shape closes down to its arguments’;
+<code>stretch</code> opts into use-site resolution</strong>
+(gh-ocannl-544). A use site can broadcast an operation result in, but
+cannot widen it: <code>relu w</code> read by a batched matmul keeps
+<code>w</code>’s shape rather than materializing per-batch copies. When
+a result <em>should</em> acquire axes from its consumer — e.g. a
+shape-inferred constant used as a pooling kernel so projections see the
+window axes — wrap it: <code>stretch 0.0</code> (the pre-544 idiom for
+this was <code>0.5 + 0.5</code>, which relied on implicit use-site
+widening). Leaf tensors, parameters, and parameter-initialization
+expressions resolve at their use sites automatically.</li>
 <li><strong>Inline declarations without a unit parameter are
 shared.</strong> In
 <code>let%op f x = ... { w = kaiming normal1 () } ...</code>,

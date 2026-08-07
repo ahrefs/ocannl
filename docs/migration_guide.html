@@ -240,7 +240,7 @@ info between phases.</p>
 <tr>
 <td><code>F.max_pool2d(x, kernel_size=k)</code></td>
 <td><code>max_pool2d ~window_size:k () x</code></td>
-<td>Uses <code>(0.5 + 0.5)</code> trick internally</td>
+<td>Uses the <code>stretch</code> wrapper internally</td>
 </tr>
 <tr>
 <td><code>F.avg_pool2d(x, kernel_size=k)</code></td>
@@ -365,7 +365,7 @@ Tensors)</h3>
 <tbody>
 <tr>
 <td><code>torch.ones_like(x)</code></td>
-<td><code>0.5 + 0.5</code></td>
+<td><code>stretch 1.0</code></td>
 <td>Shape-inferred constant 1</td>
 </tr>
 <tr>
@@ -521,7 +521,7 @@ Constants</h3>
 <div class="sourceCode" id="cb8"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>{ kernel = <span class="dv">1</span>. }  <span class="co">(* Creates learnable parameter *)</span></span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="fl">1.0</span>             <span class="co">(* Creates fixed scalar shape *)</span></span></code></pre></div>
 <p>✅ <strong>Right:</strong></p>
-<div class="sourceCode" id="cb9"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="fl">0.5</span> + <span class="fl">0.5</span>       <span class="co">(* Both are shape-inferred constant 1 *)</span></span>
+<div class="sourceCode" id="cb9"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>stretch <span class="fl">1.0</span>     <span class="co">(* Shape-inferred constant 1: resolves at the use site *)</span></span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>NTDSL.term ~fetch_op:(Constant <span class="dv">1</span>.) ()</span></code></pre></div>
 <h3 id="parameter-scoping">Parameter Scoping</h3>
 <p>❌ <strong>Wrong:</strong></p>
@@ -972,7 +972,7 @@ scope</li>
 </ul>
 <h3 id="performance">Performance</h3>
 <ul>
-<li>Virtual tensors (like <code>0.5 + 0.5</code>) are inlined during
+<li>Virtual tensors (like <code>stretch 1.0</code>) are inlined during
 optimization</li>
 <li>Row variables allow operations to work on grouped/multi-channel
 data</li>
