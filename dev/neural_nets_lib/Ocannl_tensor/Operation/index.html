@@ -1,22 +1,22 @@
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml"><head><title>Operation (neural_nets_lib.Ocannl_tensor.Operation)</title><meta charset="utf-8"/><link rel="stylesheet" href="../../../odoc.support/odoc.css"/><meta name="generator" content="odoc 3.2.1"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><script src="../../../odoc.support/highlight.pack.js"></script><script>hljs.initHighlightingOnLoad();</script></head><body class="odoc"><nav class="odoc-nav"><a href="../index.html">Up</a> – <a href="../../../index.html">Index</a> &#x00BB; <a href="../../index.html">neural_nets_lib</a> &#x00BB; <a href="../index.html">Ocannl_tensor</a> &#x00BB; Operation</nav><header class="odoc-preamble"><h1>Module <code><span>Ocannl_tensor.Operation</span></code></h1><p>Computational primitives for neural networks, integrating <code>Tensor</code> with <code>Assignments</code>.</p></header><div class="odoc-content"><div class="odoc-spec"><div class="spec module anchored" id="module-Asgns"><a href="#module-Asgns" class="anchor"></a><code><span><span class="keyword">module</span> Asgns</span><span> = <a href="../../../arrayjit/Ir/Assignments/index.html">Ir.Assignments</a></span></code></div></div><div class="odoc-spec"><div class="spec module anchored" id="module-Idx"><a href="#module-Idx" class="anchor"></a><code><span><span class="keyword">module</span> Idx</span><span> = <a href="../../../arrayjit/Ir/Indexing/index.html">Ir.Indexing</a></span></code></div></div><div class="odoc-spec"><div class="spec module anchored" id="module-Tn"><a href="#module-Tn" class="anchor"></a><code><span><span class="keyword">module</span> Tn</span><span> = <a href="../../../arrayjit/Ir/Tnode/index.html">Ir.Tnode</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-_get_local_debug_runtime"><a href="#val-_get_local_debug_runtime" class="anchor"></a><code><span><span class="keyword">val</span> _get_local_debug_runtime : <span>unit <span class="arrow">&#45;&gt;</span></span> <span>(<span class="keyword">module</span> <span class="xref-unresolved">Minidebug_runtime</span>.Debug_runtime)</span></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-grad"><a href="#val-grad" class="anchor"></a><code><span><span class="keyword">val</span> grad : <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span> <a href="../Tensor/index.html#type-tn">Tensor.tn</a></span></code></div></div><div class="odoc-spec"><div class="spec module anchored" id="module-At"><a href="#module-At" class="anchor"></a><code><span><span class="keyword">module</span> <a href="At/index.html">At</a></span><span> : <span class="keyword">sig</span> ... <span class="keyword">end</span></span></code></div></div><div class="odoc-spec"><div class="spec module anchored" id="module-Initial_NTDSL"><a href="#module-Initial_NTDSL" class="anchor"></a><code><span><span class="keyword">module</span> <a href="Initial_NTDSL/index.html">Initial_NTDSL</a></span><span> : <span class="keyword">sig</span> ... <span class="keyword">end</span></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-compose_op_of_spec"><a href="#val-compose_op_of_spec" class="anchor"></a><code><span><span class="keyword">val</span> compose_op_of_spec : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Shape/index.html#type-compose_type">Shape.compose_type</a></span></code></div><div class="spec-doc"><p>Helper to compute compose_op: if spec is provided, use Einsum; otherwise use Pointwise_bin.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-transpose_op_of_spec"><a href="#val-transpose_op_of_spec" class="anchor"></a><code><span><span class="keyword">val</span> transpose_op_of_spec : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Shape/index.html#type-transpose_type">Shape.transpose_type</a></span></code></div><div class="spec-doc"><p>Helper to compute transpose_op: if spec is provided, use Permute; otherwise use Pointwise_un.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-add"><a href="#val-add" class="anchor"></a><code><span><span class="keyword">val</span> add : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-sub"><a href="#val-sub" class="anchor"></a><code><span><span class="keyword">val</span> sub : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-mul"><a href="#val-mul" class="anchor"></a><code><span><span class="keyword">val</span> mul : 
@@ -27,220 +27,209 @@
       <span><span class="label">t2</span>:<a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
       <span><span class="label">projections</span>:<a href="../Tensor/index.html#type-projections">Tensor.projections</a> <span class="arrow">&#45;&gt;</span></span>
       <a href="../Tensor/index.html#type-comp">Tensor.comp</a>)</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?op_label</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?op_label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-pointmul"><a href="#val-pointmul" class="anchor"></a><code><span><span class="keyword">val</span> pointmul : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-matmul"><a href="#val-matmul" class="anchor"></a><code><span><span class="keyword">val</span> matmul : 
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec module anchored" id="module-NDO_before_pow"><a href="#module-NDO_before_pow" class="anchor"></a><code><span><span class="keyword">module</span> <a href="NDO_before_pow/index.html">NDO_before_pow</a></span><span> : <span class="keyword">sig</span> ... <span class="keyword">end</span></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-is_prohibit_grad"><a href="#val-is_prohibit_grad" class="anchor"></a><code><span><span class="keyword">val</span> is_prohibit_grad : <span><span><a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> option</span> <span class="arrow">&#45;&gt;</span></span> bool</span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-pointpow"><a href="#val-pointpow" class="anchor"></a><code><span><span class="keyword">val</span> pointpow : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-matmul"><a href="#val-matmul" class="anchor"></a><code><span><span class="keyword">val</span> matmul : <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span> <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span> <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span> <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec module anchored" id="module-NDO_before_pow"><a href="#module-NDO_before_pow" class="anchor"></a><code><span><span class="keyword">module</span> <a href="NDO_before_pow/index.html">NDO_before_pow</a></span><span> : <span class="keyword">sig</span> ... <span class="keyword">end</span></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-is_prohibit_grad"><a href="#val-is_prohibit_grad" class="anchor"></a><code><span><span class="keyword">val</span> is_prohibit_grad : <span><span><a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> option</span> <span class="arrow">&#45;&gt;</span></span> bool</span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-pointpow"><a href="#val-pointpow" class="anchor"></a><code><span><span class="keyword">val</span> pointpow : 
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec module anchored" id="module-NDO_before_div"><a href="#module-NDO_before_div" class="anchor"></a><code><span><span class="keyword">module</span> <a href="NDO_before_div/index.html">NDO_before_div</a></span><span> : <span class="keyword">sig</span> ... <span class="keyword">end</span></span></code></div></div><div class="odoc-spec"><div class="spec module anchored" id="module-NTDSL_before_div"><a href="#module-NTDSL_before_div" class="anchor"></a><code><span><span class="keyword">module</span> <a href="NTDSL_before_div/index.html">NTDSL_before_div</a></span><span> : <span class="keyword">sig</span> ... <span class="keyword">end</span></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-pointdiv"><a href="#val-pointdiv" class="anchor"></a><code><span><span class="keyword">val</span> pointdiv : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-relu"><a href="#val-relu" class="anchor"></a><code><span><span class="keyword">val</span> relu : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-sat01"><a href="#val-sat01" class="anchor"></a><code><span><span class="keyword">val</span> sat01 : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-exp"><a href="#val-exp" class="anchor"></a><code><span><span class="keyword">val</span> exp : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-log"><a href="#val-log" class="anchor"></a><code><span><span class="keyword">val</span> log : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-log_2"><a href="#val-log_2" class="anchor"></a><code><span><span class="keyword">val</span> log_2 : <span class="xref-unresolved">Base</span>.Float.t</span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-exp2"><a href="#val-exp2" class="anchor"></a><code><span><span class="keyword">val</span> exp2 : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-log2"><a href="#val-log2" class="anchor"></a><code><span><span class="keyword">val</span> log2 : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-sin"><a href="#val-sin" class="anchor"></a><code><span><span class="keyword">val</span> sin : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-cos"><a href="#val-cos" class="anchor"></a><code><span><span class="keyword">val</span> cos : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-sqrt"><a href="#val-sqrt" class="anchor"></a><code><span><span class="keyword">val</span> sqrt : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-recip"><a href="#val-recip" class="anchor"></a><code><span><span class="keyword">val</span> recip : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-recip_sqrt"><a href="#val-recip_sqrt" class="anchor"></a><code><span><span class="keyword">val</span> recip_sqrt : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-tanh"><a href="#val-tanh" class="anchor"></a><code><span><span class="keyword">val</span> tanh : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-neg"><a href="#val-neg" class="anchor"></a><code><span><span class="keyword">val</span> neg : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-cast"><a href="#val-cast" class="anchor"></a><code><span><span class="keyword">val</span> cast : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div><div class="spec-doc"><p>An identity operation whose sole purpose is to give the result a tensor node distinct from the argument's: the assignment-level precision conversion then happens between the two nodes when their precisions differ. This is the &quot;cast twin&quot; primitive of the mixed-precision recipes (gh-ocannl-492): pin the result at a reduced precision to make it a low-precision copy of an f32 master weight; the gradient accumulates back through the cast, widening (e.g. f16 -&gt; f32) at the accumulating assignment.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-stretch"><a href="#val-stretch" class="anchor"></a><code><span><span class="keyword">val</span> stretch : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?top_down_prec</span>:<span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?deduced</span>:<a href="../Shape/index.html#type-deduce_within_shape">Shape.deduce_within_shape</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?top_down_prec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?deduced</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div><div class="spec-doc"><p>An identity operation whose result's rows resolve at the use site (gh-ocannl-544): the result widens to what its consumers demand, and the argument broadcasts into it. Operation results otherwise close down to their arguments' shapes, so this is the explicit request for use-site widening — e.g. <code>stretch !.1.0</code> is a shape-inferred constant 1 usable as an einsum operand of any shape (formerly spelled <code>0.5 + 0.5</code>).</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-not"><a href="#val-not" class="anchor"></a><code><span><span class="keyword">val</span> not : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-uint4x32_to_prec_uniform"><a href="#val-uint4x32_to_prec_uniform" class="anchor"></a><code><span><span class="keyword">val</span> uint4x32_to_prec_uniform : 
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?top_down_prec</span>:<span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?deduced</span>:<a href="../Shape/index.html#type-deduce_within_shape">Shape.deduce_within_shape</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?top_down_prec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?deduced</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-uint4x32_to_prec_uniform1"><a href="#val-uint4x32_to_prec_uniform1" class="anchor"></a><code><span><span class="keyword">val</span> uint4x32_to_prec_uniform1 : 
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?top_down_prec</span>:<span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?deduced</span>:<a href="../Shape/index.html#type-deduce_within_shape">Shape.deduce_within_shape</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?top_down_prec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?deduced</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-lt"><a href="#val-lt" class="anchor"></a><code><span><span class="keyword">val</span> lt : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-le"><a href="#val-le" class="anchor"></a><code><span><span class="keyword">val</span> le : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-eq"><a href="#val-eq" class="anchor"></a><code><span><span class="keyword">val</span> eq : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-ne"><a href="#val-ne" class="anchor"></a><code><span><span class="keyword">val</span> ne : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-interleave"><a href="#val-interleave" class="anchor"></a><code><span><span class="keyword">val</span> interleave : 
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-interleave"><a href="#val-interleave" class="anchor"></a><code><span><span class="keyword">val</span> interleave : <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span> <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span> <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span> <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-deinterleave_even"><a href="#val-deinterleave_even" class="anchor"></a><code><span><span class="keyword">val</span> deinterleave_even : <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span> <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span> <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-deinterleave_odd"><a href="#val-deinterleave_odd" class="anchor"></a><code><span><span class="keyword">val</span> deinterleave_odd : <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span> <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span> <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-threefry4x32_crypto"><a href="#val-threefry4x32_crypto" class="anchor"></a><code><span><span class="keyword">val</span> threefry4x32_crypto : 
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-deinterleave_even"><a href="#val-deinterleave_even" class="anchor"></a><code><span><span class="keyword">val</span> deinterleave_even : 
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-deinterleave_odd"><a href="#val-deinterleave_odd" class="anchor"></a><code><span><span class="keyword">val</span> deinterleave_odd : <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span> <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span> <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-threefry4x32_crypto"><a href="#val-threefry4x32_crypto" class="anchor"></a><code><span><span class="keyword">val</span> threefry4x32_crypto : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?deduced</span>:<a href="../Shape/index.html#type-deduce_within_shape">Shape.deduce_within_shape</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?deduced</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-threefry4x32_light"><a href="#val-threefry4x32_light" class="anchor"></a><code><span><span class="keyword">val</span> threefry4x32_light : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?deduced</span>:<a href="../Shape/index.html#type-deduce_within_shape">Shape.deduce_within_shape</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?deduced</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-threefry4x32"><a href="#val-threefry4x32" class="anchor"></a><code><span><span class="keyword">val</span> threefry4x32 : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?deduced</span>:<a href="../Shape/index.html#type-deduce_within_shape">Shape.deduce_within_shape</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?deduced</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-pin_counter_spec"><a href="#val-pin_counter_spec" class="anchor"></a><code><span><span class="keyword">val</span> pin_counter_spec : string</span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-fma"><a href="#val-fma" class="anchor"></a><code><span><span class="keyword">val</span> fma : 
   <span><span class="label">grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
@@ -248,270 +237,258 @@
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-where"><a href="#val-where" class="anchor"></a><code><span><span class="keyword">val</span> where : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div><div class="spec-doc"><p>Ternary select: computes <code>where(pred, a, b)</code> element-wise. When <code>~spec</code> is given it routes through ternary einsum: over the product space of all spec labels, at each point the predicate element selects the branch-2 or branch-3 element (select happens *before* accumulation). Labels absent from the LHS become reduction axes.</p><p>Gradient: flows to <code>a</code> masked by the predicate and to <code>b</code> masked by its complement; no gradient to the predicate.</p><p>Documented caveat: when a reduced axis is absent from a branch (branch broadcasts along it), the broadcast value is accumulated once per selected reduction iteration (&quot;count-weighted&quot;) — this is the honest semantics of reduce-after-select. For example, with spec <code>&quot;p;a;b=&gt;out&quot;</code> and <code>a</code> broadcasting along a reduced axis, <code>a</code>'s scalar value is summed once for each reduction step where the predicate is 1.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-einsum"><a href="#val-einsum" class="anchor"></a><code><span><span class="keyword">val</span> einsum : 
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div><div class="spec-doc"><p>Similar to the explicit mode of <code>numpy.einsum</code>, the binary variant. Can compute various forms of matrix multiplication, inner and outer products, etc.</p><p>Note that <code>&quot;a,b-&gt;c&quot;</code> from <code>numpy</code> is <code>&quot;a;b=&gt;c&quot;</code> in OCANNL, since <code>&quot;-&gt;&quot;</code> is used to separate the input and the output axes.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-outer_sum"><a href="#val-outer_sum" class="anchor"></a><code><span><span class="keyword">val</span> outer_sum : 
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div><div class="spec-doc"><p>Like <code>einsum</code>, but adds instead than multiplying the resulting values.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-einsum3"><a href="#val-einsum3" class="anchor"></a><code><span><span class="keyword">val</span> einsum3 : 
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div><div class="spec-doc"><p>Ternary einsum: contracts three tensors under a three-RHS spec <code>rhs1 ; rhs2 ; rhs3 =&gt; lhs</code>. The forward pass computes <code>v[lhs] =+ mul3(v1[rhs1], v2[rhs2], v3[rhs3])</code> over the product space of all axis labels. Axis labels present in any RHS but absent from the LHS become reduction axes.</p><p>WARNING: for chain-structured contractions such as <code>&quot;ij;jk;km=&gt;im&quot;</code> the fused kernel iterates the full product space (O(N⁴) for N-dimensional operands), which is less efficient than a binary chain (O(N³)). Use ternary einsum for patterns where all three operands share reduction axes, e.g. bilinear forms.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-einsum1"><a href="#val-einsum1" class="anchor"></a><code><span><span class="keyword">val</span> einsum1 : 
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div><div class="spec-doc"><p>Similar to the explicit mode of <code>numpy.einsum</code>, the unary variant. Can permute axes, extract diagonals, compute traces etc.</p><p>Note that <code>&quot;a-&gt;c&quot;</code> from <code>numpy</code> is <code>&quot;a=&gt;c&quot;</code> in OCANNL, since <code>&quot;-&gt;&quot;</code> is used to separate the input and the output axes.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-concat_sum"><a href="#val-concat_sum" class="anchor"></a><code><span><span class="keyword">val</span> concat_sum : 
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?negated</span>:bool <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?negated</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="xref-unresolved">Base</span>.Array.t</span> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-concat"><a href="#val-concat" class="anchor"></a><code><span><span class="keyword">val</span> concat : 
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?negated</span>:bool <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?negated</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="xref-unresolved">Base</span>.Array.t</span> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec type anchored" id="type-stack_axis"><a href="#type-stack_axis" class="anchor"></a><code><span><span class="keyword">type</span> stack_axis</span><span> = </span><span>[ </span></code><ol><li id="type-stack_axis.Output" class="def variant constructor anchored"><a href="#type-stack_axis.Output" class="anchor"></a><code><span>| </span><span>`Output</span></code></li><li id="type-stack_axis.Batch" class="def variant constructor anchored"><a href="#type-stack_axis.Batch" class="anchor"></a><code><span>| </span><span>`Batch</span></code></li><li id="type-stack_axis.Input" class="def variant constructor anchored"><a href="#type-stack_axis.Input" class="anchor"></a><code><span>| </span><span>`Input</span></code></li></ol><code><span> ]</span></code></div><div class="spec-doc"><p>The axis kind along which <a href="#val-stack"><code>stack</code></a> introduces the fresh leading axis.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-stack"><a href="#val-stack" class="anchor"></a><code><span><span class="keyword">val</span> stack : 
   <span><a href="#type-stack_axis">stack_axis</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="xref-unresolved">Base</span>.Array.t</span> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div><div class="spec-doc"><p>Stack <code>rhses</code> along a fresh leading axis of kind <code>axis</code> (result rank = operand rank + 1, true stacking rather than concatenation along an existing axis). Each operand is unsqueezed with a size-1 axis via <a href="#val-einsum1"><code>einsum1</code></a>, then the unsqueezed intermediates are concatenated along that new axis via <a href="#val-concat"><code>concat</code></a>. The expansion and concatenation einsum specs are generated on the fly from the operand count.</p></div></div><div class="odoc-spec"><div class="spec module anchored" id="module-NDO_before_einmax1"><a href="#module-NDO_before_einmax1" class="anchor"></a><code><span><span class="keyword">module</span> <a href="NDO_before_einmax1/index.html">NDO_before_einmax1</a></span><span> : <span class="keyword">sig</span> ... <span class="keyword">end</span></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-einmax1"><a href="#val-einmax1" class="anchor"></a><code><span><span class="keyword">val</span> einmax1 : 
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?nonoverlapping</span>:bool <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?nonoverlapping</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div><div class="spec-doc"><p>Max-reduction einsum. The gradient gate lives in the product space of the operation — one bit per (result position, reduced position) pair — so it is exact even when reduction windows overlap (e.g. convolution-style specs with stride &lt; window). Ties gate the full upstream gradient to every achieving position (duplication, not a normalized split).</p><p><code>nonoverlapping</code> (gh-ocannl-527): the caller asserts that each RHS1 position feeds at most one result position — per convolution axis, stride at least the window extent (a full reduction trivially qualifies). On that domain the gate contracts to one bit per <em>input</em> position (<code>cond_rhs1</code>, the pre-gh-512 formulation): every input position belongs to at most one window, so no gate-bit collisions exist and the two formulations agree exactly, ties included — this is a cost specialization, not a semantics choice. The product-space intermediates it avoids cost 1.8-2.6x on the non-overlapping conv-pooling benchmarks. Outside the asserted domain the cheap gate is last-write-wins across colliding windows, i.e. wrong — the flag is a contract, not a heuristic; when in doubt keep the default.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-tropical"><a href="#val-tropical" class="anchor"></a><code><span><span class="keyword">val</span> tropical : 
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?nonoverlapping</span>:bool <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?nonoverlapping</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div><div class="spec-doc"><p>This generalizes the tropical matrix multiplication to arbitrary indices combinations.</p><p>The gradient gate lives in the product space of the operation — one bit per (result position, contracted position) pair — so both gradients are exact for arbitrary specs, including overlapping reduction windows (stride &lt; window) and RHS2 indices independent of RHS1. Ties gate the full upstream gradient to every achieving pair (duplication, not a normalized split).</p><p><code>nonoverlapping</code> (gh-ocannl-527): the caller asserts the <a href="#val-einmax1"><code>einmax1</code></a> domain condition — each RHS1 position feeds at most one result position — <em>and</em> additionally that the (result, contracted) pair is recoverable from the RHS1 position (RHS1's index space covers RHS2's, the convolution-like shape: kernel indices contracted against strided input indices; the pre-gh-512 g2 limitation delimits exactly this). On that domain the gate contracts to one bit per input position and both gradients agree with the product-space gate exactly, ties included — a cost specialization, not a semantics choice (1.8-2.6x on the non-overlapping conv-pooling benchmarks). Outside it the cheap gate is wrong (last-write-wins collisions, misattributed g2); when in doubt keep the default.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-offsets"><a href="#val-offsets" class="anchor"></a><code><span><span class="keyword">val</span> offsets : <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span> <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div><div class="spec-doc"><p>A fully-shape-inferred tensor that is initialized with the offset of each cell.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-range"><a href="#val-range" class="anchor"></a><code><span><span class="keyword">val</span> range : 
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?axis_basis</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
+  <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div><div class="spec-doc"><p>This generalizes the tropical matrix multiplication to arbitrary indices combinations.</p><p>The gradient gate lives in the product space of the operation — one bit per (result position, contracted position) pair — so both gradients are exact for arbitrary specs, including overlapping reduction windows (stride &lt; window) and RHS2 indices independent of RHS1. Ties gate the full upstream gradient to every achieving pair (duplication, not a normalized split).</p><p><code>nonoverlapping</code> (gh-ocannl-527): the caller asserts the <a href="#val-einmax1"><code>einmax1</code></a> domain condition — each RHS1 position feeds at most one result position — <em>and</em> additionally that the (result, contracted) pair is recoverable from the RHS1 position (RHS1's index space covers RHS2's, the convolution-like shape: kernel indices contracted against strided input indices; the pre-gh-512 g2 limitation delimits exactly this). On that domain the gate contracts to one bit per input position and both gradients agree with the product-space gate exactly, ties included — a cost specialization, not a semantics choice (1.8-2.6x on the non-overlapping conv-pooling benchmarks). Outside it the cheap gate is wrong (last-write-wins collisions, misattributed g2); when in doubt keep the default.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-offsets"><a href="#val-offsets" class="anchor"></a><code><span><span class="keyword">val</span> offsets : <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span> <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div><div class="spec-doc"><p>A fully-shape-inferred tensor that is initialized with the offset of each cell.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-range"><a href="#val-range" class="anchor"></a><code><span><span class="keyword">val</span> range : 
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?axis_basis</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="xref-unresolved">Base__Int</span>.t <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div><div class="spec-doc"><p><code>range</code> is a 1D tensor of shape <code>upto</code>, spans <code>0</code> inclusive, <code>upto</code> exclusive.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-range_of_shape"><a href="#val-range_of_shape" class="anchor"></a><code><span><span class="keyword">val</span> range_of_shape : 
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_dims</span>:<span><span class="xref-unresolved">Base</span>.Int.t <span class="xref-unresolved">Base</span>.List.t</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_dims</span>:<span><span class="xref-unresolved">Base</span>.Int.t <span class="xref-unresolved">Base</span>.List.t</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_dims</span>:<span><span class="xref-unresolved">Base</span>.Int.t <span class="xref-unresolved">Base</span>.List.t</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.Int.t)</span> <span class="xref-unresolved">Base</span>.List.t</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.Int.t)</span> <span class="xref-unresolved">Base</span>.List.t</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.Int.t)</span> <span class="xref-unresolved">Base</span>.List.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
-  <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-stop_gradient"><a href="#val-stop_gradient" class="anchor"></a><code><span><span class="keyword">val</span> stop_gradient : 
-  <span><span class="optlabel">?spec</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?capture_dims</span>:<span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div><div class="spec-doc"><p>A <code>stop_gradient</code> is an identity in the forward pass and a no-op in the backprop pass.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-slice"><a href="#val-slice" class="anchor"></a><code><span><span class="keyword">val</span> slice : 
-  <span><a href="../../../arrayjit/Ir/Indexing/index.html#type-static_symbol">Idx.static_symbol</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-embed_symbol"><a href="#val-embed_symbol" class="anchor"></a><code><span><span class="keyword">val</span> embed_symbol : 
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
+  <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-stop_gradient"><a href="#val-stop_gradient" class="anchor"></a><code><span><span class="keyword">val</span> stop_gradient : <span><span class="optlabel">?spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span> <span><span class="optlabel">?capture_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span> <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span> <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div><div class="spec-doc"><p>A <code>stop_gradient</code> is an identity in the forward pass and a no-op in the backprop pass.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-slice"><a href="#val-slice" class="anchor"></a><code><span><span class="keyword">val</span> slice : <span><a href="../../../arrayjit/Ir/Indexing/index.html#type-static_symbol">Idx.static_symbol</a> <span class="arrow">&#45;&gt;</span></span> <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span> <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span> <a href="../Tensor/index.html#type-op_fun">Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-embed_symbol"><a href="#val-embed_symbol" class="anchor"></a><code><span><span class="keyword">val</span> embed_symbol : 
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../../arrayjit/Ir/Indexing/index.html#type-static_symbol">Ir.Indexing.static_symbol</a> <span class="arrow">&#45;&gt;</span></span>
-  <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-embed_self_id"><a href="#val-embed_self_id" class="anchor"></a><code><span><span class="keyword">val</span> embed_self_id : 
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span>unit <span class="arrow">&#45;&gt;</span></span>
-  <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-embed_dim"><a href="#val-embed_dim" class="anchor"></a><code><span><span class="keyword">val</span> embed_dim : 
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
+  <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-embed_self_id"><a href="#val-embed_self_id" class="anchor"></a><code><span><span class="keyword">val</span> embed_self_id : <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span> <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span> <span>unit <span class="arrow">&#45;&gt;</span></span> <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-embed_dim"><a href="#val-embed_dim" class="anchor"></a><code><span><span class="keyword">val</span> embed_dim : 
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Shape/index.html#type-delayed_var_ref">Shape.delayed_var_ref</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-uniform"><a href="#val-uniform" class="anchor"></a><code><span><span class="keyword">val</span> uniform : 
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?top_down_prec</span>:<span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?deduced</span>:<a href="../Shape/index.html#type-deduce_within_shape">Shape.deduce_within_shape</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?top_down_prec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?deduced</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-uniform_at"><a href="#val-uniform_at" class="anchor"></a><code><span><span class="keyword">val</span> uniform_at : 
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?top_down_prec</span>:<span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?deduced</span>:<a href="../Shape/index.html#type-deduce_within_shape">Shape.deduce_within_shape</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?top_down_prec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?deduced</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div><div class="spec-doc"><p>Generates a single uniform random number using a counter symbol for PRNG state. This is useful for sequential sampling in recurrent contexts.</p><p>Note: unlike <a href="#val-uniform"><code>uniform</code></a>, this stays pointwise (no <code>pin_counter_spec</code>): the user counter's shape must propagate to the result through the key operand, so the key slot cannot be reduced away. Entropy across draws comes from the user counter; within one draw, <code>range_over_offsets</code> may close smaller than the result and repeat values along broadcast axes.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-uniform1"><a href="#val-uniform1" class="anchor"></a><code><span><span class="keyword">val</span> uniform1 : 
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?top_down_prec</span>:<span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?deduced</span>:<a href="../Shape/index.html#type-deduce_within_shape">Shape.deduce_within_shape</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?top_down_prec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?deduced</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div><div class="spec-doc"><p>DEPRECATED (gh-ocannl-509): a wasteful variant of <a href="#val-uniform"><code>uniform</code></a> that produces a single value from each 4x32 random bits. The packed <a href="#val-uniform"><code>uniform</code></a> is now total over shapes (round-up counter inference, tail-peeled lowering) and virtualizes via lane extraction, so this shape-safety fallback is no longer needed; it remains as the IR-internal substrate and for reproducing pre-0.9 random streams. The bit-spreading in int32_to_uint4x32/uint32_to_uint4x32 ensures good entropy even with the 2-round &quot;light&quot; threefry variant.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-centered_uniform_param_init"><a href="#val-centered_uniform_param_init" class="anchor"></a><code><span><span class="keyword">val</span> centered_uniform_param_init : 
-  <span><span class="optlabel">?scale</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?scale</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?top_down_prec</span>:<span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?deduced</span>:<a href="../Shape/index.html#type-deduce_within_shape">Shape.deduce_within_shape</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?top_down_prec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?deduced</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div><div class="spec-doc"><p>A centered uniform distribution over <code>[-scale/2, scale/2)] built from the packed {!uniform}. With the default [scale = 0.5] this is the default parameter initialization (see {!Make_DSL.default_param_init}). </code></p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-default_uniform_param_init"><a href="#val-default_uniform_param_init" class="anchor"></a><code><span><span class="keyword">val</span> default_uniform_param_init : 
   <span>unit <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?top_down_prec</span>:<span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?deduced</span>:<a href="../Shape/index.html#type-deduce_within_shape">Shape.deduce_within_shape</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?top_down_prec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?deduced</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-centered_uniform1_param_init"><a href="#val-centered_uniform1_param_init" class="anchor"></a><code><span><span class="keyword">val</span> centered_uniform1_param_init : 
-  <span><span class="optlabel">?scale</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?scale</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?top_down_prec</span>:<span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?deduced</span>:<a href="../Shape/index.html#type-deduce_within_shape">Shape.deduce_within_shape</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?top_down_prec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?deduced</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div><div class="spec-doc"><p>DEPRECATED (gh-ocannl-509): use <a href="#val-centered_uniform_param_init"><code>centered_uniform_param_init</code></a>. Kept for reproducing pre-0.9 random streams.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-default_uniform1_param_init"><a href="#val-default_uniform1_param_init" class="anchor"></a><code><span><span class="keyword">val</span> default_uniform1_param_init : 
   <span>unit <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?top_down_prec</span>:<span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?deduced</span>:<a href="../Shape/index.html#type-deduce_within_shape">Shape.deduce_within_shape</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?top_down_prec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?deduced</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div><div class="spec-doc"><p>DEPRECATED (gh-ocannl-509): use <a href="#val-default_uniform_param_init"><code>default_uniform_param_init</code></a>.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-uniform_at1"><a href="#val-uniform_at1" class="anchor"></a><code><span><span class="keyword">val</span> uniform_at1 : 
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../Tensor/index.html#type-t">Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?top_down_prec</span>:<span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?deduced</span>:<a href="../Shape/index.html#type-deduce_within_shape">Shape.deduce_within_shape</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?top_down_prec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?deduced</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div><div class="spec-doc"><p>A wasteful variant of <a href="#val-uniform_at"><code>uniform_at</code></a> that produces a single value from each 4x32 random bits. The bit-spreading in int32_to_uint4x32/uint32_to_uint4x32 ensures good entropy even with the 2-round &quot;light&quot; threefry variant.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-reshape"><a href="#val-reshape" class="anchor"></a><code><span><span class="keyword">val</span> reshape : 
   <span><span class="label">l</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?b</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?i</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?o</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?b</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?i</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?o</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../../arrayjit/Ir/Ndarray/index.html#type-t">Ir.Ndarray.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?fetch_op</span>:<a href="../Tensor/index.html#type-fetch_op">Tensor.fetch_op</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?top_down_prec</span>:<span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?deduced</span>:<a href="../Shape/index.html#type-deduce_within_shape">Shape.deduce_within_shape</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?fetch_op</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?top_down_prec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?deduced</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="xref-unresolved">Base</span>.unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div><div class="spec-doc"><p>The input <code>i</code> dimensions default to empty. The batch and output dimensions will be inferred if omitted. Note: the data should have no padding and if padding is inferred, the data will be copied; otherwise, the resulting tensor value shares host memory with the ndarray.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-wrap"><a href="#val-wrap" class="anchor"></a><code><span><span class="keyword">val</span> wrap : 
   <span><span class="label">l</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?prec</span>:<a href="../../../arrayjit/Ir/Ops/index.html#type-prec">Ir.Ops.prec</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?b</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?i</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?o</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?prec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?b</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?i</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?o</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../../arrayjit/Ir/Ndarray/index.html#type-t">Ir.Ndarray.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?fetch_op</span>:<a href="../Tensor/index.html#type-fetch_op">Tensor.fetch_op</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?top_down_prec</span>:<span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?deduced</span>:<a href="../Shape/index.html#type-deduce_within_shape">Shape.deduce_within_shape</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?fetch_op</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?top_down_prec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?deduced</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="xref-unresolved">Base</span>.unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div><div class="spec-doc"><p>The dimensions are taken from the provided ndarray, but the split into axis kinds still needs to be inferred (or provided). Assumes no padding. Input axes are not inferred (empty if omitted). See also: <a href="#val-reshape"><code>reshape</code></a> and <code>TDSL.wrap_param</code>.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-wrap_padded"><a href="#val-wrap_padded" class="anchor"></a><code><span><span class="keyword">val</span> wrap_padded : 
   <span><span class="label">l</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?b</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?i</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?o</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?b</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?i</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?o</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">padding</span>:<span><a href="../../../arrayjit/Ir/Ops/index.html#type-axis_padding">Ir.Ops.axis_padding</a> <span class="xref-unresolved">Base</span>.array</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">padded_value</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../../arrayjit/Ir/Ndarray/index.html#type-t">Ir.Assignments.Nd.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?fetch_op</span>:<a href="../Tensor/index.html#type-fetch_op">Tensor.fetch_op</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?top_down_prec</span>:<span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?deduced</span>:<a href="../Shape/index.html#type-deduce_within_shape">Shape.deduce_within_shape</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?fetch_op</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?top_down_prec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?deduced</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="xref-unresolved">Base</span>.unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div><div class="spec-doc"><p>Assumes the ndarray is padded as given. This means the dimensions of the ndarray will differ from the dimensions of the tensor by the padding. See also: <code>TDSL.wrap</code>.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-rebatch"><a href="#val-rebatch" class="anchor"></a><code><span><span class="keyword">val</span> rebatch : 
   <span><span class="label">l</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../../arrayjit/Ir/Ndarray/index.html#type-t">Ir.Ndarray.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?fetch_op</span>:<a href="../Tensor/index.html#type-fetch_op">Tensor.fetch_op</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?top_down_prec</span>:<span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_dims</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?deduced</span>:<a href="../Shape/index.html#type-deduce_within_shape">Shape.deduce_within_shape</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?fetch_op</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?top_down_prec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_dims</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?deduced</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="xref-unresolved">Base</span>.unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div><div class="spec-doc"><p>The output dimensions are taken from the provided ndarray, assuming precisely the first axis is a batch axis, assumes no input axes and the batch dimensions are inferred. Empty output dimensions are allowed and represent scalars. Assumes the data has no padding, and data is copied if padding is inferred. See also: <a href="#val-reshape"><code>reshape</code></a> and <a href="#val-wrap"><code>wrap</code></a>.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-init"><a href="#val-init" class="anchor"></a><code><span><span class="keyword">val</span> init : 
   <span><span class="label">l</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">prec</span>:<a href="../../../arrayjit/Ir/Ops/index.html#type-prec">Ir.Ops.prec</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?b</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base__List</span>.t</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?i</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base__List</span>.t</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?o</span>:<span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base__List</span>.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?b</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?i</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?o</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">f</span>:<span>(<span><span><span class="xref-unresolved">Base</span>.int <span class="xref-unresolved">Base</span>.array</span> <span class="arrow">&#45;&gt;</span></span> <span class="xref-unresolved">Base</span>.float)</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?fetch_op</span>:<a href="../Tensor/index.html#type-fetch_op">Tensor.fetch_op</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?grad_spec</span>:<a href="../Tensor/index.html#type-grad_spec">Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?top_down_prec</span>:<span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?batch_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?input_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?output_axes</span>:<span><span>(<span class="xref-unresolved">Base</span>.string * <span class="xref-unresolved">Base</span>.int)</span> <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?deduced</span>:<a href="../Shape/index.html#type-deduce_within_shape">Shape.deduce_within_shape</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?fetch_op</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?grad_spec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?top_down_prec</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?batch_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?input_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?output_axes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?deduced</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="xref-unresolved">Base</span>.unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../Tensor/index.html#type-t">Tensor.t</a></span></code></div><div class="spec-doc"><p>Creates a tensor by initializing values using a function from indices to values. The dimensions are split into axis kinds as specified, there is no shape inference. Recall that input axes are rightmost.</p></div></div><div class="odoc-spec"><div class="spec module anchored" id="module-Make_DSL"><a href="#module-Make_DSL" class="anchor"></a><code><span><span class="keyword">module</span> <a href="Make_DSL/index.html">Make_DSL</a></span><span> (<a href="Make_DSL/argument-1-Grad_spec/index.html">Grad_spec</a> : <span class="keyword">sig</span> ... <span class="keyword">end</span>) : <span class="keyword">sig</span> ... <span class="keyword">end</span></span></code></div></div><div class="odoc-spec"><div class="spec module anchored" id="module-DSL_modules"><a href="#module-DSL_modules" class="anchor"></a><code><span><span class="keyword">module</span> <a href="DSL_modules/index.html">DSL_modules</a></span><span> : <span class="keyword">sig</span> ... <span class="keyword">end</span></span></code></div></div></div></body></html>

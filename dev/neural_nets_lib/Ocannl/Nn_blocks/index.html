@@ -4,12 +4,12 @@
   <span><span>(<span>unit <span class="arrow">&#45;&gt;</span></span> <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a>)</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-op_fun">Ocannl_tensor.Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-kaiming_impl"><a href="#val-kaiming_impl" class="anchor"></a><code><span><span class="keyword">val</span> kaiming_impl : 
-  <span><span class="optlabel">?scale_sq</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?scale_sq</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-grad_spec">Ocannl_tensor.Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
   <span><span>(<span>unit <span class="arrow">&#45;&gt;</span></span> <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a>)</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-op_fun">Ocannl_tensor.Tensor.op_fun</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-xavier_impl"><a href="#val-xavier_impl" class="anchor"></a><code><span><span class="keyword">val</span> xavier_impl : 
-  <span><span class="optlabel">?scale_sq</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?scale_sq</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-grad_spec">Ocannl_tensor.Tensor.grad_spec</a> <span class="arrow">&#45;&gt;</span></span>
   <span><span>(<span>unit <span class="arrow">&#45;&gt;</span></span> <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a>)</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
@@ -19,7 +19,7 @@
   <span><span>int array</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
   unit</span></code></div><div class="spec-doc"><p>Convert a list of integers to a compact tensor of class IDs (no <code>num_classes</code> allocation).</p><ul class="at-tags"><li class="parameter"><span class="at-tag">parameter</span> <span class="value">lst</span> <p>List of integer class indices (0-based)</p></li></ul><ul class="at-tags"><li class="returns"><span class="at-tag">returns</span> <p>A tensor of shape <code>len</code> (a <code>len</code>-sized batch axis) holding the IDs in uint32 precision, so that the gh-343 embedding gather can guard the dynamic index with native integer comparisons (no double-precision guard, no integrality check).</p></li></ul></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-class_ids_of_int_list"><a href="#val-class_ids_of_int_list" class="anchor"></a><code><span><span class="keyword">val</span> class_ids_of_int_list : 
-  <span><span class="optlabel">?label</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span><span class="xref-unresolved">Base</span>.Int.t list</span> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-one_hot_of_ids"><a href="#val-one_hot_of_ids" class="anchor"></a><code><span><span class="keyword">val</span> one_hot_of_ids : 
   <span><span class="label">num_classes</span>:<span class="xref-unresolved">Base__Int</span>.t <span class="arrow">&#45;&gt;</span></span>
@@ -31,14 +31,14 @@
   <span><span class="label">num_classes</span>:<span class="xref-unresolved">Base__Int</span>.t <span class="arrow">&#45;&gt;</span></span>
   <span><span>int <span class="xref-unresolved">Base</span>.List.t</span> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Convert a list of integers to a dense, host-materialized one-hot Bigarray-backed tensor of shape <code>len; num_classes</code>. Prefer <a href="#val-one_hot_of_int_list"><code>one_hot_of_int_list</code></a> (logical) unless a dense host fixture is needed; a materialized Bigarray carries no proof that it is one-hot, so it cannot be optimized into an embedding gather.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-token_ids_of_array"><a href="#val-token_ids_of_array" class="anchor"></a><code><span><span class="keyword">val</span> token_ids_of_array : 
-  <span><span class="optlabel">?label</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?max_len</span>:<span class="xref-unresolved">Base__Int</span>.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?pad_id</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?max_len</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?pad_id</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span><span class="xref-unresolved">Base</span>.Int.t <span class="xref-unresolved">Base</span>.Array.t</span> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Convert an array of token IDs (e.g. the output of <code>Dataprep.Bpe.encode</code>) to a tensor of shape <code>len</code> (a <code>len</code>-sized batch axis, output rank 0) holding the IDs in uint32 precision -- large enough for any practical vocabulary (e.g. Gemma's 256K) and integer-native for the gh-343 embedding gather (see <a href="#val-class_ids_of_int_list"><code>class_ids_of_int_list</code></a>). Feed the result to <a href="#val-one_hot_of_ids"><code>one_hot_of_ids</code></a> for an embedding lookup.</p><p>If <code>max_len</code> is given, the sequence is truncated or right-padded with <code>pad_id</code> to exactly <code>max_len</code> (needed for fixed-shape batched inference). Prepending/appending special tokens (BOS/EOS) is the caller's responsibility.</p><ul class="at-tags"><li class="parameter"><span class="at-tag">parameter</span> <span class="value">pad_id</span> <p>The token ID used for padding (default 0)</p></li></ul><ul class="at-tags"><li class="parameter"><span class="at-tag">parameter</span> <span class="value">max_len</span> <p>If given, the result has exactly this length regardless of <code>Array.length ids</code></p></li></ul></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-token_ids_of_batch"><a href="#val-token_ids_of_batch" class="anchor"></a><code><span><span class="keyword">val</span> token_ids_of_batch : 
-  <span><span class="optlabel">?label</span>:<span class="xref-unresolved">Base</span>.string <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?max_len</span>:<span class="xref-unresolved">Base__Int</span>.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?pad_id</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?max_len</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?pad_id</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span><span><span class="xref-unresolved">Base</span>.Int.t <span class="xref-unresolved">Base</span>.Array.t</span> <span class="xref-unresolved">Base</span>.Array.t</span> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Batched variant of <a href="#val-token_ids_of_array"><code>token_ids_of_array</code></a>: convert several token-ID sequences to a single tensor of shape <code>num_seqs; max_len</code> (two batch axes, output rank 0) in uint32 precision. Each sequence is truncated or right-padded with <code>pad_id</code> to <code>max_len</code>, which defaults to the length of the longest sequence. Composes with <a href="#val-one_hot_of_ids"><code>one_hot_of_ids</code></a> the same way as the unbatched variant, giving a <code>num_seqs; max_len; num_classes</code> logical one-hot.</p><ul class="at-tags"><li class="parameter"><span class="at-tag">parameter</span> <span class="value">pad_id</span> <p>The token ID used for padding (default 0)</p></li></ul><ul class="at-tags"><li class="parameter"><span class="at-tag">parameter</span> <span class="value">max_len</span> <p>The common sequence length (default: longest sequence in <code>seqs</code>)</p></li></ul></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-gelu"><a href="#val-gelu" class="anchor"></a><code><span><span class="keyword">val</span> gelu : <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span> <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Gaussian Error Linear Unit, tanh approximation (Hendrycks &amp; Gimpel 2016): <code>0.5 * x * (1 + tanh (sqrt (2/pi) * (x + 0.044715 * x^3)))</code>. This is the GPT-2 activation (HF <code>gelu_new</code>); it uses only existing primitives (notably <code>Tanh_approx</code>), no dedicated backend support needed.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-mlp_layer"><a href="#val-mlp_layer" class="anchor"></a><code><span><span class="keyword">val</span> mlp_layer : 
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
@@ -57,19 +57,19 @@
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Multi-layer perceptron of depth <code>List.length hid_dims + 1</code>, with a linear output layer.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-reduce_specified_axes"><a href="#val-reduce_specified_axes" class="anchor"></a><code><span><span class="keyword">val</span> reduce_specified_axes : <span><span class="xref-unresolved">Base</span>.String.t <span class="arrow">&#45;&gt;</span></span> <span class="xref-unresolved">Base</span>.String.t</span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-softmax"><a href="#val-softmax" class="anchor"></a><code><span><span class="keyword">val</span> softmax : 
   <span><span class="label">spec</span>:<span class="xref-unresolved">Base</span>.String.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?temperature</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?temperature</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Softmax across specified axes. Does not support non-default row variables.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-cross_entropy_loss"><a href="#val-cross_entropy_loss" class="anchor"></a><code><span><span class="keyword">val</span> cross_entropy_loss : 
   <span><span class="label">spec</span>:<span class="xref-unresolved">Base</span>.String.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?mask</span>:<a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?normalize_by</span>:<a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?mask</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?normalize_by</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">logits</span>:<a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">targets</span>:<a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Cross-entropy loss from raw logits, adopting the llm.c <code>fused_classifier</code> contract (issue gh-464): numerically stable log-sum-exp (never <code>log (softmax logits)</code>), written so that the softmax-probabilities intermediate stays virtual — never materialized in either pass — and the backward accumulates <code>probs - targets</code> directly into the logits gradient. The row-wise max is detached via <code>stop_gradient</code>: the max term cancels exactly in the loss, so no gradient should flow through it (llm.c likewise treats it as a constant).</p><p><code>spec</code> follows the <a href="#val-softmax"><code>softmax</code></a> convention: it names the class/vocabulary axes to reduce over (e.g. <code>&quot;... | v&quot;</code>). <code>targets</code> is a probability distribution over those axes (typically one-hot; label smoothing works too). <code>mask</code> multiplies the per-position losses (e.g. 0/1 to exclude padding tokens); <code>normalize_by</code> divides the summed loss (e.g. by a valid-token count). Without <code>mask</code> and <code>normalize_by</code>, returns the summed scalar loss.</p></div></div><h3 id="position-embedding-strategies"><a href="#position-embedding-strategies" class="anchor"></a>Position Embedding Strategies</h3><div class="odoc-spec"><div class="spec type anchored" id="type-position_embedding"><a href="#type-position_embedding" class="anchor"></a><code><span><span class="keyword">type</span> position_embedding</span><span> = </span></code><ol><li id="type-position_embedding.Learned_additive" class="def variant constructor anchored"><a href="#type-position_embedding.Learned_additive" class="anchor"></a><code><span>| </span><span><span class="constructor">Learned_additive</span></span></code><div class="def-doc"><span class="comment-delim">(*</span><p>Current default: learned parameter added to input embeddings.</p><span class="comment-delim">*)</span></div></li><li id="type-position_embedding.Sinusoidal_additive" class="def variant constructor anchored"><a href="#type-position_embedding.Sinusoidal_additive" class="anchor"></a><code><span>| </span><span><span class="constructor">Sinusoidal_additive</span> <span class="keyword">of</span> </span><span>{</span></code><ol><li id="type-position_embedding.enc_encoding" class="def record field anchored"><a href="#type-position_embedding.enc_encoding" class="anchor"></a><code><span>enc_encoding : <a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a>;</span></code></li><li id="type-position_embedding.dec_encoding" class="def record field anchored"><a href="#type-position_embedding.dec_encoding" class="anchor"></a><code><span>dec_encoding : <a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a>;</span></code></li></ol><code><span>}</span></code><div class="def-doc"><span class="comment-delim">(*</span><p>Fixed sinusoidal encoding added to input embeddings. Use separate tensors for encoder and decoder when <code>d_enc &lt;&gt; d_dec</code>. For equal widths, the same tensor can be passed for both. Build with <a href="#val-sinusoidal_position_encoding"><code>sinusoidal_position_encoding</code></a>.</p><span class="comment-delim">*)</span></div></li><li id="type-position_embedding.RoPE" class="def variant constructor anchored"><a href="#type-position_embedding.RoPE" class="anchor"></a><code><span>| </span><span><span class="constructor">RoPE</span> <span class="keyword">of</span> </span><span>{</span></code><ol><li id="type-position_embedding.freqs" class="def record field anchored"><a href="#type-position_embedding.freqs" class="anchor"></a><code><span>freqs : <a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a>;</span></code></li><li id="type-position_embedding.positions" class="def record field anchored"><a href="#type-position_embedding.positions" class="anchor"></a><code><span>positions : <a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a>;</span></code></li></ol><code><span>}</span></code><div class="def-doc"><span class="comment-delim">(*</span><p>Rotary embeddings applied to Q/K inside self-attention. No additive component.</p><span class="comment-delim">*)</span></div></li><li id="type-position_embedding.No_pos_embed" class="def variant constructor anchored"><a href="#type-position_embedding.No_pos_embed" class="anchor"></a><code><span>| </span><span><span class="constructor">No_pos_embed</span></span></code><div class="def-doc"><span class="comment-delim">(*</span><p>No position information.</p><span class="comment-delim">*)</span></div></li></ol></div><div class="spec-doc"><p>Strategy for positional encoding in attention / transformer blocks.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-rope_frequencies"><a href="#val-rope_frequencies" class="anchor"></a><code><span><span class="keyword">val</span> rope_frequencies : 
   <span><span class="label">half_d</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?base</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?base</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>RoPE inverse frequencies: theta_k = base^(-2k/d) for k = 0..half_d-1.</p><ul class="at-tags"><li class="parameter"><span class="at-tag">parameter</span> <span class="value">half_d</span> <p>Per-head key dimension divided by 2 (i.e. d_k / 2, NOT d_model / 2).</p></li></ul><ul class="at-tags"><li class="parameter"><span class="at-tag">parameter</span> <span class="value">base</span> <p>Default 10000.0; some models use 500000 for long contexts.</p></li></ul></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-position_indices"><a href="#val-position_indices" class="anchor"></a><code><span><span class="keyword">val</span> position_indices : <span><span class="label">seq_len</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span> <span>unit <span class="arrow">&#45;&gt;</span></span> <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Position indices <code>0, 1, ..., seq_len-1</code> as a non-learned batch-dim tensor.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-sinusoidal_position_encoding"><a href="#val-sinusoidal_position_encoding" class="anchor"></a><code><span><span class="keyword">val</span> sinusoidal_position_encoding : 
   <span><span class="label">d_model</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
@@ -84,13 +84,13 @@
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_k</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_v</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?temperature</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?dropout_rate</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?mask_fill</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?pos_embed</span>:<a href="#type-position_embedding">position_embedding</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?temperature</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?dropout_rate</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?mask_fill</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?pos_embed</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><a href="../../../arrayjit/Ir/Indexing/index.html#type-static_symbol">Ir.Indexing.static_symbol</a> option</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?mask</span>:<a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?mask</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-multi_head_att_workshop"><a href="#val-multi_head_att_workshop" class="anchor"></a><code><span><span class="keyword">val</span> multi_head_att_workshop : 
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
@@ -100,7 +100,7 @@
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-layer_norm"><a href="#val-layer_norm" class="anchor"></a><code><span><span class="keyword">val</span> layer_norm : 
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?epsilon</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-transformer_encoder_block"><a href="#val-transformer_encoder_block" class="anchor"></a><code><span><span class="keyword">val</span> transformer_encoder_block : 
@@ -109,8 +109,8 @@
   <span><span class="label">d_k</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_v</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?pos_embed</span>:<a href="#type-position_embedding">position_embedding</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?epsilon</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?pos_embed</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><a href="../../../arrayjit/Ir/Indexing/index.html#type-static_symbol">Ir.Indexing.static_symbol</a> option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
@@ -120,10 +120,10 @@
   <span><span class="label">d_k</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_v</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?dropout_rate</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?mask_fill</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?pos_embed</span>:<a href="#type-position_embedding">position_embedding</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?epsilon</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?dropout_rate</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?mask_fill</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?pos_embed</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><a href="../../../arrayjit/Ir/Indexing/index.html#type-static_symbol">Ir.Indexing.static_symbol</a> option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
@@ -135,10 +135,10 @@
   <span><span class="label">d_k</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_v</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?dropout_rate</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?mask_fill</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?pos_embed</span>:<a href="#type-position_embedding">position_embedding</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?epsilon</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?dropout_rate</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?mask_fill</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?pos_embed</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><a href="../../../arrayjit/Ir/Indexing/index.html#type-static_symbol">Ir.Indexing.static_symbol</a> option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
@@ -148,8 +148,8 @@
   <span><span class="label">num_heads</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_k</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_v</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?temperature</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?dropout_rate</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?temperature</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?dropout_rate</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><a href="../../../arrayjit/Ir/Indexing/index.html#type-static_symbol">Ir.Indexing.static_symbol</a> option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
@@ -160,9 +160,9 @@
   <span><span class="label">d_k</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_v</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?mask_fill</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?pos_embed</span>:<a href="#type-position_embedding">position_embedding</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?epsilon</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?mask_fill</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?pos_embed</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><a href="../../../arrayjit/Ir/Indexing/index.html#type-static_symbol">Ir.Indexing.static_symbol</a> option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
@@ -175,8 +175,8 @@
   <span><span class="label">d_k</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_v</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?pos_embed</span>:<a href="#type-position_embedding">position_embedding</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?epsilon</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?pos_embed</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><a href="../../../arrayjit/Ir/Indexing/index.html#type-static_symbol">Ir.Indexing.static_symbol</a> option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
@@ -187,9 +187,9 @@
   <span><span class="label">d_k</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_v</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?mask_fill</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?pos_embed</span>:<a href="#type-position_embedding">position_embedding</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?epsilon</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?mask_fill</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?pos_embed</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><a href="../../../arrayjit/Ir/Indexing/index.html#type-static_symbol">Ir.Indexing.static_symbol</a> option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
@@ -203,9 +203,9 @@
   <span><span class="label">d_enc</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_dec</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">d_ff</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?mask_fill</span>:<span class="xref-unresolved">Base</span>.Float.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?pos_embed</span>:<a href="#type-position_embedding">position_embedding</a> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?epsilon</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?mask_fill</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?pos_embed</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><a href="../../../arrayjit/Ir/Indexing/index.html#type-static_symbol">Ir.Indexing.static_symbol</a> option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">src</span>:<a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
@@ -223,88 +223,88 @@
   <span><span class="label">mask</span>:<span class="type-var">'e</span> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> * <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Transformer with teacher forcing for autoregressive training.</p><p>TODO: Simplify once tensor shifting/slicing is better supported in shape inference. Currently requires pre-shifted tgt_input (all but last token) and tgt_target (all but first token). During training, the model learns to predict tgt_target given tgt_input.</p></div></div><h3 id="convolutional-neural-network-building-blocks"><a href="#convolutional-neural-network-building-blocks" class="anchor"></a>Convolutional Neural Network Building Blocks</h3><div class="odoc-spec"><div class="spec value anchored" id="val-conv2d"><a href="#val-conv2d" class="anchor"></a><code><span><span class="keyword">val</span> conv2d : 
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?kernel_size</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?stride</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?use_padding</span>:bool <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?out_channels</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?kernel_size</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?stride</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?use_padding</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?out_channels</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>2D convolution layer with flexible padding and stride options.</p><p>When <code>use_padding=false</code> and <code>stride &gt; 1</code>, the input spatial dimensions must satisfy: <code>(input_size - kernel_size) mod stride = 0</code>, otherwise shape inference will fail with &quot;incompatible stride&quot; error. The output size is <code>(input_size - kernel_size) / stride + 1</code>.</p><p>When <code>use_padding=true</code>, there is no such restriction and output size is <code>input_size / stride</code>.</p><ul class="at-tags"><li class="parameter"><span class="at-tag">parameter</span> <span class="value">out_channels</span> <p>Optional number of output channels. If not provided, must be inferred from context (e.g., from a downstream operation that constrains the output shape).</p></li></ul></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-depthwise_separable_conv2d"><a href="#val-depthwise_separable_conv2d" class="anchor"></a><code><span><span class="keyword">val</span> depthwise_separable_conv2d : 
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?kernel_size</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?stride</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?use_padding</span>:bool <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?kernel_size</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?stride</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?use_padding</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Depthwise separable convolution - more efficient for mobile/edge devices. Consists of depthwise conv (spatial filtering per channel) followed by pointwise conv (1x1 conv for channel mixing).</p><p>See <a href="#val-conv2d"><code>conv2d</code></a> for dimension constraints when <code>use_padding=false</code>.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-max_pool2d"><a href="#val-max_pool2d" class="anchor"></a><code><span><span class="keyword">val</span> max_pool2d : 
-  <span><span class="optlabel">?stride</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?window_size</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?use_padding</span>:bool <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?stride</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?window_size</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?use_padding</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Max pooling for 2D spatial data - reduces spatial dimensions by taking maximum values.</p><p>Without padding (<code>use_padding=false</code>, the default), the input spatial dimensions must satisfy: <code>(input_size - window_size) mod stride = 0</code>, otherwise shape inference will fail. The output size is <code>(input_size - window_size) / stride + 1</code>. The <code>&lt;</code> in the einsum spec indicates no-padding mode (indices stay within bounds).</p><p>With <code>use_padding=true</code> (&quot;same&quot; pooling, output size <code>input_size / stride</code>), the pool lowers with clamped window bounds (gh-504): per output position the window loop is range-guarded to the intersection of the window with the valid input range, and an out-of-range position contributes the max-accumulation identity (<code>-inf</code>) — the same as not visiting it — so clamping is semantically exact and the operand needs NO margins at all. The operand therefore composes freely with 0-neutral margin-touching consumers such as padded convs (the Inception-block pattern), with eagerly allocated data nodes (e.g. <code>TDSL.init</code>), and with operands already lowered in earlier compilations of a staged flow. The backward argmax scatter transposes the clamp (guarded writes). Interior outputs still see full windows: the guards flip truth only at affine breakpoints of the output axis, so <code>Schedule.Partition</code> at <code>Schedule.partition_breakpoints</code> specializes guard-free interior segments (gh-508).</p><p>Overlapping pooling (<code>stride &lt; window_size</code>, AlexNet-style) has exact gradients: the gradient gate lives in the (output x window) product space (gh-512), so each position receives gradient from exactly the windows it won, with ties gating every achieving pair. Non-overlapping pooling (<code>stride &gt;= window_size</code>, the common case) dispatches to the cheaper input-space gate (gh-527) — exact on that domain, ties included, see <code>Operation.tropical</code>.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-max_pool2d_copy"><a href="#val-max_pool2d_copy" class="anchor"></a><code><span><span class="keyword">val</span> max_pool2d_copy : 
-  <span><span class="optlabel">?stride</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?window_size</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?use_padding</span>:bool <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?stride</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?window_size</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?use_padding</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Like <a href="#val-max_pool2d"><code>max_pool2d</code></a>, but with <code>use_padding=true</code> the pool reads a private materialized copy of the operand instead of the operand itself. Since the clamped-window lowering (gh-504) removed the pool's <code>-inf</code> margin demand, <a href="#val-max_pool2d"><code>max_pool2d</code></a> composes with any operand and the copy is no longer needed as a conflict remedy — this variant is kept as the materialized-copy remedy pattern for the remaining conflict class (margin-touching consumers with different FINITE neutral elements, e.g. margins committed by <code>wrap_padded</code> to a value a padded conv's 0 neutral conflicts with), and for explicitly decoupling the pool's read from a shared buffer.</p><p>Prefer <a href="#val-max_pool2d"><code>max_pool2d</code></a>: it reads the operand directly, without the extra buffer and copy.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-avg_pool2d"><a href="#val-avg_pool2d" class="anchor"></a><code><span><span class="keyword">val</span> avg_pool2d : 
-  <span><span class="optlabel">?stride</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?window_size</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?stride</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?window_size</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Average pooling for 2D spatial data - reduces spatial dimensions by averaging values.</p><p>See <a href="#val-max_pool2d"><code>max_pool2d</code></a> for dimension constraints. Note there is no <code>use_padding</code> option: a padded (<code>=</code>-mode) add-family window keeps the physical 0-margins mechanism (finite accumulation identity — clamped lowering, gh-504, applies only to the max/tropical family), which gives <code>count_include_pad</code> semantics — the divisor is the full window size everywhere, counting the zero margins. PyTorch's default is <code>count_exclude_pad</code> (per-position valid-window divisor); adding a padded average pool is a per-op semantic decision that should document its choice.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-global_avg_pool2d"><a href="#val-global_avg_pool2d" class="anchor"></a><code><span><span class="keyword">val</span> global_avg_pool2d : <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">DSL_modules.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span> <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Global average pooling - reduces each feature map to a single value by averaging. Commonly used before final classification layer.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-batch_norm2d"><a href="#val-batch_norm2d" class="anchor"></a><code><span><span class="keyword">val</span> batch_norm2d : 
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?momentum</span>:float <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?epsilon</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?momentum</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><span class="type-var">'a</span> option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Batch normalization for CNN layers - normalizes across the batch dimension for each channel. Typically applied after convolutions and before activations.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-batch_norm1d"><a href="#val-batch_norm1d" class="anchor"></a><code><span><span class="keyword">val</span> batch_norm1d : 
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?epsilon</span>:<span class="xref-unresolved">Base</span>.float <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?momentum</span>:float <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?epsilon</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?momentum</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><span class="type-var">'a</span> option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Batch normalization for MLP layers - normalizes across the batch axis only. Unlike <a href="#val-batch_norm2d"><code>batch_norm2d</code></a> there are no spatial axes to reduce over; channel axes are carried through unchanged via the <code>..c..</code> row variable.</p><p>See the FIXME on <a href="#val-batch_norm2d"><code>batch_norm2d</code></a>: running statistics are not implemented, so <code>momentum</code> is ignored and inference falls back to the learned <code>gamma</code>/<code>beta</code> parameters rather than population statistics. Acceptable for tutorial examples; do not rely on inference correctness for distribution-shifted inputs.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-conv_bn_relu"><a href="#val-conv_bn_relu" class="anchor"></a><code><span><span class="keyword">val</span> conv_bn_relu : 
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?kernel_size</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?stride</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?kernel_size</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?stride</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><span class="type-var">'a</span> option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Conv block with conv -&gt; batch norm -&gt; activation pattern</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-resnet_block"><a href="#val-resnet_block" class="anchor"></a><code><span><span class="keyword">val</span> resnet_block : 
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?stride</span>:<span class="xref-unresolved">Base</span>.Int.t <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?stride</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><span class="type-var">'a</span> option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Residual block for ResNet-style architectures. Features skip connections that help with gradient flow in deep networks.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-lenet"><a href="#val-lenet" class="anchor"></a><code><span><span class="keyword">val</span> lenet : 
-  <span><span class="optlabel">?label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?out_channels1</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?out_channels2</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?use_padding</span>:bool <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?label</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?out_channels1</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?out_channels2</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?use_padding</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span class="type-var">'a</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>LeNet-style architecture for simple image classification (e.g., MNIST). Classic architecture: conv -&gt; pool -&gt; conv -&gt; pool -&gt; fc layers. Output shape is inferred from training data.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-vgg_block"><a href="#val-vgg_block" class="anchor"></a><code><span><span class="keyword">val</span> vgg_block : 
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string list</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">num_convs</span>:int <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?kernel_size</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?kernel_size</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><span class="type-var">'a</span> option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>VGG-style block - multiple convolutions with same filter count followed by pooling</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-sokoban_cnn"><a href="#val-sokoban_cnn" class="anchor"></a><code><span><span class="keyword">val</span> sokoban_cnn : 
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?num_actions</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?num_actions</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><span class="type-var">'a</span> option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">grid_state</span>:<a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
   <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> * <a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a></span></code></div><div class="spec-doc"><p>Simple CNN for Sokoban-like grid environments. Processes grid states with multiple conv layers and outputs action logits.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-mobile_cnn"><a href="#val-mobile_cnn" class="anchor"></a><code><span><span class="keyword">val</span> mobile_cnn : 
   <span><span class="label">label</span>:<span><span class="xref-unresolved">Base</span>.string <span class="xref-unresolved">Base</span>.list</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?num_classes</span>:<span class="xref-unresolved">Base</span>.int <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="optlabel">?width_mult</span>:float <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?num_classes</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?width_mult</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span>unit <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">train_step</span>:<span><span class="type-var">'a</span> option</span> <span class="arrow">&#45;&gt;</span></span>
   <span><a href="../../Ocannl_tensor/Tensor/index.html#type-t">Ocannl_tensor.Tensor.t</a> <span class="arrow">&#45;&gt;</span></span>
