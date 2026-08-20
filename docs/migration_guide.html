@@ -675,10 +675,10 @@ with Per-Step Data</h4>
 <span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> routine = Train.to_routine ctx bindings </span>
 <span id="cb19-18"><a href="#cb19-18" aria-hidden="true" tabindex="-1"></a>    (Asgns.sequence [update; sgd]) <span class="kw">in</span></span>
 <span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Value access is context-mediated (gh-ocannl-333): read/write through the routine&#39;s context. *)</span></span>
-<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> ctx = Context.context routine <span class="kw">in</span></span>
+<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> ctx = routine.Context.context <span class="kw">in</span></span>
 <span id="cb19-21"><a href="#cb19-21" aria-hidden="true" tabindex="-1"></a>  </span>
 <span id="cb19-22"><a href="#cb19-22" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Get reference to step counter *)</span></span>
-<span id="cb19-23"><a href="#cb19-23" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> step_ref = IDX.find_exn (Context.bindings routine) step_n <span class="kw">in</span></span>
+<span id="cb19-23"><a href="#cb19-23" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> step_ref = IDX.find_exn routine.Context.bindings step_n <span class="kw">in</span></span>
 <span id="cb19-24"><a href="#cb19-24" aria-hidden="true" tabindex="-1"></a>  step_ref := <span class="dv">0</span>;</span>
 <span id="cb19-25"><a href="#cb19-25" aria-hidden="true" tabindex="-1"></a>  </span>
 <span id="cb19-26"><a href="#cb19-26" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Training loop - update input data each step *)</span></span>
@@ -737,7 +737,7 @@ with Per-Step Data</h4>
 <span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a>    (Asgns.sequence [update; sgd]) <span class="kw">in</span></span>
 <span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a>  </span>
 <span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Get batch counter reference *)</span></span>
-<span id="cb21-20"><a href="#cb21-20" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> batch_ref = IDX.find_exn (Context.bindings routine) batch_n <span class="kw">in</span></span>
+<span id="cb21-20"><a href="#cb21-20" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> batch_ref = IDX.find_exn routine.Context.bindings batch_n <span class="kw">in</span></span>
 <span id="cb21-21"><a href="#cb21-21" aria-hidden="true" tabindex="-1"></a>  </span>
 <span id="cb21-22"><a href="#cb21-22" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Training epochs *)</span></span>
 <span id="cb21-23"><a href="#cb21-23" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> num_batches = <span class="dt">Array</span>.length data / batch_size <span class="kw">in</span></span>
@@ -893,11 +893,12 @@ optim/sgd.py</a>):</p>
 <span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a>    p =- learning_rate * sgd_delta]</span>
 <span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb28-13"><a href="#cb28-13" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov loss =</span>
-<span id="cb28-14"><a href="#cb28-14" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Apply sgd_one to all parameters *)</span></span>
-<span id="cb28-15"><a href="#cb28-15" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> f = sgd_one ~learning_rate ?momentum ?weight_decay ?nesterov <span class="kw">in</span></span>
-<span id="cb28-16"><a href="#cb28-16" aria-hidden="true" tabindex="-1"></a>  <span class="dt">Set</span>.to_list loss.Tensor.params </span>
-<span id="cb28-17"><a href="#cb28-17" aria-hidden="true" tabindex="-1"></a>  |&gt; <span class="dt">List</span>.map ~f </span>
-<span id="cb28-18"><a href="#cb28-18" aria-hidden="true" tabindex="-1"></a>  |&gt; Asgns.sequence  <span class="co">(* Combine into single computation *)</span></span></code></pre></div>
+<span id="cb28-14"><a href="#cb28-14" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Apply sgd_one to the parameters the loss trains: those of [loss.params] whose gradient the</span></span>
+<span id="cb28-15"><a href="#cb28-15" aria-hidden="true" tabindex="-1"></a><span class="co">     backprop code writes (so e.g. a backbone frozen behind [stop_gradient] takes no step) *)</span></span>
+<span id="cb28-16"><a href="#cb28-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> f = sgd_one ~learning_rate ?momentum ?weight_decay ?nesterov <span class="kw">in</span></span>
+<span id="cb28-17"><a href="#cb28-17" aria-hidden="true" tabindex="-1"></a>  <span class="dt">Set</span>.to_list (trainable_params loss)</span>
+<span id="cb28-18"><a href="#cb28-18" aria-hidden="true" tabindex="-1"></a>  |&gt; <span class="dt">List</span>.map ~f </span>
+<span id="cb28-19"><a href="#cb28-19" aria-hidden="true" tabindex="-1"></a>  |&gt; Asgns.sequence  <span class="co">(* Combine into single computation *)</span></span></code></pre></div>
 <p>The math is identical! The difference is compilation vs eager
 execution.</p>
 <h3 id="training-step-execution">Training Step Execution</h3>

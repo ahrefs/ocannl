@@ -1227,7 +1227,9 @@ let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov
     loss =
   let f =
     sgd_one ~learning_rate ?momentum ?weight_decay ?nesterov in
-  Set.to_list loss.Tensor.params |&amp;gt; List.map ~f |&amp;gt; Asgns.sequence
+  (* the params of [loss] whose gradient its backprop writes *)
+  Set.to_list (trainable_params loss)
+  |&amp;gt; List.map ~f |&amp;gt; Asgns.sequence
 
 ...
   let step_n, bindings =
@@ -1238,14 +1240,14 @@ let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov
     Train.sgd_update ~learning_rate ~weight_decay scalar_loss in
 &lt;/code&gt;&lt;/pre&gt;
 &lt;div down-at-unpause unfocus-at-unpause pause&gt;&lt;/div&gt;
-&lt;pre focus-at-unpause=train-loop pause&gt;&lt;code class=&quot;language-ocaml&quot;&gt;  let step_ref = IDX.find_exn (Context.bindings sgd_routine) step_n in
+&lt;pre focus-at-unpause=train-loop pause&gt;&lt;code class=&quot;language-ocaml&quot;&gt;  let step_ref = IDX.find_exn sgd_routine.Context.bindings step_n in
   step_ref := 0;
   for epoch = 1 to epochs do
     let epoch_loss = ref 0. in
     Train.sequential_loop sgd_routine.bindings ~f:(fun () -&amp;gt;
         Train.run ctx sgd_routine;
         let batch_ref =
-          IDX.find_exn (Context.bindings sgd_routine) batch_n in
+          IDX.find_exn sgd_routine.Context.bindings batch_n in
         (* Value access is context-mediated (gh-ocannl-333): the [At] accessors take a
            [(context, tensor)] pair and read on demand from the routine's context. *)
         epoch_loss := !epoch_loss +. (ctx, scalar_loss).@[0];
@@ -1260,8 +1262,6 @@ let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov
 &lt;pre id=&quot;half-moons&quot; class=&quot;example&quot; style=&quot;font-size:0.55em&quot; title=&quot;Half-moons example run full size plots&quot;&gt;&lt;code class=&quot;language-shell&quot;&gt;lukstafi@Mac ocannl % dune exec test/training/moons_demo.exe -- --ocannl_log_level=0
                                       
 Welcome to OCANNL! Reading configuration defaults from /Users/lukstafi/ocannl/ocannl_config.
-Retrieving commandline, environment, or config file variable ocannl_log_level
-Found 0, commandline --ocannl_log_level=0
 Epoch=1, step=0, batch=0, lr=0.2, loss=19.45, epoch loss=19.45
 Epoch=1, step=1, batch=1, lr=0.2, loss=8.998, epoch loss=28.45
 Epoch=1, step=2, batch=2, lr=0.2, loss=9.299, epoch loss=37.75

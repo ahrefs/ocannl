@@ -490,9 +490,9 @@ backend management, introduced in v0.6.1.</p>
 <span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Execute the routine *)</span></span>
 <span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.run ctx routine</span>
 <span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Access routine metadata *)</span></span>
-<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> bindings = Context.bindings routine</span>
-<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.context routine</span></code></pre></div>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Routine metadata is read straight off the record (private: readable, not constructible) *)</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> bindings = routine.Context.bindings</span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = routine.Context.context</span></code></pre></div>
 <h3 id="node-initialization-tracking">Node Initialization Tracking</h3>
 <p>Contexts track which tensor nodes have been initialized:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Check if a node is initialized *)</span></span>
@@ -561,22 +561,22 @@ that prior routine in their frontier and can depend on it.</p>
 <span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx1, routine_a = Context.compile ctx0 comp_a bindings <span class="kw">in</span></span>
 <span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx2, routine_b = Context.compile ctx0 comp_b bindings <span class="kw">in</span></span>
 <span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a><span class="co">(* Via Train.to_routine: chains through Context.context *)</span></span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a><span class="co">(* Via Train.to_routine: chains through the routine&#39;s stored context *)</span></span>
 <span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> routine_a = Train.to_routine ctx bindings comp_a <span class="kw">in</span></span>
-<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> routine_b = Train.to_routine (Context.context routine_a) bindings comp_b <span class="kw">in</span></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> routine_b = Train.to_routine routine_a.Context.context bindings comp_b <span class="kw">in</span></span>
 <span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a><span class="co">(* routine_b depends on routine_a — sequential via stored child context *)</span></span></code></pre></div>
 <h4 id="api">API</h4>
-<div class="sourceCode" id="cb15"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Unique integer identifying the routine *)</span></span>
-<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="kw">val</span> routine_id : routine -&gt; <span class="dt">int</span></span>
-<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Name of the routine, from backend compilation *)</span></span>
-<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="kw">val</span> routine_name : routine -&gt; <span class="dt">string</span></span>
+<p><code>Context.routine</code> is a <code>private</code> record: only
+<code>Context.compile</code> constructs routines, but every field is
+readable, including the per-routine metadata:</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>routine.Context.routine_id      <span class="co">(* unique integer identifying the routine *)</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>routine.Context.name            <span class="co">(* name of the routine, from backend compilation *)</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>routine.Context.execution_deps  <span class="co">(* Set of routine IDs that must execute before this routine *)</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>routine.Context.inputs          <span class="co">(* materialized nodes read before written, if written at all *)</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>routine.Context.outputs         <span class="co">(* materialized nodes the routine writes *)</span></span>
 <span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Routine IDs that must execute before this routine *)</span></span>
-<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a><span class="kw">val</span> execution_deps : routine -&gt; <span class="dt">int</span> <span class="dt">list</span></span>
-<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a><span class="co">(* Whether all execution dependencies have been satisfied *)</span></span>
-<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a><span class="kw">val</span> can_run : t -&gt; routine -&gt; <span class="dt">bool</span></span></code></pre></div>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* Whether all execution dependencies have been satisfied *)</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a><span class="kw">val</span> can_run : t -&gt; routine -&gt; <span class="dt">bool</span></span></code></pre></div>
 <h4 id="enforcement">Enforcement</h4>
 <p><code>Context.run</code> checks execution dependencies before running
 a routine. If any prerequisite routine has not been executed, it raises
@@ -586,7 +586,7 @@ execution, the routine is marked as executed in the shared ledger.</p>
 dependencies remain satisfied.</p>
 <div class="sourceCode" id="cb16"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Typical pattern: grad_update then sgd_update *)</span></span>
 <span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> grad_routine = Train.to_routine ctx bindings grad_comp <span class="kw">in</span></span>
-<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> sgd_routine = Train.to_routine (Context.context grad_routine) bindings sgd_comp <span class="kw">in</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> sgd_routine = Train.to_routine grad_routine.Context.context bindings sgd_comp <span class="kw">in</span></span>
 <span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a><span class="co">(* grad has no deps (first in lineage), sgd depends on grad *)</span></span>
 <span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a><span class="kw">assert</span> (Context.can_run ctx grad_routine);</span>
@@ -646,7 +646,7 @@ repeatedly:</p>
 <span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a>  (Asgns.sequence [update; sgd]) <span class="kw">in</span></span>
 <span id="cb19-18"><a href="#cb19-18" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a><span class="co">(* Training loop *)</span></span>
-<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> step_ref = IDX.find_exn (Context.bindings routine) step_n <span class="kw">in</span></span>
+<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> step_ref = IDX.find_exn routine.Context.bindings step_n <span class="kw">in</span></span>
 <span id="cb19-21"><a href="#cb19-21" aria-hidden="true" tabindex="-1"></a><span class="kw">for</span> step = <span class="dv">1</span> <span class="kw">to</span> num_steps <span class="kw">do</span></span>
 <span id="cb19-22"><a href="#cb19-22" aria-hidden="true" tabindex="-1"></a>  step_ref := step;</span>
 <span id="cb19-23"><a href="#cb19-23" aria-hidden="true" tabindex="-1"></a>  Train.run ctx routine;</span>

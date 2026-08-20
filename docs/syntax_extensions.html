@@ -1047,7 +1047,7 @@ creating non-differentiable tensors, to mimic the behavior of
 parameter would introduce:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%cd mlp_result = mlp { point } <span class="kw">in</span></span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> result_routine =</span>
-<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>    Train.to_routine (Context.context sgd_routine) IDX.empty</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>    Train.to_routine sgd_routine.Context.context IDX.empty</span>
 <span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>      [%cd ~~(<span class="st">&quot;mlp infer&quot;</span>; mlp_result.forward)]</span>
 <span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span>
 <span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> callback (x, y) =</span>
