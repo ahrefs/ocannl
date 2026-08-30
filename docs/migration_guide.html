@@ -594,7 +594,7 @@ from smaller parts - <strong>Partial updates</strong>:
 <span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> update = Train.grad_update loss <span class="kw">in</span></span>
 <span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> sgd = Train.sgd_update ~learning_rate loss <span class="kw">in</span></span>
 <span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Train.init_params ctx IDX.empty loss <span class="kw">in</span></span>
-<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> routine = Train.to_routine ctx IDX.empty </span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx, routine = Train.to_routine ctx IDX.empty </span>
 <span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>  (Asgns.sequence [update; sgd]) <span class="kw">in</span></span>
 <span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a><span class="co">(* Training loop - reuse compiled routine *)</span></span>
@@ -624,7 +624,7 @@ management and training workflows.</p>
 <span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.auto () <span class="kw">in</span></span>
 <span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Or explicit backend selection *)</span></span>
-<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.cuda ~device_id:<span class="dv">0</span> () <span class="kw">in</span></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.cuda ~ordinal:<span class="dv">0</span> () <span class="kw">in</span></span>
 <span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.metal () <span class="kw">in</span></span>
 <span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.cpu ~threads:<span class="dv">4</span> () <span class="kw">in</span></span></code></pre></div>
 <h3 id="basic-training-patterns">Basic Training Patterns</h3>
@@ -672,10 +672,10 @@ with Per-Step Data</h4>
 <span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> update = Train.grad_update loss <span class="kw">in</span></span>
 <span id="cb19-15"><a href="#cb19-15" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> sgd = Train.sgd_update ~learning_rate loss <span class="kw">in</span></span>
 <span id="cb19-16"><a href="#cb19-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> ctx = Train.init_params ctx bindings loss <span class="kw">in</span></span>
-<span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> routine = Train.to_routine ctx bindings </span>
-<span id="cb19-18"><a href="#cb19-18" aria-hidden="true" tabindex="-1"></a>    (Asgns.sequence [update; sgd]) <span class="kw">in</span></span>
-<span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Value access is context-mediated (gh-ocannl-333): read/write through the routine&#39;s context. *)</span></span>
-<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> ctx = routine.Context.context <span class="kw">in</span></span>
+<span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Value access is context-mediated (gh-ocannl-333): read/write through the post-compile</span></span>
+<span id="cb19-18"><a href="#cb19-18" aria-hidden="true" tabindex="-1"></a><span class="co">     context that [to_routine] returns (also available as [routine.Context.context]). *)</span></span>
+<span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> ctx, routine = Train.to_routine ctx bindings </span>
+<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a>    (Asgns.sequence [update; sgd]) <span class="kw">in</span></span>
 <span id="cb19-21"><a href="#cb19-21" aria-hidden="true" tabindex="-1"></a>  </span>
 <span id="cb19-22"><a href="#cb19-22" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Get reference to step counter *)</span></span>
 <span id="cb19-23"><a href="#cb19-23" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> step_ref = IDX.find_exn routine.Context.bindings step_n <span class="kw">in</span></span>
@@ -733,7 +733,7 @@ with Per-Step Data</h4>
 <span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> update = Train.grad_update batch_loss <span class="kw">in</span></span>
 <span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> sgd = Train.sgd_update ~learning_rate batch_loss <span class="kw">in</span></span>
 <span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> ctx = Train.init_params ctx bindings batch_loss <span class="kw">in</span></span>
-<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> routine = Train.to_routine ctx bindings</span>
+<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> ctx, routine = Train.to_routine ctx bindings</span>
 <span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a>    (Asgns.sequence [update; sgd]) <span class="kw">in</span></span>
 <span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a>  </span>
 <span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a>  <span class="co">(* Get batch counter reference *)</span></span>
@@ -789,7 +789,8 @@ pass only (initializes params if needed)</li>
 <li><strong><code>Train.update_once ctx loss</code></strong>: Forward +
 backward pass (initializes params if needed)</li>
 <li><strong><code>Train.to_routine ctx bindings comp</code></strong>:
-Compiles computation for repeated execution</li>
+Compiles computation for repeated execution, returning the post-compile
+context and the routine</li>
 <li><strong><code>Train.run ctx routine</code></strong>: Executes
 compiled routine</li>
 <li><strong><code>Asgns.sequence comps</code></strong>: Combines
@@ -915,7 +916,7 @@ execution.</p>
 <span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> sgd = Train.sgd_update ~learning_rate loss <span class="kw">in</span> <span class="co">(* parameter updates *)</span></span>
 <span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a><span class="co">(* Compile once *)</span></span>
-<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> routine = Train.to_routine ctx bindings </span>
+<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx, routine = Train.to_routine ctx bindings </span>
 <span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a>  (Asgns.sequence [update; sgd]) <span class="kw">in</span></span>
 <span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb30-9"><a href="#cb30-9" aria-hidden="true" tabindex="-1"></a><span class="co">(* Execute many times *)</span></span>

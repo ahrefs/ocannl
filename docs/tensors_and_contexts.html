@@ -480,8 +480,8 @@ backend management, introduced in v0.6.1.</p>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.auto ()</span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Explicit backend selection *)</span></span>
-<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.cuda ~device_id:<span class="dv">0</span> ()  <span class="co">(* NVIDIA GPU *)</span></span>
-<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.metal ~device_id:<span class="dv">0</span> () <span class="co">(* Apple Metal *)</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.cuda ~ordinal:<span class="dv">0</span> ()  <span class="co">(* NVIDIA GPU *)</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.metal ~ordinal:<span class="dv">0</span> () <span class="co">(* Apple Metal *)</span></span>
 <span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Context.cpu ~threads:<span class="dv">4</span> ()     <span class="co">(* Multi-threaded CPU *)</span></span></code></pre></div>
 <h3 id="compilation-and-execution">Compilation and Execution</h3>
 <div class="sourceCode" id="cb12"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Compile a computation *)</span></span>
@@ -561,10 +561,10 @@ that prior routine in their frontier and can depend on it.</p>
 <span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx1, routine_a = Context.compile ctx0 comp_a bindings <span class="kw">in</span></span>
 <span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx2, routine_b = Context.compile ctx0 comp_b bindings <span class="kw">in</span></span>
 <span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a><span class="co">(* Via Train.to_routine: chains through the routine&#39;s stored context *)</span></span>
-<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> routine_a = Train.to_routine ctx bindings comp_a <span class="kw">in</span></span>
-<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> routine_b = Train.to_routine routine_a.Context.context bindings comp_b <span class="kw">in</span></span>
-<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a><span class="co">(* routine_b depends on routine_a — sequential via stored child context *)</span></span></code></pre></div>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a><span class="co">(* Via Train.to_routine: chains through the returned post-compile context *)</span></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx_a, routine_a = Train.to_routine ctx bindings comp_a <span class="kw">in</span></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx_b, routine_b = Train.to_routine ctx_a bindings comp_b <span class="kw">in</span></span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a><span class="co">(* routine_b depends on routine_a — sequential via the child context *)</span></span></code></pre></div>
 <h4 id="api">API</h4>
 <p><code>Context.routine</code> is a <code>private</code> record: only
 <code>Context.compile</code> constructs routines, but every field is
@@ -585,8 +585,8 @@ execution, the routine is marked as executed in the shared ledger.</p>
 <p>Re-running a routine that has already executed is allowed — its
 dependencies remain satisfied.</p>
 <div class="sourceCode" id="cb16"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Typical pattern: grad_update then sgd_update *)</span></span>
-<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> grad_routine = Train.to_routine ctx bindings grad_comp <span class="kw">in</span></span>
-<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> sgd_routine = Train.to_routine grad_routine.Context.context bindings sgd_comp <span class="kw">in</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> grad_ctx, grad_routine = Train.to_routine ctx bindings grad_comp <span class="kw">in</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> _, sgd_routine = Train.to_routine grad_ctx bindings sgd_comp <span class="kw">in</span></span>
 <span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a><span class="co">(* grad has no deps (first in lineage), sgd depends on grad *)</span></span>
 <span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a><span class="kw">assert</span> (Context.can_run ctx grad_routine);</span>
@@ -642,7 +642,7 @@ repeatedly:</p>
 <span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx = Train.init_params ctx bindings loss <span class="kw">in</span></span>
 <span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb19-15"><a href="#cb19-15" aria-hidden="true" tabindex="-1"></a><span class="co">(* Compile training routine *)</span></span>
-<span id="cb19-16"><a href="#cb19-16" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> routine = Train.to_routine ctx bindings</span>
+<span id="cb19-16"><a href="#cb19-16" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> ctx, routine = Train.to_routine ctx bindings</span>
 <span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a>  (Asgns.sequence [update; sgd]) <span class="kw">in</span></span>
 <span id="cb19-18"><a href="#cb19-18" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a><span class="co">(* Training loop *)</span></span>

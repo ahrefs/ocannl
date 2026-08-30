@@ -1759,7 +1759,7 @@ let sgd =
 let ctx =
   Train.init_params ctx bindings scalar_loss in
 (* Combine forward, backward passes with parameter updates. *)
-let sgd_routine =
+let ctx, sgd_routine =
   Train.to_routine ctx bindings
     (Asgns.sequence [ update; sgd ])
 in

@@ -1041,12 +1041,37 @@ them include the label of the param <code>p</code> in their labels:</p>
 <span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>      { sgd_momentum } =: (!.momentum *. sgd_momentum) + sgd_delta;</span>
 <span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>      <span class="kw">if</span> nesterov <span class="kw">then</span> sgd_delta =+ !.momentum *. sgd_momentum <span class="kw">else</span> sgd_delta =: sgd_momentum);</span>
 <span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>    p =- learning_rate *. sgd_delta]</span></code></pre></div>
+<p>Because the scope of an inline declaration is the whole extension
+point, <code>%cd</code> <strong>hoists inline declarations above an
+enclosing <code>match</code> or <code>if</code></strong>: the
+<code>Pexp_match</code> arm (via <code>handle_cases</code>) and the
+<code>if ... then ... else</code> arm of <code>tensor/ppx_cd.ml</code>
+both collect their branches’ bindings with <code>reduce_vbss</code> and
+lift them out of the branch. So an arm that declares <code>{ x }</code>
+and an arm that only reads <code>x</code> name the same tensor, and
+branches need not be duplicated just to share one.</p>
+<p>The declaration may appear in only <strong>one</strong> arm, though:
+a second <code>{ x }</code> for the same name is rejected with
+<code>ppx_ocannl %cd: duplicate inline declaration of no-gradient tensor x</code>
+(<code>tensor/ppx_cd.ml:162</code>). Declare the tensor in whichever arm
+reads most naturally – typically the one whose right-hand side carries
+the best label information – and refer to it by bare name in the
+others.</p>
+<p><code>Train.sgd_one</code> in <code>lib/train.ml</code> is the worked
+example: its <code>%cd</code> payload is written once, with
+<code>{ sgd_delta }</code> and <code>{ sgd_momentum }</code> each
+declared in a single arm of the <code>grad_scale</code> /
+<code>update_gate</code> matches and read by name everywhere else, so
+the arms differ only where the gating actually changes the emitted
+assignment. (The momentum block was duplicated across the gate branches
+until gh-ocannl-772, on the mistaken assumption that hoisting past a
+<code>match</code> did not work.)</p>
 <p>Inline declarations can also be used outside of assignments for
 creating non-differentiable tensors, to mimic the behavior of
 <code>%op</code> but without the burden of initialization that a
 parameter would introduce:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%cd mlp_result = mlp { point } <span class="kw">in</span></span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> result_routine =</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> _, result_routine =</span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>    Train.to_routine sgd_routine.Context.context IDX.empty</span>
 <span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>      [%cd ~~(<span class="st">&quot;mlp infer&quot;</span>; mlp_result.forward)]</span>
 <span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span></span>
