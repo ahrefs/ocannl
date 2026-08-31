@@ -671,8 +671,12 @@ right of <code>()</code>) should be a tensor. That’s because
 of the resulting tensor.</p>
 <p>When the declaration is followed by a literal float, the float
 provides the initial value to initialize the tensor. Otherwise, the
-tensor value cells are initialized randomly with uniform
-distribution.</p>
+tensor value cells are initialized with the default parameter
+initialization: a centered, scaled packed <code>uniform ()</code> over
+<code>[-0.25, 0.25)</code>
+(<code>Operation.centered_uniform_param_init</code> with
+<code>scale = 0.5</code>), configurable by setting the reference
+<code>TDSL.default_param_init</code>.</p>
 <h2 id="the-syntax-for-cd">The syntax for %cd</h2>
 <p>The basic building blocks of the <code>%cd</code> syntax are
 individual assignments, separated by semicolons. The assignments,
@@ -978,7 +982,9 @@ the two extensions:</p>
 <li><strong><code>%op</code></strong>:
 <code>{ tensor_name = init_expr }</code> allows initialization
 expressions, or <code>{ tensor_name }</code> for default initialization
-(uniform random)</li>
+(centered scaled packed <code>uniform ()</code> over
+<code>[-0.25, 0.25)</code>, configurable via
+<code>TDSL.default_param_init</code>)</li>
 <li><strong><code>%cd</code></strong>: <code>{ tensor_name }</code>
 requires self-referential syntax (the field name must match the field
 value identifier), no separate initialization expressions are
@@ -1119,19 +1125,26 @@ resp. <code>TDSL.einsum</code>, and <code>++</code> binding to
 <code>+*</code> is a “ternary” operator, binary wrt. tensor arguments,
 and <code>++</code> is a binary operator, unary postfix wrt. tensor
 arguments. There are even more einsum operators: binary <code>@^+</code>
-and <code>+++</code>; unary <code>@^^</code>. When the einsum
-specification is a literal string, we support two syntax patterns: the
-string can either directly follow the operator (infix-style notation),
-or the string can follow the second argument (mixfix-style notation).
-When the spec string is an identifier, it must directly follow the
-operator.</p>
+binding to <code>tropical</code> and <code>+++</code> binding to
+<code>outer_sum</code>; unary <code>@^^</code> binding to
+<code>einmax1</code> (the operator-to-function tables are
+<code>einsum_binary_ops</code>/<code>einsum_unary_ops</code> in
+<code>tensor/ppx_shared.ml</code>). When the einsum specification is a
+literal string, we support two syntax patterns: the string can either
+directly follow the operator (infix-style notation), or the string can
+follow the second argument (mixfix-style notation). When the spec string
+is an identifier, it must directly follow the operator.</p>
 <p><code>+*</code>, <code>+++</code> and <code>++</code> use addition
 for the accumulation operation; <code>@^+</code> and <code>@^^</code>
-use maximum. You can verify that looking at the definitions of
-<code>Operation.einsum</code>, <code>Operation.einsum1</code>, etc. You
-can find examples of <code>+*</code> and <code>++</code> behavior in the
-test suite <a href="test/einsum_trivia.ml">einsum_trivia.ml</a> and in
-<a href="lib/nn_blocks.ml">nn_blocks.ml</a>. A frequent use-case for
+use maximum. The pairwise operation combined with the accumulation:
+<code>+*</code> multiplies (the classic einsum contraction),
+<code>+++</code> and <code>@^+</code> add (so <code>@^+</code> is
+max-reduce with add — the tropical semiring), and the unary
+<code>++</code>/<code>@^^</code> reduce their argument directly
+(add-reduce resp. max-reduce). You can verify that looking at the
+definitions of <code>Operation.einsum</code>,
+<code>Operation.einsum1</code>, etc. You can find examples of
+<code>+*</code> and <code>++</code> behavior in the test suite <a href="test/einsum_trivia.ml">einsum_trivia.ml</a> and in <a href="lib/nn_blocks.ml">nn_blocks.ml</a>. A frequent use-case for
 <code>++</code> is to sum out all axes of a tensor:</p>
 <div class="sourceCode" id="cb15"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%op scalar_loss = (margin_loss ++ <span class="st">&quot;...|... =&gt; |-&gt;0&quot;</span>) /. !..batch_size <span class="kw">in</span></span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>  ...</span></code></pre></div>
@@ -1541,20 +1554,29 @@ stacked rank rather than erroring.</li>
 <h3 id="capturing-the-dimensions-of-selected-axes-for-further-computation-or-to-add-shape-constraints">Capturing
 the dimensions of selected axes for further computation or to add shape
 constraints</h3>
-<p>The syntaxes <code>+*</code>, <code>++</code>, and <code>++^</code>
-accept an optional list of strings argument after the specification
-string. When passed, the strings should be some of the identifiers used
-in the specification. Both dimension variable and row variable labels
-are supported. This will introduce bindings for
-<code>Indexing.variable_ref</code> objects at the same point as the
-inline parameter definition bindings, and will pass these objects with
-the <code>~capture_dims</code> argument to <code>einsum</code>,
-<code>einsum1</code>, resp. <code>concat</code>. The bound objects can
-later be used with <code>Operation.embed_dim</code> or its alias
+<p>The einsum operators (<code>+*</code>, <code>@^+</code>,
+<code>+++</code>, <code>++</code>, <code>@^^</code>) and the
+concatenation operator <code>++^</code> accept an optional list of
+strings argument after the specification string. When passed, the
+strings should be some of the identifiers used in the specification.
+Both dimension variable and row variable labels are supported. This will
+introduce bindings for <code>Indexing.variable_ref</code> objects at the
+same point as the inline parameter definition bindings, and will pass
+these objects with the <code>~capture_dims</code> argument to
+<code>einsum</code>, <code>einsum1</code>, resp. <code>concat</code>.
+The bound objects can be used to add shape constraints via
+<code>Shape.set_dim</code> and <code>Shape.set_equal</code>, or with
+<code>Operation.embed_dim</code> or its alias
 <code>Operation.TDSL.O.dim</code> to embed the solved dimension of the
 corresponding variable (as a number) into a tensor expression. For a row
 variable, the number will be the product of the dimensions it resolved
 into.</p>
+<p>Capturing requires the specification to be a <strong>literal
+string</strong>: every capture pattern in <code>tensor/ppx_op.ml</code>
+and <code>tensor/ppx_cd.ml</code> matches on a string constant, so
+<code>x ++ &quot;ab =&gt; a&quot; [&quot;b&quot;]</code> works while
+<code>let s = &quot;ab =&gt; a&quot; in x ++ s [&quot;b&quot;]</code> does not expand as a
+capture.</p>
 <h3 id="einsum-gotchas-and-idioms">Einsum gotchas and idioms</h3>
 <p>Recurring stumbling points, each verified against the sources:</p>
 <ul>
