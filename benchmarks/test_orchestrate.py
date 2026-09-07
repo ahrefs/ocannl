@@ -2725,6 +2725,52 @@ class RegimeTest(unittest.TestCase):
 
         self.assertEqual(args.profile, ["exact"])
 
+    def test_a_bare_profile_flag_is_refused_rather_than_an_empty_matrix(self):
+        # `--profile` with no value would otherwise parse to [] and skip every OCANNL cell,
+        # publishing an empty report with a clean exit (Codex P2 on PR #661).
+        with self.assertRaises(SystemExit):
+            with contextlib.redirect_stderr(io.StringIO()):
+                orchestrate.build_arg_parser().parse_args(["--profile"])
+
+    def test_the_exact_envelope_verdict_is_about_drift_alone(self):
+        # A stationary approximate row within the exact envelope's drift: FAIL for not moving,
+        # and "within exact envelope" -- the two facts are reported separately, so the report
+        # never attributes a stationary loss to excessive drift (Codex P2 on PR #661).
+        ref = result("pytorch", "cpu", "eager", [2.3026, 2.3010, 2.3000])
+        flat = result("ocannl", "cc", "default", [2.3026, 2.3026, 2.3026])
+        flat["regime"] = "approximate"
+
+        orchestrate.parity_check([ref, flat])
+
+        self.assertEqual(flat["parity"], "FAIL")
+        self.assertFalse(flat["parity_loss_moved"])
+        self.assertTrue(flat["parity_exact_envelope"])
+
+    def test_a_mismatched_row_is_shouted_in_the_report_not_published_under_its_label(self):
+        # The exact cell inherited OCANNL_PROFILE=approximate: the sweep fails on it, but
+        # report.md is written before the failure exits, so the row must say so where its
+        # number is read (Codex P1 on PR #661).
+        ref = cell("pytorch", "cpu", "eager", [2.3026, 2.3010, 2.3000])
+        leaked = cell("ocannl", "cc", "default", [2.3026, 2.3011, 2.3001])
+        leaked["profile"] = "approximate"
+        orchestrate.parity_check([ref, leaked])
+        self.assertEqual(orchestrate.regime_check([ref, leaked]), [leaked])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            with contextlib.redirect_stdout(io.StringIO()):
+                orchestrate.report([ref, leaked], out)
+            text = (out / "report.md").read_text()
+            rows = [
+                strict_loads(line) for line in (out / "results.jsonl").read_text().splitlines()
+            ]
+
+        self.assertIn("| regime |", text)
+        row = [line for line in text.splitlines() if line.startswith("| ocannl")][0]
+        self.assertIn("**REGIME MISMATCH** (dispatched exact, ran approximate)", row)
+        self.assertNotIn("| exact |", row)
+        self.assertEqual(rows[1]["regime_mismatch"], "approximate")
+
     def test_both_regimes_can_share_one_sweep_and_an_unknown_one_is_refused(self):
         args = orchestrate.build_arg_parser().parse_args(["--profile", "exact", "approximate"])
 

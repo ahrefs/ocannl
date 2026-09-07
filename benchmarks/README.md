@@ -501,7 +501,8 @@ than the driver (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` at module load), run it wi
   approximate` puts the before/after in one report. Each runner reports what its process ran
   under (`profile` for OCANNL, `runner_regime` and `regime_settings` for torch), and the sweep
   fails a row whose runner contradicts the regime it was dispatched in (an ambient
-  `OCANNL_PROFILE` reaching the exact cells, say) — a mislabelled number is worse than a missing
+  `OCANNL_PROFILE` reaching the exact cells, say), rendering it as **`REGIME MISMATCH`** in the
+  report rather than under the dispatched label — a mislabelled number is worse than a missing
   one, and no parity gate can catch it, since an exact trajectory passes the approximate envelope
   too.
 - Losses are recorded per step *before* that step's SGD update (forward runs first in every

@@ -967,13 +967,13 @@ def parity_check(results):
                     else "FAIL"
                 )
                 if regime != "exact":
-                    # Whether the row also passes the exact envelope is reported, not assumed
+                    # Whether the row's DRIFT also fits the exact envelope is reported, not assumed
                     # (gh-ocannl-719): a rewrite that changes nothing measurable is a finding too,
                     # and the envelope is calibrated from these verdicts rather than from faith.
+                    # Drift alone: loss movement is the gate's own condition and is reported on
+                    # its own, so a stationary row is not misattributed to excessive drift.
                     exact_tol = parity_tol(r.get("precision", "f32"))
-                    r["parity_exact_envelope"] = bool(
-                        max_rel is not None and max_rel < exact_tol and r["parity_loss_moved"]
-                    )
+                    r["parity_exact_envelope"] = bool(max_rel is not None and max_rel < exact_tol)
 
 
 def check_fixture_digests(fixtures, digests_path=None, allow_unpinned=False):
@@ -1356,9 +1356,10 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None):
             lines.append(
                 "Rows are grouped by precision (f32 first), p50-ascending within each group.\n"
             )
-        # gh-ocannl-719: the column appears once a row ran in a non-exact regime, and then every
-        # row of the section names its regime, the exact ones included.
-        with_regime = any(regime_of(r) != "exact" for r in rows)
+        # gh-ocannl-719: the column appears once a row ran in a non-exact regime -- or claims one
+        # its runner contradicts -- and then every row of the section names its regime, the exact
+        # ones included.
+        with_regime = any(regime_of(r) != "exact" or r.get("regime_mismatch") for r in rows)
         if with_regime:
             lines.append(
                 "`regime` is the numerics regime the row was measured and gated in (gh-ocannl-719). "
@@ -1371,7 +1372,11 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None):
                 "whether they ALSO passed the exact envelope -- a rewrite that changes nothing "
                 "measurable is a finding, not a pass. tinygrad has no exact pin, so its row stands "
                 "in the approximate regime whenever the sweep has one. Exact rows come first "
-                "within each precision.\n"
+                "within each precision. **`REGIME MISMATCH`** is a row whose runner reports "
+                "having run in the OTHER regime (an ambient OCANNL_PROFILE reaching an exact "
+                "cell, say): its number belongs to neither column and is not comparable with "
+                "anything -- the sweep fails on it, and the row is kept so the failure is "
+                "visible where the numbers are read.\n"
             )
         with_tokens = any(r.get("tokens_per_step") for r in rows)
         # gh-ocannl-644: which process produced the step times. Only a cell that searches or
@@ -1456,7 +1461,14 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None):
                 provenance = " %s |" % PROVENANCE_MARK.get(r.get("provenance"), "—")
             if with_tensorization:
                 provenance += " %s |" % TENSORIZATION_MARK.get(r.get("tensorization"), "—")
-            regime = f"| {regime_of(r)} " if with_regime else ""
+            regime = ""
+            if with_regime:
+                mismatch = r.get("regime_mismatch")
+                regime = (
+                    f"| **REGIME MISMATCH** (dispatched {regime_of(r)}, ran {mismatch}) "
+                    if mismatch
+                    else f"| {regime_of(r)} "
+                )
             lines.append(
                 f"| {r['framework']} | {r['backend']} | {rendered_variant(r)} "
                 f"| {r.get('precision', 'f32')} {regime}"
@@ -1530,7 +1542,7 @@ def build_arg_parser():
     )
     ap.add_argument(
         "--profile",
-        nargs="*",
+        nargs="+",
         default=["exact"],
         choices=list(REGIMES),
         metavar="exact|approximate",
@@ -1892,7 +1904,7 @@ def main():
         ok = False
         labels = ", ".join(
             f"{r['workload']} {r['backend']}/"
-            f"{cell_name(r['variant'], r.get('precision', 'f32'))}"
+            f"{cell_name(r['variant'], r.get('precision', 'f32'))}{regime_label(regime_of(r))}"
             for r in provenance_violations
         )
         print(
@@ -1907,7 +1919,8 @@ def main():
         # failure mode is a reader quoting it as a tensor-core measurement.
         labels = ", ".join(
             f"{r['workload']} {r['backend']}/"
-            f"{cell_name(r['variant'], r.get('precision', 'f32'))} ({r['tensorization']})"
+            f"{cell_name(r['variant'], r.get('precision', 'f32'))}{regime_label(regime_of(r))}"
+            f" ({r['tensorization']})"
             for r in tensorization_mismatches
         )
         print(
@@ -1942,7 +1955,7 @@ def main():
         ok = False
         labels = ", ".join(
             f"{r['workload']} {r['framework']}/{r['backend']}/"
-            f"{cell_name(r['variant'], r.get('precision', 'f32'))}"
+            f"{cell_name(r['variant'], r.get('precision', 'f32'))}{regime_label(regime_of(r))}"
             f" (from step {r['diverged_at']})"
             for r in diverged
         )
@@ -1957,7 +1970,7 @@ def main():
         ok = False
         labels = ", ".join(
             f"{r['workload']} {r['framework']}/{r['backend']}/"
-            f"{cell_name(r['variant'], r.get('precision', 'f32'))}"
+            f"{cell_name(r['variant'], r.get('precision', 'f32'))}{regime_label(regime_of(r))}"
             for r in stationary
         )
         print(
