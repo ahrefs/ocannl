@@ -29,6 +29,10 @@ the scan output was refused as a virtualization candidate with provenance 148: t
 the scan output is decided non-virtual, so the consumer reads its buffer: true
 the consumer's read of the trajectory survives as a buffer read, not an inlined scope: true
 the consumer computes twice the prefix sums: true
+--- leg 5b: a candidate whose computation contains a scan materializes (148) ---
+the candidate computed through a scan was refused with provenance 148: true
+the scan survives as the candidate's materialized producer: true
+the consumer reads each row's total from the buffer: true
 --- leg 6: malformed scans are refused by name, at both pipeline gates ---
 a next written only under a guard is refused: true
 a next never written is refused: true
@@ -47,6 +51,7 @@ a tensor-buffer access to the state node elsewhere in the routine is refused: tr
 a read of a carried local after the scan is refused: true
 a next read early through a Tile_mma fallback is refused: true
 a tensor-buffer access to the state node inside a Tile_mma fallback is refused: true
+a Staged_compilation inside the scan body is refused: true
 a carried pair over two different nodes is refused: true
 the backend refuses a malformed scan handed through the prelowered seam: true
 --- leg 6a: a dead range is a no-op, inits included ---

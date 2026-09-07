@@ -51,10 +51,13 @@ what a future adjoint generator reads per scalar instead of reconstructing from 
   block); the state node is accessed as a tensor buffer nowhere in the routine; inits read no carried state and do not mention the scan index; each `next` is written
   exactly once, as a top-level statement of the body, and read only by later statements; nothing
   writes a `prev`.
-- **Placement** (`check_and_store_virtual`, `Non_virtual 148`): a node written inside a scan body
-  is refused as a virtualization candidate whether its store is attempted per statement (the
-  `~in_scan` flag threaded through `virtual_llc`) or at an enclosing loop's capture (the validity
-  walk meets the scan). Reads inside the body inline as usual. The state node is committed
+- **Placement** (`check_and_store_virtual`, `Non_virtual 148`): a virtualization candidate whose
+  captured computation contains a scan is refused — one written inside the body (the `~in_scan`
+  flag threaded through `virtual_llc` for the per-statement store), one fed by a scan through a
+  scope local, or one merely enclosing a sibling scan (the validity walk meets the scan at an
+  enclosing loop's capture). Per-cell replay of a scan is what the construct forbids, and the
+  inline filter could not keep one without re-minting its carried locals per replay. Reads inside
+  the body inline as usual. The state node is committed
   `Virtual` at cleanup like a scope local's, so it reaches no routine parameter list.
 - **Schedule opacity**: `Schedule.find_loops_env` and `rewrite_loop` do not enter a scan, so an op
   naming the scan's index or a loop inside its body declines with the usual "no For_loop with

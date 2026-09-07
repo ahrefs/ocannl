@@ -1953,15 +1953,16 @@ module C_syntax (B : C_syntax_config) = struct
   (* Scope-local scalars an RNG conversion writes. Their declaration, their assignments and their
      reads all have to agree on a precision, and only a whole-proc scan sees all three (a
      [Declare_local] carries no value), so the exclusion is resolved once here rather than per
-     statement. A superset would only forgo an optimization, never mis-render. Keyed per [scope_id],
-     not per tnode (Codex P2 round 2 on PR #396): virtualization copies of an rng-consuming node
-     each carry their own rng-mentioning [Set_local], so every copy is marked on its own, while an
-     UNRELATED scope over the same tnode — a schedule-minted accumulation into a node that elsewhere
-     consumes rng — keeps its accumulator residency instead of being pinned to storage by the shared
-     uid. A [Tile_mma]'s scalar fallback renders through the same [scope_prec_of], so the scan
-     descends into it. *)
+     statement. A superset would only forgo an optimization, never mis-render. Keyed per scope id --
+     the full [Scope_id], node and integer, the identity the rendered C name carries -- not per
+     tnode (Codex P2 round 2 on PR #396; full ids since gh-ocannl-696): virtualization copies of an
+     rng-consuming node each carry their own rng-mentioning [Set_local], so every copy is marked on
+     its own, while an UNRELATED scope over the same tnode — a schedule-minted accumulation into a
+     node that elsewhere consumes rng — keeps its accumulator residency instead of being pinned to
+     storage by the shared uid. A [Tile_mma]'s scalar fallback renders through the same
+     [scope_prec_of], so the scan descends into it. *)
   let rng_scope_ids =
-    let acc = Hash_set.create (module Int) in
+    let acc = Hash_set.create (module Low_level.Scope_id) in
     let rec scan_sc (llsc : Low_level.scalar_t) =
       match llsc with
       | Low_level.Local_scope { body; _ } -> scan body
@@ -1995,7 +1996,7 @@ module C_syntax (B : C_syntax_config) = struct
           scan_sc c;
           scan body
       | Set_local (id, v) ->
-          if mentions_rng_conversion v then Hash_set.add acc id.Low_level.scope_id;
+          if mentions_rng_conversion v then Hash_set.add acc id;
           scan_sc v
       | Set { llsc; _ } -> scan_sc llsc
       | Set_dynamic { dyn_value = v, _; llsc; _ } ->
@@ -2122,8 +2123,7 @@ module C_syntax (B : C_syntax_config) = struct
      (gh-ocannl-696), whose node's precision is the recurrence's semantics. *)
   let scope_prec_of (id : Low_level.scope_id) =
     let p = Lazy.force id.tn.Tn.storage_prec in
-    if Hash_set.mem rng_scope_ids id.Low_level.scope_id || Hash_set.mem carried_state_scope_ids id
-    then p
+    if Hash_set.mem rng_scope_ids id || Hash_set.mem carried_state_scope_ids id then p
     else if Hash_set.mem accum_scope_ids id.scope_id then acc_prec p
     else comp_prec p
 
@@ -5187,6 +5187,10 @@ module C_syntax (B : C_syntax_config) = struct
                          (lbrace
                          ^^ nest 2 (hardline ^^ binding ^^ hardline ^^ body_doc ())
                          ^^ hardline ^^ rbrace))))
+    (* gh-ocannl-696: a dead scan is a no-op -- its inits are unobservable -- so it renders nothing,
+       the same as the optimizer dropping it; a prelowered dead scan thus behaves like an optimized
+       one, runtime logging included. *)
+    | Scan_loop { from_; to_; _ } when to_ < from_ -> empty
     | Scan_loop { index = i; from_; to_; direction; carried; body } ->
         (* gh-ocannl-696: the carried state renders as two locals per entry, declared and
            initialized ahead of a serial loop -- counting down for [Backward] -- whose body ends
@@ -5609,7 +5613,7 @@ module C_syntax (B : C_syntax_config) = struct
         let prec = scope_prec_of id in
         let value_prec =
           if Low_level.scalar_reads_scope ~id value then prec
-          else if Hash_set.mem rng_scope_ids id.Low_level.scope_id then prec
+          else if Hash_set.mem rng_scope_ids id then prec
           else comp_prec (Lazy.force id.Low_level.tn.Tn.storage_prec)
         in
         let volatile_reads =

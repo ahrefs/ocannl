@@ -252,11 +252,13 @@ files.
   was the same six artifacts replayed in an unbalanced order; three replay sets of them spanned
   5.5-6.5%, so an identical schedule varies ~1pp run to run -- all three non-overlapping), and balancing that order matters: a fixed order
   confounds the cap with session position, which was worth ~1.4pp of an apparent 7.1%.
-- **A `Scan_loop` body's writes are never virtualization candidates, and the refusal has two doors**
-  (gh-ocannl-696, `test/operations/scan_loop.ml` leg 5): `virtual_llc` threads `~in_scan` beside
-  `~guarded`, so a per-statement store inside the scan hits `Non_virtual 148` in
-  `check_and_store_virtual`, and a capture at an ENCLOSING loop whose nest contains the scan hits the
-  same code from the validity walk (`scan_depth`). Reads inside the body inline as usual; the state
+- **A candidate whose captured computation contains a `Scan_loop` is refused, and the refusal has
+  two doors** (gh-ocannl-696, `test/operations/scan_loop.ml` legs 5 and 5b): `virtual_llc` threads
+  `~in_scan` beside `~guarded`, so a per-statement store inside the scan hits `Non_virtual 148` in
+  `check_and_store_virtual`, and a capture whose nest contains a scan anywhere — a sibling, or one
+  feeding the value through a scope local — hits the same code from the validity walk's
+  `Scan_loop` arm. The inline filter's own `Scan_loop` arm is a backstop raising 148, never a drop:
+  dropping a value-producing scan returned the pre-scan value (Codex P1, staging#660 round 5). Reads inside the body inline as usual; the state
   node of a carried pair must be declared virtual (`Ll_test.virtualize`; the validator names it
   otherwise) and cleanup commits it `Virtual 16` like a scope local's node. The contract itself —
   one node DECLARED virtual per pair, never accessed as a tensor buffer, ids pairwise distinct,

@@ -111,17 +111,18 @@ type t =
           of unbounded arity -- small fixed extents unroll into it; there is no dynamic indexing
           into state.
 
-          Placement contract: a tensor node WRITTEN inside the body is rejected as a virtualization
-          candidate ([Non_virtual 148]) -- a cell's value depends on the whole prefix through state
-          the index does not parameterize, so per-cell recomputation at a read site is unbounded and
-          wrong. Reads inside the body inline as usual (an independent producer replays soundly at
-          any position of the scan). Schedule transforms neither target the scan's own index nor
-          reach the loops inside its body (the loop is opaque to [Schedule.find_loops_env] /
-          [rewrite_loop], so an op naming either symbol declines with the usual no-such-loop
-          [Invalid_argument]); enclosing loops keep their full menu, since the state is
-          per-iteration-of-the-enclosing-loop local scratch. The index is an ordinary affine loop
-          symbol for footprint purposes ({!loop_bounds}, {!affine_accesses}, interval analysis) -- a
-          scan's accesses stay affine and dense even though its values are serial. *)
+          Placement contract: a virtualization candidate whose captured computation contains a scan
+          -- one written inside the body, one fed by a scan through a scope local, or one merely
+          enclosing a sibling scan -- is refused ([Non_virtual 148]): a cell's value depends on the
+          whole prefix through state the index does not parameterize, so per-cell recomputation at a
+          read site is unbounded and wrong. Reads inside the body inline as usual (an independent
+          producer replays soundly at any position of the scan). Schedule transforms neither target
+          the scan's own index nor reach the loops inside its body (the loop is opaque to
+          [Schedule.find_loops_env] / [rewrite_loop], so an op naming either symbol declines with
+          the usual no-such-loop [Invalid_argument]); enclosing loops keep their full menu, since
+          the state is per-iteration-of-the-enclosing-loop local scratch. The index is an ordinary
+          affine loop symbol for footprint purposes ({!loop_bounds}, {!affine_accesses}, interval
+          analysis) -- a scan's accesses stay affine and dense even though its values are serial. *)
   | Zero_out of Tnode.t
   | Set of {
       tn : Tnode.t;

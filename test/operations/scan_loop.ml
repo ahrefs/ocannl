@@ -266,6 +266,58 @@ let () =
     (Array.map prefix_sums ~f:(fun v -> 2. *. v))
     ~f:Float.equal
 
+(* --- Leg 5b: a scan feeding a candidate's value through a scope local. --- *)
+
+let () =
+  printf "--- leg 5b: a candidate whose computation contains a scan materializes (148) ---\n";
+  (* [x[i]] is computed through an inlined scope whose body runs a scan over [k] and leaves the
+     row's prefix total in the scope local; [x] is left undecided and read by [y]. Replaying the
+     scope at [y]'s read would have to replay the scan, which the inline filter cannot do, so the
+     candidate is refused where its computation is captured and [y] reads the buffer. *)
+  let rows = 3 and cols = 4 in
+  let w = mk ~dims:[| rows; cols |] "sl_vs_w" and x = mk ~dims:[| rows |] "sl_vs_x" in
+  let y = mk ~dims:[| rows |] "sl_vs_y" and v = state "sl_vs_v" and st = state "sl_vs_s" in
+  materialize w;
+  materialize y;
+  let i = sym () and k = sym () and j = sym () in
+  let id = LL.get_scope v in
+  let s = carry ~init:(c 0.) st in
+  let scope =
+    LL.Local_scope
+      {
+        id;
+        orig_indices = [| iter i |];
+        mint = LL.Inlined_computation;
+        body =
+          seq
+            (LL.Set_local (id, c 0.))
+            (scan ~upto:(cols - 1) k ~carried:[ s ]
+               (seq
+                  (set_next s (add (prev s) (get w [| iter i; iter k |])))
+                  (LL.Set_local (id, next s))));
+      }
+  in
+  let llc =
+    seq
+      (loop_n i rows (set_at x (iter i) scope))
+      (loop_n j rows (set_at y (iter j) (get x [| iter j |])))
+  in
+  let seed_w =
+    Array.init (rows * cols) ~f:(fun q -> Float.of_int (1 + (10 * (q / cols)) + (q % cols)))
+  in
+  let o, got =
+    optimize_and_execute ~name:"sl_value_scan" llc
+      ~seed:[ (w, seed_w); (y, Array.create ~len:rows sentinel) ]
+      ~read:[ y ]
+  in
+  p "the candidate computed through a scan was refused with provenance 148"
+    (Option.equal Int.equal (rejection_code o x) (Some 148));
+  p "the scan survives as the candidate's materialized producer" (count_stmt ~f:is_scan o.LL.llc = 1);
+  p_all2 "the consumer reads each row's total from the buffer" (List.hd_exn got)
+    (Array.init rows ~f:(fun r ->
+         Array.fold (Array.sub seed_w ~pos:(r * cols) ~len:cols) ~init:0. ~f:( +. )))
+    ~f:Float.equal
+
 (* --- Leg 6: the well-formedness contract at both gates. --- *)
 
 let () =
@@ -437,6 +489,13 @@ let () =
            (seq
               (set_next s (add (prev s) (get x [| iter i |])))
               (seq (set_at out (iter i) (next s)) tile))));
+  p "a Staged_compilation inside the scan body is refused"
+    (entry "sl_bad_staged" (fun (x, out, i) ->
+         let s = carry ~init:(c 0.) (state "sl_bad_staged_s") in
+         scan ~upto:(n - 1) i ~carried:[ s ]
+           (seq
+              (LL.Staged_compilation (fun () -> PPrint.empty))
+              (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s))))));
   p "a carried pair over two different nodes is refused"
     (entry "sl_bad_pair" (fun (x, out, i) ->
          let s =

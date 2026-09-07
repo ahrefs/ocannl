@@ -123,17 +123,18 @@ type t =
           of unbounded arity -- small fixed extents unroll into it; there is no dynamic indexing
           into state.
 
-          Placement contract: a tensor node WRITTEN inside the body is rejected as a virtualization
-          candidate ([Non_virtual 148]) -- a cell's value depends on the whole prefix through state
-          the index does not parameterize, so per-cell recomputation at a read site is unbounded and
-          wrong. Reads inside the body inline as usual (an independent producer replays soundly at
-          any position of the scan). Schedule transforms neither target the scan's own index nor
-          reach the loops inside its body (the loop is opaque to [Schedule.find_loops_env] /
-          [rewrite_loop], so an op naming either symbol declines with the usual no-such-loop
-          [Invalid_argument]); enclosing loops keep their full menu, since the state is
-          per-iteration-of-the-enclosing-loop local scratch. The index is an ordinary affine loop
-          symbol for footprint purposes ({!loop_bounds}, {!affine_accesses}, interval analysis) -- a
-          scan's accesses stay affine and dense even though its values are serial. *)
+          Placement contract: a virtualization candidate whose captured computation contains a scan
+          -- one written inside the body, one fed by a scan through a scope local, or one merely
+          enclosing a sibling scan -- is refused ([Non_virtual 148]): a cell's value depends on the
+          whole prefix through state the index does not parameterize, so per-cell recomputation at a
+          read site is unbounded and wrong. Reads inside the body inline as usual (an independent
+          producer replays soundly at any position of the scan). Schedule transforms neither target
+          the scan's own index nor reach the loops inside its body (the loop is opaque to
+          [Schedule.find_loops_env] / [rewrite_loop], so an op naming either symbol declines with
+          the usual no-such-loop [Invalid_argument]); enclosing loops keep their full menu, since
+          the state is per-iteration-of-the-enclosing-loop local scratch. The index is an ordinary
+          affine loop symbol for footprint purposes ({!loop_bounds}, {!affine_accesses}, interval
+          analysis) -- a scan's accesses stay affine and dense even though its values are serial. *)
   | Zero_out of Tn.t
   | Set of { tn : Tn.t; idcs : Indexing.axis_index array; llsc : scalar_t; mutable debug : string }
   | Set_dynamic of {
@@ -1261,7 +1262,6 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_
   in
   let at_idcs = ref None in
   let has_setter = ref false in
-  let scan_depth = ref 0 in
   let top_tn = traced.tn in
   let check_idcs loop_ranges indices =
     (match !at_idcs with
@@ -1351,30 +1351,24 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_
           ~loop_ranges:(Map.set loop_ranges ~key:index ~data:(to_ - from_ + 1))
           body
     | Scan_loop { index; from_; to_; carried; body; _ } ->
-        (* gh-ocannl-696: a scan inside the captured nest is an inert neighbour, walked like a loop
-           for the sibling checks -- unless it writes the candidate itself, which the setter arms
-           below refuse ([Non_virtual 148]): cell [i]'s value depends on the whole prefix through
-           state the index does not parameterize, so replaying instance [i] cannot reproduce it. *)
-        List.iter carried ~f:(fun c -> loop_scalar ~env_dom ~loop_ranges c.init);
-        Int.incr scan_depth;
-        loop_proc ~env_dom:(Set.add env_dom index)
-          ~loop_ranges:(Map.set loop_ranges ~key:index ~data:(to_ - from_ + 1))
-          body;
-        Int.decr scan_depth
-    | Zero_out tn ->
-        if Tn.equal tn top_tn then (
-          if !scan_depth > 0 then raise @@ Non_virtual 148;
-          has_setter := true)
+        (* gh-ocannl-696: a scan anywhere in the captured computation refuses the candidate. Writing
+           the candidate inside it is the obvious case -- cell [i]'s value depends on the whole
+           prefix through state the index does not parameterize, so replaying instance [i] cannot
+           reproduce it -- but a scan that feeds the candidate through a scope local is the same
+           recurrence one level down, and a sibling scan is dropped by the inline filter, which
+           cannot keep it without re-minting its carried locals per replay. One verdict for the
+           three, decided where the computation is captured. *)
+        ignore (index, from_, to_, carried, body);
+        raise @@ Non_virtual 148
+    | Zero_out tn -> if Tn.equal tn top_tn then has_setter := true
     | Set { tn; idcs; llsc; debug = _ } ->
         if Tn.equal tn top_tn then (
-          if !scan_depth > 0 then raise @@ Non_virtual 148;
           check_idcs loop_ranges idcs;
           has_setter := true)
         else check_sibling_escaping ~env_dom ~code:7 idcs;
         loop_scalar ~env_dom ~loop_ranges llsc
     | Set_from_vec { tn; idcs; length = _; vec_unop = _; arg = arg, _; debug = _ } ->
         if Tn.equal tn top_tn then (
-          if !scan_depth > 0 then raise @@ Non_virtual 148;
           check_idcs loop_ranges idcs;
           has_setter := true)
         else check_sibling_escaping ~env_dom ~code:7 idcs;
@@ -1933,11 +1927,12 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
           Option.map ~f:(fun body : t -> For_loop { index = fresh; from_; to_; body; axis })
           @@ loop env body
       | Scan_loop _ ->
-          (* gh-ocannl-696: a candidate written inside a scan never reaches storage
-             ([check_and_store_virtual]'s [Non_virtual 148]), so a scan in a stored nest is a
-             sibling contributing nothing to the candidate's value, dropped like any other
-             filtered-out sibling. *)
-          None
+          (* gh-ocannl-696: a computation containing a scan never reaches storage
+             ([check_and_store_virtual]'s [Non_virtual 148] on the scan itself), so this arm is a
+             consumption-time backstop with the same verdict, never a silent drop: the filter cannot
+             keep a scan without re-minting its carried locals per replay, and dropping one that
+             feeds the value through a scope local would return the pre-scan value. *)
+          raise @@ Non_virtual 148
       | Zero_out tn when Tn.equal tn traced.tn -> Some (Set_local (id, Constant 0.0))
       | Set { tn; idcs; llsc; debug = _ } when Tn.equal tn traced.tn ->
           assert ([%equal: Indexing.axis_index array option] (Some idcs) def_args);
@@ -7221,6 +7216,31 @@ let cached_analyze_proc (static_indices : Indexing.static_symbol list) (llc : t)
 let scan_loop_violation (plc : Tn.Placements.t) (root : t) : string option =
   let exception Malformed of string in
   let name (id : scope_id) = "v" ^ Int.to_string id.scope_id ^ "_" ^ Tn.debug_name id.tn in
+  (* Whether a subtree holds a [Staged_compilation]: a callback emitting code none of the counts
+     below can inspect, so a scan containing one has no checkable contract. *)
+  let rec has_staged (llc : t) : bool =
+    match llc with
+    | Staged_compilation _ -> true
+    | Seq (a, b) -> has_staged a || has_staged b
+    | For_loop { body; _ } | Tile_mma { fallback = body; _ } -> has_staged body
+    | If { cond = c, _; body } -> scalar_has_staged c || has_staged body
+    | Scan_loop { carried; body; _ } ->
+        List.exists carried ~f:(fun c -> scalar_has_staged c.init) || has_staged body
+    | Set { llsc; _ } | Set_local (_, llsc) -> scalar_has_staged llsc
+    | Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar_has_staged v || scalar_has_staged llsc
+    | Set_from_vec { arg = a, _; _ } -> scalar_has_staged a
+    | Noop | Comment _ | Zero_out _ | Declare_local _ | Workgroup_barrier -> false
+  and scalar_has_staged (llsc : scalar_t) : bool =
+    match llsc with
+    | Local_scope { body; _ } -> has_staged body
+    | Get_dynamic { dyn_value = v, _; _ } -> scalar_has_staged v
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        scalar_has_staged a || scalar_has_staged b || scalar_has_staged c
+    | Binop (_, (a, _), (b, _)) -> scalar_has_staged a || scalar_has_staged b
+    | Unop (_, (a, _)) -> scalar_has_staged a
+    | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
+        false
+  in
   (* Every scope id a subtree binds: statement-level [Declare_local]s and [Local_scope] binders in
      scalar positions, at any depth. *)
   let rec binders_in (llc : t) : scope_id list =
@@ -7289,6 +7309,8 @@ let scan_loop_violation (plc : Tn.Placements.t) (root : t) : string option =
     | Scan_loop { index; carried; body; _ } ->
         let where = "Scan_loop over " ^ Indexing.symbol_ident index in
         let reject what = raise (Malformed (where ^ ": " ^ what)) in
+        if has_staged body || List.exists carried ~f:(fun c -> scalar_has_staged c.init) then
+          reject "a Staged_compilation inside the scan emits code the contract cannot inspect";
         let ids = List.concat_map carried ~f:(fun c -> [ c.prev; c.next ]) in
         List.iteri ids ~f:(fun k id ->
             if List.mem (List.take ids k) id ~equal:equal_scope_id then
