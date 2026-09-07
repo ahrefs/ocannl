@@ -109,10 +109,10 @@ type t =
           previous iteration's state through [Get_local c.prev] and producing the next through
           [Set_local c.next]; after the body, every [c.prev] takes its [c.next] simultaneously
           (phi-style rotation, so a body may read any old value after any new one is written). A
-          dead range ([to_ < from_]) is a no-op, like a dead [For_loop]: its inits are unobservable,
-          since the carried locals cannot be referenced outside the scan, and virtualization drops
-          the construct. The final state is not readable after the loop: a body that wants a
-          trajectory or a final value writes it to a tensor node itself.
+          dead range ([to_ < from_]) is malformed and refused by the validator: a producer with no
+          iterations emits [Noop], so no walker needs a dead-scan convention. The final state is not
+          readable after the loop: a body that wants a trajectory or a final value writes it to a
+          tensor node itself.
 
           Contract, enforced by {!validate_scan_loops} at both ends of the pipeline: [c.prev] and
           [c.next] are ids, pairwise distinct across [carried], over one node DECLARED virtual
@@ -1104,16 +1104,13 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
             ~loop_ranges:(Map.set loop_ranges ~key:index ~data:(to_ - from_ + 1))
             body
     | Scan_loop { index; from_; to_; carried; body; _ } ->
-        (* gh-ocannl-696: a dead scan is a no-op like a dead loop -- its inits are unobservable,
-           since nothing may reference the carried locals outside the scan -- so a dead range
-           records no facts at all; a live one records its inits once and its body under the scan
-           index exactly as under a loop index. *)
-        if to_ >= from_ then (
-          List.iter carried ~f:(fun c ->
-              loop_scalar ~loop_ranges ~lhs:None ~reads:scope_reads c.init);
-          loop_proc ~scope_reads
-            ~loop_ranges:(Map.set loop_ranges ~key:index ~data:(to_ - from_ + 1))
-            body)
+        (* gh-ocannl-696: the inits are recorded once and the body's facts under the scan index
+           exactly as under a loop index. (A dead range never reaches here: the validator refuses it
+           ahead of the analysis, so no walker needs a dead-scan convention.) *)
+        List.iter carried ~f:(fun c -> loop_scalar ~loop_ranges ~lhs:None ~reads:scope_reads c.init);
+        loop_proc ~scope_reads
+          ~loop_ranges:(Map.set loop_ranges ~key:index ~data:(to_ - from_ + 1))
+          body
     | Zero_out tn ->
         let traced : traced_array = get_node traced_store tn in
         if (not traced.has_assignment) && not (Hash_set.mem read_seen tn) then (
@@ -2243,7 +2240,6 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
        consumer side with [inline_computation]'s spliced-body elision (round 10); stored
        computations lose their dead sub-loops at store time for the same reason. *)
     | For_loop { from_; to_; _ } when to_ < from_ -> Noop
-    | Scan_loop { from_; to_; _ } when to_ < from_ -> Noop
     | Scan_loop ({ index; from_; to_; carried; body; _ } as scan_config) ->
         (* gh-ocannl-696: no candidate capture at the scan's binder. A node written in the body is
            refused wherever its store is attempted -- per statement here, through [in_scan] reaching
@@ -5140,8 +5136,6 @@ let affine_accesses (llc : t) : Tn.t Affine.access list =
             code ~loops ~path:(Affine.Stmt k :: path) ~guarded stmt)
     | For_loop { index; from_; to_; body; _ } ->
         code ~loops:((index, (from_, to_)) :: loops) ~path ~guarded body
-    (* A dead scan is a no-op: it performs no accesses, its inits included. *)
-    | Scan_loop { from_; to_; _ } when to_ < from_ -> ()
     | Scan_loop { index; from_; to_; carried; body; _ } ->
         (* gh-ocannl-696: the inits are statement [0] of the construct, one [Set_local]-shaped
            position each, and the body statement [1] -- so every init read orders before every body
@@ -7316,9 +7310,18 @@ let scan_loop_violation (plc : Tn.Placements.t) (root : t) : string option =
   in
   let rec proc (llc : t) =
     match llc with
-    | Scan_loop { index; carried; body; _ } ->
+    | Scan_loop { index; from_; to_; carried; body; _ } ->
         let where = "Scan_loop over " ^ Indexing.symbol_ident index in
         let reject what = raise (Malformed (where ^ ": " ^ what)) in
+        (* A dead range is refused rather than given a meaning: every walker would otherwise need
+           its own "dead scan" convention (renderer, tracer, censuses, footprint, cost, launch
+           geometry), and each omission is a divergence. Refusing it here keeps the construct's only
+           shape the live one; a producer with an empty range emits [Noop]. *)
+        if to_ < from_ then
+          reject
+            (Printf.sprintf
+               "the range %d..%d is empty; a scan over no iterations is malformed -- emit Noop"
+               from_ to_);
         if has_staged body || List.exists carried ~f:(fun c -> scalar_has_staged c.init) then
           reject "a Staged_compilation inside the scan emits code the contract cannot inspect";
         let ids = List.concat_map carried ~f:(fun c -> [ c.prev; c.next ]) in

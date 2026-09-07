@@ -35,8 +35,9 @@ Semantics: every `prev` takes its `init` once, before the first iteration; for e
 takes its `next` simultaneously. The rotation is phi-style, so old and new values coexist inside
 one body — online softmax needs the previous *and* the new running max in one expression. The
 state is scalars only, of unbounded arity; a body that wants a trajectory or a final value writes
-it to a tensor node itself. A dead range is a no-op, like a dead `For_loop`: its inits are
-unobservable once nothing may reference the carried locals outside the scan.
+it to a tensor node itself. A dead range is malformed: the validator refuses it, and a producer
+with no iterations emits `Noop` — so no walker, census or renderer carries a dead-scan convention
+that could drift from the others.
 
 Rotation rather than in-place update is the load-bearing choice: it is SSA form for carried
 state, which is what keeps body rewrites (CSE, hoisting within the body) order-insensitive and
@@ -50,7 +51,7 @@ what a future adjoint generator reads per scalar instead of reconstructing from 
   or `Local_scope` inside the scan and referenced nowhere outside it (the locals live in the scan's
   block); the state node is accessed as a tensor buffer nowhere in the routine; inits read no carried state and do not mention the scan index; each `next` is written
   exactly once, as a top-level statement of the body, and read only by later statements; nothing
-  writes a `prev`.
+  writes a `prev`; no opaque callback inside; and the range is non-empty.
 - **Placement** (`check_and_store_virtual`, `Non_virtual 148`): a virtualization candidate whose
   captured computation contains a scan is refused — one written inside the body (the `~in_scan`
   flag threaded through `virtual_llc` for the per-statement store), one fed by a scan through a

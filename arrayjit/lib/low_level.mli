@@ -97,10 +97,10 @@ type t =
           previous iteration's state through [Get_local c.prev] and producing the next through
           [Set_local c.next]; after the body, every [c.prev] takes its [c.next] simultaneously
           (phi-style rotation, so a body may read any old value after any new one is written). A
-          dead range ([to_ < from_]) is a no-op, like a dead [For_loop]: its inits are unobservable,
-          since the carried locals cannot be referenced outside the scan, and virtualization drops
-          the construct. The final state is not readable after the loop: a body that wants a
-          trajectory or a final value writes it to a tensor node itself.
+          dead range ([to_ < from_]) is malformed and refused by the validator: a producer with no
+          iterations emits [Noop], so no walker needs a dead-scan convention. The final state is not
+          readable after the loop: a body that wants a trajectory or a final value writes it to a
+          tensor node itself.
 
           Contract, enforced by {!validate_scan_loops} at both ends of the pipeline: [c.prev] and
           [c.next] are ids, pairwise distinct across [carried], over one node DECLARED virtual
@@ -559,9 +559,10 @@ val validate_scan_loops : Tnode.Placements.t -> t -> unit
 (** gh-ocannl-696: the well-formedness contract of {!t.Scan_loop} -- one state node DECLARED virtual
     per carried pair, ids pairwise distinct across the list, inits free of carried state and of the
     scan's own index, each [next] written exactly once as a top-level body statement and read only
-    by later statements, no write of a [prev]. Raises [Invalid_argument] naming the scan and the
-    clause. Like {!validate_scope_bodies} it runs at both ends of the pipeline: {!optimize} on the
-    way in, backend codegen on the way out. *)
+    by later statements, no write of a [prev], no binder or reference of a carried id beyond its
+    scan, no opaque callback inside, and a non-empty range. Raises [Invalid_argument] naming the
+    scan and the clause. Like {!validate_scope_bodies} it runs at both ends of the pipeline:
+    {!optimize} on the way in, backend codegen on the way out. *)
 
 val validate_parallel : Tnode.Placements.t -> t -> unit
 (** Backend-independent well-formedness of hardware annotations (axis-types proposal §2); a no-op

@@ -264,7 +264,10 @@ files.
   one node DECLARED virtual per pair, never accessed as a tensor buffer, ids pairwise distinct,
   rebound by no `Declare_local`/`Local_scope` inside the scan and referenced nowhere outside it, inits free of carried state and of
   the scan index, `next` written exactly once at the body's top level and read only by later
-  statements (it is declared without a value), no write of `prev` — is
+  statements (it is declared without a value), no write of `prev`, no `Staged_compilation` inside,
+  and a NON-EMPTY range (a dead scan is refused rather than given a meaning: review rounds 4–8 on
+  staging#660 found a fresh walker each round that needed its own "dead scan is a no-op"
+  convention, so the class was closed by making the shape unreachable) — is
   `Low_level.validate_scan_loops`, run at both gates like scope purity. Codegen's three per-local
   censuses (rng precision, accumulator residency, controlled accumulators) walk the implicit
   `prev = init` / `prev = next` assignments as the `Set_local`s they render as

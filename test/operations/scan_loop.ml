@@ -24,14 +24,14 @@
    refused as a virtualization candidate ([Non_virtual 148]) rather than recomputed per cell at a
    downstream read, and the downstream consumer computes from the materialized trajectory. 6. The
    well-formedness contract, at both pipeline gates: a guarded, missing or repeated [next] write, a
-   [next] read before its write, a written [prev], a materialized or undeclared state node, a shared
-   id, an init reading carried state or the scan index, and a pair over two nodes are each refused
-   by name -- by [optimize] on the way in, and by backend codegen when the malformed scan is handed
-   straight through the [?prelowered] seam. 7. Schedule opacity: an op naming the scan's own index,
-   or a loop nested inside its body, declines with the usual no-such-loop refusal. 8. Digest
-   identity: the canonical rendering tells [Forward] from [Backward] and a swapped carried pair from
-   the original, while a fresh lowering of the same program renders identically -- the schedule
-   cache's replay key sees the recurrence and only the recurrence. *)
+   [next] read before its write, an empty range, a written [prev], a materialized or undeclared
+   state node, a shared id, an init reading carried state or the scan index, and a pair over two
+   nodes are each refused by name -- by [optimize] on the way in, and by backend codegen when the
+   malformed scan is handed straight through the [?prelowered] seam. 7. Schedule opacity: an op
+   naming the scan's own index, or a loop nested inside its body, declines with the usual
+   no-such-loop refusal. 8. Digest identity: the canonical rendering tells [Forward] from [Backward]
+   and a swapped carried pair from the original, while a fresh lowering of the same program renders
+   identically -- the schedule cache's replay key sees the recurrence and only the recurrence. *)
 
 open Base
 open Stdio
@@ -526,28 +526,31 @@ let () =
   p "the backend refuses a malformed scan handed through the prelowered seam"
     (rejected (fun () -> link ~name:"sl_exit" { o with LL.llc = bad }))
 
-(* --- Leg 6a: a dead scan is a no-op. --- *)
+(* --- Leg 6a: a dead range is malformed. --- *)
 
 let () =
-  printf "--- leg 6a: a dead range is a no-op, inits included ---\n";
+  printf "--- leg 6a: an empty range is refused, at both gates ---\n";
   let x = mk "sl_dead_x" and out = mk "sl_dead_out" in
   materialize x;
   materialize out;
-  let i = sym () in
-  (* The init reads [x]; were it evaluated, [x] would be a routine input. *)
-  let s = carry ~init:(get x [| fixed 0 |]) (state "sl_dead_s") in
-  let llc =
+  let dead () =
+    let i = sym () in
+    let s = carry ~init:(c 0.) (state "sl_dead_s") in
     scan ~upto:(-1) i ~carried:[ s ]
       (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s)))
   in
-  let o = optimize ~name:"sl_dead" llc in
-  let ctx, routine = link ~name:"sl_dead" o in
-  let ctx = run_linked (ctx, routine) ~seed:[ (out, Array.create ~len:n sentinel) ] in
-  p "the dead scan is dropped by optimize" (count_stmt ~f:is_scan o.LL.llc = 0);
-  p "a node read only by a dead scan's init is not a routine input"
-    (not (Set.mem routine.Context.inputs x));
-  p_all2 "the trajectory node keeps its seeded sentinel in every cell" (Context.get_values ctx out)
-    (Array.create ~len:n sentinel) ~f:Float.equal
+  p "a scan over an empty range is refused by optimize"
+    (rejected (fun () -> optimize ~name:"sl_dead" (dead ())));
+  (* The exit gate, through a well-formed twin's record. *)
+  let live =
+    let i = sym () in
+    let s = carry ~init:(c 0.) (state "sl_dead_live_s") in
+    scan ~upto:(n - 1) i ~carried:[ s ]
+      (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s)))
+  in
+  let o = optimize ~name:"sl_dead_live" live in
+  p "a scan over an empty range is refused by the backend through the prelowered seam"
+    (rejected (fun () -> link ~name:"sl_dead_live" { o with LL.llc = dead () }))
 
 (* --- Leg 6b: carried state resides at its node's precision. --- *)
 

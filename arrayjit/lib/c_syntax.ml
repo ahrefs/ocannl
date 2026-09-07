@@ -1983,8 +1983,6 @@ module C_syntax (B : C_syntax_config) = struct
           scan a;
           scan b
       | For_loop { body; _ } -> scan body
-      (* A dead scan renders nothing (see [pp_ll]), so it classifies nothing either. *)
-      | Scan_loop { from_; to_; _ } when to_ < from_ -> ()
       | Scan_loop { carried; body; _ } ->
           (* gh-ocannl-696: the census sees exactly the statements the renderer emits for a scan --
              the implicit init [prev = init] and rotation [prev = next] are [Set_local]s to it --
@@ -2089,8 +2087,6 @@ module C_syntax (B : C_syntax_config) = struct
           scan a;
           scan b
       | For_loop { body; _ } -> scan body
-      (* A dead scan renders nothing (see [pp_ll]), so it classifies nothing either. *)
-      | Scan_loop { from_; to_; _ } when to_ < from_ -> ()
       | Scan_loop { carried; body; _ } ->
           (* gh-ocannl-696: the implicit init and rotation are classified like the [Set_local]s they
              render as. A carried update reads [prev] and writes [next], so the classifier sees no
@@ -2244,8 +2240,6 @@ module C_syntax (B : C_syntax_config) = struct
           stmt a;
           stmt b
       | For_loop { body; _ } | If { body; _ } -> stmt body
-      (* A dead scan renders nothing (see [pp_ll]), so it classifies nothing either. *)
-      | Scan_loop { from_; to_; _ } when to_ < from_ -> ()
       | Scan_loop { carried; body; _ } ->
           List.iter carried ~f:(fun c -> List.iter (scan_implicit_set_locals c) ~f:stmt);
           stmt body
@@ -5194,10 +5188,6 @@ module C_syntax (B : C_syntax_config) = struct
                          (lbrace
                          ^^ nest 2 (hardline ^^ binding ^^ hardline ^^ body_doc ())
                          ^^ hardline ^^ rbrace))))
-    (* gh-ocannl-696: a dead scan is a no-op -- its inits are unobservable -- so it renders nothing,
-       the same as the optimizer dropping it; a prelowered dead scan thus behaves like an optimized
-       one, runtime logging included. *)
-    | Scan_loop { from_; to_; _ } when to_ < from_ -> empty
     | Scan_loop { index = i; from_; to_; direction; carried; body } ->
         (* gh-ocannl-696: the carried state renders as two locals per entry, declared and
            initialized ahead of a serial loop -- counting down for [Backward] -- whose body ends

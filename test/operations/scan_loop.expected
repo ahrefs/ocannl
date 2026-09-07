@@ -54,10 +54,9 @@ a tensor-buffer access to the state node inside a Tile_mma fallback is refused: 
 a Staged_compilation inside the scan body is refused: true
 a carried pair over two different nodes is refused: true
 the backend refuses a malformed scan handed through the prelowered seam: true
---- leg 6a: a dead range is a no-op, inits included ---
-the dead scan is dropped by optimize: true
-a node read only by a dead scan's init is not a routine input: true
-the trajectory node keeps its seeded sentinel in every cell: true
+--- leg 6a: an empty range is refused, at both gates ---
+a scan over an empty range is refused by optimize: true
+a scan over an empty range is refused by the backend through the prelowered seam: true
 --- leg 6b: a half-precision state rounds the running sum every step ---
 a single-precision state accumulates all six increments (2054): true
 a half-precision state rounds each step back to 2048, so the sum stays at 2048: true
