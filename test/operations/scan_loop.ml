@@ -23,14 +23,15 @@
    of that loop. 5. The placement contract: a scan output the program never declared materialized is
    refused as a virtualization candidate ([Non_virtual 148]) rather than recomputed per cell at a
    downstream read, and the downstream consumer computes from the materialized trajectory. 6. The
-   well-formedness contract, at both pipeline gates: a guarded or missing [next] write, a written
-   [prev], a materialized state node, an init reading carried state, and a pair over two nodes are
-   each refused by name -- by [optimize] on the way in, and by backend codegen when the malformed
-   scan is handed straight through the [?prelowered] seam. 7. Schedule opacity: an op naming the
-   scan's own index, or a loop nested inside its body, declines with the usual no-such-loop refusal.
-   8. Digest identity: the canonical rendering tells [Forward] from [Backward] and a swapped carried
-   pair from the original, while a fresh lowering of the same program renders identically -- the
-   schedule cache's replay key sees the recurrence and only the recurrence. *)
+   well-formedness contract, at both pipeline gates: a guarded, missing or repeated [next] write, a
+   [next] read before its write, a written [prev], a materialized or undeclared state node, a shared
+   id, an init reading carried state or the scan index, and a pair over two nodes are each refused
+   by name -- by [optimize] on the way in, and by backend codegen when the malformed scan is handed
+   straight through the [?prelowered] seam. 7. Schedule opacity: an op naming the scan's own index,
+   or a loop nested inside its body, declines with the usual no-such-loop refusal. 8. Digest
+   identity: the canonical rendering tells [Forward] from [Backward] and a swapped carried pair from
+   the original, while a fresh lowering of the same program renders identically -- the schedule
+   cache's replay key sees the recurrence and only the recurrence. *)
 
 open Base
 open Stdio
@@ -317,6 +318,34 @@ let () =
            (seq
               (set_next a (add (prev a) (get x [| iter i |])))
               (seq (set_next b (add (prev b) (next a))) (set_at out (iter i) (next b))))));
+  p "a next read by a statement before the one that writes it is refused"
+    (entry "sl_bad_order" (fun (x, out, i) ->
+         let a = carry ~init:(c 0.) (state "sl_bad_order_a") in
+         let b = carry ~init:(c 0.) (state "sl_bad_order_b") in
+         scan ~upto:(n - 1) i ~carried:[ a; b ]
+           (seq
+              (set_next b (add (prev b) (next a)))
+              (seq (set_next a (add (prev a) (get x [| iter i |]))) (set_at out (iter i) (next b))))));
+  p "a next read by its own defining statement is refused"
+    (entry "sl_bad_self" (fun (x, out, i) ->
+         let s = carry ~init:(c 0.) (state "sl_bad_self_s") in
+         scan ~upto:(n - 1) i ~carried:[ s ]
+           (seq (set_next s (add (next s) (get x [| iter i |]))) (set_at out (iter i) (next s)))));
+  p "an id shared by two carried pairs is refused"
+    (entry "sl_bad_dup" (fun (x, out, i) ->
+         let s = carry ~init:(c 0.) (state "sl_bad_dup_s") in
+         scan ~upto:(n - 1) i ~carried:[ s; s ]
+           (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s)))));
+  p "an init mentioning the scan index is refused"
+    (entry "sl_bad_idx" (fun (x, out, i) ->
+         let s = carry ~init:(embed i) (state "sl_bad_idx_s") in
+         scan ~upto:(n - 1) i ~carried:[ s ]
+           (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s)))));
+  p "a state node left undeclared (neither virtual nor materialized) is refused"
+    (entry "sl_bad_undecl" (fun (x, out, i) ->
+         let s = carry ~init:(c 0.) (mk ~dims:[| 1 |] "sl_bad_undecl_s") in
+         scan ~upto:(n - 1) i ~carried:[ s ]
+           (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s)))));
   p "a carried pair over two different nodes is refused"
     (entry "sl_bad_pair" (fun (x, out, i) ->
          let s =

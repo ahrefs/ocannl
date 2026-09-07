@@ -1931,6 +1931,14 @@ module C_syntax (B : C_syntax_config) = struct
     let prec = if renders_at_store_prec llsc then store_prec else comp_prec store_prec in
     (prec, B.convert_precision ~from:prec ~to_:store_prec)
 
+  (* gh-ocannl-696: the two assignments a [Scan_loop] renders for one carried scalar besides the
+     body's own -- the init [prev = init] ahead of the loop and the rotation [prev = next] at the
+     end of every iteration. Every per-local census below walks them as the [Set_local]s they render
+     as (through [pp_ll]'s [Set_local] arm), so a classification a census would give an explicit
+     assignment is given the implicit one too. *)
+  let scan_implicit_set_locals (c : Low_level.carried) : Low_level.t list =
+    [ Set_local (c.prev, c.init); Set_local (c.prev, Get_local c.next) ]
+
   (* Scope-local scalars an RNG conversion writes. Their declaration, their assignments and their
      reads all have to agree on a precision, and only a whole-proc scan sees all three (a
      [Declare_local] carries no value), so the exclusion is resolved once here rather than per
@@ -1964,7 +1972,9 @@ module C_syntax (B : C_syntax_config) = struct
           scan b
       | For_loop { body; _ } -> scan body
       | Scan_loop { carried; body; _ } ->
-          List.iter carried ~f:(fun c -> scan_sc c.init);
+          (* gh-ocannl-696: the census sees exactly the statements the renderer emits for a scan --
+             the implicit init [prev = init] and rotation [prev = next] are [Set_local]s to it. *)
+          List.iter carried ~f:(fun c -> List.iter (scan_implicit_set_locals c) ~f:scan);
           scan body
       | If { cond = c, _; body } ->
           scan_sc c;
@@ -2062,10 +2072,11 @@ module C_syntax (B : C_syntax_config) = struct
           scan b
       | For_loop { body; _ } -> scan body
       | Scan_loop { carried; body; _ } ->
-          (* gh-ocannl-696: a carried update reads [prev] and writes [next], so the classifier sees
-             no self-update and the state resides at its node's precision -- widening carried state
-             is a residency decision this construct does not make yet. *)
-          List.iter carried ~f:(fun c -> scan_sc c.init);
+          (* gh-ocannl-696: the implicit init and rotation are classified like the [Set_local]s they
+             render as. A carried update reads [prev] and writes [next], so the classifier sees no
+             self-update and the state resides at its node's precision -- widening carried state is
+             a residency decision this construct does not make yet. *)
+          List.iter carried ~f:(fun c -> List.iter (scan_implicit_set_locals c) ~f:scan);
           scan body
       | If { cond = c, _; body } ->
           guarding_reads_sc c;
@@ -2213,7 +2224,7 @@ module C_syntax (B : C_syntax_config) = struct
           stmt b
       | For_loop { body; _ } | If { body; _ } -> stmt body
       | Scan_loop { carried; body; _ } ->
-          List.iter carried ~f:(fun c -> scalar c.init);
+          List.iter carried ~f:(fun c -> List.iter (scan_implicit_set_locals c) ~f:stmt);
           stmt body
       | Set_local (id, value) ->
           add id value;

@@ -36,6 +36,11 @@ a next written twice is refused: true
 a prev written in the body is refused: true
 a materialized state node is refused: true
 an init reading carried state is refused: true
+a next read by a statement before the one that writes it is refused: true
+a next read by its own defining statement is refused: true
+an id shared by two carried pairs is refused: true
+an init mentioning the scan index is refused: true
+a state node left undeclared (neither virtual nor materialized) is refused: true
 a carried pair over two different nodes is refused: true
 the backend refuses a malformed scan handed through the prelowered seam: true
 --- leg 7: schedule ops decline the scan's index and the loops inside it ---

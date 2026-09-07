@@ -102,11 +102,13 @@ type t =
           itself.
 
           Contract, enforced by {!validate_scan_loops} at both ends of the pipeline: [c.prev] and
-          [c.next] are distinct ids over one VIRTUAL node ([c.prev.tn == c.next.tn]), which names
-          and types the state and is never a buffer; [c.next] is written exactly once, as a
-          top-level statement of [body] (not under a guard or a nested loop); nothing writes
-          [c.prev]; [c.init] reads no carried local. The state is scalars only, of unbounded arity
-          -- small fixed extents unroll into it; there is no dynamic indexing into state.
+          [c.next] are ids, pairwise distinct across [carried], over one node DECLARED virtual
+          ([c.prev.tn == c.next.tn]), which names and types the state and is never a buffer;
+          [c.next] is written exactly once, as a top-level statement of [body] (not under a guard or
+          a nested loop), and read only by statements after that write; nothing writes [c.prev];
+          [c.init] reads no carried local and does not mention [index]. The state is scalars only,
+          of unbounded arity -- small fixed extents unroll into it; there is no dynamic indexing
+          into state.
 
           Placement contract: a tensor node WRITTEN inside the body is rejected as a virtualization
           candidate ([Non_virtual 148]) -- a cell's value depends on the whole prefix through state
@@ -548,11 +550,12 @@ val validate_scope_bodies : t -> unit
     satisfies the contract by construction. *)
 
 val validate_scan_loops : Tnode.Placements.t -> t -> unit
-(** gh-ocannl-696: the well-formedness contract of {!t.Scan_loop} -- one virtual state node per
-    carried pair, two distinct ids, inits free of carried state, each [next] written exactly once as
-    a top-level body statement, no write of a [prev]. Raises [Invalid_argument] naming the scan and
-    the clause. Like {!validate_scope_bodies} it runs at both ends of the pipeline: {!optimize} on
-    the way in, backend codegen on the way out. *)
+(** gh-ocannl-696: the well-formedness contract of {!t.Scan_loop} -- one state node DECLARED virtual
+    per carried pair, ids pairwise distinct across the list, inits free of carried state and of the
+    scan's own index, each [next] written exactly once as a top-level body statement and read only
+    by later statements, no write of a [prev]. Raises [Invalid_argument] naming the scan and the
+    clause. Like {!validate_scope_bodies} it runs at both ends of the pipeline: {!optimize} on the
+    way in, backend codegen on the way out. *)
 
 val validate_parallel : Tnode.Placements.t -> t -> unit
 (** Backend-independent well-formedness of hardware annotations (axis-types proposal §2); a no-op

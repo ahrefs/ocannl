@@ -45,8 +45,9 @@ what a future adjoint generator reads per scalar instead of reconstructing from 
 
 - **Well-formedness** (`Low_level.validate_scan_loops`, at both pipeline gates like scope purity:
   `optimize_proc` on the way in, `C_syntax.compile_proc` on the way out): a carried pair names one
-  virtual node with two distinct ids; inits read no carried state; each `next` is written exactly
-  once, as a top-level statement of the body; nothing writes a `prev`.
+  node declared virtual, with ids pairwise distinct across the list; inits read no carried state
+  and do not mention the scan index; each `next` is written exactly once, as a top-level statement
+  of the body, and read only by later statements; nothing writes a `prev`.
 - **Placement** (`check_and_store_virtual`, `Non_virtual 148`): a node written inside a scan body
   is refused as a virtualization candidate whether its store is attempted per statement (the
   `~in_scan` flag threaded through `virtual_llc`) or at an enclosing loop's capture (the validity

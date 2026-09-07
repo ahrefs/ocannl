@@ -114,11 +114,13 @@ type t =
           itself.
 
           Contract, enforced by {!validate_scan_loops} at both ends of the pipeline: [c.prev] and
-          [c.next] are distinct ids over one VIRTUAL node ([c.prev.tn == c.next.tn]), which names
-          and types the state and is never a buffer; [c.next] is written exactly once, as a
-          top-level statement of [body] (not under a guard or a nested loop); nothing writes
-          [c.prev]; [c.init] reads no carried local. The state is scalars only, of unbounded arity
-          -- small fixed extents unroll into it; there is no dynamic indexing into state.
+          [c.next] are ids, pairwise distinct across [carried], over one node DECLARED virtual
+          ([c.prev.tn == c.next.tn]), which names and types the state and is never a buffer;
+          [c.next] is written exactly once, as a top-level statement of [body] (not under a guard or
+          a nested loop), and read only by statements after that write; nothing writes [c.prev];
+          [c.init] reads no carried local and does not mention [index]. The state is scalars only,
+          of unbounded arity -- small fixed extents unroll into it; there is no dynamic indexing
+          into state.
 
           Placement contract: a tensor node WRITTEN inside the body is rejected as a virtualization
           candidate ([Non_virtual 148]) -- a cell's value depends on the whole prefix through state
@@ -7198,10 +7200,15 @@ let cached_analyze_proc (static_indices : Indexing.static_symbol list) (llc : t)
 
 (** gh-ocannl-696: the well-formedness contract of {!t.Scan_loop}, as a message rather than an
     exception so both pipeline gates can phrase it. Checked per scan, at any nesting depth: the
-    carried pair names one node, never a buffer ([known_non_virtual] is false for it), with two
-    distinct ids; the [init]s read no carried local; every [next] is written exactly once, as a
-    top-level statement of the body -- a guarded or nested write would make the carried update
-    conditional or repeated; and nothing writes a [prev], which only the rotation assigns. *)
+    carried pair names one node DECLARED virtual ([known_virtual], not merely undecided -- an
+    undecided node another statement reads as a buffer would otherwise surface as a cleanup
+    assertion instead of a verdict here), with ids pairwise distinct across the whole list (the
+    renderer declares one C local per id); the [init]s read no carried local and do not mention the
+    scan's own index, which the renderer binds only after they have evaluated; every [next] is
+    written exactly once, as a top-level statement of the body -- a guarded or nested write would
+    make the carried update conditional or repeated -- and is read, at any depth, only by statements
+    AFTER that write, since the local is declared without a value; and nothing writes a [prev],
+    which only the rotation assigns. *)
 let scan_loop_violation (plc : Tn.Placements.t) (llc : t) : string option =
   let exception Malformed of string in
   let name (id : scope_id) = "v" ^ Int.to_string id.scope_id ^ "_" ^ Tn.debug_name id.tn in
@@ -7223,15 +7230,22 @@ let scan_loop_violation (plc : Tn.Placements.t) (llc : t) : string option =
     | Scan_loop { index; carried; body; _ } ->
         let where = "Scan_loop over " ^ Indexing.symbol_ident index in
         let reject what = raise (Malformed (where ^ ": " ^ what)) in
+        let ids = List.concat_map carried ~f:(fun c -> [ c.prev; c.next ]) in
+        List.iteri ids ~f:(fun k id ->
+            if List.mem (List.take ids k) id ~equal:equal_scope_id then
+              reject ("the id " ^ name id ^ " occurs twice among the carried pairs"));
         List.iter carried ~f:(fun { prev; next; init } ->
             if not (Tn.equal prev.tn next.tn) then
               reject ("the carried pair " ^ name prev ^ " / " ^ name next ^ " names two nodes");
-            if equal_scope_id prev next then
-              reject ("the carried pair uses the one id " ^ name prev ^ " as both prev and next");
-            if Tn.Placements.known_non_virtual plc prev.tn then
+            if not (Tn.Placements.known_virtual plc prev.tn) then
               reject
                 ("the state node " ^ Tn.debug_name prev.tn
-               ^ " is not virtual -- carried state lives in per-iteration locals, never a buffer");
+               ^ " is not declared virtual -- carried state lives in per-iteration locals, never a \
+                  buffer");
+            if scalar_mentions_symbol index init then
+              reject
+                ("the init of " ^ name prev ^ " mentions the scan index "
+               ^ Indexing.symbol_ident index ^ ", which is bound only after the inits evaluate");
             List.iter carried ~f:(fun c ->
                 if scalar_reads_scope ~id:c.prev init || scalar_reads_scope ~id:c.next init then
                   reject ("the init of " ^ name prev ^ " reads carried state")));
@@ -7250,6 +7264,20 @@ let scan_loop_violation (plc : Tn.Placements.t) (llc : t) : string option =
                ^ Int.to_string at_top ^ " top-level and " ^ Int.to_string anywhere ^ " total");
             if count_writes prev body > 0 then
               reject (name prev ^ " is written in the body; only the rotation assigns a prev"));
+        (* A [next] is declared without a value, so a read of it -- at any depth, the defining
+           statement's own right-hand side included -- is meaningful only after its top-level write;
+           the ordered walk over the body's statements is what decides "after". *)
+        let defined = ref [] in
+        List.iter top ~f:(fun stmt ->
+            List.iter carried ~f:(fun c ->
+                if
+                  (not (List.mem !defined c.next ~equal:equal_scope_id))
+                  && code_reads_scope ~id:c.next stmt
+                then reject (name c.next ^ " is read before the statement that writes it"));
+            match stmt with
+            | Set_local (id, _) when List.exists carried ~f:(fun c -> equal_scope_id c.next id) ->
+                defined := id :: !defined
+            | _ -> ());
         List.iter carried ~f:(fun c -> scalar c.init);
         proc body
     | Seq (a, b) ->

@@ -259,6 +259,9 @@ files.
   same code from the validity walk (`scan_depth`). Reads inside the body inline as usual; the state
   node of a carried pair must be declared virtual (`Ll_test.virtualize`; the validator names it
   otherwise) and cleanup commits it `Virtual 16` like a scope local's node. The contract itself —
-  one node per pair, distinct ids, inits free of carried state, `next` written exactly once at the
-  body's top level, no write of `prev` — is `Low_level.validate_scan_loops`, run at both gates like
-  scope purity. Build scans through `Ll_test.carry`/`scan`/`prev`/`next`/`set_next`.
+  one node DECLARED virtual per pair, ids pairwise distinct, inits free of carried state and of the
+  scan index, `next` written exactly once at the body's top level and read only by later statements
+  (it is declared without a value), no write of `prev` — is `Low_level.validate_scan_loops`, run at
+  both gates like scope purity. Codegen's three per-local censuses (rng precision, accumulator
+  residency, controlled accumulators) walk the implicit `prev = init` / `prev = next` assignments
+  as the `Set_local`s they render as (`C_syntax.scan_implicit_set_locals`). Build scans through `Ll_test.carry`/`scan`/`prev`/`next`/`set_next`.
