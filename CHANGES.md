@@ -25,10 +25,10 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
   per-cell wall-clock cap, on by default (gh-ocannl-842, gh-ocannl-760).
 - `Context.codegen_capabilities` (`supports_f64`, `accum_prec`, asynchronous staging copies) and
   `Ir.Backend_intf.advertises_mma_format` answer capability questions tests used to guess from
-  the backend name; `Autotune.report.fiss_mma_candidates` scopes the MMA count (gh-ocannl-822).
-- `mma_capability` says at which emission lifetime wide-f16 accumulation holds (`Mma_per_statement`,
-  `Mma_fragment_scope`); seeding derives the scope a site needs from its reduction extents, and CUDA
-  withholds multi-statement wide-f16 schedules where HIP and Metal advertise both (gh-ocannl-836).
+  the backend name (gh-ocannl-822).
+- `Autotune.report` carries `candidates_contended` and `default_refused`, the per-candidate facts
+  behind the window count `timings_contended` (`lukstafi/ocannl-staging` PR #608), and
+  `fiss_mma_candidates`, the MMA candidate count scoped to fission sketches (gh-ocannl-822).
 - Metal keeps uniform-f16 MMA candidates under `Fp16_wide`: half fragments feed a float
   `simdgroup_matrix` accumulator, narrowed once at the store boundary (gh-ocannl-837).
 - `tools/test-run.sh repeat [--alone] N <dune args>` runs one target N times in a clean build
@@ -48,6 +48,9 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
   the `queued-v2` policy generation, so earlier winners re-time rather than replay (gh-ocannl-892).
 - Convolution sketch seeds predict their launch geometry, and over-cap candidates are withheld
   before compile as matmul seeds already were (gh-ocannl-739).
+- `mma_capability.mma_f16_wide_acc : bool` is `mma_f16_wide_acc_scopes : mma_emission_scope list`
+  (`Mma_per_statement`, `Mma_fragment_scope`): seeding derives the scope a site needs from its
+  reduction extents; CUDA advertises only per-statement, HIP and Metal both (gh-ocannl-836).
 - RTC options (`Compiler_options.nvrtc`, `.metal`, `.hiprtc`) are pure, pinned state, printed by
   sweeps and appended to CUDA, HIP and Metal compile failures; Metal on macOS 15+ selects
   `mathMode=Safe` with fast float functions (gh-ocannl-784, gh-ocannl-848, gh-ocannl-849).
