@@ -51,6 +51,9 @@ let count_writes_to (llc : Ir.Low_level.t) (id : int) : int =
         go_t a;
         go_t b
     | For_loop { body; _ } -> go_t body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun c -> go_scalar c.init);
+        go_t body
     | Zero_out tn -> hit tn
     | Set { tn; llsc; _ } ->
         hit tn;

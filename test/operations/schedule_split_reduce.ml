@@ -86,6 +86,9 @@ let census ?label (llc : LL.t) : int * int * int =
     | LL.For_loop { body; _ } ->
         Int.incr loops;
         go body
+    | LL.Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun c -> scan c.LL.init);
+        go body
     | LL.If { cond = c, _; body } ->
         Int.incr ifs;
         scan c;
