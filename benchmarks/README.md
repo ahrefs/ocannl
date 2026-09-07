@@ -500,7 +500,9 @@ than the driver (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` at module load), run it wi
   reference in every regime and is run whatever `--profile` selects; `--profile exact
   approximate` puts the before/after in one report. Each runner reports what its process ran
   under (`profile` and `regime_knobs` — where each key of the approximate payload resolved from —
-  for OCANNL, `runner_regime` and `regime_settings` for torch), and the sweep
+  for OCANNL; for torch `runner_regime`, derived from the settings torch reports as effective
+  rather than echoed from `--regime`, so an ambient `TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1` makes an
+  exact cell report `approximate`, and `regime_settings`), and the sweep
   fails a row whose runner contradicts the regime it was dispatched in (an ambient
   `OCANNL_PROFILE` or `OCANNL_TF32_MATMULS` reaching the exact cells, say: the regime is the
   resolution of the profile's keys, not the profile's name — exact owns only built-in defaults,

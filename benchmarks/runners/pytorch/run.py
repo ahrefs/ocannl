@@ -13,6 +13,7 @@ precision these runners use.
 
 import argparse
 import math
+import os
 import sys
 import time
 from pathlib import Path
@@ -234,11 +235,25 @@ def main():
     # cudnn's tf32 defaults ON, unlike matmul's: pinning it off is part of the exact arm's contract
     # on an Ampere-or-later device, and leaving the default is part of the approximate arm's.
     torch.backends.cudnn.allow_tf32 = approximate
+    # What torch will EFFECTIVELY do, read back rather than assumed (Codex P1 on PR #661): an
+    # ambient TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1 forces tf32 matmuls whatever the precision set
+    # above, and torch's own getter reflects the override. The regime this process reports is
+    # derived from those effective settings, so an exact cell that torch quietly made approximate
+    # is reported as approximate and the sweep's regime gate refuses the row -- the class, not the
+    # one variable: anything a torch getter reflects is caught the same way.
+    effective = {
+        "matmul.allow_tf32": bool(torch.backends.cuda.matmul.allow_tf32),
+        "cudnn.allow_tf32": bool(torch.backends.cudnn.allow_tf32),
+        "cudnn.benchmark": bool(torch.backends.cudnn.benchmark),
+        "sdpa": approximate,
+    }
+    runner_regime = "exact" if not any(effective.values()) else "approximate"
+    tf32_override = os.environ.get("TORCH_ALLOW_TF32_CUBLAS_OVERRIDE")
     regime_settings = (
         f"float32_matmul_precision={torch.get_float32_matmul_precision()}, "
-        f"cudnn.allow_tf32={torch.backends.cudnn.allow_tf32}, "
-        f"cudnn.benchmark={torch.backends.cudnn.benchmark}, "
-        f"attention={'sdpa' if approximate else 'composed'}"
+        + ", ".join(f"{k}={v}" for k, v in effective.items())
+        + f", attention={'sdpa' if approximate else 'composed'}"
+        + (f", TORCH_ALLOW_TF32_CUBLAS_OVERRIDE={tf32_override}" if tf32_override else "")
     )
     dev = torch.device(args.device)
     data = load_file(args.fixture)
@@ -339,10 +354,11 @@ def main():
         "timed_steps": timed_steps,
         "losses": losses,
         "version": torch.__version__,
-        # What this process ran under, for the sweep's regime gate and the report (gh-ocannl-719).
-        # `runner_regime`, not `regime`: the sweep stamps `regime` with what it dispatched, and a
-        # same-named key would let the stamp mask a runner that ran the other arm.
-        "runner_regime": args.regime,
+        # What this process ran under, for the sweep's regime gate and the report (gh-ocannl-719):
+        # derived from torch's effective settings above, not echoed from --regime. `runner_regime`,
+        # not `regime`: the sweep stamps `regime` with what it dispatched, and a same-named key
+        # would let the stamp mask a runner that ran the other arm.
+        "runner_regime": runner_regime,
         "regime_settings": regime_settings,
     }
     if args.compile_mode:
