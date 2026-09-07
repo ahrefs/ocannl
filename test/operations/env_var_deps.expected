@@ -26,6 +26,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   build_files_prefix
   cc_backend_arch_flags
   cc_backend_compiler_command
+  cc_backend_fast_math
   cc_backend_fp_contract
   cc_backend_simd_flags
   cc_fp16_arithmetic
@@ -78,19 +79,20 @@ on its own deps.
   OCANNL_DASHED_ONLY_KEY                 test/operations/dune, executable config_var_spellings (3 runs of config_var_spellings.exe)
   OCANNL_DEMO_KEY                        test/operations/dune, executable config_var_spellings (3 runs of config_var_spellings.exe)
   OCANNL_PROFILE                         test/operations/dune, test config_profiles (1 run of it)
-  OCANNL_AUTOTUNE_BEAM_WIDTH             test/operations/profiles/dune, executable profile_precedence (6 runs of profile_precedence.exe)
-  OCANNL_AUTOTUNE_ROUNDS                 test/operations/profiles/dune, executable profile_precedence (6 runs of profile_precedence.exe)
-  OCANNL_AUTOTUNE_SEARCH                 test/operations/profiles/dune, executable profile_precedence (6 runs of profile_precedence.exe)
-  OCANNL_CC_BACKEND_ARCH_FLAGS           test/operations/profiles/dune, executable profile_precedence (6 runs of profile_precedence.exe)
-  OCANNL_CC_BACKEND_FP_CONTRACT          test/operations/profiles/dune, executable profile_precedence (6 runs of profile_precedence.exe)
-  OCANNL_CC_BACKEND_SIMD_FLAGS           test/operations/profiles/dune, executable profile_precedence (6 runs of profile_precedence.exe)
-  OCANNL_CC_VECTOR_BYTES                 test/operations/profiles/dune, executable profile_precedence (6 runs of profile_precedence.exe)
-  OCANNL_FP16_ARITHMETIC                 test/operations/profiles/dune, executable profile_precedence (6 runs of profile_precedence.exe)
-  OCANNL_MODEL_DEFAULT_SCHEDULE          test/operations/profiles/dune, executable profile_precedence (6 runs of profile_precedence.exe)
-  OCANNL_NO_CONFIG_FILE                  test/operations/profiles/dune, executable profile_precedence (6 runs of profile_precedence.exe)
-  OCANNL_TF32_MATMULS                    test/operations/profiles/dune, executable profile_precedence (6 runs of profile_precedence.exe)
-  OCANNL_TUNE_INLINE_FLIPS               test/operations/profiles/dune, executable profile_precedence (6 runs of profile_precedence.exe)
-  OCANNL_VIRTUALIZE_MAX_VISITS           test/operations/profiles/dune, executable profile_precedence (6 runs of profile_precedence.exe)
+  OCANNL_AUTOTUNE_BEAM_WIDTH             test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
+  OCANNL_AUTOTUNE_ROUNDS                 test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
+  OCANNL_AUTOTUNE_SEARCH                 test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
+  OCANNL_CC_BACKEND_ARCH_FLAGS           test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
+  OCANNL_CC_BACKEND_FAST_MATH            test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
+  OCANNL_CC_BACKEND_FP_CONTRACT          test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
+  OCANNL_CC_BACKEND_SIMD_FLAGS           test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
+  OCANNL_CC_VECTOR_BYTES                 test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
+  OCANNL_FP16_ARITHMETIC                 test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
+  OCANNL_MODEL_DEFAULT_SCHEDULE          test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
+  OCANNL_NO_CONFIG_FILE                  test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
+  OCANNL_TF32_MATMULS                    test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
+  OCANNL_TUNE_INLINE_FLIPS               test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
+  OCANNL_VIRTUALIZE_MAX_VISITS           test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
   OCANNL_LOG_CONFIG_SOURCING             test/operations/startup_streams/dune, executable startup_streams (3 runs of startup_streams.exe)
   OCANNL_LOG_LEVEL                       test/operations/startup_streams/dune, executable startup_streams (3 runs of startup_streams.exe)
   OCANNL_NO_CONFIG_FILE                  test/operations/startup_streams/dune, executable startup_streams (3 runs of startup_streams.exe)
@@ -182,6 +184,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/profiles/dune            @runtest-env_spelling_gate
   test/operations/profiles/dune            @runtest-explicit_beats_profile
   test/operations/profiles/dune            @runtest-from_cmdline
+  test/operations/profiles/dune            @runtest-from_cmdline_approximate
   test/operations/profiles/dune            @runtest-from_config_file
   test/operations/profiles/dune            @runtest-from_env
   test/operations/profiles/dune            @runtest-host_profile_flag

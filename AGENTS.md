@@ -175,12 +175,15 @@ design history) that is not derivable from the code alone.
 2. Environment variables: `OCANNL_<OPTION>=<value>` (e.g., `OCANNL_BACKEND=cuda`)
 3. Config file: `ocannl_config` in current or ancestor directories
 
-**Config profiles** (gh-ocannl-559): `profile=reproducible|performance` picks a preset bundle
+**Config profiles** (gh-ocannl-559): `profile=reproducible|performance|approximate` picks a preset bundle
 whose payload (an embedded partial config file in `arrayjit/lib/utils.ml`) applies at the sublevel
 just below the explicit keys of whichever source picked it — so explicit keys beat a profile of
 equal immediacy, and a CLI-picked profile beats an exhaustive config file. Payload keys must be
 known and documented, and the reference file's verbatim quote of each payload is checked, both by
-`test/operations/test_config_consistency`.
+`test/operations/test_config_consistency`. `approximate` (gh-ocannl-719) is `performance` plus every
+numerics-changing knob, gated in the benchmarks at its own `PARITY_TOL_APPROX` envelope; a
+numerics-changing rewrite gate lands in that payload, and in the schedule cache's numerics digest,
+in the PR that adds its key (`test/operations/config_profiles` pins approximate ⊇ performance).
 
 **Testing with Different Configurations**:
 

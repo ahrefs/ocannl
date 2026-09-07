@@ -337,6 +337,9 @@ def main():
         "workload": meta["name"],
         "compile_s": round(compile_s, 3),
         "searched": tinygrad_searched(beam_counts, args.beam),
+        # No exact arm exists for tinygrad: its default reassociates freely, so the sweep stands
+        # this one cell in the approximate regime whenever it runs one (gh-ocannl-719).
+        "regime_settings": "tinygrad defaults (no exact pin; reassociates freely)",
         "step_ms": percentiles(synced),
         "queued_step_ms": queued,
         "timed_steps": timed_steps,

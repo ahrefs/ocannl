@@ -1569,7 +1569,7 @@
   config_profiles.expected
   (env_var OCANNL_PROFILE))
  (modules config_profiles)
- (libraries base arrayjit.utils stdio))
+ (libraries base arrayjit.utils arrayjit.verdict stdio))
 
 ; gh-ocannl-605: the environment and commandline spellings of a configuration key. The rule sets
 ; the synthetic keys the executable looks up -- `demo_key` in the one environment spelling that

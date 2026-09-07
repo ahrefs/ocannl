@@ -143,7 +143,7 @@ that they earn a lookup rather than always-loaded space.
   assignment contributes only when it occupies the whole inline span outside benchmark reports and
   its unqualified name has lowercase snake-case shape with an underscore; this registry-independent
   grammar comes from `Utils.parse_config_token`, shared with the command-line and environment forms.
-  Current one-word config assignments such as `profile=reproducible|performance` and `backend=cc`
+  Current one-word config assignments such as `profile=reproducible|performance|approximate` and `backend=cc`
   are file/key/count-pinned judgments because their spelling alone cannot distinguish them from an
   arbitrary API or mathematical assignment.
   Whitespace around `=`, within the value, or an empty example value does not hide the key. The
@@ -282,6 +282,11 @@ that they earn a lookup rather than always-loaded space.
   golden union, and the manifest's repo-relative source paths equal to `env_var_deps`' derived
   scanner census. The
   audit is itself on `@scans` and excluded from the evidence corpus, so it cannot answer for itself.
+  Consequence for authoring: EVERY Verdict claim in a scanner source is a refusal to the ratchet,
+  so a claim that is not about the scan's refusals -- a relationship pin between two library values,
+  say -- belongs in a non-scanner test (a plain `(test)` stanza the manifest does not list), where it
+  costs one golden line rather than a manifest row plus an exercised control (gh-ocannl-719 put the
+  approximate ⊇ performance payload claim in `config_profiles`, not `test_config_consistency`).
   The absent-marker, colliding-fragment, one-marker/two-identical-diagnostic,
   one-observation/two-diagnostic, short-literal, `p_all2`, and scanner-population arms prove the
   failure directions. Dynamic strings returned by helpers have no
