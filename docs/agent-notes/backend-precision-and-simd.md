@@ -584,7 +584,12 @@ files.
   reports whether an approximate row ALSO passed the exact envelope — a rewrite that changes
   nothing measurable is a finding, not a pass. The exact torch CPU eager cell stays the parity
   reference in every regime; the runner reports the profile it resolved (`profile` in the result
-  line) and the sweep refuses a row whose claimed regime the runner contradicts.
+  line) and where each approximate-payload key resolved from (`regime_knobs`, via
+  `Utils.profile_payload_sources`, so the list is the payload's own), and the sweep refuses a row
+  whose claimed regime the runner contradicts — the regime is the resolution of those keys, not
+  the profile's name: exact owns only built-in defaults, approximate only the profile, and an
+  ambient `OCANNL_TF32_MATMULS=true` or a `reproducible` profile in the environment is a
+  REGIME MISMATCH row that names the key and its source.
 - **rocWMMA fragments are opaque for LAYOUT but not for ELEMENTS, and that is what wires HIP's
   wide-f16 d boundary** (gh-ocannl-789, `arrayjit/lib/hip_backend.ml`'s `mma_d_boundary`). Under
   `Fp16_wide` the uniform-f16 arm pairs a `float` accumulator fragment with the unchanged f16

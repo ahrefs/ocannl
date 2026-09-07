@@ -336,6 +336,9 @@ let exempt_zero_reference_exports =
     "Utils.parse_profile_payload";
     "Utils.performance_profile_payload";
     "Utils.profile_ineligible_keys";
+    (* Not pre-existing: the per-key half of [Utils.profile_payload_sources] (gh-ocannl-719),
+       top-level only because the config-key scan's forwarding exemption does not reach a lambda. *)
+    "Utils.profile_key_source";
     "Utils.profile_lookup";
     "Utils.read_cmdline_or_env_var";
     "Utils.requirement_of_sexp";

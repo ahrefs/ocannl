@@ -88,16 +88,22 @@ let tune =
 
 let ordinary =
   Bench_json.result_line ~backend:"cc" ~variant:"default" ~precision:"f32" ~profile:None
-    ~workload:"mlp3"
-    ~compile_s:2.5 ~searched:false ~p10:0.5 ~p50:0.75 ~p90:1.25 ~queued_ms:0.625 ~timed_steps:20
-    ~losses:[| 2.5; 1.75; 1.25 |] ()
+    ~regime_knobs:[ ("tf32_matmuls", None); ("cc_backend_fast_math", None) ]
+    ~workload:"mlp3" ~compile_s:2.5 ~searched:false ~p10:0.5 ~p50:0.75 ~p90:1.25 ~queued_ms:0.625
+    ~timed_steps:20 ~losses:[| 2.5; 1.75; 1.25 |] ()
 
 (* Everything a diverged, half-measured, tuned cell reports at once. *)
 let diverged =
   Bench_json.result_line ~backend:"metal" ~variant:"tuned" ~precision:"f16"
-    ~profile:(Some "approximate") ~workload:"gpt2_mini"
-    ~compile_s:Float.nan ~searched:true ~tokens_per_step:4096 ~tune ~p10:Float.infinity
-    ~p50:Float.nan ~p90:Float.neg_infinity ~queued_ms:Float.nan ~timed_steps:0
+    ~profile:(Some "approximate")
+    ~regime_knobs:
+      [
+        ("tf32_matmuls", Some ("true", "profile 'approximate' via the commandline"));
+        (* An override beside the profile, and a quote to escape. *)
+        ("tune_inline_flips", Some ("5", "environment \"OCANNL_TUNE_INLINE_FLIPS\""));
+      ]
+    ~workload:"gpt2_mini" ~compile_s:Float.nan ~searched:true ~tokens_per_step:4096 ~tune
+    ~p10:Float.infinity ~p50:Float.nan ~p90:Float.neg_infinity ~queued_ms:Float.nan ~timed_steps:0
     ~losses:[| 1.5; Float.nan; Float.infinity; Float.neg_infinity |]
     ()
 

@@ -1277,6 +1277,32 @@ let get_global_arg_with_source ~default ~arg_name:n =
 
 let get_global_arg ~default ~arg_name = fst (get_global_arg_with_source ~default ~arg_name)
 
+(** [profile_key_source] resolves one key with its source, and [profile_payload_sources] maps it
+    over a payload: where each key of the named built-in profile's payload resolves from in this
+    process, and to what unless it is the built-in default (whose value the read sites own, not this
+    table): [(key, None)] for a key nothing sets, [(key, Some (value, source))] otherwise. The
+    benchmark runners report this for the [approximate] payload (gh-ocannl-719): a cell's numerics
+    regime is the resolution of these keys, not the name of the profile alone -- an ambient
+    [OCANNL_TF32_MATMULS=true] makes an exact cell approximate with no profile picked, and an
+    explicit [--ocannl_tf32_matmuls=false] beside [--ocannl_profile=approximate] makes an
+    approximate cell neither regime. The key list is the payload's own, so a gate that adds a key to
+    the profile is reported without a second list anywhere. Not logged and not recorded as an
+    access: the read sites report their own reads. *)
+let profile_key_source key =
+  match
+    resolve_config_value ~cmdline:read_cmdline_var ~env:read_env_var
+      ~file:(Hashtbl.find config_file_args) ~profile:profile_lookup ~default:"" ~arg_name:key
+  with
+  | _, From_default -> None
+  | value, source -> Some (value, source)
+
+let profile_payload_sources name =
+  match List.Assoc.find profile_payloads name ~equal:String.equal with
+  | None -> invalid_arg ("OCANNL: unknown profile " ^ name)
+  | Some text ->
+      parse_config_lines ~source:("profile " ^ name) (String.split_lines text)
+      |> List.map ~f:(fun (key, _) -> (key, profile_key_source key))
+
 let get_global_flag ~default ~arg_name:n =
   bool_of_config_string ~arg_name:n
   @@ get_global_arg ~default:(if default then "true" else "false") ~arg_name:n

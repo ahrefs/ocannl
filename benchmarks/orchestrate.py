@@ -298,23 +298,61 @@ def runner_regime(result):
     return result.get("runner_regime")
 
 
+def regime_knob_leaks(result):
+    """The approximate-payload keys an OCANNL row resolved from a source its regime does not own.
+
+    None when the runner did not report them. The regime is the resolution of those keys, not the
+    profile's name (Codex P1 on PR #661): `exact` means every one of them at its built-in default
+    -- the sweep passed no profile, and nothing else may have set one, an ambient
+    OCANNL_TF32_MATMULS=true included -- and `approximate` means every one of them from the
+    approximate profile, so an explicit override beside the profile is neither regime. The runner
+    derives the key list from the payload itself, so a rewrite gate joining the profile is gated
+    here without a second list. A sweep under another profile (`reproducible` pins these keys to
+    exact values, from the profile) is thereby not an exact-regime sweep: the row says which key
+    came from where, and the remedy is to run without it.
+    """
+    knobs = result.get("regime_knobs")
+    if knobs is None:
+        return None
+    regime = regime_of(result)
+    leaks = {}
+    for key, knob in sorted(knobs.items()):
+        source = knob.get("source", "?")
+        owned = (
+            source == "default"
+            if regime == "exact"
+            else source.startswith("profile 'approximate'")
+        )
+        if not owned:
+            leaks[key] = f"{key}={knob.get('value', '?')} ({source})"
+    return leaks
+
+
 def regime_check(results):
     """Rows whose runner reports a regime other than the one the sweep dispatched (gh-ocannl-719).
 
-    The row's `regime` is what the sweep asked for; the runner says what its process resolved. A
-    mismatch is a cell that ran under the other regime's flags -- an ambient OCANNL_PROFILE the
-    process read, a config file picking a profile the commandline was expected to override -- and
-    is labelled as a regime it did not run in, which no parity gate catches (an exact cell passes
-    the approximate envelope too). Rows from a runner predating the field are not checked.
+    The row's `regime` is what the sweep asked for; the runner says what its process resolved,
+    as the profile it picked and as where each of the profile's keys resolved from
+    (`regime_knob_leaks`). A mismatch is a cell that ran under flags its regime does not own --
+    an ambient OCANNL_PROFILE or OCANNL_TF32_MATMULS the process read, a config file picking a
+    profile the commandline was expected to override -- and is labelled as a regime it did not
+    run in, which no parity gate catches (an exact cell passes the approximate envelope too).
+    `regime_mismatch` says what ran, in words the report prints. Rows from a runner predating
+    the fields are not checked.
     """
     mismatched = []
     for r in results:
         actual = runner_regime(r)
         if actual is None:
             continue
+        leaks = regime_knob_leaks(r)
         if actual != regime_of(r):
             r["regime_mismatch"] = actual
-            mismatched.append(r)
+        elif leaks:
+            r["regime_mismatch"] = f"{actual} but " + ", ".join(leaks.values())
+        else:
+            continue
+        mismatched.append(r)
     return mismatched
 
 
@@ -1373,8 +1411,10 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None):
                 "measurable is a finding, not a pass. tinygrad has no exact pin, so its row stands "
                 "in the approximate regime whenever the sweep has one. Exact rows come first "
                 "within each precision. **`REGIME MISMATCH`** is a row whose runner reports "
-                "having run in the OTHER regime (an ambient OCANNL_PROFILE reaching an exact "
-                "cell, say): its number belongs to neither column and is not comparable with "
+                "having run under flags its regime does not own (an ambient OCANNL_PROFILE or "
+                "OCANNL_TF32_MATMULS reaching an exact cell, say -- the regime is the resolution "
+                "of the profile's keys, not the profile's name, and the row names the key and its "
+                "source): its number belongs to neither column and is not comparable with "
                 "anything -- the sweep fails on it, and the row is kept so the failure is "
                 "visible where the numbers are read.\n"
             )
@@ -1465,7 +1505,7 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None):
             if with_regime:
                 mismatch = r.get("regime_mismatch")
                 regime = (
-                    f"| **REGIME MISMATCH** (dispatched {regime_of(r)}, ran {mismatch}) "
+                    f"| **REGIME MISMATCH** (dispatched {regime_of(r)}; ran {mismatch}) "
                     if mismatch
                     else f"| {regime_of(r)} "
                 )

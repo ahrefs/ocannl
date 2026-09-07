@@ -776,6 +776,11 @@ let measure_and_emit ~protocol ~backend ~variant ?(precision = "f32") ~compile_s
   let line =
     Bench_json.result_line ~backend ~variant ~precision
       ~profile:(Option.map Utils.active_profile ~f:(fun (_, name, _) -> name))
+      ~regime_knobs:
+        (List.map (Utils.profile_payload_sources "approximate") ~f:(fun (key, resolution) ->
+             ( key,
+               Option.map resolution ~f:(fun (value, source) ->
+                   (value, Utils.config_source_label source)) )))
       ~workload ~compile_s
       ~searched:(Option.value_map tune ~default:false ~f:searched)
       ?tokens_per_step ?tune:(Option.bind tune ~f:tune_json) ~p10:(percentile synced 10.)

@@ -499,9 +499,12 @@ than the driver (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` at module load), run it wi
   and the envelope is calibrated from those verdicts. The exact `pytorch/cpu/eager` cell is the
   reference in every regime and is run whatever `--profile` selects; `--profile exact
   approximate` puts the before/after in one report. Each runner reports what its process ran
-  under (`profile` for OCANNL, `runner_regime` and `regime_settings` for torch), and the sweep
+  under (`profile` and `regime_knobs` — where each key of the approximate payload resolved from —
+  for OCANNL, `runner_regime` and `regime_settings` for torch), and the sweep
   fails a row whose runner contradicts the regime it was dispatched in (an ambient
-  `OCANNL_PROFILE` reaching the exact cells, say), rendering it as **`REGIME MISMATCH`** in the
+  `OCANNL_PROFILE` or `OCANNL_TF32_MATMULS` reaching the exact cells, say: the regime is the
+  resolution of the profile's keys, not the profile's name — exact owns only built-in defaults,
+  approximate only the profile), rendering it as **`REGIME MISMATCH`** in the
   report rather than under the dispatched label — a mislabelled number is worse than a missing
   one, and no parity gate can catch it, since an exact trajectory passes the approximate envelope
   too.

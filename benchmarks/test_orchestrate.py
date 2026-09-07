@@ -2767,7 +2767,7 @@ class RegimeTest(unittest.TestCase):
 
         self.assertIn("| regime |", text)
         row = [line for line in text.splitlines() if line.startswith("| ocannl")][0]
-        self.assertIn("**REGIME MISMATCH** (dispatched exact, ran approximate)", row)
+        self.assertIn("**REGIME MISMATCH** (dispatched exact; ran approximate)", row)
         self.assertNotIn("| exact |", row)
         self.assertEqual(rows[1]["regime_mismatch"], "approximate")
 
@@ -2821,6 +2821,63 @@ class RegimeTest(unittest.TestCase):
         self.assertEqual(mismatched, [mislabelled, torch_wrong])
         self.assertEqual(mislabelled["regime_mismatch"], "approximate")
         self.assertEqual(torch_wrong["regime_mismatch"], "exact")
+
+    def test_the_regime_is_the_resolution_of_the_profiles_keys_not_its_name(self):
+        # Codex P1 on PR #661: OCANNL_TF32_MATMULS=true in the sweep's environment reaches an
+        # exact cell with no profile picked, so the profile name says `exact` while the
+        # arithmetic is approximate. The runner reports where each approximate-payload key
+        # resolved from; an exact row owns only defaults, an approximate row only the profile.
+        def knobs(**sources):
+            return {
+                key: ({"source": "default"} if src is None else {"value": val, "source": src})
+                for key, (val, src) in sources.items()
+            }
+
+        clean = result("ocannl", "cc", "default", [1.0])
+        clean.update(profile=None, regime_knobs=knobs(tf32_matmuls=(None, None)))
+        leaked = result("ocannl", "cuda", "default", [1.0])
+        leaked.update(
+            profile=None,
+            regime_knobs=knobs(
+                tf32_matmuls=("true", "environment"), cc_backend_fast_math=(None, None)
+            ),
+        )
+        honest = result("ocannl", "cuda", "tuned", [1.0])
+        honest.update(
+            regime="approximate",
+            profile="approximate",
+            regime_knobs=knobs(tf32_matmuls=("true", "profile 'approximate' via the commandline")),
+        )
+        overridden = result("ocannl", "cuda", "tuned", [1.0])
+        overridden.update(
+            regime="approximate",
+            profile="approximate",
+            regime_knobs=knobs(
+                tf32_matmuls=("false", "commandline"),
+                cc_backend_fast_math=("true", "profile 'approximate' via the commandline"),
+            ),
+        )
+        # Another profile pins these keys to exact VALUES, but from the profile: not an
+        # exact-regime sweep, and the row says which key came from where.
+        reproducible = result("ocannl", "cc", "tuned", [1.0])
+        reproducible.update(
+            profile="reproducible",
+            regime_knobs=knobs(tf32_matmuls=("false", "profile 'reproducible' via the environment")),
+        )
+        older = result("ocannl", "cc", "default", [1.0])
+        older["profile"] = None
+
+        mismatched = orchestrate.regime_check(
+            [clean, leaked, honest, overridden, reproducible, older]
+        )
+
+        self.assertEqual(mismatched, [leaked, overridden, reproducible])
+        self.assertEqual(leaked["regime_mismatch"], "exact but tf32_matmuls=true (environment)")
+        self.assertEqual(
+            overridden["regime_mismatch"], "approximate but tf32_matmuls=false (commandline)"
+        )
+        self.assertIn("profile 'reproducible'", reproducible["regime_mismatch"])
+        self.assertIsNone(orchestrate.regime_knob_leaks(older))
 
     def test_the_report_names_the_regime_and_the_exact_envelope_verdict(self):
         ref = cell("pytorch", "cpu", "eager", [2.3026, 2.3010, 2.3000])

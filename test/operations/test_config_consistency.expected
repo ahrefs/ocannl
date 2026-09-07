@@ -1,7 +1,7 @@
 every scanned root meets its source-count floor: true
 OK: 111 call-site keys, all in reference file and registry; registry and reference agree on 114 keys.
 OK: 3 profile payloads, documented and quoted verbatim: reproducible (11 keys), performance (7 keys), approximate (11 keys).
-OK: every scanned file spells every config key as a string literal, outside 6 forwarding functions: tnode.ml:get_style, utils.ml:bool_of_config_string, utils.ml:get_global_arg, utils.ml:get_global_arg_with_source, utils.ml:get_global_flag, utils.ml:resolve_config_value.
+OK: every scanned file spells every config key as a string literal, outside 7 forwarding functions: tnode.ml:get_style, utils.ml:bool_of_config_string, utils.ml:get_global_arg, utils.ml:get_global_arg_with_source, utils.ml:get_global_flag, utils.ml:profile_key_source, utils.ml:resolve_config_value.
 OK: scanned arrayjit/lib, benchmarks/runners/ocannl, bin, lib, tensor, tools.
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:

@@ -73,8 +73,8 @@ let () =
 
 (* gh-ocannl-719: the `approximate` payload is the `performance` payload plus the numerics-changing
    knobs. Pinned as a relationship between the two parsed payloads rather than as a second copy of
-   the performance keys: every key performance sets, approximate sets to the same value, and it
-   sets more. *)
+   the performance keys: every key performance sets, approximate sets to the same value, and it sets
+   more. *)
 let () =
   let parsed name =
     Utils.parse_config_lines ~source:("profile " ^ name)
