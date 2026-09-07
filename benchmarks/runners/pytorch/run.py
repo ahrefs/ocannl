@@ -36,7 +36,7 @@ def ce_onehot(logits, y_onehot):
     return (-correct.log()).mean()
 
 
-def build_mlp(meta, data, dev):
+def build_mlp(meta, data, dev, approximate=False):
     n_layers = int(meta["n_layers"])
     params = []
     for i in range(1, n_layers + 1):
@@ -60,7 +60,7 @@ def build_mlp(meta, data, dev):
     return loss_fn, flat, (x, y), None
 
 
-def build_conv(meta, data, dev):
+def build_conv(meta, data, dev, approximate=False):
     def leaf(t):
         return t.contiguous().to(dev).requires_grad_()
 
@@ -111,7 +111,7 @@ def layernorm(x, g, b):
     return c / torch.sqrt(var + 1e-5) * g + b
 
 
-def build_gpt(meta, data, dev):
+def build_gpt(meta, data, dev, approximate=False):
     n_layer, nh = int(meta["n_layer"]), int(meta["n_head"])
     d, v, seq = int(meta["d_model"]), int(meta["vocab"]), int(meta["seq_len"])
     dh = d // nh
@@ -165,10 +165,20 @@ def build_gpt(meta, data, dev):
             q = (h @ p["wq"].T).view(b, seq, nh, dh)
             k = (h @ p["wk"].T).view(b, seq, nh, dh)
             vv = (h @ p["wv"].T).view(b, seq, nh, dh)
-            att = torch.einsum("bshd,bthd->bsth", q, k) / math.sqrt(dh)
-            att = torch.where(mask[None, :, :, None], att, torch.tensor(-1e9, device=dev))
-            att = torch.softmax(att, dim=2)
-            out = torch.einsum("bsth,bthe->bshe", att, vv).reshape(b, seq, nh * dh)
+            if approximate:
+                # gh-ocannl-719: the approximate arm uses torch's fused attention (flash /
+                # memory-efficient / math, its own choice), causal by flag, in its [b, nh, s, dh]
+                # layout -- the counterpart of OCANNL's online-softmax gate once that lands, and
+                # what a PyTorch user actually runs. The composed form below is the exact arm's.
+                out = F.scaled_dot_product_attention(
+                    q.transpose(1, 2), k.transpose(1, 2), vv.transpose(1, 2), is_causal=True
+                )
+                out = out.transpose(1, 2).reshape(b, seq, nh * dh)
+            else:
+                att = torch.einsum("bshd,bthd->bsth", q, k) / math.sqrt(dh)
+                att = torch.where(mask[None, :, :, None], att, torch.tensor(-1e9, device=dev))
+                att = torch.softmax(att, dim=2)
+                out = torch.einsum("bsth,bthe->bshe", att, vv).reshape(b, seq, nh * dh)
             x = x + out @ p["wo"].T
             h2 = layernorm(x, p["g2"], p["b2"])
             x = x + (gelu_tanh(h2 @ p["fw1"].T + p["fb1"]) @ p["fw2"].T + p["fb2"])
@@ -194,7 +204,16 @@ def main():
     ap.add_argument("--compile-mode", default=None,
                     help="torch.compile mode, e.g. max-autotune; implies --compile (gh-675 probe)")
     ap.add_argument("--retime", action="store_true", help="time a second block of steps (gh-675)")
+    # gh-ocannl-719: the exact arm pins what a parity oracle needs pinned (`highest` matmul
+    # precision, no cudnn tf32, hand-composed attention). The approximate arm is torch's own
+    # defaults -- what a PyTorch user actually runs with, and the fair counterpart of OCANNL's
+    # `approximate` profile (the maintainer's decision on the issue) -- recorded per result line.
+    ap.add_argument("--regime", default="exact", choices=["exact", "approximate"],
+                    help="exact: matmul precision `highest`, cudnn tf32 off, composed attention; "
+                    "approximate: `high` (tf32 where the device has it), cudnn.benchmark, "
+                    "scaled_dot_product_attention (gh-ocannl-719)")
     args = ap.parse_args()
+    approximate = args.regime == "approximate"
     # A mode is a torch.compile setting and means nothing without it: taking it alone would run
     # EAGER while stamping the result line with a `compile_mode`, i.e. a measurement labelled as
     # something it is not.
@@ -210,11 +229,21 @@ def main():
     warmup_steps = int(meta["warmup_steps"])
     timed_steps = int(meta["timed_steps"])
 
-    torch.set_float32_matmul_precision("highest")
+    torch.set_float32_matmul_precision("high" if approximate else "highest")
+    torch.backends.cudnn.benchmark = approximate
+    # cudnn's tf32 defaults ON, unlike matmul's: pinning it off is part of the exact arm's contract
+    # on an Ampere-or-later device, and leaving the default is part of the approximate arm's.
+    torch.backends.cudnn.allow_tf32 = approximate
+    regime_settings = (
+        f"float32_matmul_precision={torch.get_float32_matmul_precision()}, "
+        f"cudnn.allow_tf32={torch.backends.cudnn.allow_tf32}, "
+        f"cudnn.benchmark={torch.backends.cudnn.benchmark}, "
+        f"attention={'sdpa' if approximate else 'composed'}"
+    )
     dev = torch.device(args.device)
     data = load_file(args.fixture)
     build = {"mlp": build_mlp, "conv": build_conv, "gpt": build_gpt}[model]
-    loss_fn, flat, (x, y), tokens_per_step = build(meta, data, dev)
+    loss_fn, flat, (x, y), tokens_per_step = build(meta, data, dev, approximate=approximate)
     n_batches = x.shape[0] // batch_size
     batches = [
         (x[i * batch_size : (i + 1) * batch_size], y[i * batch_size : (i + 1) * batch_size])
@@ -310,6 +339,11 @@ def main():
         "timed_steps": timed_steps,
         "losses": losses,
         "version": torch.__version__,
+        # What this process ran under, for the sweep's regime gate and the report (gh-ocannl-719).
+        # `runner_regime`, not `regime`: the sweep stamps `regime` with what it dispatched, and a
+        # same-named key would let the stamp mask a runner that ran the other arm.
+        "runner_regime": args.regime,
+        "regime_settings": regime_settings,
     }
     if args.compile_mode:
         result["compile_mode"] = args.compile_mode

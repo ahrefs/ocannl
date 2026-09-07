@@ -197,7 +197,11 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   `flip_candidates` list, which is how "this node is not a searchable decision" is told apart from
   "it ranked below `tune_inline_flips`" (gh-ocannl-558,
   [report-gh558-hip-flips.md](report-gh558-hip-flips.md)).
-- `runners/pytorch/run.py` — flags: `--device cpu|mps|cuda`, `--compile` (torch.compile
+- `runners/pytorch/run.py` — flags: `--device cpu|mps|cuda`, `--regime exact|approximate`
+  (exact, the default and the parity reference: `highest` matmul precision, cudnn tf32 off,
+  hand-composed attention; approximate: torch's own defaults — `high` matmul precision,
+  `cudnn.benchmark`, `scaled_dot_product_attention` — recorded per result line as
+  `regime_settings`, gh-ocannl-719), `--compile` (torch.compile
   variant, which reports whether inductor's codegen ran here or came from its cache),
   `--compile-mode MODE` (a `torch.compile` mode such as `max-autotune` — the honest analogue of a
   tuned cell, since it benchmarks kernels; measured for gh-ocannl-675 but not a matrix cell) and
@@ -215,7 +219,8 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
 - `orchestrate.py` — runs the matrix (dispatching the OCANNL executable on the fixture's
   `model`), enforces the parity gate, writes `results/results.jsonl` and
   `results/report.md`. Flags: `--workloads mlp_small ...`, `--tuned`, `--materialized`,
-  `--precision bf16 f16 f16-static f16-gatedN`, `--nojit` (tinygrad nojit), `--torch-compile`
+  `--precision bf16 f16 f16-static f16-gatedN`, `--profile exact approximate` (the numerics
+  regimes to run the matrix in, see below), `--nojit` (tinygrad nojit), `--torch-compile`
   (pytorch compiled variant), `--beam N`
   (tinygrad BEAM=N variant; wipe tinygrad's kernel cache for from-scratch search costs),
   `--only ocannl pytorch tinygrad`, `--skip-build`, `--no-skip-cells` (run the `SKIP_CELLS`
@@ -475,6 +480,30 @@ than the driver (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` at module load), run it wi
 
 ## Methodology notes / fairness pitfalls
 
+- **The regime column: exact vs `approximate`** (gh-ocannl-719, the first leg of the
+  gh-ocannl-720 expansion plan). `--profile approximate` runs every OCANNL cell under
+  `--ocannl_profile=approximate` — the `performance` preset plus every numerics-changing knob:
+  `tf32_matmuls`, `fp16_arithmetic`, `cc_backend_fast_math`, `cc_backend_fp_contract=fast`,
+  `tune_inline_flips`, and the algebraic-rewrite gates (online-softmax attention, Winograd) as they
+  land — and gates it at `PARITY_TOL_APPROX` (1e-2, looser than every exact envelope, tighter than
+  "did the loss move"). **The torch counterpart runs under torch's own defaults** (`high` matmul
+  precision, `scaled_dot_product_attention`, `cudnn.benchmark`): the exact matrix pins torch to
+  `highest` with hand-composed attention, which the parity oracle needs and which handicaps
+  torch against what its users actually run — an exact-pinned torch arm would flatter OCANNL,
+  so the headline numbers compare against torch's defaults (the maintainer's decision on the
+  issue). tinygrad has no exact pin (its default reassociates freely), so its one cell stands in
+  the approximate regime whenever the sweep has one. Every result row carries `regime`, the
+  report grows a `regime` column once any row is non-exact (exact rows first within a
+  precision), and an approximate row's `parity` cell says whether it *also* passed the exact
+  envelope — reported, not assumed: a rewrite that changes nothing measurable is a finding too,
+  and the envelope is calibrated from those verdicts. The exact `pytorch/cpu/eager` cell is the
+  reference in every regime and is run whatever `--profile` selects; `--profile exact
+  approximate` puts the before/after in one report. Each runner reports what its process ran
+  under (`profile` for OCANNL, `runner_regime` and `regime_settings` for torch), and the sweep
+  fails a row whose runner contradicts the regime it was dispatched in (an ambient
+  `OCANNL_PROFILE` reaching the exact cells, say) — a mislabelled number is worse than a missing
+  one, and no parity gate can catch it, since an exact trajectory passes the approximate envelope
+  too.
 - Losses are recorded per step *before* that step's SGD update (forward runs first in every
   framework's step). The first step doubles as the compile probe in the Python runners; for
   OCANNL, `compile_s` wraps `Context.compile` (or `Autotune.tune`).

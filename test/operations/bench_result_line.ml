@@ -87,13 +87,15 @@ let tune =
       ]
 
 let ordinary =
-  Bench_json.result_line ~backend:"cc" ~variant:"default" ~precision:"f32" ~workload:"mlp3"
+  Bench_json.result_line ~backend:"cc" ~variant:"default" ~precision:"f32" ~profile:None
+    ~workload:"mlp3"
     ~compile_s:2.5 ~searched:false ~p10:0.5 ~p50:0.75 ~p90:1.25 ~queued_ms:0.625 ~timed_steps:20
     ~losses:[| 2.5; 1.75; 1.25 |] ()
 
 (* Everything a diverged, half-measured, tuned cell reports at once. *)
 let diverged =
-  Bench_json.result_line ~backend:"metal" ~variant:"tuned" ~precision:"f16" ~workload:"gpt2_mini"
+  Bench_json.result_line ~backend:"metal" ~variant:"tuned" ~precision:"f16"
+    ~profile:(Some "approximate") ~workload:"gpt2_mini"
     ~compile_s:Float.nan ~searched:true ~tokens_per_step:4096 ~tune ~p10:Float.infinity
     ~p50:Float.nan ~p90:Float.neg_infinity ~queued_ms:Float.nan ~timed_steps:0
     ~losses:[| 1.5; Float.nan; Float.infinity; Float.neg_infinity |]

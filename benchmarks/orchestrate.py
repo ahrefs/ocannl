@@ -84,6 +84,19 @@ TINYGRAD_PROBE_TIMEOUT_S = 10
 # Accuracy-parity gates for the OCANNL mixed-precision legs (gh-ocannl-492 task 4), with roughly
 # 10x headroom over the largest drift measured by the macOS cc/Metal sweep.
 PARITY_TOL_PRECISION = {"bf16": 4e-3, "f16": 2e-3}
+# gh-ocannl-719: the parity envelope of the `approximate` regime. An approximate OCANNL cell runs
+# under `--ocannl_profile=approximate` -- tf32 matmuls, fp16 arithmetic, the C compiler's
+# reassociation and contraction licence, the inlining refinement, and the algebraic-rewrite gates
+# as they land -- and its torch counterpart under torch's own defaults (`high` matmul precision,
+# scaled_dot_product_attention, cudnn.benchmark). Looser than PARITY_TOL and the reduced-precision
+# envelopes, tighter than "did the loss move": tf32 keeps two more mantissa bits than bf16, so a
+# trajectory drifts on the order of the bf16 envelope, and 1e-2 gives it the same ~10x headroom
+# the precision envelopes carry. The first approximate sweep on a tf32-capable box calibrates it;
+# an approximate row also reports whether it passed the EXACT envelope, so a tightening is
+# evidence-based and a rewrite that changes nothing measurable is visible as such.
+PARITY_TOL_APPROX = 1e-2
+# The numerics regimes a sweep can run its matrix in, in report order (exact rows first).
+REGIMES = ("exact", "approximate")
 # A parity tolerance cannot reject an input-independent forward when the reference itself moves
 # slowly. Require at least one part per million of relative loss variation over the parity window.
 LOSS_MOVE_MIN_REL = 1e-6
@@ -221,8 +234,88 @@ def precision_rank(precision):
     return rank * 10 + (0 if precision == base else 1)
 
 
-def parity_tol(precision):
-    return PARITY_TOL_PRECISION.get(precision_base(precision), PARITY_TOL)
+def parity_tol(precision, regime="exact"):
+    """The parity envelope a cell is gated at: its storage precision's, or the approximate regime's.
+
+    The approximate envelope is the loosest, so a reduced-precision approximate cell is gated at
+    it too -- the max is the contract, should a precision envelope ever be the looser one.
+    """
+    tol = PARITY_TOL_PRECISION.get(precision_base(precision), PARITY_TOL)
+    return max(tol, PARITY_TOL_APPROX) if regime == "approximate" else tol
+
+
+def regime_of(result):
+    """The numerics regime a row was measured and gated in; rows predating the column are exact."""
+    return result.get("regime", "exact")
+
+
+def regime_label(regime):
+    """The cell-label suffix naming a non-exact regime.
+
+    Exact labels are unchanged, so an exact-only matrix's labels and reports read as they always
+    did; an approximate cell is `default [approximate]`, in the label as in the failure list.
+    """
+    return "" if regime == "exact" else f" [{regime}]"
+
+
+def ocannl_regime_args(regime):
+    """The flags an OCANNL cell is dispatched with for its regime: the profile IS the regime.
+
+    The exact regime passes no profile rather than `--ocannl_profile=performance`, so the exact
+    cells keep measuring what they always measured -- the `tuned` variant's search is the runner's
+    (BENCH_TUNE), not a profile's. A commandline-picked profile outranks the benchmark config file
+    and the environment, which is what lets the same process tree run both regimes.
+    """
+    return [] if regime == "exact" else [f"--ocannl_profile={regime}"]
+
+
+def torch_regime_args(regime):
+    """The flags the torch runner takes for its regime; its exact arm is its default."""
+    return [] if regime == "exact" else ["--regime", regime]
+
+
+def tinygrad_regime(regimes):
+    """The regime tinygrad's one cell stands in.
+
+    tinygrad has no exact pin -- its default reassociates freely -- so it is the counterpart of the
+    approximate regime whenever a sweep has one, and the exact-gated row it always was otherwise.
+    """
+    return "approximate" if "approximate" in regimes else "exact"
+
+
+def runner_regime(result):
+    """The regime a runner's own process reports having run in, or None for a runner predating it.
+
+    OCANNL names the profile it resolved (`profile`, null for none -- and a `reproducible` or
+    `performance` profile is still the exact regime); the torch runner names the regime it was
+    asked for (`runner_regime`, a key distinct from the sweep's `regime` stamp so the stamp
+    cannot mask it).
+    """
+    if result.get("framework") == "ocannl":
+        if "profile" not in result:
+            return None
+        return "approximate" if result["profile"] == "approximate" else "exact"
+    return result.get("runner_regime")
+
+
+def regime_check(results):
+    """Rows whose runner reports a regime other than the one the sweep dispatched (gh-ocannl-719).
+
+    The row's `regime` is what the sweep asked for; the runner says what its process resolved. A
+    mismatch is a cell that ran under the other regime's flags -- an ambient OCANNL_PROFILE the
+    process read, a config file picking a profile the commandline was expected to override -- and
+    is labelled as a regime it did not run in, which no parity gate catches (an exact cell passes
+    the approximate envelope too). Rows from a runner predating the field are not checked.
+    """
+    mismatched = []
+    for r in results:
+        actual = runner_regime(r)
+        if actual is None:
+            continue
+        if actual != regime_of(r):
+            r["regime_mismatch"] = actual
+            mismatched.append(r)
+    return mismatched
 
 
 def precision_spec(spec):
@@ -826,8 +919,15 @@ def parity_check(results):
     for r in results:
         by_workload.setdefault(r["workload"], []).append(r)
     for workload, rs in by_workload.items():
+        # The reference is the exact torch CPU eager cell in every regime: an approximate torch
+        # cell is a counterpart, gated against the exact one like every other approximate row.
         ref = next(
-            (r for r in rs if (r["framework"], r["backend"], r["variant"]) == REFERENCE),
+            (
+                r
+                for r in rs
+                if (r["framework"], r["backend"], r["variant"]) == REFERENCE
+                and regime_of(r) == "exact"
+            ),
             None,
         )
         ref_prefix = finite_prefix(ref["losses"]) if ref is not None else []
@@ -859,12 +959,21 @@ def parity_check(results):
                 r["parity_max_rel"] = 0.0
             else:
                 max_rel = r.get("parity_max_rel")
-                tol = parity_tol(r.get("precision", "f32"))
+                regime = regime_of(r)
+                tol = parity_tol(r.get("precision", "f32"), regime)
                 r["parity"] = (
                     "PASS"
                     if max_rel is not None and max_rel < tol and r["parity_loss_moved"]
                     else "FAIL"
                 )
+                if regime != "exact":
+                    # Whether the row also passes the exact envelope is reported, not assumed
+                    # (gh-ocannl-719): a rewrite that changes nothing measurable is a finding too,
+                    # and the envelope is calibrated from these verdicts rather than from faith.
+                    exact_tol = parity_tol(r.get("precision", "f32"))
+                    r["parity_exact_envelope"] = bool(
+                        max_rel is not None and max_rel < exact_tol and r["parity_loss_moved"]
+                    )
 
 
 def check_fixture_digests(fixtures, digests_path=None, allow_unpinned=False):
@@ -1193,7 +1302,7 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None):
         f"ocannl commit: {commit} | parity tol: {PARITY_TOL:g} (max rel diff over "
         f"first parity steps vs pytorch/cpu/eager; reduced precisions get their own envelope: "
         + ", ".join(f"{p} {t:g}" for p, t in sorted(PARITY_TOL_PRECISION.items()))
-        + ")\n"
+        + f"; the approximate regime {PARITY_TOL_APPROX:g})\n"
     )
     lines.append(
         "measurement boxes declared by `fixtures/DIGESTS.txt`: "
@@ -1233,9 +1342,12 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None):
         # Precision-major, p50-ascending within a precision: scheduling variants are ranked
         # against the others computing in the same format, and a reduced-precision block reads as
         # its own group rather than being interleaved by a speed it owes to its storage format.
+        # Within a precision the exact rows come first: an approximate row's number is read
+        # against the exact one it relaxes.
         rows.sort(
             key=lambda r: (
                 precision_rank(r.get("precision", "f32")),
+                REGIMES.index(regime_of(r)) if regime_of(r) in REGIMES else len(REGIMES),
                 r["step_ms"]["p50"] if finite(r["step_ms"]["p50"]) else math.inf,
             )
         )
@@ -1243,6 +1355,23 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None):
         if len(precisions) > 1:
             lines.append(
                 "Rows are grouped by precision (f32 first), p50-ascending within each group.\n"
+            )
+        # gh-ocannl-719: the column appears once a row ran in a non-exact regime, and then every
+        # row of the section names its regime, the exact ones included.
+        with_regime = any(regime_of(r) != "exact" for r in rows)
+        if with_regime:
+            lines.append(
+                "`regime` is the numerics regime the row was measured and gated in (gh-ocannl-719). "
+                "`exact` rows are gated at the exact envelope. `approximate` rows ran OCANNL under "
+                "`--ocannl_profile=approximate` (tf32 matmuls, fp16 arithmetic, the C compiler's "
+                "fast-math and contraction licence, the inlining refinement, and the "
+                "algebraic-rewrite gates as they land) or torch under its own defaults (`high` "
+                "matmul precision, scaled_dot_product_attention, cudnn.benchmark); they are gated "
+                f"at the approximate envelope {PARITY_TOL_APPROX:g}, and their `parity` says "
+                "whether they ALSO passed the exact envelope -- a rewrite that changes nothing "
+                "measurable is a finding, not a pass. tinygrad has no exact pin, so its row stands "
+                "in the approximate regime whenever the sweep has one. Exact rows come first "
+                "within each precision.\n"
             )
         with_tokens = any(r.get("tokens_per_step") for r in rows)
         # gh-ocannl-644: which process produced the step times. Only a cell that searches or
@@ -1276,8 +1405,13 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None):
                 "is a scalar timing: quoting it as a tensor-core number is the error this column "
                 "exists to stop.\n"
             )
-        header = "| framework | backend | variant | precision | step p50 ms | p10 | p90 | queued ms | compile s |"
-        rule = "|---|---|---|---|---|---|---|---|---|"
+        header = "| framework | backend | variant | precision |"
+        rule = "|---|---|---|---|"
+        if with_regime:
+            header += " regime |"
+            rule += "---|"
+        header += " step p50 ms | p10 | p90 | queued ms | compile s |"
+        rule += "---|---|---|---|---|"
         if with_provenance:
             header += " pass |"
             rule += "---|"
@@ -1294,8 +1428,17 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None):
         for r in rows:
             s = r["step_ms"]
             parity = r["parity"]
+            notes = []
             if parity not in ("REF", "NO-REF") and finite(r.get("parity_max_rel")):
-                parity += f" ({r['parity_max_rel']:.1e})"
+                notes.append(f"{r['parity_max_rel']:.1e}")
+            if regime_of(r) != "exact" and r.get("parity_exact_envelope") is not None:
+                notes.append(
+                    "within exact envelope"
+                    if r["parity_exact_envelope"]
+                    else "beyond exact envelope"
+                )
+            if notes:
+                parity += f" ({', '.join(notes)})"
             if r.get("diverged_at") is not None:
                 parity += f" (loss non-finite from step {r['diverged_at']})"
             elif not r["parity_loss_moved"]:
@@ -1313,9 +1456,10 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None):
                 provenance = " %s |" % PROVENANCE_MARK.get(r.get("provenance"), "—")
             if with_tensorization:
                 provenance += " %s |" % TENSORIZATION_MARK.get(r.get("tensorization"), "—")
+            regime = f"| {regime_of(r)} " if with_regime else ""
             lines.append(
                 f"| {r['framework']} | {r['backend']} | {rendered_variant(r)} "
-                f"| {r.get('precision', 'f32')} "
+                f"| {r.get('precision', 'f32')} {regime}"
                 f"| {num(s['p50'], '.3f')} | {num(s['p10'], '.3f')} | {num(s['p90'], '.3f')} "
                 f"| {num(r['queued_step_ms'], '.3f')} | {compile_s} |{provenance} {parity} |{tokens}"
             )
@@ -1383,6 +1527,25 @@ def build_arg_parser():
         "--materialized",
         action="store_true",
         help="add the OCANNL materialized-activations variant",
+    )
+    ap.add_argument(
+        "--profile",
+        nargs="*",
+        default=["exact"],
+        choices=list(REGIMES),
+        metavar="exact|approximate",
+        help="numerics regimes to run the matrix in (gh-ocannl-719; default: exact only). "
+        "`exact` is the everyday matrix: OCANNL under no profile, torch pinned to `highest` "
+        "matmul precision with hand-composed attention, gated at PARITY_TOL. `approximate` runs "
+        "every OCANNL cell under --ocannl_profile=approximate (tf32 matmuls, fp16 arithmetic, "
+        "fast-math and contraction, the inlining refinement, the rewrite gates as they land) and "
+        "every torch cell under torch's own defaults (`high` matmul precision, "
+        "scaled_dot_product_attention, cudnn.benchmark), gated at the looser PARITY_TOL_APPROX; "
+        "each row and report section names its regime, and an approximate row also reports "
+        "whether it passed the exact envelope. The parity reference (pytorch/cpu/eager, exact) "
+        "runs whichever regimes are selected; tinygrad, which has no exact pin, runs once and "
+        "stands in the approximate regime when one is selected. Both regimes in one sweep put "
+        "the before/after in one report",
     )
     ap.add_argument("--nojit", action="store_true", help="add the tinygrad nojit variant")
     ap.add_argument(
@@ -1582,60 +1745,83 @@ def main():
                                   "--no-skip-cells to run it anyway)")
                             continue
                         env = cell_env(os.environ, fx, variant, precision)
-                        cmd = [str(ocannl_exe(model)), f"--ocannl_backend={backend}"]
-                        label = f"{name} ocannl/{backend}/{cell}"
-                        # The cell's identity is what was dispatched, not what the runner chose to
-                        # call itself: stamp both axes so a report row cannot silently collapse
-                        # two cells (a runner predating gh-ocannl-539 reports a reduced-precision
-                        # cell's variant as its precision).
-                        ident = {"variant": variant, "precision": precision}
-                        if variant == "tuned":
-                            # Two-pass protocol: the search leaves the process slower (extra
-                            # per-launch overhead from accumulated modules/buffers — measured at
-                            # +10.3% on small CUDA kernels behind a 16 s search, and ~0 behind a
-                            # 4 s one or on a workload whose steps are milliseconds;
-                            # gh-ocannl-675), so pass 1 runs the search and
-                            # populates autotune_cache (its compile_s is the search cost), and a
-                            # fresh pass-2 process replays the cached winner for the step timings.
-                            pass1, note = run_cell(
-                                f"{label} (search pass)",
-                                cmd,
-                                env=env,
-                                cwd=HERE,
-                                timeout=args.cell_timeout,
-                                on_incomplete=ocannl_cache_note,
-                            )
-                            if pass1 is None:
-                                record_failure(f"{label} (search pass)", note)
-                                continue
-                            # What the search pass actually did, which is not derivable from the
-                            # compile_s it hands over: a warm autotune_cache makes it a replay, and
-                            # autotune_search=false makes it neither a search nor a replay. Both
-                            # are legitimate, and both would otherwise be published as a search
-                            # cost. Stamped so the report can say which.
-                            pass1_verdict = search_provenance(pass1)
-                            if pass1_verdict != "SEARCHED":
-                                print(f"    search pass verdict {pass1_verdict}: its compile_s is "
-                                      "not a from-scratch search cost", flush=True)
-                            collect(label, cmd, env=env, cwd=HERE,
-                                    override={**ident, "compile_s": pass1["compile_s"],
-                                              "search_pass": pass1_verdict})
-                        else:
-                            collect(label, cmd, env=env, cwd=HERE, override=ident)
+                        for regime in args.profile:
+                            # The regime is a third axis over the cells (gh-ocannl-719): the same
+                            # variant and precision, dispatched under the profile that IS the
+                            # regime, gated at that regime's envelope, labelled as such.
+                            cmd = [
+                                str(ocannl_exe(model)),
+                                f"--ocannl_backend={backend}",
+                                *ocannl_regime_args(regime),
+                            ]
+                            label = f"{name} ocannl/{backend}/{cell}{regime_label(regime)}"
+                            # The cell's identity is what was dispatched, not what the runner chose
+                            # to call itself: stamp every axis so a report row cannot silently
+                            # collapse two cells (a runner predating gh-ocannl-539 reports a
+                            # reduced-precision cell's variant as its precision; the regime is
+                            # cross-checked against what the runner resolved by `regime_check`).
+                            ident = {"variant": variant, "precision": precision, "regime": regime}
+                            if variant == "tuned":
+                                # Two-pass protocol: the search leaves the process slower (extra
+                                # per-launch overhead from accumulated modules/buffers — measured at
+                                # +10.3% on small CUDA kernels behind a 16 s search, and ~0 behind a
+                                # 4 s one or on a workload whose steps are milliseconds;
+                                # gh-ocannl-675), so pass 1 runs the search and
+                                # populates autotune_cache (its compile_s is the search cost), and a
+                                # fresh pass-2 process replays the cached winner for the step timings.
+                                pass1, note = run_cell(
+                                    f"{label} (search pass)",
+                                    cmd,
+                                    env=env,
+                                    cwd=HERE,
+                                    timeout=args.cell_timeout,
+                                    on_incomplete=ocannl_cache_note,
+                                )
+                                if pass1 is None:
+                                    record_failure(f"{label} (search pass)", note)
+                                    continue
+                                # What the search pass actually did, which is not derivable from the
+                                # compile_s it hands over: a warm autotune_cache makes it a replay, and
+                                # autotune_search=false makes it neither a search nor a replay. Both
+                                # are legitimate, and both would otherwise be published as a search
+                                # cost. Stamped so the report can say which.
+                                pass1_verdict = search_provenance(pass1)
+                                if pass1_verdict != "SEARCHED":
+                                    print(f"    search pass verdict {pass1_verdict}: its compile_s is "
+                                          "not a from-scratch search cost", flush=True)
+                                collect(label, cmd, env=env, cwd=HERE,
+                                        override={**ident, "compile_s": pass1["compile_s"],
+                                                  "search_pass": pass1_verdict})
+                            else:
+                                collect(label, cmd, env=env, cwd=HERE, override=ident)
         if "pytorch" in args.only:
             for device in ["cpu"] + ([gpu_torch] if gpu_torch else []):
                 for compiled in [False] + ([True] if args.torch_compile else []):
-                    collect(
-                        f"{name} pytorch/{device}/{'compiled' if compiled else 'eager'}",
-                        [str(VENV_PY), str(HERE / "runners/pytorch/run.py"), "--fixture", str(fx), "--device", device]
-                        + (["--compile"] if compiled else []),
-                    )
+                    regimes = list(args.profile)
+                    if device == "cpu" and not compiled and "exact" not in regimes:
+                        # The parity reference is the exact CPU eager cell whatever regimes were
+                        # selected: without it every approximate row would be NO-REF.
+                        regimes.insert(0, "exact")
+                    for regime in regimes:
+                        collect(
+                            f"{name} pytorch/{device}/{'compiled' if compiled else 'eager'}"
+                            f"{regime_label(regime)}",
+                            [str(VENV_PY), str(HERE / "runners/pytorch/run.py"), "--fixture", str(fx), "--device", device]
+                            + (["--compile"] if compiled else [])
+                            + torch_regime_args(regime),
+                            override={"regime": regime},
+                        )
         if "tinygrad" in args.only:
+            # No exact pin exists for tinygrad, so its cells run once and stand in the approximate
+            # regime whenever the sweep has one (gh-ocannl-719).
+            tiny_regime = tinygrad_regime(args.profile)
             for device in ["CPU"] + ([gpu_tiny] if gpu_tiny else []):
                 for jit in [1] + ([0] if args.nojit else []):
                     collect(
-                        f"{name} tinygrad/{device}/{'jit' if jit else 'nojit'}",
+                        f"{name} tinygrad/{device}/{'jit' if jit else 'nojit'}"
+                        f"{regime_label(tiny_regime)}",
                         [str(VENV_PY), str(HERE / "runners/tinygrad/run.py"), "--fixture", str(fx), "--device", device, "--jit", str(jit)],
+                        override={"regime": tiny_regime},
                     )
                 if args.beam:
                     # PARALLEL sizes tinygrad's candidate-compile pool (its own knob, read where
@@ -1648,7 +1834,8 @@ def main():
                         # only the label: a wedged cell records no result, and which pool it
                         # wedged with is the first thing anyone asks (gh-ocannl-760 review).
                         f"{name} tinygrad/{device}/beam"
-                        + ("" if args.beam_parallel is None else f" P={args.beam_parallel}"),
+                        + ("" if args.beam_parallel is None else f" P={args.beam_parallel}")
+                        + regime_label(tiny_regime),
                         [str(VENV_PY), str(HERE / "runners/tinygrad/run.py"), "--fixture", str(fx), "--device", device, "--beam", str(args.beam)],
                         # What pool the search ran with, recorded where the row is read. Without
                         # it the default, `0` and `--beam-parallel 2` all land as `beam` with no
@@ -1656,7 +1843,11 @@ def main():
                         # three or four -- so a compile_s from one configuration reads as the
                         # other's (gh-ocannl-760 review). `null` is tinygrad's own default, which
                         # is one worker per logical core on a GPU device and no pool on CPU.
-                        override={"beam": args.beam, "beam_parallel": args.beam_parallel},
+                        override={
+                            "beam": args.beam,
+                            "beam_parallel": args.beam_parallel,
+                            "regime": tiny_regime,
+                        },
                         env=beam_env,
                         # The one cell whose cache a kill can tear: the beam search writes its
                         # winners into a single sqlite file as it goes (gh-ocannl-760).
@@ -1668,6 +1859,7 @@ def main():
     parity_check(results)
     provenance_violations = provenance_check(results)
     tensorization_mismatches = tensorization_check(results)
+    regime_mismatches = regime_check(results)
     report(results, HERE / "results", unavailable, failures)
     ok = True
     if unavailable:
@@ -1721,6 +1913,21 @@ def main():
         print(
             f"TENSORIZATION NOTICE: {len(tensorization_mismatches)} tuned cell(s) shipped a "
             f"schedule asking for tensor cores whose kernels did not emit them: {labels}",
+            flush=True,
+        )
+    if regime_mismatches:
+        # A row labelled with a regime its process did not run in is worse than a missing row:
+        # its number would be quoted as the other regime's (gh-ocannl-719).
+        ok = False
+        labels = ", ".join(
+            f"{r['workload']} {r['framework']}/{r['backend']}/"
+            f"{cell_name(r['variant'], r.get('precision', 'f32'))}{regime_label(regime_of(r))}"
+            f" (runner reports {r['regime_mismatch']})"
+            for r in regime_mismatches
+        )
+        print(
+            f"REGIME GATE: {len(regime_mismatches)} cell(s) ran under a regime other than the "
+            f"one dispatched: {labels}",
             flush=True,
         )
     failed = [r for r in results if r["parity"] == "FAIL"]

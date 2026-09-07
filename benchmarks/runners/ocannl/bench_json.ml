@@ -113,15 +113,21 @@ let tune_object ~shipped ~searches ~replays ~no_searches ~shipped_mma ~arms =
 
     [tune] is the already-built [tune] object (see [Bench_harness.tune_json]) or [None] for an
     untuned cell; [tokens_per_step] is present only for workloads that have one. The percentiles and
-    [queued_ms] are milliseconds. *)
-let result_line ~backend ~variant ~precision ~workload ~compile_s ~searched ?tokens_per_step ?tune
-    ~p10 ~p50 ~p90 ~queued_ms ~timed_steps ~losses () =
+    [queued_ms] are milliseconds. [profile] is the name of the configuration profile this process
+    resolved ([Utils.active_profile]), or [None] for no profile: the orchestrator dispatches a
+    cell's regime as [--ocannl_profile=...] and checks the row against what the runner reports,
+    so a regime a row claims is the one the process actually ran under (gh-ocannl-719). *)
+let result_line ~backend ~variant ~precision ~profile ~workload ~compile_s ~searched
+    ?tokens_per_step ?tune ~p10 ~p50 ~p90 ~queued_ms ~timed_steps ~losses () =
   let tokens_field =
     match tokens_per_step with Some t -> Printf.sprintf {|"tokens_per_step":%d,|} t | None -> ""
   in
   let tune_field = match tune with Some j -> Printf.sprintf {|"tune":%s,|} j | None -> "" in
+  let profile_field =
+    match profile with Some p -> Printf.sprintf {|"%s"|} (string p) | None -> "null"
+  in
   Printf.sprintf
-    {|{"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","workload":"%s","compile_s":%s,"searched":%b,%s%s"step_ms":{"p10":%s,"p50":%s,"p90":%s},"queued_step_ms":%s,"timed_steps":%d,"losses":[%s]}|}
-    (string backend) (string variant) (string precision) (string workload) (fixed compile_s)
-    searched tokens_field tune_field (num p10) (num p50) (num p90) (num queued_ms) timed_steps
-    (nums ~prec:9 losses)
+    {|{"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"workload":"%s","compile_s":%s,"searched":%b,%s%s"step_ms":{"p10":%s,"p50":%s,"p90":%s},"queued_step_ms":%s,"timed_steps":%d,"losses":[%s]}|}
+    (string backend) (string variant) (string precision) profile_field (string workload)
+    (fixed compile_s) searched tokens_field tune_field (num p10) (num p50) (num p90)
+    (num queued_ms) timed_steps (nums ~prec:9 losses)
