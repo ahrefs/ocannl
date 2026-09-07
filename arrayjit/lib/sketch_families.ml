@@ -1704,13 +1704,13 @@ let gpu_mma_sketch_schedule ~(opt : LL.optimized) (site : matmul_site)
   if bk = 0 then
     (* Unsplit: the block statement spans [m_k]; a site's outer contraction loops stay above it. *)
     let kb = k_blocks site [] in
-    let tz, _lane = Sched.tensorize ~i:i_i ~j:j_i ~k:site.m_k ~simd_width:w in
+    let tz, _lane = Sched.tensorize ~i:i_i ~j:j_i ~k:site.m_k ~simd_width:w () in
     batch_hoist_swaps site @ zops @ [ sp_i; sp_j ] @ sink i_i [ j_o ] @ sink j_i kb @ sink i_i kb
     @ [ tz ]
   else
     let sp_k, k_o, k_i = Sched.split ~axis:site.m_k ~factor:bk ~outer:LL.Serial ~inner:LL.Serial in
     let kb = k_blocks site [ k_o ] in
-    let tz, _lane = Sched.tensorize ~i:i_i ~j:j_i ~k:k_i ~simd_width:w in
+    let tz, _lane = Sched.tensorize ~i:i_i ~j:j_i ~k:k_i ~simd_width:w () in
     (* Pad-composition seeding (gh-ocannl-485): with both operands staged through zero-fringe
        cooperative tiles, non-multiple extents pad to the block sizes — the guards land on the leaf
        accumulation, [Tensorize] moves the row/column masks to the fragment transfers and discharges
@@ -1772,11 +1772,11 @@ let cpu_mma_sketch_schedule (site : matmul_site) { sk_bm = bm; _ } : Sched.sched
   in
   let kb = k_blocks site [] in
   if bm = 0 then
-    let tz, _lane = Sched.tensorize ~i:site.m_i ~j:site.m_j ~k:site.m_k ~simd_width:site.m_nj in
+    let tz, _lane = Sched.tensorize ~i:site.m_i ~j:site.m_j ~k:site.m_k ~simd_width:site.m_nj () in
     batch_hoist_swaps site @ zops @ sink site.m_j kb @ sink site.m_i kb @ [ tz ]
   else
     let sp_i, _, i_i = Sched.split ~axis:site.m_i ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
-    let tz, _lane = Sched.tensorize ~i:i_i ~j:site.m_j ~k:site.m_k ~simd_width:site.m_nj in
+    let tz, _lane = Sched.tensorize ~i:i_i ~j:site.m_j ~k:site.m_k ~simd_width:site.m_nj () in
     batch_hoist_swaps site @ zops @ [ sp_i ] @ sink site.m_j kb @ sink i_i kb @ [ tz ]
 
 (* Cache-blocked, operand-packed tensorized CPU matmul: [Tile_mma] composed with the S4 packing
@@ -1880,7 +1880,7 @@ let cpu_mma_pack_sketch_schedule (site : matmul_site)
       @ (if bn = 0 then [] else pad_to ~axis:site.m_j ~extent:site.m_nj bn)
       @ pad_to ~axis:site.m_k ~extent:site.m_nk bk
   in
-  let tz, _lane = Sched.tensorize ~i:i_i ~j:j_col ~k:k_i ~simd_width:1 in
+  let tz, _lane = Sched.tensorize ~i:i_i ~j:j_col ~k:k_i ~simd_width:1 () in
   let kb = k_blocks site [ k_o ] in
   batch_hoist_swaps site @ pads @ zops @ splits @ j_swaps @ sink j_col kb @ sink i_i kb
   @ (if grid_outermost then [] else sink i_o kb)
@@ -2029,7 +2029,7 @@ let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
     let target =
       List.map site.c_outer ~f:fst @ [ row_o ] @ site.c_kernel @ [ row_i; site.c_oc; site.c_red ]
     in
-    let tz, _lane = Sched.tensorize ~i:row_i ~j:site.c_oc ~k:site.c_red ~simd_width:1 in
+    let tz, _lane = Sched.tensorize ~i:row_i ~j:site.c_oc ~k:site.c_red ~simd_width:1 () in
     row_pads @ grid_ops
     @ (sp_row :: reorder_swaps ~current ~target)
     @ [ stage site.c_a [ row_i; site.c_red ]; stage site.c_b [ site.c_red; site.c_oc ]; tz ]
@@ -2037,7 +2037,7 @@ let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
     let loop_syms =
       List.map site.c_outer ~f:fst @ site.c_kernel @ [ site.c_row; site.c_oc; site.c_red ]
     in
-    let tz, _lane = Sched.tensorize ~i:site.c_row ~j:site.c_oc ~k:site.c_red ~simd_width:1 in
+    let tz, _lane = Sched.tensorize ~i:site.c_row ~j:site.c_oc ~k:site.c_red ~simd_width:1 () in
     let zops, grid_ops =
       if not sk_grid then ([], [])
       else if List.length (conv_real_stmts site opt) > 2 then
@@ -2117,7 +2117,7 @@ let gpu_conv_sketch_schedule (site : conv_site)
     let target =
       List.map site.c_outer ~f:fst @ [ row_o ] @ site.c_kernel @ [ row_i; site.c_oc; site.c_red ]
     in
-    let tz, _lane = Sched.tensorize ~i:row_i ~j:site.c_oc ~k:site.c_red ~simd_width:w in
+    let tz, _lane = Sched.tensorize ~i:row_i ~j:site.c_oc ~k:site.c_red ~simd_width:w () in
     pads @ (outer_grid @ [ sp_row ]) @ reorder_swaps ~current ~target
     @ [ stage site.c_a [ row_i; site.c_red ]; stage site.c_b [ site.c_red; site.c_oc ]; tz ]
   else
@@ -2127,7 +2127,7 @@ let gpu_conv_sketch_schedule (site : conv_site)
     let loop_syms =
       List.map site.c_outer ~f:fst @ site.c_kernel @ [ site.c_row; site.c_oc; site.c_red ]
     in
-    let tz, _lane = Sched.tensorize ~i:site.c_row ~j:site.c_oc ~k:site.c_red ~simd_width:w in
+    let tz, _lane = Sched.tensorize ~i:site.c_row ~j:site.c_oc ~k:site.c_red ~simd_width:w () in
     pads @ outer_grid
     @ reorder_swaps ~current:site.c_loops ~target:loop_syms
     @ [ stage site.c_a [ site.c_row; site.c_red ]; stage site.c_b [ site.c_red; site.c_oc ]; tz ]

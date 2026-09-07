@@ -48,7 +48,15 @@ type saved_optop =
     }
   | Privatize of { target : int; over : sym_ref }
   | Expand_zero of { tn : int }
-  | Tensorize of { i : sym_ref; j : sym_ref; k : sym_ref; simd_width : int }
+  | Tensorize of {
+      i : sym_ref;
+      j : sym_ref;
+      k : sym_ref;
+      simd_width : int;
+      tile : Register_tile.t option; [@sexp.option]
+          (** The requested C-tile geometry (gh-ocannl-619); omitted when the renderer chooses, so
+              pre-geometry entries stay readable without an [entry_version] bump. *)
+    }
   | Fuse_epilogue of { target : int; shared : bool }
   | Split_reduce of { axis : sym_ref; target : int; num_blocks : int }
 [@@deriving sexp, compare, equal]
@@ -313,10 +321,16 @@ let to_saved r (sched : Schedule.schedule) : saved_schedule * registry =
                     record r s (Minted (idx, Expand_axis j)))
               in
               (r, Expand_zero { tn = resolve_tn_exn r tn })
-          | Schedule.Tensorize { i; j; k; lane; simd_width } ->
+          | Schedule.Tensorize { i; j; k; lane; simd_width; tile } ->
               let saved =
                 Tensorize
-                  { i = resolve_exn r i; j = resolve_exn r j; k = resolve_exn r k; simd_width }
+                  {
+                    i = resolve_exn r i;
+                    j = resolve_exn r j;
+                    k = resolve_exn r k;
+                    simd_width;
+                    tile;
+                  }
               in
               (record r lane (Minted (idx, Tensorize_lane)), saved)
           | Schedule.Fuse_epilogue { target; shared } ->
@@ -406,10 +420,10 @@ let of_saved canonical (saved : saved_schedule) : Schedule.schedule * registry =
                     record r s (Minted (idx, Expand_axis j)))
               in
               (r, op)
-          | Tensorize { i; j; k; simd_width } ->
+          | Tensorize { i; j; k; simd_width; tile } ->
               let op, lane =
-                Schedule.tensorize ~i:(unresolve_exn r i) ~j:(unresolve_exn r j)
-                  ~k:(unresolve_exn r k) ~simd_width
+                Schedule.tensorize ?tile ~i:(unresolve_exn r i) ~j:(unresolve_exn r j)
+                  ~k:(unresolve_exn r k) ~simd_width ()
               in
               (record r lane (Minted (idx, Tensorize_lane)), op)
           | Fuse_epilogue { target; shared } ->

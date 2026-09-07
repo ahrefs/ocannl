@@ -345,16 +345,7 @@ let parse_static_properties (props : Sexp.t) : device_dump option =
       Option.map (Option.all (List.map entries ~f:entry)) ~f:(fun devices -> { group; devices })
   | _ -> None
 
-let simd_lane_ladder ~vector_bytes ~elt_bytes =
-  if elt_bytes <= 0 || vector_bytes < 8 then []
-  else
-    let floor_bytes = min vector_bytes 32 in
-    let rec ladder bytes =
-      let lanes = bytes / elt_bytes in
-      let rest = if bytes / 2 >= floor_bytes then ladder (bytes / 2) else [] in
-      if lanes >= 2 then lanes :: rest else rest
-    in
-    ladder vector_bytes
+let simd_lane_ladder = Register_tile.simd_lane_ladder
 
 let simd_lanes_for ~vector_bytes ~elt_bytes ~extent =
   simd_lane_ladder ~vector_bytes ~elt_bytes

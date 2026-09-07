@@ -131,7 +131,7 @@ let composed_schedule ~a ~b (opt : LL.optimized) : Sched.schedule =
   @ sink j [ k_o ]
   @ sink i_i [ k_o ] @ sink i_o [ k_o ]
   @ [ stage b [ k_i; j ]; stage a [ i_i; k_i ] ]
-  @ if on_cpu then [ fst (Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1) ] else []
+  @ if on_cpu then [ fst (Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 ()) ] else []
 
 let run_composed ~name ~a ~b (out : Tensor.t) =
   let comp = named name (Train.forward out) in
@@ -214,7 +214,7 @@ let () =
     let zi, zj = match zsyms with [ zi; zj ] -> (zi, zj) | _ -> assert false in
     let sp_zi, _, _ = Sched.split ~axis:zi ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
     let sp_i, _, i_i = Sched.split ~axis:i ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
-    let tz, _ = Sched.tensorize ~i:i_i ~j ~k ~simd_width:n in
+    let tz, _ = Sched.tensorize ~i:i_i ~j ~k ~simd_width:n () in
     [ ez; sp_zi; Sched.Retype { axis = zj; ty = LL.Workgroup }; sp_i; tz ]
   in
   let transform opt = if on_cpu then Sched.apply (grid_schedule opt) opt else opt in
@@ -274,7 +274,7 @@ let () =
           tile_prec = None;
         }
     in
-    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 in
+    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 () in
     [ ez; sp_zi; sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ] @ sink i_o [ k_o ]
     @ [ stage mb.Tensor.value [ k_i; j ]; stage ma.Tensor.value [ i_i; k_i ]; tz ]
   in
@@ -332,7 +332,7 @@ let () =
     let sp_zi, _, _ = Sched.split ~axis:zi ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
     let sp_i, _, i_i = Sched.split ~axis:i ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
     let sp_k, k_o, k_i = Sched.split ~axis:k ~factor:bk ~outer:LL.Serial ~inner:LL.Serial in
-    let tz, _ = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 in
+    let tz, _ = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 () in
     [ ez; sp_zi; sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ]
     @ [
         Sched.Stage
@@ -398,7 +398,7 @@ let () =
     let sp_zi, _, _ = Sched.split ~axis:zi ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
     let sp_i, _, i_i = Sched.split ~axis:i ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
     let sp_k, k_o, k_i = Sched.split ~axis:k ~factor:bk ~outer:LL.Serial ~inner:LL.Serial in
-    let tz, _ = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 in
+    let tz, _ = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 () in
     [ ez; sp_zi; sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ]
     @ [
         Sched.Stage

@@ -167,7 +167,7 @@ let () =
         let sp_zi, _, _ = Sched.split ~axis:zi ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
         [ ez; sp_zi ]
     in
-    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 in
+    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 () in
     zops @ [ sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ]
     @ (if grid then [] else sink i_o [ k_o ])
     @ [ stage mb.Tensor.value [ k_i; j ]; stage ma.Tensor.value [ i_i; k_i ] ]

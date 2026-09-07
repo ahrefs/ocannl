@@ -186,7 +186,7 @@ let () =
     let sp_zi, _, _ = Sched.split ~axis:zi ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
     let rz = Sched.Retype { axis = zj; ty = LL.Workgroup } in
     let sp_i, _, i_i = Sched.split ~axis:i ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
-    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k ~simd_width in
+    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k ~simd_width () in
     [ ez; sp_zi; rz; sp_i; tz ]
   in
 
@@ -904,7 +904,7 @@ let () =
       let ez, zsyms = Sched.expand_zero ~tn:ec1.Tensor.value in
       let zj = match zsyms with [ _; zj ] -> zj | _ -> assert false in
       let rz = Sched.Retype { axis = zj; ty = LL.Workgroup } in
-      let tz, _lane = Sched.tensorize ~i ~j ~k ~simd_width:mj in
+      let tz, _lane = Sched.tensorize ~i ~j ~k ~simd_width:mj () in
       [ ez; rz; tz ]
     in
     let transform_e opt = Sched.apply (edge_schedule opt) opt in
@@ -976,7 +976,7 @@ let () =
       let ez, zsyms = Sched.expand_zero ~tn:wc1.Tensor.value in
       let zj = match zsyms with [ _; zj ] -> zj | _ -> assert false in
       let rz = Sched.Retype { axis = zj; ty = LL.Workgroup } in
-      let tz, _lane = Sched.tensorize ~i ~j ~k ~simd_width:wj in
+      let tz, _lane = Sched.tensorize ~i ~j ~k ~simd_width:wj () in
       [ ez; rz; tz ]
     in
     let transform_w opt = Sched.apply (width_schedule opt) opt in
@@ -1043,7 +1043,7 @@ let () =
       let ez, zsyms = Sched.expand_zero ~tn:fc1.Tensor.value in
       let zj = match zsyms with [ _; zj ] -> zj | _ -> assert false in
       let rz = Sched.Retype { axis = zj; ty = LL.Workgroup } in
-      let tz, _lane = Sched.tensorize ~i ~j ~k ~simd_width:fj in
+      let tz, _lane = Sched.tensorize ~i ~j ~k ~simd_width:fj () in
       [ ez; rz; tz ]
     in
     let transform_f opt = Sched.apply (fused_schedule opt) opt in
@@ -1105,7 +1105,7 @@ let () =
     let rz = Sched.Retype { axis = zj; ty = LL.Workgroup } in
     let sp_i, _, i_i = Sched.split ~axis:i ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
     let sp_k, k_o, k_i = Sched.split ~axis:k ~factor:bm ~outer:LL.Serial ~inner:LL.Serial in
-    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width in
+    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width () in
     [
       ez;
       sp_zi;
@@ -1452,7 +1452,7 @@ let () =
       | _ -> assert false
     in
     (* Roles misassigned: j as the row symbol of the accumulator fails the index discipline. *)
-    let tz, _ = Sched.tensorize ~i:j ~j:i ~k ~simd_width in
+    let tz, _ = Sched.tensorize ~i:j ~j:i ~k ~simd_width () in
     Sched.apply [ tz ] opt
   in
   let bad_comp = named "mm_bad" (Train.forward mc2) in

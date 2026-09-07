@@ -177,7 +177,7 @@ let () =
         | [ i; j; k ] -> (i, j, k)
         | _ -> assert false
       in
-      let tz, _lane = Sched.tensorize ~i ~j ~k ~simd_width:mj in
+      let tz, _lane = Sched.tensorize ~i ~j ~k ~simd_width:mj () in
       Sched.apply [ tz ] opt
     in
     let ctx_mma = run ~ctx:ctx_twin ~name:"nz_mma" ~transform [%cd d_mma =+ ma * mb ~logic:"@"] in

@@ -104,7 +104,7 @@ let staged_schedule ~out ~src_a ~src_b ~swz_a ~swz_b ~bk ~ta ~tb (opt : LL.optim
   let rz = Sched.Retype { axis = zj; ty = LL.Workgroup } in
   let sp_i, _, i_i = Sched.split ~axis:i ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
   let sp_k, k_o, k_i = Sched.split ~axis:k ~factor:bk ~outer:LL.Serial ~inner:LL.Serial in
-  let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width in
+  let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width () in
   [
     ez;
     sp_zi;

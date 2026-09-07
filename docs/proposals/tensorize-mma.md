@@ -614,6 +614,23 @@ fires — pure-fp16 (f16 accumulators, doubled lanes, bitwise vs the scalar half
 where `native_fp16_arithmetic` holds. Design record and x86 measurements:
 [gh-ocannl-575-narrow-register-tiling](gh-ocannl-575-narrow-register-tiling.md).
 
+## The register-tile geometry as a schedule decision (gh-ocannl-619, 2026-09-07)
+
+gh-575 showed the cost of a geometry only the renderer could see: the width `bw = rn * lanes` was
+a fixed cap that peeled a third of a kernel's columns at doubled lane counts (3.6x on pure-fp16
+GEBP at n = 512), establishing the right width meant patching an environment variable into the
+renderer, and gh-614 then found that the same choice decides whether gcc's accumulator spill
+fires — a dimension no ranking model represents. The geometry now lives in `Ir.Register_tile`
+(`{rm; rn; lanes}`, the ranking model as `default`, the fit rules as `check`, the seeding menu as
+`alternatives`), rides on `Schedule.Tensorize`'s `tile` into `Low_level.Tile_mma`, and reaches
+`try_register_tile`, which honours a request exactly or declines to the scalar fallback naming the
+rule (the census and the routine's `tensorization` label then say so; a request is never
+silently replaced). The matmul family tree twins each CPU tensorized leaf — whole-triple and
+packed — with the alternatives of its micro-kernel extents under a `register-tile` level
+(`auto` first, so sites with a single affordable width keep their leaf list), and the tuner picks
+by timing. Pinned by `test/operations/tile_mma_geometry.ml`. Left for later: `rm` alternatives,
+the conv family, and replacing the model's fitted constant with an `Ir.Cost_model` term.
+
 ## Relations
 
 - [schedule-ir-optops](schedule-ir-optops.md): §5 `Stage` supplies the shared tiles and

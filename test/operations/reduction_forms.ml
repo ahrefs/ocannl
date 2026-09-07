@@ -1475,7 +1475,7 @@ let optop_samples : Sched.optop list =
       };
     Sched.Privatize { target = coverage_node; over = s };
     Sched.Expand_zero { tn = coverage_node; indices = [] };
-    Sched.Tensorize { i = s; j = s; k = s; lane = s; simd_width = 1 };
+    Sched.Tensorize { i = s; j = s; k = s; lane = s; simd_width = 1; tile = None };
     Sched.Fuse_epilogue { target = coverage_node; shared = false };
     Sched.Split_reduce
       {
@@ -1996,7 +1996,7 @@ let mma_run ~name ~out ~tensorize comp =
       let i, j, k = mma_nest_syms opt in
       let ez, zsyms = Sched.expand_zero ~tn:out in
       let zj = match zsyms with [ _; zj ] -> zj | _ -> assert false in
-      let tz, _lane = Sched.tensorize ~i ~j ~k ~simd_width:mma_n in
+      let tz, _lane = Sched.tensorize ~i ~j ~k ~simd_width:mma_n () in
       Sched.apply [ ez; Sched.Retype { axis = zj; ty = LL.Workgroup }; tz ] opt
   in
   let ctx, routine =
