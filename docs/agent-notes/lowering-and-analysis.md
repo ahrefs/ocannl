@@ -324,3 +324,12 @@ files.
   `Concat` that DOES arrive is refused loudly, never approximated — `Indexing.reflect_projection` and
   `Assignments.apply_padding_offset` both raise, because neither a single affine stride nor a
   single-index shift can express a partition into disjoint sub-ranges (gh-ocannl-773).
+- **Adding a `Low_level.t` constructor: let the compiler enumerate the exhaustive sites, and audit
+  the catch-alls with warning 4** (gh-ocannl-696). Most walkers list every constructor, so the
+  build fails at each (82 sites for `Scan_loop`); the ones it cannot flag are the `| _ ->` matches.
+  `OCAMLPARAM="_,w=+4" dune build @arrayjit/lib/check` reports every fragile match with the type it
+  is over — filter for `Low_level.t` (136 sites at the time) and read them in place: nearly all are
+  shape recognizers whose fall-through is the right answer for a new statement kind, and the few
+  descend-only walkers (`hoist_cross_statement_cse`, `proc_contains_set_from_vec`,
+  `stmt_reads_cell`, the stored-computation scanners) need an explicit arm. Test-side walkers
+  (`Ll_test.walk_t`, `bench_harness`, a few tests) surface only under the full `dune build @check`.

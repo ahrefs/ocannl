@@ -721,3 +721,15 @@ files.
   old stamp and the next opener retries; power-loss durability is the filesystem's, not an fsync
   guarantee. Pre-gh-835 binaries do not take the lock and must not share a live cache directory
   during an upgrade.
+- **A `Scan_loop` is opaque to the schedule ops in both directions and transparent to the
+  annotator** (gh-ocannl-696, `test/operations/scan_loop.ml` leg 7): `find_loops_env` and
+  `rewrite_loop` do not enter it, so an op naming the scan's own index or a loop nested in its body
+  declines with the standard "no For_loop with index" refusal — the gh-ocannl-668 law holds because
+  neither walk descends. `Pad` guards the scan whole (a guard inside its body would make the carried
+  update conditional); `Stage`, `Privatize` and `Split_reduce` refuse a scan in their region by name.
+  The default annotator DOES descend, registering the body's accesses like a serial loop's, so an
+  enclosing loop the accesses prove independent keeps its `Grid` mapping — the carried state is
+  per-iteration scratch of that loop (leg 4, Serial vs Grid parity on cc and Metal). For footprint
+  queries the scan index is an ordinary loop symbol: `loop_bounds`, interval analysis, and
+  `affine_accesses`, where the inits sit at path `Stmt 0` and the body at `Stmt 1` so program order
+  is preserved.
