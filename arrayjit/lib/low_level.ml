@@ -5140,6 +5140,8 @@ let affine_accesses (llc : t) : Tn.t Affine.access list =
             code ~loops ~path:(Affine.Stmt k :: path) ~guarded stmt)
     | For_loop { index; from_; to_; body; _ } ->
         code ~loops:((index, (from_, to_)) :: loops) ~path ~guarded body
+    (* A dead scan is a no-op: it performs no accesses, its inits included. *)
+    | Scan_loop { from_; to_; _ } when to_ < from_ -> ()
     | Scan_loop { index; from_; to_; carried; body; _ } ->
         (* gh-ocannl-696: the inits are statement [0] of the construct, one [Set_local]-shaped
            position each, and the body statement [1] -- so every init read orders before every body

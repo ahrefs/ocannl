@@ -1106,10 +1106,17 @@ let collect_source_accesses ~source (llc : Low_level.t) :
         code stack b
     | For_loop { index; from_; to_; body; axis } ->
         code ({ index; from_; to_; body = Noop; axis } :: stack) body
-    | Scan_loop _ ->
-        (* gh-ocannl-696: a scan inside the staged region is out of scope for v1 -- refused loudly
-           rather than treated as a loop whose iterations the tile could serve. *)
-        invalid_arg "Schedule.Stage: a Scan_loop inside the staged region is unsupported"
+    | Scan_loop { carried; body; _ } ->
+        (* gh-ocannl-696: this walk covers the whole routine, so a scan is refused only when it
+           touches the source -- staging its reads is out of scope for v1, and a write is refused
+           like any other; a scan elsewhere in the routine is none of the op's business. *)
+        if
+          code_touches_tn source body
+          || List.exists carried ~f:(fun c -> scalar_touches_tn source c.init)
+        then
+          invalid_arg
+            ("Schedule.Stage: a Scan_loop accesses the source " ^ Tn.debug_name source
+           ^ ", which is unsupported")
     | Set { tn; llsc; _ } ->
         reject_write tn;
         scalar stack llsc

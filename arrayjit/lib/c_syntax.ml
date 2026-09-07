@@ -3100,8 +3100,8 @@ module C_syntax (B : C_syntax_config) = struct
           (* The carried pair is declared by the construct itself, so under a pool-rendered [Grid]
              body it is per-chunk storage like a [Declare_local] there. *)
           List.iter carried ~f:(fun c ->
-              on_stmt (`Declare_local c.Low_level.prev.Low_level.scope_id);
-              on_stmt (`Declare_local c.Low_level.next.Low_level.scope_id);
+              on_stmt (`Declare_local c.Low_level.prev);
+              on_stmt (`Declare_local c.Low_level.next);
               go_sc c.Low_level.init);
           go body
       | If { cond = c, _; body } ->
@@ -3119,13 +3119,13 @@ module C_syntax (B : C_syntax_config) = struct
           go_sc a;
           access ~write:true ~kind:`Vec tn idcs
       | Set_local (id, llsc) ->
-          on_stmt (`Set_local id.Low_level.scope_id);
+          on_stmt (`Set_local id);
           go_sc llsc
-      | Declare_local { id; _ } -> on_stmt (`Declare_local id.Low_level.scope_id)
+      | Declare_local { id; _ } -> on_stmt (`Declare_local id)
     and go_sc (llsc : Low_level.scalar_t) =
       match llsc with
       | Local_scope { id; body; _ } ->
-          on_stmt (`Declare_local id.Low_level.scope_id);
+          on_stmt (`Declare_local id);
           go body
       | Get_local _ -> ()
       | Get (tn, idcs) -> access ~write:false ~kind:`Exact tn idcs
@@ -3252,7 +3252,8 @@ module C_syntax (B : C_syntax_config) = struct
     let mentions_comp = Indexing.axis_index_mentions_symbol sym in
     let loop_ident = Indexing.symbol_ident sym in
     let locals : grid_local_info Hashtbl.M(Int).t = Hashtbl.create (module Int) in
-    let declared_scopes = Hash_set.create (module Int) in
+    (* Keyed by the full scope id -- node and integer, the identity the rendered C name carries. *)
+    let declared_scopes = Hash_set.create (module Low_level.Scope_id) in
     let ok = ref true in
     let opaque = ref false in
     let escaped_scope = ref false in
