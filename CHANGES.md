@@ -65,8 +65,11 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
   `Cpu_topology` have explicit interfaces that hide their zero-reference helpers
   (`Assignments.fold_leaves`, `Affine.equal_verdict`, ...); the removed surface is under gh-ocannl-806.
 - `PrintBox_utils` and `Task` have explicit interfaces: `PrintBox_utils.concise_float`, `nolines`
-  and `render_group` are private, and its `sexp_of_box`/`sexp_of_dag` converters are removed
-  (gh-ocannl-915).
+  and `render_group` are private, and its `sexp_of_box`, `sexp_of_dag` and `sexp_of_table_row_spec`
+  converters are removed (gh-ocannl-915).
+- `Shape.update_step.neutral_elem` is immutable, fixed at creation, and `Shape.product_space_shape`
+  takes `~shape ~logic` rather than an `update_step`; `Tensor.op` runs `op_asn` under
+  `Shape.with_construction_window`, which refuses a finalization before the op's constraints exist (gh-ocannl-830).
 - `Train.to_routine` returns `Context.t * Context.routine`, like `Context.compile`; fix the type
   error with `let _, routine = ...` or chain the context (gh-ocannl-772).
 - `?lowered_transform` / `?lowered_transforms` on `Context.compile`, `compile_outcome` and backend
@@ -100,9 +103,9 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
   (`lukstafi/ocannl-staging` PR #506).
 - `Set_vec_unop` lowering refuses a launch-bound symbolic extent, a defensive guard behind the
   shape solver's existing rejection of such graphs (gh-ocannl-817).
-- Reducing over a bound symbolic axis declared with maximum 1 returned the cell's prior value where
-  the empty sum is 0: the axis has no iterator for the extent guard to attach to, so `Accum_op`
-  lowering now refuses it and names the remedy (gh-ocannl-878).
+- Reducing over a bound symbolic axis declared with maximum 1 returned its operand where the empty
+  sum is 0: the axis has no iterator for the extent guard to attach to, so an extent of zero still
+  ran the body once; `Accum_op` lowering now refuses it and names the remedy (gh-ocannl-878).
 - Metal on macOS 26 silently took the macOS 14 legacy compile path (`fastMathEnabled=false`): the
   class-level selector query answered false for properties the options object accepts; the query
   now asks an initialized `MTLCompileOptions` (gh-ocannl-881, gh-ocannl-882).
