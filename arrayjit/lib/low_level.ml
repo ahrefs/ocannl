@@ -7209,9 +7209,31 @@ let cached_analyze_proc (static_indices : Indexing.static_symbol list) (llc : t)
     make the carried update conditional or repeated -- and is read, at any depth, only by statements
     AFTER that write, since the local is declared without a value; and nothing writes a [prev],
     which only the rotation assigns. *)
-let scan_loop_violation (plc : Tn.Placements.t) (llc : t) : string option =
+let scan_loop_violation (plc : Tn.Placements.t) (root : t) : string option =
   let exception Malformed of string in
   let name (id : scope_id) = "v" ^ Int.to_string id.scope_id ^ "_" ^ Tn.debug_name id.tn in
+  (* Every scope id a subtree binds: statement-level [Declare_local]s and [Local_scope] binders in
+     scalar positions, at any depth. *)
+  let rec binders_in (llc : t) : scope_id list =
+    match llc with
+    | Declare_local { id; _ } -> [ id ]
+    | Seq (a, b) -> binders_in a @ binders_in b
+    | For_loop { body; _ } | If { body; _ } | Tile_mma { fallback = body; _ } -> binders_in body
+    | Scan_loop { carried; body; _ } ->
+        List.concat_map carried ~f:(fun c -> scalar_binders c.init) @ binders_in body
+    | Set { llsc; _ } | Set_local (_, llsc) -> scalar_binders llsc
+    | Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar_binders v @ scalar_binders llsc
+    | Set_from_vec { arg = a, _; _ } -> scalar_binders a
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Workgroup_barrier -> []
+  and scalar_binders (llsc : scalar_t) : scope_id list =
+    match llsc with
+    | Local_scope { id; body; _ } -> id :: binders_in body
+    | Get_dynamic { dyn_value = v, _; _ } -> scalar_binders v
+    | Ternop (_, (a, _), (b, _), (c, _)) -> scalar_binders a @ scalar_binders b @ scalar_binders c
+    | Binop (_, (a, _), (b, _)) -> scalar_binders a @ scalar_binders b
+    | Unop (_, (a, _)) -> scalar_binders a
+    | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> []
+  in
   let rec count_writes id (llc : t) =
     match llc with
     | Set_local (id', _) -> if equal_scope_id id id' then 1 else 0
@@ -7234,6 +7256,13 @@ let scan_loop_violation (plc : Tn.Placements.t) (llc : t) : string option =
         List.iteri ids ~f:(fun k id ->
             if List.mem (List.take ids k) id ~equal:equal_scope_id then
               reject ("the id " ^ name id ^ " occurs twice among the carried pairs"));
+        (* A binder of a carried id inside the scan -- a [Declare_local] or a [Local_scope] over it
+           -- would render a shadowing C local, resetting the state every iteration. *)
+        List.iter
+          (binders_in body @ List.concat_map carried ~f:(fun c -> scalar_binders c.init))
+          ~f:(fun id ->
+            if List.mem ids id ~equal:equal_scope_id then
+              reject ("the carried id " ^ name id ^ " is redeclared inside the scan"));
         List.iter carried ~f:(fun { prev; next; init } ->
             if not (Tn.equal prev.tn next.tn) then
               reject ("the carried pair " ^ name prev ^ " / " ^ name next ^ " names two nodes");
@@ -7242,6 +7271,12 @@ let scan_loop_violation (plc : Tn.Placements.t) (llc : t) : string option =
                 ("the state node " ^ Tn.debug_name prev.tn
                ^ " is not declared virtual -- carried state lives in per-iteration locals, never a \
                   buffer");
+            (* The node names and types the state; a tensor access to it anywhere in the routine
+               would ask placement to give it a buffer, against the virtual declaration. *)
+            if code_touches_tn prev.tn root then
+              reject
+                ("the state node " ^ Tn.debug_name prev.tn
+               ^ " is accessed as a tensor buffer in the routine; it only names carried state");
             if scalar_mentions_symbol index init then
               reject
                 ("the init of " ^ name prev ^ " mentions the scan index "
@@ -7308,7 +7343,7 @@ let scan_loop_violation (plc : Tn.Placements.t) (llc : t) : string option =
     | Unop (_, (a, _)) -> scalar a
     | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
   in
-  match proc llc with () -> None | exception Malformed msg -> Some msg
+  match proc root with () -> None | exception Malformed msg -> Some msg
 
 let validate_scan_loops plc (llc : t) : unit =
   Option.iter (scan_loop_violation plc llc) ~f:(fun msg ->

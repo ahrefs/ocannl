@@ -1939,6 +1939,14 @@ module C_syntax (B : C_syntax_config) = struct
   let scan_implicit_set_locals (c : Low_level.carried) : Low_level.t list =
     [ Set_local (c.prev, c.init); Set_local (c.prev, Get_local c.next) ]
 
+  (* gh-ocannl-696: the carried ids of every [Scan_loop] in the procs. Carried state resides at its
+     node's storage precision -- the contract says the node TYPES the state, and a recurrence that
+     rounds per step at fp16 is a different function from one kept wide -- so [scope_prec_of] pins
+     these like the rng carve-out, ahead of the accumulator widening. The arithmetic feeding an
+     update still runs at compute precision; only the carried value is narrowed per iteration.
+     Populated by the rng census below, which already visits every scan. *)
+  let carried_state_scope_ids : int Hash_set.t = Hash_set.create (module Int)
+
   (* Scope-local scalars an RNG conversion writes. Their declaration, their assignments and their
      reads all have to agree on a precision, and only a whole-proc scan sees all three (a
      [Declare_local] carries no value), so the exclusion is resolved once here rather than per
@@ -1973,8 +1981,12 @@ module C_syntax (B : C_syntax_config) = struct
       | For_loop { body; _ } -> scan body
       | Scan_loop { carried; body; _ } ->
           (* gh-ocannl-696: the census sees exactly the statements the renderer emits for a scan --
-             the implicit init [prev = init] and rotation [prev = next] are [Set_local]s to it. *)
-          List.iter carried ~f:(fun c -> List.iter (scan_implicit_set_locals c) ~f:scan);
+             the implicit init [prev = init] and rotation [prev = next] are [Set_local]s to it --
+             and records the carried ids for the storage-precision pin. *)
+          List.iter carried ~f:(fun c ->
+              Hash_set.add carried_state_scope_ids c.Low_level.prev.Low_level.scope_id;
+              Hash_set.add carried_state_scope_ids c.Low_level.next.Low_level.scope_id;
+              List.iter (scan_implicit_set_locals c) ~f:scan);
           scan body
       | If { cond = c, _; body } ->
           scan_sc c;
@@ -2074,8 +2086,8 @@ module C_syntax (B : C_syntax_config) = struct
       | Scan_loop { carried; body; _ } ->
           (* gh-ocannl-696: the implicit init and rotation are classified like the [Set_local]s they
              render as. A carried update reads [prev] and writes [next], so the classifier sees no
-             self-update and the state resides at its node's precision -- widening carried state is
-             a residency decision this construct does not make yet. *)
+             self-update; the state's residency is decided by [carried_state_scope_ids] (its node's
+             storage precision), not here. *)
           List.iter carried ~f:(fun c -> List.iter (scan_implicit_set_locals c) ~f:scan);
           scan body
       | If { cond = c, _; body } ->
@@ -2103,10 +2115,14 @@ module C_syntax (B : C_syntax_config) = struct
 
   (* The precision a scope-local scalar is declared, written and read at. The rng carve-out takes
      precedence: a scope whose value consumes an RNG conversion is pinned to the storage precision
-     wholesale (gh-ocannl-517), reduction-shaped or not. *)
+     wholesale (gh-ocannl-517), reduction-shaped or not -- and so is a scan's carried state
+     (gh-ocannl-696), whose node's precision is the recurrence's semantics. *)
   let scope_prec_of (id : Low_level.scope_id) =
     let p = Lazy.force id.tn.Tn.storage_prec in
-    if Hash_set.mem rng_scope_ids id.Low_level.scope_id then p
+    if
+      Hash_set.mem rng_scope_ids id.Low_level.scope_id
+      || Hash_set.mem carried_state_scope_ids id.scope_id
+    then p
     else if Hash_set.mem accum_scope_ids id.scope_id then acc_prec p
     else comp_prec p
 

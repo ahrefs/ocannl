@@ -41,8 +41,14 @@ a next read by its own defining statement is refused: true
 an id shared by two carried pairs is refused: true
 an init mentioning the scan index is refused: true
 a state node left undeclared (neither virtual nor materialized) is refused: true
+a Declare_local of a carried id inside the body is refused: true
+a Local_scope binder reusing a carried id inside the body is refused: true
+a tensor-buffer access to the state node elsewhere in the routine is refused: true
 a carried pair over two different nodes is refused: true
 the backend refuses a malformed scan handed through the prelowered seam: true
+--- leg 6b: a half-precision state rounds the running sum every step ---
+a single-precision state accumulates all six increments (2054): true
+a half-precision state rounds each step back to 2048, so the sum stays at 2048: true
 --- leg 7: schedule ops decline the scan's index and the loops inside it ---
 Retype of the scan's own index declines for want of a For_loop: true
 Split of the scan's own index declines for want of a For_loop: true

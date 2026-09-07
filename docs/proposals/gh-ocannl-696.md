@@ -45,9 +45,11 @@ what a future adjoint generator reads per scalar instead of reconstructing from 
 
 - **Well-formedness** (`Low_level.validate_scan_loops`, at both pipeline gates like scope purity:
   `optimize_proc` on the way in, `C_syntax.compile_proc` on the way out): a carried pair names one
-  node declared virtual, with ids pairwise distinct across the list; inits read no carried state
-  and do not mention the scan index; each `next` is written exactly once, as a top-level statement
-  of the body, and read only by later statements; nothing writes a `prev`.
+  node declared virtual, with ids pairwise distinct across the list and rebound by no `Declare_local`
+  or `Local_scope` inside the scan; the state node is accessed as a tensor buffer nowhere in the
+  routine; inits read no carried state and do not mention the scan index; each `next` is written
+  exactly once, as a top-level statement of the body, and read only by later statements; nothing
+  writes a `prev`.
 - **Placement** (`check_and_store_virtual`, `Non_virtual 148`): a node written inside a scan body
   is refused as a virtualization candidate whether its store is attempted per statement (the
   `~in_scan` flag threaded through `virtual_llc`) or at an enclosing loop's capture (the validity
@@ -80,8 +82,10 @@ logging are a scope local's.
   constructor, `Scatter_accum`, the closed polymorphic-variant mapping rows per constructor.
 - An associative-combine license on the scan (what makes flash-decoding and top-k merges
   parallel), and carried-through-memory nodes (`carried_nodes`). Both are additive fields.
-- Carried-state residency: the state resides at its node's precision; the accumulator-width
-  classifier sees no self-update and leaves it there.
+- Carried-state residency as a *choice*: the state is pinned to its node's storage precision in
+  codegen (`carried_state_scope_ids`, precedence like the rng carve-out), so a half state rounds
+  per step and an fp32 state under fp16 compute stays wide; the arithmetic feeding an update runs
+  at compute precision. Letting a cost model or a policy widen the state is not offered yet.
 - Any high-level surface: no `Assignments` or `Operation` produces a scan yet. Cumulative ops and
   top-k as primitives, and a first-class scan in `Assignments`, are a separate issue.
 - The #483 rewrite itself, which this unblocks.

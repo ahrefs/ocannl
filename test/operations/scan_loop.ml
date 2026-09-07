@@ -346,6 +346,36 @@ let () =
          let s = carry ~init:(c 0.) (mk ~dims:[| 1 |] "sl_bad_undecl_s") in
          scan ~upto:(n - 1) i ~carried:[ s ]
            (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s)))));
+  p "a Declare_local of a carried id inside the body is refused"
+    (entry "sl_bad_shadow" (fun (x, out, i) ->
+         let s = carry ~init:(c 0.) (state "sl_bad_shadow_s") in
+         scan ~upto:(n - 1) i ~carried:[ s ]
+           (seq
+              (LL.Declare_local { id = s.LL.prev; needs_init = true })
+              (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s))))));
+  p "a Local_scope binder reusing a carried id inside the body is refused"
+    (entry "sl_bad_scope" (fun (x, out, i) ->
+         let s = carry ~init:(c 0.) (state "sl_bad_scope_s") in
+         let shadow =
+           LL.Local_scope
+             {
+               id = s.LL.next;
+               body = LL.Set_local (s.LL.next, get x [| iter i |]);
+               orig_indices = [| iter i |];
+               mint = LL.Inlined_computation;
+             }
+         in
+         scan ~upto:(n - 1) i ~carried:[ s ]
+           (seq (set_next s (add (prev s) shadow)) (set_at out (iter i) (next s)))));
+  p "a tensor-buffer access to the state node elsewhere in the routine is refused"
+    (entry "sl_bad_buffer" (fun (x, out, i) ->
+         let st = state "sl_bad_buffer_s" in
+         let s = carry ~init:(c 0.) st in
+         let j = sym () in
+         seq
+           (scan ~upto:(n - 1) i ~carried:[ s ]
+              (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s))))
+           (loop_n j n (set_at out (iter j) (get st [| fixed 0 |])))));
   p "a carried pair over two different nodes is refused"
     (entry "sl_bad_pair" (fun (x, out, i) ->
          let s =
@@ -373,6 +403,39 @@ let () =
   let o = optimize ~name:"sl_exit" good in
   p "the backend refuses a malformed scan handed through the prelowered seam"
     (rejected (fun () -> link ~name:"sl_exit" { o with LL.llc = bad }))
+
+(* --- Leg 6b: carried state resides at its node's precision. --- *)
+
+let () =
+  printf "--- leg 6b: a half-precision state rounds the running sum every step ---\n";
+  (* 2048 + 1 is not representable in fp16 (the spacing above 2048 is 2), so a running sum carried
+     at half stays at 2048 through six increments, while one carried at single reaches 2054. Both
+     values are exact by construction, so the golden may hold them. The input and output nodes are
+     single either way: only the state node's precision changes between the twins. *)
+  let steps = [| 2048.; 1.; 1.; 1.; 1.; 1.; 1. |] in
+  let run ~prec ~first_id ~label =
+    let x = mk (label ^ "_x") and out = mk (label ^ "_out") in
+    let st = node_factory ~prec ~first_id ~dims:[| 1 |] () (label ^ "_s") in
+    virtualize st;
+    materialize x;
+    materialize out;
+    let i = sym () in
+    let s = carry ~init:(c 0.) st in
+    let llc =
+      scan ~upto:(n - 1) i ~carried:[ s ]
+        (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s)))
+    in
+    let o = optimize ~name:label llc in
+    (List.hd_exn
+       (execute ~name:label o
+          ~seed:[ (x, steps); (out, Array.create ~len:n sentinel) ]
+          ~read:[ out ])).(n - 1)
+  in
+  let half = run ~prec:Ops.half ~first_id:10990 ~label:"sl_half" in
+  let single = run ~prec:Ops.single ~first_id:10995 ~label:"sl_single" in
+  p "a single-precision state accumulates all six increments (2054)" (Float.equal single 2054.);
+  p "a half-precision state rounds each step back to 2048, so the sum stays at 2048"
+    (Float.equal half 2048.)
 
 (* --- Leg 7: schedule opacity. --- *)
 
