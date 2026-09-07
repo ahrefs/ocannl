@@ -43,20 +43,27 @@
    not shape inference's, and so that the loop symbols are in hand: every composition names its axes
    directly instead of re-deriving them from the lowered nest.
 
-   Three points of the space are deliberately absent, and saying so is part of defining the set:
+   The table is also the WIDTH-PARITY corpus gh-ocannl-754 asks for: every rendering that holds an
+   accumulator somewhere other than its storage cell — the localized scope, the SIMD grid, the
+   shuffle tree — takes its "does this accumulator widen?" answer from one shared decision
+   ([C_syntax.accum_width]), and the members over the awkward bodies (the RNG-bearing contribution,
+   whose accumulator is pinned to storage; a sibling statement; a data-dependent guard) under each
+   retype kind are what pin that agreement: a retype must equal the serial rendering bitwise at a
+   narrow storage precision where the residency is wider, which is where a width divergence shows.
+   Two census claims say which way the decision went: {!Widened_elsewhere} (the decision was wide
+   and the grid or the tree took it) and {!Pinned_to_storage} (the decision pinned, and nothing
+   widened).
+
+   Two points of the space are deliberately absent, and saying so is part of defining the set:
 
    - The [Grid] arm, whose fallback is the plain serial loop and NOT the localizing one — the one
    arm that can serialize without localizing. No schedule op in the tree produces an unbindable,
    non-parallel-eligible [Grid] level over a reduction axis, and one that existed would be a
    cross-thread race rather than a width question, so a member here could only be built by hand out
-   of a shape the pipeline cannot reach. - The rng-mentioning update, one of the two
-   configuration-independent declines. Its source is a uint4x32 key whose host representation is not
-   a float array, so building it costs more than it would pin here;
-   [test/operations/narrow_rng_nesting.ml]'s reduced-uniform leg is where that decline lives. - The
-   HONOURED register-tile and tensor-core renderings. Those hold their accumulator in a C-tile
-   rather than in a serial nest, so they are not serial forms of this reduction; [tile_mma_narrow]
-   pins their width. What is a member is the [Tile_mma] SCALAR FALLBACK, whose reduction is a serial
-   nest like any other. *)
+   of a shape the pipeline cannot reach. - The HONOURED register-tile and tensor-core renderings.
+   Those hold their accumulator in a C-tile rather than in a serial nest, so they are not serial
+   forms of this reduction; [tile_mma_narrow] pins their width. What is a member is the [Tile_mma]
+   SCALAR FALLBACK, whose reduction is a serial nest like any other. *)
 
 open Base
 open Ocannl
@@ -322,6 +329,19 @@ type shape =
           else-arm carries the accumulator through. Post-optimize IR, so it reaches the backend
           through {!Ll_test.optimize_scoped} rather than through [LL.optimize]. Same interior
           runtime extent, so the else-arm is taken on real iterations rather than on none. *)
+  | Rng_contrib
+      (** [out[r] += x[r,k] * uniform1(key)]: a contribution mentioning an RNG conversion, which
+          pins the accumulator to STORAGE precision (gh-ocannl-517: the conversion picks its result
+          type and which random bits it consumes from the precision it renders at, so the whole
+          update renders at storage precision and localizing it would change the draw). Every
+          rendering must then narrow the accumulator on every step — the one body class where the
+          serial form and the shuffle were found deciding differently (gh-ocannl-682), and the
+          natural first member of the gh-ocannl-754 corpus. Built from a [Constant_bits] key rather
+          than a uint4x32 node: the pin fires from the contribution's SHAPE at codegen, and a
+          constant key needs no host representation. The factor is loop-invariant, which is the
+          shape a broadcast scalar uniform virtualized into a reduction takes — and exactly the
+          operand the vector renderer would splat across its lanes, rendering the draw at compute
+          precision and accumulating wide, if it decided the width for itself. *)
 
 (* How many terms a shape's reduction admits, PER ROW — which reference its value is judged against.
    Only {!Mixed_guard} varies with the row; the others admit the same prefix in each. *)
@@ -329,7 +349,7 @@ let terms_of_shape shape r =
   match shape with
   | Runtime_guard | Data_guard | Where_scope -> guard_terms
   | Mixed_guard -> guard_terms - r
-  | Plain | Side_write | Virtual_acc -> cols
+  | Plain | Side_write | Virtual_acc | Rng_contrib -> cols
 
 let shape_name = function
   | Plain -> "plain"
@@ -339,6 +359,10 @@ let shape_name = function
   | Side_write -> "sibling statement"
   | Virtual_acc -> "virtual accumulator"
   | Where_scope -> "Where-guarded scope"
+  | Rng_contrib -> "RNG-bearing contribution"
+
+(* The RNG conversion's key, the same constant [hardware_warp_shuffle]'s RNG leg draws from. *)
+let rng_key = Int64.of_int 0x9E3779B9
 
 type prog = {
   llc : LL.t;
@@ -534,6 +558,21 @@ let make ~(prec : Ops.prec) ~(shape : shape) () : prog =
         llc = LL.Seq (LL.Zero_out tmp, LL.Seq (accumulate, copy));
         seed = [ (x, x_values) ];
       }
+  | Rng_contrib ->
+      let draw =
+        LL.Unop (Ops.Uint4x32_to_prec_uniform1, (LL.Constant_bits rng_key, Ops.uint4x32))
+      in
+      let contrib = LL.Binop (Ops.Mul, (get_x, prec), (draw, prec)) in
+      let body =
+        LL.Set
+          {
+            tn = out;
+            idcs = acc_cell;
+            llsc = LL.Binop (Ops.Add, (get_acc, prec), (contrib, prec));
+            debug = "";
+          }
+      in
+      { base with llc = nest ~body () }
   | Where_scope ->
       let s, bindings = extent_symbol () in
       let cond =
@@ -665,6 +704,18 @@ type peel_claim =
           it owns its cell and opens from a zero-init rather than from a load of the node, which is
           why nothing here is a self-recurrence through memory. Distinct from {!Minted_upstream},
           where the peel was consulted at a real reduction site and refused. *)
+  | Widened_elsewhere of Cs.peel_verdict
+      (** The shared width decision (gh-ocannl-754) reached the base and said WIDE, deciding exactly
+          this, and the rendering holding the accumulator at that width is not a scope but the SIMD
+          grid or the shuffle tree: the census carries {!Cs.Peel_ceded} with this verdict, and no
+          site localized. What separates it from {!No_localization} is that the width was decided by
+          the same call the serial form consults, not by a recognizer of the rendering's own — which
+          is the whole of what gh-ocannl-754 changed. *)
+  | Pinned_to_storage
+      (** The shared width decision reached the base and PINNED it to storage width
+          ({!Cs.Skip_accum_pinned}: the RNG carve-out), so no rendering widened: no site localized,
+          none ceded, and at least one recorded the pin. The claim of every RNG-bearing member,
+          whatever retype it is under. *)
 
 let guard_verdict_name = function
   | LL.Guard_confined -> "a confined guard"
@@ -686,6 +737,68 @@ let peel_claim_name = function
   | Minted_upstream -> "the scope is minted upstream; codegen's peel localizes nothing"
   | No_localization -> "codegen's peel localizes nothing"
   | Never_a_site -> "no cell recurrence at any level: the peel is never consulted"
+  | Widened_elsewhere { Cs.levels; guards } ->
+      Printf.sprintf "the shared width decision is wide (%s%s) and the grid or tree holds it"
+        (match levels with 1 -> "one level" | n -> Printf.sprintf "%d levels" n)
+        (match guards with
+        | [] -> ", unguarded"
+        | gs -> ", through " ^ String.concat ~sep:" then " (List.map gs ~f:guard_verdict_name))
+  | Pinned_to_storage -> "the shared width decision pins the accumulator to storage: nothing widens"
+
+(* Checking a member's peel claim against its routine's census, shared by the table members and the
+   [Tile_mma] fallback leg so the two cannot read the census differently. *)
+let check_peel ~name ~claim (peel : Cs.peel_summary) (want : peel_claim) =
+  let localized_sites =
+    List.filter_map peel.Cs.sites ~f:(fun (_, site) ->
+        match site with Cs.Peel_localized v -> Some v | _ -> None)
+  in
+  let ceded_sites =
+    List.filter_map peel.Cs.sites ~f:(fun (_, site) ->
+        match site with Cs.Peel_ceded v -> Some v | _ -> None)
+  in
+  let verdicts vs =
+    String.concat ~sep:", " (List.map vs ~f:(fun v -> Sexp.to_string (Cs.sexp_of_peel_verdict v)))
+  in
+  match want with
+  | Peeled want ->
+      if not (List.for_all localized_sites ~f:(Cs.equal_peel_verdict want)) then
+        Stdio.eprintf "  %s: localized sites decided [%s], declared [%s]\n" name
+          (verdicts localized_sites) (verdicts [ want ]);
+      Verdict.p_all claim localized_sites ~f:(Cs.equal_peel_verdict want)
+  | Minted_upstream | No_localization ->
+      (* Over the whole census, so an EMPTY one fails too: "nothing localized" says nothing where
+         the peel was never consulted, and every composition here reaches at least one
+         self-recurrent serial site on both backend families. The member that does NOT is declared
+         {!Never_a_site} and checked the other way. *)
+      if not (List.is_empty localized_sites) then
+        Stdio.eprintf "  %s: declared no localization, got [%s]\n" name (verdicts localized_sites);
+      Verdict.p_empty claim ~over:peel.Cs.sites localized_sites
+  | Never_a_site ->
+      if not (List.is_empty peel.Cs.sites) then
+        Stdio.eprintf "  %s: declared no peel site, got %s\n" name (Cs.peel_summary_string peel);
+      p claim (List.is_empty peel.Cs.sites)
+  | Widened_elsewhere want ->
+      (* Non-emptiness is part of the claim: a rendering that stopped consulting the shared decision
+         would leave no ceded site, and "nothing localized" alone would still hold. *)
+      let ok =
+        List.length localized_sites = 0
+        && (not (List.is_empty ceded_sites))
+        && List.for_all ceded_sites ~f:(Cs.equal_peel_verdict want)
+      in
+      if not ok then
+        Stdio.eprintf "  %s: declared ceded [%s]; localized [%s], ceded [%s]\n" name
+          (verdicts [ want ]) (verdicts localized_sites) (verdicts ceded_sites);
+      p claim ok
+  | Pinned_to_storage ->
+      let pinned =
+        List.count peel.Cs.sites ~f:(fun (_, site) ->
+            match site with Cs.Peel_not_attempted Cs.Skip_accum_pinned -> true | _ -> false)
+      in
+      let ok = pinned > 0 && List.length localized_sites = 0 && List.length ceded_sites = 0 in
+      if not ok then
+        Stdio.eprintf "  %s: declared pinned to storage, got %s\n" name
+          (Cs.peel_summary_string peel);
+      p claim ok
 
 let is_ident_char c = Char.is_alphanum c || Char.equal c '_'
 
@@ -1040,6 +1153,11 @@ type reference =
       (** The host reference the POLICY selects, over the full axis, starting from ZERO: the virtual
           accumulator owns its cell and initializes it from a [Zero_out] rather than loading [out],
           so the incoming contents are not part of what it computes. *)
+  | Rng_baseline
+      (** The serial rendering of the RNG-bearing nest, executed at this precision: the
+          storage-pinned per-step form. No host model — the draw is the kernel's to make — so the
+          RNG members claim PARITY with it, and the control beside the baselines proves the
+          RNG-scaled operands discriminate accumulator width. *)
 
 type member = {
   slug : string;  (** Short name; also the routine name's stem, so artifacts are per member. *)
@@ -1132,11 +1250,12 @@ let simd_claimed = "SIMD accumulator grid, or the localized scope where no vecto
    lives in its grid and codegen's peel localizes nothing, while where it declines the peel is what
    produced the scope (gh-ocannl-733). *)
 let simd_or_localized_peel =
-  if on_cpu then No_localization else Peeled { Cs.levels = 1; guards = [] }
+  if on_cpu then Widened_elsewhere { Cs.levels = 1; guards = [] }
+  else Peeled { Cs.levels = 1; guards = [] }
 
 let simd_peel_claimed =
-  "codegen's peel localizes nothing under the SIMD grid, or peels the reduction level where no \
-   vector rendering exists"
+  "the shared width decision is wide and the SIMD grid holds it, or codegen's peel takes the \
+   reduction level where no vector rendering exists"
 
 let member ?(shape = Plain) ?(sched = no_ops) ?(expect = Localized) ?claimed ?(reference = Baseline)
     ?(store_sites = 1) ?(rmw_sites = 1) ?(foreign_sites = 0) ?(foreign_accesses = 0) ?expect_axis
@@ -1273,9 +1392,12 @@ let members =
            are exact whatever the association, and both the shuffle and the localized serial
            baseline narrow to bf16 exactly once. *)
       ~available:(fun prec_name -> on_cpu || shuffle_takes prec_name)
-      ~peel:(if on_cpu then Peeled { Cs.levels = 1; guards = [] } else No_localization)
+      ~peel:
+        (if on_cpu then Peeled { Cs.levels = 1; guards = [] }
+         else Widened_elsewhere { Cs.levels = 1; guards = [] })
       ~peel_claimed:
-        "codegen peels the serialized level, or localizes nothing where the shuffle tree renders"
+        "codegen peels the serialized level, or the shared width decision is wide and the shuffle \
+         tree holds it"
       ~expect_axis:LL.Workgroup_reduce
       ~sched:(fun g -> [ Sched.Retype { axis = g.k; ty = LL.Workgroup_reduce } ]);
     (* The plain [Workgroup] arm: a hardware binding where the backend has an index for the slot,
@@ -1349,6 +1471,66 @@ let members =
       ~shape:Side_write ~expect:Rmw ~peel:No_localization ~reference:Per_step ~rmw_sites:cols
       ~expect_axis:LL.Unrolled ~sched:(fun g ->
         [ Sched.Unroll { axis = g.k; materialize = false } ]);
+    (* --- gh-ocannl-754: the width-parity corpus. The awkward bodies under each retype kind, at
+       the narrow precisions where the residency is wider than storage on the widening backends —
+       which is where a rendering deciding the width for itself would show. Every value claim is
+       parity with the body's own serial rendering. --- *)
+    (* The storage-pinned accumulator under every kind. [f32] is left out on purpose: there the
+       residency IS the storage width, the pin changes nothing, and the SIMD grid and the shuffle
+       tree legitimately take the statement — reassociating f32 products that are not exact, so
+       parity would not be bitwise and the claim would say nothing about width. *)
+    member "rng" "an RNG-bearing contribution, unscheduled (the storage-pinned accumulator)"
+      ~shape:Rng_contrib ~expect:Rmw ~peel:Pinned_to_storage ~reference:Rng_baseline
+      ~precisions:[ "bf16"; "f16" ];
+    member "rng-unroll" "the RNG-bearing level Unrolled: one read-modify-write per copy"
+      ~shape:Rng_contrib ~expect:Rmw ~peel:Pinned_to_storage ~reference:Rng_baseline ~rmw_sites:cols
+      ~expect_axis:LL.Unrolled ~precisions:[ "bf16"; "f16" ] ~sched:(fun g ->
+        [ Sched.Unroll { axis = g.k; materialize = false } ]);
+    (* The schedule mint DOES take an RNG-bearing nest into a scope — and the scope is then pinned
+       to storage precision by the rng census ([C_syntax.rng_scope_ids]), so its local narrows on
+       every update exactly as the read-modify-write does. A localized FORM whose accumulator is
+       storage-width: the member that shows the width is a property of the decision and not of the
+       form. *)
+    member "rng-unroll-mat" "the RNG-bearing level Unroll ~materialize (a storage-width scope)"
+      ~shape:Rng_contrib ~peel:Minted_upstream ~reference:Rng_baseline ~precisions:[ "bf16"; "f16" ]
+      ~sched:(fun g -> [ Sched.Unroll { axis = g.k; materialize = true } ]);
+    (* The Vectorized arm over a pinned body: the SIMD grid, which would render the loop-invariant
+       draw at compute precision and accumulate its chains wide, takes the shared decision's pin and
+       declines — the third sighting of the genre, had it been left to decide for itself. *)
+    member "rng-vectorized" "the RNG-bearing axis Retyped to Vectorized: the SIMD grid declines"
+      ~shape:Rng_contrib ~expect:Rmw ~peel:Pinned_to_storage ~reference:Rng_baseline
+      ~expect_axis:LL.Vectorized ~precisions:[ "bf16"; "f16" ] ~sched:(fun g ->
+        [ Sched.Retype { axis = g.k; ty = LL.Vectorized } ]);
+    (* Where a lane index is bound the shuffle REFUSES a pinned body at a wider residency (loudly:
+       [hardware_warp_shuffle]'s RNG leg pins the message), so the member is evaluable only where
+       the level serializes. *)
+    member "rng-workgroup-reduce"
+      "the RNG-bearing axis Retyped to Workgroup_reduce (serialized: no lane index bound)"
+      ~shape:Rng_contrib ~expect:Rmw ~peel:Pinned_to_storage ~reference:Rng_baseline
+      ~expect_axis:LL.Workgroup_reduce ~precisions:[ "bf16"; "f16" ]
+      ~available:(fun _ -> on_cpu)
+      ~sched:(fun g -> [ Sched.Retype { axis = g.k; ty = LL.Workgroup_reduce } ]);
+    (* The peel-declining bodies under the two retype kinds whose renderings hold the accumulator
+       outside the cell. Under a bound lane index a declined [Workgroup_reduce] level takes the
+       hardware binding, which races a shared cell, so those two are evaluable where the level
+       serializes; the Vectorized arm's decline has a defined exit on every backend. *)
+    member "sibling-vectorized" "a second statement in the level, Retyped to Vectorized"
+      ~shape:Side_write ~expect:Rmw ~peel:No_localization ~reference:Per_step
+      ~expect_axis:LL.Vectorized ~sched:(fun g ->
+        [ Sched.Retype { axis = g.k; ty = LL.Vectorized } ]);
+    member "sibling-workgroup-reduce"
+      "a second statement in the level, Retyped to Workgroup_reduce (serialized)" ~shape:Side_write
+      ~expect:Rmw ~peel:No_localization ~reference:Per_step ~expect_axis:LL.Workgroup_reduce
+      ~available:(fun _ -> on_cpu)
+      ~sched:(fun g -> [ Sched.Retype { axis = g.k; ty = LL.Workgroup_reduce } ]);
+    member "data-guard-vectorized" "a data-dependent guard, Retyped to Vectorized" ~shape:Data_guard
+      ~expect:Rmw ~peel:No_localization ~reference:Per_step ~expect_axis:LL.Vectorized
+      ~sched:(fun g -> [ Sched.Retype { axis = g.k; ty = LL.Vectorized } ]);
+    member "data-guard-workgroup-reduce"
+      "a data-dependent guard, Retyped to Workgroup_reduce (serialized)" ~shape:Data_guard
+      ~expect:Rmw ~peel:No_localization ~reference:Per_step ~expect_axis:LL.Workgroup_reduce
+      ~available:(fun _ -> on_cpu)
+      ~sched:(fun g -> [ Sched.Retype { axis = g.k; ty = LL.Workgroup_reduce } ]);
   ]
 
 (* {1 Coverage ratchets}
@@ -1397,8 +1579,15 @@ let optop_coverage (op : Sched.optop) : coverage =
           "retype-workgroup-reduce";
           "retype-workgroup";
           "mixed-guard-workgroup";
+          "rng-vectorized";
+          "rng-workgroup-reduce";
+          "sibling-vectorized";
+          "sibling-workgroup-reduce";
+          "data-guard-vectorized";
+          "data-guard-workgroup-reduce";
         ]
-  | Sched.Unroll _ -> Covered [ "unroll-annot"; "unroll-mat"; "unroll-outer-mat" ]
+  | Sched.Unroll _ ->
+      Covered [ "unroll-annot"; "unroll-mat"; "unroll-outer-mat"; "rng-unroll"; "rng-unroll-mat" ]
   | Sched.Partition _ -> Covered [ "partition"; "partition-then-unroll"; "partition-outer" ]
   | Sched.Pad _ -> Covered [ "pad-then-unroll-mat" ]
   | Sched.Split_reduce _ -> Covered [ "split-reduce" ]
@@ -1420,10 +1609,25 @@ let optop_coverage (op : Sched.optop) : coverage =
 let axis_coverage (ty : LL.axis_type) : coverage =
   match ty with
   | LL.Serial -> Covered [ "serial"; "decline-data-guard"; "decline-sibling-statement" ]
-  | LL.Unrolled -> Covered [ "unroll-annot"; "decline-sibling-unrolled" ]
+  | LL.Unrolled -> Covered [ "unroll-annot"; "decline-sibling-unrolled"; "rng-unroll" ]
   | LL.Vectorized ->
-      Covered [ "retype-vectorized"; "split-then-vectorize-inner"; "split-then-vectorize-narrow" ]
-  | LL.Workgroup_reduce -> Covered [ "retype-workgroup-reduce" ]
+      Covered
+        [
+          "retype-vectorized";
+          "split-then-vectorize-inner";
+          "split-then-vectorize-narrow";
+          "rng-vectorized";
+          "sibling-vectorized";
+          "data-guard-vectorized";
+        ]
+  | LL.Workgroup_reduce ->
+      Covered
+        [
+          "retype-workgroup-reduce";
+          "rng-workgroup-reduce";
+          "sibling-workgroup-reduce";
+          "data-guard-workgroup-reduce";
+        ]
   | LL.Workgroup -> Covered [ "retype-workgroup"; "mixed-guard-workgroup" ]
   | LL.Grid ->
       Out_of_scope
@@ -1605,7 +1809,9 @@ let () =
       | Peeled _ -> true
       | Minted_upstream | Never_a_site ->
           same_form m.expect Localized || same_form m.expect Partials_combine
-      | No_localization -> not (same_form m.expect Localized))
+      | No_localization -> not (same_form m.expect Localized)
+      | Widened_elsewhere _ -> same_form m.expect Simd || same_form m.expect Warp
+      | Pinned_to_storage -> same_form m.expect Rmw)
 
 (* The baselines: the plain nest with no schedule ops, and the runtime-extent-guarded nest with no
    schedule ops, one of each per precision. Every localizing member is compared against one of them,
@@ -1629,9 +1835,92 @@ let mixed_baselines =
       let values, _, _, _ = execute ~name:("rf_mixed_baseline_" ^ prec_name) ~prog ~sched:[] in
       (prec_name, values))
 
+(* The RNG-bearing nest's own serial rendering, at the precisions its members run at. *)
+let rng_precs = List.filter precs ~f:(fun (prec_name, _) -> not (String.equal prec_name "f32"))
+
+let rng_baselines =
+  List.map rng_precs ~f:(fun (prec_name, prec) ->
+      let prog = make ~prec ~shape:Rng_contrib () in
+      let values, _, _, _ = execute ~name:("rf_rng_baseline_" ^ prec_name) ~prog ~sched:[] in
+      (prec_name, values))
+
 let baseline prec_name = List.Assoc.find_exn baselines ~equal:String.equal prec_name
 let guarded_baseline prec_name = List.Assoc.find_exn guarded_baselines ~equal:String.equal prec_name
 let mixed_baseline prec_name = List.Assoc.find_exn mixed_baselines ~equal:String.equal prec_name
+let rng_baseline prec_name = List.Assoc.find_exn rng_baselines ~equal:String.equal prec_name
+
+(* The discrimination control for the RNG members (gh-ocannl-754). Their value claims are parity
+   with {!rng_baselines}, and parity is worth nothing where the width cannot show — so the draw the
+   pinned rendering actually makes is read back from a one-cell kernel at the storage precision, and
+   the RNG-scaled operands are shown to discriminate accumulator width the way {!cells} does:
+   narrowing the running sum at every step differs, in every row, from narrowing it once. The
+   products are rounded to storage in both models, so the two differ only in where the SUM narrows,
+   which is the property the members are about. *)
+let () =
+  List.iter rng_precs ~f:(fun (prec_name, prec) ->
+      let draw =
+        Int.incr next_id;
+        let uvals =
+          Tn.create (Tn.Specified prec) ~id:!next_id ~label:[ "rfdraw" ]
+            ~unpadded_dims:(lazy [| 1 |])
+            ~padding:(lazy None)
+            ()
+        in
+        Ll_test.materialize uvals;
+        let prog =
+          {
+            llc =
+              LL.Set
+                {
+                  tn = uvals;
+                  idcs = [| Idx.Fixed_idx 0 |];
+                  llsc =
+                    LL.Unop (Ops.Uint4x32_to_prec_uniform1, (LL.Constant_bits rng_key, Ops.uint4x32));
+                  debug = "";
+                };
+            raw = None;
+            r = Ll_test.sym ();
+            k = Ll_test.sym ();
+            out = uvals;
+            materialized = [ uvals ];
+            seed = [];
+            bindings = Idx.Empty;
+            bind = (fun _ -> ());
+            verify = [];
+          }
+        in
+        let values, _, _, _ = execute ~name:("rf_rng_draw_" ^ prec_name) ~prog ~sched:[] in
+        values.(0)
+      in
+      Stdio.eprintf "the %s draw of the RNG members' key: %h (not part of the golden)\n%!" prec_name
+        draw;
+      let term r k = round prec (cell r k *. draw) in
+      let per_step =
+        Array.init rows ~f:(fun r ->
+            let acc = ref (seed_value r) in
+            for k = 0 to cols - 1 do
+              acc := round prec (!acc +. term r k)
+            done;
+            !acc)
+      in
+      let once =
+        Array.init rows ~f:(fun r ->
+            let acc = ref (seed_value r) in
+            for k = 0 to cols - 1 do
+              acc := !acc +. term r k
+            done;
+            round prec !acc)
+      in
+      (* "Differs", as the plain operands' control above says it: in SOME row. Which rows coincide
+         depends on the draw, and the draw differs by backend — each backend's half conversion
+         consumes its own bits of the key — so a per-row demand holds on one machine and not on
+         another, while a single differing row is what a width divergence needs to show. *)
+      p
+        (Printf.sprintf
+           "at %s the RNG-scaled operands discriminate accumulator width: the draw is a factor in \
+            (0, 1) and per-step narrowing differs from a once-narrowed whole-nest sum"
+           prec_name)
+        (Float.(draw > 0. && draw < 1.) && not (Array.for_all2_exn per_step once ~f:Float.equal)))
 
 let () =
   List.iter precs ~f:(fun (prec_name, prec) ->
@@ -1750,10 +2039,15 @@ let () =
               Printf.sprintf "%s @ %s: codegen's peel decided what the composition declares" m.slug
                 prec_name
             in
+            (* Built before the availability check: a shape's extra VERIFY claims are printed on the
+               skipped path too, and only the program knows what they are. *)
+            let prog = make ~prec ~shape:m.shape () in
             if not (m.available prec_name) then begin
               (* Every claim an evaluable leg prints, in the same order: the golden is one file for
                  all backends, so a claim emitted only on the available path leaves a hole rather
                  than a skip. *)
+              List.iter prog.verify ~f:(fun (claim, _, _) ->
+                  skipped (Printf.sprintf "%s @ %s: %s" m.slug prec_name claim));
               skipped evidence_claim;
               skipped form_claim;
               skipped peel_claim;
@@ -1761,7 +2055,6 @@ let () =
             end
             else begin
               let name = Printf.sprintf "rf_%s_%s" (routine_stem m.slug) prec_name in
-              let prog = make ~prec ~shape:m.shape () in
               let sched = m.sched prog in
               let got, verified, (before, after, per_op), peel = execute ~name ~prog ~sched in
               (* The peel census of this kernel, on stderr: it names backend kernels and counts
@@ -1889,34 +2182,7 @@ let () =
                  routine's peel census rather than off the emitted text: a member declaring a peel
                  its kernel did not perform fails here even when every textual claim holds, which is
                  the whole of what this instrument adds. *)
-              let localized_sites =
-                List.filter_map peel.Cs.sites ~f:(fun (_, site) ->
-                    match site with Cs.Peel_localized v -> Some v | _ -> None)
-              in
-              let verdicts vs =
-                String.concat ~sep:", "
-                  (List.map vs ~f:(fun v -> Sexp.to_string (Cs.sexp_of_peel_verdict v)))
-              in
-              (match m.peel with
-              | Peeled want ->
-                  if not (List.for_all localized_sites ~f:(Cs.equal_peel_verdict want)) then
-                    Stdio.eprintf "  %s: localized sites decided [%s], declared [%s]\n" name
-                      (verdicts localized_sites) (verdicts [ want ]);
-                  Verdict.p_all peel_claim localized_sites ~f:(Cs.equal_peel_verdict want)
-              | Minted_upstream | No_localization ->
-                  (* Over the whole census, so an EMPTY one fails too: "nothing localized" says
-                     nothing where the peel was never consulted, and every composition here reaches
-                     at least one self-recurrent serial site on both backend families. The member
-                     that does NOT is declared {!Never_a_site} and checked the other way. *)
-                  if not (List.is_empty localized_sites) then
-                    Stdio.eprintf "  %s: declared no localization, got [%s]\n" name
-                      (verdicts localized_sites);
-                  Verdict.p_empty peel_claim ~over:peel.Cs.sites localized_sites
-              | Never_a_site ->
-                  if not (List.is_empty peel.Cs.sites) then
-                    Stdio.eprintf "  %s: declared no peel site, got %s\n" name
-                      (Cs.peel_summary_string peel);
-                  p peel_claim (List.is_empty peel.Cs.sites));
+              check_peel ~name ~claim:peel_claim peel m.peel;
               let want =
                 match m.reference with
                 | Baseline -> baseline prec_name
@@ -1929,6 +2195,7 @@ let () =
                     match expected_residency prec with
                     | Wider -> whole_nest_ref ~terms:full ~from prec
                     | At_storage -> per_step_ref ~terms:full ~from prec)
+                | Rng_baseline -> rng_baseline prec_name
               in
               let ok = agrees got want in
               if not ok then Stdio.eprintf "  %s: got [%s] want [%s]\n" name (show got) (show want);
@@ -2092,21 +2359,7 @@ let () =
         (* And, as for every table member, WHICH decision localized that fallback reduction
            (gh-ocannl-733): codegen's peel, at the contraction's own reduction level. The textual
            reading above says a scope is there; only the census says the peel put it there. *)
-        (match mma_fallback_peel with
-        | Peeled want ->
-            let sites =
-              List.filter_map peel.Cs.sites ~f:(fun (_, site) ->
-                  match site with Cs.Peel_localized v -> Some v | _ -> None)
-            in
-            if not (List.for_all sites ~f:(Cs.equal_peel_verdict want)) then
-              Stdio.eprintf "  rf_mma_fallback_%s: localized sites decided [%s]\n" prec_name
-                (String.concat ~sep:", "
-                   (List.map sites ~f:(fun v -> Sexp.to_string (Cs.sexp_of_peel_verdict v))));
-            Verdict.p_all peel_claim sites ~f:(Cs.equal_peel_verdict want)
-        | Minted_upstream | No_localization ->
-            Verdict.p_empty peel_claim ~over:peel.Cs.sites
-              (List.filter peel.Cs.sites ~f:(fun (_, s) -> Cs.is_localized_peel s))
-        | Never_a_site -> p peel_claim (List.is_empty peel.Cs.sites));
+        check_peel ~name:("rf_mma_fallback_" ^ prec_name) ~claim:peel_claim peel mma_fallback_peel;
         let ok = agrees got want in
         if not ok then
           Stdio.eprintf "  rf_mma_fallback_%s: got [%s] want [%s]\n" prec_name (show got)

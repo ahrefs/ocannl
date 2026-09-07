@@ -621,9 +621,10 @@ files.
   accumulates in the narrow cell and narrows on every iteration, while the shuffle would have
   accumulated the whole tree wide and narrowed once. That is a change in accumulation WIDTH, not
   association — precisely the property gh-ocannl-682 exists to preserve. The lesson generalizes past
-  RNG: **the shuffle may widen only where the serial path widens**, so the two renderings consult
-  one shared predicate, `C_syntax.accum_pinned_to_storage_prec`, rather than each deciding for
-  itself. Extend that predicate, not one call site, if another such body class appears. Tests:
+  RNG: **the shuffle may widen only where the serial path widens** — which gh-ocannl-754 then made
+  structural (next bullet): the shuffle, the SIMD grid and the localizing serial form all consume
+  ONE width decision, and `C_syntax.accum_pinned_to_storage_prec` is one of that decision's
+  declines rather than a predicate each rendering remembers to consult. Tests:
   `hardware_warp_shuffle.ml`'s bf16 legs — 32 lanes of `1 + (k mod 11)/128` separate the three
   candidate renderings as 33.25 / 33 / 32.75 (once-narrowed f32 tree, tree staged at bf16,
   per-step read-modify-write), and 128 lanes give 133 / 132 / 129 while also pinning the shared
@@ -638,6 +639,46 @@ files.
   refusals, and
   `reduction_forms.ml`'s `retype-workgroup-reduce` member, whose availability now asks
   `expected_residency` instead of naming f32.
+- **One accumulator-width decision per reduction level, consumed by every rendering**
+  (gh-ocannl-754). Before it, the warp-shuffle tree and the SIMD grid recognized an accumulation
+  through a single-statement recognizer of their own while the localizing serial form went through
+  `Low_level.peel_accum_nest` plus the RNG carve-out, and the two analyses agreed by maintenance:
+  gh-ocannl-639 (`Unrolled`) and gh-ocannl-682 (RNG bodies under the shuffle) were the same genre —
+  two renderings of one body accumulating at different WIDTHS, so a retype changed the value in its
+  low mantissa bits, invisibly at f32 storage. Now `pp_ll`'s `For_loop` arm asks once —
+  `decide_accum_width` (type `C_syntax.accum_width`): the peel over the level's body, then the
+  declines the serial form applies to the base it reaches (debug logging, dead level,
+  `accum_pinned_to_storage_prec`, in that order) — and every rendering consumes the answer.
+  `try_localize_serial_reduce` renders it and records it; `try_warp_reduce` and
+  `try_vectorize_reduce` take the base only through `statement_accumulation` (a raw update at
+  exactly this level, no level or guard between) and, where the decision PINNED it, hold the
+  accumulator wide only if the residency is the storage width (`residency_is_storage`: f32 storage
+  and every non-widening backend render RNG-bearing reductions exactly as before) — otherwise the
+  shuffle refuses loudly and the grid bails to the serial fallback, which keeps the per-step
+  narrowing. The census gained `Peel_ceded verdict` — the decision was wide and the tree or the
+  grid took it — so `Context.routine.peel` attributes each rendering's width to the shared call;
+  `reduction_forms` claims it as `Widened_elsewhere` (retype-vectorized on cc,
+  retype-workgroup-reduce on the GPUs) and the pinned members as `Pinned_to_storage`. Two
+  consequences to know: (1) an UNGUARDED accumulation nest the shuffle cannot render — inner
+  levels, or a schedule-minted scope, under a `Workgroup_reduce` level whose lane index the backend
+  binds — is refused loudly instead of falling through to the hardware binding, under which every
+  lane read-modify-wrote the shared cell (a silent race before); a GUARDED one still takes the
+  binding, since a guard can select the lane, which is exactly what the explicitly staged tree's
+  `if (i == 0)` write is (`hardware_workgroup_reduce.ml`). (2) A schedule mint
+  (`Unroll ~materialize`) DOES scope an RNG-bearing nest, and the rng census then pins that scope to
+  storage precision, so its local narrows on every update: a localized FORM at storage width —
+  `rng-unroll-mat` pins it, and it is why width is a property of the decision, never of the form.
+  The corpus is `reduction_forms`' `rng*`, `sibling-*` and `data-guard-*` members — parity with
+  each body's own serial rendering at bf16/f16, with the "RNG-scaled operands discriminate
+  accumulator width" control beside the baselines, whose draw is read back from a one-cell kernel
+  because no host model of it exists — plus `hardware_warp_shuffle`'s nested-nest leg. Before the
+  decision was shared, `rng-vectorized` at bf16 on cc rendered the SIMD grid: the loop-invariant
+  draw splatted at compute precision (a different generator from the storage-precision one) and the
+  chains accumulated wide — the third sighting, found by the corpus rather than by review. Building
+  its f16 legs on Apple Silicon also exposed `Builtins_cc.uint4x32_to_half_uniform` declaring a
+  `uint16_t` return where `FLOAT_TO_HALF` yields a `_Float16` under native fp16: the value went
+  through an integer (every draw became 0) and the half FMA builtin refused the operand; it returns
+  `HALF_T` now.
 - **A "packmma" timing is not evidence that anything tensorized.** A `Tile_mma` whose register-tile
   preconditions fail renders the scalar fallback and the run still reports under whatever the
   variant was named — the column extent below the compute vector width is the easiest way in (at

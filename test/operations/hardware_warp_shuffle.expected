@@ -6,6 +6,7 @@ single-warp shuffle rendering (GPU) or serial fallback (CPU): true
 warp-shuffle max parity: true
 non-warp-multiple extent rejected (GPU) or runs serially (CPU): true
 guarded smaller-extent accumulation rejected (GPU) or runs serially (CPU): true
+an unguarded accumulation nest under the Workgroup_reduce level (a Serial level inside it) is refused loudly where a lane index is bound (GPU) or localized whole as a serial nest (CPU): true
 the bf16 single-warp rival-rendering values are pairwise distinct: true
 the bf16 four-warp rival-rendering values are pairwise distinct: true
 a bf16 single-warp Workgroup_reduce accumulates at the widened residency (32 terms narrow once to 33.25, not the 33 a bf16-staged tree or the 32.75 a per-step narrowing gives): true
