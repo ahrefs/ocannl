@@ -86,6 +86,9 @@ let show (p : Autotune.sketch_params) =
     (match p.Autotune.sk_pack_prec with
     | None -> ""
     | Some pr -> " packprec:" ^ Ir.Ops.prec_string pr)
+  ^
+  (* Likewise (gh-ocannl-619): only a schedule-carried geometry prints. *)
+  match p.Autotune.sk_tile with None -> "" | Some t -> " tile:" ^ Ir.Register_tile.to_string t
 
 let section name ~is_gpu ~is_cpu ~limits opt =
   let seeds = Autotune.sketch_seed_params ~is_gpu ~is_cpu ~limits opt in

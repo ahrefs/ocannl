@@ -376,7 +376,7 @@ let () =
     let sp_j, j_o, j_i = Sched.split ~axis:j ~factor:bn ~outer:LL.Grid ~inner:LL.Serial in
     let sp_k, k_o, k_i = Sched.split ~axis:k ~factor:bk ~outer:LL.Serial ~inner:LL.Serial in
     let sink sym below = List.map below ~f:(fun inner -> Sched.Swap { outer = sym; inner }) in
-    let tz, _lane = Sched.tensorize ~i:i_i ~j:j_i ~k:k_i ~simd_width:w in
+    let tz, _lane = Sched.tensorize ~i:i_i ~j:j_i ~k:k_i ~simd_width:w () in
     let stage source tile_loops =
       Sched.Stage
         {
@@ -407,7 +407,7 @@ let () =
     let ez, zsyms = Sched.expand_zero ~tn:mc in
     let zj = match zsyms with [ _; zj ] -> zj | _ -> assert false in
     let rz = Sched.Retype { axis = zj; ty = LL.Workgroup } in
-    let tz, _lane = Sched.tensorize ~i ~j ~k ~simd_width:n in
+    let tz, _lane = Sched.tensorize ~i ~j ~k ~simd_width:n () in
     [ ez; rz; tz ]
   in
 
@@ -436,7 +436,7 @@ let () =
           tile_prec = None;
         }
     in
-    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 in
+    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 () in
     [ sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ] @ sink i_o [ k_o ]
     @ [ stage mb.Tensor.value [ k_i; j ]; stage ma.Tensor.value [ i_i; k_i ]; tz ]
   in
@@ -469,7 +469,7 @@ let () =
           tile_prec = None;
         }
     in
-    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 in
+    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 () in
     [ ez; sp_zi; sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ] @ sink i_o [ k_o ]
     @ [ stage mb.Tensor.value [ k_i; j ]; stage ma.Tensor.value [ i_i; k_i ]; tz ]
   in
@@ -509,7 +509,7 @@ let () =
       | `Chunk -> [ stage ~hoisted:false mb.Tensor.value [ k_i; j ] ]
     in
     let stage_a = if pack_a then [ stage ~hoisted:false ma.Tensor.value [ i_i; k_i ] ] else [] in
-    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 in
+    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 () in
     [ ez; sp_zi; sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ] @ stage_b @ stage_a @ [ tz ]
   in
 

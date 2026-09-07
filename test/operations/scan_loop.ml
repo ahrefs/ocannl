@@ -455,6 +455,7 @@ let () =
                lda = 2;
                ldb = 2;
                lane = sym ();
+               tile = None;
                fallback = set d [| fixed 0; fixed 0 |] (next s);
              }
          in
@@ -482,6 +483,7 @@ let () =
                lda = 2;
                ldb = 2;
                lane = sym ();
+               tile = None;
                fallback = set d [| fixed 0; fixed 0 |] (get st [| fixed 0 |]);
              }
          in

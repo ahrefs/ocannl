@@ -3453,6 +3453,18 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name tile_mma_geometry)
+ (package neural_nets_lib)
+ (deps
+  (env_var OCANNL_BUILD_FILES_PREFIX)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules tile_mma_geometry)
+ (libraries base ocannl arrayjit.autotune stdio arrayjit.verdict test_utils)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name tile_mma_declines)
  (package neural_nets_lib)
  (deps

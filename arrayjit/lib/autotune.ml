@@ -2054,8 +2054,10 @@ let menu ?(admits = fun (_ : SC.saved_optop) -> true) ~is_cpu ~is_gpu
               [ (t1, t2, t3); (t1, t3, t2); (t2, t1, t3); (t2, t3, t1); (t3, t1, t2); (t3, t2, t1) ]
               ~f:(fun ((i, si, ei), (j, sj, ej), (k, sk, ek)) ->
                 if ei % tm = 0 && ej % tn = 0 && ek % tk = 0 then
-                  let raw, _lane = Sched.tensorize ~i:si ~j:sj ~k:sk ~simd_width:mma_simd_width in
-                  gate (SC.Tensorize { i; j; k; simd_width = mma_simd_width }, raw)
+                  let raw, _lane =
+                    Sched.tensorize ~i:si ~j:sj ~k:sk ~simd_width:mma_simd_width ()
+                  in
+                  gate (SC.Tensorize { i; j; k; simd_width = mma_simd_width; tile = None }, raw)
                 else None))
   in
   logf

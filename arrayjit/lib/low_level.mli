@@ -185,6 +185,10 @@ type t =
               tnode's minor dim in the plain last-two-axes case, larger when interior batch axes sit
               between the tile roles (gh-ocannl-528). *)
       lane : Indexing.symbol;  (** The cooperating [Workgroup] axis (extent = SIMD width). *)
+      tile : Register_tile.t option;
+          (** The C-tile geometry the register-tiled CPU rendering must use (gh-ocannl-619), carried
+              from {!Schedule.optop.Tensorize}; [None] lets the renderer choose. Ignored by the
+              intrinsic (tensor-core) emissions. *)
       fallback : t;  (** Semantically equivalent scalar micro-kernel over fresh serial symbols. *)
     }
       (** Cooperative tile multiply-accumulate (docs/proposals/tensorize-mma.md):

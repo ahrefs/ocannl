@@ -286,6 +286,16 @@ type optop =
       simd_width : int;
           (** Extent of the lane loop (the backend's {!field:Backend_intf.mma_simd_width}; 32 on
               Metal and CUDA). *)
+      tile : Register_tile.t option;
+          (** The C-tile geometry of the register-tiled CPU rendering (gh-ocannl-619): [rm] rows by
+              [rn] vectors of [lanes], held across the k-loop. [None] (the default, and what every
+              pre-existing schedule means) lets the renderer choose by its ranking model
+              ({!Register_tile.default}); [Some] is honoured exactly, or declined to the scalar
+              fallback with a diagnostic when it does not fit ({!Register_tile.check}: a width the
+              file renders and the extents fill, the live-register budget) — never silently
+              replaced, so a candidate timed under a geometry label ran that geometry or ran none.
+              Part of the schedule's identity (the cache saves it, the canonical render digests it).
+              The intrinsic (tensor-core) emissions ignore it. *)
     }
       (** Tensor-core emission (docs/proposals/tensorize-mma.md §3): replace the perfectly nested
           serial [i × j × k] matmul micro-kernel — whose body is the single accumulation
@@ -438,13 +448,15 @@ val split_reduce :
     combine nest's loops. *)
 
 val tensorize :
+  ?tile:Register_tile.t ->
   i:Indexing.symbol ->
   j:Indexing.symbol ->
   k:Indexing.symbol ->
   simd_width:int ->
+  unit ->
   optop * Indexing.symbol
 (** Builds a {!constructor-Tensorize} with a fresh lane symbol (via [Indexing.get_symbol]) and
-    returns it. *)
+    returns it. [?tile] is the register-tile geometry request (gh-ocannl-619), absent by default. *)
 
 val split_reduce_hoist : Low_level.optimized -> optop -> Indexing.symbol list
 (** The loops that would have to enclose the reduction for this {!constructor-Split_reduce} to be

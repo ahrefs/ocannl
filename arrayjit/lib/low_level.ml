@@ -197,6 +197,10 @@ type t =
               major axis may sit further out (an interior batch axis between the row and column
               axes), so the stride is recorded explicitly by [Schedule.Tensorize]. *)
       lane : Indexing.symbol;  (** The cooperating [Workgroup] axis (extent = SIMD width). *)
+      tile : Register_tile.t option;
+          (** The C-tile geometry the register-tiled CPU rendering must use (gh-ocannl-619), carried
+              from {!Schedule.optop.Tensorize}; [None] lets the renderer choose. Ignored by the
+              intrinsic (tensor-core) emissions. *)
       fallback : t;  (** Semantically equivalent scalar micro-kernel over fresh serial symbols. *)
     }
       (** Cooperative tile multiply-accumulate (docs/proposals/tensorize-mma.md):
@@ -483,7 +487,7 @@ module Canonical_render = struct
           add "){";
           emit body;
           add "}"
-      | Tile_mma { d; a; b; ta; tb; m; n; k; ldd; lda; ldb; lane; fallback } -> (
+      | Tile_mma { d; a; b; ta; tb; m; n; k; ldd; lda; ldb; lane; tile; fallback } -> (
           match p.mma with
           | Opaque_mma ->
               p.mark_incomplete ();
@@ -498,6 +502,10 @@ module Canonical_render = struct
               operand a;
               operand b;
               add (Printf.sprintf " %b %b %d %d %d %d %d %d " ta tb m n k ldd lda ldb);
+              (* A requested geometry is part of the statement's identity; the renderer's own choice
+                 is not, so [None] renders as before gh-ocannl-619. *)
+              Option.iter tile ~f:(fun t ->
+                  add (Printf.sprintf "tile{%s} " (Register_tile.to_string t)));
               emit_sym lane;
               add "{";
               emit fallback;

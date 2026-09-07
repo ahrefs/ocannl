@@ -112,7 +112,7 @@ let () =
     let ez, zsyms = Sched.expand_zero ~tn:out in
     let zj = match zsyms with [ _; zj ] -> zj | _ -> assert false in
     let rz = Sched.Retype { axis = zj; ty = LL.Workgroup } in
-    let tz, _lane = Sched.tensorize ~i ~j ~k ~simd_width:n in
+    let tz, _lane = Sched.tensorize ~i ~j ~k ~simd_width:n () in
     [ ez; rz; tz ]
   in
   let%op mc = ma * mb in
@@ -175,7 +175,7 @@ let () =
           tile_prec = None;
         }
     in
-    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 in
+    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 () in
     (* No [sink i_o [k_o]]: the Grid loop stays outermost, so the B~ pack at [k_o] lands inside the
        Grid body and each chunk re-packs its own panel. *)
     [ ez; sp_zi; sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ]

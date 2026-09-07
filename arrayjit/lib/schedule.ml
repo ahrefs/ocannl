@@ -49,6 +49,7 @@ type optop =
       k : Indexing.symbol;
       lane : Indexing.symbol;
       simd_width : int;
+      tile : Register_tile.t option;
     }
   | Fuse_epilogue of { target : Tn.t; shared : bool }
   | Split_reduce of {
@@ -75,9 +76,9 @@ let partition ~axis ~breakpoints =
   in
   (Partition { axis; breakpoints; segment_indices }, segment_indices)
 
-let tensorize ~i ~j ~k ~simd_width =
+let tensorize ?tile ~i ~j ~k ~simd_width () =
   let lane = Indexing.get_symbol () in
-  (Tensorize { i; j; k; lane; simd_width }, lane)
+  (Tensorize { i; j; k; lane; simd_width; tile }, lane)
 
 let expand_zero ~tn =
   let rank = Array.length (Lazy.force tn.Tn.dims) in
@@ -439,8 +440,8 @@ type pad_mask = {
    Divisibility by the backend's intrinsic tile is checked at emission ([mma_syntax] declines per
    call and the fallback runs), since the schedule layer is backend-agnostic. Guards around the
    accumulation are parsed as pad masks (returned for the contraction) or rejected loudly. *)
-let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width (llc : Low_level.t) :
-    Low_level.t * pad_mask list =
+let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile (llc : Low_level.t)
+    : Low_level.t * pad_mask list =
   let open Low_level in
   let out_masks = ref [] in
   let llc =
@@ -722,6 +723,7 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width (llc 
                   ldd = d_ld;
                   lda = a_ld;
                   ldb = b_ld;
+                  tile;
                   lane;
                   fallback = for_loop ifc;
                 };
@@ -3236,11 +3238,11 @@ let contract_tensorized_accumulator ~lane ~(masks : pad_mask list) (opt : Low_le
 
 let apply_tensorize op (opt : Low_level.optimized) : Low_level.optimized =
   match op with
-  | Tensorize { i; j; k; lane; simd_width } ->
+  | Tensorize { i; j; k; lane; simd_width; tile } ->
       let llc, masks =
         tensorize_llc
           ~zero_fringe:(Set.mem opt.Low_level.zero_fringe)
-          ~i ~j ~k ~lane ~simd_width opt.Low_level.llc
+          ~i ~j ~k ~lane ~simd_width ~tile opt.Low_level.llc
       in
       let opt = { opt with Low_level.llc } in
       contract_tensorized_accumulator ~lane ~masks opt
@@ -4390,7 +4392,7 @@ let op_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
               | _ -> false)
           then loops_independent opt ~syms:[ outer; inner ] ~cross_nest:false ~licensed:rmw_license
           else Op_unknown "loops are not perfectly nested")
-  | Tensorize { i; j; k; lane; simd_width } -> (
+  | Tensorize { i; j; k; lane; simd_width; tile } -> (
       (* Role-assignment validity first: the micro-kernel recognition in [tensorize_llc] is a pure
          function of the code (given the routine's zero-fringe tiles), so probing it decides exactly
          whether the candidate compile's apply would raise — a proven [Op_illegal] with no
@@ -4404,7 +4406,7 @@ let op_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
       match
         tensorize_llc
           ~zero_fringe:(Set.mem opt.Low_level.zero_fringe)
-          ~i ~j ~k ~lane ~simd_width opt.llc
+          ~i ~j ~k ~lane ~simd_width ~tile opt.llc
       with
       | exception Invalid_argument msg -> Op_illegal msg
       | (_ : Low_level.t * pad_mask list) ->

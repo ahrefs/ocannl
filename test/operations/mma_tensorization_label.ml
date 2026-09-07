@@ -98,7 +98,7 @@ let tensorize_schedule ~out (opt : LL.optimized) : Sched.schedule =
   let ez, zsyms = Sched.expand_zero ~tn:out in
   let zj = match zsyms with [ _; zj ] -> zj | _ -> assert false in
   let rz = Sched.Retype { axis = zj; ty = LL.Workgroup } in
-  let tz, _lane = Sched.tensorize ~i ~j ~k ~simd_width:n in
+  let tz, _lane = Sched.tensorize ~i ~j ~k ~simd_width:n () in
   [ ez; rz; tz ]
 
 (* === The label's three states === *)

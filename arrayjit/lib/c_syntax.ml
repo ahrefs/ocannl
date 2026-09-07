@@ -5700,7 +5700,7 @@ module C_syntax (B : C_syntax_config) = struct
             invalid_arg
               "C_syntax.pp_ll: Workgroup_barrier not supported by this backend (serialization \
                cannot implement a barrier)")
-    | Tile_mma { d; a; b; ta; tb; m; n; k; ldd; lda; ldb; lane; fallback } -> (
+    | Tile_mma { d; a; b; ta; tb; m; n; k; ldd; lda; ldb; lane; tile; fallback } -> (
         (* Cooperative tile-MMA (docs/proposals/tensorize-mma.md §4). Backends with an [mma_syntax]
            hook emit the intrinsic sequence on every lane; everywhere else (including per-call
            declines and logged runs, which must stay serial and deterministic) the scalar fallback
@@ -5798,7 +5798,9 @@ module C_syntax (B : C_syntax_config) = struct
            micro-kernel shape): the C-tile lives in an RM×RN grid of vector-extension registers
            across the ENTIRE k-loop — per k step: RN B-row vector loads, RM A-element splats, and
            RM×RN fused-FMA updates — loaded from [d] at block entry (the statement's [+=] semantics)
-           and stored back at block exit. RM = 4 rows; RN = 3 vector columns on AVX2-class
+           and stored back at block exit. The geometry — RM rows, RN vector columns, the lane count
+           — is the schedule's to carry ([Tile_mma.tile], gh-ocannl-619) and otherwise the
+           renderer's [Register_tile.default]: RM = 4; RN up to 3 vector columns on AVX2-class
            16-register files ([vector_bytes = 32]), 6 on NEON/AVX-512-class 32-register files —
            RM×RN + RM + RN live registers, tinyBLAS's budget. Edge tiles are peeled into scalar
            loops, not masked.
@@ -5911,69 +5913,44 @@ module C_syntax (B : C_syntax_config) = struct
                   not (Tn.equal tn d_tn && Tn.equal tn2 d_tn)
               | _ -> true)
           in
-          (* The widths this register file can render, narrowed to those the column extent can fill:
-             an [n] between two rungs keeps its tiling instead of falling to the scalar loop, and
-             the cost model below picks among the rungs that remain. *)
-          let lane_ladder =
-            simd_lane_ladder ~vector_bytes:B.vector_bytes ~elt_bytes:(Ops.prec_in_bytes prec)
-            |> List.filter ~f:(fun lanes -> n >= lanes)
-          in
-          let* () =
-            no_test
-              ~reason:
-                (Printf.sprintf "n = %d below the vector width (lanes = %d)" n
-                   (B.vector_bytes / max 1 (Ops.prec_in_bytes prec)))
-              (List.is_empty lane_ladder)
-          in
-          let rm = min 4 m in
-          (* The C-tile is [rm] rows of [rn] vectors; [rn] is chosen against the ACTUAL [n], not
-             fixed at the register-pressure cap (gh-ocannl-575). The columns [bw = rn * lanes] does
-             not cover are peeled to the scalar fallback, and a scalar column is roughly a whole
-             vector slot's worth of work — so a cap that leaves a fat remainder loses far more than
-             the extra A-reuse it buys. Concretely on NEON at n = 512: the pure-fp16 [bw = 48] peels
-             32 of 512 columns and runs 3.6x slower than the peel-free [bw = 32] (37 vs 133
-             GFLOP/s), and the f32 tiling gains 1.35x the same way.
-
-             The ranking model: per unit of m*k, a tile pass issues one vector FMA per lane-column
-             plus the B row loads (1/rm of them per FMA) and the A splats (1/rn), while each peeled
-             column costs [peel_cost] lane-slots. That cost does NOT scale with the lane count — the
-             peel loop is the same scalar code at either width — and the fits agree: ~8 from the
-             8-lane sweep, ~10 from the 4-lane one, ~20 from the n = 2048 pair. It only has to RANK
-             candidates, not predict times; it reproduces the measured order at n = 512 within a few
-             percent across rn = 2..6, and where several widths divide [n] evenly it lands on the
-             largest affordable one. Erring low is what costs choices — weighting a peeled column at
-             [lanes] rather than the fit picked the peeling rn = 6 over a peel-free rn = 4 at n =
-             2048, which measures 1.15x slower (Codex P2 on PR #357).
-
-             The same model ranks the LANE COUNT, over the ladder of widths the register file can
-             render ({!Ir.Backend_intf.simd_lane_ladder}): the vector-FMA term is already per
-             lane-column, so a narrower vector simply issues more of them, and a width is worth
-             stepping down to exactly when its smaller peel outweighs that. It does at n = 40, where
-             16 lanes cover 32 columns and peel 8 while 8 lanes divide the extent — the wider
-             register file otherwise running the narrower machine's kernel with a scalar tail. The
-             register-pressure cap stays keyed on the MACHINE's width, not the chosen one: stepping
-             down does not shrink the register file. *)
-          let lanes, rn =
-            let peel_cost = 10. in
-            let cost ~lanes ~rn =
-              let bw = rn * lanes in
-              let n_full = n - (n % bw) in
-              Float.of_int (n_full / lanes)
-              *. (1. +. (1. /. Float.of_int rm) +. (1. /. Float.of_int rn))
-              +. (Float.of_int (n - n_full) *. peel_cost)
-            in
-            let candidates =
-              List.concat_map lane_ladder ~f:(fun lanes ->
-                  let cap = min (if B.vector_bytes = 32 then 3 else 6) (n / lanes) in
-                  List.range 1 (cap + 1) |> List.map ~f:(fun rn -> (lanes, rn)))
-            in
-            List.min_elt candidates ~compare:(fun (l1, r1) (l2, r2) ->
-                (* Ties (an exactly-dividing [bw] repeated at a multiple, or at two widths) go to
-                   the wider vector and then the larger tile: more work per issue, more A-reuse. *)
-                match Float.compare (cost ~lanes:l1 ~rn:r1) (cost ~lanes:l2 ~rn:r2) with
-                | 0 -> ( match Int.compare l2 l1 with 0 -> Int.compare r2 r1 | c -> c)
-                | c -> c)
-            |> Option.value_exn ~message:"C_syntax: mma tile shape"
+          (* The C-tile geometry (gh-ocannl-619): [rm] rows of [rn] vectors of [lanes]. A schedule
+             that carries one ([tile]) is honoured exactly or declined — never silently replaced, so
+             a candidate the tuner times under a geometry label ran that geometry or the scalar
+             fallback (the census says which). Without one, the renderer's own ranking model picks,
+             {!Register_tile.default}: chosen against the ACTUAL [n], not fixed at the
+             register-pressure cap (gh-ocannl-575) — the columns [bw = rn * lanes] does not cover
+             are peeled to the scalar fallback, and a scalar column is roughly a whole vector slot's
+             worth of work, so a cap that leaves a fat remainder loses far more than the extra
+             A-reuse it buys (on NEON at n = 512 the pure-fp16 [bw = 48] peels 32 of 512 columns and
+             runs 3.6x slower than the peel-free [bw = 32]). The same model ranks the lane count
+             over the ladder of widths the file renders, stepping down exactly when the narrower
+             vector's smaller peel outweighs its extra issues (n = 40: 16 lanes peel 8 where 8 lanes
+             divide); the register-pressure cap stays keyed on the MACHINE's width, since stepping
+             down does not shrink the register file. The model, its fitted constant and the fit
+             rules a request must pass live in [Register_tile], where the sketch seeding consults
+             the same functions to propose the alternatives it times. *)
+          let elt_bytes = Ops.prec_in_bytes prec in
+          let vector_bytes = B.vector_bytes in
+          let* { Register_tile.rm; rn; lanes } =
+            match tile with
+            | Some t -> (
+                match Register_tile.check ~vector_bytes ~elt_bytes ~m ~n t with
+                | Ok () -> Some t
+                | Error why ->
+                    declinef "Tile_mma register tiling declined (requested geometry %s: %s): %s"
+                      (Register_tile.to_string t) why (describe ());
+                    None)
+            | None -> (
+                match Register_tile.default ~vector_bytes ~elt_bytes ~m ~n with
+                | Some t -> Some t
+                | None ->
+                    declinef
+                      "Tile_mma register tiling declined (n = %d below the vector width (lanes = \
+                       %d)): %s"
+                      n
+                      (vector_bytes / max 1 elt_bytes)
+                      (describe ());
+                    None)
           in
           let bw = rn * lanes in
           let m_full = m - (m % rm) in
@@ -6135,12 +6112,17 @@ module C_syntax (B : C_syntax_config) = struct
             | [] -> ""
             | notes -> "; narrow storage bridged: " ^ String.concat ~sep:" " notes
           in
+          let geometry_note =
+            (* Which decision produced this geometry, for the artifact readers (the schedule's or
+               the renderer's default); absent for the default so pre-gh-619 goldens stand. *)
+            if Option.is_some tile then "; geometry from the schedule" else ""
+          in
           Some
             (string
                (Printf.sprintf
                   "{ /* Tile_mma register tiling: %dx%d C-tile of %d-lane %s held across the \
-                   k-loop (full blocks %dx%d of %dx%d)%s. */"
-                  rm rn lanes ctyp m_full n_full m n narrow_note)
+                   k-loop (full blocks %dx%d of %dx%d)%s%s. */"
+                  rm rn lanes ctyp m_full n_full m n narrow_note geometry_note)
             ^^ nest 2 (hardline ^^ stmts body)
             ^^ hardline ^^ string "}")
         in
