@@ -1,0 +1,11 @@
+second consume: names the earlier consumption: true
+second consume: does not blame a parameter: true
+second consume: names the tensor: true
+parameter: says it is a parameter: true
+parameter: does not claim a prior consumption: true
+subterm: says the code is embedded in a consumer: true
+subterm: does not claim a prior consumption: true
+second backprop consume: names the earlier consumption: true
+second backprop consume: names the backprop code: true
+consumption inside with_unchanged_roots is undone: true
+and the root can then be consumed once: true
