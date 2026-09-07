@@ -35,7 +35,8 @@ Semantics: every `prev` takes its `init` once, before the first iteration; for e
 takes its `next` simultaneously. The rotation is phi-style, so old and new values coexist inside
 one body — online softmax needs the previous *and* the new running max in one expression. The
 state is scalars only, of unbounded arity; a body that wants a trajectory or a final value writes
-it to a tensor node itself. A dead range runs the inits and no body.
+it to a tensor node itself. A dead range is a no-op, like a dead `For_loop`: its inits are
+unobservable once nothing may reference the carried locals outside the scan.
 
 Rotation rather than in-place update is the load-bearing choice: it is SSA form for carried
 state, which is what keeps body rewrites (CSE, hoisting within the body) order-insensitive and

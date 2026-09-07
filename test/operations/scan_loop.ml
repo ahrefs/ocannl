@@ -409,6 +409,34 @@ let () =
          scan ~upto:(n - 1) i ~carried:[ s ]
            (seq tile
               (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s))))));
+  p "a tensor-buffer access to the state node inside a Tile_mma fallback is refused"
+    (entry "sl_bad_mma_st" (fun (x, out, i) ->
+         let st = state "sl_bad_mma_st_s" in
+         let s = carry ~init:(c 0.) st in
+         let d = mk ~dims:[| 2; 2 |] "sl_bad_mma_st_d" in
+         materialize d;
+         let tile =
+           LL.Tile_mma
+             {
+               d = (d, [| fixed 0; fixed 0 |]);
+               a = (d, [| fixed 0; fixed 0 |]);
+               b = (d, [| fixed 0; fixed 0 |]);
+               ta = false;
+               tb = false;
+               m = 2;
+               n = 2;
+               k = 2;
+               ldd = 2;
+               lda = 2;
+               ldb = 2;
+               lane = sym ();
+               fallback = set d [| fixed 0; fixed 0 |] (get st [| fixed 0 |]);
+             }
+         in
+         scan ~upto:(n - 1) i ~carried:[ s ]
+           (seq
+              (set_next s (add (prev s) (get x [| iter i |])))
+              (seq (set_at out (iter i) (next s)) tile))));
   p "a carried pair over two different nodes is refused"
     (entry "sl_bad_pair" (fun (x, out, i) ->
          let s =
@@ -436,6 +464,29 @@ let () =
   let o = optimize ~name:"sl_exit" good in
   p "the backend refuses a malformed scan handed through the prelowered seam"
     (rejected (fun () -> link ~name:"sl_exit" { o with LL.llc = bad }))
+
+(* --- Leg 6a: a dead scan is a no-op. --- *)
+
+let () =
+  printf "--- leg 6a: a dead range is a no-op, inits included ---\n";
+  let x = mk "sl_dead_x" and out = mk "sl_dead_out" in
+  materialize x;
+  materialize out;
+  let i = sym () in
+  (* The init reads [x]; were it evaluated, [x] would be a routine input. *)
+  let s = carry ~init:(get x [| fixed 0 |]) (state "sl_dead_s") in
+  let llc =
+    scan ~upto:(-1) i ~carried:[ s ]
+      (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s)))
+  in
+  let o = optimize ~name:"sl_dead" llc in
+  let ctx, routine = link ~name:"sl_dead" o in
+  let ctx = run_linked (ctx, routine) ~seed:[ (out, Array.create ~len:n sentinel) ] in
+  p "the dead scan is dropped by optimize" (count_stmt ~f:is_scan o.LL.llc = 0);
+  p "a node read only by a dead scan's init is not a routine input"
+    (not (Set.mem routine.Context.inputs x));
+  p_all2 "the trajectory node keeps its seeded sentinel in every cell" (Context.get_values ctx out)
+    (Array.create ~len:n sentinel) ~f:Float.equal
 
 (* --- Leg 6b: carried state resides at its node's precision. --- *)
 

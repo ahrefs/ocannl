@@ -1943,9 +1943,12 @@ module C_syntax (B : C_syntax_config) = struct
      node's storage precision -- the contract says the node TYPES the state, and a recurrence that
      rounds per step at fp16 is a different function from one kept wide -- so [scope_prec_of] pins
      these like the rng carve-out, ahead of the accumulator widening. The arithmetic feeding an
-     update still runs at compute precision; only the carried value is narrowed per iteration.
-     Populated by the rng census below, which already visits every scan. *)
-  let carried_state_scope_ids : int Hash_set.t = Hash_set.create (module Int)
+     update still runs at compute precision; only the carried value is narrowed per iteration. Keyed
+     by the full scope id (node and integer), the identity the rendered C name carries, so a
+     hand-minted local over another node sharing the integer is not pinned by association. Populated
+     by the rng census below, which already visits every scan. *)
+  let carried_state_scope_ids : Low_level.Scope_id.t Hash_set.t =
+    Hash_set.create (module Low_level.Scope_id)
 
   (* Scope-local scalars an RNG conversion writes. Their declaration, their assignments and their
      reads all have to agree on a precision, and only a whole-proc scan sees all three (a
@@ -1984,8 +1987,8 @@ module C_syntax (B : C_syntax_config) = struct
              the implicit init [prev = init] and rotation [prev = next] are [Set_local]s to it --
              and records the carried ids for the storage-precision pin. *)
           List.iter carried ~f:(fun c ->
-              Hash_set.add carried_state_scope_ids c.Low_level.prev.Low_level.scope_id;
-              Hash_set.add carried_state_scope_ids c.Low_level.next.Low_level.scope_id;
+              Hash_set.add carried_state_scope_ids c.Low_level.prev;
+              Hash_set.add carried_state_scope_ids c.Low_level.next;
               List.iter (scan_implicit_set_locals c) ~f:scan);
           scan body
       | If { cond = c, _; body } ->
@@ -2119,9 +2122,7 @@ module C_syntax (B : C_syntax_config) = struct
      (gh-ocannl-696), whose node's precision is the recurrence's semantics. *)
   let scope_prec_of (id : Low_level.scope_id) =
     let p = Lazy.force id.tn.Tn.storage_prec in
-    if
-      Hash_set.mem rng_scope_ids id.Low_level.scope_id
-      || Hash_set.mem carried_state_scope_ids id.scope_id
+    if Hash_set.mem rng_scope_ids id.Low_level.scope_id || Hash_set.mem carried_state_scope_ids id
     then p
     else if Hash_set.mem accum_scope_ids id.scope_id then acc_prec p
     else comp_prec p

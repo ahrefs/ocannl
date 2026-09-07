@@ -109,9 +109,10 @@ type t =
           previous iteration's state through [Get_local c.prev] and producing the next through
           [Set_local c.next]; after the body, every [c.prev] takes its [c.next] simultaneously
           (phi-style rotation, so a body may read any old value after any new one is written). A
-          dead range ([to_ < from_]) runs the inits and no body. The final state is not readable
-          after the loop: a body that wants a trajectory or a final value writes it to a tensor node
-          itself.
+          dead range ([to_ < from_]) is a no-op, like a dead [For_loop]: its inits are unobservable,
+          since the carried locals cannot be referenced outside the scan, and virtualization drops
+          the construct. The final state is not readable after the loop: a body that wants a
+          trajectory or a final value writes it to a tensor node itself.
 
           Contract, enforced by {!validate_scan_loops} at both ends of the pipeline: [c.prev] and
           [c.next] are ids, pairwise distinct across [carried], over one node DECLARED virtual
@@ -1094,13 +1095,16 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
             ~loop_ranges:(Map.set loop_ranges ~key:index ~data:(to_ - from_ + 1))
             body
     | Scan_loop { index; from_; to_; carried; body; _ } ->
-        (* gh-ocannl-696: the inits evaluate once whatever the range; the body's facts are recorded
-           under the scan index exactly as under a loop index (a dead range records none). *)
-        List.iter carried ~f:(fun c -> loop_scalar ~loop_ranges ~lhs:None ~reads:scope_reads c.init);
-        if to_ >= from_ then
+        (* gh-ocannl-696: a dead scan is a no-op like a dead loop -- its inits are unobservable,
+           since nothing may reference the carried locals outside the scan -- so a dead range
+           records no facts at all; a live one records its inits once and its body under the scan
+           index exactly as under a loop index. *)
+        if to_ >= from_ then (
+          List.iter carried ~f:(fun c ->
+              loop_scalar ~loop_ranges ~lhs:None ~reads:scope_reads c.init);
           loop_proc ~scope_reads
             ~loop_ranges:(Map.set loop_ranges ~key:index ~data:(to_ - from_ + 1))
-            body
+            body)
     | Zero_out tn ->
         let traced : traced_array = get_node traced_store tn in
         if (not traced.has_assignment) && not (Hash_set.mem read_seen tn) then (
@@ -5537,8 +5541,9 @@ and code_touches_tn tn (llc : t) =
       Tn.equal tn tn2 || scalar_touches_tn tn v || scalar_touches_tn tn llsc
   | Set_from_vec { tn = tn2; arg = a, _; _ } -> Tn.equal tn tn2 || scalar_touches_tn tn a
   | Set_local (_, llsc) -> scalar_touches_tn tn llsc
-  | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; _ } ->
-      Tn.equal tn d_tn || Tn.equal tn a_tn || Tn.equal tn b_tn
+  (* The fallback is what a backend without an MMA hook executes, so what it touches is touched. *)
+  | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; fallback; _ } ->
+      Tn.equal tn d_tn || Tn.equal tn a_tn || Tn.equal tn b_tn || code_touches_tn tn fallback
 
 (* gh-ocannl-639: the accumulation-update statement shape [tn[idcs] = op(tn[idcs], contrib)] (or its
    FMA form) over an associative-commutative [op], with [contrib] free of [tn]. The single source of

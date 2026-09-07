@@ -97,9 +97,10 @@ type t =
           previous iteration's state through [Get_local c.prev] and producing the next through
           [Set_local c.next]; after the body, every [c.prev] takes its [c.next] simultaneously
           (phi-style rotation, so a body may read any old value after any new one is written). A
-          dead range ([to_ < from_]) runs the inits and no body. The final state is not readable
-          after the loop: a body that wants a trajectory or a final value writes it to a tensor node
-          itself.
+          dead range ([to_ < from_]) is a no-op, like a dead [For_loop]: its inits are unobservable,
+          since the carried locals cannot be referenced outside the scan, and virtualization drops
+          the construct. The final state is not readable after the loop: a body that wants a
+          trajectory or a final value writes it to a tensor node itself.
 
           Contract, enforced by {!validate_scan_loops} at both ends of the pipeline: [c.prev] and
           [c.next] are ids, pairwise distinct across [carried], over one node DECLARED virtual
