@@ -10,7 +10,7 @@
 open Base
 open Stdio
 
-(* Keys where the two built-in payloads disagree, plus the three the config file states explicitly
+(* Keys where the built-in payloads disagree, plus the three the config file states explicitly
    (autotune_rounds, cc_vector_bytes, fp16_arithmetic) and one no source mentions. *)
 let keys =
   [
@@ -22,6 +22,7 @@ let keys =
     ("cc_backend_arch_flags", "auto");
     ("cc_backend_simd_flags", "auto");
     ("cc_backend_fp_contract", "auto");
+    ("cc_backend_fast_math", "false");
     ("cc_vector_bytes", "-1");
     ("fp16_arithmetic", "auto");
     ("tf32_matmuls", "false");

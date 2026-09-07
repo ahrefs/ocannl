@@ -569,6 +569,22 @@ files.
   performance profile keeps `true`. The CUDA `(mma-f16)` per-statement arm and the scope-boundary
   discriminator were executed on sm_120 by gh-ocannl-836; HIP's two-scope arm was closed by
   gh-ocannl-789.
+- **The `approximate` profile is the one word for the numerics-changing regime** (gh-ocannl-719):
+  the `performance` payload plus `tf32_matmuls=true`, `cc_backend_fast_math=true`,
+  `cc_backend_fp_contract=fast` and `tune_inline_flips=2`, contract "results differ from the exact
+  profiles by the tolerance the benchmark parity envelope names, never in shape or in which
+  operations run". A rewrite that changes numerics for throughput (online-softmax attention,
+  gh-ocannl-483; Winograd, gh-ocannl-505) gets a key defaulting off, flips it in this payload, and
+  adds it to `Schedule_cache.numerics_tag` in the same PR — every knob the profile flips today is
+  already in the numerics or codegen digest, which is what keeps a default-flags run from
+  replaying a winner tuned under the profile. Benchmark side: `orchestrate.py --profile
+  approximate` dispatches the OCANNL cells under `--ocannl_profile=approximate`, the torch cells
+  under torch's own defaults (`high` matmul precision, SDPA, `cudnn.benchmark`), gates at
+  `PARITY_TOL_APPROX` (looser than every exact envelope), labels every row with its regime, and
+  reports whether an approximate row ALSO passed the exact envelope — a rewrite that changes
+  nothing measurable is a finding, not a pass. The exact torch CPU eager cell stays the parity
+  reference in every regime; the runner reports the profile it resolved (`profile` in the result
+  line) and the sweep refuses a row whose claimed regime the runner contradicts.
 - **rocWMMA fragments are opaque for LAYOUT but not for ELEMENTS, and that is what wires HIP's
   wide-f16 d boundary** (gh-ocannl-789, `arrayjit/lib/hip_backend.ml`'s `mma_d_boundary`). Under
   `Fp16_wide` the uniform-f16 arm pairs a `float` accumulator fragment with the unchanged f16

@@ -48,3 +48,18 @@ Profile "performance" sets:
   cc_backend_simd_flags=auto
   fp16_arithmetic=true
 
+Profile "approximate" sets:
+  autotune_search=true
+  autotune_beam_width=4
+  autotune_rounds=4
+  model_default_schedule=true
+  cc_backend_arch_flags=auto
+  cc_backend_simd_flags=auto
+  fp16_arithmetic=true
+  tf32_matmuls=true
+  cc_backend_fast_math=true
+  cc_backend_fp_contract=fast
+  tune_inline_flips=2
+
+every key the performance profile sets, the approximate profile sets to the same value: true
+the approximate profile sets keys the performance profile does not: true

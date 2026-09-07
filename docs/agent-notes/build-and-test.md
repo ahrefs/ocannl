@@ -143,7 +143,7 @@ that they earn a lookup rather than always-loaded space.
   assignment contributes only when it occupies the whole inline span outside benchmark reports and
   its unqualified name has lowercase snake-case shape with an underscore; this registry-independent
   grammar comes from `Utils.parse_config_token`, shared with the command-line and environment forms.
-  Current one-word config assignments such as `profile=reproducible|performance` and `backend=cc`
+  Current one-word config assignments such as `profile=reproducible|performance|approximate` and `backend=cc`
   are file/key/count-pinned judgments because their spelling alone cannot distinguish them from an
   arbitrary API or mathematical assignment.
   Whitespace around `=`, within the value, or an empty example value does not hide the key. The

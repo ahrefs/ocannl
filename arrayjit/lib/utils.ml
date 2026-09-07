@@ -1117,10 +1117,49 @@ cc_backend_simd_flags=auto
 fp16_arithmetic=true
 |}
 
+let approximate_profile_payload =
+  {|# The fastest configuration AT TOLERANCE-BOUNDED SEMANTICS (gh-ocannl-719): the `performance`
+# payload plus every knob that changes numerics for throughput. Results differ from the exact
+# profiles by the tolerance the benchmark parity envelope names (PARITY_TOL_APPROX in
+# benchmarks/orchestrate.py), never in shape or in which operations run. Each key below
+# defaults off for the right reason -- PyTorch-style opt-in -- and this profile is the one
+# word that flips them together, so that a benchmark cell can name the regime in one flag
+# and a report can say which regime a number came from. The policy gates of the algebraic
+# rewrites (online-softmax attention, gh-ocannl-483; Winograd convolution, gh-ocannl-505)
+# join this payload as they land, each in the PR that adds its key.
+
+# The `performance` payload's keys, restated (test_config_consistency checks they agree).
+autotune_search=true
+autotune_beam_width=4
+autotune_rounds=4
+model_default_schedule=true
+cc_backend_arch_flags=auto
+cc_backend_simd_flags=auto
+fp16_arithmetic=true
+
+# f32 matmul operands computed at tf32 (10-bit mantissa, f32 accumulation) on the backends with
+# a tf32 tile shape (CUDA sm_80+); a no-op elsewhere.
+tf32_matmuls=true
+# The C compiler's licence to reassociate (fast-math) and to contract a*b+c into one rounding
+# across statements (fp-contract=fast). Both change results per compiler and target, which is
+# why `reproducible` pins them off and `performance` leaves them at their defaults.
+cc_backend_fast_math=true
+cc_backend_fp_contract=fast
+# The greedy inlining refinement of Train.tune_placements is not numerics-neutral where storage
+# is narrower than compute (a materialized node rounds to its storage precision, an inlined one
+# does not), so `performance` leaves it alone. Two flips: each costs a full search, so this
+# bounds the extra cost at two searches per arm while still exercising the refinement.
+tune_inline_flips=2
+|}
+
 (** The embedded profile payloads, by name. Each is literally a partial [ocannl_config] file: same
     syntax, same parser, setting only the keys where the profiles' goals disagree. *)
 let profile_payloads =
-  [ ("reproducible", reproducible_profile_payload); ("performance", performance_profile_payload) ]
+  [
+    ("reproducible", reproducible_profile_payload);
+    ("performance", performance_profile_payload);
+    ("approximate", approximate_profile_payload);
+  ]
 
 let parse_profile_payload ~name text =
   let source = Printf.sprintf "the built-in profile %S" name in
