@@ -678,7 +678,15 @@ files.
   its f16 legs on Apple Silicon also exposed `Builtins_cc.uint4x32_to_half_uniform` declaring a
   `uint16_t` return where `FLOAT_TO_HALF` yields a `_Float16` under native fp16: the value went
   through an integer (every draw became 0) and the half FMA builtin refused the operand; it returns
-  `HALF_T` now.
+  `HALF_T` now. And running those legs on the Linux CI leg exposed a trap one level down: the OCaml
+  executable carries a HOST copy of the builtins (`arrayjit/lib/builtins.c`, the `ir` library's
+  foreign stubs) under the same names, and on ELF the dynamic linker resolves a kernel's `-fPIC`
+  PLT calls against the executable first — so the kernel's `uint4x32_to_half_uniform` bound to the
+  host copy, which returns its `uint16_t` in an integer register while the kernel read a
+  `_Float16` from `xmm0`: the draw came back as `-0.0`, while every C-side call of the very same
+  `.so` was correct. Kernels now link with `-Wl,-Bsymbolic` on ELF (`Cc_backend.kernel_link_flags`),
+  binding a kernel's references to its own definitions as macOS's two-level namespace always did;
+  the diagnosis recipe is `LD_DEBUG=bindings` on a driver that preloads the executable's stubs.
 - **A "packmma" timing is not evidence that anything tensorized.** A `Tile_mma` whose register-tile
   preconditions fail renders the scalar fallback and the run still reports under whatever the
   variant was named — the column extent below the compute vector width is the easiest way in (at
