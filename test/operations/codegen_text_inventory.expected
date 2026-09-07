@@ -84,6 +84,7 @@ test/operations/test_where_precision.cu.expected [cuda] extension .cu.expected; 
 test/operations/test_where_precision.hip.expected [hip] extension .hip.expected; markers c-decl-banner c-logic-banner c-prec-cast cuda-kernel ll-end
 test/operations/test_where_precision.metal.expected [metal] extension .metal.expected; markers c-decl-banner c-logic-banner c-prec-cast ll-end metal-kernel
 test/operations/tile_mma_declines.expected [derived] beside test/operations/tile_mma_declines.ml
+test/operations/tile_mma_geometry.expected [derived] beside test/operations/tile_mma_geometry.ml
 test/operations/top_down_prec-unoptimized.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end
 test/operations/top_down_prec.c.expected [c] extension .c.expected; markers c-decl-banner c-logic-banner c-prec-cast c-restrict ll-end
 test/operations/top_down_prec.cu.expected [cuda] extension .cu.expected; markers c-decl-banner c-logic-banner cuda-kernel ll-end
@@ -397,6 +398,8 @@ test/operations/tile_mma_declines.ml
     "#pragma omp parallel for"
     "dispatch_apply"
     "tile_"
+test/operations/tile_mma_geometry.ml [also pins text this scan cannot name]
+    "geometry from the schedule"
 test/operations/tile_mma_narrow.ml [also pins text this scan cannot name]
     "HALF_T tile_"
     "OCANNL_VEC_NARROW_BFLOAT16"

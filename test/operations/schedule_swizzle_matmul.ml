@@ -318,7 +318,7 @@ let () =
     let rz = Sched.Retype { axis = zj; ty = LL.Workgroup } in
     let sp_i, _, i_i = Sched.split ~axis:i ~factor:bt ~outer:LL.Grid ~inner:LL.Serial in
     let sp_k, k_o, k_i = Sched.split ~axis:k ~factor:bt ~outer:LL.Serial ~inner:LL.Serial in
-    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width in
+    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width () in
     [
       ez;
       sp_zi;

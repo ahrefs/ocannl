@@ -151,6 +151,7 @@ type sketch_params = {
   sk_swizzle : Ir.Low_level.swizzle_kind option;
   sk_depth : int;
   sk_pack_prec : Ir.Ops.prec option;
+  sk_tile : Ir.Register_tile.t option;
 }
 (** Parameters of one matmul-sketch seed candidate; see the implementation's field docs. Exposed for
     tests (the seeding pre-filter of gh-ocannl-479 and the mixed grid-outermost shape of
@@ -330,6 +331,11 @@ module Family_decision : sig
         [ `Serial | `Hoisted | `Hoisted_grid | `Hoisted_grid_pack_rest | `Grid_pack_rest | `Grid ]
         (** Which CPU packed composition: where the panels are packed (in kernel, at link time, per
             Grid chunk) — what makes a packed geometry's traffic additional or merely relocated. *)
+    | Register_tile of Ir.Register_tile.t option
+        (** The CPU tensorized micro-kernel's C-tile geometry (gh-ocannl-619): [None] is the
+            renderer's own ranking-model choice, [Some] a schedule-carried alternative the renderer
+            honours exactly. The level appears only where {!Ir.Register_tile.alternatives} offers
+            one. *)
 
   type path = (string * t) list
   (** What {!Ir.Schedule_space.enumerate} and the [~path] of {!Ir.Schedule_space.search} carry at

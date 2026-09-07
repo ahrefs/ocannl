@@ -80,7 +80,15 @@ type saved_optop =
     }
   | Privatize of { target : int; over : sym_ref }
   | Expand_zero of { tn : int }
-  | Tensorize of { i : sym_ref; j : sym_ref; k : sym_ref; simd_width : int }
+  | Tensorize of {
+      i : sym_ref;
+      j : sym_ref;
+      k : sym_ref;
+      simd_width : int;
+      tile : Register_tile.t option; [@sexp.option]
+          (** The requested C-tile geometry (gh-ocannl-619); omitted when the renderer chooses, so
+              pre-geometry entries stay readable without an [entry_version] bump. *)
+    }
   | Fuse_epilogue of { target : int; shared : bool }
   | Split_reduce of { axis : sym_ref; target : int; num_blocks : int }
 [@@deriving sexp, compare, equal]

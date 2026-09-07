@@ -413,6 +413,7 @@ let () =
               lda = 5;
               ldb = 29;
               lane;
+              tile = None;
               fallback = nest;
             };
       }

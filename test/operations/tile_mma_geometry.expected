@@ -1,0 +1,31 @@
+model: vector_bytes elt_bytes m n -> default | alternatives
+  16 4  64  512 -> rm4 rn4 lanes4 | rm4 rn2 lanes4
+  32 4  64  512 -> rm4 rn2 lanes8 | rm4 rn3 lanes8
+  64 4  64  512 -> rm4 rn4 lanes16 | rm4 rn2 lanes16
+  32 4  64   64 -> rm4 rn2 lanes8 | none
+  64 4  64   40 -> rm4 rn5 lanes8 | rm4 rn2 lanes16
+  32 2  64  512 -> rm4 rn2 lanes16 | none
+  32 4   2   48 -> rm2 rn3 lanes8 | rm2 rn2 lanes8, rm2 rn5 lanes8
+the default geometry passes the fit rules on every shape: true
+no alternative repeats the default: true
+every alternative passes the fit rules: true
+every alternative is peel-free, or the register-budget cap peeling at most one vector: true
+a column extent below one vector has no default and no alternatives: true
+the budget is the widest default tile's live-register count: true
+a requested geometry renders register-tiled: true
+the emitted header names the requested geometry and its provenance: true
+the requested-geometry rendering matches the serial twin bitwise: true
+an over-budget request is refused by the fit rules: true
+an over-budget request declines to the scalar fallback: true
+the declined routine is labeled scalar-fallback, not tensorized: true
+the declined routine still computes the serial values: true
+an over-width request declines to the scalar fallback: true
+the unrequested rendering carries the model's default geometry: true
+the unrequested header does not claim a schedule provenance: true
+seeds: whole-triple bm0 tiles on 16-byte vectors at 64x512x64: auto, rm4 rn2 lanes4
+the whole-triple seeds carry one auto geometry then exactly the model's alternatives: true
+the site offers at least one alternative to time: true
+a seeded alternative instantiates through the sketch and renders its geometry: true
+a saved Tensorize with a geometry round-trips through its sexp: true
+saved Tensorize without a geometry: (Tensorize(i(Base 0))(j(Base 1))(k(Base 2))(simd_width 8))
+a saved Tensorize without a geometry omits the field (pre-gh-619 entries keep parsing): true

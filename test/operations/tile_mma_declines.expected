@@ -5,12 +5,12 @@ census: the declined schedule's routine is labeled scalar-fallback, not tensoriz
 per-chunk B~ re-pack matches the serial twin bitwise: true
 per-chunk B~ re-pack under the cap pool-parallelizes: true
 per-chunk B~ re-pack over the cap declines to serial: true
-seeds: standard, both hoistable: total=18 whole=2 packed=12 hoist=8 grid=2 packrest=0
-seeds: transposed B, hoistable: total=16 whole=0 packed=12 hoist=8 grid=2 packrest=0
-seeds: computed A x hoistable B: total=19 whole=2 packed=13 hoist=9 grid=3 packrest=1
-seeds: hoistable A x computed transposed B: total=16 whole=0 packed=12 hoist=8 grid=2 packrest=1
-seeds: no hoistable operand: total=11 whole=2 packed=7 hoist=0 grid=2 packrest=1
-seeds: narrow columns (nj < lanes): total=4 whole=0 packed=4 hoist=2 grid=0 packrest=0
+seeds: standard, both hoistable: total=22 whole=2 packed=16 hoist=10 grid=2 packrest=0
+seeds: transposed B, hoistable: total=20 whole=0 packed=16 hoist=10 grid=2 packrest=0
+seeds: computed A x hoistable B: total=23 whole=2 packed=17 hoist=11 grid=3 packrest=1
+seeds: hoistable A x computed transposed B: total=20 whole=0 packed=16 hoist=10 grid=2 packrest=1
+seeds: no hoistable operand: total=13 whole=2 packed=9 hoist=0 grid=2 packrest=1
+seeds: narrow columns (nj < lanes): total=8 whole=0 packed=8 hoist=4 grid=0 packrest=0
 seeds: f16 operands, f16 accumulator (advertised): mma seeds=5
 seeds: bf16 operands, f32 accumulator (advertised): mma seeds=5
 seeds: bf16 operands, bf16 accumulator (not advertised): mma seeds=0

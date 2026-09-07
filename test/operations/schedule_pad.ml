@@ -141,7 +141,7 @@ let () =
     [ Sched.Pad { axis = i; to_multiple_of = bm }; Sched.Pad { axis = k; to_multiple_of = bk } ]
     @ [ sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ] @ sink i_o [ k_o ]
     @ [ stage mb.Tensor.value [ k_i; j ]; stage ma.Tensor.value [ i_i; k_i ] ]
-    @ if on_cpu then [ fst (Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1) ] else []
+    @ if on_cpu then [ fst (Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 ()) ] else []
   in
   let transform opt = Sched.apply (padded_schedule opt) opt in
   let ctx, routine =
@@ -195,7 +195,7 @@ let () =
       in
       let sp_i, _, i_i = Sched.split ~axis:i ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
       let sp_k, k_o, k_i = Sched.split ~axis:k ~factor:bk ~outer:LL.Serial ~inner:LL.Serial in
-      let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width in
+      let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width () in
       [
         Sched.Pad { axis = i; to_multiple_of = bm };
         Sched.Pad { axis = j; to_multiple_of = 8 };
@@ -340,7 +340,7 @@ let () =
     let i, j, k =
       match triple (nest_paths opt.LL.llc) with [ i; j; k ] -> (i, j, k) | _ -> assert false
     in
-    [ Sched.Pad { axis = k; to_multiple_of = bk }; fst (Sched.tensorize ~i ~j ~k ~simd_width:1) ]
+    [ Sched.Pad { axis = k; to_multiple_of = bk }; fst (Sched.tensorize ~i ~j ~k ~simd_width:1 ()) ]
   in
   let transform opt = Sched.apply (unstaged_padded opt) opt in
   let rejected =
