@@ -89,6 +89,7 @@
   tnode
   host_inits
   schedule_outcome
+  register_tile
   low_level
   cost_model
   schedule_space

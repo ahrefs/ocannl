@@ -117,7 +117,7 @@ let composed_schedule ?(bk = bk) ~hoist_b ~tile_prec ~a ~b (opt : LL.optimized) 
   in
   [ sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ] @ sink i_o [ k_o ]
   @ [ stage ~hoisted:hoist_b b [ k_i; j ]; stage ~hoisted:false a [ i_i; k_i ] ]
-  @ if on_cpu then [ fst (Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1) ] else []
+  @ if on_cpu then [ fst (Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 ()) ] else []
 
 let run ~name ?schedule (out : Tensor.t) =
   let comp = named name (Train.forward out) in

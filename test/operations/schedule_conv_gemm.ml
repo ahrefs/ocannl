@@ -272,7 +272,7 @@ let () =
       let sched =
         if not tensorized then reorder
         else
-          let tz, _lane = Sched.tensorize ~i:ow ~j:oc ~k:ic ~simd_width:1 in
+          let tz, _lane = Sched.tensorize ~i:ow ~j:oc ~k:ic ~simd_width:1 () in
           reorder @ [ stage x.Tensor.value [ ow; ic ]; stage kern.Tensor.value [ ic; oc ]; tz ]
       in
       Sched.apply sched opt
@@ -514,7 +514,7 @@ let () =
               tile_prec = None;
             }
         in
-        let tz, _lane = Sched.tensorize ~i:ow ~j:oc ~k:ic ~simd_width:1 in
+        let tz, _lane = Sched.tensorize ~i:ow ~j:oc ~k:ic ~simd_width:1 () in
         let sched =
           reorder
           @ [ stage x.Tensor.value [ ow; ic ]; stage kern.Tensor.value [ ic; oc ]; tz ]
@@ -651,7 +651,7 @@ let () =
       in
       let tz, _lane =
         Sched.tensorize ~i:site.Autotune.c_row ~j:site.Autotune.c_oc ~k:site.Autotune.c_red
-          ~simd_width:w
+          ~simd_width:w ()
       in
       List.map site.Autotune.c_outer ~f:(fun (s, _) -> Sched.Retype { axis = s; ty = LL.Grid })
       @ reorder_swaps ~current:site.Autotune.c_loops ~target:(conv_target site)
@@ -743,7 +743,7 @@ let () =
       in
       let tz, _lane =
         Sched.tensorize ~i:site.Autotune.c_row ~j:site.Autotune.c_oc ~k:site.Autotune.c_red
-          ~simd_width:w
+          ~simd_width:w ()
       in
       List.map site.Autotune.c_outer ~f:(fun (s, _) -> Sched.Retype { axis = s; ty = LL.Grid })
       @ reorder_swaps ~current:site.Autotune.c_loops ~target:(conv_target site)
@@ -914,7 +914,7 @@ let () =
       else List.map site.Autotune.c_outer ~f:(fun (s, _) -> Sched.Retype { axis = s; ty = LL.Grid })
     in
     let tz, _lane =
-      Sched.tensorize ~i:row_i ~j:site.Autotune.c_oc ~k:site.Autotune.c_red ~simd_width
+      Sched.tensorize ~i:row_i ~j:site.Autotune.c_oc ~k:site.Autotune.c_red ~simd_width ()
     in
     (outer_grid @ [ sp_row ]) @ reorder_swaps ~current ~target
     @ [
@@ -1029,7 +1029,7 @@ let () =
           }
       in
       let tz, _lane =
-        Sched.tensorize ~i:row_i ~j:site.Autotune.c_oc ~k:site.Autotune.c_red ~simd_width:1
+        Sched.tensorize ~i:row_i ~j:site.Autotune.c_oc ~k:site.Autotune.c_red ~simd_width:1 ()
       in
       Sched.default_cpu ~min_parallel:1 seg
       @ (sp_row :: reorder_swaps ~current ~target)
@@ -1113,7 +1113,7 @@ let () =
       in
       let tz, _lane =
         Sched.tensorize ~i:site.Autotune.c_row ~j:site.Autotune.c_oc ~k:site.Autotune.c_red
-          ~simd_width:1
+          ~simd_width:1 ()
       in
       Sched.default_cpu ~min_parallel:1 seg
       @ reorder_swaps ~current:site.Autotune.c_loops ~target:(conv_target site)

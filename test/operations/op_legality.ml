@@ -152,7 +152,7 @@ let () =
      the k role must be the (only) rmw-carrying loop and i/j the output dims, so of the 6 role
      permutations of the [i2 x j2 x k] accumulation only the identity assignment survives; the
      affine queries then prove i/j iteration independence (reduction reassociation licensed). *)
-  let tz ~i ~j ~k name ck = ck name (fst (Sched.tensorize ~i ~j ~k ~simd_width:32)) in
+  let tz ~i ~j ~k name ck = ck name (fst (Sched.tensorize ~i ~j ~k ~simd_width:32 ())) in
   tz ~i:i2 ~j:j2 ~k "tensorize valid roles" check;
   tz ~i:j2 ~j:i2 ~k "tensorize i/j roles swapped" check;
   tz ~i:i2 ~j:k ~k:j2 "tensorize j role on the reduction" check;
@@ -240,7 +240,7 @@ let () =
   in
   let viable = ref 0 in
   List.iter perms ~f:(fun (label, i, j, k) ->
-      let op = fst (Sched.tensorize ~i ~j ~k ~simd_width:1) in
+      let op = fst (Sched.tensorize ~i ~j ~k ~simd_width:1 ()) in
       let verdict = Sched.op_legality mm_opt op in
       let hermetic =
         {

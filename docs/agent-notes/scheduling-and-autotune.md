@@ -350,6 +350,23 @@ files.
   the uniform-bf16 combination and not fp8 (whose B side has no 16-bit `ldmatrix` form at the
   orientation the staged sketches mint). The census distinguishes `Mma_intrinsics_ldmatrix` from
   `Mma_intrinsics`, so "tensorized" and "fed at rate" are separable in a sweep.
+- **The register-tile geometry is a schedule decision, not a renderer constant** (gh-ocannl-619).
+  `Schedule.Tensorize` carries `tile : Register_tile.t option` (`{rm; rn; lanes}`) into
+  `Low_level.Tile_mma`; `C_syntax.try_register_tile` honours a request EXACTLY or declines it to
+  the scalar fallback with the violated rule (`Register_tile.check`: a lane count on the file's
+  ladder that `n` fills, `rm <= m`, `rn * lanes <= n`, `rm*rn + rm + rn` within the 19/34-register
+  budget) — never substitutes, so a candidate timed under a geometry label ran that geometry or
+  ran scalar, and the census says which. `None` is the renderer's ranking model,
+  `Register_tile.default` (the gh-575 fit: constant peel weight 10, keyed on the actual `n`), which
+  the seeding consults through the same module: every CPU tensorized leaf gets a `register-tile`
+  level of `auto` plus `Register_tile.alternatives` (peel-free `rn >= 2` at the widest fitting
+  width, plus the budget cap when it peels at most one vector per row), only where at least one
+  exists — a rule that seeded the cap everywhere doubled the CPU tensorized seed count. The emitted header appends
+  `; geometry from the schedule` on a request and nothing on a default, so pre-619 codegen goldens
+  stand. Sweep a width by seeding it or by handing `?tile` to `Sched.tensorize` — never by
+  patching the renderer again. The cache saves the field as `[@sexp.option]`, so pre-619 entries
+  parse. Not done: `rm` alternatives (seeding varies the width only), the conv family (not
+  tree-factored), and a `Cost_model`-derived peel weight.
 - "Crowned" is not "shipped", and neither is reproducible on a small routine. `Train.tune_placements`
   runs two searches and keeps one artifact, so a family can win the arm that is then discarded whole
   — read `report.best_label` / `best_tensorized` / `best_tensorization` / `mma_best_ms` per arm (the A/B calls `?report`

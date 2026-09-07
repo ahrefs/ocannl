@@ -385,6 +385,7 @@ let build (emit_dir : string) =
                 lda = mma_k;
                 ldb = mma_n;
                 lane;
+                tile = None;
                 fallback;
               };
         }

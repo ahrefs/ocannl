@@ -223,6 +223,7 @@ let part2 () =
         lda = 8;
         ldb = 8;
         lane;
+        tile = None;
         fallback = LL.Noop;
       }
   in
