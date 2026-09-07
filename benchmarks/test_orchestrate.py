@@ -2668,6 +2668,258 @@ class CellTimeoutTest(unittest.TestCase):
         self.assertNotIn("Runner failures", (out / "report.md").read_text())
 
 
+class RegimeTest(unittest.TestCase):
+    """gh-ocannl-719: the numerics regime is a third axis over the cells, with its own envelope."""
+
+    def test_the_approximate_envelope_is_looser_than_every_exact_one(self):
+        # The literal is the pin. Looser than PARITY_TOL and every precision envelope, so an
+        # approximate cell of any precision is gated at it; tighter than the loss-movement floor.
+        self.assertEqual(orchestrate.PARITY_TOL_APPROX, 1e-2)
+        for precision in ("f32", "bf16", "f16", "f16-gated8"):
+            self.assertEqual(orchestrate.parity_tol(precision, "approximate"), 1e-2)
+            self.assertLess(orchestrate.parity_tol(precision), 1e-2)
+        self.assertGreater(orchestrate.PARITY_TOL_APPROX, orchestrate.LOSS_MOVE_MIN_REL)
+        # The exact envelopes are untouched by the regime's existence.
+        self.assertEqual(orchestrate.parity_tol("f32"), orchestrate.PARITY_TOL)
+        self.assertEqual(orchestrate.parity_tol("f32", "exact"), orchestrate.PARITY_TOL)
+
+    def test_the_reference_is_the_exact_torch_cell_even_when_an_approximate_one_ran(self):
+        ref = result("pytorch", "cpu", "eager", [2.3026, 2.3010, 2.3000])
+        counterpart = result("pytorch", "cpu", "eager", [2.3126, 2.3110, 2.3100])
+        counterpart["regime"] = "approximate"
+        candidate = result("ocannl", "cuda", "tuned", [2.3030, 2.3014, 2.3004])
+        candidate["regime"] = "approximate"
+
+        orchestrate.parity_check([counterpart, ref, candidate])
+
+        self.assertEqual(ref["parity"], "REF")
+        # The approximate torch cell is a counterpart gated like any other row, not a reference:
+        # its 4e-3 drift passes the approximate envelope and not the exact one -- and that second
+        # verdict is reported rather than assumed.
+        self.assertEqual(counterpart["parity"], "PASS")
+        self.assertFalse(counterpart["parity_exact_envelope"])
+        self.assertEqual(candidate["parity"], "PASS")
+        self.assertTrue(candidate["parity_exact_envelope"])
+
+    def test_an_approximate_row_beyond_its_envelope_fails(self):
+        ref = result("pytorch", "cpu", "eager", [2.3026, 2.3010, 2.3000])
+        drifted = result("ocannl", "cuda", "tuned", [2.3300, 2.3280, 2.3260])
+        drifted["regime"] = "approximate"
+
+        orchestrate.parity_check([ref, drifted])
+
+        self.assertEqual(drifted["parity"], "FAIL")
+        self.assertFalse(drifted["parity_exact_envelope"])
+
+    def test_exact_rows_carry_no_exact_envelope_verdict(self):
+        ref = result("pytorch", "cpu", "eager", [2.3026, 2.3010, 2.3000])
+        exact = result("ocannl", "cc", "default", [2.3026, 2.3010, 2.3001])
+
+        orchestrate.parity_check([ref, exact])
+
+        self.assertEqual(exact["parity"], "PASS")
+        self.assertNotIn("parity_exact_envelope", exact)
+
+    def test_a_sweep_with_no_arguments_runs_the_exact_regime_only(self):
+        args = orchestrate.build_arg_parser().parse_args([])
+
+        self.assertEqual(args.profile, ["exact"])
+
+    def test_a_bare_profile_flag_is_refused_rather_than_an_empty_matrix(self):
+        # `--profile` with no value would otherwise parse to [] and skip every OCANNL cell,
+        # publishing an empty report with a clean exit (Codex P2 on PR #661).
+        with self.assertRaises(SystemExit):
+            with contextlib.redirect_stderr(io.StringIO()):
+                orchestrate.build_arg_parser().parse_args(["--profile"])
+
+    def test_the_exact_envelope_verdict_is_about_drift_alone(self):
+        # A stationary approximate row within the exact envelope's drift: FAIL for not moving,
+        # and "within exact envelope" -- the two facts are reported separately, so the report
+        # never attributes a stationary loss to excessive drift (Codex P2 on PR #661).
+        ref = result("pytorch", "cpu", "eager", [2.3026, 2.3010, 2.3000])
+        flat = result("ocannl", "cc", "default", [2.3026, 2.3026, 2.3026])
+        flat["regime"] = "approximate"
+
+        orchestrate.parity_check([ref, flat])
+
+        self.assertEqual(flat["parity"], "FAIL")
+        self.assertFalse(flat["parity_loss_moved"])
+        self.assertTrue(flat["parity_exact_envelope"])
+
+    def test_a_mismatched_row_is_shouted_in_the_report_not_published_under_its_label(self):
+        # The exact cell inherited OCANNL_PROFILE=approximate: the sweep fails on it, but
+        # report.md is written before the failure exits, so the row must say so where its
+        # number is read (Codex P1 on PR #661).
+        ref = cell("pytorch", "cpu", "eager", [2.3026, 2.3010, 2.3000])
+        leaked = cell("ocannl", "cc", "default", [2.3026, 2.3011, 2.3001])
+        leaked["profile"] = "approximate"
+        orchestrate.parity_check([ref, leaked])
+        self.assertEqual(orchestrate.regime_check([ref, leaked]), [leaked])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            with contextlib.redirect_stdout(io.StringIO()):
+                orchestrate.report([ref, leaked], out)
+            text = (out / "report.md").read_text()
+            rows = [
+                strict_loads(line) for line in (out / "results.jsonl").read_text().splitlines()
+            ]
+
+        self.assertIn("| regime |", text)
+        row = [line for line in text.splitlines() if line.startswith("| ocannl")][0]
+        self.assertIn("**REGIME MISMATCH** (dispatched exact; ran approximate)", row)
+        self.assertNotIn("| exact |", row)
+        self.assertEqual(rows[1]["regime_mismatch"], "approximate")
+
+    def test_both_regimes_can_share_one_sweep_and_an_unknown_one_is_refused(self):
+        args = orchestrate.build_arg_parser().parse_args(["--profile", "exact", "approximate"])
+
+        self.assertEqual(args.profile, ["exact", "approximate"])
+        # `reproducible` is an OCANNL profile but not a benchmark regime: it has no envelope.
+        with self.assertRaises(SystemExit):
+            with contextlib.redirect_stderr(io.StringIO()):
+                orchestrate.build_arg_parser().parse_args(["--profile", "reproducible"])
+
+    def test_the_regime_reaches_each_runner_as_its_own_flag(self):
+        # OCANNL: the profile IS the regime, and the exact regime passes no profile at all.
+        self.assertEqual(orchestrate.ocannl_regime_args("exact"), [])
+        self.assertEqual(
+            orchestrate.ocannl_regime_args("approximate"), ["--ocannl_profile=approximate"]
+        )
+        self.assertEqual(orchestrate.torch_regime_args("exact"), [])
+        self.assertEqual(orchestrate.torch_regime_args("approximate"), ["--regime", "approximate"])
+        # Exact labels are unchanged; a non-exact cell says so in its label.
+        self.assertEqual(orchestrate.regime_label("exact"), "")
+        self.assertEqual(orchestrate.regime_label("approximate"), " [approximate]")
+        # tinygrad's one cell stands in the approximate regime once the sweep has one.
+        self.assertEqual(orchestrate.tinygrad_regime(["exact"]), "exact")
+        self.assertEqual(orchestrate.tinygrad_regime(["exact", "approximate"]), "approximate")
+
+    def test_a_row_whose_runner_ran_the_other_regime_is_a_gate_failure(self):
+        # An ambient OCANNL_PROFILE=approximate reaching the exact cells, or the reverse: the
+        # parity gate cannot see it (an exact trajectory passes the approximate envelope too).
+        mislabelled = result("ocannl", "cc", "default", [1.0])
+        mislabelled["profile"] = "approximate"
+        honest = result("ocannl", "cc", "default", [1.0])
+        honest.update(regime="approximate", profile="approximate")
+        # A reproducible or performance profile is still the exact regime.
+        reproducible = result("ocannl", "cc", "tuned", [1.0])
+        reproducible["profile"] = "reproducible"
+        torch_wrong = result("pytorch", "cuda", "eager", [1.0])
+        torch_wrong.update(regime="approximate", runner_regime="exact")
+        # A runner predating the field, and tinygrad (whose regime is the sweep's decision), are
+        # not checked.
+        older = result("ocannl", "cc", "default", [1.0])
+        older["regime"] = "approximate"
+        tiny = result("tinygrad", "CPU", "jit", [1.0])
+        tiny.update(regime="approximate", regime_settings="tinygrad defaults")
+
+        mismatched = orchestrate.regime_check(
+            [mislabelled, honest, reproducible, torch_wrong, older, tiny]
+        )
+
+        self.assertEqual(mismatched, [mislabelled, torch_wrong])
+        self.assertEqual(mislabelled["regime_mismatch"], "approximate")
+        self.assertEqual(torch_wrong["regime_mismatch"], "exact")
+
+    def test_the_regime_is_the_resolution_of_the_profiles_keys_not_its_name(self):
+        # Codex P1 on PR #661: OCANNL_TF32_MATMULS=true in the sweep's environment reaches an
+        # exact cell with no profile picked, so the profile name says `exact` while the
+        # arithmetic is approximate. The runner reports where each approximate-payload key
+        # resolved from; an exact row owns only defaults, an approximate row only the profile.
+        def knobs(**sources):
+            return {
+                key: ({"source": "default"} if src is None else {"value": val, "source": src})
+                for key, (val, src) in sources.items()
+            }
+
+        clean = result("ocannl", "cc", "default", [1.0])
+        clean.update(profile=None, regime_knobs=knobs(tf32_matmuls=(None, None)))
+        leaked = result("ocannl", "cuda", "default", [1.0])
+        leaked.update(
+            profile=None,
+            regime_knobs=knobs(
+                tf32_matmuls=("true", "environment"), cc_backend_fast_math=(None, None)
+            ),
+        )
+        honest = result("ocannl", "cuda", "tuned", [1.0])
+        honest.update(
+            regime="approximate",
+            profile="approximate",
+            regime_knobs=knobs(tf32_matmuls=("true", "profile 'approximate' via the commandline")),
+        )
+        overridden = result("ocannl", "cuda", "tuned", [1.0])
+        overridden.update(
+            regime="approximate",
+            profile="approximate",
+            regime_knobs=knobs(
+                tf32_matmuls=("false", "commandline"),
+                cc_backend_fast_math=("true", "profile 'approximate' via the commandline"),
+            ),
+        )
+        # Another profile pins these keys to exact VALUES, but from the profile: not an
+        # exact-regime sweep, and the row says which key came from where.
+        reproducible = result("ocannl", "cc", "tuned", [1.0])
+        reproducible.update(
+            profile="reproducible",
+            regime_knobs=knobs(tf32_matmuls=("false", "profile 'reproducible' via the environment")),
+        )
+        older = result("ocannl", "cc", "default", [1.0])
+        older["profile"] = None
+
+        mismatched = orchestrate.regime_check(
+            [clean, leaked, honest, overridden, reproducible, older]
+        )
+
+        self.assertEqual(mismatched, [leaked, overridden, reproducible])
+        self.assertEqual(leaked["regime_mismatch"], "exact but tf32_matmuls=true (environment)")
+        self.assertEqual(
+            overridden["regime_mismatch"], "approximate but tf32_matmuls=false (commandline)"
+        )
+        self.assertIn("profile 'reproducible'", reproducible["regime_mismatch"])
+        self.assertIsNone(orchestrate.regime_knob_leaks(older))
+
+    def test_the_report_names_the_regime_and_the_exact_envelope_verdict(self):
+        ref = cell("pytorch", "cpu", "eager", [2.3026, 2.3010, 2.3000])
+        exact = cell("ocannl", "cuda", "tuned", [2.3026, 2.3011, 2.3001], p50=2.0)
+        approx = cell("ocannl", "cuda", "tuned", [2.3126, 2.3110, 2.3100], p50=1.0)
+        approx["regime"] = "approximate"
+        orchestrate.parity_check([ref, exact, approx])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            with contextlib.redirect_stdout(io.StringIO()):
+                orchestrate.report([ref, exact, approx], out)
+            text = (out / "report.md").read_text()
+
+        self.assertIn("| regime |", text)
+        self.assertIn("the approximate regime 0.01", text)
+        table = [line for line in text.splitlines() if line.startswith("| ocannl")]
+        # The exact row comes first within the precision though the approximate one is faster:
+        # an approximate number is read against the exact one it relaxes.
+        self.assertIn("| exact |", table[0])
+        self.assertIn("| approximate |", table[1])
+        self.assertIn("PASS (4.3e-03, beyond exact envelope)", table[1])
+        self.assertNotIn("exact envelope", table[0])
+        # The exact rows name their regime too once the column exists.
+        self.assertIn("| exact |", [line for line in text.splitlines() if line.startswith("| pytorch")][0])
+
+    def test_an_exact_only_report_has_no_regime_column(self):
+        ref = cell("pytorch", "cpu", "eager", [2.3026, 2.3010, 2.3000])
+        exact = cell("ocannl", "cc", "default", [2.3026, 2.3011, 2.3001])
+        orchestrate.parity_check([ref, exact])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            with contextlib.redirect_stdout(io.StringIO()):
+                orchestrate.report([ref, exact], out)
+            text = (out / "report.md").read_text()
+
+        self.assertNotIn("| regime |", text)
+        self.assertNotIn("exact envelope", text)
+        self.assertIn("| PASS (", text)
+
+
 class CommandLineTest(unittest.TestCase):
     """What the flags parse to — the wiring between a module constant and the sweep.
 

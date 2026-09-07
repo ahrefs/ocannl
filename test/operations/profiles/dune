@@ -53,6 +53,7 @@
  (deps
   (alias runtest-from_config_file)
   (alias runtest-from_cmdline)
+  (alias runtest-from_cmdline_approximate)
   (alias runtest-from_env)
   (alias runtest-host_profile_flag)
   (alias runtest-explicit_beats_profile)
@@ -88,8 +89,8 @@
 ; ambient value outranks: the honest option wherever it is available, a guard being the second best.
 
 (rule
- ; ocannl-backend: none -- profile_precedence.exe links base, arrayjit.utils and stdio; the twelve
- ; keys it exercises do not include `backend`, and neither profile payload sets it.
+ ; ocannl-backend: none -- profile_precedence.exe links base, arrayjit.utils and stdio; the thirteen
+ ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target from_config_file.actual)
  (deps
   ocannl_config
@@ -101,6 +102,7 @@
   (env_var OCANNL_CC_BACKEND_ARCH_FLAGS)
   (env_var OCANNL_CC_BACKEND_SIMD_FLAGS)
   (env_var OCANNL_CC_BACKEND_FP_CONTRACT)
+  (env_var OCANNL_CC_BACKEND_FAST_MATH)
   (env_var OCANNL_CC_VECTOR_BYTES)
   (env_var OCANNL_FP16_ARITHMETIC)
   (env_var OCANNL_TF32_MATMULS)
@@ -123,8 +125,8 @@
   (diff from_config_file.expected from_config_file.actual)))
 
 (rule
- ; ocannl-backend: none -- profile_precedence.exe links base, arrayjit.utils and stdio; the twelve
- ; keys it exercises do not include `backend`, and neither profile payload sets it.
+ ; ocannl-backend: none -- profile_precedence.exe links base, arrayjit.utils and stdio; the thirteen
+ ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target from_cmdline.actual)
  (deps
   ocannl_config
@@ -136,6 +138,7 @@
   (env_var OCANNL_CC_BACKEND_ARCH_FLAGS)
   (env_var OCANNL_CC_BACKEND_SIMD_FLAGS)
   (env_var OCANNL_CC_BACKEND_FP_CONTRACT)
+  (env_var OCANNL_CC_BACKEND_FAST_MATH)
   (env_var OCANNL_CC_VECTOR_BYTES)
   (env_var OCANNL_FP16_ARITHMETIC)
   (env_var OCANNL_TF32_MATMULS)
@@ -157,9 +160,51 @@
  (action
   (diff from_cmdline.expected from_cmdline.actual)))
 
+; gh-ocannl-719: the third built-in profile, picked on the commandline. Its payload is the
+; `performance` payload plus the numerics-changing knobs, so this output is from_cmdline's with
+; tf32_matmuls, cc_backend_fp_contract, cc_backend_fast_math and tune_inline_flips resolved from
+; the profile instead of from their defaults -- the acceptance claim of the issue, and the one
+; place the whole bundle is visible with its provenance.
+
 (rule
- ; ocannl-backend: none -- profile_precedence.exe links base, arrayjit.utils and stdio; the twelve
- ; keys it exercises do not include `backend`, and neither profile payload sets it.
+ ; ocannl-backend: none -- profile_precedence.exe links base, arrayjit.utils and stdio; the thirteen
+ ; keys it exercises do not include `backend`, and no profile payload sets it.
+ (target from_cmdline_approximate.actual)
+ (deps
+  ocannl_config
+  (env_var OCANNL_AUTOTUNE_SEARCH)
+  (env_var OCANNL_AUTOTUNE_ROUNDS)
+  (env_var OCANNL_AUTOTUNE_BEAM_WIDTH)
+  (env_var OCANNL_MODEL_DEFAULT_SCHEDULE)
+  (env_var OCANNL_TUNE_INLINE_FLIPS)
+  (env_var OCANNL_CC_BACKEND_ARCH_FLAGS)
+  (env_var OCANNL_CC_BACKEND_SIMD_FLAGS)
+  (env_var OCANNL_CC_BACKEND_FP_CONTRACT)
+  (env_var OCANNL_CC_BACKEND_FAST_MATH)
+  (env_var OCANNL_CC_VECTOR_BYTES)
+  (env_var OCANNL_FP16_ARITHMETIC)
+  (env_var OCANNL_TF32_MATMULS)
+  (env_var OCANNL_VIRTUALIZE_MAX_VISITS)
+  (env_var OCANNL_NO_CONFIG_FILE))
+ (action
+  (setenv
+   OCANNL_PROFILE
+   ""
+   (with-stdout-to
+    %{target}
+    (run %{dep:profile_precedence.exe} --ocannl_profile=approximate)))))
+
+(rule
+ (alias runtest-from_cmdline_approximate)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff from_cmdline_approximate.expected from_cmdline_approximate.actual)))
+
+(rule
+ ; ocannl-backend: none -- profile_precedence.exe links base, arrayjit.utils and stdio; the thirteen
+ ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target from_env.actual)
  (deps
   ocannl_config
@@ -171,6 +216,7 @@
   (env_var OCANNL_CC_BACKEND_ARCH_FLAGS)
   (env_var OCANNL_CC_BACKEND_SIMD_FLAGS)
   (env_var OCANNL_CC_BACKEND_FP_CONTRACT)
+  (env_var OCANNL_CC_BACKEND_FAST_MATH)
   (env_var OCANNL_CC_VECTOR_BYTES)
   (env_var OCANNL_FP16_ARITHMETIC)
   (env_var OCANNL_TF32_MATMULS)
@@ -198,8 +244,8 @@
 ; file-picked one, unchanged -- the flag reaches nothing.
 
 (rule
- ; ocannl-backend: none -- profile_precedence.exe links base, arrayjit.utils and stdio; the twelve
- ; keys it exercises do not include `backend`, and neither profile payload sets it.
+ ; ocannl-backend: none -- profile_precedence.exe links base, arrayjit.utils and stdio; the thirteen
+ ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target host_profile_flag.actual)
  (deps
   ocannl_config
@@ -211,6 +257,7 @@
   (env_var OCANNL_CC_BACKEND_ARCH_FLAGS)
   (env_var OCANNL_CC_BACKEND_SIMD_FLAGS)
   (env_var OCANNL_CC_BACKEND_FP_CONTRACT)
+  (env_var OCANNL_CC_BACKEND_FAST_MATH)
   (env_var OCANNL_CC_VECTOR_BYTES)
   (env_var OCANNL_FP16_ARITHMETIC)
   (env_var OCANNL_TF32_MATMULS)
@@ -236,8 +283,8 @@
 ; commandline key wins over the payload of the profile the commandline picked.
 
 (rule
- ; ocannl-backend: none -- profile_precedence.exe links base, arrayjit.utils and stdio; the twelve
- ; keys it exercises do not include `backend`, and neither profile payload sets it.
+ ; ocannl-backend: none -- profile_precedence.exe links base, arrayjit.utils and stdio; the thirteen
+ ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target explicit_beats_profile.actual)
  (deps
   ocannl_config
@@ -249,6 +296,7 @@
   (env_var OCANNL_CC_BACKEND_ARCH_FLAGS)
   (env_var OCANNL_CC_BACKEND_SIMD_FLAGS)
   (env_var OCANNL_CC_BACKEND_FP_CONTRACT)
+  (env_var OCANNL_CC_BACKEND_FAST_MATH)
   (env_var OCANNL_CC_VECTOR_BYTES)
   (env_var OCANNL_FP16_ARITHMETIC)
   (env_var OCANNL_TF32_MATMULS)
@@ -279,8 +327,8 @@
 ; OCANNL_PROFILE, and the output is the env-picked one.
 
 (rule
- ; ocannl-backend: none -- profile_precedence.exe links base, arrayjit.utils and stdio; the twelve
- ; keys it exercises do not include `backend`, and neither profile payload sets it.
+ ; ocannl-backend: none -- profile_precedence.exe links base, arrayjit.utils and stdio; the thirteen
+ ; keys it exercises do not include `backend`, and no profile payload sets it.
  (target empty_cmdline_falls_through.actual)
  (deps
   ocannl_config
@@ -292,6 +340,7 @@
   (env_var OCANNL_CC_BACKEND_ARCH_FLAGS)
   (env_var OCANNL_CC_BACKEND_SIMD_FLAGS)
   (env_var OCANNL_CC_BACKEND_FP_CONTRACT)
+  (env_var OCANNL_CC_BACKEND_FAST_MATH)
   (env_var OCANNL_CC_VECTOR_BYTES)
   (env_var OCANNL_FP16_ARITHMETIC)
   (env_var OCANNL_TF32_MATMULS)

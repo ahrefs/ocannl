@@ -70,3 +70,20 @@ let () =
         (Utils.parse_config_lines ~source:("profile " ^ name) (String.split_lines text))
         ~f:(fun (key, value) -> printf "  %s=%s\n" key value);
       printf "\n")
+
+(* gh-ocannl-719: the `approximate` payload is the `performance` payload plus the numerics-changing
+   knobs. Pinned as a relationship between the two parsed payloads rather than as a second copy of
+   the performance keys: every key performance sets, approximate sets to the same value, and it sets
+   more. *)
+let () =
+  let parsed name =
+    Utils.parse_config_lines ~source:("profile " ^ name)
+      (String.split_lines (List.Assoc.find_exn Utils.profile_payloads name ~equal:String.equal))
+  in
+  let performance = parsed "performance" and approximate = parsed "approximate" in
+  Verdict.p_all ~min:5
+    "every key the performance profile sets, the approximate profile sets to the same value"
+    performance ~f:(fun (key, value) ->
+      Option.equal String.equal (List.Assoc.find approximate key ~equal:String.equal) (Some value));
+  Verdict.p "the approximate profile sets keys the performance profile does not"
+    (List.length approximate > List.length performance)

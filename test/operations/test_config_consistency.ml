@@ -174,6 +174,10 @@ let () =
               "get_global_arg_with_source";
               "get_global_arg";
               "get_global_flag";
+              (* gh-ocannl-719: resolves one key of a profile payload with its source, for
+                 profile_payload_sources, whose key list is the payload's own. Top-level, because an
+                 exemption does not reach a lambda nested in an exempted function. *)
+              "profile_key_source";
             ] );
         ("tnode.ml", Set.of_list (module String) [ "get_style" ]);
       ]

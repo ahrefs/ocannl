@@ -933,7 +933,7 @@ let refusal_control grammar_fixture =
        (Some "typo_key_7"));
   Verdict.p_all ~min:2 "counted one-word documentation assignments remain config tokens"
     [
-      ("AGENTS.md", "profile=reproducible|performance", "profile");
+      ("AGENTS.md", "profile=reproducible|performance|approximate", "profile");
       ("docs/agent-notes/backend-dialects-and-idents.md", "backend=cc", "backend");
     ]
     ~f:(fun (path, spelling, expected_key) ->

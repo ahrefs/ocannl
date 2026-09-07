@@ -109,19 +109,44 @@ let tune_object ~shipped ~searches ~replays ~no_searches ~shipped_mma ~arms =
     (string shipped) searches replays no_searches (mma_object shipped_mma)
     (String.concat ~sep:"," arms)
 
+(** The [regime_knobs] object: where each key of the approximate profile's payload resolved from in
+    this process, keyed by the setting's name -- [{"source":"default"}] for a key nothing set,
+    [{"value":…,"source":…}] otherwise, the source being {!Utils.config_source_label}'s spelling.
+    The orchestrator's regime gate reads it (gh-ocannl-719): an exact cell owns only defaults, an
+    approximate cell only the approximate profile. *)
+let regime_knobs_object knobs =
+  "{"
+  ^ String.concat ~sep:","
+      (List.map knobs ~f:(fun (key, resolution) ->
+           match resolution with
+           | None -> Printf.sprintf {|"%s":{"source":"default"}|} (string key)
+           | Some (value, source) ->
+               Printf.sprintf {|"%s":{"value":"%s","source":"%s"}|} (string key) (string value)
+                 (string source)))
+  ^ "}"
+
 (** The result line [orchestrate.py] parses, as a string without its trailing newline.
 
     [tune] is the already-built [tune] object (see [Bench_harness.tune_json]) or [None] for an
     untuned cell; [tokens_per_step] is present only for workloads that have one. The percentiles and
-    [queued_ms] are milliseconds. *)
-let result_line ~backend ~variant ~precision ~workload ~compile_s ~searched ?tokens_per_step ?tune
-    ~p10 ~p50 ~p90 ~queued_ms ~timed_steps ~losses () =
+    [queued_ms] are milliseconds. [profile] is the name of the configuration profile this process
+    resolved ([Utils.active_profile]), or [None] for no profile: the orchestrator dispatches a
+    cell's regime as [--ocannl_profile=...] and checks the row against what the runner reports, so a
+    regime a row claims is the one the process actually ran under (gh-ocannl-719); [regime_knobs]
+    (see {!regime_knobs_object}) is the same fact per setting, which is what catches an ambient
+    numerics flag that no profile name shows. *)
+let result_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload ~compile_s ~searched
+    ?tokens_per_step ?tune ~p10 ~p50 ~p90 ~queued_ms ~timed_steps ~losses () =
   let tokens_field =
     match tokens_per_step with Some t -> Printf.sprintf {|"tokens_per_step":%d,|} t | None -> ""
   in
   let tune_field = match tune with Some j -> Printf.sprintf {|"tune":%s,|} j | None -> "" in
+  let profile_field =
+    match profile with Some p -> Printf.sprintf {|"%s"|} (string p) | None -> "null"
+  in
   Printf.sprintf
-    {|{"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","workload":"%s","compile_s":%s,"searched":%b,%s%s"step_ms":{"p10":%s,"p50":%s,"p90":%s},"queued_step_ms":%s,"timed_steps":%d,"losses":[%s]}|}
-    (string backend) (string variant) (string precision) (string workload) (fixed compile_s)
-    searched tokens_field tune_field (num p10) (num p50) (num p90) (num queued_ms) timed_steps
-    (nums ~prec:9 losses)
+    {|{"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"regime_knobs":%s,"workload":"%s","compile_s":%s,"searched":%b,%s%s"step_ms":{"p10":%s,"p50":%s,"p90":%s},"queued_step_ms":%s,"timed_steps":%d,"losses":[%s]}|}
+    (string backend) (string variant) (string precision) profile_field
+    (regime_knobs_object regime_knobs)
+    (string workload) (fixed compile_s) searched tokens_field tune_field (num p10) (num p50)
+    (num p90) (num queued_ms) timed_steps (nums ~prec:9 losses)

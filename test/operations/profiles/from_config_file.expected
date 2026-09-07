@@ -7,6 +7,7 @@ tune_inline_flips        = 0              (profile 'reproducible' via the config
 cc_backend_arch_flags    = none           (profile 'reproducible' via the config file)
 cc_backend_simd_flags    = none           (profile 'reproducible' via the config file)
 cc_backend_fp_contract   = off            (profile 'reproducible' via the config file)
+cc_backend_fast_math     = false          (profile 'reproducible' via the config file)
 cc_vector_bytes          = 64             (config file)
 fp16_arithmetic          = true           (config file)
 tf32_matmuls             = false          (profile 'reproducible' via the config file)

@@ -1117,10 +1117,49 @@ cc_backend_simd_flags=auto
 fp16_arithmetic=true
 |}
 
+let approximate_profile_payload =
+  {|# The fastest configuration AT TOLERANCE-BOUNDED SEMANTICS (gh-ocannl-719): the `performance`
+# payload plus every knob that changes numerics for throughput. Results differ from the exact
+# profiles by the tolerance the benchmark parity envelope names (PARITY_TOL_APPROX in
+# benchmarks/orchestrate.py), never in shape or in which operations run. Each key below
+# defaults off for the right reason -- PyTorch-style opt-in -- and this profile is the one
+# word that flips them together, so that a benchmark cell can name the regime in one flag
+# and a report can say which regime a number came from. The policy gates of the algebraic
+# rewrites (online-softmax attention, gh-ocannl-483; Winograd convolution, gh-ocannl-505)
+# join this payload as they land, each in the PR that adds its key.
+
+# The `performance` payload's keys, restated (test_config_consistency checks they agree).
+autotune_search=true
+autotune_beam_width=4
+autotune_rounds=4
+model_default_schedule=true
+cc_backend_arch_flags=auto
+cc_backend_simd_flags=auto
+fp16_arithmetic=true
+
+# f32 matmul operands computed at tf32 (10-bit mantissa, f32 accumulation) on the backends with
+# a tf32 tile shape (CUDA sm_80+); a no-op elsewhere.
+tf32_matmuls=true
+# The C compiler's licence to reassociate (fast-math) and to contract a*b+c into one rounding
+# across statements (fp-contract=fast). Both change results per compiler and target, which is
+# why `reproducible` pins them off and `performance` leaves them at their defaults.
+cc_backend_fast_math=true
+cc_backend_fp_contract=fast
+# The greedy inlining refinement of Train.tune_placements is not numerics-neutral where storage
+# is narrower than compute (a materialized node rounds to its storage precision, an inlined one
+# does not), so `performance` leaves it alone. Two flips: each costs a full search, so this
+# bounds the extra cost at two searches per arm while still exercising the refinement.
+tune_inline_flips=2
+|}
+
 (** The embedded profile payloads, by name. Each is literally a partial [ocannl_config] file: same
     syntax, same parser, setting only the keys where the profiles' goals disagree. *)
 let profile_payloads =
-  [ ("reproducible", reproducible_profile_payload); ("performance", performance_profile_payload) ]
+  [
+    ("reproducible", reproducible_profile_payload);
+    ("performance", performance_profile_payload);
+    ("approximate", approximate_profile_payload);
+  ]
 
 let parse_profile_payload ~name text =
   let source = Printf.sprintf "the built-in profile %S" name in
@@ -1237,6 +1276,32 @@ let get_global_arg_with_source ~default ~arg_name:n =
   (result, source)
 
 let get_global_arg ~default ~arg_name = fst (get_global_arg_with_source ~default ~arg_name)
+
+(** [profile_key_source] resolves one key with its source, and [profile_payload_sources] maps it
+    over a payload: where each key of the named built-in profile's payload resolves from in this
+    process, and to what unless it is the built-in default (whose value the read sites own, not this
+    table): [(key, None)] for a key nothing sets, [(key, Some (value, source))] otherwise. The
+    benchmark runners report this for the [approximate] payload (gh-ocannl-719): a cell's numerics
+    regime is the resolution of these keys, not the name of the profile alone -- an ambient
+    [OCANNL_TF32_MATMULS=true] makes an exact cell approximate with no profile picked, and an
+    explicit [--ocannl_tf32_matmuls=false] beside [--ocannl_profile=approximate] makes an
+    approximate cell neither regime. The key list is the payload's own, so a gate that adds a key to
+    the profile is reported without a second list anywhere. Not logged and not recorded as an
+    access: the read sites report their own reads. *)
+let profile_key_source key =
+  match
+    resolve_config_value ~cmdline:read_cmdline_var ~env:read_env_var
+      ~file:(Hashtbl.find config_file_args) ~profile:profile_lookup ~default:"" ~arg_name:key
+  with
+  | _, From_default -> None
+  | value, source -> Some (value, source)
+
+let profile_payload_sources name =
+  match List.Assoc.find profile_payloads name ~equal:String.equal with
+  | None -> invalid_arg ("OCANNL: unknown profile " ^ name)
+  | Some text ->
+      parse_config_lines ~source:("profile " ^ name) (String.split_lines text)
+      |> List.map ~f:(fun (key, _) -> (key, profile_key_source key))
 
 let get_global_flag ~default ~arg_name:n =
   bool_of_config_string ~arg_name:n
