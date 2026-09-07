@@ -22,6 +22,10 @@
    values still match; the unrequested rendering carries exactly the geometry
    [Register_tile.default] computes for the site (the relationship, not a restated number).
 
+   - The seeding, on the pre-schedule lowering under synthetic limits: the whole-triple seeds carry
+   exactly [Register_tile.alternatives] of the site's extents beside one auto seed, and one seeded
+   alternative, instantiated through [Autotune.sketch_schedule], renders that geometry.
+
    - The cache format: a saved [Tensorize] with a geometry round-trips through its sexp, and one
    without omits the field, so entries written before gh-ocannl-619 keep parsing. *)
 
@@ -244,6 +248,72 @@ let () =
       (register_tiled census_d && String.is_substring src_d ~substring:(header dflt));
     p "the unrequested header does not claim a schedule provenance"
       (not (String.is_substring src_d ~substring:provenance))
+  end
+
+(* === The seeding === *)
+let () =
+  let m, nn, k = (64, 512, 64) in
+  let av = Array.init (m * k) ~f:(fun x -> Float.of_int (x % 11) *. 0.5) in
+  let bv = Array.init (k * nn) ~f:(fun x -> Float.of_int (x % 7) -. 3.) in
+  let a = TDSL.ndarray av ~label:[ "tmg_sa" ] ~input_dims:[ k ] ~output_dims:[ m ] () in
+  let b = TDSL.ndarray bv ~label:[ "tmg_sb" ] ~input_dims:[ nn ] ~output_dims:[ k ] () in
+  let%op sc = a * b in
+  let captured = ref None in
+  let ctx = Context.auto () in
+  let (_ : Context.t * Context.routine) =
+    Context.compile
+      ~lowered_transform:(fun opt ->
+        captured := Some opt;
+        [ opt ])
+      ctx
+      (named "tmg_seed_site" (Train.forward sc))
+      Ir.Indexing.Empty
+  in
+  let opt = Option.value_exn !captured in
+  let whole_tiles ~limits =
+    Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits opt
+    |> List.filter ~f:(fun p -> p.Autotune.sk_mma && p.Autotune.sk_bk = 0 && p.Autotune.sk_bm = 0)
+    |> List.map ~f:(fun p -> p.Autotune.sk_tile)
+  in
+  (* Synthetic 16-byte vectors (NEON-class, four f32 lanes, the 6-column cap): the n = 512 site of
+     the gh-575 sweep. Enumerated on the pre-schedule lowering, so it holds on every backend. *)
+  let synthetic = { Ir.Backend_intf.no_hardware_limits with simd_vector_bytes = 16 } in
+  let tiles = whole_tiles ~limits:synthetic in
+  Stdio.printf "seeds: whole-triple bm0 tiles on 16-byte vectors at %dx%dx%d: %s\n" m nn k
+    (String.concat ~sep:", " (List.map tiles ~f:(Option.value_map ~default:"auto" ~f:RT.to_string)));
+  p "the whole-triple seeds carry one auto geometry then exactly the model's alternatives"
+    (List.equal (Option.equal RT.equal) tiles
+       (None :: List.map (RT.alternatives ~vector_bytes:16 ~elt_bytes ~m ~n:nn) ~f:Option.some));
+  p_exists "the site offers at least one alternative to time" tiles ~f:Option.is_some;
+  if not on_cpu then
+    skipped "a seeded alternative instantiates through the sketch and renders its geometry"
+  else begin
+    (* Under the machine's own limits the alternative must fit its register file. *)
+    let limits = Context.hardware_limits (Context.auto ()) in
+    let seeds = Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits opt in
+    match
+      List.find seeds ~f:(fun p ->
+          p.Autotune.sk_mma && p.Autotune.sk_bk = 0 && p.Autotune.sk_bm = 0
+          && Option.is_some p.Autotune.sk_tile)
+    with
+    | None ->
+        (* Only where the machine's width divides 512 into a single affordable geometry. *)
+        skipped "a seeded alternative instantiates through the sketch and renders its geometry"
+    | Some seed ->
+        let t = Option.value_exn seed.Autotune.sk_tile in
+        let%op sc2 = a * b in
+        let comp = named "tmg_seeded" (Train.forward sc2) in
+        let ctx, routine =
+          Context.compile
+            ~lowered_transform:(fun o -> [ Sched.apply (Autotune.sketch_schedule ~p:seed o) o ])
+            ctx comp Ir.Indexing.Empty
+        in
+        let _ctx = Context.run ctx routine in
+        let src = Generated.read "tmg_seeded" in
+        p "a seeded alternative instantiates through the sketch and renders its geometry"
+          (register_tiled routine.Context.mma
+          && String.is_substring src ~substring:(header t)
+          && String.is_substring src ~substring:provenance)
   end
 
 (* === The cache format === *)

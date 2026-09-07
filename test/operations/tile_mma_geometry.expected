@@ -22,6 +22,10 @@ the declined routine still computes the serial values: true
 an over-width request declines to the scalar fallback: true
 the unrequested rendering carries the model's default geometry: true
 the unrequested header does not claim a schedule provenance: true
+seeds: whole-triple bm0 tiles on 16-byte vectors at 64x512x64: auto, rm4 rn2 lanes4
+the whole-triple seeds carry one auto geometry then exactly the model's alternatives: true
+the site offers at least one alternative to time: true
+a seeded alternative instantiates through the sketch and renders its geometry: true
 a saved Tensorize with a geometry round-trips through its sexp: true
 saved Tensorize without a geometry: (Tensorize(i(Base 0))(j(Base 1))(k(Base 2))(simd_width 8))
 a saved Tensorize without a geometry omits the field (pre-gh-619 entries keep parsing): true

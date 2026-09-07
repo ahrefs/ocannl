@@ -166,6 +166,12 @@ type sketch_params = {
           precision. Recorded in the params (rather than re-derived at build time) because schedule
           construction has no [hardware_limits] and the instantiated schedule must reproduce the
           seed-time decision exactly. *)
+  sk_tile : Ir.Register_tile.t option;
+      (** CPU tensorized pipelines only: the register-tile geometry the [Tensorize] carries
+          (gh-ocannl-619). [None] lets the renderer's ranking model choose
+          ({!Ir.Register_tile.default}); the family tree twins each CPU tensorized leaf with the
+          {!Ir.Register_tile.alternatives} of its micro-kernel extents (the "register-tile" level),
+          so the width the tuner ships is measured rather than modelled. *)
 }
 
 (* Resolve the tensor-core input format from storage precision before seeding a typed matmul/conv
@@ -1761,7 +1767,8 @@ let gpu_mma_sketch_schedule ~(opt : LL.optimized) (site : matmul_site)
    Workgroup axis with the lane width matching its extent (coverage rule; the lane loop renders
    serially on the C backends). With [sk_bm > 0] the row loops split into pool-parallel Grid blocks;
    [sk_bm = 0] keeps the single-statement form. *)
-let cpu_mma_sketch_schedule (site : matmul_site) { sk_bm = bm; _ } : Sched.schedule =
+let cpu_mma_sketch_schedule (site : matmul_site) { sk_bm = bm; sk_tile = tile; _ } : Sched.schedule
+    =
   let zops =
     zero_geometry site ~mk_zops:(fun ~zi ~zj ->
         let rz = Sched.Retype { axis = zj; ty = LL.Workgroup } in
@@ -1772,11 +1779,13 @@ let cpu_mma_sketch_schedule (site : matmul_site) { sk_bm = bm; _ } : Sched.sched
   in
   let kb = k_blocks site [] in
   if bm = 0 then
-    let tz, _lane = Sched.tensorize ~i:site.m_i ~j:site.m_j ~k:site.m_k ~simd_width:site.m_nj () in
+    let tz, _lane =
+      Sched.tensorize ?tile ~i:site.m_i ~j:site.m_j ~k:site.m_k ~simd_width:site.m_nj ()
+    in
     batch_hoist_swaps site @ zops @ sink site.m_j kb @ sink site.m_i kb @ [ tz ]
   else
     let sp_i, _, i_i = Sched.split ~axis:site.m_i ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
-    let tz, _lane = Sched.tensorize ~i:i_i ~j:site.m_j ~k:site.m_k ~simd_width:site.m_nj () in
+    let tz, _lane = Sched.tensorize ?tile ~i:i_i ~j:site.m_j ~k:site.m_k ~simd_width:site.m_nj () in
     batch_hoist_swaps site @ zops @ [ sp_i ] @ sink site.m_j kb @ sink i_i kb @ [ tz ]
 
 (* Cache-blocked, operand-packed tensorized CPU matmul: [Tile_mma] composed with the S4 packing
@@ -1811,8 +1820,17 @@ let cpu_mma_sketch_schedule (site : matmul_site) { sk_bm = bm; _ } : Sched.sched
    is privatized to per-chunk block-scope storage by the renderer ([C_syntax.parallel_grid_safe]'s
    privatization rule). *)
 let cpu_mma_pack_sketch_schedule (site : matmul_site)
-    { sk_bm = bm; sk_bn = bn; sk_bk = bk; sk_hoist; sk_grid; sk_pack_rest; sk_pack_prec; _ } :
-    Sched.schedule =
+    {
+      sk_bm = bm;
+      sk_bn = bn;
+      sk_bk = bk;
+      sk_hoist;
+      sk_grid;
+      sk_pack_rest;
+      sk_pack_prec;
+      sk_tile = tile;
+      _;
+    } : Sched.schedule =
   let outer_i = if sk_grid then LL.Grid else LL.Serial in
   let grid_outermost = sk_grid && (sk_hoist || sk_pack_rest) in
   let sp_i, i_o, i_i = Sched.split ~axis:site.m_i ~factor:bm ~outer:outer_i ~inner:LL.Serial in
@@ -1880,7 +1898,7 @@ let cpu_mma_pack_sketch_schedule (site : matmul_site)
       @ (if bn = 0 then [] else pad_to ~axis:site.m_j ~extent:site.m_nj bn)
       @ pad_to ~axis:site.m_k ~extent:site.m_nk bk
   in
-  let tz, _lane = Sched.tensorize ~i:i_i ~j:j_col ~k:k_i ~simd_width:1 () in
+  let tz, _lane = Sched.tensorize ?tile ~i:i_i ~j:j_col ~k:k_i ~simd_width:1 () in
   let kb = k_blocks site [ k_o ] in
   batch_hoist_swaps site @ pads @ zops @ splits @ j_swaps @ sink j_col kb @ sink i_i kb
   @ (if grid_outermost then [] else sink i_o kb)
@@ -2237,6 +2255,7 @@ let conv_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
           sk_depth = 1;
           sk_batch_grid = false;
           sk_pack_prec = None;
+          sk_tile = None;
         }
       in
       let cpu_seeds =
@@ -2531,6 +2550,11 @@ module Family_decision = struct
         [ `Serial | `Hoisted | `Hoisted_grid | `Hoisted_grid_pack_rest | `Grid_pack_rest | `Grid ]
         (** Which CPU packed composition: where the panels are packed (in kernel, at link time, per
             Grid chunk) — what makes a packed geometry's traffic additional or merely relocated. *)
+    | Register_tile of Ir.Register_tile.t option
+        (** The CPU tensorized micro-kernel's C-tile geometry (gh-ocannl-619): [None] is the
+            renderer's own ranking-model choice, [Some] a schedule-carried alternative the renderer
+            honours exactly. The level appears only where {!Ir.Register_tile.alternatives} offers
+            one, so a site with a single affordable width keeps its pre-level leaf list. *)
 
   type path = (string * t) list
   (** The path a consumer reads: {!Ir.Schedule_space}'s [(level, decision)] vector at this label
@@ -2560,6 +2584,7 @@ module Family_decision = struct
     | Tensorized_form _ -> "tensorized-form"
     | Row_block _ -> "row-block"
     | Packing_shape _ -> "packing-shape"
+    | Register_tile _ -> "register-tile"
 
   (** The display rendering — for logs, decline reports and goldens. Nothing reads it back. *)
   let to_label =
@@ -2597,6 +2622,8 @@ module Family_decision = struct
     | Packing_shape `Hoisted_grid_pack_rest -> "hoisted-grid-pack-rest"
     | Packing_shape `Grid_pack_rest -> "grid-pack-rest"
     | Packing_shape `Grid -> "grid"
+    | Register_tile None -> "auto"
+    | Register_tile (Some t) -> Ir.Register_tile.to_string t
 
   (** A decision path as ["level=label > …"], for logs and reports. *)
   let render_path (path : path) = Sspace.render_path ~label:to_label path
@@ -2758,6 +2785,7 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
       sk_depth = 1;
       sk_batch_grid = false;
       sk_pack_prec = None;
+      sk_tile = None;
     }
   in
   (* Both GPU pipeline branches are parameterized by the batch-geometry flavor (gh-ocannl-643):
@@ -3180,6 +3208,29 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                ~extent)
         in
         let tb_in_place = Option.value site.m_tb ~default:false in
+        (* The register-tile level (gh-ocannl-619): every CPU tensorized leaf is twinned with the
+           geometries {!Ir.Register_tile.alternatives} proposes for ITS micro-kernel extents — the
+           whole-triple's rows are [m] or the row block, the packed composition's are the packed
+           tile — "auto" first, so a site with no alternative keeps its pre-level leaf. The
+           renderer's default is not re-seeded under a label: [auto] IS that geometry, and a
+           duplicate would time it twice. *)
+        let leaf (p : sketch_params) =
+          let m = if p.sk_bm = 0 then site.m_ni else p.sk_bm in
+          let n = if p.sk_bn = 0 then site.m_nj else p.sk_bn in
+          match
+            Ir.Register_tile.alternatives ~vector_bytes:limits.Ir.Backend_intf.simd_vector_bytes
+              ~elt_bytes:(max 1 (Ir.Ops.prec_in_bytes prec))
+              ~m ~n
+          with
+          | [] -> leaf p
+          | alts ->
+              subt (fun () ->
+                  choice
+                    ((Family_decision.Register_tile None, leaf p)
+                    :: List.map alts ~f:(fun t ->
+                        (Family_decision.Register_tile (Some t), leaf { p with sk_tile = Some t }))
+                    ))
+        in
         refute_unless
           [
             ( limits.Ir.Backend_intf.simd_vector_bytes >= 8,
