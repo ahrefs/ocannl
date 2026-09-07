@@ -23,15 +23,37 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
 - Benchmark provenance and supervision: `benchmarks/fixtures/DIGESTS.txt` records which box's
   fixture bytes each published number was measured on (gh-ocannl-759); sweep children run under a
   per-cell wall-clock cap, on by default (gh-ocannl-842, gh-ocannl-760).
+- `Context.codegen_capabilities` (`supports_f64`, `accum_prec`, asynchronous staging copies) and
+  `Ir.Backend_intf.advertises_mma_format` answer capability questions tests used to guess from
+  the backend name (gh-ocannl-822).
+- `Autotune.report` carries `candidates_contended` and `default_refused`, the per-candidate facts
+  behind the window count `timings_contended` (`lukstafi/ocannl-staging` PR #608), and
+  `fiss_mma_candidates`, the MMA candidate count scoped to fission sketches (gh-ocannl-822).
+- Metal keeps uniform-f16 MMA candidates under `Fp16_wide`: half fragments feed a float
+  `simdgroup_matrix` accumulator, narrowed once at the store boundary (gh-ocannl-837).
+- `tools/test-run.sh repeat [--alone] N <dune args>` runs one target N times in a clean build
+  directory and reports whether the iterations agree, so "does it repeat?" has a supported answer
+  (gh-ocannl-896).
+- Benchmarks: `fixtures/DIGESTS.txt` declares the measurement fleet (`# measurement-boxes:`), so a
+  box with no record for a fixture is reported rather than invisible (gh-ocannl-850); beam cells
+  default to tinygrad `PARALLEL=0`, with `--beam-parallel N` the opt-in (gh-ocannl-843).
 
 ### Changed
 
 - Autotune's default `Queued` timing measures candidates under queue depth (`Isolated` stays
   selectable), withholds contended or non-finite timings from ranking, and reports
   `{ ms; contended; samples }`; `report.timing` is a `timing_mode` (gh-ocannl-755, gh-ocannl-855, gh-ocannl-888).
+- Queued timing on CUDA and HIP calibrates its batch depth to the ~10 ms wall the contention rule
+  was set for (queue cap 200 → 2048; cc and Metal unchanged); their schedule-cache entries carry
+  the `queued-v2` policy generation, so earlier winners re-time rather than replay (gh-ocannl-892).
+- Convolution sketch seeds predict their launch geometry, and over-cap candidates are withheld
+  before compile as matmul seeds already were (gh-ocannl-739).
+- `mma_capability.mma_f16_wide_acc : bool` is `mma_f16_wide_acc_scopes : mma_emission_scope list`
+  (`Mma_per_statement`, `Mma_fragment_scope`): seeding derives the scope a site needs from its
+  reduction extents; CUDA advertises only per-statement, HIP and Metal both (gh-ocannl-836).
 - RTC options (`Compiler_options.nvrtc`, `.metal`, `.hiprtc`) are pure, pinned state, printed by
-  sweeps and appended to CUDA and Metal compile failures; Metal on macOS 15+ selects
-  `mathMode=Safe` with fast float functions (gh-ocannl-784, gh-ocannl-848).
+  sweeps and appended to CUDA, HIP and Metal compile failures; Metal on macOS 15+ selects
+  `mathMode=Safe` with fast float functions (gh-ocannl-784, gh-ocannl-848, gh-ocannl-849).
 - Metal's serial-accumulation workaround is a volatile cast on device reads, far cheaper than
   the volatile accumulator; the capability is `volatile_serial_accumulation` and
   `Context.routine.volatility` says which sites took it (gh-ocannl-782, gh-ocannl-820).
@@ -45,6 +67,12 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
 - `Assignments`, `Indexing`, `Affine`, `Interval`, `Host_inits`, `Compiler_options` and
   `Cpu_topology` have explicit interfaces that hide their zero-reference helpers
   (`Assignments.fold_leaves`, `Affine.equal_verdict`, ...); the removed surface is under gh-ocannl-806.
+- `PrintBox_utils` and `Task` have explicit interfaces: `PrintBox_utils.concise_float`, `nolines`
+  and `render_group` are private, and its `sexp_of_box`, `sexp_of_dag` and `sexp_of_table_row_spec`
+  converters are removed (gh-ocannl-915).
+- `Shape.update_step.neutral_elem` is immutable, fixed at creation, and `Shape.product_space_shape`
+  takes `~shape ~logic` rather than an `update_step`; `Tensor.op` runs `op_asn` under
+  `Shape.with_construction_window`, which refuses a finalization before the op's constraints exist (gh-ocannl-830).
 - `Train.to_routine` returns `Context.t * Context.routine`, like `Context.compile`; fix the type
   error with `let _, routine = ...` or chain the context (gh-ocannl-772).
 - `?lowered_transform` / `?lowered_transforms` on `Context.compile`, `compile_outcome` and backend
@@ -71,12 +99,21 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
   failing at lowering; `test/operations/sgd_variants` pins momentum, nesterov, weight decay and
   `grad_scale` against a host simulation (gh-ocannl-772).
 - The mul-add→FMA rewrite is guarded to floating-point precisions; int64 mul-add went through
-  double `fma` and lost integers above 2^53 (gh-ocannl-824).
+  double `fma` and lost integers above 2^53 (gh-ocannl-824); the C-family renderer now also refuses
+  an integer-precision `FMA` outright instead of mapping it to `fma`/`fmaf` (gh-ocannl-873).
 - `Tensor.op` raises `Session_error` when a custom `op_asn` forces projections before the
   neutral element is installed, which silently miscomputed padding and guards
   (`lukstafi/ocannl-staging` PR #506).
 - `Set_vec_unop` lowering refuses a launch-bound symbolic extent, a defensive guard behind the
   shape solver's existing rejection of such graphs (gh-ocannl-817).
+- Reducing over a bound symbolic axis declared with maximum 1 returned its operand where the empty
+  sum is 0: the axis has no iterator for the extent guard to attach to, so an extent of zero still
+  ran the body once; `Accum_op` lowering now refuses it and names the remedy (gh-ocannl-878).
+- Metal on macOS 26 silently took the macOS 14 legacy compile path (`fastMathEnabled=false`): the
+  class-level selector query answered false for properties the options object accepts; the query
+  now asks an initialized `MTLCompileOptions` (gh-ocannl-881, gh-ocannl-882).
+- `debug_backend=flushing` ignored `location_format=no_location`, on both the log-file and the
+  stdout-prefixed destinations (gh-ocannl-876).
 - `OCANNL_LOG_LEVEL_CC_BACKEND=1` and `=3` compile again (gh-ocannl-823).
 
 ## [1.0.1] -- 2026-08-26

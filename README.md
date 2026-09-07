@@ -60,7 +60,7 @@ NOTE: debug logging from CUDA or HIP in complex settings is a bit tricky, as it 
 
 ## Milestones
 
-See [ROADMAP.md](ROADMAP.md) for the detailed schedule, its history of rebalances and renumberings, and the venue history of the paper artifacts. GitHub issue assignments are the source of truth for release scope. **v1.0.1 was released on August 26, 2026**; the next target is **v1.0.2** (robustness pulled forward), undated. Release dates are now project-internal and aspirational — through v1.0 they were pinned to conference deadlines. The version sequence is `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.2`: version-number depth tracks release *scope* (feature releases take a second component, consolidation/robustness releases a third), not semver.
+See [ROADMAP.md](ROADMAP.md) for the detailed schedule, its history of rebalances and renumberings, and the venue history of the paper artifacts. GitHub issue assignments are the source of truth for release scope. **v1.0.1 was released on August 26, 2026**; the next target is **v1.0.2** (robustness pulled forward), September 16, 2026, with **v1.2** targeted for October 28, 2026. Release dates are now project-internal and aspirational — through v1.0 they were pinned to conference deadlines. The version sequence is `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.2`: version-number depth tracks release *scope* (feature releases take a second component, consolidation/robustness releases a third), not semver.
 
 ### Releases
 
