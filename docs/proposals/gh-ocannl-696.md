@@ -46,8 +46,8 @@ what a future adjoint generator reads per scalar instead of reconstructing from 
 - **Well-formedness** (`Low_level.validate_scan_loops`, at both pipeline gates like scope purity:
   `optimize_proc` on the way in, `C_syntax.compile_proc` on the way out): a carried pair names one
   node declared virtual, with ids pairwise distinct across the list and rebound by no `Declare_local`
-  or `Local_scope` inside the scan; the state node is accessed as a tensor buffer nowhere in the
-  routine; inits read no carried state and do not mention the scan index; each `next` is written
+  or `Local_scope` inside the scan and referenced nowhere outside it (the locals live in the scan's
+  block); the state node is accessed as a tensor buffer nowhere in the routine; inits read no carried state and do not mention the scan index; each `next` is written
   exactly once, as a top-level statement of the body, and read only by later statements; nothing
   writes a `prev`.
 - **Placement** (`check_and_store_virtual`, `Non_virtual 148`): a node written inside a scan body

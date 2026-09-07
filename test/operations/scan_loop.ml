@@ -376,6 +376,39 @@ let () =
            (scan ~upto:(n - 1) i ~carried:[ s ]
               (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s))))
            (loop_n j n (set_at out (iter j) (get st [| fixed 0 |])))));
+  p "a read of a carried local after the scan is refused"
+    (entry "sl_bad_after" (fun (x, out, i) ->
+         let s = carry ~init:(c 0.) (state "sl_bad_after_s") in
+         seq
+           (scan ~upto:(n - 1) i ~carried:[ s ]
+              (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s))))
+           (set_at out (fixed 0) (next s))));
+  p "a next read early through a Tile_mma fallback is refused"
+    (entry "sl_bad_mma" (fun (x, out, i) ->
+         let s = carry ~init:(c 0.) (state "sl_bad_mma_s") in
+         let d = mk ~dims:[| 2; 2 |] "sl_bad_mma_d" in
+         materialize d;
+         let tile =
+           LL.Tile_mma
+             {
+               d = (d, [| fixed 0; fixed 0 |]);
+               a = (d, [| fixed 0; fixed 0 |]);
+               b = (d, [| fixed 0; fixed 0 |]);
+               ta = false;
+               tb = false;
+               m = 2;
+               n = 2;
+               k = 2;
+               ldd = 2;
+               lda = 2;
+               ldb = 2;
+               lane = sym ();
+               fallback = set d [| fixed 0; fixed 0 |] (next s);
+             }
+         in
+         scan ~upto:(n - 1) i ~carried:[ s ]
+           (seq tile
+              (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s))))));
   p "a carried pair over two different nodes is refused"
     (entry "sl_bad_pair" (fun (x, out, i) ->
          let s =

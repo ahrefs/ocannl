@@ -5612,7 +5612,8 @@ and code_reads_scope ~id (llc : t) =
   | Set_dynamic { dyn_value = v, _; llsc; _ } ->
       scalar_reads_scope ~id v || scalar_reads_scope ~id llsc
   | Set_from_vec { arg = a, _; _ } -> scalar_reads_scope ~id a
-  | Tile_mma _ -> false
+  (* The fallback is what a backend without an MMA hook executes, so a local it reads is read. *)
+  | Tile_mma { fallback; _ } -> code_reads_scope ~id fallback
 
 (* The reduce-shaped update of a scope LOCAL: [local = op(local, contrib)] (or its FMA form) with
    [contrib] free of the local — [subst_accum_read]'s output shape. The [`Scope] arm of the peel
@@ -7012,6 +7013,9 @@ let hosted_constant_inits_to_link_time (plc : Tn.Placements.t) (traced_store : t
           match rewrite body with Noop -> Noop | body -> For_loop { f with body })
       | If ({ body; _ } as i) -> (
           match rewrite body with Noop -> Noop | body -> If { i with body })
+      (* gh-ocannl-696: the scan's inits are kept as they are (they only read); its body loses the
+         hosted writes like any loop body, and an emptied body still rotates, so the scan stays. *)
+      | Scan_loop ({ body; _ } as sc) -> Scan_loop { sc with body = rewrite body }
       | Set { tn; _ } when Set.mem hosted tn -> Noop
       | Zero_out tn when Set.mem hosted tn -> Noop
       | c -> c
@@ -7247,6 +7251,34 @@ let scan_loop_violation (plc : Tn.Placements.t) (root : t) : string option =
     | Set _ | Set_dynamic _ | Set_from_vec _ ->
         0
   in
+  (* Syntactic occurrences of a scope id -- [Get_local], [Set_local], binders -- at any depth. The
+     carried ids are declared inside the scan's own block by the renderer, so an occurrence outside
+     the scan is an undeclared identifier: the count over the routine must equal the count over the
+     scan (its inits and body). *)
+  let rec count_refs id (llc : t) : int =
+    match llc with
+    | Set_local (id', llsc) -> (if equal_scope_id id id' then 1 else 0) + scalar_refs id llsc
+    | Declare_local { id = id'; _ } -> if equal_scope_id id id' then 1 else 0
+    | Seq (a, b) -> count_refs id a + count_refs id b
+    | For_loop { body; _ } | Tile_mma { fallback = body; _ } -> count_refs id body
+    | If { cond = c, _; body } -> scalar_refs id c + count_refs id body
+    | Scan_loop { carried; body; _ } ->
+        List.sum (module Int) carried ~f:(fun c -> scalar_refs id c.init) + count_refs id body
+    | Set { llsc; _ } -> scalar_refs id llsc
+    | Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar_refs id v + scalar_refs id llsc
+    | Set_from_vec { arg = a, _; _ } -> scalar_refs id a
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Workgroup_barrier -> 0
+  and scalar_refs id (llsc : scalar_t) : int =
+    match llsc with
+    | Get_local id' -> if equal_scope_id id id' then 1 else 0
+    | Local_scope { id = id'; body; _ } ->
+        (if equal_scope_id id id' then 1 else 0) + count_refs id body
+    | Get_dynamic { dyn_value = v, _; _ } -> scalar_refs id v
+    | Ternop (_, (a, _), (b, _), (c, _)) -> scalar_refs id a + scalar_refs id b + scalar_refs id c
+    | Binop (_, (a, _), (b, _)) -> scalar_refs id a + scalar_refs id b
+    | Unop (_, (a, _)) -> scalar_refs id a
+    | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> 0
+  in
   let rec proc (llc : t) =
     match llc with
     | Scan_loop { index; carried; body; _ } ->
@@ -7256,6 +7288,15 @@ let scan_loop_violation (plc : Tn.Placements.t) (root : t) : string option =
         List.iteri ids ~f:(fun k id ->
             if List.mem (List.take ids k) id ~equal:equal_scope_id then
               reject ("the id " ^ name id ^ " occurs twice among the carried pairs"));
+        (* The carried locals live in the scan's block: a reference after (or before) the scan is an
+           undeclared identifier in the rendered source, and the contract says the final state is
+           not readable after the loop. *)
+        List.iter ids ~f:(fun id ->
+            let inside =
+              List.sum (module Int) carried ~f:(fun c -> scalar_refs id c.init) + count_refs id body
+            in
+            if count_refs id root <> inside then
+              reject ("the carried id " ^ name id ^ " is referenced outside its scan"));
         (* A binder of a carried id inside the scan -- a [Declare_local] or a [Local_scope] over it
            -- would render a shadowing C local, resetting the state every iteration. *)
         List.iter
