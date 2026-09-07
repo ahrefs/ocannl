@@ -1,6 +1,6 @@
 # OCANNL Roadmap
 
-**v1.0.1 released August 26, 2026. Next: v1.0.2 (robustness pulled forward), undated.**
+**v1.0.1 released August 26, 2026. Next: v1.0.2 (robustness pulled forward), targeted for September 16, 2026.**
 
 This roadmap outlines the development plan for OCANNL through version 1.0 and beyond. Dates indicate **end of period** targets. Through v1.0 the schedule was pinned to conference deadlines; it is now project-internal, and the dates below are aspirational rather than external commitments.
 
@@ -19,6 +19,8 @@ This roadmap outlines the development plan for OCANNL through version 1.0 and be
 > **Update (late August 2026):** v1.2 was split along the performance seam. **v1.2 is now performance-chasing in the `approximate` profile, demonstrated on benchmarks** — the numerics-changing tier (fused attention, Winograd, tf32/fp16 arithmetic) behind a third preset, the exact-numerics performance residue, and the benchmark legs that expose where OCANNL wins and loses; the Winograd and zero-nest conv tiers (#505, #503) moved into it from v1.1. Everything else that was in v1.2 — the consumers, explorations, training experience, engineering hygiene, and hardware-gated items — is **v1.3**. With its numerics-changing carry-overs gone, **v1.1 reads as consolidation after v1.0**: the search follow-ups v1.0's evaluation filed, inlining and reduction soundness, the test and benchmark seams that cannot report a false pass, and the training-loop mechanics.
 >
 > **Renumbering (August 26, 2026):** the ladder was renumbered so that version-number depth tracks release *scope*, as it did through the 0.6.x line (0.6.1 shipped features; this project does not follow semver, and 0.x releases never did). Consolidation and robustness releases take a third component; feature releases take a second. Concretely: the release planned as v1.1 shipped as **v1.0.1**; a new **v1.0.2** pulls the robustness and engineering-hygiene backlog forward out of the feature milestones, so refactoring issues are worked while they still describe the code they were filed against; the performance milestone (formerly v1.2) is now **v1.1**; the consumers/demos milestone (formerly v1.3) is now **v1.1.1**; and a new **v1.2** holds the ambitious feature-grade work (shape schemes #404, CDNA MFMA #477, PoPE #444, mmap zero-copy #585, CUDA pinned host buffers #170 and `__constant__` arrays #195).
+>
+> **Dating (September 7, 2026):** the post-1.0.1 ladder is dated again, aspirationally. v1.2 targets **October 28, 2026**, and the milestones before it split the interval from September 7 by the scope their version depth signals (a feature release counts twice a third-component release, so 1 : 2 : 1 : 2 — issue counts were rejected as the weight, since v1.0.2's are review-filed follow-ups and the later milestones' are design spaces): **v1.0.2 September 16, v1.1 October 3, v1.1.1 October 11**. These are end-of-period targets rather than commitments; the GitHub milestone due dates carry the same values.
 >
 > The version sequence is: `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.2`. Milestone *scope* below tracks the GitHub milestones, which are the source of truth.
 
@@ -200,7 +202,7 @@ Quantization (#137, #271), the WebGPU/WASM target (#123), the LLVM backend (#200
 
 ---
 
-## v1.0.2 — undated
+## v1.0.2 — September 16, 2026
 **Theme: Robustness pulled forward — the review-filed hygiene, worked before it rots**
 
 GitHub milestone scope: *"Robustness pulled forward ahead of the feature milestones, while the issues still describe the code they were filed against."* The engineering-hygiene, dedup and test-seam backlog that had accumulated inside the feature milestones, made a release of its own by the August 26 renumbering: refactoring issues drift fastest between filing and execution, so they are sequenced directly after v1.0.1 rather than behind two feature releases. ~59 issues at creation, drawn from the old v1.3's hygiene lists and the old v1.2's soundness fringe.
@@ -222,10 +224,10 @@ GitHub milestone scope: *"Robustness pulled forward ahead of the feature milesto
 
 ---
 
-## v1.1 — undated
+## v1.1 — October 3, 2026
 **Theme: Performance-chasing in the approximate profile, demonstrated on benchmarks**
 
-GitHub milestone scope: *"Performance-chasing in the approximate profile, demonstrated on benchmarks."* The `performance` profile is defined as the fastest configuration *at unchanged semantics*; this milestone chases performance past that line, under a third preset whose results differ from the exact profiles by a tolerance the benchmark parity envelope names. An issue here closes with a before/after benchmark cell in a report. Undated: paced by what the measurements say.
+GitHub milestone scope: *"Performance-chasing in the approximate profile, demonstrated on benchmarks."* The `performance` profile is defined as the fastest configuration *at unchanged semantics*; this milestone chases performance past that line, under a third preset whose results differ from the exact profiles by a tolerance the benchmark parity envelope names. An issue here closes with a before/after benchmark cell in a report. Targeted for October 3, 2026, aspirationally; the pace is what the measurements say.
 
 **The regime and its evidence:**
 - The `approximate` profile (#719): a third built-in preset bundling tf32 matmuls, fp16 arithmetic, fast-math, and every algebraic-rewrite gate as it lands, with a benchmark regime column whose torch counterpart runs torch's own defaults (tf32, SDPA, cudnn autotuning) rather than the pinned-exact settings the parity oracle needs.
@@ -243,10 +245,10 @@ GitHub milestone scope: *"Performance-chasing in the approximate profile, demons
 
 ---
 
-## v1.1.1 — undated
+## v1.1.1 — October 11, 2026
 **Theme: Consumers and explorations**
 
-GitHub milestone scope: *"Consumers and explorations: models, reproductions, demos, integrations, and the training experience (checkpointing, tracking, plots). Undated, paced by interest."* Everything that consumes the compiler rather than building it. Its former hygiene lists moved to v1.0.2 in the renumbering, and its hardware-gated and feature-grade items to v1.2.
+GitHub milestone scope: *"Consumers and explorations: models, reproductions, demos, integrations, and the training experience (checkpointing, tracking, plots). Paced by interest."* Everything that consumes the compiler rather than building it. Its former hygiene lists moved to v1.0.2 in the renumbering, and its hardware-gated and feature-grade items to v1.2.
 
 **Training experience:**
 - Resumable checkpoints (#96), experiment tracking — graphs of observables such as loss and device health (#122), plot legends and axis ticks (#103).
@@ -259,10 +261,10 @@ GitHub milestone scope: *"Consumers and explorations: models, reproductions, dem
 
 ---
 
-## v1.2 — undated
+## v1.2 — October 28, 2026
 **Theme: Ambitious feature-grade work**
 
-GitHub milestone scope: *"Ambitious feature-grade work: larger design-space and hardware-gated features."* Undated; each item is a design space of its own rather than a follow-up.
+GitHub milestone scope: *"Ambitious feature-grade work: larger design-space and hardware-gated features."* Targeted for October 28, 2026; each item is a design space of its own rather than a follow-up.
 
 - Shape schemes for tensor functions (#404) — the exemplar of the tier.
 - PoPE, polar position embeddings (#444).
@@ -285,10 +287,10 @@ GitHub milestone scope: *"Ambitious feature-grade work: larger design-space and 
 | **0.9** | Aug 3, 2026 | **released** | **Schedule quality, deterministic parallelism, mixed precision, convolution performance, and search survivability** |
 | **1.0** | Aug 13, 2026 | **released** | **Branch-and-bound schedule inference, inlining as a searchable decision, graph capture, software pipelining, rematerialization, CPU reduced precision, and the 2x `gpt2_mini` step** |
 | **1.0.1** | Aug 26, 2026 | **released** | **Consolidation after v1.0** (planned as "v1.1"): search follow-through, inlining and reduction soundness, test and benchmark seams that cannot report a false pass, and the training-loop mechanics |
-| 1.0.2  | undated | planned | Robustness pulled forward: the review-filed hygiene, dedup and test-seam backlog, worked before it drifts from the code |
-| 1.1    | undated | planned | Performance-chasing in the approximate profile, demonstrated on benchmarks: the `approximate` preset, fused attention and Winograd, the exact-numerics residue, and the benchmark legs that expose wins and losses |
-| 1.1.1  | undated | planned | Consumers and explorations: models, reproductions, demos, integrations, and the training experience |
-| 1.2    | undated | planned | Ambitious feature-grade work: shape schemes, PoPE, checkpoint zero-copy, CDNA MFMA, CUDA pinned-host and `__constant__` memory |
+| 1.0.2  | Sep 16, 2026 | planned | Robustness pulled forward: the review-filed hygiene, dedup and test-seam backlog, worked before it drifts from the code |
+| 1.1    | Oct 3, 2026 | planned | Performance-chasing in the approximate profile, demonstrated on benchmarks: the `approximate` preset, fused attention and Winograd, the exact-numerics residue, and the benchmark legs that expose wins and losses |
+| 1.1.1  | Oct 11, 2026 | planned | Consumers and explorations: models, reproductions, demos, integrations, and the training experience |
+| 1.2    | Oct 28, 2026 | planned | Ambitious feature-grade work: shape schemes, PoPE, checkpoint zero-copy, CDNA MFMA, CUDA pinned-host and `__constant__` memory |
 
 ---
 
