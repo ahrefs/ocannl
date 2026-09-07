@@ -282,6 +282,11 @@ that they earn a lookup rather than always-loaded space.
   golden union, and the manifest's repo-relative source paths equal to `env_var_deps`' derived
   scanner census. The
   audit is itself on `@scans` and excluded from the evidence corpus, so it cannot answer for itself.
+  Consequence for authoring: EVERY Verdict claim in a scanner source is a refusal to the ratchet,
+  so a claim that is not about the scan's refusals -- a relationship pin between two library values,
+  say -- belongs in a non-scanner test (a plain `(test)` stanza the manifest does not list), where it
+  costs one golden line rather than a manifest row plus an exercised control (gh-ocannl-719 put the
+  approximate ⊇ performance payload claim in `config_profiles`, not `test_config_consistency`).
   The absent-marker, colliding-fragment, one-marker/two-identical-diagnostic,
   one-observation/two-diagnostic, short-literal, `p_all2`, and scanner-population arms prove the
   failure directions. Dynamic strings returned by helpers have no
