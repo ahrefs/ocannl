@@ -1,0 +1,2 @@
+one synchronized run of the self-incrementing routine adds exactly one: true
+16 back-to-back runs of the self-incrementing routine, with no synchronization between them, count every run: no run read the counter before the previous run wrote it: true

@@ -1400,7 +1400,11 @@ using namespace metal;|} in
      previously enqueued routine work at no extra command buffer — the FIFO-execution semantics CUDA
      streams have natively. No-op on a fresh queue: [all_work] signals [counter + 1] and stores it,
      so the latest signaled value is the current counter, and counter = 1 means no signal was issued
-     yet. *)
+     yet. The wait has to be encoded BEFORE the compute pass, which is where the call below sits:
+     [encodeWaitForEvent] orders only what follows it in the buffer, and a wait appended after an
+     encoded kernel orders nothing (the shape gh-ocannl-828's probe measured overlapping,
+     gh-ocannl-909). Executed pin: [test/operations/back_to_back_runs.ml], a self-incrementing
+     routine run back-to-back with no host sync must count every run. *)
   let encode_wait_for_enqueued dev command_buffer =
     let counter = dev.runner.counter in
     if Unsigned.ULLong.compare counter Unsigned.ULLong.one > 0 then
