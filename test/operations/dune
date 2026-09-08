@@ -191,6 +191,8 @@
   (alias runtest-test_where_precision-unoptimized)
   (alias runtest-test_where_precision-extension)
   (alias runtest-test_log_stmt_format)
+  (alias runtest-log_index_width_narrow)
+  (alias runtest-log_index_width_wide)
   (alias runtest-config_var_spellings)
   (alias runtest-config_var_warnings)
   (alias runtest-config_var_fatal_spelling)
@@ -1511,6 +1513,78 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff "test_log_stmt_format.c.expected" "test_log_stmt_format.c.actual")))
+
+(executable
+ (name log_index_width)
+ (modules log_index_width)
+ (libraries base ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; The per-iteration index trace line, at both loop-index widths. Two runs of one executable rather
+; than one: `large_models` is read once at startup, so the narrow and the wide spelling cannot come
+; out of the same process. Each run gets its own `build_files_prefix`, so the two `d_fwd.c`
+; artifacts do not overwrite each other.
+
+(rule
+ ; ocannl-backend: cc -- the command line below pins `--ocannl_backend=cc`, which outranks the
+ ; environment, and the rule copies the cc artifact `build_files/.../d_fwd.c`.
+ (target log_index_width_narrow.c.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (no-infer
+   (progn
+    (run
+     %{dep:log_index_width.exe}
+     "--ocannl_backend=cc"
+     "--ocannl_large_models=false"
+     "--ocannl_output_debug_files_in_build_directory=true"
+     "--ocannl_debug_log_from_routines=true"
+     "--ocannl_log_level=2"
+     "--ocannl_build_files_prefix=log_index_width_narrow")
+    (copy
+     build_files/log_index_width_narrow/d_fwd.c
+     log_index_width_narrow.c.actual)))))
+
+(rule
+ (alias runtest-log_index_width_narrow)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   "log_index_width_narrow.c.expected"
+   "log_index_width_narrow.c.actual")))
+
+(rule
+ ; ocannl-backend: cc -- the command line below pins `--ocannl_backend=cc`, which outranks the
+ ; environment, and the rule copies the cc artifact `build_files/.../d_fwd.c`.
+ (target log_index_width_wide.c.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (no-infer
+   (progn
+    (run
+     %{dep:log_index_width.exe}
+     "--ocannl_backend=cc"
+     "--ocannl_large_models=true"
+     "--ocannl_output_debug_files_in_build_directory=true"
+     "--ocannl_debug_log_from_routines=true"
+     "--ocannl_log_level=2"
+     "--ocannl_build_files_prefix=log_index_width_wide")
+    (copy
+     build_files/log_index_width_wide/d_fwd.c
+     log_index_width_wide.c.actual)))))
+
+(rule
+ (alias runtest-log_index_width_wide)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff "log_index_width_wide.c.expected" "log_index_width_wide.c.actual")))
 
 (test
  ; ocannl-backend: none -- links no backend: it reads tnode names through Ir.Tnode.get_debug_name as text.

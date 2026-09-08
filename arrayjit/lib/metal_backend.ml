@@ -1197,6 +1197,13 @@ module Impl = struct
       | Ops.Half_prec _ when Numerics.fp16_accum_wide () -> Ops.single
       | _ -> compute_prec prec
 
+    (* MSL has no [long long]: its 64-bit signed scalar is [long] (what [int64_t] names here), so
+       the portable-C default's [(long long)] / [%lld] pair would not compile. [os_log] checks the
+       format string against the argument types at shader-compile time, so the width has to be right
+       rather than merely wide enough. *)
+    let log_index_arg doc =
+      if Utils.settings.large_models then ("%ld", PPrint.(string "(long)" ^^ doc)) else ("%d", doc)
+
     (* If we wanted to reintroduce the log_id parameter: [Some ("const int&", "log_id")]. *)
     let kernel_log_param = None
     let log_involves_file_management = false

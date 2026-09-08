@@ -1,0 +1,84 @@
+
+#include <stdio.h>
+#include <math.h>
+#include <stdint.h>
+#include <string.h>
+#include <stdlib.h>
+
+/* SIMD platform detection (gh-ocannl-164): compile-time macros for conditional SIMD code paths
+   (explicit intrinsics are emitted by follow-up work; auto-vectorization needs no guards). */
+#ifdef __AVX2__
+  #define OCANNL_HAS_AVX2 1
+  #include <immintrin.h>
+#else
+  #define OCANNL_HAS_AVX2 0
+#endif
+#ifdef __ARM_NEON
+  #define OCANNL_HAS_NEON 1
+  /* Do NOT include <arm_neon.h> here: it defines int8x16_t, int64x2_t, uint16x8_t, etc. as
+     native vector types, colliding with the pack-struct typedefs emitted by the builtins below
+     (e.g. the uint4x32_to_*_uniform_vec result types). Nothing emits NEON intrinsics yet; when
+     that changes, the emitter must rename the pack types or include the header per-kernel. */
+#else
+  #define OCANNL_HAS_NEON 0
+#endif
+
+/* Fused elementwise FMA for explicit SIMD rendering of Vectorized loops: clang's builtin where
+   available, else the codegen's per-lane fmaf/fma loop. __has_builtin needs a shim on compilers
+   that lack it (function-like use of an undefined macro is a preprocessor error). */
+#ifndef __has_builtin
+  #define __has_builtin(x) 0
+#endif
+#if __has_builtin(__builtin_elementwise_fma)
+  #define OCANNL_HAS_ELEMENTWISE_FMA 1
+#else
+  #define OCANNL_HAS_ELEMENTWISE_FMA 0
+#endif
+
+/* Parallel Grid loops (gh-ocannl-164) use libdispatch on Apple platforms; OpenMP needs no
+   header. Guarded unconditionally so generated sources are byte-identical across platforms. */
+#ifdef __APPLE__
+  #include <dispatch/dispatch.h>
+#endif
+
+/* No longer need export macros since we're using textual prepending */
+
+ void d_fwd(
+    const char* log_file_name,
+    float *restrict d,
+    float *restrict p,
+    float *restrict q) {
+  FILE* log_file = NULL;
+  if (log_file_name) {
+    log_file = fopen(log_file_name, "w");
+  }
+  /* Debug initial parameter state. */
+
+  if (log_file_name && log_file) fprintf(log_file, "float *restrict d &[4] = %p\n", (void*)d);
+  if (log_file_name && log_file) fprintf(log_file, "float *restrict p &[4] = %p\n", (void*)p);
+  if (log_file_name && log_file) fprintf(log_file, "float *restrict q &[4] = %p\n", (void*)q);
+  /* Local declarations and initialization. */
+
+  /* Main logic. */
+  if (log_file_name && log_file) fprintf(log_file, "COMMENT: d fwd\n");
+  for (int32_t i4 = 0; i4 <= 3; ++i4) {
+    if (log_file_name && log_file) fprintf(log_file, "index i4 = %d\n", i4);
+    {
+      float new_set_v = (p[i4] + q[i4]);
+      if (log_file_name && log_file) fprintf(log_file, "# d[i4] := (p[i4] + q[i4]);\n");
+      if (log_file_name && log_file) fprintf(log_file, "d[%u]{=%de-3} = %de-3 = (p[%u]{=%de-3} + q[%u]{=%de-3})\n",
+          i4,
+          (int)(d[i4] * 1000.0),
+          (int)(new_set_v * 1000.0),
+          i4,
+          (int)(p[i4] * 1000.0),
+          i4,
+          (int)(q[i4] * 1000.0));
+      fflush(log_file);
+      d[i4] = new_set_v;
+    }
+  }
+  if (log_file_name && log_file) fprintf(log_file, "COMMENT: end\n");
+  if (log_file) { fclose(log_file); log_file = NULL; }
+
+}

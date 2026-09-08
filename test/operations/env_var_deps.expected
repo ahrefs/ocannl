@@ -152,6 +152,8 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-env_var_deps_control
   test/operations/dune                     @runtest-flip_bound_pruning
   test/operations/dune                     @runtest-generated_provenance
+  test/operations/dune                     @runtest-log_index_width_narrow
+  test/operations/dune                     @runtest-log_index_width_wide
   test/operations/dune                     @runtest-micrograd_demo_logging
   test/operations/dune                     @runtest-model_default_fallback
   test/operations/dune                     @runtest-model_default_placements

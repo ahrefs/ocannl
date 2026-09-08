@@ -188,6 +188,16 @@ files.
   CUDA or HIP for load balancing across machines. The durable part: codegen snapshots for a
   backend whose hardware isn't attached (`.cu.expected` etc.) go stale until that hardware next
   runs the suite — expect re-promotes.
+- A routine-log statement's printf conversions have to track the width of `B.loop_index_type`, which
+  `large_models` widens to 64 bits. `C_syntax_config.log_index_arg` is the seam: it returns the
+  conversion specification and the cast for one loop-index-typed argument, defaulting to
+  `%lld` / `(long long)` — the widest pair C's variadic promotions name without `<inttypes.h>`,
+  accepted by gcc, clang, the MSVC runtime, nvrtc and hiprtc alike. Metal overrides it, because MSL
+  has no `long long` at all: its 64-bit signed scalar is `long` (`%ld`), and `os_log` checks the
+  format string against the argument types at shader-compile time, so a merely-wide-enough
+  conversion is a compile error there rather than silent UB. A backend spelling the loop index as
+  its own type overrides both together. The array-offset conversions on the value-log lines are
+  still `%u` against the same index-typed arguments — gh-ocannl-953.
 
 ## Choosing a backend-query seam
 

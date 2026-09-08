@@ -155,7 +155,9 @@ type marker = { tag : string; family : family; test : test }
     the near misses. *)
 let markers =
   [
-    { tag = "c-for"; family = C; test = Needles [ "for (int32_t " ] };
+    (* Both index widths: [large_models] makes the loop index [int64_t], and a golden taken under it
+       would otherwise show no [c-for] at all. *)
+    { tag = "c-for"; family = C; test = Needles [ "for (int32_t "; "for (int64_t " ] };
     { tag = "c-restrict"; family = C; test = Needles [ "*restrict " ] };
     { tag = "c-prec-cast"; family = C; test = Needles [ "(float)("; "(double)("; "(int)(" ] };
     { tag = "c-decl-banner"; family = C; test = Needles [ "/* Local declarations" ] };
