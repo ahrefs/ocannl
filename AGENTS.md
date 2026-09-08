@@ -48,8 +48,9 @@ dune runtest
 # Run tests for a specific backend (bash syntax)
 OCANNL_BACKEND=cuda dune runtest
 
-# Install dependencies (OCaml >= 5.3)
-opam install . --deps-only
+# Install dependencies (OCaml >= 5.3). --with-dev-setup adds ocamlformat (pinned to the
+# .ocamlformat version) and ocaml-lsp-server, which --deps-only alone never installs
+opam install . --deps-only --with-test --with-dev-setup
 
 # Install with optional backends  
 opam install cudajit  # for CUDA backend
