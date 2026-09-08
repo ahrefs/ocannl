@@ -380,18 +380,43 @@ missing=""
 for pkg in base ppxlib ppx_minidebug dataprep; do
   printf '%s\n' "$installed" | grep -qx "$pkg" || missing="$missing $pkg"
 done
+# The `with-dev-setup` tooling (dune-project): part of a development switch,
+# but `opam install . --deps-only` alone never installs it, so a fresh switch
+# has neither until asked. The install below passes --with-dev-setup.
+dev_missing=""
+for pkg in ocamlformat ocaml-lsp-server; do
+  printf '%s\n' "$installed" | grep -qx "$pkg" || dev_missing="$dev_missing $pkg"
+done
 
-if [ -z "$missing" ]; then
+if [ -z "$missing" ] && [ -z "$dev_missing" ]; then
   ok "dependencies present"
 elif [ "$MODE_DEPS" = 1 ]; then
   echo "  ...   installing dependencies (this takes 10-20 minutes)"
-  if opam install . -y --deps-only --with-test --with-doc; then
+  if opam install . -y --deps-only --with-test --with-doc --with-dev-setup; then
     fixed "dependencies installed"
   else
     fail "opam install failed"
   fi
 else
-  todo "missing:$missing — re-run with --deps to install"
+  [ -n "$missing" ] && todo "missing:$missing — re-run with --deps to install" || ok "dependencies present"
+  [ -z "$dev_missing" ] || todo "dev tools missing:$dev_missing — re-run with --deps, or: opam install . --deps-only --with-dev-setup"
+fi
+
+# ocamlformat refuses to run at any release other than the one .ocamlformat
+# pins, so an installed-but-wrong release is as unusable as none; dune-project
+# pins the same release (move the two together). Only reported: the fix is an
+# opam install, and installing is not this script's to do on a workstation.
+fmt_pin="$(sed -n 's/^version *= *//p' "$script_dir/../.ocamlformat" 2>/dev/null | tr -d '[:space:]')"
+if printf '%s\n' "$installed" | grep -qx ocamlformat; then
+  # tr -d '\r': ocamlformat.exe emits CRLF on Windows; substitution strips only the LF.
+  fmt_have="$(opam exec -- ocamlformat --version 2>/dev/null | tr -d '\r' || true)"
+  if [ -z "$fmt_pin" ]; then
+    todo ".ocamlformat carries no version pin"
+  elif [ "$fmt_have" = "$fmt_pin" ]; then
+    ok "ocamlformat $fmt_pin"
+  else
+    todo "ocamlformat ${fmt_have:-?} does not match the .ocamlformat pin $fmt_pin — opam install ocamlformat.$fmt_pin"
+  fi
 fi
 
 # --- verification --------------------------------------------------------

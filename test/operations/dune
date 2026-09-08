@@ -4620,7 +4620,7 @@
   (diff agent_notes_structure.expected agent_notes_structure.actual)))
 
 ; gh-ocannl-866: PPX output goldens are ocamlformat-hostile and must all be excluded from the
-; unattended formatting sweep. The correspondence used to live only in prose; a path appended to
+; `dune build @fmt` that the CI `fmt` job gates on. The correspondence used to live only in prose; a path appended to
 ; an unterminated `.ocamlformat-ignore` line silently removed two exclusions at once. The scanner
 ; checks both directions plus the line/newline structure, and its own child-process controls stage
 ; every refusal so a green live tree cannot leave the diagnostic paths dead.

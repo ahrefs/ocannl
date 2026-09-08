@@ -484,6 +484,33 @@ jobs:
         # run still holding the lock when the second arrives -- i.e. minutes of
         # real build, against a step meant to cost seconds.
 
+  # Formatting is a gate here, and a job of its own rather than a step of the
+  # build: `dune build @fmt` compiles nothing, so this switch holds only the
+  # compiler and ocamlformat and answers in minutes while the build matrix is
+  # still queued -- a formatting red should be the FIRST thing a PR hears, not
+  # something found after twenty minutes of compilation. `lint-fmt` reads the
+  # ocamlformat release from `.ocamlformat` and installs exactly that, which is
+  # the same pin `dune-project`'s with-dev-setup dependency installs locally, so
+  # the two cannot disagree about what "formatted" means. No opam pins and no
+  # depexts: neither the project's opam files nor their dependencies are needed
+  # to format the tree. (Formatting used to be an off-branch daily sweep; the
+  # gate replaced it -- gh-ocannl-938 -- because a repo-wide reformat commit
+  # conflicts with every branch in flight, while on the author's branch it costs
+  # one command. AGENTS.md says when to run it.)
+  fmt:
+    name: Formatting
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v7
+    - uses: ocaml/setup-ocaml@v3
+      with:
+        ocaml-compiler: 5.5.x
+        allow-prerelease-opam: false
+        opam-pin: false
+        opam-depext: false
+    - uses: ocaml/setup-ocaml/lint-fmt@v3
+
   # A red on master is nobody's to sit and watch: merging sessions do not poll
   # CI after landing (roll-forward, ahrefs/ocannl#861). Instead this job fires
   # the "ocannl-staging CI-red triage" Claude Code routine, which claims the
@@ -499,7 +526,7 @@ jobs:
   # run).
   notify-triage-routine:
     name: Fire CI-red triage routine
-    needs: run
+    needs: [run, fmt]
     if: failure() && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -18,6 +18,8 @@ depends: [
   "base" {>= "v0.17.0"}
   "ctypes" {>= "0.23"}
   "ctypes-foreign" {>= "0.23"}
+  "ocamlformat" {= "0.29.0" & with-dev-setup}
+  "ocaml-lsp-server" {with-dev-setup}
   "printbox" {>= "0.12"}
   "printbox-text" {>= "0.12"}
   "pprint" {>= "20230830"}

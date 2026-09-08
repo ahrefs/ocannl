@@ -48,8 +48,9 @@ dune runtest
 # Run tests for a specific backend (bash syntax)
 OCANNL_BACKEND=cuda dune runtest
 
-# Install dependencies (OCaml >= 5.3)
-opam install . --deps-only
+# Install dependencies (OCaml >= 5.3). --with-dev-setup adds ocamlformat (pinned to the
+# .ocamlformat version) and ocaml-lsp-server, which --deps-only alone never installs
+opam install . --deps-only --with-test --with-dev-setup
 
 # Install with optional backends  
 opam install cudajit  # for CUDA backend
@@ -60,7 +61,7 @@ opam install hipjit   # for AMD HIP backend
 
 **Windows shells**: use **Git Bash** (MSYS) — not a Cygwin bash — and source `tools/opam-env.sh` before building: `opam env` emits cygwin-style paths that leave an MSYS session with a half-working toolchain (dune found, linking broken) until the script rewrites them. Route dune through `tools/dune-quiet.sh`, which filters the benign binutils warnings that flood link stderr on Windows while preserving dune's exit status. How to tell the two bashes apart, and why Cygwin's is refused (gh-ocannl-662), is in docs/agent-notes/build-and-test.md.
 
-**New ppx-expectation files** (`test/ppx/*_expected.ml`, compared against pretty-printed ppx output) must stay unformatted — add them to `.ocamlformat-ignore`, or the unattended formatting sweep fails to converge and aborts.
+**Format before the first push** (gh-ocannl-938): CI's `fmt` job runs `dune build @fmt` on every PR and is red on any unformatted `.ml`, `.mli` or dune file, so run `dune fmt` before pushing — a formatting-only fix push costs a CI round AND a review round, since reviews fire on every push. Order matters where a file carries `~here` goldens: `dune fmt`, then the test run, then promote, because a reformat shifts the `file:line` those goldens embed. Prose re-wrapped by hand in a review-fix commit is the usual way an unformatted hunk slips in; `dune fmt` after editing prose too. Master is always formatted, so `dune fmt` from a branch touches only your own files. New ppx-expectation files (`test/ppx/*_expected.ml`, compared against pretty-printed ppx output) must stay unformatted — add them to `.ocamlformat-ignore` (`test/operations/ocamlformat_ignore_scan` enforces it), or `@fmt` reformats them and their test promotes them back, forever. The formatter is pinned by `.ocamlformat` and installed locally by `opam install . --deps-only --with-dev-setup`.
 
 ## Architecture Overview
 

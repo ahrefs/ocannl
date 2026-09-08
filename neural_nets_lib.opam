@@ -17,6 +17,8 @@ depends: [
   "dune" {>= "3.20"}
   "dune-site"
   "base" {>= "v0.17.0"}
+  "ocamlformat" {= "0.29.0" & with-dev-setup}
+  "ocaml-lsp-server" {with-dev-setup}
   "arrayjit" {= version}
   "dataprep" {>= "0.1.0"}
   "yojson" {>= "2.0.0"}

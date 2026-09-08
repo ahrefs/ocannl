@@ -51,10 +51,16 @@
    (>= 0.23))
   (ctypes-foreign
    (>= 0.23))
-  ; opam 2.2.0 has with-dev-setup. Is it supported, what's the syntax?
-  ; (ocamlformat
-  ;  (>= 0.27.0)
-  ;  :with-dev-setup)
+  ; Development tooling, behind opam's `with-dev-setup` filter: `opam install . --deps-only
+  ; --with-dev-setup` installs it, a plain `--deps-only` (and so every CI solve) does not, which is
+  ; why a fresh switch has no ocamlformat until asked. ocamlformat is pinned to the release that
+  ; `.ocamlformat` names -- that file makes any other release refuse to run, this line makes opam
+  ; install the one it accepts; move the two together (a mismatch fails loudly at the first `@fmt`).
+  (ocamlformat
+   (and
+    (= 0.29.0)
+    :with-dev-setup))
+  (ocaml-lsp-server :with-dev-setup)
   (printbox
    (>= 0.12))
   ; FIXME: Depend on printbox-text > 0.12.0 when it is released.
@@ -136,10 +142,12 @@
   dune-site
   (base
    (>= v0.17.0))
-  ; opam 2.2.0 has with-dev-setup. Is it supported, what's the syntax?
-  ; (ocamlformat
-  ;  (>= 0.26.2)
-  ;  :with-dev-setup)
+  ; The same development tooling as arrayjit above, same pin, same filter.
+  (ocamlformat
+   (and
+    (= 0.29.0)
+    :with-dev-setup))
+  (ocaml-lsp-server :with-dev-setup)
   (arrayjit
    (= :version))
   (dataprep

@@ -1,5 +1,5 @@
-# Commits to hide from `git blame`: repo-wide formatting sweeps.
-# tools/format-sweep.sh appends each sweep's SHA here in a follow-up commit.
+# Commits to hide from `git blame`: the repo-wide formatting sweeps that ran before formatting
+# became a per-PR CI gate (the `fmt` job in ci.yml).
 # GitHub's blame view honors this file automatically; locally, run once:
 #   git config blame.ignoreRevsFile .git-blame-ignore-revs
 
