@@ -5779,7 +5779,11 @@ and stmt_reads_cell ~tn ~idcs (llc : t) =
   (* A guard's condition reads too: [If (a[i] == 0) local = 1] inside the scope that writes [a[i]]
      is a read of the cell the scope writes back. *)
   | If { cond = c, _; body } -> reads_cell ~tn ~idcs c || stmt_reads_cell ~tn ~idcs body
-  | For_loop { body; _ } | Scan_loop { body; _ } -> stmt_reads_cell ~tn ~idcs body
+  | For_loop { body; _ } -> stmt_reads_cell ~tn ~idcs body
+  (* A scan's carried initializers are reads the loop performs before its first iteration. *)
+  | Scan_loop { carried; body; _ } ->
+      List.exists carried ~f:(fun c -> reads_cell ~tn ~idcs c.init)
+      || stmt_reads_cell ~tn ~idcs body
   | Set { llsc; _ } | Set_local (_, llsc) -> reads_cell ~tn ~idcs llsc
   | _ -> false
 
@@ -5805,14 +5809,15 @@ let has_accumulating_cell (llc : t) : bool =
    against a per-thread local array the renderer declares once per thread), whose cell does not
    depend on the lane index, and which the LEVEL reads anywhere — in the store's own value, in a
    guard's condition, in a sibling local staging the accumulator ([tmp = acc[0]; acc[0] = tmp +
-   x[i]]), before or after the store — is a read-modify-write every lane performs on one cell: a
-   race under any hardware binding, whatever else the level holds. Reads are judged as codegen
-   renders them, through any index that may alias the cell (two different literal positions in a
-   slot are the one provable disjointness) or a dynamic gather from the node; a projection's
-   discarded operand, an arm a literal condition never selects, a dead level and a false guard read
-   nothing. The explicitly staged tree ([hardware_workgroup_reduce.ml]: [If (i < stride) partial[i]
-   += partial[i + stride]], [If (i == 0) out[0] = partial[0]]) fails the test: its per-lane cells
-   mention the lane, and the level never reads [out[0]].
+   x[i]]), in a scan's carried initializer ([acc[0]] seeding the state the body stores back), before
+   or after the store — is a read-modify-write every lane performs on one cell: a race under any
+   hardware binding, whatever else the level holds. Reads are judged as codegen renders them,
+   through any index that may alias the cell (two different literal positions in a slot are the one
+   provable disjointness) or a dynamic gather from the node; a projection's discarded operand, an
+   arm a literal condition never selects, a dead level and a false guard read nothing. The
+   explicitly staged tree ([hardware_workgroup_reduce.ml]: [If (i < stride) partial[i] += partial[i
+   + stride]], [If (i == 0) out[0] = partial[0]]) fails the test: its per-lane cells mention the
+   lane, and the level never reads [out[0]].
 
    There is deliberately NO exemption for a guard "pinning" the lane ([If (i == 0) acc += …]). Six
    review rounds on staging#674 each found another way such a pin is not one thread: a pin value
@@ -5860,7 +5865,9 @@ let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(shared : Tnode.t ->
     | For_loop { from_; to_; _ } when to_ < from_ -> false
     | If { cond = Constant c, _; _ } when Float.equal c 0. -> false
     | If { cond = c, _; body } -> reads ~tn ~idcs c || stmt_reads ~tn ~idcs body
-    | For_loop { body; _ } | Scan_loop { body; _ } -> stmt_reads ~tn ~idcs body
+    | For_loop { body; _ } -> stmt_reads ~tn ~idcs body
+    | Scan_loop { carried; body; _ } ->
+        List.exists carried ~f:(fun c -> reads ~tn ~idcs c.init) || stmt_reads ~tn ~idcs body
     | Set { llsc; _ } | Set_local (_, llsc) -> reads ~tn ~idcs llsc
     | Set_dynamic { llsc; dyn_value; _ } -> reads ~tn ~idcs llsc || reads ~tn ~idcs (fst dyn_value)
     | _ -> false

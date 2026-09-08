@@ -717,6 +717,11 @@ let claim_where_arm_no_read =
   "a Where arm a literal condition never selects reads nothing: s[0] = Where (1, 3, s[0]) beside a \
    sibling is a plain store and the level renders with 3"
 
+let claim_scan_init_read_refused =
+  "a scan whose carried initializer reads the accumulator and whose body stores the carried state \
+   back (prev = s[0]; s[0] = prev + x[i]) is the same read-modify-write through the loop's state: \
+   refused where a lane index is bound (GPU) or the full serial sum (CPU)"
+
 let claim_staged_form_renders =
   "the sound single-lane form — per-lane cells combined under lane-selecting guards and a plain \
    final store — is not a race: it renders (GPU) or the barrier it needs is rejected (CPU)"
@@ -1177,4 +1182,39 @@ let () =
   if on_gpu || on_cpu then
     p claim_where_arm_no_read
       (approx (run ~name:"race_where_wshfl" ~transform:where_transform ws2) 3.)
-  else skipped claim_where_arm_no_read
+  else skipped claim_where_arm_no_read;
+  (* A scan whose carried initializer reads the accumulator and whose body stores the carried state
+     back: [prev = s[0]; s[0] = prev + x[i]] under [k = 0..0] (Codex P1 on staging#674). The read
+     sits in the initializer, outside the body the level walks. *)
+  let state =
+    Tn.create (Tn.Specified single) ~id:999008 ~label:[ "race_state" ]
+      ~unpadded_dims:(lazy [| 1 |])
+      ~padding:(lazy None)
+      ()
+  in
+  Tn.update_memory_mode state Tn.Virtual 99;
+  let scx = TDSL.ndarray gv ~label:[ "race_scx" ] ~output_dims:[ n ] () in
+  let%op scs = scx ++ "i=>0" in
+  let scan_init_transform =
+    reduce_transform ~n scs.Tensor.value ~body_of:(fun i ->
+        let k = Idx.get_symbol () in
+        let prev = LL.get_scope state and next = LL.get_scope state in
+        let carried : LL.carried = { prev; next; init = Get (scs.Tensor.value, [| f0 |]) } in
+        let sum : LL.scalar_t =
+          Binop (Ir.Ops.Add, (Get_local prev, single), (Get (scx.Tensor.value, [| it i |]), single))
+        in
+        LL.Scan_loop
+          {
+            index = k;
+            from_ = 0;
+            to_ = 0;
+            direction = LL.Forward;
+            carried = [ carried ];
+            body =
+              LL.Seq
+                ( LL.Set { tn = scs.Tensor.value; idcs = [| f0 |]; llsc = sum; debug = "" },
+                  LL.Set_local (next, sum) );
+          })
+  in
+  refused_leg claim_scan_init_read_refused ~name:"race_scaninit_wshfl"
+    ~transform:scan_init_transform scs ~cpu_value:expected_sum

@@ -34,3 +34,4 @@ a self-update under a statically false guard beside a sibling executes nothing: 
 the accumulator staged through a sibling statement (scratch[0] = s[0]; s[0] = scratch[0] + x[i]) is the same read-modify-write across two statements: refused where a lane index is bound (GPU) or the full serial sum (CPU): true
 a read that aliases the written cell through another index (s[0] = s[k] + x[i] under k = 0..0) is a self-read: refused where a lane index is bound (GPU) or the full serial sum (CPU): true
 a Where arm a literal condition never selects reads nothing: s[0] = Where (1, 3, s[0]) beside a sibling is a plain store and the level renders with 3: true
+a scan whose carried initializer reads the accumulator and whose body stores the carried state back (prev = s[0]; s[0] = prev + x[i]) is the same read-modify-write through the loop's state: refused where a lane index is bound (GPU) or the full serial sum (CPU): true
