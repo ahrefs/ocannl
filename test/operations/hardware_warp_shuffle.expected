@@ -19,3 +19,6 @@ the f16 four-warp rival-rendering values are pairwise distinct: true
 under Fp16_wide an f16 single-warp Workgroup_reduce accumulates at the widened residency (32 terms narrow once to 32.15625, not the 32.125 an f16-staged tree or the 32.09375 a per-step narrowing gives): true
 under Fp16_wide an f16 four-warp Workgroup_reduce stages its per-warp partials at the widened residency (128 terms narrow once to 128.625, not the 128.5 an f16-staged tree or the 128.125 a per-step narrowing gives): true
 under Fp16_wide the emitted f16 shuffle declares its staging register and its per-warp slots at the residency type, never at half storage: true
+a Workgroup_reduce level holding a sibling statement beside a lane-invariant self-updating Set is refused where a lane index is bound (GPU: the hardware binding would race the cell) or runs serially (CPU): true
+a Workgroup_reduce level holding a data-dependent guard over a lane-invariant self-updating Set is refused where a lane index is bound (GPU: the guard leaves several lanes on the cell) or runs serially (CPU): true
+a lane-invariant self-updating Set under a guard pinning the lane index to one value is not a race: the hardware binding renders it and one lane performs the update (GPU), or the serial loop admits the one iteration (CPU): true

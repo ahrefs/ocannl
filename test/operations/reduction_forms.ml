@@ -1511,9 +1511,12 @@ let members =
       ~available:(fun _ -> on_cpu)
       ~sched:(fun g -> [ Sched.Retype { axis = g.k; ty = LL.Workgroup_reduce } ]);
     (* The peel-declining bodies under the two retype kinds whose renderings hold the accumulator
-       outside the cell. Under a bound lane index a declined [Workgroup_reduce] level takes the
-       hardware binding, which races a shared cell, so those two are evaluable where the level
-       serializes; the Vectorized arm's decline has a defined exit on every backend. *)
+       outside the cell. Under a bound lane index a declined [Workgroup_reduce] level is REFUSED
+       loudly rather than handed to the hardware binding, which would race the shared cell: the
+       lane-invariant self-updating [Set] is gh-ocannl-950's race criterion, and
+       [hardware_warp_shuffle] pins the refusal on the GPUs. A refusal has no value to compare, so
+       those two are evaluable where the level serializes; the Vectorized arm's decline has a
+       defined exit on every backend. *)
     member "sibling-vectorized" "a second statement in the level, Retyped to Vectorized"
       ~shape:Side_write ~expect:Rmw ~peel:No_localization ~reference:Per_step
       ~expect_axis:LL.Vectorized ~sched:(fun g ->

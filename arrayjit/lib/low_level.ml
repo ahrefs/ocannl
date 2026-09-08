@@ -5747,31 +5747,32 @@ let scope_accum_updates ~tn ~idcs ~id sbody =
    recorded every non-reduction virtualized scope in a loop as a declined reduction site, which
    inflates the decline count and lets a "the census is non-empty and nothing localized" claim pass
    over a routine with no reduction in it (Codex P2, round 2). *)
+(* Whether a value reads the cell [tn[idcs]] — the recurrence test {!has_accumulating_cell} and
+   {!racing_lane_invariant_update} share. *)
+let rec reads_cell ~tn ~idcs (sc : scalar_t) =
+  let arg (s, _prec) = reads_cell ~tn ~idcs s in
+  match sc with
+  | Get (tn', idcs') ->
+      Tnode.equal tn tn'
+      && Array.length idcs = Array.length idcs'
+      && Array.for_all2_exn idcs idcs' ~f:Indexing.equal_axis_index
+  (* A scope NESTED inside a larger value — [a[i] = f(scope { … a[i] … })] — is a recurrence like
+     any other read; the scope that IS the written value is the case above, judged by its shape. *)
+  | Local_scope { body; _ } -> stmt_reads_cell ~tn ~idcs body
+  | Get_dynamic { dyn_value; _ } -> arg dyn_value
+  | Ternop (_, a, b, c) -> arg a || arg b || arg c
+  | Binop (_, a, b) -> arg a || arg b
+  | Unop (_, a) -> arg a
+  | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> false
+
+and stmt_reads_cell ~tn ~idcs (llc : t) =
+  match llc with
+  | Seq (a, b) -> stmt_reads_cell ~tn ~idcs a || stmt_reads_cell ~tn ~idcs b
+  | If { body; _ } | For_loop { body; _ } | Scan_loop { body; _ } -> stmt_reads_cell ~tn ~idcs body
+  | Set { llsc; _ } | Set_local (_, llsc) -> reads_cell ~tn ~idcs llsc
+  | _ -> false
+
 let has_accumulating_cell (llc : t) : bool =
-  let rec reads_cell ~tn ~idcs (sc : scalar_t) =
-    let arg (s, _prec) = reads_cell ~tn ~idcs s in
-    match sc with
-    | Get (tn', idcs') ->
-        Tnode.equal tn tn'
-        && Array.length idcs = Array.length idcs'
-        && Array.for_all2_exn idcs idcs' ~f:Indexing.equal_axis_index
-    (* A scope NESTED inside a larger value — [a[i] = f(scope { … a[i] … })] — is a recurrence like
-       any other read; the scope that IS the written value is the case above, judged by its
-       shape. *)
-    | Local_scope { body; _ } -> stmt_reads_cell ~tn ~idcs body
-    | Get_dynamic { dyn_value; _ } -> arg dyn_value
-    | Ternop (_, a, b, c) -> arg a || arg b || arg c
-    | Binop (_, a, b) -> arg a || arg b
-    | Unop (_, a) -> arg a
-    | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> false
-  and stmt_reads_cell ~tn ~idcs (llc : t) =
-    match llc with
-    | Seq (a, b) -> stmt_reads_cell ~tn ~idcs a || stmt_reads_cell ~tn ~idcs b
-    | If { body; _ } | For_loop { body; _ } | Scan_loop { body; _ } ->
-        stmt_reads_cell ~tn ~idcs body
-    | Set { llsc; _ } | Set_local (_, llsc) -> reads_cell ~tn ~idcs llsc
-    | _ -> false
-  in
   let rec loop (llc : t) =
     match llc with
     | Seq (a, b) -> loop a || loop b
@@ -5787,6 +5788,45 @@ let has_accumulating_cell (llc : t) : bool =
     | _ -> false
   in
   loop llc
+
+(* gh-ocannl-950: the RACE criterion for a level whose index a backend binds to a lane. A [Set]
+   under the level whose cell does not depend on the lane index, and whose value reads that very
+   cell, is a read-modify-write every lane performs on one cell — a race under any hardware binding,
+   whatever else the level holds. The explicitly staged tree ([hardware_workgroup_reduce.ml]: [If (i
+   < stride) partial[i] += partial[i + stride]], [If (i == 0) out[0] = partial[0]]) fails the test
+   on both counts: its per-lane cells mention the lane, and its final store reads no cell of its
+   own. A guard that PINS the lane to one value ([i == e] with [e] free of [i]) selects a single
+   lane, so what it encloses is not raced and is skipped; a range guard ([i < c]) or a
+   data-dependent one leaves several lanes on the cell and does not exempt it. [Set_local] and
+   [Zero_out] are never a race: a scope local is per lane, and every lane zeroing one cell writes
+   the same bytes. Returns the first racing statement's node and cell. *)
+let racing_lane_invariant_update ~(lane : Indexing.symbol) (llc : t) :
+    (Tnode.t * Indexing.axis_index array) option =
+  let is_lane = function
+    | Embed_index (Indexing.Iterator s) -> Indexing.equal_symbol s lane
+    | _ -> false
+  in
+  let pins_lane (cond : scalar_t) =
+    match cond with
+    | Binop (Ops.Cmpeq, (a, _), (b, _)) ->
+        (is_lane a && not (scalar_mentions_symbol lane b))
+        || (is_lane b && not (scalar_mentions_symbol lane a))
+    | _ -> false
+  in
+  let rec go (llc : t) =
+    match llc with
+    | Seq (a, b) -> ( match go a with Some _ as r -> r | None -> go b)
+    | For_loop { body; _ } | Scan_loop { body; _ } -> go body
+    | If { cond = c, _; body } -> if pins_lane c then None else go body
+    | Set { tn; idcs; llsc; _ } ->
+        if
+          (not (Array.exists idcs ~f:(axis_index_mentions_symbol lane)))
+          && reads_cell ~tn ~idcs llsc
+        then Some (tn, idcs)
+        else None
+    | _ -> None
+  in
+  go llc
 
 type peel_guard_verdict = Guard_confined | Guard_lane_private | Guard_lane_private_unresolved
 [@@deriving sexp, equal, compare]

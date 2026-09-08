@@ -378,6 +378,16 @@ val accum_local_update_parts : id:scope_id -> scalar_t -> (Ops.binop * scalar_t)
     SIMD reduction rendering uses it to fold vector chains into a widened accumulator's scope local
     (gh-ocannl-639), and {!peel_accum_nest}'s scope-form validation is built on it. *)
 
+val racing_lane_invariant_update :
+  lane:Indexing.symbol -> t -> (Tnode.t * Indexing.axis_index array) option
+(** The race criterion for a level whose index a backend binds to a lane (gh-ocannl-950): the first
+    [Set] under it whose cell does not depend on [lane] and whose value reads that cell — a
+    read-modify-write every lane performs on one cell, a race under any hardware binding — unless it
+    is enclosed by a guard that pins [lane] to one value ([lane == e], [e] free of [lane]). Per-lane
+    cells (which mention the lane), stores that read no cell of their own, [Set_local] and
+    [Zero_out] are not races; a range guard or a data-dependent guard does not exempt what it
+    encloses. *)
+
 val has_accumulating_cell : t -> bool
 (** Whether the tree holds a SELF-RECURRENCE: some [Set] whose value reads the very cell it writes
     (gh-ocannl-733). This is what makes the localizing peel a live question at a level, and it is

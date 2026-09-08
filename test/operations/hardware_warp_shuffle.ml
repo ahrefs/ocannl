@@ -640,3 +640,124 @@ let () =
           && not (has "half wred_partials_"))
       end
       else skipped claim_f16_wide_types)
+
+(* --- gh-ocannl-950: the RACE criterion for a bound lane index. gh-ocannl-754's arm refuses an
+   unguarded nest the shuffle cannot render; every other body the peel declined — a sibling
+   statement beside the update, a data-dependent guard over it — fell through to the hardware
+   binding, which is the correct rendering of an explicitly staged tree
+   ([hardware_workgroup_reduce]) and a silent race for these: every lane read-modify-writes the one
+   cell [s[0]]. The criterion that tells the two apart is on the CELL, not the nest: a [Set] whose
+   cell does not mention the lane and whose value reads that cell, unless a guard pins the lane to
+   one value. So the two bodies below are refused where a lane index is bound, and the third — the
+   same update under [If (i == 0)] — is not a race and renders, one lane performing the update. On
+   the C backends [warp_size = 0], the loop is serial and each body has its serial value. *)
+
+let claim_sibling_refused =
+  "a Workgroup_reduce level holding a sibling statement beside a lane-invariant self-updating Set \
+   is refused where a lane index is bound (GPU: the hardware binding would race the cell) or runs \
+   serially (CPU)"
+
+let claim_data_guard_refused =
+  "a Workgroup_reduce level holding a data-dependent guard over a lane-invariant self-updating Set \
+   is refused where a lane index is bound (GPU: the guard leaves several lanes on the cell) or \
+   runs serially (CPU)"
+
+let claim_lane_pinned_renders =
+  "a lane-invariant self-updating Set under a guard pinning the lane index to one value is not a \
+   race: the hardware binding renders it and one lane performs the update (GPU), or the serial \
+   loop admits the one iteration (CPU)"
+
+let () =
+  let n = 32 in
+  let gv = Array.init n ~f:(fun k -> (Float.of_int (k % 9) *. 0.5) -. 2.) in
+  let iprec = Ir.Ops.index_prec () in
+  let refused ~name ~transform t =
+    try
+      ignore (run ~name ~transform t : float);
+      None
+    with Invalid_argument msg -> Some msg
+  in
+  let update s x i =
+    LL.Set
+      {
+        tn = s;
+        idcs = [| f0 |];
+        llsc = Binop (Ir.Ops.Add, (Get (s, [| f0 |]), single), (Get (x, [| it i |]), single));
+        debug = "";
+      }
+  in
+  (* Sibling: a per-lane store into a fresh kernel-local array, registered in the traced store the
+     way [hardware_workgroup_reduce] registers its tile. Per-lane, so the sibling itself is no race;
+     it is what keeps the level from being a single accumulation statement. *)
+  let side =
+    Tn.create (Tn.Specified single) ~id:999005 ~label:[ "race_side" ]
+      ~unpadded_dims:(lazy [| n |])
+      ~padding:(lazy None)
+      ()
+  in
+  Tn.update_memory_mode side Tn.Local 992;
+  let sx = TDSL.ndarray gv ~label:[ "race_sx" ] ~output_dims:[ n ] () in
+  let%op ss = sx ++ "i=>0" in
+  let sibling_transform opt =
+    ignore (LL.get_node opt.LL.traced_store side : LL.traced_array);
+    reduce_transform ~n ss.Tensor.value opt ~body_of:(fun i ->
+        LL.Seq
+          ( update ss.Tensor.value sx.Tensor.value i,
+            LL.Set
+              { tn = side; idcs = [| it i |]; llsc = Get (sx.Tensor.value, [| it i |]); debug = "" }
+          ))
+  in
+  let expected_sum = Array.fold gv ~init:0. ~f:( +. ) in
+  if on_gpu then
+    match refused ~name:"race_sibling_wshfl" ~transform:sibling_transform ss with
+    | Some msg ->
+        p claim_sibling_refused (String.is_substring msg ~substring:"race the read-modify-write")
+    | None -> p claim_sibling_refused false
+  else if on_cpu then
+    p claim_sibling_refused
+      (approx (run ~name:"race_sibling_wshfl" ~transform:sibling_transform ss) expected_sum)
+  else skipped claim_sibling_refused;
+  (* Data guard: the update admitted only for positive terms. *)
+  let dx = TDSL.ndarray gv ~label:[ "race_dx" ] ~output_dims:[ n ] () in
+  let%op ds = dx ++ "i=>0" in
+  let data_guard_transform =
+    reduce_transform ~n ds.Tensor.value ~body_of:(fun i ->
+        LL.If
+          {
+            cond =
+              ( Binop
+                  (Ir.Ops.Cmplt, (Constant 0., single), (Get (dx.Tensor.value, [| it i |]), single)),
+                single );
+            body = update ds.Tensor.value dx.Tensor.value i;
+          })
+  in
+  let expected_positive =
+    Array.fold gv ~init:0. ~f:(fun acc x -> if Float.(x > 0.) then acc +. x else acc)
+  in
+  if on_gpu then
+    match refused ~name:"race_data_guard_wshfl" ~transform:data_guard_transform ds with
+    | Some msg ->
+        p claim_data_guard_refused (String.is_substring msg ~substring:"race the read-modify-write")
+    | None -> p claim_data_guard_refused false
+  else if on_cpu then
+    p claim_data_guard_refused
+      (approx
+         (run ~name:"race_data_guard_wshfl" ~transform:data_guard_transform ds)
+         expected_positive)
+  else skipped claim_data_guard_refused;
+  (* Pinned lane: the same update under [If (i == 0)]. Not a race under any binding, and the value
+     says one lane (one iteration) performed it: the allocation-zeroed cell plus the first term. *)
+  let px = TDSL.ndarray gv ~label:[ "race_px" ] ~output_dims:[ n ] () in
+  let%op ps = px ++ "i=>0" in
+  let pinned_transform =
+    reduce_transform ~n ps.Tensor.value ~body_of:(fun i ->
+        LL.If
+          {
+            cond = (Binop (Ir.Ops.Cmpeq, (Embed_index (it i), iprec), (Constant 0., iprec)), iprec);
+            body = update ps.Tensor.value px.Tensor.value i;
+          })
+  in
+  if on_gpu || on_cpu then
+    p claim_lane_pinned_renders
+      (approx (run ~name:"race_pinned_wshfl" ~transform:pinned_transform ps) gv.(0))
+  else skipped claim_lane_pinned_renders

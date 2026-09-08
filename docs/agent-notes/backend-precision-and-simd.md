@@ -728,6 +728,22 @@ files.
   `.so` was correct. Kernels now link with `-Wl,-Bsymbolic` on ELF (`Cc_backend.kernel_link_flags`),
   binding a kernel's references to its own definitions as macOS's two-level namespace always did;
   the diagnosis recipe is `LD_DEBUG=bindings` on a driver that preloads the executable's stubs.
+- **A bound `Workgroup_reduce` level refuses on the RACE criterion, not the nest criterion**
+  (gh-ocannl-950). gh-ocannl-754's arm refuses an UNGUARDED nest the shuffle cannot render, and
+  everything else the peel declined (`Accum_not_a_nest`: a sibling statement, a data-dependent
+  guard, an inner nest) fell through to the hardware binding — the correct rendering of the
+  explicitly staged tree (`hardware_workgroup_reduce.ml`) and a silent race for `out[r] += x[r,k];
+  side[r,k] = …` or `If (mask[k] < 1) out[r] += x[r,k]`, whose every lane read-modify-writes
+  `out[r]`. `Low_level.racing_lane_invariant_update ~lane` is what tells them apart: a `Set` whose
+  cell does not mention the lane and whose value reads that cell, not enclosed by a guard that
+  PINS the lane to one value (`i == e`), is a race under any binding; the staged tree's per-lane
+  cells mention the lane and its `If (i == 0) out[0] = partial[0]` reads no cell of its own. A
+  range guard (`i < c`) or a data guard leaves several lanes on the cell and exempts nothing.
+  `try_warp_reduce`'s `None` arm raises with the cell named; `hardware_warp_shuffle` pins the two
+  refusals (sibling, data guard) and the pinned-lane control on the GPUs, and
+  `reduction_forms`' `sibling-workgroup-reduce`/`data-guard-workgroup-reduce` stay cpu-only
+  because a refusal has no value to compare — serializing the level under one lane was the
+  alternative, rejected as a silent 32x slowdown no schedule would pick on purpose.
 - **A "packmma" timing is not evidence that anything tensorized.** A `Tile_mma` whose register-tile
   preconditions fail renders the scalar fallback and the run still reports under whatever the
   variant was named — the column extent below the compute vector width is the easiest way in (at
