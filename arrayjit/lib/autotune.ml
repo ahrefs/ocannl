@@ -361,10 +361,12 @@ let search_measurements_cacheable ~nothing_timed ~timings_contended =
    routine gets depth 1 and is then measured exactly as [Isolated] measures it; later target-sized
    batch probes require a depth-separated marginal confirmation, so one stall-inflated window does
    not silently take that same path. The 10 ms target is also the Metal long-command-buffer safety
-   bound established by gh-ocannl-828: on M4 Max / macOS 26.6.2, the standalone SharedEvent chain
-   changed scheduling at about 1.2 s per kernel, while [queued_batch_depth] is already 1 at 10 ms --
-   about 120x below that regime. See [benchmarks/runners/ocannl/metal_queue_probe.ml] for the
-   raw-queue/event-chain discriminator. *)
+   bound established by gh-ocannl-828: on M4 Max / macOS 26.6.2, two UNORDERED command buffers (the
+   probe's raw-queued and wait-after-kernel arms -- the latter was misread as the backend's
+   SharedEvent chain until gh-ocannl-909) changed scheduling at about 1.2 s per kernel, while
+   [queued_batch_depth] is already 1 at 10 ms -- about 120x below that regime. The backend's own
+   launches wait for the previous all-work signal and serialize at every length. See
+   [benchmarks/runners/ocannl/metal_queue_probe.ml] for the four-arm discriminator. *)
 let queued_batch_ms = 10.
 let max_queue_depth = 2048
 let legacy_queue_depth = 200
