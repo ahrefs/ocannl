@@ -514,10 +514,13 @@ than the driver (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` at module load), run it wi
   sweep inherited — `narrow_compute_f32`, `cc_vector_bytes`, `cc_backend_arch_flags`, an
   `autotune_*` outside the payload, and whatever key is added next — is **recorded** rather than
   pinned (gh-ocannl-720): the sweep reads the environment once, stamps it onto every OCANNL row as
-  `ambient_ocannl_env`, and prints it in the report header beside the measurement boxes (`none`
-  for a clean shell, and `not recorded` for rows predating the stamp — printed alongside the
-  recorded environments in a report that mixes the two, never replaced by them), so a number is read against the
-  configuration it was taken in rather than an assumed-clean one. Nothing is stripped or refused:
+  `ambient_ocannl_env`, and prints it in the report header beside the measurement boxes, as a JSON
+  object (`none` for a clean shell, `not recorded` where no OCANNL row carried the stamp), so a
+  number is read against the configuration it was taken in rather than an assumed-clean one. The
+  environment is a fact about the *sweep*: the report says it even when every OCANNL cell failed
+  and no row survives to carry it, the failure records carry it too, and a set of rows that does
+  not agree on it is refused rather than rendered — two header lines could say only that two
+  environments exist somewhere in the tables, never which row ran under which. Nothing is stripped or refused:
   the sweep dispatches `OCANNL_BACKEND` itself, and `OCANNL_AUTOTUNE_LOG` /
   `OCANNL_AUTOTUNE_CACHE_DIR` are documented ways to run one, so a filter would have to guess —
   and the keys worth catching are the ones nobody has enumerated yet.
