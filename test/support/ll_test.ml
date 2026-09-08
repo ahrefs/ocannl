@@ -190,6 +190,43 @@ let scatter_add ~tn ~idcs ~dyn_axis ~(dyn_value : LL.scalar_arg) (addend : LL.sc
   scatter ~tn ~idcs ~dyn_axis ~dyn_value
     (LL.Binop (Ops.Add, (gather ~tn ~idcs ~dyn_axis ~dyn_value, value_prec), addend))
 
+(** {2 Cooperative tile multiply-accumulate}
+
+    {!Ir.Low_level.Tile_mma}: [d[i,j] += Σ_{l<k} a[i,l] * b[l,j]] over a block of the declared
+    extents, executed jointly by the threads of a [Workgroup] lane axis (tensor cores /
+    [simdgroup_matrix] / the register-tiled CPU GEBP kernel), carrying a scalar micro-kernel
+    [fallback] the renderer falls back to when it declines the block. Hand-built IR is the only way
+    to put one in front of a pass: schedule transforms mint [Tile_mma] AFTER the optimization
+    pipeline, and [Ir.Low_level.optimize] rejects one outright — so a test that wants a tile in a
+    routine builds the scalar twin, optimizes THAT, and substitutes the tile into the result.
+
+    [ldd]/[lda]/[ldb] default to the declared extents read as a contiguous row-major block —
+    [ldd = n], [lda = if ta then m else k], [ldb = if tb then k else n] — a purely syntactic default
+    off the tile's own geometry, NOT a read of the operands' dimensions: an operand whose tile is a
+    window into a wider array, or whose tile major axis sits outside its minor two (a batched site,
+    gh-ocannl-528), passes its stride explicitly. [lane] defaults to a fresh symbol and [tile] to
+    [None], the renderer's own choice of C-tile geometry (gh-ocannl-619). *)
+let tile_mma ?(ta = false) ?(tb = false) ?(m = 2) ?(n = 2) ?(k = 2) ?ldd ?lda ?ldb ?tile ?lane
+    ~(d : Tn.t * Idx.axis_index array) ~(a : Tn.t * Idx.axis_index array)
+    ~(b : Tn.t * Idx.axis_index array) (fallback : LL.t) : LL.t =
+  LL.Tile_mma
+    {
+      d;
+      a;
+      b;
+      ta;
+      tb;
+      m;
+      n;
+      k;
+      ldd = Option.value ldd ~default:n;
+      lda = Option.value lda ~default:(if ta then m else k);
+      ldb = Option.value ldb ~default:(if tb then k else n);
+      lane = (match lane with Some s -> s | None -> sym ());
+      tile;
+      fallback;
+    }
+
 (** {1 Scalar builders} *)
 
 let c x : LL.scalar_t = LL.Constant x

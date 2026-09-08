@@ -371,23 +371,8 @@ let build (emit_dir : string) =
           to_ = 0;
           axis = LL.Workgroup;
           body =
-            LL.Tile_mma
-              {
-                d = (d, origin);
-                a = (a, origin);
-                b = (b, origin);
-                ta = false;
-                tb = false;
-                m = mma_m;
-                n = mma_n;
-                k = mma_k;
-                ldd = mma_n;
-                lda = mma_k;
-                ldb = mma_n;
-                lane;
-                tile = None;
-                fallback;
-              };
+            Ll_test.tile_mma ~m:mma_m ~n:mma_n ~k:mma_k ~lane ~d:(d, origin) ~a:(a, origin)
+              ~b:(b, origin) fallback;
         }
     in
     (fallback, tile)
