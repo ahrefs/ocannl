@@ -208,24 +208,13 @@ let part2 () =
   p "a virtualization-inlined and a schedule-minted scope render differently"
     (not (String.equal inlined_text minted_text));
   let lane = sym () in
+  let origin = [| Idx.Fixed_idx 0 |] in
+  (* Every extent and stride spelled out rather than defaulted: the golden below is the rendering of
+     exactly these numbers, and [ldd <> n] is what makes a rendering that confused the two
+     visible. *)
   let mma =
-    LL.Tile_mma
-      {
-        d = (d, [| Idx.Fixed_idx 0 |]);
-        a = (a, [| Idx.Fixed_idx 0 |]);
-        b = (b, [| Idx.Fixed_idx 0 |]);
-        ta = false;
-        tb = true;
-        m = 16;
-        n = 8;
-        k = 8;
-        ldd = 16;
-        lda = 8;
-        ldb = 8;
-        lane;
-        tile = None;
-        fallback = LL.Noop;
-      }
+    Ll_test.tile_mma ~tb:true ~m:16 ~n:8 ~k:8 ~ldd:16 ~lda:8 ~ldb:8 ~lane ~d:(d, origin)
+      ~a:(a, origin) ~b:(b, origin) LL.Noop
   in
   let text, log = render ~mma:CR.Structural_mma mma in
   Stdio.printf "structural mma: %s\n" text;

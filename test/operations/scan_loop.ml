@@ -440,25 +440,8 @@ let () =
          let s = carry ~init:(c 0.) (state "sl_bad_mma_s") in
          let d = mk ~dims:[| 2; 2 |] "sl_bad_mma_d" in
          materialize d;
-         let tile =
-           LL.Tile_mma
-             {
-               d = (d, [| fixed 0; fixed 0 |]);
-               a = (d, [| fixed 0; fixed 0 |]);
-               b = (d, [| fixed 0; fixed 0 |]);
-               ta = false;
-               tb = false;
-               m = 2;
-               n = 2;
-               k = 2;
-               ldd = 2;
-               lda = 2;
-               ldb = 2;
-               lane = sym ();
-               tile = None;
-               fallback = set d [| fixed 0; fixed 0 |] (next s);
-             }
-         in
+         let origin = [| fixed 0; fixed 0 |] in
+         let tile = tile_mma ~d:(d, origin) ~a:(d, origin) ~b:(d, origin) (set d origin (next s)) in
          scan ~upto:(n - 1) i ~carried:[ s ]
            (seq tile
               (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s))))));
@@ -468,24 +451,10 @@ let () =
          let s = carry ~init:(c 0.) st in
          let d = mk ~dims:[| 2; 2 |] "sl_bad_mma_st_d" in
          materialize d;
+         let origin = [| fixed 0; fixed 0 |] in
          let tile =
-           LL.Tile_mma
-             {
-               d = (d, [| fixed 0; fixed 0 |]);
-               a = (d, [| fixed 0; fixed 0 |]);
-               b = (d, [| fixed 0; fixed 0 |]);
-               ta = false;
-               tb = false;
-               m = 2;
-               n = 2;
-               k = 2;
-               ldd = 2;
-               lda = 2;
-               ldb = 2;
-               lane = sym ();
-               tile = None;
-               fallback = set d [| fixed 0; fixed 0 |] (get st [| fixed 0 |]);
-             }
+           tile_mma ~d:(d, origin) ~a:(d, origin) ~b:(d, origin)
+             (set d origin (get st [| fixed 0 |]))
          in
          scan ~upto:(n - 1) i ~carried:[ s ]
            (seq
