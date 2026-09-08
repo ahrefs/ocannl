@@ -1434,6 +1434,11 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None, amb
     measurement_boxes = (
         list(next(iter(recorded_box_sets))) if recorded_box_sets else current_measurement_boxes
     )
+    # Rendered before anything is written, beside the measurement-box refusal above and for the
+    # same reason: a rejected re-render must leave the output directory as it found it. Raising
+    # after results.jsonl was overwritten would pair fresh raw rows with the report.md a previous
+    # sweep left there, which describes different measurements (Codex P2 round 4).
+    ambient_line = ambient_env_line(results, ambient)
     with open(out_dir / "results.jsonl", "w") as f:
         for r in results:
             # allow_nan=False so a non-finite value this sweep computed itself cannot slip out as
@@ -1457,7 +1462,7 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None, amb
         + ", ".join(measurement_boxes)
         + "\n"
     )
-    lines.append(ambient_env_line(results, ambient) + "\n")
+    lines.append(ambient_line + "\n")
     for workload in sorted({r["workload"] for r in results}):
         lines.append(f"\n## {workload}\n")
         rows = [r for r in results if r["workload"] == workload]

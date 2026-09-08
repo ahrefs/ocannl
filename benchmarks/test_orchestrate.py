@@ -3189,6 +3189,34 @@ class AmbientEnvTest(unittest.TestCase):
             orchestrate.ambient_env_line(rows, {"OCANNL_BACKEND": "cc"}),
         )
 
+    def test_a_refused_report_leaves_the_output_directory_as_it_found_it(self):
+        # The refusal happens before anything is written, like the measurement-box one: an output
+        # directory is persistent, so overwriting results.jsonl and then raising would pair fresh
+        # raw rows with the report.md a previous sweep left there, describing other measurements.
+        rows = [
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "cc", "default", [2.3026, 2.3010]), {"OCANNL_BACKEND": "cc"}
+            ),
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "metal", "default", [2.3026, 2.3010]),
+                {"OCANNL_BACKEND": "metal"},
+            ),
+        ]
+        orchestrate.parity_check(rows)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out / "results.jsonl").write_text('{"the previous sweep": true}\n')
+            (out / "report.md").write_text("# the previous sweep\n")
+            with self.assertRaises(ValueError):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    orchestrate.report(rows, out)
+
+            self.assertEqual(
+                (out / "results.jsonl").read_text(), '{"the previous sweep": true}\n'
+            )
+            self.assertEqual((out / "report.md").read_text(), "# the previous sweep\n")
+
     def test_the_unstamped_frameworks_are_not_a_lost_record(self):
         # Only OCANNL rows are in that agreement: torch and tinygrad rows carry no stamp by
         # design, and counting them would refuse every ordinary mixed-framework sweep.
