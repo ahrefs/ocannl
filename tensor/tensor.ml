@@ -33,6 +33,13 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 type diff = { grad : (Tn.t[@sexp.opaque]); zero_grads : Asgns.comp; backprop : Asgns.comp }
 [@@deriving sexp_of]
 
+(* Whether the tensor's code has been handed out (by [consume_forward_code], [take_forward_code] --
+   the [%cd] embedding path -- or [consume_backprop_code]). A root leaves the session's root map
+   both when a consumer embeds it and when it is consumed, and only the rejection message tells the
+   two apart. The cell is mutable and shared by every [{ t with ... }] copy, so the marker follows
+   the tensor rather than accumulating in session-global storage. *)
+type consumption = { mutable fwd_taken : bool; mutable bprop_taken : bool } [@@deriving sexp_of]
+
 module rec Self : sig
   type t = {
     params : (t, Self_comparator.comparator_witness) Set.t;
@@ -42,6 +49,7 @@ module rec Self : sig
     top_down_prec : bool;
     shape : Shape.t;
     children : subtensor list;
+    consumption : consumption;
   }
   [@@deriving sexp_of]
 
@@ -57,6 +65,7 @@ end = struct
     top_down_prec : bool;
     shape : Shape.t;
     children : subtensor list;
+    consumption : consumption;
   }
 
   and subtensor = { subtensor : t; embedded : bool }
@@ -99,21 +108,10 @@ type session_state = {
   mutable next_id : int;
   mutable forward_roots : t Map.M(Int).t;
   mutable backprop_roots : t Map.M(Int).t;
-  mutable consumed_forward : Set.M(Int).t;
-      (** Ids whose forward code [consume_forward_code] already handed out: a root leaves
-          [forward_roots] both when a consumer embeds it and when it is consumed, and only the
-          rejection message tells the two apart. *)
-  mutable consumed_backprop : Set.M(Int).t;
 }
 
 let session_state =
-  {
-    next_id = 0;
-    forward_roots = Map.empty (module Int);
-    backprop_roots = Map.empty (module Int);
-    consumed_forward = Set.empty (module Int);
-    consumed_backprop = Set.empty (module Int);
-  }
+  { next_id = 0; forward_roots = Map.empty (module Int); backprop_roots = Map.empty (module Int) }
 
 let bump_next_id id = session_state.next_id <- max session_state.next_id (id + 1)
 let get_next_id () = session_state.next_id
@@ -127,16 +125,21 @@ let is_bprop_root t = Map.mem session_state.backprop_roots t.value.id
 let remove_bprop_root t =
   session_state.backprop_roots <- Map.remove session_state.backprop_roots t.value.id
 
+let take_forward_code t =
+  remove_fwd_root t;
+  t.consumption.fwd_taken <- true;
+  t.forward
+
 let with_unchanged_roots ~f =
   let fwd_roots = session_state.forward_roots in
   let bprop_roots = session_state.backprop_roots in
-  let consumed_fwd = session_state.consumed_forward in
-  let consumed_bprop = session_state.consumed_backprop in
   let finally () =
     session_state.forward_roots <- fwd_roots;
     session_state.backprop_roots <- bprop_roots;
-    session_state.consumed_forward <- consumed_fwd;
-    session_state.consumed_backprop <- consumed_bprop
+    (* A root's code can only have been taken inside [f] if it was a root at entry, and a root is by
+       construction not yet taken: restoring the maps restores the markers. *)
+    Map.iter fwd_roots ~f:(fun t -> t.consumption.fwd_taken <- false);
+    Map.iter bprop_roots ~f:(fun t -> t.consumption.bprop_taken <- false)
   in
   Exn.protectx ~f ~finally ()
 
@@ -459,7 +462,16 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   in
   let params = Set.union_list (module T) @@ List.map ordered_ts ~f:(fun ti -> ti.params) in
   let t =
-    { params; forward = Asgns.empty_comp; diff = None; value = v; top_down_prec; shape; children }
+    {
+      params;
+      forward = Asgns.empty_comp;
+      diff = None;
+      value = v;
+      top_down_prec;
+      shape;
+      children;
+      consumption = { fwd_taken = false; bprop_taken = false };
+    }
   in
   (* The operation's shape update step is created only once [op_asn] has returned: the step carries
      the neutral element of the operation's accumulation, which is read off the assignments [op_asn]
@@ -933,13 +945,13 @@ let debug_grad t = Tn.debug_name (Option.value_exn t.diff).grad
    [Train.forward] returned), it is a parameter (never a forward root; a parameter's empty backprop
    code IS consumable, so that sentence is forward-only), or a consumer constructed from it owns its
    code. *)
-let not_a_root_reason ~consumed ~what ~name t =
-  if Set.mem consumed t.value.id then
+let not_a_root_reason ~taken ~what ~name t =
+  if taken then
     [%string
       "Tensor.consume_%{what}_code: the %{what} code of %{name} was already consumed by an earlier \
-       Train.forward / Train.grad_update / consume_%{what}_code call -- a tensor's code is \
-       consumed once; to compile it again (e.g. under another ?lowered_transform), reuse the comp \
-       that call returned"]
+       Train.forward / Train.grad_update / consume_%{what}_code call or embedded by a %%cd block \
+       that read the tensor -- a tensor's code is consumed once; to compile it again (e.g. under \
+       another ?lowered_transform), reuse the comp that call or block returned"]
   else if String.equal what "forward" && Set.mem t.params t then
     [%string
       "Tensor.consume_%{what}_code: %{name} is a parameter, which owns no %{what} code of its own \
@@ -955,7 +967,7 @@ let consume_forward_code t =
   if not @@ is_fwd_root t then
     raise
     @@ Session_error
-         ( not_a_root_reason ~consumed:session_state.consumed_forward ~what:"forward"
+         ( not_a_root_reason ~taken:t.consumption.fwd_taken ~what:"forward"
              ~name:(Tn.debug_name t.value) t,
            Some t );
   (* Check if any non-embedded descendants of t are embedded in other roots *)
@@ -975,9 +987,7 @@ let consume_forward_code t =
              {|Tensor.consume_forward_code for %{debug_name t}:
 found conflicting roots with shared non-embedded descendants: %{String.concat ~sep:", " @@ List.map ~f:debug_name conflicting_roots}|}],
            Some t );
-  remove_fwd_root t;
-  session_state.consumed_forward <- Set.add session_state.consumed_forward t.value.id;
-  t.forward
+  take_forward_code t
 
 let consume_backprop_code t =
   let diff =
@@ -991,8 +1001,7 @@ let consume_backprop_code t =
   if not @@ is_bprop_root t then
     raise
     @@ Session_error
-         ( not_a_root_reason ~consumed:session_state.consumed_backprop ~what:"backprop"
-             ~name:(debug_grad t) t,
+         ( not_a_root_reason ~taken:t.consumption.bprop_taken ~what:"backprop" ~name:(debug_grad t) t,
            Some t );
   (* Check if any non-embedded grad descendants of t are embedded in other roots *)
   let all_read = fst @@ Asgns.collect_nodes_guess_output diff.backprop.asgns in
@@ -1016,7 +1025,7 @@ let consume_backprop_code t =
 found conflicting roots with shared non-embedded grad descendants: %{String.concat ~sep:", " @@ List.map ~f:debug_grad conflicting_roots}|}],
            Some t );
   remove_bprop_root t;
-  session_state.consumed_backprop <- Set.add session_state.consumed_backprop t.value.id;
+  t.consumption.bprop_taken <- true;
   diff.backprop
 
 let set_random_seed ?seed () =
@@ -1043,8 +1052,6 @@ let%track5_sexp unsafe_reinitialize ?(namespace = Tn.default_namespace) () : uni
   session_state.next_id <- 0;
   session_state.forward_roots <- Map.empty (module Int);
   session_state.backprop_roots <- Map.empty (module Int);
-  session_state.consumed_forward <- Set.empty (module Int);
-  session_state.consumed_backprop <- Set.empty (module Int);
   param_postprocess := Fn.id;
   random_seed := None;
   Tn.Registry.clear Tn.registry;

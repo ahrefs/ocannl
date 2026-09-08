@@ -13,7 +13,7 @@ let test_raw_unop a =
                (Base.Set.singleton (module Ir.Tnode) r.Tensor.value)
            };
           if Tensor.is_fwd_root a
-          then (Tensor.remove_fwd_root a; a.Tensor.forward)
+          then Tensor.take_forward_code a
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
@@ -56,7 +56,7 @@ let test_raw_unop_transpose a =
                (Base.Set.singleton (module Ir.Tnode) r.Tensor.value)
            };
           if Tensor.is_fwd_root a
-          then (Tensor.remove_fwd_root a; a.Tensor.forward)
+          then Tensor.take_forward_code a
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
@@ -99,7 +99,7 @@ let test_raw_unop_permute a =
                (Base.Set.singleton (module Ir.Tnode) r.Tensor.value)
            };
           if Tensor.is_fwd_root a
-          then (Tensor.remove_fwd_root a; a.Tensor.forward)
+          then Tensor.take_forward_code a
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
@@ -143,7 +143,7 @@ let test_raw_identity a =
                (Base.Set.singleton (module Ir.Tnode) r.Tensor.value)
            };
           if Tensor.is_fwd_root a
-          then (Tensor.remove_fwd_root a; a.Tensor.forward)
+          then Tensor.take_forward_code a
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
@@ -186,21 +186,21 @@ let test_raw_ternop_fma a b c =
                (Base.Set.singleton (module Ir.Tnode) r.Tensor.value)
            };
           if Tensor.is_fwd_root a
-          then (Tensor.remove_fwd_root a; a.Tensor.forward)
+          then Tensor.take_forward_code a
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
               embedded_nodes = (Base.Set.empty (module Ir.Tnode))
             };
           if Tensor.is_fwd_root b
-          then (Tensor.remove_fwd_root b; b.Tensor.forward)
+          then Tensor.take_forward_code b
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
               embedded_nodes = (Base.Set.empty (module Ir.Tnode))
             };
           if Tensor.is_fwd_root c
-          then (Tensor.remove_fwd_root c; c.Tensor.forward)
+          then Tensor.take_forward_code c
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
@@ -250,21 +250,21 @@ let test_raw_ternop_pointwise a b c =
                (Base.Set.singleton (module Ir.Tnode) r.Tensor.value)
            };
           if Tensor.is_fwd_root a
-          then (Tensor.remove_fwd_root a; a.Tensor.forward)
+          then Tensor.take_forward_code a
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
               embedded_nodes = (Base.Set.empty (module Ir.Tnode))
             };
           if Tensor.is_fwd_root b
-          then (Tensor.remove_fwd_root b; b.Tensor.forward)
+          then Tensor.take_forward_code b
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
               embedded_nodes = (Base.Set.empty (module Ir.Tnode))
             };
           if Tensor.is_fwd_root c
-          then (Tensor.remove_fwd_root c; c.Tensor.forward)
+          then Tensor.take_forward_code c
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
@@ -314,21 +314,21 @@ let test_raw_ternop_einsum a b c =
                (Base.Set.singleton (module Ir.Tnode) r.Tensor.value)
            };
           if Tensor.is_fwd_root a
-          then (Tensor.remove_fwd_root a; a.Tensor.forward)
+          then Tensor.take_forward_code a
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
               embedded_nodes = (Base.Set.empty (module Ir.Tnode))
             };
           if Tensor.is_fwd_root b
-          then (Tensor.remove_fwd_root b; b.Tensor.forward)
+          then Tensor.take_forward_code b
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
               embedded_nodes = (Base.Set.empty (module Ir.Tnode))
             };
           if Tensor.is_fwd_root c
-          then (Tensor.remove_fwd_root c; c.Tensor.forward)
+          then Tensor.take_forward_code c
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
@@ -415,7 +415,7 @@ let test_merge_grad_operand a b =
                (Base.Set.singleton (module Ir.Tnode) r.Tensor.value)
            };
           if Tensor.is_fwd_root b
-          then (Tensor.remove_fwd_root b; b.Tensor.forward)
+          then Tensor.take_forward_code b
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;

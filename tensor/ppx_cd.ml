@@ -331,9 +331,7 @@ let setup_array ~punned ~bad_pun_hints ~for_slot
       let fwd_code_or_noop =
         Some
           [%expr
-            if Tensor.is_fwd_root [%e t] then (
-              Tensor.remove_fwd_root [%e t];
-              [%e t].Tensor.forward)
+            if Tensor.is_fwd_root [%e t] then Tensor.take_forward_code [%e t]
             else [%e empty_comp ~loc]]
       in
       { (default_setup false) with fwd_code_or_noop; tensor = Some t }
@@ -341,9 +339,7 @@ let setup_array ~punned ~bad_pun_hints ~for_slot
       let fwd_code_or_noop =
         Some
           [%expr
-            if Tensor.is_fwd_root [%e t] then (
-              Tensor.remove_fwd_root [%e t];
-              [%e t].Tensor.forward)
+            if Tensor.is_fwd_root [%e t] then Tensor.take_forward_code [%e t]
             else [%e empty_comp ~loc]]
       in
       {
@@ -378,9 +374,7 @@ let setup_array ~punned ~bad_pun_hints ~for_slot
       let fwd_code_or_noop =
         Some
           [%expr
-            if Tensor.is_fwd_root [%e t] then (
-              Tensor.remove_fwd_root [%e t];
-              [%e t].Tensor.forward)
+            if Tensor.is_fwd_root [%e t] then Tensor.take_forward_code [%e t]
             else [%e empty_comp ~loc]]
       in
       {

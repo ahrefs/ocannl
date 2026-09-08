@@ -20,6 +20,12 @@ type projections = {
           only after [op_asn] returns: forcing [projections] from within an [op_asn] is rejected. *)
 }
 
+type consumption = { mutable fwd_taken : bool; mutable bprop_taken : bool }
+(** Whether the tensor's code has been handed out -- by {!consume_forward_code},
+    {!take_forward_code} (the [%cd] embedding path) or {!consume_backprop_code}. A mutable cell
+    shared by every copy of the record, so the marker follows the tensor; it is what lets the
+    consume functions say "already consumed" rather than "not a root". *)
+
 type diff = {
   grad : tn;
   zero_grads : comp;
@@ -51,6 +57,7 @@ type t = {
       (** The eventual shape of [t.value] and [t.diff.grad], incorporating the current state of
           shape inference. *)
   children : subtensor list;
+  consumption : consumption;
 }
 [@@deriving sexp_of]
 (** Information needed for compositional code generation. *)
@@ -77,7 +84,17 @@ val is_fwd_root : t -> bool
 val remove_fwd_root : t -> unit
 val is_bprop_root : t -> bool
 val remove_bprop_root : t -> unit
+
+val take_forward_code : t -> comp
+(** The unchecked half of {!consume_forward_code}, for a tensor the caller has established is a
+    forward root ({!is_fwd_root}): removes it from the forward roots, marks its forward code as
+    taken, and returns the code. This is the handout every path that embeds a tensor's forward code
+    goes through -- {!consume_forward_code} and the [%cd] operands' embedding alike -- so that a
+    later {!consume_forward_code} on the same tensor reports the prior consumption. *)
+
 val with_unchanged_roots : f:(unit -> 'a) -> 'a
+(** Runs [f] and restores the forward and backprop root maps afterwards, including the consumption
+    markers of the roots that were live at entry. *)
 
 val default_value_prec : Ir.Ops.prec ref
 (** The default precision for the value node of terminal (i.e. non-composite) tensors.

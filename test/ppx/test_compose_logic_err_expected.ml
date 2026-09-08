@@ -15,14 +15,14 @@ let test_div_compose a b =
                (Base.Set.singleton (module Ir.Tnode) r.Tensor.value)
            };
           if Tensor.is_fwd_root a
-          then (Tensor.remove_fwd_root a; a.Tensor.forward)
+          then Tensor.take_forward_code a
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
               embedded_nodes = (Base.Set.empty (module Ir.Tnode))
             };
           if Tensor.is_fwd_root b
-          then (Tensor.remove_fwd_root b; b.Tensor.forward)
+          then Tensor.take_forward_code b
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
@@ -70,14 +70,14 @@ let test_pow_compose a b =
                (Base.Set.singleton (module Ir.Tnode) r.Tensor.value)
            };
           if Tensor.is_fwd_root a
-          then (Tensor.remove_fwd_root a; a.Tensor.forward)
+          then Tensor.take_forward_code a
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
               embedded_nodes = (Base.Set.empty (module Ir.Tnode))
             };
           if Tensor.is_fwd_root b
-          then (Tensor.remove_fwd_root b; b.Tensor.forward)
+          then Tensor.take_forward_code b
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
@@ -125,14 +125,14 @@ let test_div_alias_compose a b =
                (Base.Set.singleton (module Ir.Tnode) r.Tensor.value)
            };
           if Tensor.is_fwd_root a
-          then (Tensor.remove_fwd_root a; a.Tensor.forward)
+          then Tensor.take_forward_code a
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
               embedded_nodes = (Base.Set.empty (module Ir.Tnode))
             };
           if Tensor.is_fwd_root b
-          then (Tensor.remove_fwd_root b; b.Tensor.forward)
+          then Tensor.take_forward_code b
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
@@ -180,14 +180,14 @@ let test_pow_alias_compose a b =
                (Base.Set.singleton (module Ir.Tnode) r.Tensor.value)
            };
           if Tensor.is_fwd_root a
-          then (Tensor.remove_fwd_root a; a.Tensor.forward)
+          then Tensor.take_forward_code a
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
               embedded_nodes = (Base.Set.empty (module Ir.Tnode))
             };
           if Tensor.is_fwd_root b
-          then (Tensor.remove_fwd_root b; b.Tensor.forward)
+          then Tensor.take_forward_code b
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
@@ -235,14 +235,14 @@ let test_add_compose_accepted a b =
                (Base.Set.singleton (module Ir.Tnode) r.Tensor.value)
            };
           if Tensor.is_fwd_root a
-          then (Tensor.remove_fwd_root a; a.Tensor.forward)
+          then Tensor.take_forward_code a
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;
               embedded_nodes = (Base.Set.empty (module Ir.Tnode))
             };
           if Tensor.is_fwd_root b
-          then (Tensor.remove_fwd_root b; b.Tensor.forward)
+          then Tensor.take_forward_code b
           else
             {
               Ir.Assignments.asgns = Ir.Assignments.Noop;

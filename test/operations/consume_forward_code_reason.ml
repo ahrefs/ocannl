@@ -3,8 +3,9 @@
    [Train.forward]ed twice (e.g. compiled under different [?lowered_transform]s, as
    [tile_mma_geometry.ml] does across four compiles) -- its forward code was consumed by the first
    call, so it is no longer a root, and nothing about it is a parameter. A tensor leaves the root
-   map by three distinct routes, and the session now records the consumed ones so the message names
-   the route that applies. Each leg pins its sentence's discriminating words, never the old hint. *)
+   map by three distinct routes, and the tensor now carries a consumption marker so the message
+   names the route that applies. Each leg pins its sentence's discriminating words, never the old
+   hint. *)
 
 open Base
 open Ocannl.Operation.DSL_modules
@@ -51,6 +52,15 @@ let () =
   let msg = rejection ~name:"bprop twice" (fun () -> Tensor.consume_backprop_code l) in
   p "second backprop consume: names the earlier consumption" (has msg ~substring:"already consumed");
   p "second backprop consume: names the backprop code" (has msg ~substring:"backprop code");
+  (* Leg 5: a [%cd] block that reads a tensor embeds its forward code through the same handout, so
+     the rejection names the consumption rather than a consumer that does not exist. *)
+  let x = leaf "cfr_x6" in
+  let y = NTDSL.O.relu x in
+  let acc = leaf "cfr_acc6" in
+  let _embedding : Ir.Assignments.comp = [%cd acc =+ y] in
+  let msg = rejection ~name:"cd" (fun () -> Tensor.consume_forward_code y) in
+  p "after a %cd embedding: names the consumption" (has msg ~substring:"already consumed");
+  p "after a %cd embedding: does not blame a consumer" (not (has msg ~substring:"consume that"));
   (* [with_unchanged_roots] restores the consumed marks with the roots: an [ignore]d [%cd] block's
      consumption must not later be reported as a prior consumption. *)
   let x = leaf "cfr_x5" in
