@@ -399,7 +399,7 @@ elif [ "$MODE_DEPS" = 1 ]; then
   fi
 else
   [ -n "$missing" ] && todo "missing:$missing — re-run with --deps to install" || ok "dependencies present"
-  [ -z "$dev_missing" ] || todo "dev tools missing:$dev_missing — re-run with --deps, or: opam install$dev_missing"
+  [ -z "$dev_missing" ] || todo "dev tools missing:$dev_missing — re-run with --deps, or: opam install . --deps-only --with-dev-setup"
 fi
 
 # ocamlformat refuses to run at any release other than the one .ocamlformat

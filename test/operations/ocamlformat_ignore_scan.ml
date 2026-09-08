@@ -2,10 +2,9 @@
 
    A PPX output fixture is deliberately hostile to ocamlformat: formatting it changes the golden,
    its test promotes the original text back, and `dune build @fmt` -- the CI gate every PR passes
-   through -- stays red until the file is ignored.
-   The ignore entry used to be a prose-only obligation. When an entry was appended to an ignore file
-   lacking its final newline, two paths became one nonexistent path and both goldens silently
-   stopped being ignored.
+   through -- stays red until the file is ignored. The ignore entry used to be a prose-only
+   obligation. When an entry was appended to an ignore file lacking its final newline, two paths
+   became one nonexistent path and both goldens silently stopped being ignored.
 
    This scan holds both directions directly: every [test/ppx/*_expected.ml] visible in dune's clean
    declared-input sandbox is an entry, and every entry names a file there. It also requires one
