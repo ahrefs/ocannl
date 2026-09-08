@@ -220,6 +220,19 @@ files.
   scope-locals they write are excluded by a whole-proc scan (`rng_scope_local_uids`), because a
   `Declare_local` carries no value to test. And a `Set` whose value contains no operator renders at
   storage precision, so a copy loop stays a copy instead of a round-trip through f32.
+- **Which bits an RNG conversion consumes is fixed per precision, and it is the same on every
+  backend** (gh-ocannl-951). The scalar `uint4x32_to_{bfloat16,half}_uniform` take the single draw
+  of the key's first 32 bits (`uint32_to_single_uniform`) and narrow it; the `_vec`/`_lane` forms
+  consume 16 bits per lane. cc's scalar half was the one exception (the low 16 bits, matching its
+  lane form), so a half model seeded through `uniform1` started from different values on cc than on
+  the GPUs and no cc-vs-GPU parity test could seed through it. `reduction_forms` prints the f32,
+  bf16 and f16 draws of one fixed key on stdout — exact by construction, so they are golden lines —
+  and claims each narrow draw is the f32 draw narrowed, and that the host stubs over `builtins.c`
+  (`Ops.uint4x32_to_*_uniform`) draw the same number, which is the mechanical check on the
+  `builtins_cc.ml`/`builtins.c` pair gh-ocannl-656 wants. A trap in that pair: a host stub that
+  returns `uint16_t` must go through `single_to_half` (`HALF_TO_UINT16`), since `FLOAT_TO_HALF`
+  under native `_Float16` converts the value numerically into the integer return type and every
+  draw in [0, 1) becomes 0.
 - Convert-on-load/store is what makes the `Vectorized` renderings reachable for 16-bit nodes: the
   lane count comes from the **compute** vector, so the narrow side is a half-width vector, and the
   conversion happens at the memory boundary rather than per lane inside the body (per-lane
