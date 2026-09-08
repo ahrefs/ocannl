@@ -119,8 +119,11 @@ printf '%s\n' "$*" >>"$SWEEP_TEST_CALLS"
 # failure text, so a fixture can hold one stanza red while another clears.
 case " $* " in
   *" -j 1 "*)
+    # The last positional parameter: `${*##* }` is not it -- pattern removal on
+    # `$*` applies to each parameter separately, so it yields the whole line.
+    for last; do :; done
     case " ${SWEEP_TEST_OPAM_SERIAL_RED:-} " in
-      *" ${*##* } "*)
+      *" $last "*)
         [ -n "${SWEEP_TEST_OPAM_OUT_SERIAL:-}" ] && printf '%s\n' "$SWEEP_TEST_OPAM_OUT_SERIAL"
         exit 1
         ;;
@@ -932,7 +935,9 @@ absent '@check' <<<"$(tail -2 "$calls" | sed -n '1p')"
 # crashed after (no signature of its own, still a red stanza), and an inline
 # expectation located in a source file, which names no stanza and must be
 # reported unmapped rather than approximated by a directory-wide alias. The
-# fake opam holds the first stanza red on its own and clears the second.
+# fake opam holds the first stanza red on its own and clears the second. One
+# unit (`--only cc`): every local unit would rerun the same fixture, and the
+# remote ones would reach for ssh.
 environment_failure='File "test/dune", line 2, characters 7-28:
 2 |  (alias runtest-serial-probe)
 Fatal error: exception hip_init:
@@ -948,7 +953,7 @@ serial_red=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$environment_failure \
   SWEEP_TEST_OPAM_SERIAL_RED='@test/runtest-serial-probe' \
   SWEEP_TEST_OPAM_OUT_SERIAL='File "test/dune", line 2, characters 7-28:
 2 |  (alias runtest-serial-probe)
-Error: the claim itself' run_sweep_args --target serial-probe)
+Error: the claim itself' run_sweep_backend cc --target serial-probe)
 grep -q 'm4-max/cc: fail ' <<<"$serial_red"
 # One dune call per stanza, so each has its own verdict; sorted, after the unit.
 [ "$(tail -3 "$calls" | sed -n '1p')" = 'exec -- dune runtest serial-probe' ]
@@ -970,7 +975,7 @@ grep -q '^serial rerun: unmapped: ' "${serial_log%.log}.fingerprint"
 # The same red with every stanza clean on its own: the digest carries the
 # difference, so the unit-state cursor reports the fingerprint as moved.
 serial_clean=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$environment_failure \
-  run_sweep_args --target serial-probe)
+  run_sweep_backend cc --target serial-probe)
 grep -q 'm4-max/cc: serial rerun: all clean$' <<<"$serial_clean"
 grep -q 'm4-max/cc: fingerprint moved since the previous failure at ' <<<"$serial_clean"
 serial_clean_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
@@ -979,7 +984,7 @@ absent 'still red' "${serial_clean_log%.log}.fingerprint"
 
 # Negative control: a red whose failures are the tests' own gets no second run.
 serial_control=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$state_failure \
-  run_sweep_args --target serial-probe)
+  run_sweep_backend cc --target serial-probe)
 grep -q 'm4-max/cc: fail ' <<<"$serial_control"
 [ "$(tail -1 "$calls")" = 'exec -- dune runtest serial-probe' ]
 absent 'serial rerun' <<<"$serial_control"
