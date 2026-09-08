@@ -726,6 +726,11 @@ let claim_scan_init_read_refused =
    back (prev = s[0]; s[0] = prev + x[i]) is the same read-modify-write through the loop's state: \
    refused where a lane index is bound (GPU) or the full serial sum (CPU)"
 
+let claim_vec_store_refused =
+  "a vector store covering a cell the level reads (s[0..3] = uniform(bits); s[0] = s[2] + x[i]) is \
+   a store of each covered cell: refused where a lane index is bound (GPU) or serial and in \
+   [x[n-1], x[n-1] + 1) (CPU)"
+
 let claim_staged_form_renders =
   "the sound single-lane form — per-lane cells combined under lane-selecting guards and a plain \
    final store — is not a race: it renders (GPU) or the barrier it needs is rejected (CPU)"
@@ -1250,4 +1255,43 @@ let () =
           })
   in
   refused_leg claim_scan_init_read_refused ~name:"race_scaninit_wshfl"
-    ~transform:scan_init_transform scs ~cpu_value:expected_sum
+    ~transform:scan_init_transform scs ~cpu_value:expected_sum;
+  (* A vector store covers [length] cells: [s[0..3] = uniform(bits)] beside [s[0] = s[2] + x[i]]
+     writes the cell the sibling reads (Codex P1 on staging#674). The bits are a literal, as in the
+     RNG leg above: the store's SHAPE is what the criterion judges. *)
+  let vx = TDSL.ndarray gv ~label:[ "race_vx" ] ~output_dims:[ n ] () in
+  let%op vs = vx ++ "i=>i" in
+  let vec_store_transform =
+    reduce_transform ~n vs.Tensor.value ~body_of:(fun i ->
+        LL.Seq
+          ( LL.Set_from_vec
+              {
+                tn = vs.Tensor.value;
+                idcs = [| f0 |];
+                length = 4;
+                vec_unop = Ir.Ops.Uint4x32_to_prec_uniform;
+                arg = (Constant_bits (Int64.of_int 0x9E3779B9), Ir.Ops.uint4x32);
+                debug = "";
+              },
+            LL.Set
+              {
+                tn = vs.Tensor.value;
+                idcs = [| f0 |];
+                llsc =
+                  Binop
+                    ( Ir.Ops.Add,
+                      (Get (vs.Tensor.value, [| Idx.Fixed_idx 2 |]), single),
+                      (Get (vx.Tensor.value, [| it i |]), single) );
+                debug = "";
+              } ))
+  in
+  if on_gpu then
+    match refused ~name:"race_vecstore_wshfl" ~transform:vec_store_transform vs with
+    | Some msg ->
+        p claim_vec_store_refused (String.is_substring msg ~substring:"race the read-modify-write")
+    | None -> p claim_vec_store_refused false
+  else if on_cpu then
+    let v = run ~name:"race_vecstore_wshfl" ~transform:vec_store_transform vs in
+    let last = gv.(n - 1) in
+    p claim_vec_store_refused Float.(v >= last && v < last + 1.)
+  else skipped claim_vec_store_refused

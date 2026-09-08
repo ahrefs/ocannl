@@ -5827,9 +5827,9 @@ let has_accumulating_cell (llc : t) : bool =
    construction is a cell that mentions the lane; a reduction that needs a single-lane
    read-modify-write of a shared cell stages it with per-lane cells and a plain final store, which
    is what every explicitly staged tree in the repository does. A [Set_dynamic] whose static
-   coordinates do not separate the lanes is refused, the data owning which cell each lane hits.
-   [Set_local] and [Zero_out] are never a race. Returns the first racing statement's node and
-   cell. *)
+   coordinates do not separate the lanes is refused, the data owning which cell each lane hits. A
+   vector store ([Set_from_vec]) is a store of each cell it covers, its argument a read. [Set_local]
+   and [Zero_out] are never a race. Returns the first racing statement's node and cell. *)
 let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(shared : Tnode.t -> bool) (llc : t) :
     (Tnode.t * Indexing.axis_index array) option =
   let lane_invariant idcs = not (Array.exists idcs ~f:(axis_index_mentions_symbol lane)) in
@@ -5844,6 +5844,18 @@ let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(shared : Tnode.t ->
               match (a, idcs'.(k)) with
               | Indexing.Fixed_idx x, Indexing.Fixed_idx y -> x <> y
               | _ -> false))
+  in
+  (* The cells a vector store of [length] lanes covers: the last slot advanced lane by lane where it
+     is literal, the store's own slots otherwise (a symbolic slot aliases every position). *)
+  let covered idcs length =
+    let last = Array.length idcs - 1 in
+    match idcs.(last) with
+    | Indexing.Fixed_idx k ->
+        List.init length ~f:(fun o ->
+            let c = Array.copy idcs in
+            c.(last) <- Indexing.Fixed_idx (k + o);
+            c)
+    | _ -> [ idcs ]
   in
   let rec reads ~tn ~idcs (sc : scalar_t) =
     let arg (s, _) = reads ~tn ~idcs s in
@@ -5877,6 +5889,7 @@ let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(shared : Tnode.t ->
         List.exists carried ~f:(fun c -> reads ~tn ~idcs c.init) || stmt_reads ~tn ~idcs body
     | Set { llsc; _ } | Set_local (_, llsc) -> reads ~tn ~idcs llsc
     | Set_dynamic { llsc; dyn_value; _ } -> reads ~tn ~idcs llsc || reads ~tn ~idcs (fst dyn_value)
+    | Set_from_vec { arg = a, _; _ } -> reads ~tn ~idcs a
     | _ -> false
   in
   let rec go (stmt : t) =
@@ -5890,6 +5903,12 @@ let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(shared : Tnode.t ->
         else None
     | Set_dynamic { tn; idcs; _ } ->
         if shared tn && lane_invariant idcs then Some (tn, idcs) else None
+    | Set_from_vec { tn; idcs; length; _ } ->
+        if
+          shared tn && lane_invariant idcs
+          && List.exists (covered idcs length) ~f:(fun idcs -> stmt_reads ~tn ~idcs llc)
+        then Some (tn, idcs)
+        else None
     | _ -> None
   in
   go llc
