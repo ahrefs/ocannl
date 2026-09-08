@@ -5815,24 +5815,37 @@ let has_accumulating_cell (llc : t) : bool =
    cell separated by a barrier that fences threadgroup memory only. What is one thread by
    construction is a cell that mentions the lane; a reduction that needs a single-lane
    read-modify-write of a shared cell stages it with per-lane cells and a plain final store, which
-   is what every explicitly staged tree in the repository does. [Set_local] and [Zero_out] are never
-   a race. Returns the first racing statement's node and cell. *)
+   is what every explicitly staged tree in the repository does. A guard reading the cell a store
+   under it writes is the read of the read-modify-write; a [Set_dynamic] whose static coordinates do
+   not separate the lanes is refused, the data owning which cell each lane hits; a dead level
+   performs no accesses. [Set_local] and [Zero_out] are never a race. Returns the first racing
+   statement's node and cell. *)
 let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(shared : Tnode.t -> bool) (llc : t) :
     (Tnode.t * Indexing.axis_index array) option =
-  let rec go (llc : t) =
+  let lane_invariant idcs = not (Array.exists idcs ~f:(axis_index_mentions_symbol lane)) in
+  (* [guards]: the conditions of the enclosing [If]s. A guard that reads the cell a store under it
+     writes is the read of a read-modify-write too ([If (acc[0] == 0) acc[0] = x[i]]: every lane
+     tests, then some overwrite), so a store under it is judged with that read. *)
+  let rec go ~guards (llc : t) =
     match llc with
-    | Seq (a, b) -> ( match go a with Some _ as r -> r | None -> go b)
-    | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> go body
+    | Seq (a, b) -> ( match go ~guards a with Some _ as r -> r | None -> go ~guards b)
+    (* A dead level performs no accesses, here as everywhere in this file. *)
+    | For_loop { from_; to_; _ } when to_ < from_ -> None
+    | For_loop { body; _ } | Scan_loop { body; _ } -> go ~guards body
+    | If { cond = c, _; body } -> go ~guards:(c :: guards) body
     | Set { tn; idcs; llsc; _ } ->
         if
-          shared tn
-          && (not (Array.exists idcs ~f:(axis_index_mentions_symbol lane)))
-          && reads_cell ~tn ~idcs llsc
+          shared tn && lane_invariant idcs
+          && (reads_cell ~tn ~idcs llsc || List.exists guards ~f:(reads_cell ~tn ~idcs))
         then Some (tn, idcs)
         else None
+    (* A data-dependent target: which cell each lane hits is the data's to say, so two lanes on one
+       cell cannot be ruled out unless the static coordinates already separate them. *)
+    | Set_dynamic { tn; idcs; _ } ->
+        if shared tn && lane_invariant idcs then Some (tn, idcs) else None
     | _ -> None
   in
-  go llc
+  go ~guards:[] llc
 
 type peel_guard_verdict = Guard_confined | Guard_lane_private | Guard_lane_private_unresolved
 [@@deriving sexp, equal, compare]

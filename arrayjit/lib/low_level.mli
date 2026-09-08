@@ -389,10 +389,13 @@ val racing_lane_invariant_update :
     read-modify-write every lane performs on one cell, a race under any hardware binding. Reads are
     judged as codegen renders them: a projection's discarded operand ({!Ops.binop_conditionality})
     reads nothing, and a guard's condition reads. Per-lane cells (which mention the lane), stores
-    that read no cell of their own, [Set_local] and [Zero_out] are not races. There is no exemption
-    for a guard pinning the lane: a pin is one thread only under conditions (one block, no other
-    bound axis, a literal value, no barrier between phases) the walk cannot establish, and the sound
-    form of a single-lane update is a per-lane cell with a plain final store. *)
+    that read no cell of their own, [Set_local] and [Zero_out] are not races; a guard reading the
+    cell a store under it writes counts as that store's read, a [Set_dynamic] whose static
+    coordinates do not mention the lane is refused (the data owns which cell each lane hits), and a
+    dead level performs no accesses. There is no exemption for a guard pinning the lane: a pin is
+    one thread only under conditions (one block, no other bound axis, a literal value, no barrier
+    between phases) the walk cannot establish, and the sound form of a single-lane update is a
+    per-lane cell with a plain final store. *)
 
 val has_accumulating_cell : t -> bool
 (** Whether the tree holds a SELF-RECURRENCE: some [Set] whose value reads the very cell it writes

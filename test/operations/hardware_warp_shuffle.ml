@@ -687,6 +687,15 @@ let claim_cond_read_refused =
   "a scope that tests the cell it writes back in an If condition reads that cell: refused where a \
    lane index is bound (GPU) or the serial alternation ending at 0 (CPU)"
 
+let claim_guard_read_refused =
+  "a store under a guard that reads the cell it writes (If (s[0] == 0) s[0] = x[i]) is a \
+   test-then-set every lane performs: refused where a lane index is bound (GPU) or the first \
+   iteration's value (CPU)"
+
+let claim_dead_loop_renders =
+  "a self-update inside a dead inner loop (to_ < from_) beside a sibling performs no accesses: the \
+   level renders and the cell keeps its zero"
+
 let claim_staged_form_renders =
   "the sound single-lane form — per-lane cells combined under lane-selecting guards and a plain \
    final store — is not a race: it renders (GPU) or the barrier it needs is rejected (CPU)"
@@ -971,4 +980,53 @@ let () =
   else if on_cpu then
     p claim_staged_form_renders
       (Option.is_some (refused ~name:"race_staged_wshfl" ~transform:staged_transform hs))
-  else skipped claim_staged_form_renders
+  else skipped claim_staged_form_renders;
+  (* A guard's read of the cell a store under it writes: [If (s[0] == 0) s[0] = x[i]] is a
+     test-then-set every lane performs (Codex P1 on staging#674). Serially the first iteration sets
+     [x[0]] (nonzero here) and no later one fires. *)
+  let gx2 = TDSL.ndarray gv ~label:[ "race_gx2" ] ~output_dims:[ n ] () in
+  let%op gs2 = gx2 ++ "i=>0" in
+  let guard_read_transform =
+    reduce_transform ~n gs2.Tensor.value ~body_of:(fun i ->
+        LL.If
+          {
+            cond =
+              ( Binop
+                  (Ir.Ops.Cmpeq, (Get (gs2.Tensor.value, [| f0 |]), single), (Constant 0., single)),
+                single );
+            body =
+              LL.Set
+                {
+                  tn = gs2.Tensor.value;
+                  idcs = [| f0 |];
+                  llsc = Get (gx2.Tensor.value, [| it i |]);
+                  debug = "";
+                };
+          })
+  in
+  refused_leg claim_guard_read_refused ~name:"race_guardread_wshfl" ~transform:guard_read_transform
+    gs2 ~cpu_value:gv.(0);
+  (* A dead inner loop performs no accesses: the sibling body with its self-update inside a [to_ <
+     from_] loop is not a race, and renders as the sibling store alone (Codex P2 on staging#674). *)
+  let zx = TDSL.ndarray gv ~label:[ "race_zx" ] ~output_dims:[ n ] () in
+  let%op zs = zx ++ "i=>0" in
+  let dead_loop_transform opt =
+    reduce_transform ~n zs.Tensor.value (with_side opt) ~body_of:(fun i ->
+        let k = Idx.get_symbol () in
+        LL.Seq
+          ( LL.For_loop
+              {
+                index = k;
+                from_ = 1;
+                to_ = 0;
+                axis = LL.Serial;
+                body = update zs.Tensor.value zx.Tensor.value i;
+              },
+            LL.Set
+              { tn = side; idcs = [| it i |]; llsc = Get (zx.Tensor.value, [| it i |]); debug = "" }
+          ))
+  in
+  if on_gpu || on_cpu then
+    p claim_dead_loop_renders
+      (approx (run ~name:"race_deadloop_wshfl" ~transform:dead_loop_transform zs) 0.)
+  else skipped claim_dead_loop_renders
