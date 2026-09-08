@@ -17,9 +17,9 @@
 ; ocamlformat declines to format a file whose doc comments the compiler cannot
 ; attach ("ignoring <file> (misplaced documentation comments - warning 50)") and
 ; exits nonzero, so ONE such file anywhere makes `dune build @fmt` permanently
-; unclean -- and tools/format-sweep.sh, whose convergence test is exactly that,
-; can then only report a fixed point it will never reach. Three files were
-; enough to block every sweep for four days.
+; unclean -- and the CI `fmt` job that gates every PR on it red for everyone,
+; not only for the author of the file. Three such files once held repository
+; formatting up for four days.
 ;
 ; Enabling the warning moves that from an unattended discovery to a build error
 ; at the site, in front of the author, who is the only one who knows which

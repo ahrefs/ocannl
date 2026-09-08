@@ -1,7 +1,8 @@
 (* gh-ocannl-866: the PPX expectation goldens and [.ocamlformat-ignore] stay in correspondence.
 
    A PPX output fixture is deliberately hostile to ocamlformat: formatting it changes the golden,
-   its test promotes the original text back, and the unattended formatting sweep never converges.
+   its test promotes the original text back, and `dune build @fmt` -- the CI gate every PR passes
+   through -- stays red until the file is ignored.
    The ignore entry used to be a prose-only obligation. When an entry was appended to an ignore file
    lacking its final newline, two paths became one nonexistent path and both goldens silently
    stopped being ignored.

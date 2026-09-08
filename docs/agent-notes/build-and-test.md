@@ -660,6 +660,29 @@ that they earn a lookup rather than always-loaded space.
   reproduces at all (a bare `dune promotion apply` in the same scenario commits the stale golden) —
   without it, leg 2 would pass if `git commit` merely picked up the working tree, and the guard
   would be untested. Measured: legs 2, 5 and 6 all fail against the pre-guard script.
+- Formatting is a gate on the PR path, and its mechanics are worth knowing before the first red.
+  `ci.yml`'s `fmt` job is separate from the build matrix on purpose: `ocaml/setup-ocaml` plus its
+  `lint-fmt` action, which installs the ocamlformat release `.ocamlformat` pins and runs
+  `dune build @fmt` in a switch WITHOUT the project's dependencies (`@fmt` compiles nothing), so it
+  answers in a few minutes while the twenty-minute build is still queued. The same pin is what
+  `dune-project`'s `(ocamlformat (and (= …) :with-dev-setup))` installs locally through
+  `opam install . --deps-only --with-dev-setup` — a plain `--deps-only` never installs a
+  `with-dev-setup` dependency, which is why a fresh switch has no ocamlformat until asked, and
+  `scripts/setup-ocaml-env.sh` reports both that and a version drifted from the pin at session
+  start. Two files a formatter cannot handle are refused at the site rather than discovered in CI:
+  a misplaced doc comment (ocamlformat declines the whole file) is a compile error under the root
+  `dune`'s `-w +50`, and a ppx-expectation golden is in `.ocamlformat-ignore`, which
+  `ocamlformat_ignore_scan` keeps in correspondence with `test/ppx/*_expected.ml`. The one
+  interaction that needs an ORDER is with goldens that embed a `file:line` through `~here`
+  (gh-ocannl-672): a reformat moves lines, so format first, then run the tests, then promote — a
+  promote made before the format can leave the promoted block unformatted and the two chasing
+  each other. Why a gate and not an off-branch sweep, since the repository ran one for a month: a
+  repo-wide reformat commit conflicts with every branch in flight, so it could only land in quiet
+  periods (which a wave of PRs never leaves), and it needs its own format-check-test-promote
+  convergence loop for those goldens; on the author's branch the promote round already exists
+  whenever such a file was edited, and formatting adds nothing to it. The sweep's commits remain
+  listed in `.git-blame-ignore-revs`. Because master is always clean, `dune fmt` from a branch
+  rewrites only the author's own files.
 - Two Windows C-runtime formatting differences make hand-formatted floats non-portable in goldens:
   it prints 3-digit exponents (`e+018` where Linux prints `e+18`), and it rounds representable
   decimal ties away from zero where glibc rounds to even (`%.1f` of `2.25` prints `2.3` there,
