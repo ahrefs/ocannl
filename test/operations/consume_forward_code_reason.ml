@@ -61,6 +61,16 @@ let () =
   let msg = rejection ~name:"cd" (fun () -> Tensor.consume_forward_code y) in
   p "after a %cd embedding: names the consumption" (has msg ~substring:"already consumed");
   p "after a %cd embedding: does not blame a consumer" (not (has msg ~substring:"consume that"));
+  (* Leg 6: [Train.forward_once] drops a differentiable tensor's backprop root through
+     [discard_backprop_code] (called directly here: this test links no backend), and the rejection
+     names the discard rather than a consumer. *)
+  let v = Tensor.term_init [| 1.; 2. |] ~label:[ "cfr_v7" ] ~grad_spec:Require_grad () in
+  let l = TDSL.O.relu v in
+  Tensor.discard_backprop_code l;
+  let msg = rejection ~name:"discarded" (fun () -> Tensor.consume_backprop_code l) in
+  p "discarded backprop: says it was discarded" (has msg ~substring:"was discarded");
+  p "discarded backprop: names forward_once" (has msg ~substring:"forward_once");
+  p "discarded backprop: does not blame a consumer" (not (has msg ~substring:"consume that"));
   (* [with_unchanged_roots] restores the consumed marks with the roots: an [ignore]d [%cd] block's
      consumption must not later be reported as a prior consumption. *)
   let x = leaf "cfr_x5" in
