@@ -5759,7 +5759,9 @@ let rec reads_cell ~tn ~idcs (sc : scalar_t) =
   (* A scope NESTED inside a larger value — [a[i] = f(scope { … a[i] … })] — is a recurrence like
      any other read; the scope that IS the written value is the case above, judged by its shape. *)
   | Local_scope { body; _ } -> stmt_reads_cell ~tn ~idcs body
-  | Get_dynamic { dyn_value; _ } -> arg dyn_value
+  (* A dynamic gather from the written node may land on the written cell at runtime: a read of it,
+     conservatively, as well as whatever the selector reads. *)
+  | Get_dynamic { tn = tn'; dyn_value; _ } -> Tnode.equal tn tn' || arg dyn_value
   | Ternop (_, a, b, c) -> arg a || arg b || arg c
   | Binop (op, a, b) -> (
       (* A projection's discarded operand is never rendered, hence never reads the cell (the same
@@ -5832,6 +5834,9 @@ let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(shared : Tnode.t ->
     (* A dead level performs no accesses, here as everywhere in this file. *)
     | For_loop { from_; to_; _ } when to_ < from_ -> None
     | For_loop { body; _ } | Scan_loop { body; _ } -> go ~guards body
+    (* A statically false guard executes nothing (a late [lowered_transform] can leave one that no
+       simplification pass sees again). *)
+    | If { cond = Constant c, _; _ } when Float.equal c 0. -> None
     | If { cond = c, _; body } -> go ~guards:(c :: guards) body
     | Set { tn; idcs; llsc; _ } ->
         if

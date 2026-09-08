@@ -696,6 +696,14 @@ let claim_dead_loop_renders =
   "a self-update inside a dead inner loop (to_ < from_) beside a sibling performs no accesses: the \
    level renders and the cell keeps its zero"
 
+let claim_dynamic_read_refused =
+  "a store reading the written node through a dynamic gather (s[0] = s[dyn 0] + x[i]) may read its \
+   own cell: refused where a lane index is bound (GPU) or the full serial sum (CPU)"
+
+let claim_false_guard_renders =
+  "a self-update under a statically false guard beside a sibling executes nothing: the level \
+   renders and the cell keeps its zero"
+
 let claim_staged_form_renders =
   "the sound single-lane form — per-lane cells combined under lane-selecting guards and a plain \
    final store — is not a race: it renders (GPU) or the barrier it needs is rejected (CPU)"
@@ -1029,4 +1037,47 @@ let () =
   if on_gpu || on_cpu then
     p claim_dead_loop_renders
       (approx (run ~name:"race_deadloop_wshfl" ~transform:dead_loop_transform zs) 0.)
-  else skipped claim_dead_loop_renders
+  else skipped claim_dead_loop_renders;
+  (* A dynamic gather from the written node may land on the written cell: [s[0] = s[dyn 0] + x[i]]
+     is the self-update through a selector (Codex P1 on staging#674). *)
+  let yx = TDSL.ndarray gv ~label:[ "race_yx" ] ~output_dims:[ n ] () in
+  let%op ys = yx ++ "i=>0" in
+  let dynamic_read_transform =
+    reduce_transform ~n ys.Tensor.value ~body_of:(fun i ->
+        LL.Set
+          {
+            tn = ys.Tensor.value;
+            idcs = [| f0 |];
+            llsc =
+              Binop
+                ( Ir.Ops.Add,
+                  ( Get_dynamic
+                      {
+                        tn = ys.Tensor.value;
+                        idcs = [| f0 |];
+                        dyn_axis = 0;
+                        dyn_value = (Constant 0., iprec);
+                      },
+                    single ),
+                  (Get (yx.Tensor.value, [| it i |]), single) );
+            debug = "";
+          })
+  in
+  refused_leg claim_dynamic_read_refused ~name:"race_dynread_wshfl"
+    ~transform:dynamic_read_transform ys ~cpu_value:expected_sum;
+  (* A statically false guard executes nothing: the sibling body under [If 0] renders, the cell
+     keeping its zero (Codex P2 on staging#674). *)
+  let fx = TDSL.ndarray gv ~label:[ "race_fx" ] ~output_dims:[ n ] () in
+  let%op fs = fx ++ "i=>0" in
+  let false_guard_transform opt =
+    reduce_transform ~n fs.Tensor.value (with_side opt) ~body_of:(fun i ->
+        LL.Seq
+          ( LL.If { cond = (Constant 0., single); body = update fs.Tensor.value fx.Tensor.value i },
+            LL.Set
+              { tn = side; idcs = [| it i |]; llsc = Get (fx.Tensor.value, [| it i |]); debug = "" }
+          ))
+  in
+  if on_gpu || on_cpu then
+    p claim_false_guard_renders
+      (approx (run ~name:"race_falseguard_wshfl" ~transform:false_guard_transform fs) 0.)
+  else skipped claim_false_guard_renders

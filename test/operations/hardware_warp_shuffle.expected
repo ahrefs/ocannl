@@ -29,3 +29,5 @@ a scope that tests the cell it writes back in an If condition reads that cell: r
 the sound single-lane form — per-lane cells combined under lane-selecting guards and a plain final store — is not a race: it renders (GPU) or the barrier it needs is rejected (CPU): true
 a store under a guard that reads the cell it writes (If (s[0] == 0) s[0] = x[i]) is a test-then-set every lane performs: refused where a lane index is bound (GPU) or the first iteration's value (CPU): true
 a self-update inside a dead inner loop (to_ < from_) beside a sibling performs no accesses: the level renders and the cell keeps its zero: true
+a store reading the written node through a dynamic gather (s[0] = s[dyn 0] + x[i]) may read its own cell: refused where a lane index is bound (GPU) or the full serial sum (CPU): true
+a self-update under a statically false guard beside a sibling executes nothing: the level renders and the cell keeps its zero: true
