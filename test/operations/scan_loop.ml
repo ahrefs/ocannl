@@ -498,6 +498,17 @@ let () =
            (seq
               (LL.Staged_compilation (fun () -> PPrint.empty))
               (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s))))));
+  p "an unrelated local sharing a carried id's integer over another node is refused"
+    (entry "sl_bad_int" (fun (x, out, i) ->
+         let s = carry ~init:(c 0.) (state "sl_bad_int_s") in
+         let other = state "sl_bad_int_o" in
+         (* Hand-minted: the same integer as [prev], over a different node -- what the pipeline's
+            counter never produces and the integer-keyed censuses assume away. *)
+         let clash = { LL.tn = other; scope_id = s.LL.prev.LL.scope_id } in
+         seq
+           (seq (LL.Declare_local { id = clash; needs_init = true }) (LL.Set_local (clash, c 1.)))
+           (scan ~upto:(n - 1) i ~carried:[ s ]
+              (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s))))));
   p "a carried pair over two different nodes is refused"
     (entry "sl_bad_pair" (fun (x, out, i) ->
          let s =

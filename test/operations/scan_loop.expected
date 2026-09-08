@@ -52,6 +52,7 @@ a read of a carried local after the scan is refused: true
 a next read early through a Tile_mma fallback is refused: true
 a tensor-buffer access to the state node inside a Tile_mma fallback is refused: true
 a Staged_compilation inside the scan body is refused: true
+an unrelated local sharing a carried id's integer over another node is refused: true
 a carried pair over two different nodes is refused: true
 the backend refuses a malformed scan handed through the prelowered seam: true
 --- leg 6a: an empty range is refused, at both gates ---

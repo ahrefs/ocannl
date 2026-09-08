@@ -7245,6 +7245,33 @@ let scan_loop_violation (plc : Tn.Placements.t) (root : t) : string option =
     | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
         false
   in
+  (* Every scope id a subtree mentions -- binders, reads and writes -- at any depth. *)
+  let rec scope_ids_in (llc : t) : scope_id list =
+    match llc with
+    | Declare_local { id; _ } -> [ id ]
+    | Set_local (id, llsc) -> id :: scalar_scope_ids llsc
+    | Seq (a, b) -> scope_ids_in a @ scope_ids_in b
+    | For_loop { body; _ } | Tile_mma { fallback = body; _ } -> scope_ids_in body
+    | If { cond = c, _; body } -> scalar_scope_ids c @ scope_ids_in body
+    | Scan_loop { carried; body; _ } ->
+        List.concat_map carried ~f:(fun c -> c.prev :: c.next :: scalar_scope_ids c.init)
+        @ scope_ids_in body
+    | Set { llsc; _ } -> scalar_scope_ids llsc
+    | Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar_scope_ids v @ scalar_scope_ids llsc
+    | Set_from_vec { arg = a, _; _ } -> scalar_scope_ids a
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Workgroup_barrier -> []
+  and scalar_scope_ids (llsc : scalar_t) : scope_id list =
+    match llsc with
+    | Get_local id -> [ id ]
+    | Local_scope { id; body; _ } -> id :: scope_ids_in body
+    | Get_dynamic { dyn_value = v, _; _ } -> scalar_scope_ids v
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        scalar_scope_ids a @ scalar_scope_ids b @ scalar_scope_ids c
+    | Binop (_, (a, _), (b, _)) -> scalar_scope_ids a @ scalar_scope_ids b
+    | Unop (_, (a, _)) -> scalar_scope_ids a
+    | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> []
+  in
+  let routine_scope_ids = lazy (scope_ids_in root) in
   (* Every scope id a subtree binds: statement-level [Declare_local]s and [Local_scope] binders in
      scalar positions, at any depth. *)
   let rec binders_in (llc : t) : scope_id list =
@@ -7337,6 +7364,17 @@ let scan_loop_violation (plc : Tn.Placements.t) (root : t) : string option =
             in
             if count_refs id root <> inside then
               reject ("the carried id " ^ name id ^ " is referenced outside its scan"));
+        (* The per-local censuses of codegen -- accumulator residency and its volatility plumbing
+           among them -- key locals by the integer alone, an invariant the pipeline's scope-id
+           counter guarantees and hand-built IR can break. The contract guarantees it for carried
+           ids: no other local in the routine may share a carried id's integer over another node, so
+           no census can conflate carried state with an unrelated local. *)
+        List.iter ids ~f:(fun id ->
+            List.iter (Lazy.force routine_scope_ids) ~f:(fun other ->
+                if other.scope_id = id.scope_id && not (Tn.equal other.tn id.tn) then
+                  reject
+                    ("the carried id " ^ name id ^ " shares its integer with the unrelated local "
+                   ^ name other ^ "; scope-id integers must be unique in the routine")));
         (* A binder of a carried id inside the scan -- a [Declare_local] or a [Local_scope] over it
            -- would render a shadowing C local, resetting the state every iteration. *)
         List.iter

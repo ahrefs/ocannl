@@ -51,7 +51,9 @@ what a future adjoint generator reads per scalar instead of reconstructing from 
   or `Local_scope` inside the scan and referenced nowhere outside it (the locals live in the scan's
   block); the state node is accessed as a tensor buffer nowhere in the routine; inits read no carried state and do not mention the scan index; each `next` is written
   exactly once, as a top-level statement of the body, and read only by later statements; nothing
-  writes a `prev`; no opaque callback inside; and the range is non-empty.
+  writes a `prev`; no opaque callback inside; the range is non-empty; and no other local in the
+  routine shares a carried id's integer over another node (the invariant codegen's integer-keyed
+  censuses assume, guaranteed here for carried state).
 - **Placement** (`check_and_store_virtual`, `Non_virtual 148`): a virtualization candidate whose
   captured computation contains a scan is refused — one written inside the body (the `~in_scan`
   flag threaded through `virtual_llc` for the per-statement store), one fed by a scan through a
