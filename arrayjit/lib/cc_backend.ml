@@ -571,15 +571,26 @@ let vector_bytes_setting () =
    from Darwin needs [uname], and this used to shell out once per kernel compile -- on a machine
    compiling thousands of kernels per build, an entirely redundant `sh -c` plus `uname` plus `grep`
    each time. The answer cannot change within a process. *)
+(* [-Wl,-Bsymbolic] on ELF (gh-ocannl-754): a kernel's references to its OWN builtins bind to its
+   own definitions. Without it, a [-fPIC] call to a global function goes through the PLT and the
+   dynamic linker resolves it FIRST against the executable — and the OCaml executable carries a host
+   copy of the builtins ([arrayjit/lib/builtins.c], the [ir] library's foreign stubs) under the
+   same names. The two copies share their source text but not their compilation: the host copy is
+   built without the kernel's flags, and a builtin whose return type depends on the target's fp16
+   mode ([HALF_T]) comes back through an integer register from one and a float register from the
+   other, so the kernel reads whatever [xmm0] held — a half [uniform1] draw read as [-0.0] on the
+   Linux CI leg while every C-side call of the very same [.so] was correct. macOS has no such
+   interposition (two-level namespaces bind a bundle's references to the bundle), which is why it
+   passed there; Windows DLLs resolve per module too. *)
 let kernel_link_flags =
   lazy
     (match Sys.os_type with
     | "Unix" ->
         if Stdlib.Sys.command "uname -s | grep -q Darwin" = 0 then
           "-bundle -undefined dynamic_lookup"
-        else "-shared -fPIC"
+        else "-shared -fPIC -Wl,-Bsymbolic"
     | "Win32" | "Cygwin" -> "-shared"
-    | _ -> "-shared -fPIC")
+    | _ -> "-shared -fPIC -Wl,-Bsymbolic")
 
 (* gh-ocannl-530 (docs/proposals/gh-ocannl-530-pool-uniformity.md): on hybrid CPUs, one pool mixing
    two core speeds costs the tuned schedules 20-31% -- chunked Grid loops end at a barrier, so the

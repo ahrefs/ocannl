@@ -2,8 +2,8 @@ the queried accumulator capability matches the independent backend policy table:
 Schedule.optop coverage:
   Split              covered by split-then-unroll, split-then-swap, split-then-vectorize-inner, split-then-vectorize-narrow
   Swap               covered by split-then-swap
-  Retype             covered by retype-vectorized, split-then-vectorize-inner, split-then-vectorize-narrow, retype-workgroup-reduce, retype-workgroup, mixed-guard-workgroup
-  Unroll             covered by unroll-annot, unroll-mat, unroll-outer-mat
+  Retype             covered by retype-vectorized, split-then-vectorize-inner, split-then-vectorize-narrow, retype-workgroup-reduce, retype-workgroup, mixed-guard-workgroup, rng-vectorized, rng-workgroup-reduce, sibling-vectorized, sibling-workgroup-reduce, data-guard-vectorized, data-guard-workgroup-reduce
+  Unroll             covered by unroll-annot, unroll-mat, unroll-outer-mat, rng-unroll, rng-unroll-mat
   Partition          covered by partition, partition-then-unroll, partition-outer
   Pad                covered by pad-then-unroll-mat
   Stage              out of scope: stages an OPERAND into shared memory: it changes where the reduction reads from, never where its accumulator lives
@@ -15,15 +15,15 @@ Schedule.optop coverage:
 every Schedule.optop constructor is reached by a member that exists, or exempted with a reason: true
 Low_level.axis_type coverage:
   Serial             covered by serial, decline-data-guard, decline-sibling-statement
-  Unrolled           covered by unroll-annot, decline-sibling-unrolled
-  Vectorized         covered by retype-vectorized, split-then-vectorize-inner, split-then-vectorize-narrow
+  Unrolled           covered by unroll-annot, decline-sibling-unrolled, rng-unroll
+  Vectorized         covered by retype-vectorized, split-then-vectorize-inner, split-then-vectorize-narrow, rng-vectorized, sibling-vectorized, data-guard-vectorized
   Workgroup          covered by retype-workgroup, mixed-guard-workgroup
-  Workgroup_reduce   covered by retype-workgroup-reduce
+  Workgroup_reduce   covered by retype-workgroup-reduce, rng-workgroup-reduce, sibling-workgroup-reduce, data-guard-workgroup-reduce
   Grid               out of scope: its fallback is the plain serial loop and NOT the localizing one — the one arm that serializes without localizing. No schedule op in the tree produces an unbindable, non-parallel-eligible Grid level over a reduction axis, and one that existed would be a cross-thread race rather than a width question
 every Low_level.axis_type constructor is reached by a member that exists, or exempted with a reason: true
 the coverage samples name distinct constructors: true
 the numerics policy is the default the member table's forms are stated for: true
-reduction: out[3] = sum of 64 terms, hand-built Low_level, 27 members
+reduction: out[3] = sum of 64 terms, hand-built Low_level, 36 members
   01 serial                      [f32 bf16 f16] over plain                 no schedule ops (the reference rendering)                              -> localized scope
                                  codegen's peel takes one level, unguarded
   02 unroll-annot                [f32 bf16 f16] over plain                 Unroll (annotated: codegen repeats the body)                           -> localized scope
@@ -47,13 +47,13 @@ reduction: out[3] = sum of 64 terms, hand-built Low_level, 27 members
   11 split-reduce                [f32         ] over plain                 Split_reduce into four block partials plus a combine nest              -> scoped block partials + combine
                                  codegen's peel takes one level, unguarded
   12 retype-vectorized           [f32 bf16 f16] over plain                 Retype the reduction axis to Vectorized                                -> SIMD accumulator grid, or the localized scope where no vector rendering exists
-                                 codegen's peel localizes nothing under the SIMD grid, or peels the reduction level where no vector rendering exists
+                                 the shared width decision is wide and the SIMD grid holds it, or codegen's peel takes the reduction level where no vector rendering exists
   13 split-then-vectorize-inner  [f32 bf16 f16] over plain                 Split, then Retype the INNER half to Vectorized                        -> SIMD accumulator grid, or the localized scope where no vector rendering exists
                                  codegen's peel takes 2 levels, unguarded
   14 split-then-vectorize-narrow [f32 bf16 f16] over plain                 Split into a two-wide inner half, then Retype it Vectorized            -> localized scope
                                  codegen's peel takes 2 levels, unguarded
   15 retype-workgroup-reduce     [f32 bf16 f16] over plain                 Retype the reduction axis to Workgroup_reduce                          -> warp-shuffle tree, or the localized scope where no lane index is bound
-                                 codegen peels the serialized level, or localizes nothing where the shuffle tree renders
+                                 codegen peels the serialized level, or the shared width decision is wide and the shuffle tree holds it
   16 retype-workgroup            [f32 bf16 f16] over plain                 Retype the reduction axis to Workgroup (no index bound: serialized)    -> localized scope
                                  codegen's peel takes one level, unguarded
   17 runtime-guard               [f32 bf16 f16] over runtime-extent guard  a runtime-extent guard, unscheduled                                    -> localized scope
@@ -76,9 +76,29 @@ reduction: out[3] = sum of 64 terms, hand-built Low_level, 27 members
                                  codegen's peel localizes nothing
   26 decline-sibling-unrolled    [f32 bf16 f16] over sibling statement     the same level Unrolled: one read-modify-write per copy                -> per-step read-modify-write
                                  codegen's peel localizes nothing
-  27 tile-mma-fallback           [f32 bf16 f16] over small contraction     Tensorize whose emission preconditions fail (transposed-B operands)    -> Tile_mma scalar fallback
+  27 rng                         [bf16 f16    ] over RNG-bearing contribution an RNG-bearing contribution, unscheduled (the storage-pinned accumulator) -> per-step read-modify-write
+                                 the shared width decision pins the accumulator to storage: nothing widens
+  28 rng-unroll                  [bf16 f16    ] over RNG-bearing contribution the RNG-bearing level Unrolled: one read-modify-write per copy         -> per-step read-modify-write
+                                 the shared width decision pins the accumulator to storage: nothing widens
+  29 rng-unroll-mat              [bf16 f16    ] over RNG-bearing contribution the RNG-bearing level Unroll ~materialize (a storage-width scope)      -> localized scope
+                                 the scope is minted upstream; codegen's peel localizes nothing
+  30 rng-vectorized              [bf16 f16    ] over RNG-bearing contribution the RNG-bearing axis Retyped to Vectorized: the SIMD grid declines     -> per-step read-modify-write
+                                 the shared width decision pins the accumulator to storage: nothing widens
+  31 rng-workgroup-reduce        [bf16 f16    ] over RNG-bearing contribution the RNG-bearing axis Retyped to Workgroup_reduce (serialized: no lane index bound) -> per-step read-modify-write
+                                 the shared width decision pins the accumulator to storage: nothing widens
+  32 sibling-vectorized          [f32 bf16 f16] over sibling statement     a second statement in the level, Retyped to Vectorized                 -> per-step read-modify-write
+                                 codegen's peel localizes nothing
+  33 sibling-workgroup-reduce    [f32 bf16 f16] over sibling statement     a second statement in the level, Retyped to Workgroup_reduce (serialized) -> per-step read-modify-write
+                                 codegen's peel localizes nothing
+  34 data-guard-vectorized       [f32 bf16 f16] over data-dependent guard  a data-dependent guard, Retyped to Vectorized                          -> per-step read-modify-write
+                                 codegen's peel localizes nothing
+  35 data-guard-workgroup-reduce [f32 bf16 f16] over data-dependent guard  a data-dependent guard, Retyped to Workgroup_reduce (serialized)       -> per-step read-modify-write
+                                 codegen's peel localizes nothing
+  36 tile-mma-fallback           [f32 bf16 f16] over small contraction     Tensorize whose emission preconditions fail (transposed-B operands)    -> Tile_mma scalar fallback
                                  codegen's peel takes one level, unguarded
 every member's peel claim is coherent with the form it claims: true
+at bf16 the RNG-scaled operands discriminate accumulator width: the draw is a factor in (0, 1) and per-step narrowing differs from a once-narrowed whole-nest sum: true
+at f16 the RNG-scaled operands discriminate accumulator width: the draw is a factor in (0, 1) and per-step narrowing differs from a once-narrowed whole-nest sum: true
 at f32 the whole-nest and per-step references coincide (the identity-precision leg): true
 the f32 serial baseline matches the reference its backend's accumulator policy selects: true
 the f32 guarded baseline matches the reference its backend's accumulator policy selects: true
@@ -399,6 +419,100 @@ decline-sibling-unrolled @ f16: its schedule ops left their mark on the lowered 
 decline-sibling-unrolled @ f16 renders the form its composition claims: true
 decline-sibling-unrolled @ f16: codegen's peel decided what the composition declares: true
 decline-sibling-unrolled @ f16 agrees with its reference value: true
+rng @ bf16: its schedule ops left their mark on the lowered IR: true
+rng @ bf16 renders the form its composition claims: true
+rng @ bf16: codegen's peel decided what the composition declares: true
+rng @ bf16 agrees with its reference value: true
+rng @ f16: its schedule ops left their mark on the lowered IR: true
+rng @ f16 renders the form its composition claims: true
+rng @ f16: codegen's peel decided what the composition declares: true
+rng @ f16 agrees with its reference value: true
+rng-unroll @ bf16: its schedule ops left their mark on the lowered IR: true
+rng-unroll @ bf16 renders the form its composition claims: true
+rng-unroll @ bf16: codegen's peel decided what the composition declares: true
+rng-unroll @ bf16 agrees with its reference value: true
+rng-unroll @ f16: its schedule ops left their mark on the lowered IR: true
+rng-unroll @ f16 renders the form its composition claims: true
+rng-unroll @ f16: codegen's peel decided what the composition declares: true
+rng-unroll @ f16 agrees with its reference value: true
+rng-unroll-mat @ bf16: its schedule ops left their mark on the lowered IR: true
+rng-unroll-mat @ bf16 renders the form its composition claims: true
+rng-unroll-mat @ bf16: codegen's peel decided what the composition declares: true
+rng-unroll-mat @ bf16 agrees with its reference value: true
+rng-unroll-mat @ f16: its schedule ops left their mark on the lowered IR: true
+rng-unroll-mat @ f16 renders the form its composition claims: true
+rng-unroll-mat @ f16: codegen's peel decided what the composition declares: true
+rng-unroll-mat @ f16 agrees with its reference value: true
+rng-vectorized @ bf16: its schedule ops left their mark on the lowered IR: true
+rng-vectorized @ bf16 renders the form its composition claims: true
+rng-vectorized @ bf16: codegen's peel decided what the composition declares: true
+rng-vectorized @ bf16 agrees with its reference value: true
+rng-vectorized @ f16: its schedule ops left their mark on the lowered IR: true
+rng-vectorized @ f16 renders the form its composition claims: true
+rng-vectorized @ f16: codegen's peel decided what the composition declares: true
+rng-vectorized @ f16 agrees with its reference value: true
+rng-workgroup-reduce @ bf16: its schedule ops left their mark on the lowered IR: true
+rng-workgroup-reduce @ bf16 renders the form its composition claims: true
+rng-workgroup-reduce @ bf16: codegen's peel decided what the composition declares: true
+rng-workgroup-reduce @ bf16 agrees with its reference value: true
+rng-workgroup-reduce @ f16: its schedule ops left their mark on the lowered IR: true
+rng-workgroup-reduce @ f16 renders the form its composition claims: true
+rng-workgroup-reduce @ f16: codegen's peel decided what the composition declares: true
+rng-workgroup-reduce @ f16 agrees with its reference value: true
+sibling-vectorized @ f32: the sibling stores cover every cell with the value of their own iteration: true
+sibling-vectorized @ f32: its schedule ops left their mark on the lowered IR: true
+sibling-vectorized @ f32 renders the form its composition claims: true
+sibling-vectorized @ f32: codegen's peel decided what the composition declares: true
+sibling-vectorized @ f32 agrees with its reference value: true
+sibling-vectorized @ bf16: the sibling stores cover every cell with the value of their own iteration: true
+sibling-vectorized @ bf16: its schedule ops left their mark on the lowered IR: true
+sibling-vectorized @ bf16 renders the form its composition claims: true
+sibling-vectorized @ bf16: codegen's peel decided what the composition declares: true
+sibling-vectorized @ bf16 agrees with its reference value: true
+sibling-vectorized @ f16: the sibling stores cover every cell with the value of their own iteration: true
+sibling-vectorized @ f16: its schedule ops left their mark on the lowered IR: true
+sibling-vectorized @ f16 renders the form its composition claims: true
+sibling-vectorized @ f16: codegen's peel decided what the composition declares: true
+sibling-vectorized @ f16 agrees with its reference value: true
+sibling-workgroup-reduce @ f32: the sibling stores cover every cell with the value of their own iteration: true
+sibling-workgroup-reduce @ f32: its schedule ops left their mark on the lowered IR: true
+sibling-workgroup-reduce @ f32 renders the form its composition claims: true
+sibling-workgroup-reduce @ f32: codegen's peel decided what the composition declares: true
+sibling-workgroup-reduce @ f32 agrees with its reference value: true
+sibling-workgroup-reduce @ bf16: the sibling stores cover every cell with the value of their own iteration: true
+sibling-workgroup-reduce @ bf16: its schedule ops left their mark on the lowered IR: true
+sibling-workgroup-reduce @ bf16 renders the form its composition claims: true
+sibling-workgroup-reduce @ bf16: codegen's peel decided what the composition declares: true
+sibling-workgroup-reduce @ bf16 agrees with its reference value: true
+sibling-workgroup-reduce @ f16: the sibling stores cover every cell with the value of their own iteration: true
+sibling-workgroup-reduce @ f16: its schedule ops left their mark on the lowered IR: true
+sibling-workgroup-reduce @ f16 renders the form its composition claims: true
+sibling-workgroup-reduce @ f16: codegen's peel decided what the composition declares: true
+sibling-workgroup-reduce @ f16 agrees with its reference value: true
+data-guard-vectorized @ f32: its schedule ops left their mark on the lowered IR: true
+data-guard-vectorized @ f32 renders the form its composition claims: true
+data-guard-vectorized @ f32: codegen's peel decided what the composition declares: true
+data-guard-vectorized @ f32 agrees with its reference value: true
+data-guard-vectorized @ bf16: its schedule ops left their mark on the lowered IR: true
+data-guard-vectorized @ bf16 renders the form its composition claims: true
+data-guard-vectorized @ bf16: codegen's peel decided what the composition declares: true
+data-guard-vectorized @ bf16 agrees with its reference value: true
+data-guard-vectorized @ f16: its schedule ops left their mark on the lowered IR: true
+data-guard-vectorized @ f16 renders the form its composition claims: true
+data-guard-vectorized @ f16: codegen's peel decided what the composition declares: true
+data-guard-vectorized @ f16 agrees with its reference value: true
+data-guard-workgroup-reduce @ f32: its schedule ops left their mark on the lowered IR: true
+data-guard-workgroup-reduce @ f32 renders the form its composition claims: true
+data-guard-workgroup-reduce @ f32: codegen's peel decided what the composition declares: true
+data-guard-workgroup-reduce @ f32 agrees with its reference value: true
+data-guard-workgroup-reduce @ bf16: its schedule ops left their mark on the lowered IR: true
+data-guard-workgroup-reduce @ bf16 renders the form its composition claims: true
+data-guard-workgroup-reduce @ bf16: codegen's peel decided what the composition declares: true
+data-guard-workgroup-reduce @ bf16 agrees with its reference value: true
+data-guard-workgroup-reduce @ f16: its schedule ops left their mark on the lowered IR: true
+data-guard-workgroup-reduce @ f16 renders the form its composition claims: true
+data-guard-workgroup-reduce @ f16: codegen's peel decided what the composition declares: true
+data-guard-workgroup-reduce @ f16 agrees with its reference value: true
 tile-mma-fallback @ f32 renders the form its composition claims: true
 tile-mma-fallback @ f32: codegen's peel decided what the leg declares: true
 tile-mma-fallback @ f32 agrees with its reference value: true

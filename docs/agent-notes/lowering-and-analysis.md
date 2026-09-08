@@ -232,10 +232,14 @@ files.
   rendering re-renders the peeled levels inside the scope it just minted; and a routine whose form
   is localized but whose census localized NOTHING had its scope minted upstream — by a `Schedule`
   mint (`Unroll ~materialize`, `Partition`, `Pad`) or by virtualization — which is a different fact
-  about the kernel than "codegen localized it". The `reduction_forms` member table declares which of
-  the four (`Peeled` / `Minted_upstream` / `No_localization` / `Never_a_site` — the last being
-  BOTH virtualization members, whose accumulator lives in the inlined scope rather than in a cell, so
-  there is no memory recurrence and no site at all) each member claims, and
+  about the kernel than "codegen localized it". A further site kind, `Peel_ceded verdict`, says
+  the shared width decision was wide and the SIMD grid or the shuffle tree held the accumulator at
+  that width instead of a scope (gh-ocannl-754; the decision itself is in the backend-precision
+  note). The `reduction_forms` member table declares which of the six (`Peeled` /
+  `Minted_upstream` / `No_localization` / `Never_a_site` / `Widened_elsewhere` /
+  `Pinned_to_storage` — `Never_a_site` being BOTH virtualization members, whose accumulator lives in
+  the inlined scope rather than in a cell, so there is no memory recurrence and no site at all; the
+  last two being gh-ocannl-754's ceded and storage-pinned decisions) each member claims, and
   `test/operations/peel_census.ml` pins the instrument itself, including that a REFUSING report
   never claims an admitted lane-private guard: separation is settled at the base, so a refusal that
   never reached one leaves that guard `Guard_lane_private_unresolved`.

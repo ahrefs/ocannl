@@ -73,8 +73,9 @@ type routine = private {
           kernels are summarized together. *)
   peel : Ir.C_syntax.peel_summary;
       (** What the reduction peel DECIDED while emitting this routine (gh-ocannl-733): per
-          accumulating serial site, whether [Low_level.peel_accum_nest] localized it — with how many
-          levels it peeled and which verdict each peeled guard earned — or why it did not.
+          accumulating site, whether [Low_level.peel_accum_nest] localized it — with how many levels
+          it peeled and which verdict each peeled guard earned — ceded that width to the
+          warp-shuffle tree or the SIMD accumulator grid (gh-ocannl-754), or why it did not.
 
           A field of the routine, beside {!mma} and collected in the same bracket, because the
           emitted form does not determine the decision: a nest whose accumulated cell is free of the

@@ -324,6 +324,56 @@ let () =
     p "guarded smaller-extent accumulation rejected (GPU) or runs serially (CPU)"
       (approx (run ~name:"guarded_extent_wshfl" ~transform:sibling_transform z1) expected_partial)
 
+(* --- gh-ocannl-754: an accumulation the shared width decision recognizes but the shuffle cannot
+   render — a Serial level NESTED under the [Workgroup_reduce] one, accumulating into a cell every
+   lane shares. Before the decision was shared, the shuffle's own recognizer saw no single statement
+   and fell through to the plain hardware binding, under which every lane read-modify-wrote the one
+   cell: a race, and a silent one. Now a backend that binds the lane index refuses the level loudly,
+   while on the C backends it is a serial nest the localizing peel takes whole. --- *)
+let () =
+  let n = 32 and inner = 4 in
+  let mv = Array.init (n * inner) ~f:(fun k -> (Float.of_int (k % 13) *. 0.25) -. 1.5) in
+  let expected = Array.fold mv ~init:0. ~f:( +. ) in
+  let mx = TDSL.ndarray mv ~label:[ "mx" ] ~output_dims:[ n; inner ] () in
+  let%op ms = mx ++ "ij=>0" in
+  let transform =
+    reduce_transform ~n ms.Tensor.value ~body_of:(fun i ->
+        let k = Idx.get_symbol () in
+        LL.For_loop
+          {
+            index = k;
+            from_ = 0;
+            to_ = inner - 1;
+            axis = LL.Serial;
+            body =
+              LL.Set
+                {
+                  tn = ms.Tensor.value;
+                  idcs = [| f0 |];
+                  llsc =
+                    Binop
+                      ( Ir.Ops.Add,
+                        (Get (ms.Tensor.value, [| f0 |]), single),
+                        (Get (mx.Tensor.value, [| it i; it k |]), single) );
+                  debug = "";
+                };
+          })
+  in
+  let claim =
+    "an unguarded accumulation nest under the Workgroup_reduce level (a Serial level inside it) is \
+     refused loudly where a lane index is bound (GPU) or localized whole as a serial nest (CPU)"
+  in
+  if on_gpu then
+    match
+      try
+        ignore (run ~name:"nested_wshfl" ~transform ms : float);
+        None
+      with Invalid_argument msg -> Some msg
+    with
+    | Some msg -> p claim (String.is_substring msg ~substring:"single accumulation statement")
+    | None -> p claim false
+  else p claim (approx (run ~name:"nested_wshfl" ~transform ms) expected)
+
 (* --- gh-ocannl-682: narrow accumulators. The shuffle stages the value at the backend's accumulator
    RESIDENCY rather than at the node's storage precision, so a bf16 reduction on a widening backend
    computes the same number its serial rendering does, and a residency that stays narrow is refused
