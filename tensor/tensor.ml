@@ -133,9 +133,12 @@ let take_forward_code t =
   t.consumption.fwd <- Taken;
   t.forward
 
+(* Marks only what it removes: a backprop code handed out before the forward-only run stays [Taken],
+   so the later rejection reports the handout and not a discard that dropped nothing. *)
 let discard_backprop_code t =
-  remove_bprop_root t;
-  t.consumption.bprop <- Discarded
+  if is_bprop_root t then (
+    remove_bprop_root t;
+    t.consumption.bprop <- Discarded)
 
 let with_unchanged_roots ~f =
   let fwd_roots = session_state.forward_roots in

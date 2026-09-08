@@ -71,6 +71,15 @@ let () =
   p "discarded backprop: says it was discarded" (has msg ~substring:"was discarded");
   p "discarded backprop: names forward_once" (has msg ~substring:"forward_once");
   p "discarded backprop: does not blame a consumer" (not (has msg ~substring:"consume that"));
+  (* A discard after the backprop code was already handed out drops nothing, and must not overwrite
+     the handout: the rejection keeps reporting the consumption. *)
+  let v = Tensor.term_init [| 1.; 2. |] ~label:[ "cfr_v8" ] ~grad_spec:Require_grad () in
+  let l = TDSL.O.relu v in
+  ignore (Tensor.consume_backprop_code l : Ir.Assignments.comp);
+  Tensor.discard_backprop_code l;
+  let msg = rejection ~name:"taken then discarded" (fun () -> Tensor.consume_backprop_code l) in
+  p "discard after consume: still reports the consumption" (has msg ~substring:"already consumed");
+  p "discard after consume: does not claim a discard" (not (has msg ~substring:"was discarded"));
   (* [with_unchanged_roots] restores the consumed marks with the roots: an [ignore]d [%cd] block's
      consumption must not later be reported as a prior consumption. *)
   let x = leaf "cfr_x5" in

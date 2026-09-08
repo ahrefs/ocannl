@@ -12,5 +12,7 @@ after a %cd embedding: does not blame a consumer: true
 discarded backprop: says it was discarded: true
 discarded backprop: names forward_once: true
 discarded backprop: does not blame a consumer: true
+discard after consume: still reports the consumption: true
+discard after consume: does not claim a discard: true
 consumption inside with_unchanged_roots is undone: true
 and the root can then be consumed once: true
