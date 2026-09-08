@@ -20,6 +20,19 @@ type projections = {
           only after [op_asn] returns: forcing [projections] from within an [op_asn] is rejected. *)
 }
 
+type handout =
+  | Not_handed_out
+  | Taken
+  | Discarded
+      (** What became of one side of a tensor's code once it stopped being a root: [Taken] by
+          {!consume_forward_code}, {!take_forward_code} (the [%cd] embedding path) or
+          {!consume_backprop_code}; [Discarded] by {!discard_backprop_code}; [Not_handed_out] while
+          it is a root, and for a parameter or a subterm whose code a consumer embeds. *)
+
+type consumption = { mutable fwd : handout; mutable bprop : handout }
+(** A mutable cell shared by every copy of the record, so the marker follows the tensor; it is what
+    lets the consume functions say "already consumed" or "discarded" rather than "not a root". *)
+
 type diff = {
   grad : tn;
   zero_grads : comp;
@@ -51,6 +64,7 @@ type t = {
       (** The eventual shape of [t.value] and [t.diff.grad], incorporating the current state of
           shape inference. *)
   children : subtensor list;
+  consumption : consumption;
 }
 [@@deriving sexp_of]
 (** Information needed for compositional code generation. *)
@@ -74,10 +88,25 @@ val init_params : ?skip:'a Map.M(Ir.Tnode).t -> t -> comp
     even if the params set is empty. *)
 
 val is_fwd_root : t -> bool
-val remove_fwd_root : t -> unit
 val is_bprop_root : t -> bool
-val remove_bprop_root : t -> unit
+
+val take_forward_code : t -> comp
+(** The unchecked half of {!consume_forward_code}, for a tensor the caller has established is a
+    forward root ({!is_fwd_root}): removes it from the forward roots, marks its forward code as
+    taken, and returns the code. This is the handout every path that embeds a tensor's forward code
+    goes through -- {!consume_forward_code} and the [%cd] operands' embedding alike -- so that a
+    later {!consume_forward_code} on the same tensor reports the prior consumption. *)
+
+val discard_backprop_code : t -> unit
+(** Drops [t] from the backprop roots without handing its code out, and marks it so: the
+    forward-only run of a differentiable tensor ({!Train.forward_once}). A later
+    {!consume_backprop_code} then reports the discard rather than a consumer that does not exist.
+    Every route by which a root leaves the root maps without a consumer records itself this way --
+    the bare removal is not exported. *)
+
 val with_unchanged_roots : f:(unit -> 'a) -> 'a
+(** Runs [f] and restores the forward and backprop root maps afterwards, including the consumption
+    markers of the roots that were live at entry. *)
 
 val default_value_prec : Ir.Ops.prec ref
 (** The default precision for the value node of terminal (i.e. non-composite) tensors.

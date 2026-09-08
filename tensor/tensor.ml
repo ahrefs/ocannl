@@ -33,6 +33,16 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 type diff = { grad : (Tn.t[@sexp.opaque]); zero_grads : Asgns.comp; backprop : Asgns.comp }
 [@@deriving sexp_of]
 
+(* What became of the tensor's code once it stopped being a root. A root leaves the session's root
+   map when a consumer embeds it, when it is handed out ([consume_forward_code], [take_forward_code]
+   -- the [%cd] embedding path -- or [consume_backprop_code]) and when it is discarded
+   ([discard_backprop_code], the [Train.forward_once] path); only the rejection message tells these
+   apart, so every non-embedding removal records its kind here. The cell is mutable and shared by
+   every [{ t with ... }] copy, so the marker follows the tensor rather than accumulating in
+   session-global storage. *)
+type handout = Not_handed_out | Taken | Discarded [@@deriving sexp_of, equal]
+type consumption = { mutable fwd : handout; mutable bprop : handout } [@@deriving sexp_of]
+
 module rec Self : sig
   type t = {
     params : (t, Self_comparator.comparator_witness) Set.t;
@@ -42,6 +52,7 @@ module rec Self : sig
     top_down_prec : bool;
     shape : Shape.t;
     children : subtensor list;
+    consumption : consumption;
   }
   [@@deriving sexp_of]
 
@@ -57,6 +68,7 @@ end = struct
     top_down_prec : bool;
     shape : Shape.t;
     children : subtensor list;
+    consumption : consumption;
   }
 
   and subtensor = { subtensor : t; embedded : bool }
@@ -116,12 +128,28 @@ let is_bprop_root t = Map.mem session_state.backprop_roots t.value.id
 let remove_bprop_root t =
   session_state.backprop_roots <- Map.remove session_state.backprop_roots t.value.id
 
+let take_forward_code t =
+  remove_fwd_root t;
+  t.consumption.fwd <- Taken;
+  t.forward
+
+(* Marks only what it removes: a backprop code handed out before the forward-only run stays [Taken],
+   so the later rejection reports the handout and not a discard that dropped nothing. *)
+let discard_backprop_code t =
+  if is_bprop_root t then (
+    remove_bprop_root t;
+    t.consumption.bprop <- Discarded)
+
 let with_unchanged_roots ~f =
   let fwd_roots = session_state.forward_roots in
   let bprop_roots = session_state.backprop_roots in
   let finally () =
     session_state.forward_roots <- fwd_roots;
-    session_state.backprop_roots <- bprop_roots
+    session_state.backprop_roots <- bprop_roots;
+    (* A root's code can only have been taken inside [f] if it was a root at entry, and a root is by
+       construction not yet taken: restoring the maps restores the markers. *)
+    Map.iter fwd_roots ~f:(fun t -> t.consumption.fwd <- Not_handed_out);
+    Map.iter bprop_roots ~f:(fun t -> t.consumption.bprop <- Not_handed_out)
   in
   Exn.protectx ~f ~finally ()
 
@@ -444,7 +472,16 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   in
   let params = Set.union_list (module T) @@ List.map ordered_ts ~f:(fun ti -> ti.params) in
   let t =
-    { params; forward = Asgns.empty_comp; diff = None; value = v; top_down_prec; shape; children }
+    {
+      params;
+      forward = Asgns.empty_comp;
+      diff = None;
+      value = v;
+      top_down_prec;
+      shape;
+      children;
+      consumption = { fwd = Not_handed_out; bprop = Not_handed_out };
+    }
   in
   (* The operation's shape update step is created only once [op_asn] has returned: the step carries
      the neutral element of the operation's accumulation, which is read off the assignments [op_asn]
@@ -912,12 +949,44 @@ let%debug7_sexp param ?(require_grad = true) ~t (name : string) ?(more_label = [
 let debug_name t = Tn.debug_name t.value
 let debug_grad t = Tn.debug_name (Option.value_exn t.diff).grad
 
+(* A tensor stops being a root for one of four reasons, and the rejection names the one that
+   applies: its code was already consumed (the common test-authoring trap -- one tensor compiled
+   several times, e.g. under different [?lowered_transform]s: reuse the comp the first
+   [Train.forward] returned), it was discarded ([Train.forward_once] drops a differentiable tensor's
+   backprop root), it is a parameter (never a forward root; a parameter's empty backprop code IS
+   consumable, so that sentence is forward-only), or a consumer constructed from it owns its code.
+   The consumer sentence is the fallback, so every other route must leave its marker. *)
+let not_a_root_reason ~(handout : handout) ~what ~name t =
+  match handout with
+  | Discarded ->
+      [%string
+        "Tensor.consume_%{what}_code: the %{what} code of %{name} was discarded \
+         (Train.forward_once runs a differentiable tensor forward-only and drops its backprop \
+         root); to backpropagate, build the tensor afresh and use Train.update_once or \
+         Train.grad_update"]
+  | Taken ->
+      [%string
+        "Tensor.consume_%{what}_code: the %{what} code of %{name} was already consumed by an \
+         earlier Train.forward / Train.grad_update / consume_%{what}_code call or embedded by a \
+         %%cd block that read the tensor -- a tensor's code is consumed once; to compile it again \
+         (e.g. under another ?lowered_transform), reuse the comp that call or block returned"]
+  | Not_handed_out when String.equal what "forward" && Set.mem t.params t ->
+      [%string
+        "Tensor.consume_%{what}_code: %{name} is a parameter, which owns no %{what} code of its \
+         own (its value is set by Train.init_params or Context.set_values); consume a tensor \
+         computed from it instead"]
+  | Not_handed_out ->
+      [%string
+        "Tensor.consume_%{what}_code: %{name} is not a %{what} root: its %{what} code is embedded \
+         in a tensor constructed from it (a shared subtensor's code is owned by its \
+         first-constructed consumer); consume that consumer instead"]
+
 let consume_forward_code t =
   if not @@ is_fwd_root t then
     raise
     @@ Session_error
-         ( "Tensor.consume_forward_code: tensor is not a root for tnode: " ^ Tn.debug_name t.value
-           ^ " (maybe you're trying to forward a param?)",
+         ( not_a_root_reason ~handout:t.consumption.fwd ~what:"forward"
+             ~name:(Tn.debug_name t.value) t,
            Some t );
   (* Check if any non-embedded descendants of t are embedded in other roots *)
   let all_read = fst @@ Asgns.collect_nodes_guess_output t.forward.asgns in
@@ -936,8 +1005,7 @@ let consume_forward_code t =
              {|Tensor.consume_forward_code for %{debug_name t}:
 found conflicting roots with shared non-embedded descendants: %{String.concat ~sep:", " @@ List.map ~f:debug_name conflicting_roots}|}],
            Some t );
-  remove_fwd_root t;
-  t.forward
+  take_forward_code t
 
 let consume_backprop_code t =
   let diff =
@@ -951,7 +1019,8 @@ let consume_backprop_code t =
   if not @@ is_bprop_root t then
     raise
     @@ Session_error
-         ("Tensor.consume_backprop_code: tensor is not a root for tnode: " ^ debug_grad t, Some t);
+         ( not_a_root_reason ~handout:t.consumption.bprop ~what:"backprop" ~name:(debug_grad t) t,
+           Some t );
   (* Check if any non-embedded grad descendants of t are embedded in other roots *)
   let all_read = fst @@ Asgns.collect_nodes_guess_output diff.backprop.asgns in
   let non_embedded_grad_descendants = Set.diff all_read diff.backprop.embedded_nodes in
@@ -974,6 +1043,7 @@ let consume_backprop_code t =
 found conflicting roots with shared non-embedded grad descendants: %{String.concat ~sep:", " @@ List.map ~f:debug_grad conflicting_roots}|}],
            Some t );
   remove_bprop_root t;
+  t.consumption.bprop <- Taken;
   diff.backprop
 
 let set_random_seed ?seed () =

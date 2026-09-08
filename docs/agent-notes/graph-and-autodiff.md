@@ -12,7 +12,9 @@ files.
   compile before margin-blind ones, or the operand's layout locks unpadded. Sibling fragments
   are topologically ordered (owner-first forward, owner-last backward) — the old id-ascending
   order silently zeroed shared paths (regressions `forward_fragment_order.ml`,
-  `backprop_fragment_order.ml`).
+  `backprop_fragment_order.ml`). A tensor's forward code is consumable ONCE: compiling one tensor
+  several times (e.g. under different `?lowered_transform`s) means calling `Train.forward` once and
+  reusing the comp it returned — the tensor carries a consumption marker (`Tensor.take_forward_code` is the one handout, shared with the `%cd` embedding of an operand's forward code), so the rejection says whether the code was already consumed, discarded (`Train.forward_once` drops the backprop root through `discard_backprop_code`), the tensor is a parameter, or a consumer owns its code (`consume_forward_code_reason.ml`). The bare root removers are not exported: a route that drops a root without a consumer records its kind, or the consumer sentence lies.
 - The `projections` handle an `op_asn` receives is a promise: `Tensor.op` creates the operation's
   shape update step only after `op_asn` returns, because the step's `neutral_elem` is immutable and
   is read off the assignments (`Shape.derive_projections` consumes it for the gh-504 clamped-window

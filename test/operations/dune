@@ -5028,6 +5028,17 @@
 ; deliberately misbehaving [op_asn]s and pins that [Tensor.op] raises on them.
 
 (test
+ ; ocannl-backend: none -- it builds tensor graphs and pins the rejection messages of
+ ; Tensor.consume_forward_code / consume_backprop_code; nothing is ever lowered, compiled or run.
+ (name consume_forward_code_reason)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules consume_forward_code_reason)
+ (libraries base ocannl arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  ; ocannl-backend: none -- it builds a tensor graph and expects the construction to raise; nothing
  ; is ever lowered, compiled or run.
  (name neutral_elem_guard)

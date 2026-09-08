@@ -1479,7 +1479,7 @@ let forward_once ?output_cd_file ?(skip_init = false) ?reinit_all ?(bindings = I
       ~f:forward ctx t
   in
   (* gh-ocannl-777's recompute-on-read path should retire this forward-root consumption cleanup. *)
-  Tensor.remove_bprop_root t;
+  Tensor.discard_backprop_code t;
   ctx
 
 (** [update_once] is a wrapper around {!run_once} that runs the gradient update code of [t]: both
