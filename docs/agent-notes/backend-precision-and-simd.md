@@ -590,6 +590,11 @@ files.
   the profile's name: exact owns only built-in defaults, approximate only the profile, and an
   ambient `OCANNL_TF32_MATMULS=true` or a `reproducible` profile in the environment is a
   REGIME MISMATCH row that names the key and its source.
+  Keys OUTSIDE that payload are recorded instead of checked (gh-ocannl-720): the sweep reads its
+  ambient `OCANNL_*` environment once, stamps it onto every OCANNL row as `ambient_ocannl_env` and
+  prints it in the report header, so a `narrow_compute_f32` or `cc_vector_bytes` in the operator's
+  shell — or any key added after the gate was written — is visible in the artifact rather than
+  silently part of the measurement.
 - **rocWMMA fragments are opaque for LAYOUT but not for ELEMENTS, and that is what wires HIP's
   wide-f16 d boundary** (gh-ocannl-789, `arrayjit/lib/hip_backend.ml`'s `mma_d_boundary`). Under
   `Fp16_wide` the uniform-f16 arm pairs a `float` accumulator fragment with the unchanged f16

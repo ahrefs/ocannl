@@ -375,6 +375,37 @@ def precision_env(precision):
     return env
 
 
+def ambient_ocannl_env(base):
+    """Every OCANNL_* variable the sweep inherited, with its value (gh-ocannl-720).
+
+    `cell_env` passes the operator's environment straight through, so ANY configuration key can
+    reach the OCANNL cells from it, while the regime gate (gh-ocannl-719) cross-checks only the
+    keys the `approximate` payload owns. `narrow_compute_f32`, `cc_vector_bytes`,
+    `cc_backend_arch_flags`, an `autotune_*` outside the payload, and every key added later all
+    change what was measured, with nothing in the artifact saying so.
+
+    Recording is deliberately not refusing, and nothing here is filtered out: the sweep
+    dispatches `OCANNL_BACKEND` itself, and `OCANNL_AUTOTUNE_LOG` / `OCANNL_AUTOTUNE_CACHE_DIR`
+    are documented ways to run one (benchmarks/README.md), so a stripping rule would have to
+    guess which of the rest are legitimate -- and the ones worth catching are the keys nobody has
+    thought of yet. What the stamp buys is that a reader of the numbers can see the environment
+    they were taken in, whatever it was, instead of assuming a clean one.
+    """
+    return {key: base[key] for key in sorted(base) if key.startswith("OCANNL_")}
+
+
+def stamp_ambient_env(result, ambient):
+    """Record on an OCANNL row the ambient OCANNL_* environment its cell was dispatched with.
+
+    OCANNL rows only: the torch and tinygrad runners read none of these, and a row that carried
+    them would invite reading a torch number as though the variables had reached it. A copy, not
+    the collected dict itself, so one mapping cannot end up shared by every row of the sweep.
+    """
+    if result.get("framework") == "ocannl":
+        result["ambient_ocannl_env"] = dict(ambient)
+    return result
+
+
 def cell_env(base, fixture, variant, precision):
     """The environment an OCANNL cell is dispatched with."""
     env = dict(
@@ -1300,6 +1331,33 @@ def cell_timeout_arg(text):
     return seconds
 
 
+def ambient_env_line(results):
+    """The report's header record of the OCANNL_* environment its OCANNL cells were dispatched in.
+
+    Printed beside the measurement boxes because it is the same kind of fact: a number is read
+    against the machine AND the configuration it was taken under. One line per distinct recorded
+    environment, so a report combining rows from two sweeps says so rather than picking one.
+
+    A row from a sweep predating the stamp records nothing, which is not the same as an empty
+    environment: nothing at report time can recover what the shell held at measurement time, so
+    an unstamped report says `not recorded` rather than claiming a clean one.
+    """
+    recorded = sorted(
+        {
+            tuple(sorted(r["ambient_ocannl_env"].items()))
+            for r in results
+            if isinstance(r.get("ambient_ocannl_env"), dict)
+        }
+    )
+    if not recorded:
+        return "ambient OCANNL_* environment: not recorded"
+    return "\n".join(
+        "ambient OCANNL_* environment: "
+        + (", ".join(f"{key}={value}" for key, value in env) if env else "none")
+        for env in recorded
+    )
+
+
 def report(results, out_dir, unavailable=(), failures=(), digests_path=None):
     out_dir.mkdir(parents=True, exist_ok=True)
     digests_path = digests_path or HERE / "fixtures" / fixture_digest.DIGEST_FILE
@@ -1347,6 +1405,7 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None):
         + ", ".join(measurement_boxes)
         + "\n"
     )
+    lines.append(ambient_env_line(results) + "\n")
     for workload in sorted({r["workload"] for r in results}):
         lines.append(f"\n## {workload}\n")
         rows = [r for r in results if r["workload"] == workload]
@@ -1726,6 +1785,12 @@ def main():
     partial_failures = HERE / "results" / "partial-failures.jsonl"
     partial_failures.write_text("")
 
+    # What OCANNL configuration the operator's shell was already carrying when the sweep started
+    # (gh-ocannl-720). Read once, before a cell can change it, and stamped onto every OCANNL row:
+    # the cells inherit this environment, and only the approximate payload's keys are otherwise
+    # accounted for.
+    ambient = ambient_ocannl_env(os.environ)
+
     # The fixture the cells currently being dispatched are measuring — stamped onto every result
     # so a row, and the report built from it, states its own workload identity (gh-ocannl-645)
     # rather than leaving it to how the operator ran the sweep.
@@ -1748,6 +1813,7 @@ def main():
         r, note = run_cell(label, cmd, timeout=args.cell_timeout, **kwargs)
         if r:
             r.update(stamp)
+            stamp_ambient_env(r, ambient)
             if override:
                 r.update(override)
             results.append(r)
