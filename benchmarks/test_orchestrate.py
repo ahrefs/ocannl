@@ -3048,6 +3048,88 @@ class AmbientEnvTest(unittest.TestCase):
 
         self.assertIn("ambient OCANNL_* environment: none\n", self.report(rows))
 
+    def test_a_value_no_utf8_artifact_could_hold_is_escaped_where_it_is_collected(self):
+        # An environment value is bytes: on POSIX `os.environ` hands a non-UTF-8 byte over as a
+        # lone surrogate, and a row carrying one makes both artifacts unwritable at the END of a
+        # sweep -- results.jsonl through json.dumps' output and report.md through its UTF-8 write.
+        # Escaped at collection, so the byte is still legible and every consumer can write it.
+        ambient = orchestrate.ambient_ocannl_env(
+            {"OCANNL_AUTOTUNE_CACHE_DIR": "/tmp/tune-\udcff"}
+        )
+
+        self.assertEqual(ambient, {"OCANNL_AUTOTUNE_CACHE_DIR": "/tmp/tune-\\xff"})
+        # An unpaired high surrogate is not surrogate-escaped bytes at all; it escapes as itself
+        # rather than raising out of the sweep.
+        self.assertEqual(
+            orchestrate.ambient_ocannl_env({"OCANNL_BACKEND": "\ud800"}),
+            {"OCANNL_BACKEND": "\\ud800"},
+        )
+
+    def test_both_artifacts_of_a_sweep_under_such_a_value_are_written(self):
+        rows = [
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "cc", "default", [2.3026, 2.3010]),
+                orchestrate.ambient_ocannl_env(
+                    {"OCANNL_AUTOTUNE_CACHE_DIR": "/tmp/tune-\udcff"}
+                ),
+            )
+        ]
+        orchestrate.parity_check(rows)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            with contextlib.redirect_stdout(io.StringIO()):
+                orchestrate.report(rows, out)
+            text = (out / "report.md").read_text()
+            [row] = [
+                strict_loads(line)
+                for line in (out / "results.jsonl").read_text().splitlines()
+                if line
+            ]
+
+        self.assertIn(
+            "ambient OCANNL_* environment: OCANNL_AUTOTUNE_CACHE_DIR=/tmp/tune-\\xff\n", text
+        )
+        self.assertEqual(
+            row["ambient_ocannl_env"], {"OCANNL_AUTOTUNE_CACHE_DIR": "/tmp/tune-\\xff"}
+        )
+
+    def test_a_mixed_report_keeps_the_unrecorded_rows_reading(self):
+        # Rows from a pre-stamp sweep beside rows from a new one: printing only the recorded
+        # environment would put it at the head of measurements whose environment is
+        # unrecoverable, which is the reading the `not recorded` line exists to deny.
+        rows = [
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "cc", "default", [2.3026, 2.3010]),
+                {"OCANNL_NARROW_COMPUTE_F32": "true"},
+            ),
+            cell("ocannl", "metal", "default", [2.3026, 2.3010]),
+        ]
+        orchestrate.parity_check(rows)
+
+        text = self.report(rows)
+
+        self.assertIn(
+            "ambient OCANNL_* environment: OCANNL_NARROW_COMPUTE_F32=true\n", text
+        )
+        self.assertIn("ambient OCANNL_* environment: not recorded\n", text)
+
+    def test_the_unstamped_frameworks_are_not_a_lost_record(self):
+        # Only OCANNL rows are counted: torch and tinygrad rows carry no stamp by design, and a
+        # `not recorded` line beside a complete record would read as a sweep that lost one.
+        rows = [
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "cc", "default", [2.3026, 2.3010]), {"OCANNL_BACKEND": "cc"}
+            ),
+            cell("pytorch", "cpu", "eager", [2.3026, 2.3010]),
+        ]
+        orchestrate.parity_check(rows)
+
+        text = self.report(rows)
+
+        self.assertIn("ambient OCANNL_* environment: OCANNL_BACKEND=cc\n", text)
+        self.assertNotIn("not recorded", text)
+
     def test_rows_predating_the_stamp_do_not_claim_a_clean_shell(self):
         # Nothing at report time can recover what the shell held while the numbers were taken, so
         # an unstamped row's silence stays silence rather than becoming evidence of `none`.

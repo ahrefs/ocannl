@@ -375,6 +375,28 @@ def precision_env(precision):
     return env
 
 
+def report_text(text):
+    """`text` as characters this sweep's artifacts can actually hold.
+
+    An environment value is bytes, not text: on POSIX `os.environ` decodes it with
+    `surrogateescape`, so a `OCANNL_AUTOTUNE_CACHE_DIR` under a path with a non-UTF-8 byte
+    arrives holding lone surrogates. Carrying those into a row would make `json.dumps`' output
+    unwritable and `report.md`'s UTF-8 write raise -- losing results.jsonl and the report at the
+    END of a sweep, after every cell has been paid for. Sanitized where the value is COLLECTED
+    rather than where it is rendered, so every consumer of the row gets text it can write.
+
+    The bytes are recovered and re-rendered with `backslashreplace`, so the recorded value shows
+    the byte (`\\xff`) rather than a replacement character; a string that is not even
+    surrogate-escaped bytes (an unpaired high surrogate, which Windows can produce) escapes as
+    itself instead of raising.
+    """
+    try:
+        raw = text.encode("utf-8", "surrogateescape")
+    except UnicodeEncodeError:
+        raw = text.encode("utf-8", "backslashreplace")
+    return raw.decode("utf-8", "backslashreplace")
+
+
 def ambient_ocannl_env(base):
     """Every OCANNL_* variable the sweep inherited, with its value (gh-ocannl-720).
 
@@ -391,7 +413,11 @@ def ambient_ocannl_env(base):
     thought of yet. What the stamp buys is that a reader of the numbers can see the environment
     they were taken in, whatever it was, instead of assuming a clean one.
     """
-    return {key: base[key] for key in sorted(base) if key.startswith("OCANNL_")}
+    return {
+        report_text(key): report_text(base[key])
+        for key in sorted(base)
+        if key.startswith("OCANNL_")
+    }
 
 
 def stamp_ambient_env(result, ambient):
@@ -1338,24 +1364,31 @@ def ambient_env_line(results):
     against the machine AND the configuration it was taken under. One line per distinct recorded
     environment, so a report combining rows from two sweeps says so rather than picking one.
 
-    A row from a sweep predating the stamp records nothing, which is not the same as an empty
-    environment: nothing at report time can recover what the shell held at measurement time, so
-    an unstamped report says `not recorded` rather than claiming a clean one.
+    An OCANNL row from a sweep predating the stamp records nothing, which is not the same as an
+    empty environment: nothing at report time can recover what the shell held at measurement
+    time, so `not recorded` is its own reading here -- printed BESIDE the recorded environments
+    in a report that mixes the two, never replaced by them, and alone in a report that has no
+    OCANNL row to record anything. Only OCANNL rows are counted: a torch or tinygrad row carries
+    no stamp by design, and would otherwise read as a sweep that lost its record.
     """
+    ours = [r for r in results if r.get("framework") == "ocannl"]
     recorded = sorted(
         {
             tuple(sorted(r["ambient_ocannl_env"].items()))
-            for r in results
+            for r in ours
             if isinstance(r.get("ambient_ocannl_env"), dict)
         }
     )
-    if not recorded:
-        return "ambient OCANNL_* environment: not recorded"
-    return "\n".join(
-        "ambient OCANNL_* environment: "
-        + (", ".join(f"{key}={value}" for key, value in env) if env else "none")
+    lines = [
+        ", ".join(f"{key}={value}" for key, value in env) if env else "none"
         for env in recorded
-    )
+    ]
+    if not ours or any(not isinstance(r.get("ambient_ocannl_env"), dict) for r in ours):
+        # Last, and never instead of the recorded ones: in a report that mixes an old sweep's
+        # rows with a new one's, dropping this line would put the recorded environment at the
+        # head of measurements whose own environment is unrecoverable.
+        lines.append("not recorded")
+    return "\n".join("ambient OCANNL_* environment: " + line for line in lines)
 
 
 def report(results, out_dir, unavailable=(), failures=(), digests_path=None):

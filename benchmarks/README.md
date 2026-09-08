@@ -515,7 +515,8 @@ than the driver (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` at module load), run it wi
   `autotune_*` outside the payload, and whatever key is added next — is **recorded** rather than
   pinned (gh-ocannl-720): the sweep reads the environment once, stamps it onto every OCANNL row as
   `ambient_ocannl_env`, and prints it in the report header beside the measurement boxes (`none`
-  for a clean shell, `not recorded` for rows predating the stamp), so a number is read against the
+  for a clean shell, and `not recorded` for rows predating the stamp — printed alongside the
+  recorded environments in a report that mixes the two, never replaced by them), so a number is read against the
   configuration it was taken in rather than an assumed-clean one. Nothing is stripped or refused:
   the sweep dispatches `OCANNL_BACKEND` itself, and `OCANNL_AUTOTUNE_LOG` /
   `OCANNL_AUTOTUNE_CACHE_DIR` are documented ways to run one, so a filter would have to guess —
