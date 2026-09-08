@@ -4981,25 +4981,9 @@ module C_syntax (B : C_syntax_config) = struct
                       Set.mem !current_workgroup_shared tn
                       || Tn.Placements.is_materialized_force (placements ()) tn 950
                     in
-                    (* The other axes the backend binds per thread: an enclosing [Workgroup] index
-                       varies across the lanes as the lane itself does. *)
-                    let varying =
-                      List.filter_map !current_hardware_axes ~f:(fun a ->
-                          match a.Low_level.ha_kind with
-                          | `Workgroup when not (Indexing.equal_symbol a.ha_index i) ->
-                              Some a.ha_index
-                          | `Workgroup | `Grid -> None)
-                    in
-                    (* What a barrier fences: workgroup-shared storage. *)
-                    let fenced tn = Set.mem !current_workgroup_shared tn in
                     match
-                      (* A level of extent one binds lane 0 alone -- one thread only when no other
-                         workgroup axis is bound, since each coordinate of that axis has its own
-                         lane 0. *)
-                      if to_ - from_ + 1 <= 1 && List.is_empty varying then None
-                      else
-                        Low_level.racing_lane_invariant_update ~lane:i ~varying ~shared ~fenced
-                          (Low_level.unflat_lines stmts)
+                      Low_level.racing_lane_invariant_update ~lane:i ~shared
+                        (Low_level.unflat_lines stmts)
                     with
                     | None -> None
                     | Some (tn, idcs) ->
@@ -5027,12 +5011,14 @@ module C_syntax (B : C_syntax_config) = struct
                                      ^ " binds the lane index, and its body updates " ^ cell
                                      ^ " in every lane: the statement reads the cell it writes and \
                                         the cell does not depend on the lane index, so a hardware \
-                                        binding would race the read-modify-write across lanes, and \
-                                        the body is not a single accumulation the warp shuffle can \
-                                        render (a sibling statement, a data-dependent guard, or an \
-                                        inner nest). Keep the level Serial, or stage the reduction \
-                                        explicitly with per-lane cells and lane-pinning guards \
-                                        (gh-ocannl-950)";
+                                        binding would race the read-modify-write across lanes (a \
+                                        guard selecting one lane does not help: every block, and \
+                                        every coordinate of another bound axis, has that lane), \
+                                        and the body is not a single accumulation the warp shuffle \
+                                        can render (a sibling statement, a data-dependent guard, \
+                                        or an inner nest). Keep the level Serial, or stage the \
+                                        reduction explicitly with per-lane cells and a plain final \
+                                        store (gh-ocannl-950)";
                                  } ))))
             | Some ({ sa_tn = tn; sa_idcs = idcs; sa_op = op; sa_contrib = contrib; _ } as sa) ->
                 let warp = B.warp_size in

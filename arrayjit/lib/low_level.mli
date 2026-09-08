@@ -380,25 +380,19 @@ val accum_local_update_parts : id:scope_id -> scalar_t -> (Ops.binop * scalar_t)
 
 val racing_lane_invariant_update :
   lane:Indexing.symbol ->
-  varying:Indexing.symbol list ->
   shared:(Tnode.t -> bool) ->
-  fenced:(Tnode.t -> bool) ->
   t ->
   (Tnode.t * Indexing.axis_index array) option
 (** The race criterion for a level whose index a backend binds to a lane (gh-ocannl-950): the first
     [Set] to a node [shared] across the lanes (device-resident or workgroup-shared, as against a
     per-thread local array) whose cell does not depend on [lane] and whose value reads that cell — a
-    read-modify-write every lane performs on one cell, a race under any hardware binding. The one
-    exemption is a guard pinning the lane to a LITERAL constant ([lane == c], or [lane < c] with
-    [c <= 1]) over a cell that mentions every axis in [varying] — the other workgroup axes the
-    backend binds per thread — so that the pinned lane is one thread; a pin that is not a literal (a
-    loop index, another axis, a thread-local read) is not uniform across the threads and exempts
-    nothing. Sibling pins of one cell to different lanes are two threads on it, unless a
-    [Workgroup_barrier] separates them and the cell is [fenced] (workgroup-shared: what the
-    backends' barrier orders; Metal's fences threadgroup memory only). Reads are judged as codegen
-    renders them: a projection's discarded operand ({!Ops.binop_conditionality}) reads nothing, and
-    a guard's condition reads. Per-lane cells, stores that read no cell of their own, [Set_local]
-    and [Zero_out] are not races. *)
+    read-modify-write every lane performs on one cell, a race under any hardware binding. Reads are
+    judged as codegen renders them: a projection's discarded operand ({!Ops.binop_conditionality})
+    reads nothing, and a guard's condition reads. Per-lane cells (which mention the lane), stores
+    that read no cell of their own, [Set_local] and [Zero_out] are not races. There is no exemption
+    for a guard pinning the lane: a pin is one thread only under conditions (one block, no other
+    bound axis, a literal value, no barrier between phases) the walk cannot establish, and the sound
+    form of a single-lane update is a per-lane cell with a plain final store. *)
 
 val has_accumulating_cell : t -> bool
 (** Whether the tree holds a SELF-RECURRENCE: some [Set] whose value reads the very cell it writes

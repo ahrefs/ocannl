@@ -21,17 +21,9 @@ under Fp16_wide an f16 four-warp Workgroup_reduce stages its per-warp partials a
 under Fp16_wide the emitted f16 shuffle declares its staging register and its per-warp slots at the residency type, never at half storage: true
 a Workgroup_reduce level holding a sibling statement beside a lane-invariant self-updating Set is refused where a lane index is bound (GPU: the hardware binding would race the cell) or runs serially (CPU): true
 a Workgroup_reduce level holding a data-dependent guard over a lane-invariant self-updating Set is refused where a lane index is bound (GPU: the guard leaves several lanes on the cell) or runs serially (CPU): true
-a lane-invariant self-updating Set under a guard pinning the lane index to one value is not a race: the hardware binding renders it and one lane performs the update (GPU), or the serial loop admits the one iteration (CPU): true
+a lane-invariant self-updating Set under a guard pinning the lane index to one value is still refused where a lane index is bound (GPU: every block and every row has that lane), or the serial loop admits the one iteration (CPU): true
 a self-update of a per-thread local array beside a sibling statement is not a race under a bound Workgroup_reduce (one array per lane): it renders, and lane 0's fold reads its own scratch: true
-a bound Workgroup_reduce of extent one holding the refused sibling body is not a race (lane 0 alone executes it): it renders with the one term: true
-two sibling updates of one cell pinned to the SAME lane are that lane's two steps, not a race: the level renders and the value is both terms: true
-two sibling updates of one cell pinned to DIFFERENT lanes are two lanes on one cell: refused where a lane index is bound (GPU) or the serial sum of the two admitted iterations (CPU): true
-a lane pin that moves with an inner loop (If (i == k) under a serial k) selects a different lane at each iteration and is no pin: refused where a lane index is bound (GPU) or the serial sum of the two admitted iterations (CPU): true
-a lane pin on an enclosing Workgroup axis (If (i == j) under Workgroup j) selects a different lane per row of the workgroup and is no pin: refused where the axes are bound (GPU) or the serial sum of the two admitted iterations (CPU): true
-two updates of a DEVICE cell pinned to different lanes on either side of a Workgroup_barrier are not ordered by it (the barrier fences workgroup-shared storage): refused where a lane index is bound (GPU), or the barrier itself is rejected (CPU): true
-two updates of a WORKGROUP-SHARED cell pinned to different lanes on either side of a Workgroup_barrier are the staged shape, not a race: the level renders and lane 0 folds both terms into the device cell (GPU), or the barrier itself is rejected (CPU): true
+a bound Workgroup_reduce of extent one holding the sibling body is refused too (GPU: lane 0 exists per block and per coordinate of any other bound axis), or renders with the one term (CPU): true
 a store whose value is a projection discarding the cell's old value (Arg2) is not a read-modify-write: every lane stores the same bytes and the level renders: true
 a scope that tests the cell it writes back in an If condition reads that cell: refused where a lane index is bound (GPU) or the serial alternation ending at 0 (CPU): true
-a lane pin on a serial loop index outside the level (If (i == k) under a serial k around it) is not uniform across the threads and is no pin: refused where a lane index is bound (GPU) or the serial sum of the two admitted iterations (CPU): true
-a lane pin read from a per-thread local (scratch[0] = i; If (i == scratch[0])) is true in every lane and is no pin: refused where a lane index is bound (GPU) or the full serial sum (CPU): true
-a bound Workgroup_reduce of extent one under another Workgroup axis has a lane 0 per coordinate of that axis: the sibling body is refused (GPU) or the serial sum over the outer axis (CPU): true
+the sound single-lane form — per-lane cells combined under lane-selecting guards and a plain final store — is not a race: it renders (GPU) or the barrier it needs is rejected (CPU): true
