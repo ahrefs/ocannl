@@ -265,58 +265,41 @@ jobs:
         # On Windows the mingw system libraries live in opam's internal cygwin
         # root, outside _opam. Without them a restored switch believes its
         # conf-mingw-w64-* packages are present while their libraries are gone,
-        # and linking fails; caching both also carries the pkgconf repair below.
+        # and linking fails.
         path: |
           _opam
           ${{ runner.os == 'Windows' && 'C:\.opam\.cygwin' || '' }}
         key: opam-deps-${{ matrix.os }}-${{ matrix.ocaml-compiler }}-${{ hashFiles('*.opam') }}-${{ steps.pins.outputs.solution-digest }}-${{ steps.pins.outputs.digest }}
-    # FIXME: cygwin's pkgconf 3.0.4-1 (published 2026-07-26) breaks
-    # `pkgconf --personality=<triplet>`, so every conf-mingw-w64-* package (gmp,
-    # zlib, openssl, sqlite3, pcre2, curl, libffi) fails its existence check and
-    # `opam install` aborts. Two regressions: personality files are only looked up
-    # in /usr/lib/pkgconfig/personality.d while the cygwin package installs them
-    # to /etc/pkgconfig/personality.d, and even once loaded the personality's
-    # DefaultSearchPaths are ignored for module lookup. Setting PKG_CONFIG_PATH
-    # would make the checks pass, but then pkgconf emits the cygwin POSIX paths
-    # (-I/usr/x86_64-w64-mingw32/sys-root/mingw/include etc.) that the personality
-    # exists to elide, and mingw gcc cannot resolve those. So instead: install the
-    # system packages, put pkgconf 2.5.1-1 back, and build the opam dependencies
-    # with depext handling off so opam does not re-run cygwin's setup.exe (which
-    # passes --upgrade-also) and undo the downgrade.
-    # Drop these three steps, restoring the plain install below for all platforms,
-    # once cygwin ships a fixed pkgconf.
+    # cygwin's pkgconf 3.0.4-1 (published 2026-07-26) broke
+    # `pkgconf --personality=<triplet>` (personality files looked up only in
+    # /usr/lib/pkgconfig/personality.d while the package installs them to
+    # /etc/pkgconfig/personality.d, and the personality's DefaultSearchPaths
+    # ignored for module lookup), so every conf-mingw-w64-* existence check
+    # failed and `opam install` aborted. From 2026-07-27 to 2026-09-08 this leg
+    # restored pkgconf 2.5.1-1 from a cygwin mirror between the two steps below;
+    # cygwin mirrors keep only current releases, so that fetch 404'd once the
+    # mirror rotated 2.5.1 out (gh-ocannl-935). The downgrade's exit condition
+    # has arrived: cygwin's pkgconf 3.0.7-1 (2026-09-04) loads the mingw
+    # personality and the mingw depexts install against it (verified by the
+    # dispatch run gh-ocannl-935 cites), so the leg installs whatever cygwin
+    # ships and keeps only the check below, which turns a regression of the
+    # same kind into one named failure instead of six conf-mingw-w64-* ones.
+    # The two-step Windows install (system packages, then opam packages with
+    # depext handling off) stays: the cygwin system libraries are cached
+    # alongside `_opam`, and on a cache hit neither step runs.
     - name: Install system dependencies (Windows)
       if: runner.os == 'Windows' && steps.opam-cache.outputs.cache-hit != 'true'
       run: opam install . -y --deps-only --with-test --with-doc --depext-only
-    - name: Restore cygwin pkgconf 2.5.1 (Windows)
+    - name: Check cygwin pkgconf loads the mingw personality (Windows)
       if: runner.os == 'Windows' && steps.opam-cache.outputs.cache-hit != 'true'
       run: |
         $root = "$(opam var root)\.cygwin\root"
-        $base = 'https://cygwin.mirror.constant.com/x86_64/release/pkgconf'
-        New-Item -ItemType Directory -Force pkgconf-2.5.1 | Out-Null
-        # pkgconf.exe links cygpkgconf-7.dll, so libpkgconf7 has to come along:
-        # installing 3.0.4 brought in cygpkgconf-8.dll only, and against that the
-        # 2.5.1 binary dies at load time with empty stdout.
-        foreach ($pkg in 'pkgconf-2.5.1-1-x86_64', 'libpkgconf7/libpkgconf7-2.5.1-1-x86_64') {
-          $file = "$(Split-Path -Leaf $pkg).tar.zst"
-          curl.exe -sSLf -o $file "$base/$pkg.tar.zst"
-          tar.exe -xf $file -C pkgconf-2.5.1
-        }
-        # Cygwin mounts /usr/bin at <root>\bin, and nothing reads a physical
-        # <root>\usr\bin, so the package payload has to be copied rather than
-        # extracted over the root verbatim.
-        Copy-Item pkgconf-2.5.1\usr\bin\* "$root\bin" -Force
-        # Out-String because -notlike/-notmatch filter string arrays instead of
-        # returning a boolean, and --dump-personality prints several lines.
-        # 2>&1 so a load-time failure lands in the message instead of showing up
-        # as an unexplained empty string.
         $version = (& "$root\bin\pkgconf.exe" --version 2>&1 | Out-String).Trim()
-        if ($version -notlike '2.5.1*') {
-          throw "expected pkgconf 2.5.1, got '$version' (extraction failed? this needs a tar with zstd support)"
-        }
+        Write-Host "cygwin pkgconf version: $version"
         $personality = (& "$root\bin\pkgconf.exe" --personality=x86_64-w64-mingw32 --dump-personality 2>&1 | Out-String)
+        Write-Host $personality
         if ($personality -notmatch 'Triplet: x86_64-w64-mingw32') {
-          throw "pkgconf still cannot load the mingw personality: $personality"
+          throw "pkgconf $version cannot load the mingw personality: $personality"
         }
     - name: Install opam dependencies (Windows)
       if: runner.os == 'Windows' && steps.opam-cache.outputs.cache-hit != 'true'
@@ -328,8 +311,8 @@ jobs:
     # `/usr/bin/ld: cannot find -lcurl`. That is why ubuntu alternates green and
     # red by cache state rather than by commit. Installing depexts unconditionally
     # is cheap (it compiles no OCaml) and idempotent. Windows is exempt: it caches
-    # its cygwin system libraries alongside `_opam`, and re-running depext there
-    # would re-run cygwin's setup.exe and undo the pkgconf downgrade above.
+    # its cygwin system libraries alongside `_opam`, so there is nothing to
+    # reinstall on a hit.
     - name: Install system dependencies
       if: runner.os != 'Windows'
       run: opam install . -y --deps-only --with-test --with-doc --depext-only
