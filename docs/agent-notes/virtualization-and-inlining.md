@@ -252,3 +252,26 @@ files.
   was the same six artifacts replayed in an unbalanced order; three replay sets of them spanned
   5.5-6.5%, so an identical schedule varies ~1pp run to run -- all three non-overlapping), and balancing that order matters: a fixed order
   confounds the cap with session position, which was worth ~1.4pp of an apparent 7.1%.
+- **A candidate whose captured computation contains a `Scan_loop` is refused, and the refusal has
+  two doors** (gh-ocannl-696, `test/operations/scan_loop.ml` legs 5 and 5b): `virtual_llc` threads
+  `~in_scan` beside `~guarded`, so a per-statement store inside the scan hits `Non_virtual 148` in
+  `check_and_store_virtual`, and a capture whose nest contains a scan anywhere — a sibling, or one
+  feeding the value through a scope local — hits the same code from the validity walk's
+  `Scan_loop` arm. The inline filter's own `Scan_loop` arm is a backstop raising 148, never a drop:
+  dropping a value-producing scan returned the pre-scan value (Codex P1, staging#660 round 5). Reads inside the body inline as usual; the state
+  node of a carried pair must be declared virtual (`Ll_test.virtualize`; the validator names it
+  otherwise) and cleanup commits it `Virtual 16` like a scope local's node. The contract itself —
+  one node DECLARED virtual per pair, never accessed as a tensor buffer, ids pairwise distinct,
+  rebound by no `Declare_local`/`Local_scope` inside the scan and referenced nowhere outside it, inits free of carried state and of
+  the scan index, `next` written exactly once at the body's top level and read only by later
+  statements (it is declared without a value), no write of `prev`, no `Staged_compilation` inside,
+  and a NON-EMPTY range (a dead scan is refused rather than given a meaning: review rounds 4–8 on
+  staging#660 found a fresh walker each round that needed its own "dead scan is a no-op"
+  convention, so the class was closed by making the shape unreachable) — is
+  `Low_level.validate_scan_loops`, run at both gates like scope purity. Codegen's three per-local
+  censuses (rng precision, accumulator residency, controlled accumulators) walk the implicit
+  `prev = init` / `prev = next` assignments as the `Set_local`s they render as
+  (`C_syntax.scan_implicit_set_locals`), and the carried ids are pinned to their node's STORAGE
+  precision in `scope_prec_of` (`carried_state_scope_ids`, rng-carve-out precedence): a half state
+  rounds every step — `scan_loop.ml` leg 6b holds 2048 through six +1 steps where a single state
+  reaches 2054. Build scans through `Ll_test.carry`/`scan`/`prev`/`next`/`set_next`.

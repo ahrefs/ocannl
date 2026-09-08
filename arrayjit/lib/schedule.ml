@@ -143,6 +143,13 @@ let rec map_code ~fidx (llc : Low_level.t) : Low_level.t =
       llc
   | Seq (a, b) -> Seq (map_code ~fidx a, map_code ~fidx b)
   | For_loop fc -> For_loop { fc with body = map_code ~fidx fc.body }
+  | Scan_loop sc ->
+      Scan_loop
+        {
+          sc with
+          carried = List.map sc.carried ~f:(fun c -> { c with init = map_scalar ~fidx c.init });
+          body = map_code ~fidx sc.body;
+        }
   | Set { tn; idcs; llsc; debug } ->
       Set { tn; idcs = Array.map idcs ~f:fidx; llsc = map_scalar ~fidx llsc; debug }
   | Set_dynamic { tn; idcs; dyn_axis; dyn_value = v, p; llsc; debug } ->
@@ -336,6 +343,14 @@ let refresh_scopes (llc : Low_level.t) : Low_level.t =
         collect a;
         collect b
     | For_loop { body; _ } | If { body; _ } -> collect body
+    | Scan_loop { carried; body; _ } ->
+        (* gh-ocannl-696: the carried pair is a declaration of the construct -- a duplicated scan
+           needs fresh state locals like a duplicated [Declare_local]. *)
+        List.iter carried ~f:(fun c ->
+            bind c.prev;
+            bind c.next;
+            collect_scalar c.init);
+        collect body
     | Set { llsc; _ } | Set_local (_, llsc) -> collect_scalar llsc
     | Set_dynamic { dyn_value = v, _; llsc; _ } ->
         collect_scalar v;
@@ -370,6 +385,15 @@ let refresh_scopes (llc : Low_level.t) : Low_level.t =
       | Declare_local { id; needs_init } -> Declare_local { id = subst id; needs_init }
       | Seq (a, b) -> Seq (code a, code b)
       | For_loop fc -> For_loop { fc with body = code fc.body }
+      | Scan_loop sc ->
+          Scan_loop
+            {
+              sc with
+              carried =
+                List.map sc.carried ~f:(fun c ->
+                    { prev = subst c.prev; next = subst c.next; init = scalar c.init });
+              body = code sc.body;
+            }
       | If { cond = c, p; body } -> If { cond = (scalar c, p); body = code body }
       | Set ({ llsc; _ } as s) -> Set { s with llsc = scalar llsc }
       | Set_dynamic ({ dyn_value = v, p; llsc; _ } as sd) ->
@@ -879,7 +903,11 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
               | Seq (a, b) -> Seq (mask a, mask b)
               | For_loop fc' -> For_loop { fc' with body = mask fc'.body }
               | If { cond; body } -> If { cond; body = mask body }
-              | (Set _ | Set_dynamic _ | Set_from_vec _ | Set_local _ | Zero_out _) as stmt ->
+              (* gh-ocannl-696: guarded whole -- a padded iteration runs none of the scan, and a
+                 guard inside its body would make the carried update conditional, which the
+                 construct forbids. *)
+              | (Set _ | Set_dynamic _ | Set_from_vec _ | Set_local _ | Zero_out _ | Scan_loop _) as
+                stmt ->
                   guard stmt
               | (Noop | Comment _ | Declare_local _) as stmt -> stmt
               | Workgroup_barrier ->
@@ -1078,6 +1106,17 @@ let collect_source_accesses ~source (llc : Low_level.t) :
         code stack b
     | For_loop { index; from_; to_; body; axis } ->
         code ({ index; from_; to_; body = Noop; axis } :: stack) body
+    | Scan_loop { carried; body; _ } ->
+        (* gh-ocannl-696: this walk covers the whole routine, so a scan is refused only when it
+           touches the source -- staging its reads is out of scope for v1, and a write is refused
+           like any other; a scan elsewhere in the routine is none of the op's business. *)
+        if
+          code_touches_tn source body
+          || List.exists carried ~f:(fun c -> scalar_touches_tn source c.init)
+        then
+          invalid_arg
+            ("Schedule.Stage: a Scan_loop accesses the source " ^ Tn.debug_name source
+           ^ ", which is unsupported")
     | Set { tn; llsc; _ } ->
         reject_write tn;
         scalar stack llsc
@@ -1127,6 +1166,13 @@ let remap_reads ?(writes = false) ~source ~from_idcs ~tile ~tile_idcs (llc : Low
     | Tile_mma _ -> llc
     | Seq (a, b) -> Seq (code a, code b)
     | For_loop fc -> For_loop { fc with body = code fc.body }
+    | Scan_loop sc ->
+        Scan_loop
+          {
+            sc with
+            carried = List.map sc.carried ~f:(fun c -> { c with init = scalar c.init });
+            body = code sc.body;
+          }
     | Set { tn; idcs; llsc; debug }
       when writes && Tn.equal tn source && Array.equal Indexing.equal_axis_index idcs from_idcs ->
         Set { tn = tile; idcs = tile_idcs; llsc = scalar llsc; debug }
@@ -1247,6 +1293,9 @@ let written_nodes (llc : Low_level.t) : Set.M(Tn).t =
         code a;
         code b
     | For_loop { body; _ } | If { body; _ } -> code body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun c -> scalar c.init);
+        code body
     | Set { tn; llsc; _ } ->
         acc := Set.add !acc tn;
         scalar llsc
@@ -2057,6 +2106,9 @@ let apply_privatize ~target ~over (opt : Low_level.optimized) : Low_level.optimi
       | For_loop { index; axis; body; _ } ->
           tbl := Map.set !tbl ~key:index ~data:axis;
           go body
+      | Scan_loop { carried; body; _ } ->
+          List.iter carried ~f:(fun c -> go_scalar c.init);
+          go body
       | Seq (a, b) ->
           go a;
           go b
@@ -2112,6 +2164,8 @@ let apply_privatize ~target ~over (opt : Low_level.optimized) : Low_level.optimi
             scan stack conds b
         | For_loop { index; from_; to_; body; axis } ->
             scan ({ index; from_; to_; body = Noop; axis } :: stack) conds body
+        | Scan_loop _ ->
+            invalid_arg "Schedule.Privatize: a Scan_loop inside the privatized loop is unsupported"
         | Set { tn; idcs; llsc; _ } ->
             if Tn.equal tn target then (
               has_write := true;
@@ -2201,6 +2255,10 @@ let apply_privatize ~target ~over (opt : Low_level.optimized) : Low_level.optimi
           match llc with
           | For_loop { index; body; _ } ->
               acc := index :: !acc;
+              go body
+          | Scan_loop { index; carried; body; _ } ->
+              acc := index :: !acc;
+              List.iter carried ~f:(fun c -> go_scalar c.init);
               go body
           | Seq (a, b) ->
               go a;
@@ -2477,6 +2535,8 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
     | Zero_out tn -> Tn.equal tn target
     | Seq (a, b) -> touches a || touches b
     | For_loop { body; _ } -> touches body
+    | Scan_loop { carried; body; _ } ->
+        List.exists carried ~f:(fun c -> touches_scalar c.init) || touches body
     | Set { tn; llsc; _ } -> Tn.equal tn target || touches_scalar llsc
     | Set_dynamic { tn; dyn_value = v, _; llsc; _ } ->
         Tn.equal tn target || touches_scalar v || touches_scalar llsc
@@ -2576,6 +2636,9 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
               scan a;
               scan b
           | For_loop { body; _ } -> scan body
+          | Scan_loop _ ->
+              invalid_arg
+                "Schedule.Split_reduce: a Scan_loop under the reduction loop is unsupported"
           | Set { tn; idcs; llsc; _ } ->
               if Tn.equal tn target then writes := (idcs, llsc) :: !writes;
               scan_scalar llsc
@@ -2803,6 +2866,14 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
                   llc
               | Seq (a, b) -> Seq (redirect a, redirect b)
               | For_loop fc' -> For_loop { fc' with body = redirect fc'.body }
+              | Scan_loop sc ->
+                  Scan_loop
+                    {
+                      sc with
+                      carried =
+                        List.map sc.carried ~f:(fun c -> { c with init = redirect_scalar c.init });
+                      body = redirect sc.body;
+                    }
               | Set ({ llsc; _ } as s) -> Set { s with llsc = redirect_scalar llsc }
               | Set_dynamic { tn; idcs; dyn_axis; dyn_value = v, p; llsc; debug }
                 when Tn.equal tn target ->
@@ -2915,6 +2986,9 @@ let contract_tensorized_accumulator ~lane ~(masks : pad_mask list) (opt : Low_le
     | Set_local (_, llsc) -> scalar_touches target llsc
     | Seq (a, b) -> touches_outside_tile target a || touches_outside_tile target b
     | For_loop { body; _ } | If { body; _ } -> touches_outside_tile target body
+    | Scan_loop { carried; body; _ } ->
+        List.exists carried ~f:(fun c -> scalar_touches target c.init)
+        || touches_outside_tile target body
     | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier -> false
   and scalar_touches target = function
     | Get (tn, _) | Get_dynamic { tn; _ } -> Tn.equal tn target
@@ -3230,7 +3304,7 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
         Tn.equal t tn
     | Tile_mma { d = t, _; fallback; _ } -> Tn.equal t tn || writes_tn tn fallback
     | Seq (a, b) -> writes_tn tn a || writes_tn tn b
-    | For_loop { body; _ } | If { body; _ } -> writes_tn tn body
+    | For_loop { body; _ } | If { body; _ } | Scan_loop { body; _ } -> writes_tn tn body
     | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier | Set_local _ ->
         false
   in
@@ -3245,6 +3319,8 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
         Tn.equal d tn || Tn.equal a tn || Tn.equal b tn || mentions_tn tn fallback
     | Seq (a, b) -> mentions_tn tn a || mentions_tn tn b
     | For_loop { body; _ } | If { body; _ } -> mentions_tn tn body
+    | Scan_loop { carried; body; _ } ->
+        List.exists carried ~f:(fun c -> scalar_mentions tn c.init) || mentions_tn tn body
     | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier -> false
   and scalar_mentions tn = function
     | Get (t, _) | Get_dynamic { tn = t; _ } | Get_merge_buffer (t, _) -> Tn.equal t tn
@@ -3997,6 +4073,9 @@ let partition_breakpoints ~axis (llc : Low_level.t) : int list =
           go ~ranges b
       | For_loop { index; from_; to_; body; _ } ->
           go ~ranges:(Map.set ranges ~key:index ~data:(from_, to_)) body
+      | Scan_loop { index; from_; to_; carried; body; _ } ->
+          List.iter carried ~f:(fun c -> scan_scalar ~ranges c.init);
+          go ~ranges:(Map.set ranges ~key:index ~data:(from_, to_)) body
       | If { cond = c, _; body } ->
           cond ~ranges c;
           go ~ranges body
@@ -4068,6 +4147,9 @@ let accesses_outside (llc : Low_level.t) ~(skip : Low_level.t) : (int, bool) Has
           stmt a;
           stmt b
       | For_loop { body; _ } -> stmt body
+      | Scan_loop { carried; body; _ } ->
+          List.iter carried ~f:(fun c -> scalar c.init);
+          stmt body
       | If { cond = c, _; body } ->
           scalar c;
           stmt body
@@ -4478,6 +4560,13 @@ let scan_accesses plc ~local_syms (llc : Low_level.t) : access list =
         code ~depth b
     | For_loop { axis; body; _ } ->
         if not (equal_axis_type axis Serial) then raise Bail;
+        code ~depth body
+    | Scan_loop { carried; body; _ } ->
+        (* gh-ocannl-696: the scan's own index is never a retype target (it is not a [For_loop]),
+           and its body's accesses are registered like any serial loop's, so an ENCLOSING loop whose
+           iterations the accesses prove independent keeps its hardware mapping -- the carried state
+           is per-iteration scratch of that loop. *)
+        List.iter carried ~f:(fun c -> scalar ~depth c.init);
         code ~depth body
     | Zero_out tn ->
         if Tn.Placements.is_materialized_peek plc tn then raise Bail
@@ -5210,6 +5299,13 @@ let summarize_stmt plc (stmt : Low_level.t) : stmt_summary option =
     | For_loop { axis; body; _ } ->
         if not (equal_axis_type axis Serial) then raise Opaque_stmt;
         code ~top:false body
+    | Scan_loop { carried; body; _ } ->
+        (* The carried locals are bound by the statement itself, like a [Declare_local] within
+           it. *)
+        List.iter carried ~f:(fun c ->
+            bound := c.prev :: c.next :: !bound;
+            scalar c.init);
+        code ~top:false body
     | Zero_out tn ->
         writes := Set.add !writes tn;
         if top && Tn.Placements.is_materialized_peek plc tn then top_zero := Some tn
@@ -5602,6 +5698,11 @@ let code_footprint (llc : Low_level.t) : Set.M(Tn).t * bool =
         code a;
         code b
     | For_loop { body; _ } -> code body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun c ->
+            add c.prev.tn;
+            scalar c.init);
+        code body
     | Zero_out tn -> add tn
     | Set { tn; llsc; _ } ->
         add tn;

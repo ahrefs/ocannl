@@ -1990,18 +1990,38 @@ module C_syntax (B : C_syntax_config) = struct
     let prec = if renders_at_store_prec llsc then store_prec else comp_prec store_prec in
     (prec, B.convert_precision ~from:prec ~to_:store_prec)
 
+  (* gh-ocannl-696: the two assignments a [Scan_loop] renders for one carried scalar besides the
+     body's own -- the init [prev = init] ahead of the loop and the rotation [prev = next] at the
+     end of every iteration. Every per-local census below walks them as the [Set_local]s they render
+     as (through [pp_ll]'s [Set_local] arm), so a classification a census would give an explicit
+     assignment is given the implicit one too. *)
+  let scan_implicit_set_locals (c : Low_level.carried) : Low_level.t list =
+    [ Set_local (c.prev, c.init); Set_local (c.prev, Get_local c.next) ]
+
+  (* gh-ocannl-696: the carried ids of every [Scan_loop] in the procs. Carried state resides at its
+     node's storage precision -- the contract says the node TYPES the state, and a recurrence that
+     rounds per step at fp16 is a different function from one kept wide -- so [scope_prec_of] pins
+     these like the rng carve-out, ahead of the accumulator widening. The arithmetic feeding an
+     update still runs at compute precision; only the carried value is narrowed per iteration. Keyed
+     by the full scope id (node and integer), the identity the rendered C name carries, so a
+     hand-minted local over another node sharing the integer is not pinned by association. Populated
+     by the rng census below, which already visits every scan. *)
+  let carried_state_scope_ids : Low_level.Scope_id.t Hash_set.t =
+    Hash_set.create (module Low_level.Scope_id)
+
   (* Scope-local scalars an RNG conversion writes. Their declaration, their assignments and their
      reads all have to agree on a precision, and only a whole-proc scan sees all three (a
      [Declare_local] carries no value), so the exclusion is resolved once here rather than per
-     statement. A superset would only forgo an optimization, never mis-render. Keyed per [scope_id],
-     not per tnode (Codex P2 round 2 on PR #396): virtualization copies of an rng-consuming node
-     each carry their own rng-mentioning [Set_local], so every copy is marked on its own, while an
-     UNRELATED scope over the same tnode — a schedule-minted accumulation into a node that elsewhere
-     consumes rng — keeps its accumulator residency instead of being pinned to storage by the shared
-     uid. A [Tile_mma]'s scalar fallback renders through the same [scope_prec_of], so the scan
-     descends into it. *)
+     statement. A superset would only forgo an optimization, never mis-render. Keyed per scope id --
+     the full [Scope_id], node and integer, the identity the rendered C name carries -- not per
+     tnode (Codex P2 round 2 on PR #396; full ids since gh-ocannl-696): virtualization copies of an
+     rng-consuming node each carry their own rng-mentioning [Set_local], so every copy is marked on
+     its own, while an UNRELATED scope over the same tnode — a schedule-minted accumulation into a
+     node that elsewhere consumes rng — keeps its accumulator residency instead of being pinned to
+     storage by the shared uid. A [Tile_mma]'s scalar fallback renders through the same
+     [scope_prec_of], so the scan descends into it. *)
   let rng_scope_ids =
-    let acc = Hash_set.create (module Int) in
+    let acc = Hash_set.create (module Low_level.Scope_id) in
     let rec scan_sc (llsc : Low_level.scalar_t) =
       match llsc with
       | Low_level.Local_scope { body; _ } -> scan body
@@ -2022,11 +2042,20 @@ module C_syntax (B : C_syntax_config) = struct
           scan a;
           scan b
       | For_loop { body; _ } -> scan body
+      | Scan_loop { carried; body; _ } ->
+          (* gh-ocannl-696: the census sees exactly the statements the renderer emits for a scan --
+             the implicit init [prev = init] and rotation [prev = next] are [Set_local]s to it --
+             and records the carried ids for the storage-precision pin. *)
+          List.iter carried ~f:(fun c ->
+              Hash_set.add carried_state_scope_ids c.Low_level.prev;
+              Hash_set.add carried_state_scope_ids c.Low_level.next;
+              List.iter (scan_implicit_set_locals c) ~f:scan);
+          scan body
       | If { cond = c, _; body } ->
           scan_sc c;
           scan body
       | Set_local (id, v) ->
-          if mentions_rng_conversion v then Hash_set.add acc id.Low_level.scope_id;
+          if mentions_rng_conversion v then Hash_set.add acc id;
           scan_sc v
       | Set { llsc; _ } -> scan_sc llsc
       | Set_dynamic { dyn_value = v, _; llsc; _ } ->
@@ -2117,6 +2146,13 @@ module C_syntax (B : C_syntax_config) = struct
           scan a;
           scan b
       | For_loop { body; _ } -> scan body
+      | Scan_loop { carried; body; _ } ->
+          (* gh-ocannl-696: the implicit init and rotation are classified like the [Set_local]s they
+             render as. A carried update reads [prev] and writes [next], so the classifier sees no
+             self-update; the state's residency is decided by [carried_state_scope_ids] (its node's
+             storage precision), not here. *)
+          List.iter carried ~f:(fun c -> List.iter (scan_implicit_set_locals c) ~f:scan);
+          scan body
       | If { cond = c, _; body } ->
           guarding_reads_sc c;
           scan_sc c;
@@ -2142,10 +2178,11 @@ module C_syntax (B : C_syntax_config) = struct
 
   (* The precision a scope-local scalar is declared, written and read at. The rng carve-out takes
      precedence: a scope whose value consumes an RNG conversion is pinned to the storage precision
-     wholesale (gh-ocannl-517), reduction-shaped or not. *)
+     wholesale (gh-ocannl-517), reduction-shaped or not -- and so is a scan's carried state
+     (gh-ocannl-696), whose node's precision is the recurrence's semantics. *)
   let scope_prec_of (id : Low_level.scope_id) =
     let p = Lazy.force id.tn.Tn.storage_prec in
-    if Hash_set.mem rng_scope_ids id.Low_level.scope_id then p
+    if Hash_set.mem rng_scope_ids id || Hash_set.mem carried_state_scope_ids id then p
     else if Hash_set.mem accum_scope_ids id.scope_id then acc_prec p
     else comp_prec p
 
@@ -2262,6 +2299,9 @@ module C_syntax (B : C_syntax_config) = struct
           stmt a;
           stmt b
       | For_loop { body; _ } | If { body; _ } -> stmt body
+      | Scan_loop { carried; body; _ } ->
+          List.iter carried ~f:(fun c -> List.iter (scan_implicit_set_locals c) ~f:stmt);
+          stmt body
       | Set_local (id, value) ->
           add id value;
           scalar value
@@ -3109,6 +3149,14 @@ module C_syntax (B : C_syntax_config) = struct
           go a;
           go b
       | For_loop { body; _ } -> go body
+      | Scan_loop { carried; body; _ } ->
+          (* The carried pair is declared by the construct itself, so under a pool-rendered [Grid]
+             body it is per-chunk storage like a [Declare_local] there. *)
+          List.iter carried ~f:(fun c ->
+              on_stmt (`Declare_local c.Low_level.prev);
+              on_stmt (`Declare_local c.Low_level.next);
+              go_sc c.Low_level.init);
+          go body
       | If { cond = c, _; body } ->
           go_sc c;
           go body
@@ -3124,13 +3172,13 @@ module C_syntax (B : C_syntax_config) = struct
           go_sc a;
           access ~write:true ~kind:`Vec tn idcs
       | Set_local (id, llsc) ->
-          on_stmt (`Set_local id.Low_level.scope_id);
+          on_stmt (`Set_local id);
           go_sc llsc
-      | Declare_local { id; _ } -> on_stmt (`Declare_local id.Low_level.scope_id)
+      | Declare_local { id; _ } -> on_stmt (`Declare_local id)
     and go_sc (llsc : Low_level.scalar_t) =
       match llsc with
       | Local_scope { id; body; _ } ->
-          on_stmt (`Declare_local id.Low_level.scope_id);
+          on_stmt (`Declare_local id);
           go body
       | Get_local _ -> ()
       | Get (tn, idcs) -> access ~write:false ~kind:`Exact tn idcs
@@ -3202,10 +3250,10 @@ module C_syntax (B : C_syntax_config) = struct
           (* [count_accesses = 1]: the write itself, so the right-hand side does not read [tn] (a
              read-modify-write is not a covering first access). *)
           tn2.Tn.uid = tn.Tn.uid && count_accesses llc = 1 && covering ~loops idcs
-      (* [If] = guarded (partial coverage); dynamic/vector writes and [Tile_mma] operand traffic are
-         conservatively never covering. *)
+      (* [If] = guarded (partial coverage); dynamic/vector writes, [Tile_mma] operand traffic and a
+         scan's serial trajectory are conservatively never covering. *)
       | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | If _ | Set_dynamic _
-      | Set_from_vec _ | Set_local _ | Declare_local _ | Tile_mma _ ->
+      | Set_from_vec _ | Set_local _ | Declare_local _ | Tile_mma _ | Scan_loop _ ->
           false
     and level stmts ~loops =
       match List.filter stmts ~f:touches with
@@ -3257,7 +3305,8 @@ module C_syntax (B : C_syntax_config) = struct
     let mentions_comp = Indexing.axis_index_mentions_symbol sym in
     let loop_ident = Indexing.symbol_ident sym in
     let locals : grid_local_info Hashtbl.M(Int).t = Hashtbl.create (module Int) in
-    let declared_scopes = Hash_set.create (module Int) in
+    (* Keyed by the full scope id -- node and integer, the identity the rendered C name carries. *)
+    let declared_scopes = Hash_set.create (module Low_level.Scope_id) in
     let ok = ref true in
     let opaque = ref false in
     let escaped_scope = ref false in
@@ -3538,6 +3587,8 @@ module C_syntax (B : C_syntax_config) = struct
       | Low_level.Staged_compilation _ | Workgroup_barrier | Tile_mma _ -> true
       | Seq (a, b) -> stmt a || stmt b
       | For_loop { body; _ } | If { body; _ } -> stmt body
+      | Scan_loop { carried; body; _ } ->
+          List.exists carried ~f:(fun c -> scalar c.Low_level.init) || stmt body
       | Set { llsc; _ } | Set_local (_, llsc) -> scalar llsc
       | Set_dynamic { dyn_value = value, _; llsc; _ } -> scalar value || scalar llsc
       | Set_from_vec { arg = value, _; _ } -> scalar value
@@ -5168,7 +5219,8 @@ module C_syntax (B : C_syntax_config) = struct
                    not the peel's. *)
                 let rebuild_hook b = Low_level.For_loop { index = i; from_; to_; body = b; axis } in
                 let rec loop_symbols = function
-                  | Low_level.For_loop { index; body; _ } -> index :: loop_symbols body
+                  | Low_level.For_loop { index; body; _ } | Scan_loop { index; body; _ } ->
+                      index :: loop_symbols body
                   | If { body; _ } -> loop_symbols body
                   | Seq (left, right) -> loop_symbols left @ loop_symbols right
                   | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_local _
@@ -5281,6 +5333,62 @@ module C_syntax (B : C_syntax_config) = struct
                          (lbrace
                          ^^ nest 2 (hardline ^^ binding ^^ hardline ^^ body_doc ())
                          ^^ hardline ^^ rbrace))))
+    | Scan_loop { index = i; from_; to_; direction; carried; body } ->
+        (* gh-ocannl-696: the carried state renders as two locals per entry, declared and
+           initialized ahead of a serial loop -- counting down for [Backward] -- whose body ends
+           with the rotation [prev = next]. Declarations, inits and the rotation go through the
+           [Declare_local] / [Set_local] arms, so the state's type, precision conversions and
+           runtime logging are exactly a scope local's. The scan index joins [serial_loop_stack]
+           like a serial loop's, since a symbolic-extent guard inside the body must not take it for
+           a kernel parameter. *)
+        let decls =
+          List.concat_map carried ~f:(fun { Low_level.prev; next; init } ->
+              [
+                pp_ll ~log_set_locals ~in_loop (Declare_local { id = prev; needs_init = false });
+                pp_ll ~log_set_locals ~in_loop (Declare_local { id = next; needs_init = false });
+                pp_ll ~log_set_locals ~in_loop (Set_local (prev, init));
+              ])
+        in
+        let header =
+          let ty = string ("for (" ^ B.loop_index_type) in
+          match direction with
+          | Forward ->
+              ty ^^ pp_symbol i ^^ string " = " ^^ PPrint.OCaml.int from_ ^^ semi ^^ space
+              ^^ pp_symbol i ^^ string " <= " ^^ PPrint.OCaml.int to_ ^^ semi ^^ space
+              ^^ string "++" ^^ pp_symbol i ^^ string ")"
+          | Backward ->
+              ty ^^ pp_symbol i ^^ string " = " ^^ PPrint.OCaml.int to_ ^^ semi ^^ space
+              ^^ pp_symbol i ^^ string " >= " ^^ PPrint.OCaml.int from_ ^^ semi ^^ space
+              ^^ string "--" ^^ pp_symbol i ^^ string ")"
+        in
+        serial_loop_stack := i :: !serial_loop_stack;
+        let body_doc =
+          Exn.protect
+            ~f:(fun () ->
+              let doc = pp_ll ~log_set_locals ~in_loop:true body in
+              let rotation =
+                List.map carried ~f:(fun { Low_level.prev; next; _ } ->
+                    pp_ll ~log_set_locals ~in_loop:true (Set_local (prev, Get_local next)))
+              in
+              let doc = separate hardline (doc :: rotation) in
+              if Utils.debug_log_from_routines () then
+                let base_message = Printf.sprintf "index %s = %%d\n" (symbol_ident i) in
+                let log_param_doc =
+                  Option.map B.kernel_log_param ~f:(fun (_, name) -> string name)
+                in
+                B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
+                  ~base_message_literal:base_message
+                  ~args_docs:[ pp_symbol i ]
+                ^^ hardline ^^ doc
+              else doc)
+            ~finally:(fun () -> serial_loop_stack := List.tl_exn !serial_loop_stack)
+        in
+        let loop_doc =
+          group (header ^^ space ^^ lbrace ^^ nest 2 (hardline ^^ body_doc) ^^ hardline ^^ rbrace)
+        in
+        lbrace
+        ^^ nest 2 (hardline ^^ separate hardline decls ^^ hardline ^^ loop_doc)
+        ^^ hardline ^^ rbrace
     | Zero_out tn ->
         let first_touch = not (Hash_set.mem zero_out_seen tn.Tn.uid) in
         Hash_set.add zero_out_seen tn.Tn.uid;
@@ -5324,6 +5432,8 @@ module C_syntax (B : C_syntax_config) = struct
             match body with
             | Low_level.Seq (a, b) -> body_reads_tn a || body_reads_tn b
             | For_loop { body; _ } -> body_reads_tn body
+            | Scan_loop { carried; body; _ } ->
+                List.exists carried ~f:(fun c -> reads_tn c.Low_level.init) || body_reads_tn body
             | If { cond = c, _; body } -> reads_tn c || body_reads_tn body
             | Set { llsc; _ } | Set_local (_, llsc) -> reads_tn llsc
             | Set_dynamic { dyn_value = v, _; llsc; _ } -> reads_tn v || reads_tn llsc
@@ -5645,7 +5755,7 @@ module C_syntax (B : C_syntax_config) = struct
         let prec = scope_prec_of id in
         let value_prec =
           if Low_level.scalar_reads_scope ~id value then prec
-          else if Hash_set.mem rng_scope_ids id.Low_level.scope_id then prec
+          else if Hash_set.mem rng_scope_ids id then prec
           else comp_prec (Lazy.force id.Low_level.tn.Tn.storage_prec)
         in
         let volatile_reads =
@@ -6660,6 +6770,7 @@ module C_syntax (B : C_syntax_config) = struct
        impure scope body is malformed IR that no schedule choice can rescue, so declining candidates
        around it would only hide the defect. *)
     Low_level.validate_scope_bodies llc;
+    Low_level.validate_scan_loops optimize_ctx.Low_level.placements llc;
     Low_level.validate_parallel_classified optimize_ctx.Low_level.placements llc;
     (* Launch-extent guards (construct-then-fold, axis-types proposal §2), only for kinds this
        backend binds in hardware -- the serial fallback iterates the true extent. *)

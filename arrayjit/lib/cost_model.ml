@@ -113,6 +113,9 @@ let access_uncertainty ~open_placement (code : Low_level.t) =
         code_reads ~into a;
         code_reads ~into b
     | For_loop { body; _ } -> code_reads ~into body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun c -> sc_reads ~into c.init);
+        code_reads ~into body
     | If { cond = c0, _; body } ->
         sc_reads ~into c0;
         code_reads ~into body
@@ -167,6 +170,9 @@ let access_uncertainty ~open_placement (code : Low_level.t) =
         walk a;
         walk b
     | For_loop { from_; to_; body; _ } ->
+        if to_ < from_ then code_reads ~into:dead body else walk body
+    | Scan_loop { from_; to_; carried; body; _ } ->
+        List.iter carried ~f:(fun c -> sc_walk c.init);
         if to_ < from_ then code_reads ~into:dead body else walk body
     | If { cond = c0, _; body } ->
         sc_walk c0;
@@ -262,6 +268,11 @@ let analyze (code : Low_level.t) : summary =
     | For_loop { index; from_; to_; body; _ } ->
         let extent = max 0 (to_ - from_ + 1) in
         go ~scale:(scale * extent) ~env:((index, extent) :: env) body
+    | Scan_loop { index; from_; to_; carried; body; _ } ->
+        (* The inits run once; the body's work scales with the range like a serial loop's. *)
+        let extent = max 0 (to_ - from_ + 1) in
+        (scale * List.sum (module Int) carried ~f:(fun c -> sc_flops c.init))
+        + go ~scale:(scale * extent) ~env:((index, extent) :: env) body
     | Set { llsc; _ } -> scale * sc_flops llsc
     | Set_dynamic { dyn_value = dv, _; llsc; _ } -> scale * (sc_flops dv + sc_flops llsc)
     | Set_from_vec { length; arg = a, _; _ } -> scale * (length + sc_flops a)
@@ -373,6 +384,10 @@ let floor_flops ~open_placement (code : Low_level.t) : int * bool =
     | For_loop { index; from_; to_; body; _ } ->
         let extent = max 0 (to_ - from_ + 1) in
         go ~scale:(scale * extent) ~env:((index, extent) :: env) body
+    | Scan_loop { index; from_; to_; carried; body; _ } ->
+        let extent = max 0 (to_ - from_ + 1) in
+        (scale * List.sum (module Int) carried ~f:(fun c -> sc c.init))
+        + go ~scale:(scale * extent) ~env:((index, extent) :: env) body
     | Set { tn; llsc; _ } -> if open_placement tn then set_open () else scale * sc llsc
     | Set_dynamic { tn; dyn_value = dv, _; llsc; _ } ->
         if open_placement tn then set_open () else scale * (sc dv + sc llsc)

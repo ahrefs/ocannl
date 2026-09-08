@@ -1405,6 +1405,20 @@
  (modules gather_table_placement)
  (libraries base ocannl arrayjit.verdict ll_test))
 
+; gh-ocannl-696: the loop-carried recurrence construct [Scan_loop] on hand-built IR -- executed
+; cumulative sums in both directions, the online-softmax recurrence, a per-row scan under a Grid
+; outer loop, the placement and well-formedness contracts, schedule opacity and digest identity.
+; Picks its backend from the environment for the executed legs.
+
+(test
+ (name scan_loop)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules scan_loop)
+ (libraries base ocannl stdio arrayjit.verdict ll_test))
+
 (test
  (name virtual_diagonal)
  (package neural_nets_lib)

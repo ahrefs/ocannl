@@ -70,6 +70,11 @@ val axis_type_label : axis_type -> string
     way to spell "not mine". *)
 type scope_mint = Inlined_computation | Schedule_minted [@@deriving sexp, compare, equal]
 
+(** The iteration order of a {!t.Scan_loop} (gh-ocannl-696): [Forward] runs the index from [from_]
+    up to [to_], [Backward] from [to_] down to [from_]. Part of the construct from day one because
+    every adjoint of a forward scan is a backward scan over the same range. *)
+type scan_direction = Forward | Backward [@@deriving sexp, compare, equal]
+
 (** Cases: [t] -- code, [scalar_t] -- single number at some precision. *)
 type t =
   | Noop
@@ -77,6 +82,47 @@ type t =
   | Staged_compilation of (unit -> PPrint.document)
   | Seq of t * t
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; axis : axis_type }
+  | Scan_loop of {
+      index : Indexing.symbol;
+      from_ : int;
+      to_ : int;
+      direction : scan_direction;
+      carried : carried list;
+      body : t;
+    }
+      (** A loop with declared loop-carried scalar state (gh-ocannl-696): the minimal recurrence
+          construct behind cumulative ops, online softmax and top-k. Semantics, for [carried] =
+          [c_1 .. c_n]: each [c.prev] is set to [c.init] once, before the first iteration; then for
+          every value of [index] in [from_ .. to_] taken in [direction], [body] runs reading the
+          previous iteration's state through [Get_local c.prev] and producing the next through
+          [Set_local c.next]; after the body, every [c.prev] takes its [c.next] simultaneously
+          (phi-style rotation, so a body may read any old value after any new one is written). A
+          dead range ([to_ < from_]) is malformed and refused by the validator: a producer with no
+          iterations emits [Noop], so no walker needs a dead-scan convention. The final state is not
+          readable after the loop: a body that wants a trajectory or a final value writes it to a
+          tensor node itself.
+
+          Contract, enforced by {!validate_scan_loops} at both ends of the pipeline: [c.prev] and
+          [c.next] are ids, pairwise distinct across [carried], over one node DECLARED virtual
+          ([c.prev.tn == c.next.tn]), which names and types the state and is never a buffer;
+          [c.next] is written exactly once, as a top-level statement of [body] (not under a guard or
+          a nested loop), and read only by statements after that write; nothing writes [c.prev];
+          [c.init] reads no carried local and does not mention [index]. The state is scalars only,
+          of unbounded arity -- small fixed extents unroll into it; there is no dynamic indexing
+          into state.
+
+          Placement contract: a virtualization candidate whose captured computation contains a scan
+          -- one written inside the body, one fed by a scan through a scope local, or one merely
+          enclosing a sibling scan -- is refused ([Non_virtual 148]): a cell's value depends on the
+          whole prefix through state the index does not parameterize, so per-cell recomputation at a
+          read site is unbounded and wrong. Reads inside the body inline as usual (an independent
+          producer replays soundly at any position of the scan). Schedule transforms neither target
+          the scan's own index nor reach the loops inside its body (the loop is opaque to
+          [Schedule.find_loops_env] / [rewrite_loop], so an op naming either symbol declines with
+          the usual no-such-loop [Invalid_argument]); enclosing loops keep their full menu, since
+          the state is per-iteration-of-the-enclosing-loop local scratch. The index is an ordinary
+          affine loop symbol for footprint purposes ({!loop_bounds}, {!affine_accesses}, interval
+          analysis) -- a scan's accesses stay affine and dense even though its values are serial. *)
   | Zero_out of Tnode.t
   | Set of {
       tn : Tnode.t;
@@ -218,6 +264,12 @@ and scalar_t =
 and scalar_arg = scalar_t * Ops.prec [@@deriving sexp_of, equal, compare]
 (** The argument precision is preserved in heterogeneous precision operation arguments, and is
     ignored (overridden) in homogeneous precision operations. *)
+
+and carried = { prev : scope_id; next : scope_id; init : scalar_t }
+[@@deriving sexp_of, equal, compare]
+(** One loop-carried scalar of a {!t.Scan_loop}: read as [prev], written as [next], rotated
+    [prev := next] after each iteration, [prev := init] before the first. Both ids name the same
+    virtual node, whose precision is the state's precision. *)
 
 module Canonical_render : sig
   (** gh-563: the one canonical rendering of lowered code, shared by both digest consumers —
@@ -502,6 +554,15 @@ val validate_scope_bodies : t -> unit
     raw analysis entry points {!analyze_proc} / {!specialize_proc} deliberately do not validate,
     being the probes that must stay conservative on IR they may not trust. The optimization pipeline
     satisfies the contract by construction. *)
+
+val validate_scan_loops : Tnode.Placements.t -> t -> unit
+(** gh-ocannl-696: the well-formedness contract of {!t.Scan_loop} -- one state node DECLARED virtual
+    per carried pair, ids pairwise distinct across the list, inits free of carried state and of the
+    scan's own index, each [next] written exactly once as a top-level body statement and read only
+    by later statements, no write of a [prev], no binder or reference of a carried id beyond its
+    scan, no opaque callback inside, and a non-empty range. Raises [Invalid_argument] naming the
+    scan and the clause. Like {!validate_scope_bodies} it runs at both ends of the pipeline:
+    {!optimize} on the way in, backend codegen on the way out. *)
 
 val validate_parallel : Tnode.Placements.t -> t -> unit
 (** Backend-independent well-formedness of hardware annotations (axis-types proposal §2); a no-op

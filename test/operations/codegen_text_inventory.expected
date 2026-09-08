@@ -76,6 +76,7 @@ test/operations/micrograd_demo_logging-hip-0-0.log.expected [c ll routine-log] m
 test/operations/micrograd_demo_logging-multidev_cc-0-0.log.expected [c ll routine-log] markers c-prec-cast c-restrict ll-assign routine-log
 test/operations/n3_fwd_with_prec-unoptimized.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end ll-loop
 test/operations/reduction_forms.expected [derived] beside test/operations/reduction_forms.ml
+test/operations/scan_loop.expected [ll] markers ll-assign
 test/operations/test_log_stmt_format.c.expected [c] extension .c.expected; markers c-decl-banner c-logic-banner c-prec-cast c-restrict ll-assign routine-log
 test/operations/test_uniform_virtual_lane.expected [derived] beside test/operations/test_uniform_virtual_lane.ml
 test/operations/test_where_precision-unoptimized.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end
@@ -202,6 +203,7 @@ test/operations/reduction_forms.ml [also pins text this scan cannot name]
 test/operations/reserved_routine_names.ml
     "void " ^ "gh686_ordinary_name" ^ "("
     "void " ^ ... ^ "("
+test/operations/scan_loop.ml [renders generated text in memory]
 test/operations/schedule_batch_grid.ml [also pins text this scan cannot name]
 test/operations/schedule_batched_mma.ml
     "Tile_mma register tiling"

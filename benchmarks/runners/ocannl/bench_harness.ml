@@ -484,6 +484,9 @@ let print_census ?promote_locals ~backend ~limits ~static_indices opt =
               | LL.Unrolled -> "u" )
             :: !loops;
           code body
+      | LL.Scan_loop { from_; to_; body; _ } ->
+          loops := (to_ - from_ + 1, "scan") :: !loops;
+          code body
       | LL.Zero_out tn -> zeros := tn :: !zeros
       | LL.Set { tn; _ } -> writes := tn :: !writes
       | LL.Set_dynamic { tn; _ } -> writes := tn :: !writes
@@ -615,7 +618,7 @@ let time_segments ?promote_locals ?(repeats = 20) ~backend ~limits ~static_indic
       | LL.Seq (a, b) ->
           code a;
           code b
-      | LL.For_loop { body; _ } | LL.If { body; _ } -> code body
+      | LL.For_loop { body; _ } | LL.If { body; _ } | LL.Scan_loop { body; _ } -> code body
       | LL.Zero_out tn | LL.Set { tn; _ } | LL.Set_dynamic { tn; _ } | LL.Set_from_vec { tn; _ } ->
           writes := tn :: !writes
     in

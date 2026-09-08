@@ -83,12 +83,58 @@ let axis_type_label = function
     way to spell "not mine". See {!input_scope_ids}. *)
 type scope_mint = Inlined_computation | Schedule_minted [@@deriving sexp, compare, equal]
 
+(** The iteration order of a {!t.Scan_loop} (gh-ocannl-696): [Forward] runs the index from [from_]
+    up to [to_], [Backward] from [to_] down to [from_]. Part of the construct from day one because
+    every adjoint of a forward scan is a backward scan over the same range. *)
+type scan_direction = Forward | Backward [@@deriving sexp, compare, equal]
+
 type t =
   | Noop
   | Comment of string
   | Staged_compilation of ((unit -> PPrint.document)[@equal.ignore] [@compare.ignore])
   | Seq of t * t
   | For_loop of { index : Indexing.symbol; from_ : int; to_ : int; body : t; axis : axis_type }
+  | Scan_loop of {
+      index : Indexing.symbol;
+      from_ : int;
+      to_ : int;
+      direction : scan_direction;
+      carried : carried list;
+      body : t;
+    }
+      (** A loop with declared loop-carried scalar state (gh-ocannl-696): the minimal recurrence
+          construct behind cumulative ops, online softmax and top-k. Semantics, for [carried] =
+          [c_1 .. c_n]: each [c.prev] is set to [c.init] once, before the first iteration; then for
+          every value of [index] in [from_ .. to_] taken in [direction], [body] runs reading the
+          previous iteration's state through [Get_local c.prev] and producing the next through
+          [Set_local c.next]; after the body, every [c.prev] takes its [c.next] simultaneously
+          (phi-style rotation, so a body may read any old value after any new one is written). A
+          dead range ([to_ < from_]) is malformed and refused by the validator: a producer with no
+          iterations emits [Noop], so no walker needs a dead-scan convention. The final state is not
+          readable after the loop: a body that wants a trajectory or a final value writes it to a
+          tensor node itself.
+
+          Contract, enforced by {!validate_scan_loops} at both ends of the pipeline: [c.prev] and
+          [c.next] are ids, pairwise distinct across [carried], over one node DECLARED virtual
+          ([c.prev.tn == c.next.tn]), which names and types the state and is never a buffer;
+          [c.next] is written exactly once, as a top-level statement of [body] (not under a guard or
+          a nested loop), and read only by statements after that write; nothing writes [c.prev];
+          [c.init] reads no carried local and does not mention [index]. The state is scalars only,
+          of unbounded arity -- small fixed extents unroll into it; there is no dynamic indexing
+          into state.
+
+          Placement contract: a virtualization candidate whose captured computation contains a scan
+          -- one written inside the body, one fed by a scan through a scope local, or one merely
+          enclosing a sibling scan -- is refused ([Non_virtual 148]): a cell's value depends on the
+          whole prefix through state the index does not parameterize, so per-cell recomputation at a
+          read site is unbounded and wrong. Reads inside the body inline as usual (an independent
+          producer replays soundly at any position of the scan). Schedule transforms neither target
+          the scan's own index nor reach the loops inside its body (the loop is opaque to
+          [Schedule.find_loops_env] / [rewrite_loop], so an op naming either symbol declines with
+          the usual no-such-loop [Invalid_argument]); enclosing loops keep their full menu, since
+          the state is per-iteration-of-the-enclosing-loop local scratch. The index is an ordinary
+          affine loop symbol for footprint purposes ({!loop_bounds}, {!affine_accesses}, interval
+          analysis) -- a scan's accesses stay affine and dense even though its values are serial. *)
   | Zero_out of Tn.t
   | Set of { tn : Tn.t; idcs : Indexing.axis_index array; llsc : scalar_t; mutable debug : string }
   | Set_dynamic of {
@@ -202,6 +248,12 @@ and scalar_t =
 [@@deriving sexp_of, equal, compare]
 
 and scalar_arg = scalar_t * Ops.prec [@@deriving sexp_of, equal, compare]
+
+and carried = { prev : scope_id; next : scope_id; init : scalar_t }
+[@@deriving sexp_of, equal, compare]
+(** One loop-carried scalar of a {!t.Scan_loop}: read as [prev], written as [next], rotated
+    [prev := next] after each iteration, [prev := init] before the first. Both ids name the same
+    virtual node, whose precision is the state's precision. *)
 
 (* gh-563: the one canonical rendering of lowered code, shared by both digest consumers —
    [analysis_digest] (the analysis cache, consulted inside [optimize]) and
@@ -371,6 +423,23 @@ module Canonical_render = struct
           add
             (Printf.sprintf "for %s=%d..%d@%s{" tok from_ to_
                (Sexp.to_string (sexp_of_axis_type axis)));
+          emit body;
+          add "}"
+      | Scan_loop { index; from_; to_; direction; carried; body } ->
+          (* gh-ocannl-696: the inits render before the binder, in the order they evaluate; a
+             carried pair renders as [prev<-next], so swapping the two ids changes the digest. *)
+          List.iter carried ~f:(fun { prev; next; init } ->
+              add "carry ";
+              emit_scope prev;
+              add "<-";
+              emit_scope next;
+              add ":=";
+              emit_scalar init;
+              add ";");
+          let tok = bind_loop index in
+          add
+            (Printf.sprintf "scan %s=%d..%d@%s{" tok from_ to_
+               (Sexp.to_string (sexp_of_scan_direction direction)));
           emit body;
           add "}"
       | Zero_out tn ->
@@ -882,6 +951,9 @@ and proc_mentions_symbol (s : Indexing.symbol) (llc : t) : bool =
   | Set_local (_, llsc) -> scalar_mentions_symbol s llsc
   | Seq (a, b) -> proc_mentions_symbol s a || proc_mentions_symbol s b
   | For_loop { body; _ } -> proc_mentions_symbol s body
+  | Scan_loop { carried; body; _ } ->
+      List.exists carried ~f:(fun c -> scalar_mentions_symbol s c.init)
+      || proc_mentions_symbol s body
   | If { cond = c, _; body } -> scalar_mentions_symbol s c || proc_mentions_symbol s body
   | Tile_mma { d = _, d_idcs; a = _, a_idcs; b = _, b_idcs; lane; fallback; _ } ->
       Indexing.equal_symbol s lane
@@ -1031,6 +1103,14 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
           loop_proc ~scope_reads
             ~loop_ranges:(Map.set loop_ranges ~key:index ~data:(to_ - from_ + 1))
             body
+    | Scan_loop { index; from_; to_; carried; body; _ } ->
+        (* gh-ocannl-696: the inits are recorded once and the body's facts under the scan index
+           exactly as under a loop index. (A dead range never reaches here: the validator refuses it
+           ahead of the analysis, so no walker needs a dead-scan convention.) *)
+        List.iter carried ~f:(fun c -> loop_scalar ~loop_ranges ~lhs:None ~reads:scope_reads c.init);
+        loop_proc ~scope_reads
+          ~loop_ranges:(Map.set loop_ranges ~key:index ~data:(to_ - from_ + 1))
+          body
     | Zero_out tn ->
         let traced : traced_array = get_node traced_store tn in
         if (not traced.has_assignment) && not (Hash_set.mem read_seen tn) then (
@@ -1178,8 +1258,8 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
   in
   loop_proc ~loop_ranges:(Map.empty (module Indexing.Symbol)) ~scope_reads:None llc
 
-let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~enclosing traced
-    static_indices top_llc =
+let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_scan ~enclosing
+    traced static_indices top_llc =
   let exception Non_virtual of int in
   let static_indices =
     Set.of_list (module Indexing.Symbol)
@@ -1275,6 +1355,16 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~enc
         loop_proc ~env_dom:(Set.add env_dom index)
           ~loop_ranges:(Map.set loop_ranges ~key:index ~data:(to_ - from_ + 1))
           body
+    | Scan_loop { index; from_; to_; carried; body; _ } ->
+        (* gh-ocannl-696: a scan anywhere in the captured computation refuses the candidate. Writing
+           the candidate inside it is the obvious case -- cell [i]'s value depends on the whole
+           prefix through state the index does not parameterize, so replaying instance [i] cannot
+           reproduce it -- but a scan that feeds the candidate through a scope local is the same
+           recurrence one level down, and a sibling scan is dropped by the inline filter, which
+           cannot keep it without re-minting its carried locals per replay. One verdict for the
+           three, decided where the computation is captured. *)
+        ignore (index, from_, to_, carried, body);
+        raise @@ Non_virtual 148
     | Zero_out tn -> if Tn.equal tn top_tn then has_setter := true
     | Set { tn; idcs; llsc; debug = _ } ->
         if Tn.equal tn top_tn then (
@@ -1367,6 +1457,10 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~enc
        unguarded at every read site. Same verdict as the interior-guard arm, decided here because
        only the caller knows the context the subtree was captured from. *)
     if guarded then raise @@ Non_virtual 142;
+    (* gh-ocannl-696: the candidate's setter sits inside a [Scan_loop], which is outside [top_llc]
+       like an enclosing guard, so only the caller can report it. Same verdict as a scan met inside
+       the nest by the walk above. *)
+    if in_scan then raise @@ Non_virtual 148;
     loop_proc ~env_dom:static_indices ~loop_ranges:(Map.empty (module Indexing.Symbol)) top_llc;
     if not !has_setter then raise @@ Non_virtual 12;
     (* gh-651 (loop half): an enclosing [For_loop] whose symbol the candidate's index map does not
@@ -1400,6 +1494,9 @@ let rec computation_reads_merge ~self : t -> bool = function
   (* A dead loop's body replays zero times: no taint from it (review round 10), mirroring
      [drop_dead_loop_accesses] and the fan-in collector's dead-loop skip. *)
   | For_loop { from_; to_; body; _ } -> to_ >= from_ && computation_reads_merge ~self body
+  | Scan_loop { from_; to_; carried; body; _ } ->
+      List.exists carried ~f:(fun c -> scalar_reads_merge_buffer ~self c.init)
+      || (to_ >= from_ && computation_reads_merge ~self body)
   | Set { tn; llsc; _ } -> Tn.equal tn self && scalar_reads_merge_buffer ~self llsc
   | Set_local (_, llsc) -> scalar_reads_merge_buffer ~self llsc
   | Set_from_vec { tn; arg = s, _; _ } -> Tn.equal tn self && scalar_reads_merge_buffer ~self s
@@ -1591,7 +1688,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
     let rec contains = function
       | Zero_out tn -> Tn.equal tn traced.tn
       | Seq (a, b) -> contains a || contains b
-      | For_loop { body; _ } -> contains body
+      | For_loop { body; _ } | Scan_loop { body; _ } -> contains body
       | _ -> false
     in
     List.exists computations ~f:(fun (_, def) -> contains def)
@@ -1660,7 +1757,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
     (* Per-symbol loop width of this producer computation, for range guards on solved symbols. *)
     let def_loop_ranges =
       let rec scan acc = function
-        | For_loop { index; from_; to_; body; _ } ->
+        | For_loop { index; from_; to_; body; _ } | Scan_loop { index; from_; to_; body; _ } ->
             scan (Map.set acc ~key:index ~data:(to_ - from_ + 1)) body
         | Seq (a, b) -> scan (scan acc a) b
         | _ -> acc
@@ -1834,6 +1931,13 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
           let env = Map.add_exn ~key:index ~data:(Indexing.Iterator fresh) env in
           Option.map ~f:(fun body : t -> For_loop { index = fresh; from_; to_; body; axis })
           @@ loop env body
+      | Scan_loop _ ->
+          (* gh-ocannl-696: a computation containing a scan never reaches storage
+             ([check_and_store_virtual]'s [Non_virtual 148] on the scan itself), so this arm is a
+             consumption-time backstop with the same verdict, never a silent drop: the filter cannot
+             keep a scan without re-minting its carried locals per replay, and dropping one that
+             feeds the value through a scope local would return the pre-scan value. *)
+          raise @@ Non_virtual 148
       | Zero_out tn when Tn.equal tn traced.tn -> Some (Set_local (id, Constant 0.0))
       | Set { tn; idcs; llsc; debug = _ } when Tn.equal tn traced.tn ->
           assert ([%equal: Indexing.axis_index array option] (Some idcs) def_args);
@@ -2015,7 +2119,7 @@ let rec unroll_pow ~(base : scalar_t) ~(exp : int) : scalar_t =
    phase-2 emitted statement (used when the node stays materialized) is rewritten as before. *)
 let rec proc_contains_set_from_vec tn = function
   | Set_from_vec { tn = tn2; _ } -> Tn.equal tn tn2
-  | For_loop { body; _ } -> proc_contains_set_from_vec tn body
+  | For_loop { body; _ } | Scan_loop { body; _ } -> proc_contains_set_from_vec tn body
   | Seq (a, b) -> proc_contains_set_from_vec tn a || proc_contains_set_from_vec tn b
   | If { body; _ } -> proc_contains_set_from_vec tn body
   | _ -> false
@@ -2063,6 +2167,9 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
         record_spliced_reads c1;
         record_spliced_reads c2
     | For_loop { body; _ } -> record_spliced_reads body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun c -> record_spliced_scalar c.init);
+        record_spliced_reads body
     | Set { llsc; _ } | Set_local (_, llsc) -> record_spliced_scalar llsc
     | Set_from_vec { arg = sc, _; _ } -> record_spliced_scalar sc
     | Set_dynamic { dyn_value = v, _; llsc; _ } ->
@@ -2118,8 +2225,9 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
      [process_for] -- reads of them are still inlined, so surviving sibling readers can inline a
      virtualized provider. [in_storage_pass] is set within a per-candidate storage sub-pass so it
      does not recursively re-store nested-loop candidates. See #134. *)
-  let rec loop_proc ~process_for ~owned ~in_storage_pass ~guarded ~enclosing (llc : t) : t =
-    let loop = loop_proc ~process_for ~owned ~in_storage_pass ~guarded ~enclosing in
+  let rec loop_proc ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing (llc : t) : t
+      =
+    let loop = loop_proc ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing in
     match llc with
     | Noop -> Noop
     | Seq (c1, c2) ->
@@ -2132,6 +2240,30 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
        consumer side with [inline_computation]'s spliced-body elision (round 10); stored
        computations lose their dead sub-loops at store time for the same reason. *)
     | For_loop { from_; to_; _ } when to_ < from_ -> Noop
+    | Scan_loop ({ index; from_; to_; carried; body; _ } as scan_config) ->
+        (* gh-ocannl-696: no candidate capture at the scan's binder. A node written in the body is
+           refused wherever its store is attempted -- per statement here, through [in_scan] reaching
+           [check_and_store_virtual], or at an enclosing loop's capture, whose validity walk meets
+           the scan -- so inside a scan only reads inline. The inits evaluate once, outside the
+           loop, in the enclosing context. *)
+        let carried =
+          List.map carried ~f:(fun c ->
+              {
+                c with
+                init =
+                  loop_scalar ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
+                    c.init;
+              })
+        in
+        Scan_loop
+          {
+            scan_config with
+            carried;
+            body =
+              loop_proc ~process_for ~owned ~in_storage_pass ~guarded ~in_scan:true
+                ~enclosing:((index, to_ - from_ + 1) :: enclosing)
+                body;
+          }
     | For_loop ({ index; body; from_; to_; _ } as for_config) -> (
         (* What an inner candidate's capture would be replaying: this loop is outside any subtree
            stored below it (gh-651 loop half). *)
@@ -2141,8 +2273,8 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
             {
               for_config with
               body =
-                loop_proc ~process_for ~owned ~in_storage_pass:true ~guarded ~enclosing:enclosing'
-                  body;
+                loop_proc ~process_for ~owned ~in_storage_pass:true ~guarded ~in_scan
+                  ~enclosing:enclosing' body;
             }
         else
           let tns = Hashtbl.find reverse_node_map index |> Option.value ~default:[] in
@@ -2160,7 +2292,7 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
                 {
                   for_config with
                   body =
-                    loop_proc ~process_for ~owned ~in_storage_pass:false ~guarded
+                    loop_proc ~process_for ~owned ~in_storage_pass:false ~guarded ~in_scan
                       ~enclosing:enclosing' body;
                 }
           | _ ->
@@ -2189,12 +2321,13 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
                           for_config with
                           body =
                             loop_proc ~process_for:store_pf ~owned:owned' ~in_storage_pass:true
-                              ~guarded ~enclosing:enclosing' body;
+                              ~guarded ~in_scan ~enclosing:enclosing' body;
                         }
                   in
                   (* The stored subtree is rooted AT this loop, so [enclosing] (not [enclosing']) is
                      what it fails to contain. *)
-                  check_and_store_virtual optim_ctx ~guarded ~enclosing node static_indices stored);
+                  check_and_store_virtual optim_ctx ~guarded ~in_scan ~enclosing node static_indices
+                    stored);
               (* Phase 2 -- emit. Candidates are NOT in [process_for], so surviving readers
                  (materialized siblings, and later virtual siblings, all now stored) inline the
                  provider; [owned'] still suppresses candidate auto-store; each candidate setter
@@ -2204,7 +2337,7 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
                 {
                   for_config with
                   body =
-                    loop_proc ~process_for ~owned:owned' ~in_storage_pass:false ~guarded
+                    loop_proc ~process_for ~owned:owned' ~in_storage_pass:false ~guarded ~in_scan
                       ~enclosing:enclosing' body;
                 })
     | Zero_out tn ->
@@ -2213,7 +2346,8 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
           (not @@ Set.mem process_for tn)
           && (not @@ Set.mem owned tn)
           && (not @@ Tn.Placements.known_non_virtual plc traced.tn)
-        then check_and_store_virtual optim_ctx ~guarded ~enclosing traced static_indices llc;
+        then
+          check_and_store_virtual optim_ctx ~guarded ~in_scan ~enclosing traced static_indices llc;
         llc
     | Set { tn; idcs; llsc; debug } ->
         let traced : traced_array = get_node traced_store tn in
@@ -2226,7 +2360,9 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
             {
               tn;
               idcs;
-              llsc = loop_scalar ~process_for:next ~owned ~in_storage_pass ~guarded ~enclosing llsc;
+              llsc =
+                loop_scalar ~process_for:next ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
+                  llsc;
               debug;
             }
         in
@@ -2234,7 +2370,9 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
           (not @@ Set.mem process_for tn)
           && (not @@ Set.mem owned tn)
           && (not @@ Tn.Placements.known_non_virtual plc traced.tn)
-        then check_and_store_virtual optim_ctx ~guarded ~enclosing traced static_indices result;
+        then
+          check_and_store_virtual optim_ctx ~guarded ~in_scan ~enclosing traced static_indices
+            result;
         result
     | Set_from_vec { tn; idcs; length; vec_unop; arg = arg_scalar, arg_prec; debug } ->
         let traced : traced_array = get_node traced_store tn in
@@ -2250,7 +2388,7 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
               length;
               vec_unop;
               arg =
-                ( loop_scalar ~process_for:next ~owned ~in_storage_pass ~guarded ~enclosing
+                ( loop_scalar ~process_for:next ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
                     arg_scalar,
                   arg_prec );
               debug;
@@ -2263,10 +2401,11 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
         then
           (* gh-509 task 4: store the raw statement (argument not rewritten), see
              [proc_contains_set_from_vec]. The emitted statement remains [result]. *)
-          check_and_store_virtual optim_ctx ~guarded ~enclosing traced static_indices llc;
+          check_and_store_virtual optim_ctx ~guarded ~in_scan ~enclosing traced static_indices llc;
         result
     | Set_local (id, llsc) ->
-        Set_local (id, loop_scalar ~process_for ~owned ~in_storage_pass ~guarded ~enclosing llsc)
+        Set_local
+          (id, loop_scalar ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing llsc)
     | Declare_local _ -> llc
     | Comment _ -> llc
     | Staged_compilation _ -> llc
@@ -2285,12 +2424,14 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
     | If { cond = c, prec; body } ->
         If
           {
-            cond = (loop_scalar ~process_for ~owned ~in_storage_pass ~guarded ~enclosing c, prec);
-            body = loop_proc ~process_for ~owned ~in_storage_pass ~guarded:true ~enclosing body;
+            cond =
+              (loop_scalar ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing c, prec);
+            body =
+              loop_proc ~process_for ~owned ~in_storage_pass ~guarded:true ~in_scan ~enclosing body;
           }
-  and loop_scalar ~process_for ~owned ~in_storage_pass ~guarded ~enclosing (llsc : scalar_t) :
-      scalar_t =
-    let loop = loop_scalar ~process_for ~owned ~in_storage_pass ~guarded ~enclosing in
+  and loop_scalar ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
+      (llsc : scalar_t) : scalar_t =
+    let loop = loop_scalar ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing in
     match llsc with
     | Constant _ -> llsc
     | Constant_bits _ -> llsc
@@ -2360,7 +2501,7 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
             opts with
             body =
               loop_proc ~process_for:(Set.add process_for opts.id.tn) ~owned ~in_storage_pass
-                ~guarded ~enclosing opts.body;
+                ~guarded ~in_scan ~enclosing opts.body;
           }
     | Get_local _ -> llsc
     | Get_merge_buffer (_, _) -> llsc
@@ -2380,7 +2521,7 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
     loop_proc
       ~process_for:(Set.empty (module Tnode))
       ~owned:(Set.empty (module Tnode))
-      ~in_storage_pass:false ~guarded:false ~enclosing:[] llc
+      ~in_storage_pass:false ~guarded:false ~in_scan:false ~enclosing:[] llc
   in
   (result, spliced_reads)
 
@@ -2417,6 +2558,12 @@ let validate_virtualization_decision_coverage (plc : Tn.Placements.t) (llc : t) 
         let b_survives = proc b in
         a_survives || b_survives
     | For_loop { body; _ } -> proc body
+    | Scan_loop { carried; body; _ } ->
+        (* Kept whole by cleanup: the body's setters are all non-virtual and the rotation is an
+           effect on the carried locals. *)
+        List.iter carried ~f:(fun c -> scalar c.init);
+        ignore (proc body : bool);
+        true
     | Zero_out tn -> Tn.Placements.known_non_virtual plc tn
     | Set { tn; llsc; _ } ->
         let survives = Tn.Placements.known_non_virtual plc tn in
@@ -2531,6 +2678,9 @@ let input_scope_ids (llc : t) : Set.M(Scope_id).t =
         proc a;
         proc b
     | For_loop { body; _ } -> proc body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun c -> scalar c.init);
+        proc body
     | If { cond = c, _; body } ->
         scalar c;
         proc body
@@ -2577,6 +2727,19 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
         let env_dom = Set.add env_dom index in
         Option.map ~f:(fun body : t -> For_loop { for_config with body })
         @@ loop_proc ~balanced ~env_dom body
+    | Scan_loop ({ index; carried; body; _ } as scan_config) ->
+        (* gh-ocannl-696: kept whole -- every setter in the body is non-virtual ([Non_virtual 148])
+           and the rotation is an effect on the carried locals; the state node is committed
+           [Virtual] like a scope local's. *)
+        let carried =
+          List.map carried ~f:(fun c ->
+              assert (not @@ Tn.Placements.known_non_virtual plc c.prev.tn);
+              Tn.Placements.update plc c.prev.tn Virtual 16;
+              { c with init = loop_scalar ~balanced ~env_dom c.init })
+        in
+        let env_dom = Set.add env_dom index in
+        let body = Option.value ~default:Noop (loop_proc ~balanced ~env_dom body) in
+        Some (Scan_loop { scan_config with carried; body })
     | Zero_out tn ->
         if not @@ Tn.Placements.known_non_virtual plc tn then (
           (* #296: a tnode still not [known_non_virtual] by cleanup was never forced [Never_virtual]
@@ -2753,6 +2916,13 @@ and substitute_proc ~var ~value llc =
       let c2 = loop_proc c2 in
       Seq (c1, c2)
   | For_loop for_config -> For_loop { for_config with body = loop_proc for_config.body }
+  | Scan_loop sc ->
+      Scan_loop
+        {
+          sc with
+          carried = List.map sc.carried ~f:(fun c -> { c with init = loop_scalar c.init });
+          body = loop_proc sc.body;
+        }
   | Zero_out _ -> llc
   | Set { tn; idcs; llsc; debug } -> Set { tn; idcs; llsc = loop_scalar llsc; debug }
   | Set_dynamic { tn; idcs; dyn_axis; dyn_value = v, vprec; llsc; debug } ->
@@ -3174,6 +3344,15 @@ let simplify_llc static_indices llc =
                   (ienv_extend ienv for_config.index ~from_:for_config.from_ ~to_:for_config.to_)
                 for_config.body;
           }
+    | Scan_loop ({ index; from_; to_; carried; body; _ } as scan_config) ->
+        Scan_loop
+          {
+            scan_config with
+            carried =
+              List.map carried ~f:(fun c ->
+                  { c with init = fst (loop_scalar (c.init, Lazy.force c.prev.tn.Tn.storage_prec)) });
+            body = loop_proc ~ienv:(ienv_extend ienv index ~from_ ~to_) body;
+          }
     | Zero_out _ -> llc
     | Set { tn; idcs; llsc; debug } ->
         Set { tn; idcs; llsc = fst (loop_scalar (llsc, Lazy.force tn.Tn.storage_prec)); debug }
@@ -3421,6 +3600,9 @@ let simplify_llc static_indices llc =
         loop c1;
         loop c2
     | For_loop { body; _ } -> loop body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun c -> check_float c.prev.tn c.init);
+        loop body
     | Zero_out _ -> ()
     | Set { tn; llsc; _ } -> check_float tn llsc
     | Set_dynamic { tn; dyn_value = v, _; llsc; _ } ->
@@ -3644,6 +3826,16 @@ let eliminate_common_subexpressions llc =
       | Comment _ | Staged_compilation _ | Zero_out _ | Workgroup_barrier -> llc
       | Seq (c1, c2) -> Seq (loop_proc c1, loop_proc c2)
       | For_loop for_config -> For_loop { for_config with body = loop_proc for_config.body }
+      | Scan_loop sc ->
+          (* Each init is its own statement for scope-sharing purposes, like a [Set_local]. *)
+          let carried =
+            List.map sc.carried ~f:(fun c ->
+                let saved = !seen in
+                let init = loop_scalar c.init in
+                seen := saved;
+                { c with init })
+          in
+          Scan_loop { sc with carried; body = loop_proc sc.body }
       | Set { tn; idcs; llsc; debug } ->
           (* Each statement gets its own scope: codegen wraps in { } when local defs exist, so
              sibling statements can't reference each other's Local_scope declarations. *)
@@ -3685,6 +3877,13 @@ let eliminate_common_subexpressions llc =
         llc
     | Seq (c1, c2) -> Seq (loop_proc c1, loop_proc c2)
     | For_loop for_config -> For_loop { for_config with body = loop_proc for_config.body }
+    | Scan_loop sc ->
+        Scan_loop
+          {
+            sc with
+            carried = List.map sc.carried ~f:(fun c -> { c with init = cse_scalar c.init });
+            body = loop_proc sc.body;
+          }
     | Set { tn; idcs; llsc; debug } -> Set { tn; idcs; llsc = cse_scalar llsc; debug }
     | Set_dynamic { tn; idcs; dyn_axis; dyn_value = v, vprec; llsc; debug } ->
         Set_dynamic
@@ -3769,6 +3968,9 @@ let reads_of_body (body : t) : Set.M(Tn).t =
         loop_proc c1;
         loop_proc c2
     | For_loop { body; _ } -> loop_proc body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun c -> loop_scalar c.init);
+        loop_proc body
     | Set { llsc; _ } -> loop_scalar llsc
     | Set_dynamic { dyn_value = v, _; llsc; _ } ->
         (* The RMW read of the scatter target surfaces via the [Get_dynamic] inside [llsc]. *)
@@ -3824,7 +4026,7 @@ let writes_of_stmt (stmt : t) : Set.M(Tn).t =
     | Seq (a, b) ->
         loop a;
         loop b
-    | For_loop { body; _ } -> loop body
+    | For_loop { body; _ } | Scan_loop { body; _ } -> loop body
     | If { body; _ } -> loop body
     | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Set_local _ | Workgroup_barrier ->
         ()
@@ -3847,6 +4049,12 @@ let local_reads_of_body (body : t) : scope_id list =
         loop_proc c1;
         loop_proc c2
     | For_loop { body; _ } -> loop_proc body
+    | Scan_loop { carried; body; _ } ->
+        (* The rotation reads every [next]; the body's [Get_local prev]s are collected below. *)
+        List.iter carried ~f:(fun c ->
+            acc := c.next :: !acc;
+            loop_scalar c.init);
+        loop_proc body
     | Set { llsc; _ } | Set_local (_, llsc) -> loop_scalar llsc
     | Set_dynamic { dyn_value = v, _; llsc; _ } ->
         loop_scalar v;
@@ -3887,6 +4095,10 @@ let local_writes_of_stmt (stmt : t) : scope_id list =
         loop a;
         loop b
     | For_loop { body; _ } -> loop body
+    | Scan_loop { carried; body; _ } ->
+        (* The rotation writes every [prev]; the body's [Set_local next]s are collected below. *)
+        List.iter carried ~f:(fun c -> acc := c.prev :: !acc);
+        loop body
     | If { body; _ } -> loop body
     | Set _ | Set_dynamic _ | Set_from_vec _ | Zero_out _ | Tile_mma _ | Noop | Comment _
     | Staged_compilation _ | Declare_local _ | Workgroup_barrier ->
@@ -3918,6 +4130,8 @@ let reads_scope_before_set (target : scope_id) (body : t) : bool =
         false
     | Seq (a, b) -> proc_has_read a || proc_has_read b
     | For_loop { body; _ } -> proc_has_read body
+    | Scan_loop { carried; body; _ } ->
+        List.exists carried ~f:(fun c -> scalar_has_read c.init) || proc_has_read body
     | If { cond = c, _; body } -> scalar_has_read c || proc_has_read body
     | Set { llsc; _ } -> scalar_has_read llsc
     | Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar_has_read v || scalar_has_read llsc
@@ -3947,6 +4161,13 @@ let reads_scope_before_set (target : scope_id) (body : t) : bool =
         | `Read -> `Read
         | `Written -> if from_ <= to_ then `Written else `Neither
         | `Neither -> `Neither)
+    | Scan_loop { carried; body; from_; to_; _ } -> (
+        if List.exists carried ~f:(fun c -> scalar_has_read c.init) then `Read
+        else
+          match scan body with
+          | `Read -> `Read
+          | `Written -> if from_ <= to_ then `Written else `Neither
+          | `Neither -> `Neither)
     | If { cond = c, _; body } -> (
         if
           (* A guarded write is never a definite write. *)
@@ -3970,6 +4191,8 @@ let rec contains_barrier (llc : t) : bool =
   | Tile_mma _ -> true
   | Seq (a, b) -> contains_barrier a || contains_barrier b
   | For_loop { body; _ } -> contains_barrier body
+  | Scan_loop { carried; body; _ } ->
+      List.exists carried ~f:(fun c -> scalar_contains_barrier c.init) || contains_barrier body
   | Set { llsc; _ } -> scalar_contains_barrier llsc
   | Set_dynamic { dyn_value = v, _; llsc; _ } ->
       scalar_contains_barrier v || scalar_contains_barrier llsc
@@ -4014,6 +4237,8 @@ let has_accumulation (llc : t) : bool =
     | Seq (a, b) -> loop a || loop b
     | If { body; _ } -> loop body
     | For_loop { body; _ } -> loop body
+    (* gh-ocannl-696: a loop-carried dependency by construction. *)
+    | Scan_loop _ -> true
     | Set { tn; llsc; _ } -> scalar_reads ~read:(`Tn tn) llsc
     (* gh-466: a dynamic scatter accumulates by construction (its RHS reads the target row) and its
        write location is not statically known — never assert iteration independence over it. *)
@@ -4087,6 +4312,13 @@ let scope_purity_violation_gen (root : [ `Proc of t | `Scalar of scalar_t ]) : s
     | Seq (a, b) -> proc ~scope ~owned:(proc ~scope ~owned a) b
     | For_loop { body; _ } ->
         ignore (proc ~scope ~owned body : scope_id list);
+        owned
+    | Scan_loop { carried; body; _ } ->
+        (* gh-ocannl-696: the carried pair is declared by the construct, so the body's [Set_local]s
+           of a [next] are the scan's own; the declarations do not escape the scan. *)
+        List.iter carried ~f:(fun c -> scalar ~scope ~owned c.init);
+        let owned' = List.fold carried ~init:owned ~f:(fun acc c -> c.next :: c.prev :: acc) in
+        ignore (proc ~scope ~owned:owned' body : scope_id list);
         owned
     | If { cond = c, _; body } ->
         scalar ~scope ~owned c;
@@ -4204,7 +4436,7 @@ let rec hardware_depth kind (llc : t) : int =
         d + 1
       else d
   | Seq (a, b) -> max (hardware_depth kind a) (hardware_depth kind b)
-  | If { body; _ } -> hardware_depth kind body
+  | If { body; _ } | Scan_loop { body; _ } -> hardware_depth kind body
   | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _ | Set_from_vec _
   | Set_local _ | Declare_local _ | Workgroup_barrier | Tile_mma _ ->
       0
@@ -4237,7 +4469,7 @@ let hardware_axes (llc : t) : hardware_axis_info list =
     | Seq (a, b) ->
         walk a;
         walk b
-    | If { body; _ } -> walk body
+    | If { body; _ } | Scan_loop { body; _ } -> walk body
     (* The fallback's loops are fresh serial symbols; the statement binds no hardware axes. *)
     | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _ | Set_from_vec _
     | Set_local _ | Declare_local _ | Workgroup_barrier | Tile_mma _ ->
@@ -4306,6 +4538,8 @@ let rec scalar_scopes_have_annotated (llc : t) : bool =
   match llc with
   | Seq (a, b) -> scalar_scopes_have_annotated a || scalar_scopes_have_annotated b
   | For_loop { body; _ } -> scalar_scopes_have_annotated body
+  | Scan_loop { carried; body; _ } ->
+      List.exists carried ~f:(fun c -> scalar c.init) || scalar_scopes_have_annotated body
   | If { cond = c, _; body } -> scalar c || scalar_scopes_have_annotated body
   | Set { llsc; _ } -> scalar llsc
   | Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar v || scalar llsc
@@ -4362,7 +4596,7 @@ let validate_parallel plc (llc : t) : unit =
         | Seq (a, b) ->
             no_guarded_barrier a;
             no_guarded_barrier b
-        | For_loop { body; _ } -> no_guarded_barrier body
+        | For_loop { body; _ } | Scan_loop { body; _ } -> no_guarded_barrier body
         | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _
         | Set_from_vec _ | Set_local _ | Declare_local _ | Workgroup_barrier | Tile_mma _ ->
             ()
@@ -4416,6 +4650,7 @@ let validate_parallel plc (llc : t) : unit =
             | None -> covered
           in
           check_writes ~covered ~enclosing:(index :: enclosing) body
+      | Scan_loop { index; body; _ } -> check_writes ~covered ~enclosing:(index :: enclosing) body
       | Seq (a, b) ->
           check_writes ~covered ~enclosing a;
           check_writes ~covered ~enclosing b
@@ -4495,6 +4730,7 @@ let guard_annotated_extents ~(should_guard : [ `Grid | `Workgroup ] -> bool) (ll
         | _ -> For_loop { fc with body })
     | Seq (a, b) -> Seq (walk a, walk b)
     | If { cond; body } -> If { cond; body = walk body }
+    | Scan_loop sc -> Scan_loop { sc with body = walk sc.body }
     | ( Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _
       | Set_from_vec _ | Set_local _ | Declare_local _ | Workgroup_barrier | Tile_mma _ ) as other
       ->
@@ -4631,6 +4867,10 @@ let hoist_cross_statement_cse llc =
         let stmts = List.map stmts ~f:loop_proc in
         hoist_shared_locals stmts |> unflat_lines
     | For_loop fc -> For_loop { fc with body = loop_proc fc.body }
+    (* gh-ocannl-696: hoisting within a scan body is the per-iteration case of the loop-body one;
+       the rotation assigns the carried [prev]s after every body statement, so no statement of the
+       body can be lifted across such a write. *)
+    | Scan_loop sc -> Scan_loop { sc with body = loop_proc sc.body }
     | _ -> llc
   in
   loop_proc llc
@@ -4668,6 +4908,12 @@ let loop_bounds (llc : t) : (Indexing.symbol * (int * int)) list =
         go b
     | For_loop { index; from_; to_; body; _ } ->
         acc := (index, (from_, to_)) :: !acc;
+        go body
+    | Scan_loop { index; from_; to_; carried; body; _ } ->
+        (* gh-ocannl-696: the scan index bounds its body's accesses like a loop index does; what
+           differs about a scan is the order its values are produced in, not their footprint. *)
+        acc := (index, (from_, to_)) :: !acc;
+        List.iter carried ~f:(fun c -> go_sc c.init);
         go body
     | If { cond = c, _; body } ->
         go_sc c;
@@ -4727,6 +4973,8 @@ and body_value_syms ~locals (llc : t) : Indexing.symbol list =
   | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Zero_out _ -> []
   | Seq (a, b) -> body_value_syms ~locals a @ body_value_syms ~locals b
   | For_loop { body; _ } -> body_value_syms ~locals body
+  | Scan_loop { carried; body; _ } ->
+      List.concat_map carried ~f:(fun c -> scalar_syms c.init) @ body_value_syms ~locals body
   | If { cond = c, _; body } -> scalar_syms c @ body_value_syms ~locals body
   | Set { llsc; _ } | Set_local (_, llsc) -> scalar_syms llsc
   | Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar_syms v @ scalar_syms llsc
@@ -4762,6 +5010,16 @@ let scope_value_syms (llc : t) : (int, Indexing.symbol list) Hashtbl.t =
         stmt ~depth a;
         stmt ~depth b
     | For_loop { body; _ } -> stmt ~depth body
+    | Scan_loop { carried; body; _ } ->
+        (* gh-ocannl-696: [prev] is assigned by the init and, through the rotation, by [next] --
+           recorded as the two statement-level assignments they are, so a value routed through the
+           carried state keeps the symbols the body's update depends on. *)
+        List.iter carried ~f:(fun c ->
+            if depth = 0 then (
+              record c.prev c.init;
+              record c.prev (Get_local c.next));
+            scalar ~depth c.init);
+        stmt ~depth body
     | If { cond = c, _; body } ->
         scalar ~depth c;
         stmt ~depth body
@@ -4824,6 +5082,8 @@ let affine_accesses (llc : t) : Tn.t Affine.access list =
         false
     | Seq (a, b) -> body_reads uid a || body_reads uid b
     | For_loop { body; _ } -> body_reads uid body
+    | Scan_loop { carried; body; _ } ->
+        List.exists carried ~f:(fun c -> reads_tn uid c.init) || body_reads uid body
     | If { cond = c, _; body } -> reads_tn uid c || body_reads uid body
     | Set { llsc; _ } | Set_local (_, llsc) -> reads_tn uid llsc
     | Set_dynamic { dyn_value = v, _; llsc; _ } -> reads_tn uid v || reads_tn uid llsc
@@ -4876,6 +5136,15 @@ let affine_accesses (llc : t) : Tn.t Affine.access list =
             code ~loops ~path:(Affine.Stmt k :: path) ~guarded stmt)
     | For_loop { index; from_; to_; body; _ } ->
         code ~loops:((index, (from_, to_)) :: loops) ~path ~guarded body
+    | Scan_loop { index; from_; to_; carried; body; _ } ->
+        (* gh-ocannl-696: the inits are statement [0] of the construct, one [Set_local]-shaped
+           position each, and the body statement [1] -- so every init read orders before every body
+           access, and the scan index bounds the body like a loop index. *)
+        List.iteri carried ~f:(fun j c ->
+            scalar ~loops
+              ~path:(Affine.Rhs :: Affine.Stmt j :: Affine.Stmt 0 :: path)
+              ~guarded ~arg_c ?stmt_write:None c.init);
+        code ~loops:((index, (from_, to_)) :: loops) ~path:(Affine.Stmt 1 :: path) ~guarded body
     | If { cond = c, _; body } ->
         scalar ~loops ~path:(Affine.Cond :: path) ~guarded ~arg_c ?stmt_write:None c;
         code ~loops ~path:(Affine.Body :: path) ~guarded:true body
@@ -4961,6 +5230,9 @@ let iter_buffer_accesses ~(touch : Tn.t -> unit) ~(on_opaque : unit -> unit) (c 
         stmt t1;
         stmt t2
     | For_loop { body; _ } -> stmt body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun c -> scal c.init);
+        stmt body
     | Zero_out tn -> touch tn
     | Set { tn; llsc; idcs = _; debug = _ } ->
         touch tn;
@@ -5259,6 +5531,8 @@ and code_touches_tn tn (llc : t) =
   | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ -> false
   | Seq (a, b) -> code_touches_tn tn a || code_touches_tn tn b
   | For_loop { body; _ } -> code_touches_tn tn body
+  | Scan_loop { carried; body; _ } ->
+      List.exists carried ~f:(fun c -> scalar_touches_tn tn c.init) || code_touches_tn tn body
   | If { cond = c, _; body } -> scalar_touches_tn tn c || code_touches_tn tn body
   | Zero_out tn2 -> Tn.equal tn tn2
   | Set { tn = tn2; llsc; _ } -> Tn.equal tn tn2 || scalar_touches_tn tn llsc
@@ -5266,8 +5540,9 @@ and code_touches_tn tn (llc : t) =
       Tn.equal tn tn2 || scalar_touches_tn tn v || scalar_touches_tn tn llsc
   | Set_from_vec { tn = tn2; arg = a, _; _ } -> Tn.equal tn tn2 || scalar_touches_tn tn a
   | Set_local (_, llsc) -> scalar_touches_tn tn llsc
-  | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; _ } ->
-      Tn.equal tn d_tn || Tn.equal tn a_tn || Tn.equal tn b_tn
+  (* The fallback is what a backend without an MMA hook executes, so what it touches is touched. *)
+  | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; fallback; _ } ->
+      Tn.equal tn d_tn || Tn.equal tn a_tn || Tn.equal tn b_tn || code_touches_tn tn fallback
 
 (* gh-ocannl-639: the accumulation-update statement shape [tn[idcs] = op(tn[idcs], contrib)] (or its
    FMA form) over an associative-commutative [op], with [contrib] free of [tn]. The single source of
@@ -5333,12 +5608,16 @@ and code_reads_scope ~id (llc : t) =
       false
   | Seq (a, b) -> code_reads_scope ~id a || code_reads_scope ~id b
   | For_loop { body; _ } -> code_reads_scope ~id body
+  | Scan_loop { carried; body; _ } ->
+      List.exists carried ~f:(fun c -> Scope_id.equal id c.next || scalar_reads_scope ~id c.init)
+      || code_reads_scope ~id body
   | If { cond = c, _; body } -> scalar_reads_scope ~id c || code_reads_scope ~id body
   | Set { llsc; _ } | Set_local (_, llsc) -> scalar_reads_scope ~id llsc
   | Set_dynamic { dyn_value = v, _; llsc; _ } ->
       scalar_reads_scope ~id v || scalar_reads_scope ~id llsc
   | Set_from_vec { arg = a, _; _ } -> scalar_reads_scope ~id a
-  | Tile_mma _ -> false
+  (* The fallback is what a backend without an MMA hook executes, so a local it reads is read. *)
+  | Tile_mma { fallback; _ } -> code_reads_scope ~id fallback
 
 (* The reduce-shaped update of a scope LOCAL: [local = op(local, contrib)] (or its FMA form) with
    [contrib] free of the local — [subst_accum_read]'s output shape. The [`Scope] arm of the peel
@@ -5488,7 +5767,8 @@ let has_accumulating_cell (llc : t) : bool =
   and stmt_reads_cell ~tn ~idcs (llc : t) =
     match llc with
     | Seq (a, b) -> stmt_reads_cell ~tn ~idcs a || stmt_reads_cell ~tn ~idcs b
-    | If { body; _ } | For_loop { body; _ } -> stmt_reads_cell ~tn ~idcs body
+    | If { body; _ } | For_loop { body; _ } | Scan_loop { body; _ } ->
+        stmt_reads_cell ~tn ~idcs body
     | Set { llsc; _ } | Set_local (_, llsc) -> reads_cell ~tn ~idcs llsc
     | _ -> false
   in
@@ -5769,6 +6049,8 @@ and proc_mentions_tn (tn : Tn.t) (llc : t) : bool =
   | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier -> false
   | Seq (a, b) -> proc_mentions_tn tn a || proc_mentions_tn tn b
   | For_loop { body; _ } -> proc_mentions_tn tn body
+  | Scan_loop { carried; body; _ } ->
+      List.exists carried ~f:(fun c -> scalar_mentions_tn tn c.init) || proc_mentions_tn tn body
   | Zero_out g -> Tn.equal g tn
   | Set { tn = g; llsc; _ } -> Tn.equal g tn || scalar_mentions_tn tn llsc
   | Set_dynamic { tn = g; dyn_value = v, _; llsc; _ } ->
@@ -5846,6 +6128,13 @@ let rewrite_one_hot_reductions ?(static_indices = []) (llc : t) : t =
             fc with
             body = loop_proc ~ienv:(ienv_extend ienv fc.index ~from_:fc.from_ ~to_:fc.to_) fc.body;
           }
+    | Scan_loop sc ->
+        Scan_loop
+          {
+            sc with
+            carried = List.map sc.carried ~f:(fun c -> { c with init = loop_scalar ~ienv c.init });
+            body = loop_proc ~ienv:(ienv_extend ienv sc.index ~from_:sc.from_ ~to_:sc.to_) sc.body;
+          }
     | Set { tn; idcs; llsc; debug } -> Set { tn; idcs; llsc = loop_scalar ~ienv llsc; debug }
     | Set_dynamic { tn; idcs; dyn_axis; dyn_value = v, p; llsc; debug } ->
         (* Only produced by this pass; recurse for exhaustiveness/idempotence. *)
@@ -5904,6 +6193,9 @@ let rec pin_device_written_bounds (llc : t) : unit =
       pin_device_written_bounds c1;
       pin_device_written_bounds c2
   | For_loop { body; _ } -> pin_device_written_bounds body
+  | Scan_loop { carried; body; _ } ->
+      List.iter carried ~f:(fun c -> pin_scalar_written_bounds c.init);
+      pin_device_written_bounds body
   | Zero_out tn -> pin tn
   | Set { tn; llsc; _ } ->
       pin tn;
@@ -6197,6 +6489,9 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
           (* A dead loop ([to_ < from_]) replays zero times: charge nothing, mirroring
              [trace_node_facts] (which records no facts from dead-loop bodies). *)
           if to_ >= from_ then reads_of_proc ~self acc body else acc
+      | Scan_loop { from_; to_; carried; body; _ } ->
+          let acc = List.fold carried ~init:acc ~f:(fun acc c -> scalar_into ~self acc c.init) in
+          if to_ >= from_ then reads_of_proc ~self acc body else acc
       | Set { llsc; _ } -> scalar_into ~self acc llsc
       | Set_dynamic { dyn_value = v, _; llsc; _ } ->
           scalar_into ~self (scalar_into ~self acc v) llsc
@@ -6448,6 +6743,9 @@ let reconcile_traced_store (plc : Tn.Placements.t) (traced_store : traced_store)
         proc ~live c1;
         proc ~live c2
     | For_loop { from_; to_; body; _ } -> proc ~live:(live && to_ >= from_) body
+    | Scan_loop { from_; to_; carried; body; _ } ->
+        List.iter carried ~f:(fun c -> scalar ~live c.init);
+        proc ~live:(live && to_ >= from_) body
     | Zero_out tn -> written ~live tn
     | Set { tn; llsc; _ } ->
         scalar ~live llsc;
@@ -6679,6 +6977,9 @@ let hosted_constant_inits_to_link_time (plc : Tn.Placements.t) (traced_store : t
         scan c1;
         scan c2
     | For_loop { body; _ } -> scan body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun c -> scan_scalar c.init);
+        scan body
     | If { cond = c0, _; body } ->
         scan_scalar c0;
         scan body
@@ -6716,6 +7017,9 @@ let hosted_constant_inits_to_link_time (plc : Tn.Placements.t) (traced_store : t
           match rewrite body with Noop -> Noop | body -> For_loop { f with body })
       | If ({ body; _ } as i) -> (
           match rewrite body with Noop -> Noop | body -> If { i with body })
+      (* gh-ocannl-696: the scan's inits are kept as they are (they only read); its body loses the
+         hosted writes like any loop body, and an emptied body still rotates, so the scan stays. *)
+      | Scan_loop ({ body; _ } as sc) -> Scan_loop { sc with body = rewrite body }
       | Set { tn; _ } when Set.mem hosted tn -> Noop
       | Zero_out tn when Set.mem hosted tn -> Noop
       | c -> c
@@ -6902,6 +7206,268 @@ let cached_analyze_proc (static_indices : Indexing.static_symbol list) (llc : t)
           analysis_cache := List.take ((key, an) :: !analysis_cache) analysis_cache_capacity;
           an)
 
+(** gh-ocannl-696: the well-formedness contract of {!t.Scan_loop}, as a message rather than an
+    exception so both pipeline gates can phrase it. Checked per scan, at any nesting depth: the
+    carried pair names one node DECLARED virtual ([known_virtual], not merely undecided -- an
+    undecided node another statement reads as a buffer would otherwise surface as a cleanup
+    assertion instead of a verdict here), with ids pairwise distinct across the whole list (the
+    renderer declares one C local per id); the [init]s read no carried local and do not mention the
+    scan's own index, which the renderer binds only after they have evaluated; every [next] is
+    written exactly once, as a top-level statement of the body -- a guarded or nested write would
+    make the carried update conditional or repeated -- and is read, at any depth, only by statements
+    AFTER that write, since the local is declared without a value; and nothing writes a [prev],
+    which only the rotation assigns. *)
+let scan_loop_violation (plc : Tn.Placements.t) (root : t) : string option =
+  let exception Malformed of string in
+  let name (id : scope_id) = "v" ^ Int.to_string id.scope_id ^ "_" ^ Tn.debug_name id.tn in
+  (* Whether a subtree holds a [Staged_compilation]: a callback emitting code none of the counts
+     below can inspect, so a scan containing one has no checkable contract. *)
+  let rec has_staged (llc : t) : bool =
+    match llc with
+    | Staged_compilation _ -> true
+    | Seq (a, b) -> has_staged a || has_staged b
+    | For_loop { body; _ } | Tile_mma { fallback = body; _ } -> has_staged body
+    | If { cond = c, _; body } -> scalar_has_staged c || has_staged body
+    | Scan_loop { carried; body; _ } ->
+        List.exists carried ~f:(fun c -> scalar_has_staged c.init) || has_staged body
+    | Set { llsc; _ } | Set_local (_, llsc) -> scalar_has_staged llsc
+    | Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar_has_staged v || scalar_has_staged llsc
+    | Set_from_vec { arg = a, _; _ } -> scalar_has_staged a
+    | Noop | Comment _ | Zero_out _ | Declare_local _ | Workgroup_barrier -> false
+  and scalar_has_staged (llsc : scalar_t) : bool =
+    match llsc with
+    | Local_scope { body; _ } -> has_staged body
+    | Get_dynamic { dyn_value = v, _; _ } -> scalar_has_staged v
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        scalar_has_staged a || scalar_has_staged b || scalar_has_staged c
+    | Binop (_, (a, _), (b, _)) -> scalar_has_staged a || scalar_has_staged b
+    | Unop (_, (a, _)) -> scalar_has_staged a
+    | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
+        false
+  in
+  (* Every scope id a subtree mentions -- binders, reads and writes -- at any depth. *)
+  let rec scope_ids_in (llc : t) : scope_id list =
+    match llc with
+    | Declare_local { id; _ } -> [ id ]
+    | Set_local (id, llsc) -> id :: scalar_scope_ids llsc
+    | Seq (a, b) -> scope_ids_in a @ scope_ids_in b
+    | For_loop { body; _ } | Tile_mma { fallback = body; _ } -> scope_ids_in body
+    | If { cond = c, _; body } -> scalar_scope_ids c @ scope_ids_in body
+    | Scan_loop { carried; body; _ } ->
+        List.concat_map carried ~f:(fun c -> c.prev :: c.next :: scalar_scope_ids c.init)
+        @ scope_ids_in body
+    | Set { llsc; _ } -> scalar_scope_ids llsc
+    | Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar_scope_ids v @ scalar_scope_ids llsc
+    | Set_from_vec { arg = a, _; _ } -> scalar_scope_ids a
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Workgroup_barrier -> []
+  and scalar_scope_ids (llsc : scalar_t) : scope_id list =
+    match llsc with
+    | Get_local id -> [ id ]
+    | Local_scope { id; body; _ } -> id :: scope_ids_in body
+    | Get_dynamic { dyn_value = v, _; _ } -> scalar_scope_ids v
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        scalar_scope_ids a @ scalar_scope_ids b @ scalar_scope_ids c
+    | Binop (_, (a, _), (b, _)) -> scalar_scope_ids a @ scalar_scope_ids b
+    | Unop (_, (a, _)) -> scalar_scope_ids a
+    | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> []
+  in
+  let routine_scope_ids = lazy (scope_ids_in root) in
+  (* Every scope id a subtree binds: statement-level [Declare_local]s and [Local_scope] binders in
+     scalar positions, at any depth. *)
+  let rec binders_in (llc : t) : scope_id list =
+    match llc with
+    | Declare_local { id; _ } -> [ id ]
+    | Seq (a, b) -> binders_in a @ binders_in b
+    | For_loop { body; _ } | If { body; _ } | Tile_mma { fallback = body; _ } -> binders_in body
+    | Scan_loop { carried; body; _ } ->
+        List.concat_map carried ~f:(fun c -> scalar_binders c.init) @ binders_in body
+    | Set { llsc; _ } | Set_local (_, llsc) -> scalar_binders llsc
+    | Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar_binders v @ scalar_binders llsc
+    | Set_from_vec { arg = a, _; _ } -> scalar_binders a
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Workgroup_barrier -> []
+  and scalar_binders (llsc : scalar_t) : scope_id list =
+    match llsc with
+    | Local_scope { id; body; _ } -> id :: binders_in body
+    | Get_dynamic { dyn_value = v, _; _ } -> scalar_binders v
+    | Ternop (_, (a, _), (b, _), (c, _)) -> scalar_binders a @ scalar_binders b @ scalar_binders c
+    | Binop (_, (a, _), (b, _)) -> scalar_binders a @ scalar_binders b
+    | Unop (_, (a, _)) -> scalar_binders a
+    | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> []
+  in
+  let rec count_writes id (llc : t) =
+    match llc with
+    | Set_local (id', _) -> if equal_scope_id id id' then 1 else 0
+    | Seq (a, b) -> count_writes id a + count_writes id b
+    | For_loop { body; _ }
+    | If { body; _ }
+    | Scan_loop { body; _ }
+    | Tile_mma { fallback = body; _ } ->
+        count_writes id body
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier
+    | Set _ | Set_dynamic _ | Set_from_vec _ ->
+        0
+  in
+  (* Syntactic occurrences of a scope id -- [Get_local], [Set_local], binders -- at any depth. The
+     carried ids are declared inside the scan's own block by the renderer, so an occurrence outside
+     the scan is an undeclared identifier: the count over the routine must equal the count over the
+     scan (its inits and body). *)
+  let rec count_refs id (llc : t) : int =
+    match llc with
+    | Set_local (id', llsc) -> (if equal_scope_id id id' then 1 else 0) + scalar_refs id llsc
+    | Declare_local { id = id'; _ } -> if equal_scope_id id id' then 1 else 0
+    | Seq (a, b) -> count_refs id a + count_refs id b
+    | For_loop { body; _ } | Tile_mma { fallback = body; _ } -> count_refs id body
+    | If { cond = c, _; body } -> scalar_refs id c + count_refs id body
+    | Scan_loop { carried; body; _ } ->
+        List.sum (module Int) carried ~f:(fun c -> scalar_refs id c.init) + count_refs id body
+    | Set { llsc; _ } -> scalar_refs id llsc
+    | Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar_refs id v + scalar_refs id llsc
+    | Set_from_vec { arg = a, _; _ } -> scalar_refs id a
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Workgroup_barrier -> 0
+  and scalar_refs id (llsc : scalar_t) : int =
+    match llsc with
+    | Get_local id' -> if equal_scope_id id id' then 1 else 0
+    | Local_scope { id = id'; body; _ } ->
+        (if equal_scope_id id id' then 1 else 0) + count_refs id body
+    | Get_dynamic { dyn_value = v, _; _ } -> scalar_refs id v
+    | Ternop (_, (a, _), (b, _), (c, _)) -> scalar_refs id a + scalar_refs id b + scalar_refs id c
+    | Binop (_, (a, _), (b, _)) -> scalar_refs id a + scalar_refs id b
+    | Unop (_, (a, _)) -> scalar_refs id a
+    | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> 0
+  in
+  let rec proc (llc : t) =
+    match llc with
+    | Scan_loop { index; from_; to_; carried; body; _ } ->
+        let where = "Scan_loop over " ^ Indexing.symbol_ident index in
+        let reject what = raise (Malformed (where ^ ": " ^ what)) in
+        (* A dead range is refused rather than given a meaning: every walker would otherwise need
+           its own "dead scan" convention (renderer, tracer, censuses, footprint, cost, launch
+           geometry), and each omission is a divergence. Refusing it here keeps the construct's only
+           shape the live one; a producer with an empty range emits [Noop]. *)
+        if to_ < from_ then
+          reject
+            (Printf.sprintf
+               "the range %d..%d is empty; a scan over no iterations is malformed -- emit Noop"
+               from_ to_);
+        if has_staged body || List.exists carried ~f:(fun c -> scalar_has_staged c.init) then
+          reject "a Staged_compilation inside the scan emits code the contract cannot inspect";
+        let ids = List.concat_map carried ~f:(fun c -> [ c.prev; c.next ]) in
+        List.iteri ids ~f:(fun k id ->
+            if List.mem (List.take ids k) id ~equal:equal_scope_id then
+              reject ("the id " ^ name id ^ " occurs twice among the carried pairs"));
+        (* The carried locals live in the scan's block: a reference after (or before) the scan is an
+           undeclared identifier in the rendered source, and the contract says the final state is
+           not readable after the loop. *)
+        List.iter ids ~f:(fun id ->
+            let inside =
+              List.sum (module Int) carried ~f:(fun c -> scalar_refs id c.init) + count_refs id body
+            in
+            if count_refs id root <> inside then
+              reject ("the carried id " ^ name id ^ " is referenced outside its scan"));
+        (* The per-local censuses of codegen -- accumulator residency and its volatility plumbing
+           among them -- key locals by the integer alone, an invariant the pipeline's scope-id
+           counter guarantees and hand-built IR can break. The contract guarantees it for carried
+           ids: no other local in the routine may share a carried id's integer over another node, so
+           no census can conflate carried state with an unrelated local. *)
+        List.iter ids ~f:(fun id ->
+            List.iter (Lazy.force routine_scope_ids) ~f:(fun other ->
+                if other.scope_id = id.scope_id && not (Tn.equal other.tn id.tn) then
+                  reject
+                    ("the carried id " ^ name id ^ " shares its integer with the unrelated local "
+                   ^ name other ^ "; scope-id integers must be unique in the routine")));
+        (* A binder of a carried id inside the scan -- a [Declare_local] or a [Local_scope] over it
+           -- would render a shadowing C local, resetting the state every iteration. *)
+        List.iter
+          (binders_in body @ List.concat_map carried ~f:(fun c -> scalar_binders c.init))
+          ~f:(fun id ->
+            if List.mem ids id ~equal:equal_scope_id then
+              reject ("the carried id " ^ name id ^ " is redeclared inside the scan"));
+        List.iter carried ~f:(fun { prev; next; init } ->
+            if not (Tn.equal prev.tn next.tn) then
+              reject ("the carried pair " ^ name prev ^ " / " ^ name next ^ " names two nodes");
+            if not (Tn.Placements.known_virtual plc prev.tn) then
+              reject
+                ("the state node " ^ Tn.debug_name prev.tn
+               ^ " is not declared virtual -- carried state lives in per-iteration locals, never a \
+                  buffer");
+            (* The node names and types the state; a tensor access to it anywhere in the routine
+               would ask placement to give it a buffer, against the virtual declaration. *)
+            if code_touches_tn prev.tn root then
+              reject
+                ("the state node " ^ Tn.debug_name prev.tn
+               ^ " is accessed as a tensor buffer in the routine; it only names carried state");
+            if scalar_mentions_symbol index init then
+              reject
+                ("the init of " ^ name prev ^ " mentions the scan index "
+               ^ Indexing.symbol_ident index ^ ", which is bound only after the inits evaluate");
+            List.iter carried ~f:(fun c ->
+                if scalar_reads_scope ~id:c.prev init || scalar_reads_scope ~id:c.next init then
+                  reject ("the init of " ^ name prev ^ " reads carried state")));
+        let top = flat_lines [ body ] in
+        List.iter carried ~f:(fun { prev; next; _ } ->
+            let at_top =
+              List.count top ~f:(function
+                | Set_local (id, _) -> equal_scope_id id next
+                | _ -> false)
+            in
+            let anywhere = count_writes next body in
+            if at_top <> 1 || anywhere <> 1 then
+              reject
+                (name next
+               ^ " must be written exactly once, as a top-level statement of the body; found "
+               ^ Int.to_string at_top ^ " top-level and " ^ Int.to_string anywhere ^ " total");
+            if count_writes prev body > 0 then
+              reject (name prev ^ " is written in the body; only the rotation assigns a prev"));
+        (* A [next] is declared without a value, so a read of it -- at any depth, the defining
+           statement's own right-hand side included -- is meaningful only after its top-level write;
+           the ordered walk over the body's statements is what decides "after". *)
+        let defined = ref [] in
+        List.iter top ~f:(fun stmt ->
+            List.iter carried ~f:(fun c ->
+                if
+                  (not (List.mem !defined c.next ~equal:equal_scope_id))
+                  && code_reads_scope ~id:c.next stmt
+                then reject (name c.next ^ " is read before the statement that writes it"));
+            match stmt with
+            | Set_local (id, _) when List.exists carried ~f:(fun c -> equal_scope_id c.next id) ->
+                defined := id :: !defined
+            | _ -> ());
+        List.iter carried ~f:(fun c -> scalar c.init);
+        proc body
+    | Seq (a, b) ->
+        proc a;
+        proc b
+    | For_loop { body; _ } | Tile_mma { fallback = body; _ } -> proc body
+    | If { cond = c, _; body } ->
+        scalar c;
+        proc body
+    | Set { llsc; _ } | Set_local (_, llsc) -> scalar llsc
+    | Set_dynamic { dyn_value = v, _; llsc; _ } ->
+        scalar v;
+        scalar llsc
+    | Set_from_vec { arg = a, _; _ } -> scalar a
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier ->
+        ()
+  and scalar (llsc : scalar_t) =
+    match llsc with
+    | Local_scope { body; _ } -> proc body
+    | Get_dynamic { dyn_value = v, _; _ } -> scalar v
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        scalar a;
+        scalar b;
+        scalar c
+    | Binop (_, (a, _), (b, _)) ->
+        scalar a;
+        scalar b
+    | Unop (_, (a, _)) -> scalar a
+    | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
+  in
+  match proc root with () -> None | exception Malformed msg -> Some msg
+
+let validate_scan_loops plc (llc : t) : unit =
+  Option.iter (scan_loop_violation plc llc) ~f:(fun msg ->
+      invalid_arg ("Low_level.validate_scan_loops: " ^ msg))
+
 let optimize_proc (input_ctx : optimize_ctx) static_indices llc =
   (* gh-ocannl-584: the pipeline's entry gate for scope purity, ahead of the analysis cache so a
      digest hit cannot skip it. Codegen's gate alone would not do: [hoist_cross_statement_cse] lifts
@@ -6909,6 +7475,8 @@ let optimize_proc (input_ctx : optimize_ctx) static_indices llc =
      impure body's write out of any [Local_scope] -- past the later check, and executing once
      instead of once per user statement. Catch it while it is still visibly a body. *)
   validate_scope_bodies llc;
+  (* gh-ocannl-696: the scan contract, same two-gate discipline (codegen holds the exit gate). *)
+  validate_scan_loops input_ctx.placements llc;
   specialize_proc input_ctx (cached_analyze_proc static_indices llc)
 
 let code_hum_margin = ref 100
@@ -6949,6 +7517,11 @@ let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
         loop c1;
         loop c2
     | For_loop { body; _ } -> loop body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun c ->
+            visit c.prev.tn;
+            loop_scalar c.init);
+        loop body
     | Zero_out la -> visit la
     | Set { tn; llsc; _ } ->
         visit tn;
@@ -7029,6 +7602,21 @@ let to_doc_cstyle ?name ?static_indices () llc =
         let header =
           string (axis_type_label axis ^ " ")
           ^^ pp_symbol i ^^ string " = " ^^ int from_ ^^ string " to " ^^ int to_ ^^ string " {"
+        in
+        let body_doc = nest 2 (break 1 ^^ doc_of_code body) in
+        group (header ^^ body_doc ^^ break 1 ^^ string "}")
+    | Scan_loop { index = i; from_; to_; direction; carried; body } ->
+        let dir = match direction with Forward -> "" | Backward -> " backward" in
+        let carry { prev; next; init } =
+          doc_local prev ^^ string " <- " ^^ doc_local next ^^ string " := "
+          ^^ doc_of_float (Lazy.force prev.tn.storage_prec) init
+        in
+        let header =
+          string ("scan" ^ dir ^ " ")
+          ^^ pp_symbol i ^^ string " = " ^^ int from_ ^^ string " to " ^^ int to_
+          ^^ string " carrying ["
+          ^^ separate (string "; ") (List.map carried ~f:carry)
+          ^^ string "] {"
         in
         let body_doc = nest 2 (break 1 ^^ doc_of_code body) in
         group (header ^^ body_doc ^^ break 1 ^^ string "}")
@@ -7171,6 +7759,20 @@ let to_doc ?name ?static_indices () llc =
         let header =
           string (axis_type_label axis ^ " ")
           ^^ pp_symbol i ^^ string " = " ^^ int from_ ^^ string " to " ^^ int to_ ^^ string " {"
+        in
+        let body_doc = nest 2 (break 1 ^^ doc_of_code body) in
+        group (header ^^ body_doc ^^ break 1 ^^ string "}")
+    | Scan_loop { index = i; from_; to_; direction; carried; body } ->
+        let dir = match direction with Forward -> "" | Backward -> " backward" in
+        let carry { prev; next; init } =
+          doc_local prev ^^ string " <- " ^^ doc_local next ^^ string " := " ^^ doc_of_float init
+        in
+        let header =
+          string ("scan" ^ dir ^ " ")
+          ^^ pp_symbol i ^^ string " = " ^^ int from_ ^^ string " to " ^^ int to_
+          ^^ string " carrying ["
+          ^^ separate (string "; ") (List.map carried ~f:carry)
+          ^^ string "] {"
         in
         let body_doc = nest 2 (break 1 ^^ doc_of_code body) in
         group (header ^^ body_doc ^^ break 1 ^^ string "}")

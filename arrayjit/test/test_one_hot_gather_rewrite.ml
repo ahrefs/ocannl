@@ -36,6 +36,9 @@ let summarize (llc : LL.t) : int * int =
     | LL.For_loop { body; _ } ->
         Int.incr loops;
         proc body
+    | LL.Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun c -> scal c.LL.init);
+        proc body
     | LL.Set { llsc; _ } -> scal llsc
     | LL.Set_dynamic { dyn_value = v, _; llsc; _ } ->
         scal v;

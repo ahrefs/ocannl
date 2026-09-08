@@ -106,6 +106,37 @@ let loop_n s n body : LL.t = loop ~upto:(n - 1) s body
     which is the shape of every hand-built one-dimensional case. *)
 let set_at tn idx llsc : LL.t = set tn [| idx |] llsc
 
+(** {2 Scan loops}
+
+    {!Ir.Low_level.Scan_loop} (gh-ocannl-696): a loop with declared loop-carried scalar state. A
+    carried scalar is a pair of scope ids over one VIRTUAL node -- the state's name and precision,
+    never a buffer -- read as [prev] and written as [next] inside the body, rotated [prev := next]
+    after every iteration. The builders below mint the pair from a node the test declares
+    {!virtualize}d, so a case cannot spell the two ids over different nodes or forget the
+    declaration. *)
+
+(** [carry ~init tn] is one carried scalar over the state node [tn], starting at [init] (a scalar
+    that may read tensor nodes but no carried state). *)
+let carry ~init tn : LL.carried = { prev = LL.get_scope tn; next = LL.get_scope tn; init }
+
+(** [prev cr] reads the carried scalar's value from the previous iteration (its [init] on the
+    first). *)
+let prev (cr : LL.carried) : LL.scalar_t = LL.Get_local cr.prev
+
+(** [next cr] reads the value the CURRENT iteration already assigned with {!set_next}: the rotation
+    is phi-style, so old and new values coexist inside one body. *)
+let next (cr : LL.carried) : LL.scalar_t = LL.Get_local cr.next
+
+(** [set_next cr v] assigns the carried scalar's next value -- exactly once per carried scalar, as a
+    top-level statement of the body, which is the contract {!Ir.Low_level.validate_scan_loops}
+    enforces. *)
+let set_next (cr : LL.carried) v : LL.t = LL.Set_local (cr.next, v)
+
+(** [scan ~upto s ~carried body] iterates [s] over [from_ .. upto] INCLUSIVE like {!loop}, carrying
+    [carried] across iterations; [~direction:Backward] counts down instead. *)
+let scan ?(from_ = 0) ?(direction = LL.Forward) ~upto s ~carried body : LL.t =
+  LL.Scan_loop { index = s; from_; to_ = upto; direction; carried; body }
+
 (** {2 Dynamic indexing}
 
     The gather/scatter pair ({!Ir.Low_level.Get_dynamic} / {!Ir.Low_level.Set_dynamic}): a read or
@@ -612,6 +643,9 @@ let rec walk_t h (llc : LL.t) =
       walk_t h a;
       walk_t h b
   | LL.For_loop { body; _ } -> walk_t h body
+  | LL.Scan_loop { carried; body; _ } ->
+      List.iter carried ~f:(fun c -> walk_s h c.LL.init);
+      walk_t h body
   | LL.Zero_out tn -> h.h_set tn
   | LL.Set { tn; llsc; _ } ->
       h.h_set tn;

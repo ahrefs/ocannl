@@ -1,0 +1,74 @@
+--- leg 1: inclusive forward cumsum ---
+sl_fwd: every cell equals the host cumulative sum: true
+sl_fwd: the scan survives optimize as exactly one Scan_loop: true
+sl_fwd: the state node is neither an input nor an output of the linked routine: true
+sl_fwd: the input and the trajectory are the routine's only input and output: true
+sl_fwd: the state node stays virtual after optimize: true
+optimized IR:
+
+sl_fwd: scan i1 = 0 to 6 carrying [v2_sl_fwd_s <- v1_sl_fwd_s := 0.0] {
+    v1_sl_fwd_s := (v2_sl_fwd_s + sl_fwd_x[i1]);
+    sl_fwd_out[i1] := v1_sl_fwd_s;
+  }
+--- leg 2: backward cumsum (suffix sums) ---
+sl_bwd: every cell equals the host cumulative sum: true
+sl_bwd: the scan survives optimize as exactly one Scan_loop: true
+sl_bwd: the state node is neither an input nor an output of the linked routine: true
+sl_bwd: the input and the trajectory are the routine's only input and output: true
+sl_bwd: the state node stays virtual after optimize: true
+--- leg 3: online softmax (running max, rescaled normalizer) ---
+every running normalizer is within 1e-5 relative of the host recurrence: true
+the final normalizer equals the direct sum of exp(x - max x) within 1e-5 relative: true
+the trajectory is strictly increasing, as a sum of positive terms rescaled to a growing max: true
+both carried scalars are counted, and no other scan is in the routine: true
+--- leg 4: per-row scan under an outer loop, Serial vs Grid ---
+serial outer loop: every cell equals the host per-row prefix sum: true
+Grid-annotated outer loop: every cell agrees with the serial twin: true
+--- leg 5: an undeclared scan output materializes (Non_virtual 148) ---
+the scan output was refused as a virtualization candidate with provenance 148: true
+the scan output is decided non-virtual, so the consumer reads its buffer: true
+the consumer's read of the trajectory survives as a buffer read, not an inlined scope: true
+the consumer computes twice the prefix sums: true
+--- leg 5b: a candidate whose computation contains a scan materializes (148) ---
+the candidate computed through a scan was refused with provenance 148: true
+the scan survives as the candidate's materialized producer: true
+the consumer reads each row's total from the buffer: true
+--- leg 6: malformed scans are refused by name, at both pipeline gates ---
+a next written only under a guard is refused: true
+a next never written is refused: true
+a next written twice is refused: true
+a prev written in the body is refused: true
+a materialized state node is refused: true
+an init reading carried state is refused: true
+a next read by a statement before the one that writes it is refused: true
+a next read by its own defining statement is refused: true
+an id shared by two carried pairs is refused: true
+an init mentioning the scan index is refused: true
+a state node left undeclared (neither virtual nor materialized) is refused: true
+a Declare_local of a carried id inside the body is refused: true
+a Local_scope binder reusing a carried id inside the body is refused: true
+a tensor-buffer access to the state node elsewhere in the routine is refused: true
+a read of a carried local after the scan is refused: true
+a next read early through a Tile_mma fallback is refused: true
+a tensor-buffer access to the state node inside a Tile_mma fallback is refused: true
+a Staged_compilation inside the scan body is refused: true
+an unrelated local sharing a carried id's integer over another node is refused: true
+a carried pair over two different nodes is refused: true
+the backend refuses a malformed scan handed through the prelowered seam: true
+--- leg 6a: an empty range is refused, at both gates ---
+a scan over an empty range is refused by optimize: true
+a scan over an empty range is refused by the backend through the prelowered seam: true
+--- leg 6b: a half-precision state rounds the running sum every step ---
+a single-precision state accumulates all six increments (2054): true
+a half-precision state rounds each step back to 2048, so the sum stays at 2048: true
+--- leg 7: schedule ops decline the scan's index and the loops inside it ---
+Retype of the scan's own index declines for want of a For_loop: true
+Split of the scan's own index declines for want of a For_loop: true
+Unroll of a loop nested inside the scan body declines: the scan is opaque to locate and rewrite: true
+the harness traversal reaches the loop inside the scan body exactly once: true
+the nested loop computes prefix sum times (1 + k) in every cell: true
+--- leg 8: the canonical rendering sees the recurrence and only the recurrence ---
+a fresh lowering of the same scan renders identically (alpha-renamed symbols and ids): true
+Forward and Backward render differently: true
+swapping a carried pair's prev and next renders differently: true
+rendering: carry <sl_dg_s>.0<-<sl_dg_s>.1:=0.;scan b0=0..6@Forward{setl <sl_dg_s>.1:=Add(getl(<sl_dg_s>.0)@Single_prec,get <sl_dg_x>[b0,]@Single_prec);set <sl_dg_out>[b0,]:=getl(<sl_dg_s>.1);}
