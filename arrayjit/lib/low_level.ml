@@ -5799,73 +5799,66 @@ let has_accumulating_cell (llc : t) : bool =
   loop llc
 
 (* gh-ocannl-950: the RACE criterion for a level whose index a backend binds to a lane. A [Set]
-   under the level whose cell does not depend on the lane index, and whose value reads that very
-   cell, is a read-modify-write every lane performs on one cell — a race under any hardware binding,
-   whatever else the level holds. The explicitly staged tree ([hardware_workgroup_reduce.ml]: [If (i
-   < stride) partial[i] += partial[i + stride]], [If (i == 0) out[0] = partial[0]]) fails the test
-   on both counts: its per-lane cells mention the lane, and its final store reads no cell of its
-   own. A guard that PINS the lane to one value ([i == e] with [e] free of [i]) selects a single
-   lane, so what it encloses is not raced and is skipped; a range guard ([i < c]) or a
-   data-dependent one leaves several lanes on the cell and does not exempt it. [Set_local] and
-   [Zero_out] are never a race: a scope local is per lane, and every lane zeroing one cell writes
-   the same bytes. Only storage the lanes SHARE can race: [shared] says whether a node's cell is one
-   cell for every lane (device-resident, or workgroup-shared) rather than a per-thread local array,
-   which the renderer declares once per thread. A pinning guard exempts what it encloses unless a
-   sibling pins the same cell to another lane; a level of extent one is the caller's to exempt,
-   since the bounds are the caller's (Codex on staging#674). Returns the first racing statement's
-   node and cell. *)
+   under the level to storage the lanes SHARE ([shared]: device-resident or workgroup-shared, as
+   against a per-thread local array the renderer declares once per thread), whose cell does not
+   depend on the lane index, and whose value reads that very cell (as codegen renders it: a
+   projection's discarded operand reads nothing, a guard's condition reads), is a read-modify-write
+   every lane performs on one cell — a race under any hardware binding, whatever else the level
+   holds. The explicitly staged tree ([hardware_workgroup_reduce.ml]: [If (i < stride) partial[i] +=
+   partial[i + stride]], [If (i == 0) out[0] = partial[0]]) fails the test on both counts: its
+   per-lane cells mention the lane, and its final store reads no cell of its own. The one exemption
+   is a guard pinning the lane to a LITERAL constant ([i == c], or [i < 1]) over a cell that
+   separates every other bound workgroup axis — one thread, by construction; sibling pins of one
+   cell to different lanes race again, unless a barrier separates them and the storage is what the
+   barrier fences ([fenced]: workgroup-shared). [Set_local] and [Zero_out] are never a race. Returns
+   the first racing statement's node and cell. *)
 let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(varying : Indexing.symbol list)
-    ~(shared : Tnode.t -> bool) (llc : t) : (Tnode.t * Indexing.axis_index array) option =
+    ~(shared : Tnode.t -> bool) ~(fenced : Tnode.t -> bool) (llc : t) :
+    (Tnode.t * Indexing.axis_index array) option =
   let is_lane = function
     | Embed_index (Indexing.Iterator s) -> Indexing.equal_symbol s lane
     | _ -> false
   in
-  (* The value a guard pins the lane to, when it pins one: free of the lane, and of every loop index
-     between the level and the guard — [for k: If (i == k) acc[0] += …] selects a different lane at
-     each [k], and warps at different [k] read-modify-write the cell together (Codex P1 on
-     staging#674). Indices of loops OUTSIDE the level are one value for the whole workgroup. *)
-  let pin_of ~loops (cond : scalar_t) : scalar_t option =
-    (* [varying]: the other hardware axes the backend binds per thread (an enclosing [Workgroup]
-       index on the .y/.z slot varies across the lanes of one workgroup as much as the lane does);
-       an enclosing [Grid] index is one value for the whole workgroup and does not disqualify. *)
-    let fixed e =
-      (not (scalar_mentions_symbol lane e))
-      && (not (List.exists loops ~f:(fun s -> scalar_mentions_symbol s e)))
-      && not (List.exists varying ~f:(fun s -> scalar_mentions_symbol s e))
-    in
+  (* The lane a guard pins, when it pins one: a LITERAL constant only. Anything else — a loop index
+     inside or outside the level, another bound axis, a value read from thread-local storage — is
+     workgroup-uniform only by an argument the walk cannot make, and a pin that is not uniform
+     selects a different lane in different threads, which is the race again (Codex, five rounds on
+     staging#674). *)
+  let pin_of (cond : scalar_t) : float option =
     match cond with
-    | Binop (Ops.Cmpeq, (a, _), (b, _)) when is_lane a && fixed b -> Some b
-    | Binop (Ops.Cmpeq, (a, _), (b, _)) when is_lane b && fixed a -> Some a
+    | Binop (Ops.Cmpeq, (a, _), (Constant c, _)) when is_lane a -> Some c
+    | Binop (Ops.Cmpeq, (Constant c, _), (b, _)) when is_lane b -> Some c
     (* [i < 1] admits lane 0 alone: the synthetic launch guard of a one-iteration level. *)
-    | Binop (Ops.Cmplt, (a, _), (Constant c, _)) when is_lane a && Float.(c <= 1.) ->
-        Some (Constant 0.)
+    | Binop (Ops.Cmplt, (a, _), (Constant c, _)) when is_lane a && Float.(c <= 1.) -> Some 0.
     | _ -> None
   in
-  let same_pin a b = Sexp.equal (sexp_of_scalar_t a) (sexp_of_scalar_t b) in
-  (* A pinned update is exempt on its own, but two sibling updates of one cell pinned to DIFFERENT
-     lanes ([If (i == 0) acc += a; If (i == 1) acc += b]) are two lanes read-modify-writing it
-     concurrently (Codex P1 on staging#674): the cells pinned so far are remembered with their lane,
-     and a second pin of a cell to another lane is the race. *)
-  let pinned : (Tnode.t * Indexing.axis_index array * scalar_t) list ref = ref [] in
+  (* A pinned update is exempt only where the pinned lane is one thread: with another bound
+     workgroup axis, lane [c] exists once per coordinate of it, so the cell must separate those
+     coordinates (mention every [varying] axis) for the pin to select one thread. *)
+  let separates idcs =
+    List.for_all varying ~f:(fun s -> Array.exists idcs ~f:(axis_index_mentions_symbol s))
+  in
+  (* Two sibling updates of one cell pinned to DIFFERENT lanes are two threads read-modify-writing
+     it; the cells pinned so far are remembered with their lane. A [Workgroup_barrier] orders the
+     phases for workgroup-SHARED storage, which is what the backends' barrier fences (Metal's fences
+     threadgroup memory only), so only [fenced] cells drop their record at a barrier. *)
+  let pinned : (Tnode.t * Indexing.axis_index array * float) list ref = ref [] in
   let same_cell (tn, idcs) (tn', idcs', _) =
     Tnode.equal tn tn'
     && Array.length idcs = Array.length idcs'
     && Array.for_all2_exn idcs idcs' ~f:Indexing.equal_axis_index
   in
-  let rec go ~pin ~loops (llc : t) =
+  let rec go ~pin (llc : t) =
     match llc with
-    | Seq (a, b) -> ( match go ~pin ~loops a with Some _ as r -> r | None -> go ~pin ~loops b)
-    (* A barrier orders the lanes' phases: two updates of one cell pinned to different lanes on
-       either side of it are the explicitly staged shape, not a race. *)
+    | Seq (a, b) -> ( match go ~pin a with Some _ as r -> r | None -> go ~pin b)
     | Workgroup_barrier ->
-        pinned := [];
+        pinned := List.filter !pinned ~f:(fun (tn, _, _) -> not (fenced tn));
         None
-    | For_loop { index; body; _ } | Scan_loop { index; body; _ } ->
-        go ~pin ~loops:(index :: loops) body
+    | For_loop { body; _ } | Scan_loop { body; _ } -> go ~pin body
     | If { cond = c, _; body } -> (
-        match pin_of ~loops c with
-        | Some e -> go ~pin:(Some (Option.value pin ~default:e)) ~loops body
-        | None -> go ~pin ~loops body)
+        match pin_of c with
+        | Some e -> go ~pin:(Some (Option.value pin ~default:e)) body
+        | None -> go ~pin body)
     | Set { tn; idcs; llsc; _ } -> (
         if
           not
@@ -5875,17 +5868,17 @@ let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(varying : Indexing.
         then None
         else
           match pin with
-          | None -> Some (tn, idcs)
-          | Some e -> (
+          | Some e when separates idcs -> (
               match List.find !pinned ~f:(same_cell (tn, idcs)) with
-              | Some (_, _, e') when not (same_pin e e') -> Some (tn, idcs)
+              | Some (_, _, e') when not (Float.equal e e') -> Some (tn, idcs)
               | Some _ -> None
               | None ->
                   pinned := (tn, idcs, e) :: !pinned;
-                  None))
+                  None)
+          | Some _ | None -> Some (tn, idcs))
     | _ -> None
   in
-  go ~pin:None ~loops:[] llc
+  go ~pin:None llc
 
 type peel_guard_verdict = Guard_confined | Guard_lane_private | Guard_lane_private_unresolved
 [@@deriving sexp, equal, compare]

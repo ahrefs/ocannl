@@ -4990,10 +4990,15 @@ module C_syntax (B : C_syntax_config) = struct
                               Some a.ha_index
                           | `Workgroup | `Grid -> None)
                     in
+                    (* What a barrier fences: workgroup-shared storage. *)
+                    let fenced tn = Set.mem !current_workgroup_shared tn in
                     match
-                      if to_ - from_ + 1 <= 1 then None
+                      (* A level of extent one binds lane 0 alone -- one thread only when no other
+                         workgroup axis is bound, since each coordinate of that axis has its own
+                         lane 0. *)
+                      if to_ - from_ + 1 <= 1 && List.is_empty varying then None
                       else
-                        Low_level.racing_lane_invariant_update ~lane:i ~varying ~shared
+                        Low_level.racing_lane_invariant_update ~lane:i ~varying ~shared ~fenced
                           (Low_level.unflat_lines stmts)
                     with
                     | None -> None

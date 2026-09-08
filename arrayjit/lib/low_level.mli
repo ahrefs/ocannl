@@ -382,22 +382,23 @@ val racing_lane_invariant_update :
   lane:Indexing.symbol ->
   varying:Indexing.symbol list ->
   shared:(Tnode.t -> bool) ->
+  fenced:(Tnode.t -> bool) ->
   t ->
   (Tnode.t * Indexing.axis_index array) option
 (** The race criterion for a level whose index a backend binds to a lane (gh-ocannl-950): the first
     [Set] to a node [shared] across the lanes (device-resident or workgroup-shared, as against a
     per-thread local array) whose cell does not depend on [lane] and whose value reads that cell — a
-    read-modify-write every lane performs on one cell, a race under any hardware binding — unless it
-    is enclosed by a guard that pins [lane] to one value ([lane == e] with [e] free of [lane], of
-    every loop index between the level and the guard, and of [varying] — the other hardware axes the
-    backend binds per thread — or [lane < c] with [c <= 1]) — and no sibling pins the same cell to a
-    different lane, which is two lanes on one cell again; a [Workgroup_barrier] between them orders
-    the phases, so pins are scoped to the barrier-delimited segment. Reads are judged as codegen
+    read-modify-write every lane performs on one cell, a race under any hardware binding. The one
+    exemption is a guard pinning the lane to a LITERAL constant ([lane == c], or [lane < c] with
+    [c <= 1]) over a cell that mentions every axis in [varying] — the other workgroup axes the
+    backend binds per thread — so that the pinned lane is one thread; a pin that is not a literal (a
+    loop index, another axis, a thread-local read) is not uniform across the threads and exempts
+    nothing. Sibling pins of one cell to different lanes are two threads on it, unless a
+    [Workgroup_barrier] separates them and the cell is [fenced] (workgroup-shared: what the
+    backends' barrier orders; Metal's fences threadgroup memory only). Reads are judged as codegen
     renders them: a projection's discarded operand ({!Ops.binop_conditionality}) reads nothing, and
-    a guard's condition reads. Per-lane cells (which mention the lane), stores that read no cell of
-    their own, [Set_local] and [Zero_out] are not races; any other range guard or a data-dependent
-    guard does not exempt what it encloses. A level of extent one cannot race either, and is the
-    caller's to exempt, since it owns the bounds. *)
+    a guard's condition reads. Per-lane cells, stores that read no cell of their own, [Set_local]
+    and [Zero_out] are not races. *)
 
 val has_accumulating_cell : t -> bool
 (** Whether the tree holds a SELF-RECURRENCE: some [Set] whose value reads the very cell it writes
