@@ -30,6 +30,7 @@ the sound single-lane form — per-lane cells combined under lane-selecting guar
 a store under a guard that reads the cell it writes (If (s[0] == 0) s[0] = x[i]) is a test-then-set every lane performs: refused where a lane index is bound (GPU) or the first iteration's value (CPU): true
 a self-update inside a dead inner loop (to_ < from_) beside a sibling performs no accesses: the level renders and the cell keeps its zero: true
 a store reading the written node through a dynamic gather (s[0] = s[dyn 0] + x[i]) may read its own cell: refused where a lane index is bound (GPU) or the full serial sum (CPU): true
+a dynamic gather a static slot separates from the written cell (a[0,0] = a[1,dyn 0] + 3) reads nothing of it: a plain store, and the level renders with 3: true
 a self-update under a statically false guard beside a sibling executes nothing: the level renders and the cell keeps its zero: true
 the accumulator staged through a sibling statement (scratch[0] = s[0]; s[0] = scratch[0] + x[i]) is the same read-modify-write across two statements: refused where a lane index is bound (GPU) or the full serial sum (CPU): true
 a read that aliases the written cell through another index (s[0] = s[k] + x[i] under k = 0..0) is a self-read: refused where a lane index is bound (GPU) or the full serial sum (CPU): true

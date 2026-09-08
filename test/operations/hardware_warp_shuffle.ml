@@ -700,6 +700,10 @@ let claim_dynamic_read_refused =
   "a store reading the written node through a dynamic gather (s[0] = s[dyn 0] + x[i]) may read its \
    own cell: refused where a lane index is bound (GPU) or the full serial sum (CPU)"
 
+let claim_dynamic_disjoint_no_read =
+  "a dynamic gather a static slot separates from the written cell (a[0,0] = a[1,dyn 0] + 3) reads \
+   nothing of it: a plain store, and the level renders with 3"
+
 let claim_false_guard_renders =
   "a self-update under a statically false guard beside a sibling executes nothing: the level \
    renders and the cell keeps its zero"
@@ -1083,6 +1087,35 @@ let () =
   in
   refused_leg claim_dynamic_read_refused ~name:"race_dynread_wshfl"
     ~transform:dynamic_read_transform ys ~cpu_value:expected_sum;
+  (* A dynamic gather a static slot separates from the written cell: [a[0,0] = a[1,dyn 0] + 3] over
+     a [n; 1] node is a plain store whatever the selector picks (Codex P2 on staging#674). *)
+  let dx = TDSL.ndarray gv ~label:[ "race_dx" ] ~output_dims:[ n ] () in
+  let%op ds = dx ++ "i=>i0" in
+  let dynamic_disjoint_transform =
+    reduce_transform ~n ds.Tensor.value ~body_of:(fun _i ->
+        LL.Set
+          {
+            tn = ds.Tensor.value;
+            idcs = [| f0; f0 |];
+            llsc =
+              Binop
+                ( Ir.Ops.Add,
+                  ( Get_dynamic
+                      {
+                        tn = ds.Tensor.value;
+                        idcs = [| Idx.Fixed_idx 1; f0 |];
+                        dyn_axis = 1;
+                        dyn_value = (Constant 0., iprec);
+                      },
+                    single ),
+                  (Constant 3., single) );
+            debug = "";
+          })
+  in
+  if on_gpu || on_cpu then
+    p claim_dynamic_disjoint_no_read
+      (approx (run ~name:"race_dyndisjoint_wshfl" ~transform:dynamic_disjoint_transform ds) 3.)
+  else skipped claim_dynamic_disjoint_no_read;
   (* A statically false guard executes nothing: the sibling body under [If 0] renders, the cell
      keeping its zero (Codex P2 on staging#674). *)
   let fx = TDSL.ndarray gv ~label:[ "race_fx" ] ~output_dims:[ n ] () in

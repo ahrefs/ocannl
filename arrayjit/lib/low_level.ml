@@ -5813,11 +5813,11 @@ let has_accumulating_cell (llc : t) : bool =
    or after the store — is a read-modify-write every lane performs on one cell: a race under any
    hardware binding, whatever else the level holds. Reads are judged as codegen renders them,
    through any index that may alias the cell (two different literal positions in a slot are the one
-   provable disjointness) or a dynamic gather from the node; a projection's discarded operand, an
-   arm a literal condition never selects, a dead level and a false guard read nothing. The
-   explicitly staged tree ([hardware_workgroup_reduce.ml]: [If (i < stride) partial[i] += partial[i
-   + stride]], [If (i == 0) out[0] = partial[0]]) fails the test: its per-lane cells mention the
-   lane, and the level never reads [out[0]].
+   provable disjointness) or a dynamic gather whose static slots do not separate it from the cell; a
+   projection's discarded operand, an arm a literal condition never selects, a dead level and a
+   false guard read nothing. The explicitly staged tree ([hardware_workgroup_reduce.ml]: [If (i <
+   stride) partial[i] += partial[i + stride]], [If (i == 0) out[0] = partial[0]]) fails the test:
+   its per-lane cells mention the lane, and the level never reads [out[0]].
 
    There is deliberately NO exemption for a guard "pinning" the lane ([If (i == 0) acc += …]). Six
    review rounds on staging#674 each found another way such a pin is not one thread: a pin value
@@ -5833,17 +5833,24 @@ let has_accumulating_cell (llc : t) : bool =
 let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(shared : Tnode.t -> bool) (llc : t) :
     (Tnode.t * Indexing.axis_index array) option =
   let lane_invariant idcs = not (Array.exists idcs ~f:(axis_index_mentions_symbol lane)) in
-  let may_alias idcs idcs' =
+  (* [except] is a slot a dynamic gather replaces at runtime: it separates nothing, the static slots
+     still do. *)
+  let may_alias ?except idcs idcs' =
     Array.length idcs <> Array.length idcs'
     || not
-         (Array.exists2_exn idcs idcs' ~f:(fun a b ->
-              match (a, b) with Indexing.Fixed_idx x, Indexing.Fixed_idx y -> x <> y | _ -> false))
+         (Array.existsi idcs ~f:(fun k a ->
+              (not (Option.exists except ~f:(( = ) k)))
+              &&
+              match (a, idcs'.(k)) with
+              | Indexing.Fixed_idx x, Indexing.Fixed_idx y -> x <> y
+              | _ -> false))
   in
   let rec reads ~tn ~idcs (sc : scalar_t) =
     let arg (s, _) = reads ~tn ~idcs s in
     match sc with
     | Get (tn', idcs') -> Tnode.equal tn tn' && may_alias idcs idcs'
-    | Get_dynamic { tn = tn'; dyn_value; _ } -> Tnode.equal tn tn' || arg dyn_value
+    | Get_dynamic { tn = tn'; idcs = idcs'; dyn_axis; dyn_value } ->
+        (Tnode.equal tn tn' && may_alias ~except:dyn_axis idcs idcs') || arg dyn_value
     | Local_scope { body; _ } -> stmt_reads ~tn ~idcs body
     | Ternop (op, c, a, b) -> (
         match Ops.ternop_conditionality op with
