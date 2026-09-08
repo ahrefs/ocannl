@@ -524,10 +524,25 @@ that they earn a lookup rather than always-loaded space.
   through the agent harness's background mode (the harness notifies on exit); `start`/`status`/
   `wait`/`stop` are only for runs that must outlive the launching session. Its own options go
   BETWEEN the subcommand and the dune arguments (`run --cap 900 build @alias`); both
-  misplacements are refused with exit 2 having run nothing — the interesting one being an option
-  written AFTER the target, which forwarded to dune exits 1 on the unknown option, and the digest
-  then reads `FAIL (exit 1)` with no error lines, indistinguishable from a failing test. Past
-  dune's own `--` the same word belongs to the executable and is passed through.
+  misplacements are refused with exit 2 having run nothing — the option written AFTER the target
+  by a guard that knows the correct order and names it, before dune is spawned. Every OTHER
+  invocation dune's own CLI refuses — an unknown option, an unknown subcommand, a missing or
+  malformed operand (`dune build -j x`) — is dune's to refuse: it prints `dune: <complaint>` then
+  `Usage: dune …`, exits 1 and runs nothing, and the digest recognises that pair at the head of
+  the log (whole and first — a `dune:` line alone could be a test's own output) and reports
+  `INVOCATION REFUSED (dune rejected the arguments; nothing ran)` quoting dune's complaint,
+  instead of the `FAIL (exit 1)` plus `no Error/File lines matched` that once sent a session
+  debugging code that was never compiled (staging#652, gh-ocannl-944). Past dune's own `--` the
+  same word belongs to the executable and is passed through. The verdict vocabulary, with the
+  exit-code contract a caller branches on without parsing the log: `pass` (0); `FAIL` (dune's own
+  status, with a fingerprint of the `File "…"`/`Error` lines); `INVOCATION REFUSED` (`run` and
+  `wait` exit 2 — the script's usage code, shared with its own refusals, while the RECORDED status
+  — the log's `exit:` sentinel, `status`, `list` — stays dune's 1: it is what happened); `TIMEOUT`
+  (142, the cap's SIGALRM exit and the only code allowed to say timeout); `KILLED` (137);
+  `CANCELLED` (129/130/143); `ERROR (toolchain/setup: nothing ran)` (126/127). `wait`'s own
+  deadline is 124, and `status` exits 0 published / 3 running / 1 died without a verdict — it
+  reports publication, never the verdict. `tools/test-test-run.sh` legs 29–32 pin all of this
+  against a fixture dune that emits dune's exact refusal stderr, with the red-run and guard controls.
   `repeat [--alone] N` is the supported flake diagnostic: it holds that same worktree lock once,
   gives every Dune invocation a freshly cleaned cache-disabled build context, retains each
   iteration's separate stdout, stderr and exit status, and writes every pairwise diff. Stdout or status drift is red;

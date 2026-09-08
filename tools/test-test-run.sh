@@ -60,6 +60,16 @@
 #      nothing -- the misplacement dune would otherwise digest as a red run.
 #  27. the same option in its documented place is consumed, not forwarded.
 #  28. past dune's own `--` the same word is a program argument, untouched.
+#  29. an invocation dune's own parser refuses -- unknown option, unknown
+#      subcommand, malformed operand -- digests as INVOCATION REFUSED quoting
+#      dune's complaint: `run`/`wait` exit 2 over a RECORDED exit 1, `status`
+#      keeps its publication 0, and dune was invoked exactly once.
+#  30. controls: a red run (`Error:`/`File` lines, exit 1) still digests as
+#      FAIL with exit 1 -- including one whose output opens with a `dune:` line.
+#  31. the `--cap` guard still refuses BEFORE dune is spawned: the two exit-2
+#      refusals are told apart by whether dune was ever invoked.
+#  32. `repeat` stops after a refused first iteration and exits 2 under the
+#      same verdict, while a merely red iteration is still repeated in full.
 
 set -u
 
@@ -786,6 +796,28 @@ case $REPEAT_TEST_MODE in
     done
     printf 'escaped parent stdout\n'; printf 'escaped parent stderr\n' >&2
     ;;
+  # dune's own command-line refusals, verbatim from dune 3.24 (cmdliner): the
+  # `dune: <complaint>` / `Usage: dune ...` pair on stderr, exit 1, nothing
+  # else -- the operand one wraps its complaint onto an indented continuation
+  # line, which the digest must quote whole.
+  usage_option)
+    printf "dune: unknown option '--frobnicate'.\nUsage: dune build [OPTION]… [TARGET]…\nTry 'dune build --help' or 'dune --help' for more information.\n" >&2
+    exit 1 ;;
+  usage_command)
+    printf "dune: unknown command 'frobnicate', must be one of 'build', 'clean', 'exec', 'runtest' or 'test'.\nUsage: dune COMMAND …\nTry 'dune --help' for more information.\n" >&2
+    exit 1 ;;
+  usage_operand)
+    printf "dune: option '-j': invalid concurrency value, must be 'auto' or a positive\n      number\nUsage: dune build [OPTION]… [TARGET]…\nTry 'dune build --help' or 'dune --help' for more information.\n" >&2
+    exit 1 ;;
+  # An ordinary red run: a located error, exit 1 -- and the same with a test's
+  # own output opening on a `dune:` line, which no `Usage:` line follows.
+  red)
+    printf 'File "test/operations/fixture.ml", line 3, characters 4-9:\nError: This expression has type int but an expression was expected of type float\n' >&2
+    exit 1 ;;
+  dune_prefixed_red)
+    printf 'dune: is what this test prints first\n'
+    printf 'File "test/operations/fixture.ml", line 3, characters 4-9:\nError: This expression has type int but an expression was expected of type float\n' >&2
+    exit 1 ;;
   *) echo "unknown repeat fixture mode: $REPEAT_TEST_MODE" >&2; exit 92 ;;
 esac
 EOF
@@ -1237,13 +1269,16 @@ fi
 # refusal is asserted together with the CALLS file being empty: "runs nothing"
 # is the half that makes the exit code trustworthy.
 argv_probe() { # tag subcommand [argv...] -- drives the tool against the fixture dune
-  local tag=$1 runs=$TMP/argv-runs-$1
+  # `argv_mode` selects the fixture dune's behaviour (default: a green run);
+  # `argv_runs` reuses an earlier probe's run store, so `status`/`wait last`
+  # can read back the run an earlier `run` recorded there.
+  local tag=$1 runs=${argv_runs:-$TMP/argv-runs-$1}
   shift
   mkdir -p "$runs"
   : >"$TMP/$tag.counter"
   : >"$TMP/$tag.calls"
   REPEAT_TEST_ROOT=$repeat_root \
-  REPEAT_TEST_MODE=stable \
+  REPEAT_TEST_MODE=${argv_mode:-stable} \
   REPEAT_TEST_COUNTER=$TMP/$tag.counter \
   REPEAT_TEST_CALLS=$TMP/$tag.calls \
   REPEAT_TEST_WAIT_PREFIX= \
@@ -1256,10 +1291,12 @@ argv_probe() { # tag subcommand [argv...] -- drives the tool against the fixture
   PATH=$repeat_bin:$PATH \
     "$repeat_root/tools/test-run.sh" "$@" >"$TMP/$tag.out" 2>"$TMP/$tag.err"
   argv_rc=$?
+  argv_out=$(cat "$TMP/$tag.out")
   argv_err=$(cat "$TMP/$tag.err")
   argv_calls=$(cat "$TMP/$tag.calls")
+  argv_dir=$(find "$runs" -mindepth 1 -maxdepth 1 -type d -name '2*Z-*' | head -1)
 }
-argv_rc= argv_err= argv_calls=
+argv_rc= argv_out= argv_err= argv_calls= argv_dir= argv_mode= argv_runs=
 
 # Every subcommand that takes options, and both spellings of a value option:
 # the guard sits on one code path, but a future refactor that splits it must
@@ -1309,6 +1346,171 @@ if [ "$argv_rc" = 0 ] && [ "$argv_calls" = "exec ./prog.exe -- --cap 900" ]; the
 else
   report 1 "an option past dune's -- reaches the program untouched" \
     "exit $argv_rc; calls: ${argv_calls:-<none>}; stderr: $argv_err"
+fi
+
+# ---------------------------------------------------------------------------
+# Legs 29-32: an invocation dune's own parser refused is a verdict of its own
+# ---------------------------------------------------------------------------
+# The guard above knows two words. Everything else dune's CLI refuses -- an
+# unknown option, an unknown subcommand, a malformed operand -- prints
+# `dune: <complaint>` then `Usage: dune ...`, exits 1 and runs nothing, and the
+# digest used to read that 1 as `FAIL (exit 1)` with no error lines: the verdict
+# of a red suite, at the moment the reader decides between reading failures and
+# fixing the command line (gh-ocannl-944). Each shape is driven through the
+# real `run` path against the fixture dune emitting dune's exact stderr, and
+# the assertions are the halves of the contract: the distinct verdict quoting
+# dune's own complaint (the wrapped operand complaint WHOLE, continuation line
+# included), `run`'s status 2 -- the usage code, so a caller branches without
+# reading the log -- over a RECORDED status that stays dune's 1, the same two
+# readings from `wait` (2) and `status` (0: it reports publication), and dune
+# invoked exactly once -- what tells this refusal from the guard's, which
+# shares its exit code.
+refused_verdict="verdict: INVOCATION REFUSED (dune rejected the arguments; nothing ran) (exit 2)"
+refused_label="a dune-refused invocation is INVOCATION REFUSED: run/wait exit 2, recorded exit 1"
+refused_detail=
+for probe in "usage_option|build @cheap --frobnicate" \
+             "usage_command|frobnicate" \
+             "usage_operand|build -j x"; do
+  mode=${probe%%|*}
+  case $mode in
+    usage_option) want1="dune: unknown option '--frobnicate'." want2= ;;
+    usage_command) want1="dune: unknown command 'frobnicate', must be one of" want2= ;;
+    usage_operand) want1="dune: option '-j': invalid concurrency value" want2="        number" ;;
+  esac
+  argv_mode=$mode argv_probe "refused-$mode" run ${probe#*|}
+  refused_runs=$TMP/argv-runs-refused-$mode
+  case $argv_rc in
+    2) ;;
+    *) refused_detail="$mode: run exited $argv_rc (want 2); stdout: $argv_out"; break ;;
+  esac
+  case $argv_out in
+    *"$refused_verdict"*"dune said:"*"  $want1"*"$want2"*) ;;
+    *) refused_detail="$mode: verdict or quoted complaint missing: $argv_out"; break ;;
+  esac
+  case $argv_out in
+    *"no Error/File lines matched"* | *"fingerprint:"*)
+      refused_detail="$mode: the red-run digest still printed: $argv_out"; break ;;
+  esac
+  if [ "$argv_calls" != "${probe#*|}" ]; then
+    refused_detail="$mode: dune calls (want exactly the argv): ${argv_calls:-<none>}"; break
+  fi
+  if [ -z "$argv_dir" ] || [ "$(cat "$argv_dir/exit" 2>/dev/null)" != 1 ] \
+     || [ "$(tail -n 1 "$argv_dir/log" 2>/dev/null)" != "exit: 1" ]; then
+    refused_detail="$mode: recorded status is not dune's 1: $(cat "$argv_dir/exit" 2>/dev/null; tail -n 1 "$argv_dir/log" 2>/dev/null)"
+    break
+  fi
+  argv_runs=$refused_runs argv_probe "refused-$mode-status" status last
+  if [ "$argv_rc" != 0 ] || [ "$argv_calls" != "" ]; then
+    refused_detail="$mode: status last exited $argv_rc (want 0: publication, not the verdict); calls: $argv_calls"; break
+  fi
+  case $argv_out in
+    *"$refused_verdict"*) ;;
+    *) refused_detail="$mode: status last lost the verdict: $argv_out"; break ;;
+  esac
+  argv_runs=$refused_runs argv_probe "refused-$mode-wait" wait last
+  if [ "$argv_rc" != 2 ] || [ "$argv_calls" != "" ]; then
+    refused_detail="$mode: wait last exited $argv_rc (want 2); calls: $argv_calls"; break
+  fi
+  case $argv_out in
+    *"$refused_verdict"*"  $want1"*) ;;
+    *) refused_detail="$mode: wait last lost the verdict: $argv_out"; break ;;
+  esac
+done
+argv_mode= argv_runs=
+if [ -z "$refused_detail" ]; then
+  report 0 "$refused_label"
+else
+  report 1 "$refused_label" "$refused_detail"
+fi
+
+# The controls: a run that FAILED still says so, with dune's status and the
+# fingerprint -- a recogniser that fired on `dune:` alone would turn a test
+# whose output opens on that word into "nothing ran", the inverse misreading.
+red_label="a red run still digests as FAIL (exit 1) with its fingerprint"
+red_detail=
+for mode in red dune_prefixed_red; do
+  argv_mode=$mode argv_probe "red-$mode" run build @cheap
+  case $argv_rc in
+    1) ;;
+    *) red_detail="$mode: run exited $argv_rc (want 1); stdout: $argv_out"; break ;;
+  esac
+  # The fingerprint is sorted (`sort -u`), so its two lines are pinned
+  # separately rather than in an order the digest never promised.
+  case $argv_out in
+    *"verdict: FAIL (exit 1)"*"fingerprint:"*'File "test/operations/fixture.ml", line 3'*) ;;
+    *) red_detail="$mode: FAIL verdict or File fingerprint missing: $argv_out"; break ;;
+  esac
+  case $argv_out in
+    *"fingerprint:"*"Error: This expression has type int"*) ;;
+    *) red_detail="$mode: Error fingerprint missing: $argv_out"; break ;;
+  esac
+  case $argv_out in
+    *"INVOCATION REFUSED"*) red_detail="$mode: a red run read as refused: $argv_out"; break ;;
+  esac
+  argv_runs=$TMP/argv-runs-red-$mode argv_probe "red-$mode-wait" wait last
+  if [ "$argv_rc" != 1 ]; then
+    red_detail="$mode: wait last exited $argv_rc (want 1)"; break
+  fi
+done
+argv_mode= argv_runs=
+if [ -z "$red_detail" ]; then
+  report 0 "$red_label"
+else
+  report 1 "$red_label" "$red_detail"
+fi
+
+# The guard from leg 26 is not made redundant by the digest: it knows the
+# correct order and refuses without spawning dune. With a fixture that WOULD
+# refuse, the guard's refusal is the one that arrives, and the calls file --
+# empty here, one line for the digest's refusal -- is what separates the two
+# exit-2 outcomes.
+argv_mode=usage_option argv_probe guard-before-dune run build @cheap --cap 900
+argv_mode=
+if [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] \
+   && case $argv_err in *"belongs before the dune arguments"*) true ;; *) false ;; esac \
+   && case $argv_out in *"INVOCATION REFUSED"*) false ;; *) true ;; esac; then
+  report 0 "the --cap guard still refuses before dune is spawned"
+else
+  report 1 "the --cap guard still refuses before dune is spawned" \
+    "exit $argv_rc; calls: ${argv_calls:-<none>}; stderr: $argv_err; stdout: $argv_out"
+fi
+
+# `repeat` has its own vocabulary and the same trap: N refused iterations are
+# byte-identical, so an unguarded set would report IDENTICAL over nothing.
+# One iteration decides it (every iteration runs the same argv), the set stops
+# there, the coordinator exits 2 over a recorded 1, and `wait` on the set
+# digests it under the same verdict. The control: a merely red iteration is
+# still repeated in full, with dune's status.
+repeat_probe repeat-refused usage_option 3 build @cheap
+repeat_refused_label="repeat stops after a refused first iteration and exits 2 over a recorded 1"
+if [ "$repeat_rc" = 2 ] && [ "$(cat "$TMP/repeat-refused.counter")" = 1 ] \
+   && [ "$(cat "$repeat_dir/exit" 2>/dev/null)" = 1 ] \
+   && case $repeat_out in
+        *"repeat result: INVOCATION REFUSED"*"dune said:"*"  dune: unknown option '--frobnicate'."*) true ;;
+        *) false ;;
+      esac; then
+  argv_runs=$TMP/repeat-runs-repeat-refused argv_probe repeat-refused-wait wait last
+  argv_runs=
+  if [ "$argv_rc" = 2 ] && case $argv_out in *"$refused_verdict"*) true ;; *) false ;; esac; then
+    report 0 "$repeat_refused_label"
+  else
+    report 1 "$repeat_refused_label" "wait last on the set: exit $argv_rc; stdout: $argv_out"
+  fi
+else
+  report 1 "$repeat_refused_label" \
+    "exit $repeat_rc; iterations $(cat "$TMP/repeat-refused.counter"); recorded $(cat "$repeat_dir/exit" 2>/dev/null); stdout: $repeat_out"
+fi
+repeat_probe repeat-red-error red 2 build @cheap
+if [ "$repeat_rc" = 1 ] && [ "$(cat "$TMP/repeat-red-error.counter")" = 2 ] \
+   && case $repeat_out in
+        *"INVOCATION REFUSED"*) false ;;
+        *"repeat result: IDENTICAL"*) true ;;
+        *) false ;;
+      esac; then
+  report 0 "repeat: a red iteration is repeated in full and keeps dune's status"
+else
+  report 1 "repeat: a red iteration is repeated in full and keeps dune's status" \
+    "exit $repeat_rc; iterations $(cat "$TMP/repeat-red-error.counter"); stdout: $repeat_out"
 fi
 
 echo

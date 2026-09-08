@@ -37,19 +37,29 @@
 # when dune itself stayed green); stderr-only drift is reported distinctly but
 # is not red. Any red dune iteration keeps a nonzero dune status.
 #
-# Exit codes: `run` and `wait` exit with dune's status. `repeat` preserves the
+# Exit codes: `run` and `wait` exit with dune's status, with ONE substitution:
+# an invocation dune's own CLI refused -- an unknown option or subcommand, a
+# missing or malformed operand -- exits 2, this script's usage code, under the
+# verdict `INVOCATION REFUSED`. dune prints `dune: <complaint>` then `Usage:
+# dune ...`, exits 1 and runs nothing, and that 1 is not a test result: read as
+# one it sends a session debugging code that was never compiled (staging#652).
+# The recorded status (the `exit:` sentinel, `status`, `list`) stays dune's
+# own 1; the substitution is the caller-facing one, so a caller branching on
+# the status needs no log parsing to tell "fix the command line" from "read
+# the failures". `repeat` preserves the
 # first nonzero dune status, or exits 1 when otherwise-green stdout/statuses
-# differ (142 = the cap expired,
+# differ, and exits 2 with the same verdict when its first iteration is refused
+# (there is nothing to repeat) (142 = the cap expired,
 # 143/130 = cancelled, 137 = SIGKILLed, 124 = `wait` itself timed out; dune
 # never reaches those on its own). `status` exits 0 finished, 3 still running
 # (or verdict publication in flight), 1 died without a verdict. Usage and lock
 # refusals exit 2 -- every one of them, including EITHER misplacement of this
 # script's own options: before the subcommand (`--cap 5400 run ...`) and after
 # the dune arguments (`run build @alias --cap 900`). Options go in between:
-# `run --cap 5400 build @alias`. The second refusal is why the scan below
-# exists -- unguarded, `--cap` reaches dune as an unknown option, and dune's
-# exit 1 having run nothing is digested here as `FAIL (exit 1)` with no error
-# lines, which reads exactly like a failing test.
+# `run --cap 5400 build @alias`. The second misplacement is also refused BEFORE
+# dune is spawned, by the scan below, because for those two words the correct
+# order is known and the message can name it; every other refusal is dune's
+# to make and is recognised afterwards in the digest, quoting dune's complaint.
 # But a launcher that swallows the status -- e.g. an agent harness's background
 # mode reporting its own wrapper's 0 -- turns that refusal into a false green,
 # so read the message, not only the code: a usage error runs no tests at all.
@@ -95,8 +105,9 @@ reject_misplaced_options() {
   # dune has no `--cap` and no `--alone`, so either word among the arguments
   # FORWARDED to dune is this script's options written on the wrong side of the
   # target -- never something a caller could mean. Left to reach dune it exits 1
-  # with `dune: unknown option`, having built nothing, and that status is
-  # digested as an ordinary red run: a session then debugs code that never ran.
+  # with `dune: unknown option`, having built nothing; the digest would now
+  # report that as INVOCATION REFUSED, but only this guard knows the correct
+  # order, so it refuses first and names it, without spawning dune at all.
   # The scan stops at dune's own `--`, past which the words belong to an
   # executable (`run exec foo.exe -- --cap 900` passes its cap to foo.exe).
   for arg do
@@ -703,6 +714,27 @@ resolve_run() {
     die "not a test-run directory (no cmd/cap metadata): $run_dir"
 }
 
+# A dune invocation dune's own command-line parser refused -- an unknown option
+# or subcommand, a missing or malformed operand -- is a stable two-part shape
+# on stderr: `dune: <complaint>` (continued onto indented lines when the parser
+# wraps it) followed by `Usage: dune ...`, then exit 1 with nothing built or
+# run. Neither an `Error:` nor a `File "..."` line ever accompanies it, so the
+# fingerprint has nothing to quote and the digest used to fall through to
+# `FAIL (exit 1)` plus a raw log tail -- the verdict of a red suite, read at
+# the moment the reader decides between "read the failures" and "fix the
+# command line" (gh-ocannl-944). The shape is required WHOLE and FIRST: a
+# `dune:` line alone could be a test's own output, and dune's usage errors are
+# emitted before anything else is. Prints the complaint (the lines before
+# `Usage:`), 0 iff FILE opens with such a refusal.
+dune_refusal() { # FILE
+  head -c 20000 "$1" 2>/dev/null | awk '
+    NR == 1 && $0 !~ /^dune: / { exit 1 }
+    /^Usage: dune/ { found = 1; exit }
+    NR > 20 { exit 1 }
+    { print }
+    END { exit found ? 0 : 1 }'
+}
+
 # The compact report `run`, `wait` and `status` all end with. Fingerprint in
 # the sweep.sh sense: the `File "..."` and `Error ...` lines, deduplicated, so
 # a new failure is distinguishable from a standing one without opening the log.
@@ -711,15 +743,34 @@ resolve_run() {
 # fall through to the raw log tail. The line numbers are kept as printed: this
 # report is read against the tree that produced it, unlike sweep.sh's, which is
 # diffed across commits and so normalizes a dune location to its stanza.
+# Sets `digest_rc`, the status `run` and `wait` exit with: the recorded status,
+# except 2 for a refused invocation (see the header's exit-code contract).
+digest_rc=
 digest() {
-  local dir=$1 rc verdict fp
+  local dir=$1 rc verdict fp complaint= refusal_src
   rc=$(cat "$dir/exit" 2>/dev/null) || die "no verdict recorded in $dir"
+  digest_rc=$rc
+  # Where dune's stderr opens: the run log for `run`/`start`; for a repeat the
+  # log opens with the iteration banner, and the refusal (if any) is the first
+  # iteration's own stderr, which is also the only iteration a refusal leaves.
+  refusal_src=$dir/log
+  [ "$(cat "$dir/mode" 2>/dev/null)" = repeat ] && refusal_src=$dir/iteration-1/stderr
   # 142 is the ONLY code the cap produces (the supervisor's SIGALRM exit), so
   # only it may say "timeout". 137 is a SIGKILL -- an OOM kill or a forced
   # external kill -- and labeling it a timeout would send triage hunting a
-  # hang that never happened.
+  # hang that never happened. And 1 is the only status dune's parser exits
+  # with, so only it is examined for a refusal: a refused-looking log under
+  # any other code still reports that code's verdict.
   case $rc in
     0) verdict=pass ;;
+    1)
+      if complaint=$(dune_refusal "$refusal_src"); then
+        verdict="INVOCATION REFUSED (dune rejected the arguments; nothing ran)"
+        digest_rc=2
+      else
+        verdict=FAIL
+      fi
+      ;;
     142) verdict="TIMEOUT (cap expired; run was killed, not judged)" ;;
     137) verdict="KILLED (SIGKILL: OOM or forced kill; not judged)" ;;
     129 | 130 | 143) verdict="CANCELLED (run was killed, not judged)" ;;
@@ -727,8 +778,17 @@ digest() {
     *) verdict=FAIL ;;
   esac
   echo "command: dune $(cat "$dir/cmd")"
-  echo "verdict: $verdict (exit $rc)"
+  echo "verdict: $verdict (exit $digest_rc)"
   echo "log:     $dir/log"
+  if [ "$digest_rc" = 2 ]; then
+    # dune's own words name the fix; nothing below (promotion diffs, the
+    # fingerprint, a log tail) could apply to a run in which no rule ran.
+    echo "dune said:"
+    printf '%s\n' "$complaint" | sed 's/^/  /'
+    echo "fix the command line and run again -- no test was built or judged" \
+         "(dune's own status was $rc; this script exits 2, its usage code)"
+    return 0
+  fi
   # Digest sits on `wait`'s deadline path, so it examines at most the last
   # 10MB of the log rather than scaling with an arbitrarily noisy run.
   scan_log() { tail -c 10000000 "$dir/log" 2>/dev/null; }
@@ -811,6 +871,7 @@ case $sub in
     repeat_cancelled=
     completed=0
     first_nonzero=0
+    repeat_refused=
     repeat_signal() {
       repeat_cancelled=$1
       [ -n "$repeat_sup" ] && kill "-$1" "$repeat_sup" 2>/dev/null
@@ -849,6 +910,9 @@ case $sub in
           printf 'test-run: repeat exited %s but its verdict could not be recorded\n' "$rc" >&2
       fi
       exec 9>&-
+      # Same contract as `run`: the RECORDED status is dune's own, the process
+      # status of a refused invocation is the usage code (header).
+      [ -n "$repeat_cancelled" ] || [ -z "$repeat_refused" ] || rc=2
       exit "$rc"
     }
     trap repeat_exit EXIT
@@ -1006,6 +1070,15 @@ case $sub in
       printf 'repeat: iteration %s/%s exit %s; stdout=%s stderr=%s\n' \
         "$i" "$repeats" "$iter_rc" "$iter/stdout" "$iter/stderr"
       completed=$i
+      # An invocation dune's parser refused ran nothing, so there is nothing
+      # whose stability the remaining iterations could measure: stop after the
+      # first, and let the verdict below say so rather than reporting N
+      # identical refusals as IDENTICAL. Only the first iteration can decide
+      # this -- every iteration runs the same argv.
+      if [ "$i" = 1 ] && [ "$iter_rc" = 1 ] && dune_refusal "$iter/stderr" >/dev/null; then
+        repeat_refused=1
+        break
+      fi
       [ -z "$repeat_cancelled" ] || break
       i=$(( i + 1 ))
     done
@@ -1069,6 +1142,9 @@ case $sub in
       repeat_reported_cancelled=1
       final_rc=$first_nonzero
       [ "$final_rc" != 0 ] || final_rc=143
+    elif [ -n "$repeat_refused" ]; then
+      repeat_result="INVOCATION REFUSED -- dune rejected the arguments; nothing ran, so nothing was repeated"
+      final_rc=$first_nonzero
     elif [ "$differing" -gt 0 ]; then
       repeat_result="DIFFERING -- stdout or exit status moved across $differing pair(s)"
       final_rc=$first_nonzero
@@ -1081,6 +1157,13 @@ case $sub in
       final_rc=$first_nonzero
     fi
     printf 'repeat result: %s\n' "$repeat_result" | tee -a "$run_dir/log"
+    if [ -n "$repeat_refused" ]; then
+      { echo "dune said:"
+        dune_refusal "$run_dir/iteration-1/stderr" | sed 's/^/  /'
+        echo "fix the command line and run again -- no test was built or judged" \
+             "(dune's own status was $final_rc; this script exits 2, its usage code)"
+      } | tee -a "$run_dir/log"
+    fi
     printf 'repeat artifacts: %s (pairwise diffs under %s/diffs)\n' "$run_dir" "$run_dir" |
       tee -a "$run_dir/log"
     # repeat_exit keeps cancellation deferred through cleanup/comparison and
@@ -1314,7 +1397,7 @@ case $sub in
       trap - INT TERM HUP
       if [ -f "$run_dir/exit" ]; then
         digest "$run_dir"
-        exit "$(cat "$run_dir/exit")"
+        exit "$digest_rc"
       fi
       echo "run died without recording a verdict (wrapper killed?): $run_dir"
       exit 1
@@ -1429,7 +1512,7 @@ case $sub in
       waited=$(( waited + step ))
     done
     digest "$run_dir"
-    exit "$(cat "$run_dir/exit")"
+    exit "$digest_rc"
     ;;
   stop)
     resolve_run "${1:-last}"
