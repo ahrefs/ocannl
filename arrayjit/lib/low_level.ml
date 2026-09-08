@@ -5747,31 +5747,47 @@ let scope_accum_updates ~tn ~idcs ~id sbody =
    recorded every non-reduction virtualized scope in a loop as a declined reduction site, which
    inflates the decline count and lets a "the census is non-empty and nothing localized" claim pass
    over a routine with no reduction in it (Codex P2, round 2). *)
+(* Whether a value reads the cell [tn[idcs]] — the recurrence test {!has_accumulating_cell} and
+   {!racing_lane_invariant_update} share. *)
+let rec reads_cell ~tn ~idcs (sc : scalar_t) =
+  let arg (s, _prec) = reads_cell ~tn ~idcs s in
+  match sc with
+  | Get (tn', idcs') ->
+      Tnode.equal tn tn'
+      && Array.length idcs = Array.length idcs'
+      && Array.for_all2_exn idcs idcs' ~f:Indexing.equal_axis_index
+  (* A scope NESTED inside a larger value — [a[i] = f(scope { … a[i] … })] — is a recurrence like
+     any other read; the scope that IS the written value is the case above, judged by its shape. *)
+  | Local_scope { body; _ } -> stmt_reads_cell ~tn ~idcs body
+  (* A dynamic gather from the written node may land on the written cell at runtime: a read of it,
+     conservatively, as well as whatever the selector reads. *)
+  | Get_dynamic { tn = tn'; dyn_value; _ } -> Tnode.equal tn tn' || arg dyn_value
+  | Ternop (_, a, b, c) -> arg a || arg b || arg c
+  | Binop (op, a, b) -> (
+      (* A projection's discarded operand is never rendered, hence never reads the cell (the same
+         rule [scalar_reads_merge_buffer] applies); a gated second operand may evaluate. *)
+      match Ops.binop_conditionality op with
+      | Ops.Only_first -> arg a
+      | Ops.Only_second -> arg b
+      | Ops.Both_operands | Ops.Gated_second -> arg a || arg b)
+  | Unop (_, a) -> arg a
+  | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> false
+
+and stmt_reads_cell ~tn ~idcs (llc : t) =
+  match llc with
+  | Seq (a, b) -> stmt_reads_cell ~tn ~idcs a || stmt_reads_cell ~tn ~idcs b
+  (* A guard's condition reads too: [If (a[i] == 0) local = 1] inside the scope that writes [a[i]]
+     is a read of the cell the scope writes back. *)
+  | If { cond = c, _; body } -> reads_cell ~tn ~idcs c || stmt_reads_cell ~tn ~idcs body
+  | For_loop { body; _ } -> stmt_reads_cell ~tn ~idcs body
+  (* A scan's carried initializers are reads the loop performs before its first iteration. *)
+  | Scan_loop { carried; body; _ } ->
+      List.exists carried ~f:(fun c -> reads_cell ~tn ~idcs c.init)
+      || stmt_reads_cell ~tn ~idcs body
+  | Set { llsc; _ } | Set_local (_, llsc) -> reads_cell ~tn ~idcs llsc
+  | _ -> false
+
 let has_accumulating_cell (llc : t) : bool =
-  let rec reads_cell ~tn ~idcs (sc : scalar_t) =
-    let arg (s, _prec) = reads_cell ~tn ~idcs s in
-    match sc with
-    | Get (tn', idcs') ->
-        Tnode.equal tn tn'
-        && Array.length idcs = Array.length idcs'
-        && Array.for_all2_exn idcs idcs' ~f:Indexing.equal_axis_index
-    (* A scope NESTED inside a larger value — [a[i] = f(scope { … a[i] … })] — is a recurrence like
-       any other read; the scope that IS the written value is the case above, judged by its
-       shape. *)
-    | Local_scope { body; _ } -> stmt_reads_cell ~tn ~idcs body
-    | Get_dynamic { dyn_value; _ } -> arg dyn_value
-    | Ternop (_, a, b, c) -> arg a || arg b || arg c
-    | Binop (_, a, b) -> arg a || arg b
-    | Unop (_, a) -> arg a
-    | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> false
-  and stmt_reads_cell ~tn ~idcs (llc : t) =
-    match llc with
-    | Seq (a, b) -> stmt_reads_cell ~tn ~idcs a || stmt_reads_cell ~tn ~idcs b
-    | If { body; _ } | For_loop { body; _ } | Scan_loop { body; _ } ->
-        stmt_reads_cell ~tn ~idcs body
-    | Set { llsc; _ } | Set_local (_, llsc) -> reads_cell ~tn ~idcs llsc
-    | _ -> false
-  in
   let rec loop (llc : t) =
     match llc with
     | Seq (a, b) -> loop a || loop b
@@ -5787,6 +5803,115 @@ let has_accumulating_cell (llc : t) : bool =
     | _ -> false
   in
   loop llc
+
+(* gh-ocannl-950: the RACE criterion for a level whose index a backend binds to a lane. A [Set]
+   under the level to storage the lanes SHARE ([shared]: device-resident or workgroup-shared, as
+   against a per-thread local array the renderer declares once per thread), whose cell does not
+   depend on the lane index, and which the LEVEL reads anywhere — in the store's own value, in a
+   guard's condition, in a sibling local staging the accumulator ([tmp = acc[0]; acc[0] = tmp +
+   x[i]]), in a scan's carried initializer ([acc[0]] seeding the state the body stores back), before
+   or after the store — is a read-modify-write every lane performs on one cell: a race under any
+   hardware binding, whatever else the level holds. Reads are judged as codegen renders them,
+   through any index that may alias the cell (two different literal positions in a slot are the one
+   provable disjointness) or a dynamic gather whose static slots do not separate it from the cell; a
+   projection's discarded operand, an arm a literal condition never selects, a dead level and a
+   false guard read nothing. The explicitly staged tree ([hardware_workgroup_reduce.ml]: [If (i <
+   stride) partial[i] += partial[i + stride]], [If (i == 0) out[0] = partial[0]]) fails the test:
+   its per-lane cells mention the lane, and the level never reads [out[0]].
+
+   There is deliberately NO exemption for a guard "pinning" the lane ([If (i == 0) acc += …]). Six
+   review rounds on staging#674 each found another way such a pin is not one thread: a pin value
+   that is a loop index or a thread-local read, another bound workgroup axis (each coordinate has
+   its own lane 0), a grid of several blocks all holding lane 0 of a device cell, two pins of one
+   cell separated by a barrier that fences threadgroup memory only. What is one thread by
+   construction is a cell that mentions the lane; a reduction that needs a single-lane
+   read-modify-write of a shared cell stages it with per-lane cells and a plain final store, which
+   is what every explicitly staged tree in the repository does. A [Set_dynamic] whose static
+   coordinates do not separate the lanes is refused, the data owning which cell each lane hits. A
+   vector store ([Set_from_vec]) is a store of each cell it covers, its argument a read. [Set_local]
+   and [Zero_out] are never a race. Returns the first racing statement's node and cell. *)
+let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(shared : Tnode.t -> bool) (llc : t) :
+    (Tnode.t * Indexing.axis_index array) option =
+  let lane_invariant idcs = not (Array.exists idcs ~f:(axis_index_mentions_symbol lane)) in
+  (* [except] is a slot a dynamic gather replaces at runtime: it separates nothing, the static slots
+     still do. *)
+  let may_alias ?except idcs idcs' =
+    Array.length idcs <> Array.length idcs'
+    || not
+         (Array.existsi idcs ~f:(fun k a ->
+              (not (Option.exists except ~f:(( = ) k)))
+              &&
+              match (a, idcs'.(k)) with
+              | Indexing.Fixed_idx x, Indexing.Fixed_idx y -> x <> y
+              | _ -> false))
+  in
+  (* The cells a vector store of [length] lanes covers: the last slot advanced lane by lane where it
+     is literal, the store's own slots otherwise (a symbolic slot aliases every position). *)
+  let covered idcs length =
+    let last = Array.length idcs - 1 in
+    match idcs.(last) with
+    | Indexing.Fixed_idx k ->
+        List.init length ~f:(fun o ->
+            let c = Array.copy idcs in
+            c.(last) <- Indexing.Fixed_idx (k + o);
+            c)
+    | _ -> [ idcs ]
+  in
+  let rec reads ~tn ~idcs (sc : scalar_t) =
+    let arg (s, _) = reads ~tn ~idcs s in
+    match sc with
+    | Get (tn', idcs') -> Tnode.equal tn tn' && may_alias idcs idcs'
+    | Get_dynamic { tn = tn'; idcs = idcs'; dyn_axis; dyn_value } ->
+        (Tnode.equal tn tn' && may_alias ~except:dyn_axis idcs idcs') || arg dyn_value
+    | Local_scope { body; _ } -> stmt_reads ~tn ~idcs body
+    | Ternop (op, c, a, b) -> (
+        match Ops.ternop_conditionality op with
+        | Ops.All_three -> arg c || arg a || arg b
+        | Ops.Cond_and_one_arm -> (
+            match c with
+            | Constant x, _ -> if Float.equal x 0. then arg b else arg a
+            | _ -> arg c || arg a || arg b))
+    | Binop (op, a, b) -> (
+        match Ops.binop_conditionality op with
+        | Ops.Only_first -> arg a
+        | Ops.Only_second -> arg b
+        | Ops.Both_operands | Ops.Gated_second -> arg a || arg b)
+    | Unop (_, a) -> arg a
+    | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> false
+  and stmt_reads ~tn ~idcs (llc : t) =
+    match llc with
+    | Seq (a, b) -> stmt_reads ~tn ~idcs a || stmt_reads ~tn ~idcs b
+    | For_loop { from_; to_; _ } when to_ < from_ -> false
+    | If { cond = Constant c, _; _ } when Float.equal c 0. -> false
+    | If { cond = c, _; body } -> reads ~tn ~idcs c || stmt_reads ~tn ~idcs body
+    | For_loop { body; _ } -> stmt_reads ~tn ~idcs body
+    | Scan_loop { carried; body; _ } ->
+        List.exists carried ~f:(fun c -> reads ~tn ~idcs c.init) || stmt_reads ~tn ~idcs body
+    | Set { llsc; _ } | Set_local (_, llsc) -> reads ~tn ~idcs llsc
+    | Set_dynamic { llsc; dyn_value; _ } -> reads ~tn ~idcs llsc || reads ~tn ~idcs (fst dyn_value)
+    | Set_from_vec { arg = a, _; _ } -> reads ~tn ~idcs a
+    | _ -> false
+  in
+  let rec go (stmt : t) =
+    match stmt with
+    | Seq (a, b) -> ( match go a with Some _ as r -> r | None -> go b)
+    | For_loop { from_; to_; _ } when to_ < from_ -> None
+    | If { cond = Constant c, _; _ } when Float.equal c 0. -> None
+    | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> go body
+    | Set { tn; idcs; _ } ->
+        if shared tn && lane_invariant idcs && stmt_reads ~tn ~idcs llc then Some (tn, idcs)
+        else None
+    | Set_dynamic { tn; idcs; _ } ->
+        if shared tn && lane_invariant idcs then Some (tn, idcs) else None
+    | Set_from_vec { tn; idcs; length; _ } ->
+        if
+          shared tn && lane_invariant idcs
+          && List.exists (covered idcs length) ~f:(fun idcs -> stmt_reads ~tn ~idcs llc)
+        then Some (tn, idcs)
+        else None
+    | _ -> None
+  in
+  go llc
 
 type peel_guard_verdict = Guard_confined | Guard_lane_private | Guard_lane_private_unresolved
 [@@deriving sexp, equal, compare]

@@ -4965,11 +4965,61 @@ module C_syntax (B : C_syntax_config) = struct
                        this level (a nest of inner levels, or a schedule-minted scope) is one the \
                        shuffle cannot render, and it is unguarded, so every lane would update the \
                        same cell"
-                | Accum_base _ | Accum_not_a_nest _ ->
-                    (* Not an accumulation the shuffle owns: an explicitly staged tree (whose
-                       lane-selecting guards and per-lane cells keep it out of the peel), or a
-                       per-lane update. The hardware binding is its correct rendering. *)
-                    None)
+                | Accum_base _ | Accum_not_a_nest _ -> (
+                    (* Not an accumulation the shuffle owns. The hardware binding is the correct
+                       rendering of an explicitly staged tree (lane-selecting guards, per-lane
+                       cells) and of a per-lane update — and a silent race for a body that
+                       read-modify-writes a cell every lane shares: a level with a sibling
+                       statement, a data-dependent guard, or an inner nest, which the peel refuses
+                       as [Accum_not_a_nest] and which fell through to the binding until
+                       gh-ocannl-950. The race criterion, not the nest criterion, is what tells the
+                       two apart: [Low_level.racing_lane_invariant_update]. *)
+                    (* Shared across the lanes: device-resident (materialized) or workgroup-shared
+                       storage. A per-thread local array is one array per lane and cannot race. A
+                       level of extent one binds lane 0 alone and cannot race either. *)
+                    let shared tn =
+                      Set.mem !current_workgroup_shared tn
+                      || Tn.Placements.is_materialized_force (placements ()) tn 950
+                    in
+                    match
+                      Low_level.racing_lane_invariant_update ~lane:i ~shared
+                        (Low_level.unflat_lines stmts)
+                    with
+                    | None -> None
+                    | Some (tn, idcs) ->
+                        let cell =
+                          Tn.debug_name tn ^ "["
+                          ^ String.concat ~sep:", "
+                              (Array.to_list idcs
+                              |> List.map ~f:(fun idx ->
+                                  Sexp.to_string_hum (Indexing.sexp_of_axis_index idx)))
+                          ^ "]"
+                        in
+                        (* A typed schedule cause, not a bare [Invalid_argument]: under the
+                           autotuner this is one candidate's decline, and the strict default
+                           classification would make an unclassified exception fatal to the whole
+                           search. A hand-written schedule still sees [Invalid_argument] at the
+                           [Context.compile] boundary ([Schedule_outcome.exception_of_cause]). *)
+                        raise
+                          (Schedule_outcome.Cause_at
+                             ( Schedule_outcome.Backend_codegen,
+                               Schedule_outcome.Illegal_schedule
+                                 {
+                                   check = "workgroup_reduce_race";
+                                   detail =
+                                     "C_syntax.pp_ll: Workgroup_reduce loop " ^ symbol_ident i
+                                     ^ " binds the lane index, and its body updates " ^ cell
+                                     ^ " in every lane: the statement reads the cell it writes and \
+                                        the cell does not depend on the lane index, so a hardware \
+                                        binding would race the read-modify-write across lanes (a \
+                                        guard selecting one lane does not help: every block, and \
+                                        every coordinate of another bound axis, has that lane), \
+                                        and the body is not a single accumulation the warp shuffle \
+                                        can render (a sibling statement, a data-dependent guard, \
+                                        or an inner nest). Keep the level Serial, or stage the \
+                                        reduction explicitly with per-lane cells and a plain final \
+                                        store (gh-ocannl-950)";
+                                 } ))))
             | Some ({ sa_tn = tn; sa_idcs = idcs; sa_op = op; sa_contrib = contrib; _ } as sa) ->
                 let warp = B.warp_size in
                 assert (warp > 1 && Int.is_pow2 warp);

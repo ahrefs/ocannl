@@ -728,6 +728,31 @@ files.
   `.so` was correct. Kernels now link with `-Wl,-Bsymbolic` on ELF (`Cc_backend.kernel_link_flags`),
   binding a kernel's references to its own definitions as macOS's two-level namespace always did;
   the diagnosis recipe is `LD_DEBUG=bindings` on a driver that preloads the executable's stubs.
+- **A bound `Workgroup_reduce` level refuses on the RACE criterion, not the nest criterion**
+  (gh-ocannl-950). gh-ocannl-754's arm refuses an UNGUARDED nest the shuffle cannot render, and
+  everything else the peel declined (`Accum_not_a_nest`: a sibling statement, a data-dependent
+  guard, an inner nest) fell through to the hardware binding — the correct rendering of the
+  explicitly staged tree (`hardware_workgroup_reduce.ml`) and a silent race for `out[r] += x[r,k];
+  side[r,k] = …` or `If (mask[k] < 1) out[r] += x[r,k]`, whose every lane read-modify-writes
+  `out[r]`. `Low_level.racing_lane_invariant_update ~lane ~shared` is what tells them apart: a
+  `Set` to storage the lanes share (`shared`: device-resident by the placements, or
+  workgroup-shared — never a per-thread local array) whose cell does not mention the lane and
+  whose value reads that cell, with reads judged as codegen renders them (a projection's discarded
+  operand reads nothing, an `If` condition reads). The staged tree's per-lane cells mention the
+  lane and its `If (i == 0) out[0] = partial[0]` reads no cell of its own. **There is no exemption
+  for a guard pinning the lane** (`If (i == 0) acc += …`): six review rounds on staging#674 each
+  found another way such a pin is not one thread — a pin value that is a loop index or a
+  thread-local read, another bound workgroup axis, a grid of several blocks all holding lane 0 of a
+  device cell, phases separated by a barrier that fences threadgroup memory only — so the sound
+  single-lane form is a per-lane cell with a plain final store, and the refusal message says so.
+  `try_warp_reduce`'s `None` arm raises a typed `Schedule_outcome.Cause_at (Backend_codegen,
+  Illegal_schedule {check = "workgroup_reduce_race"})`, one candidate's decline under the
+  autotuner and `Invalid_argument` at the `Context.compile` boundary; `hardware_warp_shuffle` pins
+  the refusals (sibling, data guard, pinned lane, extent one, condition read), the renderings
+  (per-thread scratch, projection store, the staged form) on the GPUs, and `reduction_forms`'
+  `sibling-workgroup-reduce`/`data-guard-workgroup-reduce` stay cpu-only because a refusal has no
+  value to compare — serializing the level under one lane was the alternative, rejected as a
+  silent 32x slowdown no schedule would pick on purpose.
 - **A "packmma" timing is not evidence that anything tensorized.** A `Tile_mma` whose register-tile
   preconditions fail renders the scalar fallback and the run still reports under whatever the
   variant was named — the column extent below the compute vector width is the easiest way in (at
