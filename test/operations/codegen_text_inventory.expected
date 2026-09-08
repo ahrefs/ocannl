@@ -48,6 +48,7 @@ document combinators, given nothing of the libraries to render, so not on the fr
 comma_sep [Ir.Indexing.Doc_helpers.comma_sep]
 doc_of_sexp [Utils.doc_of_sexp]
 int [Ir.Indexing.Doc_helpers.int]
+log_index_arg [Ir.C_syntax.C_syntax_config.log_index_arg Ir.C_syntax.Pure_C_config.log_index_arg]
 mma_fragment_syntax [Ir.C_syntax.C_syntax_config.mma_fragment_syntax]
 mma_syntax [Ir.C_syntax.C_syntax_config.mma_syntax]
 pp_comma [Ir.Indexing.Doc_helpers.pp_comma]
@@ -71,6 +72,8 @@ test/operations/canonical_render.expected [ll] markers ll-assign
 test/operations/concat_loop_symbols.expected [derived] beside test/operations/concat_loop_symbols.ml
 test/operations/cost_model_floor.expected [derived] beside test/operations/cost_model_floor.ml
 test/operations/ll_printer_constants.expected [derived] beside test/operations/ll_printer_constants.ml
+test/operations/log_index_width_narrow.c.expected [c] extension .c.expected; markers c-decl-banner c-for c-logic-banner c-prec-cast c-restrict ll-assign routine-log
+test/operations/log_index_width_wide.c.expected [c] extension .c.expected; markers c-decl-banner c-for c-logic-banner c-prec-cast c-restrict ll-assign routine-log
 test/operations/micrograd_demo_logging-cc-0-0.log.expected [c ll routine-log] markers c-prec-cast c-restrict ll-assign routine-log
 test/operations/micrograd_demo_logging-hip-0-0.log.expected [c ll routine-log] markers c-prec-cast ll-assign routine-log
 test/operations/micrograd_demo_logging-multidev_cc-0-0.log.expected [c ll routine-log] markers c-prec-cast c-restrict ll-assign routine-log

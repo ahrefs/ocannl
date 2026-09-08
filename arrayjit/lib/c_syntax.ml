@@ -560,6 +560,20 @@ module type C_syntax_config = sig
   val styled_log_arg : PPrint.document -> PPrint.document
   (** Function to convert potentially floating-point numeric values for logging. *)
 
+  val log_index_arg : PPrint.document -> string * PPrint.document
+  (** How a value of {!loop_index_type} is passed to a log statement: the printf conversion
+      specification to splice into the format string, and the argument document, cast where the
+      backend's variadic logging call needs a different type than the loop index's own.
+
+      A loop index is [int32_t]/[int] normally but 64-bit under [large_models], and the conversion
+      has to track that width: passing a 64-bit argument to [%d] is a variadic type mismatch --
+      undefined behaviour on the printf paths, a compile error on Metal's [os_log], and wrong digits
+      for values past 32 bits either way.
+
+      Coupled to [loop_index_type] and to [pp_log_statement]: a backend that spells the loop index
+      as its own type, or logs through a call whose conversions are not C's, overrides this
+      alongside. *)
+
   val ternop_syntax :
     Ops.prec ->
     Ops.ternop ->
@@ -1710,6 +1724,14 @@ struct
     else
       let open PPrint in
       string "(int)(" ^^ doc ^^ string " * 1000.0)"
+
+  (* [long long] is the widest type C's variadic promotions name portably, and [%lld] its conversion
+     -- available on glibc, musl, the MSVC runtime, nvrtc and hiprtc alike, with no [<inttypes.h>]
+     and no [PRId64] string-concatenation dance. The cast is a no-op where [loop_index_type] is
+     already [long long] (CUDA, HIP) and a widening no-op where it is [int64_t] (the C backends). *)
+  let log_index_arg doc =
+    if Utils.settings.large_models then ("%lld", PPrint.(string "(long long)" ^^ doc))
+    else ("%d", doc)
 
   let ternop_syntax prec op v1 v2 v3 =
     let op_prefix, op_infix1, op_infix2, op_suffix = Ops.ternop_c_syntax prec op in
@@ -3977,13 +3999,13 @@ module C_syntax (B : C_syntax_config) = struct
           let doc = ref (pp_ll ~log_set_locals ~in_loop:true body) in
           (if Utils.debug_log_from_routines () then
              let log_doc =
-               let base_message = Printf.sprintf "index %s = %%d\n" (symbol_ident i) in
+               let spec, arg_doc = B.log_index_arg (pp_symbol i) in
+               let base_message = Printf.sprintf "index %s = %s\n" (symbol_ident i) spec in
                let log_param_doc =
                  Option.map B.kernel_log_param ~f:(fun (_, name) -> string name)
                in
                B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
-                 ~base_message_literal:base_message
-                 ~args_docs:[ pp_symbol i ]
+                 ~base_message_literal:base_message ~args_docs:[ arg_doc ]
              in
              doc := log_doc ^^ hardline ^^ !doc);
           !doc
@@ -5372,13 +5394,15 @@ module C_syntax (B : C_syntax_config) = struct
               in
               let doc = separate hardline (doc :: rotation) in
               if Utils.debug_log_from_routines () then
-                let base_message = Printf.sprintf "index %s = %%d\n" (symbol_ident i) in
+                (* Identical to the [For_loop] arm's trace line, index width included: the two loop
+                   kinds' per-iteration traces are read side by side. *)
+                let spec, arg_doc = B.log_index_arg (pp_symbol i) in
+                let base_message = Printf.sprintf "index %s = %s\n" (symbol_ident i) spec in
                 let log_param_doc =
                   Option.map B.kernel_log_param ~f:(fun (_, name) -> string name)
                 in
                 B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
-                  ~base_message_literal:base_message
-                  ~args_docs:[ pp_symbol i ]
+                  ~base_message_literal:base_message ~args_docs:[ arg_doc ]
                 ^^ hardline ^^ doc
               else doc)
             ~finally:(fun () -> serial_loop_stack := List.tl_exn !serial_loop_stack)
