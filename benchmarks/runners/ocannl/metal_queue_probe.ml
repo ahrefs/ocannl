@@ -3,7 +3,7 @@
    SharedEvent ordering shape is present?
 
    This links the Metal bindings directly and contains no OCANNL lowering, scheduling, context or
-   stream code. It measures three shapes over the same pipeline and two independent output buffers:
+   stream code. It measures four shapes over the same pipeline and two independent output buffers:
 
    - [sync-between]: commit one kernel and await it before committing the next.
 
