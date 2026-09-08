@@ -408,11 +408,14 @@ uint16_t uint4x32_to_bfloat16_uniform(uint4x32_t x) {
     return bf;
 }
 
-/* Uint4x32 to float16 uniform - uses first 16 bits */
+/* Uint4x32 to float16 uniform - the single draw of the first 32 bits, narrowed, like the scalar
+   bf16 conversion and like the GPU backends' half conversion (gh-ocannl-951). This host copy returns
+   the half's BITS: single_to_half goes through HALF_TO_UINT16, where FLOAT_TO_HALF alone would, under
+   native _Float16, convert the value numerically into the uint16_t return type and truncate every
+   draw in [0, 1) to 0. */
+uint16_t single_to_half(float f);
 uint16_t uint4x32_to_half_uniform(uint4x32_t x) {
-    /* Convert through float for consistent behavior */
-    float f = (x.v[0] & 0xFFFF) * (1.0f / 65536.0f);
-    return FLOAT_TO_HALF(f);
+    return single_to_half(uint32_to_single_uniform(x.v[0]));
 }
 
 /* Uint4x32 to fp8 uniform - uses first 8 bits */

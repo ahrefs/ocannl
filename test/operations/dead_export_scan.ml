@@ -213,7 +213,6 @@ let exempt_zero_reference_exports =
     "Ops.half_to_uint4x32";
     "Ops.hum_typ_of_prec";
     "Ops.int32_to_uint4x32";
-    "Ops.int64_to_uint4x32";
     "Ops.interpret_ternop";
     "Ops.is_assign_op";
     "Ops.is_binop_infix";

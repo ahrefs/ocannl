@@ -1855,45 +1855,83 @@ let rng_baseline prec_name = List.Assoc.find_exn rng_baselines ~equal:String.equ
    the RNG-scaled operands are shown to discriminate accumulator width the way {!cells} does:
    narrowing the running sum at every step differs, in every row, from narrowing it once. The
    products are rounded to storage in both models, so the two differ only in where the SUM narrows,
-   which is the property the members are about. *)
+   which is the property the members are about.
+
+   The draw is also the cross-backend pin gh-ocannl-951 asked for. A conversion picks which bits of
+   the key it consumes from the precision it renders at (gh-ocannl-517) -- per PRECISION, not per
+   backend -- and the scalar bf16 and half conversions both take the single draw of the first 32
+   bits, narrowed, on every backend (cc's half used to consume the low 16 bits instead, so one key
+   drew a different half on cc than on the GPUs). The draws are exact by construction (a bit
+   selection and one rounding, never a reduction), so they belong on stdout: a backend that consumed
+   other bits prints another number, and the claim that each narrow draw IS the single draw narrowed
+   by the library's own conversion fails on it. The host copy of the conversion ([Ops]'s stubs over
+   [builtins.c], the hand-synced twin of the cc builtins -- gh-ocannl-656) is held to the same draw,
+   which is the first mechanical check that the pair has not drifted. *)
+let device_draw (prec_name, prec) =
+  Int.incr next_id;
+  let uvals =
+    Tn.create (Tn.Specified prec) ~id:!next_id ~label:[ "rfdraw" ]
+      ~unpadded_dims:(lazy [| 1 |])
+      ~padding:(lazy None)
+      ()
+  in
+  Ll_test.materialize uvals;
+  let prog =
+    {
+      llc =
+        LL.Set
+          {
+            tn = uvals;
+            idcs = [| Idx.Fixed_idx 0 |];
+            llsc = LL.Unop (Ops.Uint4x32_to_prec_uniform1, (LL.Constant_bits rng_key, Ops.uint4x32));
+            debug = "";
+          };
+      raw = None;
+      r = Ll_test.sym ();
+      k = Ll_test.sym ();
+      out = uvals;
+      materialized = [ uvals ];
+      seed = [];
+      bindings = Idx.Empty;
+      bind = (fun _ -> ());
+      verify = [];
+    }
+  in
+  let values, _, _, _ = execute ~name:("rf_rng_draw_" ^ prec_name) ~prog ~sched:[] in
+  values.(0)
+
+(* The key's four lanes, as the host conversions consume them: what [LL.Constant_bits] widens to on
+   the device. *)
+let rng_key_lanes = Ops.int64_to_uint4x32 rng_key
+
+let single_draw =
+  let draw = device_draw ("f32", Ops.single) in
+  Stdio.printf "the f32 draw of the RNG members' key: %s\n" (Test_utils.hex_float draw);
+  draw
+
 let () =
   List.iter rng_precs ~f:(fun (prec_name, prec) ->
-      let draw =
-        Int.incr next_id;
-        let uvals =
-          Tn.create (Tn.Specified prec) ~id:!next_id ~label:[ "rfdraw" ]
-            ~unpadded_dims:(lazy [| 1 |])
-            ~padding:(lazy None)
-            ()
-        in
-        Ll_test.materialize uvals;
-        let prog =
-          {
-            llc =
-              LL.Set
-                {
-                  tn = uvals;
-                  idcs = [| Idx.Fixed_idx 0 |];
-                  llsc =
-                    LL.Unop (Ops.Uint4x32_to_prec_uniform1, (LL.Constant_bits rng_key, Ops.uint4x32));
-                  debug = "";
-                };
-            raw = None;
-            r = Ll_test.sym ();
-            k = Ll_test.sym ();
-            out = uvals;
-            materialized = [ uvals ];
-            seed = [];
-            bindings = Idx.Empty;
-            bind = (fun _ -> ());
-            verify = [];
-          }
-        in
-        let values, _, _, _ = execute ~name:("rf_rng_draw_" ^ prec_name) ~prog ~sched:[] in
-        values.(0)
+      let draw = device_draw (prec_name, prec) in
+      Stdio.printf "the %s draw of the RNG members' key: %s\n" prec_name (Test_utils.hex_float draw);
+      p
+        (Printf.sprintf
+           "the %s draw is the f32 draw narrowed to %s: the conversion consumes the same 32 bits \
+            of the key on every backend (gh-ocannl-951)"
+           prec_name prec_name)
+        (Float.equal draw (round prec single_draw));
+      let host_draw =
+        match prec with
+        | Ops.Bfloat16_prec _ ->
+            Ops.bfloat16_to_single (Ops.uint4x32_to_bfloat16_uniform rng_key_lanes)
+        | Ops.Half_prec _ -> Ops.half_to_single (Ops.uint4x32_to_half_uniform rng_key_lanes)
+        | _ -> assert false
       in
-      Stdio.eprintf "the %s draw of the RNG members' key: %h (not part of the golden)\n%!" prec_name
-        draw;
+      p
+        (Printf.sprintf
+           "the host copy of the %s conversion draws what the backend draws (the builtins.c twin \
+            has not drifted, gh-ocannl-656)"
+           prec_name)
+        (Float.equal draw host_draw);
       let term r k = round prec (cell r k *. draw) in
       let per_step =
         Array.init rows ~f:(fun r ->
@@ -1912,9 +1950,9 @@ let () =
             round prec !acc)
       in
       (* "Differs", as the plain operands' control above says it: in SOME row. Which rows coincide
-         depends on the draw, and the draw differs by backend — each backend's half conversion
-         consumes its own bits of the key — so a per-row demand holds on one machine and not on
-         another, while a single differing row is what a width divergence needs to show. *)
+         depends on the draw, which the pins above hold equal across backends but which any future
+         change to the conversion moves, so a per-row demand would tie this control to one draw,
+         while a single differing row is what a width divergence needs to show. *)
       p
         (Printf.sprintf
            "at %s the RNG-scaled operands discriminate accumulator width: the draw is a factor in \

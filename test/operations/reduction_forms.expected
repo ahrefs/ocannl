@@ -97,7 +97,14 @@ reduction: out[3] = sum of 64 terms, hand-built Low_level, 36 members
   36 tile-mma-fallback           [f32 bf16 f16] over small contraction     Tensorize whose emission preconditions fail (transposed-B operands)    -> Tile_mma scalar fallback
                                  codegen's peel takes one level, unguarded
 every member's peel claim is coherent with the form it claims: true
+the f32 draw of the RNG members' key: 0x1.3c6ef2p-1
+the bf16 draw of the RNG members' key: 0x1.3cp-1
+the bf16 draw is the f32 draw narrowed to bf16: the conversion consumes the same 32 bits of the key on every backend (gh-ocannl-951): true
+the host copy of the bf16 conversion draws what the backend draws (the builtins.c twin has not drifted, gh-ocannl-656): true
 at bf16 the RNG-scaled operands discriminate accumulator width: the draw is a factor in (0, 1) and per-step narrowing differs from a once-narrowed whole-nest sum: true
+the f16 draw of the RNG members' key: 0x1.3c8p-1
+the f16 draw is the f32 draw narrowed to f16: the conversion consumes the same 32 bits of the key on every backend (gh-ocannl-951): true
+the host copy of the f16 conversion draws what the backend draws (the builtins.c twin has not drifted, gh-ocannl-656): true
 at f16 the RNG-scaled operands discriminate accumulator width: the draw is a factor in (0, 1) and per-step narrowing differs from a once-narrowed whole-nest sum: true
 at f32 the whole-nest and per-step references coincide (the identity-precision leg): true
 the f32 serial baseline matches the reference its backend's accumulator policy selects: true
