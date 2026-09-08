@@ -672,6 +672,14 @@ let claim_local_scratch_renders =
    bound Workgroup_reduce (one array per lane): it renders, and lane 0's fold reads its own \
    scratch"
 
+let claim_same_pin_siblings_render =
+  "two sibling updates of one cell pinned to the SAME lane are that lane's two steps, not a race: \
+   the level renders and the value is both terms"
+
+let claim_two_pin_siblings_refused =
+  "two sibling updates of one cell pinned to DIFFERENT lanes are two lanes on one cell: refused \
+   where a lane index is bound (GPU) or the serial sum of the two admitted iterations (CPU)"
+
 let claim_extent_one_renders =
   "a bound Workgroup_reduce of extent one holding the refused sibling body is not a race (lane 0 \
    alone executes it): it renders with the one term"
@@ -839,4 +847,47 @@ let () =
   if on_gpu || on_cpu then
     p claim_extent_one_renders
       (approx (run ~name:"race_extent1_wshfl" ~transform:one_transform os) gv.(0))
-  else skipped claim_extent_one_renders
+  else skipped claim_extent_one_renders;
+  (* Sibling pins: two updates of the one cell each pinned to a lane. To the SAME lane they are one
+     lane's two steps ([2 * x[0]] everywhere); to DIFFERENT lanes they are two lanes on one cell, a
+     race the per-statement exemption alone would miss (Codex P1 on staging#674). *)
+  let pinned_update s x i lane_no =
+    LL.If
+      {
+        cond =
+          ( Binop
+              (Ir.Ops.Cmpeq, (Embed_index (it i), iprec), (Constant (Float.of_int lane_no), iprec)),
+            iprec );
+        body = update s x i;
+      }
+  in
+  let qx = TDSL.ndarray gv ~label:[ "race_qx" ] ~output_dims:[ n ] () in
+  let%op qs = qx ++ "i=>0" in
+  let same_pins_transform =
+    reduce_transform ~n qs.Tensor.value ~body_of:(fun i ->
+        LL.Seq
+          ( pinned_update qs.Tensor.value qx.Tensor.value i 0,
+            pinned_update qs.Tensor.value qx.Tensor.value i 0 ))
+  in
+  if on_gpu || on_cpu then
+    p claim_same_pin_siblings_render
+      (approx (run ~name:"race_samepin_wshfl" ~transform:same_pins_transform qs) (2. *. gv.(0)))
+  else skipped claim_same_pin_siblings_render;
+  let rx2 = TDSL.ndarray gv ~label:[ "race_rx2" ] ~output_dims:[ n ] () in
+  let%op rs2 = rx2 ++ "i=>0" in
+  let two_pins_transform =
+    reduce_transform ~n rs2.Tensor.value ~body_of:(fun i ->
+        LL.Seq
+          ( pinned_update rs2.Tensor.value rx2.Tensor.value i 0,
+            pinned_update rs2.Tensor.value rx2.Tensor.value i 1 ))
+  in
+  if on_gpu then
+    match refused ~name:"race_twopins_wshfl" ~transform:two_pins_transform rs2 with
+    | Some msg ->
+        p claim_two_pin_siblings_refused
+          (String.is_substring msg ~substring:"race the read-modify-write")
+    | None -> p claim_two_pin_siblings_refused false
+  else if on_cpu then
+    p claim_two_pin_siblings_refused
+      (approx (run ~name:"race_twopins_wshfl" ~transform:two_pins_transform rs2) (gv.(0) +. gv.(1)))
+  else skipped claim_two_pin_siblings_refused

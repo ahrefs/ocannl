@@ -24,3 +24,5 @@ a Workgroup_reduce level holding a data-dependent guard over a lane-invariant se
 a lane-invariant self-updating Set under a guard pinning the lane index to one value is not a race: the hardware binding renders it and one lane performs the update (GPU), or the serial loop admits the one iteration (CPU): true
 a self-update of a per-thread local array beside a sibling statement is not a race under a bound Workgroup_reduce (one array per lane): it renders, and lane 0's fold reads its own scratch: true
 a bound Workgroup_reduce of extent one holding the refused sibling body is not a race (lane 0 alone executes it): it renders with the one term: true
+two sibling updates of one cell pinned to the SAME lane are that lane's two steps, not a race: the level renders and the value is both terms: true
+two sibling updates of one cell pinned to DIFFERENT lanes are two lanes on one cell: refused where a lane index is bound (GPU) or the serial sum of the two admitted iterations (CPU): true

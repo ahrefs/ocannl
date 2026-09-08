@@ -4997,16 +4997,29 @@ module C_syntax (B : C_syntax_config) = struct
                                   Sexp.to_string_hum (Indexing.sexp_of_axis_index idx)))
                           ^ "]"
                         in
-                        invalid_arg
-                          ("C_syntax.pp_ll: Workgroup_reduce loop " ^ symbol_ident i
-                         ^ " binds the lane index, and its body updates " ^ cell
-                         ^ " in every lane: the statement reads the cell it writes and the cell \
-                            does not depend on the lane index, so a hardware binding would race \
-                            the read-modify-write across lanes, and the body is not a single \
-                            accumulation the warp shuffle can render (a sibling statement, a \
-                            data-dependent guard, or an inner nest). Keep the level Serial, or \
-                            stage the reduction explicitly with per-lane cells and lane-pinning \
-                            guards (gh-ocannl-950)")))
+                        (* A typed schedule cause, not a bare [Invalid_argument]: under the
+                           autotuner this is one candidate's decline, and the strict default
+                           classification would make an unclassified exception fatal to the whole
+                           search. A hand-written schedule still sees [Invalid_argument] at the
+                           [Context.compile] boundary ([Schedule_outcome.exception_of_cause]). *)
+                        raise
+                          (Schedule_outcome.Cause_at
+                             ( Schedule_outcome.Backend_codegen,
+                               Schedule_outcome.Illegal_schedule
+                                 {
+                                   check = "workgroup_reduce_race";
+                                   detail =
+                                     "C_syntax.pp_ll: Workgroup_reduce loop " ^ symbol_ident i
+                                     ^ " binds the lane index, and its body updates " ^ cell
+                                     ^ " in every lane: the statement reads the cell it writes and \
+                                        the cell does not depend on the lane index, so a hardware \
+                                        binding would race the read-modify-write across lanes, and \
+                                        the body is not a single accumulation the warp shuffle can \
+                                        render (a sibling statement, a data-dependent guard, or an \
+                                        inner nest). Keep the level Serial, or stage the reduction \
+                                        explicitly with per-lane cells and lane-pinning guards \
+                                        (gh-ocannl-950)";
+                                 } ))))
             | Some ({ sa_tn = tn; sa_idcs = idcs; sa_op = op; sa_contrib = contrib; _ } as sa) ->
                 let warp = B.warp_size in
                 assert (warp > 1 && Int.is_pow2 warp);

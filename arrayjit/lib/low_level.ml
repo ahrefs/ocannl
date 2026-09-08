@@ -5801,39 +5801,67 @@ let has_accumulating_cell (llc : t) : bool =
    [Zero_out] are never a race: a scope local is per lane, and every lane zeroing one cell writes
    the same bytes. Only storage the lanes SHARE can race: [shared] says whether a node's cell is one
    cell for every lane (device-resident, or workgroup-shared) rather than a per-thread local array,
-   which the renderer declares once per thread. A pinning guard exempts what it encloses; a level of
-   extent one is the caller's to exempt, since the bounds are the caller's (Codex P2s on
-   staging#674). Returns the first racing statement's node and cell. *)
+   which the renderer declares once per thread. A pinning guard exempts what it encloses unless a
+   sibling pins the same cell to another lane; a level of extent one is the caller's to exempt,
+   since the bounds are the caller's (Codex on staging#674). Returns the first racing statement's
+   node and cell. *)
 let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(shared : Tnode.t -> bool) (llc : t) :
     (Tnode.t * Indexing.axis_index array) option =
   let is_lane = function
     | Embed_index (Indexing.Iterator s) -> Indexing.equal_symbol s lane
     | _ -> false
   in
-  let pins_lane (cond : scalar_t) =
+  (* The value a guard pins the lane to, when it pins one. *)
+  let pin_of (cond : scalar_t) : scalar_t option =
     match cond with
-    | Binop (Ops.Cmpeq, (a, _), (b, _)) ->
-        (is_lane a && not (scalar_mentions_symbol lane b))
-        || (is_lane b && not (scalar_mentions_symbol lane a))
+    | Binop (Ops.Cmpeq, (a, _), (b, _)) when is_lane a && not (scalar_mentions_symbol lane b) ->
+        Some b
+    | Binop (Ops.Cmpeq, (a, _), (b, _)) when is_lane b && not (scalar_mentions_symbol lane a) ->
+        Some a
     (* [i < 1] admits lane 0 alone: the synthetic launch guard of a one-iteration level. *)
-    | Binop (Ops.Cmplt, (a, _), (Constant c, _)) when is_lane a -> Float.(c <= 1.)
-    | _ -> false
-  in
-  let rec go (llc : t) =
-    match llc with
-    | Seq (a, b) -> ( match go a with Some _ as r -> r | None -> go b)
-    | For_loop { body; _ } | Scan_loop { body; _ } -> go body
-    | If { cond = c, _; body } -> if pins_lane c then None else go body
-    | Set { tn; idcs; llsc; _ } ->
-        if
-          shared tn
-          && (not (Array.exists idcs ~f:(axis_index_mentions_symbol lane)))
-          && reads_cell ~tn ~idcs llsc
-        then Some (tn, idcs)
-        else None
+    | Binop (Ops.Cmplt, (a, _), (Constant c, _)) when is_lane a && Float.(c <= 1.) ->
+        Some (Constant 0.)
     | _ -> None
   in
-  go llc
+  let same_pin a b = Sexp.equal (sexp_of_scalar_t a) (sexp_of_scalar_t b) in
+  (* A pinned update is exempt on its own, but two sibling updates of one cell pinned to DIFFERENT
+     lanes ([If (i == 0) acc += a; If (i == 1) acc += b]) are two lanes read-modify-writing it
+     concurrently (Codex P1 on staging#674): the cells pinned so far are remembered with their lane,
+     and a second pin of a cell to another lane is the race. *)
+  let pinned : (Tnode.t * Indexing.axis_index array * scalar_t) list ref = ref [] in
+  let same_cell (tn, idcs) (tn', idcs', _) =
+    Tnode.equal tn tn'
+    && Array.length idcs = Array.length idcs'
+    && Array.for_all2_exn idcs idcs' ~f:Indexing.equal_axis_index
+  in
+  let rec go ~pin (llc : t) =
+    match llc with
+    | Seq (a, b) -> ( match go ~pin a with Some _ as r -> r | None -> go ~pin b)
+    | For_loop { body; _ } | Scan_loop { body; _ } -> go ~pin body
+    | If { cond = c, _; body } -> (
+        match pin_of c with
+        | Some e -> go ~pin:(Some (Option.value pin ~default:e)) body
+        | None -> go ~pin body)
+    | Set { tn; idcs; llsc; _ } -> (
+        if
+          not
+            (shared tn
+            && (not (Array.exists idcs ~f:(axis_index_mentions_symbol lane)))
+            && reads_cell ~tn ~idcs llsc)
+        then None
+        else
+          match pin with
+          | None -> Some (tn, idcs)
+          | Some e -> (
+              match List.find !pinned ~f:(same_cell (tn, idcs)) with
+              | Some (_, _, e') when not (same_pin e e') -> Some (tn, idcs)
+              | Some _ -> None
+              | None ->
+                  pinned := (tn, idcs, e) :: !pinned;
+                  None))
+    | _ -> None
+  in
+  go ~pin:None llc
 
 type peel_guard_verdict = Guard_confined | Guard_lane_private | Guard_lane_private_unresolved
 [@@deriving sexp, equal, compare]

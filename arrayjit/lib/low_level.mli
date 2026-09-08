@@ -388,7 +388,8 @@ val racing_lane_invariant_update :
     per-thread local array) whose cell does not depend on [lane] and whose value reads that cell — a
     read-modify-write every lane performs on one cell, a race under any hardware binding — unless it
     is enclosed by a guard that pins [lane] to one value ([lane == e] with [e] free of [lane], or
-    [lane < c] with [c <= 1]). Per-lane cells (which mention the lane), stores that read no cell of
+    [lane < c] with [c <= 1]) — and no sibling pins the same cell to a different lane, which is two
+    lanes on one cell again. Per-lane cells (which mention the lane), stores that read no cell of
     their own, [Set_local] and [Zero_out] are not races; any other range guard or a data-dependent
     guard does not exempt what it encloses. A level of extent one cannot race either, and is the
     caller's to exempt, since it owns the bounds. *)
