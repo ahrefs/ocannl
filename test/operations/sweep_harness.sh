@@ -27,7 +27,7 @@ on_error() {
     repeated_backend_pass mixed_scope_fail mixed_scope_cleared historical_matrix \
     local_identity_error unsafe_identity_error only_typo_error matrix_error state_first state_same \
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
-    capped capped_target; do
+    capped capped_target serial_red serial_clean serial_control; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
   done
@@ -58,7 +58,8 @@ absent() {
 # where its environment is built.
 unset SWEEP_TEST_CALLS SWEEP_TEST_WAIT_PREFIX SWEEP_TEST_OPAM_RC \
   SWEEP_TEST_OPAM_OUT SWEEP_TEST_OPAM_OUT_CC SWEEP_TEST_OPAM_OUT_MULTIDEV_CC \
-  SWEEP_TEST_OPAM_OUT_METAL SWEEP_TEST_LOCAL_BOX SWEEP_TEST_JOBS
+  SWEEP_TEST_OPAM_OUT_METAL SWEEP_TEST_LOCAL_BOX SWEEP_TEST_JOBS \
+  SWEEP_TEST_OPAM_SERIAL_RED SWEEP_TEST_OPAM_OUT_SERIAL
 
 sweep=$1
 aggregate=$2
@@ -112,6 +113,21 @@ git -C "$main" push -q -u origin master
 cat >"$fake_bin/opam" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SWEEP_TEST_CALLS"
+# A serial rerun (gh-ocannl-945) -- the sweep's `-j 1` call for ONE stanza, its
+# alias the last argument -- answers on its own: red exactly when that alias is
+# listed in SWEEP_TEST_OPAM_SERIAL_RED, with SWEEP_TEST_OPAM_OUT_SERIAL as its
+# failure text, so a fixture can hold one stanza red while another clears.
+case " $* " in
+  *" -j 1 "*)
+    case " ${SWEEP_TEST_OPAM_SERIAL_RED:-} " in
+      *" ${*##* } "*)
+        [ -n "${SWEEP_TEST_OPAM_OUT_SERIAL:-}" ] && printf '%s\n' "$SWEEP_TEST_OPAM_OUT_SERIAL"
+        exit 1
+        ;;
+      *) exit 0 ;;
+    esac
+    ;;
+esac
 # Stands in for what a test run writes to the unit's log. The common output
 # drives failure-fingerprint coverage; the per-backend outputs let the skip
 # aggregation controls distinguish an intersection from a union without GPUs.
@@ -172,6 +188,8 @@ run_sweep_args() {
     "SWEEP_TEST_OPAM_OUT_CC=${SWEEP_TEST_OPAM_OUT_CC:-}" \
     "SWEEP_TEST_OPAM_OUT_MULTIDEV_CC=${SWEEP_TEST_OPAM_OUT_MULTIDEV_CC:-}" \
     "SWEEP_TEST_OPAM_OUT_METAL=${SWEEP_TEST_OPAM_OUT_METAL:-}" \
+    "SWEEP_TEST_OPAM_SERIAL_RED=${SWEEP_TEST_OPAM_SERIAL_RED:-}" \
+    "SWEEP_TEST_OPAM_OUT_SERIAL=${SWEEP_TEST_OPAM_OUT_SERIAL:-}" \
     "OCANNL_TOOL_SWEEP_LOCAL_BOX=${SWEEP_TEST_LOCAL_BOX-m4-max}" \
     "OCANNL_TOOL_SWEEP_JOBS=${SWEEP_TEST_JOBS:-}" \
     "OCANNL_TOOL_SWEEP_REPO=$main" \
@@ -906,6 +924,67 @@ absent 'dune build \(-j\|@check\)' <<<"$(tail -4 "$calls" | sed -n '1p')"
 capped_target=$(SWEEP_TEST_JOBS=2 run_sweep_args --target state-probe)
 [ "$(tail -1 "$calls")" = 'exec -- dune runtest -j 2 state-probe' ]
 absent '@check' <<<"$(tail -2 "$calls" | sed -n '1p')"
+
+# An environment-red unit -- a red whose log carries a runtime-refusal signature
+# from sweep.sh's ENVIRONMENT_REFUSALS table -- reruns its failing stanzas one at
+# a time at `-j 1` and records which stayed red (gh-ocannl-945). The fixture is
+# the 2026-09-05 minix/hip shape: one stanza refused at hip_init, one that
+# crashed after (no signature of its own, still a red stanza), and an inline
+# expectation located in a source file, which names no stanza and must be
+# reported unmapped rather than approximated by a directory-wide alias. The
+# fake opam holds the first stanza red on its own and clears the second.
+environment_failure='File "test/dune", line 2, characters 7-28:
+2 |  (alias runtest-serial-probe)
+Fatal error: exception hip_init:
+HIP_ERROR_INVALID_DEVICE
+File "test/dune", lines 5-8, characters 0-0:
+5 | (rule
+6 |  (alias runtest-pre-diff-probe)
+......
+Command got signal SEGV.
+File "test/inline_expect.ml", line 1, characters 0-0:
+Error: inline expectation differs'
+serial_red=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$environment_failure \
+  SWEEP_TEST_OPAM_SERIAL_RED='@test/runtest-serial-probe' \
+  SWEEP_TEST_OPAM_OUT_SERIAL='File "test/dune", line 2, characters 7-28:
+2 |  (alias runtest-serial-probe)
+Error: the claim itself' run_sweep_args --target serial-probe)
+grep -q 'm4-max/cc: fail ' <<<"$serial_red"
+# One dune call per stanza, so each has its own verdict; sorted, after the unit.
+[ "$(tail -3 "$calls" | sed -n '1p')" = 'exec -- dune runtest serial-probe' ]
+[ "$(tail -3 "$calls" | sed -n '2p')" = 'exec -- dune build -j 1 @test/runtest-pre-diff-probe' ]
+[ "$(tail -3 "$calls" | sed -n '3p')" = 'exec -- dune build -j 1 @test/runtest-serial-probe' ]
+# The verdict reaches all three channels: the summary, the log, the fingerprint.
+grep -q 'm4-max/cc: environment-red, 2 stanzas rerun at -j 1' <<<"$serial_red"
+grep -q 'm4-max/cc: serial rerun: still red: @test/runtest-serial-probe$' <<<"$serial_red"
+serial_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
+grep -q '^serial rerun: still red: @test/runtest-serial-probe$' "$serial_log"
+grep -q '^serial rerun: unmapped: \[File "test/inline_expect.ml", line 1\]$' "$serial_log"
+absent '^serial rerun: all clean' "$serial_log"
+grep -q '^Error: the claim itself$' "$serial_log"
+grep -q '^serial rerun: still red: @test/runtest-serial-probe$' "${serial_log%.log}.fingerprint"
+grep -q '^serial rerun: unmapped: ' "${serial_log%.log}.fingerprint"
+# The rerun's verdict must not replace the unit's: the row still says fail.
+[ "$(awk -F '\t' '$3 == "cc" { print $5 }' "$state/history.tsv" | tail -1)" = fail ]
+
+# The same red with every stanza clean on its own: the digest carries the
+# difference, so the unit-state cursor reports the fingerprint as moved.
+serial_clean=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$environment_failure \
+  run_sweep_args --target serial-probe)
+grep -q 'm4-max/cc: serial rerun: all clean$' <<<"$serial_clean"
+grep -q 'm4-max/cc: fingerprint moved since the previous failure at ' <<<"$serial_clean"
+serial_clean_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
+grep -q '^serial rerun: all clean$' "${serial_clean_log%.log}.fingerprint"
+absent 'still red' "${serial_clean_log%.log}.fingerprint"
+
+# Negative control: a red whose failures are the tests' own gets no second run.
+serial_control=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$state_failure \
+  run_sweep_args --target serial-probe)
+grep -q 'm4-max/cc: fail ' <<<"$serial_control"
+[ "$(tail -1 "$calls")" = 'exec -- dune runtest serial-probe' ]
+absent 'serial rerun' <<<"$serial_control"
+serial_control_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
+absent 'serial rerun' "${serial_control_log%.log}.fingerprint"
 
 # A historical target may declare fewer boxes than today's execution map. The
 # extra local unit still proves backend facts, but cannot be counted as a member

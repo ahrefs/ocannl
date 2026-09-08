@@ -142,6 +142,39 @@ unit_jobs() {
   esac
 }
 
+# The failure names that mean the ENVIRONMENT refused the run rather than a
+# test judging it. On minix the dxg bridge described above surfaces its lost
+# messages as three HIP exceptions; rog-nv's CUDA reaches its GPU through the
+# same WSL2 bridge, so the cudajit checks at the same three call sites are
+# listed by analogy (not yet observed there). A unit whose log carries any of
+# them is environment-red: its stanzas were refused a device, not judged, and
+# whatever test-logic failures it also holds are hidden under that noise until
+# the environment is repaired -- days, for a WSL box. The 2026-09-05 wide run
+# hid a genuine hip-only regression that way (gh-ocannl-943; the executable
+# segfaulted after its hip_init was refused, so no fingerprint could have shown
+# it), and only rerunning the failing stanzas at `-j 1` on the box told the two
+# apart: 4 of 27 stayed red on their own. So such a unit gets exactly that rerun
+# (serial_rerun below, gh-ocannl-945): every failing stanza again under `-j 1`,
+# and `serial rerun:` lines in its log and fingerprint saying which stayed red.
+# Keyed as dune prints an uncaught binding error, `Fatal error: exception
+# <name>:` with the status on the next line. The statuses each name has been
+# seen with, and how to read a rerun's verdict, are the signature table in
+# docs/agent-notes/build-and-test.md (the record half of gh-ocannl-927).
+ENVIRONMENT_REFUSALS='hip_init
+hip_module_load_data_ex
+hip_stream_create_with_priority
+cu_init
+cu_module_load_data_ex
+cu_stream_create_with_priority'
+
+environment_red() { # log
+  local name
+  while IFS= read -r name; do
+    [ -n "$name" ] && grep -q "^Fatal error: exception $name:" "$1" && return 0
+  done <<<"$ENVIRONMENT_REFUSALS"
+  return 1
+}
+
 # Successful forced full-suite units are the only logs from which absence of a
 # skip announcement means execution. Incremental Dune runs may serve a cached
 # test without replaying its stderr, and a red or interrupted unit may not have
@@ -737,15 +770,14 @@ record() {
     die "cannot record $1/$2 outcome in $HISTORY"
 }
 
-# A compact, diffable summary of what went wrong, so a caller can tell a NEW
-# failure from a standing one. Metal's operations suite carries known-red tests,
-# and a sweep that shouts on every red is a sweep nobody reads.
-fingerprint() {
+# The error SITES in a log, one per line, in BOTH of dune's spellings: a
+# diagnostic anchored to one line says `line N`, one anchored to a span --
+# notably a whole stanza whose action exited non-zero, which is how every
+# explicit-rule test here fails -- says `lines N-M`. Shared by `fingerprint`,
+# which sorts and bounds them, and by `rerun_aliases`, which needs every one.
+dune_sites() { # log
   {
-    # Error SITES, in BOTH of dune's spellings: a diagnostic anchored to one
-    # line says `line N`, one anchored to a span -- notably a whole stanza whose
-    # action exited non-zero, which is how every explicit-rule test here fails --
-    # says `lines N-M`. Matching only the singular left a unit whose ONLY failure
+    # Matching only the singular left a unit whose ONLY failure
     # had that shape with an EMPTY fingerprint, and empty compares equal to
     # empty, so the consumer that diffs against the previous non-pass run read a
     # red suite as "unchanged since the last sweep" and said nothing.
@@ -811,6 +843,15 @@ fingerprint() {
       }
       END { flush() }
     ' "$1"
+  } 2>/dev/null
+}
+
+# A compact, diffable summary of what went wrong, so a caller can tell a NEW
+# failure from a standing one. Metal's operations suite carries known-red tests,
+# and a sweep that shouts on every red is a sweep nobody reads.
+fingerprint() {
+  {
+    dune_sites "$1"
     grep -hoE '^(Error|Fatal error|Exception)[^,]*' "$1"
     # A production compiler option vector appended to the exception message by
     # `cuda_to_ptx`, `hip_to_code`, or `compile_metal_source`. The selectors above
@@ -828,6 +869,120 @@ fingerprint() {
   # vector then shows up as a diff beside the failure it explains, which is the
   # whole point (gh-ocannl-784).
   sed -n '/^=== rtc-context /,/^=== end rtc-context ===$/p' "$1" 2>/dev/null | head -40
+  # The serial rerun's verdict (serial_rerun), after the sorted block and
+  # outside its bound: which of the red stanzas stayed red on their own is the
+  # first line a reader of an environment-red unit needs, and the one a
+  # 60-entry bound must not be able to drop.
+  grep -h '^serial rerun: ' "$1" 2>/dev/null
+}
+
+# The stanza aliases behind a log's dune-file sites, one per line, each prefixed
+# `alias ` or `unmapped `. A `(test (name X))` stanza reruns as
+# `@<dir>/runtest-X`, the per-test alias dune generates from 3.20 (the
+# project's floor); an explicit rule as `@<dir>/<its alias>`. A site that names
+# no stanza -- an unnamed span, a bare `target`, an inline expectation located
+# in a source file -- has no alias to hand dune and is reported unmapped rather
+# than approximated by its directory's `runtest`, which at `-j 1` is the whole
+# suite again.
+rerun_aliases() { # log
+  dune_sites "$1" | sort -u | awk '
+    /^File "[^"]*dune", (alias|name|names) [A-Za-z0-9_.-]+$/ {
+      dir = $2
+      sub(/^"/, "", dir)
+      sub(/dune",$/, "", dir)
+      if (dir ~ /^([A-Za-z0-9_.-]+\/)*$/) {
+        if ($3 == "alias") print "alias @" dir $4
+        else print "alias @" dir "runtest-" $4
+        next
+      }
+    }
+    { print "unmapped " $0 }
+  '
+}
+
+# The rerun as shell text for the machine that owns the worktree, one dune call
+# per stanza so each has its own status: a single call over all of them would
+# report one verdict for the set. The markers are what serial_rerun reads back.
+serial_rerun_cmd() { # backend wt alias...
+  local backend=$1 wt=$2 a
+  shift 2
+  printf 'cd "%s" || exit 127; ' "$wt"
+  for a in "$@"; do
+    printf 'echo "=== serial rerun %s ==="; ' "$a"
+    printf 'OCANNL_BACKEND=%s opam exec -- dune build -j 1 %s; ' "$backend" "$a"
+    printf 'echo "=== serial rerun %s: exit $? ==="; ' "$a"
+  done
+  printf 'exit 0'
+}
+
+# Rerun an environment-red unit's failing stanzas one at a time, appending to
+# its log, then write the `serial rerun:` verdict lines that `fingerprint`
+# carries and the summary quotes. The shape is collect_rtc_context's: its own
+# phase after the row is recorded, under the worktree lock on whichever side
+# owns the tree, with a status that never reaches the outcome. The budget is the
+# unit's own CAP rather than CONTEXT_CAP, because this is not a diagnostic of
+# fixed size but the suite's red stanzas run again -- 27 of them on the day this
+# was measured -- and a stanza the cap cut short is reported `unjudged`, never
+# folded into `all clean`.
+serial_rerun() { # backend host wt log label [path_prefix]
+  local backend=$1 host=$2 wt=$3 log=$4 label=$5 path_prefix=${6:-}
+  local line cmd started rc a aliases=() unmapped=() red=() unjudged=()
+  environment_red "$log" || return 0
+  while IFS= read -r line; do
+    case $line in
+      "alias "*) aliases+=("${line#alias }") ;;
+      "unmapped "*) unmapped+=("${line#unmapped }") ;;
+    esac
+  done < <(rerun_aliases "$log")
+  started=$(date +%s)
+  if [ ${#aliases[@]} -gt 0 ]; then
+    cmd=$(serial_rerun_cmd "$backend" "$wt" "${aliases[@]}")
+    echo "=== serial rerun: ${#aliases[@]} stanzas at -j 1 ===" >>"$log"
+    if [ -n "$host" ]; then
+      run_capped "$(( CAP + 300 ))" ssh -o BatchMode=yes -o ConnectTimeout=8 \
+        -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
+        "$host" "$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $cmd")" \
+        >>"$log" 2>&1
+    else
+      run_capped "$CAP" /bin/sh -c "$cmd" >>"$log" 2>&1
+    fi
+    rc=$?
+    for a in "${aliases[@]}"; do
+      line=$(grep -hF -- "=== serial rerun $a: exit " "$log" | tail -1)
+      case $line in
+        "") unjudged+=("$a") ;;
+        *": exit 0 ==="*) ;;
+        *) red+=("$a") ;;
+      esac
+    done
+  else
+    rc=0
+  fi
+  {
+    if [ ${#red[@]} -gt 0 ]; then
+      printf 'serial rerun: still red:'
+      printf ' %s' "${red[@]}"
+      printf '\n'
+    elif [ ${#unjudged[@]} -eq 0 ] && [ ${#aliases[@]} -gt 0 ]; then
+      printf 'serial rerun: all clean\n'
+    fi
+    if [ ${#unjudged[@]} -gt 0 ]; then
+      printf 'serial rerun: unjudged (exit %s):' "$rc"
+      printf ' %s' "${unjudged[@]}"
+      printf '\n'
+    fi
+    if [ ${#aliases[@]} -eq 0 ]; then
+      printf 'serial rerun: nothing to rerun -- no site names a stanza\n'
+    fi
+    if [ ${#unmapped[@]} -gt 0 ]; then
+      printf 'serial rerun: unmapped:'
+      printf ' [%s]' "${unmapped[@]}"
+      printf '\n'
+    fi
+  } >>"$log"
+  echo "  $label: environment-red, ${#aliases[@]} stanzas rerun at -j 1 ($(( $(date +%s) - started ))s)"
+  grep -h '^serial rerun: ' "$log" | sed "s|^|  $label: |"
+  return 0
 }
 
 # An outcome that is not a pass, with nothing extractable from its log, is its
@@ -1150,6 +1305,13 @@ for unit in "${UNITS[@]}"; do
     fail:cuda | fail:hip | fail:metal)
       collect_rtc_context "$backend" "$host" "$wt" "$log" "${path_prefix:-}"
       ;;
+  esac
+  # Only a `fail` can be environment-red: a `timeout` had its process group
+  # destroyed and may still hold the box, and an `error` never reached dune.
+  # Gated inside on the signature table, so a red whose failures are the
+  # tests' own gets no second run.
+  case $outcome in
+    fail) serial_rerun "$backend" "$host" "$wt" "$log" "$machine/$backend" "${path_prefix:-}" ;;
   esac
   case $outcome in
     fail | timeout | error) write_fingerprint "$log" "$machine/$backend" ;;

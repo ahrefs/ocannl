@@ -1769,23 +1769,57 @@ that they earn a lookup rather than always-loaded space.
   failures) after the box had kept its VM across two host resumes (dmesg shows
   `hv_utils: TimeSync IC version` renegotiations between the last green unit and the first
   burst): a fresh VM had tolerated the full width for eleven daily sweeps, so the degraded
-  bridge lowers the tolerance rather than removing it. Under WSL2 `/dev/kfd` and `/dev/dri`
-  are never present and `rocm-smi` always reports the driver as uninitialized — neither is
-  evidence of a lost passthrough; `hipGetDeviceCount` is. The `unit_jobs` table in
-  `tools/sweep.sh` holds the cap (`OCANNL_TOOL_SWEEP_JOBS=<n>` overrides it for one run),
-  applied to the test phase only: `test_cmd` compiles under `@check` at full width first, since
-  the cap bounds GPU-holding processes, not the build. The value is measured, not guessed: on
-  the degraded bridge `-j 4` still lost 27 stanzas while `-j 2` ran a forced full unit clean
-  in 18.5 minutes (the sweep harness pins the call shape). A single GPU serialises the
+  bridge lowers the tolerance rather than removing it, and a fresh VM removes the refusal
+  class. Under WSL2 `/dev/kfd` and `/dev/dri` are never present and `rocm-smi` always reports
+  the driver as uninitialized — neither is evidence of a lost passthrough; `hipGetDeviceCount`
+  is. The `unit_jobs` table in `tools/sweep.sh` holds the cap (`OCANNL_TOOL_SWEEP_JOBS=<n>`
+  overrides it for one run), applied to the test phase only: `test_cmd` compiles under `@check`
+  at full width first, since the cap bounds GPU-holding processes, not the build. The value is
+  measured, not guessed: on the degraded bridge dune's default lost 67 stanzas (356 kernel-side
+  refusals), `-j 4` still lost 27 (120), and `-j 2` ran a forced full `@runtest @train` unit
+  clean in 18.5 minutes (the sweep harness pins the call shape). A single GPU serialises the
   kernels anyway, so the capped test phase is not much slower. Recovery for the bridge itself
   is `wsl --shutdown` from the Windows side, then a kick from the coordinator
   (`wake-lab.sh kick-wsl minix`) — from inside the VM the shutdown kills the session issuing
-  it. And an environment-red unit is still worth reading past its fingerprint: the same day's
-  wide run hid a genuine hip-only test regression under the runtime noise
-  (`autotune_fission_sketch`, whose staging#639 MMA-count claims assumed every GPU backend seeds
-  a tensorized sketch for an f32 site — HIP's rocWMMA advertises no f32 triple, so the counters
-  are zero there by design; now gated through the seeder's own decision), which only a serial
-  rerun of the failing stanzas told apart from the bridge.
+  it. A retry scoped to module loading would cover one of the three names: the refusal lands on
+  `hipInit` and on stream creation too, per VM-bus message, so it would have to sit at the
+  binding's error check, and it cannot help a process whose `hip_init` was refused
+  (gh-ocannl-927).
+- **Runtime-refusal signature table.** These are the exception names `tools/sweep.sh`'s
+  `ENVIRONMENT_REFUSALS` treats as the environment refusing a run rather than a test judging it;
+  dune prints an uncaught binding error as `Fatal error: exception <name>:` with the status on
+  the next line, and the sweep keys on the name. A `fail` unit whose log carries any of them is
+  *environment-red* and gets a **serial rerun** (gh-ocannl-945): every failing stanza again as
+  `dune build -j 1 @<dir>/runtest-<name>` (or `@<dir>/<alias>` for an explicit rule), one dune
+  call each, under the same worktree lock and the unit's own cap, appended to the unit's log.
+
+| name (`Fatal error: exception <name>:`) | call site | statuses seen (minix, 2026-09-05) |
+| --- | --- | --- |
+| `hip_init` | `Hip.init`, backend `ensure_initialized` | `HIP_ERROR_INVALID_DEVICE` (11), `HIP_ERROR_NO_DEVICE` (1) |
+| `hip_module_load_data_ex` | `Hip.Module.load_data_ex`, backend `link` | `HIP_ERROR_NO_BINARY_FOR_GPU` (34) |
+| `hip_stream_create_with_priority` | `Hip.Stream.create`, backend `get_device` | `HIP_ERROR_OUT_OF_MEMORY` (4) |
+| `cu_init` | `Cu.init` | analogue by construction — rog-nv reaches its GPU through the same dxg bridge; not yet observed |
+| `cu_module_load_data_ex` | `Cu.Module.load_data_ex` | analogue, not yet observed |
+| `cu_stream_create_with_priority` | `Cu.Stream.create` | analogue, not yet observed |
+
+- **Reading a rerun's verdict.** Adding a name means adding it in both places: the table in
+  `sweep.sh` gates the rerun, this one records what the name has been seen with. The verdict is written as `serial
+  rerun:` lines in the log AND the fingerprint (outside the fingerprint's 60-entry bound, so a
+  wide red cannot drop it), and quoted in the sweep's summary: `still red: <aliases>` names the
+  stanzas red on their own — read those first, they are the test-logic failures the noise was
+  hiding; `all clean` says every red stanza passed alone; `unjudged (exit N): <aliases>` are the
+  ones the cap cut short, never folded into `all clean`; `unmapped: [<site>]...` lists sites
+  that name no stanza (an unnamed span, a bare `target` rule, an inline expectation located in
+  a source file), which the rerun does not approximate by a directory-wide alias — under `-j 1`
+  that is the whole suite again. The row's outcome stays `fail`; the rerun never changes a
+  verdict, it explains one. Why this exists: the same day's wide run hid a genuine hip-only
+  regression under the bridge noise (`autotune_fission_sketch`, whose staging#639 MMA-count
+  claims assumed every GPU backend seeds a tensorized sketch for an f32 site — HIP's rocWMMA
+  advertises no f32 triple, so the counters are zero there by design; now gated through the
+  seeder's own decision, gh-ocannl-943), and the executable segfaulted after its `hip_init`
+  was refused, so no fingerprint could have shown it — only rerunning the 27 red stanzas at
+  `-j 1` on the box did, 4 of them staying red. The harness pins the call shape, all three
+  verdict channels, and that a red without a signature gets no second run.
 - A forced full-suite sweep also intersects the backend-scoped `Verdict.skipped`
   executable-and-claim keys from every successful unit through `tools/aggregate-skips.sh`
   (gh-ocannl-792), writing
