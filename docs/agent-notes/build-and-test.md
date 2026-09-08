@@ -529,7 +529,9 @@ that they earn a lookup rather than always-loaded space.
   invocation dune's own CLI refuses — an unknown option, an unknown subcommand, a missing or
   malformed operand (`dune build -j x`) — is dune's to refuse: it prints `dune: <complaint>` then
   `Usage: dune …`, exits 1 and runs nothing, and the digest recognises that pair at the head of
-  the log (whole and first — a `dune:` line alone could be a test's own output) and reports
+  the log (whole, first and alone — a `dune:` line alone could be a test's own output, and
+  anything after the `Usage:` line beyond dune's `Try '… --help'` and the `exit:` sentinel is
+  evidence that something ran, such as a `dune exec` program printing a nested refusal) and reports
   `INVOCATION REFUSED (dune rejected the arguments; nothing ran)` quoting dune's complaint,
   instead of the `FAIL (exit 1)` plus `no Error/File lines matched` that once sent a session
   debugging code that was never compiled (staging#652, gh-ocannl-944). Past dune's own `--` the

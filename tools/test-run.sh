@@ -20,7 +20,7 @@
 #     so it cannot strand.
 #
 # Usage:
-#   tools/test-run.sh run   [--cap N] [DUNE ARGS...]   # foreground; digest; dune's status
+#   tools/test-run.sh run   [--cap N] [DUNE ARGS...]   # foreground; digest; dune's status (2: refused)
 #   tools/test-run.sh start [--cap N] [DUNE ARGS...]   # detached; survives the session
 #   tools/test-run.sh repeat [--cap N] [--alone] N [DUNE ARGS...]
 #                                                      # compare N isolated runs
@@ -722,16 +722,23 @@ resolve_run() {
 # fingerprint has nothing to quote and the digest used to fall through to
 # `FAIL (exit 1)` plus a raw log tail -- the verdict of a red suite, read at
 # the moment the reader decides between "read the failures" and "fix the
-# command line" (gh-ocannl-944). The shape is required WHOLE and FIRST: a
-# `dune:` line alone could be a test's own output, and dune's usage errors are
-# emitted before anything else is. Prints the complaint (the lines before
-# `Usage:`), 0 iff FILE opens with such a refusal.
+# command line" (gh-ocannl-944). The shape is required WHOLE, FIRST and ALONE:
+# a `dune:` line alone could be a test's own output; dune's usage errors are
+# emitted before anything else is; and a refusal that ran nothing leaves
+# nothing after itself -- past `Usage:` only dune's own `Try '... --help'`
+# line, blank lines and this script's `exit: N` sentinel may follow. Anything
+# else after it is evidence that something DID run (a `dune exec` program
+# printing a nested dune usage error and then failing, say), and the log is
+# then an ordinary red run whose fingerprint the digest must show. Prints the
+# complaint (the lines before `Usage:`), 0 iff FILE is such a refusal.
 dune_refusal() { # FILE
   head -c 20000 "$1" 2>/dev/null | awk '
     NR == 1 && $0 !~ /^dune: / { exit 1 }
-    /^Usage: dune/ { found = 1; exit }
-    NR > 20 { exit 1 }
-    { print }
+    !found && /^Usage: dune/ { found = 1; next }
+    !found && NR > 20 { exit 1 }
+    !found { print; next }
+    /^Try \047.*--help/ || /^exit: [0-9]+$/ || /^$/ { next }
+    { found = 0; exit 1 }
     END { exit found ? 0 : 1 }'
 }
 

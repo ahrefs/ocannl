@@ -65,7 +65,9 @@
 #      dune's complaint: `run`/`wait` exit 2 over a RECORDED exit 1, `status`
 #      keeps its publication 0, and dune was invoked exactly once.
 #  30. controls: a red run (`Error:`/`File` lines, exit 1) still digests as
-#      FAIL with exit 1 -- including one whose output opens with a `dune:` line.
+#      FAIL with exit 1 -- including one whose output opens with a `dune:`
+#      line, and one that prints a complete nested dune refusal and then
+#      goes on (the shape must be alone in the log, not merely first).
 #  31. the `--cap` guard still refuses BEFORE dune is spawned: the two exit-2
 #      refusals are told apart by whether dune was ever invoked.
 #  32. `repeat` stops after a refused first iteration and exits 2 under the
@@ -818,6 +820,18 @@ case $REPEAT_TEST_MODE in
     printf 'dune: is what this test prints first\n'
     printf 'File "test/operations/fixture.ml", line 3, characters 4-9:\nError: This expression has type int but an expression was expected of type float\n' >&2
     exit 1 ;;
+  # A program dune DID run (`dune exec`) that shells out to dune with bad
+  # arguments, prints that nested refusal first, then fails on its own: the
+  # complete refusal shape, followed by evidence that something ran -- a
+  # located error in one, plain output in the other.
+  nested_usage_red)
+    printf "dune: unknown option '--frobnicate'.\nUsage: dune build [OPTION]… [TARGET]…\nTry 'dune build --help' or 'dune --help' for more information.\n" >&2
+    printf 'File "test/operations/fixture.ml", line 3, characters 4-9:\nError: This expression has type int but an expression was expected of type float\n' >&2
+    exit 1 ;;
+  nested_usage_output)
+    printf "dune: unknown option '--frobnicate'.\nUsage: dune build [OPTION]… [TARGET]…\nTry 'dune build --help' or 'dune --help' for more information.\n" >&2
+    printf 'the program went on to print this and then failed\n'
+    exit 1 ;;
   *) echo "unknown repeat fixture mode: $REPEAT_TEST_MODE" >&2; exit 92 ;;
 esac
 EOF
@@ -1425,27 +1439,47 @@ fi
 
 # The controls: a run that FAILED still says so, with dune's status and the
 # fingerprint -- a recogniser that fired on `dune:` alone would turn a test
-# whose output opens on that word into "nothing ran", the inverse misreading.
+# whose output opens on that word into "nothing ran", and one that stopped
+# reading at `Usage:` would do the same to a `dune exec` program that printed
+# a nested dune refusal and then failed (Codex review round 1, P2): both are
+# the inverse misreading, so the shape must also be ALONE in the log.
 red_label="a red run still digests as FAIL (exit 1) with its fingerprint"
 red_detail=
-for mode in red dune_prefixed_red; do
+for mode in red dune_prefixed_red nested_usage_red nested_usage_output; do
   argv_mode=$mode argv_probe "red-$mode" run build @cheap
   case $argv_rc in
     1) ;;
     *) red_detail="$mode: run exited $argv_rc (want 1); stdout: $argv_out"; break ;;
   esac
+  case $argv_out in
+    *"verdict: FAIL (exit 1)"*) ;;
+    *) red_detail="$mode: FAIL verdict missing: $argv_out"; break ;;
+  esac
+  case $argv_out in
+    *"INVOCATION REFUSED"*) red_detail="$mode: a red run read as refused: $argv_out"; break ;;
+  esac
+  if [ "$mode" = nested_usage_output ]; then
+    # No located error to fingerprint: the digest falls through to the log
+    # tail, which is the trailing evidence itself.
+    case $argv_out in
+      *"no Error/File lines matched"*"the program went on to print this"*) ;;
+      *) red_detail="$mode: log tail missing: $argv_out"; break ;;
+    esac
+    argv_runs=$TMP/argv-runs-red-$mode argv_probe "red-$mode-wait" wait last
+    if [ "$argv_rc" != 1 ]; then
+      red_detail="$mode: wait last exited $argv_rc (want 1)"; break
+    fi
+    continue
+  fi
   # The fingerprint is sorted (`sort -u`), so its two lines are pinned
   # separately rather than in an order the digest never promised.
   case $argv_out in
-    *"verdict: FAIL (exit 1)"*"fingerprint:"*'File "test/operations/fixture.ml", line 3'*) ;;
-    *) red_detail="$mode: FAIL verdict or File fingerprint missing: $argv_out"; break ;;
+    *"fingerprint:"*'File "test/operations/fixture.ml", line 3'*) ;;
+    *) red_detail="$mode: File fingerprint missing: $argv_out"; break ;;
   esac
   case $argv_out in
     *"fingerprint:"*"Error: This expression has type int"*) ;;
     *) red_detail="$mode: Error fingerprint missing: $argv_out"; break ;;
-  esac
-  case $argv_out in
-    *"INVOCATION REFUSED"*) red_detail="$mode: a red run read as refused: $argv_out"; break ;;
   esac
   argv_runs=$TMP/argv-runs-red-$mode argv_probe "red-$mode-wait" wait last
   if [ "$argv_rc" != 1 ]; then
