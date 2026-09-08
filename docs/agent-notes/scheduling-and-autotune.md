@@ -633,16 +633,24 @@ files.
   macOS 26.6.2 build 25G83, current-master `schedule_bench` showed no superlinear queue cost from
   256³ through 512³: its one-thread kernel rose from 210 ms to 2.32 s, and two queued runs stayed
   within 11% per launch at every size. The OCANNL-free
-  `benchmarks/runners/ocannl/metal_queue_probe.ml` separates three submission shapes over the same
-  long kernel. Raw back-to-back command buffers still overlapped at a 1.586 s single-kernel time;
-  the exact `Metal_backend` SharedEvent shape (kernel, signal, wait+kernel, signal) overlapped through
-  1.198 s and serialized by 1.213 s. Neither arm reproduced the historical ~30x penalty: the event
-  arm changed from ~1x to ~2x single-kernel wall. This makes the transition a Metal driver's
-  response to the SharedEvent command-buffer shape rather than OCANNL work between submissions,
-  and leaves `queued_batch_ms` about 120x below it: any estimate at or above 10 ms already selects
-  depth 1, so the autotuner cannot put a second long kernel in flight. Do not add a per-repeat host
-  sync to the timing path on this evidence; rerun the standalone probe after an OS/driver change if
-  the superlinear symptom returns. The probe takes a duration target it feedback-corrects to within
+  `benchmarks/runners/ocannl/metal_queue_probe.ml` separates four submission shapes over the same
+  long kernel. Raw back-to-back command buffers still overlapped at a 1.586 s single-kernel time.
+  The arm the gh-828 session read as "the exact `Metal_backend` SharedEvent shape" (kernel,
+  signal, wait+kernel, signal) overlapped through 1.198 s and serialized by 1.213 s — but that arm
+  had encoded its wait AFTER the second kernel's compute pass, where `encodeWaitForEvent` orders
+  nothing, so it measured two effectively unordered buffers, and the transition it found is the
+  driver serializing long unordered command buffers, not a response to the SharedEvent shape
+  (gh-ocannl-909). The backend's actual shape — the wait encoded before the compute pass, as
+  `Metal_backend.link_proc` does — is the probe's `event-chain` arm since gh-909 and serializes at
+  every kernel length (1.001x of a synced pair at 150 ms; `test/operations/back_to_back_runs`
+  pins it executed at ~5 ms); the misplaced-wait shape is kept as the `wait-after-kernel` arm
+  (0.501x at 150 ms) as the record of the artifact. Neither unordered arm reproduced the
+  historical ~30x penalty: wait-after-kernel changed from ~1x to ~2x single-kernel wall. What
+  survives for the autotuner is unchanged: `queued_batch_ms` sits about 120x below the unordered
+  regime's transition, any estimate at or above 10 ms already selects depth 1, and the backend's
+  own launches are ordered regardless. Do not add a per-repeat host sync to the timing path on
+  this evidence; rerun the standalone probe after an OS/driver change if the superlinear symptom
+  returns. The probe takes a duration target it feedback-corrects to within
   2% (it prints the requested and achieved single-kernel ms and the iteration count it settled on)
   or an exact `--iterations=N`, so a narrow threshold rerun pins the count from the previous
   report instead of re-adjusting the target by hand.

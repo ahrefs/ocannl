@@ -3,14 +3,24 @@
    SharedEvent ordering shape is present?
 
    This links the Metal bindings directly and contains no OCANNL lowering, scheduling, context or
-   stream code. It measures three shapes over the same pipeline and two independent output buffers:
+   stream code. It measures four shapes over the same pipeline and two independent output buffers:
 
    - [sync-between]: commit one kernel and await it before committing the next.
 
    - [raw-queued]: commit both kernels, then await both (no intervening host synchronization).
 
-   - [event-chain]: reproduce Metal_backend's command-buffer sequence exactly: kernel, signal,
-   wait+kernel, signal, followed by one host wait on the final SharedEvent value.
+   - [event-chain]: Metal_backend's command-buffer sequence: kernel, signal, wait+kernel, signal,
+   followed by one host wait on the final SharedEvent value. The wait is encoded BEFORE the second
+   kernel's compute pass, as [Metal_backend.link_proc] encodes it ([encode_wait_for_enqueued] runs
+   before the encoder is created), so the second kernel cannot start until the signal fires.
+
+   - [wait-after-kernel]: the same buffers with the wait encoded AFTER the second kernel's compute
+   pass — [encodeWaitForEvent] takes effect at the point in the buffer where it is encoded, so a
+   wait appended to an already-encoded buffer orders nothing before it. This is the shape the
+   event-chain arm had until gh-ocannl-909, and it is why staging#641 measured the two kernels
+   overlapping "through the backend's sequence": the probe was not reproducing the backend. Kept as
+   the artifact's record; the executed pin of the backend's own ordering is
+   [test/operations/back_to_back_runs.ml].
 
    The kernel's loop bound is runtime data and every iteration performs a volatile device read, so
    the compiler cannot fold the long loop away. The kernel length is fixed one of two ways.
@@ -60,8 +70,13 @@ let ropts =
 let now () = Unix.gettimeofday ()
 let elapsed_ms start = (now () -. start) *. 1000.
 
-let command_buffer ~queue ~pso ~input ~output ~iterations_buf =
+(* [?wait]: a SharedEvent wait encoded before the compute pass, where it orders the kernel. *)
+let command_buffer ?wait ~queue ~pso ~input ~output ~iterations_buf () =
   let cb = Me.CommandBuffer.on_queue queue in
+  Option.iter
+    (fun (event, value) ->
+      Me.CommandBuffer.encode_wait_for_event cb (Me.SharedEvent.super event) value)
+    wait;
   let enc = Me.ComputeCommandEncoder.on_buffer cb in
   Me.ComputeCommandEncoder.set_compute_pipeline_state enc pso;
   Me.ComputeCommandEncoder.set_buffer enc ~index:0 input;
@@ -183,7 +198,7 @@ let () =
     output_b_f <-@ 0.5
   in
   let run_one output =
-    let cb = command_buffer ~queue ~pso ~input ~output ~iterations_buf in
+    let cb = command_buffer ~queue ~pso ~input ~output ~iterations_buf () in
     let start = now () in
     Me.CommandBuffer.commit cb;
     Me.CommandBuffer.wait_until_completed cb;
@@ -250,11 +265,11 @@ let () =
   let sync_between () =
     set_iterations iterations;
     let start = now () in
-    let a = command_buffer ~queue ~pso ~input ~output:output_a ~iterations_buf in
+    let a = command_buffer ~queue ~pso ~input ~output:output_a ~iterations_buf () in
     Me.CommandBuffer.commit a;
     Me.CommandBuffer.wait_until_completed a;
     check_completed "sync-between first" a;
-    let b = command_buffer ~queue ~pso ~input ~output:output_b ~iterations_buf in
+    let b = command_buffer ~queue ~pso ~input ~output:output_b ~iterations_buf () in
     Me.CommandBuffer.commit b;
     Me.CommandBuffer.wait_until_completed b;
     check_completed "sync-between second" b;
@@ -262,8 +277,8 @@ let () =
   in
   let raw_queued () =
     set_iterations iterations;
-    let a = command_buffer ~queue ~pso ~input ~output:output_a ~iterations_buf in
-    let b = command_buffer ~queue ~pso ~input ~output:output_b ~iterations_buf in
+    let a = command_buffer ~queue ~pso ~input ~output:output_a ~iterations_buf () in
+    let b = command_buffer ~queue ~pso ~input ~output:output_b ~iterations_buf () in
     let start = now () in
     Me.CommandBuffer.commit a;
     Me.CommandBuffer.commit b;
@@ -274,14 +289,23 @@ let () =
     check_completed "raw-queued second" b;
     elapsed_ms start
   in
-  let event_chain () =
+  (* [~wait_before]: the wait encoded before the second kernel (the backend's shape) or after it
+     (the artifact). Both arms run the same buffers otherwise. *)
+  let event_chain_arm ~wait_before label () =
     set_iterations iterations;
     let event = Me.SharedEvent.on_device device in
     let one = Unsigned.ULLong.one in
     let two = Unsigned.ULLong.of_int 2 in
-    let a = command_buffer ~queue ~pso ~input ~output:output_a ~iterations_buf in
-    let b = command_buffer ~queue ~pso ~input ~output:output_b ~iterations_buf in
-    Me.CommandBuffer.encode_wait_for_event b (Me.SharedEvent.super event) one;
+    let a = command_buffer ~queue ~pso ~input ~output:output_a ~iterations_buf () in
+    let b =
+      if wait_before then
+        command_buffer ~wait:(event, one) ~queue ~pso ~input ~output:output_b ~iterations_buf ()
+      else begin
+        let b = command_buffer ~queue ~pso ~input ~output:output_b ~iterations_buf () in
+        Me.CommandBuffer.encode_wait_for_event b (Me.SharedEvent.super event) one;
+        b
+      end
+    in
     let start = now () in
     Me.CommandBuffer.commit a;
     commit_signal queue event one;
@@ -291,20 +315,28 @@ let () =
       Me.SharedEvent.wait_until_signaled_value event ~value:two ~timeout_ms:Unsigned.ULLong.max_int
     in
     if not completed then (
-      Printf.eprintf "event-chain final SharedEvent wait timed out\n";
+      Printf.eprintf "%s final SharedEvent wait timed out\n" label;
       exit 1);
     Me.CommandBuffer.wait_until_completed a;
     Me.CommandBuffer.wait_until_completed b;
-    check_completed "event-chain first" a;
-    check_completed "event-chain second" b;
+    check_completed (label ^ " first") a;
+    check_completed (label ^ " second") b;
     elapsed_ms start
   in
-  (* Warm every submission shape once, then rotate their measurement order across three passes. *)
+  let event_chain = event_chain_arm ~wait_before:true "event-chain" in
+  let wait_after_kernel = event_chain_arm ~wait_before:false "wait-after-kernel" in
+  (* Warm every submission shape once, then rotate their measurement order across the passes. *)
   ignore (sync_between ());
   ignore (raw_queued ());
   ignore (event_chain ());
+  ignore (wait_after_kernel ());
   let arms =
-    [ ("sync-between", sync_between); ("raw-queued", raw_queued); ("event-chain", event_chain) ]
+    [
+      ("sync-between", sync_between);
+      ("raw-queued", raw_queued);
+      ("event-chain", event_chain);
+      ("wait-after-kernel", wait_after_kernel);
+    ]
   in
   let rotate n values =
     let rec split i left = function
@@ -315,9 +347,9 @@ let () =
     let left, right = split n [] values in
     right @ left
   in
-  let samples = Hashtbl.create 3 in
+  let samples = Hashtbl.create 4 in
   List.iter (fun (label, _) -> Hashtbl.add samples label []) arms;
-  for pass = 0 to 2 do
+  for pass = 0 to 3 do
     List.iter
       (fun (label, run) ->
         let ms = run () in
@@ -330,10 +362,10 @@ let () =
     values.(Array.length values / 2)
   in
   let baseline = median (Hashtbl.find samples "sync-between") in
-  Printf.printf "%-14s %12s %10s\n" "submission" "two-kernel ms" "vs synced";
+  Printf.printf "%-18s %12s %10s\n" "submission" "two-kernel ms" "vs synced";
   List.iter
     (fun (label, _) ->
       let ms = median (Hashtbl.find samples label) in
-      Printf.printf "%-14s %12.3f %9.3fx\n" label ms (ms /. baseline))
+      Printf.printf "%-18s %12.3f %9.3fx\n" label ms (ms /. baseline))
     arms;
   Printf.printf "outputs: %.9g %.9g\n" !@output_a_f !@output_b_f

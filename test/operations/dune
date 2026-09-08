@@ -5151,3 +5151,16 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff changelog_unreleased_scan.expected changelog_unreleased_scan.actual)))
+
+; gh-ocannl-909: consecutive runs of one routine execute in order on every backend without host
+; synchronization between them -- an executed probe of the queue-ordering invariant each backend's
+; launch path claims (Metal's all-work signal, the CUDA/HIP stream FIFO, cc's synchronous run).
+
+(test
+ (name back_to_back_runs)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules back_to_back_runs)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test))
