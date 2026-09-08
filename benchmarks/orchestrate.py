@@ -1377,7 +1377,9 @@ def ambient_env_line(results, ambient=None):
     against the machine AND the configuration it was taken under. It is a fact about the SWEEP,
     not about a row, so `main` passes what it collected and a report says it even when every
     OCANNL cell failed and no row survives to carry it. A re-render of stored rows has no sweep
-    to ask and derives it from them instead.
+    to ask and derives it from them instead. Either way the rows are checked for agreement, with
+    each other and with a supplied value: a header that printed one environment over rows stamped
+    with another would misattribute the very measurements results.jsonl records correctly.
 
     Rendered as a JSON object, which is the only rendering that cannot be forged or collapsed by
     what an environment variable is allowed to contain (Codex P2 round 2): a value holding a
@@ -1390,8 +1392,17 @@ def ambient_env_line(results, ambient=None):
     carried the stamp, which is not the same thing -- nothing at report time can recover what the
     shell held at measurement time, so silence stays silence.
     """
+    # Unconditionally, not only when deriving: the sweep's own value is what the header would
+    # otherwise print over rows that disagree with it and with each other, leaving results.jsonl
+    # holding stamps the report contradicts (Codex P2 round 3).
+    recorded = recorded_ambient_env(results)
     if ambient is None:
-        ambient = recorded_ambient_env(results)
+        ambient = recorded
+    elif recorded is not None and recorded != ambient:
+        raise ValueError(
+            "the sweep's ambient OCANNL_* environment disagrees with what its rows recorded: "
+            f"{ambient!r} against {recorded!r}"
+        )
     if ambient is None:
         return "ambient OCANNL_* environment: not recorded"
     if not ambient:

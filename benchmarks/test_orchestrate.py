@@ -3155,6 +3155,40 @@ class AmbientEnvTest(unittest.TestCase):
 
         self.assertIn("not recorded", str(refused.exception))
 
+    def test_the_sweeps_own_value_does_not_excuse_the_rows_from_agreeing(self):
+        # The refusal is about what the artifacts SAY, so it cannot be gated on how the header
+        # got its value: a supplied environment printed over rows stamped with another would
+        # misattribute the measurements results.jsonl records correctly.
+        rows = [
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "cc", "default", [2.3026, 2.3010]), {"OCANNL_BACKEND": "cc"}
+            ),
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "metal", "default", [2.3026, 2.3010]),
+                {"OCANNL_BACKEND": "metal"},
+            ),
+        ]
+
+        with self.assertRaises(ValueError):
+            orchestrate.ambient_env_line(rows, {"OCANNL_BACKEND": "cc"})
+
+    def test_a_supplied_environment_its_rows_contradict_is_refused(self):
+        rows = [
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "cc", "default", [2.3026, 2.3010]), {"OCANNL_BACKEND": "cc"}
+            )
+        ]
+
+        with self.assertRaises(ValueError) as refused:
+            orchestrate.ambient_env_line(rows, {"OCANNL_BACKEND": "metal"})
+
+        self.assertIn("disagrees with what its rows recorded", str(refused.exception))
+        # The agreeing case is the sweep's own, and is not disturbed by the check.
+        self.assertIn(
+            '{"OCANNL_BACKEND": "cc"}',
+            orchestrate.ambient_env_line(rows, {"OCANNL_BACKEND": "cc"}),
+        )
+
     def test_the_unstamped_frameworks_are_not_a_lost_record(self):
         # Only OCANNL rows are in that agreement: torch and tinygrad rows carry no stamp by
         # design, and counting them would refuse every ordinary mixed-framework sweep.
