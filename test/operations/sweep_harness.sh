@@ -25,7 +25,7 @@ on_error() {
   for name in incremental forced slow_forced coverage hostile complete_fail \
     environment_executed partial_matrix singleton_fail repeated_backend_fail \
     repeated_backend_pass mixed_scope_fail mixed_scope_cleared historical_matrix \
-    local_identity_error unsafe_identity_error matrix_error state_first state_same \
+    local_identity_error unsafe_identity_error only_typo_error matrix_error state_first state_same \
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
     capped capped_target; do
     [ -n "${!name:-}" ] || continue
@@ -874,6 +874,19 @@ set -e
 [ "$unsafe_identity_error_rc" -eq 2 ]
 grep -q "^sweep: set OCANNL_TOOL_SWEEP_LOCAL_BOX to this host's portable measurement-box ID$" \
   <<<"$unsafe_identity_error"
+
+# An --only typo is refused, with the backends that would have been accepted:
+# a selector that matches nothing would otherwise record nothing and exit 0
+# (sweep.sh says so at the check). Every positive run of this harness goes
+# through `--only cc`, the first backend the table lists -- the exact value the
+# check once refused on the ubuntu CI leg (gh-ocannl-949) -- so this is the
+# negative half of that control, not a restatement of it.
+set +e
+only_typo_error=$(run_sweep_backend cudaa 2>&1)
+only_typo_error_rc=$?
+set -e
+[ "$only_typo_error_rc" -eq 2 ]
+grep -q "^sweep: unknown backend 'cudaa'; known: cc multidev_cc metal cuda hip" <<<"$only_typo_error"
 
 # A unit with a dune job cap -- the per-unit table names minix/hip, a unit this
 # harness cannot reach, so the run-wide override stands in -- compiles at full

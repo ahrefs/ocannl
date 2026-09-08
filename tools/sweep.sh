@@ -180,10 +180,28 @@ git -C "$MAIN" rev-parse --git-dir >/dev/null 2>&1 ||
 
 # An --only typo must not look like a clean sweep: without this, `--only cudaa`
 # selects nothing, records nothing, and exits 0 having tested nothing.
-known_backends=$(for u in "${UNITS[@]}"; do printf '%s\n' "$u" | cut -d: -f2; done)
+#
+# A pure-shell match over the unit table, deliberately not a `printf | grep -qx`
+# pipeline: that spelling once refused `cc` -- the FIRST backend listed -- on
+# the ubuntu CI leg while printing a list that visibly contained it
+# (gh-ocannl-949). Under `pipefail` a pipeline's verdict belongs to every
+# element, so the check answered for the writer's fate (a builtin in a pipeline
+# runs in a forked subshell) as well as the reader's match; a match that forks
+# nothing has no second party to answer for. The forked spelling was never
+# reproduced -- tens of thousands of iterations on bash 3.2, and a writer this
+# short cannot outlive the reader's single read (see the PR) -- so this is the
+# removal of a question, not the fix of a diagnosed bug.
+known_backend() {
+  local unit
+  for unit in "${UNITS[@]}"; do
+    case $unit in *:"$1":*) return 0 ;; esac
+  done
+  return 1
+}
+known_backends=$(for u in "${UNITS[@]}"; do b=${u#*:}; printf '%s\n' "${b%%:*}"; done)
 if [ ${#ONLY[@]} -gt 0 ]; then
   for b in "${ONLY[@]}"; do
-    printf '%s\n' "$known_backends" | grep -qx "$b" ||
+    known_backend "$b" ||
       die "unknown backend '$b'; known: $(printf '%s' "$known_backends" | tr '\n' ' ')"
   done
 fi
