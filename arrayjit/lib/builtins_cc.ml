@@ -497,14 +497,16 @@ float uint4x32_to_single_uniform(uint4x32_t x) {
       [ "uint4x32_t"; "uint32_to_single_uniform" ] );
     ( "uint4x32_to_half_uniform",
       {|
-/* Uint4x32 to float16 uniform - uses first 16 bits */
-uint16_t uint4x32_to_half_uniform(uint4x32_t x) {
+/* Uint4x32 to float16 uniform - uses first 16 bits. Returns the half STORAGE type: under native
+   fp16 that is _Float16, and a uint16_t return type would convert the value through an integer
+   (truncating every draw in [0, 1) to 0) and hand an integer to the half FMA builtin. */
+HALF_T uint4x32_to_half_uniform(uint4x32_t x) {
     /* Convert through float for consistent behavior */
     float f = (x.v[0] & 0xFFFF) * (1.0f / 65536.0f);
     return FLOAT_TO_HALF(f);
 }
 |},
-      [ "uint4x32_t"; "FLOAT_TO_HALF" ] );
+      [ "uint4x32_t"; "HALF_T"; "FLOAT_TO_HALF" ] );
     ( "uint4x32_to_half_uniform_vec",
       {|
 /* Convert uint4x32 to 8 float16s uniform */

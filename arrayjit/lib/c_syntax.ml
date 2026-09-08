@@ -201,14 +201,16 @@ let with_census f =
    subscripts, no foreign store — so a test classifying the emitted code passes over either, whether
    or not the code path it is named for ran.
 
-   Collected exactly where the decision is made, in [try_localize_serial_reduce], and only at sites
-   where localization is a live question ([Low_level.has_accumulating_cell] of the level's body — a
-   [Set] reading the very cell it writes): a loop with no such recurrence was never a candidate, and
-   censusing it would bury the reductions in noise. Not [has_accumulation], which counts every
-   [Local_scope] conservatively and so records an ordinary virtualized computation inside a loop as
-   a declined reduction site. The refs are bracketed by {!with_peel_census}, which
-   {!Context.compile} calls around every routine's codegen, so the summary is a field of the
-   compiled routine rather than something a caller must remember to collect. *)
+   Collected exactly where the decision is consumed — [try_localize_serial_reduce],
+   [try_warp_reduce] and [try_vectorize_reduce], which all take it from the one [decide_accum_width]
+   call of their level (gh-ocannl-754) — and only at sites where localization is a live question
+   ([Low_level.has_accumulating_cell] of the level's body — a [Set] reading the very cell it
+   writes): a loop with no such recurrence was never a candidate, and censusing it would bury the
+   reductions in noise. Not [has_accumulation], which counts every [Local_scope] conservatively and
+   so records an ordinary virtualized computation inside a loop as a declined reduction site. The
+   refs are bracketed by {!with_peel_census}, which {!Context.compile} calls around every routine's
+   codegen, so the summary is a field of the compiled routine rather than something a caller must
+   remember to collect. *)
 
 type peel_skip =
   | Skip_debug_logging
@@ -233,8 +235,18 @@ type peel_verdict = {
 
 type peel_site =
   | Peel_localized of peel_verdict  (** The site localized, deciding this. *)
+  | Peel_ceded of peel_verdict
+      (** The width decision reached a base the serial rendering would have localized, deciding this
+          — and the site rendered a form that holds the accumulator at that same residency somewhere
+          other than a minted scope: the warp-shuffle tree or the SIMD accumulator grid
+          (gh-ocannl-754). Not {!Peel_localized}, since no scope was minted; not a skip, since the
+          width question was asked and answered wide. A test can therefore pin that the shuffle or
+          the grid took its width from the one shared decision rather than from a recognizer of its
+          own. *)
   | Peel_refused of Low_level.peel_refusal  (** [Low_level.peel_accum_nest] refused, with why. *)
-  | Peel_not_attempted of peel_skip  (** Codegen declined without asking the peel, or after it. *)
+  | Peel_not_attempted of peel_skip
+      (** The peel reached a base, and localization was not attempted, for this reason. Every
+          rendering of the level then keeps the accumulator at storage width (gh-ocannl-754). *)
 [@@deriving sexp, equal, compare]
 
 let peel_census_enabled = ref false
@@ -242,21 +254,67 @@ let peel_census : (string * peel_site) list ref = ref []
 
 let is_localized_peel = function
   | Peel_localized _ -> true
-  | Peel_refused _ | Peel_not_attempted _ -> false
+  | Peel_ceded _ | Peel_refused _ | Peel_not_attempted _ -> false
 
 type peel_summary = {
   sites : (string * peel_site) list;
       (** The census entries of one compile, in emission order (kernel name, site). Fissioned
           segments of one routine contribute their kernels to the same summary. *)
   localized : int;
-  declined : int;  (** Sites that did not localize, refused and not-attempted together. *)
+  ceded : int;
+      (** Sites whose width decision was wide and whose rendering held the accumulator outside a
+          scope (gh-ocannl-754). *)
+  declined : int;  (** Sites that did not localize or cede, refused and not-attempted together. *)
 }
 [@@deriving sexp_of]
 (** What a compile's {!peel_census} says about the routine it produced (gh-ocannl-733). *)
 
 let summarize_peel_census sites =
   let localized = List.count sites ~f:(fun (_, s) -> is_localized_peel s) in
-  { sites; localized; declined = List.length sites - localized }
+  let ceded =
+    List.count sites ~f:(fun (_, s) -> match s with Peel_ceded _ -> true | _ -> false)
+  in
+  { sites; localized; ceded; declined = List.length sites - localized - ceded }
+
+(** How the accumulator of one reduction level is held — decided ONCE, and consumed by every
+    rendering of that level (gh-ocannl-754). A [Workgroup_reduce] level renders as the warp-shuffle
+    tree, a [Vectorized] level as the SIMD accumulator grid, and every kind falls back through the
+    localizing serial form; each of the three holds the accumulator somewhere other than its storage
+    cell, and until this decision existed each recognized the accumulation through an analysis of
+    its own — the shuffle and the grid through a single-statement recognizer, the serial form
+    through {!Low_level.peel_accum_nest} plus the storage-pinning carve-out. Wherever the two
+    disagreed on a body, a retype changed the accumulation WIDTH and so the value (gh-ocannl-639 on
+    [Unrolled], gh-ocannl-682 on RNG-bearing shuffles). Now the peel and the carve-out are asked
+    here, once, and a rendering that holds the accumulator wide may do so exactly where the serial
+    form localizes. *)
+type accum_width =
+  | Accum_not_a_nest of Low_level.peel_refusal
+      (** {!Low_level.peel_accum_nest} reached no accumulation base under the level. *)
+  | Accum_base of {
+      tn : Tnode.t;
+      idcs : Indexing.axis_index array;
+      base : [ `Update of Low_level.scalar_t | `Scope of Low_level.scope_id * Low_level.t list ];
+      debug : string;
+      rebuild : Low_level.t -> Low_level.t;
+      verdict : peel_verdict;
+          (** What the peel decided, the level being rendered counted in ([levels >= 1]). *)
+      pinned : peel_skip option;
+          (** [Some why]: the serial rendering keeps the accumulator in its storage cell, narrowing
+              every step, so no rendering may hold it wider. [None]: the serial rendering localizes
+              it at the residency, and so may any other. *)
+    }
+
+type statement_accum = {
+  sa_tn : Tnode.t;
+  sa_idcs : Indexing.axis_index array;
+  sa_op : Ops.binop;
+  sa_contrib : Low_level.scalar_t;
+  sa_verdict : peel_verdict;
+  sa_pinned : peel_skip option;
+}
+(** The base of an {!accum_width} that is a single accumulation STATEMENT at the level itself —
+    [acc[idcs] = op(acc[idcs], contrib)] or its FMA form, no level or guard between — which is the
+    shape the warp-shuffle and SIMD renderings can render. *)
 
 let empty_peel_summary = summarize_peel_census []
 
@@ -274,8 +332,8 @@ let peel_summary_string summary =
               (Sexp.to_string (sexp_of_peel_site s))
               (List.count sites ~f:(fun (_, s') -> equal_peel_site s s')))
       in
-      Printf.sprintf "%d localized, %d declined: %s" summary.localized summary.declined
-        (String.concat ~sep:", " counted)
+      Printf.sprintf "%d localized, %d ceded, %d declined: %s" summary.localized summary.ceded
+        summary.declined (String.concat ~sep:", " counted)
 
 (** Run [f] with the {!peel_census} collecting, and return its result alongside the summary of what
     the reduction peel decided during it (gh-ocannl-733). Nests additively and restores both refs,
@@ -1894,8 +1952,9 @@ module C_syntax (B : C_syntax_config) = struct
         false
 
   (* gh-ocannl-682: whether a recognized accumulation's contribution pins its accumulator to the
-     target's STORAGE precision. Both renderings of such a body consult this one predicate, so the
-     two cannot drift apart on which bodies get the wide accumulator.
+     target's STORAGE precision. One of the declines of the accumulator-width decision every
+     rendering of a reduction level consumes ([decide_accum_width], gh-ocannl-754), so no rendering
+     can drift on which bodies get the wide accumulator.
 
      An RNG conversion picks both its result type and which random bits it consumes from the
      precision it renders at (gh-ocannl-517), so [try_localize_serial_reduce] declines to localize
@@ -4077,20 +4136,133 @@ module C_syntax (B : C_syntax_config) = struct
             | Low_level.Noop | Comment _ -> false
             | _ -> true)
         in
-        (* A body that is a single accumulation statement [acc[idcs] = op(acc[idcs], contrib)] (or
-           its FMA form [acc = FMA(a, b, acc)]) where [idcs] does not mention the loop index (more
-           generally: any index in [free_of], for recognizing whole nests) and [op] is an
-           associative-commutative reduction — such a body IS the loop's serial meaning. Recognized
-           by the warp-shuffle rendering of [Workgroup_reduce] loops (gh-ocannl-462), by the SIMD
-           reduction rendering of [Vectorized] loops (gh-ocannl-468), and by the widened serial
-           fallback of reduction nests (gh-ocannl-639). *)
-        let recognize_accumulation ?(free_of = [ i ]) stmts =
-          match stmts with
-          | [ Low_level.Set { tn; idcs; llsc; _ } ]
-            when not (Array.exists idcs ~f:(Indexing.axis_index_mentions_any free_of)) ->
+        (* --- The accumulator-width decision of this level (gh-ocannl-754), shared by the
+           warp-shuffle ([Workgroup_reduce]), SIMD-grid ([Vectorized]) and localizing-serial
+           renderings below. ONE analysis: {!Low_level.peel_accum_nest} over the level's body, then
+           the declines the serial rendering applies to the base it reaches. A rendering that holds
+           the accumulator at the residency across the level may do so exactly where this says the
+           serial rendering localizes ([pinned = None]), and must keep the storage cell's width
+           where it says the serial rendering declines. The previous arrangement — a
+           single-statement recognizer for the shuffle and the grid, the peel for the serial form,
+           and one shared predicate patching the one disagreement that had been noticed — kept the
+           two agreeing by maintenance; deriving the shuffle's and the grid's answer from the same
+           call makes the agreement structural. *)
+        (* A hardware-annotated reduction loop this backend serializes (no hardware index for its
+           slot) is a serial level like any other — without this, retyping an INNER reduction axis
+           to [Workgroup_reduce] on cc would stop the peel and narrow the accumulator once per
+           remaining outer iteration. *)
+        let serialized_hardware index = function
+          | Low_level.Workgroup_reduce -> (
+              match
+                List.find !current_hardware_axes ~f:(fun a ->
+                    Indexing.equal_symbol a.Low_level.ha_index index)
+              with
+              | Some a -> Option.is_none (B.hardware_index ~kind:`Workgroup ~slot:a.ha_slot)
+              | None -> false)
+          | _ -> false
+        in
+        (* The peel census (gh-ocannl-733) records what this site DECIDED, not merely what it
+           rendered. Only accumulating levels are censused: elsewhere localization was never a
+           question, and the entries would drown the reductions. *)
+        let censusing = !peel_census_enabled && Low_level.has_accumulating_cell body in
+        let record site =
+          if censusing then peel_census := (!current_kernel_name, site) :: !peel_census
+        in
+        (* The localized rendering re-renders the peeled levels INSIDE the scope it just minted, and
+           those re-visits refuse (the base is a [Set_local] by then) — censusing them would report
+           refusals for levels that localized. Collection is suspended for the recursive render, and
+           nothing genuine hides behind that: the peel descends single-statement levels down to the
+           accumulation base, so the scope body holds no other site. *)
+        let without_census f =
+          let saved = !peel_census_enabled in
+          peel_census_enabled := false;
+          Exn.protect ~f ~finally:(fun () -> peel_census_enabled := saved)
+        in
+        (* [?body]: the warp-shuffle rendering asks about the body with its synthetic launch guard
+           stripped, which is vacuous with respect to the level's own iteration space. *)
+        let decide_accum_width ?(body = body) () : accum_width =
+          let report = ref None in
+          match
+            Low_level.peel_accum_nest ~extra_level:serialized_hardware
+              ~report:(fun r -> report := Some r)
+              ~loop_bounds:!current_loop_bounds ~free_of:[ i ] body
+          with
+          | None ->
+              Accum_not_a_nest
+                (match !report with
+                | Some { Low_level.refusal = Some refusal; _ } -> refusal
+                | _ ->
+                    (* [peel_accum_nest] reports exactly once, and a [None] result carries a
+                       refusal; this arm exists only so the census cannot invent a verdict. *)
+                    Low_level.Refused_not_a_nest)
+          | Some (tn, idcs, base, debug, rebuild) ->
+              let verdict =
+                match !report with
+                | Some { Low_level.levels; guards; refusal = _ } ->
+                    (* [+ 1]: the peel is asked of this level's BODY, so a scope spans one more
+                       level than it reports — the one being rendered here. *)
+                    { levels = levels + 1; guards }
+                | None -> { levels = 1; guards = [] }
+              in
+              (* The declines, in the order the serial rendering has always applied them. Under
+                 [debug_log_from_routines] the per-step [Set] form is kept — a [Local_scope] body
+                 renders with [log_set_locals:false], so a rewrite would silence the per-iteration
+                 trace (the SIMD and shuffle renderings refuse under logging for the same reason). A
+                 dead level ([to_ < from_]) performs no accesses; see [peel_accum_nest]'s refusal,
+                 which covers the levels BELOW this one — this is the same refusal for the level
+                 being rendered, whose bounds the peel never sees. And the storage-pinned base
+                 ([accum_pinned_to_storage_prec]): an update mentioning an RNG conversion renders at
+                 the storage precision, so localizing it would change the draw, not merely move it —
+                 the serial rendering accumulates it in the narrow cell, narrowing every iteration,
+                 and every other rendering must do the same or change the width (gh-ocannl-682). *)
+              let pinned =
+                if Utils.debug_log_from_routines () then Some Skip_debug_logging
+                else if to_ < from_ then Some Skip_dead_level
+                else
+                  match base with
+                  | `Update llsc when accum_pinned_to_storage_prec llsc -> Some Skip_accum_pinned
+                  | `Update _ | `Scope _ -> None
+              in
+              Accum_base { tn; idcs; base; debug; rebuild; verdict; pinned }
+        in
+        (* The single accumulation statement at THIS level, as the warp-shuffle and SIMD renderings
+           need it: the peel reached a raw update with no level or guard in between. *)
+        let statement_accumulation (decision : accum_width) : statement_accum option =
+          match decision with
+          | Accum_base
+              {
+                tn;
+                idcs;
+                base = `Update llsc;
+                verdict = { levels = 1; guards = [] } as verdict;
+                pinned;
+                _;
+              } ->
               Option.map (Low_level.accum_update_parts ~tn ~idcs llsc) ~f:(fun (op, contrib) ->
-                  (tn, idcs, op, contrib))
-          | _ -> None
+                  {
+                    sa_tn = tn;
+                    sa_idcs = idcs;
+                    sa_op = op;
+                    sa_contrib = contrib;
+                    sa_verdict = verdict;
+                    sa_pinned = pinned;
+                  })
+          | Accum_base _ | Accum_not_a_nest _ -> None
+        in
+        (* Whether a rendering that holds a statement's accumulator at the residency may take it
+           even though the decision pinned it to storage: only where the residency IS the storage
+           width, so there is no width to change — at f32/f64 storage, and on every backend that
+           does not widen this precision, an RNG-bearing reduction shuffles or vectorizes exactly as
+           it did before gh-ocannl-682. *)
+        let residency_is_storage tn =
+          let store_prec = Lazy.force tn.Tn.storage_prec in
+          Ops.equal_prec (acc_prec store_prec) store_prec
+        in
+        (* What a rendering that took the statement records: the width DECISION, not the form. *)
+        let width_site (sa : statement_accum) =
+          match sa.sa_pinned with
+          | None -> Peel_ceded sa.sa_verdict
+          | Some skip -> Peel_not_attempted skip
         in
         (* Eligibility bail-out of the explicit-SIMD renderings ([try_vectorize] /
            [try_vectorize_reduce]) back to the pragma/serial fallbacks. *)
@@ -4436,14 +4608,25 @@ module C_syntax (B : C_syntax_config) = struct
                [Local_scope], its update is a [Set_local] — recognizing it here is what lets a
                vectorized inner reduction axis keep the whole nest's compute-precision residency,
                its chains folding into the local with no storage round-trip at all). *)
-            let acc_target, op, contrib =
-              match recognize_accumulation (nonempty_stmts body) with
-              | Some (tn, idcs, op, contrib) -> (`Cell (tn, idcs), op, contrib)
+            let acc_target, op, contrib, decided =
+              match statement_accumulation (decide_accum_width ()) with
+              | Some sa ->
+                  (* gh-ocannl-754: the chains hold the accumulator across the level, so the grid
+                     may take the statement only where the shared decision lets the serial rendering
+                     localize it — or where the residency is the storage width and the decline
+                     changes nothing. A pinned body at a wider residency (an RNG-bearing
+                     contribution on a widening backend) bails to the serial fallback, which keeps
+                     the per-step narrowing the pin asks for. *)
+                  (match sa.sa_pinned with
+                  | None -> ()
+                  | Some Skip_accum_pinned -> if not (residency_is_storage sa.sa_tn) then raise Bail
+                  | Some (Skip_debug_logging | Skip_dead_level) -> raise Bail);
+                  (`Cell (sa.sa_tn, sa.sa_idcs), sa.sa_op, sa.sa_contrib, Some sa)
               | None -> (
                   match nonempty_stmts body with
                   | [ Low_level.Set_local (id, llsc) ] -> (
                       match Low_level.accum_local_update_parts ~id llsc with
-                      | Some (op, contrib) -> (`Local id, op, contrib)
+                      | Some (op, contrib) -> (`Local id, op, contrib, None)
                       | None -> raise Bail)
                   | _ -> raise Bail)
             in
@@ -4616,6 +4799,10 @@ module C_syntax (B : C_syntax_config) = struct
                   ^^ semi
             in
             let it = B.loop_index_type in
+            (* Past every bail-out: the grid renders, and the census says which decision it took its
+               width from. A scope-local target sits inside a scope that was censused when it was
+               minted, so it records nothing here. *)
+            Option.iter decided ~f:(fun sa -> record (width_site sa));
             Some
               (string
                  (Printf.sprintf
@@ -4684,15 +4871,33 @@ module C_syntax (B : C_syntax_config) = struct
                   nonempty_stmts guarded
               | _ -> stmts
             in
-            match recognize_accumulation stmts with
-            | None -> None
-            | Some (tn, idcs, op, contrib) ->
-                let fail msg =
-                  invalid_arg
-                    ("C_syntax.pp_ll: Workgroup_reduce loop " ^ symbol_ident i
-                   ^ " is a recognized accumulation, but the warp-shuffle rendering requires " ^ msg
-                   ^ " (a plain hardware binding would race the accumulator update)")
-                in
+            let fail msg =
+              invalid_arg
+                ("C_syntax.pp_ll: Workgroup_reduce loop " ^ symbol_ident i
+               ^ " is a recognized accumulation, but the warp-shuffle rendering requires " ^ msg
+               ^ " (a plain hardware binding would race the accumulator update)")
+            in
+            let decision = decide_accum_width ~body:(Low_level.unflat_lines stmts) () in
+            match statement_accumulation decision with
+            | None -> (
+                match decision with
+                | Accum_base { verdict = { guards = []; _ }; _ } ->
+                    (* The shared decision found an accumulation into a cell every lane shares — a
+                       nest of levels below this one, or a schedule-minted scope — with no guard
+                       selecting among the lanes. The shuffle cannot render it, and binding the
+                       index would have every lane read-modify-write the one cell; before
+                       gh-ocannl-754 this fell through to that binding silently. *)
+                    fail
+                      "a single accumulation statement as its body: the accumulation found under \
+                       this level (a nest of inner levels, or a schedule-minted scope) is one the \
+                       shuffle cannot render, and it is unguarded, so every lane would update the \
+                       same cell"
+                | Accum_base _ | Accum_not_a_nest _ ->
+                    (* Not an accumulation the shuffle owns: an explicitly staged tree (whose
+                       lane-selecting guards and per-lane cells keep it out of the peel), or a
+                       per-lane update. The hardware binding is its correct rendering. *)
+                    None)
+            | Some ({ sa_tn = tn; sa_idcs = idcs; sa_op = op; sa_contrib = contrib; _ } as sa) ->
                 let warp = B.warp_size in
                 assert (warp > 1 && Int.is_pow2 warp);
                 let extent = to_ - from_ + 1 in
@@ -4717,20 +4922,25 @@ module C_syntax (B : C_syntax_config) = struct
                          "a single- or double-precision accumulator residency (accum_prec resolves \
                           %s storage to %s)"
                          (Ops.prec_string store_prec) (Ops.prec_string prec)));
-                (* Only where the residency is actually wider: at f32/f64 storage the two coincide,
-                   and an RNG-bearing reduction shuffles exactly as it did before gh-ocannl-682. *)
-                if (not (Ops.equal_prec prec store_prec)) && accum_pinned_to_storage_prec contrib
-                then
-                  fail
-                    (Printf.sprintf
-                       "a contribution free of RNG conversions when the accumulator residency (%s) \
-                        is wider than storage (%s): the serial rendering of an RNG-bearing \
-                        accumulation declines localization and narrows its accumulator every \
-                        iteration, so shuffling this one at the residency would change the \
-                        accumulation width rather than only its association"
-                       (Ops.prec_string prec) (Ops.prec_string store_prec));
-                if Utils.debug_log_from_routines () then
-                  fail "debug_log_from_routines to be disabled";
+                (* gh-ocannl-754: the shuffle may widen only where the serial rendering widens, and
+                   the shared decision is what says so. A storage-pinned statement (an RNG-bearing
+                   contribution, gh-ocannl-682) is refused only where the residency is actually
+                   wider: at f32/f64 storage the two coincide, and such a reduction shuffles exactly
+                   as it did before gh-ocannl-682. *)
+                (match sa.sa_pinned with
+                | None -> ()
+                | Some Skip_debug_logging -> fail "debug_log_from_routines to be disabled"
+                | Some Skip_dead_level -> fail "a live extent (the level is dead: to_ < from_)"
+                | Some Skip_accum_pinned ->
+                    if not (residency_is_storage tn) then
+                      fail
+                        (Printf.sprintf
+                           "a contribution free of RNG conversions when the accumulator residency \
+                            (%s) is wider than storage (%s): the serial rendering of an \
+                            RNG-bearing accumulation declines localization and narrows its \
+                            accumulator every iteration, so shuffling this one at the residency \
+                            would change the accumulation width rather than only its association"
+                           (Ops.prec_string prec) (Ops.prec_string store_prec)));
                 if extent % warp <> 0 then
                   fail
                     (Printf.sprintf "the extent (%d) to be a multiple of the warp size (%d)" extent
@@ -4850,6 +5060,9 @@ module C_syntax (B : C_syntax_config) = struct
                   ^^ pp_symbol i
                   ^^ string (" = " ^ cast ^ reg ^ ";")
                 in
+                (* Past every refusal: the tree renders, and the census says which decision it took
+                   its width from. *)
+                record (width_site sa);
                 Some
                   (string
                      (Printf.sprintf
@@ -4915,161 +5128,93 @@ module C_syntax (B : C_syntax_config) = struct
            confined volatile pointer casts. Where the peel is blocked at an outer level, the
            device-memory RMW remains and its reads receive the same expression-level cast. *)
         let try_localize_serial_reduce () : PPrint.document option =
-          (* The peel census (gh-ocannl-733) records what this site DECIDED, not merely what it
-             rendered. Only accumulating levels are censused: elsewhere localization was never a
-             question, and the entries would drown the reductions. *)
-          let censusing = !peel_census_enabled && Low_level.has_accumulating_cell body in
-          let record site =
-            if censusing then peel_census := (!current_kernel_name, site) :: !peel_census
-          in
-          (* The localized rendering re-renders the peeled levels INSIDE the scope it just minted,
-             and those re-visits refuse (the base is a [Set_local] by then) — censusing them would
-             report refusals for levels that localized. Collection is suspended for the recursive
-             render, and nothing genuine hides behind that: the peel descends single-statement
-             levels down to the accumulation base, so the scope body holds no other site. *)
-          let without_census f =
-            let saved = !peel_census_enabled in
-            peel_census_enabled := false;
-            Exn.protect ~f ~finally:(fun () -> peel_census_enabled := saved)
-          in
-          (* A dead level ([to_ < from_]) performs no accesses; see [peel_accum_nest]'s refusal,
-             which covers the levels BELOW this one. This is the same refusal for the level being
-             rendered, whose bounds the peel never sees (the caller re-wraps it via
-             [rebuild_hook]). *)
-          if Utils.debug_log_from_routines () then begin
-            record (Peel_not_attempted Skip_debug_logging);
-            None
-          end
-          else if to_ < from_ then begin
-            record (Peel_not_attempted Skip_dead_level);
-            None
-          end
-          else
-            let localize (tn, idcs, base, debug, rebuild) =
-              match base with
-              (* The narrow-accumulator half of [accum_pinned_to_storage_prec]: declining to
-                 localize leaves the accumulation in the storage cell, narrowing every iteration.
-                 The warp-shuffle rendering refuses the same bodies rather than widening them. *)
-              | `Update llsc when accum_pinned_to_storage_prec llsc -> None
-              | _ ->
-                  let id, update_code =
-                    match base with
-                    | `Update llsc ->
-                        let id = Low_level.get_scope tn in
-                        (* Codegen-minted, so the census over [B.procs] never saw it: register the
-                           scope as an accumulator or [scope_prec_of] would resolve it at
-                           [comp_prec] and defeat the widening on the backends where the two differ
-                           (gh-ocannl-663). Fresh ids per mint, so no collision with a censused
-                           verdict. *)
-                        Hash_set.add accum_scope_ids id.Low_level.scope_id;
-                        (id, Low_level.Set_local (id, Low_level.subst_accum_read ~tn ~idcs ~id llsc))
-                    | `Scope (id, rest) ->
-                        (* The scope-form base [Sched.Unroll ~materialize:true] minted (or a
-                           previous level of this very rewrite): hoist it through the enclosing
-                           reduction levels by moving its init above them and keeping its updates
-                           inside — otherwise a partially materialized nest would store and narrow
-                           the accumulator once per remaining outer iteration. The scope id is
-                           reused, so the rng census's storage-precision marking still applies; at
-                           storage precision the hoist is value-neutral. *)
-                        (id, Low_level.unflat_lines rest)
+          (* The decision is the shared one above (gh-ocannl-754); this arm only renders what it
+             says and records it. *)
+          match decide_accum_width () with
+          | Accum_not_a_nest refusal ->
+              record (Peel_refused refusal);
+              None
+          | Accum_base { pinned = Some skip; _ } ->
+              (* The peel reached a base and the decision declined it — under logging, at a dead
+                 level, or the storage-pinned accumulator. A census that recorded the peel's success
+                 here would credit the site with a rewrite the kernel does not contain. *)
+              record (Peel_not_attempted skip);
+              None
+          | Accum_base { tn; idcs; base; debug; rebuild; verdict; pinned = None } ->
+              let doc =
+                let id, update_code =
+                  match base with
+                  | `Update llsc ->
+                      let id = Low_level.get_scope tn in
+                      (* Codegen-minted, so the census over [B.procs] never saw it: register the
+                         scope as an accumulator or [scope_prec_of] would resolve it at [comp_prec]
+                         and defeat the widening on the backends where the two differ
+                         (gh-ocannl-663). Fresh ids per mint, so no collision with a censused
+                         verdict. *)
+                      Hash_set.add accum_scope_ids id.Low_level.scope_id;
+                      (id, Low_level.Set_local (id, Low_level.subst_accum_read ~tn ~idcs ~id llsc))
+                  | `Scope (id, rest) ->
+                      (* The scope-form base [Sched.Unroll ~materialize:true] minted (or a previous
+                         level of this very rewrite): hoist it through the enclosing reduction
+                         levels by moving its init above them and keeping its updates inside —
+                         otherwise a partially materialized nest would store and narrow the
+                         accumulator once per remaining outer iteration. The scope id is reused, so
+                         the rng census's storage-precision marking still applies; at storage
+                         precision the hoist is value-neutral. *)
+                      (id, Low_level.unflat_lines rest)
+                in
+                (* The level being rendered is re-wrapped around the rebuilt nest here; the peel
+                   never saw its bounds, which is why the dead-level decline is the decision's and
+                   not the peel's. *)
+                let rebuild_hook b = Low_level.For_loop { index = i; from_; to_; body = b; axis } in
+                let rec loop_symbols = function
+                  | Low_level.For_loop { index; body; _ } -> index :: loop_symbols body
+                  | If { body; _ } -> loop_symbols body
+                  | Seq (left, right) -> loop_symbols left @ loop_symbols right
+                  | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_local _
+                  | Set_dynamic _ | Set_from_vec _ | Declare_local _ | Workgroup_barrier
+                  | Tile_mma _ ->
+                      []
+                in
+                let localized_symbols = i :: loop_symbols (rebuild Low_level.Noop) in
+                let scope_body =
+                  let opening =
+                    match !current_localized_zero_seed with
+                    | Some seed
+                      when Tn.equal seed.lzs_tn tn
+                           && Array.equal Indexing.equal_axis_index seed.lzs_idcs idcs ->
+                        if
+                          List.for_all seed.lzs_repeated ~f:(fun repeated ->
+                              List.mem localized_symbols repeated ~equal:Indexing.equal_symbol)
+                        then begin
+                          seed.lzs_consumed <- true;
+                          Low_level.Constant 0.0
+                        end
+                        else Low_level.Get (tn, idcs)
+                    | _ -> Low_level.Get (tn, idcs)
                   in
-                  let rebuild_hook b =
-                    Low_level.For_loop { index = i; from_; to_; body = b; axis }
-                  in
-                  let rec loop_symbols = function
-                    | Low_level.For_loop { index; body; _ } -> index :: loop_symbols body
-                    | If { body; _ } -> loop_symbols body
-                    | Seq (left, right) -> loop_symbols left @ loop_symbols right
-                    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_local _
-                    | Set_dynamic _ | Set_from_vec _ | Declare_local _ | Workgroup_barrier
-                    | Tile_mma _ ->
-                        []
-                  in
-                  let localized_symbols = i :: loop_symbols (rebuild Low_level.Noop) in
-                  let scope_body =
-                    let opening =
-                      match !current_localized_zero_seed with
-                      | Some seed
-                        when Tn.equal seed.lzs_tn tn
-                             && Array.equal Indexing.equal_axis_index seed.lzs_idcs idcs ->
-                          if
-                            List.for_all seed.lzs_repeated ~f:(fun repeated ->
-                                List.mem localized_symbols repeated ~equal:Indexing.equal_symbol)
-                          then begin
-                            seed.lzs_consumed <- true;
-                            Low_level.Constant 0.0
-                          end
-                          else Low_level.Get (tn, idcs)
-                      | _ -> Low_level.Get (tn, idcs)
-                    in
-                    Low_level.Seq
-                      (Low_level.Set_local (id, opening), rebuild_hook (rebuild update_code))
-                  in
-                  Some
-                    (without_census (fun () ->
-                         pp_ll ~log_set_locals ~in_loop
-                           (Low_level.Set
-                              {
-                                tn;
-                                idcs;
-                                llsc =
-                                  Local_scope
-                                    {
-                                      id;
-                                      body = scope_body;
-                                      orig_indices = idcs;
-                                      mint = Schedule_minted;
-                                    };
-                                debug;
-                              })))
-            in
-            (* A hardware-annotated reduction loop this backend serializes (no hardware index for
-               its slot) is a serial level like any other — without this, retyping an INNER
-               reduction axis to [Workgroup_reduce] on cc would stop the peel and narrow the
-               accumulator once per remaining outer iteration. *)
-            let serialized_hardware index = function
-              | Low_level.Workgroup_reduce -> (
-                  match
-                    List.find !current_hardware_axes ~f:(fun a ->
-                        Indexing.equal_symbol a.Low_level.ha_index index)
-                  with
-                  | Some a -> Option.is_none (B.hardware_index ~kind:`Workgroup ~slot:a.ha_slot)
-                  | None -> false)
-              | _ -> false
-            in
-            let report = ref None in
-            let peeled =
-              Low_level.peel_accum_nest ~extra_level:serialized_hardware
-                ~report:(fun r -> report := Some r)
-                ~loop_bounds:!current_loop_bounds ~free_of:[ i ] body
-            in
-            match peeled with
-            | None ->
-                record
-                  (match !report with
-                  | Some { Low_level.refusal = Some refusal; _ } -> Peel_refused refusal
-                  | _ ->
-                      (* [peel_accum_nest] reports exactly once, and a [None] result carries a
-                         refusal; this arm exists only so the census cannot invent a verdict. *)
-                      Peel_refused Low_level.Refused_not_a_nest);
-                None
-            | Some peeled -> (
-                match localize peeled with
-                | None ->
-                    (* The peel reached a base and the LOCALIZATION declined it: the storage-pinned
-                       accumulator. A census that recorded the peel's success here would credit the
-                       site with a rewrite the kernel does not contain. *)
-                    record (Peel_not_attempted Skip_accum_pinned);
-                    None
-                | Some doc ->
-                    record
-                      (match !report with
-                      | Some { Low_level.levels; guards; refusal = _ } ->
-                          (* [+ 1]: the peel is asked of this level's BODY, so the scope spans one
-                             more level than it reports — the one being rendered here. *)
-                          Peel_localized { levels = levels + 1; guards }
-                      | None -> Peel_localized { levels = 1; guards = [] });
-                    Some doc)
+                  Low_level.Seq
+                    (Low_level.Set_local (id, opening), rebuild_hook (rebuild update_code))
+                in
+                without_census (fun () ->
+                    pp_ll ~log_set_locals ~in_loop
+                      (Low_level.Set
+                         {
+                           tn;
+                           idcs;
+                           llsc =
+                             Local_scope
+                               {
+                                 id;
+                                 body = scope_body;
+                                 orig_indices = idcs;
+                                 mint = Schedule_minted;
+                               };
+                           debug;
+                         }))
+              in
+              record (Peel_localized verdict);
+              Some doc
         in
         let localize_or_serial () =
           match try_localize_serial_reduce () with Some doc -> doc | None -> serial_loop ()
