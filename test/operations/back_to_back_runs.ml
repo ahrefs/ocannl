@@ -3,20 +3,24 @@
    link time, so back-to-back runs of the SAME routine — every training step, every
    [Train.sequential_loop] iteration — are ordered by the backend's queue semantics alone: FIFO on a
    CUDA/HIP stream, synchronous on cc, and on Metal by the wait each launch encodes for the previous
-   all-work signal. The standalone probe of gh-ocannl-828 (`benchmarks/runners/ocannl/
-   metal_queue_probe.ml`) reproduced that signal/wait shape against the Metal bindings alone and saw
-   the two command buffers overlap, contradicting the backend's comment — a same-buffer race, since
-   repeated runs reuse the same pools.
+   all-work signal BEFORE its compute pass ([Metal_backend.encode_wait_for_enqueued]).
 
-   This is the executed form of that invariant: a routine that reads a counter FIRST, spins long
-   enough that a run started before the previous one finished would still read the stale value, then
-   writes the counter back incremented. [runs] such runs with no sync between them must leave the
-   counter at [runs]; an overlapping pair loses at least one increment. The increment is exact by
-   construction: [outer * m] FMA steps of [1/(outer * m)] over a device-resident [ones] operand, so
-   the compiler cannot fold the spin (it cannot know [ones] holds ones) and every partial sum is a
-   dyadic rational the accumulator holds exactly up to the run count here. The read is data-bound to
-   the first step ([acc = counter; acc = fma(acc, ones[i], steps[i])]), so no compiler can sink the
-   load below the spin. *)
+   The issue was filed because the standalone probe of gh-ocannl-828
+   (`benchmarks/runners/ocannl/metal_queue_probe.ml`) measured two command buffers overlapping in
+   what it called the backend's kernel / signal / wait+kernel / signal shape. That arm had encoded
+   its wait AFTER the second kernel's compute pass, where [encodeWaitForEvent] orders nothing, so it
+   was measuring two unordered buffers and not the backend (the probe keeps that shape as its
+   [wait-after-kernel] arm; its [event-chain] arm now encodes the wait first and serializes). This
+   test is the executed form of the backend's ordering, so the invariant is checked on every backend
+   rather than inferred from a probe: a routine that reads a counter FIRST, spins long enough that a
+   run started before the previous one finished would still read the stale value, then writes the
+   counter back incremented. [runs] such runs with no sync between them must leave the counter at
+   [runs]; an overlapping pair loses at least one increment. The increment is exact by construction:
+   [outer * m] FMA steps of [1/(outer * m)] over a device-resident [ones] operand, so the compiler
+   cannot fold the spin (it cannot know [ones] holds ones) and every partial sum is a dyadic
+   rational the accumulator holds exactly up to the run count here. The read is data-bound to the
+   first step ([acc = counter; acc = fma(acc, ones[i], steps[i])]), so no compiler can sink the load
+   below the spin. *)
 
 open Base
 module Tn = Ir.Tnode
