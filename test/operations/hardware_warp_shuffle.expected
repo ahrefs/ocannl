@@ -26,3 +26,4 @@ a self-update of a per-thread local array beside a sibling statement is not a ra
 a bound Workgroup_reduce of extent one holding the refused sibling body is not a race (lane 0 alone executes it): it renders with the one term: true
 two sibling updates of one cell pinned to the SAME lane are that lane's two steps, not a race: the level renders and the value is both terms: true
 two sibling updates of one cell pinned to DIFFERENT lanes are two lanes on one cell: refused where a lane index is bound (GPU) or the serial sum of the two admitted iterations (CPU): true
+a lane pin that moves with an inner loop (If (i == k) under a serial k) selects a different lane at each iteration and is no pin: refused where a lane index is bound (GPU) or the serial sum of the two admitted iterations (CPU): true

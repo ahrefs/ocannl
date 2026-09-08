@@ -387,12 +387,13 @@ val racing_lane_invariant_update :
     [Set] to a node [shared] across the lanes (device-resident or workgroup-shared, as against a
     per-thread local array) whose cell does not depend on [lane] and whose value reads that cell — a
     read-modify-write every lane performs on one cell, a race under any hardware binding — unless it
-    is enclosed by a guard that pins [lane] to one value ([lane == e] with [e] free of [lane], or
-    [lane < c] with [c <= 1]) — and no sibling pins the same cell to a different lane, which is two
-    lanes on one cell again. Per-lane cells (which mention the lane), stores that read no cell of
-    their own, [Set_local] and [Zero_out] are not races; any other range guard or a data-dependent
-    guard does not exempt what it encloses. A level of extent one cannot race either, and is the
-    caller's to exempt, since it owns the bounds. *)
+    is enclosed by a guard that pins [lane] to one value ([lane == e] with [e] free of [lane] and of
+    every loop index between the level and the guard, or [lane < c] with [c <= 1]) — and no sibling
+    pins the same cell to a different lane, which is two lanes on one cell again. Per-lane cells
+    (which mention the lane), stores that read no cell of their own, [Set_local] and [Zero_out] are
+    not races; any other range guard or a data-dependent guard does not exempt what it encloses. A
+    level of extent one cannot race either, and is the caller's to exempt, since it owns the bounds.
+*)
 
 val has_accumulating_cell : t -> bool
 (** Whether the tree holds a SELF-RECURRENCE: some [Set] whose value reads the very cell it writes

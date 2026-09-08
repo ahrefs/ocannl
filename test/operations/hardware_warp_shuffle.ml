@@ -680,6 +680,11 @@ let claim_two_pin_siblings_refused =
   "two sibling updates of one cell pinned to DIFFERENT lanes are two lanes on one cell: refused \
    where a lane index is bound (GPU) or the serial sum of the two admitted iterations (CPU)"
 
+let claim_moving_pin_refused =
+  "a lane pin that moves with an inner loop (If (i == k) under a serial k) selects a different \
+   lane at each iteration and is no pin: refused where a lane index is bound (GPU) or the serial \
+   sum of the two admitted iterations (CPU)"
+
 let claim_extent_one_renders =
   "a bound Workgroup_reduce of extent one holding the refused sibling body is not a race (lane 0 \
    alone executes it): it renders with the one term"
@@ -890,4 +895,39 @@ let () =
   else if on_cpu then
     p claim_two_pin_siblings_refused
       (approx (run ~name:"race_twopins_wshfl" ~transform:two_pins_transform rs2) (gv.(0) +. gv.(1)))
-  else skipped claim_two_pin_siblings_refused
+  else skipped claim_two_pin_siblings_refused;
+  (* A pin that moves with an inner loop is no pin: [for k: If (i == k) s += x[i]] selects lane k at
+     each k, and warps at different k update the cell together (Codex P1 on staging#674). Serially
+     it admits the two iterations where i = k. *)
+  let mx = TDSL.ndarray gv ~label:[ "race_mx" ] ~output_dims:[ n ] () in
+  let%op ms = mx ++ "i=>0" in
+  let moving_pin_transform =
+    reduce_transform ~n ms.Tensor.value ~body_of:(fun i ->
+        let k = Idx.get_symbol () in
+        LL.For_loop
+          {
+            index = k;
+            from_ = 0;
+            to_ = 1;
+            axis = LL.Serial;
+            body =
+              LL.If
+                {
+                  cond =
+                    ( Binop (Ir.Ops.Cmpeq, (Embed_index (it i), iprec), (Embed_index (it k), iprec)),
+                      iprec );
+                  body = update ms.Tensor.value mx.Tensor.value i;
+                };
+          })
+  in
+  if on_gpu then
+    match refused ~name:"race_movingpin_wshfl" ~transform:moving_pin_transform ms with
+    | Some msg ->
+        p claim_moving_pin_refused (String.is_substring msg ~substring:"race the read-modify-write")
+    | None -> p claim_moving_pin_refused false
+  else if on_cpu then
+    p claim_moving_pin_refused
+      (approx
+         (run ~name:"race_movingpin_wshfl" ~transform:moving_pin_transform ms)
+         (gv.(0) +. gv.(1)))
+  else skipped claim_moving_pin_refused

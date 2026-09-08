@@ -5811,13 +5811,18 @@ let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(shared : Tnode.t ->
     | Embed_index (Indexing.Iterator s) -> Indexing.equal_symbol s lane
     | _ -> false
   in
-  (* The value a guard pins the lane to, when it pins one. *)
-  let pin_of (cond : scalar_t) : scalar_t option =
+  (* The value a guard pins the lane to, when it pins one: free of the lane, and of every loop index
+     between the level and the guard — [for k: If (i == k) acc[0] += …] selects a different lane at
+     each [k], and warps at different [k] read-modify-write the cell together (Codex P1 on
+     staging#674). Indices of loops OUTSIDE the level are one value for the whole workgroup. *)
+  let pin_of ~loops (cond : scalar_t) : scalar_t option =
+    let fixed e =
+      (not (scalar_mentions_symbol lane e))
+      && not (List.exists loops ~f:(fun s -> scalar_mentions_symbol s e))
+    in
     match cond with
-    | Binop (Ops.Cmpeq, (a, _), (b, _)) when is_lane a && not (scalar_mentions_symbol lane b) ->
-        Some b
-    | Binop (Ops.Cmpeq, (a, _), (b, _)) when is_lane b && not (scalar_mentions_symbol lane a) ->
-        Some a
+    | Binop (Ops.Cmpeq, (a, _), (b, _)) when is_lane a && fixed b -> Some b
+    | Binop (Ops.Cmpeq, (a, _), (b, _)) when is_lane b && fixed a -> Some a
     (* [i < 1] admits lane 0 alone: the synthetic launch guard of a one-iteration level. *)
     | Binop (Ops.Cmplt, (a, _), (Constant c, _)) when is_lane a && Float.(c <= 1.) ->
         Some (Constant 0.)
@@ -5834,14 +5839,15 @@ let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(shared : Tnode.t ->
     && Array.length idcs = Array.length idcs'
     && Array.for_all2_exn idcs idcs' ~f:Indexing.equal_axis_index
   in
-  let rec go ~pin (llc : t) =
+  let rec go ~pin ~loops (llc : t) =
     match llc with
-    | Seq (a, b) -> ( match go ~pin a with Some _ as r -> r | None -> go ~pin b)
-    | For_loop { body; _ } | Scan_loop { body; _ } -> go ~pin body
+    | Seq (a, b) -> ( match go ~pin ~loops a with Some _ as r -> r | None -> go ~pin ~loops b)
+    | For_loop { index; body; _ } | Scan_loop { index; body; _ } ->
+        go ~pin ~loops:(index :: loops) body
     | If { cond = c, _; body } -> (
-        match pin_of c with
-        | Some e -> go ~pin:(Some (Option.value pin ~default:e)) body
-        | None -> go ~pin body)
+        match pin_of ~loops c with
+        | Some e -> go ~pin:(Some (Option.value pin ~default:e)) ~loops body
+        | None -> go ~pin ~loops body)
     | Set { tn; idcs; llsc; _ } -> (
         if
           not
@@ -5861,7 +5867,7 @@ let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(shared : Tnode.t ->
                   None))
     | _ -> None
   in
-  go ~pin:None llc
+  go ~pin:None ~loops:[] llc
 
 type peel_guard_verdict = Guard_confined | Guard_lane_private | Guard_lane_private_unresolved
 [@@deriving sexp, equal, compare]
