@@ -5803,12 +5803,16 @@ let has_accumulating_cell (llc : t) : bool =
 (* gh-ocannl-950: the RACE criterion for a level whose index a backend binds to a lane. A [Set]
    under the level to storage the lanes SHARE ([shared]: device-resident or workgroup-shared, as
    against a per-thread local array the renderer declares once per thread), whose cell does not
-   depend on the lane index, and whose value reads that very cell (as codegen renders it: a
-   projection's discarded operand reads nothing, a guard's condition reads), is a read-modify-write
-   every lane performs on one cell — a race under any hardware binding, whatever else the level
-   holds. The explicitly staged tree ([hardware_workgroup_reduce.ml]: [If (i < stride) partial[i] +=
-   partial[i + stride]], [If (i == 0) out[0] = partial[0]]) fails the test on both counts: its
-   per-lane cells mention the lane, and its final store reads no cell of its own.
+   depend on the lane index, and which the LEVEL reads anywhere — in the store's own value, in a
+   guard's condition, in a sibling local staging the accumulator ([tmp = acc[0]; acc[0] = tmp +
+   x[i]]), before or after the store — is a read-modify-write every lane performs on one cell: a
+   race under any hardware binding, whatever else the level holds. Reads are judged as codegen
+   renders them, through any index that may alias the cell (two different literal positions in a
+   slot are the one provable disjointness) or a dynamic gather from the node; a projection's
+   discarded operand, an arm a literal condition never selects, a dead level and a false guard read
+   nothing. The explicitly staged tree ([hardware_workgroup_reduce.ml]: [If (i < stride) partial[i]
+   += partial[i + stride]], [If (i == 0) out[0] = partial[0]]) fails the test: its per-lane cells
+   mention the lane, and the level never reads [out[0]].
 
    There is deliberately NO exemption for a guard "pinning" the lane ([If (i == 0) acc += …]). Six
    review rounds on staging#674 each found another way such a pin is not one thread: a pin value
@@ -5817,40 +5821,64 @@ let has_accumulating_cell (llc : t) : bool =
    cell separated by a barrier that fences threadgroup memory only. What is one thread by
    construction is a cell that mentions the lane; a reduction that needs a single-lane
    read-modify-write of a shared cell stages it with per-lane cells and a plain final store, which
-   is what every explicitly staged tree in the repository does. A guard reading the cell a store
-   under it writes is the read of the read-modify-write; a [Set_dynamic] whose static coordinates do
-   not separate the lanes is refused, the data owning which cell each lane hits; a dead level
-   performs no accesses. [Set_local] and [Zero_out] are never a race. Returns the first racing
-   statement's node and cell. *)
+   is what every explicitly staged tree in the repository does. A [Set_dynamic] whose static
+   coordinates do not separate the lanes is refused, the data owning which cell each lane hits.
+   [Set_local] and [Zero_out] are never a race. Returns the first racing statement's node and
+   cell. *)
 let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(shared : Tnode.t -> bool) (llc : t) :
     (Tnode.t * Indexing.axis_index array) option =
   let lane_invariant idcs = not (Array.exists idcs ~f:(axis_index_mentions_symbol lane)) in
-  (* [guards]: the conditions of the enclosing [If]s. A guard that reads the cell a store under it
-     writes is the read of a read-modify-write too ([If (acc[0] == 0) acc[0] = x[i]]: every lane
-     tests, then some overwrite), so a store under it is judged with that read. *)
-  let rec go ~guards (llc : t) =
+  let may_alias idcs idcs' =
+    Array.length idcs <> Array.length idcs'
+    || not
+         (Array.exists2_exn idcs idcs' ~f:(fun a b ->
+              match (a, b) with Indexing.Fixed_idx x, Indexing.Fixed_idx y -> x <> y | _ -> false))
+  in
+  let rec reads ~tn ~idcs (sc : scalar_t) =
+    let arg (s, _) = reads ~tn ~idcs s in
+    match sc with
+    | Get (tn', idcs') -> Tnode.equal tn tn' && may_alias idcs idcs'
+    | Get_dynamic { tn = tn'; dyn_value; _ } -> Tnode.equal tn tn' || arg dyn_value
+    | Local_scope { body; _ } -> stmt_reads ~tn ~idcs body
+    | Ternop (op, c, a, b) -> (
+        match Ops.ternop_conditionality op with
+        | Ops.All_three -> arg c || arg a || arg b
+        | Ops.Cond_and_one_arm -> (
+            match c with
+            | Constant x, _ -> if Float.equal x 0. then arg b else arg a
+            | _ -> arg c || arg a || arg b))
+    | Binop (op, a, b) -> (
+        match Ops.binop_conditionality op with
+        | Ops.Only_first -> arg a
+        | Ops.Only_second -> arg b
+        | Ops.Both_operands | Ops.Gated_second -> arg a || arg b)
+    | Unop (_, a) -> arg a
+    | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> false
+  and stmt_reads ~tn ~idcs (llc : t) =
     match llc with
-    | Seq (a, b) -> ( match go ~guards a with Some _ as r -> r | None -> go ~guards b)
-    (* A dead level performs no accesses, here as everywhere in this file. *)
+    | Seq (a, b) -> stmt_reads ~tn ~idcs a || stmt_reads ~tn ~idcs b
+    | For_loop { from_; to_; _ } when to_ < from_ -> false
+    | If { cond = Constant c, _; _ } when Float.equal c 0. -> false
+    | If { cond = c, _; body } -> reads ~tn ~idcs c || stmt_reads ~tn ~idcs body
+    | For_loop { body; _ } | Scan_loop { body; _ } -> stmt_reads ~tn ~idcs body
+    | Set { llsc; _ } | Set_local (_, llsc) -> reads ~tn ~idcs llsc
+    | Set_dynamic { llsc; dyn_value; _ } -> reads ~tn ~idcs llsc || reads ~tn ~idcs (fst dyn_value)
+    | _ -> false
+  in
+  let rec go (stmt : t) =
+    match stmt with
+    | Seq (a, b) -> ( match go a with Some _ as r -> r | None -> go b)
     | For_loop { from_; to_; _ } when to_ < from_ -> None
-    | For_loop { body; _ } | Scan_loop { body; _ } -> go ~guards body
-    (* A statically false guard executes nothing (a late [lowered_transform] can leave one that no
-       simplification pass sees again). *)
     | If { cond = Constant c, _; _ } when Float.equal c 0. -> None
-    | If { cond = c, _; body } -> go ~guards:(c :: guards) body
-    | Set { tn; idcs; llsc; _ } ->
-        if
-          shared tn && lane_invariant idcs
-          && (reads_cell ~tn ~idcs llsc || List.exists guards ~f:(reads_cell ~tn ~idcs))
-        then Some (tn, idcs)
+    | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> go body
+    | Set { tn; idcs; _ } ->
+        if shared tn && lane_invariant idcs && stmt_reads ~tn ~idcs llc then Some (tn, idcs)
         else None
-    (* A data-dependent target: which cell each lane hits is the data's to say, so two lanes on one
-       cell cannot be ruled out unless the static coordinates already separate them. *)
     | Set_dynamic { tn; idcs; _ } ->
         if shared tn && lane_invariant idcs then Some (tn, idcs) else None
     | _ -> None
   in
-  go ~guards:[] llc
+  go llc
 
 type peel_guard_verdict = Guard_confined | Guard_lane_private | Guard_lane_private_unresolved
 [@@deriving sexp, equal, compare]

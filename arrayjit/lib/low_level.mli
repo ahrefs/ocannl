@@ -385,17 +385,19 @@ val racing_lane_invariant_update :
   (Tnode.t * Indexing.axis_index array) option
 (** The race criterion for a level whose index a backend binds to a lane (gh-ocannl-950): the first
     [Set] to a node [shared] across the lanes (device-resident or workgroup-shared, as against a
-    per-thread local array) whose cell does not depend on [lane] and whose value reads that cell — a
-    read-modify-write every lane performs on one cell, a race under any hardware binding. Reads are
-    judged as codegen renders them: a projection's discarded operand ({!Ops.binop_conditionality})
-    reads nothing, and a guard's condition reads. Per-lane cells (which mention the lane), stores
-    that read no cell of their own, [Set_local] and [Zero_out] are not races; a guard reading the
-    cell a store under it writes counts as that store's read, a [Set_dynamic] whose static
-    coordinates do not mention the lane is refused (the data owns which cell each lane hits), and a
-    dead level performs no accesses. There is no exemption for a guard pinning the lane: a pin is
-    one thread only under conditions (one block, no other bound axis, a literal value, no barrier
-    between phases) the walk cannot establish, and the sound form of a single-lane update is a
-    per-lane cell with a plain final store. *)
+    per-thread local array) whose cell does not depend on [lane] and which the LEVEL reads anywhere
+    — in that store's value, in a guard's condition, in a sibling local staging the value, before or
+    after the store — through any index that may alias the cell (two different literal positions in
+    a slot are the one provable disjointness) or a dynamic gather from the node. Every lane performs
+    the read and the write, so the interleaving is a race under any hardware binding. Reads are
+    judged as codegen renders them: a projection's discarded operand and an arm a literal condition
+    never selects ({!Ops.binop_conditionality}, {!Ops.ternop_conditionality}) read nothing, nor do a
+    dead level or a false guard. A [Set_dynamic] whose static coordinates do not mention the lane is
+    refused: the data owns which cell each lane hits. Per-lane cells (which mention the lane),
+    stores of cells the level never reads, [Set_local] and [Zero_out] are not races. There is no
+    exemption for a guard pinning the lane: a pin is one thread only under conditions (one block, no
+    other bound axis, a literal value, no barrier between phases) the walk cannot establish, and the
+    sound form of a single-lane update is a per-lane cell with a plain final store. *)
 
 val has_accumulating_cell : t -> bool
 (** Whether the tree holds a SELF-RECURRENCE: some [Set] whose value reads the very cell it writes

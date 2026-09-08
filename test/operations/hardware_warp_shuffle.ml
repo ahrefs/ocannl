@@ -704,6 +704,19 @@ let claim_false_guard_renders =
   "a self-update under a statically false guard beside a sibling executes nothing: the level \
    renders and the cell keeps its zero"
 
+let claim_staged_local_refused =
+  "the accumulator staged through a sibling statement (scratch[0] = s[0]; s[0] = scratch[0] + \
+   x[i]) is the same read-modify-write across two statements: refused where a lane index is bound \
+   (GPU) or the full serial sum (CPU)"
+
+let claim_alias_read_refused =
+  "a read that aliases the written cell through another index (s[0] = s[k] + x[i] under k = 0..0) \
+   is a self-read: refused where a lane index is bound (GPU) or the full serial sum (CPU)"
+
+let claim_where_arm_no_read =
+  "a Where arm a literal condition never selects reads nothing: s[0] = Where (1, 3, s[0]) beside a \
+   sibling is a plain store and the level renders with 3"
+
 let claim_staged_form_renders =
   "the sound single-lane form — per-lane cells combined under lane-selecting guards and a plain \
    final store — is not a race: it renders (GPU) or the barrier it needs is rejected (CPU)"
@@ -1080,4 +1093,88 @@ let () =
   if on_gpu || on_cpu then
     p claim_false_guard_renders
       (approx (run ~name:"race_falseguard_wshfl" ~transform:false_guard_transform fs) 0.)
-  else skipped claim_false_guard_renders
+  else skipped claim_false_guard_renders;
+  (* The accumulator staged through a sibling statement: [scratch[0] = s[0]; s[0] = scratch[0] +
+     x[i]] reads and writes the cell across two statements (Codex P1 on staging#674). *)
+  let tx = TDSL.ndarray gv ~label:[ "race_tx" ] ~output_dims:[ n ] () in
+  let%op ts = tx ++ "i=>0" in
+  let staged_local_transform opt =
+    ignore (LL.get_node opt.LL.traced_store scratch : LL.traced_array);
+    reduce_transform ~n ts.Tensor.value opt ~body_of:(fun i ->
+        LL.Seq
+          ( LL.Set
+              { tn = scratch; idcs = [| f0 |]; llsc = Get (ts.Tensor.value, [| f0 |]); debug = "" },
+            LL.Set
+              {
+                tn = ts.Tensor.value;
+                idcs = [| f0 |];
+                llsc =
+                  Binop
+                    ( Ir.Ops.Add,
+                      (Get (scratch, [| f0 |]), single),
+                      (Get (tx.Tensor.value, [| it i |]), single) );
+                debug = "";
+              } ))
+  in
+  refused_leg claim_staged_local_refused ~name:"race_stagedlocal_wshfl"
+    ~transform:staged_local_transform ts ~cpu_value:expected_sum;
+  (* A read that aliases the written cell through another index: [s[0] = s[k] + x[i]] under [k =
+     0..0] (Codex P1 on staging#674). *)
+  let ax = TDSL.ndarray gv ~label:[ "race_ax" ] ~output_dims:[ n ] () in
+  let%op as_ = ax ++ "i=>0" in
+  let alias_transform =
+    reduce_transform ~n as_.Tensor.value ~body_of:(fun i ->
+        let k = Idx.get_symbol () in
+        LL.For_loop
+          {
+            index = k;
+            from_ = 0;
+            to_ = 0;
+            axis = LL.Serial;
+            body =
+              LL.Set
+                {
+                  tn = as_.Tensor.value;
+                  idcs = [| f0 |];
+                  llsc =
+                    Binop
+                      ( Ir.Ops.Add,
+                        (Get (as_.Tensor.value, [| it k |]), single),
+                        (Get (ax.Tensor.value, [| it i |]), single) );
+                  debug = "";
+                };
+          })
+  in
+  refused_leg claim_alias_read_refused ~name:"race_alias_wshfl" ~transform:alias_transform as_
+    ~cpu_value:expected_sum;
+  (* A [Where] arm a literal condition never selects reads nothing: [s[0] = Where (1, 3, s[0])]
+     beside a sibling is a plain store of 3 (Codex P2 on staging#674). *)
+  let wx2 = TDSL.ndarray gv ~label:[ "race_wx2" ] ~output_dims:[ n ] () in
+  let%op ws2 = wx2 ++ "i=>0" in
+  let where_transform opt =
+    reduce_transform ~n ws2.Tensor.value (with_side opt) ~body_of:(fun i ->
+        LL.Seq
+          ( LL.Set
+              {
+                tn = ws2.Tensor.value;
+                idcs = [| f0 |];
+                llsc =
+                  Ternop
+                    ( Ir.Ops.Where,
+                      (Constant 1., single),
+                      (Constant 3., single),
+                      (Get (ws2.Tensor.value, [| f0 |]), single) );
+                debug = "";
+              },
+            LL.Set
+              {
+                tn = side;
+                idcs = [| it i |];
+                llsc = Get (wx2.Tensor.value, [| it i |]);
+                debug = "";
+              } ))
+  in
+  if on_gpu || on_cpu then
+    p claim_where_arm_no_read
+      (approx (run ~name:"race_where_wshfl" ~transform:where_transform ws2) 3.)
+  else skipped claim_where_arm_no_read

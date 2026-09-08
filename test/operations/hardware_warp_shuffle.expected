@@ -31,3 +31,6 @@ a store under a guard that reads the cell it writes (If (s[0] == 0) s[0] = x[i])
 a self-update inside a dead inner loop (to_ < from_) beside a sibling performs no accesses: the level renders and the cell keeps its zero: true
 a store reading the written node through a dynamic gather (s[0] = s[dyn 0] + x[i]) may read its own cell: refused where a lane index is bound (GPU) or the full serial sum (CPU): true
 a self-update under a statically false guard beside a sibling executes nothing: the level renders and the cell keeps its zero: true
+the accumulator staged through a sibling statement (scratch[0] = s[0]; s[0] = scratch[0] + x[i]) is the same read-modify-write across two statements: refused where a lane index is bound (GPU) or the full serial sum (CPU): true
+a read that aliases the written cell through another index (s[0] = s[k] + x[i] under k = 0..0) is a self-read: refused where a lane index is bound (GPU) or the full serial sum (CPU): true
+a Where arm a literal condition never selects reads nothing: s[0] = Where (1, 3, s[0]) beside a sibling is a plain store and the level renders with 3: true
