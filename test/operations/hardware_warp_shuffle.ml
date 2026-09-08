@@ -685,6 +685,24 @@ let claim_moving_pin_refused =
    lane at each iteration and is no pin: refused where a lane index is bound (GPU) or the serial \
    sum of the two admitted iterations (CPU)"
 
+let claim_outer_axis_pin_refused =
+  "a lane pin on an enclosing Workgroup axis (If (i == j) under Workgroup j) selects a different \
+   lane per row of the workgroup and is no pin: refused where the axes are bound (GPU) or the \
+   serial sum of the two admitted iterations (CPU)"
+
+let claim_barrier_scopes_pins =
+  "two updates of one cell pinned to different lanes on either side of a Workgroup_barrier are the \
+   staged shape, not a race: the level renders with both terms (GPU), or the barrier itself is \
+   rejected (CPU)"
+
+let claim_projection_operand_no_read =
+  "a store whose value is a projection discarding the cell's old value (Arg2) is not a \
+   read-modify-write: every lane stores the same bytes and the level renders"
+
+let claim_cond_read_refused =
+  "a scope that tests the cell it writes back in an If condition reads that cell: refused where a \
+   lane index is bound (GPU) or the serial alternation ending at 0 (CPU)"
+
 let claim_extent_one_renders =
   "a bound Workgroup_reduce of extent one holding the refused sibling body is not a race (lane 0 \
    alone executes it): it renders with the one term"
@@ -930,4 +948,156 @@ let () =
       (approx
          (run ~name:"race_movingpin_wshfl" ~transform:moving_pin_transform ms)
          (gv.(0) +. gv.(1)))
-  else skipped claim_moving_pin_refused
+  else skipped claim_moving_pin_refused;
+  (* An enclosing Workgroup axis varies per thread too: under [Workgroup j] of extent 2 around the
+     level, [If (i == j) s += x[i]] admits lane 0 in one row of the workgroup and lane 1 in the
+     other, both on the one cell (Codex P1 on staging#674). Serially it admits the two iterations
+     where i = j. *)
+  let wx = TDSL.ndarray gv ~label:[ "race_wx" ] ~output_dims:[ n ] () in
+  let%op ws = wx ++ "i=>0" in
+  let outer_axis_transform (opt : LL.optimized) =
+    (LL.get_node opt.traced_store ws.Tensor.value).LL.zero_initialized_by_code <- false;
+    let j = Idx.get_symbol () and i = Idx.get_symbol () in
+    {
+      opt with
+      llc =
+        LL.For_loop
+          {
+            index = j;
+            from_ = 0;
+            to_ = 1;
+            axis = LL.Workgroup;
+            body =
+              LL.For_loop
+                {
+                  index = i;
+                  from_ = 0;
+                  to_ = n - 1;
+                  axis = LL.Workgroup_reduce;
+                  body =
+                    LL.If
+                      {
+                        cond =
+                          ( Binop
+                              ( Ir.Ops.Cmpeq,
+                                (Embed_index (it i), iprec),
+                                (Embed_index (it j), iprec) ),
+                            iprec );
+                        body = update ws.Tensor.value wx.Tensor.value i;
+                      };
+                };
+          };
+    }
+  in
+  if on_gpu then
+    match refused ~name:"race_outeraxis_wshfl" ~transform:outer_axis_transform ws with
+    | Some msg ->
+        p claim_outer_axis_pin_refused
+          (String.is_substring msg ~substring:"race the read-modify-write")
+    | None -> p claim_outer_axis_pin_refused false
+  else if on_cpu then
+    p claim_outer_axis_pin_refused
+      (approx
+         (run ~name:"race_outeraxis_wshfl" ~transform:outer_axis_transform ws)
+         (gv.(0) +. gv.(1)))
+  else skipped claim_outer_axis_pin_refused;
+  (* A barrier scopes the pins: lane 0's update, a barrier, lane 1's update of the same cell is the
+     explicitly staged shape (Codex P2 on staging#674) and renders on the GPUs with both terms; the
+     C backends reject a barrier outright, which is their existing contract. *)
+  let bx = TDSL.ndarray gv ~label:[ "race_bx" ] ~output_dims:[ n ] () in
+  let%op bs = bx ++ "i=>0" in
+  let barrier_transform =
+    reduce_transform ~n bs.Tensor.value ~body_of:(fun i ->
+        LL.Seq
+          ( pinned_update bs.Tensor.value bx.Tensor.value i 0,
+            LL.Seq (LL.Workgroup_barrier, pinned_update bs.Tensor.value bx.Tensor.value i 1) ))
+  in
+  if on_gpu then
+    p claim_barrier_scopes_pins
+      (approx (run ~name:"race_barrier_wshfl" ~transform:barrier_transform bs) (gv.(0) +. gv.(1)))
+  else if on_cpu then
+    p claim_barrier_scopes_pins
+      (Option.is_some (refused ~name:"race_barrier_wshfl" ~transform:barrier_transform bs))
+  else skipped claim_barrier_scopes_pins;
+  (* A projection's discarded operand is no read: [s[0] = Arg2 (s[0], 3)] is a store every lane
+     makes with the same bytes, not a read-modify-write (Codex P2 on staging#674). *)
+  let px2 = TDSL.ndarray gv ~label:[ "race_px2" ] ~output_dims:[ n ] () in
+  let%op ps2 = px2 ++ "i=>0" in
+  let projection_transform opt =
+    ignore (LL.get_node opt.LL.traced_store side : LL.traced_array);
+    reduce_transform ~n ps2.Tensor.value opt ~body_of:(fun i ->
+        LL.Seq
+          ( LL.Set
+              {
+                tn = ps2.Tensor.value;
+                idcs = [| f0 |];
+                llsc =
+                  Binop
+                    (Ir.Ops.Arg2, (Get (ps2.Tensor.value, [| f0 |]), single), (Constant 3., single));
+                debug = "";
+              },
+            LL.Set
+              {
+                tn = side;
+                idcs = [| it i |];
+                llsc = Get (px2.Tensor.value, [| it i |]);
+                debug = "";
+              } ))
+  in
+  if on_gpu || on_cpu then
+    p claim_projection_operand_no_read
+      (approx (run ~name:"race_projection_wshfl" ~transform:projection_transform ps2) 3.)
+  else skipped claim_projection_operand_no_read;
+  (* A guard's condition reads: the scope writing [s[0]] back tests [s[0]] in its [If], which is the
+     read the lanes race on (Codex P1 on staging#674). Serially the cell alternates 0 → 1 → 0 over
+     the [n] iterations and ends at 0 for even [n]. *)
+  let cx = TDSL.ndarray gv ~label:[ "race_cx" ] ~output_dims:[ n ] () in
+  let%op cs = cx ++ "i=>0" in
+  let cond_read_transform opt =
+    ignore (LL.get_node opt.LL.traced_store side : LL.traced_array);
+    reduce_transform ~n cs.Tensor.value opt ~body_of:(fun i ->
+        let id = LL.get_scope cs.Tensor.value in
+        LL.Seq
+          ( LL.Set
+              {
+                tn = cs.Tensor.value;
+                idcs = [| f0 |];
+                llsc =
+                  Binop
+                    ( Ir.Ops.Add,
+                      ( Local_scope
+                          {
+                            id;
+                            body =
+                              LL.Seq
+                                ( LL.Set_local (id, Constant 0.),
+                                  LL.If
+                                    {
+                                      cond =
+                                        ( Binop
+                                            ( Ir.Ops.Cmpeq,
+                                              (Get (cs.Tensor.value, [| f0 |]), single),
+                                              (Constant 0., single) ),
+                                          single );
+                                      body = LL.Set_local (id, Constant 1.);
+                                    } );
+                            orig_indices = [||];
+                            mint = LL.Schedule_minted;
+                          },
+                        single ),
+                      (Constant 0., single) );
+                debug = "";
+              },
+            LL.Set
+              { tn = side; idcs = [| it i |]; llsc = Get (cx.Tensor.value, [| it i |]); debug = "" }
+          ))
+  in
+  if on_gpu then
+    match refused ~name:"race_condread_wshfl" ~transform:cond_read_transform cs with
+    | Some msg ->
+        p claim_cond_read_refused (String.is_substring msg ~substring:"race the read-modify-write")
+    | None -> p claim_cond_read_refused false
+  else if on_cpu then
+    p claim_cond_read_refused
+      (Float.equal (run ~name:"race_condread_wshfl" ~transform:cond_read_transform cs) 0.)
+  else skipped claim_cond_read_refused

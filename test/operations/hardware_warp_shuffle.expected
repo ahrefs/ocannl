@@ -27,3 +27,7 @@ a bound Workgroup_reduce of extent one holding the refused sibling body is not a
 two sibling updates of one cell pinned to the SAME lane are that lane's two steps, not a race: the level renders and the value is both terms: true
 two sibling updates of one cell pinned to DIFFERENT lanes are two lanes on one cell: refused where a lane index is bound (GPU) or the serial sum of the two admitted iterations (CPU): true
 a lane pin that moves with an inner loop (If (i == k) under a serial k) selects a different lane at each iteration and is no pin: refused where a lane index is bound (GPU) or the serial sum of the two admitted iterations (CPU): true
+a lane pin on an enclosing Workgroup axis (If (i == j) under Workgroup j) selects a different lane per row of the workgroup and is no pin: refused where the axes are bound (GPU) or the serial sum of the two admitted iterations (CPU): true
+two updates of one cell pinned to different lanes on either side of a Workgroup_barrier are the staged shape, not a race: the level renders with both terms (GPU), or the barrier itself is rejected (CPU): true
+a store whose value is a projection discarding the cell's old value (Arg2) is not a read-modify-write: every lane stores the same bytes and the level renders: true
+a scope that tests the cell it writes back in an If condition reads that cell: refused where a lane index is bound (GPU) or the serial alternation ending at 0 (CPU): true

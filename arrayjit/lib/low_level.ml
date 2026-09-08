@@ -5761,14 +5761,23 @@ let rec reads_cell ~tn ~idcs (sc : scalar_t) =
   | Local_scope { body; _ } -> stmt_reads_cell ~tn ~idcs body
   | Get_dynamic { dyn_value; _ } -> arg dyn_value
   | Ternop (_, a, b, c) -> arg a || arg b || arg c
-  | Binop (_, a, b) -> arg a || arg b
+  | Binop (op, a, b) -> (
+      (* A projection's discarded operand is never rendered, hence never reads the cell (the same
+         rule [scalar_reads_merge_buffer] applies); a gated second operand may evaluate. *)
+      match Ops.binop_conditionality op with
+      | Ops.Only_first -> arg a
+      | Ops.Only_second -> arg b
+      | Ops.Both_operands | Ops.Gated_second -> arg a || arg b)
   | Unop (_, a) -> arg a
   | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> false
 
 and stmt_reads_cell ~tn ~idcs (llc : t) =
   match llc with
   | Seq (a, b) -> stmt_reads_cell ~tn ~idcs a || stmt_reads_cell ~tn ~idcs b
-  | If { body; _ } | For_loop { body; _ } | Scan_loop { body; _ } -> stmt_reads_cell ~tn ~idcs body
+  (* A guard's condition reads too: [If (a[i] == 0) local = 1] inside the scope that writes [a[i]]
+     is a read of the cell the scope writes back. *)
+  | If { cond = c, _; body } -> reads_cell ~tn ~idcs c || stmt_reads_cell ~tn ~idcs body
+  | For_loop { body; _ } | Scan_loop { body; _ } -> stmt_reads_cell ~tn ~idcs body
   | Set { llsc; _ } | Set_local (_, llsc) -> reads_cell ~tn ~idcs llsc
   | _ -> false
 
@@ -5805,8 +5814,8 @@ let has_accumulating_cell (llc : t) : bool =
    sibling pins the same cell to another lane; a level of extent one is the caller's to exempt,
    since the bounds are the caller's (Codex on staging#674). Returns the first racing statement's
    node and cell. *)
-let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(shared : Tnode.t -> bool) (llc : t) :
-    (Tnode.t * Indexing.axis_index array) option =
+let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(varying : Indexing.symbol list)
+    ~(shared : Tnode.t -> bool) (llc : t) : (Tnode.t * Indexing.axis_index array) option =
   let is_lane = function
     | Embed_index (Indexing.Iterator s) -> Indexing.equal_symbol s lane
     | _ -> false
@@ -5816,9 +5825,13 @@ let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(shared : Tnode.t ->
      each [k], and warps at different [k] read-modify-write the cell together (Codex P1 on
      staging#674). Indices of loops OUTSIDE the level are one value for the whole workgroup. *)
   let pin_of ~loops (cond : scalar_t) : scalar_t option =
+    (* [varying]: the other hardware axes the backend binds per thread (an enclosing [Workgroup]
+       index on the .y/.z slot varies across the lanes of one workgroup as much as the lane does);
+       an enclosing [Grid] index is one value for the whole workgroup and does not disqualify. *)
     let fixed e =
       (not (scalar_mentions_symbol lane e))
-      && not (List.exists loops ~f:(fun s -> scalar_mentions_symbol s e))
+      && (not (List.exists loops ~f:(fun s -> scalar_mentions_symbol s e)))
+      && not (List.exists varying ~f:(fun s -> scalar_mentions_symbol s e))
     in
     match cond with
     | Binop (Ops.Cmpeq, (a, _), (b, _)) when is_lane a && fixed b -> Some b
@@ -5842,6 +5855,11 @@ let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(shared : Tnode.t ->
   let rec go ~pin ~loops (llc : t) =
     match llc with
     | Seq (a, b) -> ( match go ~pin ~loops a with Some _ as r -> r | None -> go ~pin ~loops b)
+    (* A barrier orders the lanes' phases: two updates of one cell pinned to different lanes on
+       either side of it are the explicitly staged shape, not a race. *)
+    | Workgroup_barrier ->
+        pinned := [];
+        None
     | For_loop { index; body; _ } | Scan_loop { index; body; _ } ->
         go ~pin ~loops:(index :: loops) body
     | If { cond = c, _; body } -> (

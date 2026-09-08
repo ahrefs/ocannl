@@ -4981,10 +4981,19 @@ module C_syntax (B : C_syntax_config) = struct
                       Set.mem !current_workgroup_shared tn
                       || Tn.Placements.is_materialized_force (placements ()) tn 950
                     in
+                    (* The other axes the backend binds per thread: an enclosing [Workgroup] index
+                       varies across the lanes as the lane itself does. *)
+                    let varying =
+                      List.filter_map !current_hardware_axes ~f:(fun a ->
+                          match a.Low_level.ha_kind with
+                          | `Workgroup when not (Indexing.equal_symbol a.ha_index i) ->
+                              Some a.ha_index
+                          | `Workgroup | `Grid -> None)
+                    in
                     match
                       if to_ - from_ + 1 <= 1 then None
                       else
-                        Low_level.racing_lane_invariant_update ~lane:i ~shared
+                        Low_level.racing_lane_invariant_update ~lane:i ~varying ~shared
                           (Low_level.unflat_lines stmts)
                     with
                     | None -> None
