@@ -2920,6 +2920,363 @@ class RegimeTest(unittest.TestCase):
         self.assertIn("| PASS (", text)
 
 
+class AmbientEnvTest(unittest.TestCase):
+    """gh-ocannl-720: what the shell was already carrying is recorded, not guessed at.
+
+    The regime gate (gh-ocannl-719) cross-checks the keys the `approximate` payload owns. Every
+    other configuration key reaches the OCANNL cells through `cell_env`'s pass-through of
+    `os.environ`, so the artifact has to say what that environment was -- for the keys nobody has
+    enumerated as much as for the ones anybody has.
+    """
+
+    def test_the_sweep_records_every_ocannl_variable_it_inherited(self):
+        # Values as well as names: `OCANNL_CC_VECTOR_BYTES=16` and `=64` are different
+        # measurements, and a bare list of names cannot tell the two apart.
+        ambient = orchestrate.ambient_ocannl_env(
+            {
+                "OCANNL_NARROW_COMPUTE_F32": "true",
+                "PATH": "/usr/bin",
+                "OCANNL_CC_VECTOR_BYTES": "64",
+                "HOME": "/home/nobody",
+            }
+        )
+
+        self.assertEqual(
+            ambient,
+            {"OCANNL_CC_VECTOR_BYTES": "64", "OCANNL_NARROW_COMPUTE_F32": "true"},
+        )
+        # Sorted, so two sweeps that inherited the same environment stamp the same mapping
+        # whatever order the shell happened to export it in.
+        self.assertEqual(
+            list(ambient), ["OCANNL_CC_VECTOR_BYTES", "OCANNL_NARROW_COMPUTE_F32"]
+        )
+
+    def test_a_key_the_regime_gate_does_not_own_is_recorded_like_any_other(self):
+        # The point of recording over enumerating: the rule is the `OCANNL_` prefix, not a list.
+        # `regime_check` cross-checks the approximate payload's keys, and a key outside it --
+        # `cc_backend_arch_flags` changes what the C backend compiles to, and the key added after
+        # this test was written is by definition on nobody's list -- lands in the row all the same.
+        self.assertEqual(
+            orchestrate.ambient_ocannl_env({"OCANNL_CC_BACKEND_ARCH_FLAGS": "-mcpu=native"}),
+            {"OCANNL_CC_BACKEND_ARCH_FLAGS": "-mcpu=native"},
+        )
+
+    def test_the_legitimate_variables_are_recorded_rather_than_stripped(self):
+        # The sweep dispatches OCANNL_BACKEND itself and benchmarks/README.md documents running
+        # under OCANNL_AUTOTUNE_LOG / OCANNL_AUTOTUNE_CACHE_DIR. None of them is refused or
+        # filtered out -- a record that quietly omits what it considers normal is not a record.
+        env = {
+            "OCANNL_BACKEND": "metal",
+            "OCANNL_AUTOTUNE_LOG": "1",
+            "OCANNL_AUTOTUNE_CACHE_DIR": "/tmp/tune",
+        }
+
+        self.assertEqual(orchestrate.ambient_ocannl_env(env), env)
+
+    def test_only_the_ocannl_rows_carry_the_environment(self):
+        ambient = {"OCANNL_NARROW_COMPUTE_F32": "true"}
+        ours = result("ocannl", "cc", "default", [2.3026, 2.3010])
+        theirs = result("pytorch", "cpu", "eager", [2.3026, 2.3010])
+
+        orchestrate.stamp_ambient_env(ours, ambient)
+        orchestrate.stamp_ambient_env(theirs, ambient)
+
+        self.assertEqual(ours["ambient_ocannl_env"], ambient)
+        # The torch runner reads none of these; a stamp on its row would invite reading its
+        # number as though they had reached it.
+        self.assertNotIn("ambient_ocannl_env", theirs)
+
+    def test_each_row_records_its_own_copy(self):
+        # One mapping shared by every row of a sweep is a row that changes after it was written.
+        ambient = {"OCANNL_BACKEND": "cc"}
+        row = orchestrate.stamp_ambient_env(
+            result("ocannl", "cc", "default", [2.3026, 2.3010]), ambient
+        )
+
+        ambient["OCANNL_BACKEND"] = "metal"
+
+        self.assertEqual(row["ambient_ocannl_env"], {"OCANNL_BACKEND": "cc"})
+
+    def test_the_report_names_the_environment_its_numbers_were_taken_in(self):
+        rows = [
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "cc", "default", [2.3026, 2.3010]),
+                {"OCANNL_CC_VECTOR_BYTES": "64", "OCANNL_NARROW_COMPUTE_F32": "true"},
+            ),
+            cell("pytorch", "cpu", "eager", [2.3026, 2.3010]),
+        ]
+        orchestrate.parity_check(rows)
+
+        text = self.report(rows)
+
+        lines = text.splitlines()
+        [index] = [
+            i for i, line in enumerate(lines) if line.startswith("ambient OCANNL_* environment:")
+        ]
+        self.assertEqual(
+            lines[index],
+            'ambient OCANNL_* environment: {"OCANNL_CC_VECTOR_BYTES": "64", '
+            '"OCANNL_NARROW_COMPUTE_F32": "true"}',
+        )
+        # Beside the measurement boxes, in the header: the configuration a number was taken under
+        # is read with the box it was taken on, not hunted for in results.jsonl.
+        before = [line for line in lines[:index] if line.strip()]
+        self.assertTrue(before[-1].startswith("measurement boxes declared by"))
+
+    def test_a_clean_shell_is_recorded_as_such(self):
+        rows = [
+            orchestrate.stamp_ambient_env(cell("ocannl", "cc", "default", [2.3026, 2.3010]), {})
+        ]
+        orchestrate.parity_check(rows)
+
+        self.assertIn("ambient OCANNL_* environment: none\n", self.report(rows))
+
+    def test_a_value_no_text_artifact_could_hold_is_kept_faithful_and_escaped_to_render(self):
+        # An environment value is bytes: on POSIX `os.environ` hands a non-UTF-8 byte over as a
+        # lone surrogate. The row keeps it verbatim -- `json.dumps` spells it `\udcff` under
+        # `ensure_ascii`, so results.jsonl carries it losslessly -- while report.md's UTF-8 write
+        # cannot hold it, which is why the rendering escapes and the record does not.
+        ambient = orchestrate.ambient_ocannl_env(
+            {"OCANNL_AUTOTUNE_CACHE_DIR": "/tmp/tune-\udcff"}
+        )
+
+        self.assertEqual(ambient, {"OCANNL_AUTOTUNE_CACHE_DIR": "/tmp/tune-\udcff"})
+        self.assertIn("/tmp/tune-\\udcff", orchestrate.ambient_env_line([], ambient))
+
+    def test_both_artifacts_of_a_sweep_under_such_a_value_are_written(self):
+        # End to end, because the failure this prevents lands at the END of a sweep, after every
+        # cell has been paid for: report.md's UTF-8 write is what cannot hold a lone surrogate.
+        rows = [
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "cc", "default", [2.3026, 2.3010]),
+                orchestrate.ambient_ocannl_env(
+                    {"OCANNL_AUTOTUNE_CACHE_DIR": "/tmp/tune-\udcff"}
+                ),
+            )
+        ]
+        orchestrate.parity_check(rows)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            with contextlib.redirect_stdout(io.StringIO()):
+                orchestrate.report(rows, out)
+            text = (out / "report.md").read_text()
+            [row] = [
+                strict_loads(line)
+                for line in (out / "results.jsonl").read_text().splitlines()
+                if line
+            ]
+
+        self.assertIn("/tmp/tune-\\udcff", text)
+        # The row is the record and keeps the value verbatim; only the rendering escapes.
+        self.assertEqual(
+            row["ambient_ocannl_env"], {"OCANNL_AUTOTUNE_CACHE_DIR": "/tmp/tune-\udcff"}
+        )
+
+    def test_a_byte_and_the_characters_that_spell_it_stay_distinguishable(self):
+        # Any escaping that leaves ordinary values untouched maps the 0xff byte and the four
+        # literal characters `\xff` onto the same text, so two different cache directories would
+        # dedupe into one environment and the record would say something false about both.
+        byte = orchestrate.ambient_env_line(
+            [], orchestrate.ambient_ocannl_env({"OCANNL_AUTOTUNE_CACHE_DIR": "/tmp/\udcff"})
+        )
+        spelling = orchestrate.ambient_env_line(
+            [], orchestrate.ambient_ocannl_env({"OCANNL_AUTOTUNE_CACHE_DIR": "/tmp/\\xff"})
+        )
+
+        self.assertNotEqual(byte, spelling)
+
+    def test_a_value_cannot_forge_a_second_header_line(self):
+        # Environment values may contain newlines, and an interpolated one would open what reads
+        # as a second `ambient OCANNL_* environment:` line -- the header contradicting itself
+        # about the configuration its numbers were taken under.
+        line = orchestrate.ambient_env_line(
+            [],
+            orchestrate.ambient_ocannl_env(
+                {"OCANNL_AUTOTUNE_CACHE_DIR": "/tmp/a\nambient OCANNL_* environment: none"}
+            ),
+        )
+
+        self.assertEqual(len(line.splitlines()), 1)
+        self.assertIn("\\n", line)
+
+    def test_the_report_says_the_environment_even_when_every_cell_failed(self):
+        # The environment is a fact about the SWEEP, not about a row: an ambient setting the
+        # cells cannot run under is exactly what makes every OCANNL cell fail, and a report that
+        # then said `not recorded` would withhold the record at the moment it explains the run.
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            with contextlib.redirect_stdout(io.StringIO()):
+                orchestrate.report(
+                    [],
+                    out,
+                    failures=[("mlp_wide ocannl/cc/default", "no result line")],
+                    ambient={"OCANNL_NARROW_COMPUTE_F32": "true"},
+                )
+            text = (out / "report.md").read_text()
+
+        self.assertIn(
+            'ambient OCANNL_* environment: {"OCANNL_NARROW_COMPUTE_F32": "true"}\n', text
+        )
+
+    def test_rows_that_disagree_about_the_environment_are_refused(self):
+        # Two header lines could only say that two environments exist somewhere in the tables,
+        # never which row was measured under which -- swapping the two stamps would leave the
+        # report byte-identical. Refused like a mixture of measurement-box declarations, with
+        # rendering them separately as the remedy.
+        rows = [
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "cc", "default", [2.3026, 2.3010]), {"OCANNL_BACKEND": "cc"}
+            ),
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "metal", "default", [2.3026, 2.3010]),
+                {"OCANNL_BACKEND": "metal"},
+            ),
+        ]
+
+        with self.assertRaises(ValueError) as refused:
+            orchestrate.recorded_ambient_env(rows)
+
+        self.assertIn("separate reports", str(refused.exception))
+
+    def test_a_recorded_environment_beside_an_unrecorded_one_is_refused_too(self):
+        # `not recorded` is a reading like any other: pairing it with a recorded environment
+        # leaves the same ambiguity, and lets the recorded one stand at the head of measurements
+        # whose own environment is unrecoverable.
+        rows = [
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "cc", "default", [2.3026, 2.3010]), {"OCANNL_BACKEND": "cc"}
+            ),
+            cell("ocannl", "metal", "default", [2.3026, 2.3010]),
+        ]
+
+        with self.assertRaises(ValueError) as refused:
+            orchestrate.recorded_ambient_env(rows)
+
+        self.assertIn("not recorded", str(refused.exception))
+
+    def test_the_sweeps_own_value_does_not_excuse_the_rows_from_agreeing(self):
+        # The refusal is about what the artifacts SAY, so it cannot be gated on how the header
+        # got its value: a supplied environment printed over rows stamped with another would
+        # misattribute the measurements results.jsonl records correctly.
+        rows = [
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "cc", "default", [2.3026, 2.3010]), {"OCANNL_BACKEND": "cc"}
+            ),
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "metal", "default", [2.3026, 2.3010]),
+                {"OCANNL_BACKEND": "metal"},
+            ),
+        ]
+
+        with self.assertRaises(ValueError):
+            orchestrate.ambient_env_line(rows, {"OCANNL_BACKEND": "cc"})
+
+    def test_a_supplied_environment_its_rows_contradict_is_refused(self):
+        rows = [
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "cc", "default", [2.3026, 2.3010]), {"OCANNL_BACKEND": "cc"}
+            )
+        ]
+
+        with self.assertRaises(ValueError) as refused:
+            orchestrate.ambient_env_line(rows, {"OCANNL_BACKEND": "metal"})
+
+        self.assertIn("disagrees with what its rows recorded", str(refused.exception))
+        # The agreeing case is the sweep's own, and is not disturbed by the check.
+        self.assertIn(
+            '{"OCANNL_BACKEND": "cc"}',
+            orchestrate.ambient_env_line(rows, {"OCANNL_BACKEND": "cc"}),
+        )
+
+    def test_a_refused_report_leaves_the_output_directory_as_it_found_it(self):
+        # The refusal happens before anything is written, like the measurement-box one: an output
+        # directory is persistent, so overwriting results.jsonl and then raising would pair fresh
+        # raw rows with the report.md a previous sweep left there, describing other measurements.
+        rows = [
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "cc", "default", [2.3026, 2.3010]), {"OCANNL_BACKEND": "cc"}
+            ),
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "metal", "default", [2.3026, 2.3010]),
+                {"OCANNL_BACKEND": "metal"},
+            ),
+        ]
+        orchestrate.parity_check(rows)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out / "results.jsonl").write_text('{"the previous sweep": true}\n')
+            (out / "report.md").write_text("# the previous sweep\n")
+            with self.assertRaises(ValueError):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    orchestrate.report(rows, out)
+
+            self.assertEqual(
+                (out / "results.jsonl").read_text(), '{"the previous sweep": true}\n'
+            )
+            self.assertEqual((out / "report.md").read_text(), "# the previous sweep\n")
+
+    def test_the_unstamped_frameworks_are_not_a_lost_record(self):
+        # Only OCANNL rows are in that agreement: torch and tinygrad rows carry no stamp by
+        # design, and counting them would refuse every ordinary mixed-framework sweep.
+        rows = [
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "cc", "default", [2.3026, 2.3010]), {"OCANNL_BACKEND": "cc"}
+            ),
+            cell("pytorch", "cpu", "eager", [2.3026, 2.3010]),
+        ]
+        orchestrate.parity_check(rows)
+
+        text = self.report(rows)
+
+        self.assertIn(
+            'ambient OCANNL_* environment: {"OCANNL_BACKEND": "cc"}\n', text
+        )
+        self.assertNotIn("not recorded", text)
+
+    def test_rows_predating_the_stamp_do_not_claim_a_clean_shell(self):
+        # Nothing at report time can recover what the shell held while the numbers were taken, so
+        # an unstamped row's silence stays silence rather than becoming evidence of `none`.
+        rows = [cell("ocannl", "cc", "default", [2.3026, 2.3010])]
+        orchestrate.parity_check(rows)
+
+        text = self.report(rows)
+
+        self.assertIn("ambient OCANNL_* environment: not recorded\n", text)
+        self.assertNotIn("environment: none", text)
+
+    def test_the_recorded_environment_survives_into_the_raw_rows(self):
+        # The report line is a summary; the per-row stamp is what a later script reads, and it has
+        # to be JSON like everything else results.jsonl carries.
+        rows = [
+            orchestrate.stamp_ambient_env(
+                cell("ocannl", "cc", "default", [2.3026, 2.3010]),
+                {"OCANNL_NARROW_COMPUTE_F32": "true"},
+            )
+        ]
+        orchestrate.parity_check(rows)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            with contextlib.redirect_stdout(io.StringIO()):
+                orchestrate.report(rows, out)
+            [row] = [
+                strict_loads(line)
+                for line in (out / "results.jsonl").read_text().splitlines()
+                if line
+            ]
+
+        self.assertEqual(row["ambient_ocannl_env"], {"OCANNL_NARROW_COMPUTE_F32": "true"})
+
+    def report(self, rows):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            with contextlib.redirect_stdout(io.StringIO()):
+                orchestrate.report(rows, out)
+            return (out / "report.md").read_text()
+
+
 class CommandLineTest(unittest.TestCase):
     """What the flags parse to — the wiring between a module constant and the sweep.
 

@@ -375,6 +375,43 @@ def precision_env(precision):
     return env
 
 
+def ambient_ocannl_env(base):
+    """Every OCANNL_* variable the sweep inherited, with its value (gh-ocannl-720).
+
+    `cell_env` passes the operator's environment straight through, so ANY configuration key can
+    reach the OCANNL cells from it, while the regime gate (gh-ocannl-719) cross-checks only the
+    keys the `approximate` payload owns. `narrow_compute_f32`, `cc_vector_bytes`,
+    `cc_backend_arch_flags`, an `autotune_*` outside the payload, and every key added later all
+    change what was measured, with nothing in the artifact saying so.
+
+    Recording is deliberately not refusing, and nothing here is filtered out: the sweep
+    dispatches `OCANNL_BACKEND` itself, and `OCANNL_AUTOTUNE_LOG` / `OCANNL_AUTOTUNE_CACHE_DIR`
+    are documented ways to run one (benchmarks/README.md), so a stripping rule would have to
+    guess which of the rest are legitimate -- and the ones worth catching are the keys nobody has
+    thought of yet. What the stamp buys is that a reader of the numbers can see the environment
+    they were taken in, whatever it was, instead of assuming a clean one.
+
+    The values are recorded VERBATIM, non-UTF-8 bytes included: on POSIX an environment value is
+    bytes, which `os.environ` hands over surrogate-escaped, and a provenance record that mangles
+    what it records is not one -- `json.dumps` escapes a lone surrogate like any other character
+    it cannot spell (`ensure_ascii`), so results.jsonl carries it losslessly and reads back
+    identical. Only TEXT rendering cannot hold it, which is `ambient_env_line`'s business.
+    """
+    return {key: base[key] for key in sorted(base) if key.startswith("OCANNL_")}
+
+
+def stamp_ambient_env(result, ambient):
+    """Record on an OCANNL row the ambient OCANNL_* environment its cell was dispatched with.
+
+    OCANNL rows only: the torch and tinygrad runners read none of these, and a row that carried
+    them would invite reading a torch number as though the variables had reached it. A copy, not
+    the collected dict itself, so one mapping cannot end up shared by every row of the sweep.
+    """
+    if result.get("framework") == "ocannl":
+        result["ambient_ocannl_env"] = dict(ambient)
+    return result
+
+
 def cell_env(base, fixture, variant, precision):
     """The environment an OCANNL cell is dispatched with."""
     env = dict(
@@ -1300,7 +1337,80 @@ def cell_timeout_arg(text):
     return seconds
 
 
-def report(results, out_dir, unavailable=(), failures=(), digests_path=None):
+def recorded_ambient_env(results):
+    """The one ambient OCANNL_* environment this report's OCANNL rows agree on, or None.
+
+    A sweep runs under ONE environment, so a report renders one -- and a set of rows that does
+    not agree on it is refused rather than rendered, exactly as a set that does not agree on its
+    measurement-box declaration is. Two header lines could only say that two environments exist
+    somewhere in the tables, never which row was measured under which; swapping the stamps of a
+    `cc` row and a `metal` row would leave the report byte-identical, which is a provenance
+    record that records nothing (Codex P2 round 2). Rendering the rows separately is the remedy,
+    and the refusal says so.
+
+    Unstamped OCANNL rows are part of that agreement: `not recorded` is a reading like any other,
+    and pairing it with a recorded environment leaves the same ambiguity. Only OCANNL rows count
+    -- a torch or tinygrad row carries no stamp by design.
+    """
+    ours = [r for r in results if r.get("framework") == "ocannl"]
+    recorded = sorted(
+        {
+            tuple(sorted(r["ambient_ocannl_env"].items()))
+            for r in ours
+            if isinstance(r.get("ambient_ocannl_env"), dict)
+        }
+    )
+    unstamped = any(not isinstance(r.get("ambient_ocannl_env"), dict) for r in ours)
+    if len(recorded) > 1 or (recorded and unstamped):
+        named = [repr(dict(env)) for env in recorded] + (["not recorded"] if unstamped else [])
+        raise ValueError(
+            "cannot combine OCANNL result rows measured under different ambient OCANNL_* "
+            "environments (render them as separate reports): " + ", ".join(named)
+        )
+    return dict(recorded[0]) if recorded else None
+
+
+def ambient_env_line(results, ambient=None):
+    """The report's header record of the OCANNL_* environment its OCANNL cells ran under.
+
+    Printed beside the measurement boxes because it is the same kind of fact: a number is read
+    against the machine AND the configuration it was taken under. It is a fact about the SWEEP,
+    not about a row, so `main` passes what it collected and a report says it even when every
+    OCANNL cell failed and no row survives to carry it. A re-render of stored rows has no sweep
+    to ask and derives it from them instead. Either way the rows are checked for agreement, with
+    each other and with a supplied value: a header that printed one environment over rows stamped
+    with another would misattribute the very measurements results.jsonl records correctly.
+
+    Rendered as a JSON object, which is the only rendering that cannot be forged or collapsed by
+    what an environment variable is allowed to contain (Codex P2 round 2): a value holding a
+    newline would otherwise open a second apparent header line, and any escaping that leaves
+    ordinary values untouched maps a real 0xff byte and the four literal characters `\xff` onto
+    the same text, so two different cache directories would dedupe into one environment. Quoting
+    both key and value keeps every distinction the row keeps, lone surrogates included.
+
+    `none` is a recorded empty environment; `not recorded` is a report whose OCANNL rows never
+    carried the stamp, which is not the same thing -- nothing at report time can recover what the
+    shell held at measurement time, so silence stays silence.
+    """
+    # Unconditionally, not only when deriving: the sweep's own value is what the header would
+    # otherwise print over rows that disagree with it and with each other, leaving results.jsonl
+    # holding stamps the report contradicts (Codex P2 round 3).
+    recorded = recorded_ambient_env(results)
+    if ambient is None:
+        ambient = recorded
+    elif recorded is not None and recorded != ambient:
+        raise ValueError(
+            "the sweep's ambient OCANNL_* environment disagrees with what its rows recorded: "
+            f"{ambient!r} against {recorded!r}"
+        )
+    if ambient is None:
+        return "ambient OCANNL_* environment: not recorded"
+    if not ambient:
+        return "ambient OCANNL_* environment: none"
+    return "ambient OCANNL_* environment: " + json.dumps(ambient, sort_keys=True)
+
+
+def report(results, out_dir, unavailable=(), failures=(), digests_path=None, ambient=None):
     out_dir.mkdir(parents=True, exist_ok=True)
     digests_path = digests_path or HERE / "fixtures" / fixture_digest.DIGEST_FILE
     digest_entries = fixture_digest.read_digests(digests_path)
@@ -1324,6 +1434,11 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None):
     measurement_boxes = (
         list(next(iter(recorded_box_sets))) if recorded_box_sets else current_measurement_boxes
     )
+    # Rendered before anything is written, beside the measurement-box refusal above and for the
+    # same reason: a rejected re-render must leave the output directory as it found it. Raising
+    # after results.jsonl was overwritten would pair fresh raw rows with the report.md a previous
+    # sweep left there, which describes different measurements (Codex P2 round 4).
+    ambient_line = ambient_env_line(results, ambient)
     with open(out_dir / "results.jsonl", "w") as f:
         for r in results:
             # allow_nan=False so a non-finite value this sweep computed itself cannot slip out as
@@ -1347,6 +1462,7 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None):
         + ", ".join(measurement_boxes)
         + "\n"
     )
+    lines.append(ambient_line + "\n")
     for workload in sorted({r["workload"] for r in results}):
         lines.append(f"\n## {workload}\n")
         rows = [r for r in results if r["workload"] == workload]
@@ -1726,6 +1842,12 @@ def main():
     partial_failures = HERE / "results" / "partial-failures.jsonl"
     partial_failures.write_text("")
 
+    # What OCANNL configuration the operator's shell was already carrying when the sweep started
+    # (gh-ocannl-720). Read once, before a cell can change it, and stamped onto every OCANNL row:
+    # the cells inherit this environment, and only the approximate payload's keys are otherwise
+    # accounted for.
+    ambient = ambient_ocannl_env(os.environ)
+
     # The fixture the cells currently being dispatched are measuring — stamped onto every result
     # so a row, and the report built from it, states its own workload identity (gh-ocannl-645)
     # rather than leaving it to how the operator ran the sweep.
@@ -1741,13 +1863,24 @@ def main():
         """
         failures.append((label, note))
         with open(partial_failures, "a") as f:
-            f.write(json.dumps({"cell": label, "why": note}) + "\n")
+            # The ambient environment rides on the failure record too: a sweep whose OCANNL cells
+            # all failed -- which is what an ambient setting they cannot run under looks like --
+            # leaves no result row to carry it, and the checkpoint an interrupted run leaves is
+            # then the only artifact there is. It says what the SWEEP inherited, not what a runner
+            # read: a failed cell produced no result line to name its framework.
+            f.write(
+                json.dumps(
+                    {"cell": label, "why": note, "ambient_ocannl_env": ambient}
+                )
+                + "\n"
+            )
 
     def collect(label, cmd, override=None, **kwargs):
         t0 = time.monotonic()
         r, note = run_cell(label, cmd, timeout=args.cell_timeout, **kwargs)
         if r:
             r.update(stamp)
+            stamp_ambient_env(r, ambient)
             if override:
                 r.update(override)
             results.append(r)
@@ -1912,7 +2045,7 @@ def main():
     provenance_violations = provenance_check(results)
     tensorization_mismatches = tensorization_check(results)
     regime_mismatches = regime_check(results)
-    report(results, HERE / "results", unavailable, failures)
+    report(results, HERE / "results", unavailable, failures, ambient=ambient)
     ok = True
     if unavailable:
         # Not a failure: these cells were requested but the workload cannot express them. Saying so
