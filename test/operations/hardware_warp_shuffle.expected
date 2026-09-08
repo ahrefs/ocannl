@@ -22,3 +22,5 @@ under Fp16_wide the emitted f16 shuffle declares its staging register and its pe
 a Workgroup_reduce level holding a sibling statement beside a lane-invariant self-updating Set is refused where a lane index is bound (GPU: the hardware binding would race the cell) or runs serially (CPU): true
 a Workgroup_reduce level holding a data-dependent guard over a lane-invariant self-updating Set is refused where a lane index is bound (GPU: the guard leaves several lanes on the cell) or runs serially (CPU): true
 a lane-invariant self-updating Set under a guard pinning the lane index to one value is not a race: the hardware binding renders it and one lane performs the update (GPU), or the serial loop admits the one iteration (CPU): true
+a self-update of a per-thread local array beside a sibling statement is not a race under a bound Workgroup_reduce (one array per lane): it renders, and lane 0's fold reads its own scratch: true
+a bound Workgroup_reduce of extent one holding the refused sibling body is not a race (lane 0 alone executes it): it renders with the one term: true

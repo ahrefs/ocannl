@@ -379,14 +379,19 @@ val accum_local_update_parts : id:scope_id -> scalar_t -> (Ops.binop * scalar_t)
     (gh-ocannl-639), and {!peel_accum_nest}'s scope-form validation is built on it. *)
 
 val racing_lane_invariant_update :
-  lane:Indexing.symbol -> t -> (Tnode.t * Indexing.axis_index array) option
+  lane:Indexing.symbol ->
+  shared:(Tnode.t -> bool) ->
+  t ->
+  (Tnode.t * Indexing.axis_index array) option
 (** The race criterion for a level whose index a backend binds to a lane (gh-ocannl-950): the first
-    [Set] under it whose cell does not depend on [lane] and whose value reads that cell — a
+    [Set] to a node [shared] across the lanes (device-resident or workgroup-shared, as against a
+    per-thread local array) whose cell does not depend on [lane] and whose value reads that cell — a
     read-modify-write every lane performs on one cell, a race under any hardware binding — unless it
-    is enclosed by a guard that pins [lane] to one value ([lane == e], [e] free of [lane]). Per-lane
-    cells (which mention the lane), stores that read no cell of their own, [Set_local] and
-    [Zero_out] are not races; a range guard or a data-dependent guard does not exempt what it
-    encloses. *)
+    is enclosed by a guard that pins [lane] to one value ([lane == e] with [e] free of [lane], or
+    [lane < c] with [c <= 1]). Per-lane cells (which mention the lane), stores that read no cell of
+    their own, [Set_local] and [Zero_out] are not races; any other range guard or a data-dependent
+    guard does not exempt what it encloses. A level of extent one cannot race either, and is the
+    caller's to exempt, since it owns the bounds. *)
 
 val has_accumulating_cell : t -> bool
 (** Whether the tree holds a SELF-RECURRENCE: some [Set] whose value reads the very cell it writes

@@ -5799,8 +5799,12 @@ let has_accumulating_cell (llc : t) : bool =
    lane, so what it encloses is not raced and is skipped; a range guard ([i < c]) or a
    data-dependent one leaves several lanes on the cell and does not exempt it. [Set_local] and
    [Zero_out] are never a race: a scope local is per lane, and every lane zeroing one cell writes
-   the same bytes. Returns the first racing statement's node and cell. *)
-let racing_lane_invariant_update ~(lane : Indexing.symbol) (llc : t) :
+   the same bytes. Only storage the lanes SHARE can race: [shared] says whether a node's cell is one
+   cell for every lane (device-resident, or workgroup-shared) rather than a per-thread local array,
+   which the renderer declares once per thread. A pinning guard exempts what it encloses; a level of
+   extent one is the caller's to exempt, since the bounds are the caller's (Codex P2s on
+   staging#674). Returns the first racing statement's node and cell. *)
+let racing_lane_invariant_update ~(lane : Indexing.symbol) ~(shared : Tnode.t -> bool) (llc : t) :
     (Tnode.t * Indexing.axis_index array) option =
   let is_lane = function
     | Embed_index (Indexing.Iterator s) -> Indexing.equal_symbol s lane
@@ -5811,6 +5815,8 @@ let racing_lane_invariant_update ~(lane : Indexing.symbol) (llc : t) :
     | Binop (Ops.Cmpeq, (a, _), (b, _)) ->
         (is_lane a && not (scalar_mentions_symbol lane b))
         || (is_lane b && not (scalar_mentions_symbol lane a))
+    (* [i < 1] admits lane 0 alone: the synthetic launch guard of a one-iteration level. *)
+    | Binop (Ops.Cmplt, (a, _), (Constant c, _)) when is_lane a -> Float.(c <= 1.)
     | _ -> false
   in
   let rec go (llc : t) =
@@ -5820,7 +5826,8 @@ let racing_lane_invariant_update ~(lane : Indexing.symbol) (llc : t) :
     | If { cond = c, _; body } -> if pins_lane c then None else go body
     | Set { tn; idcs; llsc; _ } ->
         if
-          (not (Array.exists idcs ~f:(axis_index_mentions_symbol lane)))
+          shared tn
+          && (not (Array.exists idcs ~f:(axis_index_mentions_symbol lane)))
           && reads_cell ~tn ~idcs llsc
         then Some (tn, idcs)
         else None

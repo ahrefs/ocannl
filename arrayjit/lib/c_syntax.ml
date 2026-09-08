@@ -4974,8 +4974,18 @@ module C_syntax (B : C_syntax_config) = struct
                        as [Accum_not_a_nest] and which fell through to the binding until
                        gh-ocannl-950. The race criterion, not the nest criterion, is what tells the
                        two apart: [Low_level.racing_lane_invariant_update]. *)
+                    (* Shared across the lanes: device-resident (materialized) or workgroup-shared
+                       storage. A per-thread local array is one array per lane and cannot race. A
+                       level of extent one binds lane 0 alone and cannot race either. *)
+                    let shared tn =
+                      Set.mem !current_workgroup_shared tn
+                      || Tn.Placements.is_materialized_force (placements ()) tn 950
+                    in
                     match
-                      Low_level.racing_lane_invariant_update ~lane:i (Low_level.unflat_lines stmts)
+                      if to_ - from_ + 1 <= 1 then None
+                      else
+                        Low_level.racing_lane_invariant_update ~lane:i ~shared
+                          (Low_level.unflat_lines stmts)
                     with
                     | None -> None
                     | Some (tn, idcs) ->

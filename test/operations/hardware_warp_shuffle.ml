@@ -667,6 +667,15 @@ let claim_lane_pinned_renders =
    race: the hardware binding renders it and one lane performs the update (GPU), or the serial \
    loop admits the one iteration (CPU)"
 
+let claim_local_scratch_renders =
+  "a self-update of a per-thread local array beside a sibling statement is not a race under a \
+   bound Workgroup_reduce (one array per lane): it renders, and lane 0's fold reads its own \
+   scratch"
+
+let claim_extent_one_renders =
+  "a bound Workgroup_reduce of extent one holding the refused sibling body is not a race (lane 0 \
+   alone executes it): it renders with the one term"
+
 let () =
   let n = 32 in
   let gv = Array.init n ~f:(fun k -> (Float.of_int (k % 9) *. 0.5) -. 2.) in
@@ -760,4 +769,74 @@ let () =
   if on_gpu || on_cpu then
     p claim_lane_pinned_renders
       (approx (run ~name:"race_pinned_wshfl" ~transform:pinned_transform ps) gv.(0))
-  else skipped claim_lane_pinned_renders
+  else skipped claim_lane_pinned_renders;
+  (* Per-thread local scratch: a self-update of a kernel-local array beside a sibling is one array
+     per lane, so it is not a race (Codex P2 on staging#674). The scratch is written, then
+     self-updated, then folded into [s] by lane 0 alone: [2 * x[0]] on every backend — on a GPU lane
+     0's own scratch holds [2 * x[0]], serially the last iteration before [i = 0]'s fold is [i = 0]
+     itself. *)
+  let scratch =
+    Tn.create (Tn.Specified single) ~id:999006 ~label:[ "race_scratch" ]
+      ~unpadded_dims:(lazy [| 1 |])
+      ~padding:(lazy None)
+      ()
+  in
+  Tn.update_memory_mode scratch Tn.Local 993;
+  let lx = TDSL.ndarray gv ~label:[ "race_lx" ] ~output_dims:[ n ] () in
+  let%op ls = lx ++ "i=>0" in
+  let local_transform opt =
+    ignore (LL.get_node opt.LL.traced_store scratch : LL.traced_array);
+    reduce_transform ~n ls.Tensor.value opt ~body_of:(fun i ->
+        LL.Seq
+          ( LL.Set
+              {
+                tn = scratch;
+                idcs = [| f0 |];
+                llsc = Get (lx.Tensor.value, [| it i |]);
+                debug = "";
+              },
+            LL.Seq
+              ( update scratch lx.Tensor.value i,
+                LL.If
+                  {
+                    cond =
+                      ( Binop (Ir.Ops.Cmpeq, (Embed_index (it i), iprec), (Constant 0., iprec)),
+                        iprec );
+                    body =
+                      LL.Set
+                        {
+                          tn = ls.Tensor.value;
+                          idcs = [| f0 |];
+                          llsc =
+                            Binop
+                              ( Ir.Ops.Add,
+                                (Get (ls.Tensor.value, [| f0 |]), single),
+                                (Get (scratch, [| f0 |]), single) );
+                          debug = "";
+                        };
+                  } ) ))
+  in
+  if on_gpu || on_cpu then
+    p claim_local_scratch_renders
+      (approx (run ~name:"race_local_wshfl" ~transform:local_transform ls) (2. *. gv.(0)))
+  else skipped claim_local_scratch_renders;
+  (* Extent one: a bound level of one iteration executes on lane 0 alone, so the sibling body that
+     is refused over 32 lanes renders here, and the value is the one term. *)
+  (* The full operand, not a one-element one: a one-element constant is inlined and would not be a
+     kernel parameter for the transformed body to read. The one-iteration level reads its first
+     term only. *)
+  let ox = TDSL.ndarray gv ~label:[ "race_ox" ] ~output_dims:[ n ] () in
+  let%op os = ox ++ "i=>0" in
+  let one_transform opt =
+    ignore (LL.get_node opt.LL.traced_store side : LL.traced_array);
+    reduce_transform ~n:1 os.Tensor.value opt ~body_of:(fun i ->
+        LL.Seq
+          ( update os.Tensor.value ox.Tensor.value i,
+            LL.Set
+              { tn = side; idcs = [| it i |]; llsc = Get (ox.Tensor.value, [| it i |]); debug = "" }
+          ))
+  in
+  if on_gpu || on_cpu then
+    p claim_extent_one_renders
+      (approx (run ~name:"race_extent1_wshfl" ~transform:one_transform os) gv.(0))
+  else skipped claim_extent_one_renders
