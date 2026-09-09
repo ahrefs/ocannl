@@ -95,12 +95,14 @@ let if_ cond body : LL.t = LL.If { cond = (cond, single); body }
 
 (** [loop ~upto s body] iterates [s] over [0 .. upto] INCLUSIVE, mirroring
     {!Ir.Low_level.For_loop}'s own bounds; [upto < 0] is a dead loop, which is a case worth
-    building. *)
-let loop ?(from_ = 0) ~upto s body : LL.t =
-  LL.For_loop { index = s; from_; to_ = upto; body; axis = Serial }
+    building. [~axis] declares the loop's hardware axis ({!Ir.Low_level.Serial} by default): the
+    tests that judge a binding — a [Grid] block loop, a [Workgroup] lane, a [Workgroup_reduce]
+    accumulation — name it here rather than spelling the record. *)
+let loop ?(from_ = 0) ?(axis = LL.Serial) ~upto s body : LL.t =
+  LL.For_loop { index = s; from_; to_ = upto; body; axis }
 
 (** [loop_n s n body] iterates [s] over a range of WIDTH [n], i.e. [0 .. n-1]. *)
-let loop_n s n body : LL.t = loop ~upto:(n - 1) s body
+let loop_n ?axis s n body : LL.t = loop ?axis ~upto:(n - 1) s body
 
 (** [set_at tn idx llsc] writes the single-axis cell [idx] — [set] over a one-element index array,
     which is the shape of every hand-built one-dimensional case. *)

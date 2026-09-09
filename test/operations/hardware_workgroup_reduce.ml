@@ -20,7 +20,7 @@ open Ocannl.Operation.DSL_modules
 module Tn = Ir.Tnode
 module LL = Ir.Low_level
 module Asgns = Ir.Assignments
-module Idx = Ir.Indexing
+module L = Ll_test
 
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
@@ -38,7 +38,6 @@ module Generated = Test_utils.Generated
 
 let () = Generated.init ~backend_name
 let single = Ir.Ops.single
-let iprec = Ir.Ops.index_prec ()
 
 (* Replace the lowered serial sum with the hand-built workgroup tree reduction. *)
 let group_reduce ~(v : Tn.t) ~(s : Tn.t) (opt : LL.optimized) : LL.optimized =
@@ -51,55 +50,22 @@ let group_reduce ~(v : Tn.t) ~(s : Tn.t) (opt : LL.optimized) : LL.optimized =
   Tn.update_memory_mode partial Tn.Local 991;
   (* Register the tile in the traced store so [compile_proc]'s local-declaration pass sees it. *)
   ignore (LL.get_node opt.traced_store partial : LL.traced_array);
-  let it i = Idx.Iterator i in
+  let it = L.iter in
+  let f0 = L.fixed 0 in
   let wg body_f : LL.t =
-    let i = Idx.get_symbol () in
-    LL.For_loop { index = i; from_ = 0; to_ = n - 1; body = body_f i; axis = Workgroup_reduce }
+    let i = L.sym () in
+    L.loop_n ~axis:LL.Workgroup_reduce i n (body_f i)
   in
-  let load =
-    wg (fun i -> LL.Set { tn = partial; idcs = [| it i |]; llsc = Get (v, [| it i |]); debug = "" })
-  in
+  let load = wg (fun i -> L.set_at partial (it i) (L.get v [| it i |])) in
   let stage stride =
     wg (fun i ->
-        LL.If
-          {
-            cond =
-              ( LL.Binop
-                  ( Ir.Ops.Cmplt,
-                    (LL.Embed_index (it i), iprec),
-                    (LL.Constant (Float.of_int stride), iprec) ),
-                iprec );
-            body =
-              LL.Set
-                {
-                  tn = partial;
-                  idcs = [| it i |];
-                  llsc =
-                    Binop
-                      ( Ir.Ops.Add,
-                        (Get (partial, [| it i |]), single),
-                        ( Get (partial, [| Idx.Affine { symbols = [ (1, i) ]; offset = stride } |]),
-                          single ) );
-                  debug = "";
-                };
-          })
+        L.if_idx
+          (L.lt (L.embed i) (L.ic stride))
+          (L.set_at partial (it i)
+             (L.add (L.get partial [| it i |]) (L.get partial [| L.aff [ (1, i) ] stride |]))))
   in
   let write_out =
-    wg (fun i ->
-        LL.If
-          {
-            cond =
-              ( LL.Binop (Ir.Ops.Cmpeq, (LL.Embed_index (it i), iprec), (LL.Constant 0., iprec)),
-                iprec );
-            body =
-              LL.Set
-                {
-                  tn = s;
-                  idcs = [| Idx.Fixed_idx 0 |];
-                  llsc = Get (partial, [| Idx.Fixed_idx 0 |]);
-                  debug = "";
-                };
-          })
+    wg (fun i -> L.if_idx (L.eq (L.embed i) (L.ic 0)) (L.set_at s f0 (L.get partial [| f0 |])))
   in
   let strides = [ 32; 16; 8; 4; 2; 1 ] in
   let stmts =

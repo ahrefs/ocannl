@@ -33,8 +33,8 @@ open Ocannl.Operation.DSL_modules
 module Tn = Ir.Tnode
 module LL = Ir.Low_level
 module Asgns = Ir.Assignments
-module Idx = Ir.Indexing
 module Numerics = Ir.Numerics
+module L = Ll_test
 
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
@@ -103,12 +103,8 @@ let named name (comp : Asgns.comp) : Asgns.comp =
    the accumulation the same all-zeros starting point as the serial lowering. *)
 let reduce_transform ~n ~body_of (s : Tn.t) (opt : LL.optimized) : LL.optimized =
   (LL.get_node opt.traced_store s).LL.zero_initialized_by_code <- false;
-  let i = Idx.get_symbol () in
-  {
-    opt with
-    llc =
-      LL.For_loop { index = i; from_ = 0; to_ = n - 1; body = body_of i; axis = Workgroup_reduce };
-  }
+  let i = L.sym () in
+  { opt with llc = L.loop_n ~axis:LL.Workgroup_reduce i n (body_of i) }
 
 let run ~name ~transform t =
   let comp = named name (Train.forward t) in
@@ -119,8 +115,8 @@ let run ~name ~transform t =
   let ctx = Context.run ctx routine in
   (Context.get_values ctx t.Tensor.value).(0)
 
-let it i = Idx.Iterator i
-let f0 = Idx.Fixed_idx 0
+let it = L.iter
+let f0 = L.fixed 0
 
 let () =
   (* --- Two-phase sum: 128 = 4 warps of 32. --- *)
@@ -136,17 +132,8 @@ let () =
     run ~name:"sum_wshfl"
       ~transform:
         (reduce_transform ~n s1.Tensor.value ~body_of:(fun i ->
-             LL.Set
-               {
-                 tn = s1.Tensor.value;
-                 idcs = [| f0 |];
-                 llsc =
-                   Binop
-                     ( Ir.Ops.Add,
-                       (Get (s1.Tensor.value, [| f0 |]), single),
-                       (Get (v.Tensor.value, [| it i |]), single) );
-                 debug = "";
-               }))
+             L.set_at s1.Tensor.value f0
+               (L.add (L.get s1.Tensor.value [| f0 |]) (L.get v.Tensor.value [| it i |]))))
       s1
   in
   p "warp-shuffle sum parity" (approx got expected_sum);
@@ -170,18 +157,12 @@ let () =
     run ~name:"dot_wshfl"
       ~transform:
         (reduce_transform ~n:m d1.Tensor.value ~body_of:(fun i ->
-             LL.Set
-               {
-                 tn = d1.Tensor.value;
-                 idcs = [| f0 |];
-                 llsc =
-                   Ternop
-                     ( Ir.Ops.FMA,
-                       (Get (va.Tensor.value, [| it i |]), single),
-                       (Get (vb.Tensor.value, [| it i |]), single),
-                       (Get (d1.Tensor.value, [| f0 |]), single) );
-                 debug = "";
-               }))
+             L.set_at d1.Tensor.value f0
+               (Ternop
+                  ( Ir.Ops.FMA,
+                    (L.get va.Tensor.value [| it i |], single),
+                    (L.get vb.Tensor.value [| it i |], single),
+                    (L.get d1.Tensor.value [| f0 |], single) ))))
       d1
   in
   p "warp-shuffle fma dot parity" (approx got_dot expected_dot);
@@ -204,17 +185,9 @@ let () =
     run ~name:"max_wshfl"
       ~transform:
         (reduce_transform ~n:q x1.Tensor.value ~body_of:(fun i ->
-             LL.Set
-               {
-                 tn = x1.Tensor.value;
-                 idcs = [| f0 |];
-                 llsc =
-                   Binop
-                     ( Ir.Ops.Max,
-                       (Get (x1.Tensor.value, [| f0 |]), single),
-                       (Get (w.Tensor.value, [| it i |]), single) );
-                 debug = "";
-               }))
+             L.set_at x1.Tensor.value f0
+               (L.binop Ir.Ops.Max (L.get x1.Tensor.value [| f0 |])
+                  (L.get w.Tensor.value [| it i |]))))
       x1
   in
   p "warp-shuffle max parity" (approx got_max expected_max);
@@ -228,17 +201,8 @@ let () =
   let%op y1 = u ++ "i=>0" in
   let transform =
     reduce_transform ~n:r y1.Tensor.value ~body_of:(fun i ->
-        LL.Set
-          {
-            tn = y1.Tensor.value;
-            idcs = [| f0 |];
-            llsc =
-              Binop
-                ( Ir.Ops.Add,
-                  (Get (y1.Tensor.value, [| f0 |]), single),
-                  (Get (u.Tensor.value, [| it i |]), single) );
-            debug = "";
-          })
+        L.set_at y1.Tensor.value f0
+          (L.add (L.get y1.Tensor.value [| f0 |]) (L.get u.Tensor.value [| it i |])))
   in
   if on_gpu then
     match
@@ -267,45 +231,16 @@ let () =
   let%op z1 = tt ++ "i=>0" in
   let sibling_transform (opt : LL.optimized) : LL.optimized =
     (LL.get_node opt.traced_store z1.Tensor.value).LL.zero_initialized_by_code <- false;
-    let j = Idx.get_symbol () in
-    let i = Idx.get_symbol () in
+    let j = L.sym () in
+    let i = L.sym () in
     let copy_nest =
-      LL.For_loop
-        {
-          index = j;
-          from_ = 0;
-          to_ = t - 1;
-          axis = Workgroup;
-          body =
-            LL.Set
-              {
-                tn = tt.Tensor.value;
-                idcs = [| it j |];
-                llsc = Get (tt.Tensor.value, [| it j |]);
-                debug = "";
-              };
-        }
+      L.loop ~axis:LL.Workgroup ~upto:(t - 1) j
+        (L.set_at tt.Tensor.value (it j) (L.get tt.Tensor.value [| it j |]))
     in
     let reduce_nest =
-      LL.For_loop
-        {
-          index = i;
-          from_ = 0;
-          to_ = 63;
-          axis = Workgroup_reduce;
-          body =
-            LL.Set
-              {
-                tn = z1.Tensor.value;
-                idcs = [| f0 |];
-                llsc =
-                  Binop
-                    ( Ir.Ops.Add,
-                      (Get (z1.Tensor.value, [| f0 |]), single),
-                      (Get (tt.Tensor.value, [| it i |]), single) );
-                debug = "";
-              };
-        }
+      L.loop ~axis:LL.Workgroup_reduce ~upto:63 i
+        (L.set_at z1.Tensor.value f0
+           (L.add (L.get z1.Tensor.value [| f0 |]) (L.get tt.Tensor.value [| it i |])))
     in
     { opt with llc = LL.Seq (copy_nest, reduce_nest) }
   in
@@ -338,26 +273,10 @@ let () =
   let%op ms = mx ++ "ij=>0" in
   let transform =
     reduce_transform ~n ms.Tensor.value ~body_of:(fun i ->
-        let k = Idx.get_symbol () in
-        LL.For_loop
-          {
-            index = k;
-            from_ = 0;
-            to_ = inner - 1;
-            axis = LL.Serial;
-            body =
-              LL.Set
-                {
-                  tn = ms.Tensor.value;
-                  idcs = [| f0 |];
-                  llsc =
-                    Binop
-                      ( Ir.Ops.Add,
-                        (Get (ms.Tensor.value, [| f0 |]), single),
-                        (Get (mx.Tensor.value, [| it i; it k |]), single) );
-                  debug = "";
-                };
-          })
+        let k = L.sym () in
+        L.loop ~upto:(inner - 1) ~axis:LL.Serial k
+          (L.set_at ms.Tensor.value f0
+             (L.add (L.get ms.Tensor.value [| f0 |]) (L.get mx.Tensor.value [| it i; it k |]))))
   in
   let claim =
     "an unguarded accumulation nest under the Workgroup_reduce level (a Serial level inside it) is \
@@ -401,17 +320,11 @@ let bf16_sum ~name ({ n; term; _ } : rival_fixture) =
   run ~name
     ~transform:
       (reduce_transform ~n s.Tensor.value ~body_of:(fun i ->
-           LL.Set
-             {
-               tn = s.Tensor.value;
-               idcs = [| f0 |];
-               llsc =
-                 Binop
-                   ( Ir.Ops.Add,
-                     (Get (s.Tensor.value, [| f0 |]), bf16),
-                     (Get (x.Tensor.value, [| it i |]), bf16) );
-               debug = "";
-             }))
+           L.set_at s.Tensor.value f0
+             (Binop
+                ( Ir.Ops.Add,
+                  (L.get s.Tensor.value [| f0 |], bf16),
+                  (L.get x.Tensor.value [| it i |], bf16) ))))
     s
 
 let claim_bf16_1w =
@@ -470,17 +383,11 @@ let () =
   Tn.update_prec hs.Tensor.value half;
   let transform =
     reduce_transform ~n hs.Tensor.value ~body_of:(fun i ->
-        LL.Set
-          {
-            tn = hs.Tensor.value;
-            idcs = [| f0 |];
-            llsc =
-              Binop
-                ( Ir.Ops.Add,
-                  (Get (hs.Tensor.value, [| f0 |]), half),
-                  (Get (hx.Tensor.value, [| it i |]), half) );
-            debug = "";
-          })
+        L.set_at hs.Tensor.value f0
+          (Binop
+             ( Ir.Ops.Add,
+               (L.get hs.Tensor.value [| f0 |], half),
+               (L.get hx.Tensor.value [| it i |], half) )))
   in
   if on_gpu then
     match
@@ -518,24 +425,18 @@ let () =
   Tn.update_prec rs.Tensor.value bf16;
   let transform =
     reduce_transform ~n rs.Tensor.value ~body_of:(fun i ->
-        LL.Set
-          {
-            tn = rs.Tensor.value;
-            idcs = [| f0 |];
-            llsc =
-              Binop
-                ( Ir.Ops.Add,
-                  (Get (rs.Tensor.value, [| f0 |]), bf16),
-                  ( Binop
-                      ( Ir.Ops.Mul,
-                        (Get (rx.Tensor.value, [| it i |]), bf16),
-                        ( Unop
-                            ( Ir.Ops.Uint4x32_to_prec_uniform1,
-                              (Constant_bits (Int64.of_int 0x9E3779B9), Ir.Ops.uint4x32) ),
-                          bf16 ) ),
-                    bf16 ) );
-            debug = "";
-          })
+        L.set_at rs.Tensor.value f0
+          (Binop
+             ( Ir.Ops.Add,
+               (L.get rs.Tensor.value [| f0 |], bf16),
+               ( Binop
+                   ( Ir.Ops.Mul,
+                     (L.get rx.Tensor.value [| it i |], bf16),
+                     ( Unop
+                         ( Ir.Ops.Uint4x32_to_prec_uniform1,
+                           (Constant_bits (Int64.of_int 0x9E3779B9), Ir.Ops.uint4x32) ),
+                       bf16 ) ),
+                 bf16 ) )))
   in
   if widens_bf16 && on_gpu then
     match
@@ -585,17 +486,11 @@ let f16_sum ~name ({ n; term; _ } : rival_fixture) =
   run ~name
     ~transform:
       (reduce_transform ~n s.Tensor.value ~body_of:(fun i ->
-           LL.Set
-             {
-               tn = s.Tensor.value;
-               idcs = [| f0 |];
-               llsc =
-                 Binop
-                   ( Ir.Ops.Add,
-                     (Get (s.Tensor.value, [| f0 |]), half),
-                     (Get (x.Tensor.value, [| it i |]), half) );
-               debug = "";
-             }))
+           L.set_at s.Tensor.value f0
+             (Binop
+                ( Ir.Ops.Add,
+                  (L.get s.Tensor.value [| f0 |], half),
+                  (L.get x.Tensor.value [| it i |], half) ))))
     s
 
 let claim_f16_wide_1w =
@@ -755,7 +650,6 @@ let claim_tile_mma_refused =
 let () =
   let n = 32 in
   let gv = Array.init n ~f:(fun k -> (Float.of_int (k % 9) *. 0.5) -. 2.) in
-  let iprec = Ir.Ops.index_prec () in
   let run_values ~name ~transform t =
     let comp = named name (Train.forward t) in
     let ctx = Context.auto () in
@@ -771,15 +665,7 @@ let () =
       None
     with Invalid_argument msg -> Some msg
   in
-  let update s x i =
-    LL.Set
-      {
-        tn = s;
-        idcs = [| f0 |];
-        llsc = Binop (Ir.Ops.Add, (Get (s, [| f0 |]), single), (Get (x, [| it i |]), single));
-        debug = "";
-      }
-  in
+  let update s x i = L.set_at s f0 (L.add (L.get s [| f0 |]) (L.get x [| it i |])) in
   (* A refusal is the typed [hardware_binding_race] cause, [Invalid_argument] at the compile
      boundary; the phrase is the rule's own statement of what went wrong. *)
   let refusal_phrase = "from more than one thread" in
@@ -801,16 +687,7 @@ let () =
     (LL.get_node opt.LL.traced_store s).LL.zero_initialized_by_code <- false;
     { opt with llc = llc_of () }
   in
-  let for_ ?(from_ = 0) ~upto ~axis index body : LL.t =
-    LL.For_loop { index; from_; to_ = upto; axis; body }
-  in
-  let pin i body : LL.t =
-    LL.If
-      {
-        cond = (Binop (Ir.Ops.Cmpeq, (Embed_index (it i), iprec), (Constant 0., iprec)), iprec);
-        body;
-      }
-  in
+  let pin i body : LL.t = L.if_idx (L.eq (L.embed i) (L.ic 0)) body in
   (* Sibling: a per-lane store into a fresh kernel-local array, registered in the traced store the
      way [hardware_workgroup_reduce] registers its tile. Per-lane, so the sibling itself is no race;
      it is what keeps the level from being a single accumulation statement. *)
@@ -825,9 +702,7 @@ let () =
     ignore (LL.get_node opt.LL.traced_store side : LL.traced_array);
     opt
   in
-  let side_store x i =
-    LL.Set { tn = side; idcs = [| it i |]; llsc = Get (x, [| it i |]); debug = "" }
-  in
+  let side_store x i = L.set_at side (it i) (L.get x [| it i |]) in
   let sx = TDSL.ndarray gv ~label:[ "race_sx" ] ~output_dims:[ n ] () in
   let%op ss = sx ++ "i=>0" in
   let sibling_transform opt =
@@ -842,14 +717,9 @@ let () =
   let%op ds = dx ++ "i=>0" in
   let data_guard_transform =
     reduce_transform ~n ds.Tensor.value ~body_of:(fun i ->
-        LL.If
-          {
-            cond =
-              ( Binop
-                  (Ir.Ops.Cmplt, (Constant 0., single), (Get (dx.Tensor.value, [| it i |]), single)),
-                single );
-            body = update ds.Tensor.value dx.Tensor.value i;
-          })
+        L.if_
+          (L.binop Ir.Ops.Cmplt (L.c 0.) (L.get dx.Tensor.value [| it i |]))
+          (update ds.Tensor.value dx.Tensor.value i))
   in
   let expected_positive =
     Array.fold gv ~init:0. ~f:(fun acc x -> if Float.(x > 0.) then acc +. x else acc)
@@ -872,9 +742,9 @@ let () =
   let%op pgs = pgx ++ "i=>0" in
   let pin_grid_transform =
     replace ~s:pgs.Tensor.value ~llc_of:(fun () ->
-        let b = Idx.get_symbol () and i = Idx.get_symbol () in
-        for_ ~upto:1 ~axis:LL.Grid b
-          (for_ ~upto:(n - 1) ~axis:LL.Workgroup_reduce i
+        let b = L.sym () and i = L.sym () in
+        L.loop ~upto:1 ~axis:LL.Grid b
+          (L.loop ~upto:(n - 1) ~axis:LL.Workgroup_reduce i
              (pin i (update pgs.Tensor.value pgx.Tensor.value i))))
   in
   (* On cc the same Grid loop renders as pool chunks wherever a pool was probed, and that binding is
@@ -897,27 +767,16 @@ let () =
      order. (What OTHER statements' threads do to the pinned cell is dependence analysis over
      barrier regions, outside the binding rule — the tensorized pipeline zeroes on every lane and
      stores back from lane 0 across the intrinsic's barrier.) *)
-  let store_at s v : LL.t = LL.Set { tn = s; idcs = [| f0 |]; llsc = v; debug = "" } in
-  let pin_at i c body : LL.t =
-    LL.If
-      {
-        cond =
-          ( Binop (Ir.Ops.Cmpeq, (Embed_index (it i), iprec), (Constant (Float.of_int c), iprec)),
-            iprec );
-        body;
-      }
-  in
+  let store_at s v : LL.t = L.set_at s f0 v in
+  let pin_at i c body : LL.t = L.if_idx (L.eq (L.embed i) (L.ic c)) body in
   let two_pins ~same (s : Tensor.t) (x : Tensor.t) =
     reduce_transform ~n s.Tensor.value ~body_of:(fun i ->
         LL.Seq
-          ( pin_at i 0 (store_at s.Tensor.value (Get (x.Tensor.value, [| Idx.Fixed_idx 0 |]))),
+          ( pin_at i 0 (store_at s.Tensor.value (L.get x.Tensor.value [| f0 |])),
             pin_at i
               (if same then 0 else 1)
               (store_at s.Tensor.value
-                 (Binop
-                    ( Ir.Ops.Add,
-                      (Get (s.Tensor.value, [| f0 |]), single),
-                      (Get (x.Tensor.value, [| Idx.Fixed_idx 1 |]), single) ))) ))
+                 (L.add (L.get s.Tensor.value [| f0 |]) (L.get x.Tensor.value [| L.fixed 1 |]))) ))
   in
   let spx = TDSL.ndarray gv ~label:[ "race_spx" ] ~output_dims:[ n ] () in
   let%op sps = spx ++ "i=>0" in
@@ -940,23 +799,10 @@ let () =
     ignore (LL.get_node opt.LL.traced_store scratch : LL.traced_array);
     reduce_transform ~n ls.Tensor.value opt ~body_of:(fun i ->
         LL.Seq
-          ( LL.Set
-              {
-                tn = scratch;
-                idcs = [| f0 |];
-                llsc = Get (lx.Tensor.value, [| it i |]);
-                debug = "";
-              },
+          ( L.set_at scratch f0 (L.get lx.Tensor.value [| it i |]),
             LL.Seq
               ( update scratch lx.Tensor.value i,
-                pin i
-                  (LL.Set
-                     {
-                       tn = ls.Tensor.value;
-                       idcs = [| f0 |];
-                       llsc = Get (scratch, [| f0 |]);
-                       debug = "";
-                     }) ) ))
+                pin i (L.set_at ls.Tensor.value f0 (L.get scratch [| f0 |])) ) ))
   in
   renders_leg claim_local_scratch_renders ~name:"race_local_wshfl" ~transform:local_transform ls
     ~value:(2. *. gv.(0));
@@ -978,15 +824,8 @@ let () =
   let projection_transform opt =
     reduce_transform ~n ps2.Tensor.value (with_side opt) ~body_of:(fun i ->
         LL.Seq
-          ( LL.Set
-              {
-                tn = ps2.Tensor.value;
-                idcs = [| f0 |];
-                llsc =
-                  Binop
-                    (Ir.Ops.Arg2, (Get (ps2.Tensor.value, [| f0 |]), single), (Constant 3., single));
-                debug = "";
-              },
+          ( L.set_at ps2.Tensor.value f0
+              (L.binop Ir.Ops.Arg2 (L.get ps2.Tensor.value [| f0 |]) (L.c 3.)),
             side_store px2.Tensor.value i ))
   in
   refused_leg claim_projection_store_refused ~name:"race_projection_wshfl"
@@ -1009,27 +848,12 @@ let () =
     let opt =
       reduce_transform ~n hs.Tensor.value opt ~body_of:(fun i ->
           LL.Seq
-            ( LL.Set
-                {
-                  tn = tile;
-                  idcs = [| it i |];
-                  llsc = Get (hx.Tensor.value, [| it i |]);
-                  debug = "";
-                },
+            ( L.set_at tile (it i) (L.get hx.Tensor.value [| it i |]),
               LL.Seq
                 ( LL.Workgroup_barrier,
                   pin i
-                    (LL.Set
-                       {
-                         tn = hs.Tensor.value;
-                         idcs = [| f0 |];
-                         llsc =
-                           Binop
-                             ( Ir.Ops.Add,
-                               (Get (tile, [| Idx.Fixed_idx 0 |]), single),
-                               (Get (tile, [| Idx.Fixed_idx 1 |]), single) );
-                         debug = "";
-                       }) ) ))
+                    (L.set_at hs.Tensor.value f0
+                       (L.add (L.get tile [| f0 |]) (L.get tile [| L.fixed 1 |]))) ) ))
     in
     { opt with workgroup_shared = Set.add opt.workgroup_shared tile }
   in
@@ -1048,9 +872,9 @@ let () =
   let%op zs = zx ++ "i=>0" in
   let dead_loop_transform opt =
     reduce_transform ~n zs.Tensor.value (with_side opt) ~body_of:(fun i ->
-        let k = Idx.get_symbol () in
+        let k = L.sym () in
         LL.Seq
-          ( for_ ~from_:1 ~upto:0 ~axis:LL.Serial k (update zs.Tensor.value zx.Tensor.value i),
+          ( L.loop ~from_:1 ~upto:0 ~axis:LL.Serial k (update zs.Tensor.value zx.Tensor.value i),
             side_store zx.Tensor.value i ))
   in
   renders_leg claim_dead_loop_renders ~name:"race_deadloop_wshfl" ~transform:dead_loop_transform zs
@@ -1062,8 +886,7 @@ let () =
   let false_guard_transform opt =
     reduce_transform ~n fs.Tensor.value (with_side opt) ~body_of:(fun i ->
         LL.Seq
-          ( LL.If { cond = (Constant 0., single); body = update fs.Tensor.value fx.Tensor.value i },
-            side_store fx.Tensor.value i ))
+          (L.if_ (L.c 0.) (update fs.Tensor.value fx.Tensor.value i), side_store fx.Tensor.value i))
   in
   renders_leg claim_false_guard_renders ~name:"race_falseguard_wshfl"
     ~transform:false_guard_transform fs ~value:0.;
@@ -1075,22 +898,16 @@ let () =
   let%op macc = mx ++ "ji=>i" in
   let two_axes_transform ~cell =
     replace ~s:macc.Tensor.value ~llc_of:(fun () ->
-        let j = Idx.get_symbol () and i = Idx.get_symbol () in
-        for_ ~upto:1 ~axis:LL.Workgroup j
-          (for_ ~upto:(n - 1) ~axis:LL.Workgroup_reduce i
-             (LL.Set
-                {
-                  tn = macc.Tensor.value;
-                  idcs = [| cell ~i ~j |];
-                  llsc =
-                    Binop
-                      ( Ir.Ops.Add,
-                        (Get (macc.Tensor.value, [| cell ~i ~j |]), single),
-                        (Get (mx.Tensor.value, [| it j; it i |]), single) );
-                  debug = "";
-                })))
+        let j = L.sym () and i = L.sym () in
+        L.loop ~upto:1 ~axis:LL.Workgroup j
+          (L.loop ~upto:(n - 1) ~axis:LL.Workgroup_reduce i
+             (L.set macc.Tensor.value
+                [| cell ~i ~j |]
+                (L.add
+                   (L.get macc.Tensor.value [| cell ~i ~j |])
+                   (L.get mx.Tensor.value [| it j; it i |])))))
   in
-  let sum_cell ~i ~j = Idx.Affine { symbols = [ (1, i); (1, j) ]; offset = 0 } in
+  let sum_cell ~i ~j = L.aff [ (1, i); (1, j) ] 0 in
   (* Serially, [acc[5] = x[0, 5] + x[1, 4]]. *)
   refused_leg claim_mention_not_injective_refused ~index:5 ~name:"race_two_axes_sum_wshfl"
     ~transform:(two_axes_transform ~cell:sum_cell)
@@ -1103,21 +920,14 @@ let () =
   let%op iacc = ix ++ "ji=>i" in
   let injective_transform =
     replace ~s:iacc.Tensor.value ~llc_of:(fun () ->
-        let j = Idx.get_symbol () and i = Idx.get_symbol () in
-        let cell = Idx.Affine { symbols = [ (2, i); (1, j) ]; offset = 0 } in
-        for_ ~upto:1 ~axis:LL.Workgroup j
-          (for_ ~upto:(n - 1) ~axis:LL.Workgroup_reduce i
-             (LL.Set
-                {
-                  tn = iacc.Tensor.value;
-                  idcs = [| cell |];
-                  llsc =
-                    Binop
-                      ( Ir.Ops.Add,
-                        (Get (iacc.Tensor.value, [| cell |]), single),
-                        (Get (ix.Tensor.value, [| it j; it i |]), single) );
-                  debug = "";
-                })))
+        let j = L.sym () and i = L.sym () in
+        let cell = L.aff [ (2, i); (1, j) ] 0 in
+        L.loop ~upto:1 ~axis:LL.Workgroup j
+          (L.loop ~upto:(n - 1) ~axis:LL.Workgroup_reduce i
+             (L.set iacc.Tensor.value [| cell |]
+                (L.add
+                   (L.get iacc.Tensor.value [| cell |])
+                   (L.get ix.Tensor.value [| it j; it i |])))))
   in
   renders_leg claim_injective_map_renders ~index:5 ~name:"race_two_axes_radix_wshfl"
     ~transform:injective_transform iacc
@@ -1129,30 +939,17 @@ let () =
   let%op oacc = ox2 ++ "ji=>i" in
   let outer_pin_transform =
     replace ~s:oacc.Tensor.value ~llc_of:(fun () ->
-        let j = Idx.get_symbol () and i = Idx.get_symbol () in
-        let cell = Idx.Affine { symbols = [ (1, i); (1, j) ]; offset = 0 } in
-        for_ ~upto:1 ~axis:LL.Workgroup j
+        let j = L.sym () and i = L.sym () in
+        let cell = L.aff [ (1, i); (1, j) ] 0 in
+        L.loop ~upto:1 ~axis:LL.Workgroup j
           (pin j
-             (for_ ~upto:(n - 1) ~axis:LL.Workgroup_reduce i
+             (L.loop ~upto:(n - 1) ~axis:LL.Workgroup_reduce i
                 (LL.Seq
-                   ( LL.Set
-                       {
-                         tn = oacc.Tensor.value;
-                         idcs = [| cell |];
-                         llsc =
-                           Binop
-                             ( Ir.Ops.Add,
-                               (Get (oacc.Tensor.value, [| cell |]), single),
-                               (Get (ox2.Tensor.value, [| it j; it i |]), single) );
-                         debug = "";
-                       },
-                     LL.Set
-                       {
-                         tn = side;
-                         idcs = [| it i |];
-                         llsc = Get (ox2.Tensor.value, [| it j; it i |]);
-                         debug = "";
-                       } )))))
+                   ( L.set oacc.Tensor.value [| cell |]
+                       (L.add
+                          (L.get oacc.Tensor.value [| cell |])
+                          (L.get ox2.Tensor.value [| it j; it i |])),
+                     L.set_at side (it i) (L.get ox2.Tensor.value [| it j; it i |]) )))))
   in
   renders_leg claim_outer_pin_narrows ~index:5 ~name:"race_outer_pin_wshfl"
     ~transform:(fun opt -> outer_pin_transform (with_side opt))
@@ -1165,36 +962,18 @@ let () =
   let%op racc = rgx ++ "ji=>i" in
   let range_guard_transform =
     replace ~s:racc.Tensor.value ~llc_of:(fun () ->
-        let j = Idx.get_symbol () and i = Idx.get_symbol () in
-        let cell = Idx.Affine { symbols = [ (1, i); (16, j) ]; offset = 0 } in
-        for_ ~upto:1 ~axis:LL.Workgroup j
-          (for_ ~upto:(n - 1) ~axis:LL.Workgroup_reduce i
+        let j = L.sym () and i = L.sym () in
+        let cell = L.aff [ (1, i); (16, j) ] 0 in
+        L.loop ~upto:1 ~axis:LL.Workgroup j
+          (L.loop ~upto:(n - 1) ~axis:LL.Workgroup_reduce i
              (LL.Seq
-                ( LL.If
-                    {
-                      cond =
-                        ( Binop (Ir.Ops.Cmplt, (Embed_index (it i), iprec), (Constant 16., iprec)),
-                          iprec );
-                      body =
-                        LL.Set
-                          {
-                            tn = racc.Tensor.value;
-                            idcs = [| cell |];
-                            llsc =
-                              Binop
-                                ( Ir.Ops.Add,
-                                  (Get (racc.Tensor.value, [| cell |]), single),
-                                  (Get (rgx.Tensor.value, [| it j; it i |]), single) );
-                            debug = "";
-                          };
-                    },
-                  LL.Set
-                    {
-                      tn = side;
-                      idcs = [| it i |];
-                      llsc = Get (rgx.Tensor.value, [| it j; it i |]);
-                      debug = "";
-                    } ))))
+                ( L.if_idx
+                    (L.lt (L.embed i) (L.ic 16))
+                    (L.set racc.Tensor.value [| cell |]
+                       (L.add
+                          (L.get racc.Tensor.value [| cell |])
+                          (L.get rgx.Tensor.value [| it j; it i |]))),
+                  L.set_at side (it i) (L.get rgx.Tensor.value [| it j; it i |]) ))))
   in
   renders_leg claim_range_guard_narrows ~index:21 ~name:"race_range_guard_wshfl"
     ~transform:(fun opt -> range_guard_transform (with_side opt))
@@ -1208,20 +987,13 @@ let () =
   let%op rout = rx ++ "rk=>r" in
   let plain_workgroup_transform =
     replace ~s:rout.Tensor.value ~llc_of:(fun () ->
-        let k = Idx.get_symbol () and r = Idx.get_symbol () in
-        for_ ~upto:(n - 1) ~axis:LL.Workgroup k
-          (for_ ~upto:1 ~axis:LL.Serial r
-             (LL.Set
-                {
-                  tn = rout.Tensor.value;
-                  idcs = [| it r |];
-                  llsc =
-                    Binop
-                      ( Ir.Ops.Add,
-                        (Get (rout.Tensor.value, [| it r |]), single),
-                        (Get (rx.Tensor.value, [| it r; it k |]), single) );
-                  debug = "";
-                })))
+        let k = L.sym () and r = L.sym () in
+        L.loop ~upto:(n - 1) ~axis:LL.Workgroup k
+          (L.loop ~upto:1 ~axis:LL.Serial r
+             (L.set_at rout.Tensor.value (it r)
+                (L.add
+                   (L.get rout.Tensor.value [| it r |])
+                   (L.get rx.Tensor.value [| it r; it k |])))))
   in
   let row1 = Array.fold (Array.sub rv ~pos:n ~len:n) ~init:0. ~f:( +. ) in
   refused_leg claim_plain_workgroup_reduction_refused ~index:1 ~name:"race_plain_workgroup_wshfl"
@@ -1233,15 +1005,9 @@ let () =
   let ax2 = TDSL.ndarray av ~label:[ "race_ax2" ] ~output_dims:[ n; 1 ] () in
   let%op aa2 = ax2 ++ "ij=>ij" in
   let scatter ~(target : Tensor.t) ~(source : Tensor.t) ~idcs ~dyn_axis i : LL.t =
-    LL.Set_dynamic
-      {
-        tn = target.Tensor.value;
-        idcs;
-        dyn_axis;
-        dyn_value = (Constant 0., iprec);
-        llsc = Get (source.Tensor.value, [| it i; f0 |]);
-        debug = "";
-      }
+    L.scatter ~tn:target.Tensor.value ~idcs ~dyn_axis
+      ~dyn_value:(L.ic 0, L.iprec ())
+      (L.get source.Tensor.value [| it i; f0 |])
   in
   let scatter_lane_transform =
     reduce_transform ~n aa.Tensor.value ~body_of:(fun i ->
@@ -1277,7 +1043,7 @@ let () =
   let in_unit v = Float.(v >= 0. && v < 1.) in
   let vec_aligned_transform =
     reduce_transform ~n vs.Tensor.value ~body_of:(fun i ->
-        vec_store ~target:vs ~base:(Idx.Affine { symbols = [ (4, i) ]; offset = 0 }))
+        vec_store ~target:vs ~base:(L.aff [ (4, i) ] 0))
   in
   if on_gpu || on_cpu then
     let v = run_values ~name:"race_vec_aligned_wshfl" ~transform:vec_aligned_transform vs in
@@ -1307,49 +1073,24 @@ let () =
   let%op md = ma * mb in
   let tile_mma_transform =
     replace ~s:md.Tensor.value ~llc_of:(fun () ->
-        let i = Idx.get_symbol () and w = Idx.get_symbol () in
-        let r = Idx.get_symbol () and c = Idx.get_symbol () and l = Idx.get_symbol () in
+        let i = L.sym () and w = L.sym () in
+        let r = L.sym () and c = L.sym () and l = L.sym () in
         let d = md.Tensor.value and a = ma.Tensor.value and b = mb.Tensor.value in
         let fallback =
-          for_ ~upto:(t - 1) ~axis:LL.Serial r
-            (for_ ~upto:(t - 1) ~axis:LL.Serial c
-               (for_ ~upto:(t - 1) ~axis:LL.Serial l
-                  (LL.Set
-                     {
-                       tn = d;
-                       idcs = [| it r; it c |];
-                       llsc =
-                         Binop
-                           ( Ir.Ops.Add,
-                             (Get (d, [| it r; it c |]), single),
-                             ( Binop
-                                 ( Ir.Ops.Mul,
-                                   (Get (a, [| it r; it l |]), single),
-                                   (Get (b, [| it l; it c |]), single) ),
-                               single ) );
-                       debug = "";
-                     })))
+          L.loop ~upto:(t - 1) ~axis:LL.Serial r
+            (L.loop ~upto:(t - 1) ~axis:LL.Serial c
+               (L.loop ~upto:(t - 1) ~axis:LL.Serial l
+                  (L.set d
+                     [| it r; it c |]
+                     (L.add
+                        (L.get d [| it r; it c |])
+                        (L.mul (L.get a [| it r; it l |]) (L.get b [| it l; it c |]))))))
         in
         let origin = [| f0; f0 |] in
-        for_ ~upto:(n - 1) ~axis:LL.Workgroup_reduce i
-          (for_ ~upto:(n - 1) ~axis:LL.Workgroup w
-             (LL.Tile_mma
-                {
-                  d = (d, origin);
-                  a = (a, origin);
-                  b = (b, origin);
-                  ta = false;
-                  tb = false;
-                  m = t;
-                  n = t;
-                  k = t;
-                  ldd = t;
-                  lda = t;
-                  ldb = t;
-                  lane = w;
-                  tile = None;
-                  fallback;
-                })))
+        L.loop ~upto:(n - 1) ~axis:LL.Workgroup_reduce i
+          (L.loop ~upto:(n - 1) ~axis:LL.Workgroup w
+             (L.tile_mma ~m:t ~n:t ~k:t ~lane:w ~d:(d, origin) ~a:(a, origin) ~b:(b, origin)
+                fallback)))
   in
   let ab00 =
     List.fold (List.init t ~f:Fn.id) ~init:0. ~f:(fun acc l -> acc +. (mav.(l) *. mbv.(l * t)))
