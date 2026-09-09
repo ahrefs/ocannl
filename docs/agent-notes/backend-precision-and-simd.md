@@ -703,9 +703,10 @@ files.
   consequences to know: (1) an UNGUARDED accumulation nest the shuffle cannot render — inner
   levels, or a schedule-minted scope, under a `Workgroup_reduce` level whose lane index the backend
   binds — is refused loudly instead of falling through to the hardware binding, under which every
-  lane read-modify-wrote the shared cell (a silent race before); a GUARDED one still takes the
-  binding, since a guard can select the lane, which is exactly what the explicitly staged tree's
-  `if (i == 0)` write is (`hardware_workgroup_reduce.ml`). (2) A schedule mint
+  lane read-modify-wrote the shared cell (a silent race before); a GUARDED one takes the binding
+  only where the guard PINS the lane to a literal, which is exactly what the explicitly staged
+  tree's `if (i == 0)` write is (`hardware_workgroup_reduce.ml`; the binding-legality bullet
+  below). (2) A schedule mint
   (`Unroll ~materialize`) DOES scope an RNG-bearing nest, and the rng census then pins that scope to
   storage precision, so its local narrows on every update: a localized FORM at storage width —
   `rng-unroll-mat` pins it, and it is why width is a property of the decision, never of the form.
@@ -728,31 +729,55 @@ files.
   `.so` was correct. Kernels now link with `-Wl,-Bsymbolic` on ELF (`Cc_backend.kernel_link_flags`),
   binding a kernel's references to its own definitions as macOS's two-level namespace always did;
   the diagnosis recipe is `LD_DEBUG=bindings` on a driver that preloads the executable's stubs.
-- **A bound `Workgroup_reduce` level refuses on the RACE criterion, not the nest criterion**
-  (gh-ocannl-950). gh-ocannl-754's arm refuses an UNGUARDED nest the shuffle cannot render, and
-  everything else the peel declined (`Accum_not_a_nest`: a sibling statement, a data-dependent
-  guard, an inner nest) fell through to the hardware binding — the correct rendering of the
-  explicitly staged tree (`hardware_workgroup_reduce.ml`) and a silent race for `out[r] += x[r,k];
-  side[r,k] = …` or `If (mask[k] < 1) out[r] += x[r,k]`, whose every lane read-modify-writes
-  `out[r]`. `Low_level.racing_lane_invariant_update ~lane ~shared` is what tells them apart: a
-  `Set` to storage the lanes share (`shared`: device-resident by the placements, or
-  workgroup-shared — never a per-thread local array) whose cell does not mention the lane and
-  whose value reads that cell, with reads judged as codegen renders them (a projection's discarded
-  operand reads nothing, an `If` condition reads). The staged tree's per-lane cells mention the
-  lane and its `If (i == 0) out[0] = partial[0]` reads no cell of its own. **There is no exemption
-  for a guard pinning the lane** (`If (i == 0) acc += …`): six review rounds on staging#674 each
-  found another way such a pin is not one thread — a pin value that is a loop index or a
-  thread-local read, another bound workgroup axis, a grid of several blocks all holding lane 0 of a
-  device cell, phases separated by a barrier that fences threadgroup memory only — so the sound
-  single-lane form is a per-lane cell with a plain final store, and the refusal message says so.
-  `try_warp_reduce`'s `None` arm raises a typed `Schedule_outcome.Cause_at (Backend_codegen,
-  Illegal_schedule {check = "workgroup_reduce_race"})`, one candidate's decline under the
-  autotuner and `Invalid_argument` at the `Context.compile` boundary; `hardware_warp_shuffle` pins
-  the refusals (sibling, data guard, pinned lane, extent one, condition read), the renderings
-  (per-thread scratch, projection store, the staged form) on the GPUs, and `reduction_forms`'
-  `sibling-workgroup-reduce`/`data-guard-workgroup-reduce` stay cpu-only because a refusal has no
-  value to compare — serializing the level under one lane was the alternative, rejected as a
-  silent 32x slowdown no schedule would pick on purpose.
+- **A hardware binding is legal when every store under it owns its cell — the separation query,
+  not "mentions the lane"** (gh-ocannl-959, generalizing gh-ocannl-950's race criterion).
+  gh-ocannl-754's arm refuses an UNGUARDED nest the shuffle cannot render; everything else the peel
+  declined (`Accum_not_a_nest`: a sibling statement, a data-dependent guard, an inner nest, a
+  pinned update) falls through to the hardware binding — the correct rendering of the explicitly
+  staged tree and a silent race for a store every lane performs to one cell. The rule that tells
+  them apart is `Low_level.unseparated_thread_write ~active ~thread ~deferred ~storage`, walked
+  over the WHOLE kernel: thread identity is one coordinate per active slot of the launch (a
+  `(kind, slot)` some register-bound loop of extent above one occupies), and a store to storage
+  the threads share (`Device` by the placements, `Workgroup_shared`; never a per-thread local
+  array) needs a bound loop of every active slot enclosing it and a cell that `Affine.separates`
+  the enclosing thread symbols over every loop symbol in scope. The environment is narrowed by
+  each enclosing `If` through gh-566's `ienv_narrow_from_cond`, so `If (i < 16)` shrinks the
+  radix argument's range and `If (i == 0)` pins `i` to a width-one range the engine already reads
+  as one thread. Three consequences that took 13 review rounds to settle by hand and the engine
+  settles by construction: mentioning an axis is not separating it (`acc[i + j]` under a bound
+  `j` and a bound `i` collides at `(0, 1)`/`(1, 0)`; so does `acc[i + k]` under a bound `i` and a
+  SERIAL `k`, which is why every loop symbol is concurrent); a pin is one thread along its axis
+  ALONE — a Grid of blocks, a second workgroup dimension, are coordinates the cell must still
+  separate, and a pin to a loop index or a memory read narrows nothing; and reads play no part — a
+  plain lane-invariant store is a write-write race whatever the bytes, so `s[0] = Arg2 (s[0], 3)`
+  is refused like `s[0] += x[i]`. What the rule does NOT judge, deliberately: whether OTHER
+  statements' threads touch a pinned cell across a barrier (the tensorized pipeline zeroes its
+  output on every lane and stores the tile back from lane 0 across the intrinsic's barrier; a
+  companion nest then reads it) — that is dependence analysis over barrier regions, the obligation
+  of whoever mints the pin (`Stage`, `Tensorize`) or the binding (the annotator), as it was for
+  every unpinned store before; a pairwise check tried in review refused exactly those pipelines. A
+  `Grid` axis is not a thread of workgroup-shared storage (one block, one copy). The renderer asks
+  it twice, through `refuse_unseparated_thread_write`: `C_syntax.compile_proc` with the kernel's
+  thread axes — every axis `bound_register` binds plus cc's pool-parallel outermost Grid loops
+  (`current_parallel_grid`: chunks are threads too, and `parallel_grid_safe` judged only local
+  arrays; a per-loop binding, so a thread axis but not a launch slot) — deferring the
+  `Workgroup_reduce` lanes the shuffle may own (they still COVER their slot), and
+  `try_warp_reduce`'s decline arm with the one lane it is about to bind un-deferred. Both raise the
+  typed `Schedule_outcome.Cause_at (Backend_codegen, Illegal_schedule {check =
+  "hardware_binding_race"})`, one candidate's decline under the autotuner and `Invalid_argument`
+  at the `Context.compile` boundary. `validate_parallel` stays structural and
+  backend-independent; the check lives at the binding because a `Workgroup` loop on cc iterates,
+  so the reduction-axis-to-`Workgroup` form `reduction_forms` runs cpu-only is legal there and
+  refused where a register binds it. A `Tile_mma` is judged through its `fallback`'s stores with
+  its own cooperating `lane` excused (gh-ocannl-960), a `Set_dynamic` by its static slots, a
+  `Set_from_vec` by its aligned run blocks (base a multiple of the length, else the component is
+  opaque), a `Zero_out` as a store of every cell. `hardware_warp_shuffle` pins the corpus on the
+  GPUs and the serial values on cc: the refusals (sibling, data guard, pin under a Grid — on cc
+  too, where `Context.Cc_backend.pool_parallel_grid` says the grid binds — projection store,
+  `acc[i + j]`, plain-`Workgroup` reduction, lane-invariant scatter and vector store, the tile) and
+  the renderings (pin alone, same pin twice, outer pin narrowing the reduce level, `If (i < 16)`
+  narrowing, extent one, per-thread scratch, the staged form, dead level, false guard,
+  `acc[2 i + j]`, lane-indexed scatter, aligned vector runs).
 - **A "packmma" timing is not evidence that anything tensorized.** A `Tile_mma` whose register-tile
   preconditions fail renders the scalar fallback and the run still reports under whatever the
   variant was named — the column extent below the compute vector width is the easiest way in (at

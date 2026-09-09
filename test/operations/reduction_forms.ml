@@ -1402,8 +1402,9 @@ let members =
       ~sched:(fun g -> [ Sched.Retype { axis = g.k; ty = LL.Workgroup_reduce } ]);
     (* The plain [Workgroup] arm: a hardware binding where the backend has an index for the slot,
        and otherwise the localizing peel. Only the second half is a member here — binding a
-       REDUCTION axis to a workgroup dimension is a cross-lane race wherever the binding exists, so
-       the leg runs on the backends that serialize it and is skipped where it would not be. *)
+       REDUCTION axis to a workgroup dimension is a cross-lane race wherever the binding exists
+       (refused there since gh-ocannl-959: [hardware_warp_shuffle] pins the refusal), so the leg
+       runs on the backends that serialize it and is skipped where it would not be. *)
     member "retype-workgroup" "Retype the reduction axis to Workgroup (no index bound: serialized)"
       ~available:(fun _ -> on_cpu)
       ~expect_axis:LL.Workgroup

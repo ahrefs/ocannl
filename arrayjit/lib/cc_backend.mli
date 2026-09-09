@@ -12,6 +12,13 @@ val compiler_executable_identity : string -> string
     modification time. Exposed for the generated-kernel census's persistent listing identity: an
     in-place toolchain replacement must not replay assembly from the previous executable. *)
 
+val pool_parallel_grid : unit -> bool
+(** Whether this backend renders the outermost [Grid] loops it proves safe as concurrent chunks of
+    the native pool — the gate of [C_syntax.collect_parallel_grid]: a pool syntax was probed, more
+    than one chunk is configured, and no kernel logging is on. Exposed so a test can say what a
+    bound grid axis means on cc (gh-ocannl-959): a binding the legality check judges where this
+    holds, a serial loop where it does not. *)
+
 val vector_bytes_setting : unit -> int
 (** The vector register width in bytes for the explicit SIMD renderings (config [cc_vector_bytes];
     auto-probed when unset). Exposed for [Schedulers.cpu_mma_limits]'s [simd_vector_bytes]. *)
