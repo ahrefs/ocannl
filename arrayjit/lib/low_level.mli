@@ -378,10 +378,12 @@ val accum_local_update_parts : id:scope_id -> scalar_t -> (Ops.binop * scalar_t)
     SIMD reduction rendering uses it to fold vector chains into a widened accumulator's scope local
     (gh-ocannl-639), and {!peel_accum_nest}'s scope-form validation is built on it. *)
 
-type thread_storage = [ `Device | `Workgroup_shared | `Thread_private ]
+type thread_storage = [ `Device | `Shared | `Thread ]
 (** How a node's storage is shared across the threads a hardware binding creates: device-resident
     (every thread of the launch), workgroup-shared (the threads of one block), or thread-private (a
-    per-thread local array, which no binding can race). *)
+    per-thread local array, which no binding can race). The tags are spelled as the tile-MMA address
+    space [C_syntax.mma_space] spells them, so the fragment-operand sites answer the same question
+    by coercing this classifier rather than repeating it. *)
 
 type thread_slot = [ `Grid | `Workgroup ] * int
 (** One coordinate of thread identity: the hardware dimension a bound loop occupies

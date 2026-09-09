@@ -3026,10 +3026,15 @@ module C_syntax (B : C_syntax_config) = struct
   let current_active_slots : Low_level.thread_slot list ref = ref []
   let current_kernel_llc : Low_level.t ref = ref Low_level.Noop
 
+  (* The one storage classification this renderer makes: workgroup-shared when [compile_proc] placed
+     the node there, else device-resident when the placements materialize it, else a per-thread
+     local array. Both the binding-legality query (gh-ocannl-959) and the tile-MMA operand sites
+     (gh-ocannl-440, gh-ocannl-441) read it -- the latter by coercing to {!mma_space}, which the
+     tags are spelled to match and which adds only [`Fragment]. *)
   let thread_storage tn : Low_level.thread_storage =
-    if Set.mem !current_workgroup_shared tn then `Workgroup_shared
+    if Set.mem !current_workgroup_shared tn then `Shared
     else if Tn.Placements.is_materialized_force (placements ()) tn 959 then `Device
-    else `Thread_private
+    else `Thread
 
   let current_deferred_lanes : Indexing.symbol list ref = ref []
 
@@ -3846,11 +3851,7 @@ module C_syntax (B : C_syntax_config) = struct
           | _ -> Indexing.Affine { symbols; offset })
       | other -> other
     in
-    let operand_space tn =
-      if Set.mem !current_workgroup_shared tn then `Shared
-      else if Tn.Placements.is_materialized_force (placements ()) tn 441 then `Device
-      else `Thread
-    in
+    let operand_space tn : mma_space = (thread_storage tn :> mma_space) in
     (* The a/b operands of a fragment scope are described, not addressed: no pointer is rendered for
        them here. Their addresses belong to the [Tile_mma] sites inside the reduction loop, which
        re-render them where a pipelined tile's buffer rotation is in scope (gh-ocannl-487) — at this
@@ -5986,11 +5987,7 @@ module C_syntax (B : C_syntax_config) = struct
               when Tn.equal tn fragment ->
                 (ptr, target_ld, space, (layout :> [ mma_layout | `Decline of string ]))
             | _ ->
-                let space =
-                  if Set.mem !current_workgroup_shared tn then `Shared
-                  else if Tn.Placements.is_materialized_force (placements ()) tn 440 then `Device
-                  else `Thread
-                in
+                let space : mma_space = (thread_storage tn :> mma_space) in
                 ( parens
                     (string (get_ident tn)
                     ^^ string " + "
