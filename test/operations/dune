@@ -2931,7 +2931,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules hardware_workgroup_reduce)
- (libraries base ocannl stdio arrayjit.verdict test_utils)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -2944,7 +2944,7 @@
   (env_var OCANNL_FP16_ARITHMETIC)
   (env_var OCANNL_BACKEND))
  (modules hardware_warp_shuffle)
- (libraries base ocannl stdio arrayjit.verdict test_utils)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
