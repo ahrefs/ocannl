@@ -70,6 +70,16 @@ val separates :
     that a common cell forces [w1] equal, while instances [(0, 1)] and [(1, 0)] share [acc[1]].
     [syms] is then the subset the caller needs told apart. *)
 
+val separation_failure :
+  range:(Indexing.symbol -> (int * int) option) ->
+  concurrent:(Indexing.symbol -> bool) ->
+  syms:Indexing.symbol list ->
+  idcs:Indexing.axis_index array ->
+  string option
+(** {!separates} with the engine's witness: [None] where the vector separates [syms], otherwise the
+    explanation {!pair_conflict} gives for the cross-thread conflict — the symbol a common cell does
+    not force equal — for a refusal message that names what failed. *)
+
 val within_box :
   range:(Indexing.symbol -> (int * int) option) ->
   dims:int array ->

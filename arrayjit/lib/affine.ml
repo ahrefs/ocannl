@@ -230,17 +230,20 @@ let linear_terms (idx : Idx.axis_index) : ((int * Idx.symbol) list * int) option
     those of [syms]: with [idcs = acc[w1 + w2]] and [syms = [w1]], holding [w2] equal would "prove"
     that a common cell forces [w1] equal, while instances [(0, 1)] and [(1, 0)] share [acc[1]].
     [syms] is then the subset the caller needs told apart. *)
-let separates ~range ~(concurrent : Idx.symbol -> bool) ~(syms : Idx.symbol list)
-    ~(idcs : Idx.axis_index array) : bool =
-  List.is_empty syms
-  ||
-  match
-    pair_conflict ~range ~dup_left:concurrent ~dup_right:concurrent
-      ~pairs:(List.map syms ~f:(fun s -> (s, s)))
-      ~left:idcs ~right:idcs
-  with
-  | Disjoint | Same_thread -> true
-  | Cross_thread _ -> false
+let separation_failure ~range ~(concurrent : Idx.symbol -> bool) ~(syms : Idx.symbol list)
+    ~(idcs : Idx.axis_index array) : string option =
+  if List.is_empty syms then None
+  else
+    match
+      pair_conflict ~range ~dup_left:concurrent ~dup_right:concurrent
+        ~pairs:(List.map syms ~f:(fun s -> (s, s)))
+        ~left:idcs ~right:idcs
+    with
+    | Disjoint | Same_thread -> None
+    | Cross_thread witness -> Some witness
+
+let separates ~range ~concurrent ~syms ~idcs =
+  Option.is_none (separation_failure ~range ~concurrent ~syms ~idcs)
 
 (** [within_box ~range ~dims idcs]: does the index vector address a cell INSIDE the [dims] box for
     every valuation of its symbols within their ranges? The interval companion of {!covers_box},

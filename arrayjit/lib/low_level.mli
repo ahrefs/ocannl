@@ -378,26 +378,32 @@ val accum_local_update_parts : id:scope_id -> scalar_t -> (Ops.binop * scalar_t)
     SIMD reduction rendering uses it to fold vector chains into a widened accumulator's scope local
     (gh-ocannl-639), and {!peel_accum_nest}'s scope-form validation is built on it. *)
 
-val racing_lane_invariant_update :
-  lane:Indexing.symbol ->
-  shared:(Tnode.t -> bool) ->
+type thread_storage = [ `Device | `Workgroup_shared | `Thread_private ]
+(** How a node's storage is shared across the threads a hardware binding creates: device-resident
+    (every thread of the launch), workgroup-shared (the threads of one block), or thread-private (a
+    per-thread local array, which no binding can race). *)
+
+val unseparated_thread_write :
+  bounds:(Indexing.symbol * (int * int)) list ->
+  thread:(Indexing.symbol -> [ `Grid | `Workgroup ] option) ->
+  storage:(Tnode.t -> thread_storage) ->
   t ->
-  (Tnode.t * Indexing.axis_index array) option
-(** The race criterion for a level whose index a backend binds to a lane (gh-ocannl-950): the first
-    [Set] to a node [shared] across the lanes (device-resident or workgroup-shared, as against a
-    per-thread local array) whose cell does not depend on [lane] and which the LEVEL reads anywhere
-    — in that store's value, in a guard's condition, in a sibling local staging the value, before or
-    after the store — through any index that may alias the cell (two different literal positions in
-    a slot are the one provable disjointness) or a dynamic gather from the node. Every lane performs
-    the read and the write, so the interleaving is a race under any hardware binding. Reads are
-    judged as codegen renders them: a projection's discarded operand and an arm a literal condition
-    never selects ({!Ops.binop_conditionality}, {!Ops.ternop_conditionality}) read nothing, nor do a
-    dead level or a false guard. A [Set_dynamic] whose static coordinates do not mention the lane is
-    refused: the data owns which cell each lane hits. Per-lane cells (which mention the lane),
-    stores of cells the level never reads, [Set_local] and [Zero_out] are not races. There is no
-    exemption for a guard pinning the lane: a pin is one thread only under conditions (one block, no
-    other bound axis, a literal value, no barrier between phases) the walk cannot establish, and the
-    sound form of a single-lane update is a per-lane cell with a plain final store. *)
+  (Tnode.t * Indexing.axis_index array * string) option
+(** The legality of a hardware binding, as a query on the written cell (gh-ocannl-959): the first
+    store under loops the backend binds ([thread]: the register kind, [None] for a loop it iterates)
+    to storage the threads share whose cell does not {!Affine.separates} the bound axes — two
+    threads may own one cell — with the engine's witness. Every loop symbol of [bounds] (the
+    routine's {!loop_bounds}) varies independently between two instances, so mentioning a bound axis
+    is not separating it ([acc[i + j]] under two bound axes, [acc[i + k]] under a bound [i] and a
+    serial [k]); a guard [If (s == c)] with a literal [c] pins [s] on its domain and is one thread
+    along [s] alone; a [Grid] axis is a thread of device storage only, workgroup-shared storage
+    being per block. Reads play no part: a store every thread performs to one cell is a write-write
+    race whatever the values. A dead level and a false guard execute nothing; a [Set_dynamic] is
+    judged by its static slots, a [Set_from_vec] by its aligned run blocks, a [Zero_out] as a store
+    of every cell, a [Tile_mma] through its [fallback] with its own [lane] excused (gh-ocannl-960).
+    The renderer asks this at every binding it emits: for the kernel's [Grid]/[Workgroup] axes
+    before rendering, and for a [Workgroup_reduce] lane the warp shuffle cannot own, before falling
+    through to the plain binding. *)
 
 val has_accumulating_cell : t -> bool
 (** Whether the tree holds a SELF-RECURRENCE: some [Set] whose value reads the very cell it writes
@@ -539,6 +545,9 @@ type launch_dims = { grid : int array; block : int array } [@@deriving sexp_of, 
 type hardware_axis_info = {
   ha_index : Indexing.symbol;
   ha_kind : [ `Grid | `Workgroup ];
+  ha_axis : axis_type;
+      (** The loop's own annotation: [Workgroup] and [Workgroup_reduce] share the kind (and the slot
+          space) but not the rendering, and the binding-legality check reads the difference. *)
   ha_slot : int;  (** Positional: the innermost same-kind loop binds [.x] = slot 0. *)
   ha_from_ : int;
   ha_extent : int;  (** [to_ - from_ + 1]. *)
@@ -592,8 +601,9 @@ val validate_parallel : Tnode.Placements.t -> t -> unit
     extents or [If] guards, writes to materialized nodes not nested under annotated loops covering
     {e every} active (non-unit) hardware dimension — launch dimensions are global to the kernel, so
     an uncovered dimension executes the write once per hardware index — and whole-node [Zero_out] of
-    materialized nodes in multi-threaded kernels (nesting never distributes it). Cannot prove
-    iteration independence — that is the annotating pass's obligation. *)
+    materialized nodes in multi-threaded kernels (nesting never distributes it). Does not prove
+    iteration independence: an annotating pass proves it for the annotations it mints, and the
+    renderer asks {!unseparated_thread_write} of every binding it actually emits. *)
 
 val validate_parallel_classified : Tnode.Placements.t -> t -> unit
 (** Internal backend-facing variant of {!validate_parallel}; transports a validation

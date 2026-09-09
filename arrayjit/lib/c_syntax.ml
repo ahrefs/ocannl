@@ -3000,6 +3000,48 @@ module C_syntax (B : C_syntax_config) = struct
      their [Zero_out] is never elided. *)
   let current_workgroup_shared : Set.M(Tn).t ref = ref (Set.empty (module Tn))
 
+  (* gh-ocannl-959: the legality of every hardware binding this renderer emits, asked of the cells
+     the bound threads write ([Low_level.unseparated_thread_write]). Storage the threads share is
+     device-resident (by the placements) or workgroup-shared; a per-thread local array is one array
+     per thread. Raised as a typed schedule cause: under the autotuner one candidate's decline, and
+     [Invalid_argument] at the [Context.compile] boundary
+     ([Schedule_outcome.exception_of_cause]). *)
+  let thread_storage tn : Low_level.thread_storage =
+    if Set.mem !current_workgroup_shared tn then `Workgroup_shared
+    else if Tn.Placements.is_materialized_force (placements ()) tn 959 then `Device
+    else `Thread_private
+
+  let refuse_unseparated_thread_write ~site ~thread llc =
+    match
+      Low_level.unseparated_thread_write ~bounds:!current_loop_bounds ~thread
+        ~storage:thread_storage llc
+    with
+    | None -> ()
+    | Some (tn, idcs, why) ->
+        let cell =
+          Tn.debug_name tn ^ "["
+          ^ String.concat ~sep:", "
+              (Array.to_list idcs
+              |> List.map ~f:(fun idx -> Sexp.to_string_hum (Indexing.sexp_of_axis_index idx)))
+          ^ "]"
+        in
+        raise
+          (Schedule_outcome.Cause_at
+             ( Schedule_outcome.Backend_codegen,
+               Schedule_outcome.Illegal_schedule
+                 {
+                   check = "hardware_binding_race";
+                   detail =
+                     site ^ " writes " ^ cell ^ " from more than one thread (" ^ why
+                     ^ "): a store to storage the threads share must own its cell, so the cell's \
+                        index map has to separate every bound axis over all concurrently varying \
+                        loop symbols. Mentioning an axis is not separating it (acc[i + j] under \
+                        two bound axes collides), and a guard pinning an axis to a literal is one \
+                        thread along that axis alone. Keep the loop Serial, index the cell by the \
+                        thread, or stage per-thread cells with a pinned final store \
+                        (gh-ocannl-959)";
+                 } ))
+
   (* Marked local accumulator tiles and the one currently being rendered by a backend fragment
      scope. Outside such a scope they retain ordinary local-array semantics. *)
   let current_simdgroup_fragments : Set.M(Tn).t ref = ref (Set.empty (module Tn))
@@ -4965,61 +5007,27 @@ module C_syntax (B : C_syntax_config) = struct
                        this level (a nest of inner levels, or a schedule-minted scope) is one the \
                        shuffle cannot render, and it is unguarded, so every lane would update the \
                        same cell"
-                | Accum_base _ | Accum_not_a_nest _ -> (
+                | Accum_base _ | Accum_not_a_nest _ ->
                     (* Not an accumulation the shuffle owns. The hardware binding is the correct
-                       rendering of an explicitly staged tree (lane-selecting guards, per-lane
-                       cells) and of a per-lane update — and a silent race for a body that
-                       read-modify-writes a cell every lane shares: a level with a sibling
-                       statement, a data-dependent guard, or an inner nest, which the peel refuses
-                       as [Accum_not_a_nest] and which fell through to the binding until
-                       gh-ocannl-950. The race criterion, not the nest criterion, is what tells the
-                       two apart: [Low_level.racing_lane_invariant_update]. *)
-                    (* Shared across the lanes: device-resident (materialized) or workgroup-shared
-                       storage. A per-thread local array is one array per lane and cannot race. A
-                       level of extent one binds lane 0 alone and cannot race either. *)
-                    let shared tn =
-                      Set.mem !current_workgroup_shared tn
-                      || Tn.Placements.is_materialized_force (placements ()) tn 950
-                    in
-                    match
-                      Low_level.racing_lane_invariant_update ~lane:i ~shared
-                        (Low_level.unflat_lines stmts)
-                    with
-                    | None -> None
-                    | Some (tn, idcs) ->
-                        let cell =
-                          Tn.debug_name tn ^ "["
-                          ^ String.concat ~sep:", "
-                              (Array.to_list idcs
-                              |> List.map ~f:(fun idx ->
-                                  Sexp.to_string_hum (Indexing.sexp_of_axis_index idx)))
-                          ^ "]"
-                        in
-                        (* A typed schedule cause, not a bare [Invalid_argument]: under the
-                           autotuner this is one candidate's decline, and the strict default
-                           classification would make an unclassified exception fatal to the whole
-                           search. A hand-written schedule still sees [Invalid_argument] at the
-                           [Context.compile] boundary ([Schedule_outcome.exception_of_cause]). *)
-                        raise
-                          (Schedule_outcome.Cause_at
-                             ( Schedule_outcome.Backend_codegen,
-                               Schedule_outcome.Illegal_schedule
-                                 {
-                                   check = "workgroup_reduce_race";
-                                   detail =
-                                     "C_syntax.pp_ll: Workgroup_reduce loop " ^ symbol_ident i
-                                     ^ " binds the lane index, and its body updates " ^ cell
-                                     ^ " in every lane: the statement reads the cell it writes and \
-                                        the cell does not depend on the lane index, so a hardware \
-                                        binding would race the read-modify-write across lanes (a \
-                                        guard selecting one lane does not help: every block, and \
-                                        every coordinate of another bound axis, has that lane), \
-                                        and the body is not a single accumulation the warp shuffle \
-                                        can render (a sibling statement, a data-dependent guard, \
-                                        or an inner nest). Keep the level Serial, or stage the \
-                                        reduction explicitly with per-lane cells and a plain final \
-                                        store (gh-ocannl-950)";
-                                 } ))))
+                       rendering of an explicitly staged tree (per-lane cells, lane-pinned final
+                       store) and of a per-lane update — and a silent race for a body that stores to
+                       a cell the lanes share: a level with a sibling statement, a data-dependent
+                       guard, or an inner nest, which the peel refuses as [Accum_not_a_nest] and
+                       which fell through to the binding until gh-ocannl-950. The binding is what
+                       makes the lane a thread, so the binding's legality question is asked here, of
+                       this lane alone (the kernel's other bound axes were judged before rendering):
+                       does every store under the level separate it
+                       ([Low_level.unseparated_thread_write], gh-ocannl-959)? *)
+                    refuse_unseparated_thread_write
+                      ~site:
+                        ("C_syntax.pp_ll: Workgroup_reduce loop " ^ symbol_ident i
+                       ^ " binds the lane index (its body is not a single accumulation the warp \
+                          shuffle can render: a sibling statement, a guard, or an inner nest), and \
+                          under that binding the body")
+                      ~thread:(fun s -> if Indexing.equal_symbol s i then Some `Workgroup else None)
+                      (Low_level.For_loop
+                         { index = i; from_; to_; body = Low_level.unflat_lines stmts; axis });
+                    None)
             | Some ({ sa_tn = tn; sa_idcs = idcs; sa_op = op; sa_contrib = contrib; _ } as sa) ->
                 let warp = B.warp_size in
                 assert (warp > 1 && Int.is_pow2 warp);
@@ -6861,6 +6869,23 @@ module C_syntax (B : C_syntax_config) = struct
      current_grid_private := grid_private;
      current_local_ptr_alias := local_ptr_alias);
     current_workgroup_shared := workgroup_shared;
+    (* gh-ocannl-959: the kernel's Grid/Workgroup bindings, judged before rendering. A
+       [Workgroup_reduce] lane is a thread only where the warp shuffle declines it, which is decided
+       at its own rendering ([try_warp_reduce]); here it is a loop like any other. *)
+    refuse_unseparated_thread_write
+      ~site:"C_syntax.compile_proc: the hardware binding of the kernel's Grid/Workgroup axes"
+      ~thread:(fun s ->
+        List.find_map !current_hardware_axes ~f:(fun a ->
+            if
+              Indexing.equal_symbol a.Low_level.ha_index s
+              && not (Low_level.equal_axis_type a.ha_axis Low_level.Workgroup_reduce)
+            then
+              let hw_slot =
+                match a.ha_kind with `Grid when a.ha_slot >= 2 -> 2 | _ -> a.ha_slot
+              in
+              Option.map (B.hardware_index ~kind:a.ha_kind ~slot:hw_slot) ~f:(fun _ -> a.ha_kind)
+            else None))
+      llc;
     current_simdgroup_fragments := simdgroup_fragments;
     current_swizzled := swizzled;
     current_pipelined := pipelined;

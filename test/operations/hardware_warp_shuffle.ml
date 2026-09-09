@@ -641,22 +641,26 @@ let () =
       end
       else skipped claim_f16_wide_types)
 
-(* --- gh-ocannl-950: the RACE criterion for a bound lane index. gh-ocannl-754's arm refuses an
-   unguarded nest the shuffle cannot render; every other body the peel declined — a sibling
-   statement beside the update, a data-dependent guard over it — fell through to the hardware
-   binding, which is the correct rendering of an explicitly staged tree
-   ([hardware_workgroup_reduce]) and a silent race for these: every lane read-modify-writes the one
-   cell [s[0]]. The criterion that tells the two apart is on the CELL, not the nest: a [Set] to
-   storage the lanes share whose cell does not mention the lane and whose value reads that cell.
-   There is no exemption for a guard pinning the lane — one lane per block, per coordinate of any
-   other bound axis, per barrier phase, is not one thread, and the sound single-lane form is a
-   per-lane cell with a plain final store (which the staged tree uses and which stays out of the
-   criterion). On the C backends [warp_size = 0], the loop is serial and each body has its serial
-   value. *)
+(* --- gh-ocannl-959 (and gh-ocannl-950 before it): the legality of the hardware BINDING, asked of
+   the cells the bound threads write. gh-ocannl-754's arm refuses an unguarded nest the shuffle
+   cannot render; every other body the peel declines — a sibling statement beside the update, a
+   data-dependent guard over it, a lane-pinned update — falls through to the hardware binding, which
+   is the correct rendering of an explicitly staged tree ([hardware_workgroup_reduce]) and a silent
+   race for a store every lane performs to one cell. What tells the two apart is on the CELL, not on
+   the nest and not on whether the store reads its cell: a store under the bound loop to storage the
+   lanes share must SEPARATE the lane — two threads never own one cell
+   ([Low_level.unseparated_thread_write], the [Affine.separates] query). Mentioning the lane is not
+   separating it ([acc[i + j]] under two bound axes collides); a guard pinning the lane to a literal
+   is one thread along the lane, and along the lane alone — a second bound axis is still a thread
+   the cell must separate. The same question is asked of the kernel's Grid/Workgroup bindings before
+   rendering, so a reduction axis retyped to a plain [Workgroup] is refused where it would bind, and
+   a [Tile_mma] under a bound reduce lane is judged through the stores its fallback spells
+   (gh-ocannl-960). On the C backends [warp_size = 0] and no register binds a Workgroup-kind loop,
+   so every level is serial and each body has its serial value. *)
 
 let claim_sibling_refused =
   "a Workgroup_reduce level holding a sibling statement beside a lane-invariant self-updating Set \
-   is refused where a lane index is bound (GPU: the hardware binding would race the cell) or runs \
+   is refused where a lane index is bound (GPU: the cell does not separate the lane) or runs \
    serially (CPU)"
 
 let claim_data_guard_refused =
@@ -664,84 +668,94 @@ let claim_data_guard_refused =
    is refused where a lane index is bound (GPU: the guard leaves several lanes on the cell) or \
    runs serially (CPU)"
 
-let claim_lane_pin_no_exemption =
-  "a lane-invariant self-updating Set under a guard pinning the lane index to one value is still \
-   refused where a lane index is bound (GPU: every block and every row has that lane), or the \
-   serial loop admits the one iteration (CPU)"
+let claim_lane_pin_renders =
+  "a lane-invariant self-update under a guard pinning the lane index to a literal is one thread \
+   along the lane: it renders with the pinned lane's term where no other axis is bound (GPU) and \
+   the serial loop admits the one iteration (CPU)"
+
+let claim_pin_other_axis_refused =
+  "the same pinned update under a bound Grid axis is refused where the axes bind (GPU: lane 0 of \
+   every block writes the one device cell — a pin separates its own axis alone) or runs serially \
+   over both loops (CPU)"
 
 let claim_local_scratch_renders =
   "a self-update of a per-thread local array beside a sibling statement is not a race under a \
    bound Workgroup_reduce (one array per lane): it renders, and lane 0's fold reads its own \
    scratch"
 
-let claim_extent_one_refused =
-  "a bound Workgroup_reduce of extent one holding the sibling body is refused too (GPU: lane 0 \
-   exists per block and per coordinate of any other bound axis), or renders with the one term \
-   (CPU)"
+let claim_extent_one_renders =
+  "a bound Workgroup_reduce of extent one is one thread along the lane: the sibling body renders \
+   with the one term on every backend"
 
-let claim_projection_operand_no_read =
-  "a store whose value is a projection discarding the cell's old value (Arg2) is not a \
-   read-modify-write: every lane stores the same bytes and the level renders"
+let claim_projection_store_refused =
+  "a lane-invariant store whose value discards the cell's old value (Arg2) is still a store every \
+   lane performs to one cell: refused where a lane index is bound (GPU: a write-write race, \
+   whatever the bytes) or the serial store of 3 (CPU)"
 
-let claim_cond_read_refused =
-  "a scope that tests the cell it writes back in an If condition reads that cell: refused where a \
-   lane index is bound (GPU) or the serial alternation ending at 0 (CPU)"
-
-let claim_guard_read_refused =
-  "a store under a guard that reads the cell it writes (If (s[0] == 0) s[0] = x[i]) is a \
-   test-then-set every lane performs: refused where a lane index is bound (GPU) or the first \
-   iteration's value (CPU)"
+let claim_staged_form_renders =
+  "the sound single-lane form — per-lane cells combined under lane-selecting guards and a plain \
+   pinned final store — is not a race: it renders (GPU) or the barrier it needs is rejected (CPU)"
 
 let claim_dead_loop_renders =
   "a self-update inside a dead inner loop (to_ < from_) beside a sibling performs no accesses: the \
    level renders and the cell keeps its zero"
 
-let claim_dynamic_read_refused =
-  "a store reading the written node through a dynamic gather (s[0] = s[dyn 0] + x[i]) may read its \
-   own cell: refused where a lane index is bound (GPU) or the full serial sum (CPU)"
-
-let claim_dynamic_disjoint_no_read =
-  "a dynamic gather a static slot separates from the written cell (a[0,0] = a[1,dyn 0] + 3) reads \
-   nothing of it: a plain store, and the level renders with 3"
-
 let claim_false_guard_renders =
   "a self-update under a statically false guard beside a sibling executes nothing: the level \
    renders and the cell keeps its zero"
 
-let claim_staged_local_refused =
-  "the accumulator staged through a sibling statement (scratch[0] = s[0]; s[0] = scratch[0] + \
-   x[i]) is the same read-modify-write across two statements: refused where a lane index is bound \
-   (GPU) or the full serial sum (CPU)"
+let claim_mention_not_injective_refused =
+  "acc[i + j] += x[j, i] under a bound Workgroup j and a bound Workgroup_reduce i mentions both \
+   axes yet threads (0, 1) and (1, 0) share acc[1]: refused where the axes bind (GPU) or the \
+   serial anti-diagonal sums (CPU)"
 
-let claim_alias_read_refused =
-  "a read that aliases the written cell through another index (s[0] = s[k] + x[i] under k = 0..0) \
-   is a self-read: refused where a lane index is bound (GPU) or the full serial sum (CPU)"
+let claim_injective_map_renders =
+  "acc[2 * i + j] += x[j, i] under the same two bound axes separates both (the mixed-radix \
+   injectivity the engine proves): each thread owns its cell and the level renders on every \
+   backend"
 
-let claim_where_arm_no_read =
-  "a Where arm a literal condition never selects reads nothing: s[0] = Where (1, 3, s[0]) beside a \
-   sibling is a plain store and the level renders with 3"
+let claim_plain_workgroup_reduction_refused =
+  "a reduction axis retyped to a plain Workgroup (out[r] += x[r, k] under a bound k) is refused \
+   before rendering where the axis binds (GPU) or serializes to the row sums (CPU)"
 
-let claim_scan_init_read_refused =
-  "a scan whose carried initializer reads the accumulator and whose body stores the carried state \
-   back (prev = s[0]; s[0] = prev + x[i]) is the same read-modify-write through the loop's state: \
-   refused where a lane index is bound (GPU) or the full serial sum (CPU)"
+let claim_dynamic_static_slot_renders =
+  "a dynamic scatter whose static slot is the lane (a[i, dyn 0] = x[i, 0]) separates the lane by \
+   its static slots alone: it renders on every backend"
 
-let claim_vec_store_refused =
-  "a vector store covering a cell the level reads (s[0..3] = uniform(bits); s[0] = s[2] + x[i]) is \
-   a store of each covered cell: refused where a lane index is bound (GPU) or serial and in \
-   [x[n-1], x[n-1] + 1) (CPU)"
+let claim_dynamic_lane_invariant_refused =
+  "a dynamic scatter whose static slots are lane-invariant (a[dyn 0, 0] = x[i, 0]) may land every \
+   lane on one cell: refused where a lane index is bound (GPU) or the last serial store (CPU)"
 
-let claim_staged_form_renders =
-  "the sound single-lane form — per-lane cells combined under lane-selecting guards and a plain \
-   final store — is not a race: it renders (GPU) or the barrier it needs is rejected (CPU)"
+let claim_vec_aligned_runs_render =
+  "a vector store whose base is a multiple of its length (s[4 i .. 4 i + 3] = uniform(bits)) \
+   writes aligned per-lane blocks: it renders, every lane's block holding the same draw, on every \
+   backend"
+
+let claim_vec_lane_invariant_refused =
+  "a vector store at a lane-invariant base (s[0 .. 3] = uniform(bits)) is every lane's store of \
+   the same four cells: refused where a lane index is bound (GPU) or the serial draw (CPU)"
+
+let claim_tile_mma_refused =
+  "a Tile_mma under a bound Workgroup_reduce whose accumulator tile omits the reduce lane is \
+   judged through its fallback's stores and refused where the lane binds (GPU: every simdgroup \
+   would accumulate into the one tile) or accumulates once per serial iteration (CPU)"
 
 let () =
   let n = 32 in
   let gv = Array.init n ~f:(fun k -> (Float.of_int (k % 9) *. 0.5) -. 2.) in
   let iprec = Ir.Ops.index_prec () in
+  let run_values ~name ~transform t =
+    let comp = named name (Train.forward t) in
+    let ctx = Context.auto () in
+    let ctx, routine =
+      Context.compile ~lowered_transform:(fun o -> [ transform o ]) ctx comp Ir.Indexing.Empty
+    in
+    let ctx = Context.run ctx routine in
+    Context.get_values ctx t.Tensor.value
+  in
   let refused ~name ~transform t =
     try
-      ignore (run ~name ~transform t : float);
+      ignore (run_values ~name ~transform t : float array);
       None
     with Invalid_argument msg -> Some msg
   in
@@ -754,13 +768,36 @@ let () =
         debug = "";
       }
   in
-  let refused_leg claim ~name ~transform t ~cpu_value =
+  (* A refusal is the typed [hardware_binding_race] cause, [Invalid_argument] at the compile
+     boundary; the phrase is the rule's own statement of what went wrong. *)
+  let refusal_phrase = "from more than one thread" in
+  let refused_leg ?(index = 0) claim ~name ~transform t ~cpu_value =
     if on_gpu then
       match refused ~name ~transform t with
-      | Some msg -> p claim (String.is_substring msg ~substring:"race the read-modify-write")
+      | Some msg -> p claim (String.is_substring msg ~substring:refusal_phrase)
       | None -> p claim false
-    else if on_cpu then p claim (approx (run ~name ~transform t) cpu_value)
+    else if on_cpu then p claim (approx (run_values ~name ~transform t).(index) cpu_value)
     else skipped claim
+  in
+  let renders_leg ?(index = 0) claim ~name ~transform t ~value =
+    if on_gpu || on_cpu then p claim (approx (run_values ~name ~transform t).(index) value)
+    else skipped claim
+  in
+  (* Replace the lowered code with a hand-built nest over the value node [s] (dropping the lowered
+     [Zero_out], hence un-marking [zero_initialized_by_code] as [reduce_transform] does). *)
+  let replace ~s ~llc_of (opt : LL.optimized) : LL.optimized =
+    (LL.get_node opt.LL.traced_store s).LL.zero_initialized_by_code <- false;
+    { opt with llc = llc_of () }
+  in
+  let for_ ?(from_ = 0) ~upto ~axis index body : LL.t =
+    LL.For_loop { index; from_; to_ = upto; axis; body }
+  in
+  let pin i body : LL.t =
+    LL.If
+      {
+        cond = (Binop (Ir.Ops.Cmpeq, (Embed_index (it i), iprec), (Constant 0., iprec)), iprec);
+        body;
+      }
   in
   (* Sibling: a per-lane store into a fresh kernel-local array, registered in the traced store the
      way [hardware_workgroup_reduce] registers its tile. Per-lane, so the sibling itself is no race;
@@ -776,15 +813,14 @@ let () =
     ignore (LL.get_node opt.LL.traced_store side : LL.traced_array);
     opt
   in
+  let side_store x i =
+    LL.Set { tn = side; idcs = [| it i |]; llsc = Get (x, [| it i |]); debug = "" }
+  in
   let sx = TDSL.ndarray gv ~label:[ "race_sx" ] ~output_dims:[ n ] () in
   let%op ss = sx ++ "i=>0" in
   let sibling_transform opt =
     reduce_transform ~n ss.Tensor.value (with_side opt) ~body_of:(fun i ->
-        LL.Seq
-          ( update ss.Tensor.value sx.Tensor.value i,
-            LL.Set
-              { tn = side; idcs = [| it i |]; llsc = Get (sx.Tensor.value, [| it i |]); debug = "" }
-          ))
+        LL.Seq (update ss.Tensor.value sx.Tensor.value i, side_store sx.Tensor.value i))
   in
   let expected_sum = Array.fold gv ~init:0. ~f:( +. ) in
   refused_leg claim_sibling_refused ~name:"race_sibling_wshfl" ~transform:sibling_transform ss
@@ -808,20 +844,30 @@ let () =
   in
   refused_leg claim_data_guard_refused ~name:"race_data_guard_wshfl" ~transform:data_guard_transform
     ds ~cpu_value:expected_positive;
-  (* A pin is no exemption: the same update under [If (i == 0)] is one lane per block and per row,
-     not one thread. *)
+  (* A pin is one thread along its axis: [If (i == 0) s[0] += x[i]] under the one bound lane is lane
+     0 of the one block, and renders. *)
   let px = TDSL.ndarray gv ~label:[ "race_px" ] ~output_dims:[ n ] () in
   let%op ps = px ++ "i=>0" in
   let pinned_transform =
     reduce_transform ~n ps.Tensor.value ~body_of:(fun i ->
-        LL.If
-          {
-            cond = (Binop (Ir.Ops.Cmpeq, (Embed_index (it i), iprec), (Constant 0., iprec)), iprec);
-            body = update ps.Tensor.value px.Tensor.value i;
-          })
+        pin i (update ps.Tensor.value px.Tensor.value i))
   in
-  refused_leg claim_lane_pin_no_exemption ~name:"race_pinned_wshfl" ~transform:pinned_transform ps
-    ~cpu_value:gv.(0);
+  renders_leg claim_lane_pin_renders ~name:"race_pinned_wshfl" ~transform:pinned_transform ps
+    ~value:gv.(0);
+  (* ... and along its axis alone: under a Grid of two blocks the pinned update is lane 0 of each
+     block, both on the one device cell. The Grid binding is judged before rendering. *)
+  let pgx = TDSL.ndarray gv ~label:[ "race_pgx" ] ~output_dims:[ n ] () in
+  let%op pgs = pgx ++ "i=>0" in
+  let pin_grid_transform =
+    replace ~s:pgs.Tensor.value ~llc_of:(fun () ->
+        let b = Idx.get_symbol () and i = Idx.get_symbol () in
+        for_ ~upto:1 ~axis:LL.Grid b
+          (for_ ~upto:(n - 1) ~axis:LL.Workgroup_reduce i
+             (pin i (update pgs.Tensor.value pgx.Tensor.value i))))
+  in
+  refused_leg claim_pin_other_axis_refused ~name:"race_pin_grid_wshfl" ~transform:pin_grid_transform
+    pgs
+    ~cpu_value:(2. *. gv.(0));
   (* Per-thread local scratch: a self-update of a kernel-local array beside a sibling is one array
      per lane, so it is not a race. The scratch is written, then self-updated, then folded into [s]
      by lane 0 alone with a plain store: [2 * x[0]] on every backend. *)
@@ -847,42 +893,30 @@ let () =
               },
             LL.Seq
               ( update scratch lx.Tensor.value i,
-                LL.If
-                  {
-                    cond =
-                      ( Binop (Ir.Ops.Cmpeq, (Embed_index (it i), iprec), (Constant 0., iprec)),
-                        iprec );
-                    body =
-                      LL.Set
-                        {
-                          tn = ls.Tensor.value;
-                          idcs = [| f0 |];
-                          llsc = Get (scratch, [| f0 |]);
-                          debug = "";
-                        };
-                  } ) ))
+                pin i
+                  (LL.Set
+                     {
+                       tn = ls.Tensor.value;
+                       idcs = [| f0 |];
+                       llsc = Get (scratch, [| f0 |]);
+                       debug = "";
+                     }) ) ))
   in
-  if on_gpu || on_cpu then
-    p claim_local_scratch_renders
-      (approx (run ~name:"race_local_wshfl" ~transform:local_transform ls) (2. *. gv.(0)))
-  else skipped claim_local_scratch_renders;
-  (* Extent one: still refused where a lane is bound, since lane 0 exists per block. The full
-     operand, not a one-element one: a one-element constant is inlined and would not be a kernel
-     parameter for the transformed body to read. *)
+  renders_leg claim_local_scratch_renders ~name:"race_local_wshfl" ~transform:local_transform ls
+    ~value:(2. *. gv.(0));
+  (* Extent one: a width-one axis is one thread by the engine's own rule. The full operand, not a
+     one-element one: a one-element constant is inlined and would not be a kernel parameter for the
+     transformed body to read. *)
   let ox = TDSL.ndarray gv ~label:[ "race_ox" ] ~output_dims:[ n ] () in
   let%op os = ox ++ "i=>0" in
   let one_transform opt =
     reduce_transform ~n:1 os.Tensor.value (with_side opt) ~body_of:(fun i ->
-        LL.Seq
-          ( update os.Tensor.value ox.Tensor.value i,
-            LL.Set
-              { tn = side; idcs = [| it i |]; llsc = Get (ox.Tensor.value, [| it i |]); debug = "" }
-          ))
+        LL.Seq (update os.Tensor.value ox.Tensor.value i, side_store ox.Tensor.value i))
   in
-  refused_leg claim_extent_one_refused ~name:"race_extent1_wshfl" ~transform:one_transform os
-    ~cpu_value:gv.(0);
-  (* A projection's discarded operand is no read: [s[0] = Arg2 (s[0], 3)] is a store every lane
-     makes with the same bytes, not a read-modify-write. *)
+  renders_leg claim_extent_one_renders ~name:"race_extent1_wshfl" ~transform:one_transform os
+    ~value:gv.(0);
+  (* A projection's discarded operand is no read, and it makes no difference: [s[0] = Arg2 (s[0],
+     3)] is a store every lane makes to the one cell. *)
   let px2 = TDSL.ndarray gv ~label:[ "race_px2" ] ~output_dims:[ n ] () in
   let%op ps2 = px2 ++ "i=>0" in
   let projection_transform opt =
@@ -897,74 +931,14 @@ let () =
                     (Ir.Ops.Arg2, (Get (ps2.Tensor.value, [| f0 |]), single), (Constant 3., single));
                 debug = "";
               },
-            LL.Set
-              {
-                tn = side;
-                idcs = [| it i |];
-                llsc = Get (px2.Tensor.value, [| it i |]);
-                debug = "";
-              } ))
+            side_store px2.Tensor.value i ))
   in
-  if on_gpu || on_cpu then
-    p claim_projection_operand_no_read
-      (approx (run ~name:"race_projection_wshfl" ~transform:projection_transform ps2) 3.)
-  else skipped claim_projection_operand_no_read;
-  (* A guard's condition reads: the scope writing [s[0]] back tests [s[0]] in its [If], which is the
-     read the lanes race on. Serially the cell alternates 0 → 1 → 0 over the [n] iterations and ends
-     at 0 for even [n]. *)
-  let cx = TDSL.ndarray gv ~label:[ "race_cx" ] ~output_dims:[ n ] () in
-  let%op cs = cx ++ "i=>0" in
-  let cond_read_transform opt =
-    reduce_transform ~n cs.Tensor.value (with_side opt) ~body_of:(fun i ->
-        let id = LL.get_scope cs.Tensor.value in
-        LL.Seq
-          ( LL.Set
-              {
-                tn = cs.Tensor.value;
-                idcs = [| f0 |];
-                llsc =
-                  Binop
-                    ( Ir.Ops.Add,
-                      ( Local_scope
-                          {
-                            id;
-                            body =
-                              LL.Seq
-                                ( LL.Set_local (id, Constant 0.),
-                                  LL.If
-                                    {
-                                      cond =
-                                        ( Binop
-                                            ( Ir.Ops.Cmpeq,
-                                              (Get (cs.Tensor.value, [| f0 |]), single),
-                                              (Constant 0., single) ),
-                                          single );
-                                      body = LL.Set_local (id, Constant 1.);
-                                    } );
-                            orig_indices = [||];
-                            mint = LL.Schedule_minted;
-                          },
-                        single ),
-                      (Constant 0., single) );
-                debug = "";
-              },
-            LL.Set
-              { tn = side; idcs = [| it i |]; llsc = Get (cx.Tensor.value, [| it i |]); debug = "" }
-          ))
-  in
-  if on_gpu then
-    match refused ~name:"race_condread_wshfl" ~transform:cond_read_transform cs with
-    | Some msg ->
-        p claim_cond_read_refused (String.is_substring msg ~substring:"race the read-modify-write")
-    | None -> p claim_cond_read_refused false
-  else if on_cpu then
-    p claim_cond_read_refused
-      (Float.equal (run ~name:"race_condread_wshfl" ~transform:cond_read_transform cs) 0.)
-  else skipped claim_cond_read_refused;
+  refused_leg claim_projection_store_refused ~name:"race_projection_wshfl"
+    ~transform:projection_transform ps2 ~cpu_value:3.;
   (* The sound single-lane form, in miniature: a workgroup-shared tile of per-lane cells, each lane
-     writing its own cell, a barrier, and lane 0 combining the first two cells with a PLAIN store
-     into the device cell. Nothing in it is a lane-invariant self-update, so the criterion is silent
-     and the hardware binding renders it; the C backends reject the barrier. *)
+     writing its own cell, a barrier, and lane 0 combining the first two cells with a PLAIN pinned
+     store into the device cell. Every store separates the lane (the tile's by its index, the device
+     cell's by the pin), so the hardware binding renders it; the C backends reject the barrier. *)
   let tile =
     Tn.create (Tn.Specified single) ~id:999007 ~label:[ "race_tile" ]
       ~unpadded_dims:(lazy [| n |])
@@ -988,310 +962,263 @@ let () =
                 },
               LL.Seq
                 ( LL.Workgroup_barrier,
-                  LL.If
-                    {
-                      cond =
-                        ( Binop (Ir.Ops.Cmpeq, (Embed_index (it i), iprec), (Constant 0., iprec)),
-                          iprec );
-                      body =
-                        LL.Set
-                          {
-                            tn = hs.Tensor.value;
-                            idcs = [| f0 |];
-                            llsc =
-                              Binop
-                                ( Ir.Ops.Add,
-                                  (Get (tile, [| Idx.Fixed_idx 0 |]), single),
-                                  (Get (tile, [| Idx.Fixed_idx 1 |]), single) );
-                            debug = "";
-                          };
-                    } ) ))
+                  pin i
+                    (LL.Set
+                       {
+                         tn = hs.Tensor.value;
+                         idcs = [| f0 |];
+                         llsc =
+                           Binop
+                             ( Ir.Ops.Add,
+                               (Get (tile, [| Idx.Fixed_idx 0 |]), single),
+                               (Get (tile, [| Idx.Fixed_idx 1 |]), single) );
+                         debug = "";
+                       }) ) ))
     in
     { opt with workgroup_shared = Set.add opt.workgroup_shared tile }
   in
   if on_gpu then
     p claim_staged_form_renders
-      (approx (run ~name:"race_staged_wshfl" ~transform:staged_transform hs) (gv.(0) +. gv.(1)))
+      (approx
+         (run_values ~name:"race_staged_wshfl" ~transform:staged_transform hs).(0)
+         (gv.(0) +. gv.(1)))
   else if on_cpu then
     p claim_staged_form_renders
       (Option.is_some (refused ~name:"race_staged_wshfl" ~transform:staged_transform hs))
   else skipped claim_staged_form_renders;
-  (* A guard's read of the cell a store under it writes: [If (s[0] == 0) s[0] = x[i]] is a
-     test-then-set every lane performs (Codex P1 on staging#674). Serially the first iteration sets
-     [x[0]] (nonzero here) and no later one fires. *)
-  let gx2 = TDSL.ndarray gv ~label:[ "race_gx2" ] ~output_dims:[ n ] () in
-  let%op gs2 = gx2 ++ "i=>0" in
-  let guard_read_transform =
-    reduce_transform ~n gs2.Tensor.value ~body_of:(fun i ->
-        LL.If
-          {
-            cond =
-              ( Binop
-                  (Ir.Ops.Cmpeq, (Get (gs2.Tensor.value, [| f0 |]), single), (Constant 0., single)),
-                single );
-            body =
-              LL.Set
-                {
-                  tn = gs2.Tensor.value;
-                  idcs = [| f0 |];
-                  llsc = Get (gx2.Tensor.value, [| it i |]);
-                  debug = "";
-                };
-          })
-  in
-  refused_leg claim_guard_read_refused ~name:"race_guardread_wshfl" ~transform:guard_read_transform
-    gs2 ~cpu_value:gv.(0);
   (* A dead inner loop performs no accesses: the sibling body with its self-update inside a [to_ <
-     from_] loop is not a race, and renders as the sibling store alone (Codex P2 on staging#674). *)
+     from_] loop is not a race, and renders as the sibling store alone. *)
   let zx = TDSL.ndarray gv ~label:[ "race_zx" ] ~output_dims:[ n ] () in
   let%op zs = zx ++ "i=>0" in
   let dead_loop_transform opt =
     reduce_transform ~n zs.Tensor.value (with_side opt) ~body_of:(fun i ->
         let k = Idx.get_symbol () in
         LL.Seq
-          ( LL.For_loop
-              {
-                index = k;
-                from_ = 1;
-                to_ = 0;
-                axis = LL.Serial;
-                body = update zs.Tensor.value zx.Tensor.value i;
-              },
-            LL.Set
-              { tn = side; idcs = [| it i |]; llsc = Get (zx.Tensor.value, [| it i |]); debug = "" }
-          ))
+          ( for_ ~from_:1 ~upto:0 ~axis:LL.Serial k (update zs.Tensor.value zx.Tensor.value i),
+            side_store zx.Tensor.value i ))
   in
-  if on_gpu || on_cpu then
-    p claim_dead_loop_renders
-      (approx (run ~name:"race_deadloop_wshfl" ~transform:dead_loop_transform zs) 0.)
-  else skipped claim_dead_loop_renders;
-  (* A dynamic gather from the written node may land on the written cell: [s[0] = s[dyn 0] + x[i]]
-     is the self-update through a selector (Codex P1 on staging#674). *)
-  let yx = TDSL.ndarray gv ~label:[ "race_yx" ] ~output_dims:[ n ] () in
-  let%op ys = yx ++ "i=>0" in
-  let dynamic_read_transform =
-    reduce_transform ~n ys.Tensor.value ~body_of:(fun i ->
-        LL.Set
-          {
-            tn = ys.Tensor.value;
-            idcs = [| f0 |];
-            llsc =
-              Binop
-                ( Ir.Ops.Add,
-                  ( Get_dynamic
-                      {
-                        tn = ys.Tensor.value;
-                        idcs = [| f0 |];
-                        dyn_axis = 0;
-                        dyn_value = (Constant 0., iprec);
-                      },
-                    single ),
-                  (Get (yx.Tensor.value, [| it i |]), single) );
-            debug = "";
-          })
-  in
-  refused_leg claim_dynamic_read_refused ~name:"race_dynread_wshfl"
-    ~transform:dynamic_read_transform ys ~cpu_value:expected_sum;
-  (* A dynamic gather a static slot separates from the written cell: [a[0,0] = a[1,dyn 0] + 3] over
-     a [n; 1] node is a plain store whatever the selector picks (Codex P2 on staging#674). *)
-  let dx = TDSL.ndarray gv ~label:[ "race_dx" ] ~output_dims:[ n ] () in
-  let%op ds = dx ++ "i=>i0" in
-  let dynamic_disjoint_transform =
-    reduce_transform ~n ds.Tensor.value ~body_of:(fun _i ->
-        LL.Set
-          {
-            tn = ds.Tensor.value;
-            idcs = [| f0; f0 |];
-            llsc =
-              Binop
-                ( Ir.Ops.Add,
-                  ( Get_dynamic
-                      {
-                        tn = ds.Tensor.value;
-                        idcs = [| Idx.Fixed_idx 1; f0 |];
-                        dyn_axis = 1;
-                        dyn_value = (Constant 0., iprec);
-                      },
-                    single ),
-                  (Constant 3., single) );
-            debug = "";
-          })
-  in
-  if on_gpu || on_cpu then
-    p claim_dynamic_disjoint_no_read
-      (approx (run ~name:"race_dyndisjoint_wshfl" ~transform:dynamic_disjoint_transform ds) 3.)
-  else skipped claim_dynamic_disjoint_no_read;
+  renders_leg claim_dead_loop_renders ~name:"race_deadloop_wshfl" ~transform:dead_loop_transform zs
+    ~value:0.;
   (* A statically false guard executes nothing: the sibling body under [If 0] renders, the cell
-     keeping its zero (Codex P2 on staging#674). *)
+     keeping its zero. *)
   let fx = TDSL.ndarray gv ~label:[ "race_fx" ] ~output_dims:[ n ] () in
   let%op fs = fx ++ "i=>0" in
   let false_guard_transform opt =
     reduce_transform ~n fs.Tensor.value (with_side opt) ~body_of:(fun i ->
         LL.Seq
           ( LL.If { cond = (Constant 0., single); body = update fs.Tensor.value fx.Tensor.value i },
-            LL.Set
-              { tn = side; idcs = [| it i |]; llsc = Get (fx.Tensor.value, [| it i |]); debug = "" }
-          ))
+            side_store fx.Tensor.value i ))
   in
-  if on_gpu || on_cpu then
-    p claim_false_guard_renders
-      (approx (run ~name:"race_falseguard_wshfl" ~transform:false_guard_transform fs) 0.)
-  else skipped claim_false_guard_renders;
-  (* The accumulator staged through a sibling statement: [scratch[0] = s[0]; s[0] = scratch[0] +
-     x[i]] reads and writes the cell across two statements (Codex P1 on staging#674). *)
-  let tx = TDSL.ndarray gv ~label:[ "race_tx" ] ~output_dims:[ n ] () in
-  let%op ts = tx ++ "i=>0" in
-  let staged_local_transform opt =
-    ignore (LL.get_node opt.LL.traced_store scratch : LL.traced_array);
-    reduce_transform ~n ts.Tensor.value opt ~body_of:(fun i ->
-        LL.Seq
-          ( LL.Set
-              { tn = scratch; idcs = [| f0 |]; llsc = Get (ts.Tensor.value, [| f0 |]); debug = "" },
-            LL.Set
-              {
-                tn = ts.Tensor.value;
-                idcs = [| f0 |];
-                llsc =
-                  Binop
-                    ( Ir.Ops.Add,
-                      (Get (scratch, [| f0 |]), single),
-                      (Get (tx.Tensor.value, [| it i |]), single) );
-                debug = "";
-              } ))
-  in
-  refused_leg claim_staged_local_refused ~name:"race_stagedlocal_wshfl"
-    ~transform:staged_local_transform ts ~cpu_value:expected_sum;
-  (* A read that aliases the written cell through another index: [s[0] = s[k] + x[i]] under [k =
-     0..0] (Codex P1 on staging#674). *)
-  let ax = TDSL.ndarray gv ~label:[ "race_ax" ] ~output_dims:[ n ] () in
-  let%op as_ = ax ++ "i=>0" in
-  let alias_transform =
-    reduce_transform ~n as_.Tensor.value ~body_of:(fun i ->
-        let k = Idx.get_symbol () in
-        LL.For_loop
-          {
-            index = k;
-            from_ = 0;
-            to_ = 0;
-            axis = LL.Serial;
-            body =
-              LL.Set
+  renders_leg claim_false_guard_renders ~name:"race_falseguard_wshfl"
+    ~transform:false_guard_transform fs ~value:0.;
+  (* --- gh-ocannl-959's own shape: a cell mentioning every bound axis is not a per-thread cell. [x]
+     is [j: 2; i: 33] so that [acc = x ++ "ji=>i"] has the 33 cells [i + j] reaches; the loops are
+     the transform's own, [j] a Workgroup of two and [i] a Workgroup_reduce of a warp. --- *)
+  let mv = Array.init (2 * 33) ~f:(fun k -> (Float.of_int (k % 7) *. 0.25) -. 1.) in
+  let mx = TDSL.ndarray mv ~label:[ "race_mx" ] ~output_dims:[ 2; 33 ] () in
+  let%op macc = mx ++ "ji=>i" in
+  let two_axes_transform ~cell =
+    replace ~s:macc.Tensor.value ~llc_of:(fun () ->
+        let j = Idx.get_symbol () and i = Idx.get_symbol () in
+        for_ ~upto:1 ~axis:LL.Workgroup j
+          (for_ ~upto:(n - 1) ~axis:LL.Workgroup_reduce i
+             (LL.Set
                 {
-                  tn = as_.Tensor.value;
-                  idcs = [| f0 |];
+                  tn = macc.Tensor.value;
+                  idcs = [| cell ~i ~j |];
                   llsc =
                     Binop
                       ( Ir.Ops.Add,
-                        (Get (as_.Tensor.value, [| it k |]), single),
-                        (Get (ax.Tensor.value, [| it i |]), single) );
+                        (Get (macc.Tensor.value, [| cell ~i ~j |]), single),
+                        (Get (mx.Tensor.value, [| it j; it i |]), single) );
                   debug = "";
-                };
-          })
+                })))
   in
-  refused_leg claim_alias_read_refused ~name:"race_alias_wshfl" ~transform:alias_transform as_
-    ~cpu_value:expected_sum;
-  (* A [Where] arm a literal condition never selects reads nothing: [s[0] = Where (1, 3, s[0])]
-     beside a sibling is a plain store of 3 (Codex P2 on staging#674). *)
-  let wx2 = TDSL.ndarray gv ~label:[ "race_wx2" ] ~output_dims:[ n ] () in
-  let%op ws2 = wx2 ++ "i=>0" in
-  let where_transform opt =
-    reduce_transform ~n ws2.Tensor.value (with_side opt) ~body_of:(fun i ->
-        LL.Seq
-          ( LL.Set
-              {
-                tn = ws2.Tensor.value;
-                idcs = [| f0 |];
-                llsc =
-                  Ternop
-                    ( Ir.Ops.Where,
-                      (Constant 1., single),
-                      (Constant 3., single),
-                      (Get (ws2.Tensor.value, [| f0 |]), single) );
-                debug = "";
-              },
-            LL.Set
-              {
-                tn = side;
-                idcs = [| it i |];
-                llsc = Get (wx2.Tensor.value, [| it i |]);
-                debug = "";
-              } ))
+  let sum_cell ~i ~j = Idx.Affine { symbols = [ (1, i); (1, j) ]; offset = 0 } in
+  (* Serially, [acc[5] = x[0, 5] + x[1, 4]]. *)
+  refused_leg claim_mention_not_injective_refused ~index:5 ~name:"race_two_axes_sum_wshfl"
+    ~transform:(two_axes_transform ~cell:sum_cell)
+    macc
+    ~cpu_value:(mv.(5) +. mv.(33 + 4));
+  (* The injective twin: [acc[2 i + j]] over [j < 2] is mixed-radix, and [acc = x ++ "ji=>i"] over
+     [x: [2; 64]] has the 64 cells it reaches. [acc[5] = x[1, 2]] on every backend. *)
+  let iv = Array.init (2 * 64) ~f:(fun k -> (Float.of_int (k % 11) *. 0.125) -. 0.5) in
+  let ix = TDSL.ndarray iv ~label:[ "race_ix" ] ~output_dims:[ 2; 64 ] () in
+  let%op iacc = ix ++ "ji=>i" in
+  let injective_transform =
+    replace ~s:iacc.Tensor.value ~llc_of:(fun () ->
+        let j = Idx.get_symbol () and i = Idx.get_symbol () in
+        let cell = Idx.Affine { symbols = [ (2, i); (1, j) ]; offset = 0 } in
+        for_ ~upto:1 ~axis:LL.Workgroup j
+          (for_ ~upto:(n - 1) ~axis:LL.Workgroup_reduce i
+             (LL.Set
+                {
+                  tn = iacc.Tensor.value;
+                  idcs = [| cell |];
+                  llsc =
+                    Binop
+                      ( Ir.Ops.Add,
+                        (Get (iacc.Tensor.value, [| cell |]), single),
+                        (Get (ix.Tensor.value, [| it j; it i |]), single) );
+                  debug = "";
+                })))
+  in
+  renders_leg claim_injective_map_renders ~index:5 ~name:"race_two_axes_radix_wshfl"
+    ~transform:injective_transform iacc
+    ~value:iv.(64 + 2);
+  (* A reduction axis bound as a plain Workgroup — the form [reduction_forms]' retype-workgroup
+     member runs only where it serializes: [out[r] += x[r, k]] under a bound [k] is every lane on
+     [out[r]], and the Grid/Workgroup pass refuses it before anything renders. *)
+  let rv = Array.init (2 * n) ~f:(fun k -> (Float.of_int (k % 5) *. 0.5) -. 1.) in
+  let rx = TDSL.ndarray rv ~label:[ "race_rx" ] ~output_dims:[ 2; n ] () in
+  let%op rout = rx ++ "rk=>r" in
+  let plain_workgroup_transform =
+    replace ~s:rout.Tensor.value ~llc_of:(fun () ->
+        let k = Idx.get_symbol () and r = Idx.get_symbol () in
+        for_ ~upto:(n - 1) ~axis:LL.Workgroup k
+          (for_ ~upto:1 ~axis:LL.Serial r
+             (LL.Set
+                {
+                  tn = rout.Tensor.value;
+                  idcs = [| it r |];
+                  llsc =
+                    Binop
+                      ( Ir.Ops.Add,
+                        (Get (rout.Tensor.value, [| it r |]), single),
+                        (Get (rx.Tensor.value, [| it r; it k |]), single) );
+                  debug = "";
+                })))
+  in
+  let row1 = Array.fold (Array.sub rv ~pos:n ~len:n) ~init:0. ~f:( +. ) in
+  refused_leg claim_plain_workgroup_reduction_refused ~index:1 ~name:"race_plain_workgroup_wshfl"
+    ~transform:plain_workgroup_transform rout ~cpu_value:row1;
+  (* --- A dynamic scatter is judged by its static slots, over an [n; 1] node. --- *)
+  let av = Array.copy gv in
+  let ax = TDSL.ndarray av ~label:[ "race_ax" ] ~output_dims:[ n; 1 ] () in
+  let%op aa = ax ++ "ij=>ij" in
+  let ax2 = TDSL.ndarray av ~label:[ "race_ax2" ] ~output_dims:[ n; 1 ] () in
+  let%op aa2 = ax2 ++ "ij=>ij" in
+  let scatter ~(target : Tensor.t) ~(source : Tensor.t) ~idcs ~dyn_axis i : LL.t =
+    LL.Set_dynamic
+      {
+        tn = target.Tensor.value;
+        idcs;
+        dyn_axis;
+        dyn_value = (Constant 0., iprec);
+        llsc = Get (source.Tensor.value, [| it i; f0 |]);
+        debug = "";
+      }
+  in
+  let scatter_lane_transform =
+    reduce_transform ~n aa.Tensor.value ~body_of:(fun i ->
+        scatter ~target:aa ~source:ax ~idcs:[| it i; f0 |] ~dyn_axis:1 i)
+  in
+  renders_leg claim_dynamic_static_slot_renders ~index:3 ~name:"race_scatter_lane_wshfl"
+    ~transform:scatter_lane_transform aa ~value:gv.(3);
+  let scatter_invariant_transform =
+    reduce_transform ~n aa2.Tensor.value ~body_of:(fun i ->
+        scatter ~target:aa2 ~source:ax2 ~idcs:[| f0; f0 |] ~dyn_axis:0 i)
+  in
+  refused_leg claim_dynamic_lane_invariant_refused ~name:"race_scatter_invariant_wshfl"
+    ~transform:scatter_invariant_transform aa2
+    ~cpu_value:gv.(n - 1);
+  (* --- A vector store is judged by its aligned run blocks, over a [4 n] node. The bits are a
+     literal, as in the RNG leg above: the store's SHAPE is what the rule judges. --- *)
+  let zeros = Array.init (4 * n) ~f:(fun _ -> 0.) in
+  let vx = TDSL.ndarray zeros ~label:[ "race_vx" ] ~output_dims:[ 4 * n ] () in
+  let%op vs = vx ++ "i=>i" in
+  let vx2 = TDSL.ndarray zeros ~label:[ "race_vx2" ] ~output_dims:[ 4 * n ] () in
+  let%op vs2 = vx2 ++ "i=>i" in
+  let vec_store ~(target : Tensor.t) ~base : LL.t =
+    LL.Set_from_vec
+      {
+        tn = target.Tensor.value;
+        idcs = [| base |];
+        length = 4;
+        vec_unop = Ir.Ops.Uint4x32_to_prec_uniform;
+        arg = (Constant_bits (Int64.of_int 0x9E3779B9), Ir.Ops.uint4x32);
+        debug = "";
+      }
+  in
+  let in_unit v = Float.(v >= 0. && v < 1.) in
+  let vec_aligned_transform =
+    reduce_transform ~n vs.Tensor.value ~body_of:(fun i ->
+        vec_store ~target:vs ~base:(Idx.Affine { symbols = [ (4, i) ]; offset = 0 }))
   in
   if on_gpu || on_cpu then
-    p claim_where_arm_no_read
-      (approx (run ~name:"race_where_wshfl" ~transform:where_transform ws2) 3.)
-  else skipped claim_where_arm_no_read;
-  (* A scan whose carried initializer reads the accumulator and whose body stores the carried state
-     back: [prev = s[0]; s[0] = prev + x[i]] under [k = 0..0] (Codex P1 on staging#674). The read
-     sits in the initializer, outside the body the level walks. *)
-  let state =
-    Tn.create (Tn.Specified single) ~id:999008 ~label:[ "race_state" ]
-      ~unpadded_dims:(lazy [| 1 |])
-      ~padding:(lazy None)
-      ()
-  in
-  Tn.update_memory_mode state Tn.Virtual 99;
-  let scx = TDSL.ndarray gv ~label:[ "race_scx" ] ~output_dims:[ n ] () in
-  let%op scs = scx ++ "i=>0" in
-  let scan_init_transform =
-    reduce_transform ~n scs.Tensor.value ~body_of:(fun i ->
-        let k = Idx.get_symbol () in
-        let prev = LL.get_scope state and next = LL.get_scope state in
-        let carried : LL.carried = { prev; next; init = Get (scs.Tensor.value, [| f0 |]) } in
-        let sum : LL.scalar_t =
-          Binop (Ir.Ops.Add, (Get_local prev, single), (Get (scx.Tensor.value, [| it i |]), single))
-        in
-        LL.Scan_loop
-          {
-            index = k;
-            from_ = 0;
-            to_ = 0;
-            direction = LL.Forward;
-            carried = [ carried ];
-            body =
-              LL.Seq
-                ( LL.Set { tn = scs.Tensor.value; idcs = [| f0 |]; llsc = sum; debug = "" },
-                  LL.Set_local (next, sum) );
-          })
-  in
-  refused_leg claim_scan_init_read_refused ~name:"race_scaninit_wshfl"
-    ~transform:scan_init_transform scs ~cpu_value:expected_sum;
-  (* A vector store covers [length] cells: [s[0..3] = uniform(bits)] beside [s[0] = s[2] + x[i]]
-     writes the cell the sibling reads (Codex P1 on staging#674). The bits are a literal, as in the
-     RNG leg above: the store's SHAPE is what the criterion judges. *)
-  let vx = TDSL.ndarray gv ~label:[ "race_vx" ] ~output_dims:[ n ] () in
-  let%op vs = vx ++ "i=>i" in
-  let vec_store_transform =
-    reduce_transform ~n vs.Tensor.value ~body_of:(fun i ->
-        LL.Seq
-          ( LL.Set_from_vec
-              {
-                tn = vs.Tensor.value;
-                idcs = [| f0 |];
-                length = 4;
-                vec_unop = Ir.Ops.Uint4x32_to_prec_uniform;
-                arg = (Constant_bits (Int64.of_int 0x9E3779B9), Ir.Ops.uint4x32);
-                debug = "";
-              },
-            LL.Set
-              {
-                tn = vs.Tensor.value;
-                idcs = [| f0 |];
-                llsc =
-                  Binop
-                    ( Ir.Ops.Add,
-                      (Get (vs.Tensor.value, [| Idx.Fixed_idx 2 |]), single),
-                      (Get (vx.Tensor.value, [| it i |]), single) );
-                debug = "";
-              } ))
+    let v = run_values ~name:"race_vec_aligned_wshfl" ~transform:vec_aligned_transform vs in
+    p claim_vec_aligned_runs_render (in_unit v.(1) && Float.equal v.(1) v.(5))
+  else skipped claim_vec_aligned_runs_render;
+  let vec_invariant_transform =
+    reduce_transform ~n vs2.Tensor.value ~body_of:(fun _i -> vec_store ~target:vs2 ~base:f0)
   in
   if on_gpu then
-    match refused ~name:"race_vecstore_wshfl" ~transform:vec_store_transform vs with
+    match refused ~name:"race_vec_invariant_wshfl" ~transform:vec_invariant_transform vs2 with
     | Some msg ->
-        p claim_vec_store_refused (String.is_substring msg ~substring:"race the read-modify-write")
-    | None -> p claim_vec_store_refused false
+        p claim_vec_lane_invariant_refused (String.is_substring msg ~substring:refusal_phrase)
+    | None -> p claim_vec_lane_invariant_refused false
   else if on_cpu then
-    let v = run ~name:"race_vecstore_wshfl" ~transform:vec_store_transform vs in
-    let last = gv.(n - 1) in
-    p claim_vec_store_refused Float.(v >= last && v < last + 1.)
-  else skipped claim_vec_store_refused
+    let v = run_values ~name:"race_vec_invariant_wshfl" ~transform:vec_invariant_transform vs2 in
+    p claim_vec_lane_invariant_refused (in_unit v.(0))
+  else skipped claim_vec_lane_invariant_refused;
+  (* --- gh-ocannl-960: a [Tile_mma] whose accumulator tile omits the reduce lane above it. The
+     tile's cooperating lane [w] is excused (the tile is jointly owned along it); the reduce lane
+     [i] is not, and the fallback's [d[r, c] += a[r, l] * b[l, c]] does not separate it. Serially
+     the tile accumulates once per [i]: [d[0, 0] = n * (a b)[0, 0]]. --- *)
+  let t = 8 in
+  let mav = Array.init (t * t) ~f:(fun k -> Float.of_int (k % 5) -. 2.) in
+  let mbv = Array.init (t * t) ~f:(fun k -> Float.of_int (k % 3) -. 1.) in
+  let ma = TDSL.ndarray mav ~label:[ "race_ma" ] ~input_dims:[ t ] ~output_dims:[ t ] () in
+  let mb = TDSL.ndarray mbv ~label:[ "race_mb" ] ~input_dims:[ t ] ~output_dims:[ t ] () in
+  let%op md = ma * mb in
+  let tile_mma_transform =
+    replace ~s:md.Tensor.value ~llc_of:(fun () ->
+        let i = Idx.get_symbol () and w = Idx.get_symbol () in
+        let r = Idx.get_symbol () and c = Idx.get_symbol () and l = Idx.get_symbol () in
+        let d = md.Tensor.value and a = ma.Tensor.value and b = mb.Tensor.value in
+        let fallback =
+          for_ ~upto:(t - 1) ~axis:LL.Serial r
+            (for_ ~upto:(t - 1) ~axis:LL.Serial c
+               (for_ ~upto:(t - 1) ~axis:LL.Serial l
+                  (LL.Set
+                     {
+                       tn = d;
+                       idcs = [| it r; it c |];
+                       llsc =
+                         Binop
+                           ( Ir.Ops.Add,
+                             (Get (d, [| it r; it c |]), single),
+                             ( Binop
+                                 ( Ir.Ops.Mul,
+                                   (Get (a, [| it r; it l |]), single),
+                                   (Get (b, [| it l; it c |]), single) ),
+                               single ) );
+                       debug = "";
+                     })))
+        in
+        let origin = [| f0; f0 |] in
+        for_ ~upto:(n - 1) ~axis:LL.Workgroup_reduce i
+          (for_ ~upto:(n - 1) ~axis:LL.Workgroup w
+             (LL.Tile_mma
+                {
+                  d = (d, origin);
+                  a = (a, origin);
+                  b = (b, origin);
+                  ta = false;
+                  tb = false;
+                  m = t;
+                  n = t;
+                  k = t;
+                  ldd = t;
+                  lda = t;
+                  ldb = t;
+                  lane = w;
+                  tile = None;
+                  fallback;
+                })))
+  in
+  let ab00 =
+    List.fold (List.init t ~f:Fn.id) ~init:0. ~f:(fun acc l -> acc +. (mav.(l) *. mbv.(l * t)))
+  in
+  refused_leg claim_tile_mma_refused ~name:"race_tile_mma_wshfl" ~transform:tile_mma_transform md
+    ~cpu_value:(Float.of_int n *. ab00)
