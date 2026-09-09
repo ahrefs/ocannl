@@ -22,7 +22,8 @@ under Fp16_wide the emitted f16 shuffle declares its staging register and its pe
 a Workgroup_reduce level holding a sibling statement beside a lane-invariant self-updating Set is refused where a lane index is bound (GPU: the cell does not separate the lane) or runs serially (CPU): true
 a Workgroup_reduce level holding a data-dependent guard over a lane-invariant self-updating Set is refused where a lane index is bound (GPU: the guard leaves several lanes on the cell) or runs serially (CPU): true
 a lane-invariant self-update under a guard pinning the lane index to a literal is one thread along the lane: it renders with the pinned lane's term where no other axis is bound (GPU) and the serial loop admits the one iteration (CPU): true
-the same pinned update under a bound Grid axis is refused where the axes bind (GPU: lane 0 of every block writes the one device cell — a pin separates its own axis alone) or runs serially over both loops (CPU): true
+the same pinned update under a bound Grid axis is refused wherever the grid binds — a hardware register (GPU) or cc's pool of chunks — since lane 0 of every block writes the one device cell (a pin separates its own axis alone), and sums serially over both loops where the grid iterates: true
+two stores to one device cell pinned to the same lane are one thread along the lane: they render, x[0] + x[1], on every backend: true
 a self-update of a per-thread local array beside a sibling statement is not a race under a bound Workgroup_reduce (one array per lane): it renders, and lane 0's fold reads its own scratch: true
 a bound Workgroup_reduce of extent one is one thread along the lane: the sibling body renders with the one term on every backend: true
 a lane-invariant store whose value discards the cell's old value (Arg2) is still a store every lane performs to one cell: refused where a lane index is bound (GPU: a write-write race, whatever the bytes) or the serial store of 3 (CPU): true
@@ -31,6 +32,8 @@ a self-update inside a dead inner loop (to_ < from_) beside a sibling performs n
 a self-update under a statically false guard beside a sibling executes nothing: the level renders and the cell keeps its zero: true
 acc[i + j] += x[j, i] under a bound Workgroup j and a bound Workgroup_reduce i mentions both axes yet threads (0, 1) and (1, 0) share acc[1]: refused where the axes bind (GPU) or the serial anti-diagonal sums (CPU): true
 acc[2 * i + j] += x[j, i] under the same two bound axes separates both (the mixed-radix injectivity the engine proves): each thread owns its cell and the level renders on every backend: true
+a pin on an enclosing bound axis reaches the reduce level's judgement: acc[i + j] under If (j == 0) is acc[i], each lane its own cell, and the level renders on every backend: true
+a range guard narrows the lane's domain for the radix argument: If (i < 16) acc[i + 16 j] separates both bound axes over i < 16 and renders on every backend: true
 a reduction axis retyped to a plain Workgroup (out[r] += x[r, k] under a bound k) is refused before rendering where the axis binds (GPU) or serializes to the row sums (CPU): true
 a dynamic scatter whose static slot is the lane (a[i, dyn 0] = x[i, 0]) separates the lane by its static slots alone: it renders on every backend: true
 a dynamic scatter whose static slots are lane-invariant (a[dyn 0, 0] = x[i, 0]) may land every lane on one cell: refused where a lane index is bound (GPU) or the last serial store (CPU): true

@@ -674,9 +674,21 @@ let claim_lane_pin_renders =
    the serial loop admits the one iteration (CPU)"
 
 let claim_pin_other_axis_refused =
-  "the same pinned update under a bound Grid axis is refused where the axes bind (GPU: lane 0 of \
-   every block writes the one device cell — a pin separates its own axis alone) or runs serially \
-   over both loops (CPU)"
+  "the same pinned update under a bound Grid axis is refused wherever the grid binds — a hardware \
+   register (GPU) or cc's pool of chunks — since lane 0 of every block writes the one device cell \
+   (a pin separates its own axis alone), and sums serially over both loops where the grid iterates"
+
+let claim_same_pin_renders =
+  "two stores to one device cell pinned to the same lane are one thread along the lane: they \
+   render, x[0] + x[1], on every backend"
+
+let claim_outer_pin_narrows =
+  "a pin on an enclosing bound axis reaches the reduce level's judgement: acc[i + j] under If (j \
+   == 0) is acc[i], each lane its own cell, and the level renders on every backend"
+
+let claim_range_guard_narrows =
+  "a range guard narrows the lane's domain for the radix argument: If (i < 16) acc[i + 16 j] \
+   separates both bound axes over i < 16 and renders on every backend"
 
 let claim_local_scratch_renders =
   "a self-update of a per-thread local array beside a sibling statement is not a race under a \
@@ -865,9 +877,53 @@ let () =
           (for_ ~upto:(n - 1) ~axis:LL.Workgroup_reduce i
              (pin i (update pgs.Tensor.value pgx.Tensor.value i))))
   in
-  refused_leg claim_pin_other_axis_refused ~name:"race_pin_grid_wshfl" ~transform:pin_grid_transform
-    pgs
-    ~cpu_value:(2. *. gv.(0));
+  (* On cc the same Grid loop renders as pool chunks wherever a pool was probed, and that binding is
+     judged like a register's; without a pool it iterates. *)
+  (* Which branch this run took is on stderr, not in the golden. *)
+  if on_cpu then
+    Stdio.eprintf "cc pool-parallel grid: %b (not part of the golden)\n%!"
+      (Context.Cc_backend.pool_parallel_grid ());
+  if on_gpu || (on_cpu && Context.Cc_backend.pool_parallel_grid ()) then
+    match refused ~name:"race_pin_grid_wshfl" ~transform:pin_grid_transform pgs with
+    | Some msg -> p claim_pin_other_axis_refused (String.is_substring msg ~substring:refusal_phrase)
+    | None -> p claim_pin_other_axis_refused false
+  else if on_cpu then
+    p claim_pin_other_axis_refused
+      (approx
+         (run_values ~name:"race_pin_grid_wshfl" ~transform:pin_grid_transform pgs).(0)
+         (2. *. gv.(0)))
+  else skipped claim_pin_other_axis_refused;
+  (* A pin is one thread along its axis: two stores under the same pin are that thread in program
+     order. (What OTHER statements' threads do to the pinned cell is dependence analysis over
+     barrier regions, outside the binding rule — the tensorized pipeline zeroes on every lane and
+     stores back from lane 0 across the intrinsic's barrier.) *)
+  let store_at s v : LL.t = LL.Set { tn = s; idcs = [| f0 |]; llsc = v; debug = "" } in
+  let pin_at i c body : LL.t =
+    LL.If
+      {
+        cond =
+          ( Binop (Ir.Ops.Cmpeq, (Embed_index (it i), iprec), (Constant (Float.of_int c), iprec)),
+            iprec );
+        body;
+      }
+  in
+  let two_pins ~same (s : Tensor.t) (x : Tensor.t) =
+    reduce_transform ~n s.Tensor.value ~body_of:(fun i ->
+        LL.Seq
+          ( pin_at i 0 (store_at s.Tensor.value (Get (x.Tensor.value, [| Idx.Fixed_idx 0 |]))),
+            pin_at i
+              (if same then 0 else 1)
+              (store_at s.Tensor.value
+                 (Binop
+                    ( Ir.Ops.Add,
+                      (Get (s.Tensor.value, [| f0 |]), single),
+                      (Get (x.Tensor.value, [| Idx.Fixed_idx 1 |]), single) ))) ))
+  in
+  let spx = TDSL.ndarray gv ~label:[ "race_spx" ] ~output_dims:[ n ] () in
+  let%op sps = spx ++ "i=>0" in
+  renders_leg claim_same_pin_renders ~name:"race_same_pin_wshfl"
+    ~transform:(two_pins ~same:true sps spx) sps
+    ~value:(gv.(0) +. gv.(1));
   (* Per-thread local scratch: a self-update of a kernel-local array beside a sibling is one array
      per lane, so it is not a race. The scratch is written, then self-updated, then folded into [s]
      by lane 0 alone with a plain store: [2 * x[0]] on every backend. *)
@@ -1066,6 +1122,84 @@ let () =
   renders_leg claim_injective_map_renders ~index:5 ~name:"race_two_axes_radix_wshfl"
     ~transform:injective_transform iacc
     ~value:iv.(64 + 2);
+  (* The guards enclosing the reduce level reach its judgement: [j] pinned outside the level makes
+     [acc[i + j]] a per-lane cell. [acc[5] = x[0, 5]] on every backend. *)
+  let ov = Array.init (2 * 33) ~f:(fun k -> (Float.of_int (k % 5) *. 0.5) -. 1.) in
+  let ox2 = TDSL.ndarray ov ~label:[ "race_ox2" ] ~output_dims:[ 2; 33 ] () in
+  let%op oacc = ox2 ++ "ji=>i" in
+  let outer_pin_transform =
+    replace ~s:oacc.Tensor.value ~llc_of:(fun () ->
+        let j = Idx.get_symbol () and i = Idx.get_symbol () in
+        let cell = Idx.Affine { symbols = [ (1, i); (1, j) ]; offset = 0 } in
+        for_ ~upto:1 ~axis:LL.Workgroup j
+          (pin j
+             (for_ ~upto:(n - 1) ~axis:LL.Workgroup_reduce i
+                (LL.Seq
+                   ( LL.Set
+                       {
+                         tn = oacc.Tensor.value;
+                         idcs = [| cell |];
+                         llsc =
+                           Binop
+                             ( Ir.Ops.Add,
+                               (Get (oacc.Tensor.value, [| cell |]), single),
+                               (Get (ox2.Tensor.value, [| it j; it i |]), single) );
+                         debug = "";
+                       },
+                     LL.Set
+                       {
+                         tn = side;
+                         idcs = [| it i |];
+                         llsc = Get (ox2.Tensor.value, [| it j; it i |]);
+                         debug = "";
+                       } )))))
+  in
+  renders_leg claim_outer_pin_narrows ~index:5 ~name:"race_outer_pin_wshfl"
+    ~transform:(fun opt -> outer_pin_transform (with_side opt))
+    oacc ~value:ov.(5);
+  (* A range guard is a domain too: over [i < 16], [acc[i + 16 j]] with [j < 2] is mixed-radix.
+     Without the narrowing [(i = 16, j = 0)] and [(i = 0, j = 1)] would meet on [acc[16]]. [acc[21]
+     = x[1, 5]] on every backend. *)
+  let rgv = Array.init (2 * n) ~f:(fun k -> (Float.of_int (k % 6) *. 0.25) -. 0.5) in
+  let rgx = TDSL.ndarray rgv ~label:[ "race_rgx" ] ~output_dims:[ 2; n ] () in
+  let%op racc = rgx ++ "ji=>i" in
+  let range_guard_transform =
+    replace ~s:racc.Tensor.value ~llc_of:(fun () ->
+        let j = Idx.get_symbol () and i = Idx.get_symbol () in
+        let cell = Idx.Affine { symbols = [ (1, i); (16, j) ]; offset = 0 } in
+        for_ ~upto:1 ~axis:LL.Workgroup j
+          (for_ ~upto:(n - 1) ~axis:LL.Workgroup_reduce i
+             (LL.Seq
+                ( LL.If
+                    {
+                      cond =
+                        ( Binop (Ir.Ops.Cmplt, (Embed_index (it i), iprec), (Constant 16., iprec)),
+                          iprec );
+                      body =
+                        LL.Set
+                          {
+                            tn = racc.Tensor.value;
+                            idcs = [| cell |];
+                            llsc =
+                              Binop
+                                ( Ir.Ops.Add,
+                                  (Get (racc.Tensor.value, [| cell |]), single),
+                                  (Get (rgx.Tensor.value, [| it j; it i |]), single) );
+                            debug = "";
+                          };
+                    },
+                  LL.Set
+                    {
+                      tn = side;
+                      idcs = [| it i |];
+                      llsc = Get (rgx.Tensor.value, [| it j; it i |]);
+                      debug = "";
+                    } ))))
+  in
+  renders_leg claim_range_guard_narrows ~index:21 ~name:"race_range_guard_wshfl"
+    ~transform:(fun opt -> range_guard_transform (with_side opt))
+    racc
+    ~value:rgv.(n + 5);
   (* A reduction axis bound as a plain Workgroup — the form [reduction_forms]' retype-workgroup
      member runs only where it serializes: [out[r] += x[r, k]] under a bound [k] is every lane on
      [out[r]], and the Grid/Workgroup pass refuses it before anything renders. *)

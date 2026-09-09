@@ -5808,95 +5808,78 @@ let has_accumulating_cell (llc : t) : bool =
   loop llc
 
 (* gh-ocannl-959: the legality of a hardware binding, as a query on the written cell. Binding a
-   loop's index to a hardware register makes its iterations threads; a store under it to storage the
-   threads share is race-free exactly when no two threads own the same cell — the cell's index map
-   must SEPARATE the bound axes ({!Affine.separates}: two instances of the statement, varying every
-   enclosing loop symbol independently, address a common cell only if they agree on every bound
-   symbol). Mentioning a bound symbol is not separating it: [acc[i + j]] mentions both of two bound
-   axes and [(0, 1)] and [(1, 0)] share [acc[1]] (the issue's example), and [acc[i + k]] under a
-   bound [i] and a serial [k] collides the same way — which is why every enclosing loop symbol is
-   concurrent, not only the bound ones. What separates a bound axis is the injectivity the engine
-   proves ([acc[2 * i + j]] with [j < 2]), or a guard PINNING the axis to a literal ([If (i == 0)]):
-   on that store's domain the axis takes one value, so it is one thread along that axis — and along
-   that axis alone. The six ways a pin was found not to be one thread on staging#674 are each
-   another bound symbol the cell must still separate: a grid of blocks is a bound [Grid] axis
-   (device storage; workgroup-shared storage is per block, so [Grid] axes are not its threads), a
-   second workgroup dimension is a bound [Workgroup] axis, a pin to a loop index or a memory read
-   pins nothing. A width-one axis is one thread by the same rule ({!Affine.pair_conflict}'s
-   width-one clause).
+   loop's index to a hardware register makes its iterations threads, and thread identity is one
+   coordinate per ACTIVE slot — a (kind, slot) of the launch some bound loop of extent above one
+   occupies; cc's pool renders one outermost Grid loop at a time as chunks, a binding whose threads
+   exist only under that loop. A store under a binding to storage the threads share is race-free
+   exactly when no two threads own the same cell: every active slot must have a bound loop enclosing
+   the store (a slot without one executes the store on each of its coordinates —
+   [validate_parallel]'s coverage rule, here for workgroup-shared storage too), and the cell's index
+   map must SEPARATE the enclosing thread symbols ({!Affine.separates}: two instances of the
+   statement, varying every loop symbol in scope independently, address a common cell only if they
+   agree on every thread symbol). Mentioning a thread symbol is not separating it: [acc[i + j]]
+   mentions both of two bound axes and [(0, 1)] and [(1, 0)] share [acc[1]] (the issue's example),
+   and [acc[i + k]] under a bound [i] and a serial [k] collides the same way — which is why every
+   loop symbol in scope is concurrent, not only the bound ones. What separates a thread symbol is
+   the injectivity the engine proves ([acc[2 * i + j]] with [j < 2]), or the guards the store sits
+   under: the environment is narrowed by each enclosing [If] exactly as gh-ocannl-566's simplifier
+   narrows it ({!ienv_narrow_from_cond}: conjunctions of affine comparisons), so [If (i < 16)]
+   shrinks [i]'s range for the radix argument and [If (i == 0)] PINS [i] to a width-one range, which
+   the engine already reads as one thread along that axis — and along that axis alone, since the
+   other active slots keep their coordinates. The six ways a pin was found not to be one thread on
+   staging#674 are each another coordinate the cell must still separate: a grid of blocks is a bound
+   [Grid] axis (of device storage; workgroup-shared storage is per block, so [Grid] axes are not its
+   threads), a second workgroup dimension is a bound [Workgroup] axis, a pin to a loop index or a
+   memory read narrows nothing.
+
+   What this judges is the store's OWN threads. The cell a pinned store writes may be read or
+   written by other threads from OTHER statements — the tensorized pipeline zeroes its output on
+   every lane and stores the tile back from lane 0, ordered by the barrier the intrinsic block ends
+   with — and whether such a pair is ordered is dependence analysis over barrier regions: the
+   schedule's obligation where it mints the pin ([Stage], [Tensorize]) and the annotating pass's
+   where it mints the binding, exactly as for every unpinned store before this rule existed. It is
+   deliberately not modelled here.
 
    Reads play no part: a plain store every thread performs to one cell is a write-write race whether
-   or not the values agree, so the sound single-thread form is a pinned final store or a per-thread
-   cell, and the read-modify-write case is the same refusal with a louder symptom. A dead level
-   ([to_ < from_]) and a statically false guard execute nothing. A [Set_dynamic] is judged by its
-   static slots (the dynamic one separates nothing: masked opaque). A [Set_from_vec] is a run of
-   [length] cells from its base: where the base's last component is a multiple of [length], the runs
-   are aligned blocks and the quotient map is what must separate; otherwise the component is opaque
-   and the other slots must. A [Zero_out] is a store of every cell. A [Tile_mma] is judged through
-   its [fallback] — the scalar nest that spells the tile's stores — with its own cooperating [lane]
-   excused (the tile is jointly owned by that axis and by construction mentions it nowhere), so a
-   tile whose base omits an outer bound axis is refused where the plain store would be
-   (gh-ocannl-960). [Set_local] and [Declare_local] are thread-private by nature.
+   or not the values agree, so the sound single-thread form is a pinned store or a per-thread cell.
+   A dead level ([to_ < from_]) and a statically false guard execute nothing. A [Set_dynamic] is
+   judged by its static slots (the dynamic one separates nothing: masked opaque). A [Set_from_vec]
+   is a run of [length] cells from its base: where the base's last component is a multiple of
+   [length] the runs are aligned blocks and the quotient map is what must separate, otherwise the
+   component is opaque and the other slots must. A [Zero_out] is a store of every cell. A [Tile_mma]
+   is judged through its [fallback] — the scalar nest that spells the tile's stores — with its own
+   cooperating [lane] excused (the tile is jointly owned by that axis and by construction mentions
+   it nowhere), so a tile whose base omits an outer bound axis is refused where the plain store
+   would be (gh-ocannl-960). [Set_local] and [Declare_local] are thread-private by nature.
 
-   [bounds] is the routine's loop table ({!loop_bounds}); [thread s] says whether the backend binds
-   the loop [s] and to which kind of register; [storage] classifies a node as device-resident,
-   workgroup-shared or thread-private. Returns the first offending store's node and cell with the
-   engine's witness. *)
+   [active] is the launch's slots; [thread s] says whether the loop [s] is bound and to which slot;
+   [deferred s] marks a bound loop whose separation another call judges (a [Workgroup_reduce] lane
+   the warp shuffle may still own) — it covers its slot like any bound loop but is not a symbol a
+   store must separate here; [storage] classifies a node as device-resident, workgroup-shared or
+   thread-private. The whole kernel is walked, so every loop symbol a store can mention is in scope.
+   Returns the first offending store's node and cell with the reason. *)
 type thread_storage = [ `Device | `Workgroup_shared | `Thread_private ]
+type thread_slot = [ `Grid | `Workgroup ] * int
 
-let unseparated_thread_write ~(bounds : (Indexing.symbol * (int * int)) list)
-    ~(thread : Indexing.symbol -> [ `Grid | `Workgroup ] option)
-    ~(storage : Tnode.t -> thread_storage) (llc : t) :
+let unseparated_thread_write ~(active : thread_slot list)
+    ~(thread : Indexing.symbol -> thread_slot option) ~(deferred : Indexing.symbol -> bool)
+    ~(storage : Tnode.t -> thread_storage) (kernel : t) :
     (Tnode.t * Indexing.axis_index array * string) option =
-  let bound_range s =
-    List.fold bounds ~init:None ~f:(fun acc (s', (lo, hi)) ->
-        if Indexing.equal_symbol s s' then
-          match acc with None -> Some (lo, hi) | Some (lo0, hi0) -> Some (min lo0 lo, max hi0 hi)
-        else acc)
+  let equal_slot (k1, s1) (k2, s2) = Poly.equal k1 k2 && s1 = s2 in
+  let slot_matters cls (kind, _) =
+    match (cls, kind) with
+    | `Workgroup_shared, `Grid -> false
+    | (`Device | `Workgroup_shared), (`Grid | `Workgroup) -> true
   in
-  let concurrent s = Option.is_some (bound_range s) in
-  (* [If (s == c)] with a literal [c] pins [s] on the guarded domain; a conjunction pins each
-     conjunct. Anything else (a comparison against a loop index or a memory read, an inequality)
-     pins nothing. *)
-  let rec pins (c : scalar_t) : (Indexing.symbol * int) list =
-    match c with
-    | Binop (Ops.And, (a, _), (b, _)) -> pins a @ pins b
-    | Binop (Ops.Cmpeq, (Embed_index idx, _), (Constant v, _))
-    | Binop (Ops.Cmpeq, (Constant v, _), (Embed_index idx, _))
-      when Float.is_integer v -> (
-        let v = Float.to_int v in
-        match idx with
-        | Indexing.Iterator s -> [ (s, v) ]
-        | Indexing.Affine { symbols = [ (1, s) ]; offset } -> [ (s, v - offset) ]
-        | Indexing.Affine _ | Indexing.Fixed_idx _ | Indexing.Sub_axis | Indexing.Concat _ -> [])
-    | _ -> []
-  in
-  let judge ~pinned ~enclosing ~excused tn idcs =
-    match storage tn with
-    | `Thread_private -> None
-    | (`Device | `Workgroup_shared) as cls ->
-        let range s =
-          match List.Assoc.find pinned s ~equal:Indexing.equal_symbol with
-          | Some c -> Some (c, c)
-          | None -> bound_range s
-        in
-        let syms =
-          List.filter enclosing ~f:(fun s ->
-              (not (List.mem excused s ~equal:Indexing.equal_symbol))
-              &&
-              match thread s with
-              | Some `Workgroup -> true
-              | Some `Grid -> Poly.equal cls `Device
-              | None -> false)
-        in
-        Option.map (Affine.separation_failure ~range ~concurrent ~syms ~idcs) ~f:(fun why ->
-            (tn, idcs, why))
+  let describe (kind, slot) =
+    (match kind with `Grid -> "Grid" | `Workgroup -> "Workgroup") ^ " slot " ^ Int.to_string slot
   in
   let mask_dynamic idcs dyn_axis =
     let m = Array.copy idcs in
-    if dyn_axis < Array.length m then m.(dyn_axis) <- Indexing.Sub_axis;
+    m.(dyn_axis) <- Indexing.Sub_axis;
     m
   in
+  (* The aligned-block quotient a vector store's separation is judged by. *)
   let vec_blocks idcs length =
     let last = Array.length idcs - 1 in
     if length <= 1 || last < 0 then idcs
@@ -5915,25 +5898,67 @@ let unseparated_thread_write ~(bounds : (Indexing.symbol * (int * int)) list)
         | _ -> Indexing.Sub_axis);
       m
   in
-  let rec go ~pinned ~enclosing ~excused (stmt : t) =
-    let go' = go ~pinned ~enclosing ~excused in
-    let judge = judge ~pinned ~enclosing ~excused in
-    match stmt with
+  (* [threads]: the bound loops enclosing the store, innermost first; [excused]: the cooperating
+     lanes of the tiles it sits in. *)
+  let judge ~env ~threads ~excused tn idcs =
+    match storage tn with
+    | `Thread_private -> None
+    | (`Device | `Workgroup_shared) as cls -> (
+        let covering = List.filter threads ~f:(fun (_, sl) -> slot_matters cls sl) in
+        match
+          List.find active ~f:(fun sl ->
+              slot_matters cls sl
+              && not (List.exists covering ~f:(fun (_, sl') -> equal_slot sl sl')))
+        with
+        | Some sl ->
+            Some
+              ( tn,
+                idcs,
+                "no enclosing bound loop of " ^ describe sl
+                ^ " tells its threads apart: every coordinate of the slot executes the store" )
+        | None ->
+            let syms =
+              List.filter_map covering ~f:(fun (s, _) ->
+                  if deferred s || List.mem excused s ~equal:Indexing.equal_symbol then None
+                  else Some s)
+            in
+            (* A Grid symbol is shared by the threads of one block, hence equal across two instances
+               on workgroup-shared storage. *)
+            let concurrent s =
+              Map.mem env.sym_env s
+              && (Poly.equal cls `Device
+                 || not (Option.exists (thread s) ~f:(fun (k, _) -> Poly.equal k `Grid)))
+            in
+            Option.map
+              (Affine.separation_failure ~range:(sym_int_bounds env.sym_env) ~concurrent ~syms ~idcs)
+              ~f:(fun why -> (tn, idcs, why)))
+  in
+  let rec go ~env ~threads ~excused (st : t) =
+    let go' = go ~env ~threads ~excused in
+    let judge = judge ~env ~threads ~excused in
+    let enter index ~from_ ~to_ body =
+      let threads = match thread index with Some sl -> (index, sl) :: threads | None -> threads in
+      go ~env:(ienv_extend env index ~from_ ~to_) ~threads ~excused body
+    in
+    match st with
     | Seq (a, b) -> ( match go' a with Some _ as r -> r | None -> go' b)
-    | For_loop { from_; to_; _ } when to_ < from_ -> None
+    | (For_loop { from_; to_; _ } | Scan_loop { from_; to_; _ }) when to_ < from_ -> None
     | If { cond = Constant c, _; _ } when Float.equal c 0. -> None
-    | For_loop { index; body; _ } | Scan_loop { index; body; _ } ->
-        go ~pinned ~enclosing:(index :: enclosing) ~excused body
-    | If { cond = c, _; body } -> go ~pinned:(pins c @ pinned) ~enclosing ~excused body
+    | For_loop { index; from_; to_; body; _ } | Scan_loop { index; from_; to_; body; _ } ->
+        enter index ~from_ ~to_ body
+    | If { cond = c, cprec; body } ->
+        go ~env:(ienv_narrow_from_cond env ~cprec c) ~threads ~excused body
     | Set { tn; idcs; _ } -> judge tn idcs
     | Set_dynamic { tn; idcs; dyn_axis; _ } -> judge tn (mask_dynamic idcs dyn_axis)
     | Set_from_vec { tn; idcs; length; _ } -> judge tn (vec_blocks idcs length)
     | Zero_out tn -> judge tn [||]
-    | Tile_mma { lane; fallback; _ } -> go ~pinned ~enclosing ~excused:(lane :: excused) fallback
+    | Tile_mma { lane; fallback; _ } -> go ~env ~threads ~excused:(lane :: excused) fallback
     | Noop | Comment _ | Staged_compilation _ | Set_local _ | Declare_local _ | Workgroup_barrier ->
         None
   in
-  go ~pinned:[] ~enclosing:[] ~excused:[] llc
+  go
+    ~env:{ sym_env = Map.empty (module Indexing.Symbol); memo = Phys_memo.create 16 }
+    ~threads:[] ~excused:[] kernel
 
 type peel_guard_verdict = Guard_confined | Guard_lane_private | Guard_lane_private_unresolved
 [@@deriving sexp, equal, compare]

@@ -383,27 +383,39 @@ type thread_storage = [ `Device | `Workgroup_shared | `Thread_private ]
     (every thread of the launch), workgroup-shared (the threads of one block), or thread-private (a
     per-thread local array, which no binding can race). *)
 
+type thread_slot = [ `Grid | `Workgroup ] * int
+(** One coordinate of thread identity: the hardware dimension a bound loop occupies
+    ({!hardware_axis_info}'s kind and slot). *)
+
 val unseparated_thread_write :
-  bounds:(Indexing.symbol * (int * int)) list ->
-  thread:(Indexing.symbol -> [ `Grid | `Workgroup ] option) ->
+  active:thread_slot list ->
+  thread:(Indexing.symbol -> thread_slot option) ->
+  deferred:(Indexing.symbol -> bool) ->
   storage:(Tnode.t -> thread_storage) ->
   t ->
   (Tnode.t * Indexing.axis_index array * string) option
-(** The legality of a hardware binding, as a query on the written cell (gh-ocannl-959): the first
-    store under loops the backend binds ([thread]: the register kind, [None] for a loop it iterates)
-    to storage the threads share whose cell does not {!Affine.separates} the bound axes — two
-    threads may own one cell — with the engine's witness. Every loop symbol of [bounds] (the
-    routine's {!loop_bounds}) varies independently between two instances, so mentioning a bound axis
-    is not separating it ([acc[i + j]] under two bound axes, [acc[i + k]] under a bound [i] and a
-    serial [k]); a guard [If (s == c)] with a literal [c] pins [s] on its domain and is one thread
-    along [s] alone; a [Grid] axis is a thread of device storage only, workgroup-shared storage
-    being per block. Reads play no part: a store every thread performs to one cell is a write-write
-    race whatever the values. A dead level and a false guard execute nothing; a [Set_dynamic] is
-    judged by its static slots, a [Set_from_vec] by its aligned run blocks, a [Zero_out] as a store
-    of every cell, a [Tile_mma] through its [fallback] with its own [lane] excused (gh-ocannl-960).
-    The renderer asks this at every binding it emits: for the kernel's [Grid]/[Workgroup] axes
-    before rendering, and for a [Workgroup_reduce] lane the warp shuffle cannot own, before falling
-    through to the plain binding. *)
+(** The legality of a hardware binding, as a query on the written cell (gh-ocannl-959). [active] is
+    the launch's thread identity, one coordinate per slot some register-bound loop of extent above
+    one occupies; [thread] names every bound loop and its slot — the register-bound ones and cc's
+    pool-parallel outermost [Grid] loops, a per-loop binding; [deferred] the bound loops whose
+    separation another call judges (a reduce lane left to its own rendering: it still covers its
+    slot). The first store in the kernel to storage the threads share that two threads may own, with
+    the reason: an active slot with no bound loop enclosing the store (every coordinate of the slot
+    executes it), or a cell whose index map does not {!Affine.separates} the enclosing thread
+    symbols over every loop symbol in scope — mentioning a bound axis is not separating it
+    ([acc[i + j]] under two bound axes, [acc[i + k]] under a bound [i] and a serial [k]). Guards
+    narrow the environment as gh-ocannl-566's simplifier narrows it: [If (i < 16)] shrinks the range
+    the radix argument sees and [If (i == 0)] pins [i] to one thread along that axis alone. A [Grid]
+    axis is not a thread of workgroup-shared storage (one block, one copy). What is judged is the
+    store's own threads: whether other statements' threads touch the cell across a barrier is
+    dependence analysis, the obligation of whoever mints the pin or the binding, as it was for every
+    store before this rule. Reads play no part: a store every thread performs to one cell is a
+    write-write race whatever the values. A dead level and a false guard execute nothing; a
+    [Set_dynamic] is judged by its static slots, a [Set_from_vec] by its aligned run blocks, a
+    [Zero_out] as a store of every cell, a [Tile_mma] through its [fallback] with its own [lane]
+    excused (gh-ocannl-960). The whole kernel is walked. The renderer asks this at every binding it
+    emits: for the kernel's [Grid]/[Workgroup] axes before rendering, and for a [Workgroup_reduce]
+    lane the warp shuffle cannot own, before falling through to the plain binding. *)
 
 val has_accumulating_cell : t -> bool
 (** Whether the tree holds a SELF-RECURRENCE: some [Set] whose value reads the very cell it writes

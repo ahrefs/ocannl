@@ -735,33 +735,49 @@ files.
   declined (`Accum_not_a_nest`: a sibling statement, a data-dependent guard, an inner nest, a
   pinned update) falls through to the hardware binding — the correct rendering of the explicitly
   staged tree and a silent race for a store every lane performs to one cell. The rule that tells
-  them apart is `Low_level.unseparated_thread_write ~bounds ~thread ~storage`: a store under loops
-  the backend binds, to storage the threads share (`Device` by the placements, `Workgroup_shared`;
-  never a per-thread local array), whose cell does not `Affine.separates` the bound axes over ALL
-  the routine's loop symbols varying independently. Three consequences that took 13 review rounds
-  to settle by hand and the engine settles by construction: mentioning an axis is not separating it
-  (`acc[i + j]` under a bound `j` and a bound `i` collides at `(0, 1)`/`(1, 0)`; so does
-  `acc[i + k]` under a bound `i` and a SERIAL `k`, which is why every loop symbol is concurrent);
-  a guard pinning an axis to a literal (`If (i == 0)`) is one thread along that axis and along it
-  ALONE — a Grid of blocks, a second workgroup dimension, are bound symbols the cell must still
-  separate, and a pin to a loop index or a memory read pins nothing; and reads play no part — a
+  them apart is `Low_level.unseparated_thread_write ~active ~thread ~deferred ~storage`, walked
+  over the WHOLE kernel: thread identity is one coordinate per active slot of the launch (a
+  `(kind, slot)` some register-bound loop of extent above one occupies), and a store to storage
+  the threads share (`Device` by the placements, `Workgroup_shared`; never a per-thread local
+  array) needs a bound loop of every active slot enclosing it and a cell that `Affine.separates`
+  the enclosing thread symbols over every loop symbol in scope. The environment is narrowed by
+  each enclosing `If` through gh-566's `ienv_narrow_from_cond`, so `If (i < 16)` shrinks the
+  radix argument's range and `If (i == 0)` pins `i` to a width-one range the engine already reads
+  as one thread. Three consequences that took 13 review rounds to settle by hand and the engine
+  settles by construction: mentioning an axis is not separating it (`acc[i + j]` under a bound
+  `j` and a bound `i` collides at `(0, 1)`/`(1, 0)`; so does `acc[i + k]` under a bound `i` and a
+  SERIAL `k`, which is why every loop symbol is concurrent); a pin is one thread along its axis
+  ALONE — a Grid of blocks, a second workgroup dimension, are coordinates the cell must still
+  separate, and a pin to a loop index or a memory read narrows nothing; and reads play no part — a
   plain lane-invariant store is a write-write race whatever the bytes, so `s[0] = Arg2 (s[0], 3)`
-  is refused like `s[0] += x[i]`. The renderer asks it twice: `C_syntax.compile_proc` of the
-  kernel's Grid/Workgroup axes (a `Workgroup_reduce` lane is a loop like any other there), and
-  `try_warp_reduce`'s decline arm of the one reduce lane it is about to bind. Both raise the typed
-  `Schedule_outcome.Cause_at (Backend_codegen, Illegal_schedule {check = "hardware_binding_race"})`,
-  one candidate's decline under the autotuner and `Invalid_argument` at the `Context.compile`
-  boundary. `validate_parallel` stays structural (coverage, slots, barriers) and backend-independent;
-  the separation check lives at the binding because a `Workgroup` loop on cc iterates, so the
-  reduction-axis-to-`Workgroup` form `reduction_forms` runs cpu-only is legal there and refused
-  where a register binds it. A `Tile_mma` is judged through its `fallback`'s stores with its own
-  cooperating `lane` excused (gh-ocannl-960), a `Set_dynamic` by its static slots, a `Set_from_vec`
-  by its aligned run blocks (base a multiple of the length, else the component is opaque), a
-  `Zero_out` as a store of every cell. `hardware_warp_shuffle` pins the corpus on the GPUs and the
-  serial values on cc: the refusals (sibling, data guard, pin under a Grid, projection store,
+  is refused like `s[0] += x[i]`. What the rule does NOT judge, deliberately: whether OTHER
+  statements' threads touch a pinned cell across a barrier (the tensorized pipeline zeroes its
+  output on every lane and stores the tile back from lane 0 across the intrinsic's barrier; a
+  companion nest then reads it) — that is dependence analysis over barrier regions, the obligation
+  of whoever mints the pin (`Stage`, `Tensorize`) or the binding (the annotator), as it was for
+  every unpinned store before; a pairwise check tried in review refused exactly those pipelines. A
+  `Grid` axis is not a thread of workgroup-shared storage (one block, one copy). The renderer asks
+  it twice, through `refuse_unseparated_thread_write`: `C_syntax.compile_proc` with the kernel's
+  thread axes — every axis `bound_register` binds plus cc's pool-parallel outermost Grid loops
+  (`current_parallel_grid`: chunks are threads too, and `parallel_grid_safe` judged only local
+  arrays; a per-loop binding, so a thread axis but not a launch slot) — deferring the
+  `Workgroup_reduce` lanes the shuffle may own (they still COVER their slot), and
+  `try_warp_reduce`'s decline arm with the one lane it is about to bind un-deferred. Both raise the
+  typed `Schedule_outcome.Cause_at (Backend_codegen, Illegal_schedule {check =
+  "hardware_binding_race"})`, one candidate's decline under the autotuner and `Invalid_argument`
+  at the `Context.compile` boundary. `validate_parallel` stays structural and
+  backend-independent; the check lives at the binding because a `Workgroup` loop on cc iterates,
+  so the reduction-axis-to-`Workgroup` form `reduction_forms` runs cpu-only is legal there and
+  refused where a register binds it. A `Tile_mma` is judged through its `fallback`'s stores with
+  its own cooperating `lane` excused (gh-ocannl-960), a `Set_dynamic` by its static slots, a
+  `Set_from_vec` by its aligned run blocks (base a multiple of the length, else the component is
+  opaque), a `Zero_out` as a store of every cell. `hardware_warp_shuffle` pins the corpus on the
+  GPUs and the serial values on cc: the refusals (sibling, data guard, pin under a Grid — on cc
+  too, where `Context.Cc_backend.pool_parallel_grid` says the grid binds — projection store,
   `acc[i + j]`, plain-`Workgroup` reduction, lane-invariant scatter and vector store, the tile) and
-  the renderings (pin alone, extent one, per-thread scratch, the staged form, dead level, false
-  guard, `acc[2 i + j]`, lane-indexed scatter, aligned vector runs).
+  the renderings (pin alone, same pin twice, outer pin narrowing the reduce level, `If (i < 16)`
+  narrowing, extent one, per-thread scratch, the staged form, dead level, false guard,
+  `acc[2 i + j]`, lane-indexed scatter, aligned vector runs).
 - **A "packmma" timing is not evidence that anything tensorized.** A `Tile_mma` whose register-tile
   preconditions fail renders the scalar fallback and the run still reports under whatever the
   variant was named — the column extent below the compute vector width is the easiest way in (at

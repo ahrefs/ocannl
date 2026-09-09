@@ -679,6 +679,11 @@ let parallel_grid_chunks_setting () =
    ([__clang_major__], [__AVX2__], [__ARM_FEATURE_FP16_VECTOR_ARITHMETIC], ...): one subprocess,
    cached per machine like every other probe. A toolchain that cannot dump them degrades to the
    flag spelling, which is what the tag had before. *)
+let pool_parallel_grid () =
+  (not (Poly.equal (parallel_grid_syntax_setting ()) `None))
+  && parallel_grid_chunks_setting () > 1
+  && not (Utils.debug_log_from_routines ())
+
 let target_fingerprint =
   lazy
     (cached_probe ~name:"target"

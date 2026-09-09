@@ -3000,29 +3000,51 @@ module C_syntax (B : C_syntax_config) = struct
      their [Zero_out] is never elided. *)
   let current_workgroup_shared : Set.M(Tn).t ref = ref (Set.empty (module Tn))
 
-  (* gh-ocannl-959: the legality of every hardware binding this renderer emits, asked of the cells
-     the bound threads write ([Low_level.unseparated_thread_write]). Storage the threads share is
-     device-resident (by the placements) or workgroup-shared; a per-thread local array is one array
-     per thread. Raised as a typed schedule cause: under the autotuner one candidate's decline, and
-     [Invalid_argument] at the [Context.compile] boundary
-     ([Schedule_outcome.exception_of_cause]). *)
+  (* The register a hardware-annotated loop binds, if this backend has one for its slot. Grid slots
+     [>= 2] fold onto the hardware [.z] register (gh-ocannl-643, the [Low_level] hardware-axis
+     section comment), so the backend is only ever asked for slots it names ([0..2]). The one place
+     the "does this loop bind" question is answered: the loop rendering, the serialized reduce-lane
+     classification and the binding-legality check all read it. *)
+  let bound_register (a : Low_level.hardware_axis_info) : string option =
+    let hw_slot = match a.ha_kind with `Grid when a.ha_slot >= 2 -> 2 | _ -> a.ha_slot in
+    B.hardware_index ~kind:a.ha_kind ~slot:hw_slot
+
+  (* gh-ocannl-959: the legality of every binding this renderer emits, asked of the cells the bound
+     threads write ([Low_level.unseparated_thread_write]). Set by [compile_proc]:
+     [current_active_slots] is the launch's thread identity — the slots register-bound loops of
+     extent above one occupy; [current_thread_axes] is every bound loop with its slot: those, plus
+     the outermost Grid loops cc renders as pool chunks (a per-loop binding, so a thread axis but
+     not a launch slot); a [Workgroup_reduce] lane is a thread only where the warp shuffle declines
+     it, which its own rendering decides and asks ([try_warp_reduce]), except on a backend with
+     registers but no shuffle, where the lane is bound like a plain axis and judged here.
+     [current_kernel_llc] is the whole kernel, which both sites walk: a store's judgement needs
+     every loop and guard enclosing it. Storage the threads share is device-resident (by the
+     placements) or workgroup-shared; a per-thread local array is one array per thread. Raised as a
+     typed schedule cause: under the autotuner one candidate's decline, and [Invalid_argument] at
+     the [Context.compile] boundary ([Schedule_outcome.exception_of_cause]). *)
+  let current_thread_axes : (Indexing.symbol * Low_level.thread_slot) list ref = ref []
+  let current_active_slots : Low_level.thread_slot list ref = ref []
+  let current_kernel_llc : Low_level.t ref = ref Low_level.Noop
+
   let thread_storage tn : Low_level.thread_storage =
     if Set.mem !current_workgroup_shared tn then `Workgroup_shared
     else if Tn.Placements.is_materialized_force (placements ()) tn 959 then `Device
     else `Thread_private
 
-  let refuse_unseparated_thread_write ~site ~thread llc =
+  let current_deferred_lanes : Indexing.symbol list ref = ref []
+
+  let refuse_unseparated_thread_write ~site ~(deferred : Indexing.symbol list) =
+    let thread s = List.Assoc.find !current_thread_axes s ~equal:Indexing.equal_symbol in
+    let deferred s = List.mem deferred s ~equal:Indexing.equal_symbol in
     match
-      Low_level.unseparated_thread_write ~bounds:!current_loop_bounds ~thread
-        ~storage:thread_storage llc
+      Low_level.unseparated_thread_write ~active:!current_active_slots ~thread ~deferred
+        ~storage:thread_storage !current_kernel_llc
     with
     | None -> ()
     | Some (tn, idcs, why) ->
         let cell =
           Tn.debug_name tn ^ "["
-          ^ String.concat ~sep:", "
-              (Array.to_list idcs
-              |> List.map ~f:(fun idx -> Sexp.to_string_hum (Indexing.sexp_of_axis_index idx)))
+          ^ String.concat_array ~sep:", " (Array.map idcs ~f:Affine.axis_index_to_string)
           ^ "]"
         in
         raise
@@ -3032,14 +3054,15 @@ module C_syntax (B : C_syntax_config) = struct
                  {
                    check = "hardware_binding_race";
                    detail =
-                     site ^ " writes " ^ cell ^ " from more than one thread (" ^ why
-                     ^ "): a store to storage the threads share must own its cell, so the cell's \
-                        index map has to separate every bound axis over all concurrently varying \
-                        loop symbols. Mentioning an axis is not separating it (acc[i + j] under \
-                        two bound axes collides), and a guard pinning an axis to a literal is one \
-                        thread along that axis alone. Keep the loop Serial, index the cell by the \
-                        thread, or stage per-thread cells with a pinned final store \
-                        (gh-ocannl-959)";
+                     site ^ " writes " ^ cell ^ " from more than one thread: " ^ why
+                     ^ ". A store to storage the threads share must own its cell: every active \
+                        hardware slot needs a bound loop enclosing it, and the cell's index map \
+                        has to separate those loops' symbols over every loop symbol in scope. \
+                        Mentioning an axis is not separating it (acc[i + j] under two bound axes \
+                        collides); a guard pinning an axis to a literal is one thread along that \
+                        axis alone, and a cell it pins may not be touched by other threads from \
+                        other statements. Keep the loop Serial, index the cell by the thread, or \
+                        stage per-thread cells with a pinned final store (gh-ocannl-959)";
                  } ))
 
   (* Marked local accumulator tiles and the one currently being rendered by a backend fragment
@@ -4134,28 +4157,29 @@ module C_syntax (B : C_syntax_config) = struct
            reduction serialized for lack of a hardware index (cc's [Workgroup_reduce] among others)
            keeps the same accumulator width as the [Serial] spelling of the same loop. *)
         let hardware_binding ?(fallback = serial_loop) kind =
-          let slot =
+          let axis_info =
             match
               List.find !current_hardware_axes ~f:(fun a ->
                   Indexing.equal_symbol a.Low_level.ha_index i)
             with
-            | Some a -> a.Low_level.ha_slot
+            | Some a -> a
             | None ->
                 invalid_arg
                   ("C_syntax.pp_ll: hardware-annotated loop " ^ symbol_ident i
                  ^ " missing from the slot table (pp_ll called outside compile_proc?)")
           in
+          let slot = axis_info.Low_level.ha_slot in
           (* Grid slots [>= 2] fold onto the hardware [.z] register (gh-ocannl-643, the [Low_level]
              hardware-axis section comment): the loop binds [(z / stride) % cap], with the
              divisor/modulo omitted where trivial — a lone slot-2 loop renders the bare register
-             exactly as before the fold existed. The backend is only ever asked for slots it names
-             ([0..2]). *)
-          let hw_slot, fold =
+             exactly as before the fold existed; [bound_register] asks the backend for the folded
+             slot. *)
+          let fold =
             match kind with
-            | `Grid when slot >= 2 -> (2, Some (Low_level.grid_fold !current_hardware_axes ~slot))
-            | _ -> (slot, None)
+            | `Grid when slot >= 2 -> Some (Low_level.grid_fold !current_hardware_axes ~slot)
+            | _ -> None
           in
-          match B.hardware_index ~kind ~slot:hw_slot with
+          match bound_register { axis_info with ha_kind = kind } with
           | None -> fallback ()
           | Some reg ->
               let cast = "(" ^ String.strip B.loop_index_type ^ ")" in
@@ -4272,7 +4296,7 @@ module C_syntax (B : C_syntax_config) = struct
                 List.find !current_hardware_axes ~f:(fun a ->
                     Indexing.equal_symbol a.Low_level.ha_index index)
               with
-              | Some a -> Option.is_none (B.hardware_index ~kind:`Workgroup ~slot:a.ha_slot)
+              | Some a -> Option.is_none (bound_register a)
               | None -> false)
           | _ -> false
         in
@@ -5018,15 +5042,21 @@ module C_syntax (B : C_syntax_config) = struct
                        this lane alone (the kernel's other bound axes were judged before rendering):
                        does every store under the level separate it
                        ([Low_level.unseparated_thread_write], gh-ocannl-959)? *)
-                    refuse_unseparated_thread_write
-                      ~site:
-                        ("C_syntax.pp_ll: Workgroup_reduce loop " ^ symbol_ident i
-                       ^ " binds the lane index (its body is not a single accumulation the warp \
-                          shuffle can render: a sibling statement, a guard, or an inner nest), and \
-                          under that binding the body")
-                      ~thread:(fun s -> if Indexing.equal_symbol s i then Some `Workgroup else None)
-                      (Low_level.For_loop
-                         { index = i; from_; to_; body = Low_level.unflat_lines stmts; axis });
+                    (match
+                       List.find !current_hardware_axes ~f:(fun a ->
+                           Indexing.equal_symbol a.Low_level.ha_index i)
+                     with
+                    | Some a when Option.is_some (bound_register a) ->
+                        refuse_unseparated_thread_write
+                          ~site:
+                            ("C_syntax.pp_ll: Workgroup_reduce loop " ^ symbol_ident i
+                           ^ " binds the lane index (its body is not a single accumulation the \
+                              warp shuffle can render: a sibling statement, a guard, or an inner \
+                              nest), and under that binding the kernel")
+                          ~deferred:
+                            (List.filter !current_deferred_lanes
+                               ~f:(Fn.non (Indexing.equal_symbol i)))
+                    | _ -> ());
                     None)
             | Some ({ sa_tn = tn; sa_idcs = idcs; sa_op = op; sa_contrib = contrib; _ } as sa) ->
                 let warp = B.warp_size in
@@ -6869,23 +6899,30 @@ module C_syntax (B : C_syntax_config) = struct
      current_grid_private := grid_private;
      current_local_ptr_alias := local_ptr_alias);
     current_workgroup_shared := workgroup_shared;
-    (* gh-ocannl-959: the kernel's Grid/Workgroup bindings, judged before rendering. A
-       [Workgroup_reduce] lane is a thread only where the warp shuffle declines it, which is decided
-       at its own rendering ([try_warp_reduce]); here it is a loop like any other. *)
+    (* gh-ocannl-959: the kernel's thread identity, and the bindings judged before rendering. A
+       [Workgroup_reduce] lane is left to its own rendering where the warp shuffle may own it; on cc
+       the outermost pool-parallel Grid loops bind their chunks the way a register binds threads. *)
+    current_kernel_llc := llc;
+    current_thread_axes :=
+      List.filter_map !current_hardware_axes ~f:(fun a ->
+          if
+            Option.is_some (bound_register a)
+            || (Poly.equal a.ha_kind `Grid && Set.mem !current_parallel_grid a.ha_index)
+          then Some (a.ha_index, (a.ha_kind, a.ha_slot))
+          else None);
+    current_active_slots :=
+      List.filter_map !current_hardware_axes ~f:(fun a ->
+          if Option.is_some (bound_register a) && a.ha_extent > 1 then Some (a.ha_kind, a.ha_slot)
+          else None)
+      |> List.dedup_and_sort ~compare:Poly.compare;
+    current_deferred_lanes :=
+      List.filter_map !current_hardware_axes ~f:(fun a ->
+          if Low_level.equal_axis_type a.ha_axis Low_level.Workgroup_reduce && B.warp_size > 0 then
+            Some a.ha_index
+          else None);
     refuse_unseparated_thread_write
       ~site:"C_syntax.compile_proc: the hardware binding of the kernel's Grid/Workgroup axes"
-      ~thread:(fun s ->
-        List.find_map !current_hardware_axes ~f:(fun a ->
-            if
-              Indexing.equal_symbol a.Low_level.ha_index s
-              && not (Low_level.equal_axis_type a.ha_axis Low_level.Workgroup_reduce)
-            then
-              let hw_slot =
-                match a.ha_kind with `Grid when a.ha_slot >= 2 -> 2 | _ -> a.ha_slot
-              in
-              Option.map (B.hardware_index ~kind:a.ha_kind ~slot:hw_slot) ~f:(fun _ -> a.ha_kind)
-            else None))
-      llc;
+      ~deferred:!current_deferred_lanes;
     current_simdgroup_fragments := simdgroup_fragments;
     current_swizzled := swizzled;
     current_pipelined := pipelined;
