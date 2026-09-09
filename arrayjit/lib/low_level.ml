@@ -5858,7 +5858,7 @@ let has_accumulating_cell (llc : t) : bool =
    store must separate here; [storage] classifies a node as device-resident, workgroup-shared or
    thread-private. The whole kernel is walked, so every loop symbol a store can mention is in scope.
    Returns the first offending store's node and cell with the reason. *)
-type thread_storage = [ `Device | `Workgroup_shared | `Thread_private ]
+type thread_storage = [ `Device | `Shared | `Thread ]
 type thread_slot = [ `Grid | `Workgroup ] * int
 
 let unseparated_thread_write ~(active : thread_slot list)
@@ -5868,8 +5868,8 @@ let unseparated_thread_write ~(active : thread_slot list)
   let equal_slot (k1, s1) (k2, s2) = Poly.equal k1 k2 && s1 = s2 in
   let slot_matters cls (kind, _) =
     match (cls, kind) with
-    | `Workgroup_shared, `Grid -> false
-    | (`Device | `Workgroup_shared), (`Grid | `Workgroup) -> true
+    | `Shared, `Grid -> false
+    | (`Device | `Shared), (`Grid | `Workgroup) -> true
   in
   let describe (kind, slot) =
     (match kind with `Grid -> "Grid" | `Workgroup -> "Workgroup") ^ " slot " ^ Int.to_string slot
@@ -5902,8 +5902,8 @@ let unseparated_thread_write ~(active : thread_slot list)
      lanes of the tiles it sits in. *)
   let judge ~env ~threads ~excused tn idcs =
     match storage tn with
-    | `Thread_private -> None
-    | (`Device | `Workgroup_shared) as cls -> (
+    | `Thread -> None
+    | (`Device | `Shared) as cls -> (
         let covering = List.filter threads ~f:(fun (_, sl) -> slot_matters cls sl) in
         match
           List.find active ~f:(fun sl ->

@@ -738,8 +738,8 @@ files.
   them apart is `Low_level.unseparated_thread_write ~active ~thread ~deferred ~storage`, walked
   over the WHOLE kernel: thread identity is one coordinate per active slot of the launch (a
   `(kind, slot)` some register-bound loop of extent above one occupies), and a store to storage
-  the threads share (`Device` by the placements, `Workgroup_shared`; never a per-thread local
-  array) needs a bound loop of every active slot enclosing it and a cell that `Affine.separates`
+  the threads share (`Device` by the placements, `Shared`; never a per-thread local array)
+  needs a bound loop of every active slot enclosing it and a cell that `Affine.separates`
   the enclosing thread symbols over every loop symbol in scope. The environment is narrowed by
   each enclosing `If` through gh-566's `ienv_narrow_from_cond`, so `If (i < 16)` shrinks the
   radix argument's range and `If (i == 0)` pins `i` to a width-one range the engine already reads
