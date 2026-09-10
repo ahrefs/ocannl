@@ -307,6 +307,12 @@ accepts a repeated pattern's guard as a witness for the case that repeats it: tr
 refuses a quantifier passed through a functor parameter's claim inside an expression: true
 refuses two quantifiers compared for equality: true
 accepts two quantifiers compared for equality under a witness: true
+refuses a quantifier through a functor applied by its qualified path: true
+accepts a guarded quantifier through a functor applied by its qualified path: true
+binds a for loop's variable apart from an outer namesake: true
+accepts a for loop body's quantifier witnessed on the loop's own variable: true
+refuses a witness on a field the file assigns: true
+accepts a witness on a field nothing in the file assigns: true
 the shipping ratchet process refuses the planted helper fixture: true
 the shipping ratchet process refuses a quantifier written directly in a native claim: true
 refuses a stale quantified-helper exemption: true

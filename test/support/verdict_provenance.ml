@@ -95,7 +95,14 @@ type binding = {
   mutable payload : payload;
 }
 
-and payload = Pending of (unit -> provenance) | Resolving | Resolved of provenance
+and payload =
+  | Pending of (unit -> provenance)
+  | Resolving
+  | Resolved of provenance
+  | Functor of string option * module_expr
+      (** A file-local functor: the parameter's name and the body, for an application to scan the
+          body with the argument's exports bound to the parameter. In the environment like any other
+          binding, so a module prefix, an alias or an open qualifies it as it does a value. *)
 
 and provenance = {
   when_true : view;
@@ -684,9 +691,8 @@ type context = {
   found : claim list ref;  (** Claims whose value no longer mentions any parameter. *)
   pending_calls : deferred_call list ref;
       (** Applications of a parameter made inside the function being analysed. *)
-  functors : (string * (string option * module_expr)) list ref;
-      (** File-local functors by name: the parameter's name and the body, for an application to scan
-          the body with the argument's exports bound to the parameter. *)
+  mutated : Set.M(String).t;
+      (** The fields some assignment in the file writes; see [mutated_fields]. *)
 }
 
 let lookup env name = List.find env ~f:(fun binding -> String.equal binding.name name)
@@ -700,7 +706,7 @@ let span_of_location (location : Ppxlib.Location.t) =
 let resolve_binding binding =
   match binding.payload with
   | Resolved provenance -> provenance
-  | Resolving -> nothing
+  | Resolving | Functor _ -> nothing
   | Pending compute ->
       binding.payload <- Resolving;
       let provenance = compute () in
@@ -966,6 +972,7 @@ let rec population ctx expr =
   let lexical_key () =
     let text = Stdlib.Format.asprintf "%a" Pprintast.expression expr in
     let names = ref [] in
+    let mutable_read = ref false in
     let iterator =
       object
         inherit Ast_traverse.iter as super
@@ -976,12 +983,21 @@ let rec population ctx expr =
               Option.iter
                 (Option.try_with (fun () -> Longident.flatten_exn txt))
                 ~f:(fun path -> names := String.concat ~sep:"." path :: !names)
+          | Pexp_field (_, { txt; _ }) when Set.mem ctx.mutated (Longident.last_exn txt) ->
+              mutable_read := true
           | _ -> ());
           super#expression child
       end
     in
     iterator#expression expr;
     let scopes = List.dedup_and_sort !names ~compare:String.compare |> List.map ~f:scope_of in
+    (* A field the file assigns somewhere is read afresh each time: the reading's own position keeps
+       one occurrence's witness from covering another's. *)
+    let scopes =
+      if !mutable_read then
+        scopes @ [ "@" ^ Int.to_string expr.pexp_loc.loc_start.Stdlib.Lexing.pos_cnum ]
+      else scopes
+    in
     Some (population_key ~text scopes)
   in
   match expr.pexp_desc with
@@ -1212,12 +1228,7 @@ let rec walk ctx expr =
   | Pexp_open (declaration, body) ->
       walk { ctx with env = module_exports ctx declaration.popen_expr @ ctx.env } body
   | Pexp_letmodule ({ txt = Some name; _ }, module_expr, body) ->
-      (match module_expr.pmod_desc with
-      | Pmod_functor (parameter, functor_body) ->
-          let parameter = match parameter with Named ({ txt; _ }, _) -> txt | Unit -> None in
-          ctx.functors := (name, (parameter, functor_body)) :: !(ctx.functors)
-      | _ -> ());
-      let exports = module_exports ctx module_expr |> prefix_bindings name in
+      let exports = module_bindings ctx ~name module_expr in
       walk { ctx with env = exports @ ctx.env } body
   | Pexp_letmodule ({ txt = None; _ }, module_expr, body) ->
       ignore (module_exports ctx module_expr : binding list);
@@ -1294,6 +1305,13 @@ let rec walk ctx expr =
         :: case_alternatives ctx ~scrutinee:None cases)
   | Pexp_function (parameters, _, body) -> function_closure ctx parameters body
   | Pexp_apply (callee, arguments) -> application ctx expr callee arguments
+  | Pexp_for (pattern, low, high, _, body) ->
+      (* The loop variable is a binder of its own: a body's population mentioning it is not an outer
+         namesake's. *)
+      discard ctx low;
+      discard ctx high;
+      discard { ctx with env = bind_pattern ctx pattern ~producer:None } body;
+      nothing
   | _ ->
       fallback ctx expr;
       nothing
@@ -2092,12 +2110,7 @@ and scan_structure ctx items =
           discard ctx expr;
           (env, exports)
       | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } ->
-          (match pmb_expr.pmod_desc with
-          | Pmod_functor (parameter, body) ->
-              let parameter = match parameter with Named ({ txt; _ }, _) -> txt | Unit -> None in
-              ctx.functors := (name, (parameter, body)) :: !(ctx.functors)
-          | _ -> ());
-          let nested = module_exports ctx pmb_expr |> prefix_bindings name in
+          let nested = module_bindings ctx ~name pmb_expr in
           (nested @ env, nested @ exports)
       | Pstr_module { pmb_expr; _ } ->
           ignore (module_exports ctx pmb_expr : binding list);
@@ -2173,14 +2186,14 @@ and module_exports ctx module_expr =
       (* A file-local functor's body, scanned with the argument's exports bound to its parameter. *)
       match
         Option.bind (module_path functor_) ~f:(fun path ->
-            List.Assoc.find !(ctx.functors) (String.concat ~sep:"." path) ~equal:String.equal)
+            lookup ctx.env (String.concat ~sep:"." path))
       with
-      | Some (Some parameter, body) ->
+      | Some { payload = Functor (Some parameter, body); _ } ->
           module_exports
             { ctx with env = prefix_bindings parameter argument_exports @ ctx.env }
             body
-      | Some (None, body) -> module_exports ctx body
-      | None -> module_exports ctx functor_)
+      | Some { payload = Functor (None, body); _ } -> module_exports ctx body
+      | Some _ | None -> module_exports ctx functor_)
   | Pmod_apply_unit functor_ -> module_exports ctx functor_
   | _ ->
       let iterator =
@@ -2195,11 +2208,46 @@ and module_exports ctx module_expr =
       iterator#module_expr module_expr;
       []
 
+(* What binding a module to [name] adds to the scope: its exports under the prefix, and the module
+   itself where it is a functor, so an application by any path that reaches it finds the body. *)
+and module_bindings ctx ~name module_expr =
+  let exports = module_exports ctx module_expr |> prefix_bindings name in
+  match module_expr.pmod_desc with
+  | Pmod_functor (parameter, body) ->
+      let parameter = match parameter with Named ({ txt; _ }, _) -> txt | Unit -> None in
+      make_binding ~name ~site:(site_of_location module_expr.pmod_loc) (Functor (parameter, body))
+      :: exports
+  | _ -> exports
+
+(* Every field some assignment in [structure] writes: a population read through such a field is what
+   it is at that moment, so a witness taken on one reading says nothing about another. *)
+let mutated_fields structure =
+  let fields = ref (Set.empty (module String)) in
+  let iterator =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression expr =
+        (match expr.pexp_desc with
+        | Pexp_setfield (_, { txt; _ }, _) -> fields := Set.add !fields (Longident.last_exn txt)
+        | _ -> ());
+        super#expression expr
+    end
+  in
+  iterator#structure structure;
+  !fields
+
 (** Every [Verdict] claim [structure] fires, in source order, each with the sources its claimed
     Boolean can rest on. *)
 let claims structure =
   let ctx =
-    { env = []; pending = ref []; found = ref []; pending_calls = ref []; functors = ref [] }
+    {
+      env = [];
+      pending = ref [];
+      found = ref [];
+      pending_calls = ref [];
+      mutated = mutated_fields structure;
+    }
   in
   ignore (scan_structure ctx structure : binding list * binding list);
   List.rev !(ctx.found)

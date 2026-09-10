@@ -1647,6 +1647,55 @@ let () = Verdict.p "all rows pass" result|ocaml},
   Verdict.p "the checks agree"
     ((not (List.is_empty rows)) && List.for_all rows ~f:p = List.for_all rows ~f:q)|ocaml},
       [] );
+    (* staging#681 round 12: a functor applied by its qualified path; a for loop's variable; a
+       witness on a field the file assigns. *)
+    ( "refuses a quantifier through a functor applied by its qualified path",
+      {ocaml|module Outer = struct
+  module Make (C : S) = struct
+    let check = C.p
+  end
+end
+module Checks = Outer.Make (Verdict)
+let () = Checks.check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a guarded quantifier through a functor applied by its qualified path",
+      {ocaml|module Outer = struct
+  module Make (C : S) = struct
+    let check = C.p
+  end
+end
+module Checks = Outer.Make (Verdict)
+let () =
+  Checks.check "all rows pass" ((not (List.is_empty rows)) && List.for_all rows ~f:Fn.id)|ocaml},
+      [] );
+    ( "binds a for loop's variable apart from an outer namesake",
+      {ocaml|let i = 0
+let present = not (List.is_empty (List.filter rows ~f:(fun r -> r.group = i)))
+let () =
+  for i = 1 to 2 do
+    Verdict.p "all rows pass"
+      (present && List.for_all (List.filter rows ~f:(fun r -> r.group = i)) ~f:Fn.id)
+  done|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a for loop body's quantifier witnessed on the loop's own variable",
+      {ocaml|let () =
+  for i = 1 to 2 do
+    Verdict.p "all rows pass"
+      ((not (List.is_empty (List.filter rows ~f:(fun r -> r.group = i))))
+      && List.for_all (List.filter rows ~f:(fun r -> r.group = i)) ~f:Fn.id)
+  done|ocaml},
+      [] );
+    ( "refuses a witness on a field the file assigns",
+      {ocaml|let () =
+  let present = not (List.is_empty state.rows) in
+  state.rows <- [];
+  Verdict.p "all rows pass" (present && List.for_all state.rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a witness on a field nothing in the file assigns",
+      {ocaml|let () =
+  let present = not (List.is_empty state.rows) in
+  Verdict.p "all rows pass" (present && List.for_all state.rows ~f:Fn.id)|ocaml},
+      [] );
   ]
 
 (* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round
