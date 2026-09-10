@@ -95,7 +95,7 @@ let quantified_claims structure =
         List.filter_map claim.value.sources ~f:(fun source ->
             match source.origin with
             | Provenance.Quantifier { kind; _ } -> Some (source, kind)
-            | Provenance.Parameter _ -> None)
+            | Provenance.Parameter _ | Provenance.Steering _ -> None)
       in
       let keyed =
         List.map quantified ~f:(fun (source, kind) ->
@@ -1190,6 +1190,58 @@ let () = Verdict.p "the detail holds" result.detail|ocaml},
       {ocaml|let packed = (List.for_all rows ~f:Fn.id, info)
 let () = Verdict.p "all rows pass" (fst packed)|ocaml},
       [ "packed" ] );
+    (* staging#681 round 2: the native claims reached through Verdict itself; a length inequality
+       with zero as a witness; ordered avoidance in a match; a dynamically formatted claim partially
+       applied; a condition selecting wrapper parameters that later become constants. *)
+    ( "refuses a quantifier written directly in a claim opened from Verdict",
+      {ocaml|open Verdict
+let () = p "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a quantifier written directly in a claim through a module alias of Verdict",
+      {ocaml|module V = Verdict
+let () = V.p "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a length inequality with zero as the non-empty witness",
+      {ocaml|let close xs = List.length xs <> 0 && List.for_all xs ~f:Fn.id
+let () = Verdict.p "every sample agrees" (close samples)|ocaml},
+      [] );
+    ( "refuses a length inequality with a positive literal as a witness",
+      {ocaml|let close xs = List.length xs <> 1 && List.for_all xs ~f:Fn.id
+let () = Verdict.p "every sample agrees" (close samples)|ocaml},
+      [ "close" ] );
+    ( "does not let a later case's guard witness an earlier case's quantifier",
+      {ocaml|let result =
+  match () with
+  | () when List.for_all rows ~f:Fn.id -> true
+  | () when List.is_empty rows -> false
+  | () -> false
+let () = Verdict.p "all rows pass" result|ocaml},
+      [ "result" ] );
+    ( "accepts a witness from an earlier avoided case",
+      {ocaml|let result =
+  match () with
+  | () when List.is_empty rows -> false
+  | () when List.for_all rows ~f:Fn.id -> true
+  | () -> false
+let () = Verdict.p "all rows pass" result|ocaml},
+      [] );
+    ( "refuses a quantifier reaching a dynamically formatted claim through a partial application",
+      {ocaml|let check = Verdict.pf fmt label
+let () = check (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "fmt" ] );
+    ( "refuses a quantified condition selecting constant wrapper arguments",
+      {ocaml|let check yes no = Verdict.p "all rows pass" (if List.for_all rows ~f:Fn.id then yes else no)
+let () = check true false|ocaml},
+      [ "check" ] );
+    ( "accepts a quantified condition selecting inverted constant wrapper arguments",
+      {ocaml|let check yes no = Verdict.p "some row fails" (if List.for_all rows ~f:Fn.id then yes else no)
+let () = check false true|ocaml},
+      [] );
+    ( "defers a quantified condition through a wrapper that forwards its arguments",
+      {ocaml|let check yes no = Verdict.p "all rows pass" (if List.for_all rows ~f:Fn.id then yes else no)
+let forward a b = check a b
+let () = forward true false|ocaml},
+      [ "check" ] );
   ]
 
 (* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round

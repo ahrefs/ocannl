@@ -225,6 +225,16 @@ does not treat a partially applied quantifier as a Boolean: true
 refuses a quantified field read from a record binding: true
 conservatively refuses a sibling field read from a quantified record binding: true
 refuses a quantified component read through fst: true
+refuses a quantifier written directly in a claim opened from Verdict: true
+refuses a quantifier written directly in a claim through a module alias of Verdict: true
+accepts a length inequality with zero as the non-empty witness: true
+refuses a length inequality with a positive literal as a witness: true
+does not let a later case's guard witness an earlier case's quantifier: true
+accepts a witness from an earlier avoided case: true
+refuses a quantifier reaching a dynamically formatted claim through a partial application: true
+refuses a quantified condition selecting constant wrapper arguments: true
+accepts a quantified condition selecting inverted constant wrapper arguments: true
+defers a quantified condition through a wrapper that forwards its arguments: true
 the shipping ratchet process refuses the planted helper fixture: true
 the shipping ratchet process refuses a quantifier written directly in a native claim: true
 refuses a stale quantified-helper exemption: true

@@ -126,6 +126,11 @@ and source = {
 and origin =
   | Quantifier of { kind : quantifier_kind; populations : Set.M(String).t }
   | Parameter of { parameter : binding; positive : bool }
+  | Steering of { sources : source list; parameter : binding; positive : bool }
+      (** [sources] steer to a branch whose value is [parameter] read at [positive]. A condition is
+          the value only where the branch returns a constant, and a parameter's constant is not
+          known until the closure is applied, so the decision is deferred: once the actual argument
+          is that constant, the sources are the value's own; once it is the other, they are gone. *)
 
 and closure = Quantifier_function of quantifier_partial | Function of function_closure
 
@@ -183,15 +188,20 @@ let covered witnesses source =
   match source.origin with
   | Quantifier { populations; _ } ->
       (not (Set.is_empty populations)) && not (Set.is_empty (Set.inter populations witnesses))
-  | Parameter _ -> false
+  | Parameter _ | Steering _ -> false
 
-let source_key source =
+let rec source_key source =
   let origin =
     match source.origin with
     | Quantifier { kind; populations } ->
         quantifier_name kind ^ "(" ^ String.concat ~sep:"," (Set.to_list populations) ^ ")"
     | Parameter { parameter; positive } ->
         Printf.sprintf "%s@%d%s" parameter.name parameter.site.position
+          (if positive then "+" else "-")
+    | Steering { sources; parameter; positive } ->
+        Printf.sprintf "[%s]->%s@%d%s"
+          (String.concat ~sep:";" (List.map sources ~f:source_key))
+          parameter.name parameter.site.position
           (if positive then "+" else "-")
   in
   Printf.sprintf "%s@%d:%s:%s" origin source.written.position
@@ -200,13 +210,20 @@ let source_key source =
 
 (* A view's sources are the ones its witnesses do not cover: coverage is decided wherever a witness
    and a source meet, and never undone, since witnesses only accumulate along a conjunction. *)
-let settle view =
-  {
-    view with
-    sources =
-      List.filter view.sources ~f:(fun source -> not (covered view.witnesses source))
-      |> List.dedup_and_sort ~compare:(fun a b -> String.compare (source_key a) (source_key b));
-  }
+let rec settle_sources witnesses sources =
+  List.filter_map sources ~f:(fun source ->
+      if covered witnesses source then None
+      else
+        match source.origin with
+        | Steering { sources = steered; parameter; positive } -> (
+            match settle_sources witnesses steered with
+            | [] -> None
+            | steered ->
+                Some { source with origin = Steering { sources = steered; parameter; positive } })
+        | Quantifier _ | Parameter _ -> Some source)
+  |> List.dedup_and_sort ~compare:(fun a b -> String.compare (source_key a) (source_key b))
+
+let settle view = { view with sources = settle_sources view.witnesses view.sources }
 
 (* Both views hold: what either can rest on, vouched for by what either establishes. *)
 let both a b =
@@ -274,30 +291,46 @@ type alternative = { steering : provenance list; outcome : provenance }
 
 let alternatives cases =
   let at positive =
-    let taken, avoided =
-      List.partition_tf cases ~f:(fun alternative -> reachable alternative.outcome positive)
+    (* In order: an alternative the value must have avoided vouches only for the alternatives after
+       it -- a later case's guard is never evaluated once an earlier case was taken. *)
+    let _, taken =
+      List.fold cases ~init:(empty_view, []) ~f:(fun (avoided, taken) { steering; outcome } ->
+          if not (reachable outcome positive) then
+            let avoided =
+              List.fold steering ~init:avoided ~f:(fun acc s -> both acc s.when_false)
+            in
+            (avoided, taken)
+          else
+            let outcome_view = view_at outcome positive in
+            let selecting = List.concat_map steering ~f:(fun s -> s.when_true.sources) in
+            let steering_sources =
+              if Option.equal Bool.equal outcome.constant (Some positive) then selecting
+              else if List.is_empty selecting then []
+              else
+                (* The branch returns a parameter: whether the condition is the value waits on the
+                   actual argument. *)
+                List.filter_map outcome_view.sources ~f:(fun source ->
+                    match source.origin with
+                    | Parameter { parameter; positive } ->
+                        Some
+                          {
+                            origin = Steering { sources = selecting; parameter; positive };
+                            owner = None;
+                            written = source.written;
+                            via = no_populations;
+                          }
+                    | Quantifier _ | Steering _ -> None)
+            in
+            let witnesses =
+              List.fold steering ~init:outcome_view.witnesses ~f:(fun acc s ->
+                  Set.union acc s.when_true.witnesses)
+            in
+            let view =
+              both (settle { sources = steering_sources @ outcome_view.sources; witnesses }) avoided
+            in
+            (avoided, view :: taken))
     in
-    let avoided =
-      List.fold avoided ~init:empty_view ~f:(fun acc alternative ->
-          List.fold alternative.steering ~init:acc ~f:(fun acc steering ->
-              both acc steering.when_false))
-    in
-    let taken =
-      List.map taken ~f:(fun { steering; outcome } ->
-          let outcome_view = view_at outcome positive in
-          let steering_sources =
-            if Option.equal Bool.equal outcome.constant (Some positive) then
-              List.concat_map steering ~f:(fun s -> s.when_true.sources)
-            else []
-          in
-          let witnesses =
-            List.fold steering ~init:outcome_view.witnesses ~f:(fun acc s ->
-                Set.union acc s.when_true.witnesses)
-          in
-          settle { sources = steering_sources @ outcome_view.sources; witnesses })
-      |> merge
-    in
-    both taken avoided
+    merge (List.rev taken)
   in
   let agreed =
     match cases with
@@ -534,16 +567,17 @@ let rec own binding provenance =
     | Quantifier _, None -> true
     | Quantifier _, Some owner ->
         (not owner.final) && start <= owner.site.position && owner.site.position < stop
-    | Parameter _, _ -> false
+    | (Parameter _ | Steering _), _ -> false
   in
-  let own_view view =
-    {
-      view with
-      sources =
-        List.map view.sources ~f:(fun source ->
-            if claims source then { source with owner = Some binding } else source);
-    }
+  let rec own_sources sources =
+    List.map sources ~f:(fun source ->
+        match source.origin with
+        | Steering { sources = steered; parameter; positive } ->
+            { source with origin = Steering { sources = own_sources steered; parameter; positive } }
+        | Quantifier _ | Parameter _ ->
+            if claims source then { source with owner = Some binding } else source)
   in
+  let own_view view = { view with sources = own_sources view.sources } in
   {
     when_true = own_view provenance.when_true;
     when_false = own_view provenance.when_false;
@@ -753,33 +787,60 @@ let projected_arguments parameter (argument : expression) =
 
 let mentions_parameter view =
   List.exists view.sources ~f:(fun source ->
-      match source.origin with Parameter _ -> true | Quantifier _ -> false)
+      match source.origin with Parameter _ | Steering _ -> true | Quantifier _ -> false)
 
-let substitute_view ~(replacement : binding -> (site * provenance) option option) ~populations view
-    =
-  let sources =
-    List.concat_map view.sources ~f:(fun source ->
-        match source.origin with
-        | Quantifier { kind; populations = named } ->
-            let named =
-              Set.map (module String) named ~f:(fun p -> Option.value (populations p) ~default:p)
-            in
-            [ { source with origin = Quantifier { kind; populations = named } } ]
-        | Parameter { parameter; positive } -> (
-            match replacement parameter with
-            | None -> [ source ]
-            | Some None -> []
-            | Some (Some (argument_site, actual)) ->
-                (view_at actual positive).sources
-                |> List.map ~f:(fun actual_source ->
-                    {
-                      actual_source with
-                      via = Set.union actual_source.via source.via;
-                      written =
-                        (if Option.is_none actual_source.owner then argument_site
-                         else actual_source.written);
-                    })))
+let parameter_of source =
+  match source.origin with
+  | Parameter { parameter; _ } | Steering { parameter; _ } -> Some parameter
+  | Quantifier _ -> None
+
+let rec substitute_sources ~(replacement : binding -> (site * provenance) option option)
+    ~populations sources =
+  let from_actual source argument_site actual_sources =
+    List.map actual_sources ~f:(fun actual_source ->
+        {
+          actual_source with
+          via = Set.union actual_source.via source.via;
+          written =
+            (if Option.is_none actual_source.owner then argument_site else actual_source.written);
+        })
   in
+  List.concat_map sources ~f:(fun source ->
+      match source.origin with
+      | Quantifier { kind; populations = named } ->
+          let named =
+            Set.map (module String) named ~f:(fun p -> Option.value (populations p) ~default:p)
+          in
+          [ { source with origin = Quantifier { kind; populations = named } } ]
+      | Parameter { parameter; positive } -> (
+          match replacement parameter with
+          | None -> [ source ]
+          | Some None -> []
+          | Some (Some (argument_site, actual)) ->
+              from_actual source argument_site (view_at actual positive).sources)
+      | Steering { sources = steered; parameter; positive } -> (
+          let steered = substitute_sources ~replacement ~populations steered in
+          let steering parameter positive =
+            { source with origin = Steering { sources = steered; parameter; positive } }
+          in
+          match replacement parameter with
+          | None -> [ steering parameter positive ]
+          | Some None -> []
+          | Some (Some (argument_site, actual)) -> (
+              (* The branch's value is the constant the steering selects exactly when the actual
+                 argument is that constant; an actual that is itself a parameter defers again. *)
+              match actual.constant with
+              | Some constant when Bool.equal constant positive ->
+                  from_actual source argument_site steered
+              | Some _ -> []
+              | None ->
+                  List.filter_map (view_at actual positive).sources ~f:(fun actual_source ->
+                      match actual_source.origin with
+                      | Parameter { parameter; positive } -> Some (steering parameter positive)
+                      | Quantifier _ | Steering _ -> None))))
+
+let substitute_view ~replacement ~populations view =
+  let sources = substitute_sources ~replacement ~populations view.sources in
   let witnesses =
     Set.map (module String) view.witnesses ~f:(fun p -> Option.value (populations p) ~default:p)
   in
@@ -809,7 +870,20 @@ let drop_via labels provenance =
   if Set.is_empty labels then provenance
   else
     let keep source = Set.is_empty (Set.inter source.via labels) in
-    let drop_view view = { view with sources = List.filter view.sources ~f:keep } in
+    let rec drop_sources sources =
+      List.filter_map sources ~f:(fun source ->
+          if not (keep source) then None
+          else
+            match source.origin with
+            | Steering { sources = steered; parameter; positive } -> (
+                match drop_sources steered with
+                | [] -> None
+                | steered ->
+                    Some
+                      { source with origin = Steering { sources = steered; parameter; positive } })
+            | Quantifier _ | Parameter _ -> Some source)
+    in
+    let drop_view view = { view with sources = drop_sources view.sources } in
     let rec drop provenance =
       {
         when_true = drop_view provenance.when_true;
@@ -1103,9 +1177,8 @@ and function_closure ctx parameters body =
   let mine = List.concat_map params ~f:(fun p -> p.slot :: p.names) in
   let mentions_mine claim =
     List.exists claim.value.sources ~f:(fun source ->
-        match source.origin with
-        | Parameter { parameter; _ } -> List.exists mine ~f:(phys_equal parameter)
-        | Quantifier _ -> false)
+        Option.value_map (parameter_of source) ~default:false ~f:(fun parameter ->
+            List.exists mine ~f:(phys_equal parameter)))
   in
   let own_claims, outer = List.partition_tf !pending ~f:mentions_mine in
   ctx.pending := outer @ !(ctx.pending);
@@ -1189,9 +1262,11 @@ and comparison ctx callee left right =
           int_literal left,
           length_population ctx right )
       with
-      | Some population, Some n, _, _ when (equality && n > 0) || (gt && n >= 0) || (ge && n > 0) ->
+      | Some population, Some n, _, _
+        when (equality && n > 0) || (inequality && n = 0) || (gt && n >= 0) || (ge && n > 0) ->
           witness population
-      | _, _, Some n, Some population when (equality && n > 0) || (lt && n >= 0) || (le && n > 0) ->
+      | _, _, Some n, Some population
+        when (equality && n > 0) || (inequality && n = 0) || (lt && n >= 0) || (le && n > 0) ->
           witness population
       | _ -> nothing)
 
@@ -1262,7 +1337,9 @@ and apply ctx ~site ~callee_name closure arguments =
                   claim with
                   label = (match claim.label with Label_slot _ -> Label_expr value | l -> l);
                 });
-          nothing)
+          (* How many arguments the format takes is unknown, so the closure stays: a partial
+             application's later arguments are claimed the same way. *)
+          { nothing with closure = Some (Function closure) })
   | Function closure ->
       let unlabelled_arguments = ref (unlabelled arguments) in
       let assignments =
@@ -1488,7 +1565,10 @@ and module_exports ctx module_expr =
       match module_path module_expr with
       | None -> []
       | Some path ->
-          if List.equal String.equal path [ "Verdict"; "Claims" ] then claim_exports ~site
+          if
+            List.equal String.equal path [ "Verdict"; "Claims" ]
+            || List.equal String.equal path [ "Verdict" ]
+          then claim_exports ~site
           else if is_collection_module path then quantifier_exports ~site
           else
             let prefix = String.concat ~sep:"." path ^ "." in
