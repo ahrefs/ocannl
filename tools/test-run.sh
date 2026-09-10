@@ -444,12 +444,18 @@ supervisor_perl='
 # is the pointer's target. Exit codes: 1 lock busy, 2 pointer unwritable.
 take_lock() {
   exec 9>>"$LOCK" || die "cannot open lock file $LOCK"
+  # The pointer is written aside and renamed into place: a reader refused by
+  # the lock in the same instant sees the previous owner or this run, never
+  # a truncated or half-written path that would send it to `last` instead
+  # of the actual holder.
   perl -e '
     use Fcntl ":flock";
     exit 1 unless flock(STDIN, LOCK_EX | LOCK_NB);
-    open(my $fh, ">", $ARGV[0]) or exit 2;
+    my $tmp = "$ARGV[0].tmp.$$";
+    open(my $fh, ">", $tmp) or exit 2;
     print $fh "$ARGV[1]\n" or exit 2;
     close $fh or exit 2;
+    rename($tmp, $ARGV[0]) or do { unlink $tmp; exit 2 };
     exit 0;
   ' "$OWNER" "$run_dir" <&9
   case $? in
@@ -489,7 +495,8 @@ new_run() {
     : >"$run_dir/log"; } || die "cannot write run metadata in $run_dir"
   # `runs` is the state root this run's lock and pointers live under: `stop`
   # and retention read them from there, whichever OCANNL_TOOL_TEST_RUNS the
-  # caller has.
+  # caller has -- and its absence marks a run of the version that kept them
+  # beside the worktree (see lock_paths_of).
   # Runs are throwaway diagnostics; reap old ones so the directory cannot grow
   # without bound. Deletion demands the full run schema -- the timestamped
   # name AND this script's metadata files -- never mere position under $RUNS,
@@ -557,16 +564,28 @@ lock_held() { # <lock-file>; exits 0 iff some process holds its flock
 # owner? Then $1's leftovers are what is holding it -- grounds both for
 # reaping them (stop) and for keeping $1's metadata alive (retention).
 lock_still_owned() {
-  local w r k
-  w=$(cat "$1/wt" 2>/dev/null) || return 1
-  [ -n "$w" ] || return 1
-  # The state root the run was launched under, where its lock lives; a run
-  # recorded without one (an older version, a harness's forged directory) is
-  # read under the caller's.
+  lock_paths_of "$1" || return 1
+  [ "$(cat "$run_owner" 2>/dev/null)" = "$1" ] && lock_held "$run_lock"
+}
+# Where run-dir $1's lock and owner pointer live: under the state root it
+# recorded in `runs`, keyed by its worktree. A run with no `runs` on record
+# was launched by the version that kept both BESIDE the worktree
+# (`.test-run.lock`, `.test-run.lock.owner`); its leftovers, if any, hold
+# THAT lock, and only those paths can attribute and reap them. Sets
+# run_wt, run_lock, run_owner; fails when the run recorded no worktree.
+lock_paths_of() {
+  local r k
+  run_wt=$(cat "$1/wt" 2>/dev/null) || return 1
+  [ -n "$run_wt" ] || return 1
   r=$(cat "$1/runs" 2>/dev/null)
-  [ -n "$r" ] || r=$RUNS
-  k=$(wt_key_of "$w")
-  [ "$(cat "$r/owner-$k" 2>/dev/null)" = "$1" ] && lock_held "$r/lock-$k"
+  if [ -n "$r" ]; then
+    k=$(wt_key_of "$run_wt")
+    run_lock=$r/lock-$k
+    run_owner=$r/owner-$k
+  else
+    run_lock=$run_wt/.test-run.lock
+    run_owner=$run_wt/.test-run.lock.owner
+  fi
 }
 
 # One fixed rendering for start-time tokens: lstart is locale- AND
@@ -1415,6 +1434,11 @@ case $sub in
         [ "$step" -gt 0 ] && sleep "$step"
         waited=$(( waited + step ))
         [ -f "$run_dir/exit" ] && break
+        # Re-asked after the settle: `wait last` can arrive in the
+        # milliseconds between a launcher's publication and its
+        # supervisor's first write, and an owner that has appeared since is
+        # a running run, not a dead one.
+        sup_alive "$run_dir" && continue
         # Recomputed AFTER the settle: consuming the final second must report
         # the documented timeout, not slip through on the pre-sleep value.
         [ $(( budget - waited )) -le 0 ] && { echo "wait timed out after ${budget}s: $run_dir"; exit 124; }
@@ -1443,11 +1467,12 @@ case $sub in
     # trusted); the lsof census on the lock file covers detached holders
     # the group cannot see. reap_cycle reports honestly when the lock is
     # STILL held afterwards (no lsof on this system, or unkillable holders).
-    run_wt=$(cat "$run_dir/wt" 2>/dev/null)
-    run_wt=${run_wt:-$PWD}
-    run_runs=$(cat "$run_dir/runs" 2>/dev/null)
-    run_runs=${run_runs:-$RUNS}
-    run_lock=$run_runs/lock-$(wt_key_of "$run_wt")
+    lock_paths_of "$run_dir" || {
+      # No worktree on record: nothing can attribute leftovers to this run,
+      # so the leftover branches below stay closed and only the recorded
+      # owner and group can be signalled.
+      run_wt=$PWD run_lock= run_owner=
+    }
     # The census prefers /proc/locks (only pids actually HOLDING the flock,
     # matched by device AND inode -- inode numbers repeat across
     # filesystems); lsof is the fallback and lists any process with the
