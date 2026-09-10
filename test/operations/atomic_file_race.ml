@@ -819,7 +819,7 @@ let () =
   Verdict.p_empty "the rerun's clearing is visible to this process too" ~over:planted (listing ());
   Verdict.p "a rerun over an interrupted run's leftovers publishes its directory tree"
     (publish_directory_tree ());
-  Verdict.p_empty "the rerun left the scratch directory as it found it" ~over:planted (listing ())
+  Verdict.p "the rerun left the scratch directory as it found it" (List.is_empty (listing ()))
 
 (* One exception type for filesystem refusals, whatever refused. A best-effort writer -- the
    schedule cache treats a refusal as a future miss rather than a failed tuning run -- needs one

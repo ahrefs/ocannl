@@ -291,6 +291,10 @@ let exempt_quantified_helpers =
     ( "test/operations/agent_notes_structure.ml:every exemption still names a bullet that needs one",
       "over the file's own exemption list, which is empty today: a stale entry is reported the \
        moment one is added, and there is no population beneath an empty list to witness" );
+    ( "test/operations/atomic_file_race.ml:the rerun left the scratch directory as it found it",
+      "the directory must end empty, and the tree the rerun published and removed is not \
+       enumerated, so nothing in scope witnesses the final listing; the fixtures an interrupted \
+       run leaves behind are witnessed by the clearing claims just above" );
     ( "test/operations/simd_lane_choice.ml:a backend that renders no vectors offers no rungs",
       "a zero vector width yields no ladder by construction; the rungs the widths that do render \
        offer are pinned by the claims beside it" );
