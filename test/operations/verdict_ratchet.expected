@@ -255,6 +255,15 @@ refuses a filtered population whose predicate was rebound after the witness: tru
 accepts a filtered population witnessed under the same predicate binding: true
 does not mistake a parameter mark spelled inside a filter predicate: true
 refuses a quantifier completed after its population passed through a helper: true
+refuses a quantifier passed to the fifth of five alternative claim functions: true
+does not read a locally bound List.length as a witness: true
+accepts a witness passed to a wrapper as a conjunct of its claim: true
+refuses a witness passed to a wrapper as an alternative of its claim: true
+refuses a quantifier claimed through a claim function passed as an argument: true
+refuses a quantifier claimed through a wrapper passed as an argument: true
+refuses a quantifier spelled in Stdlib's argument order: true
+accepts a negated quantifier spelled in Stdlib's argument order: true
+refuses a quantifier passed to a recursive module's claim wrapper: true
 the shipping ratchet process refuses the planted helper fixture: true
 the shipping ratchet process refuses a quantifier written directly in a native claim: true
 refuses a stale quantified-helper exemption: true

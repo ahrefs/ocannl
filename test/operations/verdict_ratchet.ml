@@ -1344,6 +1344,62 @@ let () = Verdict.p "all kept rows pass" (present && List.for_all (List.filter ro
 let all_rows = every rows
 let () = Verdict.p "all rows pass" (all_rows ~f:Fn.id)|ocaml},
       [ "all rows pass" ] );
+    (* staging#681 round 6: many alternatives; a rebound List.length; a conjunct parameter's
+       witnesses; a claim function passed as an argument; Stdlib's argument order; a recursive
+       module's exports. *)
+    ( "refuses a quantifier passed to the fifth of five alternative claim functions",
+      {ocaml|let quiet_one _ = ()
+let quiet_two _ = ()
+let quiet_three _ = ()
+let quiet_four _ = ()
+let check =
+  match mode with
+  | 1 -> quiet_one
+  | 2 -> quiet_two
+  | 3 -> quiet_three
+  | 4 -> quiet_four
+  | _ -> Verdict.p "all rows pass"
+let () = check (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "check" ] );
+    ( "does not read a locally bound List.length as a witness",
+      {ocaml|module List = struct
+  let length _ = 1
+  let for_all = List.for_all
+end
+let close = List.length rows > 0 && List.for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" close|ocaml},
+      [ "close" ] );
+    ( "accepts a witness passed to a wrapper as a conjunct of its claim",
+      {ocaml|let check nonempty = Verdict.p "all rows pass" (nonempty && List.for_all rows ~f:Fn.id)
+let () = check (not (List.is_empty rows))|ocaml},
+      [] );
+    ( "refuses a witness passed to a wrapper as an alternative of its claim",
+      {ocaml|let check nonempty = Verdict.p "all rows pass" (nonempty || List.for_all rows ~f:Fn.id)
+let () = check (not (List.is_empty rows))|ocaml},
+      [ "check" ] );
+    ( "refuses a quantifier claimed through a claim function passed as an argument",
+      {ocaml|let apply claim value = claim "all rows pass" value
+let () = apply Verdict.p (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a quantifier claimed through a wrapper passed as an argument",
+      {ocaml|let check ok = Verdict.p "all rows pass" ok
+let apply claim value = claim value
+let () = apply check (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "check" ] );
+    ( "refuses a quantifier spelled in Stdlib's argument order",
+      {ocaml|let () = Verdict.p "all rows pass" (Stdlib.List.for_all Fn.id rows)|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a negated quantifier spelled in Stdlib's argument order",
+      {ocaml|let () = Verdict.p "some row fails" (not (Stdlib.List.for_all Fn.id rows))|ocaml},
+      [] );
+    ( "refuses a quantifier passed to a recursive module's claim wrapper",
+      {ocaml|module rec Checks : sig
+  val check : string -> bool -> unit
+end = struct
+  let check = Verdict.p
+end
+let () = Checks.check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
   ]
 
 (* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round

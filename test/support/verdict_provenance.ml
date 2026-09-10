@@ -121,6 +121,10 @@ and source = {
   via : Set.M(String).t;
       (** Optional-parameter labels whose default this source passed through; supplying the label at
           a call removes it. *)
+  necessary : bool;
+      (** Whether the value has this polarity only if this source does: true along a conjunction,
+          false once the source is one of several alternatives. A necessary parameter's actual
+          argument brings its witnesses to the value. *)
 }
 
 and origin =
@@ -142,12 +146,25 @@ and quantifier_partial = {
   kind : quantifier_kind;
   populations : string option list;
       (** The positional arguments supplied so far, each resolved to its population identity. *)
-  predicate : bool;  (** Whether [~f] has been supplied; [is_empty] takes none. *)
+  predicate : bool;  (** Whether the predicate has been supplied; [is_empty] takes none. *)
+  stdlib : bool;
+      (** The [Stdlib] spelling, whose predicate is the first positional argument, against [Base]'s
+          labelled [~f]. *)
+}
+
+and deferred_call = {
+  applied : binding;  (** The parameter applied. *)
+  call_site : site;
+  call_arguments : (Asttypes.arg_label * expression * provenance) list;
+      (** The arguments as written and as walked where they were written. *)
 }
 
 and function_closure = {
   parameters : parameter list;  (** The parameters not yet supplied, in order. *)
   claims : claim list;  (** Claims the body fires, in terms of the parameters. *)
+  calls : deferred_call list;
+      (** Applications of a parameter the body makes, to be applied once a call supplies a function
+          for it. *)
   body : provenance;  (** What the body returns, in terms of the parameters. *)
   native : bool;
       (** A [Verdict] claim function itself, reached by its path or through an alias, as opposed to
@@ -190,12 +207,7 @@ let rec map_functions closure ~f =
   | Function function_closure -> Function (f function_closure)
   | Alternatives closures -> Alternatives (List.map closures ~f:(map_functions ~f))
 
-(* The functions a value selected by control flow could be, flattened, each once, and bounded:
-   alternatives multiply through every application, and a bound keeps a long chain of
-   function-returning branches from turning the walk exponential. Past the bound the first few stand
-   for the rest, which loses precision loudly (an alternative not applied fires no claim) only in
-   code shaped like a dispatch table of dispatch tables. *)
-let alternatives_bound = 4
+(* The functions a value selected by control flow could be, flattened, each once. *)
 
 let select_closures closures =
   let rec flatten = function
@@ -208,7 +220,7 @@ let select_closures closures =
         if List.exists seen ~f:(phys_equal closure) then seen else closure :: seen)
     |> List.rev
   in
-  match List.take distinct alternatives_bound with
+  match distinct with
   | [] -> None
   | [ closure ] -> Some closure
   | closures -> Some (Alternatives closures)
@@ -239,7 +251,9 @@ let rec source_key source =
           parameter.name parameter.site.position
           (if positive then "+" else "-")
   in
-  Printf.sprintf "%s@%d:%s:%s" origin source.written.position
+  Printf.sprintf "%s%s@%d:%s:%s"
+    (if source.necessary then "" else "?")
+    origin source.written.position
     (Option.value_map source.owner ~default:"" ~f:(fun owner -> Int.to_string owner.site.position))
     (String.concat ~sep:"," (Set.to_list source.via))
 
@@ -267,7 +281,12 @@ let both a b =
 (* One of the views holds, which one unknown: what either can rest on, vouched for only by what both
    establish. *)
 let either a b =
-  settle { sources = a.sources @ b.sources; witnesses = Set.inter a.witnesses b.witnesses }
+  let optional source = { source with necessary = false } in
+  settle
+    {
+      sources = List.map (a.sources @ b.sources) ~f:optional;
+      witnesses = Set.inter a.witnesses b.witnesses;
+    }
 
 let merge views = List.reduce views ~f:either |> Option.value ~default:empty_view
 
@@ -310,7 +329,9 @@ let disjunction a b = negate (conjunction (negate a) (negate b))
 let aggregate components =
   let gather positive =
     {
-      sources = List.concat_map components ~f:(fun c -> (view_at c positive).sources);
+      sources =
+        List.concat_map components ~f:(fun c -> (view_at c positive).sources)
+        |> List.map ~f:(fun source -> { source with necessary = false });
       witnesses = no_populations;
     }
   in
@@ -353,6 +374,7 @@ let alternatives cases =
                             owner = None;
                             written = source.written;
                             via = no_populations;
+                            necessary = source.necessary;
                           }
                     | Quantifier _ | Steering _ -> None)
             in
@@ -420,10 +442,17 @@ let quantifier_of_member = function
 
 let quantifier_members = [ "for_all"; "for_all2_exn"; "is_empty"; "exists" ]
 
+(* [Stdlib.List.for_all f l] takes its predicate first and positionally, where [Base] takes [~f];
+   the resolved path says which. [Stdlib]'s pairwise form is [for_all2]. *)
+let stdlib_path = function "Stdlib" :: _ -> true | _ -> false
+
 let collection_quantifier path =
   match List.rev path with
   | member :: container :: _ when String.equal container "List" || String.equal container "Array" ->
-      quantifier_of_member member
+      let kind = quantifier_of_member member in
+      if Option.is_some kind then Option.map kind ~f:(fun kind -> (kind, stdlib_path path))
+      else if stdlib_path path && String.equal member "for_all2" then Some (For_all2, true)
+      else None
   | _ -> None
 
 let claim_kind_of_path = function
@@ -585,6 +614,8 @@ type context = {
       (** Claims fired inside the function being analysed that still mention a parameter; the
           function's closure collects those that mention its own. *)
   found : claim list ref;  (** Claims whose value no longer mentions any parameter. *)
+  pending_calls : deferred_call list ref;
+      (** Applications of a parameter made inside the function being analysed. *)
 }
 
 let lookup env name = List.find env ~f:(fun binding -> String.equal binding.name name)
@@ -649,6 +680,7 @@ let parameter_provenance binding =
       owner = None;
       written = binding.site;
       via = no_populations;
+      necessary = true;
     }
   in
   {
@@ -689,6 +721,7 @@ let native_claim kind ~site =
         {
           parameters = [ label; value ];
           claims = [ claim ];
+          calls = [];
           body = nothing;
           native = true;
           format = false;
@@ -699,6 +732,7 @@ let native_claim kind ~site =
         {
           parameters = [ parameter "format" ];
           claims = [];
+          calls = [];
           body = nothing;
           native = true;
           format = true;
@@ -741,6 +775,7 @@ let format_claim ~site format_expression =
       {
         parameters = arguments @ [ value ];
         claims = [ claim ];
+        calls = [];
         body = nothing;
         native = true;
         format = false;
@@ -750,21 +785,28 @@ let format_claim ~site format_expression =
       {
         parameters = [ value ];
         claims = [ claim ];
+        calls = [];
         body = nothing;
         native = true;
         format = false;
         loose = true;
       }
 
-let quantifier_function kind =
+let quantifier_function ?(stdlib = false) kind =
   {
     nothing with
-    closure = Some (Quantifier_function { kind; populations = []; predicate = false });
+    closure = Some (Quantifier_function { kind; populations = []; predicate = false; stdlib });
   }
 
 let quantifier kind populations ~written =
   let source =
-    { origin = Quantifier { kind; populations }; owner = None; written; via = no_populations }
+    {
+      origin = Quantifier { kind; populations };
+      owner = None;
+      written;
+      via = no_populations;
+      necessary = true;
+    }
   in
   let vacuous = { sources = [ source ]; witnesses = no_populations } in
   let witnessed = { sources = []; witnesses = populations } in
@@ -859,7 +901,8 @@ let rec population ctx expr =
 
 let length_population ctx expr =
   match (normalize ~rebound:(rebound_in ctx.env) expr).pexp_desc with
-  | Pexp_apply (callee, arguments) when is_collection_call callee ~member:"length" ->
+  | Pexp_apply (callee, arguments)
+    when is_collection_call callee ~member:"length" && not (rebound_in ctx.env callee) ->
       List.hd (unlabelled arguments) |> Option.bind ~f:(population ctx)
   | _ -> None
 
@@ -938,16 +981,17 @@ let rec substitute_sources ~(replacement : binding -> (site * provenance) option
 
 let substitute_view ~replacement ~populations view =
   let sources = substitute_sources ~replacement ~populations view.sources in
-  (* A view that is exactly one parameter IS the actual argument, witnesses included: a native
-     claim's value slot, a wrapper forwarding a parameter. A parameter beside other sources keeps
-     only its own witnesses, since the value may have rested on the others. *)
+  (* A necessary parameter -- the value's own slot, a conjunct -- brings its actual argument's
+     witnesses to the value; one that is only an alternative brings nothing, since the value may
+     have rested on the others. *)
   let inherited =
-    match view.sources with
-    | [ { origin = Parameter { parameter; positive }; _ } ] -> (
-        match replacement parameter with
-        | Some (Some (_, actual)) -> (view_at actual positive).witnesses
-        | Some None | None -> no_populations)
-    | _ -> no_populations
+    List.fold view.sources ~init:no_populations ~f:(fun acc source ->
+        match source.origin with
+        | Parameter { parameter; positive } when source.necessary -> (
+            match replacement parameter with
+            | Some (Some (_, actual)) -> Set.union acc (view_at actual positive).witnesses
+            | Some None | None -> acc)
+        | _ -> acc)
   in
   let witnesses =
     Set.map
@@ -976,6 +1020,14 @@ let rec substitute ~replacement ~populations provenance =
             body = substitute ~replacement ~populations function_closure.body;
             claims =
               List.map function_closure.claims ~f:(substitute_claim ~replacement ~populations);
+            calls =
+              List.map function_closure.calls ~f:(fun call ->
+                  {
+                    call with
+                    call_arguments =
+                      List.map call.call_arguments ~f:(fun (label, expr, provenance) ->
+                          (label, expr, substitute ~replacement ~populations provenance));
+                  });
           }
     | Alternatives closures -> Alternatives (List.map closures ~f:closure)
   in
@@ -1130,7 +1182,7 @@ and resolve ctx expr =
               }
           | None -> (
               match collection_quantifier path with
-              | Some kind -> quantifier_function kind
+              | Some (kind, stdlib) -> quantifier_function ~stdlib kind
               | None -> nothing)))
 
 (* The bindings a [let] adds, each walked once, in source order so that claims fire in source order.
@@ -1241,12 +1293,13 @@ and boolean_selection scrutinee = function
    function's parameters are handed up to it. *)
 and function_closure ctx parameters body =
   let pending = ref [] in
+  let pending_calls = ref [] in
   let env, params =
     List.fold parameters ~init:(ctx.env, []) ~f:(fun (env, params) parameter ->
         match parameter.pparam_desc with
         | Pparam_newtype _ -> (env, params)
         | Pparam_val (label, default, pattern) ->
-            let pre_ctx = { ctx with env; pending } in
+            let pre_ctx = { ctx with env; pending; pending_calls } in
             let default = Option.map default ~f:(walk pre_ctx) in
             let site = site_of_location pattern.ppat_loc in
             let slot = parameter_binding ~name:"" ~site in
@@ -1273,7 +1326,7 @@ and function_closure ctx parameters body =
             (List.rev_append names env, param :: params))
   in
   let params = List.rev params in
-  let inner_ctx = { ctx with env; pending } in
+  let inner_ctx = { ctx with env; pending; pending_calls } in
   let params, body =
     match body with
     | Pfunction_body body -> (params, walk inner_ctx body)
@@ -1311,6 +1364,10 @@ and function_closure ctx parameters body =
   let mentions_mine claim = List.exists claim.value.sources ~f:(waits_on_parameter ~among:mine) in
   let own_claims, outer = List.partition_tf !pending ~f:mentions_mine in
   ctx.pending := outer @ !(ctx.pending);
+  let own_calls, outer_calls =
+    List.partition_tf !pending_calls ~f:(fun call -> List.exists mine ~f:(phys_equal call.applied))
+  in
+  ctx.pending_calls := outer_calls @ !(ctx.pending_calls);
   {
     nothing with
     closure =
@@ -1319,6 +1376,7 @@ and function_closure ctx parameters body =
            {
              parameters = params;
              claims = List.rev own_claims;
+             calls = List.rev own_calls;
              body;
              native = false;
              format = false;
@@ -1357,9 +1415,27 @@ and application ctx expr callee arguments =
                 Option.map (lookup ctx.env name) ~f:(fun _ -> name))
           in
           apply ctx ~site ~callee_name closure arguments
-      | None ->
-          List.iter arguments ~f:(fun (_, argument) -> discard ctx argument);
-          nothing)
+      | None -> (
+          (* A parameter applied: the function it stands for arrives with a call, so the application
+             is deferred to it, arguments walked where they are written. *)
+          let applied =
+            List.find_map function_.when_true.sources ~f:(fun source ->
+                match source.origin with
+                | Parameter { parameter; _ } -> Some parameter
+                | Quantifier _ | Steering _ -> None)
+          in
+          match applied with
+          | Some applied ->
+              let call_arguments =
+                List.map arguments ~f:(fun (label, argument) ->
+                    (label, argument, walk ctx argument))
+              in
+              ctx.pending_calls :=
+                { applied; call_site = site; call_arguments } :: !(ctx.pending_calls);
+              nothing
+          | None ->
+              List.iter arguments ~f:(fun (_, argument) -> discard ctx argument);
+              nothing))
 
 (* [x = true], [Bool.equal x false], [x <> true]: the other operand, in the polarity the constant
    selects. Otherwise a comparison is a value of its own -- except a literal length bound, which is
@@ -1403,12 +1479,24 @@ and comparison ctx callee left right =
           witness population
       | _ -> nothing)
 
-and apply ctx ~site ~callee_name closure arguments =
+(* [valued] answers for an argument already walked where it was written -- a deferred call's --
+   whose environment is gone: it is read from its provenance alone, never walked, projected or
+   resolved to a population here. *)
+and apply ?(valued = fun _ -> None) ctx ~site ~callee_name closure arguments =
+  let value_of argument =
+    match valued argument with Some provenance -> provenance | None -> walk ctx argument
+  in
+  let discard_unless_valued argument =
+    if Option.is_none (valued argument) then discard ctx argument
+  in
+  let population_unless_valued argument =
+    if Option.is_none (valued argument) then population ctx argument else None
+  in
   match closure with
   | Alternatives closures ->
       (* Applied to every function it could be; what comes back is any of the results. *)
       let results =
-        List.map closures ~f:(fun closure -> apply ctx ~site ~callee_name closure arguments)
+        List.map closures ~f:(fun closure -> apply ~valued ctx ~site ~callee_name closure arguments)
       in
       {
         (aggregate results) with
@@ -1417,10 +1505,18 @@ and apply ctx ~site ~callee_name closure arguments =
   | Quantifier_function partial ->
       (* A quantifier is a value once every population and, but for [is_empty], its predicate have
          arrived; until then it stays the function it is, with what it has received. *)
-      List.iter arguments ~f:(fun (_, argument) -> discard ctx argument);
-      let populations = partial.populations @ List.map (unlabelled arguments) ~f:(population ctx) in
+      List.iter arguments ~f:(fun (_, argument) -> discard_unless_valued argument);
+      let positional = unlabelled arguments in
+      (* [Stdlib]'s predicate is the first positional argument, ahead of the populations. *)
+      let predicate_first =
+        partial.stdlib && (not partial.predicate)
+        && (match partial.kind with Is_empty -> false | _ -> true)
+        && not (List.is_empty positional)
+      in
+      let positional = if predicate_first then List.tl_exn positional else positional in
+      let populations = partial.populations @ List.map positional ~f:population_unless_valued in
       let predicate =
-        partial.predicate
+        partial.predicate || predicate_first
         || List.exists arguments ~f:(fun (label, _) ->
             match label with Asttypes.Labelled "f" | Optional "f" -> true | _ -> false)
       in
@@ -1447,7 +1543,7 @@ and apply ctx ~site ~callee_name closure arguments =
       with
       | None -> { nothing with closure = Some (Function closure) }
       | Some (_, format) ->
-          discard ctx format;
+          discard_unless_valued format;
           let expanded = format_claim ~site format in
           let rest =
             List.filter arguments ~f:(fun (label, argument) ->
@@ -1457,14 +1553,14 @@ and apply ctx ~site ~callee_name closure arguments =
           in
           if List.is_empty rest then
             { nothing with closure = Some (Function { expanded with native = false }) }
-          else apply ctx ~site ~callee_name (Function expanded) rest)
+          else apply ~valued ctx ~site ~callee_name (Function expanded) rest)
   | Function closure when closure.loose -> (
-      List.iter arguments ~f:(fun (_, argument) -> discard ctx argument);
+      List.iter arguments ~f:(fun (_, argument) -> discard_unless_valued argument);
       match List.last (unlabelled arguments) with
       | None -> { nothing with closure = Some (Function closure) }
       | Some value ->
           let slot = (List.hd_exn closure.parameters).slot in
-          let actual = walk ctx value in
+          let actual = value_of value in
           let replacement parameter =
             if phys_equal parameter slot then Some (Some (site_of_location value.pexp_loc, actual))
             else None
@@ -1522,7 +1618,7 @@ and apply ctx ~site ~callee_name closure arguments =
                 | Nolabel -> false)
       in
       List.iter arguments ~f:(fun argument ->
-          if not (taken argument) then discard ctx (snd argument));
+          if not (taken argument) then discard_unless_valued (snd argument));
       let fires =
         List.for_all assignments ~f:(fun (parameter, argument) ->
             match (parameter.label, argument) with
@@ -1545,7 +1641,7 @@ and apply ctx ~site ~callee_name closure arguments =
       List.iter assignments ~f:(fun (parameter, argument) ->
           let actual = match argument with Supplied e | Unknown e -> Some e | Absent -> None in
           let resolved_actual =
-            Option.map actual ~f:(fun e -> (site_of_location e.pexp_loc, walk ctx e))
+            Option.map actual ~f:(fun e -> (site_of_location e.pexp_loc, value_of e))
           in
           (* An absent parameter is left alone while the application is partial; once the closure
              fires, an absent optional is its default, whose tagged sources the parameter already
@@ -1557,6 +1653,9 @@ and apply ctx ~site ~callee_name closure arguments =
           List.iter parameter.names ~f:(fun name ->
               match actual with
               | None -> if fires then table := (name, None) :: !table
+              | Some actual when Option.is_some (valued actual) ->
+                  (* Walked elsewhere: the whole argument for every name, no population named. *)
+                  table := (name, Option.map resolved_actual ~f:Fn.id) :: !table
               | Some actual -> (
                   let parts =
                     projected_arguments parameter actual
@@ -1649,16 +1748,56 @@ and apply ctx ~site ~callee_name closure arguments =
             })
       in
       let body = substitute_all closure.body in
+      (* A deferred application whose parameter this call supplies with a function is made now, on
+         the arguments as they were walked; one on a parameter still unsupplied waits on. *)
+      let calls =
+        List.filter_map closure.calls ~f:(fun call ->
+            let call_arguments =
+              List.map call.call_arguments ~f:(fun (label, expr, provenance) ->
+                  (label, expr, substitute_all provenance))
+            in
+            match replacement call.applied with
+            | None -> Some { call with call_arguments }
+            | Some None -> None
+            | Some (Some (_, actual)) ->
+                Option.iter actual.closure ~f:(fun function_ ->
+                    let valued expr =
+                      List.find_map call_arguments ~f:(fun (_, written, provenance) ->
+                          if phys_equal written expr then Some provenance else None)
+                    in
+                    (* Named by the function argument the parameter received, where it is a binding
+                       in scope; otherwise by the helper that made the call. *)
+                    let callee_name =
+                      List.find_map assignments ~f:(fun (parameter, argument) ->
+                          if
+                            phys_equal parameter.slot call.applied
+                            || List.exists parameter.names ~f:(phys_equal call.applied)
+                          then
+                            match argument with
+                            | Supplied e | Unknown e ->
+                                Option.bind (Read.longident_of e) ~f:(fun path ->
+                                    let name = String.concat ~sep:"." path in
+                                    Option.map (lookup ctx.env name) ~f:(fun _ -> name))
+                            | Absent -> None
+                          else None)
+                      |> fun named -> Option.first_some named callee_name
+                    in
+                    ignore
+                      (apply ~valued ctx ~site:call.call_site ~callee_name function_
+                         (List.map call_arguments ~f:(fun (label, expr, _) -> (label, expr)))
+                        : provenance));
+                None)
+      in
       if fires then (
         let helper = if closure.native then None else callee_name in
         List.iter claims ~f:(emit ctx ~site ~helper);
         match (leftover, body.closure) with
         | [], _ -> body
         | leftover, Some returned ->
-            apply ctx ~site ~callee_name returned
+            apply ~valued ctx ~site ~callee_name returned
               (List.map leftover ~f:(fun argument -> (Asttypes.Nolabel, argument)))
         | _ :: _, None ->
-            List.iter leftover ~f:(discard ctx);
+            List.iter leftover ~f:discard_unless_valued;
             body)
       else
         let remaining =
@@ -1673,6 +1812,7 @@ and apply ctx ~site ~callee_name closure arguments =
                  {
                    parameters = remaining;
                    claims;
+                   calls;
                    body;
                    native = false;
                    format = false;
@@ -1700,9 +1840,15 @@ and scan_structure ctx items =
           ignore (module_exports ctx pmb_expr : binding list);
           (env, exports)
       | Pstr_recmodule bindings ->
-          List.iter bindings ~f:(fun binding ->
-              ignore (module_exports ctx binding.pmb_expr : binding list));
-          (env, exports)
+          let nested =
+            List.concat_map bindings ~f:(fun binding ->
+                match binding.pmb_name.txt with
+                | Some name -> module_exports ctx binding.pmb_expr |> prefix_bindings name
+                | None ->
+                    ignore (module_exports ctx binding.pmb_expr : binding list);
+                    [])
+          in
+          (nested @ env, nested @ exports)
       | Pstr_open declaration ->
           let opened = module_exports ctx declaration.popen_expr in
           (opened @ env, exports)
@@ -1762,7 +1908,7 @@ and module_exports ctx module_expr =
 (** Every [Verdict] claim [structure] fires, in source order, each with the sources its claimed
     Boolean can rest on. *)
 let claims structure =
-  let ctx = { env = []; pending = ref []; found = ref [] } in
+  let ctx = { env = []; pending = ref []; found = ref []; pending_calls = ref [] } in
   ignore (scan_structure ctx structure : binding list * binding list);
   List.rev !(ctx.found)
   |> List.dedup_and_sort ~compare:(fun a b ->
