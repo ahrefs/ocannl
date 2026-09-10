@@ -5,6 +5,7 @@ bc: the minor output axis carries block-level parallelism wherever the geometry 
 bc: the j-blocking detector rejects the CPU pipelines, which block the row axis instead: true
 bc: every unfused GPU seed compiles and computes correctly: true
 bc: tuned batched head matches the reference: true
+bc: the tuning search reports exactly once: true
 bc: the tuning census records no companion-coverage decline: true
 bc: reduction-over-j companion refutes the GPU family pre-proposal: true
 bc: a foreign seed replayed against the companion routine still raises the decline: true

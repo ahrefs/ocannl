@@ -1242,6 +1242,50 @@ let () = check false true|ocaml},
 let forward a b = check a b
 let () = forward true false|ocaml},
       [ "check" ] );
+    (* staging#681 round 3: constructor payloads; locally rebound builtins; bound aggregates handed
+       to a destructured parameter; a claim function selected by control flow. *)
+    ( "refuses a quantifier carried in a constructor payload and matched out",
+      {ocaml|let result = Ok (List.for_all rows ~f:Fn.id)
+let () = match result with Ok ok -> Verdict.p "all rows pass" ok | Error _ -> ()|ocaml},
+      [ "result" ] );
+    ( "accepts a negated quantifier carried in a constructor payload",
+      {ocaml|let result = Ok (not (List.for_all rows ~f:Fn.id))
+let () = match result with Ok differs -> Verdict.p "some row fails" differs | Error _ -> ()|ocaml},
+      [] );
+    ( "reads a constructor pattern's payload exactly against a matching constructor",
+      {ocaml|let () =
+  Verdict.p "the constant passes"
+    (match Ok (true, List.for_all rows ~f:Fn.id) with Ok (ok, _) -> ok | Error _ -> false)|ocaml},
+      [] );
+    ( "does not read a locally bound not as the Boolean primitive",
+      {ocaml|let not _ = List.for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" (not ())|ocaml},
+      [ "not" ] );
+    ( "does not read a locally bound fst as a projection",
+      {ocaml|let fst _ = List.for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" (fst (true, true))|ocaml},
+      [ "fst" ] );
+    ( "does not let a bound aggregate's witness cover a sibling formal",
+      {ocaml|let check (guarded, tested) =
+  Verdict.p "all rows pass" ((not (List.is_empty guarded)) && List.for_all tested ~f:Fn.id)
+let pair = (nonempty, empty)
+let () = check pair|ocaml},
+      [ "check" ] );
+    ( "accepts a literal tuple argument whose witness and quantifier share the actual",
+      {ocaml|let check (guarded, tested) =
+  Verdict.p "all rows pass" ((not (List.is_empty guarded)) && List.for_all tested ~f:Fn.id)
+let () = check (rows, rows)|ocaml},
+      [] );
+    ( "refuses a quantifier passed to a native claim selected by control flow",
+      {ocaml|let check = if verbose then Verdict.p else Verdict.claim
+let () = check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a quantifier passed to a wrapper selected by a match",
+      {ocaml|let loud ok = Verdict.p "all rows pass" ok
+let quiet ok = Verdict.claim "all rows pass" ok
+let check = match mode with `Loud -> loud | `Quiet -> quiet
+let () = check (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "check" ] );
   ]
 
 (* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round

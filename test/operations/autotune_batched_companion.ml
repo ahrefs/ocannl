@@ -228,8 +228,10 @@ let () =
   let got = Context.get_values ctx y.Tensor.value in
   p_all2 "bc: tuned batched head matches the reference" got expected ~f:(fun a b ->
       Float.(abs (a - b) < 1e-3));
-  (* The census is derived from the reports the search produced, and quantified over them: a claim
-     over zero reports would call the census clean without having inspected one. *)
+  (* Exactly one report, then its census: the callback contract is a claim of its own, and the
+     census is quantified over the reports, so a claim over zero reports cannot call it clean
+     without having inspected one. *)
+  p "bc: the tuning search reports exactly once" (List.length !reports = 1);
   p_empty "bc: the tuning census records no companion-coverage decline" ~over:!reports
     (List.concat_map !reports ~f:(fun r ->
          List.filter r.Autotune.declines ~f:(fun d ->

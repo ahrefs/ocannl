@@ -235,6 +235,15 @@ refuses a quantifier reaching a dynamically formatted claim through a partial ap
 refuses a quantified condition selecting constant wrapper arguments: true
 accepts a quantified condition selecting inverted constant wrapper arguments: true
 defers a quantified condition through a wrapper that forwards its arguments: true
+refuses a quantifier carried in a constructor payload and matched out: true
+accepts a negated quantifier carried in a constructor payload: true
+reads a constructor pattern's payload exactly against a matching constructor: true
+does not read a locally bound not as the Boolean primitive: true
+does not read a locally bound fst as a projection: true
+does not let a bound aggregate's witness cover a sibling formal: true
+accepts a literal tuple argument whose witness and quantifier share the actual: true
+refuses a quantifier passed to a native claim selected by control flow: true
+refuses a quantifier passed to a wrapper selected by a match: true
 the shipping ratchet process refuses the planted helper fixture: true
 the shipping ratchet process refuses a quantifier written directly in a native claim: true
 refuses a stale quantified-helper exemption: true

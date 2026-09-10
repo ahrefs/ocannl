@@ -132,7 +132,11 @@ and origin =
           known until the closure is applied, so the decision is deferred: once the actual argument
           is that constant, the sources are the value's own; once it is the other, they are gone. *)
 
-and closure = Quantifier_function of quantifier_partial | Function of function_closure
+and closure =
+  | Quantifier_function of quantifier_partial
+  | Function of function_closure
+  | Alternatives of closure list
+      (** A function selected by control flow: applying it applies every alternative. *)
 
 and quantifier_partial = {
   kind : quantifier_kind;
@@ -177,6 +181,37 @@ and label = Label_slot of binding | Label_expr of expression
 
 (* ---------------------------------------------------------------------------------------------- *)
 (* Views and their algebra. *)
+
+(* [f] applied to every function a closure could be: a quantifier function is left alone, and a
+   function selected by control flow is mapped through. *)
+let rec map_functions closure ~f =
+  match closure with
+  | Quantifier_function _ -> closure
+  | Function function_closure -> Function (f function_closure)
+  | Alternatives closures -> Alternatives (List.map closures ~f:(map_functions ~f))
+
+(* The functions a value selected by control flow could be, flattened, each once, and bounded:
+   alternatives multiply through every application, and a bound keeps a long chain of
+   function-returning branches from turning the walk exponential. Past the bound the first few stand
+   for the rest, which loses precision loudly (an alternative not applied fires no claim) only in
+   code shaped like a dispatch table of dispatch tables. *)
+let alternatives_bound = 4
+
+let select_closures closures =
+  let rec flatten = function
+    | Alternatives closures -> List.concat_map closures ~f:flatten
+    | closure -> [ closure ]
+  in
+  let distinct =
+    List.concat_map closures ~f:flatten
+    |> List.fold ~init:[] ~f:(fun seen closure ->
+        if List.exists seen ~f:(phys_equal closure) then seen else closure :: seen)
+    |> List.rev
+  in
+  match List.take distinct alternatives_bound with
+  | [] -> None
+  | [ closure ] -> Some closure
+  | closures -> Some (Alternatives closures)
 
 let no_populations = Set.empty (module String)
 let empty_view = { sources = []; witnesses = no_populations }
@@ -343,11 +378,15 @@ let alternatives cases =
             Some value
         | _ -> None)
   in
+  (* A function chosen by control flow is every function it could be. *)
+  let closure =
+    select_closures (List.filter_map cases ~f:(fun alternative -> alternative.outcome.closure))
+  in
   (* Every alternative returning the same constant is that constant: what steered between them never
      reaches the value. *)
   match agreed with
   | Some value -> constant value
-  | None -> { when_true = at true; when_false = at false; constant = None; closure = None }
+  | None -> { when_true = at true; when_false = at false; constant = None; closure }
 
 (* ---------------------------------------------------------------------------------------------- *)
 (* Syntax helpers. *)
@@ -516,6 +555,10 @@ let rec binding_parts pattern expression =
       }
       :: binding_parts inner expression
   | Ppat_constraint (inner, _), _ -> binding_parts inner expression
+  | ( Ppat_construct ({ txt = pattern_constructor; _ }, Some (_, inner)),
+      Pexp_construct ({ txt = expression_constructor; _ }, Some payload) )
+    when Poly.equal pattern_constructor expression_constructor ->
+      binding_parts inner payload
   | Ppat_tuple patterns, Pexp_tuple expressions when List.length patterns = List.length expressions
     ->
       List.map2_exn patterns expressions ~f:binding_parts |> List.concat
@@ -583,17 +626,16 @@ let rec own binding provenance =
     when_false = own_view provenance.when_false;
     constant = provenance.constant;
     closure =
-      Option.map provenance.closure ~f:(function
-        | Quantifier_function _ as q -> q
-        | Function closure ->
-            Function
-              {
-                closure with
-                body = own binding closure.body;
-                claims =
-                  List.map closure.claims ~f:(fun claim ->
-                      { claim with value = own_view claim.value });
-              });
+      Option.map provenance.closure
+        ~f:
+          (map_functions ~f:(fun closure ->
+               {
+                 closure with
+                 body = own binding closure.body;
+                 claims =
+                   List.map closure.claims ~f:(fun claim ->
+                       { claim with value = own_view claim.value });
+               }));
   }
 
 let parameter_provenance binding =
@@ -746,6 +788,13 @@ let module_path module_expr =
   | Pmod_ident { txt; _ } -> Option.try_with (fun () -> Longident.flatten_exn txt)
   | _ -> None
 
+(* A parameter's population is marked, so that a quantifier over it is known to wait for the actual
+   argument: [name@P<position>], against [name@<position>] for any other binder. *)
+let population_of_binding binding =
+  Printf.sprintf "%s@%s%d" binding.name (if binding.final then "P" else "") binding.site.position
+
+let parameter_population key = String.is_substring key ~substring:"@P"
+
 (* Population identity: the name a quantifier ranges over, resolved to the binder that introduced
    it. A filtered view is its own population, still anchored to its source's binder: collapsing it
    to the source lets a non-empty [filter rows ~f:p1] guard a distinct, empty [filter rows
@@ -753,9 +802,10 @@ let module_path module_expr =
 let rec population ctx expr =
   let expr = normalize expr in
   match expr.pexp_desc with
-  | Pexp_ident { txt = Longident.Lident name; _ } ->
-      let scope = Option.value_map (lookup ctx.env name) ~default:0 ~f:(fun b -> b.site.position) in
-      Some (Printf.sprintf "%s@%d" name scope)
+  | Pexp_ident { txt = Longident.Lident name; _ } -> (
+      match lookup ctx.env name with
+      | Some binding -> Some (population_of_binding binding)
+      | None -> Some (Printf.sprintf "%s@%d" name 0))
   | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> population ctx inner
   | Pexp_apply (callee, arguments)
     when is_collection_call callee ~member:"filter"
@@ -785,14 +835,22 @@ type argument = Supplied of expression | Unknown of expression | Absent
 let projected_arguments parameter (argument : expression) =
   List.concat_map parameter.patterns ~f:(fun pattern -> binding_parts pattern argument)
 
-let mentions_parameter view =
-  List.exists view.sources ~f:(fun source ->
-      match source.origin with Parameter _ | Steering _ -> true | Quantifier _ -> false)
-
-let parameter_of source =
+(* Whether a source waits on a parameter: a parameter's own value, a steering decision on it, or a
+   quantifier over a parameter population. [among] restricts the question to given parameters. *)
+let waits_on_parameter ?among source =
+  let binding_counts parameter =
+    Option.value_map among ~default:true ~f:(List.exists ~f:(phys_equal parameter))
+  in
+  let population_counts key =
+    parameter_population key
+    && Option.value_map among ~default:true ~f:(fun mine ->
+        List.exists mine ~f:(fun parameter -> String.equal key (population_of_binding parameter)))
+  in
   match source.origin with
-  | Parameter { parameter; _ } | Steering { parameter; _ } -> Some parameter
-  | Quantifier _ -> None
+  | Parameter { parameter; _ } | Steering { parameter; _ } -> binding_counts parameter
+  | Quantifier { populations; _ } -> Set.exists populations ~f:population_counts
+
+let mentions_parameter view = List.exists view.sources ~f:(fun s -> waits_on_parameter s)
 
 let rec substitute_sources ~(replacement : binding -> (site * provenance) option option)
     ~populations sources =
@@ -841,8 +899,22 @@ let rec substitute_sources ~(replacement : binding -> (site * provenance) option
 
 let substitute_view ~replacement ~populations view =
   let sources = substitute_sources ~replacement ~populations view.sources in
+  (* A view that is exactly one parameter IS the actual argument, witnesses included: a native
+     claim's value slot, a wrapper forwarding a parameter. A parameter beside other sources keeps
+     only its own witnesses, since the value may have rested on the others. *)
+  let inherited =
+    match view.sources with
+    | [ { origin = Parameter { parameter; positive }; _ } ] -> (
+        match replacement parameter with
+        | Some (Some (_, actual)) -> (view_at actual positive).witnesses
+        | Some None | None -> no_populations)
+    | _ -> no_populations
+  in
   let witnesses =
-    Set.map (module String) view.witnesses ~f:(fun p -> Option.value (populations p) ~default:p)
+    Set.map
+      (module String)
+      (Set.union view.witnesses inherited)
+      ~f:(fun p -> Option.value (populations p) ~default:p)
   in
   settle { sources; witnesses }
 
@@ -852,15 +924,14 @@ let rec substitute ~replacement ~populations provenance =
     when_false = substitute_view ~replacement ~populations provenance.when_false;
     constant = provenance.constant;
     closure =
-      Option.map provenance.closure ~f:(function
-        | Quantifier_function _ as q -> q
-        | Function closure ->
-            Function
-              {
-                closure with
-                body = substitute ~replacement ~populations closure.body;
-                claims = List.map closure.claims ~f:(substitute_claim ~replacement ~populations);
-              });
+      Option.map provenance.closure
+        ~f:
+          (map_functions ~f:(fun closure ->
+               {
+                 closure with
+                 body = substitute ~replacement ~populations closure.body;
+                 claims = List.map closure.claims ~f:(substitute_claim ~replacement ~populations);
+               }));
   }
 
 and substitute_claim ~replacement ~populations claim =
@@ -890,17 +961,16 @@ let drop_via labels provenance =
         when_false = drop_view provenance.when_false;
         constant = provenance.constant;
         closure =
-          Option.map provenance.closure ~f:(function
-            | Quantifier_function _ as q -> q
-            | Function closure ->
-                Function
-                  {
-                    closure with
-                    body = drop closure.body;
-                    claims =
-                      List.map closure.claims ~f:(fun claim ->
-                          { claim with value = drop_view claim.value });
-                  });
+          Option.map provenance.closure
+            ~f:
+              (map_functions ~f:(fun closure ->
+                   {
+                     closure with
+                     body = drop closure.body;
+                     claims =
+                       List.map closure.claims ~f:(fun claim ->
+                           { claim with value = drop_view claim.value });
+                   }));
       }
     in
     drop provenance
@@ -926,8 +996,8 @@ let rec walk ctx expr =
       constant (Option.value_exn (literal_bool expr))
   | Pexp_construct ({ txt = Longident.Lident "Some"; _ }, Some payload) -> walk ctx payload
   | Pexp_construct (_, Some payload) ->
-      discard ctx payload;
-      nothing
+      (* [Ok b], [`Tag b], [Some b]: the payload's provenance, which a match will read out. *)
+      walk ctx payload
   | Pexp_construct (_, None) | Pexp_constant _ -> nothing
   | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> walk ctx inner
   | Pexp_field (record, _) ->
@@ -1040,7 +1110,7 @@ and new_bindings ctx recursive bindings =
       force added;
       added
   | Recursive ->
-      let rounds = Int.max 1 (List.length parts) in
+      let rounds = Int.min 2 (Int.max 1 (List.length parts)) in
       let rec close remaining siblings =
         if remaining = 0 then siblings
         else
@@ -1175,11 +1245,7 @@ and function_closure ctx parameters body =
         (params @ [ param ], alternatives alternatives_)
   in
   let mine = List.concat_map params ~f:(fun p -> p.slot :: p.names) in
-  let mentions_mine claim =
-    List.exists claim.value.sources ~f:(fun source ->
-        Option.value_map (parameter_of source) ~default:false ~f:(fun parameter ->
-            List.exists mine ~f:(phys_equal parameter)))
-  in
+  let mentions_mine claim = List.exists claim.value.sources ~f:(waits_on_parameter ~among:mine) in
   let own_claims, outer = List.partition_tf !pending ~f:mentions_mine in
   ctx.pending := outer @ !(ctx.pending);
   {
@@ -1199,20 +1265,29 @@ and function_closure ctx parameters body =
 
 and application ctx expr callee arguments =
   let site = site_of_location expr.pexp_loc in
+  (* A builtin is read as itself only where nothing in scope has rebound its name. *)
+  let builtin name =
+    is_name callee name
+    && not
+         (Option.exists (Read.longident_of callee) ~f:(fun path ->
+              Option.is_some (lookup ctx.env (String.concat ~sep:"." path))))
+  in
   match arguments with
-  | [ (Asttypes.Nolabel, argument) ] when is_name callee "not" -> negate (walk ctx argument)
-  | [ (Asttypes.Nolabel, argument) ] when is_transparent_boolean_wrapper callee -> walk ctx argument
-  | [ (Asttypes.Nolabel, argument) ] when is_name callee "fst" || is_name callee "snd" ->
+  | [ (Asttypes.Nolabel, argument) ] when builtin "not" -> negate (walk ctx argument)
+  | [ (Asttypes.Nolabel, argument) ] when is_transparent_boolean_wrapper callee && builtin "id" ->
       walk ctx argument
-  | [ (Asttypes.Nolabel, left); (Asttypes.Nolabel, right) ] when is_name callee "&&" ->
+  | [ (Asttypes.Nolabel, argument) ] when builtin "fst" || builtin "snd" -> walk ctx argument
+  | [ (Asttypes.Nolabel, left); (Asttypes.Nolabel, right) ] when builtin "&&" ->
       let left = walk ctx left in
       let right = walk ctx right in
       conjunction left right
-  | [ (Asttypes.Nolabel, left); (Asttypes.Nolabel, right) ] when is_name callee "||" ->
+  | [ (Asttypes.Nolabel, left); (Asttypes.Nolabel, right) ] when builtin "||" ->
       let left = walk ctx left in
       let right = walk ctx right in
       disjunction left right
-  | [ (Asttypes.Nolabel, left); (Asttypes.Nolabel, right) ] when is_boolean_comparison callee ->
+  | [ (Asttypes.Nolabel, left); (Asttypes.Nolabel, right) ]
+    when is_boolean_comparison callee
+         && List.exists [ "="; "<>"; "equal"; "!="; ">"; ">="; "<"; "<=" ] ~f:builtin ->
       comparison ctx callee left right
   | _ -> (
       let function_ = walk ctx callee in
@@ -1272,6 +1347,15 @@ and comparison ctx callee left right =
 
 and apply ctx ~site ~callee_name closure arguments =
   match closure with
+  | Alternatives closures ->
+      (* Applied to every function it could be; what comes back is any of the results. *)
+      let results =
+        List.map closures ~f:(fun closure -> apply ctx ~site ~callee_name closure arguments)
+      in
+      {
+        (aggregate results) with
+        closure = select_closures (List.filter_map results ~f:(fun result -> result.closure));
+      }
   | Quantifier_function partial ->
       (* A quantifier is a value once every population and, but for [is_empty], its predicate have
          arrived; until then it stays the function it is, with what it has received. *)
@@ -1443,16 +1527,50 @@ and apply ctx ~site ~callee_name closure arguments =
                         site_of_location (List.hd_exn parts).part_expression.pexp_loc
                       in
                       table := (name, Some (argument_site, combined)) :: !table;
+                      (* Only a component the pattern aligned exactly names the formal's population:
+                         a bound aggregate hands every formal the whole argument, and one identity
+                         for two formals would let one's witness cover the other. *)
                       List.iter parts ~f:(fun part ->
-                          Option.iter (population ctx part.part_expression) ~f:(fun key ->
-                              populations :=
-                                (Printf.sprintf "%s@%d" name.name name.site.position, key)
-                                :: !populations)))));
+                          if part.exact then
+                            Option.iter (population ctx part.part_expression) ~f:(fun key ->
+                                populations := (population_of_binding name, key) :: !populations)))));
       let replacement parameter =
         List.find_map !table ~f:(fun (binding, actual) ->
             if phys_equal binding parameter then Some actual else None)
       in
       let population_of key = List.Assoc.find !populations key ~equal:String.equal in
+      (* A parameter this application supplied is a parameter no longer: its population, where no
+         component of the actual named one, is opaque from here on -- no witness can cover it, and
+         no later call will substitute it. *)
+      let sealed =
+        List.filter_map assignments ~f:(fun (parameter, argument) ->
+            match argument with
+            | Supplied _ | Unknown _ -> Some parameter
+            | Absent -> if fires then Some parameter else None)
+        |> List.concat_map ~f:(fun parameter -> parameter.slot :: parameter.names)
+        |> List.map ~f:population_of_binding
+      in
+      (* A population is mapped by its scope: the formal's own name becomes the actual's identity,
+         and a view over the formal (a filter) keeps its text under the actual's scope. *)
+      let scope_of key =
+        Option.value_map (String.rsplit2 key ~on:'@') ~default:("", key) ~f:Fn.id
+      in
+      let population_of key =
+        match population_of key with
+        | Some mapped -> Some mapped
+        | None -> (
+            let text, scope = scope_of key in
+            match
+              List.find_map !populations ~f:(fun (formal, actual) ->
+                  let _, formal_scope = scope_of formal in
+                  if String.equal formal_scope scope then Some (snd (scope_of actual)) else None)
+            with
+            | Some actual_scope -> Some (text ^ "@" ^ actual_scope)
+            | None ->
+                if List.exists sealed ~f:(fun formal -> String.equal (snd (scope_of formal)) scope)
+                then Some (text ^ "@applied" ^ String.drop_prefix scope 1)
+                else None)
+      in
       let substitute_all provenance =
         substitute ~replacement ~populations:population_of provenance |> drop_via supplied_labels
       in
