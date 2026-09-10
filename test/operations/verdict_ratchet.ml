@@ -46,7 +46,8 @@
    witness that the population is there. That reader is [Test_utils.Verdict_provenance]
    (gh-ocannl-931): one model of scope and polarity for every syntax form, which this file only
    consumes, through [quantified_claims]. What stays here is the policy -- the exemption lists,
-   their one-key/one-definition contract, the diagnostics and the controls that pin the model.
+   their one-key/one-definition contract, the diagnostics, the controls and the syntax coverage
+   matrix that pins the model.
 
    Every synthetic control below earned its place by a mutation run -- the scanner mechanism it pins
    disabled, this alias re-run, exactly that control failing. The manifest of those runs, one row
@@ -1155,6 +1156,457 @@ let () = Verdict.p "all rows pass" close|ocaml},
       [] );
   ]
 
+(* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round
+   found; what they cannot show is which CROSS-PRODUCTS nobody wrote. This generates them: every
+   value form the provenance layer models (a binding, a helper, a wrapper parameter, a match, a
+   module, an open, a callback, an application), under every quantifier kind, under every way of
+   spelling the quantifier's function, in the four cases each pairing wants -- the refusal (the
+   quantifier reaching the claim in its vacuous polarity, which must be refused), the inverted
+   spelling (accepted: the polarity is the wrong one for vacuity), the guarded spelling (accepted:
+   the population is witnessed), and the shadowed spelling (accepted: a constant intercepts the
+   value where the form binds a name, or an ignored sibling receives it). A missing combination is a
+   cell nobody added, visible in the grid the golden prints, rather than a shape found by review.
+
+   Each family is a template placing the quantified value [v] -- and [helper], the name the refusal
+   must report. The four cases differ only in [v] and, for the shadowed case, the template's
+   [shadow]; the expected verdict follows from the case, never from the family, which is what keeps
+   the matrix data rather than a second list of hand-decided controls. *)
+type matrix_family = {
+  family : string;
+  reports : string;  (** The name the refusal case must report. *)
+  place : string -> string;
+  shadow : string -> string;
+}
+
+let matrix_families =
+  [
+    {
+      family = "a native claim's argument";
+      reports = "the claim";
+      place = (fun v -> Printf.sprintf "let () = Verdict.p \"the claim\" (%s)" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf "let () = Verdict.p \"the claim\" (let v = %s in let v = true in v)" v);
+    };
+    {
+      family = "a structure-level binding";
+      reports = "v";
+      place = (fun v -> Printf.sprintf "let v = %s\nlet () = Verdict.p \"the claim\" v" v);
+      shadow =
+        (fun v -> Printf.sprintf "let v = %s\nlet v = true\nlet () = Verdict.p \"the claim\" v" v);
+    };
+    {
+      family = "a binding local to the argument";
+      reports = "v";
+      place = (fun v -> Printf.sprintf "let () = Verdict.p \"the claim\" (let v = %s in v)" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf "let () = Verdict.p \"the claim\" (let v = %s in let v = true in v)" v);
+    };
+    {
+      family = "a helper applied to the population";
+      reports = "h";
+      place =
+        (fun v -> Printf.sprintf "let h rows = %s\nlet () = Verdict.p \"the claim\" (h rows)" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let h rows = %s\nlet h rows = true\nlet () = Verdict.p \"the claim\" (h rows)" v);
+    };
+    {
+      family = "a function-case helper";
+      reports = "h";
+      place =
+        (fun v ->
+          Printf.sprintf "let h = function rows -> %s\nlet () = Verdict.p \"the claim\" (h rows)" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let h = function rows -> %s\n\
+             let h = function rows -> true\n\
+             let () = Verdict.p \"the claim\" (h rows)"
+            v);
+    };
+    {
+      family = "a wrapper's positional parameter";
+      reports = "check";
+      place =
+        (fun v -> Printf.sprintf "let check ok = Verdict.p \"the claim\" ok\nlet () = check (%s)" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let check ok = let ok = true in Verdict.p \"the claim\" ok\nlet () = check (%s)" v);
+    };
+    {
+      family = "a wrapper's labelled parameter";
+      reports = "check";
+      place =
+        (fun v ->
+          Printf.sprintf "let check ~ok = Verdict.p \"the claim\" ok\nlet () = check ~ok:(%s)" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let check ~ok = let ok = true in Verdict.p \"the claim\" ok\nlet () = check ~ok:(%s)" v);
+    };
+    {
+      family = "a wrapper's optional default";
+      reports = "ok";
+      place =
+        (fun v ->
+          Printf.sprintf "let check ?(ok = %s) () = Verdict.p \"the claim\" ok\nlet () = check ()" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let check ?(ok = %s) () = Verdict.p \"the claim\" ok\nlet () = check ~ok:true ()" v);
+    };
+    {
+      family = "a destructured wrapper parameter";
+      reports = "check";
+      place =
+        (fun v ->
+          Printf.sprintf "let check (_, ok) = Verdict.p \"the claim\" ok\nlet () = check (true, %s)"
+            v);
+      shadow =
+        (fun v ->
+          Printf.sprintf "let check (_, ok) = Verdict.p \"the claim\" ok\nlet () = check (%s, true)"
+            v);
+    };
+    {
+      family = "a match forwarding its scrutinee";
+      reports = "v";
+      place =
+        (fun v ->
+          Printf.sprintf "let v = match %s with ok -> ok\nlet () = Verdict.p \"the claim\" v" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf "let v = match %s with _ -> true\nlet () = Verdict.p \"the claim\" v" v);
+    };
+    {
+      family = "a Boolean constructor match";
+      reports = "v";
+      place =
+        (fun v ->
+          Printf.sprintf
+            "let v = match %s with true -> true | false -> false\n\
+             let () = Verdict.p \"the claim\" v"
+            v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let v = match %s with true -> true | false -> true\nlet () = Verdict.p \"the claim\" v"
+            v);
+    };
+    {
+      family = "an if condition";
+      reports = "v";
+      place =
+        (fun v ->
+          Printf.sprintf "let v = if %s then true else false\nlet () = Verdict.p \"the claim\" v" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf "let v = if %s then true else true\nlet () = Verdict.p \"the claim\" v" v);
+    };
+    {
+      family = "a match guard";
+      reports = "v";
+      place =
+        (fun v ->
+          Printf.sprintf
+            "let v = match () with () when %s -> true | () -> false\n\
+             let () = Verdict.p \"the claim\" v"
+            v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let v = match () with () when %s -> true | () -> true\n\
+             let () = Verdict.p \"the claim\" v"
+            v);
+    };
+    {
+      family = "a protected try body";
+      reports = "v";
+      place =
+        (fun v ->
+          Printf.sprintf "let v = try %s with _ -> false\nlet () = Verdict.p \"the claim\" v" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let v = try %s with _ -> false\nlet v = true\nlet () = Verdict.p \"the claim\" v" v);
+    };
+    {
+      family = "a member of a local module";
+      reports = "M.v";
+      place =
+        (fun v ->
+          Printf.sprintf "module M = struct let v = %s end\nlet () = Verdict.p \"the claim\" M.v" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "module M = struct let v = %s let v = true end\nlet () = Verdict.p \"the claim\" M.v" v);
+    };
+    {
+      family = "a member reached through open";
+      reports = "v";
+      place =
+        (fun v ->
+          Printf.sprintf
+            "module M = struct let v = %s end\nopen M\nlet () = Verdict.p \"the claim\" v" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "module M = struct let v = %s end\n\
+             open M\n\
+             let v = true\n\
+             let () = Verdict.p \"the claim\" v"
+            v);
+    };
+    {
+      family = "a member reached through a local open";
+      reports = "v";
+      place =
+        (fun v ->
+          Printf.sprintf
+            "module M = struct let v = %s end\nlet () = let open M in Verdict.p \"the claim\" v" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "module M = struct let v = %s end\n\
+             let () = let open M in let v = true in Verdict.p \"the claim\" v"
+            v);
+    };
+    {
+      family = "a claim inside a callback";
+      reports = "check";
+      place =
+        (fun v ->
+          Printf.sprintf
+            "let check ok = List.iter [ () ] ~f:(fun () -> Verdict.p \"the claim\" ok)\n\
+             let () = check (%s)"
+            v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let check ok = List.iter [ true ] ~f:(fun ok -> Verdict.p \"the claim\" ok)\n\
+             let () = check (%s)"
+            v);
+    };
+    {
+      family = "an immediately invoked function";
+      reports = "the claim";
+      place = (fun v -> Printf.sprintf "let () = Verdict.p \"the claim\" ((fun () -> %s) ())" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let () = Verdict.p \"the claim\" ((fun () -> let v = %s in let v = true in v) ())" v);
+    };
+    {
+      family = "a partially applied native claim";
+      reports = "check";
+      place = (fun v -> Printf.sprintf "let check = Verdict.p \"the claim\"\nlet () = check (%s)" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let check = Verdict.p \"the claim\"\nlet check b = ignore b\nlet () = check (%s)" v);
+    };
+    {
+      family = "a pipeline into the claim";
+      reports = "the claim";
+      place = (fun v -> Printf.sprintf "let () = (%s) |> Verdict.p \"the claim\"" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf "let () = (let v = %s in let v = true in v) |> Verdict.p \"the claim\"" v);
+    };
+    {
+      family = "a sequence's tail";
+      reports = "v";
+      place =
+        (fun v -> Printf.sprintf "let v = (ignore rows; %s)\nlet () = Verdict.p \"the claim\" v" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf "let v = (ignore (%s); true)\nlet () = Verdict.p \"the claim\" v" v);
+    };
+    {
+      family = "a tuple component destructured at binding";
+      reports = "v";
+      place =
+        (fun v -> Printf.sprintf "let v, _ = (%s, true)\nlet () = Verdict.p \"the claim\" v" v);
+      shadow =
+        (fun v -> Printf.sprintf "let _, v = (%s, true)\nlet () = Verdict.p \"the claim\" v" v);
+    };
+    {
+      family = "a comparison with true";
+      reports = "v";
+      place = (fun v -> Printf.sprintf "let v = (%s) = true\nlet () = Verdict.p \"the claim\" v" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf "let v = (%s) = true\nlet v = true\nlet () = Verdict.p \"the claim\" v" v);
+    };
+  ]
+
+(* A quantifier kind, as a value over the free population [rows] (and [want]), given the text that
+   names its function. *)
+type matrix_quantifier = {
+  quantifier : string;
+  container : string;
+  member : string;
+  refusal : string -> string;
+  inverted : string -> string;
+  guarded : string -> string;
+}
+
+let matrix_quantifiers =
+  [
+    {
+      quantifier = "for_all";
+      container = "List";
+      member = "for_all";
+      refusal = (fun q -> q ^ " rows ~f:Fn.id");
+      inverted = (fun q -> "not (" ^ q ^ " rows ~f:Fn.id)");
+      guarded = (fun q -> "(not (List.is_empty rows)) && " ^ q ^ " rows ~f:Fn.id");
+    };
+    {
+      quantifier = "for_all2_exn";
+      container = "Array";
+      member = "for_all2_exn";
+      refusal = (fun q -> q ^ " rows want ~f:Float.equal");
+      inverted = (fun q -> "not (" ^ q ^ " rows want ~f:Float.equal)");
+      guarded = (fun q -> "(not (Array.is_empty rows)) && " ^ q ^ " rows want ~f:Float.equal");
+    };
+    {
+      quantifier = "is_empty";
+      container = "List";
+      member = "is_empty";
+      refusal = (fun q -> q ^ " rows");
+      inverted = (fun q -> "not (" ^ q ^ " rows)");
+      guarded = (fun q -> "List.length rows > 0 && " ^ q ^ " rows");
+    };
+    {
+      quantifier = "exists";
+      container = "List";
+      member = "exists";
+      refusal = (fun q -> "not (" ^ q ^ " rows ~f:Fn.id)");
+      inverted = (fun q -> q ^ " rows ~f:Fn.id");
+      guarded = (fun q -> "(not (List.is_empty rows)) && not (" ^ q ^ " rows ~f:Fn.id)");
+    };
+  ]
+
+(* How the quantifier's function is spelled: qualified, through a structure-level open, through a
+   module alias, or through a local open (gh-ocannl-908 item 6). *)
+type matrix_spelling = {
+  spelling : string;
+  prelude : string -> string;
+  call : string -> string -> string;
+}
+
+let matrix_spellings =
+  [
+    {
+      spelling = "qualified";
+      prelude = (fun _ -> "");
+      call = (fun container member -> container ^ "." ^ member);
+    };
+    {
+      spelling = "opened";
+      prelude = (fun container -> "open " ^ container ^ "\n");
+      call = (fun _ member -> member);
+    };
+    {
+      spelling = "aliased";
+      prelude = (fun container -> "module Q = " ^ container ^ "\n");
+      call = (fun _ member -> "Q." ^ member);
+    };
+    {
+      spelling = "local open";
+      prelude = (fun _ -> "");
+      call = (fun container member -> container ^ ".(" ^ member ^ ")");
+    };
+  ]
+
+type matrix_case = Refusal | Inverted | Guarded | Shadowed
+
+let matrix_cases = [ Refusal; Inverted; Guarded; Shadowed ]
+
+let matrix_case_letter = function
+  | Refusal -> 'R'
+  | Inverted -> 'I'
+  | Guarded -> 'G'
+  | Shadowed -> 'S'
+
+let matrix_source family quantifier spelling case =
+  let q = spelling.call quantifier.container quantifier.member in
+  let value, place =
+    match case with
+    | Refusal -> (quantifier.refusal q, family.place)
+    | Inverted -> (quantifier.inverted q, family.place)
+    | Guarded -> (quantifier.guarded q, family.place)
+    | Shadowed -> (quantifier.refusal q, family.shadow)
+  in
+  spelling.prelude quantifier.container ^ place value
+
+let matrix_expected family = function
+  | Refusal -> [ family.reports ]
+  | Inverted | Guarded | Shadowed -> []
+
+(* Runs the matrix: per family, the grid row and whether every cell read as expected. A cell that
+   does not parse is a fixture defect and reads as unexpected too, named on stderr. *)
+let run_syntax_matrix () =
+  List.map matrix_families ~f:(fun family ->
+      let cells =
+        List.concat_map matrix_quantifiers ~f:(fun quantifier ->
+            List.map matrix_spellings ~f:(fun spelling ->
+                String.of_char_list
+                  (List.map matrix_cases ~f:(fun case ->
+                       let source = matrix_source family quantifier spelling case in
+                       let found =
+                         match Sources.structure_of source with
+                         | structure ->
+                             quantified_claims structure
+                             |> List.map ~f:(fun claim -> claim.helper)
+                             |> List.dedup_and_sort ~compare:String.compare
+                         | exception exception_ ->
+                             eprintf "syntax matrix: %s / %s / %s does not parse: %s\n%s\n"
+                               family.family quantifier.quantifier spelling.spelling
+                               (Exn.to_string exception_) source;
+                             [ "<does not parse>" ]
+                       in
+                       let expected = matrix_expected family case in
+                       if List.equal String.equal found expected then matrix_case_letter case
+                       else (
+                         eprintf "syntax matrix: %s / %s / %s / %c expected [%s], found [%s]:\n%s\n"
+                           family.family quantifier.quantifier spelling.spelling
+                           (matrix_case_letter case)
+                           (String.concat ~sep:", " expected)
+                           (String.concat ~sep:", " found) source;
+                         '!')))))
+      in
+      let ok = List.for_all cells ~f:(fun cell -> not (String.contains cell '!')) in
+      (family.family, String.concat ~sep:" " cells, ok))
+
+let matrix_claim_label family = family ^ ": every syntax matrix cell reads as expected"
+
+let print_syntax_matrix rows =
+  printf
+    "\n\
+     Syntax coverage matrix (gh-ocannl-931): each value form, under each quantifier and each\n\
+     spelling of its function (%s), in the four cases\n\
+     refusal / inverted / guarded / shadowed. A cell reads its case letter (R I G S) where the\n\
+     verdict is as the case requires -- refused for R, accepted for the rest -- and `!` otherwise.\n\n"
+    (String.concat ~sep:", " (List.map matrix_spellings ~f:(fun s -> s.spelling)));
+  let width =
+    List.fold matrix_families ~init:0 ~f:(fun acc f -> Int.max acc (String.length f.family))
+  in
+  let group = (4 * List.length matrix_spellings) + List.length matrix_spellings - 1 in
+  printf "  %-*s  %s\n" width ""
+    (String.concat ~sep:"  "
+       (List.map matrix_quantifiers ~f:(fun q -> Printf.sprintf "%-*s" group q.quantifier))
+    |> String.rstrip);
+  List.iter rows ~f:(fun (family, cells, _) ->
+      let groups =
+        List.chunks_of (String.split cells ~on:' ') ~length:(List.length matrix_spellings)
+        |> List.map ~f:(String.concat ~sep:" ")
+      in
+      printf "  %-*s  %s\n" width family (String.concat ~sep:"  " groups))
+
 (* The shadowing fixtures, which the control list above cannot state: those cases compare the helper
    NAMES a source yields, and a name shadowed by a second definition of itself appears once in that
    comparison however many bodies carry it. What has to be pinned here is the opposite -- that one
@@ -1594,8 +2046,12 @@ let () =
     @ run_shadowed_quantified_controls ()
     @ run_colliding_site_controls ()
   in
+  let matrix_rows = run_syntax_matrix () in
+  let matrix_results =
+    List.map matrix_rows ~f:(fun (family, _, ok) -> (matrix_claim_label family, ok))
+  in
   let control_results =
-    control_results @ run_manifest_controls ~manifest ~controls:control_results
+    control_results @ run_manifest_controls ~manifest ~controls:(control_results @ matrix_results)
   in
   let per_directory = Hashtbl.create (module String) in
   printf
@@ -1706,6 +2162,8 @@ let () =
   else List.iter exempt_quantified_helpers ~f:(fun (key, why) -> printf "  %s -- %s\n" key why);
   printf "\nSynthetic helper-rule controls:\n";
   List.iter control_results ~f:(fun (label, ok) -> Verdict.pf "%s" label ok);
+  print_syntax_matrix matrix_rows;
+  List.iter matrix_results ~f:(fun (label, ok) -> Verdict.pf "%s" label ok);
   let stale =
     Set.union
       (Set.diff (Set.of_list (module String) (List.map exempt_sites ~f:fst)) !exemptions_used)

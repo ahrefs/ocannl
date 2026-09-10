@@ -237,3 +237,44 @@ label they print is listed so the inventory the ratchet checks is complete.
   misspelled one phrase here and saw both claims report `false` with the missing label and the
   stale phrase named on stderr: a quantified-list row (`value` to `result` in a round-5 row,
   `20260905T004841Z-76830`) and a family label (`20260905T005706Z-70118`).
+
+## The syntax coverage matrix
+
+The hand-written controls each pin one shape a review round found. What none of them can show is
+the cross-product nobody wrote, so the ratchet also generates one (gh-ocannl-931): every value form
+below, under each quantifier kind (`for_all`, `for_all2_exn`, `is_empty`, negated `exists`) and each
+spelling of the quantifier's function (qualified, through a structure-level `open`, through a
+module alias, through a local open), in four cases -- the refusal (the quantifier reaching the
+claim in its vacuous polarity, which must be refused), the inverted spelling (accepted), the guarded
+spelling (accepted), and the shadowed spelling (accepted: a constant intercepts the value where the
+form binds a name, or an ignored sibling receives it). The grid prints in the golden, a cell
+reading its case letter where the verdict is as the case requires and `!` otherwise, and each row
+is one claim, labelled by its value form. The families are the data table `matrix_families` in the
+ratchet; adding a form there adds its row here and its claim to the golden.
+
+| Value form | Claim |
+|---|---|
+| the argument of a native claim | `a native claim's argument: every syntax matrix cell reads as expected` |
+| a structure-level binding | `a structure-level binding: every syntax matrix cell reads as expected` |
+| a binding local to the argument | `a binding local to the argument: every syntax matrix cell reads as expected` |
+| a helper applied to the population | `a helper applied to the population: every syntax matrix cell reads as expected` |
+| a helper written with function-case syntax | `a function-case helper: every syntax matrix cell reads as expected` |
+| a wrapper's positional parameter | `a wrapper's positional parameter: every syntax matrix cell reads as expected` |
+| a wrapper's labelled parameter | `a wrapper's labelled parameter: every syntax matrix cell reads as expected` |
+| a wrapper's optional default | `a wrapper's optional default: every syntax matrix cell reads as expected` |
+| a destructured (tuple) wrapper parameter | `a destructured wrapper parameter: every syntax matrix cell reads as expected` |
+| a match forwarding its scrutinee through a variable pattern | `a match forwarding its scrutinee: every syntax matrix cell reads as expected` |
+| a complementary Boolean constructor match | `a Boolean constructor match: every syntax matrix cell reads as expected` |
+| an if condition selecting literal branches | `an if condition: every syntax matrix cell reads as expected` |
+| a match guard selecting literal results | `a match guard: every syntax matrix cell reads as expected` |
+| a protected try body | `a protected try body: every syntax matrix cell reads as expected` |
+| a member of a local module, qualified | `a member of a local module: every syntax matrix cell reads as expected` |
+| the same member through a structure-level open | `a member reached through open: every syntax matrix cell reads as expected` |
+| the same member through a local open | `a member reached through a local open: every syntax matrix cell reads as expected` |
+| a claim fired inside a callback of the wrapper | `a claim inside a callback: every syntax matrix cell reads as expected` |
+| an immediately invoked function | `an immediately invoked function: every syntax matrix cell reads as expected` |
+| a partially applied native claim | `a partially applied native claim: every syntax matrix cell reads as expected` |
+| a pipeline into the claim | `a pipeline into the claim: every syntax matrix cell reads as expected` |
+| the tail of a sequence | `a sequence's tail: every syntax matrix cell reads as expected` |
+| a tuple component destructured at binding | `a tuple component destructured at binding: every syntax matrix cell reads as expected` |
+| a comparison with true | `a comparison with true: every syntax matrix cell reads as expected` |

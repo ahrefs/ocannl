@@ -241,6 +241,61 @@ every control phrase in the mutation-run manifest names a live control: true
 synthetic control labels are pairwise distinct: true
 every control phrase appears once in the mutation-run manifest: true
 
+Syntax coverage matrix (gh-ocannl-931): each value form, under each quantifier and each
+spelling of its function (qualified, opened, aliased, local open), in the four cases
+refusal / inverted / guarded / shadowed. A cell reads its case letter (R I G S) where the
+verdict is as the case requires -- refused for R, accepted for the rest -- and `!` otherwise.
+
+                                             for_all              for_all2_exn         is_empty             exists
+  a native claim's argument                  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a structure-level binding                  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a binding local to the argument            RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a helper applied to the population         RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a function-case helper                     RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a wrapper's positional parameter           RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a wrapper's labelled parameter             RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a wrapper's optional default               RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a destructured wrapper parameter           RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a match forwarding its scrutinee           RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a Boolean constructor match                RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  an if condition                            RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a match guard                              RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a protected try body                       RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a member of a local module                 RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a member reached through open              RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a member reached through a local open      RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a claim inside a callback                  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  an immediately invoked function            RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a partially applied native claim           RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a pipeline into the claim                  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a sequence's tail                          RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a tuple component destructured at binding  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a comparison with true                     RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+a native claim's argument: every syntax matrix cell reads as expected: true
+a structure-level binding: every syntax matrix cell reads as expected: true
+a binding local to the argument: every syntax matrix cell reads as expected: true
+a helper applied to the population: every syntax matrix cell reads as expected: true
+a function-case helper: every syntax matrix cell reads as expected: true
+a wrapper's positional parameter: every syntax matrix cell reads as expected: true
+a wrapper's labelled parameter: every syntax matrix cell reads as expected: true
+a wrapper's optional default: every syntax matrix cell reads as expected: true
+a destructured wrapper parameter: every syntax matrix cell reads as expected: true
+a match forwarding its scrutinee: every syntax matrix cell reads as expected: true
+a Boolean constructor match: every syntax matrix cell reads as expected: true
+an if condition: every syntax matrix cell reads as expected: true
+a match guard: every syntax matrix cell reads as expected: true
+a protected try body: every syntax matrix cell reads as expected: true
+a member of a local module: every syntax matrix cell reads as expected: true
+a member reached through open: every syntax matrix cell reads as expected: true
+a member reached through a local open: every syntax matrix cell reads as expected: true
+a claim inside a callback: every syntax matrix cell reads as expected: true
+an immediately invoked function: every syntax matrix cell reads as expected: true
+a partially applied native claim: every syntax matrix cell reads as expected: true
+a pipeline into the claim: every syntax matrix cell reads as expected: true
+a sequence's tail: every syntax matrix cell reads as expected: true
+a tuple component destructured at binding: every syntax matrix cell reads as expected: true
+a comparison with true: every syntax matrix cell reads as expected: true
+
 every test source decides its claims through Verdict: true
 every quantified binding used by a claim witnesses a non-empty population: true
 the scan found every literal planted for it: true
