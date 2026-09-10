@@ -1400,6 +1400,37 @@ end = struct
 end
 let () = Checks.check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
       [ "all rows pass" ] );
+    (* staging#681 round 7: a deferred call's result; a predicate deciding its quantifier; let
+       operators. *)
+    ( "refuses a quantifier returned through a function parameter applied for its result",
+      {ocaml|let apply all xs = all xs ~f:Fn.id
+let () = Verdict.p "all rows pass" (apply List.for_all rows)|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a negated quantifier returned through a function parameter applied for its result",
+      {ocaml|let apply all xs = not (all xs ~f:Fn.id)
+let () = Verdict.p "some row fails" (apply List.for_all rows)|ocaml},
+      [] );
+    ( "refuses a vacuous quantifier inside the predicate deciding its quantifier",
+      {ocaml|let () =
+  Verdict.p "some group passes" (List.exists groups ~f:(fun rows -> List.for_all rows ~f:Fn.id))|ocaml},
+      [ "some group passes" ] );
+    ( "accepts a guarded quantifier inside the predicate deciding its quantifier",
+      {ocaml|let () =
+  Verdict.p "some group passes"
+    (List.exists groups ~f:(fun rows -> (not (List.is_empty rows)) && List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "refuses a quantifier bound by a let operator",
+      {ocaml|let ( let* ) x f = f x
+let () =
+  let* ok = List.for_all rows ~f:Fn.id in
+  Verdict.p "all rows pass" ok|ocaml},
+      [ "ok" ] );
+    ( "accepts a negated quantifier bound by a let operator",
+      {ocaml|let ( let* ) x f = f x
+let () =
+  let* differs = not (List.for_all rows ~f:Fn.id) in
+  Verdict.p "some row fails" differs|ocaml},
+      [] );
   ]
 
 (* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round

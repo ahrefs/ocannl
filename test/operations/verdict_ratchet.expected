@@ -264,6 +264,12 @@ refuses a quantifier claimed through a wrapper passed as an argument: true
 refuses a quantifier spelled in Stdlib's argument order: true
 accepts a negated quantifier spelled in Stdlib's argument order: true
 refuses a quantifier passed to a recursive module's claim wrapper: true
+refuses a quantifier returned through a function parameter applied for its result: true
+accepts a negated quantifier returned through a function parameter applied for its result: true
+refuses a vacuous quantifier inside the predicate deciding its quantifier: true
+accepts a guarded quantifier inside the predicate deciding its quantifier: true
+refuses a quantifier bound by a let operator: true
+accepts a negated quantifier bound by a let operator: true
 the shipping ratchet process refuses the planted helper fixture: true
 the shipping ratchet process refuses a quantifier written directly in a native claim: true
 refuses a stale quantified-helper exemption: true

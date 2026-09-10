@@ -150,6 +150,10 @@ and quantifier_partial = {
   stdlib : bool;
       (** The [Stdlib] spelling, whose predicate is the first positional argument, against [Base]'s
           labelled [~f]. *)
+  predicate_sources : source list * source list;
+      (** What the predicate's own value can rest on, true and false, its parameters sealed: an
+          element that satisfies the predicate vacuously decides the quantifier as an empty
+          population would. *)
 }
 
 and deferred_call = {
@@ -157,6 +161,9 @@ and deferred_call = {
   call_site : site;
   call_arguments : (Asttypes.arg_label * expression * provenance) list;
       (** The arguments as written and as walked where they were written. *)
+  result : binding;
+      (** A placeholder standing for the call's value in the body, substituted by the result once
+          the call is made. *)
 }
 
 and function_closure = {
@@ -795,7 +802,10 @@ let format_claim ~site format_expression =
 let quantifier_function ?(stdlib = false) kind =
   {
     nothing with
-    closure = Some (Quantifier_function { kind; populations = []; predicate = false; stdlib });
+    closure =
+      Some
+        (Quantifier_function
+           { kind; populations = []; predicate = false; stdlib; predicate_sources = ([], []) });
   }
 
 let quantifier kind populations ~written =
@@ -1122,6 +1132,16 @@ let rec walk ctx expr =
       ignore (module_exports ctx module_expr : binding list);
       walk ctx body
   | Pexp_letexception (_, body) -> walk ctx body
+  | Pexp_letop { let_; ands; body } ->
+      (* `let* x = e in body`: the operator is not modelled, and [x] conservatively receives [e]'s
+         provenance, as it would under an identity operator. *)
+      let env =
+        List.fold (let_ :: ands) ~init:ctx.env ~f:(fun env binding ->
+            let ctx = { ctx with env } in
+            bind_pattern ctx binding.pbop_pat
+              ~producer:(Some (binding.pbop_exp, walk ctx binding.pbop_exp)))
+      in
+      walk { ctx with env } body
   | Pexp_tuple items -> aggregate (List.map items ~f:(walk ctx))
   | Pexp_record (fields, base) ->
       aggregate
@@ -1361,13 +1381,16 @@ and function_closure ctx parameters body =
         (params @ [ param ], alternatives alternatives_)
   in
   let mine = List.concat_map params ~f:(fun p -> p.slot :: p.names) in
-  let mentions_mine claim = List.exists claim.value.sources ~f:(waits_on_parameter ~among:mine) in
-  let own_claims, outer = List.partition_tf !pending ~f:mentions_mine in
-  ctx.pending := outer @ !(ctx.pending);
   let own_calls, outer_calls =
     List.partition_tf !pending_calls ~f:(fun call -> List.exists mine ~f:(phys_equal call.applied))
   in
   ctx.pending_calls := outer_calls @ !(ctx.pending_calls);
+  (* A deferred call's result placeholder is this closure's as well: a claim resting on it waits for
+     the call that makes it. *)
+  let mine = mine @ List.map own_calls ~f:(fun call -> call.result) in
+  let mentions_mine claim = List.exists claim.value.sources ~f:(waits_on_parameter ~among:mine) in
+  let own_claims, outer = List.partition_tf !pending ~f:mentions_mine in
+  ctx.pending := outer @ !(ctx.pending);
   {
     nothing with
     closure =
@@ -1430,9 +1453,10 @@ and application ctx expr callee arguments =
                 List.map arguments ~f:(fun (label, argument) ->
                     (label, argument, walk ctx argument))
               in
+              let result = parameter_binding ~name:"" ~site in
               ctx.pending_calls :=
-                { applied; call_site = site; call_arguments } :: !(ctx.pending_calls);
-              nothing
+                { applied; call_site = site; call_arguments; result } :: !(ctx.pending_calls);
+              parameter_provenance result
           | None ->
               List.iter arguments ~f:(fun (_, argument) -> discard ctx argument);
               nothing))
@@ -1515,25 +1539,65 @@ and apply ?(valued = fun _ -> None) ctx ~site ~callee_name closure arguments =
       in
       let positional = if predicate_first then List.tl_exn positional else positional in
       let populations = partial.populations @ List.map positional ~f:population_unless_valued in
-      let predicate =
-        partial.predicate || predicate_first
-        || List.exists arguments ~f:(fun (label, _) ->
-            match label with Asttypes.Labelled "f" | Optional "f" -> true | _ -> false)
+      let predicate_argument =
+        if predicate_first then List.hd (unlabelled arguments)
+        else
+          List.find_map arguments ~f:(fun (label, argument) ->
+              match label with Asttypes.Labelled "f" | Optional "f" -> Some argument | _ -> None)
+      in
+      let predicate = partial.predicate || Option.is_some predicate_argument in
+      (* What the predicate's own value rests on, its parameters sealed: a group whose rows are
+         empty satisfies [fun rows -> List.for_all rows ~f] as an empty population would. *)
+      let predicate_sources =
+        match Option.bind predicate_argument ~f:(fun argument -> (value_of argument).closure) with
+        | Some (Function predicate) ->
+            let own = List.concat_map predicate.parameters ~f:(fun p -> p.slot :: p.names) in
+            let sealed = List.map own ~f:scope_entry in
+            let replacement binding =
+              if List.exists own ~f:(phys_equal binding) then Some None else None
+            in
+            let populations key =
+              let scopes = population_scopes key in
+              if List.exists scopes ~f:(List.mem sealed ~equal:String.equal) then
+                Some
+                  (population_key ~text:(population_text key)
+                     (List.map scopes ~f:(fun entry ->
+                          if List.mem sealed entry ~equal:String.equal then
+                            String.substr_replace_first entry ~pattern:"=P" ~with_:"=applied"
+                          else entry)))
+              else None
+            in
+            let at view =
+              (substitute_view ~replacement ~populations view).sources
+              |> List.map ~f:(fun source -> { source with necessary = false })
+            in
+            (at predicate.body.when_true, at predicate.body.when_false)
+        | _ -> partial.predicate_sources
       in
       let complete =
         List.length populations >= quantifier_arity partial.kind
         && (predicate || match partial.kind with Is_empty -> true | _ -> false)
       in
       if complete then
-        quantifier partial.kind
-          (List.take populations (quantifier_arity partial.kind)
-          |> List.filter_opt
-          |> Set.of_list (module String))
-          ~written:site
+        let value =
+          quantifier partial.kind
+            (List.take populations (quantifier_arity partial.kind)
+            |> List.filter_opt
+            |> Set.of_list (module String))
+            ~written:site
+        in
+        let with_predicate view sources = settle { view with sources = view.sources @ sources } in
+        let on_true, on_false = predicate_sources in
+        {
+          value with
+          when_true = with_predicate value.when_true on_true;
+          when_false = with_predicate value.when_false on_false;
+        }
       else
         {
           nothing with
-          closure = Some (Quantifier_function { partial with populations; predicate });
+          closure =
+            Some (Quantifier_function { partial with populations; predicate; predicate_sources });
         }
   | Function closure when closure.format -> (
       (* The format literal, once supplied, says how many arguments precede the value. *)
@@ -1726,6 +1790,53 @@ and apply ?(valued = fun _ -> None) ctx ~site ~callee_name closure arguments =
       let substitute_all provenance =
         substitute ~replacement ~populations:population_of provenance |> drop_via supplied_labels
       in
+      (* A deferred application whose parameter this call supplies with a function is made now, on
+         the arguments as they were walked, and its result stands in for the placeholder the body
+         refers to; one on a parameter still unsupplied waits on. Before the claims and the body are
+         substituted, since they may rest on those results. *)
+      let calls =
+        List.filter_map closure.calls ~f:(fun call ->
+            let call_arguments =
+              List.map call.call_arguments ~f:(fun (label, expr, provenance) ->
+                  (label, expr, substitute_all provenance))
+            in
+            match replacement call.applied with
+            | None -> Some { call with call_arguments }
+            | Some None ->
+                table := (call.result, None) :: !table;
+                None
+            | Some (Some (_, actual)) ->
+                (match actual.closure with
+                | None -> table := (call.result, None) :: !table
+                | Some function_ ->
+                    let valued expr =
+                      List.find_map call_arguments ~f:(fun (_, written, provenance) ->
+                          if phys_equal written expr then Some provenance else None)
+                    in
+                    (* Named by the function argument the parameter received, where it is a binding
+                       in scope; otherwise by the helper that made the call. *)
+                    let callee_name =
+                      List.find_map assignments ~f:(fun (parameter, argument) ->
+                          if
+                            phys_equal parameter.slot call.applied
+                            || List.exists parameter.names ~f:(phys_equal call.applied)
+                          then
+                            match argument with
+                            | Supplied e | Unknown e ->
+                                Option.bind (Read.longident_of e) ~f:(fun path ->
+                                    let name = String.concat ~sep:"." path in
+                                    Option.map (lookup ctx.env name) ~f:(fun _ -> name))
+                            | Absent -> None
+                          else None)
+                      |> fun named -> Option.first_some named callee_name
+                    in
+                    let result =
+                      apply ~valued ctx ~site:call.call_site ~callee_name function_
+                        (List.map call_arguments ~f:(fun (label, expr, _) -> (label, expr)))
+                    in
+                    table := (call.result, Some (call.call_site, result)) :: !table);
+                None)
+      in
       let claims =
         List.map closure.claims ~f:(fun claim ->
             let claim = substitute_claim ~replacement ~populations:population_of claim in
@@ -1748,46 +1859,6 @@ and apply ?(valued = fun _ -> None) ctx ~site ~callee_name closure arguments =
             })
       in
       let body = substitute_all closure.body in
-      (* A deferred application whose parameter this call supplies with a function is made now, on
-         the arguments as they were walked; one on a parameter still unsupplied waits on. *)
-      let calls =
-        List.filter_map closure.calls ~f:(fun call ->
-            let call_arguments =
-              List.map call.call_arguments ~f:(fun (label, expr, provenance) ->
-                  (label, expr, substitute_all provenance))
-            in
-            match replacement call.applied with
-            | None -> Some { call with call_arguments }
-            | Some None -> None
-            | Some (Some (_, actual)) ->
-                Option.iter actual.closure ~f:(fun function_ ->
-                    let valued expr =
-                      List.find_map call_arguments ~f:(fun (_, written, provenance) ->
-                          if phys_equal written expr then Some provenance else None)
-                    in
-                    (* Named by the function argument the parameter received, where it is a binding
-                       in scope; otherwise by the helper that made the call. *)
-                    let callee_name =
-                      List.find_map assignments ~f:(fun (parameter, argument) ->
-                          if
-                            phys_equal parameter.slot call.applied
-                            || List.exists parameter.names ~f:(phys_equal call.applied)
-                          then
-                            match argument with
-                            | Supplied e | Unknown e ->
-                                Option.bind (Read.longident_of e) ~f:(fun path ->
-                                    let name = String.concat ~sep:"." path in
-                                    Option.map (lookup ctx.env name) ~f:(fun _ -> name))
-                            | Absent -> None
-                          else None)
-                      |> fun named -> Option.first_some named callee_name
-                    in
-                    ignore
-                      (apply ~valued ctx ~site:call.call_site ~callee_name function_
-                         (List.map call_arguments ~f:(fun (label, expr, _) -> (label, expr)))
-                        : provenance));
-                None)
-      in
       if fires then (
         let helper = if closure.native then None else callee_name in
         List.iter claims ~f:(emit ctx ~site ~helper);
