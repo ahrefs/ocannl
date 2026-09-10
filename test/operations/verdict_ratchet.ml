@@ -1286,6 +1286,33 @@ let quiet ok = Verdict.claim "all rows pass" ok
 let check = match mode with `Loud -> loud | `Quiet -> quiet
 let () = check (List.for_all rows ~f:Fn.id)|ocaml},
       [ "check" ] );
+    (* staging#681 round 4: polymorphic variant payloads; a rebound pipeline operator; the recursive
+       group's two rounds against a three-sibling chain and a cycle. *)
+    ( "refuses a quantifier carried in a polymorphic variant payload and matched out",
+      {ocaml|let result = `Ok (List.for_all rows ~f:Fn.id)
+let () = match result with `Ok ok -> Verdict.p "all rows pass" ok | `Error -> ()|ocaml},
+      [ "result" ] );
+    ( "reads a variant pattern's payload exactly against a matching tag",
+      {ocaml|let () =
+  Verdict.p "the constant passes"
+    (match `Ok (true, List.for_all rows ~f:Fn.id) with `Ok (ok, _) -> ok | `Error -> false)|ocaml},
+      [] );
+    ( "does not read a locally bound pipeline operator as the builtin",
+      {ocaml|let ( |> ) _ _ = List.for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" (() |> ())|ocaml},
+      [ "|>" ] );
+    ( "refuses a quantifier reached through a three-sibling recursive chain",
+      {ocaml|let rec first xs = middle xs
+and middle xs = last xs
+and last xs = List.for_all xs ~f:Fn.id
+let () = Verdict.p "all rows pass" (first rows)|ocaml},
+      [ "last" ] );
+    ( "refuses a quantifier reached around a recursive cycle",
+      {ocaml|let rec first xs = if stop then middle xs else last xs
+and middle xs = first xs
+and last xs = List.for_all xs ~f:Fn.id
+let () = Verdict.p "all rows pass" (first rows)|ocaml},
+      [ "last" ] );
   ]
 
 (* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round

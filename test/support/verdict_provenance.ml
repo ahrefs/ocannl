@@ -476,18 +476,19 @@ let is_transparent_boolean_wrapper callee =
 (* Pipeline and application operators are rewritten to the plain application they stand for, so `xs
    |> List.for_all ~f`, `x |> not`, `x |> Bool.equal true` and `not @@ x` need no case of their own
    anywhere below. *)
-let rec normalize expr =
+let rec normalize ~rebound expr =
+  let operator name callee = is_name callee name && not (rebound callee) in
   match expr.pexp_desc with
   | Pexp_apply (pipe, [ (Asttypes.Nolabel, value); (Asttypes.Nolabel, function_) ])
-    when is_name pipe "|>" ->
-      applied function_ value ~loc:expr.pexp_loc
+    when operator "|>" pipe ->
+      applied ~rebound function_ value ~loc:expr.pexp_loc
   | Pexp_apply (apply, [ (Asttypes.Nolabel, function_); (Asttypes.Nolabel, value) ])
-    when is_name apply "@@" ->
-      applied function_ value ~loc:expr.pexp_loc
+    when operator "@@" apply ->
+      applied ~rebound function_ value ~loc:expr.pexp_loc
   | _ -> expr
 
-and applied function_ value ~loc =
-  let function_ = normalize function_ in
+and applied ~rebound function_ value ~loc =
+  let function_ = normalize ~rebound function_ in
   match function_.pexp_desc with
   | Pexp_apply (callee, arguments) ->
       {
@@ -555,6 +556,9 @@ let rec binding_parts pattern expression =
       }
       :: binding_parts inner expression
   | Ppat_constraint (inner, _), _ -> binding_parts inner expression
+  | Ppat_variant (pattern_tag, Some inner), Pexp_variant (expression_tag, Some payload)
+    when String.equal pattern_tag expression_tag ->
+      binding_parts inner payload
   | ( Ppat_construct ({ txt = pattern_constructor; _ }, Some (_, inner)),
       Pexp_construct ({ txt = expression_constructor; _ }, Some payload) )
     when Poly.equal pattern_constructor expression_constructor ->
@@ -799,8 +803,12 @@ let parameter_population key = String.is_substring key ~substring:"@P"
    it. A filtered view is its own population, still anchored to its source's binder: collapsing it
    to the source lets a non-empty [filter rows ~f:p1] guard a distinct, empty [filter rows
    ~f:p2]. *)
+let rebound_in env callee =
+  Option.exists (Read.longident_of callee) ~f:(fun path ->
+      Option.is_some (lookup env (String.concat ~sep:"." path)))
+
 let rec population ctx expr =
-  let expr = normalize expr in
+  let expr = normalize ~rebound:(rebound_in ctx.env) expr in
   match expr.pexp_desc with
   | Pexp_ident { txt = Longident.Lident name; _ } -> (
       match lookup ctx.env name with
@@ -821,7 +829,7 @@ let rec population ctx expr =
   | _ -> None
 
 let length_population ctx expr =
-  match (normalize expr).pexp_desc with
+  match (normalize ~rebound:(rebound_in ctx.env) expr).pexp_desc with
   | Pexp_apply (callee, arguments) when is_collection_call callee ~member:"length" ->
       List.hd (unlabelled arguments) |> Option.bind ~f:(population ctx)
   | _ -> None
@@ -989,12 +997,13 @@ let emit ctx ~site ~helper claim =
   else ctx.found := claim :: !(ctx.found)
 
 let rec walk ctx expr =
-  let expr = normalize expr in
+  let expr = normalize ~rebound:(rebound_in ctx.env) expr in
   match expr.pexp_desc with
   | Pexp_ident _ -> resolve ctx expr
   | Pexp_construct ({ txt = Longident.Lident ("true" | "false"); _ }, None) ->
       constant (Option.value_exn (literal_bool expr))
   | Pexp_construct ({ txt = Longident.Lident "Some"; _ }, Some payload) -> walk ctx payload
+  | Pexp_variant (_, Some payload) -> walk ctx payload
   | Pexp_construct (_, Some payload) ->
       (* [Ok b], [`Tag b], [Some b]: the payload's provenance, which a match will read out. *)
       walk ctx payload
@@ -1090,8 +1099,9 @@ and new_bindings ctx recursive bindings =
   (* `let () = …` and `let _ = …` bind no name, and are read for the claims they fire. *)
   List.iter bindings ~f:(fun binding ->
       if List.is_empty (pattern_names binding.pvb_pat) then discard ctx binding.pvb_expr);
+  (* [env] is read when a body is walked, not when the binding is made, so a recursive group can put
+     its own members in scope before any of them is forced. *)
   let make env =
-    let body_ctx = { ctx with env } in
     List.concat_map bindings ~f:(fun binding ->
         binding_parts binding.pvb_pat binding.pvb_expr
         |> List.map ~f:(fun part ->
@@ -1099,22 +1109,26 @@ and new_bindings ctx recursive bindings =
               ~span:(span_of_location binding.pvb_expr.pexp_loc)
               ~name:part.part_name
               ~site:(site_of_location part.part_location)
-              (Pending (fun () -> walk body_ctx part.part_expression))))
+              (Pending (fun () -> walk { ctx with env = env () } part.part_expression))))
   in
   let force bindings =
     List.iter bindings ~f:(fun binding -> ignore (resolve_binding binding : provenance))
   in
   match recursive with
   | Asttypes.Nonrecursive ->
-      let added = make ctx.env in
+      let added = make (fun () -> ctx.env) in
       force added;
       added
   | Recursive ->
+      (* Each round sees the previous round's siblings resolved and its own siblings pending, so a
+         forward reference resolves on demand and only a cycle needs the second round. *)
       let rounds = Int.min 2 (Int.max 1 (List.length parts)) in
-      let rec close remaining siblings =
-        if remaining = 0 then siblings
+      let rec close remaining previous =
+        if remaining = 0 then previous
         else
-          let added = make (List.rev_append siblings ctx.env) in
+          let own = ref [] in
+          let added = make (fun () -> List.rev_append !own (List.rev_append previous ctx.env)) in
+          own := added;
           force added;
           close (remaining - 1) added
       in
@@ -1266,12 +1280,7 @@ and function_closure ctx parameters body =
 and application ctx expr callee arguments =
   let site = site_of_location expr.pexp_loc in
   (* A builtin is read as itself only where nothing in scope has rebound its name. *)
-  let builtin name =
-    is_name callee name
-    && not
-         (Option.exists (Read.longident_of callee) ~f:(fun path ->
-              Option.is_some (lookup ctx.env (String.concat ~sep:"." path))))
-  in
+  let builtin name = is_name callee name && not (rebound_in ctx.env callee) in
   match arguments with
   | [ (Asttypes.Nolabel, argument) ] when builtin "not" -> negate (walk ctx argument)
   | [ (Asttypes.Nolabel, argument) ] when is_transparent_boolean_wrapper callee && builtin "id" ->
