@@ -1158,6 +1158,38 @@ let () = Verdict.p "all rows pass" close|ocaml},
 let close = for_all rows ~f:Fn.id
 let () = Verdict.p "all rows pass" close|ocaml},
       [] );
+    (* staging#681 round 1: an unknown forwarded option keeps the default alive; a quantifier is a
+       value only once its populations and predicate have all arrived; a projection out of an
+       aggregate conservatively carries the aggregate. *)
+    ( "keeps a wrapper's default alive through an unknown forwarded option",
+      {ocaml|let check ?(ok = List.for_all rows ~f:Fn.id) () = Verdict.p "all rows pass" ok
+let use opt = check ?ok:opt ()
+let () = use None|ocaml},
+      [ "ok" ] );
+    ( "refuses a quantifier completed by a later predicate argument",
+      {ocaml|let all = List.for_all rows
+let () = Verdict.p "all rows pass" (all ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a for_all2_exn completed one population at a time",
+      {ocaml|let agree = Array.for_all2_exn got
+let () = Verdict.p "the values agree" (agree want ~f:Float.equal)|ocaml},
+      [ "the values agree" ] );
+    ( "does not treat a partially applied quantifier as a Boolean",
+      {ocaml|let all = List.for_all rows
+let () = Verdict.p "the constant passes" (let _pending = all in true)|ocaml},
+      [] );
+    ( "refuses a quantified field read from a record binding",
+      {ocaml|let result = { ok = List.for_all rows ~f:Fn.id; detail = info }
+let () = Verdict.p "all rows pass" result.ok|ocaml},
+      [ "result" ] );
+    ( "conservatively refuses a sibling field read from a quantified record binding",
+      {ocaml|let result = { ok = List.for_all rows ~f:Fn.id; detail = true }
+let () = Verdict.p "the detail holds" result.detail|ocaml},
+      [ "result" ] );
+    ( "refuses a quantified component read through fst",
+      {ocaml|let packed = (List.for_all rows ~f:Fn.id, info)
+let () = Verdict.p "all rows pass" (fst packed)|ocaml},
+      [ "packed" ] );
   ]
 
 (* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round
@@ -1436,6 +1468,21 @@ let matrix_families =
         (fun v -> Printf.sprintf "let v, _ = (%s, true)\nlet () = Verdict.p \"the claim\" v" v);
       shadow =
         (fun v -> Printf.sprintf "let _, v = (%s, true)\nlet () = Verdict.p \"the claim\" v" v);
+    };
+    {
+      family = "a field of a record binding";
+      reports = "r";
+      place =
+        (fun v ->
+          Printf.sprintf "let r = { ok = %s; detail = info }\nlet () = Verdict.p \"the claim\" r.ok"
+            v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let r = { ok = %s; detail = info }\n\
+             let r = { ok = true; detail = info }\n\
+             let () = Verdict.p \"the claim\" r.ok"
+            v);
     };
     {
       family = "a comparison with true";

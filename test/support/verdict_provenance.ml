@@ -127,7 +127,14 @@ and origin =
   | Quantifier of { kind : quantifier_kind; populations : Set.M(String).t }
   | Parameter of { parameter : binding; positive : bool }
 
-and closure = Quantifier_function of quantifier_kind | Function of function_closure
+and closure = Quantifier_function of quantifier_partial | Function of function_closure
+
+and quantifier_partial = {
+  kind : quantifier_kind;
+  populations : string option list;
+      (** The positional arguments supplied so far, each resolved to its population identity. *)
+  predicate : bool;  (** Whether [~f] has been supplied; [is_empty] takes none. *)
+}
 
 and function_closure = {
   parameters : parameter list;  (** The parameters not yet supplied, in order. *)
@@ -669,7 +676,11 @@ let format_claim ~site format_expression =
         loose = true;
       }
 
-let quantifier_function kind = { nothing with closure = Some (Quantifier_function kind) }
+let quantifier_function kind =
+  {
+    nothing with
+    closure = Some (Quantifier_function { kind; populations = []; predicate = false });
+  }
 
 let quantifier kind populations ~written =
   let source =
@@ -845,6 +856,10 @@ let rec walk ctx expr =
       nothing
   | Pexp_construct (_, None) | Pexp_constant _ -> nothing
   | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> walk ctx inner
+  | Pexp_field (record, _) ->
+      (* A projection reads one component the aggregate did not keep apart: conservatively the whole
+         record's sources, as [fst]/[snd] below and a destructuring of a bound aggregate. *)
+      walk ctx record
   | Pexp_let (recursive, bindings, body) -> walk { ctx with env = bind ctx recursive bindings } body
   | Pexp_sequence (setup, result) ->
       discard ctx setup;
@@ -1114,6 +1129,8 @@ and application ctx expr callee arguments =
   match arguments with
   | [ (Asttypes.Nolabel, argument) ] when is_name callee "not" -> negate (walk ctx argument)
   | [ (Asttypes.Nolabel, argument) ] when is_transparent_boolean_wrapper callee -> walk ctx argument
+  | [ (Asttypes.Nolabel, argument) ] when is_name callee "fst" || is_name callee "snd" ->
+      walk ctx argument
   | [ (Asttypes.Nolabel, left); (Asttypes.Nolabel, right) ] when is_name callee "&&" ->
       let left = walk ctx left in
       let right = walk ctx right in
@@ -1180,17 +1197,31 @@ and comparison ctx callee left right =
 
 and apply ctx ~site ~callee_name closure arguments =
   match closure with
-  | Quantifier_function kind -> (
+  | Quantifier_function partial ->
+      (* A quantifier is a value once every population and, but for [is_empty], its predicate have
+         arrived; until then it stays the function it is, with what it has received. *)
       List.iter arguments ~f:(fun (_, argument) -> discard ctx argument);
-      match unlabelled arguments with
-      | [] -> quantifier_function kind
-      | populations ->
-          let populations =
-            List.take populations (quantifier_arity kind)
-            |> List.filter_map ~f:(population ctx)
-            |> Set.of_list (module String)
-          in
-          quantifier kind populations ~written:site)
+      let populations = partial.populations @ List.map (unlabelled arguments) ~f:(population ctx) in
+      let predicate =
+        partial.predicate
+        || List.exists arguments ~f:(fun (label, _) ->
+            match label with Asttypes.Labelled "f" | Optional "f" -> true | _ -> false)
+      in
+      let complete =
+        List.length populations >= quantifier_arity partial.kind
+        && (predicate || match partial.kind with Is_empty -> true | _ -> false)
+      in
+      if complete then
+        quantifier partial.kind
+          (List.take populations (quantifier_arity partial.kind)
+          |> List.filter_opt
+          |> Set.of_list (module String))
+          ~written:site
+      else
+        {
+          nothing with
+          closure = Some (Quantifier_function { partial with populations; predicate });
+        }
   | Function closure when closure.format -> (
       (* The format literal, once supplied, says how many arguments precede the value. *)
       match

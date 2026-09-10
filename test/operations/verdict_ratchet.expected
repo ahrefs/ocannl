@@ -218,6 +218,13 @@ refuses a quantifier reached through a local open: true
 refuses a quantifier reached through a let-open of Array: true
 does not resolve an unqualified for_all with no open in scope: true
 keeps a local open of List inside its scope: true
+keeps a wrapper's default alive through an unknown forwarded option: true
+refuses a quantifier completed by a later predicate argument: true
+refuses a for_all2_exn completed one population at a time: true
+does not treat a partially applied quantifier as a Boolean: true
+refuses a quantified field read from a record binding: true
+conservatively refuses a sibling field read from a quantified record binding: true
+refuses a quantified component read through fst: true
 the shipping ratchet process refuses the planted helper fixture: true
 the shipping ratchet process refuses a quantifier written directly in a native claim: true
 refuses a stale quantified-helper exemption: true
@@ -271,6 +278,7 @@ verdict is as the case requires -- refused for R, accepted for the rest -- and `
   a pipeline into the claim                  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
   a sequence's tail                          RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
   a tuple component destructured at binding  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a field of a record binding                RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
   a comparison with true                     RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
 a native claim's argument: every syntax matrix cell reads as expected: true
 a structure-level binding: every syntax matrix cell reads as expected: true
@@ -295,6 +303,7 @@ a partially applied native claim: every syntax matrix cell reads as expected: tr
 a pipeline into the claim: every syntax matrix cell reads as expected: true
 a sequence's tail: every syntax matrix cell reads as expected: true
 a tuple component destructured at binding: every syntax matrix cell reads as expected: true
+a field of a record binding: every syntax matrix cell reads as expected: true
 a comparison with true: every syntax matrix cell reads as expected: true
 
 every test source decides its claims through Verdict: true
