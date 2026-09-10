@@ -40,9 +40,14 @@
    can sit in a file-local helper, with only [p "claim" (close got want)] left at the claim site.
    The gh-ocannl-729/746 sweeps could not find that shape by looking for the quantifier beside [p],
    and ten helpers carried the empty-population hole until a manual read found them. The second
-   reader below follows local bindings from a Verdict boolean back to [for_all], [for_all2_exn],
-   [is_empty], or a negated [exists], and requires the helper to make non-emptiness part of its
-   passing result.
+   reader follows a Verdict boolean back to [for_all], [for_all2_exn], [is_empty], or a negated
+   [exists] -- written directly in the claim's argument (gh-ocannl-908), or reached through any
+   binding, helper, wrapper, match, open or module between the two (gh-ocannl-887) -- and requires a
+   witness that the population is there. That reader is [Test_utils.Verdict_provenance]
+   (gh-ocannl-931): one model of scope and polarity for every syntax form, which this file only
+   consumes, through [quantified_claims]. What stays here is the policy -- the exemption lists,
+   their one-key/one-definition contract, the diagnostics, the controls and the syntax coverage
+   matrix that pins the model.
 
    Every synthetic control below earned its place by a mutation run -- the scanner mechanism it pins
    disabled, this alias re-run, exactly that control failing. The manifest of those runs, one row
@@ -57,1722 +62,68 @@ let printf = Test_utils.Refusal_control_manifest.printf
 module Scan = Test_utils.Verdict_scan
 module Dune = Test_utils.Dune_stanza_scan
 module Sources = Test_utils.Config_key_scan
-module Ast_traverse = Ppxlib.Ast_traverse
-module Asttypes = Ppxlib.Asttypes
-open Ppxlib.Parsetree
+module Provenance = Test_utils.Verdict_provenance
 
-type quantifier_kind = For_all | For_all2 | Is_empty | Not_exists
+type quantifier_kind = Provenance.quantifier_kind = For_all | For_all2 | Is_empty | Not_exists
 
-let quantifier_name = function
-  | For_all -> "for_all"
-  | For_all2 -> "for_all2_exn"
-  | Is_empty -> "is_empty"
-  | Not_exists -> "not exists"
+let quantifier_name = Provenance.quantifier_name
 
-type quantifier = { kind : quantifier_kind; populations : Set.M(String).t; sealed : bool }
-type claim_kind = P | Pf | Pass_fail | Claim | Claimf
+type definition_site = Provenance.site = { line : int; column : int; position : int }
 
-(* A definition's [position] is its absolute character offset, which no two bindings share; [line]
-   and [column] are for saying where it is. Identity has to be the offset: `let refused = … in`
-   twice in one expression, or two local scopes written on one line, are two bodies a line number
-   cannot tell apart -- and telling two bodies apart is the whole of what the exemption key rests
-   on. *)
-type definition_site = { line : int; column : int; position : int }
-
-type helper_binding = {
-  name : string;
-  site : definition_site;
-  optional_label : string option;
-  dependencies : helper_dependency list;
-  guards : Set.M(String).t;
-  unguarded : quantifier list;
-  negated_unguarded : quantifier list;
-  constant_bool : bool option;
-  quantifier_alias : (quantifier_kind * int) option;
-  claim_kind : claim_kind option;
-  claim_wrapper : wrapper_slot list option;
-}
-
-and helper_dependency = {
-  binding : helper_binding;
-  positive : bool;
-  forwards_guards : bool;
-  supplied_optional : Set.M(String).t option;
-}
-
-and wrapper_slot = {
-  label : string option;
-  optional : bool;
-  unlabelled_index : int option;
-  positive : bool;
-  default_binding : helper_binding option;
-}
-
+(* A quantified binding reaching a claim without a witness: [helper] is the binding that wrote the
+   quantifier, or -- for a quantifier written directly in the claim's argument -- the wrapper the
+   claim went through, or the native claim's label; [helper_site] is that binding's definition, or
+   the argument. [direct] tells the two apart for the diagnostic. *)
 type quantified_claim = {
   helper : string;
   helper_site : definition_site;
   claim_line : int;
   quantifiers : quantifier_kind list;
+  direct : bool;
 }
 
-let describe_site site = Printf.sprintf "%d:%d" site.line site.column
+let describe_site = Provenance.describe_site
 
-let site_of_location location =
-  let start = location.Ppxlib.Location.loc_start in
-  {
-    line = start.Stdlib.Lexing.pos_lnum;
-    column = start.Stdlib.Lexing.pos_cnum - start.Stdlib.Lexing.pos_bol;
-    position = start.Stdlib.Lexing.pos_cnum;
-  }
-
-let path_ends path ~container ~member =
-  match List.rev path with
-  | found_member :: found_container :: _ ->
-      String.equal found_member member && String.equal found_container container
-  | _ -> false
-
-let is_collection_call expr ~member =
-  match Sources.longident_of expr with
-  | Some path ->
-      path_ends path ~container:"Array" ~member || path_ends path ~container:"List" ~member
-  | None -> false
-
-let is_name expr name =
-  match Sources.longident_of expr with
-  | Some path -> Option.value_map (List.last path) ~default:false ~f:(String.equal name)
-  | None -> false
-
-let rec function_body expr =
-  match expr.pexp_desc with
-  | Pexp_function (_, _, Pfunction_body body) -> function_body body
-  | _ -> expr
-
-let unlabelled arguments =
-  List.filter_map arguments ~f:(function Asttypes.Nolabel, argument -> Some argument | _ -> None)
-
-type binding_part = {
-  name : string;
-  expression : expression;
-  location : Ppxlib.Location.t;
-  exact : bool;
-}
-
-let pattern_names pattern =
-  let names = ref [] in
-  let iterator =
-    object
-      inherit Ast_traverse.iter as super
-
-      method! pattern pattern =
-        (match pattern.ppat_desc with
-        | Ppat_var { txt; _ } | Ppat_alias (_, { txt; _ }) ->
-            names := (txt, pattern.ppat_loc) :: !names
-        | _ -> ());
-        super#pattern pattern
-    end
-  in
-  iterator#pattern pattern;
-  List.rev !names
-  |> List.dedup_and_sort ~compare:(fun (left, _) (right, _) -> String.compare left right)
-
-let conservative_binding_parts pattern expression =
-  pattern_names pattern
-  |> List.map ~f:(fun (name, location) -> { name; expression; location; exact = false })
-
-(* A destructuring pattern is not permission to lose the binding. Literal tuples and records give
-   each name its exact producer; for a shape we cannot align, every bound name retains the whole
-   expression as a conservative producer. [returned_quantifiers] uses [exact] to decide whether it
-   may restrict itself to the returned path or must inspect that producer broadly. *)
-let rec binding_parts pattern expression =
-  match (pattern.ppat_desc, expression.pexp_desc) with
-  | Ppat_var { txt; _ }, _ ->
-      [ { name = txt; expression; location = pattern.ppat_loc; exact = true } ]
-  | Ppat_alias (inner, { txt; _ }), _ ->
-      { name = txt; expression; location = pattern.ppat_loc; exact = true }
-      :: binding_parts inner expression
-  | Ppat_constraint (inner, _), _ -> binding_parts inner expression
-  | Ppat_tuple patterns, Pexp_tuple expressions when List.length patterns = List.length expressions
-    ->
-      List.map2_exn patterns expressions ~f:binding_parts |> List.concat
-  | Ppat_record (patterns, _), Pexp_record (expressions, None) ->
-      List.map patterns ~f:(fun (pattern_label, pattern) ->
-          List.find_map expressions ~f:(fun (expression_label, expression) ->
-              if Poly.equal pattern_label.txt expression_label.txt then
-                Some (binding_parts pattern expression)
-              else None))
-      |> Option.all
-      |> Option.value_map ~default:(conservative_binding_parts pattern expression) ~f:List.concat
-  | _ -> conservative_binding_parts pattern expression
-
-let rec population_name expr =
-  match Sources.longident_of expr with
-  | Some [ name ] -> Some name
-  | _ -> (
-      match expr.pexp_desc with
-      | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> population_name inner
-      | Pexp_apply (callee, _)
-        when is_collection_call callee ~member:"filter"
-             || is_collection_call callee ~member:"filter_map" ->
-          (* A filtered view is its own population. Collapsing it to the source lets a non-empty
-             [filter rows ~f:p1] guard a distinct, empty [filter rows ~f:p2]. Pretty-printing the
-             location-free AST gives repeated spellings the same lexical identity while retaining
-             the predicate that distinguishes derived populations. *)
-          Some (Stdlib.Format.asprintf "%a" Ppxlib.Pprintast.expression expr)
-      | _ -> None)
-
-let populations arguments count =
-  unlabelled arguments |> Fn.flip List.take count
-  |> List.filter_map ~f:population_name
-  |> Set.of_list (module String)
-
-let collection_quantifier callee =
-  if is_collection_call callee ~member:"for_all" then Some (For_all, 1)
-  else if is_collection_call callee ~member:"for_all2_exn" then Some (For_all2, 2)
-  else if is_collection_call callee ~member:"is_empty" then Some (Is_empty, 1)
-  else if is_collection_call callee ~member:"exists" then Some (Not_exists, 1)
-  else None
-
-let bool_literal expr value =
-  match expr.pexp_desc with
-  | Pexp_construct ({ txt = Ppxlib.Longident.Lident found; _ }, None) ->
-      String.equal found (Bool.to_string value)
-  | _ -> false
-
-let literal_bool expr =
-  if bool_literal expr true then Some true else if bool_literal expr false then Some false else None
-
-let rec bool_pattern_matches pattern value =
-  match pattern.ppat_desc with
-  | Ppat_construct ({ txt = Ppxlib.Longident.Lident found; _ }, None) ->
-      String.equal found (Bool.to_string value)
-  | Ppat_any | Ppat_var _ -> true
-  | Ppat_alias (inner, _) | Ppat_constraint (inner, _) | Ppat_open (_, inner) ->
-      bool_pattern_matches inner value
-  | Ppat_or (left, right) -> bool_pattern_matches left value || bool_pattern_matches right value
-  | _ -> false
-
-let boolean_match_polarity cases =
-  let output_for input =
-    List.find cases ~f:(fun case -> bool_pattern_matches case.pc_lhs input)
-    |> Option.bind ~f:(fun case ->
-        if Option.is_none case.pc_guard then literal_bool case.pc_rhs else None)
-  in
-  match (output_for true, output_for false) with
-  | Some true, Some false -> Some true
-  | Some false, Some true -> Some false
-  | _ -> None
-
-let result_polarities positive result =
-  if bool_literal result true then [ positive ]
-  else if bool_literal result false then [ not positive ]
-  else [ positive; not positive ]
-
-let condition_polarities positive yes no =
-  match no with
-  | None -> []
-  | Some no when bool_literal yes true && bool_literal no false -> [ positive ]
-  | Some no when bool_literal yes false && bool_literal no true -> [ not positive ]
-  | Some no
-    when (bool_literal yes true && bool_literal no true)
-         || (bool_literal yes false && bool_literal no false) ->
-      []
-  | Some _ -> []
-
-let is_boolean_comparison callee =
-  is_name callee "=" || is_name callee "<>" || is_name callee "equal"
-
-let is_transparent_boolean_wrapper callee =
-  match Sources.longident_of callee with
-  | Some ([ "Fn"; "id" ] | [ "Fun"; "id" ] | [ "Stdlib"; "Fun"; "id" ]) -> true
-  | _ -> false
-
-let compared_argument callee left right ~positive =
-  if is_boolean_comparison callee then
-    let equal = not (is_name callee "<>") in
-    match
-      ( bool_literal left true,
-        bool_literal left false,
-        bool_literal right true,
-        bool_literal right false )
-    with
-    | true, _, _, _ -> Some (right, Bool.equal positive equal)
-    | _, true, _, _ -> Some (right, Bool.equal positive (not equal))
-    | _, _, true, _ -> Some (left, Bool.equal positive equal)
-    | _, _, _, true -> Some (left, Bool.equal positive (not equal))
-    | _ -> None
-  else None
-
-let quantifiers_in ?(positive = true) expr =
-  let found = ref [] in
-  let positive = ref positive in
-  let iterator =
-    object (self)
-      inherit Ast_traverse.iter as super
-      method! attribute _ = ()
-
-      method! expression expr =
-        let visit_with_polarity polarity argument =
-          let previous = !positive in
-          positive := polarity;
-          self#expression argument;
-          positive := previous
-        in
-        match expr.pexp_desc with
-        | Pexp_apply (callee, [ (Asttypes.Nolabel, argument) ]) when is_name callee "not" ->
-            visit_with_polarity (not !positive) argument
-        | Pexp_apply (apply, [ (Asttypes.Nolabel, function_); (Asttypes.Nolabel, argument) ])
-          when is_name apply "@@" && is_name function_ "not" ->
-            visit_with_polarity (not !positive) argument
-        | Pexp_apply (pipe, [ (Asttypes.Nolabel, population); (Asttypes.Nolabel, piped_call) ])
-          when is_name pipe "|>" -> (
-            match piped_call.pexp_desc with
-            | Pexp_ident _ when is_name piped_call "not" ->
-                visit_with_polarity (not !positive) population
-            | Pexp_apply (callee, arguments) -> (
-                match collection_quantifier callee with
-                | Some (kind, count)
-                  when (!positive && not (Poly.equal kind Not_exists))
-                       || ((not !positive) && Poly.equal kind Not_exists) ->
-                    found :=
-                      {
-                        kind;
-                        populations =
-                          populations ((Asttypes.Nolabel, population) :: arguments) count;
-                        sealed = false;
-                      }
-                      :: !found;
-                    self#expression population;
-                    List.iter arguments ~f:(fun (_, argument) -> self#expression argument)
-                | _ -> (
-                    match unlabelled arguments with
-                    | [ literal ] -> (
-                        match compared_argument callee literal population ~positive:!positive with
-                        | Some (argument, polarity) -> visit_with_polarity polarity argument
-                        | None -> super#expression expr)
-                    | _ -> super#expression expr))
-            | _ -> super#expression expr)
-        | Pexp_apply (callee, [ (Asttypes.Nolabel, left); (Asttypes.Nolabel, right) ])
-          when is_boolean_comparison callee -> (
-            match compared_argument callee left right ~positive:!positive with
-            | Some (argument, polarity) -> visit_with_polarity polarity argument
-            | None -> super#expression expr)
-        | Pexp_apply (callee, arguments) ->
-            let add kind count =
-              found := { kind; populations = populations arguments count; sealed = false } :: !found
-            in
-            if !positive && is_collection_call callee ~member:"for_all" then add For_all 1
-            else if !positive && is_collection_call callee ~member:"for_all2_exn" then
-              add For_all2 2
-            else if !positive && is_collection_call callee ~member:"is_empty" then add Is_empty 1
-            else if (not !positive) && is_collection_call callee ~member:"exists" then
-              add Not_exists 1;
-            super#expression expr
-        | _ -> super#expression expr
-    end
-  in
-  iterator#expression (function_body expr);
-  List.rev !found
-
-let int_literal expr =
-  match expr.pexp_desc with
-  | Pexp_constant (Pconst_integer (value, _)) -> Option.try_with (fun () -> Int.of_string value)
-  | _ -> None
-
-let length_population expr =
-  match expr.pexp_desc with
-  | Pexp_apply (callee, arguments) when is_collection_call callee ~member:"length" ->
-      List.hd (unlabelled arguments) |> Option.bind ~f:population_name
-  | _ -> None
-
-(* Populations that HAVE to be non-empty for this expression to be true. This is intentionally a
-   small boolean grammar: conjunction composes requirements, [not (X.is_empty xs)] is the spelling
-   the gh-ocannl-746 helper sweep installed, and a positive literal length pins the same fact. A
-   construct the reader cannot prove contributes no guard, so it produces a loud finding rather than
-   silently licensing a vacuous helper. *)
-let rec required_nonempty expr =
-  let none () = Set.empty (module String) in
-  match expr.pexp_desc with
-  | Pexp_function (_, _, Pfunction_body body) -> required_nonempty body
-  | Pexp_function (_, _, Pfunction_cases ([ case ], _, _)) -> required_nonempty case.pc_rhs
-  | Pexp_function (_, _, Pfunction_cases (_, _, _)) -> Set.empty (module String)
-  | Pexp_let (_, _, body) -> required_nonempty body
-  | Pexp_letmodule (_, _, body) | Pexp_letexception (_, body) -> required_nonempty body
-  | Pexp_open (_, body) -> required_nonempty body
-  | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> required_nonempty inner
-  | Pexp_apply (callee, [ (Asttypes.Nolabel, argument) ]) when is_name callee "not" -> (
-      match argument.pexp_desc with
-      | Pexp_apply (empty, arguments) when is_collection_call empty ~member:"is_empty" ->
-          populations arguments 1
-      | _ -> none ())
-  | Pexp_apply (op, [ (Asttypes.Nolabel, left); (Asttypes.Nolabel, right) ]) when is_name op "&&" ->
-      Set.union (required_nonempty left) (required_nonempty right)
-  | Pexp_apply (op, [ (Asttypes.Nolabel, left); (Asttypes.Nolabel, right) ]) when is_name op "="
-    -> (
-      match
-        (length_population left, int_literal right, int_literal left, length_population right)
-      with
-      | Some population, Some n, _, _ when n > 0 -> Set.singleton (module String) population
-      | _, _, Some n, Some population when n > 0 -> Set.singleton (module String) population
-      | _ -> none ())
-  | Pexp_apply (op, [ (Asttypes.Nolabel, left); (Asttypes.Nolabel, right) ]) -> (
-      match
-        ( Sources.longident_of op,
-          length_population left,
-          int_literal right,
-          int_literal left,
-          length_population right )
-      with
-      | Some _, Some population, Some n, _, _
-        when (is_name op ">" && n >= 0) || (is_name op ">=" && n > 0) ->
-          Set.singleton (module String) population
-      | Some _, _, _, Some n, Some population
-        when (is_name op "<" && n >= 0) || (is_name op "<=" && n > 0) ->
-          Set.singleton (module String) population
-      | _ -> none ())
-  | Pexp_ifthenelse (condition, yes, Some no) when bool_literal no false ->
-      Set.union (required_nonempty condition) (required_nonempty yes)
-  | _ -> none ()
-
-(* Quantifiers that contribute to the value a helper RETURNS, rather than to setup or validation it
-   performs on the way. [nonzero] helpers are the important near miss: they use [not (exists ...)]
-   only to decide whether to raise, then return the input array. Treating every expression in their
-   body as the helper's boolean made every later parity claim look helper-wrapped. *)
-let rec returned_quantifiers ?(positive = true) expr =
-  match expr.pexp_desc with
-  | Pexp_function (_, _, Pfunction_body body) -> returned_quantifiers ~positive body
-  | Pexp_function (_, _, Pfunction_cases (cases, _, _)) ->
-      List.concat_map cases ~f:(fun case ->
-          let guard_quantifiers =
-            Option.value_map case.pc_guard ~default:[] ~f:(fun guard ->
-                result_polarities positive case.pc_rhs
-                |> List.concat_map ~f:(fun guard_positive ->
-                    quantifiers_in ~positive:guard_positive guard))
-          in
-          guard_quantifiers @ returned_quantifiers ~positive case.pc_rhs)
-  | Pexp_let (_, bindings, body) ->
-      let returned_bindings = returned_binding_polarities positive body in
-      (unguarded_component ~positive body
-      |> List.map ~f:(fun quantifier -> { quantifier with sealed = true }))
-      @ List.concat_map bindings ~f:(fun binding ->
-          binding_parts binding.pvb_pat binding.pvb_expr
-          |> List.concat_map ~f:(fun part ->
-              List.filter_map returned_bindings ~f:(fun (name, returned_positive) ->
-                  if String.equal name part.name then
-                    Some
-                      ((if part.exact then
-                          unguarded_component ~positive:returned_positive part.expression
-                        else
-                          let guards = required_nonempty part.expression in
-                          quantifiers_in ~positive:returned_positive part.expression
-                          |> List.filter ~f:(fun quantifier ->
-                              Set.is_empty quantifier.populations
-                              || Set.is_empty (Set.inter guards quantifier.populations)))
-                      |> List.map ~f:(fun quantifier -> { quantifier with sealed = true }))
-                  else None)
-              |> List.concat))
-  | Pexp_sequence (_, result) -> returned_quantifiers ~positive result
-  | Pexp_letmodule (_, _, body) | Pexp_letexception (_, body) -> returned_quantifiers ~positive body
-  | Pexp_open (_, body) -> returned_quantifiers ~positive body
-  | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> returned_quantifiers ~positive inner
-  | Pexp_tuple expressions -> List.concat_map expressions ~f:(unguarded_component ~positive)
-  | Pexp_record (fields, base) ->
-      List.concat_map fields ~f:(fun (_, expression) -> unguarded_component ~positive expression)
-      @ Option.value_map base ~default:[] ~f:(unguarded_component ~positive)
-  | Pexp_ifthenelse (condition, yes, no) ->
-      let condition_quantifiers =
-        condition_polarities positive yes no
-        |> List.concat_map ~f:(fun condition_positive ->
-            quantifiers_in ~positive:condition_positive condition)
-      in
-      condition_quantifiers
-      @ returned_quantifiers ~positive yes
-      @ Option.value_map no ~default:[] ~f:(returned_quantifiers ~positive)
-  | Pexp_match (scrutinee, cases) ->
-      let scrutinee_quantifiers =
-        Option.value_map (boolean_match_polarity cases) ~default:[] ~f:(fun same_polarity ->
-            quantifiers_in ~positive:(Bool.equal positive same_polarity) scrutinee)
-      in
-      scrutinee_quantifiers
-      @ List.concat_map cases ~f:(fun case ->
-          let returned_bindings = returned_binding_polarities positive case.pc_rhs in
-          let guard_quantifiers =
-            Option.value_map case.pc_guard ~default:[] ~f:(fun guard ->
-                result_polarities positive case.pc_rhs
-                |> List.concat_map ~f:(fun guard_positive ->
-                    quantifiers_in ~positive:guard_positive guard))
-          in
-          guard_quantifiers
-          @ (returned_quantifiers ~positive case.pc_rhs
-            |> List.map ~f:(fun quantifier -> { quantifier with sealed = true }))
-          @ (binding_parts case.pc_lhs scrutinee
-            |> List.concat_map ~f:(fun part ->
-                List.filter_map returned_bindings ~f:(fun (name, returned_positive) ->
-                    if String.equal name part.name then
-                      Some
-                        (if part.exact then
-                           returned_quantifiers ~positive:returned_positive part.expression
-                         else quantifiers_in ~positive:returned_positive part.expression)
-                    else None)
-                |> List.concat)))
-  | Pexp_try (body, cases) ->
-      returned_quantifiers ~positive body
-      @ List.concat_map cases ~f:(fun case ->
-          let guard_quantifiers =
-            Option.value_map case.pc_guard ~default:[] ~f:(fun guard ->
-                result_polarities positive case.pc_rhs
-                |> List.concat_map ~f:(fun guard_positive ->
-                    quantifiers_in ~positive:guard_positive guard))
-          in
-          guard_quantifiers @ returned_quantifiers ~positive case.pc_rhs)
-  | Pexp_apply (callee, [ (Asttypes.Nolabel, left); (Asttypes.Nolabel, right) ])
-    when is_name callee "&&" ->
-      returned_quantifiers ~positive left @ returned_quantifiers ~positive right
-  | Pexp_construct ({ txt = Ppxlib.Longident.Lident "Some"; _ }, Some payload) ->
-      returned_quantifiers ~positive payload
-  | Pexp_apply (callee, _)
-    when is_collection_call callee ~member:"for_all"
-         || is_collection_call callee ~member:"for_all2_exn"
-         || is_collection_call callee ~member:"is_empty"
-         || is_collection_call callee ~member:"exists"
-         || is_name callee "not" || is_name callee "&&" || is_name callee "||" || is_name callee "="
-         || is_name callee "<>" || is_name callee "equal" || is_name callee "|>"
-         || is_name callee "@@" ->
-      quantifiers_in ~positive expr
-  | Pexp_apply (callee, arguments) when is_transparent_boolean_wrapper callee -> (
-      match unlabelled arguments with
-      | [ argument ] -> returned_quantifiers ~positive argument
-      | _ -> [])
-  | _ -> []
-
-and unguarded_component ~positive expression =
-  let guards = required_nonempty expression in
-  returned_quantifiers ~positive expression
-  |> List.filter ~f:(fun quantifier ->
-      quantifier.sealed
-      || Set.is_empty quantifier.populations
-      || Set.is_empty (Set.inter guards quantifier.populations))
-
-and returned_binding_polarities positive expr =
-  match expr.pexp_desc with
-  | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> [ (name, positive) ]
-  | Pexp_function (_, _, Pfunction_body body) -> returned_binding_polarities positive body
-  | Pexp_function (_, _, Pfunction_cases (cases, _, _)) ->
-      List.concat_map cases ~f:(fun case ->
-          let shadowed =
-            pattern_names case.pc_lhs |> List.map ~f:fst |> Set.of_list (module String)
-          in
-          returned_binding_polarities positive case.pc_rhs
-          |> List.filter ~f:(fun (name, _) -> not (Set.mem shadowed name)))
-  | Pexp_let (_, bindings, body) ->
-      let shadowed =
-        List.concat_map bindings ~f:(fun binding -> List.map (pattern_names binding.pvb_pat) ~f:fst)
-        |> Set.of_list (module String)
-      in
-      returned_binding_polarities positive body
-      |> List.filter ~f:(fun (name, _) -> not (Set.mem shadowed name))
-  | Pexp_sequence (_, result) -> returned_binding_polarities positive result
-  | Pexp_letmodule (_, _, body) | Pexp_letexception (_, body) ->
-      returned_binding_polarities positive body
-  | Pexp_open (_, body) -> returned_binding_polarities positive body
-  | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) ->
-      returned_binding_polarities positive inner
-  | Pexp_ifthenelse (condition, yes, no) ->
-      (condition_polarities positive yes no
-      |> List.concat_map ~f:(fun condition_positive ->
-          returned_binding_polarities condition_positive condition))
-      @ returned_binding_polarities positive yes
-      @ Option.value_map no ~default:[] ~f:(returned_binding_polarities positive)
-  | Pexp_match (scrutinee, cases) ->
-      Option.value_map (boolean_match_polarity cases) ~default:[] ~f:(fun same_polarity ->
-          returned_binding_polarities (Bool.equal positive same_polarity) scrutinee)
-      @ List.concat_map cases ~f:(fun case ->
-          let returned = returned_binding_polarities positive case.pc_rhs in
-          let shadowed =
-            pattern_names case.pc_lhs |> List.map ~f:fst |> Set.of_list (module String)
-          in
-          (returned |> List.filter ~f:(fun (name, _) -> not (Set.mem shadowed name)))
-          @ (binding_parts case.pc_lhs scrutinee
-            |> List.concat_map ~f:(fun part ->
-                List.filter_map returned ~f:(fun (name, returned_positive) ->
-                    if String.equal name part.name then
-                      Some (returned_binding_polarities returned_positive part.expression)
-                    else None)
-                |> List.concat)))
-  | Pexp_try (body, cases) ->
-      returned_binding_polarities positive body
-      @ List.concat_map cases ~f:(fun case ->
-          let shadowed =
-            pattern_names case.pc_lhs |> List.map ~f:fst |> Set.of_list (module String)
-          in
-          returned_binding_polarities positive case.pc_rhs
-          |> List.filter ~f:(fun (name, _) -> not (Set.mem shadowed name)))
-  | Pexp_apply (callee, [ (Asttypes.Nolabel, argument) ]) when is_name callee "not" ->
-      returned_binding_polarities (not positive) argument
-  | Pexp_apply (apply, [ (Asttypes.Nolabel, function_); (Asttypes.Nolabel, argument) ])
-    when is_name apply "@@" && is_name function_ "not" ->
-      returned_binding_polarities (not positive) argument
-  | Pexp_apply (pipe, [ (Asttypes.Nolabel, value); (Asttypes.Nolabel, piped_call) ])
-    when is_name pipe "|>" -> (
-      match piped_call.pexp_desc with
-      | Pexp_ident _ when is_name piped_call "not" ->
-          returned_binding_polarities (not positive) value
-      | Pexp_apply (callee, arguments) -> (
-          match unlabelled arguments with
-          | [ literal ] -> (
-              match compared_argument callee literal value ~positive with
-              | Some (argument, polarity) -> returned_binding_polarities polarity argument
-              | None -> returned_binding_polarities positive piped_call)
-          | _ -> returned_binding_polarities positive piped_call)
-      | _ -> returned_binding_polarities positive piped_call)
-  | Pexp_apply (callee, [ (Asttypes.Nolabel, left); (Asttypes.Nolabel, right) ])
-    when is_boolean_comparison callee -> (
-      match compared_argument callee left right ~positive with
-      | Some (argument, polarity) -> returned_binding_polarities polarity argument
-      | None ->
-          returned_binding_polarities positive left @ returned_binding_polarities positive right)
-  | Pexp_apply (callee, arguments) when is_name callee "&&" || is_name callee "||" ->
-      List.concat_map arguments ~f:(fun (_, argument) ->
-          returned_binding_polarities positive argument)
-  | Pexp_apply (callee, _) -> (
-      match Sources.longident_of callee with Some [ name ] -> [ (name, positive) ] | _ -> [])
-  | _ -> []
-
-(* [Verdict] is the only module a claim is reached through: [Ll_test] re-exported six of these names
-   while [Verdict] had no open-able surface, and gh-ocannl-815 retired that copy in favour of [open
-   Verdict.Claims], which the environment below models. *)
-let claim_kind_of_path path =
-  match path with
-  | "Verdict" :: _ -> (
-      match List.last path with
-      | Some "p" -> Some P
-      | Some "pf" -> Some Pf
-      | Some "pass_fail" -> Some Pass_fail
-      | Some "claim" -> Some Claim
-      | Some "claimf" -> Some Claimf
-      | _ -> None)
-  | _ -> None
-
-let module_path module_expr =
-  match module_expr.pmod_desc with
-  | Pmod_ident { txt; _ } -> ( try Some (Ppxlib.Longident.flatten_exn txt) with _ -> None)
-  | _ -> None
-
-let opens_verdict_claims module_expr =
-  Option.value_map (module_path module_expr) ~default:false
-    ~f:(List.equal String.equal [ "Verdict"; "Claims" ])
-
-(* [open Verdict.Claims] is the migration target of gh-ocannl-815. Model its bindings explicitly so
-   helper-following does not lose sight of an unqualified [p]/[claim]/[pass_fail] call when the file
-   deletes its local aliases. Ordinary value bindings are prepended later and therefore shadow these
-   exactly as they do in OCaml. *)
-let opened_claim_bindings site =
-  [ ("p", P); ("pf", Pf); ("pass_fail", Pass_fail); ("claim", Claim); ("claimf", Claimf) ]
-  |> List.map ~f:(fun (name, claim_kind) ->
-      {
-        name;
-        site;
-        optional_label = None;
-        dependencies = [];
-        guards = Set.empty (module String);
-        unguarded = [];
-        negated_unguarded = [];
-        constant_bool = None;
-        quantifier_alias = None;
-        claim_kind = Some claim_kind;
-        claim_wrapper = None;
-      })
-
-let open_claims environment declaration =
-  let verdict_environment =
-    if opens_verdict_claims declaration.popen_expr then
-      let start = declaration.popen_loc.loc_start in
-      List.rev_append
-        (opened_claim_bindings
-           {
-             line = start.Stdlib.Lexing.pos_lnum;
-             column = start.Stdlib.Lexing.pos_cnum - start.Stdlib.Lexing.pos_bol;
-             position = start.Stdlib.Lexing.pos_cnum;
-           })
-        environment
-    else environment
-  in
-  match module_path declaration.popen_expr with
-  | None -> verdict_environment
-  | Some path ->
-      let prefix = String.concat ~sep:"." path ^ "." in
-      let opened =
-        List.filter_map environment ~f:(fun (binding : helper_binding) ->
-            String.chop_prefix binding.name ~prefix
-            |> Option.map ~f:(fun name -> { binding with name }))
-      in
-      List.rev_append opened verdict_environment
-
-let lookup (environment : helper_binding list) name =
-  List.find environment ~f:(fun binding -> String.equal binding.name name)
-
-let claim_target environment callee =
-  match Sources.longident_of callee with
-  | Some path -> (
-      match lookup environment (String.concat ~sep:"." path) with
-      | Some binding -> Option.map binding.claim_kind ~f:(fun kind -> (kind, Some binding))
-      | None -> Option.map (claim_kind_of_path path) ~f:(fun kind -> (kind, None)))
-  | None -> None
-
-let constant_bool_of environment expr =
-  match literal_bool expr with
-  | Some _ as value -> value
-  | None -> (
-      match Sources.longident_of expr with
-      | Some [ name ] ->
-          lookup environment name |> Option.bind ~f:(fun binding -> binding.constant_bool)
-      | _ -> None)
-
-let resolved_bool = constant_bool_of
-
-let quantifier_alias_of environment expr =
-  match collection_quantifier expr with
-  | Some _ as quantifier -> quantifier
-  | None -> (
-      match Sources.longident_of expr with
-      | Some path ->
-          lookup environment (String.concat ~sep:"." path)
-          |> Option.bind ~f:(fun binding -> binding.quantifier_alias)
-      | None -> None)
-
-let resolved_compared_argument environment callee left right ~positive =
-  match compared_argument callee left right ~positive with
-  | Some _ as found -> found
-  | None when is_boolean_comparison callee -> (
-      let equal = not (is_name callee "<>") in
-      let with_constant constant argument =
-        Some (argument, Bool.equal positive (Bool.equal constant equal))
-      in
-      match (resolved_bool environment left, resolved_bool environment right) with
-      | Some constant, None -> with_constant constant right
-      | None, Some constant -> with_constant constant left
-      | Some _, Some _ | None, None -> None)
-  | None -> None
-
-let resolved_boolean_match_polarity environment cases =
-  let output_for input =
-    List.find cases ~f:(fun case -> bool_pattern_matches case.pc_lhs input)
-    |> Option.bind ~f:(fun case ->
-        if Option.is_none case.pc_guard then resolved_bool environment case.pc_rhs else None)
-  in
-  match (output_for true, output_for false) with
-  | Some true, Some false -> Some true
-  | Some false, Some true -> Some false
-  | _ -> None
-
-let resolved_result_polarities environment positive result =
-  match resolved_bool environment result with
-  | Some true -> [ positive ]
-  | Some false -> [ not positive ]
-  | None -> []
-
-let dependency_result_polarities environment positive result =
-  match resolved_bool environment result with
-  | Some true -> [ positive ]
-  | Some false -> [ not positive ]
-  | None -> result_polarities positive result
-
-let resolved_condition_polarities environment positive yes no =
-  match
-    Option.bind no ~f:(fun no ->
-        Option.both (resolved_bool environment yes) (resolved_bool environment no))
-  with
-  | Some (true, false) -> [ positive ]
-  | Some (false, true) -> [ not positive ]
-  | Some (true, true | false, false) | None -> []
-
-let dependency_condition_polarities environment positive yes no =
-  match
-    Option.bind no ~f:(fun no ->
-        Option.both (resolved_bool environment yes) (resolved_bool environment no))
-  with
-  | Some (true, false) -> [ positive ]
-  | Some (false, true) -> [ not positive ]
-  | Some (true, true | false, false) -> []
-  | None -> [ positive ]
-
-let shadow_parameters environment parameters =
-  List.fold parameters ~init:environment ~f:(fun environment parameter ->
-      match parameter.pparam_desc with
-      | Pparam_val (_, _, pattern) ->
-          let shadowed = pattern_names pattern |> List.map ~f:fst |> Set.of_list (module String) in
-          List.filter environment ~f:(fun (binding : helper_binding) ->
-              not (Set.mem shadowed binding.name))
-      | Pparam_newtype _ -> environment)
-
-let constant_binding environment part =
-  {
-    name = part.name;
-    site = site_of_location part.location;
-    optional_label = None;
-    dependencies = [];
-    guards = Set.empty (module String);
-    unguarded = [];
-    negated_unguarded = [];
-    constant_bool = constant_bool_of environment part.expression;
-    quantifier_alias = quantifier_alias_of environment part.expression;
-    claim_kind = None;
-    claim_wrapper = None;
-  }
-
-let rec alias_quantifiers environment ?(positive = true) expr =
-  match expr.pexp_desc with
-  | Pexp_function (parameters, _, Pfunction_body body) ->
-      alias_quantifiers (shadow_parameters environment parameters) ~positive body
-  | Pexp_function (parameters, _, Pfunction_cases (cases, _, _)) ->
-      let environment = shadow_parameters environment parameters in
-      List.concat_map cases ~f:(fun case ->
-          let shadowed =
-            pattern_names case.pc_lhs |> List.map ~f:fst |> Set.of_list (module String)
-          in
-          let case_environment =
-            List.filter environment ~f:(fun (binding : helper_binding) ->
-                not (Set.mem shadowed binding.name))
-          in
-          let guards =
-            Option.value_map case.pc_guard ~default:[] ~f:(fun guard ->
-                resolved_result_polarities case_environment positive case.pc_rhs
-                |> List.concat_map ~f:(fun guard_positive ->
-                    quantifiers_in ~positive:guard_positive guard))
-          in
-          guards @ alias_quantifiers case_environment ~positive case.pc_rhs)
-  | Pexp_let (_, bindings, body) ->
-      let local =
-        List.concat_map bindings ~f:(fun binding ->
-            binding_parts binding.pvb_pat binding.pvb_expr
-            |> List.map ~f:(constant_binding environment))
-      in
-      let body_environment = List.rev_append local environment in
-      let returned = returned_binding_polarities positive body in
-      alias_quantifiers body_environment ~positive body
-      @ List.concat_map bindings ~f:(fun binding ->
-          binding_parts binding.pvb_pat binding.pvb_expr
-          |> List.concat_map ~f:(fun part ->
-              List.filter_map returned ~f:(fun (name, returned_positive) ->
-                  if String.equal name part.name then
-                    Some (alias_quantifiers environment ~positive:returned_positive part.expression)
-                  else None)
-              |> List.concat))
-  | Pexp_sequence (_, result) | Pexp_open (_, result) ->
-      alias_quantifiers environment ~positive result
-  | Pexp_letmodule (_, _, body) | Pexp_letexception (_, body) ->
-      alias_quantifiers environment ~positive body
-  | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) ->
-      alias_quantifiers environment ~positive inner
-  | Pexp_tuple expressions ->
-      List.concat_map expressions ~f:(alias_quantifiers environment ~positive)
-  | Pexp_record (fields, base) ->
-      List.concat_map fields ~f:(fun (_, field) -> alias_quantifiers environment ~positive field)
-      @ Option.value_map base ~default:[] ~f:(alias_quantifiers environment ~positive)
-  | Pexp_ifthenelse (condition, yes, no) ->
-      let from_condition =
-        resolved_condition_polarities environment positive yes no
-        |> List.concat_map ~f:(fun condition_positive ->
-            quantifiers_in ~positive:condition_positive condition)
-      in
-      from_condition
-      @ alias_quantifiers environment ~positive yes
-      @ Option.value_map no ~default:[] ~f:(alias_quantifiers environment ~positive)
-  | Pexp_match (scrutinee, cases) ->
-      let scrutinee_quantifiers =
-        Option.value_map (resolved_boolean_match_polarity environment cases) ~default:[]
-          ~f:(fun same_polarity ->
-            quantifiers_in ~positive:(Bool.equal positive same_polarity) scrutinee)
-      in
-      scrutinee_quantifiers
-      @ List.concat_map cases ~f:(fun case ->
-          let shadowed =
-            pattern_names case.pc_lhs |> List.map ~f:fst |> Set.of_list (module String)
-          in
-          let case_environment =
-            List.filter environment ~f:(fun (binding : helper_binding) ->
-                not (Set.mem shadowed binding.name))
-          in
-          let guards =
-            Option.value_map case.pc_guard ~default:[] ~f:(fun guard ->
-                resolved_result_polarities case_environment positive case.pc_rhs
-                |> List.concat_map ~f:(fun guard_positive ->
-                    quantifiers_in ~positive:guard_positive guard))
-          in
-          guards @ alias_quantifiers case_environment ~positive case.pc_rhs)
-  | Pexp_try (body, cases) ->
-      alias_quantifiers environment ~positive body
-      @ List.concat_map cases ~f:(fun case ->
-          let shadowed =
-            pattern_names case.pc_lhs |> List.map ~f:fst |> Set.of_list (module String)
-          in
-          let case_environment =
-            List.filter environment ~f:(fun (binding : helper_binding) ->
-                not (Set.mem shadowed binding.name))
-          in
-          let guards =
-            Option.value_map case.pc_guard ~default:[] ~f:(fun guard ->
-                resolved_result_polarities case_environment positive case.pc_rhs
-                |> List.concat_map ~f:(fun guard_positive ->
-                    quantifiers_in ~positive:guard_positive guard))
-          in
-          guards @ alias_quantifiers case_environment ~positive case.pc_rhs)
-  | Pexp_apply (callee, [ (Asttypes.Nolabel, left); (Asttypes.Nolabel, right) ])
-    when is_boolean_comparison callee -> (
-      match resolved_compared_argument environment callee left right ~positive with
-      | Some (argument, argument_positive) -> quantifiers_in ~positive:argument_positive argument
-      | None -> [])
-  | Pexp_apply (({ pexp_desc = Pexp_function _; _ } as function_), _) ->
-      alias_quantifiers environment ~positive function_
-  | Pexp_apply (callee, arguments) -> (
-      match quantifier_alias_of environment callee with
-      | Some (kind, count)
-        when (positive && not (Poly.equal kind Not_exists))
-             || ((not positive) && Poly.equal kind Not_exists) ->
-          [ { kind; populations = populations arguments count; sealed = false } ]
-      | Some _ | None -> [])
-  | _ -> []
-
-let argument_at_slot arguments slot =
-  match (slot.label, slot.unlabelled_index) with
-  | Some name, _ ->
-      List.find_map arguments ~f:(fun (label, argument) ->
-          match label with
-          | Asttypes.Labelled found when String.equal found name -> Some argument
-          | Optional found when slot.optional && String.equal found name -> (
-              match argument.pexp_desc with
-              | Pexp_construct ({ txt = Ppxlib.Longident.Lident "Some"; _ }, Some payload) ->
-                  Some payload
-              | Pexp_construct ({ txt = Ppxlib.Longident.Lident "None"; _ }, None) -> None
-              | _ -> Some argument)
-          | _ -> None)
-  | None, Some index -> List.nth (unlabelled arguments) index
-  | None, None -> None
-
-let slot_definitely_supplied arguments slot =
-  match slot.label with
-  | None -> Option.is_some (argument_at_slot arguments slot)
-  | Some name ->
-      List.exists arguments ~f:(fun (label, argument) ->
-          match label with
-          | Asttypes.Labelled found -> String.equal found name
-          | Optional found when slot.optional && String.equal found name -> (
-              match argument.pexp_desc with
-              | Pexp_construct ({ txt = Ppxlib.Longident.Lident "Some"; _ }, Some _) -> true
-              | _ -> false)
-          | _ -> false)
-
-let claim_arguments target arguments =
-  match target with
-  | _, Some { claim_wrapper = Some slots; _ } ->
-      List.filter_map slots ~f:(fun slot ->
-          Option.map (argument_at_slot arguments slot) ~f:(fun argument ->
-              (argument, slot.positive)))
-  | _ ->
-      Option.to_list (List.last (unlabelled arguments))
-      |> List.map ~f:(fun argument -> (argument, true))
-
-let claim_default_bindings target arguments =
-  match target with
-  | _, Some { claim_wrapper = Some slots; _ } ->
-      List.filter_map slots ~f:(fun slot ->
-          if slot_definitely_supplied arguments slot then None
-          else Option.map slot.default_binding ~f:(fun binding -> (binding, slot.positive)))
-  | _ -> []
-
-let rec make_bindings environment value =
-  binding_parts value.pvb_pat value.pvb_expr |> List.map ~f:(make_binding_part environment)
-
-and make_binding_part ?optional_label environment part =
-  let guards = required_nonempty part.expression in
-  let returned =
-    returned_quantifiers part.expression @ alias_quantifiers environment part.expression
-  in
-  let unguarded =
-    List.filter returned ~f:(fun quantifier ->
-        quantifier.sealed
-        || Set.is_empty quantifier.populations
-        || Set.is_empty (Set.inter guards quantifier.populations))
-  in
-  let negated_unguarded =
-    returned_quantifiers ~positive:false part.expression
-    @ alias_quantifiers environment ~positive:false part.expression
-  in
-  let constant_bool = constant_bool_of environment part.expression in
-  let dependencies =
-    function_dependencies environment part.expression
-    |> List.filter ~f:(fun dependency ->
-        (* A returned local quantifier is already attributed to this binding by
-           [returned_quantifiers]. Keep outer dependencies beside it, but not the local definition
-           of the same quantifier: reporting both would make one semantic hole need two exemptions.
-           With no direct hole, local dependencies remain the path that carries intermediate
-           negation and guards to an outer binding. *)
-        (List.is_empty unguarded && List.is_empty negated_unguarded)
-        || List.exists environment ~f:(fun (outer : helper_binding) ->
-            outer.site.position = dependency.binding.site.position))
-  in
-  let claim_kind, claim_wrapper =
-    match Sources.longident_of part.expression with
-    | Some [ alias ] ->
-        lookup environment alias
-        |> Option.value_map ~default:(None, None) ~f:(fun binding ->
-            (binding.claim_kind, binding.claim_wrapper))
-    | Some path -> (claim_kind_of_path path, None)
-    | None -> Option.value (wrapper_signature environment part.expression) ~default:(None, None)
-  in
-  let start = part.location.loc_start in
-  let site =
-    {
-      line = start.Stdlib.Lexing.pos_lnum;
-      column = start.Stdlib.Lexing.pos_cnum - start.Stdlib.Lexing.pos_bol;
-      position = start.Stdlib.Lexing.pos_cnum;
-    }
-  in
-  {
-    name = part.name;
-    site;
-    optional_label;
-    dependencies;
-    guards;
-    unguarded;
-    negated_unguarded;
-    constant_bool;
-    quantifier_alias = quantifier_alias_of environment part.expression;
-    claim_kind;
-    claim_wrapper;
-  }
-
-and wrapper_signature environment expression =
-  let rec parameters_and_body parameters expression =
-    match expression.pexp_desc with
-    | Pexp_function (more, _, Pfunction_body body) -> parameters_and_body (parameters @ more) body
-    | _ -> (parameters, expression)
-  in
-  let resolve_alias aliases (name, positive) =
-    match List.Assoc.find aliases name ~equal:String.equal with
-    | None -> [ (name, positive) ]
-    | Some targets ->
-        List.map targets ~f:(fun (target, target_positive) ->
-            (target, Bool.equal positive target_positive))
-  in
-  let extend_aliases aliases recursive bindings =
-    let parts =
-      List.concat_map bindings ~f:(fun binding -> binding_parts binding.pvb_pat binding.pvb_expr)
-    in
-    let shadowed = List.map parts ~f:(fun part -> part.name) |> Set.of_list (module String) in
-    let outer_aliases = List.filter aliases ~f:(fun (name, _) -> not (Set.mem shadowed name)) in
-    let local_aliases =
-      match recursive with
-      | Asttypes.Nonrecursive ->
-          List.map parts ~f:(fun part ->
-              let targets =
-                returned_binding_polarities true part.expression
-                |> List.concat_map ~f:(resolve_alias aliases)
-              in
-              (part.name, targets))
-      | Recursive -> List.map parts ~f:(fun part -> (part.name, []))
-    in
-    List.rev_append local_aliases outer_aliases
-  in
-  let shadow_aliases aliases pattern =
-    let shadowed = pattern_names pattern |> List.map ~f:fst |> Set.of_list (module String) in
-    let outer = List.filter aliases ~f:(fun (name, _) -> not (Set.mem shadowed name)) in
-    Set.to_list shadowed |> List.map ~f:(fun name -> (name, [])) |> Fn.flip List.rev_append outer
-  in
-  let rec claim_calls claim_environment aliases expression =
-    match expression.pexp_desc with
-    | Pexp_let (recursive, bindings, body) ->
-        let binding_aliases =
-          match recursive with
-          | Asttypes.Nonrecursive -> aliases
-          | Recursive -> extend_aliases aliases recursive bindings
-        in
-        List.concat_map bindings ~f:(fun binding ->
-            claim_calls claim_environment binding_aliases binding.pvb_expr)
-        @ claim_calls claim_environment (extend_aliases aliases recursive bindings) body
-    | Pexp_sequence (left, right) ->
-        claim_calls claim_environment aliases left @ claim_calls claim_environment aliases right
-    | Pexp_letmodule (_, _, body) | Pexp_letexception (_, body) ->
-        claim_calls claim_environment aliases body
-    | Pexp_open (declaration, body) ->
-        claim_calls (open_claims claim_environment declaration) aliases body
-    | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) ->
-        claim_calls claim_environment aliases inner
-    | Pexp_ifthenelse (_, yes, no) ->
-        claim_calls claim_environment aliases yes
-        @ Option.value_map no ~default:[] ~f:(claim_calls claim_environment aliases)
-    | Pexp_match (_, cases) ->
-        List.concat_map cases ~f:(fun case ->
-            claim_calls claim_environment (shadow_aliases aliases case.pc_lhs) case.pc_rhs)
-    | Pexp_try (body, cases) ->
-        claim_calls claim_environment aliases body
-        @ List.concat_map cases ~f:(fun case ->
-            claim_calls claim_environment (shadow_aliases aliases case.pc_lhs) case.pc_rhs)
-    | Pexp_function (parameters, _, Pfunction_body body) ->
-        let aliases =
-          List.fold parameters ~init:aliases ~f:(fun aliases parameter ->
-              match parameter.pparam_desc with
-              | Pparam_val (_, _, pattern) -> shadow_aliases aliases pattern
-              | Pparam_newtype _ -> aliases)
-        in
-        claim_calls claim_environment aliases body
-    | Pexp_function (parameters, _, Pfunction_cases (cases, _, _)) ->
-        let aliases =
-          List.fold parameters ~init:aliases ~f:(fun aliases parameter ->
-              match parameter.pparam_desc with
-              | Pparam_val (_, _, pattern) -> shadow_aliases aliases pattern
-              | Pparam_newtype _ -> aliases)
-        in
-        List.concat_map cases ~f:(fun case ->
-            claim_calls claim_environment (shadow_aliases aliases case.pc_lhs) case.pc_rhs)
-    | Pexp_apply (callee, arguments) -> (
-        match claim_target claim_environment callee with
-        | Some target -> [ (target, arguments, aliases) ]
-        | None ->
-            claim_calls claim_environment aliases callee
-            @ List.concat_map arguments ~f:(fun (_, argument) ->
-                claim_calls claim_environment aliases argument))
-    | _ -> []
-  in
-  let parameters, body = parameters_and_body [] expression in
-  let function_cases =
-    match body.pexp_desc with
-    | Pexp_function (_, _, Pfunction_cases (cases, _, _)) -> cases
-    | _ -> []
-  in
-  let calls =
-    if List.is_empty function_cases then claim_calls environment [] body
-    else List.concat_map function_cases ~f:(fun case -> claim_calls environment [] case.pc_rhs)
-  in
-  let unlabelled_parameters =
-    List.count parameters ~f:(fun parameter ->
-        match parameter.pparam_desc with
-        | Pparam_val (Asttypes.Nolabel, _, _) -> true
-        | Pparam_val ((Labelled _ | Optional _), _, _) | Pparam_newtype _ -> false)
-  in
-  let partial_claim_slot ((kind, wrapper), arguments, _) =
-    let unlabelled_arguments = unlabelled arguments in
-    let pending_format_arguments =
-      match (kind, unlabelled_arguments) with
-      | (Pf | Claimf), format :: supplied ->
-          Option.map (Sources.string_literal format) ~f:(fun format ->
-              let expected =
-                Scan.directives format
-                |> List.sum
-                     (module Int)
-                     ~f:(fun (directive : Scan.directive) ->
-                       if Scan.consumes_nothing directive.conversion then 0
-                       else
-                         let modifiers =
-                           String.sub format ~pos:(directive.start + 1)
-                             ~len:(directive.stop - directive.start - 1)
-                         in
-                         1
-                         + String.count modifiers ~f:(Char.equal '*')
-                         + if Char.equal directive.conversion 'a' then 1 else 0)
-              in
-              if List.length supplied <= expected then Some (expected - List.length supplied)
-              else None)
-          |> Option.join
-      | (P | Pass_fail | Claim), [ _ ] -> Some 0
-      | (P | Pass_fail | Claim), _ -> None
-      | (Pf | Claimf), [] -> None
-    in
-    match (wrapper, pending_format_arguments) with
-    | Some { claim_wrapper = Some _; _ }, _ | _, None -> None
-    | _, Some missing ->
-        Some
-          {
-            label = None;
-            optional = false;
-            unlabelled_index = Some (unlabelled_parameters + missing);
-            positive = true;
-            default_binding = None;
-          }
-  in
-  let forwarded_wrapper_slots ((_, wrapper), arguments, _) =
-    match wrapper with
-    | Some { claim_wrapper = Some slots; _ } ->
-        let supplied_unlabelled = List.length (unlabelled arguments) in
-        List.filter_map slots ~f:(fun slot ->
-            match (slot.label, slot.unlabelled_index) with
-            | None, Some index when index >= supplied_unlabelled ->
-                Some
-                  {
-                    slot with
-                    unlabelled_index = Some (unlabelled_parameters + index - supplied_unlabelled);
-                  }
-            | Some label, _ ->
-                let supplied =
-                  List.exists arguments ~f:(fun (argument_label, _) ->
-                      match argument_label with
-                      | Asttypes.Labelled found | Optional found -> String.equal found label
-                      | Nolabel -> false)
-                in
-                if supplied then None else Some slot
-            | None, Some _ | None, None -> None)
-    | Some { claim_wrapper = None; _ } | None -> []
-  in
-  match calls with
-  | [] -> None
-  | ((kind, _), _, _) :: _ as calls ->
-      let partial_claim_slots =
-        List.filter_map calls ~f:partial_claim_slot
-        @ List.concat_map calls ~f:forwarded_wrapper_slots
-      in
-      let claimed_names =
-        List.concat_map calls ~f:(fun (target, arguments, aliases) ->
-            claim_arguments target arguments
-            |> List.concat_map ~f:(fun (argument, positive) ->
-                returned_binding_polarities positive argument
-                |> List.concat_map ~f:(resolve_alias aliases)))
-      in
-      let _, slots, _ =
-        List.fold parameters ~init:(0, [], environment)
-          ~f:(fun (unlabelled_index, slots, parameter_environment) parameter ->
-            match parameter.pparam_desc with
-            | Pparam_newtype _ -> (unlabelled_index, slots, parameter_environment)
-            | Pparam_val (label, default, pattern) ->
-                let names = pattern_names pattern |> List.map ~f:fst in
-                let shadowed = Set.of_list (module String) names in
-                let outer_environment =
-                  List.filter parameter_environment ~f:(fun (binding : helper_binding) ->
-                      not (Set.mem shadowed binding.name))
-                in
-                let optional_label =
-                  match label with
-                  | Asttypes.Optional name | Labelled name -> Some name
-                  | Nolabel -> None
-                in
-                let default_bindings =
-                  Option.value_map default ~default:[] ~f:(fun default ->
-                      binding_parts pattern default
-                      |> List.map ~f:(make_binding_part ?optional_label parameter_environment))
-                in
-                let matches =
-                  List.filter_map claimed_names ~f:(fun (name, positive) ->
-                      if List.mem names name ~equal:String.equal then Some (name, positive)
-                      else None)
-                in
-                let slot =
-                  match label with
-                  | Asttypes.Nolabel ->
-                      {
-                        label = None;
-                        optional = false;
-                        unlabelled_index = Some unlabelled_index;
-                        positive = true;
-                        default_binding = None;
-                      }
-                  | Labelled name ->
-                      {
-                        label = Some name;
-                        optional = false;
-                        unlabelled_index = None;
-                        positive = true;
-                        default_binding = None;
-                      }
-                  | Optional name ->
-                      {
-                        label = Some name;
-                        optional = true;
-                        unlabelled_index = None;
-                        positive = true;
-                        default_binding = None;
-                      }
-                in
-                let slots =
-                  List.rev_append
-                    (List.map matches ~f:(fun (name, positive) ->
-                         {
-                           slot with
-                           positive;
-                           default_binding =
-                             List.find default_bindings ~f:(fun binding ->
-                                 String.equal binding.name name);
-                         }))
-                    slots
-                in
-                let unlabelled_index =
-                  match label with Nolabel -> unlabelled_index + 1 | _ -> unlabelled_index
-                in
-                (unlabelled_index, slots, List.rev_append default_bindings outer_environment))
-      in
-      let case_slots =
-        List.filter_map function_cases ~f:(fun case ->
-            let names = pattern_names case.pc_lhs |> List.map ~f:fst in
-            List.find_map claimed_names ~f:(fun (name, positive) ->
-                if List.mem names name ~equal:String.equal then
-                  Some
-                    {
-                      label = None;
-                      optional = false;
-                      unlabelled_index = Some unlabelled_parameters;
-                      positive;
-                      default_binding = None;
-                    }
-                else None))
-      in
-      Some (Some kind, Some (List.rev_append slots (case_slots @ partial_claim_slots)))
-
-and make_binding_group environment recursive values =
-  match recursive with
-  | Asttypes.Nonrecursive -> List.concat_map values ~f:(make_bindings environment)
-  | Recursive ->
-      (* Recursive siblings are simultaneously in scope. Recompute the finite group once per bound
-         name so a dependency can cross the longest possible sibling chain without making the
-         surrounding lexical environment recursive too. *)
-      let iterations =
-        List.sum (module Int) values ~f:(fun value -> List.length (pattern_names value.pvb_pat))
-        |> Int.max 1
-      in
-      let rec close remaining siblings =
-        if remaining = 0 then siblings
-        else
-          let recursive_environment = List.rev_append siblings environment in
-          close (remaining - 1) (List.concat_map values ~f:(make_bindings recursive_environment))
-      in
-      close iterations []
-
-and function_dependencies environment expr =
-  match expr.pexp_desc with
-  | Pexp_function (parameters, _, Pfunction_body body) ->
-      let body_environment = function_parameter_environment environment parameters in
-      function_dependencies body_environment body
-  | Pexp_function (parameters, _, Pfunction_cases (cases, _, _)) ->
-      let body_environment = function_parameter_environment environment parameters in
-      List.concat_map cases ~f:(fun case ->
-          let shadowed =
-            pattern_names case.pc_lhs |> List.map ~f:fst |> Set.of_list (module String)
-          in
-          let case_environment =
-            List.filter body_environment ~f:(fun (binding : helper_binding) ->
-                not (Set.mem shadowed binding.name))
-          in
-          let guard_dependencies =
-            Option.value_map case.pc_guard ~default:[] ~f:(fun guard ->
-                dependency_result_polarities case_environment true case.pc_rhs
-                |> List.concat_map ~f:(fun positive ->
-                    binding_dependencies ~positive case_environment guard))
-          in
-          guard_dependencies @ function_dependencies case_environment case.pc_rhs)
-  | _ -> binding_dependencies environment expr
-
-and function_parameter_environment environment parameters =
-  List.fold parameters ~init:environment ~f:(fun parameter_environment parameter ->
-      match parameter.pparam_desc with
-      | Pparam_val (label, default, pattern) ->
-          let names = pattern_names pattern |> List.map ~f:fst in
-          let shadowed = Set.of_list (module String) names in
-          let outer_environment =
-            List.filter parameter_environment ~f:(fun (binding : helper_binding) ->
-                not (Set.mem shadowed binding.name))
-          in
-          Option.value_map default ~default:outer_environment ~f:(fun default ->
-              let optional_label =
-                match label with
-                | Asttypes.Optional name -> Some name
-                | Labelled name -> Some name
-                | Nolabel -> None
-              in
-              let defaults =
-                binding_parts pattern default
-                |> List.map ~f:(make_binding_part ?optional_label parameter_environment)
-              in
-              List.rev_append defaults outer_environment)
-      | Pparam_newtype _ -> parameter_environment)
-
-and binding_dependencies ?(positive = true) environment expr =
-  let bindings = ref [] in
-  let rec visit environment positive forwards_guards expr =
-    let visit_arguments environment positive forwards_guards arguments =
-      List.iter arguments ~f:(fun (_, argument) ->
-          visit environment positive forwards_guards argument)
-    in
-    match expr.pexp_desc with
-    | Pexp_let (recursive, values, body) ->
-        let local = make_binding_group environment recursive values in
-        visit (List.rev_append local environment) positive false body
-    | Pexp_letmodule (_, _, body) | Pexp_letexception (_, body) ->
-        visit environment positive forwards_guards body
-    | Pexp_sequence (_, result) -> visit environment positive forwards_guards result
-    | Pexp_ifthenelse (condition, yes, no) ->
-        dependency_condition_polarities environment positive yes no
-        |> List.iter ~f:(fun condition_positive ->
-            visit environment condition_positive false condition);
-        visit environment positive forwards_guards yes;
-        Option.iter no ~f:(visit environment positive forwards_guards)
-    | Pexp_match (scrutinee, cases) ->
-        let scrutinee_positive =
-          Option.value_map (resolved_boolean_match_polarity environment cases) ~default:positive
-            ~f:(fun same_polarity -> Bool.equal positive same_polarity)
-        in
-        visit environment scrutinee_positive false scrutinee;
-        List.iter cases ~f:(fun case ->
-            let shadowed =
-              pattern_names case.pc_lhs |> List.map ~f:fst |> Set.of_list (module String)
-            in
-            let case_environment =
-              List.filter environment ~f:(fun (binding : helper_binding) ->
-                  not (Set.mem shadowed binding.name))
-            in
-            Option.iter case.pc_guard ~f:(fun guard ->
-                dependency_result_polarities case_environment positive case.pc_rhs
-                |> List.iter ~f:(fun guard_positive ->
-                    visit case_environment guard_positive false guard));
-            visit case_environment positive forwards_guards case.pc_rhs)
-    | Pexp_try (body, cases) ->
-        visit environment positive forwards_guards body;
-        List.iter cases ~f:(fun case ->
-            let shadowed =
-              pattern_names case.pc_lhs |> List.map ~f:fst |> Set.of_list (module String)
-            in
-            let case_environment =
-              List.filter environment ~f:(fun (binding : helper_binding) ->
-                  not (Set.mem shadowed binding.name))
-            in
-            Option.iter case.pc_guard ~f:(fun guard ->
-                dependency_result_polarities case_environment positive case.pc_rhs
-                |> List.iter ~f:(fun guard_positive ->
-                    visit case_environment guard_positive false guard));
-            visit case_environment positive forwards_guards case.pc_rhs)
-    | Pexp_apply (callee, [ (Asttypes.Nolabel, argument) ]) when is_name callee "not" ->
-        visit environment (not positive) forwards_guards argument
-    | Pexp_apply (apply, [ (Asttypes.Nolabel, function_); (Asttypes.Nolabel, argument) ])
-      when is_name apply "@@" && is_name function_ "not" ->
-        visit environment (not positive) forwards_guards argument
-    | Pexp_apply (pipe, [ (Asttypes.Nolabel, value); (Asttypes.Nolabel, piped_call) ])
-      when is_name pipe "|>" -> (
-        match piped_call.pexp_desc with
-        | Pexp_ident _ when is_name piped_call "not" ->
-            visit environment (not positive) forwards_guards value
-        | Pexp_apply (callee, arguments) -> (
-            match unlabelled arguments with
-            | [ literal ] -> (
-                match compared_argument callee literal value ~positive with
-                | Some (argument, polarity) -> visit environment polarity forwards_guards argument
-                | None ->
-                    visit_arguments environment positive false
-                      [ (Asttypes.Nolabel, value); (Asttypes.Nolabel, piped_call) ])
-            | _ ->
-                visit_arguments environment positive false
-                  [ (Asttypes.Nolabel, value); (Asttypes.Nolabel, piped_call) ])
-        | _ ->
-            visit_arguments environment positive false
-              [ (Asttypes.Nolabel, value); (Asttypes.Nolabel, piped_call) ])
-    | Pexp_apply (callee, [ (Asttypes.Nolabel, left); (Asttypes.Nolabel, right) ])
-      when is_boolean_comparison callee -> (
-        match resolved_compared_argument environment callee left right ~positive with
-        | Some (argument, polarity) -> visit environment polarity forwards_guards argument
-        | None ->
-            visit_arguments environment positive forwards_guards
-              [ (Asttypes.Nolabel, left); (Asttypes.Nolabel, right) ])
-    | Pexp_apply (callee, arguments) when is_name callee "&&" || is_name callee "||" ->
-        visit_arguments environment positive forwards_guards arguments
-    | Pexp_apply
-        ( ({ pexp_desc = Pexp_function (parameters, _, Pfunction_body body); _ } as _callee),
-          arguments ) ->
-        visit (shadow_parameters environment parameters) positive forwards_guards body;
-        visit_arguments environment positive false arguments
-    | Pexp_apply
-        ( ({ pexp_desc = Pexp_function (parameters, _, Pfunction_cases (cases, _, _)); _ } as _callee),
-          arguments ) ->
-        let function_environment = shadow_parameters environment parameters in
-        List.iter cases ~f:(fun case ->
-            let shadowed =
-              pattern_names case.pc_lhs |> List.map ~f:fst |> Set.of_list (module String)
-            in
-            let case_environment =
-              List.filter function_environment ~f:(fun (binding : helper_binding) ->
-                  not (Set.mem shadowed binding.name))
-            in
-            Option.iter case.pc_guard ~f:(visit case_environment positive false);
-            visit case_environment positive forwards_guards case.pc_rhs);
-        visit_arguments environment positive false arguments
-    | Pexp_apply (callee, arguments) -> (
-        match Sources.longident_of callee with
-        | Some path -> (
-            match lookup environment (String.concat ~sep:"." path) with
-            | Some binding ->
-                let supplied_optional =
-                  List.filter_map arguments ~f:(fun (label, argument) ->
-                      match label with
-                      | Asttypes.Labelled name -> Some name
-                      | Optional name -> (
-                          match argument.pexp_desc with
-                          | Pexp_construct ({ txt = Ppxlib.Longident.Lident "Some"; _ }, Some _) ->
-                              Some name
-                          | _ -> None)
-                      | Nolabel -> None)
-                  |> Set.of_list (module String)
-                in
-                bindings :=
-                  {
-                    binding;
-                    positive;
-                    forwards_guards = false;
-                    supplied_optional = Some supplied_optional;
-                  }
-                  :: !bindings;
-                visit_arguments environment positive false arguments
-            | None ->
-                visit environment positive false callee;
-                visit_arguments environment positive false arguments)
-        | _ ->
-            visit environment positive false callee;
-            visit_arguments environment positive false arguments)
-    | Pexp_function _ -> ()
-    | _ ->
-        (match Sources.longident_of expr with
-        | Some path ->
-            Option.iter
-              (lookup environment (String.concat ~sep:"." path))
-              ~f:(fun binding ->
-                bindings :=
-                  { binding; positive; forwards_guards; supplied_optional = None } :: !bindings)
-        | _ -> ());
-        let iterator =
-          object
-            inherit Ast_traverse.iter as super
-            method! attribute _ = ()
-            method! expression child = visit environment positive forwards_guards child
-            method children child = super#expression child
-          end
-        in
-        iterator#children expr
-  in
-  visit environment positive true expr;
-  !bindings
-
+(* Every claim the provenance layer finds, reduced to what the ratchet reports: one finding per
+   binding whose quantifier the claim can rest on, and one per argument site for quantifiers written
+   directly into the claim. The layer has already removed every source a witness covers. *)
 let quantified_claims structure =
-  let origins (dependencies : helper_dependency list) =
-    let rec visit seen inherited_guards positive supplied_optional (binding : helper_binding) =
-      let key =
-        binding.name ^ ":"
-        ^ Int.to_string binding.site.position
-        ^ ":" ^ Bool.to_string positive ^ ":"
-        ^ String.concat ~sep:"," (Set.to_list supplied_optional)
+  Provenance.claims structure
+  |> List.concat_map ~f:(fun (claim : Provenance.claim) ->
+      let claim_line = claim.fired.line in
+      let quantified =
+        List.filter_map claim.value.sources ~f:(fun source ->
+            match source.origin with
+            | Provenance.Quantifier { kind; _ } -> Some (source, kind)
+            | Provenance.Parameter _ | Provenance.Steering _ -> None)
       in
-      if Set.mem seen key then []
-      else if Option.value_map binding.optional_label ~default:false ~f:(Set.mem supplied_optional)
-      then []
-      else
-        let seen = Set.add seen key in
-        let guards =
-          if positive then Set.union inherited_guards binding.guards else inherited_guards
-        in
-        let candidates = if positive then binding.unguarded else binding.negated_unguarded in
-        let uncovered =
-          List.filter candidates ~f:(fun quantifier ->
-              quantifier.sealed
-              || Set.is_empty quantifier.populations
-              || Set.is_empty (Set.inter guards quantifier.populations))
-        in
-        let direct = if List.is_empty uncovered then [] else [ (binding, uncovered) ] in
-        direct
-        @ List.concat_map binding.dependencies ~f:(fun dependency ->
-            let inherited_guards =
-              if positive && dependency.forwards_guards then guards else Set.empty (module String)
-            in
-            let supplied_optional =
-              Option.value dependency.supplied_optional ~default:supplied_optional
-            in
-            visit seen inherited_guards
-              (Bool.equal positive dependency.positive)
-              supplied_optional dependency.binding)
-    in
-    List.concat_map dependencies ~f:(fun dependency ->
-        let supplied_optional =
-          Option.value dependency.supplied_optional ~default:(Set.empty (module String))
-        in
-        visit
-          (Set.empty (module String))
-          (Set.empty (module String))
-          dependency.positive supplied_optional dependency.binding)
-    |> List.dedup_and_sort ~compare:(fun (left, _) (right, _) ->
-        Int.compare left.site.position right.site.position)
-  in
-  let found = ref [] in
-  let record_dependencies ~claim_line dependencies =
-    dependencies |> origins
-    |> List.iter ~f:(fun ((binding : helper_binding), quantifiers) ->
-        found :=
+      let keyed =
+        List.map quantified ~f:(fun (source, kind) ->
+            match source.owner with
+            | Some owner -> ((owner.name, owner.site, false), kind)
+            | None ->
+                let helper =
+                  Option.value claim.helper ~default:(Provenance.label_text claim.label)
+                in
+                ((helper, source.written, true), kind))
+      in
+      List.map keyed ~f:fst
+      |> List.dedup_and_sort ~compare:(fun (a, a_site, _) (b, b_site, _) ->
+          match Int.compare a_site.position b_site.position with
+          | 0 -> String.compare a b
+          | order -> order)
+      |> List.map ~f:(fun (helper, helper_site, direct) ->
           {
-            helper = binding.name;
-            helper_site = binding.site;
+            helper;
+            helper_site;
             claim_line;
+            direct;
             quantifiers =
-              List.map quantifiers ~f:(fun quantifier -> quantifier.kind)
+              List.filter_map keyed ~f:(fun ((h, s, _), kind) ->
+                  if String.equal h helper && s.position = helper_site.position then Some kind
+                  else None)
               |> List.dedup_and_sort ~compare:Poly.compare;
-          }
-          :: !found)
-  in
-  let record_origins ~claim_line ~positive environment boolean =
-    binding_dependencies ~positive environment boolean |> record_dependencies ~claim_line
-  in
-  let record_direct_quantifiers ~claim_site ~positive ~environment (wrapper : helper_binding)
-      boolean =
-    let guards = required_nonempty boolean in
-    let quantifiers =
-      returned_quantifiers ~positive boolean @ alias_quantifiers environment ~positive boolean
-      |> List.filter ~f:(fun quantifier ->
-          quantifier.sealed
-          || Set.is_empty quantifier.populations
-          || Set.is_empty (Set.inter guards quantifier.populations))
-    in
-    if not (List.is_empty quantifiers) then
-      let argument_site = site_of_location boolean.pexp_loc in
-      found :=
-        {
-          helper = wrapper.name;
-          helper_site = argument_site;
-          claim_line = claim_site.line;
-          quantifiers =
-            List.map quantifiers ~f:(fun quantifier -> quantifier.kind)
-            |> List.dedup_and_sort ~compare:Poly.compare;
-        }
-        :: !found
-  in
-  let record_claim environment expr =
-    match expr.pexp_desc with
-    | Pexp_apply (callee, arguments) -> (
-        match claim_target environment callee with
-        | None -> ()
-        | Some ((_, wrapper) as target) ->
-            let claim_site = site_of_location expr.pexp_loc in
-            let claim_line = claim_site.line in
-            claim_arguments target arguments
-            |> List.iter ~f:(fun (boolean, positive) ->
-                record_origins ~claim_line ~positive environment boolean;
-                Option.iter wrapper ~f:(fun binding ->
-                    if Option.is_some binding.claim_wrapper then
-                      record_direct_quantifiers ~claim_site ~positive ~environment binding boolean));
-            claim_default_bindings target arguments
-            |> List.iter ~f:(fun (binding, positive) ->
-                record_dependencies ~claim_line
-                  [
-                    {
-                      binding;
-                      positive;
-                      forwards_guards = false;
-                      supplied_optional = Some (Set.empty (module String));
-                    };
-                  ]))
-    | _ -> ()
-  in
-  let prefix_bindings prefix bindings =
-    List.map bindings ~f:(fun (binding : helper_binding) ->
-        { binding with name = prefix ^ "." ^ binding.name })
-  in
-  let rec module_claim_bindings environment module_expr =
-    match module_expr.pmod_desc with
-    | Pmod_structure items ->
-        let _, exports =
-          List.fold items ~init:(environment, []) ~f:(fun (environment, exports) item ->
-              match item.pstr_desc with
-              | Pstr_value (recursive, bindings) ->
-                  let local = make_binding_group environment recursive bindings in
-                  (List.rev_append local environment, List.rev_append local exports)
-              | Pstr_open declaration -> (open_claims environment declaration, exports)
-              | Pstr_module binding -> (
-                  match binding.pmb_name.txt with
-                  | Some name ->
-                      let nested =
-                        module_claim_bindings environment binding.pmb_expr |> prefix_bindings name
-                      in
-                      (List.rev_append nested environment, List.rev_append nested exports)
-                  | None -> (environment, exports))
-              | _ -> (environment, exports))
-        in
-        exports
-    | Pmod_constraint (inner, _) -> module_claim_bindings environment inner
-    | _ -> []
-  in
-  let rec scan_expression environment expr =
-    record_claim environment expr;
-    match expr.pexp_desc with
-    | Pexp_let (recursive, bindings, body) ->
-        let local = make_binding_group environment recursive bindings in
-        let binding_environment =
-          match recursive with
-          | Asttypes.Nonrecursive -> environment
-          | Recursive -> List.rev_append local environment
-        in
-        List.iter bindings ~f:(fun binding -> scan_expression binding_environment binding.pvb_expr);
-        scan_expression (List.rev_append local environment) body
-    | Pexp_open (declaration, body) ->
-        scan_module environment declaration.popen_expr;
-        scan_expression (open_claims environment declaration) body
-    | _ ->
-        let iterator =
-          object
-            inherit Ast_traverse.iter as super
-            method! attribute _ = ()
-            method! expression child = scan_expression environment child
-            method! structure nested = scan_structure environment nested
-            method children child = super#expression child
-          end
-        in
-        iterator#children expr
-  and scan_structure environment items =
-    ignore
-      (List.fold items ~init:environment ~f:(fun environment item ->
-           match item.pstr_desc with
-           | Pstr_value (recursive, bindings) ->
-               let local = make_binding_group environment recursive bindings in
-               let binding_environment =
-                 match recursive with
-                 | Asttypes.Nonrecursive -> environment
-                 | Recursive -> List.rev_append local environment
-               in
-               List.iter bindings ~f:(fun binding ->
-                   scan_expression binding_environment binding.pvb_expr);
-               List.rev_append local environment
-           | Pstr_eval (expr, _) ->
-               scan_expression environment expr;
-               environment
-           | Pstr_module binding -> (
-               scan_module environment binding.pmb_expr;
-               match binding.pmb_name.txt with
-               | Some name ->
-                   module_claim_bindings environment binding.pmb_expr
-                   |> prefix_bindings name
-                   |> Fn.flip List.rev_append environment
-               | None -> environment)
-           | Pstr_recmodule bindings ->
-               List.iter bindings ~f:(fun binding -> scan_module environment binding.pmb_expr);
-               environment
-           | Pstr_open declaration ->
-               scan_module environment declaration.popen_expr;
-               open_claims environment declaration
-           | _ ->
-               let iterator =
-                 object
-                   inherit Ast_traverse.iter as super
-                   method! attribute _ = ()
-                   method! expression expr = scan_expression environment expr
-                   method! structure nested = scan_structure environment nested
-                   method! structure_item item = super#structure_item item
-                 end
-               in
-               iterator#structure_item item;
-               environment))
-  and scan_module environment module_expr =
-    match module_expr.pmod_desc with
-    | Pmod_structure nested -> scan_structure environment nested
-    | _ ->
-        let iterator =
-          object
-            inherit Ast_traverse.iter as super
-            method! attribute _ = ()
-            method! expression expr = scan_expression environment expr
-            method! structure nested = scan_structure environment nested
-            method! module_expr module_expr = super#module_expr module_expr
-          end
-        in
-        iterator#module_expr module_expr
-  in
-  scan_structure [] structure;
-  List.rev !found
+          }))
   |> List.dedup_and_sort ~compare:(fun a b ->
       match Int.compare a.claim_line b.claim_line with
       | 0 -> (
@@ -1892,9 +243,6 @@ let exempt_quantified_helpers =
     ( "test/operations/autotune_routine_name.ml:contributed",
       "a contended search may legitimately contribute no rows; its report counters separately \
        prove whether that absence came from refused timings rather than a lost result" );
-    ( "test/operations/env_var_deps.ml:family_floor_met",
-      "a non-repository synthetic run deliberately skips repository-only family floors; the \
-       repository path checks every family and reports each shortfall separately" );
     ( "test/operations/epilogue_fusion_mma_seeds.ml:vacuous",
       "an empty GPU mma family deliberately selects the environment-gated vacuity path; the \
        non-vacuous path separately requires and executes the epilogue twins" );
@@ -1910,10 +258,73 @@ let exempt_quantified_helpers =
     ( "test/operations/reduction_forms.ml:extra_ok",
       "an empty extra-fragment list deliberately means the member requires no additional emitted \
        assignment fragments" );
-    ( "test/operations/shell_scripts_parse.ml:line_enables_errexit",
-      "a line may legitimately parse to no parent-affecting command fragment; this exists result \
-       is an internal classification input, while the fixed non-empty case table is the test \
-       population" );
+    (* Quantifiers written directly into a native claim are keyed by the claim's label
+       (gh-ocannl-908): the sites the audited migration left on the unguarded spelling, each because
+       emptiness is what the claim means and nothing in scope must be non-empty. *)
+    ( "test/operations/autotune_batched_companion.ml:bc: reduction-over-j companion refutes the \
+       GPU family pre-proposal",
+      "the empty seed list is the consequence the claim conjoins with the family's \
+       coverage-refutation witness on the sketch tree, which is the non-vacuous half and is itself \
+       guarded on a non-empty refutation list" );
+    ( "test/operations/autotune_batched_companion.ml:lm: coarse fission keeps the row-max \
+       companion in the GEMM's segment",
+      "the single coarse segment's empty seed list is conjoined with the tree's \
+       coverage-refutation witness, which carries the claim" );
+    ( "test/operations/autotune_smoke.ml:a replayed second report has no declines",
+      "a cache replay compiles no candidate, so its census has no rows to be derived from; the \
+       claim conjoins it with a zero failure count and is conditioned on the replay having \
+       happened" );
+    ( "test/operations/autotune_smoke.ml:search off without a cache times nothing",
+      "with the search off no candidate exists to populate a schedule; the empty best schedule is \
+       one of four zero counters the claim conjoins" );
+    ( "test/operations/hip_scratch_tune_survives.ml:scratch/tune: the declined baseline is not \
+       also counted as a gh-532 refusal",
+      "conditioned on the baseline having been declined, and on a device that backs the frame the \
+       decline census is legitimately empty (announced vacuous on stderr); where the baseline is \
+       declined the claim just above witnesses the census" );
+    ( "test/operations/schedule_batched_mma.ml:variance-like site: no cpu mma seeds",
+      "the variance-style self-product is deliberately not recognized as a matmul or conv site, so \
+       the sketch seeder yields no seeds of any kind and there is no seed population to quantify \
+       the mma subset over" );
+    ( "test/operations/schedule_batched_mma.ml:variance-like site: no gpu mma seeds",
+      "the same site, on the GPU seeder" );
+    (* Equivalences `Bool.equal <quantifier> <backend fact>` (staging#681 round 11): the reader sees
+       that the quantifier's false polarity -- the empty population -- is what the claim accepts on
+       one side of the fact, and on that side emptiness is the designed reading. *)
+    ( "test/operations/autotune_candidate_release.ml:hoisted_attempted",
+      "the equivalence `constant class grows iff hoisted candidates were attempted` is asserted \
+       precisely so that a GPU backend, whose seeder proposes no hoisted candidate, reads `no \
+       hoist labels, no constant growth` rather than a vacuous growth claim; the label population \
+       is non-empty on cc, where the split is pinned" );
+    ( "test/operations/autotune_serial_baseline.ml:the refusal is recorded in the decline census, \
+       on GPU backends only",
+      "on a CPU backend the baseline is dispatched and no refusal is recorded, so an empty census \
+       is the passing reading there; on GPU the equivalence requires the entry" );
+    ( "test/operations/autotune_smoke.ml:tensorized_schedule",
+      "the flag and the schedule are read off the same winner, so a schedule with no Tensorize op \
+       must agree with a false flag: the empty case is one side of the equivalence, and the \
+       tensorized side is exercised by the searched report" );
+    ( "test/operations/shell_scripts_parse.ml:Shebang.mentions_a_shell",
+      "the scope table pairs each line with the reading the predicate must give it, and a line \
+       mentioning no shell is `outside this check's scope` by design; the positive rows exercise \
+       the non-empty word list" );
+    ( "test/operations/agent_notes_structure.ml:every exemption still names a bullet that needs one",
+      "over the file's own exemption list, which is empty today: a stale entry is reported the \
+       moment one is added, and there is no population beneath an empty list to witness" );
+    ( "test/operations/atomic_file_race.ml:the rerun left the scratch directory as it found it",
+      "the directory must end empty, and the tree the rerun published and removed is not \
+       enumerated, so nothing in scope witnesses the final listing; the fixtures an interrupted \
+       run leaves behind are witnessed by the clearing claims just above" );
+    ( "test/operations/simd_lane_choice.ml:a backend that renders no vectors offers no rungs",
+      "a zero vector width yields no ladder by construction; the rungs the widths that do render \
+       offer are pinned by the claims beside it" );
+    ( "test/operations/test_cpu_topology.ml:classes well-formed",
+      "a live probe of the host's core classes: a host the probe cannot classify legitimately \
+       reports none, and the invariant is over whatever it found" );
+    ( "test/operations/tile_mma_geometry.ml:a column extent below one vector has no default and no \
+       alternatives",
+      "the absence of alternatives is the geometry rule the claim states, for an extent that \
+       admits no tile; the shapes that do admit one are quantified by the claims above it" );
   ]
 
 (* Synthetic inputs state the helper rule independently of whatever helpers happen to be in the
@@ -2238,11 +649,26 @@ let () = Verdict.p "all selected rows pass" close|ocaml},
   && List.for_all (List.filter rows ~f:p2) ~f:q
 let () = Verdict.p "all selected rows pass" close|ocaml},
       [ "close" ] );
-    ( "conservatively refuses an outer guard across a helper call",
+    ( "accepts an outer guard forwarded to a helper call over the same actual",
       {ocaml|let all xs = List.for_all xs ~f:Fn.id
 let checked xs = (not (List.is_empty xs)) && all xs
 let () = Verdict.p "all rows pass" (checked rows)|ocaml},
+      [] );
+    ( "refuses a helper applied to an expression that is not a population",
+      {ocaml|let all xs = List.for_all xs ~f:Fn.id
+let checked xs = (not (List.is_empty xs)) && all (List.rev xs)
+let () = Verdict.p "all rows pass" (checked rows)|ocaml},
       [ "all" ] );
+    ( "accepts a witness a helper establishes over the same actual",
+      {ocaml|let present xs = not (List.is_empty xs)
+let checked = present rows && List.for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" checked|ocaml},
+      [] );
+    ( "refuses a witness a helper establishes over a different actual",
+      {ocaml|let present xs = not (List.is_empty xs)
+let checked = present other_rows && List.for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" checked|ocaml},
+      [ "checked" ] );
     ( "refuses a mismatched actual hidden by equal formal names",
       {ocaml|let all xs = List.for_all xs ~f:Fn.id
 let checked xs other = (not (List.is_empty xs)) && all other
@@ -2605,7 +1031,1138 @@ let () = Verdict.p "some sample is bad" (some_bad samples)|ocaml},
       {ocaml|let close got want = Array.for_all2_exn got want ~f:Float.equal
 let () = if close got want then Stdio.printf "same\n"|ocaml},
       [] );
+    (* gh-ocannl-908 (1): a guarded population survives a double negation. *)
+    ( "accepts a guarded quantifier assigned through a double negation",
+      {ocaml|let inverted = not ((not (List.is_empty rows)) && List.for_all rows ~f:Fn.id)
+let () = Verdict.p "all rows pass" (not inverted)|ocaml},
+      [] );
+    ( "refuses a double negation without the non-empty witness",
+      {ocaml|let inverted = not (List.for_all rows ~f:Fn.id)
+let () = Verdict.p "all rows pass" (not inverted)|ocaml},
+      [ "inverted" ] );
+    ( "refuses a double negation guarded over a different population",
+      {ocaml|let inverted = not ((not (List.is_empty other_rows)) && List.for_all rows ~f:Fn.id)
+let () = Verdict.p "all rows pass" (not inverted)|ocaml},
+      [ "inverted" ] );
+    (* gh-ocannl-908 (2): a condition whose every branch returns the same Boolean is that Boolean,
+       however the branches spell it; one the reader cannot prove equal still steers. *)
+    ( "does not attribute a condition whose branches return the same Boolean alias",
+      {ocaml|let all = List.for_all rows ~f:Fn.id
+let yes = true
+let result = if all then yes else true
+let () = Verdict.p "the constant passes" result|ocaml},
+      [] );
+    ( "does not attribute a condition whose branches agree through a nested condition",
+      {ocaml|let all = List.for_all rows ~f:Fn.id
+let some = List.exists rows ~f:Fn.id
+let result = if all then true else if some then true else true
+let () = Verdict.p "the constant passes" result|ocaml},
+      [] );
+    ( "refuses a condition with one constant branch and one the reader cannot prove",
+      {ocaml|let all = List.for_all rows ~f:Fn.id
+let result = if all then true else other_flag
+let () = Verdict.p "all rows pass" result|ocaml},
+      [ "all" ] );
+    ( "does not attribute a condition steering between two unproven branches",
+      {ocaml|let all = List.for_all rows ~f:Fn.id
+let result = if all then compute () else other ()
+let () = Verdict.p "the computed value holds" result|ocaml},
+      [] );
+    ( "accepts a witness from a condition selecting the claimed branch",
+      {ocaml|let result = if not (List.is_empty rows) then List.for_all rows ~f:Fn.id else false
+let () = Verdict.p "all rows pass" result|ocaml},
+      [] );
+    (* gh-ocannl-908 (3): a wrapper's parameter shadows an outer quantified binding while its body
+       is scanned; a wrapper that closes over the binding instead is still refused. *)
+    ( "accepts a constant argument through a parameter shadowing an outer quantified binding",
+      {ocaml|let ok = List.for_all rows ~f:Fn.id
+let check ok = Verdict.p "the constant passes" ok
+let () = check true|ocaml},
+      [] );
+    ( "still refuses the outer quantified binding a wrapper closes over",
+      {ocaml|let ok = List.for_all rows ~f:Fn.id
+let check () = Verdict.p "all rows pass" ok
+let () = check ()|ocaml},
+      [ "ok" ] );
+    ( "evaluates a wrapper's optional default before its parameter shadows the name",
+      {ocaml|let ok = List.for_all rows ~f:Fn.id
+let check ?(ok = ok) () = Verdict.p "all rows pass" ok
+let () = check ()|ocaml},
+      [ "ok" ] );
+    (* gh-ocannl-908 (4): a destructured wrapper parameter claims its own component only. *)
+    ( "accepts a quantified sibling ignored by a destructured wrapper parameter",
+      {ocaml|let check (_, ok) = Verdict.p "the constant passes" ok
+let () = check (List.for_all rows ~f:Fn.id, true)|ocaml},
+      [] );
+    ( "refuses the claimed component of a destructured wrapper parameter",
+      {ocaml|let check (_, ok) = Verdict.p "all rows pass" ok
+let () = check (true, List.for_all rows ~f:Fn.id)|ocaml},
+      [ "check" ] );
+    ( "accepts a quantified field ignored by a record wrapper parameter",
+      {ocaml|let check { ok; _ } = Verdict.p "the constant passes" ok
+let () = check { ok = true; detail = List.for_all rows ~f:Fn.id }|ocaml},
+      [] );
+    ( "refuses the claimed field of a record wrapper parameter",
+      {ocaml|let check { ok; _ } = Verdict.p "all rows pass" ok
+let () = check { ok = List.for_all rows ~f:Fn.id; detail = info }|ocaml},
+      [ "check" ] );
+    ( "conservatively inspects a wrapper argument its pattern cannot align",
+      {ocaml|let packed = (List.for_all rows ~f:Fn.id, true)
+let check (_, ok) = Verdict.p "the constant passes" ok
+let () = check packed|ocaml},
+      [ "packed" ] );
+    (* gh-ocannl-908 (5): a quantifier written directly into a native claim. *)
+    ( "refuses a quantifier written directly in a native claim",
+      {ocaml|let () = Verdict.p "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a guarded quantifier written directly in a native claim",
+      {ocaml|let () =
+  Verdict.p "all rows pass" ((not (List.is_empty rows)) && List.for_all rows ~f:Fn.id)|ocaml},
+      [] );
+    ( "accepts a negated quantifier written directly in a native claim",
+      {ocaml|let () = Verdict.p "some row fails" (not (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "refuses a quantifier written directly in a computed-label native claim",
+      {ocaml|let () = Verdict.pf "%s rows pass" tag (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "%s rows pass" ] );
+    ( "refuses a quantifier piped into a native claim",
+      {ocaml|let () = List.for_all rows ~f:Fn.id |> Verdict.p "all rows pass"|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a quantifier written directly in an opened native claim",
+      {ocaml|open Verdict.Claims
+let () = p "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "names a native claim's non-literal label by its expression",
+      {ocaml|let () = Verdict.p (tag ^ " rows pass") (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "tag ^ \" rows pass\"" ] );
+    (* gh-ocannl-908 (6): quantifiers reached through an open of List or Array, a local open, or a
+       module alias -- and an unqualified name with none of those in scope is not one. *)
+    ( "refuses a quantifier reached through an open of List",
+      {ocaml|open List
+let close = for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" close|ocaml},
+      [ "close" ] );
+    ( "accepts an inverted quantifier reached through an open of List",
+      {ocaml|open List
+let differs = not (for_all rows ~f:Fn.id)
+let () = Verdict.p "some row fails" differs|ocaml},
+      [] );
+    ( "refuses a negated exists reached through an open of Array",
+      {ocaml|open Array
+let none = not (exists rows ~f:bad)
+let () = Verdict.p "no row is bad" none|ocaml},
+      [ "none" ] );
+    ( "refuses a quantifier reached through a module alias",
+      {ocaml|module L = List
+let close = L.for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" close|ocaml},
+      [ "close" ] );
+    ( "refuses a quantifier reached through a local open",
+      {ocaml|let close = List.(for_all rows ~f:Fn.id)
+let () = Verdict.p "all rows pass" close|ocaml},
+      [ "close" ] );
+    ( "refuses a quantifier reached through a let-open of Array",
+      {ocaml|let close =
+  let open Array in
+  for_all2_exn got want ~f:Float.equal
+let () = Verdict.p "the values agree" close|ocaml},
+      [ "close" ] );
+    ( "does not resolve an unqualified for_all with no open in scope",
+      {ocaml|let close = for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" close|ocaml},
+      [] );
+    ( "keeps a local open of List inside its scope",
+      {ocaml|let guarded () =
+  let open List in
+  for_all rows ~f:Fn.id
+let close = for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" close|ocaml},
+      [] );
+    (* staging#681 round 1: an unknown forwarded option keeps the default alive; a quantifier is a
+       value only once its populations and predicate have all arrived; a projection out of an
+       aggregate conservatively carries the aggregate. *)
+    ( "keeps a wrapper's default alive through an unknown forwarded option",
+      {ocaml|let check ?(ok = List.for_all rows ~f:Fn.id) () = Verdict.p "all rows pass" ok
+let use opt = check ?ok:opt ()
+let () = use None|ocaml},
+      [ "ok" ] );
+    ( "refuses a quantifier completed by a later predicate argument",
+      {ocaml|let all = List.for_all rows
+let () = Verdict.p "all rows pass" (all ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a for_all2_exn completed one population at a time",
+      {ocaml|let agree = Array.for_all2_exn got
+let () = Verdict.p "the values agree" (agree want ~f:Float.equal)|ocaml},
+      [ "the values agree" ] );
+    ( "does not treat a partially applied quantifier as a Boolean",
+      {ocaml|let all = List.for_all rows
+let () = Verdict.p "the constant passes" (let _pending = all in true)|ocaml},
+      [] );
+    ( "refuses a quantified field read from a record binding",
+      {ocaml|let result = { ok = List.for_all rows ~f:Fn.id; detail = info }
+let () = Verdict.p "all rows pass" result.ok|ocaml},
+      [ "result" ] );
+    ( "conservatively refuses a sibling field read from a quantified record binding",
+      {ocaml|let result = { ok = List.for_all rows ~f:Fn.id; detail = true }
+let () = Verdict.p "the detail holds" result.detail|ocaml},
+      [ "result" ] );
+    ( "refuses a quantified component read through fst",
+      {ocaml|let packed = (List.for_all rows ~f:Fn.id, info)
+let () = Verdict.p "all rows pass" (fst packed)|ocaml},
+      [ "packed" ] );
+    (* staging#681 round 2: the native claims reached through Verdict itself; a length inequality
+       with zero as a witness; ordered avoidance in a match; a dynamically formatted claim partially
+       applied; a condition selecting wrapper parameters that later become constants. *)
+    ( "refuses a quantifier written directly in a claim opened from Verdict",
+      {ocaml|open Verdict
+let () = p "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a quantifier written directly in a claim through a module alias of Verdict",
+      {ocaml|module V = Verdict
+let () = V.p "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a length inequality with zero as the non-empty witness",
+      {ocaml|let close xs = List.length xs <> 0 && List.for_all xs ~f:Fn.id
+let () = Verdict.p "every sample agrees" (close samples)|ocaml},
+      [] );
+    ( "refuses a length inequality with a positive literal as a witness",
+      {ocaml|let close xs = List.length xs <> 1 && List.for_all xs ~f:Fn.id
+let () = Verdict.p "every sample agrees" (close samples)|ocaml},
+      [ "close" ] );
+    ( "does not let a later case's guard witness an earlier case's quantifier",
+      {ocaml|let result =
+  match () with
+  | () when List.for_all rows ~f:Fn.id -> true
+  | () when List.is_empty rows -> false
+  | () -> false
+let () = Verdict.p "all rows pass" result|ocaml},
+      [ "result" ] );
+    ( "accepts a witness from an earlier avoided case",
+      {ocaml|let result =
+  match () with
+  | () when List.is_empty rows -> false
+  | () when List.for_all rows ~f:Fn.id -> true
+  | () -> false
+let () = Verdict.p "all rows pass" result|ocaml},
+      [] );
+    ( "refuses a quantifier reaching a dynamically formatted claim through a partial application",
+      {ocaml|let check = Verdict.pf fmt label
+let () = check (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "fmt" ] );
+    ( "refuses a quantified condition selecting constant wrapper arguments",
+      {ocaml|let check yes no = Verdict.p "all rows pass" (if List.for_all rows ~f:Fn.id then yes else no)
+let () = check true false|ocaml},
+      [ "check" ] );
+    ( "accepts a quantified condition selecting inverted constant wrapper arguments",
+      {ocaml|let check yes no = Verdict.p "some row fails" (if List.for_all rows ~f:Fn.id then yes else no)
+let () = check false true|ocaml},
+      [] );
+    ( "defers a quantified condition through a wrapper that forwards its arguments",
+      {ocaml|let check yes no = Verdict.p "all rows pass" (if List.for_all rows ~f:Fn.id then yes else no)
+let forward a b = check a b
+let () = forward true false|ocaml},
+      [ "check" ] );
+    (* staging#681 round 3: constructor payloads; locally rebound builtins; bound aggregates handed
+       to a destructured parameter; a claim function selected by control flow. *)
+    ( "refuses a quantifier carried in a constructor payload and matched out",
+      {ocaml|let result = Ok (List.for_all rows ~f:Fn.id)
+let () = match result with Ok ok -> Verdict.p "all rows pass" ok | Error _ -> ()|ocaml},
+      [ "result" ] );
+    ( "accepts a negated quantifier carried in a constructor payload",
+      {ocaml|let result = Ok (not (List.for_all rows ~f:Fn.id))
+let () = match result with Ok differs -> Verdict.p "some row fails" differs | Error _ -> ()|ocaml},
+      [] );
+    ( "reads a constructor pattern's payload exactly against a matching constructor",
+      {ocaml|let () =
+  Verdict.p "the constant passes"
+    (match Ok (true, List.for_all rows ~f:Fn.id) with Ok (ok, _) -> ok | Error _ -> false)|ocaml},
+      [] );
+    ( "does not read a locally bound not as the Boolean primitive",
+      {ocaml|let not _ = List.for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" (not ())|ocaml},
+      [ "not" ] );
+    ( "does not read a locally bound fst as a projection",
+      {ocaml|let fst _ = List.for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" (fst (true, true))|ocaml},
+      [ "fst" ] );
+    ( "does not let a bound aggregate's witness cover a sibling formal",
+      {ocaml|let check (guarded, tested) =
+  Verdict.p "all rows pass" ((not (List.is_empty guarded)) && List.for_all tested ~f:Fn.id)
+let pair = (nonempty, empty)
+let () = check pair|ocaml},
+      [ "check" ] );
+    ( "accepts a literal tuple argument whose witness and quantifier share the actual",
+      {ocaml|let check (guarded, tested) =
+  Verdict.p "all rows pass" ((not (List.is_empty guarded)) && List.for_all tested ~f:Fn.id)
+let () = check (rows, rows)|ocaml},
+      [] );
+    ( "refuses a quantifier passed to a native claim selected by control flow",
+      {ocaml|let check = if verbose then Verdict.p else Verdict.claim
+let () = check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a quantifier passed to a wrapper selected by a match",
+      {ocaml|let loud ok = Verdict.p "all rows pass" ok
+let quiet ok = Verdict.claim "all rows pass" ok
+let check = match mode with `Loud -> loud | `Quiet -> quiet
+let () = check (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "check" ] );
+    (* staging#681 round 4: polymorphic variant payloads; a rebound pipeline operator; the recursive
+       group's two rounds against a three-sibling chain and a cycle. *)
+    ( "refuses a quantifier carried in a polymorphic variant payload and matched out",
+      {ocaml|let result = `Ok (List.for_all rows ~f:Fn.id)
+let () = match result with `Ok ok -> Verdict.p "all rows pass" ok | `Error -> ()|ocaml},
+      [ "result" ] );
+    ( "reads a variant pattern's payload exactly against a matching tag",
+      {ocaml|let () =
+  Verdict.p "the constant passes"
+    (match `Ok (true, List.for_all rows ~f:Fn.id) with `Ok (ok, _) -> ok | `Error -> false)|ocaml},
+      [] );
+    ( "does not read a locally bound pipeline operator as the builtin",
+      {ocaml|let ( |> ) _ _ = List.for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" (() |> ())|ocaml},
+      [ "|>" ] );
+    ( "refuses a quantifier reached through a three-sibling recursive chain",
+      {ocaml|let rec first xs = middle xs
+and middle xs = last xs
+and last xs = List.for_all xs ~f:Fn.id
+let () = Verdict.p "all rows pass" (first rows)|ocaml},
+      [ "last" ] );
+    ( "refuses a quantifier reached around a recursive cycle",
+      {ocaml|let rec first xs = if stop then middle xs else last xs
+and middle xs = first xs
+and last xs = List.for_all xs ~f:Fn.id
+let () = Verdict.p "all rows pass" (first rows)|ocaml},
+      [ "last" ] );
+    (* staging#681 round 5: guarded Boolean cases; a filtered view's predicate identity; the
+       parameter mark inside printed text; a quantifier partially applied through a helper. *)
+    ( "refuses a direct quantifier selected by a guarded Boolean case",
+      {ocaml|let close = match List.for_all rows ~f:Fn.id with true when enabled -> true | _ -> false
+let () = Verdict.p "all rows pass" close|ocaml},
+      [ "close" ] );
+    ( "accepts a direct quantifier inverted by a guarded Boolean case",
+      {ocaml|let differs = match List.for_all rows ~f:Fn.id with true when enabled -> false | _ -> true
+let () = Verdict.p "some row fails" differs|ocaml},
+      [] );
+    ( "refuses a filtered population whose predicate was rebound after the witness",
+      {ocaml|let p = keep
+let present = not (List.is_empty (List.filter rows ~f:p))
+let p = drop
+let () = Verdict.p "all kept rows pass" (present && List.for_all (List.filter rows ~f:p) ~f:Fn.id)|ocaml},
+      [ "all kept rows pass" ] );
+    ( "accepts a filtered population witnessed under the same predicate binding",
+      {ocaml|let p = keep
+let present = not (List.is_empty (List.filter rows ~f:p))
+let () = Verdict.p "all kept rows pass" (present && List.for_all (List.filter rows ~f:p) ~f:Fn.id)|ocaml},
+      [] );
+    ( "does not mistake a parameter mark spelled inside a filter predicate",
+      {ocaml|let () =
+  Verdict.p "all rows pass"
+    (List.for_all (List.filter rows ~f:(fun s -> String.equal s "@P")) ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a quantifier completed after its population passed through a helper",
+      {ocaml|let every xs = List.for_all xs
+let all_rows = every rows
+let () = Verdict.p "all rows pass" (all_rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    (* staging#681 round 6: many alternatives; a rebound List.length; a conjunct parameter's
+       witnesses; a claim function passed as an argument; Stdlib's argument order; a recursive
+       module's exports. *)
+    ( "refuses a quantifier passed to the fifth of five alternative claim functions",
+      {ocaml|let quiet_one _ = ()
+let quiet_two _ = ()
+let quiet_three _ = ()
+let quiet_four _ = ()
+let check =
+  match mode with
+  | 1 -> quiet_one
+  | 2 -> quiet_two
+  | 3 -> quiet_three
+  | 4 -> quiet_four
+  | _ -> Verdict.p "all rows pass"
+let () = check (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "check" ] );
+    ( "does not read a locally bound List.length as a witness",
+      {ocaml|module List = struct
+  let length _ = 1
+  let for_all = List.for_all
+end
+let close = List.length rows > 0 && List.for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" close|ocaml},
+      [ "close" ] );
+    ( "accepts a witness passed to a wrapper as a conjunct of its claim",
+      {ocaml|let check nonempty = Verdict.p "all rows pass" (nonempty && List.for_all rows ~f:Fn.id)
+let () = check (not (List.is_empty rows))|ocaml},
+      [] );
+    ( "refuses a witness passed to a wrapper as an alternative of its claim",
+      {ocaml|let check nonempty = Verdict.p "all rows pass" (nonempty || List.for_all rows ~f:Fn.id)
+let () = check (not (List.is_empty rows))|ocaml},
+      [ "check" ] );
+    ( "refuses a quantifier claimed through a claim function passed as an argument",
+      {ocaml|let apply claim value = claim "all rows pass" value
+let () = apply Verdict.p (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a quantifier claimed through a wrapper passed as an argument",
+      {ocaml|let check ok = Verdict.p "all rows pass" ok
+let apply claim value = claim value
+let () = apply check (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "check" ] );
+    ( "refuses a quantifier spelled in Stdlib's argument order",
+      {ocaml|let () = Verdict.p "all rows pass" (Stdlib.List.for_all Fn.id rows)|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a negated quantifier spelled in Stdlib's argument order",
+      {ocaml|let () = Verdict.p "some row fails" (not (Stdlib.List.for_all Fn.id rows))|ocaml},
+      [] );
+    ( "refuses a quantifier passed to a recursive module's claim wrapper",
+      {ocaml|module rec Checks : sig
+  val check : string -> bool -> unit
+end = struct
+  let check = Verdict.p
+end
+let () = Checks.check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    (* staging#681 round 7: a deferred call's result; a predicate deciding its quantifier; let
+       operators. *)
+    ( "refuses a quantifier returned through a function parameter applied for its result",
+      {ocaml|let apply all xs = all xs ~f:Fn.id
+let () = Verdict.p "all rows pass" (apply List.for_all rows)|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a negated quantifier returned through a function parameter applied for its result",
+      {ocaml|let apply all xs = not (all xs ~f:Fn.id)
+let () = Verdict.p "some row fails" (apply List.for_all rows)|ocaml},
+      [] );
+    ( "refuses a vacuous quantifier inside the predicate deciding its quantifier",
+      {ocaml|let () =
+  Verdict.p "some group passes" (List.exists groups ~f:(fun rows -> List.for_all rows ~f:Fn.id))|ocaml},
+      [ "some group passes" ] );
+    ( "accepts a guarded quantifier inside the predicate deciding its quantifier",
+      {ocaml|let () =
+  Verdict.p "some group passes"
+    (List.exists groups ~f:(fun rows -> (not (List.is_empty rows)) && List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "refuses a quantifier bound by a let operator",
+      {ocaml|let ( let* ) x f = f x
+let () =
+  let* ok = List.for_all rows ~f:Fn.id in
+  Verdict.p "all rows pass" ok|ocaml},
+      [ "let*" ] );
+    ( "accepts a negated quantifier bound by a let operator",
+      {ocaml|let ( let* ) x f = f x
+let () =
+  let* differs = not (List.for_all rows ~f:Fn.id) in
+  Verdict.p "some row fails" differs|ocaml},
+      [] );
+    (* staging#681 round 8: Stdlib through an alias; recursive modules calling later siblings; field
+       and qualified populations; callbacks handed to unmodelled functions; refutable cases' guards;
+       a predicate selected by control flow. *)
+    ( "refuses a quantifier spelled in Stdlib's argument order through a module alias",
+      {ocaml|module L = Stdlib.List
+let () = Verdict.p "all rows pass" (L.for_all Fn.id rows)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a quantifier passed through an earlier recursive module calling a later one",
+      {ocaml|module rec A : sig
+  val check : string -> bool -> unit
+end = struct
+  let check label value = B.check label value
+end
+and B : sig
+  val check : string -> bool -> unit
+end = struct
+  let check = Verdict.p
+end
+let () = A.check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "A.check" ] );
+    ( "accepts a witness over a record field guarding the same field's quantifier",
+      {ocaml|let () =
+  Verdict.p "all rows pass"
+    ((not (List.is_empty state.rows)) && List.for_all state.rows ~f:Fn.id)|ocaml},
+      [] );
+    ( "refuses a witness over one record field against another's quantifier",
+      {ocaml|let () =
+  Verdict.p "all rows pass"
+    ((not (List.is_empty state.other)) && List.for_all state.rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a witness over a qualified population guarding its quantifier",
+      {ocaml|let () =
+  Verdict.p "all rows pass" ((not (List.is_empty Fixture.rows)) && List.for_all Fixture.rows ~f:Fn.id)|ocaml},
+      [] );
+    ( "refuses a quantifier claimed inside a callback over the callback's own population",
+      {ocaml|let () =
+  List.iter groups ~f:(fun rows -> Verdict.p "all rows pass" (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a guarded quantifier claimed inside a callback over its own population",
+      {ocaml|let () =
+  List.iter groups ~f:(fun rows ->
+      Verdict.p "all rows pass" ((not (List.is_empty rows)) && List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "does not let a refutable case's guard witness a later case",
+      {ocaml|let result =
+  match option with
+  | None when List.is_empty rows -> false
+  | _ -> List.for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" result|ocaml},
+      [ "result" ] );
+    ( "accepts an irrefutable case's guard as a witness for a later case",
+      {ocaml|let result =
+  match option with
+  | _ when List.is_empty rows -> false
+  | _ -> List.for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" result|ocaml},
+      [] );
+    ( "refuses a vacuous quantifier inside a predicate selected by control flow",
+      {ocaml|let pred = if enabled then fun rows -> List.for_all rows ~f:Fn.id else fun _ -> false
+let () = Verdict.p "some group passes" (List.exists groups ~f:pred)|ocaml},
+      [ "pred" ] );
+    (* staging#681 round 9: a predicate's own claims; a rebound module behind a qualified
+       population; applied functors; a local module shadowing List; phys_equal; not as a value. *)
+    ( "refuses a claim fired inside a predicate over its own population",
+      {ocaml|let () =
+  ignore
+    (List.for_all groups ~f:(fun rows ->
+         Verdict.p "all rows pass" (List.for_all rows ~f:Fn.id);
+         true))|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a guarded claim fired inside a predicate over its own population",
+      {ocaml|let () =
+  ignore
+    (List.for_all groups ~f:(fun rows ->
+         Verdict.p "all rows pass" ((not (List.is_empty rows)) && List.for_all rows ~f:Fn.id);
+         true))|ocaml},
+      [] );
+    ( "refuses a qualified population whose module was rebound after the witness",
+      {ocaml|module Fixture = struct let rows = full end
+let present = not (List.is_empty Fixture.rows)
+module Fixture = struct let rows = [] end
+let () = Verdict.p "all rows pass" (present && List.for_all Fixture.rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a quantifier passed to a wrapper exported by an applied functor",
+      {ocaml|module Make () = struct let check = Verdict.p end
+module Checks = Make ()
+let () = Checks.check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "resolves an opened local module that shadows List to its own members",
+      {ocaml|module List = struct let all xs = Base.List.for_all xs ~f:Fn.id end
+open List
+let () = Verdict.p "all rows pass" (all rows)|ocaml},
+      [ "all" ] );
+    ( "refuses a quantifier compared with true through phys_equal",
+      {ocaml|let () = Verdict.p "all rows pass" (phys_equal (List.for_all rows ~f:Fn.id) true)|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a quantifier compared with false through phys_equal",
+      {ocaml|let () = Verdict.p "some row fails" (phys_equal (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [] );
+    ( "refuses a negated exists through an alias of not",
+      {ocaml|let none = not
+let () = Verdict.p "no row matches" (none (List.exists rows ~f:Fn.id))|ocaml},
+      [ "no row matches" ] );
+    ( "accepts a negated for_all through an alias of not",
+      {ocaml|let none = not
+let () = Verdict.p "some row fails" (none (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    (* staging#681 round 10: functor arguments; callable optional parameters; callables in
+       aggregates; indexed quantifiers; longer recursive module chains; let operators applied. *)
+    ( "refuses a quantifier passed through a functor parameter's claim",
+      {ocaml|module Make (C : S) = struct let check = C.p end
+module Checks = Make (Verdict)
+let () = Checks.check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a quantifier passed to a supplied callable optional parameter",
+      {ocaml|let check ?(claim = fun _ _ -> ()) value = claim "all rows pass" value
+let () = check ~claim:Verdict.p (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "does not fire a callable optional parameter's inert default",
+      {ocaml|let check ?(claim = fun _ _ -> ()) value = claim "all rows pass" value
+let () = check (List.for_all rows ~f:Fn.id)|ocaml},
+      [] );
+    ( "refuses a quantifier passed to a claim function stored in a record field",
+      {ocaml|let callbacks = { check = Verdict.p }
+let () = callbacks.check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a vacuous indexed quantifier",
+      {ocaml|let () = Verdict.p "all rows pass" (List.for_alli rows ~f:(fun _ row -> row))|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a positive indexed exists",
+      {ocaml|let () = Verdict.p "some row matches" (Array.existsi rows ~f:(fun _ row -> row))|ocaml},
+      [] );
+    ( "refuses a quantifier passed through a three-module recursive chain",
+      {ocaml|module rec A : sig
+  val check : string -> bool -> unit
+end = struct
+  let check label value = B.check label value
+end
+and B : sig
+  val check : string -> bool -> unit
+end = struct
+  let check label value = C.check label value
+end
+and C : sig
+  val check : string -> bool -> unit
+end = struct
+  let check = Verdict.p
+end
+let () = A.check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "A.check" ] );
+    ( "refuses a quantifier claimed by a let operator's own definition",
+      {ocaml|let ( let* ) x f =
+  Verdict.p "all rows pass" x;
+  f x
+let () =
+  let* _ = List.for_all rows ~f:Fn.id in
+  ()|ocaml},
+      [ "let*" ] );
+    ( "conservatively binds a let operator defined elsewhere as an identity",
+      {ocaml|open Let_syntax
+let () =
+  let* ok = List.for_all rows ~f:Fn.id in
+  Verdict.p "all rows pass" ok|ocaml},
+      [ "ok" ] );
+    (* staging#681 round 11: a repeated pattern's guard; a functor bound by let module; two Booleans
+       compared. *)
+    ( "does not let a repeated pattern's guard witness a differently matched case",
+      {ocaml|let result =
+  match option with
+  | None when List.is_empty rows -> false
+  | None -> false
+  | Some _ -> List.for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" result|ocaml},
+      [ "result" ] );
+    ( "accepts a repeated pattern's guard as a witness for the case that repeats it",
+      {ocaml|let result =
+  match option with
+  | None when List.is_empty rows -> false
+  | None -> List.for_all rows ~f:Fn.id
+  | Some _ -> true
+let () = Verdict.p "all rows pass" result|ocaml},
+      [] );
+    ( "refuses a quantifier passed through a functor parameter's claim inside an expression",
+      {ocaml|let () =
+  let module Make = functor (C : S) -> struct let check = C.p end in
+  let module Checks = Make (Verdict) in
+  Checks.check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses two quantifiers compared for equality",
+      {ocaml|let () = Verdict.p "the checks agree" (List.for_all rows ~f:p = List.for_all rows ~f:q)|ocaml},
+      [ "the checks agree" ] );
+    ( "accepts two quantifiers compared for equality under a witness",
+      {ocaml|let () =
+  Verdict.p "the checks agree"
+    ((not (List.is_empty rows)) && List.for_all rows ~f:p = List.for_all rows ~f:q)|ocaml},
+      [] );
+    (* staging#681 round 12: a functor applied by its qualified path; a for loop's variable; a
+       witness on a field the file assigns. *)
+    ( "refuses a quantifier through a functor applied by its qualified path",
+      {ocaml|module Outer = struct
+  module Make (C : S) = struct
+    let check = C.p
+  end
+end
+module Checks = Outer.Make (Verdict)
+let () = Checks.check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a guarded quantifier through a functor applied by its qualified path",
+      {ocaml|module Outer = struct
+  module Make (C : S) = struct
+    let check = C.p
+  end
+end
+module Checks = Outer.Make (Verdict)
+let () =
+  Checks.check "all rows pass" ((not (List.is_empty rows)) && List.for_all rows ~f:Fn.id)|ocaml},
+      [] );
+    ( "binds a for loop's variable apart from an outer namesake",
+      {ocaml|let i = 0
+let present = not (List.is_empty (List.filter rows ~f:(fun r -> r.group = i)))
+let () =
+  for i = 1 to 2 do
+    Verdict.p "all rows pass"
+      (present && List.for_all (List.filter rows ~f:(fun r -> r.group = i)) ~f:Fn.id)
+  done|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a for loop body's quantifier witnessed on the loop's own variable",
+      {ocaml|let () =
+  for i = 1 to 2 do
+    Verdict.p "all rows pass"
+      ((not (List.is_empty (List.filter rows ~f:(fun r -> r.group = i))))
+      && List.for_all (List.filter rows ~f:(fun r -> r.group = i)) ~f:Fn.id)
+  done|ocaml},
+      [] );
+    ( "refuses a witness on a field the file assigns",
+      {ocaml|let () =
+  let present = not (List.is_empty state.rows) in
+  state.rows <- [];
+  Verdict.p "all rows pass" (present && List.for_all state.rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a witness on a field nothing in the file assigns",
+      {ocaml|let () =
+  let present = not (List.is_empty state.rows) in
+  Verdict.p "all rows pass" (present && List.for_all state.rows ~f:Fn.id)|ocaml},
+      [] );
   ]
+
+(* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round
+   found; what they cannot show is which CROSS-PRODUCTS nobody wrote. This generates them: every
+   value form the provenance layer models (a binding, a helper, a wrapper parameter, a match, a
+   module, an open, a callback, an application), under every quantifier kind, under every way of
+   spelling the quantifier's function, in the four cases each pairing wants -- the refusal (the
+   quantifier reaching the claim in its vacuous polarity, which must be refused), the inverted
+   spelling (accepted: the polarity is the wrong one for vacuity), the guarded spelling (accepted:
+   the population is witnessed), and the shadowed spelling (accepted: a constant intercepts the
+   value where the form binds a name, or an ignored sibling receives it). A missing combination is a
+   cell nobody added, visible in the grid the golden prints, rather than a shape found by review.
+
+   Each family is a template placing the quantified value [v] -- and [helper], the name the refusal
+   must report. The four cases differ only in [v] and, for the shadowed case, the template's
+   [shadow]; the expected verdict follows from the case, never from the family, which is what keeps
+   the matrix data rather than a second list of hand-decided controls. *)
+type matrix_family = {
+  family : string;
+  reports : string;  (** The name the refusal case must report. *)
+  place : string -> string;
+  shadow : string -> string;
+}
+
+let matrix_families =
+  [
+    {
+      family = "a native claim's argument";
+      reports = "the claim";
+      place = (fun v -> Printf.sprintf "let () = Verdict.p \"the claim\" (%s)" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf "let () = Verdict.p \"the claim\" (let v = %s in let v = true in v)" v);
+    };
+    {
+      family = "a structure-level binding";
+      reports = "v";
+      place = (fun v -> Printf.sprintf "let v = %s\nlet () = Verdict.p \"the claim\" v" v);
+      shadow =
+        (fun v -> Printf.sprintf "let v = %s\nlet v = true\nlet () = Verdict.p \"the claim\" v" v);
+    };
+    {
+      family = "a binding local to the argument";
+      reports = "v";
+      place = (fun v -> Printf.sprintf "let () = Verdict.p \"the claim\" (let v = %s in v)" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf "let () = Verdict.p \"the claim\" (let v = %s in let v = true in v)" v);
+    };
+    {
+      family = "a helper applied to the population";
+      reports = "h";
+      place =
+        (fun v -> Printf.sprintf "let h rows = %s\nlet () = Verdict.p \"the claim\" (h rows)" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let h rows = %s\nlet h rows = true\nlet () = Verdict.p \"the claim\" (h rows)" v);
+    };
+    {
+      family = "a function-case helper";
+      reports = "h";
+      place =
+        (fun v ->
+          Printf.sprintf "let h = function rows -> %s\nlet () = Verdict.p \"the claim\" (h rows)" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let h = function rows -> %s\n\
+             let h = function rows -> true\n\
+             let () = Verdict.p \"the claim\" (h rows)"
+            v);
+    };
+    {
+      family = "a wrapper's positional parameter";
+      reports = "check";
+      place =
+        (fun v -> Printf.sprintf "let check ok = Verdict.p \"the claim\" ok\nlet () = check (%s)" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let check ok = let ok = true in Verdict.p \"the claim\" ok\nlet () = check (%s)" v);
+    };
+    {
+      family = "a wrapper's labelled parameter";
+      reports = "check";
+      place =
+        (fun v ->
+          Printf.sprintf "let check ~ok = Verdict.p \"the claim\" ok\nlet () = check ~ok:(%s)" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let check ~ok = let ok = true in Verdict.p \"the claim\" ok\nlet () = check ~ok:(%s)" v);
+    };
+    {
+      family = "a wrapper's optional default";
+      reports = "ok";
+      place =
+        (fun v ->
+          Printf.sprintf "let check ?(ok = %s) () = Verdict.p \"the claim\" ok\nlet () = check ()" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let check ?(ok = %s) () = Verdict.p \"the claim\" ok\nlet () = check ~ok:true ()" v);
+    };
+    {
+      family = "a destructured wrapper parameter";
+      reports = "check";
+      place =
+        (fun v ->
+          Printf.sprintf "let check (_, ok) = Verdict.p \"the claim\" ok\nlet () = check (true, %s)"
+            v);
+      shadow =
+        (fun v ->
+          Printf.sprintf "let check (_, ok) = Verdict.p \"the claim\" ok\nlet () = check (%s, true)"
+            v);
+    };
+    {
+      family = "a match forwarding its scrutinee";
+      reports = "v";
+      place =
+        (fun v ->
+          Printf.sprintf "let v = match %s with ok -> ok\nlet () = Verdict.p \"the claim\" v" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf "let v = match %s with _ -> true\nlet () = Verdict.p \"the claim\" v" v);
+    };
+    {
+      family = "a Boolean constructor match";
+      reports = "v";
+      place =
+        (fun v ->
+          Printf.sprintf
+            "let v = match %s with true -> true | false -> false\n\
+             let () = Verdict.p \"the claim\" v"
+            v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let v = match %s with true -> true | false -> true\nlet () = Verdict.p \"the claim\" v"
+            v);
+    };
+    {
+      family = "an if condition";
+      reports = "v";
+      place =
+        (fun v ->
+          Printf.sprintf "let v = if %s then true else false\nlet () = Verdict.p \"the claim\" v" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf "let v = if %s then true else true\nlet () = Verdict.p \"the claim\" v" v);
+    };
+    {
+      family = "a match guard";
+      reports = "v";
+      place =
+        (fun v ->
+          Printf.sprintf
+            "let v = match () with () when %s -> true | () -> false\n\
+             let () = Verdict.p \"the claim\" v"
+            v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let v = match () with () when %s -> true | () -> true\n\
+             let () = Verdict.p \"the claim\" v"
+            v);
+    };
+    {
+      family = "a protected try body";
+      reports = "v";
+      place =
+        (fun v ->
+          Printf.sprintf "let v = try %s with _ -> false\nlet () = Verdict.p \"the claim\" v" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let v = try %s with _ -> false\nlet v = true\nlet () = Verdict.p \"the claim\" v" v);
+    };
+    {
+      family = "a member of a local module";
+      reports = "M.v";
+      place =
+        (fun v ->
+          Printf.sprintf "module M = struct let v = %s end\nlet () = Verdict.p \"the claim\" M.v" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "module M = struct let v = %s let v = true end\nlet () = Verdict.p \"the claim\" M.v" v);
+    };
+    {
+      family = "a member reached through open";
+      reports = "v";
+      place =
+        (fun v ->
+          Printf.sprintf
+            "module M = struct let v = %s end\nopen M\nlet () = Verdict.p \"the claim\" v" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "module M = struct let v = %s end\n\
+             open M\n\
+             let v = true\n\
+             let () = Verdict.p \"the claim\" v"
+            v);
+    };
+    {
+      family = "a member reached through a local open";
+      reports = "v";
+      place =
+        (fun v ->
+          Printf.sprintf
+            "module M = struct let v = %s end\nlet () = let open M in Verdict.p \"the claim\" v" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "module M = struct let v = %s end\n\
+             let () = let open M in let v = true in Verdict.p \"the claim\" v"
+            v);
+    };
+    {
+      family = "a claim inside a callback";
+      reports = "check";
+      place =
+        (fun v ->
+          Printf.sprintf
+            "let check ok = List.iter [ () ] ~f:(fun () -> Verdict.p \"the claim\" ok)\n\
+             let () = check (%s)"
+            v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let check ok = List.iter [ true ] ~f:(fun ok -> Verdict.p \"the claim\" ok)\n\
+             let () = check (%s)"
+            v);
+    };
+    {
+      family = "an immediately invoked function";
+      reports = "the claim";
+      place = (fun v -> Printf.sprintf "let () = Verdict.p \"the claim\" ((fun () -> %s) ())" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let () = Verdict.p \"the claim\" ((fun () -> let v = %s in let v = true in v) ())" v);
+    };
+    {
+      family = "a partially applied native claim";
+      reports = "check";
+      place = (fun v -> Printf.sprintf "let check = Verdict.p \"the claim\"\nlet () = check (%s)" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let check = Verdict.p \"the claim\"\nlet check b = ignore b\nlet () = check (%s)" v);
+    };
+    {
+      family = "a pipeline into the claim";
+      reports = "the claim";
+      place = (fun v -> Printf.sprintf "let () = (%s) |> Verdict.p \"the claim\"" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf "let () = (let v = %s in let v = true in v) |> Verdict.p \"the claim\"" v);
+    };
+    {
+      family = "a sequence's tail";
+      reports = "v";
+      place =
+        (fun v -> Printf.sprintf "let v = (ignore rows; %s)\nlet () = Verdict.p \"the claim\" v" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf "let v = (ignore (%s); true)\nlet () = Verdict.p \"the claim\" v" v);
+    };
+    {
+      family = "a tuple component destructured at binding";
+      reports = "v";
+      place =
+        (fun v -> Printf.sprintf "let v, _ = (%s, true)\nlet () = Verdict.p \"the claim\" v" v);
+      shadow =
+        (fun v -> Printf.sprintf "let _, v = (%s, true)\nlet () = Verdict.p \"the claim\" v" v);
+    };
+    {
+      family = "a field of a record binding";
+      reports = "r";
+      place =
+        (fun v ->
+          Printf.sprintf "let r = { ok = %s; detail = info }\nlet () = Verdict.p \"the claim\" r.ok"
+            v);
+      shadow =
+        (fun v ->
+          Printf.sprintf
+            "let r = { ok = %s; detail = info }\n\
+             let r = { ok = true; detail = info }\n\
+             let () = Verdict.p \"the claim\" r.ok"
+            v);
+    };
+    {
+      family = "a comparison with true";
+      reports = "v";
+      place = (fun v -> Printf.sprintf "let v = (%s) = true\nlet () = Verdict.p \"the claim\" v" v);
+      shadow =
+        (fun v ->
+          Printf.sprintf "let v = (%s) = true\nlet v = true\nlet () = Verdict.p \"the claim\" v" v);
+    };
+  ]
+
+(* A quantifier kind, as a value over the free population [rows] (and [want]), given the text that
+   names its function. *)
+type matrix_quantifier = {
+  quantifier : string;
+  container : string;
+  member : string;
+  refusal : string -> string;
+  inverted : string -> string;
+  guarded : string -> string;
+}
+
+let matrix_quantifiers =
+  [
+    {
+      quantifier = "for_all";
+      container = "List";
+      member = "for_all";
+      refusal = (fun q -> q ^ " rows ~f:Fn.id");
+      inverted = (fun q -> "not (" ^ q ^ " rows ~f:Fn.id)");
+      guarded = (fun q -> "(not (List.is_empty rows)) && " ^ q ^ " rows ~f:Fn.id");
+    };
+    {
+      quantifier = "for_all2_exn";
+      container = "Array";
+      member = "for_all2_exn";
+      refusal = (fun q -> q ^ " rows want ~f:Float.equal");
+      inverted = (fun q -> "not (" ^ q ^ " rows want ~f:Float.equal)");
+      guarded = (fun q -> "(not (Array.is_empty rows)) && " ^ q ^ " rows want ~f:Float.equal");
+    };
+    {
+      quantifier = "is_empty";
+      container = "List";
+      member = "is_empty";
+      refusal = (fun q -> q ^ " rows");
+      inverted = (fun q -> "not (" ^ q ^ " rows)");
+      guarded = (fun q -> "List.length rows > 0 && " ^ q ^ " rows");
+    };
+    {
+      quantifier = "exists";
+      container = "List";
+      member = "exists";
+      refusal = (fun q -> "not (" ^ q ^ " rows ~f:Fn.id)");
+      inverted = (fun q -> q ^ " rows ~f:Fn.id");
+      guarded = (fun q -> "(not (List.is_empty rows)) && not (" ^ q ^ " rows ~f:Fn.id)");
+    };
+  ]
+
+(* How the quantifier's function is spelled: qualified, through a structure-level open, through a
+   module alias, or through a local open (gh-ocannl-908 item 6). *)
+type matrix_spelling = {
+  spelling : string;
+  prelude : string -> string;
+  call : string -> string -> string;
+}
+
+let matrix_spellings =
+  [
+    {
+      spelling = "qualified";
+      prelude = (fun _ -> "");
+      call = (fun container member -> container ^ "." ^ member);
+    };
+    {
+      spelling = "opened";
+      prelude = (fun container -> "open " ^ container ^ "\n");
+      call = (fun _ member -> member);
+    };
+    {
+      spelling = "aliased";
+      prelude = (fun container -> "module Q = " ^ container ^ "\n");
+      call = (fun _ member -> "Q." ^ member);
+    };
+    {
+      spelling = "local open";
+      prelude = (fun _ -> "");
+      call = (fun container member -> container ^ ".(" ^ member ^ ")");
+    };
+  ]
+
+type matrix_case = Refusal | Inverted | Guarded | Shadowed
+
+let matrix_cases = [ Refusal; Inverted; Guarded; Shadowed ]
+
+let matrix_case_letter = function
+  | Refusal -> 'R'
+  | Inverted -> 'I'
+  | Guarded -> 'G'
+  | Shadowed -> 'S'
+
+let matrix_source family quantifier spelling case =
+  let q = spelling.call quantifier.container quantifier.member in
+  let value, place =
+    match case with
+    | Refusal -> (quantifier.refusal q, family.place)
+    | Inverted -> (quantifier.inverted q, family.place)
+    | Guarded -> (quantifier.guarded q, family.place)
+    | Shadowed -> (quantifier.refusal q, family.shadow)
+  in
+  spelling.prelude quantifier.container ^ place value
+
+let matrix_expected family = function
+  | Refusal -> [ family.reports ]
+  | Inverted | Guarded | Shadowed -> []
+
+(* Runs the matrix: per family, the grid row and whether every cell read as expected. A cell that
+   does not parse is a fixture defect and reads as unexpected too, named on stderr. *)
+let run_syntax_matrix () =
+  List.map matrix_families ~f:(fun family ->
+      let cells =
+        List.concat_map matrix_quantifiers ~f:(fun quantifier ->
+            List.map matrix_spellings ~f:(fun spelling ->
+                String.of_char_list
+                  (List.map matrix_cases ~f:(fun case ->
+                       let source = matrix_source family quantifier spelling case in
+                       let found =
+                         match Sources.structure_of source with
+                         | structure ->
+                             quantified_claims structure
+                             |> List.map ~f:(fun claim -> claim.helper)
+                             |> List.dedup_and_sort ~compare:String.compare
+                         | exception exception_ ->
+                             eprintf "syntax matrix: %s / %s / %s does not parse: %s\n%s\n"
+                               family.family quantifier.quantifier spelling.spelling
+                               (Exn.to_string exception_) source;
+                             [ "<does not parse>" ]
+                       in
+                       let expected = matrix_expected family case in
+                       if List.equal String.equal found expected then matrix_case_letter case
+                       else (
+                         eprintf "syntax matrix: %s / %s / %s / %c expected [%s], found [%s]:\n%s\n"
+                           family.family quantifier.quantifier spelling.spelling
+                           (matrix_case_letter case)
+                           (String.concat ~sep:", " expected)
+                           (String.concat ~sep:", " found) source;
+                         '!')))))
+      in
+      let ok = List.for_all cells ~f:(fun cell -> not (String.contains cell '!')) in
+      (family.family, String.concat ~sep:" " cells, ok))
+
+let matrix_claim_label family = family ^ ": every syntax matrix cell reads as expected"
+
+let print_syntax_matrix rows =
+  printf
+    "\n\
+     Syntax coverage matrix (gh-ocannl-931): each value form, under each quantifier and each\n\
+     spelling of its function (%s), in the four cases\n\
+     refusal / inverted / guarded / shadowed. A cell reads its case letter (R I G S) where the\n\
+     verdict is as the case requires -- refused for R, accepted for the rest -- and `!` otherwise.\n\n"
+    (String.concat ~sep:", " (List.map matrix_spellings ~f:(fun s -> s.spelling)));
+  let width =
+    List.fold matrix_families ~init:0 ~f:(fun acc f -> Int.max acc (String.length f.family))
+  in
+  let group = (4 * List.length matrix_spellings) + List.length matrix_spellings - 1 in
+  printf "  %-*s  %s\n" width ""
+    (String.concat ~sep:"  "
+       (List.map matrix_quantifiers ~f:(fun q -> Printf.sprintf "%-*s" group q.quantifier))
+    |> String.rstrip);
+  List.iter rows ~f:(fun (family, cells, _) ->
+      let groups =
+        List.chunks_of (String.split cells ~on:' ') ~length:(List.length matrix_spellings)
+        |> List.map ~f:(String.concat ~sep:" ")
+      in
+      printf "  %-*s  %s\n" width family (String.concat ~sep:"  " groups))
 
 (* The shadowing fixtures, which the control list above cannot state: those cases compare the helper
    NAMES a source yields, and a name shadowed by a second definition of itself appears once in that
@@ -2771,24 +2328,55 @@ let run_manifest_controls ~manifest ~controls =
 
 let quantified_failure source claim =
   let key = quantified_exemption_key ~source claim in
-  Printf.sprintf
-    "%s:%d sends `%s` from line %d into a Verdict claim, but that binding's `%s` can pass on an \
-     empty population -- use the matching `Verdict.p_*` combinator, or make non-emptiness part of \
-     the binding's passing result. If emptiness is the intended passing case, exempt `%s` by name \
-     in verdict_ratchet.ml and say why"
-    source claim.claim_line claim.helper claim.helper_site.line
-    (List.map claim.quantifiers ~f:quantifier_name |> String.concat ~sep:", ")
-    key
+  let quantifiers = List.map claim.quantifiers ~f:quantifier_name |> String.concat ~sep:", " in
+  if claim.direct then
+    Printf.sprintf
+      "%s:%d claims `%s` over a `%s` written directly in the argument at line %d, which can pass \
+       on an empty population -- use the matching `Verdict.p_*` combinator (`p_all`, `p_none`, \
+       `p_empty ~over`, `p_all2`), or make non-emptiness part of the claimed value. If emptiness \
+       is the intended passing case, exempt `%s` by name in verdict_ratchet.ml and say why"
+      source claim.claim_line claim.helper quantifiers claim.helper_site.line key
+  else
+    Printf.sprintf
+      "%s:%d sends `%s` from line %d into a Verdict claim, but that binding's `%s` can pass on an \
+       empty population -- use the matching `Verdict.p_*` combinator, or make non-emptiness part \
+       of the binding's passing result. If emptiness is the intended passing case, exempt `%s` by \
+       name in verdict_ratchet.ml and say why"
+      source claim.claim_line claim.helper claim.helper_site.line quantifiers key
 
+(* The two refusal diagnostics, each exercised by re-running this executable on a planted fixture in
+   a child process: the fixture is the first control (a bound helper) and the native-claim control
+   (a quantifier written directly in the argument), and the child must exit 1 printing the
+   diagnostic that fixture earns. *)
 let refusal_mode = "--quantified-helper-refusal-control"
+let direct_refusal_mode = "--direct-quantifier-refusal-control"
 
-let run_refusal_control () =
+let refusal_children =
+  [
+    ( refusal_mode,
+      "the shipping ratchet process refuses the planted helper fixture",
+      "refuses an unguarded for_all2_exn helper behind a local Verdict alias",
+      [ "control_fixture.ml:3 sends `close`"; "can pass on an empty population" ] );
+    ( direct_refusal_mode,
+      "the shipping ratchet process refuses a quantifier written directly in a native claim",
+      "refuses a quantifier written directly in a native claim",
+      [ "control_fixture.ml:1 claims `all rows pass`"; "written directly in the argument" ] );
+  ]
+
+let refusal_fixture mode =
+  List.find_map refusal_children ~f:(fun (found_mode, _, control, _) ->
+      if String.equal found_mode mode then
+        List.find_map quantified_helper_controls ~f:(fun (label, source, _) ->
+            if String.equal label control then Some source else None)
+      else None)
+
+let run_refusal_control (mode, label, _, expected) =
   let exe = Stdlib.Sys.executable_name in
   let capture suffix = Stdlib.Filename.temp_file "verdict_ratchet_control" suffix in
   let out_path = capture ".out" and err_path = capture ".err" in
   let open_capture path = Unix.openfile path [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
   let out = open_capture out_path and err = open_capture err_path in
-  let pid = Unix.create_process exe [| exe; refusal_mode |] Unix.stdin out err in
+  let pid = Unix.create_process exe [| exe; mode |] Unix.stdin out err in
   let _, status = Unix.waitpid [] pid in
   Unix.close out;
   Unix.close err;
@@ -2798,12 +2386,13 @@ let run_refusal_control () =
   unlink err_path;
   let ok =
     (match status with Unix.WEXITED 1 -> true | _ -> false)
-    && String.is_substring output ~substring:"control_fixture.ml:3 sends `close`"
-    && String.is_substring output ~substring:"can pass on an empty population"
+    && List.for_all expected ~f:(fun substring -> String.is_substring output ~substring)
   in
   if not ok then
-    eprintf "the helper-refusal child did not reject its planted fixture as designed:\n%s\n" output;
-  ("the shipping ratchet process refuses the planted helper fixture", ok)
+    eprintf "the %s child did not reject its planted fixture as designed:\n%s\n" mode output;
+  (label, ok)
+
+let run_refusal_controls () = List.map refusal_children ~f:run_refusal_control
 
 let refuse_stale_quantified ~fail stale_quantified =
   if not (Set.is_empty stale_quantified) then
@@ -2955,14 +2544,16 @@ let base_dir = Dune.base_dir
 let repo_relative = Dune.repo_relative
 
 let () =
-  if Array.length Stdlib.Sys.argv >= 2 && String.equal Stdlib.Sys.argv.(1) refusal_mode then (
-    let _, source, _ = List.hd_exn quantified_helper_controls in
-    let claims = quantified_claims (Sources.structure_of source) in
-    if List.is_empty claims then (
-      eprintf "the planted helper fixture produced no finding\n";
-      Stdlib.exit 2);
-    List.iter claims ~f:(fun claim -> Verdict.fail (quantified_failure "control_fixture.ml" claim));
-    Stdlib.exit 1);
+  (match Option.bind (List.nth (Array.to_list Stdlib.Sys.argv) 1) ~f:refusal_fixture with
+  | None -> ()
+  | Some source ->
+      let claims = quantified_claims (Sources.structure_of source) in
+      if List.is_empty claims then (
+        eprintf "the planted fixture produced no finding\n";
+        Stdlib.exit 2);
+      List.iter claims ~f:(fun claim ->
+          Verdict.fail (quantified_failure "control_fixture.ml" claim));
+      Stdlib.exit 1);
   if Array.length Stdlib.Sys.argv < 2 then (
     eprintf "Usage: %s <workspace_root> <source...>\n" Stdlib.Sys.argv.(0);
     Stdlib.exit 1);
@@ -3007,13 +2598,17 @@ let () =
         else None)
   in
   let control_results =
-    run_quantified_helper_controls ()
-    @ [ run_refusal_control (); run_stale_quantified_control () ]
+    run_quantified_helper_controls () @ run_refusal_controls ()
+    @ [ run_stale_quantified_control () ]
     @ run_shadowed_quantified_controls ()
     @ run_colliding_site_controls ()
   in
+  let matrix_rows = run_syntax_matrix () in
+  let matrix_results =
+    List.map matrix_rows ~f:(fun (family, _, ok) -> (matrix_claim_label family, ok))
+  in
   let control_results =
-    control_results @ run_manifest_controls ~manifest ~controls:control_results
+    control_results @ run_manifest_controls ~manifest ~controls:(control_results @ matrix_results)
   in
   let per_directory = Hashtbl.create (module String) in
   printf
@@ -3124,6 +2719,8 @@ let () =
   else List.iter exempt_quantified_helpers ~f:(fun (key, why) -> printf "  %s -- %s\n" key why);
   printf "\nSynthetic helper-rule controls:\n";
   List.iter control_results ~f:(fun (label, ok) -> Verdict.pf "%s" label ok);
+  print_syntax_matrix matrix_rows;
+  List.iter matrix_results ~f:(fun (label, ok) -> Verdict.pf "%s" label ok);
   let stale =
     Set.union
       (Set.diff (Set.of_list (module String) (List.map exempt_sites ~f:fst)) !exemptions_used)
@@ -3185,10 +2782,12 @@ let () =
   Verdict.p "the scan found every literal planted for it" (Set.is_empty missing);
   Verdict.p "every exemption on this check's lists is still earned"
     (Set.is_empty unread && Set.is_empty stale && Set.is_empty stale_quantified);
-  Verdict.p "every exempted claim-shaped literal is one source site, not a shared key"
-    (List.is_empty colliding_sites);
-  Verdict.p "every exempted quantified binding is one definition, not a shared name"
-    (List.is_empty colliding_quantified);
+  (* Over the exemption lists, which is where a shared key would have to be written. *)
+  Verdict.p_empty "every exempted claim-shaped literal is one source site, not a shared key"
+    ~over:(exempt_sites @ exempt_computed_sites)
+    colliding_sites;
+  Verdict.p_empty "every exempted quantified binding is one definition, not a shared name"
+    ~over:exempt_quantified_helpers colliding_quantified;
   (* What a blind walk cannot produce. Without these, "no offenders" and "read nothing" are the same
      result -- and the second is the one that arrives silently. *)
   Verdict.p "the walk read string literals out of these sources" (!literals > 0);

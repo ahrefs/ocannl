@@ -187,7 +187,7 @@ let () =
 let () = Unix.putenv "OCANNL_BUFFER_ALIASING" "true"
 
 (* Layers 1 and 2: calibrate, then pin the selector's contract against the two calibrated ends. *)
-let baseline, minimum, mid =
+let baseline, minimum, mid, minimize_flips =
   let ctx, comp, _loss, _mem0 = build () in
   let base = Memory_budget.footprint ctx comp IDX.empty in
   let _ctx, min_plan = Memory_budget.fit ~budget:Memory_budget.Minimize ctx comp IDX.empty in
@@ -207,14 +207,15 @@ let baseline, minimum, mid =
     = baseline - minimum);
   p_all "minimize: no flip reports negative relief" min_plan.bp_flips ~f:(fun (_, relief, _) ->
       relief >= 0);
-  (* Strictly between the two ends, so it is reachable but not free. *)
-  (baseline, minimum, (baseline + minimum) / 2)
+  (* Strictly between the two ends, so it is reachable but not free. The flips minimize took are the
+     population a budgeted plan chooses from: what the baseline plan declines is drawn from them. *)
+  (baseline, minimum, (baseline + minimum) / 2, min_plan.bp_flips)
 
 let () =
   let ctx, comp, _loss, _mem0 = build () in
   let plan budget = snd (Memory_budget.fit ~budget ctx comp IDX.empty) in
   let at_baseline = plan (Memory_budget.Bytes baseline) in
-  p "budget at the baseline: no flips" (List.is_empty at_baseline.bp_flips);
+  p_empty "budget at the baseline: no flips" ~over:minimize_flips at_baseline.bp_flips;
   p "budget at the baseline: within budget" at_baseline.bp_within_budget;
   let at_mid = plan (Memory_budget.Bytes mid) in
   p "reachable budget: met" at_mid.bp_within_budget;

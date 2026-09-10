@@ -327,8 +327,8 @@ let () =
       p "awkward site seeds staged GPU MMA pad-compositions" false;
       p "awkward site does not seed the unstaged (in-place) GPU flavor" false;
       p "awkward site seeds the CPU packed pad-composition" false);
-  p "seeded packed pad-composition matches the serial twin bitwise"
-    ((not on_cpu) || Array.for_all2_exn got want ~f:Float.equal)
+  p_all2 "seeded packed pad-composition matches the serial twin bitwise" got want ~f:(fun a b ->
+      (not on_cpu) || Float.equal a b)
 
 (* === Negative pin: a pad guard over an in-place operand (no zero-fringe staged tile) must be
    rejected — the intrinsic path would read past the operand's extent. === *)

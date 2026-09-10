@@ -852,24 +852,25 @@ let () =
      the scan tried to parse it instead. *)
   let uncanonical = List.filter section ~f:(Fn.non is_canonical) in
   List.iter uncanonical ~f:(fun line -> eprintf "  not a canonical line: %s\n" line);
-  p "every line in Unreleased is blank, a subheading, a bullet, or a two-space continuation"
-    (List.is_empty uncanonical);
+  p_empty "every line in Unreleased is blank, a subheading, a bullet, or a two-space continuation"
+    ~over:lines uncanonical;
   let orphans = orphan_continuations section in
   List.iter orphans ~f:(fun line -> eprintf "  a continuation with no bullet above it: %s\n" line);
-  p "every continuation line in Unreleased belongs to a bullet" (List.is_empty orphans);
-  (* Unguarded universals, deliberately, and this is the one site in the file where emptiness is a
-     PASSING case: an editorial pass at release prep moves every bullet into the new released
-     section, and the Unreleased section that remains is legitimately empty until the next merge. A
-     population guard here would fail the release-prep build for having nothing to complain about.
-     What the guard is normally for -- a scan that reports nothing because it read nothing -- is
-     carried by the anchor and gate claims above, and by the synthetic controls below, whose
-     population is fixed and non-empty. *)
-  report "over three lines" (List.filter bullets ~f:(Fn.non within_line_budget));
-  p "every Unreleased bullet is at most three lines" (List.for_all bullets ~f:within_line_budget);
-  report "no gh-ocannl-NNN or `lukstafi/ocannl-staging` PR #NNN citation"
-    (List.filter bullets ~f:(Fn.non cites_record));
-  p "every Unreleased bullet cites gh-ocannl-NNN or a staging PR #NNN"
-    (List.for_all bullets ~f:cites_record);
+  p_empty "every continuation line in Unreleased belongs to a bullet" ~over:lines orphans;
+  (* Guarded over the LINES of CHANGES.md rather than over the bullets, because this is the one site
+     in the file where an empty bullet population is a PASSING case: an editorial pass at release
+     prep moves every bullet into the new released section, and the Unreleased section that remains
+     is legitimately empty until the next merge. A guard over the bullets would fail the
+     release-prep build for having nothing to complain about. What the guard is for -- a scan that
+     reports nothing because it read nothing -- is what the file's lines witness, alongside the
+     anchor and gate claims above and the synthetic controls below, whose population is fixed and
+     non-empty. *)
+  let over_budget = List.filter bullets ~f:(Fn.non within_line_budget) in
+  report "over three lines" over_budget;
+  p_empty "every Unreleased bullet is at most three lines" ~over:lines over_budget;
+  let uncited = List.filter bullets ~f:(Fn.non cites_record) in
+  report "no gh-ocannl-NNN or `lukstafi/ocannl-staging` PR #NNN citation" uncited;
+  p_empty "every Unreleased bullet cites gh-ocannl-NNN or a staging PR #NNN" ~over:lines uncited;
   (* The controls. *)
   let control = bullets_of control_section in
   p "the section reader finds the eighteen synthetic control bullets" (List.length control = 18);
@@ -924,9 +925,14 @@ let () =
   p_all "the gate refuses every shape this grammar does not name" non_canonical ~f:(fun (_, line) ->
       not (is_canonical line));
   p_all "the gate accepts every shape it names" canonical_shapes ~f:is_canonical;
-  p "the gate refuses a continuation with no bullet above it"
-    (List.is_empty (bullets_of control_orphan_continuation)
-    && List.length (orphan_continuations control_orphan_continuation) = 1);
+  (* No control line opens a bullet -- every bullet's first line is one of the input's lines -- and
+     the one continuation is reported as an orphan. *)
+  let orphan_control_bullets = bullets_of control_orphan_continuation in
+  p_all "the gate refuses a continuation with no bullet above it" control_orphan_continuation
+    ~f:(fun line ->
+      (not
+         (List.exists orphan_control_bullets ~f:(fun bullet -> String.equal bullet.first_line line)))
+      && List.length (orphan_continuations control_orphan_continuation) = 1);
   (* The anchor, and released history that must not fail the scan. *)
   let one_anchor_one_bullet control =
     List.length (unreleased_headings control) = 1
@@ -935,12 +941,18 @@ let () =
   p "the section reader refuses a changelog with two Unreleased anchors"
     (Option.is_none (unreleased_section control_duplicate_anchors)
     && List.length (unreleased_headings control_duplicate_anchors) = 2);
-  p "only the exact `## [Unreleased]` line counts as the anchor"
-    (List.is_empty (unreleased_headings control_inexact_anchors)
-    && Option.is_none (unreleased_section control_inexact_anchors));
-  p "an indented copy of the anchor's text is not the anchor"
-    (List.is_empty (unreleased_headings control_indented_anchor)
-    && Option.is_some (heading_level "  ## [Unreleased]"));
+  (* Every anchor found is one of the control's lines, so "no control line is a found anchor" is "no
+     anchor was found", quantified over the lines the reader was given. *)
+  let inexact_anchors = unreleased_headings control_inexact_anchors in
+  p_all "only the exact `## [Unreleased]` line counts as the anchor" control_inexact_anchors
+    ~f:(fun line ->
+      (not (List.mem inexact_anchors line ~equal:String.equal))
+      && Option.is_none (unreleased_section control_inexact_anchors));
+  let indented_anchors = unreleased_headings control_indented_anchor in
+  p_all "an indented copy of the anchor's text is not the anchor" control_indented_anchor
+    ~f:(fun line ->
+      (not (List.mem indented_anchors line ~equal:String.equal))
+      && Option.is_some (heading_level "  ## [Unreleased]"));
   p "a four-space-indented copy of the anchor is code, not a second anchor"
     (one_anchor_one_bullet control_code_indented_anchor);
   p "an anchor quoted in a fence or a comment is not a second anchor"
@@ -974,11 +986,12 @@ let () =
     (match bullets_of (Option.value (unreleased_section control_setext_boundary) ~default:[]) with
     | [ bullet ] -> cites_record bullet
     | _ -> false);
-  p "a comment opener inside prose or a code span opens no HTML block"
-    ((not (List.exists control_code_span_comment ~f:opens_comment_block))
-    && (not (opens_comment_block "- An uncited change <!-- gh-ocannl-807 -->"))
-    && List.length (bullets_of control_code_span_comment) = 1
-    && List.for_all (bullets_of control_code_span_comment) ~f:cites_record);
+  let code_span_bullets = bullets_of control_code_span_comment in
+  p_all "a comment opener inside prose or a code span opens no HTML block" control_code_span_comment
+    ~f:(fun line ->
+      (not (opens_comment_block line))
+      && (not (opens_comment_block "- An uncited change <!-- gh-ocannl-807 -->"))
+      && match code_span_bullets with [ bullet ] -> cites_record bullet | _ -> false);
   p "a level-4 subheading stays inside Unreleased, and the released section does not"
     (let deep =
        bullets_of (Option.value (unreleased_section control_deep_subheading) ~default:[])

@@ -30,13 +30,27 @@ each carrying its assertion separately through `Verdict.claim`/`claimf`:
 Quantified bindings exempted because emptiness is their passing meaning:
   test/operations/backend_golden_family_scan.ml:complete -- empty incomplete/error lists are the passing evidence; the non-empty synthetic-control population is guarded in the same binding
   test/operations/autotune_routine_name.ml:contributed -- a contended search may legitimately contribute no rows; its report counters separately prove whether that absence came from refused timings rather than a lost result
-  test/operations/env_var_deps.ml:family_floor_met -- a non-repository synthetic run deliberately skips repository-only family floors; the repository path checks every family and reports each shortfall separately
   test/operations/epilogue_fusion_mma_seeds.ml:vacuous -- an empty GPU mma family deliberately selects the environment-gated vacuity path; the non-vacuous path separately requires and executes the epilogue twins
   test/operations/fission_schedule.ml:annotated -- the merge-back case deliberately requires the consumer segment to have no hardware axes; the same claim also requires the producer segment to be annotated
   test/operations/ocamlformat_ignore_scan.ml:refused -- the message list is an optional strengthening of the child-exit refusal: an empty list deliberately means that the nonzero status alone is the passing evidence
   test/operations/reduction_forms.ml:changed -- an empty schedule deliberately needs no IR change, and an empty per-op result means there were no per-op transformations to validate
   test/operations/reduction_forms.ml:extra_ok -- an empty extra-fragment list deliberately means the member requires no additional emitted assignment fragments
-  test/operations/shell_scripts_parse.ml:line_enables_errexit -- a line may legitimately parse to no parent-affecting command fragment; this exists result is an internal classification input, while the fixed non-empty case table is the test population
+  test/operations/autotune_batched_companion.ml:bc: reduction-over-j companion refutes the GPU family pre-proposal -- the empty seed list is the consequence the claim conjoins with the family's coverage-refutation witness on the sketch tree, which is the non-vacuous half and is itself guarded on a non-empty refutation list
+  test/operations/autotune_batched_companion.ml:lm: coarse fission keeps the row-max companion in the GEMM's segment -- the single coarse segment's empty seed list is conjoined with the tree's coverage-refutation witness, which carries the claim
+  test/operations/autotune_smoke.ml:a replayed second report has no declines -- a cache replay compiles no candidate, so its census has no rows to be derived from; the claim conjoins it with a zero failure count and is conditioned on the replay having happened
+  test/operations/autotune_smoke.ml:search off without a cache times nothing -- with the search off no candidate exists to populate a schedule; the empty best schedule is one of four zero counters the claim conjoins
+  test/operations/hip_scratch_tune_survives.ml:scratch/tune: the declined baseline is not also counted as a gh-532 refusal -- conditioned on the baseline having been declined, and on a device that backs the frame the decline census is legitimately empty (announced vacuous on stderr); where the baseline is declined the claim just above witnesses the census
+  test/operations/schedule_batched_mma.ml:variance-like site: no cpu mma seeds -- the variance-style self-product is deliberately not recognized as a matmul or conv site, so the sketch seeder yields no seeds of any kind and there is no seed population to quantify the mma subset over
+  test/operations/schedule_batched_mma.ml:variance-like site: no gpu mma seeds -- the same site, on the GPU seeder
+  test/operations/autotune_candidate_release.ml:hoisted_attempted -- the equivalence `constant class grows iff hoisted candidates were attempted` is asserted precisely so that a GPU backend, whose seeder proposes no hoisted candidate, reads `no hoist labels, no constant growth` rather than a vacuous growth claim; the label population is non-empty on cc, where the split is pinned
+  test/operations/autotune_serial_baseline.ml:the refusal is recorded in the decline census, on GPU backends only -- on a CPU backend the baseline is dispatched and no refusal is recorded, so an empty census is the passing reading there; on GPU the equivalence requires the entry
+  test/operations/autotune_smoke.ml:tensorized_schedule -- the flag and the schedule are read off the same winner, so a schedule with no Tensorize op must agree with a false flag: the empty case is one side of the equivalence, and the tensorized side is exercised by the searched report
+  test/operations/shell_scripts_parse.ml:Shebang.mentions_a_shell -- the scope table pairs each line with the reading the predicate must give it, and a line mentioning no shell is `outside this check's scope` by design; the positive rows exercise the non-empty word list
+  test/operations/agent_notes_structure.ml:every exemption still names a bullet that needs one -- over the file's own exemption list, which is empty today: a stale entry is reported the moment one is added, and there is no population beneath an empty list to witness
+  test/operations/atomic_file_race.ml:the rerun left the scratch directory as it found it -- the directory must end empty, and the tree the rerun published and removed is not enumerated, so nothing in scope witnesses the final listing; the fixtures an interrupted run leaves behind are witnessed by the clearing claims just above
+  test/operations/simd_lane_choice.ml:a backend that renders no vectors offers no rungs -- a zero vector width yields no ladder by construction; the rungs the widths that do render offer are pinned by the claims beside it
+  test/operations/test_cpu_topology.ml:classes well-formed -- a live probe of the host's core classes: a host the probe cannot classify legitimately reports none, and the invariant is over whatever it found
+  test/operations/tile_mma_geometry.ml:a column extent below one vector has no default and no alternatives -- the absence of alternatives is the geometry rule the claim states, for an extent that admits no tile; the shapes that do admit one are quantified by the claims above it
 
 Synthetic helper-rule controls:
 refuses an unguarded for_all2_exn helper behind a local Verdict alias: true
@@ -104,7 +118,10 @@ refuses a negated bound exists: true
 accepts a guarded intermediate binding: true
 accepts a quantifier guarded by the same filtered population: true
 refuses a guard on a differently filtered population: true
-conservatively refuses an outer guard across a helper call: true
+accepts an outer guard forwarded to a helper call over the same actual: true
+refuses a helper applied to an expression that is not a population: true
+accepts a witness a helper establishes over the same actual: true
+refuses a witness a helper establishes over a different actual: true
 refuses a mismatched actual hidden by equal formal names: true
 refuses a shadowed guard identity across a nested alias: true
 refuses a binding nested directly inside a claim argument: true
@@ -174,7 +191,130 @@ accepts a positive literal length as the non-empty witness: true
 accepts a negated for_all2_exn discrimination helper: true
 accepts a positive exists helper, which is false on an empty population: true
 ignores a quantified helper that reaches no Verdict claim: true
+accepts a guarded quantifier assigned through a double negation: true
+refuses a double negation without the non-empty witness: true
+refuses a double negation guarded over a different population: true
+does not attribute a condition whose branches return the same Boolean alias: true
+does not attribute a condition whose branches agree through a nested condition: true
+refuses a condition with one constant branch and one the reader cannot prove: true
+does not attribute a condition steering between two unproven branches: true
+accepts a witness from a condition selecting the claimed branch: true
+accepts a constant argument through a parameter shadowing an outer quantified binding: true
+still refuses the outer quantified binding a wrapper closes over: true
+evaluates a wrapper's optional default before its parameter shadows the name: true
+accepts a quantified sibling ignored by a destructured wrapper parameter: true
+refuses the claimed component of a destructured wrapper parameter: true
+accepts a quantified field ignored by a record wrapper parameter: true
+refuses the claimed field of a record wrapper parameter: true
+conservatively inspects a wrapper argument its pattern cannot align: true
+refuses a quantifier written directly in a native claim: true
+accepts a guarded quantifier written directly in a native claim: true
+accepts a negated quantifier written directly in a native claim: true
+refuses a quantifier written directly in a computed-label native claim: true
+refuses a quantifier piped into a native claim: true
+refuses a quantifier written directly in an opened native claim: true
+names a native claim's non-literal label by its expression: true
+refuses a quantifier reached through an open of List: true
+accepts an inverted quantifier reached through an open of List: true
+refuses a negated exists reached through an open of Array: true
+refuses a quantifier reached through a module alias: true
+refuses a quantifier reached through a local open: true
+refuses a quantifier reached through a let-open of Array: true
+does not resolve an unqualified for_all with no open in scope: true
+keeps a local open of List inside its scope: true
+keeps a wrapper's default alive through an unknown forwarded option: true
+refuses a quantifier completed by a later predicate argument: true
+refuses a for_all2_exn completed one population at a time: true
+does not treat a partially applied quantifier as a Boolean: true
+refuses a quantified field read from a record binding: true
+conservatively refuses a sibling field read from a quantified record binding: true
+refuses a quantified component read through fst: true
+refuses a quantifier written directly in a claim opened from Verdict: true
+refuses a quantifier written directly in a claim through a module alias of Verdict: true
+accepts a length inequality with zero as the non-empty witness: true
+refuses a length inequality with a positive literal as a witness: true
+does not let a later case's guard witness an earlier case's quantifier: true
+accepts a witness from an earlier avoided case: true
+refuses a quantifier reaching a dynamically formatted claim through a partial application: true
+refuses a quantified condition selecting constant wrapper arguments: true
+accepts a quantified condition selecting inverted constant wrapper arguments: true
+defers a quantified condition through a wrapper that forwards its arguments: true
+refuses a quantifier carried in a constructor payload and matched out: true
+accepts a negated quantifier carried in a constructor payload: true
+reads a constructor pattern's payload exactly against a matching constructor: true
+does not read a locally bound not as the Boolean primitive: true
+does not read a locally bound fst as a projection: true
+does not let a bound aggregate's witness cover a sibling formal: true
+accepts a literal tuple argument whose witness and quantifier share the actual: true
+refuses a quantifier passed to a native claim selected by control flow: true
+refuses a quantifier passed to a wrapper selected by a match: true
+refuses a quantifier carried in a polymorphic variant payload and matched out: true
+reads a variant pattern's payload exactly against a matching tag: true
+does not read a locally bound pipeline operator as the builtin: true
+refuses a quantifier reached through a three-sibling recursive chain: true
+refuses a quantifier reached around a recursive cycle: true
+refuses a direct quantifier selected by a guarded Boolean case: true
+accepts a direct quantifier inverted by a guarded Boolean case: true
+refuses a filtered population whose predicate was rebound after the witness: true
+accepts a filtered population witnessed under the same predicate binding: true
+does not mistake a parameter mark spelled inside a filter predicate: true
+refuses a quantifier completed after its population passed through a helper: true
+refuses a quantifier passed to the fifth of five alternative claim functions: true
+does not read a locally bound List.length as a witness: true
+accepts a witness passed to a wrapper as a conjunct of its claim: true
+refuses a witness passed to a wrapper as an alternative of its claim: true
+refuses a quantifier claimed through a claim function passed as an argument: true
+refuses a quantifier claimed through a wrapper passed as an argument: true
+refuses a quantifier spelled in Stdlib's argument order: true
+accepts a negated quantifier spelled in Stdlib's argument order: true
+refuses a quantifier passed to a recursive module's claim wrapper: true
+refuses a quantifier returned through a function parameter applied for its result: true
+accepts a negated quantifier returned through a function parameter applied for its result: true
+refuses a vacuous quantifier inside the predicate deciding its quantifier: true
+accepts a guarded quantifier inside the predicate deciding its quantifier: true
+refuses a quantifier bound by a let operator: true
+accepts a negated quantifier bound by a let operator: true
+refuses a quantifier spelled in Stdlib's argument order through a module alias: true
+refuses a quantifier passed through an earlier recursive module calling a later one: true
+accepts a witness over a record field guarding the same field's quantifier: true
+refuses a witness over one record field against another's quantifier: true
+accepts a witness over a qualified population guarding its quantifier: true
+refuses a quantifier claimed inside a callback over the callback's own population: true
+accepts a guarded quantifier claimed inside a callback over its own population: true
+does not let a refutable case's guard witness a later case: true
+accepts an irrefutable case's guard as a witness for a later case: true
+refuses a vacuous quantifier inside a predicate selected by control flow: true
+refuses a claim fired inside a predicate over its own population: true
+accepts a guarded claim fired inside a predicate over its own population: true
+refuses a qualified population whose module was rebound after the witness: true
+refuses a quantifier passed to a wrapper exported by an applied functor: true
+resolves an opened local module that shadows List to its own members: true
+refuses a quantifier compared with true through phys_equal: true
+accepts a quantifier compared with false through phys_equal: true
+refuses a negated exists through an alias of not: true
+accepts a negated for_all through an alias of not: true
+refuses a quantifier passed through a functor parameter's claim: true
+refuses a quantifier passed to a supplied callable optional parameter: true
+does not fire a callable optional parameter's inert default: true
+refuses a quantifier passed to a claim function stored in a record field: true
+refuses a vacuous indexed quantifier: true
+accepts a positive indexed exists: true
+refuses a quantifier passed through a three-module recursive chain: true
+refuses a quantifier claimed by a let operator's own definition: true
+conservatively binds a let operator defined elsewhere as an identity: true
+does not let a repeated pattern's guard witness a differently matched case: true
+accepts a repeated pattern's guard as a witness for the case that repeats it: true
+refuses a quantifier passed through a functor parameter's claim inside an expression: true
+refuses two quantifiers compared for equality: true
+accepts two quantifiers compared for equality under a witness: true
+refuses a quantifier through a functor applied by its qualified path: true
+accepts a guarded quantifier through a functor applied by its qualified path: true
+binds a for loop's variable apart from an outer namesake: true
+accepts a for loop body's quantifier witnessed on the loop's own variable: true
+refuses a witness on a field the file assigns: true
+accepts a witness on a field nothing in the file assigns: true
 the shipping ratchet process refuses the planted helper fixture: true
+the shipping ratchet process refuses a quantifier written directly in a native claim: true
 refuses a stale quantified-helper exemption: true
 a shadowed helper name resolves to two definitions, not one: true
 refuses an exemption key that names both shadowed definitions: true
@@ -196,6 +336,63 @@ every synthetic control has a row in the mutation-run manifest: true
 every control phrase in the mutation-run manifest names a live control: true
 synthetic control labels are pairwise distinct: true
 every control phrase appears once in the mutation-run manifest: true
+
+Syntax coverage matrix (gh-ocannl-931): each value form, under each quantifier and each
+spelling of its function (qualified, opened, aliased, local open), in the four cases
+refusal / inverted / guarded / shadowed. A cell reads its case letter (R I G S) where the
+verdict is as the case requires -- refused for R, accepted for the rest -- and `!` otherwise.
+
+                                             for_all              for_all2_exn         is_empty             exists
+  a native claim's argument                  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a structure-level binding                  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a binding local to the argument            RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a helper applied to the population         RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a function-case helper                     RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a wrapper's positional parameter           RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a wrapper's labelled parameter             RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a wrapper's optional default               RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a destructured wrapper parameter           RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a match forwarding its scrutinee           RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a Boolean constructor match                RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  an if condition                            RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a match guard                              RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a protected try body                       RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a member of a local module                 RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a member reached through open              RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a member reached through a local open      RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a claim inside a callback                  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  an immediately invoked function            RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a partially applied native claim           RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a pipeline into the claim                  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a sequence's tail                          RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a tuple component destructured at binding  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a field of a record binding                RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+  a comparison with true                     RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS  RIGS RIGS RIGS RIGS
+a native claim's argument: every syntax matrix cell reads as expected: true
+a structure-level binding: every syntax matrix cell reads as expected: true
+a binding local to the argument: every syntax matrix cell reads as expected: true
+a helper applied to the population: every syntax matrix cell reads as expected: true
+a function-case helper: every syntax matrix cell reads as expected: true
+a wrapper's positional parameter: every syntax matrix cell reads as expected: true
+a wrapper's labelled parameter: every syntax matrix cell reads as expected: true
+a wrapper's optional default: every syntax matrix cell reads as expected: true
+a destructured wrapper parameter: every syntax matrix cell reads as expected: true
+a match forwarding its scrutinee: every syntax matrix cell reads as expected: true
+a Boolean constructor match: every syntax matrix cell reads as expected: true
+an if condition: every syntax matrix cell reads as expected: true
+a match guard: every syntax matrix cell reads as expected: true
+a protected try body: every syntax matrix cell reads as expected: true
+a member of a local module: every syntax matrix cell reads as expected: true
+a member reached through open: every syntax matrix cell reads as expected: true
+a member reached through a local open: every syntax matrix cell reads as expected: true
+a claim inside a callback: every syntax matrix cell reads as expected: true
+an immediately invoked function: every syntax matrix cell reads as expected: true
+a partially applied native claim: every syntax matrix cell reads as expected: true
+a pipeline into the claim: every syntax matrix cell reads as expected: true
+a sequence's tail: every syntax matrix cell reads as expected: true
+a tuple component destructured at binding: every syntax matrix cell reads as expected: true
+a field of a record binding: every syntax matrix cell reads as expected: true
+a comparison with true: every syntax matrix cell reads as expected: true
 
 every test source decides its claims through Verdict: true
 every quantified binding used by a claim witnesses a non-empty population: true

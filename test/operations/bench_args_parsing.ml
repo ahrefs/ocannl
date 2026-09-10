@@ -76,8 +76,8 @@ let () =
      the whole argv, with no terminator and prefix-free spellings accepted, so a post-[--] argument
      that spells a setting has already been applied by the time a tool sees it. Unfixable from here
      -- what is fixable is the silence, so the collision is reported. *)
-  p "an ordinary post-[--] argument shadows no setting"
-    (List.is_empty (Bench_args.shadowing_config args));
+  p_empty "an ordinary post-[--] argument shadows no setting" ~over:(Bench_args.positional args)
+    (Bench_args.shadowing_config args);
   let shadowing =
     Bench_args.create ~argv:[| "gpt2_generate"; "--"; "--backend=cuda" |] "gpt2_generate"
   in

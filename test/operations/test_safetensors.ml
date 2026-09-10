@@ -36,10 +36,8 @@ let () =
         offset nbytes
   | None -> printf "a: missing!\n");
   let a = Safetensors.to_float32 st "a" in
-  let a_ok =
-    Array.for_alli a_vals ~f:(fun i v -> Float.equal (Bigarray.Genarray.get a [| i / 3; i % 3 |]) v)
-  in
-  Verdict.p "a roundtrips (2x3)" a_ok;
+  Verdict.p_alli "a roundtrips (2x3)" (Array.to_list a_vals) ~f:(fun i v ->
+      Float.equal (Bigarray.Genarray.get a [| i / 3; i % 3 |]) v);
 
   (* Device roundtrip through an OCANNL tensor. *)
   let b = TDSL.wrap ~l:"b" ~b:[] ~o:[ 4 ] (Safetensors.to_ndarray st "b") () in
@@ -184,9 +182,9 @@ let () =
       printf "  %s: [%s]%s\n" name
         (String.concat ~sep:"; " (Array.to_list (Array.map mapped ~f:(Printf.sprintf "%.1f"))))
         (if Array.equal Float.equal mapped decoded then "" else " DIFFERS WHEN DECODED"));
-  Verdict.p "mapping and decoding agree on values"
-    (List.for_all2_exn aligned unaligned ~f:(fun (_, m, _, _, _) (_, d, _, _, _) ->
-         Array.equal Float.equal m d))
+  Verdict.p_all2 "mapping and decoding agree on values" (Array.of_list aligned)
+    (Array.of_list unaligned) ~f:(fun (_, m, _, _, _) (_, d, _, _, _) ->
+      Array.equal Float.equal m d)
 
 let () =
   printf "=== Precision conversion, descriptor lifetime, rejections ===\n";

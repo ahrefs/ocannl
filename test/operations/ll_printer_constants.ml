@@ -76,14 +76,14 @@ let () =
   List.iter values ~f:(fun v ->
       Stdio.printf "%-26s %-26s %s\n" (Printf.sprintf "%h" v) (cd_token v) (ll_token v));
   let tokens = List.concat_map values ~f:(fun v -> [ (v, cd_token v); (v, ll_token v) ]) in
-  p "every dumped constant parses back to the double it names"
-    (List.for_all tokens ~f:(fun (v, token) -> round_trips v token));
+  p_all "every dumped constant parses back to the double it names" tokens ~f:(fun (v, token) ->
+      round_trips v token);
   (* A finite token that is neither is an integer literal, which is how the radix point went missing
      in the first place. *)
-  p "every finite constant is dumped as a floating literal, with a radix point or an exponent"
-    (List.for_all tokens ~f:(fun (v, token) ->
-         (not (Float.is_finite v))
-         || String.exists token ~f:(function '.' | 'e' | 'E' -> true | _ -> false)));
+  p_all "every finite constant is dumped as a floating literal, with a radix point or an exponent"
+    tokens ~f:(fun (v, token) ->
+      (not (Float.is_finite v))
+      || String.exists token ~f:(function '.' | 'e' | 'E' -> true | _ -> false));
   p "the two zeros are dumped differently"
     (String.(cd_token 0.0 <> cd_token (-0.0)) && String.(ll_token 0.0 <> ll_token (-0.0)));
   p "a constant needing a 17th digit is dumped differently from its 16-digit neighbour"

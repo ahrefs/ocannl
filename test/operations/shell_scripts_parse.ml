@@ -1611,7 +1611,7 @@ let () =
             in
             eprintf "%s: parsed with %s\n" rel (String.concat ~sep:", " usable);
             List.iter complaints ~f:(fun complaint -> eprintf "  %s: %s\n" rel complaint);
-            Verdict.pf "%s parses" rel (List.is_empty complaints));
+            Verdict.p_empty (Printf.sprintf "%s parses" rel) ~over:usable complaints);
   eprintf "shell scripts scanned: %d\n" (List.length scripts);
   Verdict.pf "the scan reached at least the %d shell scripts this repository is known to have"
     script_floor
@@ -1619,5 +1619,6 @@ let () =
   let scanned = Set.of_list (module String) (List.map scripts ~f:fst) in
   let missing = List.filter must_be_scanned ~f:(Fn.non (Set.mem scanned)) in
   List.iter missing ~f:(fun rel -> eprintf "not reached by the scan: %s\n" rel);
-  Verdict.p "the scan reached the session hook and the suite runner" (List.is_empty missing);
+  Verdict.p_empty "the scan reached the session hook and the suite runner" ~over:must_be_scanned
+    missing;
   Test_utils.Refusal_control_manifest.print "shell_scripts_parse.ml"

@@ -233,7 +233,7 @@ let () =
   let got3 = run_with "epf_mma" transform3 mc3 in
   p "staged fused: epilogue is a sibling of the fragment store-back" !has_epilogue_sibling;
   p_all2 "staged fused values match two-kernel" got3 want ~f:(fun a b -> Float.(abs (a - b) < 1e-2));
-  p "staged fused bitwise on C backends" (on_gpu || Array.for_all2_exn got3 want ~f:Float.equal);
+  p_all2 "staged fused bitwise on C backends" got3 want ~f:(fun a b -> on_gpu || Float.equal a b);
   (let src = Generated.read "epf_mma" in
    let has s = String.is_substring src ~substring:s in
    let ok =

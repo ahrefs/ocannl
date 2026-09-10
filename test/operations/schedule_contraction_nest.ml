@@ -388,15 +388,17 @@ let bf16_leg ~tag ~build =
    so it no longer produces a k-divisibility witness at all -- which the padded leg below asserts.
    The CPU blocktile pipeline packs into stack scratch outside that composition and keeps the gate,
    so its witnesses are where the label is still rendered. *)
-let k_witnesses ~name ~is_gpu ~prefix build =
+let k_refutations ~name ~is_gpu build =
   let opt = capture (named name (Train.forward (build ()))) in
   match
     Autotune.matmul_sketch_tree ~is_gpu ~is_cpu:(not is_gpu)
       ~limits:Ir.Backend_intf.no_hardware_limits opt
   with
   | None -> []
-  | Some tree ->
-      Sspace.refutations tree |> List.map ~f:snd |> List.filter ~f:(String.is_prefix ~prefix)
+  | Some tree -> Sspace.refutations tree |> List.map ~f:snd
+
+let k_witnesses ~name ~is_gpu ~prefix build =
+  k_refutations ~name ~is_gpu build |> List.filter ~f:(String.is_prefix ~prefix)
 
 (* The padded GPU blocktile family at an awkward contraction extent (gh-ocannl-730): head_dim 12,
    which neither curated [bk] (8, 16) divides. The pipeline stages BOTH operands through zero-fringe
@@ -502,12 +504,13 @@ let () =
         let%op out = wv * av in
         out)
   in
-  let gpu_bk =
-    k_witnesses ~name:"out_proj_gpu_witness" ~is_gpu:true ~prefix:"bk=" (fun () ->
+  let gpu_refuted =
+    k_refutations ~name:"out_proj_gpu_witness" ~is_gpu:true (fun () ->
         let wv = w_odd () and av = att_odd () in
         let%op out = wv * av in
         out)
   in
+  let gpu_bk = List.filter gpu_refuted ~f:(String.is_prefix ~prefix:"bk=") in
   let single =
     k_witnesses ~name:"single_axis_witness" ~is_gpu:false ~prefix:"b=" (fun () ->
         let wv =
@@ -534,8 +537,9 @@ let () =
       String.is_suffix wit ~suffix:"does not divide k=12");
   (* gh-ocannl-730: the GPU blocktile family stages both operands, so its k-extent pads and the gate
      that used to delete the whole family here produces no witness at all. *)
-  p "out_proj: the GPU blocktile family raises no bk-divisibility refutation on the awkward extent"
-    (List.is_empty gpu_bk);
+  p_empty
+    "out_proj: the GPU blocktile family raises no bk-divisibility refutation on the awkward extent"
+    ~over:gpu_refuted gpu_bk;
   padded_leg ~tag:"out_proj_odd" ~nk:ee_odd
     ~build:(fun () ->
       let wv = w_odd () and av = att_odd () in

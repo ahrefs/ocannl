@@ -44,6 +44,7 @@
   scan_floors
   dune_stanza_scan
   verdict_scan
+  verdict_provenance
   generated
   asm_census)
  (libraries

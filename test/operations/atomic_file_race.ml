@@ -346,7 +346,7 @@ let () =
   Verdict.p "the released writer commits its own complete payload"
     (Option.equal String.equal (read_published ()) (Some blocked));
   Verdict.p "the blocked writer waited rather than timing out" !waited;
-  Verdict.p "no staging file survives the interleaving" (List.is_empty (staging_leftovers ()))
+  Verdict.p_none "no staging file survives the interleaving" (listing ()) ~f:AF.is_staging_file
 
 (* The stress leg. Fixed counts and a rendezvous, so the interleaving is arranged rather than hoped
    for: every writer publishes its first round and then WAITS for every reader to have read, and
@@ -595,7 +595,7 @@ let () =
     (100 * Array.fold refusals ~init:0 ~f:( + ) < total_publications);
   Verdict.p "the file left by the race is a complete payload"
     (Option.value_map (read_published ()) ~default:false ~f:is_well_formed);
-  Verdict.p "the race leaves no staging file behind" (List.is_empty (staging_leftovers ()));
+  Verdict.p_none "the race leaves no staging file behind" (listing ()) ~f:AF.is_staging_file;
   Verdict.p "the race leaves only the published file"
     (List.equal String.equal (listing ()) [ "published.bin" ])
 
@@ -759,7 +759,7 @@ let () =
   Verdict.p "a publish that fails in its commit window raises" failed;
   Verdict.p "a failed publish leaves the previous payload"
     (Option.equal String.equal (read_published ()) (Some seed));
-  Verdict.p "a failed publish removes its own staging file" (List.is_empty (staging_leftovers ()));
+  Verdict.p_none "a failed publish removes its own staging file" (listing ()) ~f:AF.is_staging_file;
   let streamed = payload ~writer:(Char.to_int 'c') ~round:2 in
   AF.with_channel ~path:target () ~f:(fun oc -> Stdlib.output_string oc streamed);
   Verdict.p "a streamed publish commits its whole payload"
@@ -777,8 +777,8 @@ let () =
   Verdict.p "a streamed publish that raises mid-write raises" stream_failed;
   Verdict.p "a failed streamed publish leaves the previous payload"
     (Option.equal String.equal (read_published ()) (Some streamed));
-  Verdict.p "a failed streamed publish removes its own staging file"
-    (List.is_empty (staging_leftovers ()));
+  Verdict.p_none "a failed streamed publish removes its own staging file" (listing ())
+    ~f:AF.is_staging_file;
   Verdict.p "a privately built directory tree publishes as one path" (publish_directory_tree ())
 
 (* The rerun control (gh-ocannl-803). Every leg above starts from an empty scratch directory, and a
@@ -805,17 +805,18 @@ let () =
   in
   List.iter [ "staged-directory"; "published-directory"; "not_created_yet" ] ~f:plant_tree;
   Stdio.Out_channel.write_all target ~data:"leftover from an interrupted run";
+  let planted = listing () in
   Verdict.p "the planted leftovers are what an interrupted run leaves behind"
-    (List.equal String.equal (listing ())
+    (List.equal String.equal planted
        [ "not_created_yet"; "published-directory"; "published.bin"; "staged-directory" ]);
   let status, probe_cwd, seen_after_startup = run_startup_probe () in
   Verdict.p "a fresh process starts over the leftovers and exits cleanly"
     (match status with Unix.WEXITED 0 -> true | _ -> false);
   Verdict.p "the fresh process ran in this test's own scratch directory"
     (Option.value_map probe_cwd ~default:false ~f:(String.equal (Unix.getcwd ())));
-  Verdict.p "a fresh process's startup clears an interrupted run's directory fixtures"
-    (List.is_empty seen_after_startup);
-  Verdict.p "the rerun's clearing is visible to this process too" (List.is_empty (listing ()));
+  Verdict.p_empty "a fresh process's startup clears an interrupted run's directory fixtures"
+    ~over:planted seen_after_startup;
+  Verdict.p_empty "the rerun's clearing is visible to this process too" ~over:planted (listing ());
   Verdict.p "a rerun over an interrupted run's leftovers publishes its directory tree"
     (publish_directory_tree ());
   Verdict.p "the rerun left the scratch directory as it found it" (List.is_empty (listing ()))
@@ -856,7 +857,7 @@ let () =
             AF.write_all ~path:target ~data:"payload"
               ~before_commit:(fun () -> failwith "gh780 hook failure")
               ())));
-  Verdict.p "a refused publish leaves no staging file" (List.is_empty (staging_leftovers ()))
+  Verdict.p_none "a refused publish leaves no staging file" (listing ()) ~f:AF.is_staging_file
 
 (* Crash-stale cleanup: the writer that dies in its commit window cannot clean up after itself, so
    the sweep must — by age, and only over this module's own artifacts. *)

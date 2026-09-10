@@ -465,6 +465,6 @@ let () =
     (String.equal (SC.cache_key ~limits canon ~backend) (key (SC.objective_tag ())));
   (* The tag a key carries is the mode's own spelling, so a report's objective and the entry that
      stored its times name the same thing. *)
-  p "the key's objective spelling round-trips through the mode"
-    (List.for_all [ Autotune.Isolated; Autotune.Queued ] ~f:(fun m ->
-         Poly.equal (Autotune.timing_of_setting (Autotune.timing_string m)) m))
+  Verdict.p_all "the key's objective spelling round-trips through the mode"
+    [ Autotune.Isolated; Autotune.Queued ] ~f:(fun m ->
+      Poly.equal (Autotune.timing_of_setting (Autotune.timing_string m)) m)

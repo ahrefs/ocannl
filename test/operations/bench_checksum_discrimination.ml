@@ -129,14 +129,15 @@ let () =
     [ ("ma", 0x5A17, 48); ("mb", 0x3C6E, 17) ]
     ~f:(fun (name, salt, modulus) ->
       let strides = List.map operand_multiples ~f:(fun mult -> modulus * mult) in
-      Verdict.pf "mixed %s rows stay pairwise distinct at every row stride %d divides" name modulus
-        (List.for_all strides ~f:(fun row_stride ->
-             pairwise_distinct (mixed_rows ~salt ~modulus ~row_stride ~rows:16)));
-      Verdict.pf
-        "flat-offset %s rows are all identical at every row stride %d divides (negative control)"
-        name modulus
-        (List.for_all strides ~f:(fun row_stride ->
-             all_identical (flat_rows ~modulus ~row_stride ~rows:16))));
+      Verdict.p_all
+        (Printf.sprintf "mixed %s rows stay pairwise distinct at every row stride %d divides" name
+           modulus) strides ~f:(fun row_stride ->
+          pairwise_distinct (mixed_rows ~salt ~modulus ~row_stride ~rows:16));
+      Verdict.p_all
+        (Printf.sprintf
+           "flat-offset %s rows are all identical at every row stride %d divides (negative control)"
+           name modulus) strides ~f:(fun row_stride ->
+          all_identical (flat_rows ~modulus ~row_stride ~rows:16)));
 
   (* Enough distinct weights to tell the rows apart. A row's weight vector is what a swap of two
      rows has to differ in; where two rows share one, their swap is invisible to any weighting of
@@ -403,26 +404,26 @@ let () =
       (* The flat form's bound is not a birthday: its rows repeat with the modulus's period at EVERY
          stride, 13 or 17 rows in. The mixed form is birthday-limited in a space of levels^stride,
          so it is behind only where that space is itself too small to matter. *)
-      Verdict.pf
-        "the mixed %s keeps rows distinct at least as far as the flat form, at every %s above %d"
-        name axis crossover
-        (List.for_all
-           (List.filter narrow_strides ~f:(fun stride -> stride > crossover))
-           ~f:(fun stride ->
-             match (mixed_at ~salt ~levels stride, flat_at ~modulus stride) with
-             | None, _ -> true
-             | Some _, None -> false
-             | Some m, Some f -> m >= f));
-      Verdict.pf
-        "at %s <= %d both forms are exhausted within twenty rows, against a levels^%s space bound \
-         of %d that leaves no room to improve"
-        axis crossover axis (Int.pow levels crossover)
-        (List.for_all
-           (List.range 1 (crossover + 1))
-           ~f:(fun stride ->
-             match (mixed_at ~salt ~levels stride, flat_at ~modulus stride) with
-             | Some m, Some f -> m <= 20 && f <= 20
-             | _ -> false)));
+      Verdict.p_all
+        (Printf.sprintf
+           "the mixed %s keeps rows distinct at least as far as the flat form, at every %s above %d"
+           name axis crossover)
+        (List.filter narrow_strides ~f:(fun stride -> stride > crossover))
+        ~f:(fun stride ->
+          match (mixed_at ~salt ~levels stride, flat_at ~modulus stride) with
+          | None, _ -> true
+          | Some _, None -> false
+          | Some m, Some f -> m >= f);
+      Verdict.p_all
+        (Printf.sprintf
+           "at %s <= %d both forms are exhausted within twenty rows, against a levels^%s space \
+            bound of %d that leaves no room to improve"
+           axis crossover axis (Int.pow levels crossover))
+        (List.range 1 (crossover + 1))
+        ~f:(fun stride ->
+          match (mixed_at ~salt ~levels stride, flat_at ~modulus stride) with
+          | Some m, Some f -> m <= 20 && f <= 20
+          | _ -> false));
 
   (* The arithmetic the weights' exactness argument rests on: a residue is a residue (non-negative,
      below its modulus), so a weight is in [1, 251] and products of the benches' exact-in-binary

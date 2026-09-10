@@ -98,12 +98,11 @@ let () =
       "Sample.sexp_of_poly";
       "Sample.sexp_of_handwritten";
     ] ~f:(fun key -> List.mem (export_keys fixture_exports) key ~equal:String.equal);
-  Verdict.p "nested lets and nested-module derived values are not exports"
-    (not
-       (List.exists fixture_exports ~f:(fun (export : Scan.export) ->
-            String.equal export.value "nested"
-            || String.equal export.value "hidden"
-            || String.equal export.value "equal_nested")));
+  Verdict.p_none "nested lets and nested-module derived values are not exports" fixture_exports
+    ~f:(fun (export : Scan.export) ->
+      String.equal export.value "nested"
+      || String.equal export.value "hidden"
+      || String.equal export.value "equal_nested");
   Verdict.p "a deriving on the last declaration covers its whole recursive type group"
     (List.mem (export_keys fixture_exports) "Sample.equal_group_a" ~equal:String.equal
     && List.mem (export_keys fixture_exports) "Sample.equal_group_b" ~equal:String.equal);
@@ -163,8 +162,9 @@ let () =
   in
   Verdict.p "unqualified identifiers in an open scope count conservatively"
     (referenced opened "plain" && referenced opened "pair" && referenced opened "primitive");
-  let inert = refs [ ("inert.ml", "let s = \"Sample.outer\" (* Sample.alias *)\n") ] in
-  Verdict.p "comments and strings do not count as references" (List.is_empty inert);
+  let inert_sources = [ ("inert.ml", "let s = \"Sample.outer\" (* Sample.alias *)\n") ] in
+  let inert = refs inert_sources in
+  Verdict.p_empty "comments and strings do not count as references" ~over:inert_sources inert;
   let extensions =
     refs
       [
@@ -231,9 +231,10 @@ let () =
   in
   Verdict.p_none "a deriving attribute is not an ordinary opened value reference" [ "equal" ]
     ~f:(referenced deriving_attribute);
-  let functor_application = refs [ ("functor.ml", "let f = [%of_sexp: F(X).t]\n") ] in
-  Verdict.p "a functor-application type path is accepted without guessed credit"
-    (List.is_empty functor_application);
+  let functor_sources = [ ("functor.ml", "let f = [%of_sexp: F(X).t]\n") ] in
+  let functor_application = refs functor_sources in
+  Verdict.p_empty "a functor-application type path is accepted without guessed credit"
+    ~over:functor_sources functor_application;
   let included = refs [ ("included.ml", "include Sample\n") ] in
   Verdict.p "include counts as a reference to every re-exported value"
     (List.length included = List.length fixture_exports);

@@ -747,7 +747,7 @@ let peel_claim_name = function
 
 (* Checking a member's peel claim against its routine's census, shared by the table members and the
    [Tile_mma] fallback leg so the two cannot read the census differently. *)
-let check_peel ~name ~claim (peel : Cs.peel_summary) (want : peel_claim) =
+let check_peel ~name ~claim ~statements (peel : Cs.peel_summary) (want : peel_claim) =
   let localized_sites =
     List.filter_map peel.Cs.sites ~f:(fun (_, site) ->
         match site with Cs.Peel_localized v -> Some v | _ -> None)
@@ -774,9 +774,11 @@ let check_peel ~name ~claim (peel : Cs.peel_summary) (want : peel_claim) =
         Stdio.eprintf "  %s: declared no localization, got [%s]\n" name (verdicts localized_sites);
       Verdict.p_empty claim ~over:peel.Cs.sites localized_sites
   | Never_a_site ->
+      (* Over the emitted kernel's statements, which is where a site would have been censused: an
+         empty census is only a claim about a kernel that rendered something. *)
       if not (List.is_empty peel.Cs.sites) then
         Stdio.eprintf "  %s: declared no peel site, got %s\n" name (Cs.peel_summary_string peel);
-      p claim (List.is_empty peel.Cs.sites)
+      Verdict.p_empty claim ~over:statements peel.Cs.sites
   | Widened_elsewhere want ->
       (* Non-emptiness is part of the claim: a rendering that stopped consulting the shared decision
          would leave no ceded site, and "nothing localized" alone would still hold. *)
@@ -2224,7 +2226,7 @@ let () =
                  routine's peel census rather than off the emitted text: a member declaring a peel
                  its kernel did not perform fails here even when every textual claim holds, which is
                  the whole of what this instrument adds. *)
-              check_peel ~name ~claim:peel_claim peel m.peel;
+              check_peel ~name ~claim:peel_claim ~statements:(statements src) peel m.peel;
               let want =
                 match m.reference with
                 | Baseline -> baseline prec_name
@@ -2367,8 +2369,9 @@ let () =
           done;
           String.lstrip ~drop:(Char.equal '_') (String.drop_prefix l !b)
         in
+        let src = Generated.read ("rf_mma_fallback_" ^ prec_name) in
         let localized =
-          match read_form (Generated.read ("rf_mma_fallback_" ^ prec_name)) ~label with
+          match read_form src ~label with
           | None ->
               Stdio.eprintf "  rf_mma_fallback_%s: no accumulator identifier in the kernel\n"
                 prec_name;
@@ -2401,7 +2404,8 @@ let () =
         (* And, as for every table member, WHICH decision localized that fallback reduction
            (gh-ocannl-733): codegen's peel, at the contraction's own reduction level. The textual
            reading above says a scope is there; only the census says the peel put it there. *)
-        check_peel ~name:("rf_mma_fallback_" ^ prec_name) ~claim:peel_claim peel mma_fallback_peel;
+        check_peel ~name:("rf_mma_fallback_" ^ prec_name) ~claim:peel_claim
+          ~statements:(statements src) peel mma_fallback_peel;
         let ok = agrees got want in
         if not ok then
           Stdio.eprintf "  rf_mma_fallback_%s: got [%s] want [%s]\n" prec_name (show got)

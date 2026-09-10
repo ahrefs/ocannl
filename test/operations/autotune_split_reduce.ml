@@ -123,8 +123,8 @@ let () =
   let b = TDSL.ndarray mvv ~label:[ "sr_b" ] ~output_dims:[ red_d ] () in
   let%op w = a + b in
   let ew_opt = capture_base (named "asr_elemwise" (Train.forward w)) in
-  p "elementwise code yields no split-reduce sites"
-    (List.is_empty (Autotune.split_reduce_sites ew_opt));
+  p_empty "elementwise code yields no split-reduce sites" ~over:(LL.loop_bounds ew_opt.LL.llc)
+    (Autotune.split_reduce_sites ew_opt);
 
   (* A short reduction (below the extent threshold) is not worth a second pass: no sites. *)
   let short = 32 in
@@ -140,8 +140,8 @@ let () =
   in
   let%op ys = ms * vs in
   let short_opt = capture_base (named "asr_short" (Train.forward ys)) in
-  p "short reductions yield no split-reduce sites"
-    (List.is_empty (Autotune.split_reduce_sites short_opt))
+  p_empty "short reductions yield no split-reduce sites" ~over:(LL.loop_bounds short_opt.LL.llc)
+    (Autotune.split_reduce_sites short_opt)
 
 (* === Leg 2: the gh-466 embedding-backward scatter yields a dynamic site. === *)
 

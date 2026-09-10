@@ -102,7 +102,7 @@ let () =
     let found = of_rule rule in
     List.iter found ~f:(fun f ->
         eprintf "  %s: %s: %s\n" f.Notes.rule f.Notes.where f.Notes.message);
-    Verdict.p claim (List.is_empty found)
+    Verdict.p_empty claim ~over:files found
   in
   report Notes.rule_bullet_integrity "every bullet is whole and every list parses as one reading";
   report Notes.rule_index_agreement "every index row names a file that carries what it claims";
@@ -130,7 +130,7 @@ let () =
   List.iter unnamed ~f:(fun f ->
       eprintf "  %s: %s: a finding tagged with a rule the scan does not name\n" f.Notes.rule
         f.Notes.where);
-  Verdict.p "every finding carries one of the rules the scan names" (List.is_empty unnamed);
+  Verdict.p_empty "every finding carries one of the rules the scan names" ~over:files unnamed;
   (* An exemption is a claim about a specific bullet; one that matches nothing has stopped being
      one, and left behind a hole the next edit falls into. *)
   (* An exemption key is the whole normalized bullet, so two bullets cannot share one. That is a

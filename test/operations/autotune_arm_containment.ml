@@ -429,8 +429,8 @@ let () =
   let control_reports, control_ships = negative_control () in
   p_all "control: an uninjected search declines nothing at pre-dispatch validation" control_reports
     ~f:(fun r -> List.is_empty (preflight_declines r));
-  p "control: an uninjected search completes and ships"
-    (control_ships && List.for_all control_reports ~f:completed);
+  p_all "control: an uninjected search completes and ships" control_reports ~f:(fun r ->
+      control_ships && completed r);
 
   (* An unsatisfied execution dependency, from a routine that genuinely has one: [dep_r2] reads what
      [dep_r1] writes and [dep_r1] has not run. *)

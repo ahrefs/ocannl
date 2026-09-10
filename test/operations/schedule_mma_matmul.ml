@@ -364,8 +364,8 @@ let () =
   let ctx_a = Context.run ctx_a routine_a in
   let got_mma = Context.get_values ctx_a mc1.Tensor.value in
   p_all2 "tensorized matmul values match the serial twin" got_mma got_serial ~f:approx;
-  p "C-backend fallback matches bitwise"
-    (on_gpu || Array.for_all2_exn got_mma got_serial ~f:Float.equal);
+  p_all2 "C-backend fallback matches bitwise" got_mma got_serial ~f:(fun a b ->
+      on_gpu || Float.equal a b);
   (let src = Generated.read "mm_mma" in
    let has s = String.is_substring src ~substring:s in
    let ok =
@@ -1413,9 +1413,8 @@ let () =
     let ctx1 = Context.run ctx1 routine1 in
     let got = Context.get_values ctx1 tensorized.Tensor.value in
     p_all2 (Printf.sprintf "%s tensorized matmul matches the serial twin" tag) got want ~f:approx;
-    p
-      (Printf.sprintf "%s C-backend fallback matches bitwise" tag)
-      (on_gpu || Array.for_all2_exn got want ~f:Float.equal);
+    p_all2 (Printf.sprintf "%s C-backend fallback matches bitwise" tag) got want ~f:(fun a b ->
+        on_gpu || Float.equal a b);
     let src = Generated.read ("mm_" ^ tag ^ "_mma") in
     let has s = String.is_substring src ~substring:s in
     let ok =

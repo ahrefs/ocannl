@@ -127,6 +127,7 @@ let refusal_callees =
     "p_all";
     "p_all2";
     "p_none";
+    "p_alli";
     "p_exists";
     "p_empty";
     "claim";

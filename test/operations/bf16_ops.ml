@@ -45,8 +45,10 @@ let () =
   let ctx = Train.forward_once ctx u in
   let values = Context.get_values ctx u.value in
   Stdio.printf "\n";
-  Verdict.pf "uniform bfloat16: %d values, all in [0,1)" (Array.length values)
-    (Array.for_all values ~f:(fun v -> Float.(v >= 0. && v < 1.)));
+  Verdict.p_all
+    (Printf.sprintf "uniform bfloat16: %d values, all in [0,1)" (Array.length values))
+    (Array.to_list values)
+    ~f:(fun v -> Float.(v >= 0. && v < 1.));
   (* Keep the uniform virtual so its consumer reads each packed block through the lane-extract
      builtin rather than [Set_from_vec]. This covers the other route by which a raw ushort return
      used to be converted numerically into a bfloat cell. *)
@@ -57,5 +59,7 @@ let () =
   Train.set_materialized virtual_values.value;
   let ctx = Train.forward_once ctx virtual_values in
   let values = Context.get_values ctx virtual_values.value in
-  Verdict.pf "virtual uniform bfloat16: %d values, all in [0,1)" (Array.length values)
-    (Array.for_all values ~f:(fun v -> Float.(v >= 0. && v < 1.)))
+  Verdict.p_all
+    (Printf.sprintf "virtual uniform bfloat16: %d values, all in [0,1)" (Array.length values))
+    (Array.to_list values)
+    ~f:(fun v -> Float.(v >= 0. && v < 1.))

@@ -127,7 +127,8 @@ let () =
   let missing = List.concat_map alone.F.interfaces ~f:(fun i -> i.F.missing) in
   same "a hand-over that lost the member interfaces reports them as missing" ~derived:missing
     ~declared;
-  Verdict.p "a hand-over that lost the member interfaces derives no frontier from them"
-    (List.is_empty alone.F.emitters && List.is_empty alone.F.combinators);
+  Verdict.p_empty "a hand-over that lost the member interfaces derives no frontier from them"
+    ~over:missing
+    (alone.F.emitters @ alone.F.combinators);
   Stdlib.Sys.remove copy;
   Stdlib.Sys.rmdir elsewhere

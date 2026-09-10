@@ -885,7 +885,8 @@ that they earn a lookup rather than always-loaded space.
   construction (gh-ocannl-729). It bites hardest where the claim is worth most: quantified over a
   DERIVED collection — the seeds a family tree yields, the refutations a gate raises, the
   candidates that validated — where empty is a plausible regression rather than an impossible
-  state. So `Verdict.p_all name xs ~f`, `p_none name xs ~f` (the mirror: filtering an empty list
+  state. So `Verdict.p_all name xs ~f`, `p_alli` (the indexed form), `p_none name xs ~f` (the
+  mirror: filtering an empty list
   also yields nothing, so `List.is_empty (List.filter …)` has the same hole), `p_exists`, and
   `p_empty name ~over:population derived` for the sites that keep the derived subset around to
   report it. A non-empty collection prints exactly what `p` prints, which is what let ~44 files
@@ -895,98 +896,57 @@ that they earn a lookup rather than always-loaded space.
   emptiness — "no candidate declines", "no key is undocumented", a scan over a tree that is usually
   clean — and those want a companion claim that the population was there at all, which is what the
   `p_empty ~over` form is.
-  `verdict_ratchet` also follows file-local boolean bindings into `Verdict.p`/`claim`/`pass_fail`
-  (and their format-taking forms): a helper returning `for_all`, `for_all2_exn`, `is_empty`, or a
-  negated `exists`, and a fully applied quantified value bound before the claim, must make
-  non-emptiness part of its passing result. A file-local wrapper whose body calls one of those
-  `Verdict` forms is a claim target too: bound Boolean arguments are traced to their quantified
-  origin, while direct quantified arguments are checked at the wrapper call. Wrapper parameters
-  are matched to labeled or positional actual arguments with the polarity of their use in the
-  underlying claim, so a wrapper such as `Verdict.p label (not ok)` does not hide a negated
-  `exists`. When an optional claim parameter is omitted, its definition-time default binding is
-  followed instead; a definitely supplied argument suppresses that edge, while an unknown
-  forwarded option conservatively checks both its possible payload and the default. A partial
-  application such as `let check = Verdict.p label` records the Boolean slot that its later call
-  still owes, after any positional parameters a curried wrapper has already consumed. Tail-position
-  setup (`let`, sequence, local open, or constraint) is unwrapped before wrapper recognition, while
-  value aliases in that setup retain their connection to the claimed formal. Every claim in a
-  sequential or control-flow wrapper contributes its Boolean slot, and partial `pf`/`claimf` calls
-  count the literal format's still-owed arguments before that slot. Partially applying an already
-  recognised local wrapper carries its remaining slots forward. Local `open Verdict.Claims` scopes
-  extend discovery, eager outer calls do not hide a nested claim argument, and `function` cases
-  contribute their positional argument slot. Conditions forwarded or inverted inside a claimed
-  Boolean retain their polarity. Wrappers and quantified helpers exported from file-local modules
-  are available through their qualified name or through a file-local module `open`. Match aliases
-  connect a wrapper's claimed result back to its scrutinee, and a syntactic `?arg:None` keeps the
-  optional default edge when a wrapper is partially applied. Its exact, stale-checked exemption list
-  is only for bindings whose intended passing meaning allows an empty population; synthetic controls
-  include a child process the shipping ratchet demonstrably refuses (gh-ocannl-801, gh-ocannl-887).
-  An entry
-  there names ONE definition, and that is checked rather than assumed: a name shadowed by a second
-  definition would hand both bodies to one key, so an exempted key resolving to two definition
-  offsets refuses the run instead of covering the body nobody read.
-  Claim-argument resolution installs a `let` nested inside the argument before following the value
-  it returns, and both helper analysis and claim resolution preserve polarity through `not` and
-  explicit true/false comparisons (including pipeline spelling) across intermediate bindings.
-  Non-empty guards propagate down positive value-alias edges, but conservatively stop at helper
-  calls: without formal-to-actual substitution, matching formal names can incorrectly license a
-  quantifier over a different actual argument. They also stop when entering a nested `let`, where a
-  shadowed collection can reuse the same spelling for a different identity. Dependency edges retain
-  their sign, so a bound `exists` later used under `not` is checked as `not exists`; direct and piped
-  `not` have the same polarity, including when a helper returns a negated local binding. Tuple and
-  record destructuring maps names to their corresponding value expressions, and a match-bound value
-  maps to its scrutinee, so changing the binding pattern cannot hide a quantifier. Mutually recursive
-  binding groups are closed over their sibling dependencies; function parameters, conversely,
-  shadow same-named outer helpers while their body is analyzed, and later local bindings shadow
-  returned-name references. `Fn.id`/`Fun.id` are transparent to returned-quantifier analysis.
-  Immediately invoked function bodies remain visible, and aliases of the recognized collection
-  quantifier functions retain the underlying quantifier kind and population arity. Nested callback
-  bodies contribute their claims with callback parameters shadowing outer wrapper aliases.
-  Dependencies that choose a returned value through an `if` condition or match scrutinee, and a
-  dependency returned from a protected `try` body, remain visible; complementary Boolean `if`
-  branches retain their polarity. Match-case patterns shadow outer helper names in their guards and
-  right-hand sides, while a case guard that selects a Boolean result is itself a signed dependency.
-  Optional-parameter defaults are resolved in the environment before that parameter shadows its
-  name. They become labeled local bindings, so later defaults can depend on earlier ones and a call
-  that definitely supplies an optional argument suppresses exactly that default edge; `?arg` only
-  does so for a syntactic `Some`, since `None` invokes the default. Direct quantifiers in an `if`
-  condition or match guard are attributed to the returned binding as well as dependencies named
-  there. `function`-case bodies and guards receive the same scoped analysis as ordinary matches.
-  Case-pattern names shadow returned-name references as well as dependency references. A single
-  `function` case can contribute its non-empty witnesses; alternatives never pool witnesses across
-  cases, where equal parameter spellings are distinct runtime branches. A complementary
-  `true`/`false` constructor match over a direct quantifier is recognized as either forwarding or
-  inverting that Boolean, and the same polarity applies when the scrutinee is a bound quantifier;
-  other constructor matches do not guess a polarity. Direct and bound quantifiers in `try`-handler
-  guards are treated like match guards, with polarity derived from the handler result; when that
-  result is not a syntactic Boolean literal, both polarities are retained conservatively. An aggregate
-  bound before it is destructured conservatively retains every quantified component; literal tuple
-  and record destructuring remains component-exact. A quantifier returned from a nested `let` is
-  checked against witnesses inside that scope and then sealed, so an outer witness with the same
-  textual name cannot license a shadowed population. Match-case results are sealed for the same
-  reason: a case-bound population cannot borrow a same-spelled witness from outside the match.
-  Constant Boolean aliases in an `if` or guarded-case result—including aliases introduced by a
-  returned local `let`—carry the same polarity as literal `true` and `false`; unresolved outcomes
-  retain the existing conservative dependency traversal, while identical resolved branches prove
-  that the condition does not contribute. Boolean match polarity follows the first matching case for
-  each input, including wildcard, variable, alias, constrained, open, and or-patterns, rather than
-  considering only literal constructor patterns. This preserves forwarding and inversion through
-  ordinary exhaustive matches, including when the match maps a wrapper parameter into a claim.
-  Constructor-match outcomes and Boolean-comparison
-  operands resolve the same aliases. Local opens, local-module declarations, and local exceptions
-  are transparent to returned-quantifier analysis, protected `try` expressions remain part of that
-  analysis, and `not @@ quantified` retains the same negative polarity as direct and piped `not`.
-  Filtered populations retain the filter expression in their identity, so a non-empty view selected
-  by one predicate cannot guard an empty view selected by another. The controls pair each accepted
-  negation or shadow with a positive form the ratchet must still refuse.
+  `verdict_ratchet` enforces the guard mechanically, for a quantifier (`for_all`/`for_alli`,
+  `for_all2_exn`, `is_empty`, a negated `exists`/`existsi`, in Base's or `Stdlib`'s spelling)
+  written directly into a
+  native claim (`Verdict.p`, `pf`, `claim`, `claimf`, `pass_fail`, opened or qualified) and for one
+  reached through a file-local binding, helper, wrapper or module (gh-ocannl-801, gh-ocannl-887,
+  gh-ocannl-908). The reader is `test/support/verdict_provenance.ml` (gh-ocannl-931): ONE walker
+  over the syntax that models each form once as a scope-and-polarity *provenance* -- two views,
+  what the value's `true` can rest on and what its `false` can, each listing the quantifiers (or
+  not-yet-known function parameters) the value may reduce to and the populations certainly
+  non-empty at that polarity; a constant when the value is one; a closure when it is a function.
+  Every question the old walkers answered separately (what a binding returns, what it depends on,
+  which parameter a wrapper claims, which function a call resolves to) is a projection of that one
+  model, so a syntax form handled for one question is handled for all: `not` swaps the views, `&&`
+  joins them (sources union, witnesses union, and a witness covers a source the moment they meet),
+  a conditional merges its branches (a condition steers between values and IS the value only where
+  a branch returns a constant; alternatives all returning one constant fold to it), `|>` and `@@`
+  are rewritten to plain application, and every binder -- `let`, parameters with their optional
+  defaults walked before the parameter shadows anything, match cases mapped to the scrutinee's
+  components, `open`, `module` -- goes through one environment. Population identity is lexical (a
+  name plus its binder), which is what stops a witness from vouching for a shadowed collection.
+  Functions are closures: parameters are bindings whose value is the parameter itself, and applying
+  a closure substitutes the actuals -- a Boolean parameter by the argument's provenance, a
+  population parameter by the argument's identity (so a caller's guard covers a helper's quantifier
+  over the same actual and no other), a destructured parameter by its component of a literal tuple
+  or record. `Verdict.p` itself is such a closure with a label slot and a value slot, which is why
+  a local wrapper, a partial application of a native claim, a `function`-case wrapper and a claim
+  inside a callback are one mechanism. A claim fires when the closure receives its last required
+  argument; the diagnostic names the innermost binding that wrote the quantifier (a local of a
+  function body is taken over by the function when it is referenced; a local nothing named
+  encloses stays the name), or, for a quantifier written directly into a native claim, the claim's
+  label -- which is also the exemption key for the sites where emptiness is the passing meaning
+  and nothing in scope must be non-empty. The exact, stale-checked exemption list holds those and
+  the bindings whose passing meaning allows an empty population; an entry names ONE definition,
+  checked by definition offset rather than assumed, so a name shadowed by a second definition
+  refuses the run instead of covering the body nobody read. Synthetic controls include two child
+  processes the shipping ratchet demonstrably refuses (one per diagnostic), the mutation-run
+  manifest `test/operations/verdict_ratchet_controls.md` (held equal to the control labels in both
+  directions), and a generated syntax coverage matrix: every value form the model handles, under
+  every quantifier kind and every spelling of the quantifier's function (qualified, `open List`, a
+  module alias, a local open), in refusal / inverted / guarded / shadowed cases, printed as a grid
+  in the golden so a missing cross-product is a visible cell rather than a review finding. Adding
+  a syntax form means one case in `walk` and one family in `matrix_families`; the grid says whether
+  the form composes with everything else.
   The literal- and computed-label exemption lists carry the same one-key/one-site contract
   (gh-ocannl-891). `Verdict_scan.site.position` is the parser's absolute character offset, while
   line and column are report text; `record_definition` aggregates all three exemption families by
   offset, and each refuses a key that resolves to more than one site. Multiline and same-line
   duplicate controls exist for both literal and computed labels, because a line number merges the
-  exact same-line shape the check must distinguish. Direct quantifiers passed to a Verdict wrapper
-  use the claimed ARGUMENT offset, so one intentional exemption cannot silently cover another call
-  through the same wrapper or another claimed slot in the same call.
+  exact same-line shape the check must distinguish. Direct quantifiers reaching a claim through a
+  wrapper or a native call use the claimed ARGUMENT offset, so one intentional exemption cannot
+  silently cover another call through the same wrapper or another claimed slot in the same call.
 - The guarded pairwise claim has the same two label dialects as the scalar claim (gh-ocannl-816):
   `pf_all2` formats a computed label before taking the two arrays, and `pass_fail_all2` preserves
   `pass_fail`'s lazy failure detail while adding the structural empty, floor-shortfall, or

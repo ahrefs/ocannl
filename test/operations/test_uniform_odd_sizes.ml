@@ -41,7 +41,9 @@ let test_prec ?(check_range = true) ~name prec ns =
       in
       let in_range = (not check_range) || range_holds in
       let prefix_stable =
-        count_ok && Array.for_alli vs ~f:(fun i x -> Float.equal x reference.(i))
+        count_ok
+        && (not (Array.is_empty vs))
+        && Array.for_alli vs ~f:(fun i x -> Float.equal x reference.(i))
       in
       (* A three-property census row whose shape is the point, so the claims sit beside it on the
          same [let]-bound booleans, each naming the precision and the size it is about. *)

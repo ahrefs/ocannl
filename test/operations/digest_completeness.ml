@@ -163,7 +163,8 @@ let () =
       List.iter (List.sort keys ~compare:String.compare) ~f:(fun key ->
           printf "  %s%s\n" key (if Set.mem codegen_read key then " [read at codegen]" else "")));
   printf "\n";
-  Verdict.p "every scanned root meets its source-count floor" (List.is_empty floor_violations);
+  Verdict.p_empty "every scanned root meets its source-count floor" ~over:source_files
+    floor_violations;
   if not (Verdict.any_failed ()) then
     printf "OK: %d config keys classified against %d cache-key components.\n"
       (Set.length classified) (List.length SC.key_components);

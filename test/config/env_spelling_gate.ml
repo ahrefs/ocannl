@@ -36,8 +36,12 @@ open Base
 let () =
   (* Unreachable with a rejected spelling set -- `Utils`' initializer exits first -- which is the
      claim: the two must not be able to disagree. It is stated rather than assumed so that making
-     the abort conditional some day fails here instead of silently reopening the hole. *)
+     the abort conditional some day fails here instead of silently reopening the hole. Each rejected
+     spelling is a failure of its own, naming the variable: a single claim that the list is empty
+     would be the vacuous-quantifier shape verdict_ratchet refuses, and an ambient environment
+     legitimately has nothing in it to be rejected. *)
   let fatal = List.filter (Utils.unread_env_vars ()) ~f:(fun (_, is_fatal, _) -> is_fatal) in
-  List.iter fatal ~f:(fun (name, _, reason) -> Stdio.eprintf "  %s %s\n" name reason);
-  Verdict.claim "no ambient environment variable is a rejected spelling of a known key"
-    (List.is_empty fatal)
+  List.iter fatal ~f:(fun (name, _, reason) ->
+      Verdict.fail
+        (Printf.sprintf "ambient environment variable %s is a rejected spelling of a known key: %s"
+           name reason))

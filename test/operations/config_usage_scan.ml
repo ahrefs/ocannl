@@ -982,8 +982,8 @@ let refusal_control grammar_fixture =
     ];
   Verdict.p_all ~min:11 "every config-usage direct refusal format is observed"
     direct_refusal_formats ~f:(Hash_set.mem observed);
-  Verdict.p "the config-usage refusal control emits no unexpected diagnostic"
-    (List.is_empty !unexpected);
+  Verdict.p_empty "the config-usage refusal control emits no unexpected diagnostic"
+    ~over:(Hash_set.to_list observed) !unexpected;
   Refusal_manifest.print source
 
 let file_kind path =

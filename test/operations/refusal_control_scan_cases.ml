@@ -51,8 +51,8 @@ let dynamic reason = Verdict.fail reason
   let one = List.hd_exn diagnostics in
   Verdict.p "an absent fragment is an orphan"
     (List.length (Scan.orphans ~control_text:"" [ one ]) = 1);
-  Verdict.p "the diagnostic's unique marker in a control golden covers it"
-    (List.is_empty (Scan.orphans ~control_text:(Scan.marker one) [ one ]));
+  Verdict.p_empty "the diagnostic's unique marker in a control golden covers it" ~over:[ one ]
+    (Scan.orphans ~control_text:(Scan.marker one) [ one ]);
   let colliding_fragment =
     { one with Scan.format = one.format ^ " elsewhere"; identity = "other" }
   in
