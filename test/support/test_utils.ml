@@ -35,6 +35,11 @@ module Verdict_scan = Verdict_scan
 (** Scanning test sources for claims a test decides itself and prints outside [Verdict], where a
     failing one is [dune promote]-able into the golden. *)
 
+module Verdict_provenance = Verdict_provenance
+(** Scope-and-polarity provenance of the Boolean a [Verdict] claim receives: which quantifiers it
+    can rest on, through bindings, helpers, wrappers, matches and modules, and which populations are
+    witnessed non-empty when it holds. *)
+
 module Agent_notes_scan = Agent_notes_scan
 (** Reading [docs/agent-notes.md] and [docs/agent-notes/] as structure: bullet integrity, index-hook
     agreement, table shape, reachability from the index, and repetition across files. *)

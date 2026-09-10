@@ -85,7 +85,27 @@ Conventions:
 
 | Round | Prototype | What it showed | Run |
 |---|---|---|---|
-| 25 `8c090d393` | Native `Verdict.*` calls scanned for direct quantifiers (not merged) | Caught the proposed fixture, and also 65 clean-tree corpus sites plus three claim-local controls now reporting `Verdict.p` as the helper. Deferred to ahrefs/ocannl#908 as an audited migration. | `20260904T221248Z-50429` |
+| 25 `8c090d393` | Native `Verdict.*` calls scanned for direct quantifiers (not merged) | Caught the proposed fixture, and also 65 clean-tree corpus sites plus three claim-local controls now reporting `Verdict.p` as the helper. Deferred to ahrefs/ocannl#908 as an audited migration, which landed with the gh-ocannl-931 provenance layer: the corpus sites were migrated to the `p_*` combinators or exempted by claim label, one decision per site, and a direct quantifier reaching a native claim is named by the claim's label. | `20260904T221248Z-50429` |
+
+## The provenance layer (gh-ocannl-931) and its precision controls (gh-ocannl-908)
+
+`test/support/verdict_provenance.ml` replaced the ratchet's separate walkers with one
+scope-and-polarity model, so most of the mechanisms above are now one rule each of that model
+rather than a path of their own. The controls this round added pin the model's new behaviour; the
+mutation for each was made in the provenance module and run through the focused alias like the
+rounds above (runs of 2026-09-10, on the same box; the corpus was clean before each run, and each
+run's log ends with exactly the controls the row names reporting `false`).
+
+| Mechanism | Mutation applied to the provenance layer | Control(s) that failed under the mutation | Run |
+|---|---|---|---|
+| Witnesses swap polarity with the value, so a guarded conjunction negated into a binding keeps its population witnessed when read back through `not` (gh-ocannl-908 item 1); coverage is decided where witness and source meet, so a negation has nothing to undo | `negate` drops the swapped views' witnesses -- which is the single-negation guard of a negated is_empty too, so this mutation fails every guarded control, `accepts a guarded quantifier assigned through a double negation` among them, and 105 corpus sites (`refuses a double negation without the non-empty witness` and `refuses a double negation guarded over a different population` stay refused) | `20260910T101641Z-78070` |
+| A conditional whose alternatives all return one Boolean is that constant, through aliases and nesting (item 2) | Constant agreement across alternatives not folded | `does not attribute a condition whose branches return the same Boolean alias`; `does not attribute a condition whose branches agree through a nested condition`; the round-18 same-literal control; and the four matrix rows whose shadowed case is a constant conditional (`refuses a condition with one constant branch and one the reader cannot prove` stays refused) | `20260910T101648Z-83242` |
+| A condition steers between values and is the value only where a branch returns a constant | (design rule, exercised on every run) | `does not attribute a condition steering between two unproven branches`; `accepts a witness from a condition selecting the claimed branch` | -- |
+| Function parameters are bindings in the one environment, so a wrapper body's claim scanning sees the parameter and not the outer binding it shadows, while an optional default is walked before its parameter is bound (item 3) | (structural in the model: there is no second environment to leave unshadowed; exercised on every run) | `accepts a constant argument through a parameter shadowing an outer quantified binding`; `still refuses the outer quantified binding a wrapper closes over`; `evaluates a wrapper's optional default before its parameter shadows the name` | -- |
+| A destructured parameter receives the component of the actual argument its name was bound to (item 4) | `projected_arguments` hands every name the whole actual | `accepts a quantified sibling ignored by a destructured wrapper parameter`; `accepts a quantified field ignored by a record wrapper parameter`; the destructured-parameter matrix row (`refuses the claimed component of a destructured wrapper parameter`, `refuses the claimed field of a record wrapper parameter` and `conservatively inspects a wrapper argument its pattern cannot align` stay refused) | `20260910T101655Z-88455` |
+| Native claims are closures like local wrappers, so a quantifier written directly in `Verdict.p`'s argument is found and named by the label (item 5) | Claims fired by a native closure not emitted | `refuses a quantifier written directly in a native claim`; `refuses a quantifier written directly in a computed-label native claim`; `refuses a quantifier piped into a native claim`; `refuses a quantifier written directly in an opened native claim`; `names a native claim's non-literal label by its expression`; `the shipping ratchet process refuses a quantifier written directly in a native claim`; every matrix row (each fires through a native claim), the wrapper-call shadowed-quantified controls, and the label-keyed exemptions reported stale (`accepts a guarded quantifier written directly in a native claim` and `accepts a negated quantifier written directly in a native claim` stay accepted) | `20260910T101701Z-93611` |
+| An open of List or Array, a module alias of either, and `List.(…)` bring the quantifier functions into scope by name (item 6) | `quantifier_exports` exports nothing | `refuses a quantifier reached through an open of List`; `refuses a negated exists reached through an open of Array`; `refuses a quantifier reached through a module alias`; `refuses a quantifier reached through a local open`; `refuses a quantifier reached through a let-open of Array`; and every matrix row, through its opened, aliased and local-open columns (`accepts an inverted quantifier reached through an open of List`, `does not resolve an unqualified for_all with no open in scope` and `keeps a local open of List inside its scope` stay accepted) | `20260910T101708Z-98774` |
+| A helper's population parameters are substituted by the actual arguments, so a caller's witness covers the helper's quantifier over the same actual and a helper's own witness covers the caller's quantifier | Population substitution at application disabled | `accepts an outer guard forwarded to a helper call over the same actual`; `accepts a witness a helper establishes over the same actual` (`refuses a helper applied to an expression that is not a population` and `refuses a witness a helper establishes over a different actual` stay refused) | `20260910T101714Z-4598` |
 
 ## Mutation runs recorded only in the PR thread
 
@@ -100,7 +120,7 @@ re-establish them.
 | 2 `ec34361be` | Direct `Bool.equal` dispatch removed | `refuses a direct Bool.equal true around a fully applied quantifier`; `accepts a direct Bool.equal false around a fully applied quantifier` |
 | 2 `ec34361be` | Intermediate dependencies collected without polarity; inherited guards not propagated | `accepts a negated intermediate binding`; `accepts a guarded intermediate binding` |
 | 2 `ec34361be` | Literal tuple/record pattern mapping to producers disabled | `refuses a quantified component of a destructured tuple binding`; `conservatively refuses a quantified component of a record binding` |
-| 3 `dca4325db` | Inherited guards forwarded across helper calls | `conservatively refuses an outer guard across a helper call`; `refuses a mismatched actual hidden by equal formal names` |
+| 3 `dca4325db` | Inherited guards forwarded across helper calls (superseded: the provenance layer of gh-ocannl-931 substitutes a helper's population parameters by the actual arguments, so the same-actual guard is now accepted, by the control the gh-ocannl-931 table lists under population substitution, while the mismatched actual stays refused; the mutation for the substitution is in the gh-ocannl-931 table below) | `refuses a mismatched actual hidden by equal formal names` |
 | 4 `dcf717100` | Inherited guard identity forwarded into a nested `let` | `refuses a shadowed guard identity across a nested alias` |
 | 4 `dcf717100` | Pipeline-position `not`/`Bool.not` not recognised | `accepts a piped negated intermediate binding`; `accepts a directly quantified value piped through not` |
 | 4 `dcf717100` | Negative dependency edges dropped | `refuses a negated bound exists` (`accepts a positive bound exists` stays accepted) |
@@ -173,10 +193,13 @@ exercised by every `dune build @test/operations/runtest-verdict_ratchet`. A roun
 These predate PR #633 and are exercised on every run rather than by a one-off mutation; every
 label they print is listed so the inventory the ratchet checks is complete.
 
-- `run_refusal_control` (`--quantified-helper-refusal-control`): the ratchet re-executes itself on a
-  synthetic offending fixture and checks the exact refusal diagnostic and exit status. Introduced
-  by `cf1874075` (bind refusal markers to exercised controls). Label:
-  `the shipping ratchet process refuses the planted helper fixture`.
+- `run_refusal_controls` (`--quantified-helper-refusal-control`,
+  `--direct-quantifier-refusal-control`): the ratchet re-executes itself on a synthetic offending
+  fixture and checks the exact refusal diagnostic and exit status -- one child per diagnostic, the
+  bound-helper one introduced by `cf1874075` (bind refusal markers to exercised controls) and the
+  direct-quantifier one with gh-ocannl-908. Labels:
+  `the shipping ratchet process refuses the planted helper fixture` (listed here; its twin is in
+  the gh-ocannl-908 table above).
 - `run_stale_quantified_control`: an exemption whose key no longer matches a live claim is refused.
   Introduced by `ad983d863`. Label: `refuses a stale quantified-helper exemption`.
 - `run_shadowed_quantified_controls`: an exempted quantified helper key must name exactly one

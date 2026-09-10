@@ -30,13 +30,22 @@ each carrying its assertion separately through `Verdict.claim`/`claimf`:
 Quantified bindings exempted because emptiness is their passing meaning:
   test/operations/backend_golden_family_scan.ml:complete -- empty incomplete/error lists are the passing evidence; the non-empty synthetic-control population is guarded in the same binding
   test/operations/autotune_routine_name.ml:contributed -- a contended search may legitimately contribute no rows; its report counters separately prove whether that absence came from refused timings rather than a lost result
-  test/operations/env_var_deps.ml:family_floor_met -- a non-repository synthetic run deliberately skips repository-only family floors; the repository path checks every family and reports each shortfall separately
   test/operations/epilogue_fusion_mma_seeds.ml:vacuous -- an empty GPU mma family deliberately selects the environment-gated vacuity path; the non-vacuous path separately requires and executes the epilogue twins
   test/operations/fission_schedule.ml:annotated -- the merge-back case deliberately requires the consumer segment to have no hardware axes; the same claim also requires the producer segment to be annotated
   test/operations/ocamlformat_ignore_scan.ml:refused -- the message list is an optional strengthening of the child-exit refusal: an empty list deliberately means that the nonzero status alone is the passing evidence
   test/operations/reduction_forms.ml:changed -- an empty schedule deliberately needs no IR change, and an empty per-op result means there were no per-op transformations to validate
   test/operations/reduction_forms.ml:extra_ok -- an empty extra-fragment list deliberately means the member requires no additional emitted assignment fragments
-  test/operations/shell_scripts_parse.ml:line_enables_errexit -- a line may legitimately parse to no parent-affecting command fragment; this exists result is an internal classification input, while the fixed non-empty case table is the test population
+  test/operations/autotune_batched_companion.ml:bc: reduction-over-j companion refutes the GPU family pre-proposal -- the empty seed list is the consequence the claim conjoins with the family's coverage-refutation witness on the sketch tree, which is the non-vacuous half and is itself guarded on a non-empty refutation list
+  test/operations/autotune_batched_companion.ml:lm: coarse fission keeps the row-max companion in the GEMM's segment -- the single coarse segment's empty seed list is conjoined with the tree's coverage-refutation witness, which carries the claim
+  test/operations/autotune_smoke.ml:a replayed second report has no declines -- a cache replay compiles no candidate, so its census has no rows to be derived from; the claim conjoins it with a zero failure count and is conditioned on the replay having happened
+  test/operations/autotune_smoke.ml:search off without a cache times nothing -- with the search off no candidate exists to populate a schedule; the empty best schedule is one of four zero counters the claim conjoins
+  test/operations/hip_scratch_tune_survives.ml:scratch/tune: the declined baseline is not also counted as a gh-532 refusal -- conditioned on the baseline having been declined, and on a device that backs the frame the decline census is legitimately empty (announced vacuous on stderr); where the baseline is declined the claim just above witnesses the census
+  test/operations/schedule_batched_mma.ml:variance-like site: no cpu mma seeds -- the variance-style self-product is deliberately not recognized as a matmul or conv site, so the sketch seeder yields no seeds of any kind and there is no seed population to quantify the mma subset over
+  test/operations/schedule_batched_mma.ml:variance-like site: no gpu mma seeds -- the same site, on the GPU seeder
+  test/operations/agent_notes_structure.ml:every exemption still names a bullet that needs one -- over the file's own exemption list, which is empty today: a stale entry is reported the moment one is added, and there is no population beneath an empty list to witness
+  test/operations/simd_lane_choice.ml:a backend that renders no vectors offers no rungs -- a zero vector width yields no ladder by construction; the rungs the widths that do render offer are pinned by the claims beside it
+  test/operations/test_cpu_topology.ml:classes well-formed -- a live probe of the host's core classes: a host the probe cannot classify legitimately reports none, and the invariant is over whatever it found
+  test/operations/tile_mma_geometry.ml:a column extent below one vector has no default and no alternatives -- the absence of alternatives is the geometry rule the claim states, for an extent that admits no tile; the shapes that do admit one are quantified by the claims above it
 
 Synthetic helper-rule controls:
 refuses an unguarded for_all2_exn helper behind a local Verdict alias: true
@@ -104,7 +113,10 @@ refuses a negated bound exists: true
 accepts a guarded intermediate binding: true
 accepts a quantifier guarded by the same filtered population: true
 refuses a guard on a differently filtered population: true
-conservatively refuses an outer guard across a helper call: true
+accepts an outer guard forwarded to a helper call over the same actual: true
+refuses a helper applied to an expression that is not a population: true
+accepts a witness a helper establishes over the same actual: true
+refuses a witness a helper establishes over a different actual: true
 refuses a mismatched actual hidden by equal formal names: true
 refuses a shadowed guard identity across a nested alias: true
 refuses a binding nested directly inside a claim argument: true
@@ -174,7 +186,39 @@ accepts a positive literal length as the non-empty witness: true
 accepts a negated for_all2_exn discrimination helper: true
 accepts a positive exists helper, which is false on an empty population: true
 ignores a quantified helper that reaches no Verdict claim: true
+accepts a guarded quantifier assigned through a double negation: true
+refuses a double negation without the non-empty witness: true
+refuses a double negation guarded over a different population: true
+does not attribute a condition whose branches return the same Boolean alias: true
+does not attribute a condition whose branches agree through a nested condition: true
+refuses a condition with one constant branch and one the reader cannot prove: true
+does not attribute a condition steering between two unproven branches: true
+accepts a witness from a condition selecting the claimed branch: true
+accepts a constant argument through a parameter shadowing an outer quantified binding: true
+still refuses the outer quantified binding a wrapper closes over: true
+evaluates a wrapper's optional default before its parameter shadows the name: true
+accepts a quantified sibling ignored by a destructured wrapper parameter: true
+refuses the claimed component of a destructured wrapper parameter: true
+accepts a quantified field ignored by a record wrapper parameter: true
+refuses the claimed field of a record wrapper parameter: true
+conservatively inspects a wrapper argument its pattern cannot align: true
+refuses a quantifier written directly in a native claim: true
+accepts a guarded quantifier written directly in a native claim: true
+accepts a negated quantifier written directly in a native claim: true
+refuses a quantifier written directly in a computed-label native claim: true
+refuses a quantifier piped into a native claim: true
+refuses a quantifier written directly in an opened native claim: true
+names a native claim's non-literal label by its expression: true
+refuses a quantifier reached through an open of List: true
+accepts an inverted quantifier reached through an open of List: true
+refuses a negated exists reached through an open of Array: true
+refuses a quantifier reached through a module alias: true
+refuses a quantifier reached through a local open: true
+refuses a quantifier reached through a let-open of Array: true
+does not resolve an unqualified for_all with no open in scope: true
+keeps a local open of List inside its scope: true
 the shipping ratchet process refuses the planted helper fixture: true
+the shipping ratchet process refuses a quantifier written directly in a native claim: true
 refuses a stale quantified-helper exemption: true
 a shadowed helper name resolves to two definitions, not one: true
 refuses an exemption key that names both shadowed definitions: true
