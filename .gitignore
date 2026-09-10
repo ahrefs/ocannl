@@ -112,3 +112,7 @@ docs/*.blg
 !/.claude/dune
 !/.claude/settings.json
 !/.claude/skills/
+# Residue of tools/test-run.sh runs from before gh-ocannl-606, which kept its
+# lock beside the worktree; the script now removes it on its next launch there.
+# Delete this rule with the script's transitional legacy-lock handling.
+/.test-run.lock*

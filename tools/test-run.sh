@@ -423,13 +423,22 @@ supervisor_perl='
   # code -- and the group reaped BEFORE the verdict: a run is not finished
   # while a descendant dune left in its group still runs, holding lock fd 9
   # (every later launch refused) or, having closed it, mutating _build
-  # under no lock at all. The group id is the pid of the reaped leader,
-  # which POSIX forbids reusing while the group exists, so a reachable
-  # group is what dune left behind and nothing else. (An escapee that
-  # called setsid is beyond this and every census; the lock it inherited
-  # is what stops the next launch, and `stop` reaps it.)
+  # under no lock at all. Only a group the child confirmed LEADING (its
+  # pgid record) is reaped: where setpgrp failed there is no group of ours
+  # to signal, only whatever process the number lands on next. The group
+  # id is the pid of the reaped leader, which POSIX forbids reusing while
+  # the group exists, so a reachable group is what dune left behind -- the
+  # residual, stated: a group that emptied and whose id a fresh leader took
+  # within this two-second grace. (An escapee that called setsid is beyond
+  # this and every census; the lock it inherited is what stops the next
+  # launch, and `stop` reaps it.)
   $finishing = 1;
-  if (kill(0, -$pid)) {
+  my $led = 0;
+  if ($rd && open(my $pf, "<", "$rd/pgid")) {
+    my $recorded = <$pf>;
+    $led = 1 if defined $recorded && $recorded =~ /^\s*(\d+)\s*$/ && $1 == $pid;
+  }
+  if ($led && kill(0, -$pid)) {
     kill("TERM", -$pid);
     for (1 .. 20) {
       last unless kill(0, -$pid);
@@ -458,20 +467,30 @@ supervisor_perl='
 # new_run creates the run directory BEFORE the lock is taken: the directory
 # is the pointer's target. Exit codes: 1 lock busy, 2 pointer unwritable.
 take_lock() {
-  # Transitional (delete once no run launched before gh-ocannl-606 can be in
-  # flight): a `start`/`repeat` of the previous version holds the lock that
-  # version kept beside the worktree, which this acquisition would not see
-  # -- and two managed runs in one worktree is what the lock exists to
-  # refuse. Its owner pointer sits beside it, so the refusal can still name
-  # the run.
-  if [ -e "$PWD/.test-run.lock" ] && lock_held "$PWD/.test-run.lock"; then
-    rm -rf "$run_dir"
-    owner=$(cat "$PWD/.test-run.lock.owner" 2>/dev/null)
-    owner=$(printf %q "${owner:-last}")
-    echo "test-run: a test-run of the previous version is still active in this worktree" >&2
-    echo "  (it holds $PWD/.test-run.lock); check it with: tools/test-run.sh status $owner" >&2
-    echo "(a stale one can be stopped with: tools/test-run.sh stop $owner)" >&2
-    exit 2
+  # Transitional (delete, with the `.gitignore` rule for these files, once
+  # no run launched before gh-ocannl-606 can be in flight): a `start`/
+  # `repeat` of the previous version holds the lock that version kept
+  # beside the worktree, which this acquisition would not see -- and two
+  # managed runs in one worktree is what the lock exists to refuse. So
+  # where that file exists it is TAKEN, on fd 5, not merely probed: held
+  # through this acquisition and inherited by the run like fd 9, it keeps
+  # a launcher of the previous version refused for as long as this run
+  # holds the new lock. Its owner pointer sits beside it, so a refusal can
+  # still name the run. Once held, the residue that version left -- lock,
+  # owner and launcher record -- is removed: unlocked, it belongs to no run,
+  # and it is what made every worktree that ran a suite ignored-dirty.
+  if [ -e "$PWD/.test-run.lock" ]; then
+    exec 5>>"$PWD/.test-run.lock" || die "cannot open the previous version's lock file"
+    if ! perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 1)' <&5; then
+      rm -rf "$run_dir"
+      owner=$(cat "$PWD/.test-run.lock.owner" 2>/dev/null)
+      owner=$(printf %q "${owner:-last}")
+      echo "test-run: a test-run of the previous version is still active in this worktree" >&2
+      echo "  (it holds $PWD/.test-run.lock); check it with: tools/test-run.sh status $owner" >&2
+      echo "(a stale one can be stopped with: tools/test-run.sh stop $owner)" >&2
+      exit 2
+    fi
+    rm -f "$PWD/.test-run.lock" "$PWD/.test-run.lock.owner" "$PWD/.test-run.lock.launcher"
   fi
   exec 9>>"$LOCK" || die "cannot open lock file $LOCK"
   # The pointer is written aside and renamed into place: a reader refused by
