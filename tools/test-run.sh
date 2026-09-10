@@ -355,6 +355,18 @@ supervisor_perl='
             select undef, undef, undef, 0.1;
           }
         }
+        # Then let the group VANISH before finishing, bounded: the KILLed
+        # members are orphans now, and until init reaps them a Linux group
+        # probe still counts their corpses -- a repeat coordinator asking
+        # right after this exit would find a reachable group with no leader
+        # to verify and refuse to reuse its build tree. Under an init that
+        # never reaps, the corpses are permanent and this wait ends on its
+        # bound; that refusal is then the fail-closed answer it was built
+        # to give.
+        for (1 .. 10) {
+          last unless kill(0, -$pid);
+          select undef, undef, undef, 0.1;
+        }
       }
     }
     $finish->($code);
