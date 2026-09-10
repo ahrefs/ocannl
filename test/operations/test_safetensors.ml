@@ -184,9 +184,9 @@ let () =
       printf "  %s: [%s]%s\n" name
         (String.concat ~sep:"; " (Array.to_list (Array.map mapped ~f:(Printf.sprintf "%.1f"))))
         (if Array.equal Float.equal mapped decoded then "" else " DIFFERS WHEN DECODED"));
-  Verdict.p "mapping and decoding agree on values"
-    (List.for_all2_exn aligned unaligned ~f:(fun (_, m, _, _, _) (_, d, _, _, _) ->
-         Array.equal Float.equal m d))
+  Verdict.p_all2 "mapping and decoding agree on values" (Array.of_list aligned)
+    (Array.of_list unaligned) ~f:(fun (_, m, _, _, _) (_, d, _, _, _) ->
+      Array.equal Float.equal m d)
 
 let () =
   printf "=== Precision conversion, descriptor lifetime, rejections ===\n";

@@ -459,9 +459,9 @@ let phase4 () =
   let o_b = optimize_in ctx ~name:"vcf_allvirt_b" llc_b in
   p "all-virtual: fan-in decisions unchanged in routine B (x8 trips the cap)"
     (known_virtual o_b c.xs.(6) && known_non_virtual o_b c.xs.(7) && known_virtual o_b c.xs.(8));
-  p "all-virtual: routine B declares the spliced leaves as inputs"
-    (let (ins, _), _ = LL.input_and_output_nodes o_b in
-     Set.mem ins c.x0 && Array.for_all c.ws ~f:(Set.mem ins));
+  (let (ins, _), _ = LL.input_and_output_nodes o_b in
+   p_all "all-virtual: routine B declares the spliced leaves as inputs" (c.x0 :: Array.to_list c.ws)
+     ~f:(Set.mem ins));
   let got = execute ~name:"vcf_allvirt_b" o_b ~seed:(chain_seed c) ~read:[ c.out ] in
   p "all-virtual: executed values match the reference" (same got [ expected_out ])
 

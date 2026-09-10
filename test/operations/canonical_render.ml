@@ -186,8 +186,9 @@ let part2 () =
   let text, log = render use_free in
   p "an unbound symbol reaches the free-symbol hook"
     (List.equal String.equal log [ "free:" ^ Idx.symbol_ident free ]);
-  let text', log' = render ~initial_tokens:[ (free, "s0") ] use_free in
-  p "initial_tokens pre-bind it instead" (List.is_empty log');
+  let initial_tokens = [ (free, "s0") ] in
+  let text', log' = render ~initial_tokens use_free in
+  p_empty "initial_tokens pre-bind it instead" ~over:initial_tokens log';
   p "and it then renders positionally"
     (String.is_substring text ~substring:"?" && String.is_substring text' ~substring:"s0");
   (* gh-ocannl-687: which pass minted a [Local_scope] is part of a program's identity — it decides
@@ -218,7 +219,7 @@ let part2 () =
   in
   let text, log = render ~mma:CR.Structural_mma mma in
   Stdio.printf "structural mma: %s\n" text;
-  p "structural mma is complete" (List.is_empty (List.filter log ~f:(String.equal "incomplete")));
+  p_none "structural mma is complete" log ~f:(String.equal "incomplete");
   let text, log = render ~mma:CR.Opaque_mma mma in
   p "opaque mma renders a placeholder and reports incomplete"
     (String.equal text "mma;" && List.mem log "incomplete" ~equal:String.equal)

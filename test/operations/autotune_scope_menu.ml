@@ -156,11 +156,11 @@ let () =
     (List.exists menu ~f:(function
       | SC.Retype { axis; ty = LL.Vectorized } -> SC.equal_sym_ref axis rt
       | _ -> false));
-  p "the statement-level loop over the scope no longer reads as innermost (no Vectorized retype)"
-    (not
-       (List.exists menu ~f:(function
-         | SC.Retype { axis; ty = LL.Vectorized } -> SC.equal_sym_ref axis ri
-         | _ -> false)));
+  p_none
+    "the statement-level loop over the scope no longer reads as innermost (no Vectorized retype)"
+    menu ~f:(function
+    | SC.Retype { axis; ty = LL.Vectorized } -> SC.equal_sym_ref axis ri
+    | _ -> false);
   (* The executed leg: every proposal, replayed through the cache's saved form the way a beam
      candidate is, must compile and reproduce the serial result. *)
   let parity_leg ~claim ~saved_prefix menu_ops =
@@ -213,11 +213,10 @@ let () =
     (List.exists pt_menu ~f:(function
       | SC.Retype { axis; ty = LL.Vectorized } -> SC.equal_sym_ref axis rseg2
       | _ -> false));
-  p "no Split targets the nonzero-origin segment (Split alone requires a zero origin)"
-    (not
-       (List.exists pt_menu ~f:(function
-         | SC.Split { axis; _ } -> SC.equal_sym_ref axis rseg2
-         | _ -> false)));
+  p_none "no Split targets the nonzero-origin segment (Split alone requires a zero origin)" pt_menu
+    ~f:(function
+    | SC.Split { axis; _ } -> SC.equal_sym_ref axis rseg2
+    | _ -> false);
   p "the zero-origin first segment still draws a dividing Split"
     (List.exists pt_menu ~f:(function
       | SC.Split { axis; _ } -> SC.equal_sym_ref axis rseg1

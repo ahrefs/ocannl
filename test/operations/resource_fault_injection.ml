@@ -290,16 +290,15 @@ let () =
     injected FI.Schedule_cache_before_commit (fun () ->
         SC.store ~dir:resource_cache_dir ~key:cache_key (cache_entry "new" 1.))
   in
-  let leftovers =
-    (* The staging naming scheme belongs to the helper that creates these files, so ask it rather
-       than spelling an infix again here: a change to the scheme must not quietly turn this into a
-       filter that matches nothing. *)
-    Array.to_list (Stdlib.Sys.readdir resource_cache_dir)
-    |> List.filter ~f:Utils.Atomic_file.is_staging_file
-  in
+  (* Quantified over the directory's entries, which the committed entry keeps non-empty. The staging
+     naming scheme belongs to the helper that creates these files, so ask it rather than spelling an
+     infix again here: a change to the scheme must not quietly turn this into a predicate that
+     matches nothing. *)
+  let entries = Array.to_list (Stdlib.Sys.readdir resource_cache_dir) in
   p "cache-store injection fired" (raised && hits = 1);
-  p "failed cache commit preserves the old entry and removes its staging file"
-    (Option.equal String.equal (cache_backend cache_key) (Some "old") && List.is_empty leftovers);
+  let old_preserved = Option.equal String.equal (cache_backend cache_key) (Some "old") in
+  p_all "failed cache commit preserves the old entry and removes its staging file" entries
+    ~f:(fun entry -> old_preserved && not (Utils.Atomic_file.is_staging_file entry));
   SC.store ~dir:resource_cache_dir ~key:cache_key (cache_entry "new" 1.);
   p "cache-store retry commits the replacement"
     (Option.equal String.equal (cache_backend cache_key) (Some "new"));

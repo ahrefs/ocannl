@@ -63,12 +63,12 @@ let () =
     | false, false -> "claimed by neither backend_is_cpu nor backend_is_gpu"
     | _ -> "claimed by both backend_is_cpu and backend_is_gpu"
   in
-  let stray =
-    List.map Backends.all_of_backend ~f:Backends.backend_name |> List.filter ~f:undecided
-  in
+  let backends = List.map Backends.all_of_backend ~f:Backends.backend_name in
+  let stray = List.filter backends ~f:undecided in
   List.iter stray ~f:(fun name -> Stdio.eprintf "%s is %s\n" name (describe name));
-  Verdict.p "every backend OCANNL has is classified CPU or GPU, by exactly one of the predicates"
-    (List.is_empty stray);
+  Verdict.p_empty
+    "every backend OCANNL has is classified CPU or GPU, by exactly one of the predicates"
+    ~over:backends stray;
   (* Put to names that are not backends, because every backend today satisfies the rule: a control
      drawn from the corpus would encode the absence of the violating shape, which a rule deciding
      nothing satisfies just as well. Both violating shapes, since the claim above rejects both. *)

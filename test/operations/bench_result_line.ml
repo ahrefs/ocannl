@@ -127,11 +127,10 @@ let () =
   let losses = member "losses" j in
   p "a diverged loss trajectory keeps its finite steps and nulls the rest"
     (Yojson.Safe.equal losses (`List [ `Float 1.5; `Null; `Null; `Null ]));
-  p "an unmeasured time is null, not a number"
-    (List.for_all [ "p10"; "p50"; "p90" ] ~f:(fun p ->
-         Yojson.Safe.equal (member p (member "step_ms" j)) `Null)
-    && Yojson.Safe.equal (member "queued_step_ms" j) `Null
-    && Yojson.Safe.equal (member "compile_s" j) `Null);
+  p_all "an unmeasured time is null, not a number"
+    (List.map [ "p10"; "p50"; "p90" ] ~f:(fun p -> member p (member "step_ms" j))
+    @ [ member "queued_step_ms" j; member "compile_s" j ])
+    ~f:(fun time -> Yojson.Safe.equal time `Null);
   let arm_a = List.hd_exn (Yojson.Safe.Util.to_list (member "arms" (member "tune" j))) in
   p "an arm that timed nothing reports null times"
     (Yojson.Safe.equal (member "best_ms" arm_a) `Null
@@ -157,13 +156,11 @@ let () =
       | _ -> false);
   p "a contention-affected arm preserves its refusal count"
     (Yojson.Safe.equal (member "timings_contended" (arm "D")) (`Int 2));
-  p "an arm with no crowned candidate reports a null tensorization, not a label"
-    (List.for_all [ "A"; "C" ] ~f:(fun n ->
-         Yojson.Safe.equal (member "tensorization" (arm n)) `Null));
-  p "the three tensorization labels reach the wire"
-    (List.for_all
-       [ ("B", "scalar-fallback"); ("D", "tensorized"); ("E", "not-requested") ]
-       ~f:(fun (n, label) -> Yojson.Safe.equal (member "tensorization" (arm n)) (`String label)));
+  p_all "an arm with no crowned candidate reports a null tensorization, not a label" [ "A"; "C" ]
+    ~f:(fun n -> Yojson.Safe.equal (member "tensorization" (arm n)) `Null);
+  p_all "the three tensorization labels reach the wire"
+    [ ("B", "scalar-fallback"); ("D", "tensorized"); ("E", "not-requested") ]
+    ~f:(fun (n, label) -> Yojson.Safe.equal (member "tensorization" (arm n)) (`String label));
   p "a tensorized label over a scalar-fallback emission is visible as the pair"
     (Yojson.Safe.equal (member "tensorized" (arm "B")) (`Bool true)
     && Yojson.Safe.equal (member "tensorization" (arm "B")) (`String "scalar-fallback")
@@ -189,9 +186,8 @@ let () =
    rejects each of them — which is what makes the verdicts above evidence rather than ceremony. (A
    JSON parser that admits `NaN` as an extension still rejects `nan`.) *)
 let () =
-  p "the pre-fix spellings do not parse"
-    (List.for_all [ "nan"; "inf"; "-inf" ] ~f:(fun spelling ->
-         not (parses (Printf.sprintf {|{"losses":[%s]}|} spelling))));
-  p "OCaml's own float conversion spells them the way this oracle rejects"
-    (List.for_all [ Float.nan; Float.infinity; Float.neg_infinity ] ~f:(fun v ->
-         not (parses (Printf.sprintf {|{"losses":[%.9g]}|} v))))
+  p_all "the pre-fix spellings do not parse" [ "nan"; "inf"; "-inf" ] ~f:(fun spelling ->
+      not (parses (Printf.sprintf {|{"losses":[%s]}|} spelling)));
+  p_all "OCaml's own float conversion spells them the way this oracle rejects"
+    [ Float.nan; Float.infinity; Float.neg_infinity ] ~f:(fun v ->
+      not (parses (Printf.sprintf {|{"losses":[%.9g]}|} v)))

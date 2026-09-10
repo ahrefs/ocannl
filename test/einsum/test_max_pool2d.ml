@@ -295,8 +295,8 @@ let test_max_pool2d_conflicting_consumers () =
     let v = Context.get_values ctx pool_branch.Tensor.value in
     printf "%s: pooled shared = [%g %g %g %g %g %g %g %g]\n%!" tag v.(0) v.(1) v.(2) v.(3) v.(4)
       v.(5) v.(6) v.(7);
-    Verdict.pf "%s: pooled shared values correct (0-margins never read)" tag
-      (Array.for_all (Array.zip_exn v expected_pool) ~f:(fun (a, b) -> Float.(a = b)))
+    Verdict.pf_all2 "%s: pooled shared values correct (0-margins never read)" tag v expected_pool
+      ~f:(fun a b -> Float.(a = b))
   in
   let shared, conv_branch, pool_branch =
     make_graph (fun x -> max_pool2d ~stride:2 ~window_size:3 ~use_padding:true () x)

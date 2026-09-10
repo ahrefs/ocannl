@@ -15,4 +15,4 @@ let () =
     Nativeint.(addr % of_int align = 0n)
   in
   let sizes = [ 1; 3; 8; 31; 32; 33; 100; 1023; 4096; 65537 ] in
-  Verdict.pf "all pool bases %d-byte aligned" align (List.for_all sizes ~f:aligned)
+  Verdict.p_all (Printf.sprintf "all pool bases %d-byte aligned" align) sizes ~f:aligned

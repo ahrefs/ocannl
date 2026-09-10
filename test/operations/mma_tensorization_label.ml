@@ -199,7 +199,10 @@ let () =
   p "a nested bracket summarizes only its own entries" (!inner_seen = 1);
   p "an enclosing bracket observes the entries of a nested one"
     (outer.Cs.statements = 2 && outer.Cs.scalar_fallbacks = 1);
-  p "a completed bracket leaves the census global as it found it" (List.is_empty !Cs.mma_census)
+  (* Over what the outer bracket collected: the global is empty AFTER a bracket that recorded
+     something, not one that never had anything to leave behind. *)
+  p_empty "a completed bracket leaves the census global as it found it" ~over:outer.Cs.renderings
+    !Cs.mma_census
 
 (* === The report-level negative control === *)
 

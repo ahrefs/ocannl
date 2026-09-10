@@ -788,7 +788,8 @@ let refuse name =
     "The refusal relationship is put to a synthesized `Verdict.fail` format. Its stable fragment\n\
      appears in no permanent control golden in the negative arm, and appears in the positive arm.\n\n";
   Verdict.p "a diagnostic absent from every control golden is an orphan" (List.length absent = 1);
-  Verdict.p "the same diagnostic fragment in a control golden is covered" (List.is_empty covered);
+  Verdict.p_empty "the same diagnostic fragment in a control golden is covered" ~over:diagnostics
+    covered;
   Verdict.p "one control marker occurrence covers only one identical diagnostic"
     (List.length duplicate = 1);
   Verdict.p "a scanner absent from the manifest is detected by the population equality"
@@ -2418,10 +2419,19 @@ let main () =
        (List.map families ~f:(fun family ->
             Printf.sprintf "  %-20s %d (floor %d)" ("@" ^ family.family_alias) (found family)
               family.family_floor)));
-  Verdict.p
+  (* Quantified over the dune files scanned -- non-empty in every run, the controls' synthetic trees
+     included -- rather than over the members, which a control tree legitimately has none of: the
+     member population's own floor is the repository-gated one folded in beside it. *)
+  let unaggregated_files =
+    Set.of_list
+      (module String)
+      (List.map family_unaggregated ~f:(fun (dune_file, _, _, _) -> dune_file))
+  in
+  Verdict.p_all
     "every focused-aggregate member is reached by its family alias, and a repository-wide \
      derivation finds enough of them for the rule to be about something"
-    (List.is_empty family_unaggregated && family_floor_met);
+    dune_files ~f:(fun (dune_file, _) ->
+      (not (Set.mem unaggregated_files dune_file)) && family_floor_met);
   eprintf
     "Artifact-directory verdict of every stanza whose modules call Test_utils.Generated.init, or \
      which declares %s without one (not diffed -- see gh-ocannl-665):\n\
@@ -2453,10 +2463,13 @@ let main () =
          artifact_caller_floor);
   eprintf "Sources calling Test_utils.Generated.init: %d, against a floor of %d.\n"
     (List.length artifact_callers) artifact_caller_floor;
-  Verdict.p
+  (* Over the sources scanned, for the reason the family claim above gives: a control tree may
+     legitimately hold no caller at all, and the callers' own floor is the repository-gated one. *)
+  let unclaimed_sources = Set.of_list (module String) unclaimed in
+  Verdict.p_all
     "every source that calls Test_utils.Generated.init is claimed by some stanza's modules, and a \
      repository-wide census finds enough of them for the rule to be about something"
-    (List.is_empty unclaimed && floor_met);
+    source_files ~f:(fun (path, _) -> (not (Set.mem unclaimed_sources path)) && floor_met);
   Verdict.p
     "every stanza whose modules call Test_utils.Generated.init declares OCANNL_BUILD_FILES_PREFIX \
      where dune runs it, and every declaration of it has a caller behind it"
@@ -2489,10 +2502,17 @@ let main () =
       (List.equal String.equal manifest_sources derived_scanner_sources);
     Verdict.p_all ~min:10 "the permanent control-golden corpus is present" control_goldens
       ~f:(fun (_path, on_disk) -> not (String.is_empty (In_channel.read_all on_disk)));
-    Verdict.p
+    let orphan_keys =
+      Set.of_list
+        (module String)
+        (List.map orphan_refusals ~f:(fun (source, diagnostic) -> refusal_key source diagnostic))
+    in
+    Verdict.p_all
       "every statically recoverable scanner refusal diagnostic appears in a control golden or has \
        a named reasoned exemption"
-      (List.is_empty orphan_refusals && Set.is_empty stale_refusal_exemptions));
+      refusal_diagnostics ~f:(fun (source, diagnostic) ->
+        (not (Set.mem orphan_keys (refusal_key source diagnostic)))
+        && Set.is_empty stale_refusal_exemptions));
   if not (Verdict.any_failed ()) then
     printf
       "\n\

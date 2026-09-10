@@ -162,15 +162,14 @@ let () =
     match !site with
     | None -> p (tag ^ " detected") false
     | Some s ->
-        p (tag ^ " detected")
-          (List.length s.Autotune.c_axes = 2
-          && s.Autotune.c_nrow = want_row && s.Autotune.c_noc = 8 && s.Autotune.c_nred = 4
-          && s.Autotune.c_zeroed && s.Autotune.c_fma
-          && List.for_all s.Autotune.c_axes ~f:(fun cx ->
-              cx.Autotune.cx_stride = want_stride
-              && cx.Autotune.cx_dilation = 1
-              && cx.Autotune.cx_offset = want_offset
-              && cx.Autotune.cx_nk = 3))
+        p_all (tag ^ " detected") s.Autotune.c_axes ~f:(fun cx ->
+            List.length s.Autotune.c_axes = 2
+            && s.Autotune.c_nrow = want_row && s.Autotune.c_noc = 8 && s.Autotune.c_nred = 4
+            && s.Autotune.c_zeroed && s.Autotune.c_fma
+            && cx.Autotune.cx_stride = want_stride
+            && cx.Autotune.cx_dilation = 1
+            && cx.Autotune.cx_offset = want_offset
+            && cx.Autotune.cx_nk = 3)
   in
   detect_leg "cvd_s1v" ~stride:1 ~use_padding:false ~want_stride:1 ~want_offset:0 ~want_row:9
     ~want_seeds:4;
@@ -413,10 +412,11 @@ let () =
       (not (Array.is_empty got))
       && Array.for_all2_exn got want2 ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
     in
-    p "cvs2: the stride-2 conv seeds are the serial pipeline and its Grid twin"
-      (List.length !seeds = 2
-      && List.for_all !seeds ~f:(fun s -> s.Autotune.sk_conv && not s.Autotune.sk_gpu)
-      && List.count !seeds ~f:(fun s -> s.Autotune.sk_grid) = 1);
+    p_all "cvs2: the stride-2 conv seeds are the serial pipeline and its Grid twin" !seeds
+      ~f:(fun s ->
+        List.length !seeds = 2
+        && s.Autotune.sk_conv && (not s.Autotune.sk_gpu)
+        && List.count !seeds ~f:(fun t -> t.Autotune.sk_grid) = 1);
     p "cvs2: every seeded stride-2 candidate matches the natural form within tolerance"
       (List.for_alli !seeds ~f:run_seed))
   else (
@@ -842,10 +842,10 @@ let () =
       (not (Array.is_empty got))
       && Array.for_all2_exn got want12 ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
     in
-    p "cvs2b: the strided non-dividing row seeds a padded row-panel flavor"
-      (List.exists !seeds ~f:(fun s -> s.Autotune.sk_bm = 8)
-      && List.length !seeds = 3
-      && List.for_all !seeds ~f:(fun s -> s.Autotune.sk_conv));
+    p_all "cvs2b: the strided non-dividing row seeds a padded row-panel flavor" !seeds ~f:(fun s ->
+        List.exists !seeds ~f:(fun t -> t.Autotune.sk_bm = 8)
+        && List.length !seeds = 3
+        && s.Autotune.sk_conv);
     p "cvs2b: every per-segment stride-2 candidate matches the natural form within tolerance"
       (List.for_alli !seeds ~f:run_seed))
   else (

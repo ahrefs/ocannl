@@ -94,12 +94,15 @@ let () =
   p "an ordinary %op reduction reaches Accum_op with a maximum-one extent and no iterator"
     (List.exists one.projections.Idx.extent_syms ~f:(fun (iter, sym) ->
          Option.is_none iter && Idx.equal_static_symbol sym one.extent));
-  p "its product space is empty, so no loop exists for an extent guard to sit in"
-    (Array.is_empty one.projections.Idx.components);
-  p "both sides of the reduction are indexed at element zero"
-    (Array.for_all one.projections.Idx.project_lhs ~f:(Idx.equal_axis_index (Idx.Fixed_idx 0))
-    && Array.for_all one.projections.Idx.project_rhs ~f:(fun idcs ->
-        Array.for_all idcs ~f:(Idx.equal_axis_index (Idx.Fixed_idx 0))));
+  (* Over the extent symbols the projection carries: the product space is what their iterators span,
+     so an empty one is only a claim where there is an extent to have no iterator. *)
+  p_empty "its product space is empty, so no loop exists for an extent guard to sit in"
+    ~over:one.projections.Idx.extent_syms
+    (Array.to_list one.projections.Idx.components);
+  p_all "both sides of the reduction are indexed at element zero"
+    (Array.to_list one.projections.Idx.project_lhs
+    @ List.concat_map (Array.to_list one.projections.Idx.project_rhs) ~f:Array.to_list)
+    ~f:(Idx.equal_axis_index (Idx.Fixed_idx 0));
   p "zero is a legal runtime binding for a maximum-one extent"
     (Result.is_ok (Result.try_with (fun () -> Idx.validate_bound_value one.extent 0)));
 

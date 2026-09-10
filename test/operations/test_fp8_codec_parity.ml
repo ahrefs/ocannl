@@ -128,8 +128,8 @@ let () =
         else Some (Printf.sprintf "%h: host %h, device %h" v host.(i) device.(i)))
   in
   Array.iter disagreements ~f:(fun d -> Stdio.eprintf "fp8 narrowing disagreement: %s\n" d);
-  p "the device narrows every decisive value exactly as the host does"
-    (Array.is_empty disagreements);
+  p_empty "the device narrows every decisive value exactly as the host does"
+    ~over:(Array.to_list decisive) (Array.to_list disagreements);
 
   (* Reachability, so that "no disagreement" cannot hold vacuously: the flushing codec this replaced
      could never emit the smallest subnormal from a narrowing, whichever side ran it. *)

@@ -320,13 +320,15 @@ let () =
                 it is short by however many renderers it exports"
                i.Emitter_frontier.library m)));
   List.iter (golden_violations @ source_violations) ~f:Verdict.fail;
-  Verdict.p "every scanned root meets its golden floor" (List.is_empty golden_violations);
-  Verdict.p "every scanned root meets its source-site floor" (List.is_empty source_violations);
-  Verdict.p "every source handed over parsed as OCaml" (List.is_empty !unparsed);
-  Verdict.p "every exclusion still names a file the globs hand over" (List.is_empty stale);
+  Verdict.p_empty "every scanned root meets its golden floor" ~over:golden_paths golden_violations;
+  Verdict.p_empty "every scanned root meets its source-site floor" ~over:site_paths
+    source_violations;
+  Verdict.p_empty "every source handed over parsed as OCaml" ~over:source_files !unparsed;
+  Verdict.p_empty "every exclusion still names a file the globs hand over" ~over:handed_over stale;
   Verdict.p "every module the scanned library interfaces declare was read"
     (List.equal String.equal declared read_interfaces);
   Verdict.p_all "every scanned library declares modules" frontier.Emitter_frontier.interfaces
     ~f:(fun i -> not (List.is_empty i.Emitter_frontier.declared));
-  Verdict.p "no source hides a route to generated text behind an open" (List.is_empty !rejected);
+  Verdict.p_empty "no source hides a route to generated text behind an open" ~over:source_files
+    !rejected;
   Test_utils.Refusal_control_manifest.print "codegen_text_inventory.ml"

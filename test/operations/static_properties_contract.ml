@@ -78,16 +78,12 @@ let check_dump ~leg ~backend_name (props : Sexp.t) =
   let some_device = not (List.is_empty devices) in
   Verdict.pf "%s: at least one device is enumerated" leg some_device;
   let keys = List.map devices ~f:(fun fields -> List.map fields ~f:fst) in
-  Verdict.pf "%s: keys within a device entry are distinct" leg
-    (some_device
-    && List.for_all keys ~f:(fun ks ->
-        List.length (List.dedup_and_sort ks ~compare:String.compare) = List.length ks));
-  Verdict.pf "%s: all device entries carry the same keys in the same order" leg
-    (some_device
-    &&
-    match keys with
-    | [] -> false
-    | first :: rest -> List.for_all rest ~f:(List.equal String.equal first));
+  Verdict.p_all (Printf.sprintf "%s: keys within a device entry are distinct" leg) keys
+    ~f:(fun ks -> List.length (List.dedup_and_sort ks ~compare:String.compare) = List.length ks);
+  (* [f] is only reached over a non-empty [keys], so the head is there to compare against -- taken
+     inside the closure, so an empty [keys] is reported as such rather than raising here. *)
+  Verdict.p_all (Printf.sprintf "%s: all device entries carry the same keys in the same order" leg)
+    keys ~f:(fun ks -> List.equal String.equal (List.hd_exn keys) ks);
   Verdict.pf "%s: every device entry carries device_name and device_ordinal" leg
     (some_device
     && List.for_all devices ~f:(fun fields ->

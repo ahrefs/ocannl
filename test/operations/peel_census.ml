@@ -274,11 +274,10 @@ let () =
 
 let () =
   List.iter runs ~f:(fun (shape, run) ->
-      p
+      p_all2
         (Printf.sprintf "%s: the nest computes its reference sum" (shape_name shape))
-        (Array.length run.values = Array.length run.want
-        && Array.for_all2_exn run.values run.want ~f:(fun got want ->
-            Float.(abs (got - want) < 1e-4)));
+        run.values run.want
+        ~f:(fun got want -> Float.(abs (got - want) < 1e-4));
       p
         (Printf.sprintf "%s: the routine's census equals the one a bracket around it collects"
            (shape_name shape))
@@ -332,7 +331,8 @@ let () =
    shapes — or refused it on another ground — fails rather than passing on "it did not localize". *)
 let () =
   let enclosing = run_of Enclosing_guard in
-  p "the nest-fixed guard localizes nowhere" (List.is_empty (localized_verdicts enclosing.summary));
+  Verdict.p_empty "the nest-fixed guard localizes nowhere" ~over:enclosing.summary.Cs.sites
+    (localized_verdicts enclosing.summary);
   Verdict.p_exists "the nest-fixed guard is refused as a guard whose truth is fixed for the nest"
     (refusals enclosing.summary) ~f:(function
     | LL.Refused_guard_fixed _ -> true
@@ -343,7 +343,8 @@ let () =
   Verdict.p_exists "its enclosing level is refused because the accumulated cell varies"
     (refusals enclosing.summary) ~f:(fun why -> LL.equal_peel_refusal why LL.Refused_cell_varies);
   let data = run_of Data_guard in
-  p "the data-dependent guard localizes nowhere" (List.is_empty (localized_verdicts data.summary));
+  Verdict.p_empty "the data-dependent guard localizes nowhere" ~over:data.summary.Cs.sites
+    (localized_verdicts data.summary);
   Verdict.p_all "every peel site of the data-guarded nest refused" data.summary.Cs.sites
     ~f:(fun (_, site) -> not (Cs.is_localized_peel site))
 
@@ -470,5 +471,8 @@ let () =
      or wrapping the compile path in the bracket would silently empty every outer one. *)
   p "the enclosing bracket sees both, in emission order"
     (entries outer_summary.Cs.sites [ ("outer_kernel", site 1); ("inner_kernel", site 2) ]);
-  p "a completed bracket leaves the census global as it found it" (List.is_empty !Cs.peel_census);
+  (* Over what the outer bracket collected: the global is empty AFTER a bracket that recorded
+     something, not one that never had anything to leave behind. *)
+  Verdict.p_empty "a completed bracket leaves the census global as it found it"
+    ~over:outer_summary.Cs.sites !Cs.peel_census;
   p "collection is off outside every bracket" (not !Cs.peel_census_enabled)

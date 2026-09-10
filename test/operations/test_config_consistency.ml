@@ -299,7 +299,8 @@ let () =
   Config_key_scan.report_counts source_files;
   let floor_violations = Config_key_scan.floor_violations source_files in
   List.iter floor_violations ~f:fail;
-  Verdict.p "every scanned root meets its source-count floor" (List.is_empty floor_violations);
+  Verdict.p_empty "every scanned root meets its source-count floor" ~over:source_files
+    floor_violations;
   if not (Verdict.any_failed ()) then (
     printf
       "OK: %d call-site keys, all in reference file and registry; registry and reference agree on \

@@ -220,10 +220,8 @@ let () =
   let ctx5 = Context.cpu () in
   let ctx5 = Train.forward_once ctx5 cids in
   let cid_vals = Context.get_values ctx5 cids.Tensor.value in
-  p "class_ids_of_int_list stores compact ids"
-    (Array.length cid_vals = List.length id_list
-    && Array.for_all2_exn cid_vals (Array.of_list id_list) ~f:(fun v i -> approx v (Float.of_int i))
-    );
+  p_all2 "class_ids_of_int_list stores compact ids" cid_vals (Array.of_list id_list) ~f:(fun v i ->
+      approx v (Float.of_int i));
 
   (* --- Integer-precision ids: [class_ids_of_int_list] stores uint32 IDs and [one_hot_of_ids] flows
      the integer precision into the gather (threefry-style backward precision). The guard then needs

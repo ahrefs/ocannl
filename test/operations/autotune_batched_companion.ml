@@ -189,28 +189,28 @@ let () =
   if not is_gpu then
     Stdio.eprintf "bc: %s is not a GPU backend — the executable parity check below is vacuous\n"
       backend_name;
-  p "bc: every unfused GPU seed compiles and computes correctly"
-    ((not is_gpu)
-    || List.for_all
-         (List.init (List.length seeds) ~f:Fn.id)
-         ~f:(fun idx ->
-           let transform opt =
-             let sp = List.nth_exn (gpu_seeds opt) idx in
-             Sched.apply (Autotune.sketch_schedule ~p:sp opt) opt
-           in
-           match
-             let sctx, sroutine =
-               Context.compile
-                 ~lowered_transform:(fun o -> [ transform o ])
-                 (Context.auto ()) comp Ir.Indexing.Empty
-             in
-             let sctx = Context.run sctx sroutine in
-             Context.get_values sctx y.Tensor.value
-           with
-           | got -> Array.for_all2_exn got expected ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
-           | exception exn ->
-               Stdio.eprintf "bc: scalar GPU seed %d FAILED %s\n" idx (Exn.to_string exn);
-               false));
+  p_all "bc: every unfused GPU seed compiles and computes correctly"
+    (List.init (List.length seeds) ~f:Fn.id)
+    ~f:(fun idx ->
+      (not is_gpu)
+      ||
+      let transform opt =
+        let sp = List.nth_exn (gpu_seeds opt) idx in
+        Sched.apply (Autotune.sketch_schedule ~p:sp opt) opt
+      in
+      match
+        let sctx, sroutine =
+          Context.compile
+            ~lowered_transform:(fun o -> [ transform o ])
+            (Context.auto ()) comp Ir.Indexing.Empty
+        in
+        let sctx = Context.run sctx sroutine in
+        Context.get_values sctx y.Tensor.value
+      with
+      | got -> Array.for_all2_exn got expected ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
+      | exception exn ->
+          Stdio.eprintf "bc: scalar GPU seed %d FAILED %s\n" idx (Exn.to_string exn);
+          false);
 
   (* Tune integration: the search itself (fission, per-segment seeding, replay) must route through
      the widened coverage — and the winner must still compute the right values. On cc the GPU
@@ -228,17 +228,15 @@ let () =
   let got = Context.get_values ctx y.Tensor.value in
   p_all2 "bc: tuned batched head matches the reference" got expected ~f:(fun a b ->
       Float.(abs (a - b) < 1e-3));
-  (* Exactly one report, then its census — a vacuous [for_all] over zero reports would claim the
-     census was clean without having inspected one. *)
-  p "bc: the tuning census records no companion-coverage decline"
-    (match !reports with
-    | [ r ] ->
-        List.for_all r.Autotune.declines ~f:(fun d ->
-            match d.Autotune.key with
-            | Ir.Schedule_outcome.Unsupported_key k ->
-                not (String.equal k "autotune_sketch_companion_coverage")
-            | _ -> true)
-    | _ -> false);
+  (* The census is derived from the reports the search produced, and quantified over them: a claim
+     over zero reports would call the census clean without having inspected one. *)
+  p_empty "bc: the tuning census records no companion-coverage decline" ~over:!reports
+    (List.concat_map !reports ~f:(fun r ->
+         List.filter r.Autotune.declines ~f:(fun d ->
+             match d.Autotune.key with
+             | Ir.Schedule_outcome.Unsupported_key k ->
+                 String.equal k "autotune_sketch_companion_coverage"
+             | _ -> false)));
 
   (* The safety boundary the lifted arity must NOT cross (the lm_head shape): a companion that
      REDUCES over the site's minor output axis reads cells every j-block wrote, with no intra-kernel
@@ -457,41 +455,40 @@ let () =
   if not is_gpu then
     Stdio.eprintf "lm: %s is not a GPU backend — the per-seed executable check below is vacuous\n"
       backend_name;
-  p "lm: every fine GPU seed compiles and computes correctly"
-    ((not is_gpu)
-    ||
-    let n_seeds =
-      match fine_gemm_seg (segments ~arity_cuts:true opt) with
-      | Some seg -> List.length (gpu_seeds seg)
-      | None -> 0
-    in
-    n_seeds > 0
-    && List.for_all (List.init n_seeds ~f:Fn.id) ~f:(fun idx ->
-        let comp_s, z_s, r_s = mk_comp (Printf.sprintf "lms%d" idx) in
-        let transforms opt =
-          let preset seg =
-            (* The freed GEMM segment is the only one with GPU seeds; every other segment keeps the
-               default preset. *)
-            match List.nth (gpu_seeds seg) idx with
-            | Some sp -> Autotune.sketch_schedule ~p:sp seg
-            | None -> Sched.default_gpu ~min_parallel:1 ~limits seg
-          in
-          let zero_sched = Sched.zero_expansion ~limits in
-          List.map
-            (Sched.fission_scheduled ~promote_locals:true ~arity_cuts:true ~preset ~zero_sched
-               ~static_indices:[] opt) ~f:(fun (_, _, _, post) -> post)
+  let n_seeds =
+    match fine_gemm_seg (segments ~arity_cuts:true opt) with
+    | Some seg -> List.length (gpu_seeds seg)
+    | None -> 0
+  in
+  p_all "lm: every fine GPU seed compiles and computes correctly" (List.init n_seeds ~f:Fn.id)
+    ~f:(fun idx ->
+      (not is_gpu)
+      ||
+      let comp_s, z_s, r_s = mk_comp (Printf.sprintf "lms%d" idx) in
+      let transforms opt =
+        let preset seg =
+          (* The freed GEMM segment is the only one with GPU seeds; every other segment keeps the
+             default preset. *)
+          match List.nth (gpu_seeds seg) idx with
+          | Some sp -> Autotune.sketch_schedule ~p:sp seg
+          | None -> Sched.default_gpu ~min_parallel:1 ~limits seg
         in
-        match
-          let ctx, routine =
-            Context.compile ~lowered_transform:transforms (Context.auto ()) comp_s Ir.Indexing.Empty
-          in
-          let ctx = Context.run ctx routine in
-          (Context.get_values ctx z_s.Tensor.value, Context.get_values ctx r_s.Tensor.value)
-        with
-        | got_z, got_r -> approx got_z z_expected && approx got_r r_expected
-        | exception exn ->
-            Stdio.eprintf "lm: fine GPU seed %d FAILED %s\n" idx (Exn.to_string exn);
-            false));
+        let zero_sched = Sched.zero_expansion ~limits in
+        List.map
+          (Sched.fission_scheduled ~promote_locals:true ~arity_cuts:true ~preset ~zero_sched
+             ~static_indices:[] opt) ~f:(fun (_, _, _, post) -> post)
+      in
+      match
+        let ctx, routine =
+          Context.compile ~lowered_transform:transforms (Context.auto ()) comp_s Ir.Indexing.Empty
+        in
+        let ctx = Context.run ctx routine in
+        (Context.get_values ctx z_s.Tensor.value, Context.get_values ctx r_s.Tensor.value)
+      with
+      | got_z, got_r -> approx got_z z_expected && approx got_r r_expected
+      | exception exn ->
+          Stdio.eprintf "lm: fine GPU seed %d FAILED %s\n" idx (Exn.to_string exn);
+          false);
   (* Tune integration: the search on the lm_head shape (fine candidates seeded on GPU backends)
      crowns a winner that computes the right values, and a second tune replays it through the disk
      cache — exercising the [finer_fission] entry field when a fine candidate won. *)

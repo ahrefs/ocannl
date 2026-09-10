@@ -327,5 +327,10 @@ let () =
     Ir.C_syntax.operand_conditionality_violations ~ternop_syntax:C_config.ternop_syntax
       ~binop_syntax:C_config.binop_syntax
   in
-  Verdict.p "  plain-C renderings agree" (List.is_empty violations);
+  (* Over the operators the table above enumerates, which is the sweep the violations came from. *)
+  let swept =
+    List.map Ops.all_of_binop ~f:Ops.binop_cd_fallback_syntax
+    @ List.map Ops.all_of_ternop ~f:Ops.ternop_cd_syntax
+  in
+  Verdict.p_empty "  plain-C renderings agree" ~over:swept violations;
   List.iter violations ~f:(fun v -> Stdio.printf "  VIOLATION %s\n" v)
