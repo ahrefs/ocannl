@@ -520,8 +520,16 @@ that they earn a lookup rather than always-loaded space.
   the whole process group, records the verdict in a FILE (`wait` polls that file under a hard
   timeout — it structurally cannot strand), and holds a per-worktree flock so a second
   invocation refuses loudly instead of queueing behind dune's lock — "I lost track of a run so
-  I started another" being the usual start of the spiral. Prefer foreground `run` launched
-  through the agent harness's background mode (the harness notifies on exit); `start`/`status`/
+  I started another" being the usual start of the spiral. A run is two processes — the launching
+  shell, which takes the lock and publishes the run, and a perl supervisor that inherits the lock,
+  caps dune and records the verdict (gh-ocannl-606 collapsed the former three-party launch and its
+  publication handshake) — and everything it keeps per worktree (the lock, its owner pointer, the
+  `last` pointer) lives under `~/.ocannl-test-runs` keyed by the worktree's path, never in the
+  tree: a run leaves the worktree exactly as clean as it found it, so a teardown that judges a
+  worktree by its ignored files is not refused over lock residue. `OCANNL_TOOL_TEST_RUNS` relocates
+  the lock with the diagnostics, so two sessions on one worktree see each other's lock only under
+  the same override. Prefer foreground `run` launched through the agent harness's background mode
+  (the harness notifies on exit); `start`/`status`/
   `wait`/`stop` are only for runs that must outlive the launching session. Its own options go
   BETWEEN the subcommand and the dune arguments (`run --cap 900 build @alias`); both
   misplacements are refused with exit 2 having run nothing — the option written AFTER the target
@@ -621,7 +629,7 @@ that they earn a lookup rather than always-loaded space.
   cleanup assertion pass vacuously.
   The same harness drives `stop` itself, keeping its two surviving-group sentences apart:
   a FORGED run directory (`cmd`, `cap`, `wt`, `log`, `pgid`, `gtoken`, and deliberately no
-  `pid`/`wpid`/`exit`, so the surviving-group branch is the one reached), pointed at by `last` under
+  `pid`/`exit`, so the surviving-group branch is the one reached), pointed at by `last` under
   a private `OCANNL_TOOL_TEST_RUNS` so the ambient run history is never touched, with the pointer's
   worktree key EXTRACTED from the shipping script rather than guessed. Against it: a group whose
   leader ignores TERM — reported as ignoring it, and the escalation separately checked to have
