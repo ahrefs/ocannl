@@ -1432,17 +1432,27 @@ case $sub in
     if [ -f "$run_dir/exit" ]; then
       digest "$run_dir"
       exit 0
-    elif sup_alive "$run_dir"; then
+    elif proc_alive "$run_dir/pid" "$run_dir/ptoken"; then
       echo "running: dune $(cat "$run_dir/cmd")  (log: $run_dir/log)"
+      exit 3
+    elif legacy_owner_alive "$run_dir"; then
+      # A run of the previous version whose wrapper outlives its supervisor
+      # to publish the verdict (or, for a repeat, its coordinator between
+      # iterations): in flight, not dead.
+      echo "managed, verdict pending (the previous version's wrapper is publishing): $run_dir"
       exit 3
     elif [ -f "$run_dir/exit" ]; then
       digest "$run_dir" # published between the checks above
       exit 0
+    elif [ ! -f "$run_dir/pid" ] && lock_still_owned "$run_dir"; then
+      # Published, but no supervisor on record, and the run holds its
+      # worktree lock: the milliseconds between a launcher's publication and
+      # its supervisor's first write. In flight -- the launcher is alive and
+      # holding the lock -- so the running code, not the dead one.
+      echo "launch in progress (supervisor not yet recorded): $run_dir"
+      exit 3
     elif [ ! -f "$run_dir/pid" ]; then
-      # Published, but no supervisor on record: the milliseconds between a
-      # launcher's publication and its supervisor's first write, or a launch
-      # interrupted inside them. Named as such rather than read as a death.
-      echo "no supervisor recorded yet (launch in progress, or interrupted before it started): $run_dir"
+      echo "launch interrupted before its supervisor started: $run_dir"
       exit 1
     else
       echo "run died without recording a verdict (killed externally?): $run_dir"
@@ -1669,18 +1679,25 @@ case $sub in
       # remaining iteration while stop claimed success. For a run of the
       # previous version that coordinator is the recorded wrapper (see
       # sup_alive), and its `pid` is only the current iteration.
-      if [ "$(cat "$run_dir/mode" 2>/dev/null)" = repeat ] && legacy_owner_alive "$run_dir"; then
-        kill -TERM "$(cat "$run_dir/wpid")" 2>/dev/null
-      elif proc_alive "$run_dir/pid" "$run_dir/ptoken"; then
-        kill -TERM "$(cat "$run_dir/pid")" 2>/dev/null
-      fi
       # Name the run explicitly (%q-quoted): `last` may resolve to a
       # DIFFERENT run when this stop targeted an identifier from another
       # worktree's history.
-      if [ "$(cat "$run_dir/mode" 2>/dev/null)" = repeat ]; then
+      if [ "$(cat "$run_dir/mode" 2>/dev/null)" = repeat ] && legacy_owner_alive "$run_dir"; then
+        kill -TERM "$(cat "$run_dir/wpid")" 2>/dev/null
         echo "sent TERM to the repeat coordinator; confirm with: tools/test-run.sh wait $(printf %q "$run_dir")"
+      elif proc_alive "$run_dir/pid" "$run_dir/ptoken"; then
+        kill -TERM "$(cat "$run_dir/pid")" 2>/dev/null
+        if [ "$(cat "$run_dir/mode" 2>/dev/null)" = repeat ]; then
+          echo "sent TERM to the repeat coordinator; confirm with: tools/test-run.sh wait $(printf %q "$run_dir")"
+        else
+          echo "sent TERM; confirm with: tools/test-run.sh wait $(printf %q "$run_dir")"
+        fi
       else
-        echo "sent TERM; confirm with: tools/test-run.sh wait $(printf %q "$run_dir")"
+        # The previous version's wrapper, publishing its verdict after the
+        # supervisor exited: it ignores TERM by design, and there is nothing
+        # left to cancel.
+        echo "run is finishing (verdict publication in flight); confirm with:" \
+             "tools/test-run.sh wait $(printf %q "$run_dir")"
       fi
     elif group_verified "$run_dir" &&
          pg=$(cat "$run_dir/pgid") && kill -0 -- "-$pg" 2>/dev/null; then
