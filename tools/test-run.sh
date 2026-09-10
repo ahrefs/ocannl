@@ -418,10 +418,25 @@ supervisor_perl='
   alarm $cap if $cap > 0;
   waitpid($pid, 0);
   my $st = $?;
-  # The finish flagged and $pid cleared BEFORE anything else, in this order
-  # -- a handler firing in between reads the status through its WNOHANG
-  # probe and finishes with the real code.
+  # The finish flagged BEFORE anything else -- a handler firing in between
+  # reads the status through its WNOHANG probe and finishes with the real
+  # code -- and the group reaped BEFORE the verdict: a run is not finished
+  # while a descendant dune left in its group still runs, holding lock fd 9
+  # (every later launch refused) or, having closed it, mutating _build
+  # under no lock at all. The group id is the pid of the reaped leader,
+  # which POSIX forbids reusing while the group exists, so a reachable
+  # group is what dune left behind and nothing else. (An escapee that
+  # called setsid is beyond this and every census; the lock it inherited
+  # is what stops the next launch, and `stop` reaps it.)
   $finishing = 1;
+  if (kill(0, -$pid)) {
+    kill("TERM", -$pid);
+    for (1 .. 20) {
+      last unless kill(0, -$pid);
+      select undef, undef, undef, 0.1;
+    }
+    kill("KILL", -$pid) if kill(0, -$pid);
+  }
   $pid = 0;
   $finish->($code_of->($st));
 '
@@ -443,6 +458,21 @@ supervisor_perl='
 # new_run creates the run directory BEFORE the lock is taken: the directory
 # is the pointer's target. Exit codes: 1 lock busy, 2 pointer unwritable.
 take_lock() {
+  # Transitional (delete once no run launched before gh-ocannl-606 can be in
+  # flight): a `start`/`repeat` of the previous version holds the lock that
+  # version kept beside the worktree, which this acquisition would not see
+  # -- and two managed runs in one worktree is what the lock exists to
+  # refuse. Its owner pointer sits beside it, so the refusal can still name
+  # the run.
+  if [ -e "$PWD/.test-run.lock" ] && lock_held "$PWD/.test-run.lock"; then
+    rm -rf "$run_dir"
+    owner=$(cat "$PWD/.test-run.lock.owner" 2>/dev/null)
+    owner=$(printf %q "${owner:-last}")
+    echo "test-run: a test-run of the previous version is still active in this worktree" >&2
+    echo "  (it holds $PWD/.test-run.lock); check it with: tools/test-run.sh status $owner" >&2
+    echo "(a stale one can be stopped with: tools/test-run.sh stop $owner)" >&2
+    exit 2
+  fi
   exec 9>>"$LOCK" || die "cannot open lock file $LOCK"
   # The pointer is written aside and renamed into place: a reader refused by
   # the lock in the same instant sees the previous owner or this run, never
@@ -643,7 +673,13 @@ proc_alive() { # pid-file token-file
 }
 # The run's OWNER: the supervisor of a `run`/`start`, the coordinator of a
 # `repeat` -- the process that publishes the verdict and that `stop` TERMs.
-sup_alive() { proc_alive "$1/pid" "$1/ptoken"; }
+# Transitional: a run recorded by the previous version (no `runs`, see
+# lock_paths_of) kept its owner -- the wrapper subshell, or the repeat
+# coordinator, in `wpid`/`wtoken` -- apart from the supervisor in `pid`,
+# and that owner outlives the supervisor while it publishes, or between
+# repeat iterations; delete with the legacy paths.
+sup_alive() { proc_alive "$1/pid" "$1/ptoken" || legacy_owner_alive "$1"; }
+legacy_owner_alive() { [ ! -f "$1/runs" ] && proc_alive "$1/wpid" "$1/wtoken"; }
 # Group signaling demands a RECORDED leader token: proc_alive's empty-token
 # fallback exists for supervisor pids on platforms without lstart,
 # and is too weak to aim a signal at a whole, possibly recycled, process
@@ -1583,13 +1619,30 @@ case $sub in
       digest "$run_dir"
       exit 0
     fi
+    # A stop landing in the launch window -- the run published, its
+    # supervisor not yet on record -- must not read the live launcher as
+    # leftovers and reap it: give the record the moment it needs, and let
+    # the owner branch take the TERM. (A bounded wait, so a launch that
+    # really died there still reaches the recovery below.)
+    if [ ! -f "$run_dir/pid" ] && [ ! -f "$run_dir/exit" ] && lock_still_owned "$run_dir"; then
+      for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+        [ -f "$run_dir/pid" ] && break
+        sleep 0.1
+      done
+    fi
     if sup_alive "$run_dir"; then
       # The run's owner takes the TERM: the supervisor reaps dune and records
       # the cancellation; a repeat's coordinator owns the set-wide
       # cancellation bit -- killing only its current iteration's supervisor
       # would produce exit 143 and then let the outer loop launch every
-      # remaining iteration while stop claimed success.
-      kill -TERM "$(cat "$run_dir/pid")" 2>/dev/null
+      # remaining iteration while stop claimed success. For a run of the
+      # previous version that coordinator is the recorded wrapper (see
+      # sup_alive), and its `pid` is only the current iteration.
+      if [ "$(cat "$run_dir/mode" 2>/dev/null)" = repeat ] && legacy_owner_alive "$run_dir"; then
+        kill -TERM "$(cat "$run_dir/wpid")" 2>/dev/null
+      elif proc_alive "$run_dir/pid" "$run_dir/ptoken"; then
+        kill -TERM "$(cat "$run_dir/pid")" 2>/dev/null
+      fi
       # Name the run explicitly (%q-quoted): `last` may resolve to a
       # DIFFERENT run when this stop targeted an identifier from another
       # worktree's history.
