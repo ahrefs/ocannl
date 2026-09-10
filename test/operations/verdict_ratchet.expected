@@ -42,6 +42,10 @@ Quantified bindings exempted because emptiness is their passing meaning:
   test/operations/hip_scratch_tune_survives.ml:scratch/tune: the declined baseline is not also counted as a gh-532 refusal -- conditioned on the baseline having been declined, and on a device that backs the frame the decline census is legitimately empty (announced vacuous on stderr); where the baseline is declined the claim just above witnesses the census
   test/operations/schedule_batched_mma.ml:variance-like site: no cpu mma seeds -- the variance-style self-product is deliberately not recognized as a matmul or conv site, so the sketch seeder yields no seeds of any kind and there is no seed population to quantify the mma subset over
   test/operations/schedule_batched_mma.ml:variance-like site: no gpu mma seeds -- the same site, on the GPU seeder
+  test/operations/autotune_candidate_release.ml:hoisted_attempted -- the equivalence `constant class grows iff hoisted candidates were attempted` is asserted precisely so that a GPU backend, whose seeder proposes no hoisted candidate, reads `no hoist labels, no constant growth` rather than a vacuous growth claim; the label population is non-empty on cc, where the split is pinned
+  test/operations/autotune_serial_baseline.ml:the refusal is recorded in the decline census, on GPU backends only -- on a CPU backend the baseline is dispatched and no refusal is recorded, so an empty census is the passing reading there; on GPU the equivalence requires the entry
+  test/operations/autotune_smoke.ml:tensorized_schedule -- the flag and the schedule are read off the same winner, so a schedule with no Tensorize op must agree with a false flag: the empty case is one side of the equivalence, and the tensorized side is exercised by the searched report
+  test/operations/shell_scripts_parse.ml:Shebang.mentions_a_shell -- the scope table pairs each line with the reading the predicate must give it, and a line mentioning no shell is `outside this check's scope` by design; the positive rows exercise the non-empty word list
   test/operations/agent_notes_structure.ml:every exemption still names a bullet that needs one -- over the file's own exemption list, which is empty today: a stale entry is reported the moment one is added, and there is no population beneath an empty list to witness
   test/operations/atomic_file_race.ml:the rerun left the scratch directory as it found it -- the directory must end empty, and the tree the rerun published and removed is not enumerated, so nothing in scope witnesses the final listing; the fixtures an interrupted run leaves behind are witnessed by the clearing claims just above
   test/operations/simd_lane_choice.ml:a backend that renders no vectors offers no rungs -- a zero vector width yields no ladder by construction; the rungs the widths that do render offer are pinned by the claims beside it
@@ -298,6 +302,11 @@ accepts a positive indexed exists: true
 refuses a quantifier passed through a three-module recursive chain: true
 refuses a quantifier claimed by a let operator's own definition: true
 conservatively binds a let operator defined elsewhere as an identity: true
+does not let a repeated pattern's guard witness a differently matched case: true
+accepts a repeated pattern's guard as a witness for the case that repeats it: true
+refuses a quantifier passed through a functor parameter's claim inside an expression: true
+refuses two quantifiers compared for equality: true
+accepts two quantifiers compared for equality under a witness: true
 the shipping ratchet process refuses the planted helper fixture: true
 the shipping ratchet process refuses a quantifier written directly in a native claim: true
 refuses a stale quantified-helper exemption: true

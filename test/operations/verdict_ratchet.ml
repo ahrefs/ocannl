@@ -288,6 +288,26 @@ let exempt_quantified_helpers =
        the mma subset over" );
     ( "test/operations/schedule_batched_mma.ml:variance-like site: no gpu mma seeds",
       "the same site, on the GPU seeder" );
+    (* Equivalences `Bool.equal <quantifier> <backend fact>` (staging#681 round 11): the reader sees
+       that the quantifier's false polarity -- the empty population -- is what the claim accepts on
+       one side of the fact, and on that side emptiness is the designed reading. *)
+    ( "test/operations/autotune_candidate_release.ml:hoisted_attempted",
+      "the equivalence `constant class grows iff hoisted candidates were attempted` is asserted \
+       precisely so that a GPU backend, whose seeder proposes no hoisted candidate, reads `no \
+       hoist labels, no constant growth` rather than a vacuous growth claim; the label population \
+       is non-empty on cc, where the split is pinned" );
+    ( "test/operations/autotune_serial_baseline.ml:the refusal is recorded in the decline census, \
+       on GPU backends only",
+      "on a CPU backend the baseline is dispatched and no refusal is recorded, so an empty census \
+       is the passing reading there; on GPU the equivalence requires the entry" );
+    ( "test/operations/autotune_smoke.ml:tensorized_schedule",
+      "the flag and the schedule are read off the same winner, so a schedule with no Tensorize op \
+       must agree with a false flag: the empty case is one side of the equivalence, and the \
+       tensorized side is exercised by the searched report" );
+    ( "test/operations/shell_scripts_parse.ml:Shebang.mentions_a_shell",
+      "the scope table pairs each line with the reading the predicate must give it, and a line \
+       mentioning no shell is `outside this check's scope` by design; the positive rows exercise \
+       the non-empty word list" );
     ( "test/operations/agent_notes_structure.ml:every exemption still names a bullet that needs one",
       "over the file's own exemption list, which is empty today: a stale entry is reported the \
        moment one is added, and there is no population beneath an empty list to witness" );
@@ -1595,6 +1615,38 @@ let () =
   let* ok = List.for_all rows ~f:Fn.id in
   Verdict.p "all rows pass" ok|ocaml},
       [ "ok" ] );
+    (* staging#681 round 11: a repeated pattern's guard; a functor bound by let module; two Booleans
+       compared. *)
+    ( "does not let a repeated pattern's guard witness a differently matched case",
+      {ocaml|let result =
+  match option with
+  | None when List.is_empty rows -> false
+  | None -> false
+  | Some _ -> List.for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" result|ocaml},
+      [ "result" ] );
+    ( "accepts a repeated pattern's guard as a witness for the case that repeats it",
+      {ocaml|let result =
+  match option with
+  | None when List.is_empty rows -> false
+  | None -> List.for_all rows ~f:Fn.id
+  | Some _ -> true
+let () = Verdict.p "all rows pass" result|ocaml},
+      [] );
+    ( "refuses a quantifier passed through a functor parameter's claim inside an expression",
+      {ocaml|let () =
+  let module Make = functor (C : S) -> struct let check = C.p end in
+  let module Checks = Make (Verdict) in
+  Checks.check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses two quantifiers compared for equality",
+      {ocaml|let () = Verdict.p "the checks agree" (List.for_all rows ~f:p = List.for_all rows ~f:q)|ocaml},
+      [ "the checks agree" ] );
+    ( "accepts two quantifiers compared for equality under a witness",
+      {ocaml|let () =
+  Verdict.p "the checks agree"
+    ((not (List.is_empty rows)) && List.for_all rows ~f:p = List.for_all rows ~f:q)|ocaml},
+      [] );
   ]
 
 (* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round

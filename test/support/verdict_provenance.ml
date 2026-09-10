@@ -364,29 +364,44 @@ let aggregate components =
 type alternative = {
   steering : provenance list;
   outcome : provenance;
-  certain : bool;
-      (** Whether the steering alone decides the alternative: an [if] branch, an irrefutable case, a
-          Boolean case. A case whose pattern may simply not match was not necessarily avoided
-          because its guard was false. *)
+  pattern : string;  (** The case's pattern as printed; empty for a branch with none. *)
+  decided : decided;
 }
+
+(* For which later alternatives the steering alone decided that this one was avoided: every one (an
+   [if] branch, an irrefutable case, a Boolean case -- whatever reached a later alternative went
+   through this steering); only the ones repeating this pattern (a value that matched the repeated
+   pattern was refused here by the guard alone); or none (the pattern may simply not have matched,
+   so the guard says nothing). *)
+and decided = Everyone | Same_pattern | Nobody
 
 let alternatives cases =
   let at positive =
     (* In order: an alternative the value must have avoided vouches only for the alternatives after
        it -- a later case's guard is never evaluated once an earlier case was taken. *)
     let _, taken =
-      List.fold cases ~init:(empty_view, [])
-        ~f:(fun (avoided, taken) { steering; outcome; certain } ->
+      List.fold cases ~init:([], [])
+        ~f:(fun (avoided, taken) { steering; outcome; pattern; decided } ->
           if not (reachable outcome positive) then
-            (* Avoided means the steering as a whole was false -- one of its conditions -- and only
-               where the steering is all there was to it. *)
+            (* Avoided means the steering as a whole was false -- one of its conditions -- for the
+               alternatives it decided. *)
             let avoided =
-              if certain && not (List.is_empty steering) then
-                both avoided (merge (List.map steering ~f:(fun s -> s.when_false)))
-              else avoided
+              match decided with
+              | Nobody -> avoided
+              | (Everyone | Same_pattern) when List.is_empty steering -> avoided
+              | Everyone | Same_pattern ->
+                  (decided, pattern, merge (List.map steering ~f:(fun s -> s.when_false)))
+                  :: avoided
             in
             (avoided, taken)
           else
+            let avoided_here =
+              List.fold avoided ~init:empty_view ~f:(fun acc (decided, avoided_pattern, view) ->
+                  match decided with
+                  | Everyone -> both acc view
+                  | Same_pattern when String.equal avoided_pattern pattern -> both acc view
+                  | Same_pattern | Nobody -> acc)
+            in
             let outcome_view = view_at outcome positive in
             let selecting = List.concat_map steering ~f:(fun s -> s.when_true.sources) in
             let steering_sources =
@@ -413,7 +428,9 @@ let alternatives cases =
                   Set.union acc s.when_true.witnesses)
             in
             let view =
-              both (settle { sources = steering_sources @ outcome_view.sources; witnesses }) avoided
+              both
+                (settle { sources = steering_sources @ outcome_view.sources; witnesses })
+                avoided_here
             in
             (avoided, view :: taken))
     in
@@ -523,12 +540,16 @@ let rec irrefutable pattern =
 
 (* Whether a case is decided by its guard alone: its pattern cannot fail, or a later case repeats
    the pattern, so whatever reached that case would have matched this one too. *)
-let guard_decides cases index =
-  let pattern_text pattern = Stdlib.Format.asprintf "%a" Pprintast.pattern pattern in
+let pattern_text pattern = Stdlib.Format.asprintf "%a" Pprintast.pattern pattern
+
+let guard_decides cases index ~selected =
   let case = List.nth_exn cases index in
-  irrefutable case.pc_lhs
-  || List.existsi cases ~f:(fun later_index later ->
-      later_index > index && String.equal (pattern_text later.pc_lhs) (pattern_text case.pc_lhs))
+  if selected || irrefutable case.pc_lhs then Everyone
+  else if
+    List.existsi cases ~f:(fun later_index later ->
+        later_index > index && String.equal (pattern_text later.pc_lhs) (pattern_text case.pc_lhs))
+  then Same_pattern
+  else Nobody
 
 let rec bool_pattern_matches pattern value =
   match pattern.ppat_desc with
@@ -1191,6 +1212,11 @@ let rec walk ctx expr =
   | Pexp_open (declaration, body) ->
       walk { ctx with env = module_exports ctx declaration.popen_expr @ ctx.env } body
   | Pexp_letmodule ({ txt = Some name; _ }, module_expr, body) ->
+      (match module_expr.pmod_desc with
+      | Pmod_functor (parameter, functor_body) ->
+          let parameter = match parameter with Named ({ txt; _ }, _) -> txt | Unit -> None in
+          ctx.functors := (name, (parameter, functor_body)) :: !(ctx.functors)
+      | _ -> ());
       let exports = module_exports ctx module_expr |> prefix_bindings name in
       walk { ctx with env = exports @ ctx.env } body
   | Pexp_letmodule ({ txt = None; _ }, module_expr, body) ->
@@ -1255,8 +1281,8 @@ let rec walk ctx expr =
           let no = walk ctx no in
           alternatives
             [
-              { steering = [ condition ]; outcome = yes; certain = true };
-              { steering = [ negate condition ]; outcome = no; certain = true };
+              { steering = [ condition ]; outcome = yes; pattern = ""; decided = Everyone };
+              { steering = [ negate condition ]; outcome = no; pattern = ""; decided = Everyone };
             ])
   | Pexp_match (scrutinee_expr, cases) ->
       let scrutinee = walk ctx scrutinee_expr in
@@ -1264,7 +1290,7 @@ let rec walk ctx expr =
   | Pexp_try (body, cases) ->
       let body = walk ctx body in
       alternatives
-        ({ steering = []; outcome = body; certain = true }
+        ({ steering = []; outcome = body; pattern = ""; decided = Everyone }
         :: case_alternatives ctx ~scrutinee:None cases)
   | Pexp_function (parameters, _, body) -> function_closure ctx parameters body
   | Pexp_apply (callee, arguments) -> application ctx expr callee arguments
@@ -1428,8 +1454,13 @@ and case_alternatives ctx ~scrutinee cases =
         | Some (_, scrutinee) -> boolean_selection scrutinee (on_true, on_false)
         | None -> []
       in
-      let certain = guard_decides cases index || not (List.is_empty selection) in
-      { steering = Option.to_list guard @ selection; outcome; certain })
+      let decided = guard_decides cases index ~selected:(not (List.is_empty selection)) in
+      {
+        steering = Option.to_list guard @ selection;
+        outcome;
+        pattern = pattern_text case.pc_lhs;
+        decided;
+      })
 
 (* Which Boolean values of the scrutinee can reach each case: the values its pattern admits that no
    earlier UNGUARDED case has already taken -- a guarded case takes nothing away, since its guard
@@ -1512,8 +1543,13 @@ and function_closure ctx parameters body =
               let guard = Option.map case.pc_guard ~f:(walk case_ctx) in
               let outcome = walk case_ctx case.pc_rhs in
               let selection = boolean_selection scrutinee selected in
-              let certain = guard_decides cases index || not (List.is_empty selection) in
-              { steering = Option.to_list guard @ selection; outcome; certain })
+              let decided = guard_decides cases index ~selected:(not (List.is_empty selection)) in
+              {
+                steering = Option.to_list guard @ selection;
+                outcome;
+                pattern = pattern_text case.pc_lhs;
+                decided;
+              })
         in
         let param =
           {
@@ -1650,6 +1686,15 @@ and comparison ctx callee left right =
       | _, _, Some n, Some population
         when (equality && n > 0) || (inequality && n = 0) || (lt && n >= 0) || (le && n > 0) ->
           witness population
+      | _ when equality || inequality ->
+          (* Two Booleans compared: equal when both true or both false. An operand that is not a
+             Boolean has no view, and contributes nothing. *)
+          let agree =
+            disjunction
+              (conjunction left_provenance right_provenance)
+              (conjunction (negate left_provenance) (negate right_provenance))
+          in
+          if equality then agree else negate agree
       | _ -> nothing)
 
 (* [valued] answers for an argument already walked where it was written -- a deferred call's --

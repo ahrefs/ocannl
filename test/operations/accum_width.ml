@@ -471,7 +471,8 @@ let () =
   p_all2 claim_f16_wide_matmul got_wide16 want16 ~f:Float.equal;
   let got_auto16 = f16_matmul ~name:"aw_f16_naive_auto" () in
   p claim_f16_default_matmul
-    (Bool.equal (Array.for_all2_exn got_auto16 want16 ~f:Float.equal) on_cpu)
+    ((not (Array.is_empty got_auto16))
+    && Bool.equal (Array.for_all2_exn got_auto16 want16 ~f:Float.equal) on_cpu)
 
 (* In execution order — the GPU skip lines must match the cc run's golden line for line. *)
 let all_claims =

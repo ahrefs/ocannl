@@ -885,7 +885,8 @@ that they earn a lookup rather than always-loaded space.
   construction (gh-ocannl-729). It bites hardest where the claim is worth most: quantified over a
   DERIVED collection — the seeds a family tree yields, the refutations a gate raises, the
   candidates that validated — where empty is a plausible regression rather than an impossible
-  state. So `Verdict.p_all name xs ~f`, `p_none name xs ~f` (the mirror: filtering an empty list
+  state. So `Verdict.p_all name xs ~f`, `p_alli` (the indexed form), `p_none name xs ~f` (the
+  mirror: filtering an empty list
   also yields nothing, so `List.is_empty (List.filter …)` has the same hole), `p_exists`, and
   `p_empty name ~over:population derived` for the sites that keep the derived subset around to
   report it. A non-empty collection prints exactly what `p` prints, which is what let ~44 files
@@ -895,7 +896,9 @@ that they earn a lookup rather than always-loaded space.
   emptiness — "no candidate declines", "no key is undocumented", a scan over a tree that is usually
   clean — and those want a companion claim that the population was there at all, which is what the
   `p_empty ~over` form is.
-  `verdict_ratchet` enforces the guard mechanically, for a quantifier written directly into a
+  `verdict_ratchet` enforces the guard mechanically, for a quantifier (`for_all`/`for_alli`,
+  `for_all2_exn`, `is_empty`, a negated `exists`/`existsi`, in Base's or `Stdlib`'s spelling)
+  written directly into a
   native claim (`Verdict.p`, `pf`, `claim`, `claimf`, `pass_fail`, opened or qualified) and for one
   reached through a file-local binding, helper, wrapper or module (gh-ocannl-801, gh-ocannl-887,
   gh-ocannl-908). The reader is `test/support/verdict_provenance.ml` (gh-ocannl-931): ONE walker
