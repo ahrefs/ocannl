@@ -112,4 +112,3 @@ docs/*.blg
 !/.claude/dune
 !/.claude/settings.json
 !/.claude/skills/
-/.test-run.lock*

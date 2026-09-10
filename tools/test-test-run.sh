@@ -14,8 +14,8 @@
 # zombie-group control (gh-ocannl-795).
 #
 # It tests the WORKING-TREE copy: `group_alive` is extracted from the shared
-# scripts/process-group.sh; `ps_token`, `proc_identity_matches`, and `proc_alive`
-# come from tools/test-run.sh. The `stop` legs drive that same tool as a
+# scripts/process-group.sh; `ps_token`, `proc_identity_matches`, `proc_alive`
+# and `wt_key_of` come from tools/test-run.sh. The `stop` legs drive that same tool as a
 # subprocess. Each extraction is asserted structurally before use, so a sed
 # that matched nothing cannot leave every leg passing without testing anything.
 #
@@ -251,14 +251,18 @@ trap 'exit 143' TERM
 # from the one the shipping script recomputes would leave every one of them
 # falling through to "nothing left to signal" -- passing no leg, but testing
 # neither sentence either.
-for fn in group_alive ps_token proc_identity_matches proc_alive; do
+# `wt_key_of` is the worktree key the `last` pointer -- and now the lock and
+# its owner pointer -- are named by; the stop legs need it to place a fixture
+# where `stop last` will look. It is a one-liner, hence its own size floor.
+for fn in group_alive ps_token proc_identity_matches proc_alive wt_key_of; do
   if [ "$fn" = group_alive ]; then fn_src="$GROUP_SRC"; else fn_src="$SRC"; fi
+  case $fn in wt_key_of) g_min=3 ;; *) g_min=10 ;; esac
   sed -n "/^$fn() {/,/^}/p" "$fn_src" >"$TMP/$fn.sh"
   g_lines="$(wc -l <"$TMP/$fn.sh" | tr -d ' ')"
   g_head="$(head -n1 "$TMP/$fn.sh")"
   case $g_head in "$fn() {"*) g_ok=1 ;; *) g_ok=0 ;; esac
   if [ "$g_ok" = 0 ] \
-     || [ "$(tail -n1 "$TMP/$fn.sh")" != "}" ] || [ "$g_lines" -lt 10 ]; then
+     || [ "$(tail -n1 "$TMP/$fn.sh")" != "}" ] || [ "$g_lines" -lt "$g_min" ]; then
     report 1 "$fn: extracted" "sed did not capture the function body from $fn_src"
   else
     report 0 "$fn: extracted ($g_lines lines)"
@@ -498,14 +502,14 @@ fi
 # fixture's own and dies with the temp dir. `last` rather than an explicit run
 # directory, because that is the spelling an operator uses and it exercises the
 # pointer too; its name is keyed on the worktree, and the key is EXTRACTED from
-# the shipping script and evaluated with the cwd that script gives itself (its
-# own repo root, not the caller's), so a change to the keying moves the fixture
-# with it instead of quietly leaving these legs unable to find a run.
+# the shipping script (its `wt_key=` line, evaluated over the `wt_key_of` it
+# calls) with the cwd that script gives itself (its own repo root, not the
+# caller's), so a change to the keying moves the fixture with it instead of
+# quietly leaving these legs unable to find a run.
 #
-# The fixture deliberately records no pid/ptoken and no wpid/wtoken and leaves
-# no `exit` file: a run with any of those is managed or finished, and the group
-# branch is the one reached by a run whose supervisor and wrapper are both gone
-# while its process group is not.
+# The fixture deliberately records no pid/ptoken and leaves no `exit` file: a
+# run with either is owned or finished, and the group branch is the one reached
+# by a run whose supervisor is gone while its process group is not.
 l_ignored="stop: a group whose leader ignores TERM is reported with the unreaped-exits caveat"
 l_killed="stop: that escalation kills the whole group, not just its leader"
 l_took="stop: a group whose leader takes the TERM is reported as TERMed, not as ignoring it"
@@ -739,11 +743,23 @@ cat >"$repeat_bin/dune" <<'EOF'
 set -u
 # Close the inherited lock descriptor before probing through a fresh open.
 # Acquiring here would prove repeat released its one set-wide lock too early.
-if perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 1)' \
-   9>&- <"$REPEAT_TEST_ROOT/.test-run.lock"; then
-  echo "repeat fixture acquired the supposedly held worktree lock" >&2
-  exit 91
-fi
+# The lock lives under the runs directory, keyed by the worktree; this fixture
+# is the only worktree using its private runs directory, so exactly one lock
+# file is expected there -- and its ABSENCE is a failure of its own, since a
+# probe against nothing would acquire and misreport an early release.
+lock_probe() { # a function, so the glob does not disturb this fixture's own argv
+  set -- "$OCANNL_TOOL_TEST_RUNS"/lock-*
+  if [ $# -ne 1 ] || [ ! -e "$1" ]; then
+    echo "repeat fixture found no single worktree lock under $OCANNL_TOOL_TEST_RUNS" >&2
+    exit 94
+  fi
+  if perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 1)' \
+     9>&- <"$1"; then
+    echo "repeat fixture acquired the supposedly held worktree lock" >&2
+    exit 91
+  fi
+}
+lock_probe
 # Repeat establishes a fresh context with `dune clean` before each measured
 # invocation. The fixture keeps setup out of the iteration count and streams.
 if [ "${1:-}" = clean ]; then
@@ -869,7 +885,6 @@ repeat_probe() { # tag mode [repeat options/count/dune argv...]
   mkdir -p "$runs"
   : >"$TMP/$tag.counter"
   : >"$TMP/$tag.calls"
-  REPEAT_TEST_ROOT=$repeat_root \
   REPEAT_TEST_MODE=$mode \
   REPEAT_TEST_COUNTER=$TMP/$tag.counter \
   REPEAT_TEST_CALLS=$TMP/$tag.calls \
@@ -893,7 +908,7 @@ repeat_probe() { # tag mode [repeat options/count/dune argv...]
 completed_line=$(grep -n '^    completed=0$' "$SRC" | cut -d: -f1)
 signal_trap_line=$(grep -n "^    trap 'repeat_signal TERM' TERM$" "$SRC" | cut -d: -f1)
 exit_trap_line=$(grep -n '^    trap repeat_exit EXIT$' "$SRC" | cut -d: -f1)
-publish_line=$(grep -n '^    with_meta_lock publish_run || die "cannot publish repeat run ' "$SRC" | cut -d: -f1)
+publish_line=$(grep -n '^    publish_run || die "cannot publish repeat run ' "$SRC" | cut -d: -f1)
 if [ -n "$completed_line" ] && [ -n "$signal_trap_line" ] \
    && [ -n "$exit_trap_line" ] && [ -n "$publish_line" ] \
    && [ "$completed_line" -lt "$publish_line" ] \
@@ -913,7 +928,6 @@ repeat_red_cancel_prefix=$TMP/repeat-red-cancel
 mkdir -p "$repeat_red_cancel_runs"
 : >"$TMP/repeat-red-cancel.counter"
 : >"$TMP/repeat-red-cancel.calls"
-REPEAT_TEST_ROOT=$repeat_root \
 REPEAT_TEST_MODE=fail_first \
 REPEAT_TEST_COUNTER=$TMP/repeat-red-cancel.counter \
 REPEAT_TEST_CALLS=$TMP/repeat-red-cancel.calls \
@@ -961,7 +975,6 @@ repeat_orphan_pid_file=$TMP/repeat-orphan-pid
 mkdir -p "$repeat_orphan_runs"
 : >"$TMP/repeat-orphan.counter"
 : >"$TMP/repeat-orphan.calls"
-REPEAT_TEST_ROOT=$repeat_root \
 REPEAT_TEST_MODE=orphan_first \
 REPEAT_TEST_COUNTER=$TMP/repeat-orphan.counter \
 REPEAT_TEST_CALLS=$TMP/repeat-orphan.calls \
@@ -1003,8 +1016,7 @@ escape_pid_file=$TMP/repeat-session-escape.pid
 mkdir -p "$repeat_escape_runs"
 : >"$TMP/repeat-session-escape.counter"
 : >"$TMP/repeat-session-escape.calls"
-if REPEAT_TEST_ROOT=$repeat_root \
-   REPEAT_TEST_MODE=session_escape \
+if REPEAT_TEST_MODE=session_escape \
    REPEAT_TEST_COUNTER=$TMP/repeat-session-escape.counter \
    REPEAT_TEST_CALLS=$TMP/repeat-session-escape.calls \
    REPEAT_TEST_WAIT_PREFIX= \
@@ -1049,7 +1061,7 @@ escape_pid=
 escape_release=
 
 pre_launch_line=$(grep -n '^      \[ -z "$repeat_cancelled" \] || break$' "$SRC" | head -1 | cut -d: -f1)
-launch_line=$(grep -n '^        perl -e "$capped_perl" -- "$cap" /bin/bash -c \\' "$SRC" | head -1 | cut -d: -f1)
+launch_line=$(grep -n '^        perl -e "$supervisor_perl" -- "$cap" /bin/bash -c \\' "$SRC" | head -1 | cut -d: -f1)
 supervisor_line=$(grep -n '^      repeat_sup=\$!$' "$SRC" | cut -d: -f1)
 post_launch_line=$(grep -n '^      \[ -z "$repeat_cancelled" \] || kill "-\$repeat_cancelled" "\$repeat_sup" 2>/dev/null$' "$SRC" | cut -d: -f1)
 if [ -n "$pre_launch_line" ] && [ -n "$launch_line" ] \
@@ -1159,7 +1171,6 @@ repeat_stop_prefix=$TMP/repeat-stop
 mkdir -p "$repeat_stop_runs"
 : >"$TMP/repeat-stop.counter"
 : >"$TMP/repeat-stop.calls"
-REPEAT_TEST_ROOT=$repeat_root \
 REPEAT_TEST_MODE=stable \
 REPEAT_TEST_COUNTER=$TMP/repeat-stop.counter \
 REPEAT_TEST_CALLS=$TMP/repeat-stop.calls \
@@ -1205,7 +1216,6 @@ repeat_finalize_prefix=$TMP/repeat-finalize
 mkdir -p "$repeat_finalize_runs"
 : >"$TMP/repeat-finalize.counter"
 : >"$TMP/repeat-finalize.calls"
-REPEAT_TEST_ROOT=$repeat_root \
 REPEAT_TEST_MODE=stdout \
 REPEAT_TEST_COUNTER=$TMP/repeat-finalize.counter \
 REPEAT_TEST_CALLS=$TMP/repeat-finalize.calls \
@@ -1251,8 +1261,8 @@ printf 'build @cheap\n' >"$wait_dir/cmd"
 printf '2\n' >"$wait_dir/cap"
 printf 'repeat\n' >"$wait_dir/mode"
 printf '3\n' >"$wait_dir/repeats"
-printf '%s\n' "$$" >"$wait_dir/wpid"
-ps_token "$$" >"$wait_dir/wtoken"
+printf '%s\n' "$$" >"$wait_dir/pid"
+ps_token "$$" >"$wait_dir/ptoken"
 : >"$wait_dir/log"
 cat >"$TMP/wait-bin/sleep" <<'EOF'
 #!/bin/sh
@@ -1291,7 +1301,6 @@ argv_probe() { # tag subcommand [argv...] -- drives the tool against the fixture
   mkdir -p "$runs"
   : >"$TMP/$tag.counter"
   : >"$TMP/$tag.calls"
-  REPEAT_TEST_ROOT=$repeat_root \
   REPEAT_TEST_MODE=${argv_mode:-stable} \
   REPEAT_TEST_COUNTER=$TMP/$tag.counter \
   REPEAT_TEST_CALLS=$TMP/$tag.calls \
