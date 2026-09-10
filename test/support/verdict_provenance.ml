@@ -534,9 +534,9 @@ let rec bool_pattern_matches pattern value =
   | Ppat_or (left, right) -> bool_pattern_matches left value || bool_pattern_matches right value
   | _ -> false
 
-let is_boolean_comparison callee =
-  is_name callee "=" || is_name callee "<>" || is_name callee "equal" || is_name callee "!="
-  || is_name callee ">" || is_name callee ">=" || is_name callee "<" || is_name callee "<="
+let equality_operators = [ "="; "equal"; "phys_equal"; "==" ]
+let comparison_operators = equality_operators @ [ "<>"; "!="; ">"; ">="; "<"; "<=" ]
+let is_boolean_comparison callee = List.exists comparison_operators ~f:(is_name callee)
 
 let is_transparent_boolean_wrapper callee =
   match Read.longident_of callee with
@@ -942,7 +942,10 @@ let rec population ctx expr =
 
         method! expression child =
           (match child.pexp_desc with
-          | Pexp_ident { txt = Longident.Lident name; _ } -> names := name :: !names
+          | Pexp_ident { txt; _ } ->
+              Option.iter
+                (Option.try_with (fun () -> Longident.flatten_exn txt))
+                ~f:(fun path -> names := String.concat ~sep:"." path :: !names)
           | _ -> ());
           super#expression child
       end
@@ -1277,6 +1280,26 @@ and resolve ctx expr =
                 nothing with
                 closure = Some (native_claim kind ~site:(site_of_location expr.pexp_loc));
               }
+          | None when Option.equal String.equal (List.last path) (Some "not") ->
+              (* [not] as a value -- aliased, passed along -- is the closure that negates its
+                 argument. *)
+              let slot = parameter_binding ~name:"x" ~site:(site_of_location expr.pexp_loc) in
+              {
+                nothing with
+                closure =
+                  Some
+                    (Function
+                       {
+                         parameters =
+                           [ { slot; label = Asttypes.Nolabel; patterns = []; names = [] } ];
+                         claims = [];
+                         calls = [];
+                         body = negate (parameter_provenance slot);
+                         native = false;
+                         format = false;
+                         loose = false;
+                       });
+              }
           | None -> (
               match collection_quantifier path with
               | Some (kind, stdlib) -> quantifier_function ~stdlib kind
@@ -1504,8 +1527,7 @@ and application ctx expr callee arguments =
       let right = walk ctx right in
       disjunction left right
   | [ (Asttypes.Nolabel, left); (Asttypes.Nolabel, right) ]
-    when is_boolean_comparison callee
-         && List.exists [ "="; "<>"; "equal"; "!="; ">"; ">="; "<"; "<=" ] ~f:builtin ->
+    when is_boolean_comparison callee && List.exists comparison_operators ~f:builtin ->
       comparison ctx callee left right
   | _ -> (
       let function_ = walk ctx callee in
@@ -1544,7 +1566,7 @@ and application ctx expr callee arguments =
    selects. Otherwise a comparison is a value of its own -- except a literal length bound, which is
    a witness: [List.length xs > 0] and [Array.length got = 4] establish the population. *)
 and comparison ctx callee left right =
-  let equality = is_name callee "=" || is_name callee "equal" in
+  let equality = List.exists equality_operators ~f:(is_name callee) in
   let inequality = is_name callee "<>" || is_name callee "!=" in
   let left_provenance = walk ctx left in
   let right_provenance = walk ctx right in
@@ -1627,8 +1649,13 @@ and apply ?(valued = fun _ -> None) ctx ~site ~callee_name closure arguments =
       let predicate = partial.predicate || Option.is_some predicate_argument in
       (* What the predicate's own value rests on, its parameters sealed: a group whose rows are
          empty satisfies [fun rows -> List.for_all rows ~f] as an empty population would. *)
+      let predicate_value = Option.map predicate_argument ~f:value_of in
+      (* The predicate's own claims -- over its element parameter -- fire as a released callback's
+         do. *)
+      Option.iter (Option.both predicate_argument predicate_value) ~f:(fun (argument, value) ->
+          release ctx argument value);
       let predicate_sources =
-        match Option.bind predicate_argument ~f:(fun argument -> (value_of argument).closure) with
+        match Option.bind predicate_value ~f:(fun value -> value.closure) with
         | Some closure when not (List.is_empty (functions_of closure)) ->
             let predicates = functions_of closure in
             let predicate =
@@ -2023,17 +2050,30 @@ and module_exports ctx module_expr =
       let site = site_of_location module_expr.pmod_loc in
       match module_path module_expr with
       | None -> []
-      | Some path ->
-          if
-            List.equal String.equal path [ "Verdict"; "Claims" ]
-            || List.equal String.equal path [ "Verdict" ]
-          then claim_exports ~site
-          else if is_collection_module path then quantifier_exports ~site ~stdlib:(stdlib_path path)
-          else
-            let prefix = String.concat ~sep:"." path ^ "." in
+      | Some path -> (
+          (* A file-local module of that name comes first: it shadows the known module. *)
+          let prefix = String.concat ~sep:"." path ^ "." in
+          match
             List.filter_map ctx.env ~f:(fun binding ->
                 String.chop_prefix binding.name ~prefix
-                |> Option.map ~f:(fun name -> { binding with name })))
+                |> Option.map ~f:(fun name -> { binding with name }))
+          with
+          | _ :: _ as local -> local
+          | [] ->
+              if
+                List.equal String.equal path [ "Verdict"; "Claims" ]
+                || List.equal String.equal path [ "Verdict" ]
+              then claim_exports ~site
+              else if is_collection_module path then
+                quantifier_exports ~site ~stdlib:(stdlib_path path)
+              else []))
+  | Pmod_functor (_, body) ->
+      (* The functor's body, its parameter unresolved: what an application of it exports. *)
+      module_exports ctx body
+  | Pmod_apply (functor_, argument) ->
+      ignore (module_exports ctx argument : binding list);
+      module_exports ctx functor_
+  | Pmod_apply_unit functor_ -> module_exports ctx functor_
   | _ ->
       let iterator =
         object

@@ -1492,6 +1492,52 @@ let () = Verdict.p "all rows pass" result|ocaml},
       {ocaml|let pred = if enabled then fun rows -> List.for_all rows ~f:Fn.id else fun _ -> false
 let () = Verdict.p "some group passes" (List.exists groups ~f:pred)|ocaml},
       [ "pred" ] );
+    (* staging#681 round 9: a predicate's own claims; a rebound module behind a qualified
+       population; applied functors; a local module shadowing List; phys_equal; not as a value. *)
+    ( "refuses a claim fired inside a predicate over its own population",
+      {ocaml|let () =
+  ignore
+    (List.for_all groups ~f:(fun rows ->
+         Verdict.p "all rows pass" (List.for_all rows ~f:Fn.id);
+         true))|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a guarded claim fired inside a predicate over its own population",
+      {ocaml|let () =
+  ignore
+    (List.for_all groups ~f:(fun rows ->
+         Verdict.p "all rows pass" ((not (List.is_empty rows)) && List.for_all rows ~f:Fn.id);
+         true))|ocaml},
+      [] );
+    ( "refuses a qualified population whose module was rebound after the witness",
+      {ocaml|module Fixture = struct let rows = full end
+let present = not (List.is_empty Fixture.rows)
+module Fixture = struct let rows = [] end
+let () = Verdict.p "all rows pass" (present && List.for_all Fixture.rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a quantifier passed to a wrapper exported by an applied functor",
+      {ocaml|module Make () = struct let check = Verdict.p end
+module Checks = Make ()
+let () = Checks.check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "resolves an opened local module that shadows List to its own members",
+      {ocaml|module List = struct let all xs = Base.List.for_all xs ~f:Fn.id end
+open List
+let () = Verdict.p "all rows pass" (all rows)|ocaml},
+      [ "all" ] );
+    ( "refuses a quantifier compared with true through phys_equal",
+      {ocaml|let () = Verdict.p "all rows pass" (phys_equal (List.for_all rows ~f:Fn.id) true)|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a quantifier compared with false through phys_equal",
+      {ocaml|let () = Verdict.p "some row fails" (phys_equal (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [] );
+    ( "refuses a negated exists through an alias of not",
+      {ocaml|let none = not
+let () = Verdict.p "no row matches" (none (List.exists rows ~f:Fn.id))|ocaml},
+      [ "no row matches" ] );
+    ( "accepts a negated for_all through an alias of not",
+      {ocaml|let none = not
+let () = Verdict.p "some row fails" (none (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
   ]
 
 (* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round

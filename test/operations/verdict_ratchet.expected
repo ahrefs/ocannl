@@ -280,6 +280,15 @@ accepts a guarded quantifier claimed inside a callback over its own population: 
 does not let a refutable case's guard witness a later case: true
 accepts an irrefutable case's guard as a witness for a later case: true
 refuses a vacuous quantifier inside a predicate selected by control flow: true
+refuses a claim fired inside a predicate over its own population: true
+accepts a guarded claim fired inside a predicate over its own population: true
+refuses a qualified population whose module was rebound after the witness: true
+refuses a quantifier passed to a wrapper exported by an applied functor: true
+resolves an opened local module that shadows List to its own members: true
+refuses a quantifier compared with true through phys_equal: true
+accepts a quantifier compared with false through phys_equal: true
+refuses a negated exists through an alias of not: true
+accepts a negated for_all through an alias of not: true
 the shipping ratchet process refuses the planted helper fixture: true
 the shipping ratchet process refuses a quantifier written directly in a native claim: true
 refuses a stale quantified-helper exemption: true
