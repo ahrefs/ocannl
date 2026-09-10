@@ -289,6 +289,15 @@ refuses a quantifier compared with true through phys_equal: true
 accepts a quantifier compared with false through phys_equal: true
 refuses a negated exists through an alias of not: true
 accepts a negated for_all through an alias of not: true
+refuses a quantifier passed through a functor parameter's claim: true
+refuses a quantifier passed to a supplied callable optional parameter: true
+does not fire a callable optional parameter's inert default: true
+refuses a quantifier passed to a claim function stored in a record field: true
+refuses a vacuous indexed quantifier: true
+accepts a positive indexed exists: true
+refuses a quantifier passed through a three-module recursive chain: true
+refuses a quantifier claimed by a let operator's own definition: true
+conservatively binds a let operator defined elsewhere as an identity: true
 the shipping ratchet process refuses the planted helper fixture: true
 the shipping ratchet process refuses a quantifier written directly in a native claim: true
 refuses a stale quantified-helper exemption: true

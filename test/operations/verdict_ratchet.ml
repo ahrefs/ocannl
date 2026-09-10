@@ -1424,7 +1424,7 @@ let () = Verdict.p "some row fails" (apply List.for_all rows)|ocaml},
 let () =
   let* ok = List.for_all rows ~f:Fn.id in
   Verdict.p "all rows pass" ok|ocaml},
-      [ "ok" ] );
+      [ "let*" ] );
     ( "accepts a negated quantifier bound by a let operator",
       {ocaml|let ( let* ) x f = f x
 let () =
@@ -1538,6 +1538,63 @@ let () = Verdict.p "no row matches" (none (List.exists rows ~f:Fn.id))|ocaml},
       {ocaml|let none = not
 let () = Verdict.p "some row fails" (none (List.for_all rows ~f:Fn.id))|ocaml},
       [] );
+    (* staging#681 round 10: functor arguments; callable optional parameters; callables in
+       aggregates; indexed quantifiers; longer recursive module chains; let operators applied. *)
+    ( "refuses a quantifier passed through a functor parameter's claim",
+      {ocaml|module Make (C : S) = struct let check = C.p end
+module Checks = Make (Verdict)
+let () = Checks.check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a quantifier passed to a supplied callable optional parameter",
+      {ocaml|let check ?(claim = fun _ _ -> ()) value = claim "all rows pass" value
+let () = check ~claim:Verdict.p (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "does not fire a callable optional parameter's inert default",
+      {ocaml|let check ?(claim = fun _ _ -> ()) value = claim "all rows pass" value
+let () = check (List.for_all rows ~f:Fn.id)|ocaml},
+      [] );
+    ( "refuses a quantifier passed to a claim function stored in a record field",
+      {ocaml|let callbacks = { check = Verdict.p }
+let () = callbacks.check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a vacuous indexed quantifier",
+      {ocaml|let () = Verdict.p "all rows pass" (List.for_alli rows ~f:(fun _ row -> row))|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a positive indexed exists",
+      {ocaml|let () = Verdict.p "some row matches" (Array.existsi rows ~f:(fun _ row -> row))|ocaml},
+      [] );
+    ( "refuses a quantifier passed through a three-module recursive chain",
+      {ocaml|module rec A : sig
+  val check : string -> bool -> unit
+end = struct
+  let check label value = B.check label value
+end
+and B : sig
+  val check : string -> bool -> unit
+end = struct
+  let check label value = C.check label value
+end
+and C : sig
+  val check : string -> bool -> unit
+end = struct
+  let check = Verdict.p
+end
+let () = A.check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "A.check" ] );
+    ( "refuses a quantifier claimed by a let operator's own definition",
+      {ocaml|let ( let* ) x f =
+  Verdict.p "all rows pass" x;
+  f x
+let () =
+  let* _ = List.for_all rows ~f:Fn.id in
+  ()|ocaml},
+      [ "let*" ] );
+    ( "conservatively binds a let operator defined elsewhere as an identity",
+      {ocaml|open Let_syntax
+let () =
+  let* ok = List.for_all rows ~f:Fn.id in
+  Verdict.p "all rows pass" ok|ocaml},
+      [ "ok" ] );
   ]
 
 (* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round

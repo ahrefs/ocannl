@@ -55,6 +55,7 @@ let check ~name ~prec ?input_dims output_dims =
   let vir_vals, vir_src = run ~virtual_:true ~prec ?input_dims output_dims in
   let parity =
     Array.length ref_vals = Array.length vir_vals
+    && (not (Array.is_empty vir_vals))
     && Array.for_alli vir_vals ~f:(fun i v -> bits_equal v ref_vals.(i))
   in
   let ref_vec = has "_uniform_vec(" ref_src and ref_lane = has "_uniform_lane(" ref_src in

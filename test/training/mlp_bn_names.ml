@@ -439,25 +439,21 @@ let () =
   Verdict.p "Start-context top-3 next chars are a, e, i in that order"
     (String.equal letters "a e i");
   let min_gap = 0.05 in
-  let gaps_wide =
-    Array.for_alli top3 ~f:(fun k (p, _) ->
-        k = 0
-        ||
-        let prev = fst top3.(k - 1) in
-        Float.(prev -. p > min_gap))
-  in
-  Verdict.pf "Start-context top-3 probabilities are separated by more than %g" min_gap gaps_wide;
+  Verdict.p_alli
+    (Printf.sprintf "Start-context top-3 probabilities are separated by more than %g" min_gap)
+    (Array.to_list top3) ~f:(fun k (p, _) ->
+      k = 0
+      ||
+      let prev = fst top3.(k - 1) in
+      Float.(prev -. p > min_gap));
   (* Ranking and separation are both SHAPE claims: a head of 0.70 / 0.20 / 0.08 satisfies each of
      them while being severely distorted, and the two printed decimals used to rule that out (Codex
      round 1, P2). So keep a magnitude check too, as coarse per-rank bands -- each is roughly a
      factor of two wide around the observed 0.28 / 0.17 / 0.10, some hundreds of times the ~3e-4
      cross-build drift, so it is portable while still rejecting a collapsed or a spiked head. *)
   let bands = [| (0.15, 0.45); (0.08, 0.30); (0.04, 0.20) |] in
-  let in_bands =
-    Array.for_alli top3 ~f:(fun k (p, _) ->
-        let lo, hi = bands.(k) in
-        Float.(p >= lo && p < hi))
-  in
-  Verdict.p
+  Verdict.p_alli
     "Start-context top-3 probabilities lie in their coarse bands (0.15-0.45, 0.08-0.30, 0.04-0.20)"
-    in_bands
+    (Array.to_list top3) ~f:(fun k (p, _) ->
+      let lo, hi = bands.(k) in
+      Float.(p >= lo && p < hi))

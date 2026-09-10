@@ -603,9 +603,8 @@ let () =
         | _ -> Stdio.printf "root is not the fusion level\n");
         Verdict.p "tree leaves = flat enumeration"
           (List.equal (fun a b -> String.equal (show a) (show b)) (Sspace.leaves tree) seeds);
-        Verdict.p "every fused leaf follows every unfused leaf"
-          (List.for_alli seeds ~f:(fun i p ->
-               Bool.equal p.Autotune.sk_epilogue (i >= List.length unfused)));
+        Verdict.p_alli "every fused leaf follows every unfused leaf" seeds ~f:(fun i p ->
+            Bool.equal p.Autotune.sk_epilogue (i >= List.length unfused));
         Verdict.p "the fused flavor twins the unfused leaves geometry for geometry"
           ((not (List.is_empty fused))
           && List.equal

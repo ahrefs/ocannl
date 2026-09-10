@@ -36,10 +36,8 @@ let () =
         offset nbytes
   | None -> printf "a: missing!\n");
   let a = Safetensors.to_float32 st "a" in
-  let a_ok =
-    Array.for_alli a_vals ~f:(fun i v -> Float.equal (Bigarray.Genarray.get a [| i / 3; i % 3 |]) v)
-  in
-  Verdict.p "a roundtrips (2x3)" a_ok;
+  Verdict.p_alli "a roundtrips (2x3)" (Array.to_list a_vals) ~f:(fun i v ->
+      Float.equal (Bigarray.Genarray.get a [| i / 3; i % 3 |]) v);
 
   (* Device roundtrip through an OCANNL tensor. *)
   let b = TDSL.wrap ~l:"b" ~b:[] ~o:[ 4 ] (Safetensors.to_ndarray st "b") () in

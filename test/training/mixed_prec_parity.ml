@@ -216,8 +216,8 @@ let () =
     (String.concat ~sep:" " (List.map stepped_d ~f:(fun b -> if b then "T" else "F")));
   Stdio.printf "dynamic leg scale after each step: %s\n"
     (String.concat ~sep:" " (List.map scales_d ~f:(fun s -> Printf.sprintf "%.0f" s)));
-  Verdict.p "dynamic leg losses on good steps finite"
-    (List.for_alli stepped_d ~f:(fun i ran -> (not ran) || Float.is_finite losses_d.(i)));
+  Verdict.p_alli "dynamic leg losses on good steps finite" stepped_d ~f:(fun i ran ->
+      (not ran) || Float.is_finite losses_d.(i));
 
   (* Leg E: the fused gated recipe (gh-ocannl-492 task 5) — one routine per step, the inf/nan gate
      evaluated on device, the host sampling the sticky window checksum every [check_interval] steps.

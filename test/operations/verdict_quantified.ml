@@ -101,6 +101,7 @@ let () =
   (* === Must succeed: run directly by the dune rule. === *)
   | "holds" ->
       Verdict.p_all "every seed is even" seeds ~f:even;
+      Verdict.p_alli "every seed exceeds its index" seeds ~f:(fun i n -> n > i);
       Verdict.p_all ~min:3 "every one of the three seeds is even" seeds ~f:even;
       Verdict.p_none "no seed is odd" seeds ~f:odd;
       Verdict.p_exists "some seed exceeds four" seeds ~f:(fun n -> n > 4);
@@ -134,6 +135,7 @@ let () =
   | "all_empty" -> Verdict.p_all "every seed is even" [] ~f:even
   | "all_short" -> Verdict.p_all ~min:3 "every one of the three seeds is even" [ 2 ] ~f:even
   | "none_empty" -> Verdict.p_none "no seed is odd" [] ~f:odd
+  | "alli_empty" -> Verdict.p_alli "every seed exceeds its index" [] ~f:(fun i n -> n > i)
   | "exists_empty" -> Verdict.p_exists "some seed exceeds four" [] ~f:(fun n -> n > 4)
   | "exists_short" ->
       Verdict.p_exists ~min:2 "at least two seeds exceed four" seeds ~f:(fun n -> n > 4)
@@ -174,6 +176,9 @@ let () =
         ~line:"every one of the three seeds is even (only 1 of 3): false" (run_child "all_short");
       refused "a `no X is` claim over an empty collection fails rather than passing vacuously"
         ~line:"no seed is odd (empty): false" (run_child "none_empty");
+      refused
+        "an indexed `every` claim over an empty collection fails rather than passing vacuously"
+        ~line:"every seed exceeds its index (empty): false" (run_child "alli_empty");
       refused "a `some X` claim over an empty collection names emptiness rather than the property"
         ~line:"some seed exceeds four (empty): false" (run_child "exists_empty");
       (* Codex P2, round 1: `~min` on an existential counts WITNESSES. Read as a population floor it

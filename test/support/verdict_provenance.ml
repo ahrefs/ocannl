@@ -347,7 +347,13 @@ let aggregate components =
       witnesses = no_populations;
     }
   in
-  { when_true = gather true; when_false = gather false; constant = None; closure = None }
+  {
+    when_true = gather true;
+    when_false = gather false;
+    constant = None;
+    (* A projection out of the aggregate may be any callable component. *)
+    closure = select_closures (List.filter_map components ~f:(fun c -> c.closure));
+  }
 
 (* One alternative of a conditional: the value it yields, and what steers to it -- the condition at
    the polarity that selects the branch, a case's guard. A condition steers between values; it IS
@@ -458,13 +464,13 @@ let is_collection_module path =
   match List.last path with Some ("List" | "Array") -> true | _ -> false
 
 let quantifier_of_member = function
-  | "for_all" -> Some For_all
+  | "for_all" | "for_alli" -> Some For_all
   | "for_all2_exn" -> Some For_all2
   | "is_empty" -> Some Is_empty
-  | "exists" -> Some Not_exists
+  | "exists" | "existsi" -> Some Not_exists
   | _ -> None
 
-let quantifier_members = [ "for_all"; "for_all2_exn"; "is_empty"; "exists" ]
+let quantifier_members = [ "for_all"; "for_alli"; "for_all2_exn"; "is_empty"; "exists"; "existsi" ]
 
 (* [Stdlib.List.for_all f l] takes its predicate first and positionally, where [Base] takes [~f];
    the resolved path says which. [Stdlib]'s pairwise form is [for_all2]. *)
@@ -657,6 +663,9 @@ type context = {
   found : claim list ref;  (** Claims whose value no longer mentions any parameter. *)
   pending_calls : deferred_call list ref;
       (** Applications of a parameter made inside the function being analysed. *)
+  functors : (string * (string option * module_expr)) list ref;
+      (** File-local functors by name: the parameter's name and the body, for an application to scan
+          the body with the argument's exports bound to the parameter. *)
 }
 
 let lookup env name = List.find env ~f:(fun binding -> String.equal binding.name name)
@@ -1188,9 +1197,43 @@ let rec walk ctx expr =
       ignore (module_exports ctx module_expr : binding list);
       walk ctx body
   | Pexp_letexception (_, body) -> walk ctx body
+  | Pexp_letop { let_; ands; body } when Option.is_some (lookup ctx.env let_.pbop_op.txt) ->
+      (* A let operator defined in the file is applied as the syntax desugars it: [( let* ) (( and*
+         ) e1 e2) (fun (p1, p2) -> body)]. *)
+      let loc = expr.pexp_loc in
+      let ident name = { expr with pexp_desc = Pexp_ident { txt = Longident.Lident name; loc } } in
+      let producer, pattern =
+        List.fold ands ~init:(let_.pbop_exp, let_.pbop_pat) ~f:(fun (producer, pattern) binding ->
+            ( {
+                expr with
+                pexp_desc =
+                  Pexp_apply
+                    ( ident binding.pbop_op.txt,
+                      [ (Asttypes.Nolabel, producer); (Asttypes.Nolabel, binding.pbop_exp) ] );
+              },
+              { pattern with ppat_desc = Ppat_tuple [ pattern; binding.pbop_pat ] } ))
+      in
+      let continuation =
+        {
+          expr with
+          pexp_desc =
+            Pexp_function
+              ( [ { pparam_loc = loc; pparam_desc = Pparam_val (Asttypes.Nolabel, None, pattern) } ],
+                None,
+                Pfunction_body body );
+        }
+      in
+      walk ctx
+        {
+          expr with
+          pexp_desc =
+            Pexp_apply
+              ( ident let_.pbop_op.txt,
+                [ (Asttypes.Nolabel, producer); (Asttypes.Nolabel, continuation) ] );
+        }
   | Pexp_letop { let_; ands; body } ->
-      (* `let* x = e in body`: the operator is not modelled, and [x] conservatively receives [e]'s
-         provenance, as it would under an identity operator. *)
+      (* An operator from elsewhere is not modelled: the pattern conservatively receives the
+         producer's provenance, as it would under an identity operator. *)
       let env =
         List.fold (let_ :: ands) ~init:ctx.env ~f:(fun env binding ->
             let ctx = { ctx with env } in
@@ -1531,36 +1574,41 @@ and application ctx expr callee arguments =
       comparison ctx callee left right
   | _ -> (
       let function_ = walk ctx callee in
-      match function_.closure with
-      | Some closure ->
-          let callee_name =
-            Option.bind (Read.longident_of callee) ~f:(fun path ->
-                let name = String.concat ~sep:"." path in
-                Option.map (lookup ctx.env name) ~f:(fun _ -> name))
-          in
-          apply ctx ~site ~callee_name closure arguments
-      | None -> (
-          (* A parameter applied: the function it stands for arrives with a call, so the application
-             is deferred to it, arguments walked where they are written. *)
-          let applied =
-            List.find_map function_.when_true.sources ~f:(fun source ->
-                match source.origin with
-                | Parameter { parameter; _ } -> Some parameter
-                | Quantifier _ | Steering _ -> None)
-          in
-          match applied with
-          | Some applied ->
-              let call_arguments =
-                List.map arguments ~f:(fun (label, argument) ->
-                    (label, argument, walk ctx argument))
-              in
-              let result = parameter_binding ~name:"" ~site in
-              ctx.pending_calls :=
-                { applied; call_site = site; call_arguments; result } :: !(ctx.pending_calls);
-              parameter_provenance result
-          | None ->
-              List.iter arguments ~f:(fun (_, argument) -> release ctx argument (walk ctx argument));
-              nothing))
+      (* A parameter applied: the function it stands for arrives with a call, so the application is
+         deferred to it, arguments walked where they are written. A callable it may also be -- an
+         optional parameter's default -- is applied as well, and the value is either result. *)
+      let applied =
+        List.find_map function_.when_true.sources ~f:(fun source ->
+            match source.origin with
+            | Parameter { parameter; _ } -> Some parameter
+            | Quantifier _ | Steering _ -> None)
+      in
+      let deferred =
+        Option.map applied ~f:(fun applied ->
+            let call_arguments =
+              List.map arguments ~f:(fun (label, argument) -> (label, argument, walk ctx argument))
+            in
+            let result = parameter_binding ~name:"" ~site in
+            ctx.pending_calls :=
+              { applied; call_site = site; call_arguments; result } :: !(ctx.pending_calls);
+            parameter_provenance result)
+      in
+      let direct =
+        Option.map function_.closure ~f:(fun closure ->
+            let callee_name =
+              Option.bind (Read.longident_of callee) ~f:(fun path ->
+                  let name = String.concat ~sep:"." path in
+                  Option.map (lookup ctx.env name) ~f:(fun _ -> name))
+            in
+            apply ctx ~site ~callee_name closure arguments)
+      in
+      match (direct, deferred) with
+      | Some direct, None -> direct
+      | None, Some deferred -> deferred
+      | Some direct, Some deferred -> aggregate [ direct; deferred ]
+      | None, None ->
+          List.iter arguments ~f:(fun (_, argument) -> release ctx argument (walk ctx argument));
+          nothing)
 
 (* [x = true], [Bool.equal x false], [x <> true]: the other operand, in the polarity the constant
    selects. Otherwise a comparison is a value of its own -- except a literal length bound, which is
@@ -1999,6 +2047,11 @@ and scan_structure ctx items =
           discard ctx expr;
           (env, exports)
       | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } ->
+          (match pmb_expr.pmod_desc with
+          | Pmod_functor (parameter, body) ->
+              let parameter = match parameter with Named ({ txt; _ }, _) -> txt | Unit -> None in
+              ctx.functors := (name, (parameter, body)) :: !(ctx.functors)
+          | _ -> ());
           let nested = module_exports ctx pmb_expr |> prefix_bindings name in
           (nested @ env, nested @ exports)
       | Pstr_module { pmb_expr; _ } ->
@@ -2016,7 +2069,7 @@ and scan_structure ctx items =
                     ignore (module_exports { ctx with env } binding.pmb_expr : binding list);
                     [])
           in
-          let nested = round (round env @ env) in
+          let nested = List.fold bindings ~init:[] ~f:(fun previous _ -> round (previous @ env)) in
           (nested @ env, nested @ exports)
       | Pstr_open declaration ->
           let opened = module_exports ctx declaration.popen_expr in
@@ -2070,9 +2123,19 @@ and module_exports ctx module_expr =
   | Pmod_functor (_, body) ->
       (* The functor's body, its parameter unresolved: what an application of it exports. *)
       module_exports ctx body
-  | Pmod_apply (functor_, argument) ->
-      ignore (module_exports ctx argument : binding list);
-      module_exports ctx functor_
+  | Pmod_apply (functor_, argument) -> (
+      let argument_exports = module_exports ctx argument in
+      (* A file-local functor's body, scanned with the argument's exports bound to its parameter. *)
+      match
+        Option.bind (module_path functor_) ~f:(fun path ->
+            List.Assoc.find !(ctx.functors) (String.concat ~sep:"." path) ~equal:String.equal)
+      with
+      | Some (Some parameter, body) ->
+          module_exports
+            { ctx with env = prefix_bindings parameter argument_exports @ ctx.env }
+            body
+      | Some (None, body) -> module_exports ctx body
+      | None -> module_exports ctx functor_)
   | Pmod_apply_unit functor_ -> module_exports ctx functor_
   | _ ->
       let iterator =
@@ -2090,7 +2153,9 @@ and module_exports ctx module_expr =
 (** Every [Verdict] claim [structure] fires, in source order, each with the sources its claimed
     Boolean can rest on. *)
 let claims structure =
-  let ctx = { env = []; pending = ref []; found = ref []; pending_calls = ref [] } in
+  let ctx =
+    { env = []; pending = ref []; found = ref []; pending_calls = ref []; functors = ref [] }
+  in
   ignore (scan_structure ctx structure : binding list * binding list);
   List.rev !(ctx.found)
   |> List.dedup_and_sort ~compare:(fun a b ->

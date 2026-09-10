@@ -178,8 +178,9 @@ let () =
   p_all2 "every running normalizer is within 1e-5 relative of the host recurrence" got want ~f:close;
   p "the final normalizer equals the direct sum of exp(x - max x) within 1e-5 relative"
     (close got.(n - 1) final_direct);
-  p "the trajectory is strictly increasing, as a sum of positive terms rescaled to a growing max"
-    (Array.for_alli got ~f:(fun k v -> k = 0 || Float.( > ) v got.(k - 1)));
+  p_alli
+    "the trajectory is strictly increasing, as a sum of positive terms rescaled to a growing max"
+    (Array.to_list got) ~f:(fun k v -> k = 0 || Float.( > ) v got.(k - 1));
   p "both carried scalars are counted, and no other scan is in the routine"
     (count_stmt ~f:is_scan o.LL.llc = 1
     && count_stmt ~f:(function LL.Set_local _ -> true | _ -> false) o.LL.llc = 2)

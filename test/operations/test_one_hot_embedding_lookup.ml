@@ -172,10 +172,10 @@ let () =
   let ctx2 = Train.forward_once ctx2 embedded2 in
   let got2 = Context.get_values ctx2 embedded2.Tensor.value in
   let row1 = Array.init embed ~f:(fun o -> Float.of_int ((o * vocab) + 1)) in
-  let in_range_ok = Array.for_alli got2 ~f:(fun i v -> i >= embed || approx v row1.(i)) in
-  let oob_zero = Array.for_alli got2 ~f:(fun i v -> i < embed || approx v 0.) in
-  p "in-range row of OOB batch is correct" in_range_ok;
-  p "out-of-range index gives a zero embedding row" oob_zero;
+  p_alli "in-range row of OOB batch is correct" (Array.to_list got2) ~f:(fun i v ->
+      i >= embed || approx v row1.(i));
+  p_alli "out-of-range index gives a zero embedding row" (Array.to_list got2) ~f:(fun i v ->
+      i < embed || approx v 0.);
 
   (* --- Fractional index yields a zero row (one-hot semantics: every [k == 1.5] is false). The
      guard's integrality check ([idx == trunc(idx)]) must reject it rather than gather row 1. --- *)
@@ -185,10 +185,10 @@ let () =
   let ctx_f = Train.forward_once ctx_f embedded3 in
   let got3 = Context.get_values ctx_f embedded3.Tensor.value in
   let row2 = Array.init embed ~f:(fun o -> Float.of_int ((o * vocab) + 2)) in
-  let frac_in_range_ok = Array.for_alli got3 ~f:(fun i v -> i >= embed || approx v row2.(i)) in
-  let frac_zero = Array.for_alli got3 ~f:(fun i v -> i < embed || approx v 0.) in
-  p "integer row of fractional batch is correct" frac_in_range_ok;
-  p "fractional index gives a zero embedding row" frac_zero;
+  p_alli "integer row of fractional batch is correct" (Array.to_list got3) ~f:(fun i v ->
+      i >= embed || approx v row2.(i));
+  p_alli "fractional index gives a zero embedding row" (Array.to_list got3) ~f:(fun i v ->
+      i < embed || approx v 0.);
 
   (* --- Fallback: an ordinary matmul (not a one-hot reduction) is not rewritten --- *)
   let a =
@@ -239,12 +239,10 @@ let () =
     Array.concat_map [| 1; 3; 0 |] ~f:(fun idx ->
         Array.init embed ~f:(fun o -> Float.of_int ((o * vocab) + idx)))
   in
-  let int_in_range_ok =
-    Array.for_alli got_int ~f:(fun i v -> i >= 3 * embed || approx v expected_int.(i))
-  in
-  let int_oob_zero = Array.for_alli got_int ~f:(fun i v -> i < 3 * embed || approx v 0.) in
-  p "uint32 ids: forward equals direct gather of table rows" int_in_range_ok;
-  p "uint32 ids: out-of-range id gives a zero embedding row" int_oob_zero;
+  p_alli "uint32 ids: forward equals direct gather of table rows" (Array.to_list got_int)
+    ~f:(fun i v -> i >= 3 * embed || approx v expected_int.(i));
+  p_alli "uint32 ids: out-of-range id gives a zero embedding row" (Array.to_list got_int)
+    ~f:(fun i v -> i < 3 * embed || approx v 0.);
   let dyn_int, _, _, truncs_int = inspect embedded_int ids_int.Tensor.value in
   p "uint32 ids: optimized IR contains a Get_dynamic gather" (dyn_int >= 1);
   p "uint32 ids: guard has no integrality Trunc" (truncs_int = 0);

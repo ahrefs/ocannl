@@ -364,8 +364,8 @@ let phase3 () =
   let llc_b = List.reduce_exn ~f:seq (List.drop c.links split @ [ c.consumer ]) in
   let ctx = LL.empty_optimize_ctx () in
   let o_a = optimize_in ctx ~name:"vcf_xchain_a" llc_a in
-  p "cross-routine: routine A leaves x1..x5 virtual"
-    (Array.for_alli c.xs ~f:(fun k tn -> k >= split || known_virtual o_a tn));
+  p_alli "cross-routine: routine A leaves x1..x5 virtual" (Array.to_list c.xs) ~f:(fun k tn ->
+      k >= split || known_virtual o_a tn);
   let o_b = optimize_in ctx ~name:"vcf_xchain_b" llc_b in
   (* Routine B never sets x5, yet x5's stored computation is replayed when inlined: its fan-in (6:
      {x0, w1..w5}) is derived from the computation, so x6 sees 7, x7 sees 8, and x8 trips the cap
@@ -449,8 +449,8 @@ let phase4 () =
   p "all-virtual: the empty schedule has an empty interface"
     (let (ins, outs), merge = LL.input_and_output_nodes o_a in
      Set.is_empty ins && Set.is_empty outs && Option.is_none merge);
-  p "all-virtual: x1..x5 committed virtual"
-    (Array.for_alli c.xs ~f:(fun k tn -> k >= split || known_virtual o_a tn));
+  p_alli "all-virtual: x1..x5 committed virtual" (Array.to_list c.xs) ~f:(fun k tn ->
+      k >= split || known_virtual o_a tn);
   p "all-virtual: the deferred computations persist in the lineage"
     (Hashtbl.mem ctx.LL.computations c.xs.(split - 1));
   (* The empty routine must remain compilable and runnable end to end. *)

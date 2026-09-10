@@ -191,6 +191,11 @@ let pf_all2 ?min fmt = Printf.ksprintf (fun label got want ~f -> p_all2 ?min lab
     spelling passes on an empty input just as [List.for_all] does. *)
 let p_none ?min name xs ~f = quantified ?min name xs (fun () -> not (List.exists xs ~f))
 
+(** [p_alli name xs ~f] is {!p_all} with each element's index beside it -- the guarded form of
+    [p name (List.for_alli xs ~f)], for the claims that compare an element with its neighbour or
+    with a reference at the same position. Arrays go through [Array.to_list], as for {!p_all}. *)
+let p_alli ?min name xs ~f = quantified ?min name xs (fun () -> List.for_alli xs ~f)
+
 (** [p_empty name ~over xs] claims that the derived collection [xs] is empty, and that the
     collection it was derived from, [over], is not — the guarded form of [p name (List.is_empty xs)]
     where [xs] is a precomputed subset (the invalid seeds, the declined candidates, the offending
@@ -336,6 +341,7 @@ module Claims = struct
   let p_all2 = p_all2
   let pf_all2 = pf_all2
   let p_none = p_none
+  let p_alli = p_alli
   let p_empty = p_empty
   let p_exists = p_exists
   let p_pairwise_distinct = p_pairwise_distinct

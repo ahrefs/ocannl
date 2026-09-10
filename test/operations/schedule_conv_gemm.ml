@@ -417,8 +417,8 @@ let () =
         List.length !seeds = 2
         && s.Autotune.sk_conv && (not s.Autotune.sk_gpu)
         && List.count !seeds ~f:(fun t -> t.Autotune.sk_grid) = 1);
-    p "cvs2: every seeded stride-2 candidate matches the natural form within tolerance"
-      (List.for_alli !seeds ~f:run_seed))
+    p_alli "cvs2: every seeded stride-2 candidate matches the natural form within tolerance" !seeds
+      ~f:run_seed)
   else (
     skipped "cvs2: the stride-2 conv seeds are the serial pipeline and its Grid twin";
     skipped "cvs2: every seeded stride-2 candidate matches the natural form within tolerance");
@@ -846,8 +846,8 @@ let () =
         List.exists !seeds ~f:(fun t -> t.Autotune.sk_bm = 8)
         && List.length !seeds = 3
         && s.Autotune.sk_conv);
-    p "cvs2b: every per-segment stride-2 candidate matches the natural form within tolerance"
-      (List.for_alli !seeds ~f:run_seed))
+    p_alli "cvs2b: every per-segment stride-2 candidate matches the natural form within tolerance"
+      !seeds ~f:run_seed)
   else (
     skipped "cvs2b: the strided non-dividing row seeds a padded row-panel flavor";
     skipped "cvs2b: every per-segment stride-2 candidate matches the natural form within tolerance");

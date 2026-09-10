@@ -135,8 +135,8 @@ let () =
      could never emit the smallest subnormal from a narrowing, whichever side ran it. *)
   p "narrowing reaches the smallest e5m2 subnormal"
     (Array.existsi decisive ~f:(fun i v -> Float.(v > 0.) && Float.(device.(i) = two_pow (-16))));
-  p "a finite input above the range saturates rather than going infinite"
-    (Array.for_alli decisive ~f:(fun i v -> (not (Float.is_finite v)) || Float.is_finite device.(i)));
+  p_alli "a finite input above the range saturates rather than going infinite"
+    (Array.to_list decisive) ~f:(fun i v -> (not (Float.is_finite v)) || Float.is_finite device.(i));
   p "the sign of a zero survives narrowing"
     (Array.existsi decisive ~f:(fun i v ->
          Float.(v = 0.) && Float.ieee_negative v && Float.ieee_negative device.(i)));
