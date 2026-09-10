@@ -1313,6 +1313,37 @@ and middle xs = first xs
 and last xs = List.for_all xs ~f:Fn.id
 let () = Verdict.p "all rows pass" (first rows)|ocaml},
       [ "last" ] );
+    (* staging#681 round 5: guarded Boolean cases; a filtered view's predicate identity; the
+       parameter mark inside printed text; a quantifier partially applied through a helper. *)
+    ( "refuses a direct quantifier selected by a guarded Boolean case",
+      {ocaml|let close = match List.for_all rows ~f:Fn.id with true when enabled -> true | _ -> false
+let () = Verdict.p "all rows pass" close|ocaml},
+      [ "close" ] );
+    ( "accepts a direct quantifier inverted by a guarded Boolean case",
+      {ocaml|let differs = match List.for_all rows ~f:Fn.id with true when enabled -> false | _ -> true
+let () = Verdict.p "some row fails" differs|ocaml},
+      [] );
+    ( "refuses a filtered population whose predicate was rebound after the witness",
+      {ocaml|let p = keep
+let present = not (List.is_empty (List.filter rows ~f:p))
+let p = drop
+let () = Verdict.p "all kept rows pass" (present && List.for_all (List.filter rows ~f:p) ~f:Fn.id)|ocaml},
+      [ "all kept rows pass" ] );
+    ( "accepts a filtered population witnessed under the same predicate binding",
+      {ocaml|let p = keep
+let present = not (List.is_empty (List.filter rows ~f:p))
+let () = Verdict.p "all kept rows pass" (present && List.for_all (List.filter rows ~f:p) ~f:Fn.id)|ocaml},
+      [] );
+    ( "does not mistake a parameter mark spelled inside a filter predicate",
+      {ocaml|let () =
+  Verdict.p "all rows pass"
+    (List.for_all (List.filter rows ~f:(fun s -> String.equal s "@P")) ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a quantifier completed after its population passed through a helper",
+      {ocaml|let every xs = List.for_all xs
+let all_rows = every rows
+let () = Verdict.p "all rows pass" (all_rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
   ]
 
 (* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round

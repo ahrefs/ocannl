@@ -249,6 +249,12 @@ reads a variant pattern's payload exactly against a matching tag: true
 does not read a locally bound pipeline operator as the builtin: true
 refuses a quantifier reached through a three-sibling recursive chain: true
 refuses a quantifier reached around a recursive cycle: true
+refuses a direct quantifier selected by a guarded Boolean case: true
+accepts a direct quantifier inverted by a guarded Boolean case: true
+refuses a filtered population whose predicate was rebound after the witness: true
+accepts a filtered population witnessed under the same predicate binding: true
+does not mistake a parameter mark spelled inside a filter predicate: true
+refuses a quantifier completed after its population passed through a helper: true
 the shipping ratchet process refuses the planted helper fixture: true
 the shipping ratchet process refuses a quantifier written directly in a native claim: true
 refuses a stale quantified-helper exemption: true
