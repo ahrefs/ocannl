@@ -1431,6 +1431,67 @@ let () =
   let* differs = not (List.for_all rows ~f:Fn.id) in
   Verdict.p "some row fails" differs|ocaml},
       [] );
+    (* staging#681 round 8: Stdlib through an alias; recursive modules calling later siblings; field
+       and qualified populations; callbacks handed to unmodelled functions; refutable cases' guards;
+       a predicate selected by control flow. *)
+    ( "refuses a quantifier spelled in Stdlib's argument order through a module alias",
+      {ocaml|module L = Stdlib.List
+let () = Verdict.p "all rows pass" (L.for_all Fn.id rows)|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a quantifier passed through an earlier recursive module calling a later one",
+      {ocaml|module rec A : sig
+  val check : string -> bool -> unit
+end = struct
+  let check label value = B.check label value
+end
+and B : sig
+  val check : string -> bool -> unit
+end = struct
+  let check = Verdict.p
+end
+let () = A.check "all rows pass" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "A.check" ] );
+    ( "accepts a witness over a record field guarding the same field's quantifier",
+      {ocaml|let () =
+  Verdict.p "all rows pass"
+    ((not (List.is_empty state.rows)) && List.for_all state.rows ~f:Fn.id)|ocaml},
+      [] );
+    ( "refuses a witness over one record field against another's quantifier",
+      {ocaml|let () =
+  Verdict.p "all rows pass"
+    ((not (List.is_empty state.other)) && List.for_all state.rows ~f:Fn.id)|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a witness over a qualified population guarding its quantifier",
+      {ocaml|let () =
+  Verdict.p "all rows pass" ((not (List.is_empty Fixture.rows)) && List.for_all Fixture.rows ~f:Fn.id)|ocaml},
+      [] );
+    ( "refuses a quantifier claimed inside a callback over the callback's own population",
+      {ocaml|let () =
+  List.iter groups ~f:(fun rows -> Verdict.p "all rows pass" (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a guarded quantifier claimed inside a callback over its own population",
+      {ocaml|let () =
+  List.iter groups ~f:(fun rows ->
+      Verdict.p "all rows pass" ((not (List.is_empty rows)) && List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "does not let a refutable case's guard witness a later case",
+      {ocaml|let result =
+  match option with
+  | None when List.is_empty rows -> false
+  | _ -> List.for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" result|ocaml},
+      [ "result" ] );
+    ( "accepts an irrefutable case's guard as a witness for a later case",
+      {ocaml|let result =
+  match option with
+  | _ when List.is_empty rows -> false
+  | _ -> List.for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" result|ocaml},
+      [] );
+    ( "refuses a vacuous quantifier inside a predicate selected by control flow",
+      {ocaml|let pred = if enabled then fun rows -> List.for_all rows ~f:Fn.id else fun _ -> false
+let () = Verdict.p "some group passes" (List.exists groups ~f:pred)|ocaml},
+      [ "pred" ] );
   ]
 
 (* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round

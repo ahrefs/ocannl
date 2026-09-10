@@ -214,8 +214,13 @@ let rec map_functions closure ~f =
   | Function function_closure -> Function (f function_closure)
   | Alternatives closures -> Alternatives (List.map closures ~f:(map_functions ~f))
 
-(* The functions a value selected by control flow could be, flattened, each once. *)
+(* Every function a closure could be. *)
+let rec functions_of = function
+  | Function function_ -> [ function_ ]
+  | Alternatives closures -> List.concat_map closures ~f:functions_of
+  | Quantifier_function _ -> []
 
+(* The functions a value selected by control flow could be, flattened, each once. *)
 let select_closures closures =
   let rec flatten = function
     | Alternatives closures -> List.concat_map closures ~f:flatten
@@ -350,17 +355,29 @@ let aggregate components =
    while its witnesses hold whenever the branch is taken. An alternative whose constant is the other
    polarity is one the value must have avoided, so its steering's other polarity holds on every path
    -- how `match () with () when some -> false | () -> true` rests on `not some`. *)
-type alternative = { steering : provenance list; outcome : provenance }
+type alternative = {
+  steering : provenance list;
+  outcome : provenance;
+  certain : bool;
+      (** Whether the steering alone decides the alternative: an [if] branch, an irrefutable case, a
+          Boolean case. A case whose pattern may simply not match was not necessarily avoided
+          because its guard was false. *)
+}
 
 let alternatives cases =
   let at positive =
     (* In order: an alternative the value must have avoided vouches only for the alternatives after
        it -- a later case's guard is never evaluated once an earlier case was taken. *)
     let _, taken =
-      List.fold cases ~init:(empty_view, []) ~f:(fun (avoided, taken) { steering; outcome } ->
+      List.fold cases ~init:(empty_view, [])
+        ~f:(fun (avoided, taken) { steering; outcome; certain } ->
           if not (reachable outcome positive) then
+            (* Avoided means the steering as a whole was false -- one of its conditions -- and only
+               where the steering is all there was to it. *)
             let avoided =
-              List.fold steering ~init:avoided ~f:(fun acc s -> both acc s.when_false)
+              if certain && not (List.is_empty steering) then
+                both avoided (merge (List.map steering ~f:(fun s -> s.when_false)))
+              else avoided
             in
             (avoided, taken)
           else
@@ -489,6 +506,23 @@ let int_literal expr =
   match expr.pexp_desc with
   | Pexp_constant (Pconst_integer (value, _)) -> Option.try_with (fun () -> Int.of_string value)
   | _ -> None
+
+let rec irrefutable pattern =
+  match pattern.ppat_desc with
+  | Ppat_any | Ppat_var _ -> true
+  | Ppat_construct ({ txt = Longident.Lident "()"; _ }, None) -> true
+  | Ppat_alias (inner, _) | Ppat_constraint (inner, _) | Ppat_open (_, inner) -> irrefutable inner
+  | Ppat_tuple patterns -> List.for_all patterns ~f:irrefutable
+  | _ -> false
+
+(* Whether a case is decided by its guard alone: its pattern cannot fail, or a later case repeats
+   the pattern, so whatever reached that case would have matched this one too. *)
+let guard_decides cases index =
+  let pattern_text pattern = Stdlib.Format.asprintf "%a" Pprintast.pattern pattern in
+  let case = List.nth_exn cases index in
+  irrefutable case.pc_lhs
+  || List.existsi cases ~f:(fun later_index later ->
+      later_index > index && String.equal (pattern_text later.pc_lhs) (pattern_text case.pc_lhs))
 
 let rec bool_pattern_matches pattern value =
   match pattern.ppat_desc with
@@ -831,10 +865,10 @@ let claim_exports ~site =
   List.map claim_kinds ~f:(fun (name, kind) ->
       make_binding ~name ~site (Resolved { nothing with closure = Some (native_claim kind ~site) }))
 
-let quantifier_exports ~site =
+let quantifier_exports ~site ~stdlib =
   List.filter_map quantifier_members ~f:(fun name ->
       Option.map (quantifier_of_member name) ~f:(fun kind ->
-          make_binding ~name ~site (Resolved (quantifier_function kind))))
+          make_binding ~name ~site (Resolved (quantifier_function ~stdlib kind))))
 
 let prefix_bindings prefix bindings =
   List.map bindings ~f:(fun binding -> { binding with name = prefix ^ "." ^ binding.name })
@@ -879,34 +913,53 @@ let rebound_in env callee =
   Option.exists (Read.longident_of callee) ~f:(fun path ->
       Option.is_some (lookup env (String.concat ~sep:"." path)))
 
+(* A population's scope entries, sealed: the entries of the given parameters read as applied, which
+   no witness spells and no later call substitutes. *)
+let seal_populations sealed key =
+  let scopes = population_scopes key in
+  if List.exists scopes ~f:(List.mem sealed ~equal:String.equal) then
+    Some
+      (population_key ~text:(population_text key)
+         (List.map scopes ~f:(fun entry ->
+              if List.mem sealed entry ~equal:String.equal then
+                String.substr_replace_first entry ~pattern:"=P" ~with_:"=applied"
+              else entry)))
+  else None
+
 let rec population ctx expr =
   let expr = normalize ~rebound:(rebound_in ctx.env) expr in
   let scope_of name =
     Option.value_map (lookup ctx.env name) ~default:(name ^ "=0") ~f:scope_entry
   in
+  (* A repeatable expression -- a field, a qualified value, a filtered view -- is a population by
+     its text and the scope of every name it mentions. *)
+  let lexical_key () =
+    let text = Stdlib.Format.asprintf "%a" Pprintast.expression expr in
+    let names = ref [] in
+    let iterator =
+      object
+        inherit Ast_traverse.iter as super
+
+        method! expression child =
+          (match child.pexp_desc with
+          | Pexp_ident { txt = Longident.Lident name; _ } -> names := name :: !names
+          | _ -> ());
+          super#expression child
+      end
+    in
+    iterator#expression expr;
+    let scopes = List.dedup_and_sort !names ~compare:String.compare |> List.map ~f:scope_of in
+    Some (population_key ~text scopes)
+  in
   match expr.pexp_desc with
   | Pexp_ident { txt = Longident.Lident name; _ } ->
       Some (population_key ~text:name [ scope_of name ])
+  | Pexp_ident _ | Pexp_field _ -> lexical_key ()
   | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> population ctx inner
   | Pexp_apply (callee, _)
     when is_collection_call callee ~member:"filter"
          || is_collection_call callee ~member:"filter_map" ->
-      let text = Stdlib.Format.asprintf "%a" Pprintast.expression expr in
-      let names = ref [] in
-      let iterator =
-        object
-          inherit Ast_traverse.iter as super
-
-          method! expression child =
-            (match child.pexp_desc with
-            | Pexp_ident { txt = Longident.Lident name; _ } -> names := name :: !names
-            | _ -> ());
-            super#expression child
-        end
-      in
-      iterator#expression expr;
-      let scopes = List.dedup_and_sort !names ~compare:String.compare |> List.map ~f:scope_of in
-      Some (population_key ~text scopes)
+      lexical_key ()
   | _ -> None
 
 let length_population ctx expr =
@@ -1156,15 +1209,17 @@ let rec walk ctx expr =
           let no = walk ctx no in
           alternatives
             [
-              { steering = [ condition ]; outcome = yes };
-              { steering = [ negate condition ]; outcome = no };
+              { steering = [ condition ]; outcome = yes; certain = true };
+              { steering = [ negate condition ]; outcome = no; certain = true };
             ])
   | Pexp_match (scrutinee_expr, cases) ->
       let scrutinee = walk ctx scrutinee_expr in
       alternatives (case_alternatives ctx ~scrutinee:(Some (scrutinee_expr, scrutinee)) cases)
   | Pexp_try (body, cases) ->
       let body = walk ctx body in
-      alternatives ({ steering = []; outcome = body } :: case_alternatives ctx ~scrutinee:None cases)
+      alternatives
+        ({ steering = []; outcome = body; certain = true }
+        :: case_alternatives ctx ~scrutinee:None cases)
   | Pexp_function (parameters, _, body) -> function_closure ctx parameters body
   | Pexp_apply (callee, arguments) -> application ctx expr callee arguments
   | _ ->
@@ -1172,6 +1227,28 @@ let rec walk ctx expr =
       nothing
 
 and discard ctx expr = ignore (walk ctx expr : provenance)
+
+(* A function handed to something this reader does not model -- a callback to [List.iter] -- is
+   applied to arguments nobody sees: its claims fire with its parameters sealed, so a quantifier
+   over a callback's own population is refused, while a claim resting on the parameter's Boolean
+   value has nothing to rest on. *)
+and release ctx argument provenance =
+  Option.iter provenance.closure ~f:(fun closure ->
+      let helper =
+        Option.bind (Read.longident_of argument) ~f:(fun path ->
+            let name = String.concat ~sep:"." path in
+            Option.map (lookup ctx.env name) ~f:(fun _ -> name))
+      in
+      List.iter (functions_of closure) ~f:(fun function_ ->
+          let own = List.concat_map function_.parameters ~f:(fun p -> p.slot :: p.names) in
+          let sealed = List.map own ~f:scope_entry in
+          let replacement binding =
+            if List.exists own ~f:(phys_equal binding) then Some None else None
+          in
+          List.iter function_.claims ~f:(fun claim ->
+              emit ctx ~site:claim.fired
+                ~helper:(if function_.native then None else helper)
+                (substitute_claim ~replacement ~populations:(seal_populations sealed) claim))))
 
 (* Sub-expressions of a form this reader has no value rule for are still read for the claims they
    fire, in the environment in effect here. *)
@@ -1275,7 +1352,7 @@ and bind_pattern ctx pattern ~producer =
 
 and case_alternatives ctx ~scrutinee cases =
   let selections = boolean_selections cases in
-  List.map2_exn cases selections ~f:(fun case (on_true, on_false) ->
+  List.mapi (List.zip_exn cases selections) ~f:(fun index (case, (on_true, on_false)) ->
       let env = bind_pattern ctx case.pc_lhs ~producer:scrutinee in
       let case_ctx = { ctx with env } in
       let guard = Option.map case.pc_guard ~f:(walk case_ctx) in
@@ -1285,7 +1362,8 @@ and case_alternatives ctx ~scrutinee cases =
         | Some (_, scrutinee) -> boolean_selection scrutinee (on_true, on_false)
         | None -> []
       in
-      { steering = Option.to_list guard @ selection; outcome })
+      let certain = guard_decides cases index || not (List.is_empty selection) in
+      { steering = Option.to_list guard @ selection; outcome; certain })
 
 (* Which Boolean values of the scrutinee can reach each case: the values its pattern admits that no
    earlier UNGUARDED case has already taken -- a guarded case takes nothing away, since its guard
@@ -1357,7 +1435,7 @@ and function_closure ctx parameters body =
         let names = ref [] in
         let alternatives_ =
           let selections = boolean_selections cases in
-          List.map2_exn cases selections ~f:(fun case selected ->
+          List.mapi (List.zip_exn cases selections) ~f:(fun index (case, selected) ->
               let case_names =
                 pattern_names case.pc_lhs
                 |> List.map ~f:(fun (name, location) ->
@@ -1368,7 +1446,8 @@ and function_closure ctx parameters body =
               let guard = Option.map case.pc_guard ~f:(walk case_ctx) in
               let outcome = walk case_ctx case.pc_rhs in
               let selection = boolean_selection scrutinee selected in
-              { steering = Option.to_list guard @ selection; outcome })
+              let certain = guard_decides cases index || not (List.is_empty selection) in
+              { steering = Option.to_list guard @ selection; outcome; certain })
         in
         let param =
           {
@@ -1458,7 +1537,7 @@ and application ctx expr callee arguments =
                 { applied; call_site = site; call_arguments; result } :: !(ctx.pending_calls);
               parameter_provenance result
           | None ->
-              List.iter arguments ~f:(fun (_, argument) -> discard ctx argument);
+              List.iter arguments ~f:(fun (_, argument) -> release ctx argument (walk ctx argument));
               nothing))
 
 (* [x = true], [Bool.equal x false], [x <> true]: the other operand, in the polarity the constant
@@ -1550,25 +1629,22 @@ and apply ?(valued = fun _ -> None) ctx ~site ~callee_name closure arguments =
          empty satisfies [fun rows -> List.for_all rows ~f] as an empty population would. *)
       let predicate_sources =
         match Option.bind predicate_argument ~f:(fun argument -> (value_of argument).closure) with
-        | Some (Function predicate) ->
+        | Some closure when not (List.is_empty (functions_of closure)) ->
+            let predicates = functions_of closure in
+            let predicate =
+              {
+                (List.hd_exn predicates) with
+                body = aggregate (List.map predicates ~f:(fun predicate -> predicate.body));
+                parameters = List.concat_map predicates ~f:(fun predicate -> predicate.parameters);
+              }
+            in
             let own = List.concat_map predicate.parameters ~f:(fun p -> p.slot :: p.names) in
             let sealed = List.map own ~f:scope_entry in
             let replacement binding =
               if List.exists own ~f:(phys_equal binding) then Some None else None
             in
-            let populations key =
-              let scopes = population_scopes key in
-              if List.exists scopes ~f:(List.mem sealed ~equal:String.equal) then
-                Some
-                  (population_key ~text:(population_text key)
-                     (List.map scopes ~f:(fun entry ->
-                          if List.mem sealed entry ~equal:String.equal then
-                            String.substr_replace_first entry ~pattern:"=P" ~with_:"=applied"
-                          else entry)))
-              else None
-            in
             let at view =
-              (substitute_view ~replacement ~populations view).sources
+              (substitute_view ~replacement ~populations:(seal_populations sealed) view).sources
               |> List.map ~f:(fun source -> { source with necessary = false })
             in
             (at predicate.body.when_true, at predicate.body.when_false)
@@ -1776,16 +1852,7 @@ and apply ?(valued = fun _ -> None) ctx ~site ~callee_name closure arguments =
       let population_of key =
         match population_of key with
         | Some mapped -> Some mapped
-        | None ->
-            let scopes = population_scopes key in
-            if List.exists scopes ~f:(List.mem sealed ~equal:String.equal) then
-              Some
-                (population_key ~text:(population_text key)
-                   (List.map scopes ~f:(fun entry ->
-                        if List.mem sealed entry ~equal:String.equal then
-                          String.substr_replace_first entry ~pattern:"=P" ~with_:"=applied"
-                        else entry)))
-            else None
+        | None -> seal_populations sealed key
       in
       let substitute_all provenance =
         substitute ~replacement ~populations:population_of provenance |> drop_via supplied_labels
@@ -1911,14 +1978,18 @@ and scan_structure ctx items =
           ignore (module_exports ctx pmb_expr : binding list);
           (env, exports)
       | Pstr_recmodule bindings ->
-          let nested =
+          (* Twice, the second time with the first round's exports in scope, so an earlier module
+             resolves a later sibling as a recursive value group does. *)
+          let round env =
             List.concat_map bindings ~f:(fun binding ->
                 match binding.pmb_name.txt with
-                | Some name -> module_exports ctx binding.pmb_expr |> prefix_bindings name
+                | Some name ->
+                    module_exports { ctx with env } binding.pmb_expr |> prefix_bindings name
                 | None ->
-                    ignore (module_exports ctx binding.pmb_expr : binding list);
+                    ignore (module_exports { ctx with env } binding.pmb_expr : binding list);
                     [])
           in
+          let nested = round (round env @ env) in
           (nested @ env, nested @ exports)
       | Pstr_open declaration ->
           let opened = module_exports ctx declaration.popen_expr in
@@ -1957,7 +2028,7 @@ and module_exports ctx module_expr =
             List.equal String.equal path [ "Verdict"; "Claims" ]
             || List.equal String.equal path [ "Verdict" ]
           then claim_exports ~site
-          else if is_collection_module path then quantifier_exports ~site
+          else if is_collection_module path then quantifier_exports ~site ~stdlib:(stdlib_path path)
           else
             let prefix = String.concat ~sep:"." path ^ "." in
             List.filter_map ctx.env ~f:(fun binding ->

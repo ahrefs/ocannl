@@ -270,6 +270,16 @@ refuses a vacuous quantifier inside the predicate deciding its quantifier: true
 accepts a guarded quantifier inside the predicate deciding its quantifier: true
 refuses a quantifier bound by a let operator: true
 accepts a negated quantifier bound by a let operator: true
+refuses a quantifier spelled in Stdlib's argument order through a module alias: true
+refuses a quantifier passed through an earlier recursive module calling a later one: true
+accepts a witness over a record field guarding the same field's quantifier: true
+refuses a witness over one record field against another's quantifier: true
+accepts a witness over a qualified population guarding its quantifier: true
+refuses a quantifier claimed inside a callback over the callback's own population: true
+accepts a guarded quantifier claimed inside a callback over its own population: true
+does not let a refutable case's guard witness a later case: true
+accepts an irrefutable case's guard as a witness for a later case: true
+refuses a vacuous quantifier inside a predicate selected by control flow: true
 the shipping ratchet process refuses the planted helper fixture: true
 the shipping ratchet process refuses a quantifier written directly in a native claim: true
 refuses a stale quantified-helper exemption: true
