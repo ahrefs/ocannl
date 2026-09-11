@@ -19,8 +19,13 @@ files.
   (gh-ocannl-521) had every GPU backend seeding tensorized candidates in bulk and timing none of
   them. Residual, shared with the shipped zeroing geometry: a tensorized nest's workgroup slot is the
   opaque `Tensorize` lane, so a per-lane companion reads cells other lanes of the same simdgroup
-  produced — safe only because the threadgroup is exactly one simd width; a cross-nest simdgroup
-  barrier is the formal fix. Query the analysis at the SITE'S arity (`aligned_chains ?max_chain`,
+  produced. These exchanges rely on the intrinsic's trailing workgroup barrier and the lane-0
+  fallback's bracketing barriers, including device-memory ordering for distributed zeroing before
+  store-back. Metal's `barrier_syntax` fences both device and threadgroup memory (gh-ocannl-963),
+  as CUDA/HIP's `__syncthreads()` does; one simdgroup alone is not a memory-ordering guarantee.
+  Cross-statement dependence analysis over barrier regions remains unimplemented (gh-ocannl-963),
+  so this reliance does not establish legality for arbitrary hand-built or `Retype`d schedules.
+  Query the analysis at the SITE'S arity (`aligned_chains ?max_chain`,
   default 2 = the presets' Grid+Workgroup shape): a batched matmul's chain is batch loops + row +
   column, and under the default cap a rank-3+ site can never match its full chain, so every seed for
   such a site declines on companion coverage — that single decline held gpt2_mini's five FFN-class

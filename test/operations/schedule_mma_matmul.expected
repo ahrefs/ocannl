@@ -31,10 +31,16 @@ bfu_m2 tensorized matmul matches the serial twin: true
 bfu_m2 tensorized structure as expected: true
 f8 tensorized matmul matches the serial twin bitwise: true
 f8 tensorized structure as expected: true
+f8 Metal fallback fences device memory on both sides: true
+f8 Metal fence check rejects a threadgroup-only bracket: true
 f8_ta tensorized matmul matches the serial twin bitwise: true
 f8_ta tensorized structure as expected: true
+f8_ta Metal fallback fences device memory on both sides: true
+f8_ta Metal fence check rejects a threadgroup-only bracket: true
 f8_tb tensorized matmul matches the serial twin bitwise: true
 f8_tb tensorized structure as expected: true
+f8_tb Metal fallback fences device memory on both sides: true
+f8_tb Metal fence check rejects a threadgroup-only bracket: true
 edge-extent tensorized matmul matches the serial twin bitwise: true
 edge-extent register tiling with peeled edges: true
 extent-adapted tensorized matmul matches the serial twin bitwise: true

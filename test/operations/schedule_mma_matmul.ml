@@ -60,6 +60,22 @@ module Generated = Test_utils.Generated
 
 let () = Generated.init ~backend_name
 
+(* The fp8 Metal legs necessarily use the lane-0 fallback, between distributed device zeroing and
+   the result readback. Pin BOTH brackets: bitwise parity alone passed with the old threadgroup-only
+   fences, whose device ordering MSL does not guarantee (gh-ocannl-963). *)
+let metal_device_fence = "threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);"
+
+let metal_fallback_device_fenced src =
+  match
+    ( String.substr_index_all src ~may_overlap:false ~pattern:"threadgroup_barrier(",
+      String.substr_index src ~pattern:"== 0)" )
+  with
+  | [ before; after ], Some guard ->
+      before < guard && guard < after
+      && String.is_prefix (String.drop_prefix src before) ~prefix:metal_device_fence
+      && String.is_prefix (String.drop_prefix src after) ~prefix:metal_device_fence
+  | _ -> false
+
 (* The maximal single-child chains of statement-level loops: one symbol list per top-level nest. *)
 let nest_paths (llc : LL.t) : Ir.Indexing.symbol list list =
   let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
@@ -849,7 +865,21 @@ let () =
             fallback arm) while the arithmetic stays vectorized. *)
          has "Tile_mma register tiling" && has "narrow storage bridged: a:fp8 b:fp8"
      in
-     p (Printf.sprintf "%s tensorized structure as expected" tag) ok
+     p (Printf.sprintf "%s tensorized structure as expected" tag) ok;
+     let fence_claim = Printf.sprintf "%s Metal fallback fences device memory on both sides" tag in
+     let control_claim =
+       Printf.sprintf "%s Metal fence check rejects a threadgroup-only bracket" tag
+     in
+     if on_metal then (
+       p fence_claim (metal_fallback_device_fenced src);
+       let weakened =
+         String.substr_replace_first src ~pattern:metal_device_fence
+           ~with_:"threadgroup_barrier(mem_flags::mem_threadgroup);"
+       in
+       p control_claim (not (metal_fallback_device_fenced weakened)))
+     else (
+       skipped fence_claim;
+       skipped control_claim)
    in
    fp8_leg ~tag:"f8" ~build:(fun () ->
        let%op t = maf * mbf in
