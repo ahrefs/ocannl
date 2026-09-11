@@ -58,7 +58,10 @@ class CellGroupTest(unittest.TestCase):
                 "        'signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)')\n"
                 "kid = subprocess.Popen([sys.executable, '-c', code],\n"
                 "  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
-                "open(sys.argv[1], 'w').write(str(kid.pid))\n"
+                "pending = sys.argv[1] + '.pending'\n"
+                "with open(pending, 'w') as stream:\n"
+                "  stream.write(str(kid.pid))\n"
+                "os.replace(pending, sys.argv[1])\n"
                 "time.sleep(300)\n",
                 pidfile,
             ),
@@ -75,6 +78,14 @@ class CellGroupTest(unittest.TestCase):
         self.assertTrue(result.reaped)
         self.assertTrue(self.wait_gone(grandchild), f"pid {grandchild} survived group cleanup")
 
+    # Windows implements communicate timeouts by joining pipe-reader threads and raises before
+    # copying their buffers into TimeoutExpired. The later successful communicate is therefore
+    # the first observable snapshot, and this fixture deliberately truncates that return to model
+    # the regression -- leaving no earlier partial snapshot whose preservation it can exercise.
+    @unittest.skipIf(
+        os.name == "nt",
+        "communicate timeouts expose no partial pipe snapshot on Windows",
+    )
     def test_a_child_killed_mid_stream_preserves_its_partial_stdout(self):
         ready = self.dir / "stdout-ready"
         child = cell_group.spawn(
