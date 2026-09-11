@@ -551,7 +551,12 @@ module Impl = struct
       | 2 -> Some (reg ^ ".z")
       | _ -> None
 
-    let barrier_syntax = Some "threadgroup_barrier(mem_flags::mem_threadgroup);"
+    (* Sibling nests can exchange device cells between lanes: in particular, distributed zeroing
+       precedes the lane-0 Tile_mma fallback. Fence device writes as well as shared tile storage
+       (gh-ocannl-963); a threadgroup-only fence does not order that exchange. *)
+    let barrier_syntax =
+      Some "threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);"
+
     let shared_decl_prefix = Some "threadgroup "
 
     (* Warp-shuffle rendering of [Workgroup_reduce] accumulation loops (gh-ocannl-462):

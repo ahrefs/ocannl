@@ -291,6 +291,8 @@ test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name]
     "thread_elements()[1]"
     "threadgroup float tile_"
     "threadgroup_barrier"
+    "threadgroup_barrier("
+    "threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);"
     "threadgroup_barrier(mem_flags::mem_threadgroup);"
     "tile_mma 16x32x24 (wmma-tf32)"
     "tile_mma fragment update"
