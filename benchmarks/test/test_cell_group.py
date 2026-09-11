@@ -75,13 +75,20 @@ class CellGroupTest(unittest.TestCase):
         self.assertTrue(result.reaped)
         self.assertTrue(self.wait_gone(grandchild), f"pid {grandchild} survived group cleanup")
 
+    # Windows implements communicate timeouts by joining pipe-reader threads and raises before
+    # copying their buffers into TimeoutExpired. The later successful communicate is therefore
+    # the first observable snapshot, and this fixture deliberately truncates that return to model
+    # the regression -- leaving no earlier partial snapshot whose preservation it can exercise.
+    @unittest.skipIf(
+        os.name == "nt",
+        "communicate timeouts expose no partial pipe snapshot on Windows",
+    )
     def test_a_child_killed_mid_stream_preserves_its_partial_stdout(self):
         ready = self.dir / "stdout-ready"
         child = cell_group.spawn(
             self.python(
                 "import signal, sys, time\n"
-                "grace_signal = getattr(signal, 'SIGBREAK', signal.SIGTERM)\n"
-                "signal.signal(grace_signal, signal.SIG_IGN)\n"
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
                 "sys.stdout.write('partial child output')\n"
                 "sys.stdout.flush()\n"
                 "open(sys.argv[1], 'w').write('ready')\n"
@@ -92,10 +99,9 @@ class CellGroupTest(unittest.TestCase):
             stderr=subprocess.STDOUT,
             text=True,
         )
-        # The child ignores the signal ManagedProcess uses for its graceful phase: SIGTERM on
-        # POSIX, SIGBREAK (sent as CTRL_BREAK_EVENT) on Windows. The readiness marker is published
-        # only after that handler is installed and stdout was flushed, so the parent cannot signal
-        # the child before either prerequisite of the intended grace-then-kill path exists.
+        # The readiness marker is published only after stdout was flushed. This ordering makes
+        # the test deterministic: the parent cannot kill the child before the asserted bytes
+        # exist, which was the macOS CI flake in the old combined sleep-chain test.
         self.wait_file(ready)
         real_communicate = child.communicate
 
