@@ -80,7 +80,8 @@ class CellGroupTest(unittest.TestCase):
         child = cell_group.spawn(
             self.python(
                 "import signal, sys, time\n"
-                "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                "grace_signal = getattr(signal, 'SIGBREAK', signal.SIGTERM)\n"
+                "signal.signal(grace_signal, signal.SIG_IGN)\n"
                 "sys.stdout.write('partial child output')\n"
                 "sys.stdout.flush()\n"
                 "open(sys.argv[1], 'w').write('ready')\n"
@@ -91,9 +92,10 @@ class CellGroupTest(unittest.TestCase):
             stderr=subprocess.STDOUT,
             text=True,
         )
-        # The readiness marker is published only after stdout was flushed. This ordering makes
-        # the test deterministic: the parent cannot kill the child before the asserted bytes
-        # exist, which was the macOS CI flake in the old combined sleep-chain test.
+        # The child ignores the signal ManagedProcess uses for its graceful phase: SIGTERM on
+        # POSIX, SIGBREAK (sent as CTRL_BREAK_EVENT) on Windows. The readiness marker is published
+        # only after that handler is installed and stdout was flushed, so the parent cannot signal
+        # the child before either prerequisite of the intended grace-then-kill path exists.
         self.wait_file(ready)
         real_communicate = child.communicate
 
