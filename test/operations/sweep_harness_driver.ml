@@ -10,12 +10,8 @@ let windows_git_roots getenv =
   @ [ {|C:\Progra~1\Git|} ]
 
 let git_bash_candidates getenv =
-  List.concat_map
-    (fun root ->
-      [
-        Filename.concat (Filename.concat root "bin") "bash.exe";
-        Filename.concat (Filename.concat (Filename.concat root "usr") "bin") "bash.exe";
-      ])
+  List.map
+    (fun root -> Filename.concat (Filename.concat root "bin") "bash.exe")
     (windows_git_roots getenv)
 
 let resolve_bash ~win32 ~git_bashes ~available =
@@ -26,7 +22,17 @@ let resolve_bash ~win32 ~git_bashes ~available =
    in System32 on the runner image; it must not win, and must not become a fallback when Git Bash is
    absent. *)
 let check_resolution () =
-  let git_bash = "fixture-git-bash.exe" in
+  let program_files = "fixture-program-files" in
+  let getenv name = if String.equal name "ProgramFiles" then Some program_files else None in
+  let git_bash =
+    Filename.concat (Filename.concat (Filename.concat program_files "Git") "bin") "bash.exe"
+  in
+  let raw_bash =
+    Filename.concat
+      (Filename.concat (Filename.concat (Filename.concat program_files "Git") "usr") "bin")
+      "bash.exe"
+  in
+  let git_bashes = git_bash_candidates getenv in
   let available path = String.equal path "bash" || String.equal path git_bash in
   let expect name got want =
     if not (Option.equal String.equal got want) then
@@ -36,10 +42,11 @@ let check_resolution () =
            (Option.value ~default:"<none>" want))
   in
   expect "Windows selects Git Bash even when bare bash is executable"
-    (resolve_bash ~win32:true ~git_bashes:[ git_bash ] ~available)
+    (resolve_bash ~win32:true ~git_bashes ~available)
     (Some git_bash);
-  expect "Windows never falls back to bare bash"
-    (resolve_bash ~win32:true ~git_bashes:[] ~available)
+  expect "Windows never falls back to bare or raw usr/bin bash"
+    (resolve_bash ~win32:true ~git_bashes ~available:(fun path ->
+         String.equal path "bash" || String.equal path raw_bash))
     None;
   expect "non-Windows keeps PATH lookup"
     (resolve_bash ~win32:false ~git_bashes:[] ~available)
