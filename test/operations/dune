@@ -5029,7 +5029,7 @@
 (executable
  (name sweep_harness_driver)
  (modules sweep_harness_driver)
- (libraries unix arrayjit.ir))
+ (libraries unix arrayjit.ir arrayjit.verdict))
 
 (executable
  (name verdict_skip_probe)
@@ -5047,7 +5047,11 @@
   ../../benchmarks/fixture_digest.py
   ../../tools/aggregate-skips.sh
   ../../tools/sweep.sh
-  sweep_harness.sh)
+  sweep_harness.sh
+  (env_var ProgramFiles)
+  (env_var ProgramW6432)
+  (env_var "ProgramFiles(x86)")
+  (env_var LOCALAPPDATA))
  (action
   (run
    %{dep:sweep_harness_driver.exe}
