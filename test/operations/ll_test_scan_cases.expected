@@ -21,6 +21,17 @@ a sibling harness cannot cover the selected real source: true
 the off-platform select arm is checked independently too: true
 select target exclusion prevents harness ownership: true
 every owning select stanza must link the harness for a shared arm: true
+an unowned copy source inherits its destination harness: true
+copied targets enter default module ownership: true
+a linked original cannot hide an unlinked copied consumer: true
+short copy_files# retains source ownership: true
+literal copy chains retain every consumer: true
+an unlinked consumer at the end of a copy chain is refused: true
+unsupported copy globs are refused explicitly: true
+copy inputs outside the declared corpus are refused explicitly: true
+copy chains cannot hide an origin outside the declared corpus: true
+PPX output goldens do not require a library-owning stanza: true
+ordinary unowned sources cannot borrow the PPX golden exclusion: true
 shipping scanner resolves a parent subdir owning the adopted test: true
 parent subdir defaults share ownership with physical child stanzas: true
 shipping scanner explicitly refuses include_subdirs ownership: true

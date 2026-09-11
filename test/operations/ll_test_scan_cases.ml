@@ -143,6 +143,54 @@ let () =
   Unix.unlink (Stdlib.Filename.concat root "test/choice.real.ml");
   Unix.unlink (Stdlib.Filename.concat root "test/choice.missing.ml");
   write "test/dune" base_stanza;
+  Unix.mkdir (Stdlib.Filename.concat root "test/shared") 0o700;
+  write "test/shared/copied.ml" record;
+  let copied_stanza ?(harness = "ll_test") ?(modules = "(modules copied)") () =
+    "(test (name copied) " ^ modules ^ " (libraries " ^ harness ^ "))"
+  in
+  let copy = "(copy_files (files shared/copied.ml))" in
+  write "test/dune" (base_stanza ^ copy ^ copied_stanza ());
+  check "an unowned copy source inherits its destination harness" ~exit:0
+    ~message:"Adoption threshold:" (run ());
+  write "test/dune" (base_stanza ^ copy ^ copied_stanza ~modules:"" ());
+  check "copied targets enter default module ownership" ~exit:0 ~message:"Adoption threshold:"
+    (run ());
+  write "test/shared/dune" "(library (name original) (modules copied) (libraries ll_test))";
+  write "test/dune" (base_stanza ^ copy ^ copied_stanza ~harness:"" ());
+  check "a linked original cannot hide an unlinked copied consumer" ~exit:1
+    ~message:"test/shared/copied.ml: requires ll_test" (run ());
+  write "test/dune" (base_stanza ^ "(copy_files# shared/copied.ml)" ^ copied_stanza ());
+  check "short copy_files# retains source ownership" ~exit:0 ~message:"Adoption threshold:" (run ());
+  write "arrayjit/test/dune"
+    "(copy_files ../../test/copied.ml) (test (name copied) (modules copied) (libraries ll_test))";
+  check "literal copy chains retain every consumer" ~exit:0 ~message:"Adoption threshold:" (run ());
+  write "arrayjit/test/dune"
+    "(copy_files ../../test/copied.ml) (test (name copied) (modules copied))";
+  check "an unlinked consumer at the end of a copy chain is refused" ~exit:1
+    ~message:"test/shared/copied.ml: requires ll_test" (run ());
+  write "arrayjit/test/dune" "";
+  write "test/dune" (base_stanza ^ "(copy_files shared/*.ml)" ^ copied_stanza ());
+  check "unsupported copy globs are refused explicitly" ~exit:1
+    ~message:"unsupported copy_files glob or dynamic source" (run ());
+  write "test/dune" (base_stanza ^ "(copy_files ../outside.ml)" ^ copied_stanza ());
+  check "copy inputs outside the declared corpus are refused explicitly" ~exit:1
+    ~message:"source input outside declared test corpus" (run ());
+  write "dune" "(subdir staging (copy_files ../outside.ml))";
+  write "test/dune" (base_stanza ^ "(copy_files ../staging/outside.ml)" ^ copied_stanza ());
+  check "copy chains cannot hide an origin outside the declared corpus" ~exit:1
+    ~message:"source input outside declared test corpus" (run ());
+  write "dune" "";
+  Unix.unlink (Stdlib.Filename.concat root "test/shared/copied.ml");
+  write "test/shared/dune" "";
+  write "test/dune" base_stanza;
+  Unix.mkdir (Stdlib.Filename.concat root "test/ppx") 0o700;
+  write "test/ppx/fixture_expected.ml" record;
+  check "PPX output goldens do not require a library-owning stanza" ~exit:0
+    ~message:"Adoption threshold:" (run ());
+  write "test/fixture_expected.ml" record;
+  check "ordinary unowned sources cannot borrow the PPX golden exclusion" ~exit:1
+    ~message:"test/fixture_expected.ml: requires ll_test" (run ());
+  Unix.unlink (Stdlib.Filename.concat root "test/fixture_expected.ml");
   Unix.unlink (Stdlib.Filename.concat root "test/dune");
   write "dune" "(subdir test (test (name new) (modules new) (libraries ll_test)))";
   check "shipping scanner resolves a parent subdir owning the adopted test" ~exit:0

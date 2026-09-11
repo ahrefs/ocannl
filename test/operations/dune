@@ -119,6 +119,7 @@
   (alias runtest-config_usage_scan_refusal_control)
   (alias runtest-ocamlformat_ignore_scan)
   (alias runtest-ll_test_ratchet)
+  (alias runtest-ll_test_scan_cases)
   (alias runtest-workflow_job_timeouts)
   (alias runtest-shell_scripts_parse)
   (alias runtest-refusal_control_scan_cases)

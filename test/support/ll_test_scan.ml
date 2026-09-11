@@ -86,13 +86,18 @@ let census ~constructors:(constructors, record_constructors) source =
 
 let needs_harness { records; traversals } = records >= 1 || traversals >= 1
 
-let stanza_links ~directory_modules ~module_name ~stanzas stanza =
+let stanza_owns ~directory_modules ~module_name ~stanzas stanza =
   Option.value_map (Dune.head stanza) ~default:false ~f:(fun head ->
       List.mem Dune.module_bearing_heads head ~equal:String.equal)
   && List.exists (Dune.modules_of ~directory_modules stanzas stanza) ~f:(fun name ->
       String.Caseless.equal name module_name)
-  && Option.value_map (Dune.field stanza "libraries") ~default:false ~f:(fun libraries ->
+
+let links_harness stanza =
+  Option.value_map (Dune.field stanza "libraries") ~default:false ~f:(fun libraries ->
       List.mem libraries (Sexp.Atom "ll_test") ~equal:Sexp.equal)
+
+let stanza_links ~directory_modules ~module_name ~stanzas stanza =
+  stanza_owns ~directory_modules ~module_name ~stanzas stanza && links_harness stanza
 
 let linked ~directory_modules ~module_name stanzas =
   List.exists stanzas ~f:(stanza_links ~directory_modules ~module_name ~stanzas)
@@ -118,6 +123,40 @@ let select_arms stanza =
 (** Fold physical dune files and parent subdir blocks into the same directory groups before
     resolving defaults. Directory-spanning ownership modes remain explicit refusals, as in
     env_var_deps; silently treating them as unlinked would misdiagnose an adopted test. *)
+let test_source path =
+  (String.is_prefix path ~prefix:"test/" || String.is_prefix path ~prefix:"arrayjit/test/")
+  && String.is_suffix path ~suffix:".ml"
+  && not
+       (String.equal (Stdlib.Filename.dirname path) "test/ppx"
+       && String.is_suffix path ~suffix:"_expected.ml")
+
+(** Literal copy forms used by this tree. Do not silently guess at globs, pforms or generated inputs
+    outside the declared test corpus. Non-ML copies do not affect module ownership. *)
+let copy_input stanza =
+  match Dune.head stanza with
+  | Some ("copy_files" | "copy_files#") -> (
+      let input =
+        match stanza with
+        | Sexp.List [ _; Sexp.Atom input ] -> Some input
+        | _ -> (
+            match Dune.field stanza "files" with
+            | Some [ Sexp.Atom input ] -> Some input
+            | _ -> None)
+      in
+      match input with
+      | None -> Error "unsupported copy_files source form"
+      | Some input ->
+          let dynamic s = String.exists s ~f:(fun c -> String.mem "*?[]{}%" c) in
+          let extension = Stdlib.Filename.extension input in
+          if
+            (not (String.is_empty extension))
+            && (not (dynamic extension))
+            && not (String.equal extension ".ml")
+          then Ok None
+          else if dynamic input then Error "unsupported copy_files glob or dynamic source"
+          else Ok (Option.some_if (String.is_suffix input ~suffix:".ml") input))
+  | _ -> Ok None
+
 let ownership ~sources ~dune_files =
   let groups =
     List.concat_map dune_files ~f:(fun (path, content) ->
@@ -150,9 +189,48 @@ let ownership ~sources ~dune_files =
             |> List.map ~f:(fun (target, arm) ->
                 (dir, stanza, target, Dune.normalize_path (Dune.in_subdir dir arm)))))
   in
+  let copy_errors = ref [] in
+  let copies =
+    Map.to_alist groups
+    |> List.concat_map ~f:(fun (dir, stanzas) ->
+        List.filter_map stanzas ~f:(fun stanza ->
+            match copy_input stanza with
+            | Error reason ->
+                if test_source (Dune.normalize_path (Dune.in_subdir dir "probe.ml")) then
+                  copy_errors := (dir ^ ": " ^ reason) :: !copy_errors;
+                None
+            | Ok None -> None
+            | Ok (Some input) ->
+                Some
+                  ( Dune.normalize_path (Dune.in_subdir dir input),
+                    Dune.normalize_path (Dune.in_subdir dir (Stdlib.Filename.basename input)) )))
+  in
+  let inputs =
+    copies
+    @ List.map selections ~f:(fun (dir, _, target, arm) ->
+        (arm, Dune.normalize_path (Dune.in_subdir dir target)))
+  in
+  let rec declared_origin seen path =
+    if List.mem sources path ~equal:String.equal then true
+    else if List.mem seen path ~equal:String.equal then false
+    else
+      let origins =
+        List.filter_map inputs ~f:(fun (input, target) ->
+            Option.some_if (String.equal target path) input)
+      in
+      (not (List.is_empty origins)) && List.for_all origins ~f:(declared_origin (path :: seen))
+  in
+  let input_errors =
+    List.filter_map inputs ~f:(fun (input, target) ->
+        if test_source target && not (declared_origin [] input) then
+          Some (target ^ ": source input outside declared test corpus: " ^ input)
+        else None)
+  in
   let module_name path = Stdlib.Filename.remove_extension (Stdlib.Filename.basename path) in
   let directory_modules dir =
-    List.filter_map sources ~f:(fun source ->
+    List.filter_map
+      (sources @ List.map copies ~f:snd)
+      ~f:(fun source ->
         if
           String.equal (Stdlib.Filename.dirname source) dir
           && not (List.exists selections ~f:(fun (_, _, _, arm) -> String.equal source arm))
@@ -163,22 +241,36 @@ let ownership ~sources ~dune_files =
     |> List.dedup_and_sort ~compare:String.compare
   in
   let stanzas_at dir = Option.value (Map.find groups dir) ~default:[] in
-  let is_linked path =
-    match List.filter selections ~f:(fun (_, _, _, arm) -> String.equal path arm) with
-    | [] ->
-        let dir = Stdlib.Filename.dirname path in
-        linked ~directory_modules:(directory_modules dir) ~module_name:(module_name path)
-          (stanzas_at dir)
-    | owners ->
-        List.for_all owners ~f:(fun (dir, stanza, target, _) ->
-            stanza_links ~directory_modules:(directory_modules dir)
-              ~module_name:(module_name target) ~stanzas:(stanzas_at dir) stanza)
+  let rec owners seen path =
+    if List.mem seen path ~equal:String.equal then [ false ]
+    else
+      let seen = path :: seen in
+      let direct =
+        match List.filter selections ~f:(fun (_, _, _, arm) -> String.equal path arm) with
+        | [] ->
+            if not (test_source path) then []
+            else
+              let dir = Stdlib.Filename.dirname path in
+              List.filter (stanzas_at dir)
+                ~f:
+                  (stanza_owns ~directory_modules:(directory_modules dir)
+                     ~module_name:(module_name path) ~stanzas:(stanzas_at dir))
+              |> List.map ~f:links_harness
+        | selected ->
+            List.concat_map selected ~f:(fun (dir, stanza, target, _) ->
+                stanza_links ~directory_modules:(directory_modules dir)
+                  ~module_name:(module_name target) ~stanzas:(stanzas_at dir) stanza
+                :: copied_owners seen (Dune.normalize_path (Dune.in_subdir dir target)))
+      in
+      direct @ copied_owners seen path
+  and copied_owners seen path =
+    List.filter copies ~f:(fun (source, _) -> String.equal source path)
+    |> List.concat_map ~f:(fun (_, target) -> owners seen target)
   in
-  (is_linked, problems)
-
-let test_source path =
-  (String.is_prefix path ~prefix:"test/" || String.is_prefix path ~prefix:"arrayjit/test/")
-  && String.is_suffix path ~suffix:".ml"
+  let is_linked path =
+    match owners [] path with [] -> false | owners -> List.for_all owners ~f:Fn.id
+  in
+  (is_linked, problems @ List.rev !copy_errors @ input_errors)
 
 let violations ~exemptions rows =
   let debt = List.filter rows ~f:(fun (_, counts, linked) -> needs_harness counts && not linked) in
