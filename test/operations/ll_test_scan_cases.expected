@@ -1,0 +1,20 @@
+two records stay below the adoption floor: true
+three records reach the adoption floor: true
+a private recursive walker reaches the floor without any construction: true
+comment and quoted fixture records are not constructions: true
+record match arms are not constructions: true
+tuple constructors with foreign record payloads do not count: true
+derived constructor membership includes a new inline-record constructor: true
+constructors in unrelated nested type declarations do not widen the census: true
+nested private walkers are counted once, not again through their parent: true
+a sibling stanza's harness does not cover this module: true
+default module membership links the owning harness: true
+ordered-set exclusion prevents harness membership: true
+a new subdirectory in either package is in scope: true
+shipping scanner refuses unlinked record builders: true
+shipping scanner accepts adoption without golden churn: true
+shipping scanner refuses stale exemptions after adoption: true
+shipping scanner refuses a private traversal alone: true
+shipping scanner accepts an explicitly exempt migration: true
+new arrayjit debt is not implicitly exempted by the package blocker: true
+shipping scanner refuses an emptied arrayjit source root: true

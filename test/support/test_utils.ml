@@ -98,3 +98,5 @@ let print_floats ?(prec = 6) ?(sep = " ") vs =
     in [.missing.ml] backend stubs): text-mode stdout on Windows rewrites ["\n"] to ["\r\n"],
     corrupting the comparison. *)
 let set_binary_stdout () = Out_channel.set_binary_mode stdout true
+
+module Ll_test_scan = Ll_test_scan

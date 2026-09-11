@@ -118,6 +118,7 @@
   (alias runtest-config_usage_scan_control)
   (alias runtest-config_usage_scan_refusal_control)
   (alias runtest-ocamlformat_ignore_scan)
+  (alias runtest-ll_test_ratchet)
   (alias runtest-workflow_job_timeouts)
   (alias runtest-shell_scripts_parse)
   (alias runtest-refusal_control_scan_cases)
@@ -227,6 +228,7 @@
   (alias runtest-config_usage_scan_control)
   (alias runtest-config_usage_scan_refusal_control)
   (alias runtest-ocamlformat_ignore_scan)
+  (alias runtest-ll_test_ratchet)
   (alias runtest-workflow_job_timeouts)
   (alias runtest-shell_scripts_parse)
   (alias runtest-optional_arg_inventory)
@@ -1990,6 +1992,9 @@
   env_var_deps.ml
   env_var_deps_control.expected
   env_var_deps.expected
+  ll_test_ratchet.ml
+  ll_test_ratchet.expected
+  ll_test_scan_cases.expected
   ocamlformat_ignore_scan.ml
   ocamlformat_ignore_scan.expected
   optional_arg_inventory.ml
@@ -2031,6 +2036,8 @@
    config_scan_lexing.expected,digest_completeness.expected
    env_var_deps.ml
    env_var_deps_control.expected,env_var_deps.expected
+   ll_test_ratchet.ml
+   ll_test_ratchet.expected,ll_test_scan_cases.expected
    ocamlformat_ignore_scan.ml
    ocamlformat_ignore_scan.expected
    optional_arg_inventory.ml
@@ -3803,7 +3810,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules cost_model_extraction)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -5168,3 +5175,44 @@
   (env_var OCANNL_BACKEND))
  (modules back_to_back_runs)
  (libraries base ocannl stdio unix arrayjit.verdict ll_test))
+
+(executable
+ (name ll_test_ratchet)
+ (modules ll_test_ratchet)
+ (libraries base stdio test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- parses source and dune stanzas without running a backend.
+ (target ll_test_ratchet.actual)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (sandbox always)
+  (source_tree ../..))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:ll_test_ratchet.exe}
+    %{workspace_root}
+    %{dep:ll_test_ratchet.exe}
+    %{target}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-ll_test_ratchet)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff ll_test_ratchet.expected ll_test_ratchet.actual)))
+
+(test
+ ; ocannl-backend: none -- synthetic source/Dune cases and child scanner invocations.
+ (name ll_test_scan_cases)
+ (package neural_nets_lib)
+ (modules ll_test_scan_cases)
+ (libraries base stdio unix test_utils arrayjit.verdict)
+ (deps ocannl_config ll_test_ratchet.exe)
+ (action
+  (run %{test} %{dep:ll_test_ratchet.exe})))

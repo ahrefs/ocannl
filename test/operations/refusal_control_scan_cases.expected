@@ -313,6 +313,7 @@ env_var_deps.ml: [scanner-refusal:b850c5e69abfcc5facf9b920af1a291f] same executa
 env_var_deps.ml: [scanner-refusal:b098b95e7bbcc632b19f0e470447fd97] both declaring passes (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:d8c7b4408936ac9480281388a26eb873] dynamic reach whose (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:7a38e9cb5b4418e6e5bb8fe3b294d8fd] the same variable (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+ll_test_ratchet.ml has exactly the explicitly assigned refusal controls: true
 ocamlformat_ignore_scan.ml has exactly the explicitly assigned refusal controls: true
 ocamlformat_ignore_scan.ml: [scanner-refusal:e1f2fc5fc55abe7d73725c939c81a516] ocamlformat-ignore ends in (claim) is catalogued beside ocamlformat_ignore_scan.expected: true
 ocamlformat_ignore_scan.ml: [scanner-refusal:d936cdade68aaf6cb4f1a8a0bfc17655] ocamlformat-ignore line contains (claim) is catalogued beside ocamlformat_ignore_scan.expected: true
