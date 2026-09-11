@@ -58,7 +58,10 @@ class CellGroupTest(unittest.TestCase):
                 "        'signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)')\n"
                 "kid = subprocess.Popen([sys.executable, '-c', code],\n"
                 "  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
-                "open(sys.argv[1], 'w').write(str(kid.pid))\n"
+                "pending = sys.argv[1] + '.pending'\n"
+                "with open(pending, 'w') as stream:\n"
+                "  stream.write(str(kid.pid))\n"
+                "os.replace(pending, sys.argv[1])\n"
                 "time.sleep(300)\n",
                 pidfile,
             ),
