@@ -18,6 +18,7 @@ module Tn = Ir.Tnode
 module Ops = Ir.Ops
 module Idx = Ir.Indexing
 module LL = Ir.Low_level
+module B = Ll_builders
 
 let make_optimized llc tns : LL.optimized =
   let traced_store = Hashtbl.create (module Tn) in
@@ -48,14 +49,7 @@ let make_on_device id label =
 
 let vec_loop ~axis tn =
   let i = Idx.get_symbol () in
-  LL.For_loop
-    {
-      index = i;
-      from_ = 0;
-      to_ = 7;
-      axis;
-      body = LL.Set { tn; idcs = [| Idx.Iterator i |]; llsc = LL.Constant 1.0; debug = "" };
-    }
+  B.loop ~upto:7 ~axis i (B.set tn [| Idx.Iterator i |] (LL.Constant 1.0))
 
 let compile_with_pure_config ~name optimized =
   let module Syntax = Ir.C_syntax.C_syntax (Ir.C_syntax.Pure_C_config (struct
@@ -107,23 +101,10 @@ let () =
   let out3 = make_on_device 4 "out3" in
   let i = Idx.get_symbol () in
   let llc3 =
-    LL.For_loop
-      {
-        index = i;
-        from_ = 0;
-        to_ = 7;
-        axis = LL.Serial;
-        body =
-          LL.Seq
-            ( LL.Set { tn = local; idcs = [| Idx.Iterator i |]; llsc = LL.Constant 2.0; debug = "" },
-              LL.Set
-                {
-                  tn = out3;
-                  idcs = [| Idx.Iterator i |];
-                  llsc = LL.Get (local, [| Idx.Iterator i |]);
-                  debug = "";
-                } );
-      }
+    B.loop ~upto:7 i
+      (LL.Seq
+         ( B.set local [| Idx.Iterator i |] (LL.Constant 2.0),
+           B.set out3 [| Idx.Iterator i |] (LL.Get (local, [| Idx.Iterator i |])) ))
   in
   let doc3 =
     compile_with_pure_config ~name:"aligned_local_kernel" (make_optimized llc3 [ local; out3 ])
@@ -149,28 +130,14 @@ let () =
   let out4 = make_on_device 8 "out4" in
   let i = Idx.get_symbol () in
   let elementwise =
-    LL.For_loop
-      {
-        index = i;
-        from_ = 0;
-        to_ = 7;
-        axis = LL.Vectorized;
-        body =
-          LL.Seq
-            ( LL.Set
-                {
-                  tn = out4;
-                  idcs = [| Idx.Iterator i |];
-                  llsc =
-                    LL.Binop
-                      ( Ops.Add,
-                        (LL.Get (inp, [| Idx.Iterator i |]), Ops.single),
-                        (LL.Constant 2.0, Ops.single) );
-                  debug = "";
-                },
-              LL.Set { tn = inp; idcs = [| Idx.Iterator i |]; llsc = LL.Constant 1.0; debug = "" }
-            );
-      }
+    B.loop ~upto:7 ~axis:LL.Vectorized i
+      (LL.Seq
+         ( B.set out4 [| Idx.Iterator i |]
+             (LL.Binop
+                ( Ops.Add,
+                  (LL.Get (inp, [| Idx.Iterator i |]), Ops.single),
+                  (LL.Constant 2.0, Ops.single) )),
+           B.set inp [| Idx.Iterator i |] (LL.Constant 1.0) ))
   in
   let doc4 =
     compile_with_vector_config ~name:"vec_simd_kernel" (make_optimized elementwise [ inp; out4 ])
@@ -184,21 +151,9 @@ let () =
   let out5 = make_on_device 10 "out5" in
   let i = Idx.get_symbol () in
   let strided =
-    LL.For_loop
-      {
-        index = i;
-        from_ = 0;
-        to_ = 3;
-        axis = LL.Vectorized;
-        body =
-          LL.Set
-            {
-              tn = out5;
-              idcs = [| Idx.Iterator i |];
-              llsc = LL.Get (inp2, [| Idx.Affine { symbols = [ (2, i) ]; offset = 0 } |]);
-              debug = "";
-            };
-      }
+    B.loop ~upto:3 ~axis:LL.Vectorized i
+      (B.set out5 [| Idx.Iterator i |]
+         (LL.Get (inp2, [| Idx.Affine { symbols = [ (2, i) ]; offset = 0 } |])))
   in
   let doc5 =
     compile_with_vector_config ~name:"vec_strided_kernel" (make_optimized strided [ inp2; out5 ])
@@ -214,26 +169,13 @@ let () =
   let out6 = make_on_device 13 "out6" in
   let i = Idx.get_symbol () in
   let fma_body =
-    LL.For_loop
-      {
-        index = i;
-        from_ = 0;
-        to_ = 7;
-        axis = LL.Vectorized;
-        body =
-          LL.Set
-            {
-              tn = out6;
-              idcs = [| Idx.Iterator i |];
-              llsc =
-                LL.Ternop
-                  ( Ops.FMA,
-                    (LL.Get (g1, [| Idx.Iterator i |]), Ops.single),
-                    (LL.Get (g2, [| Idx.Iterator i |]), Ops.single),
-                    (LL.Get (out6, [| Idx.Iterator i |]), Ops.single) );
-              debug = "";
-            };
-      }
+    B.loop ~upto:7 ~axis:LL.Vectorized i
+      (B.set out6 [| Idx.Iterator i |]
+         (LL.Ternop
+            ( Ops.FMA,
+              (LL.Get (g1, [| Idx.Iterator i |]), Ops.single),
+              (LL.Get (g2, [| Idx.Iterator i |]), Ops.single),
+              (LL.Get (out6, [| Idx.Iterator i |]), Ops.single) )))
   in
   let doc6 =
     compile_with_vector_config ~name:"vec_fma_kernel" (make_optimized fma_body [ g1; g2; out6 ])
@@ -260,26 +202,13 @@ let () =
   let dacc = make_sized 16 "dacc" [| 1 |] in
   let i = Idx.get_symbol () in
   let dot_red =
-    LL.For_loop
-      {
-        index = i;
-        from_ = 0;
-        to_ = 71;
-        axis = LL.Vectorized;
-        body =
-          LL.Set
-            {
-              tn = dacc;
-              idcs = [| Idx.Fixed_idx 0 |];
-              llsc =
-                LL.Ternop
-                  ( Ops.FMA,
-                    (LL.Get (da, [| Idx.Iterator i |]), Ops.single),
-                    (LL.Get (db, [| Idx.Iterator i |]), Ops.single),
-                    (LL.Get (dacc, [| Idx.Fixed_idx 0 |]), Ops.single) );
-              debug = "";
-            };
-      }
+    B.loop ~upto:71 ~axis:LL.Vectorized i
+      (B.set dacc [| Idx.Fixed_idx 0 |]
+         (LL.Ternop
+            ( Ops.FMA,
+              (LL.Get (da, [| Idx.Iterator i |]), Ops.single),
+              (LL.Get (db, [| Idx.Iterator i |]), Ops.single),
+              (LL.Get (dacc, [| Idx.Fixed_idx 0 |]), Ops.single) )))
   in
   let doc7 =
     compile_with_vector_config ~name:"vec_dot_reduce_kernel"
@@ -294,25 +223,12 @@ let () =
   let macc = make_sized 18 "macc" [| 1 |] in
   let i = Idx.get_symbol () in
   let max_red =
-    LL.For_loop
-      {
-        index = i;
-        from_ = 0;
-        to_ = 15;
-        axis = LL.Vectorized;
-        body =
-          LL.Set
-            {
-              tn = macc;
-              idcs = [| Idx.Fixed_idx 0 |];
-              llsc =
-                LL.Binop
-                  ( Ops.Max,
-                    (LL.Get (macc, [| Idx.Fixed_idx 0 |]), Ops.single),
-                    (LL.Get (ma, [| Idx.Iterator i |]), Ops.single) );
-              debug = "";
-            };
-      }
+    B.loop ~upto:15 ~axis:LL.Vectorized i
+      (B.set macc [| Idx.Fixed_idx 0 |]
+         (LL.Binop
+            ( Ops.Max,
+              (LL.Get (macc, [| Idx.Fixed_idx 0 |]), Ops.single),
+              (LL.Get (ma, [| Idx.Iterator i |]), Ops.single) )))
   in
   let doc8 =
     compile_with_vector_config ~name:"vec_max_reduce_kernel" (make_optimized max_red [ ma; macc ])
@@ -330,26 +246,12 @@ let () =
   let sacc = make_sized 20 "sacc" [| 1 |] in
   let i = Idx.get_symbol () in
   let strided_red =
-    LL.For_loop
-      {
-        index = i;
-        from_ = 0;
-        to_ = 7;
-        axis = LL.Vectorized;
-        body =
-          LL.Set
-            {
-              tn = sacc;
-              idcs = [| Idx.Fixed_idx 0 |];
-              llsc =
-                LL.Binop
-                  ( Ops.Add,
-                    (LL.Get (sacc, [| Idx.Fixed_idx 0 |]), Ops.single),
-                    (LL.Get (sa, [| Idx.Affine { symbols = [ (2, i) ]; offset = 0 } |]), Ops.single)
-                  );
-              debug = "";
-            };
-      }
+    B.loop ~upto:7 ~axis:LL.Vectorized i
+      (B.set sacc [| Idx.Fixed_idx 0 |]
+         (LL.Binop
+            ( Ops.Add,
+              (LL.Get (sacc, [| Idx.Fixed_idx 0 |]), Ops.single),
+              (LL.Get (sa, [| Idx.Affine { symbols = [ (2, i) ]; offset = 0 } |]), Ops.single) )))
   in
   let doc9 =
     compile_with_pure_config ~name:"vec_strided_reduce_kernel"
@@ -386,37 +288,12 @@ let () =
               (LL.Binop (Ops.Mul, (ag, Ops.single), (bg, Ops.single)), Ops.single) )
     in
     let nest =
-      let set =
-        LL.Set { tn = td; idcs = [| Idx.Iterator fi; Idx.Iterator fj |]; llsc; debug = "" }
-      in
-      let mk index to_ body = LL.For_loop { index; from_ = 0; to_; axis = LL.Serial; body } in
+      let set = B.set td [| Idx.Iterator fi; Idx.Iterator fj |] llsc in
+      let mk index to_ body = B.loop ~upto:to_ index body in
       mk fi 5 (mk fj 28 (mk fl 4 set))
     in
-    LL.For_loop
-      {
-        index = lane;
-        from_ = 0;
-        to_ = 0;
-        axis = LL.Workgroup;
-        body =
-          LL.Tile_mma
-            {
-              d = (td, f00);
-              a = (ta, f00);
-              b = (tb, f00);
-              ta = false;
-              tb = false;
-              m = 6;
-              n = 29;
-              k = 5;
-              ldd = 29;
-              lda = 5;
-              ldb = 29;
-              lane;
-              tile = None;
-              fallback = nest;
-            };
-      }
+    B.loop ~upto:0 ~axis:LL.Workgroup lane
+      (B.tile_mma ~d:(td, f00) ~a:(ta, f00) ~b:(tb, f00) ~m:6 ~n:29 ~k:5 ~lane nest)
   in
   let td, ta, tb = tile_operands () in
   let doc10 =

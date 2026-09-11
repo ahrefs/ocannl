@@ -1,12 +1,6 @@
 Source floor: test/ >= 200
 Source floor: arrayjit/test/ >= 20
 Adoption threshold: 1 record construction or 1 private traversal
-arrayjit/test/test_cross_cse.ml -- records<=8 traversals<=2: blocked-on-954: arrayjit package cannot link ll_test
-arrayjit/test/test_local_scope_init.ml -- records<=20 traversals<=0: blocked-on-954: arrayjit package cannot link ll_test
-arrayjit/test/test_one_hot_gather_rewrite.ml -- records<=5 traversals<=3: blocked-on-954: arrayjit package cannot link ll_test
-arrayjit/test/test_stage_b_where_debug.ml -- records<=9 traversals<=0: blocked-on-954: arrayjit package cannot link ll_test
-arrayjit/test/test_vectorized_codegen.ml -- records<=22 traversals<=0: blocked-on-954: arrayjit package cannot link ll_test
-arrayjit/test/test_zero_out_codegen.ml -- records<=2 traversals<=0: blocked-on-954: arrayjit package cannot link ll_test
 test/operations/affine_extraction.ml -- records<=14 traversals<=0: existing migration debt; adopt ll_test when touched
 test/operations/affine_lowering.ml -- records<=0 traversals<=3: existing migration debt; adopt ll_test when touched
 test/operations/autotune_scope_menu.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
@@ -35,4 +29,4 @@ test/operations/test_one_hot_embedding_lookup.ml -- records<=0 traversals<=6: ex
 test/operations/test_slice_alias.ml -- records<=0 traversals<=2: existing migration debt; adopt ll_test when touched
 test/operations/tile_mma_declines.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
 test/operations/tile_mma_geometry.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
-test/support/ll_test.ml -- permanent: canonical harness implementation owns these builders and traversals
+test/support/ll_builders.ml -- permanent: canonical pure IR builders shared by both packages

@@ -94,7 +94,8 @@ let stanza_owns ~directory_modules ~module_name ~stanzas stanza =
 
 let links_harness stanza =
   Option.value_map (Dune.field stanza "libraries") ~default:false ~f:(fun libraries ->
-      List.mem libraries (Sexp.Atom "ll_test") ~equal:Sexp.equal)
+      List.exists [ "ll_test"; "arrayjit.ll_builders" ] ~f:(fun name ->
+          List.mem libraries (Sexp.Atom name) ~equal:Sexp.equal))
 
 let stanza_links ~directory_modules ~module_name ~stanzas stanza =
   stanza_owns ~directory_modules ~module_name ~stanzas stanza && links_harness stanza

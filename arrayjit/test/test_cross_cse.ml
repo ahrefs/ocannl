@@ -3,6 +3,7 @@ module Tn = Ir.Tnode
 module Ops = Ir.Ops
 module Idx = Ir.Indexing
 module LL = Ir.Low_level
+module B = Ll_builders
 
 (* Builders shared across scenarios. *)
 let make_tn ~id ~label ~dim =
@@ -65,8 +66,7 @@ let make_scope ~tn_src scope_id orig_indices =
       mint = LL.Inlined_computation;
     }
 
-let make_set ~tn_out scalar =
-  LL.Set { tn = tn_out; idcs = [| Idx.Fixed_idx 0 |]; llsc = scalar; debug = "" }
+let make_set ~tn_out scalar = B.set tn_out [| Idx.Fixed_idx 0 |] scalar
 
 let () =
   let tn_src = make_tn ~id:1 ~label:"src" ~dim:4 in
@@ -122,17 +122,7 @@ let () =
   let d_scope0 = make_scope ~tn_src { tn = tn_src; scope_id = 500 } [||] in
   let d_scope2 = make_scope ~tn_src { tn = tn_src; scope_id = 600 } [||] in
   let k = Idx.get_symbol () in
-  let d_loop =
-    LL.For_loop
-      {
-        index = k;
-        from_ = 0;
-        to_ = 3;
-        body =
-          LL.Set { tn = tn_src; idcs = [| Idx.Iterator k |]; llsc = LL.Constant 1.0; debug = "" };
-        axis = Serial;
-      }
-  in
+  let d_loop = B.loop ~upto:3 k (B.set tn_src [| Idx.Iterator k |] (LL.Constant 1.0)) in
   let d_prog =
     LL.Seq (make_set ~tn_out:tn_out1 d_scope0, LL.Seq (d_loop, make_set ~tn_out:tn_out2 d_scope2))
   in
@@ -152,41 +142,22 @@ let () =
       {
         id = scope_id;
         body =
-          LL.For_loop
-            {
-              index = idx;
-              from_ = 0;
-              to_ = 3;
-              body =
-                LL.Set_local
-                  ( scope_id,
-                    LL.Binop
-                      ( Ops.Add,
-                        (LL.Get_local scope_id, Ops.single),
-                        (LL.Get (tn_src, [| Idx.Iterator idx |]), Ops.single) ) );
-              axis = Serial;
-            };
+          B.loop ~upto:3 idx
+            (LL.Set_local
+               ( scope_id,
+                 LL.Binop
+                   ( Ops.Add,
+                     (LL.Get_local scope_id, Ops.single),
+                     (LL.Get (tn_src, [| Idx.Iterator idx |]), Ops.single) ) ));
         orig_indices = [||];
         mint = LL.Inlined_computation;
       }
   in
   let stmt1 =
-    LL.Set
-      {
-        tn = tn_out1;
-        idcs = [| Idx.Fixed_idx 0 |];
-        llsc = make_local_scope scope1 idx1;
-        debug = "out1 := sum(src)";
-      }
+    B.set ~debug:"out1 := sum(src)" tn_out1 [| Idx.Fixed_idx 0 |] (make_local_scope scope1 idx1)
   in
   let stmt2 =
-    LL.Set
-      {
-        tn = tn_out2;
-        idcs = [| Idx.Fixed_idx 0 |];
-        llsc = make_local_scope scope2 idx2;
-        debug = "out2 := sum(src)";
-      }
+    B.set ~debug:"out2 := sum(src)" tn_out2 [| Idx.Fixed_idx 0 |] (make_local_scope scope2 idx2)
   in
   let llc = LL.Seq (stmt1, stmt2) in
 

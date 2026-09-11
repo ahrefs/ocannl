@@ -9,6 +9,7 @@ module Tn = Ir.Tnode
 module Ops = Ir.Ops
 module Idx = Ir.Indexing
 module LL = Ir.Low_level
+module B = Ll_builders
 
 let make_tn ~id ~label =
   Tn.create (Tn.Default Ops.single) ~id ~label:[ label ]
@@ -69,24 +70,14 @@ let () =
 
   (* Loop with write body -- write is definite when from_ <= to_ *)
   let idx = Idx.get_symbol () in
-  let loop_with_write =
-    LL.For_loop
-      { index = idx; from_ = 0; to_ = 3; body = LL.Set_local (id, LL.Constant 1.); axis = Serial }
-  in
+  let loop_with_write = B.loop ~upto:3 idx (LL.Set_local (id, LL.Constant 1.)) in
   assert (not (LL.reads_scope_before_set id loop_with_write));
 
   (* Loop with read body -- reads always count *)
   let loop_with_read =
-    LL.For_loop
-      {
-        index = idx;
-        from_ = 0;
-        to_ = 3;
-        body =
-          LL.Set_local
-            (id, LL.Binop (Ops.Add, (LL.Get_local id, Ops.single), (LL.Constant 1., Ops.single)));
-        axis = Serial;
-      }
+    B.loop ~upto:3 idx
+      (LL.Set_local
+         (id, LL.Binop (Ops.Add, (LL.Get_local id, Ops.single), (LL.Constant 1., Ops.single))))
   in
   assert (LL.reads_scope_before_set id loop_with_read);
 
@@ -98,10 +89,7 @@ let () =
   (* Empty loop (from_ > to_): write is NOT definite (loop never runs), so the local may be
      uninitialized after the body -- needs initialization. scan returns `Neither` for the same
      reason as Noop, so this must also return true. *)
-  let empty_loop_write =
-    LL.For_loop
-      { index = idx; from_ = 5; to_ = 0; body = LL.Set_local (id, LL.Constant 1.); axis = Serial }
-  in
+  let empty_loop_write = B.loop ~from_:5 ~upto:0 idx (LL.Set_local (id, LL.Constant 1.)) in
   assert (LL.reads_scope_before_set id empty_loop_write);
 
   (* Empty loop followed by accumulator read: scan returns `Read` (the accumulator step reads the
@@ -129,9 +117,7 @@ let () =
   let local_scope =
     LL.Local_scope { id; body; orig_indices = [||]; mint = LL.Inlined_computation }
   in
-  let llc =
-    LL.Set { tn = tn_out; idcs = [| Idx.Fixed_idx 0 |]; llsc = local_scope; debug = "write-first" }
-  in
+  let llc = B.set ~debug:"write-first" tn_out [| Idx.Fixed_idx 0 |] local_scope in
   Stdio.printf "=== Local_scope write-before-read (no init): ===\n";
   pp llc;
   Stdio.printf "\n%!"
@@ -145,27 +131,18 @@ let () =
   (* Body: accumulator loop -- local is read before written. *)
   let idx = Idx.get_symbol () in
   let body =
-    LL.For_loop
-      {
-        index = idx;
-        from_ = 0;
-        to_ = 3;
-        body =
-          LL.Set_local
-            ( id,
-              LL.Binop
-                ( Ops.Add,
-                  (LL.Get_local id, Ops.single),
-                  (LL.Get (tn_src, [| Idx.Iterator idx |]), Ops.single) ) );
-        axis = Serial;
-      }
+    B.loop ~upto:3 idx
+      (LL.Set_local
+         ( id,
+           LL.Binop
+             ( Ops.Add,
+               (LL.Get_local id, Ops.single),
+               (LL.Get (tn_src, [| Idx.Iterator idx |]), Ops.single) ) ))
   in
   let local_scope =
     LL.Local_scope { id; body; orig_indices = [||]; mint = LL.Inlined_computation }
   in
-  let llc =
-    LL.Set { tn = tn_out; idcs = [| Idx.Fixed_idx 0 |]; llsc = local_scope; debug = "accumulator" }
-  in
+  let llc = B.set ~debug:"accumulator" tn_out [| Idx.Fixed_idx 0 |] local_scope in
   Stdio.printf "=== Local_scope read-before-write (needs init): ===\n";
   pp llc;
   Stdio.printf "\n%!"
@@ -181,9 +158,7 @@ let () =
   let local_scope =
     LL.Local_scope { id; body = LL.Noop; orig_indices = [||]; mint = LL.Inlined_computation }
   in
-  let llc =
-    LL.Set { tn = tn_out; idcs = [| Idx.Fixed_idx 0 |]; llsc = local_scope; debug = "noop-body" }
-  in
+  let llc = B.set ~debug:"noop-body" tn_out [| Idx.Fixed_idx 0 |] local_scope in
   Stdio.printf "=== Local_scope Noop body (needs init, Neither case): ===\n";
   pp llc;
   Stdio.printf "\n%!"
@@ -197,10 +172,7 @@ let () =
   let tn_out = make_tn ~id:13 ~label:"out_el" in
   let id : LL.scope_id = { tn = tn_src; scope_id = 50 } in
   let idx = Idx.get_symbol () in
-  let empty_loop =
-    LL.For_loop
-      { index = idx; from_ = 5; to_ = 0; body = LL.Set_local (id, LL.Constant 0.); axis = Serial }
-  in
+  let empty_loop = B.loop ~from_:5 ~upto:0 idx (LL.Set_local (id, LL.Constant 0.)) in
   let acc_step =
     LL.Set_local
       (id, LL.Binop (Ops.Add, (LL.Get_local id, Ops.single), (LL.Constant 1., Ops.single)))
@@ -209,15 +181,7 @@ let () =
   let local_scope =
     LL.Local_scope { id; body; orig_indices = [||]; mint = LL.Inlined_computation }
   in
-  let llc =
-    LL.Set
-      {
-        tn = tn_out;
-        idcs = [| Idx.Fixed_idx 0 |];
-        llsc = local_scope;
-        debug = "empty-loop-then-acc";
-      }
-  in
+  let llc = B.set ~debug:"empty-loop-then-acc" tn_out [| Idx.Fixed_idx 0 |] local_scope in
   Stdio.printf "=== Local_scope empty-loop-write then accumulator (needs init): ===\n";
   pp llc;
   Stdio.printf "\n%!"
@@ -240,12 +204,8 @@ let () =
         mint = LL.Inlined_computation;
       }
   in
-  let stmt1 =
-    LL.Set { tn = tn_out1; idcs = [| Idx.Fixed_idx 0 |]; llsc = make_scope scope1 [||]; debug = "" }
-  in
-  let stmt2 =
-    LL.Set { tn = tn_out2; idcs = [| Idx.Fixed_idx 0 |]; llsc = make_scope scope2 [||]; debug = "" }
-  in
+  let stmt1 = B.set tn_out1 [| Idx.Fixed_idx 0 |] (make_scope scope1 [||]) in
+  let stmt2 = B.set tn_out2 [| Idx.Fixed_idx 0 |] (make_scope scope2 [||]) in
   let hoisted = LL.hoist_cross_statement_cse (LL.Seq (stmt1, stmt2)) in
   Stdio.printf "=== Hoisted Declare_local write-before-read (no init): ===\n";
   pp hoisted;
@@ -267,32 +227,19 @@ let () =
       {
         id = sid;
         body =
-          LL.For_loop
-            {
-              index = idx;
-              from_ = 0;
-              to_ = 3;
-              body =
-                LL.Set_local
-                  ( sid,
-                    LL.Binop
-                      ( Ops.Add,
-                        (LL.Get_local sid, Ops.single),
-                        (LL.Get (tn_src, [| Idx.Iterator idx |]), Ops.single) ) );
-              axis = Serial;
-            };
+          B.loop ~upto:3 idx
+            (LL.Set_local
+               ( sid,
+                 LL.Binop
+                   ( Ops.Add,
+                     (LL.Get_local sid, Ops.single),
+                     (LL.Get (tn_src, [| Idx.Iterator idx |]), Ops.single) ) ));
         orig_indices = [||];
         mint = LL.Inlined_computation;
       }
   in
-  let stmt1 =
-    LL.Set
-      { tn = tn_out1; idcs = [| Idx.Fixed_idx 0 |]; llsc = make_acc_scope scope1 idx1; debug = "" }
-  in
-  let stmt2 =
-    LL.Set
-      { tn = tn_out2; idcs = [| Idx.Fixed_idx 0 |]; llsc = make_acc_scope scope2 idx2; debug = "" }
-  in
+  let stmt1 = B.set tn_out1 [| Idx.Fixed_idx 0 |] (make_acc_scope scope1 idx1) in
+  let stmt2 = B.set tn_out2 [| Idx.Fixed_idx 0 |] (make_acc_scope scope2 idx2) in
   let hoisted = LL.hoist_cross_statement_cse (LL.Seq (stmt1, stmt2)) in
   Stdio.printf "=== Hoisted Declare_local read-before-write (needs init): ===\n";
   pp hoisted;

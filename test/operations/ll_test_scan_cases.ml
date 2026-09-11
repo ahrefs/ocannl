@@ -245,8 +245,20 @@ let () =
   write "test/dune" "(test (name new) (modules new))";
   write "test/new.ml" "";
   write "arrayjit/test/new.ml" (record ^ record ^ record);
-  check "new arrayjit debt is not implicitly exempted by the package blocker" ~exit:1
+  check "new arrayjit debt requires explicit adoption" ~exit:1
     ~message:"arrayjit/test/new.ml: requires ll_test" (run ());
+  write "arrayjit/test/dune" "(test (name new) (modules new) (libraries arrayjit.ll_builders))";
+  check "public arrayjit builders satisfy package adoption" ~exit:0 ~message:"Adoption threshold:"
+    (run ());
+  write "arrayjit/test/dune" "(test (name new) (modules new) (libraries ll_builders))";
+  check "private builder spelling does not satisfy package adoption" ~exit:1
+    ~message:"arrayjit/test/new.ml: requires ll_test" (run ());
+  write "arrayjit/test/dune"
+    "(test (name new) (modules new)) (library (name other) (modules other) (libraries \
+     arrayjit.ll_builders))";
+  check "public builders in another stanza do not cover this consumer" ~exit:1
+    ~message:"arrayjit/test/new.ml: requires ll_test" (run ());
+  write "arrayjit/test/dune" "";
   write "arrayjit/test/new.ml" "";
   for i = 1 to 20 do
     Unix.unlink (Stdlib.Filename.concat root (Printf.sprintf "arrayjit/test/empty%d.ml" i))

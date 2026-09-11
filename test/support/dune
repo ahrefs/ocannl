@@ -1,4 +1,4 @@
-; Three support libraries, deliberately split by dependency (gh-ocannl-600). [test_utils] stays
+; Support libraries, deliberately split by dependency (gh-ocannl-600). [test_utils] stays
 ; below [ocannl] -- [arrayjit.utils], [arrayjit.ir] and [arrayjit.verdict], no backends and no
 ; tensor layer -- because tests like config_scan_lexing and test_ndarray link nothing more;
 ; [ll_test] links [ocannl], for the hand-built-Low_level harness.
@@ -8,8 +8,8 @@
 ; Neither widens the set of tests that can link [test_utils]: [arrayjit.ir] already depends on
 ; [arrayjit.utils], and [arrayjit.verdict] depends on nothing but base and stdio.
 ;
-; [verdict] (gh-ocannl-601) depends on nothing but base and stdio, and is the one support library
-; that is PUBLIC, because the tests of both packages report verdicts through it and a
+; [verdict] (gh-ocannl-601) depends on nothing but base and stdio, and is PUBLIC because the tests
+; of both packages report verdicts through it and a
 ; package-filtered build cannot see across the boundary. `dune build -p <pkg>` -- what each .opam
 ; file's with-test command runs -- disables the stanzas of every package it did not select and
 ; resolves those libraries from the INSTALLED ones instead, so a PRIVATE library assigned to
@@ -18,7 +18,8 @@
 ; Unpackaged does not work either: a private library attached to a package -- `ll_test`,
 ; `operations_tutorials` -- may not depend on an unpackaged one. So it installs, as
 ; `arrayjit.verdict`, and every dependant spells it by that public name: under the filter the
-; private name is not what is on disk.
+; private name is not what is on disk. The pure-IR [arrayjit.ll_builders] tier follows the same
+; rule (gh-ocannl-954); [ll_test] re-exports its builders and keeps execution and traversals.
 
 (library
  (name verdict)
@@ -80,7 +81,13 @@
  (libraries base compiler-libs.common))
 
 (library
+ (name ll_builders)
+ (public_name arrayjit.ll_builders)
+ (modules ll_builders)
+ (libraries base arrayjit.ir))
+
+(library
  (name ll_test)
  (package neural_nets_lib)
  (modules ll_test)
- (libraries base stdio ocannl))
+ (libraries base stdio ocannl arrayjit.ll_builders))

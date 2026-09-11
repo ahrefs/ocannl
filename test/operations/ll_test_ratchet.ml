@@ -7,27 +7,9 @@ module Inventory = Test_utils.Source_inventory
 (* Existing debt is exact by path and capped independently in both detected metrics. Decreases
    remain valid; adoption (or eliminating all detected debt) makes the row stale. The canonical
    harness itself is an intentional permanent exception. Remove a row when its test adopts the
-   harness; arrayjit cannot do that until gh-ocannl-954 splits out the package-safe builders. *)
+   harness or the package-safe arrayjit.ll_builders. *)
 let exemptions =
   [
-    ( "arrayjit/test/test_cross_cse.ml",
-      Scan.Migration { records = 8; traversals = 2 },
-      "blocked-on-954: arrayjit package cannot link ll_test" );
-    ( "arrayjit/test/test_local_scope_init.ml",
-      Scan.Migration { records = 20; traversals = 0 },
-      "blocked-on-954: arrayjit package cannot link ll_test" );
-    ( "arrayjit/test/test_one_hot_gather_rewrite.ml",
-      Scan.Migration { records = 5; traversals = 3 },
-      "blocked-on-954: arrayjit package cannot link ll_test" );
-    ( "arrayjit/test/test_stage_b_where_debug.ml",
-      Scan.Migration { records = 9; traversals = 0 },
-      "blocked-on-954: arrayjit package cannot link ll_test" );
-    ( "arrayjit/test/test_vectorized_codegen.ml",
-      Scan.Migration { records = 22; traversals = 0 },
-      "blocked-on-954: arrayjit package cannot link ll_test" );
-    ( "arrayjit/test/test_zero_out_codegen.ml",
-      Scan.Migration { records = 2; traversals = 0 },
-      "blocked-on-954: arrayjit package cannot link ll_test" );
     ( "test/operations/affine_extraction.ml",
       Scan.Migration { records = 14; traversals = 0 },
       "existing migration debt; adopt ll_test when touched" );
@@ -112,9 +94,9 @@ let exemptions =
     ( "test/operations/tile_mma_geometry.ml",
       Scan.Migration { records = 0; traversals = 1 },
       "existing migration debt; adopt ll_test when touched" );
-    ( "test/support/ll_test.ml",
+    ( "test/support/ll_builders.ml",
       Scan.Permanent,
-      "canonical harness implementation owns these builders and traversals" );
+      "canonical pure IR builders shared by both packages" );
   ]
 
 let scan ~exemptions root generated =

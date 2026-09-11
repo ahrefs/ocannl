@@ -131,7 +131,7 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries base stdio arrayjit.ir arrayjit.verdict))
+ (libraries arrayjit.ll_builders base stdio arrayjit.ir arrayjit.verdict))
 
 (test
  (name test_one_hot_gather_rewrite)
@@ -140,7 +140,7 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries base stdio arrayjit.ir arrayjit.verdict))
+ (libraries arrayjit.ll_builders base stdio arrayjit.ir arrayjit.verdict))
 
 (test
  (name test_zero_out_codegen)
@@ -149,7 +149,7 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries base stdio arrayjit.ir))
+ (libraries arrayjit.ll_builders base stdio arrayjit.ir))
 
 (test
  ; ocannl-backend: none -- tests a pure compiler-option helper and selects no runtime backend.
@@ -219,7 +219,7 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries base stdio arrayjit.ir arrayjit.verdict))
+ (libraries arrayjit.ll_builders base stdio arrayjit.ir arrayjit.verdict))
 
 (test
  (name test_local_scope_init)
@@ -228,7 +228,7 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries base stdio arrayjit.ir))
+ (libraries arrayjit.ll_builders base stdio arrayjit.ir))
 
 (test
  (name test_slab_free_on_grow)
@@ -351,7 +351,7 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries base stdio arrayjit.ir arrayjit.verdict))
+ (libraries arrayjit.ll_builders base stdio arrayjit.ir arrayjit.verdict))
 
 (test
  (name test_backend_selection)
