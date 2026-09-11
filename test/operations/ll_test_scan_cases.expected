@@ -48,5 +48,8 @@ new builders in an exempt file exceed its migration cap: true
 an intentional permanent exception is not a migration quota: true
 new private traversals in an exempt file exceed their independent cap: true
 permanent exemptions also become stale after harness adoption: true
-new arrayjit debt is not implicitly exempted by the package blocker: true
+new arrayjit debt requires explicit adoption: true
+public arrayjit builders satisfy package adoption: true
+private builder spelling does not satisfy package adoption: true
+public builders in another stanza do not cover this consumer: true
 shipping scanner refuses an emptied arrayjit source root: true

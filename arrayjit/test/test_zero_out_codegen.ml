@@ -16,6 +16,7 @@ module Tn = Ir.Tnode
 module Ops = Ir.Ops
 module Idx = Ir.Indexing
 module LL = Ir.Low_level
+module B = Ll_builders
 
 let () =
   (* Two local (non-virtual, non-materialized) tensor nodes. Local nodes are the ones whose
@@ -33,7 +34,7 @@ let () =
   let tn_a = make_local 1 "acc_a" in
   let tn_b = make_local 2 "acc_b" in
 
-  let set tn v = LL.Set { tn; idcs = [| Idx.Fixed_idx 0 |]; llsc = LL.Constant v; debug = "" } in
+  let set tn v = B.set tn [| Idx.Fixed_idx 0 |] (LL.Constant v) in
 
   (* Scenario A: Zero_out; Set; Zero_out -- the FIRST Zero_out is redundant with [= {0}] and should
      be elided; the SECOND is a genuine re-zero (it discards the value just written) and must still
@@ -43,10 +44,7 @@ let () =
   (* Scenario B: a first-touch Zero_out reached inside an iterated loop. Even though it is the first
      (and only) Zero_out of [tn_b], it re-runs every iteration, so [= {0}] (entry-time only) does
      not make it redundant -- the zeroing loop must be emitted. *)
-  let scenario_b =
-    LL.For_loop
-      { index = Idx.get_symbol (); from_ = 0; to_ = 3; body = LL.Zero_out tn_b; axis = Serial }
-  in
+  let scenario_b = B.loop ~upto:3 (Idx.get_symbol ()) (LL.Zero_out tn_b) in
 
   let llc = LL.Seq (scenario_a, scenario_b) in
 

@@ -9,6 +9,7 @@
 open Base
 module Idx = Ir.Indexing
 module LL = Ir.Low_level
+module B = Ll_builders
 module Tn = Ir.Tnode
 module Ops = Ir.Ops
 
@@ -93,25 +94,18 @@ let make_local_scope_reduction ~table ~ids ~result ~table_idcs ~vocab ~bounds ~r
   let id : LL.scope_id = { tn = result; scope_id = !next_id * 10 } in
   let acc = LL.Binop (Ops.Add, (LL.Get_local id, vprec), (contribution, vprec)) in
   let body =
-    LL.Seq
-      ( LL.Set_local (id, LL.Constant 0.),
-        LL.For_loop { index = k; from_; to_; axis = Serial; body = LL.Set_local (id, acc) } )
+    LL.Seq (LL.Set_local (id, LL.Constant 0.), B.loop ~from_ ~upto:to_ k (LL.Set_local (id, acc)))
   in
   ignore vocab;
-  LL.Set
-    {
-      tn = result;
-      idcs = [| Idx.Iterator b; Idx.Iterator d |];
-      llsc =
-        LL.Local_scope
-          {
-            id;
-            body;
-            orig_indices = [| Idx.Iterator b; Idx.Iterator d |];
-            mint = LL.Inlined_computation;
-          };
-      debug = "";
-    }
+  B.set result
+    [| Idx.Iterator b; Idx.Iterator d |]
+    (LL.Local_scope
+       {
+         id;
+         body;
+         orig_indices = [| Idx.Iterator b; Idx.Iterator d |];
+         mint = LL.Inlined_computation;
+       })
 
 let plain_table_idcs k d = [| Idx.Iterator k; Idx.Iterator d |]
 
@@ -219,14 +213,7 @@ let make_transposed_loop ~d_table ~ids ~g ~lhs_idcs ~bounds ~fma =
           (LL.Ternop (Ops.Where, (cmpeq, iprec), (g_scalar, vprec), (LL.Constant 0., vprec)), vprec)
         )
   in
-  LL.For_loop
-    {
-      index = k;
-      from_;
-      to_;
-      axis = Serial;
-      body = LL.Set { tn = d_table; idcs = lhs_idcs; llsc = acc; debug = "" };
-    }
+  B.loop ~from_ ~upto:to_ k (B.set d_table lhs_idcs acc)
 
 let () =
   let vocab = 4 and embed = 3 in

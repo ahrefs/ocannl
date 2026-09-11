@@ -23,6 +23,7 @@ module Tn = Ir.Tnode
 module Ops = Ir.Ops
 module Idx = Ir.Indexing
 module LL = Ir.Low_level
+module B = Ll_builders
 open Verdict.Claims
 
 let doc_to_string doc =
@@ -95,14 +96,8 @@ let () =
         (LL.Get (producer, [| Idx.Iterator t |]), Ops.single),
         (LL.Get_local id, Ops.single) )
   in
-  let body =
-    LL.Set { tn = out; idcs = [| Idx.Iterator t |]; llsc = guarded; debug = "unit-solve guard" }
-  in
-  let llc =
-    LL.Seq
-      ( LL.Declare_local { id; needs_init = true },
-        LL.For_loop { index = t; from_ = 0; to_ = 5; body; axis = Serial } )
-  in
+  let body = B.set ~debug:"unit-solve guard" out [| Idx.Iterator t |] guarded in
+  let llc = LL.Seq (LL.Declare_local { id; needs_init = true }, B.loop ~upto:5 t body) in
   let c = compile_to_c ~name:"stage_b_where_debug" llc in
   (* then-branch producer read short-circuited on the range condition: [(<cond> ? producer[t] : 0)].
      Mutation: reverting the [debug_float] guard wrap drops the [? producer[] arg form. *)
@@ -128,8 +123,8 @@ let () =
         (LL.Get (athen, [| Idx.Iterator t |]), Ops.single),
         (LL.Get (belse, [| Idx.Iterator t |]), Ops.single) )
   in
-  let body = LL.Set { tn = out; idcs = [| Idx.Iterator t |]; llsc = where; debug = "symmetric" } in
-  let llc = LL.For_loop { index = t; from_ = 0; to_ = 3; body; axis = Serial } in
+  let body = B.set ~debug:"symmetric" out [| Idx.Iterator t |] where in
+  let llc = B.loop ~upto:3 t body in
   let c = compile_to_c ~name:"symmetric_where" llc in
   (* then read gated by [cond]; else read gated by [!cond]. Both branch reads are array
      dereferences, so both must short-circuit. *)
@@ -168,15 +163,11 @@ let () =
         (inner_where, Ops.single),
         (LL.Get_local id1, Ops.single) )
   in
-  let body =
-    LL.Set { tn = out; idcs = [| Idx.Iterator t |]; llsc = outer_where; debug = "nested" }
-  in
+  let body = B.set ~debug:"nested" out [| Idx.Iterator t |] outer_where in
   let llc =
     LL.Seq
       ( LL.Declare_local { id = id1; needs_init = true },
-        LL.Seq
-          ( LL.Declare_local { id = id2; needs_init = true },
-            LL.For_loop { index = t; from_ = 0; to_ = 3; body; axis = Serial } ) )
+        LL.Seq (LL.Declare_local { id = id2; needs_init = true }, B.loop ~upto:3 t body) )
   in
   let c = compile_to_c ~name:"nested_where" llc in
   (* The inner condition's read [condrd3[t]] is gated by the OUTER guard: [(<outer_cond> ?

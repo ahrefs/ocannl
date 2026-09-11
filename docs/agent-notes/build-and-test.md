@@ -2050,10 +2050,10 @@ that they earn a lookup rather than always-loaded space.
   relationships), and constructor names from
   `Low_level.t` / `scalar_t`. One inline record construction or one recursive binding matching two distinct IR
   constructors requires
-  `ll_test` or an exact, stale-checked exemption. Constructor names are matched conservatively
+  `ll_test`, public `arrayjit.ll_builders`, or an exact, stale-checked exemption. Constructor names are matched conservatively
   regardless of qualifier; comments, strings and non-record constructors cannot inflate the builder
-  census. Existing walkers remain migration debt, with six arrayjit rows explicitly blocked on
-  gh-ocannl-954. Directory-spanning `include_subdirs` modes and unresolved `include` directives
+  census. The six arrayjit consumers adopted the public builders in gh-ocannl-954; their private
+  traversals remain local, since builder adoption does not claim traversal centralization. Directory-spanning `include_subdirs` modes and unresolved `include` directives
   are refused explicitly, following the existing Dune scanner boundary. Adoption removes the exemption in the
   same change; counts go to stderr and the
   golden keeps source floors and reasons. `ll_test_scan_cases` drives the shipping scanner as a
@@ -2069,3 +2069,9 @@ that they earn a lookup rather than always-loaded space.
   globs/dynamic inputs and inputs outside the declared test corpus are refused explicitly. Documented
   `test/ppx/*_expected.ml` goldens are not implementation modules and are excluded; arbitrary unowned
   sources remain checked. The `scans` aggregate runs the shipping scanner and its control suite.
+
+- Pure IR node, index, statement and scalar builders live in public `arrayjit.ll_builders`
+  (gh-ocannl-954), re-exported unchanged by `Ll_test`. Every Dune consumer spells the public name,
+  so package-filtered arrayjit builds with tests can resolve it. Optimization, execution,
+  discriminating test data and traversals stay in `ll_test`; the builder tier depends only on
+  `base` and `arrayjit.ir`. `set` accepts an optional debug label to preserve diagnostic fixtures.
