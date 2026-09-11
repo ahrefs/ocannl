@@ -45,6 +45,9 @@ let () =
        .records = 0);
   p "nested private walkers are counted once, not again through their parent"
     ((counts ("let rec outer x = " ^ walker ^ " in walk x")).traversals = 1);
+  p "a walker inside a local module is not counted through its recursive parent"
+    ((counts ("let rec outer x = let module M = struct " ^ walker ^ " end in M.walk x")).traversals
+   = 1);
   let linked content =
     Scan.linked ~directory_modules:[ "new"; "other" ] ~module_name:"new"
       (Test_utils.Dune_stanza_scan.stanzas content)

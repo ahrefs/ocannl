@@ -41,6 +41,11 @@ let census ~constructors:(constructors, record_constructors) source =
           object (self)
             inherit Ast_traverse.iter as super
 
+            method! structure_item item =
+              match item.pstr_desc with
+              | Pstr_value (Recursive, _) -> ()
+              | _ -> super#structure_item item
+
             method! expression expr =
               match expr.pexp_desc with
               | Pexp_let (Recursive, _, body) -> self#expression body

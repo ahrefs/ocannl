@@ -8,6 +8,7 @@ tuple constructors with foreign record payloads do not count: true
 derived constructor membership includes a new inline-record constructor: true
 constructors in unrelated nested type declarations do not widen the census: true
 nested private walkers are counted once, not again through their parent: true
+a walker inside a local module is not counted through its recursive parent: true
 a sibling stanza's harness does not cover this module: true
 default module membership links the owning harness: true
 ordered-set exclusion prevents harness membership: true
