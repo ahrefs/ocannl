@@ -14,6 +14,7 @@ open Stdio
 
 let raw_entries =
   [
+    ("ll_test_ratchet.ml", []);
     ( "atomic_file_rename_scan.ml",
       [
         "[scanner-refusal:7191f5e19a3640926ad61aeb2d7a349e] source-generation input has";

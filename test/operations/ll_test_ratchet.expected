@@ -1,0 +1,38 @@
+Source floor: test/ >= 200
+Source floor: arrayjit/test/ >= 20
+Adoption threshold: 1 record construction or 1 private traversal
+arrayjit/test/test_cross_cse.ml -- records<=8 traversals<=2: blocked-on-954: arrayjit package cannot link ll_test
+arrayjit/test/test_local_scope_init.ml -- records<=20 traversals<=0: blocked-on-954: arrayjit package cannot link ll_test
+arrayjit/test/test_one_hot_gather_rewrite.ml -- records<=5 traversals<=3: blocked-on-954: arrayjit package cannot link ll_test
+arrayjit/test/test_stage_b_where_debug.ml -- records<=9 traversals<=0: blocked-on-954: arrayjit package cannot link ll_test
+arrayjit/test/test_vectorized_codegen.ml -- records<=22 traversals<=0: blocked-on-954: arrayjit package cannot link ll_test
+arrayjit/test/test_zero_out_codegen.ml -- records<=2 traversals<=0: blocked-on-954: arrayjit package cannot link ll_test
+test/operations/affine_extraction.ml -- records<=14 traversals<=0: existing migration debt; adopt ll_test when touched
+test/operations/affine_lowering.ml -- records<=0 traversals<=3: existing migration debt; adopt ll_test when touched
+test/operations/autotune_scope_menu.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
+test/operations/autotune_smoke.ml -- records<=3 traversals<=1: existing migration debt; adopt ll_test when touched
+test/operations/buffer_aliasing.ml -- records<=1 traversals<=0: existing migration debt; adopt ll_test when touched
+test/operations/cost_model_floor.ml -- records<=16 traversals<=0: existing migration debt; adopt ll_test when touched
+test/operations/cpu_simd_reduction.ml -- records<=5 traversals<=1: existing migration debt; adopt ll_test when touched
+test/operations/fission_schedule.ml -- records<=9 traversals<=2: existing migration debt; adopt ll_test when touched
+test/operations/hardware_axes_parity.ml -- records<=4 traversals<=4: existing migration debt; adopt ll_test when touched
+test/operations/hip_scratch_budget.ml -- records<=5 traversals<=0: existing migration debt; adopt ll_test when touched
+test/operations/mma_tensorization_label.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
+test/operations/model_default_fallback.ml -- records<=2 traversals<=2: existing migration debt; adopt ll_test when touched
+test/operations/narrow_storage_compute.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
+test/operations/schedule_conv_gemm.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
+test/operations/schedule_cpu_pack_matmul.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
+test/operations/schedule_epilogue_fusion.ml -- records<=4 traversals<=4: existing migration debt; adopt ll_test when touched
+test/operations/schedule_ldmatrix_matmul.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
+test/operations/schedule_pack_mma_matmul.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
+test/operations/schedule_pipelined_matmul.ml -- records<=3 traversals<=8: existing migration debt; adopt ll_test when touched
+test/operations/schedule_register_matmul.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
+test/operations/schedule_swizzle_matmul.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
+test/operations/scratch_value_variance.ml -- records<=5 traversals<=0: existing migration debt; adopt ll_test when touched
+test/operations/test_bounds_folded_gather.ml -- records<=0 traversals<=2: existing migration debt; adopt ll_test when touched
+test/operations/test_one_hot_embedding_backward.ml -- records<=0 traversals<=4: existing migration debt; adopt ll_test when touched
+test/operations/test_one_hot_embedding_lookup.ml -- records<=0 traversals<=6: existing migration debt; adopt ll_test when touched
+test/operations/test_slice_alias.ml -- records<=0 traversals<=2: existing migration debt; adopt ll_test when touched
+test/operations/tile_mma_declines.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
+test/operations/tile_mma_geometry.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
+test/support/ll_test.ml -- permanent: canonical harness implementation owns these builders and traversals

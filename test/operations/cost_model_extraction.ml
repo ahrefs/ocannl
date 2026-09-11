@@ -23,21 +23,12 @@ module Ops = Ir.Ops
 module CM = Ir.Cost_model
 
 let fresh_tn =
-  let c = ref 970_000_000 in
-  fun label dims ->
-    Int.incr c;
-    Tn.create (Tn.Specified Ops.single) ~id:!c ~label:[ label ]
-      ~unpadded_dims:(lazy dims)
-      ~padding:(lazy None)
-      ()
+  let make = Ll_test.node_factory ~first_id:970_000_000 ~dims:[||] () in
+  fun label dims -> make ~dims label
 
 let sp = Ops.single
-
-let for_over ?(extent = 4) sym body =
-  LL.For_loop { index = sym; from_ = 0; to_ = extent - 1; body; axis = LL.Serial }
-
-let get tn idcs = LL.Get (tn, idcs)
-let it s = Idx.Iterator s
+let get = Ll_test.get
+let it = Ll_test.iter
 
 let show_summary name (s : CM.summary) =
   Stdio.printf "== %s ==\n" name;
@@ -58,15 +49,11 @@ let () =
   let b = fresh_tn "B" [| 5 |] in
   let c = fresh_tn "C" [| 4; 5 |] in
   let pointwise =
-    for_over i
-      (for_over ~extent:5 j
-         (LL.Set
-            {
-              tn = c;
-              idcs = [| it i; it j |];
-              llsc = LL.Binop (Ops.Add, (get a [| it i; it j |], sp), (get b [| it j |], sp));
-              debug = "";
-            }))
+    Ll_test.loop_n i 4
+      (Ll_test.loop_n j 5
+         (Ll_test.set c
+            [| it i; it j |]
+            (LL.Binop (Ops.Add, (get a [| it i; it j |], sp), (get b [| it j |], sp)))))
   in
   show_summary "elementwise map 4x5" (CM.analyze pointwise);
 
@@ -76,24 +63,17 @@ let () =
   let b_kn = fresh_tn "Bm" [| 5; 3 |] in
   let d_mn = fresh_tn "Dm" [| 4; 3 |] in
   let matmul =
-    for_over i
-      (for_over ~extent:3 j
-         (for_over ~extent:5 k
-            (LL.Set
-               {
-                 tn = d_mn;
-                 idcs = [| it i; it j |];
-                 llsc =
-                   LL.Binop
-                     ( Ops.Add,
-                       (get d_mn [| it i; it j |], sp),
-                       ( LL.Binop
-                           ( Ops.Mul,
-                             (get a_mk [| it i; it k |], sp),
-                             (get b_kn [| it k; it j |], sp) ),
-                         sp ) );
-                 debug = "";
-               })))
+    Ll_test.loop_n i 4
+      (Ll_test.loop_n j 3
+         (Ll_test.loop_n k 5
+            (Ll_test.set d_mn
+               [| it i; it j |]
+               (LL.Binop
+                  ( Ops.Add,
+                    (get d_mn [| it i; it j |], sp),
+                    ( LL.Binop
+                        (Ops.Mul, (get a_mk [| it i; it k |], sp), (get b_kn [| it k; it j |], sp)),
+                      sp ) )))))
   in
   let mm = CM.analyze matmul in
   show_summary "matmul 4x3x5" mm;
@@ -101,21 +81,16 @@ let () =
   (* The same matmul in FMA form: D[i][j] = FMA(A[i][k], B2[k][j], D[i][j]) — an FMA counts as two
      operations, so the score is identical to the mul+add form. *)
   let matmul_fma =
-    for_over i
-      (for_over ~extent:3 j
-         (for_over ~extent:5 k
-            (LL.Set
-               {
-                 tn = d_mn;
-                 idcs = [| it i; it j |];
-                 llsc =
-                   LL.Ternop
-                     ( Ops.FMA,
-                       (get a_mk [| it i; it k |], sp),
-                       (get b_kn [| it k; it j |], sp),
-                       (get d_mn [| it i; it j |], sp) );
-                 debug = "";
-               })))
+    Ll_test.loop_n i 4
+      (Ll_test.loop_n j 3
+         (Ll_test.loop_n k 5
+            (Ll_test.set d_mn
+               [| it i; it j |]
+               (LL.Ternop
+                  ( Ops.FMA,
+                    (get a_mk [| it i; it k |], sp),
+                    (get b_kn [| it k; it j |], sp),
+                    (get d_mn [| it i; it j |], sp) )))))
   in
   show_summary "matmul 4x3x5, FMA form" (CM.analyze matmul_fma);
 
@@ -124,29 +99,21 @@ let () =
   let r8 = fresh_tn "R8" [| 8 |] in
   let stride2 s = Idx.Affine { symbols = [ (2, s) ]; offset = 0 } in
   let strided =
-    for_over i
-      (LL.Set
-         {
-           tn = r8;
-           idcs = [| stride2 i |];
-           llsc = LL.Binop (Ops.Mul, (get a8 [| stride2 i |], sp), (LL.Constant 2., sp));
-           debug = "";
-         })
+    Ll_test.loop_n i 4
+      (Ll_test.set r8
+         [| stride2 i |]
+         (LL.Binop (Ops.Mul, (get a8 [| stride2 i |], sp), (LL.Constant 2., sp))))
   in
   show_summary "strided copy-scale over half the cells" (CM.analyze strided);
 
   (* Rmw reduction: for i: for k: S[i] = S[i] + A[i][k] — S rd 16 B, wr 16 B all rmw. *)
   let s = fresh_tn "S" [| 4 |] in
   let reduction =
-    for_over i
-      (for_over ~extent:5 k
-         (LL.Set
-            {
-              tn = s;
-              idcs = [| it i |];
-              llsc = LL.Binop (Ops.Add, (get s [| it i |], sp), (get a [| it i; it k |], sp));
-              debug = "";
-            }))
+    Ll_test.loop_n i 4
+      (Ll_test.loop_n k 5
+         (Ll_test.set s
+            [| it i |]
+            (LL.Binop (Ops.Add, (get s [| it i |], sp), (get a [| it i; it k |], sp)))))
   in
   show_summary "rmw reduction 4x5" (CM.analyze reduction);
 
@@ -154,18 +121,9 @@ let () =
   let g = fresh_tn "G" [| 1 |] in
   let d1 = fresh_tn "D1" [| 1 |] in
   let guarded =
-    LL.If
-      {
-        cond = (get g [| Idx.Fixed_idx 0 |], sp);
-        body =
-          LL.Set
-            {
-              tn = d1;
-              idcs = [| Idx.Fixed_idx 0 |];
-              llsc = LL.Binop (Ops.Mul, (get g [| Idx.Fixed_idx 0 |], sp), (LL.Constant 3., sp));
-              debug = "";
-            };
-      }
+    Ll_test.if_ (get g [| Idx.Fixed_idx 0 |])
+      (Ll_test.set d1 [| Idx.Fixed_idx 0 |]
+         (LL.Binop (Ops.Mul, (get g [| Idx.Fixed_idx 0 |], sp), (LL.Constant 3., sp))))
   in
   show_summary "guarded write" (CM.analyze guarded);
 
@@ -173,21 +131,13 @@ let () =
   let e = fresh_tn "E" [| 4 |] in
   let ids = fresh_tn "I" [| 4 |] in
   let gather =
-    for_over i
-      (LL.Set
-         {
-           tn = e;
-           idcs = [| it i |];
-           llsc =
-             LL.Get_dynamic
-               {
-                 tn = a;
-                 idcs = [| Idx.Fixed_idx 0; Idx.Fixed_idx 0 |];
-                 dyn_axis = 0;
-                 dyn_value = (get ids [| it i |], sp);
-               };
-           debug = "";
-         })
+    Ll_test.loop_n i 4
+      (Ll_test.set e
+         [| it i |]
+         (Ll_test.gather ~tn:a
+            ~idcs:[| Idx.Fixed_idx 0; Idx.Fixed_idx 0 |]
+            ~dyn_axis:0
+            ~dyn_value:(get ids [| it i |], sp)))
   in
   show_summary "dynamic gather (whole-node fallback)" (CM.analyze gather);
 
@@ -196,10 +146,7 @@ let () =
   let s2 = fresh_tn "S2" [| 4 |] in
   let overlap =
     LL.unflat_lines
-      [
-        LL.Zero_out s2;
-        for_over i (LL.Set { tn = s2; idcs = [| it i |]; llsc = LL.Constant 0.5; debug = "" });
-      ]
+      [ LL.Zero_out s2; Ll_test.loop_n i 4 (Ll_test.set s2 [| it i |] (LL.Constant 0.5)) ]
   in
   show_summary "zero-out then overwrite (union bound capped)" (CM.analyze overlap);
 
@@ -209,14 +156,10 @@ let () =
   let c2 = fresh_tn "C2" [| 4 |] in
   let shift8 s = Idx.Affine { symbols = [ (1, s) ]; offset = 8 } in
   let disjoint_slices =
-    for_over i
-      (LL.Set
-         {
-           tn = c2;
-           idcs = [| it i |];
-           llsc = LL.Binop (Ops.Add, (get a16 [| it i |], sp), (get a16 [| shift8 i |], sp));
-           debug = "";
-         })
+    Ll_test.loop_n i 4
+      (Ll_test.set c2
+         [| it i |]
+         (LL.Binop (Ops.Add, (get a16 [| it i |], sp), (get a16 [| shift8 i |], sp))))
   in
   show_summary "disjoint slice reads (exact union)" (CM.analyze disjoint_slices);
 
@@ -224,14 +167,10 @@ let () =
      cell, so the sum stays a flagged union bound. *)
   let shift1 s = Idx.Affine { symbols = [ (1, s) ]; offset = 1 } in
   let overlapping_slices =
-    for_over i
-      (LL.Set
-         {
-           tn = c2;
-           idcs = [| it i |];
-           llsc = LL.Binop (Ops.Add, (get a16 [| it i |], sp), (get a16 [| shift1 i |], sp));
-           debug = "";
-         })
+    Ll_test.loop_n i 4
+      (Ll_test.set c2
+         [| it i |]
+         (LL.Binop (Ops.Add, (get a16 [| it i |], sp), (get a16 [| shift1 i |], sp))))
   in
   show_summary "overlapping slice reads (union bound)" (CM.analyze overlapping_slices);
 
@@ -240,14 +179,10 @@ let () =
   let even s = Idx.Affine { symbols = [ (2, s) ]; offset = 0 } in
   let odd s = Idx.Affine { symbols = [ (2, s) ]; offset = 1 } in
   let parity =
-    for_over i
-      (LL.Set
-         {
-           tn = c2;
-           idcs = [| it i |];
-           llsc = LL.Binop (Ops.Mul, (get a16 [| even i |], sp), (get a16 [| odd i |], sp));
-           debug = "";
-         })
+    Ll_test.loop_n i 4
+      (Ll_test.set c2
+         [| it i |]
+         (LL.Binop (Ops.Mul, (get a16 [| even i |], sp), (get a16 [| odd i |], sp))))
   in
   show_summary "parity-disjoint reads (exact union)" (CM.analyze parity);
 
@@ -257,19 +192,14 @@ let () =
      count an upper bound too. *)
   let k4 = fresh_tn "K4" [| 4 |] in
   let where_arms =
-    for_over i
-      (LL.Set
-         {
-           tn = c2;
-           idcs = [| it i |];
-           llsc =
-             LL.Ternop
-               ( Ops.Where,
-                 (get k4 [| it i |], sp),
-                 (LL.Binop (Ops.Mul, (get a16 [| it i |], sp), (LL.Constant 2., sp)), sp),
-                 (get a16 [| shift8 i |], sp) );
-           debug = "";
-         })
+    Ll_test.loop_n i 4
+      (Ll_test.set c2
+         [| it i |]
+         (LL.Ternop
+            ( Ops.Where,
+              (get k4 [| it i |], sp),
+              (LL.Binop (Ops.Mul, (get a16 [| it i |], sp), (LL.Constant 2., sp)), sp),
+              (get a16 [| shift8 i |], sp) )))
   in
   show_summary "where-arm reads (conditional, stays a bound)" (CM.analyze where_arms);
 
@@ -277,19 +207,14 @@ let () =
      bound (gh-ocannl-578 round 2): C2[i] = where(K4[i], A16[i] * 2, A16[i+8] * 3) charges both
      multiplications while one runs. *)
   let where_equal_arms =
-    for_over i
-      (LL.Set
-         {
-           tn = c2;
-           idcs = [| it i |];
-           llsc =
-             LL.Ternop
-               ( Ops.Where,
-                 (get k4 [| it i |], sp),
-                 (LL.Binop (Ops.Mul, (get a16 [| it i |], sp), (LL.Constant 2., sp)), sp),
-                 (LL.Binop (Ops.Mul, (get a16 [| shift8 i |], sp), (LL.Constant 3., sp)), sp) );
-           debug = "";
-         })
+    Ll_test.loop_n i 4
+      (Ll_test.set c2
+         [| it i |]
+         (LL.Ternop
+            ( Ops.Where,
+              (get k4 [| it i |], sp),
+              (LL.Binop (Ops.Mul, (get a16 [| it i |], sp), (LL.Constant 2., sp)), sp),
+              (LL.Binop (Ops.Mul, (get a16 [| shift8 i |], sp), (LL.Constant 3., sp)), sp) )))
   in
   show_summary "where equal-cost arms (op count stays a bound)" (CM.analyze where_equal_arms);
 
@@ -299,7 +224,7 @@ let () =
   let src = fresh_tn "U" [| 4 |] in
   let base4 s = Idx.Affine { symbols = [ (4, s) ]; offset = 0 } in
   let vec_of idcs =
-    for_over i
+    Ll_test.loop_n i 4
       (LL.Set_from_vec
          {
            tn = v16;
@@ -320,7 +245,7 @@ let () =
      where it could meet that row's base, so exactness is declined. *)
   let w46 = fresh_tn "W46" [| 4; 6 |] in
   let vec_spill =
-    for_over i
+    Ll_test.loop_n i 4
       (LL.Set_from_vec
          {
            tn = w46;
@@ -337,7 +262,7 @@ let () =
      row, disjoint by rows, 16 cells exact. *)
   let w44 = fresh_tn "W44" [| 4; 4 |] in
   let vec_rows =
-    for_over i
+    Ll_test.loop_n i 4
       (LL.Set_from_vec
          {
            tn = w44;

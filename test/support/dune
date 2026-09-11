@@ -40,6 +40,7 @@
   refusal_control_manifest
   optional_arg_scan
   source_inventory
+  ll_test_scan
   scan_argv
   scan_floors
   dune_stanza_scan

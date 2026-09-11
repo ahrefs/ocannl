@@ -1,0 +1,52 @@
+zero records stay below the adoption floor: true
+the first record requires harness adoption: true
+two records also require harness adoption: true
+a private recursive walker reaches the floor without any construction: true
+comment and quoted fixture records are not constructions: true
+record match arms are not constructions: true
+tuple constructors with foreign record payloads do not count: true
+derived constructor membership includes a new inline-record constructor: true
+constructors in unrelated nested type declarations do not widen the census: true
+nested private walkers are counted once, not again through their parent: true
+a walker inside a local module is not counted through its recursive parent: true
+a sibling stanza's harness does not cover this module: true
+default module membership links the owning harness: true
+ordered-set exclusion prevents harness membership: true
+a new subdirectory in either package is in scope: true
+shipping scanner refuses the first unlinked record builder: true
+shipping scanner accepts adoption without golden churn: true
+both select arms inherit the generated target module's harness: true
+default module ownership includes select targets, not arm basenames: true
+a sibling harness cannot cover the selected real source: true
+the off-platform select arm is checked independently too: true
+select target exclusion prevents harness ownership: true
+every owning select stanza must link the harness for a shared arm: true
+an unowned copy source inherits its destination harness: true
+copied targets enter default module ownership: true
+a linked original cannot hide an unlinked copied consumer: true
+short copy_files# retains source ownership: true
+literal copy chains retain every consumer: true
+an unlinked consumer at the end of a copy chain is refused: true
+unsupported copy globs are refused explicitly: true
+copy inputs outside the declared corpus are refused explicitly: true
+copy chains cannot hide an origin outside the declared corpus: true
+PPX output goldens do not require a library-owning stanza: true
+ordinary unowned sources cannot borrow the PPX golden exclusion: true
+shipping scanner resolves a parent subdir owning the adopted test: true
+parent subdir defaults share ownership with physical child stanzas: true
+shipping scanner explicitly refuses include_subdirs ownership: true
+nested include_subdirs cannot escape the ownership refusal: true
+unresolved Dune includes are explicit ownership refusals: true
+include_subdirs no keeps direct ownership valid: true
+unrelated ownership directives do not widen scanner scope: true
+shipping scanner refuses stale exemptions after adoption: true
+shipping scanner refuses a private traversal alone: true
+shipping scanner accepts an explicitly exempt migration: true
+migration debt at its recorded builder cap remains valid: true
+decreased migration debt remains valid: true
+new builders in an exempt file exceed its migration cap: true
+an intentional permanent exception is not a migration quota: true
+new private traversals in an exempt file exceed their independent cap: true
+permanent exemptions also become stale after harness adoption: true
+new arrayjit debt is not implicitly exempted by the package blocker: true
+shipping scanner refuses an emptied arrayjit source root: true

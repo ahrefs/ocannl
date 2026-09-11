@@ -2044,3 +2044,28 @@ that they earn a lookup rather than always-loaded space.
   exception the injected arm failure raises, which is why the tuner wraps it) reaching stderr, and
   dune interleaves it with whatever else runs in parallel — in the 09-03 sweep it landed directly
   above an unrelated test's failure and read as its cause.
+
+- `ll_test_ratchet` (gh-ocannl-964) derives test sources from `Source_inventory`, harness membership
+  from owning Dune stanza groups (including parent `subdir` blocks and `select` target-to-arm
+  relationships), and constructor names from
+  `Low_level.t` / `scalar_t`. One inline record construction or one recursive binding matching two distinct IR
+  constructors requires
+  `ll_test` or an exact, stale-checked exemption. Constructor names are matched conservatively
+  regardless of qualifier; comments, strings and non-record constructors cannot inflate the builder
+  census. Existing walkers remain migration debt, with six arrayjit rows explicitly blocked on
+  gh-ocannl-954. Directory-spanning `include_subdirs` modes and unresolved `include` directives
+  are refused explicitly, following the existing Dune scanner boundary. Adoption removes the exemption in the
+  same change; counts go to stderr and the
+  golden keeps source floors and reasons. `ll_test_scan_cases` drives the shipping scanner as a
+  child to pin refusal, adoption, stale exemptions, package coverage and a missing source root.
+  Temporary migration rows cap both detected metrics independently: increased records or walkers
+  fail even in an exempt file, while decreases remain valid until adoption or removal makes the row
+  stale. The canonical harness is explicitly permanent rather than a migration quota. Tuple and
+  nullary constructions remain outside this record-literal ratchet's detection boundary.
+  Both selected source arms are checked regardless of host availability, against their generated
+  target module and actual owning stanza; shared arms require every owner to link the harness.
+  Literal `copy_files` / `copy_files#` relationships carry ownership through destination modules
+  and copy chains; a linked original cannot cover an unlinked copied consumer. Unsupported copy
+  globs/dynamic inputs and inputs outside the declared test corpus are refused explicitly. Documented
+  `test/ppx/*_expected.ml` goldens are not implementation modules and are excluded; arbitrary unowned
+  sources remain checked. The `scans` aggregate runs the shipping scanner and its control suite.
