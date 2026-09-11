@@ -2,9 +2,9 @@ open Base
 (** A deliberately syntactic ratchet, not a type checker. Constructor names are derived from
     Low_level's t/scalar_t declarations, independent of qualifier spelling (including opens and
     aliases). A same-named foreign constructor is conservatively counted. Expressions and patterns
-    are separate: three record constructions or one recursive binding inspecting at least two
-    distinct IR constructors warrants the harness. Quoted fixtures and comments are not AST nodes.
-    Linking the harness is the adoption boundary; this does not ban test-specific match arms. *)
+    are separate: one record construction or one recursive binding inspecting at least two distinct
+    IR constructors warrants the harness. Quoted fixtures and comments are not AST nodes. Linking
+    the harness is the adoption boundary; this does not ban test-specific match arms. *)
 
 open Ppxlib
 module Dune = Dune_stanza_scan
@@ -78,10 +78,9 @@ let census ~constructors:(constructors, record_constructors) source =
   walker#structure (Parse.implementation (Lexing.from_string source));
   { records = !records; traversals = !traversals }
 
-let needs_harness { records; traversals } = records >= 3 || traversals >= 1
+let needs_harness { records; traversals } = records >= 1 || traversals >= 1
 
-let linked ~directory_modules ~module_name content =
-  let stanzas = Dune.stanzas content in
+let linked ~directory_modules ~module_name stanzas =
   List.exists stanzas ~f:(fun stanza ->
       Option.value_map (Dune.head stanza) ~default:false ~f:(fun head ->
           List.mem Dune.module_bearing_heads head ~equal:String.equal)
@@ -89,6 +88,46 @@ let linked ~directory_modules ~module_name content =
           String.Caseless.equal name module_name)
       && Option.value_map (Dune.field stanza "libraries") ~default:false ~f:(fun libraries ->
           List.mem libraries (Sexp.Atom "ll_test") ~equal:Sexp.equal))
+
+(** Fold physical dune files and parent subdir blocks into the same directory groups before
+    resolving defaults. Directory-spanning ownership modes remain explicit refusals, as in
+    env_var_deps; silently treating them as unlinked would misdiagnose an adopted test. *)
+let ownership ~sources ~dune_files =
+  let groups =
+    List.concat_map dune_files ~f:(fun (path, content) ->
+        let dir = Stdlib.Filename.dirname path in
+        Dune.walk dir (Dune.stanzas content) ~f:(fun dir stanza ->
+            let dir = Dune.normalize_path dir in
+            [ ((if String.is_empty dir then "." else dir), stanza) ]))
+    |> Map.of_alist_multi (module String)
+  in
+  let problems =
+    Map.to_alist groups
+    |> List.concat_map ~f:(fun (dir, stanzas) ->
+        if
+          List.exists sources ~f:(fun path ->
+              String.equal dir "." || String.is_prefix path ~prefix:(dir ^ "/"))
+        then
+          List.filter_map stanzas ~f:(fun stanza ->
+              match stanza with
+              | Sexp.List [ Sexp.Atom "include_subdirs"; Sexp.Atom "no" ] -> None
+              | Sexp.List (Sexp.Atom (("include_subdirs" | "include") as directive) :: _) ->
+                  Some (dir ^ ": unsupported module ownership directive " ^ directive)
+              | _ -> None)
+        else [])
+  in
+  let is_linked path =
+    let dir = Stdlib.Filename.dirname path in
+    let module_name = Stdlib.Filename.remove_extension (Stdlib.Filename.basename path) in
+    let directory_modules =
+      List.filter_map sources ~f:(fun source ->
+          if String.equal (Stdlib.Filename.dirname source) dir then
+            Some (Stdlib.Filename.remove_extension (Stdlib.Filename.basename source))
+          else None)
+    in
+    linked ~directory_modules ~module_name (Option.value (Map.find groups dir) ~default:[])
+  in
+  (is_linked, problems)
 
 let test_source path =
   (String.is_prefix path ~prefix:"test/" || String.is_prefix path ~prefix:"arrayjit/test/")

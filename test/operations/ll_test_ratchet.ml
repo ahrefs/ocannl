@@ -17,10 +17,13 @@ let exemptions =
       "blocked-on-954: arrayjit package cannot link ll_test" );
     ( "arrayjit/test/test_vectorized_codegen.ml",
       "blocked-on-954: arrayjit package cannot link ll_test" );
+    ( "arrayjit/test/test_zero_out_codegen.ml",
+      "blocked-on-954: arrayjit package cannot link ll_test" );
     ("test/operations/affine_extraction.ml", "existing migration debt; adopt ll_test when touched");
     ("test/operations/affine_lowering.ml", "existing migration debt; adopt ll_test when touched");
     ("test/operations/autotune_scope_menu.ml", "existing migration debt; adopt ll_test when touched");
     ("test/operations/autotune_smoke.ml", "existing migration debt; adopt ll_test when touched");
+    ("test/operations/buffer_aliasing.ml", "existing migration debt; adopt ll_test when touched");
     ("test/operations/cost_model_floor.ml", "existing migration debt; adopt ll_test when touched");
     ("test/operations/cpu_simd_reduction.ml", "existing migration debt; adopt ll_test when touched");
     ("test/operations/fission_schedule.ml", "existing migration debt; adopt ll_test when touched");
@@ -70,29 +73,26 @@ let scan ~exemptions root generated =
     Scan.constructors
       (In_channel.read_all (Stdlib.Filename.concat root "arrayjit/lib/low_level.ml"))
   in
+  let dune_files =
+    Inventory.select inventory ~f:(fun path -> String.equal (Stdlib.Filename.basename path) "dune")
+    |> List.map ~f:(fun (file : Inventory.file) -> (file.path, In_channel.read_all file.on_disk))
+  in
+  let is_linked, ownership_problems =
+    Scan.ownership
+      ~sources:(List.map sources ~f:(fun (file : Inventory.file) -> file.path))
+      ~dune_files
+  in
+  List.iter ownership_problems ~f:Verdict.fail;
   let rows =
     List.map sources ~f:(fun (file : Inventory.file) ->
-        let dir = Stdlib.Filename.dirname file.path in
-        let modules =
-          List.filter_map sources ~f:(fun (s : Inventory.file) ->
-              if String.equal (Stdlib.Filename.dirname s.path) dir then
-                Some (Stdlib.Filename.remove_extension (Stdlib.Filename.basename s.path))
-              else None)
-        in
-        let dune = Stdlib.Filename.concat root (dir ^ "/dune") in
-        let linked =
-          Stdlib.Sys.file_exists dune
-          && Scan.linked ~directory_modules:modules
-               ~module_name:(Stdlib.Filename.remove_extension (Stdlib.Filename.basename file.path))
-               (In_channel.read_all dune)
-        in
+        let linked = is_linked file.path in
         let counts = Scan.census ~constructors (In_channel.read_all file.on_disk) in
         if Scan.needs_harness counts && not linked then
           eprintf "%s records=%d traversals=%d\n" file.path counts.records counts.traversals;
         (file.path, counts, linked))
   in
   let problems = Scan.violations ~exemptions rows in
-  List.iter problems ~f:Verdict.fail;
+  if List.is_empty ownership_problems then List.iter problems ~f:Verdict.fail;
   List.iter
     [ ("test/", 200); ("arrayjit/test/", 20) ]
     ~f:(fun (prefix, floor) ->
@@ -101,7 +101,7 @@ let scan ~exemptions root generated =
       in
       printf "Source floor: %s >= %d\n" prefix floor;
       if count < floor then Verdict.fail (prefix ^ ": source inventory below floor"));
-  printf "Adoption threshold: 3 record constructions or 1 private traversal\n";
+  printf "Adoption threshold: 1 record construction or 1 private traversal\n";
   List.iter exemptions ~f:(fun (path, reason) -> printf "%s -- %s\n" path reason)
 
 let () =

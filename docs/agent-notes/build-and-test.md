@@ -2046,11 +2046,14 @@ that they earn a lookup rather than always-loaded space.
   above an unrelated test's failure and read as its cause.
 
 - `ll_test_ratchet` (gh-ocannl-964) derives test sources from `Source_inventory`, harness membership
-  from each owning Dune stanza, and constructor names from `Low_level.t` / `scalar_t`. Three inline
-  record constructions or one recursive binding matching two distinct IR constructors requires
+  from owning Dune stanza groups (including parent `subdir` blocks), and constructor names from
+  `Low_level.t` / `scalar_t`. One inline record construction or one recursive binding matching two distinct IR
+  constructors requires
   `ll_test` or an exact, stale-checked exemption. Constructor names are matched conservatively
   regardless of qualifier; comments, strings and non-record constructors cannot inflate the builder
-  census. Existing walkers remain migration debt, with five arrayjit rows explicitly blocked on
-  gh-ocannl-954. Adoption removes the exemption in the same change; counts go to stderr and the
+  census. Existing walkers remain migration debt, with six arrayjit rows explicitly blocked on
+  gh-ocannl-954. Directory-spanning `include_subdirs` modes and unresolved `include` directives
+  are refused explicitly, following the existing Dune scanner boundary. Adoption removes the exemption in the
+  same change; counts go to stderr and the
   golden keeps source floors and reasons. `ll_test_scan_cases` drives the shipping scanner as a
   child to pin refusal, adoption, stale exemptions, package coverage and a missing source root.

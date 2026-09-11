@@ -16,10 +16,9 @@ let walker =
 
 let () =
   let counts source = Scan.census ~constructors source in
-  p "two records stay below the adoption floor"
-    (not (Scan.needs_harness (counts (record ^ record))));
-  p "three records reach the adoption floor"
-    (Scan.needs_harness (counts (record ^ record ^ record)));
+  p "zero records stay below the adoption floor" (not (Scan.needs_harness (counts "let x = 0")));
+  p "the first record requires harness adoption" (Scan.needs_harness (counts record));
+  p "two records also require harness adoption" (Scan.needs_harness (counts (record ^ record)));
   p "a private recursive walker reaches the floor without any construction"
     (let c = counts walker in
      c.records = 0 && c.traversals = 1 && Scan.needs_harness c);
@@ -47,7 +46,8 @@ let () =
   p "nested private walkers are counted once, not again through their parent"
     ((counts ("let rec outer x = " ^ walker ^ " in walk x")).traversals = 1);
   let linked content =
-    Scan.linked ~directory_modules:[ "new"; "other" ] ~module_name:"new" content
+    Scan.linked ~directory_modules:[ "new"; "other" ] ~module_name:"new"
+      (Test_utils.Dune_stanza_scan.stanzas content)
   in
   p "a sibling stanza's harness does not cover this module"
     (not
@@ -98,11 +98,36 @@ let () =
     if not ok then eprintf "%s captured output:\n%s\n" label text;
     p label ok
   in
-  write "test/new.ml" (record ^ record ^ record);
-  check "shipping scanner refuses unlinked record builders" ~exit:1
+  write "test/new.ml" record;
+  check "shipping scanner refuses the first unlinked record builder" ~exit:1
     ~message:"test/new.ml: requires ll_test" (run ());
   write "test/dune" "(test (name new) (modules new) (libraries ll_test))";
   check "shipping scanner accepts adoption without golden churn" ~exit:0
+    ~message:"Adoption threshold:" (run ());
+  Unix.unlink (Stdlib.Filename.concat root "test/dune");
+  write "dune" "(subdir test (test (name new) (modules new) (libraries ll_test)))";
+  check "shipping scanner resolves a parent subdir owning the adopted test" ~exit:0
+    ~message:"Adoption threshold:" (run ());
+  write "test/dune" "(test (name other) (modules other))";
+  write "dune" "(subdir test (test (name new) (libraries ll_test)))";
+  check "parent subdir defaults share ownership with physical child stanzas" ~exit:0
+    ~message:"Adoption threshold:" (run ());
+  Unix.unlink (Stdlib.Filename.concat root "test/dune");
+  write "dune" "(include_subdirs unqualified) (library (name parent) (libraries ll_test))";
+  check "shipping scanner explicitly refuses include_subdirs ownership" ~exit:1
+    ~message:"unsupported module ownership directive include_subdirs" (run ());
+  write "dune" "(subdir test (include_subdirs qualified))";
+  check "nested include_subdirs cannot escape the ownership refusal" ~exit:1
+    ~message:"test: unsupported module ownership directive include_subdirs" (run ());
+  write "dune" "(subdir test (include test_stanzas))";
+  check "unresolved Dune includes are explicit ownership refusals" ~exit:1
+    ~message:"test: unsupported module ownership directive include" (run ());
+  write "dune" "(include_subdirs no)";
+  write "test/dune" "(test (name new) (modules new) (libraries ll_test))";
+  check "include_subdirs no keeps direct ownership valid" ~exit:0 ~message:"Adoption threshold:"
+    (run ());
+  write "dune" "(subdir unrelated (include_subdirs unqualified))";
+  check "unrelated ownership directives do not widen scanner scope" ~exit:0
     ~message:"Adoption threshold:" (run ());
   check "shipping scanner refuses stale exemptions after adoption" ~exit:1
     ~message:"test/new.ml: stale ll_test exemption" (run ~exempt:true ());

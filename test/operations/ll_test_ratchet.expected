@@ -1,15 +1,17 @@
 Source floor: test/ >= 200
 Source floor: arrayjit/test/ >= 20
-Adoption threshold: 3 record constructions or 1 private traversal
+Adoption threshold: 1 record construction or 1 private traversal
 arrayjit/test/test_cross_cse.ml -- blocked-on-954: arrayjit package cannot link ll_test
 arrayjit/test/test_local_scope_init.ml -- blocked-on-954: arrayjit package cannot link ll_test
 arrayjit/test/test_one_hot_gather_rewrite.ml -- blocked-on-954: arrayjit package cannot link ll_test
 arrayjit/test/test_stage_b_where_debug.ml -- blocked-on-954: arrayjit package cannot link ll_test
 arrayjit/test/test_vectorized_codegen.ml -- blocked-on-954: arrayjit package cannot link ll_test
+arrayjit/test/test_zero_out_codegen.ml -- blocked-on-954: arrayjit package cannot link ll_test
 test/operations/affine_extraction.ml -- existing migration debt; adopt ll_test when touched
 test/operations/affine_lowering.ml -- existing migration debt; adopt ll_test when touched
 test/operations/autotune_scope_menu.ml -- existing migration debt; adopt ll_test when touched
 test/operations/autotune_smoke.ml -- existing migration debt; adopt ll_test when touched
+test/operations/buffer_aliasing.ml -- existing migration debt; adopt ll_test when touched
 test/operations/cost_model_floor.ml -- existing migration debt; adopt ll_test when touched
 test/operations/cpu_simd_reduction.ml -- existing migration debt; adopt ll_test when touched
 test/operations/fission_schedule.ml -- existing migration debt; adopt ll_test when touched
