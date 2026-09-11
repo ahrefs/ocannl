@@ -15,6 +15,12 @@ ordered-set exclusion prevents harness membership: true
 a new subdirectory in either package is in scope: true
 shipping scanner refuses the first unlinked record builder: true
 shipping scanner accepts adoption without golden churn: true
+both select arms inherit the generated target module's harness: true
+default module ownership includes select targets, not arm basenames: true
+a sibling harness cannot cover the selected real source: true
+the off-platform select arm is checked independently too: true
+select target exclusion prevents harness ownership: true
+every owning select stanza must link the harness for a shared arm: true
 shipping scanner resolves a parent subdir owning the adopted test: true
 parent subdir defaults share ownership with physical child stanzas: true
 shipping scanner explicitly refuses include_subdirs ownership: true

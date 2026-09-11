@@ -113,6 +113,36 @@ let () =
   write "test/dune" "(test (name new) (modules new) (libraries ll_test))";
   check "shipping scanner accepts adoption without golden churn" ~exit:0
     ~message:"Adoption threshold:" (run ());
+  let base_stanza = "(test (name new) (modules new) (libraries ll_test))" in
+  let selection ?(modules = "(modules choice)") ?(harness = "ll_test") () =
+    "(test (name choice) " ^ modules ^ " (libraries " ^ harness
+    ^ " (select choice.ml from (backend -> choice.real.ml) (-> choice.missing.ml))))"
+  in
+  write "test/choice.real.ml" record;
+  write "test/choice.missing.ml" record;
+  write "test/dune" (base_stanza ^ selection ());
+  check "both select arms inherit the generated target module's harness" ~exit:0
+    ~message:"Adoption threshold:" (run ());
+  write "test/dune" (base_stanza ^ selection ~modules:"" ());
+  check "default module ownership includes select targets, not arm basenames" ~exit:0
+    ~message:"Adoption threshold:" (run ());
+  write "test/dune" (base_stanza ^ selection ~harness:"" ());
+  let missing_select_harness = run () in
+  check "a sibling harness cannot cover the selected real source" ~exit:1
+    ~message:"test/choice.real.ml: requires ll_test" missing_select_harness;
+  check "the off-platform select arm is checked independently too" ~exit:1
+    ~message:"test/choice.missing.ml: requires ll_test" missing_select_harness;
+  write "test/dune" (base_stanza ^ selection ~modules:"(modules (:standard \\ choice))" ());
+  check "select target exclusion prevents harness ownership" ~exit:1
+    ~message:"test/choice.real.ml: requires ll_test" (run ());
+  write "test/dune"
+    (base_stanza ^ selection ()
+   ^ "(test (name other) (modules other) (libraries (select other.ml from (-> choice.real.ml))))");
+  check "every owning select stanza must link the harness for a shared arm" ~exit:1
+    ~message:"test/choice.real.ml: requires ll_test" (run ());
+  Unix.unlink (Stdlib.Filename.concat root "test/choice.real.ml");
+  Unix.unlink (Stdlib.Filename.concat root "test/choice.missing.ml");
+  write "test/dune" base_stanza;
   Unix.unlink (Stdlib.Filename.concat root "test/dune");
   write "dune" "(subdir test (test (name new) (modules new) (libraries ll_test)))";
   check "shipping scanner resolves a parent subdir owning the adopted test" ~exit:0

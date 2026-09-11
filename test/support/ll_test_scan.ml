@@ -86,14 +86,34 @@ let census ~constructors:(constructors, record_constructors) source =
 
 let needs_harness { records; traversals } = records >= 1 || traversals >= 1
 
+let stanza_links ~directory_modules ~module_name ~stanzas stanza =
+  Option.value_map (Dune.head stanza) ~default:false ~f:(fun head ->
+      List.mem Dune.module_bearing_heads head ~equal:String.equal)
+  && List.exists (Dune.modules_of ~directory_modules stanzas stanza) ~f:(fun name ->
+      String.Caseless.equal name module_name)
+  && Option.value_map (Dune.field stanza "libraries") ~default:false ~f:(fun libraries ->
+      List.mem libraries (Sexp.Atom "ll_test") ~equal:Sexp.equal)
+
 let linked ~directory_modules ~module_name stanzas =
-  List.exists stanzas ~f:(fun stanza ->
-      Option.value_map (Dune.head stanza) ~default:false ~f:(fun head ->
-          List.mem Dune.module_bearing_heads head ~equal:String.equal)
-      && List.exists (Dune.modules_of ~directory_modules stanzas stanza) ~f:(fun name ->
-          String.Caseless.equal name module_name)
-      && Option.value_map (Dune.field stanza "libraries") ~default:false ~f:(fun libraries ->
-          List.mem libraries (Sexp.Atom "ll_test") ~equal:Sexp.equal))
+  List.exists stanzas ~f:(stanza_links ~directory_modules ~module_name ~stanzas)
+
+(** A select arm is source for the generated target module, never a module named *.real or
+    *.missing. Keep the owning stanza with the relationship: another stanza linking ll_test cannot
+    cover it, and every owner of a reused arm must adopt the harness. *)
+let select_arms stanza =
+  Option.value (Dune.field stanza "libraries") ~default:[]
+  |> List.concat_map ~f:(function
+    | Sexp.List (Sexp.Atom "select" :: Sexp.Atom target :: Sexp.Atom "from" :: arms)
+      when String.is_suffix target ~suffix:".ml" ->
+        List.filter_map arms ~f:(function
+          | Sexp.List terms -> (
+              match
+                List.drop_while terms ~f:(fun term -> not (Sexp.equal term (Sexp.Atom "->")))
+              with
+              | [ Sexp.Atom "->"; Sexp.Atom source ] -> Some (target, source)
+              | _ -> None)
+          | _ -> None)
+    | _ -> [])
 
 (** Fold physical dune files and parent subdir blocks into the same directory groups before
     resolving defaults. Directory-spanning ownership modes remain explicit refusals, as in
@@ -122,16 +142,37 @@ let ownership ~sources ~dune_files =
               | _ -> None)
         else [])
   in
+  let selections =
+    Map.to_alist groups
+    |> List.concat_map ~f:(fun (dir, stanzas) ->
+        List.concat_map stanzas ~f:(fun stanza ->
+            select_arms stanza
+            |> List.map ~f:(fun (target, arm) ->
+                (dir, stanza, target, Dune.normalize_path (Dune.in_subdir dir arm)))))
+  in
+  let module_name path = Stdlib.Filename.remove_extension (Stdlib.Filename.basename path) in
+  let directory_modules dir =
+    List.filter_map sources ~f:(fun source ->
+        if
+          String.equal (Stdlib.Filename.dirname source) dir
+          && not (List.exists selections ~f:(fun (_, _, _, arm) -> String.equal source arm))
+        then Some (module_name source)
+        else None)
+    @ List.filter_map selections ~f:(fun (owner_dir, _, target, _) ->
+        Option.some_if (String.equal owner_dir dir) (module_name target))
+    |> List.dedup_and_sort ~compare:String.compare
+  in
+  let stanzas_at dir = Option.value (Map.find groups dir) ~default:[] in
   let is_linked path =
-    let dir = Stdlib.Filename.dirname path in
-    let module_name = Stdlib.Filename.remove_extension (Stdlib.Filename.basename path) in
-    let directory_modules =
-      List.filter_map sources ~f:(fun source ->
-          if String.equal (Stdlib.Filename.dirname source) dir then
-            Some (Stdlib.Filename.remove_extension (Stdlib.Filename.basename source))
-          else None)
-    in
-    linked ~directory_modules ~module_name (Option.value (Map.find groups dir) ~default:[])
+    match List.filter selections ~f:(fun (_, _, _, arm) -> String.equal path arm) with
+    | [] ->
+        let dir = Stdlib.Filename.dirname path in
+        linked ~directory_modules:(directory_modules dir) ~module_name:(module_name path)
+          (stanzas_at dir)
+    | owners ->
+        List.for_all owners ~f:(fun (dir, stanza, target, _) ->
+            stanza_links ~directory_modules:(directory_modules dir)
+              ~module_name:(module_name target) ~stanzas:(stanzas_at dir) stanza)
   in
   (is_linked, problems)
 

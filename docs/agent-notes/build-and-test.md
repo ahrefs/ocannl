@@ -2046,7 +2046,8 @@ that they earn a lookup rather than always-loaded space.
   above an unrelated test's failure and read as its cause.
 
 - `ll_test_ratchet` (gh-ocannl-964) derives test sources from `Source_inventory`, harness membership
-  from owning Dune stanza groups (including parent `subdir` blocks), and constructor names from
+  from owning Dune stanza groups (including parent `subdir` blocks and `select` target-to-arm
+  relationships), and constructor names from
   `Low_level.t` / `scalar_t`. One inline record construction or one recursive binding matching two distinct IR
   constructors requires
   `ll_test` or an exact, stale-checked exemption. Constructor names are matched conservatively
@@ -2061,3 +2062,5 @@ that they earn a lookup rather than always-loaded space.
   fail even in an exempt file, while decreases remain valid until adoption or removal makes the row
   stale. The canonical harness is explicitly permanent rather than a migration quota. Tuple and
   nullary constructions remain outside this record-literal ratchet's detection boundary.
+  Both selected source arms are checked regardless of host availability, against their generated
+  target module and actual owning stanza; shared arms require every owner to link the harness.
