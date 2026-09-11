@@ -24,5 +24,11 @@ unrelated ownership directives do not widen scanner scope: true
 shipping scanner refuses stale exemptions after adoption: true
 shipping scanner refuses a private traversal alone: true
 shipping scanner accepts an explicitly exempt migration: true
+migration debt at its recorded builder cap remains valid: true
+decreased migration debt remains valid: true
+new builders in an exempt file exceed its migration cap: true
+an intentional permanent exception is not a migration quota: true
+new private traversals in an exempt file exceed their independent cap: true
+permanent exemptions also become stale after harness adoption: true
 new arrayjit debt is not implicitly exempted by the package blocker: true
 shipping scanner refuses an emptied arrayjit source root: true

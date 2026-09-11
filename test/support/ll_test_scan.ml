@@ -10,6 +10,7 @@ open Ppxlib
 module Dune = Dune_stanza_scan
 
 type census = { records : int; traversals : int }
+type exemption = Migration of census | Permanent
 
 let constructors source =
   let names = ref [] and records = ref [] in
@@ -136,12 +137,21 @@ let test_source path =
 let violations ~exemptions rows =
   let debt = List.filter rows ~f:(fun (_, counts, linked) -> needs_harness counts && not linked) in
   let missing =
-    List.filter_map debt ~f:(fun (path, _, _) ->
-        if List.Assoc.mem exemptions path ~equal:String.equal then None
-        else Some (path ^ ": requires ll_test or a named migration exemption"))
+    List.filter_map debt ~f:(fun (path, counts, _) ->
+        match List.find exemptions ~f:(fun (name, _, _) -> String.equal name path) with
+        | None -> Some (path ^ ": requires ll_test or a named migration exemption")
+        | Some (_, Permanent, _) -> None
+        | Some (_, Migration cap, _) ->
+            if counts.records <= cap.records && counts.traversals <= cap.traversals then None
+            else
+              Some
+                (Printf.sprintf
+                   "%s: migration debt grew beyond ll_test baseline (records %d/%d, traversals \
+                    %d/%d)"
+                   path counts.records cap.records counts.traversals cap.traversals))
   in
   let stale =
-    List.filter_map exemptions ~f:(fun (path, _) ->
+    List.filter_map exemptions ~f:(fun (path, _, _) ->
         if List.exists debt ~f:(fun (name, _, _) -> String.equal name path) then None
         else Some (path ^ ": stale ll_test exemption"))
   in

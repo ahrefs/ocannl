@@ -76,12 +76,18 @@ let () =
         write (Printf.sprintf "%s/empty%d.ml" dir i) ""
       done);
   write "test/dune" "(test (name new) (modules new))";
-  let run ?(exempt = false) () =
+  let run ?(exempt = false) ?(permanent = false) () =
     let out = Stdlib.Filename.temp_file "ll-ratchet" ".out" in
     let fd = Unix.openfile out [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
     let pid =
       Unix.create_process exe
-        [| exe; (if exempt then "--fixture-exempt" else "--fixture"); root |]
+        [|
+          exe;
+          (if permanent then "--fixture-permanent"
+           else if exempt then "--fixture-exempt"
+           else "--fixture");
+          root;
+        |]
         Unix.stdin fd fd
     in
     let _, status = Unix.waitpid [] pid in
@@ -137,6 +143,25 @@ let () =
     ~message:"test/new.ml: requires ll_test" (run ());
   check "shipping scanner accepts an explicitly exempt migration" ~exit:0
     ~message:"control exemption" (run ~exempt:true ());
+  write "test/new.ml" (record ^ record);
+  check "migration debt at its recorded builder cap remains valid" ~exit:0
+    ~message:"control exemption" (run ~exempt:true ());
+  write "test/new.ml" record;
+  check "decreased migration debt remains valid" ~exit:0 ~message:"control exemption"
+    (run ~exempt:true ());
+  write "test/new.ml" (record ^ record ^ record);
+  check "new builders in an exempt file exceed its migration cap" ~exit:1
+    ~message:"test/new.ml: migration debt grew beyond ll_test baseline (records 3/2"
+    (run ~exempt:true ());
+  check "an intentional permanent exception is not a migration quota" ~exit:0
+    ~message:"control permanent exemption" (run ~permanent:true ());
+  write "test/new.ml" (walker ^ walker);
+  check "new private traversals in an exempt file exceed their independent cap" ~exit:1
+    ~message:"traversals 2/1" (run ~exempt:true ());
+  write "test/dune" "(test (name new) (modules new) (libraries ll_test))";
+  check "permanent exemptions also become stale after harness adoption" ~exit:1
+    ~message:"test/new.ml: stale ll_test exemption" (run ~permanent:true ());
+  write "test/dune" "(test (name new) (modules new))";
   write "test/new.ml" "";
   write "arrayjit/test/new.ml" (record ^ record ^ record);
   check "new arrayjit debt is not implicitly exempted by the package blocker" ~exit:1

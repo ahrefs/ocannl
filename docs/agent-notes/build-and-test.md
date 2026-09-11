@@ -2057,3 +2057,7 @@ that they earn a lookup rather than always-loaded space.
   same change; counts go to stderr and the
   golden keeps source floors and reasons. `ll_test_scan_cases` drives the shipping scanner as a
   child to pin refusal, adoption, stale exemptions, package coverage and a missing source root.
+  Temporary migration rows cap both detected metrics independently: increased records or walkers
+  fail even in an exempt file, while decreases remain valid until adoption or removal makes the row
+  stale. The canonical harness is explicitly permanent rather than a migration quota. Tuple and
+  nullary constructions remain outside this record-literal ratchet's detection boundary.

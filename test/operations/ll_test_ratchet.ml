@@ -4,65 +4,116 @@ open Stdio
 module Scan = Test_utils.Ll_test_scan
 module Inventory = Test_utils.Source_inventory
 
-(* Existing debt is deliberately exact by path. Remove a row when its test adopts the harness;
-   arrayjit cannot do that until gh-ocannl-954 splits out the package-safe builders. *)
+(* Existing debt is exact by path and capped independently in both detected metrics. Decreases
+   remain valid; adoption (or eliminating all detected debt) makes the row stale. The canonical
+   harness itself is an intentional permanent exception. Remove a row when its test adopts the
+   harness; arrayjit cannot do that until gh-ocannl-954 splits out the package-safe builders. *)
 let exemptions =
   [
-    ("arrayjit/test/test_cross_cse.ml", "blocked-on-954: arrayjit package cannot link ll_test");
+    ( "arrayjit/test/test_cross_cse.ml",
+      Scan.Migration { records = 8; traversals = 2 },
+      "blocked-on-954: arrayjit package cannot link ll_test" );
     ( "arrayjit/test/test_local_scope_init.ml",
+      Scan.Migration { records = 20; traversals = 0 },
       "blocked-on-954: arrayjit package cannot link ll_test" );
     ( "arrayjit/test/test_one_hot_gather_rewrite.ml",
+      Scan.Migration { records = 5; traversals = 3 },
       "blocked-on-954: arrayjit package cannot link ll_test" );
     ( "arrayjit/test/test_stage_b_where_debug.ml",
+      Scan.Migration { records = 9; traversals = 0 },
       "blocked-on-954: arrayjit package cannot link ll_test" );
     ( "arrayjit/test/test_vectorized_codegen.ml",
+      Scan.Migration { records = 22; traversals = 0 },
       "blocked-on-954: arrayjit package cannot link ll_test" );
     ( "arrayjit/test/test_zero_out_codegen.ml",
+      Scan.Migration { records = 2; traversals = 0 },
       "blocked-on-954: arrayjit package cannot link ll_test" );
-    ("test/operations/affine_extraction.ml", "existing migration debt; adopt ll_test when touched");
-    ("test/operations/affine_lowering.ml", "existing migration debt; adopt ll_test when touched");
-    ("test/operations/autotune_scope_menu.ml", "existing migration debt; adopt ll_test when touched");
-    ("test/operations/autotune_smoke.ml", "existing migration debt; adopt ll_test when touched");
-    ("test/operations/buffer_aliasing.ml", "existing migration debt; adopt ll_test when touched");
-    ("test/operations/cost_model_floor.ml", "existing migration debt; adopt ll_test when touched");
-    ("test/operations/cpu_simd_reduction.ml", "existing migration debt; adopt ll_test when touched");
-    ("test/operations/fission_schedule.ml", "existing migration debt; adopt ll_test when touched");
-    ( "test/operations/hardware_axes_parity.ml",
+    ( "test/operations/affine_extraction.ml",
+      Scan.Migration { records = 14; traversals = 0 },
       "existing migration debt; adopt ll_test when touched" );
-    ("test/operations/hip_scratch_budget.ml", "existing migration debt; adopt ll_test when touched");
+    ( "test/operations/affine_lowering.ml",
+      Scan.Migration { records = 0; traversals = 3 },
+      "existing migration debt; adopt ll_test when touched" );
+    ( "test/operations/autotune_scope_menu.ml",
+      Scan.Migration { records = 0; traversals = 1 },
+      "existing migration debt; adopt ll_test when touched" );
+    ( "test/operations/autotune_smoke.ml",
+      Scan.Migration { records = 3; traversals = 1 },
+      "existing migration debt; adopt ll_test when touched" );
+    ( "test/operations/buffer_aliasing.ml",
+      Scan.Migration { records = 1; traversals = 0 },
+      "existing migration debt; adopt ll_test when touched" );
+    ( "test/operations/cost_model_floor.ml",
+      Scan.Migration { records = 16; traversals = 0 },
+      "existing migration debt; adopt ll_test when touched" );
+    ( "test/operations/cpu_simd_reduction.ml",
+      Scan.Migration { records = 5; traversals = 1 },
+      "existing migration debt; adopt ll_test when touched" );
+    ( "test/operations/fission_schedule.ml",
+      Scan.Migration { records = 9; traversals = 2 },
+      "existing migration debt; adopt ll_test when touched" );
+    ( "test/operations/hardware_axes_parity.ml",
+      Scan.Migration { records = 4; traversals = 4 },
+      "existing migration debt; adopt ll_test when touched" );
+    ( "test/operations/hip_scratch_budget.ml",
+      Scan.Migration { records = 5; traversals = 0 },
+      "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/mma_tensorization_label.ml",
+      Scan.Migration { records = 0; traversals = 1 },
       "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/model_default_fallback.ml",
+      Scan.Migration { records = 2; traversals = 2 },
       "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/narrow_storage_compute.ml",
+      Scan.Migration { records = 0; traversals = 1 },
       "existing migration debt; adopt ll_test when touched" );
-    ("test/operations/schedule_conv_gemm.ml", "existing migration debt; adopt ll_test when touched");
+    ( "test/operations/schedule_conv_gemm.ml",
+      Scan.Migration { records = 0; traversals = 1 },
+      "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/schedule_cpu_pack_matmul.ml",
+      Scan.Migration { records = 0; traversals = 1 },
       "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/schedule_epilogue_fusion.ml",
+      Scan.Migration { records = 4; traversals = 4 },
       "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/schedule_ldmatrix_matmul.ml",
+      Scan.Migration { records = 0; traversals = 1 },
       "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/schedule_pack_mma_matmul.ml",
+      Scan.Migration { records = 0; traversals = 1 },
       "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/schedule_pipelined_matmul.ml",
+      Scan.Migration { records = 3; traversals = 8 },
       "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/schedule_register_matmul.ml",
+      Scan.Migration { records = 0; traversals = 1 },
       "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/schedule_swizzle_matmul.ml",
+      Scan.Migration { records = 0; traversals = 1 },
       "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/scratch_value_variance.ml",
+      Scan.Migration { records = 5; traversals = 0 },
       "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/test_bounds_folded_gather.ml",
+      Scan.Migration { records = 0; traversals = 2 },
       "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/test_one_hot_embedding_backward.ml",
+      Scan.Migration { records = 0; traversals = 4 },
       "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/test_one_hot_embedding_lookup.ml",
+      Scan.Migration { records = 0; traversals = 6 },
       "existing migration debt; adopt ll_test when touched" );
-    ("test/operations/test_slice_alias.ml", "existing migration debt; adopt ll_test when touched");
-    ("test/operations/tile_mma_declines.ml", "existing migration debt; adopt ll_test when touched");
-    ("test/operations/tile_mma_geometry.ml", "existing migration debt; adopt ll_test when touched");
+    ( "test/operations/test_slice_alias.ml",
+      Scan.Migration { records = 0; traversals = 2 },
+      "existing migration debt; adopt ll_test when touched" );
+    ( "test/operations/tile_mma_declines.ml",
+      Scan.Migration { records = 0; traversals = 1 },
+      "existing migration debt; adopt ll_test when touched" );
+    ( "test/operations/tile_mma_geometry.ml",
+      Scan.Migration { records = 0; traversals = 1 },
+      "existing migration debt; adopt ll_test when touched" );
     ( "test/support/ll_test.ml",
+      Scan.Permanent,
       "canonical harness implementation owns these builders and traversals" );
   ]
 
@@ -102,12 +153,21 @@ let scan ~exemptions root generated =
       printf "Source floor: %s >= %d\n" prefix floor;
       if count < floor then Verdict.fail (prefix ^ ": source inventory below floor"));
   printf "Adoption threshold: 1 record construction or 1 private traversal\n";
-  List.iter exemptions ~f:(fun (path, reason) -> printf "%s -- %s\n" path reason)
+  List.iter exemptions ~f:(fun (path, kind, reason) ->
+      match kind with
+      | Scan.Permanent -> printf "%s -- permanent: %s\n" path reason
+      | Scan.Migration cap ->
+          printf "%s -- records<=%d traversals<=%d: %s\n" path cap.records cap.traversals reason)
 
 let () =
   match Array.to_list Stdlib.Sys.argv with
   | [ _; "--fixture"; root ] -> scan ~exemptions:[] root []
   | [ _; "--fixture-exempt"; root ] ->
-      scan ~exemptions:[ ("test/new.ml", "control exemption") ] root []
+      scan
+        ~exemptions:
+          [ ("test/new.ml", Scan.Migration { records = 2; traversals = 1 }, "control exemption") ]
+        root []
+  | [ _; "--fixture-permanent"; root ] ->
+      scan ~exemptions:[ ("test/new.ml", Scan.Permanent, "control permanent exemption") ] root []
   | _ :: root :: generated -> scan ~exemptions root generated
   | _ -> Stdlib.exit 2
