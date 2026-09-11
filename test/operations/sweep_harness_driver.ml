@@ -17,6 +17,9 @@ let git_bash_candidates getenv =
 let resolve_bash ~win32 ~git_bashes ~available =
   if win32 then List.find_opt available git_bashes else Some "bash"
 
+let path_available ~win32 ~stat_kind ~x_ok path =
+  match stat_kind path with Some Unix.S_REG -> win32 || x_ok path | _ -> false
+
 (* This test runs on Windows only in the extended matrix, so keep the lookup's defining negative
    control host-independent. In particular, an executable bare [bash] on Windows is the WSL launcher
    in System32 on the runner image; it must not win, and must not become a fallback when Git Bash is
@@ -50,7 +53,19 @@ let check_resolution () =
     None;
   expect "non-Windows keeps PATH lookup"
     (resolve_bash ~win32:false ~git_bashes:[] ~available)
-    (Some "bash")
+    (Some "bash");
+  let regular _ = Some Unix.S_REG in
+  let directory _ = Some Unix.S_DIR in
+  if
+    not
+      (path_available ~win32:true ~stat_kind:regular
+         ~x_ok:(fun _ -> failwith "Windows must not call Unix.access X_OK")
+         git_bash)
+  then failwith "Windows rejects a regular Git Bash executable";
+  if path_available ~win32:true ~stat_kind:directory ~x_ok:(fun _ -> true) git_bash then
+    failwith "Windows accepts a Git Bash directory";
+  if path_available ~win32:false ~stat_kind:regular ~x_ok:(fun _ -> false) git_bash then
+    failwith "non-Windows accepts a non-executable Git Bash file"
 
 let executable path =
   try
@@ -64,8 +79,13 @@ let () =
     exit 2);
   check_resolution ();
   let bash =
-    resolve_bash ~win32:Sys.win32 ~git_bashes:(git_bash_candidates Sys.getenv_opt)
-      ~available:(fun path -> Sys.file_exists path && executable path)
+    resolve_bash ~win32:Sys.win32
+      ~git_bashes:(git_bash_candidates Sys.getenv_opt)
+      ~available:
+        (path_available ~win32:Sys.win32
+           ~stat_kind:(fun path ->
+             try Some (Unix.stat path).st_kind with Unix.Unix_error _ -> None)
+           ~x_ok:executable)
   in
   let bash =
     match bash with
