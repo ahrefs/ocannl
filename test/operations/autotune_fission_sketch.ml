@@ -527,7 +527,9 @@ let () =
     | Some r ->
         accounting tag r;
         (r, got)
-    | None -> failwith "expected a multi-site report"
+    | None ->
+        fail "expected a multi-site report";
+        Stdlib.exit 1
   in
   let%op qd2 = qa + qb in
   Train.set_materialized qd2.Tensor.value;
@@ -542,7 +544,8 @@ let () =
   let%op qe4 = qd4 * qc in
   Train.set_materialized qe4.Tensor.value;
   let%op qg4 = qc16 * qe4 in
-  let report_ab, got_ms = tune_candidates "af_ms_ab" (Train.forward qg4) qg4 in
+  let ms_comp = Train.forward qg4 in
+  let report_ab, got_ms = tune_candidates "af_ms_ab" ms_comp qg4 in
   let%op qd5 = qa + qb in
   Train.set_materialized qd5.Tensor.value;
   let%op qe5 = qd5 * qc in
@@ -571,6 +574,48 @@ let () =
     (((not eligible) || report_ab.Autotune.fiss_sketch_composite_timed)
     && if is_cpu then timed_ab = cand_ab + Bool.to_int eligible else timed_ab > 0);
   p_all2 "multi-site: tuned two-matmul chain matches the serial twin" got_ms got_ms_serial ~f:approx;
+
+  (* A post-admission failure must not erase the window from the partial report. The attempt label
+     identifies the coarse multi-entry candidate; the timed hook guarantees that the injection
+     happens after admission, not merely after dispatch. *)
+  let partial = ref None and injected = ref false and composite_attempt = ref false in
+  let old_attempt = !Autotune.on_candidate_attempt in
+  let old_timed = !Autotune.on_candidate_timed in
+  (Autotune.on_candidate_attempt :=
+     fun label ->
+       composite_attempt :=
+         String.is_prefix label ~prefix:"F_sketch["
+         && (not (String.is_prefix label ~prefix:"F_sketch[fine "))
+         && String.mem label ',');
+  (Autotune.on_candidate_timed :=
+     fun _ ~timed_so_far:_ ->
+       if !composite_attempt then (
+         injected := true;
+         raise Stdlib.Exit));
+  Exn.protect
+    ~finally:(fun () ->
+      Autotune.on_candidate_attempt := old_attempt;
+      Autotune.on_candidate_timed := old_timed)
+    ~f:(fun () ->
+      match
+        Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
+          ~report:(fun r -> partial := Some r)
+          (Context.auto ()) (named "af_ms_partial" ms_comp) Ir.Indexing.Empty
+      with
+      | ctx, _ -> Context.release ctx
+      | exception Stdlib.Exit when !injected -> ());
+  let partial_claim = "multi-site: partial report retains admitted composite timing" in
+  (match !partial with
+  | Some r when !injected ->
+      p partial_claim
+        (r.Autotune.fiss_sketch_composite_eligible && r.Autotune.fiss_sketch_composite_timed
+       && r.Autotune.fiss_sketch_timed > 0
+        && ((not is_cpu) || r.Autotune.fiss_sketch_timed = r.Autotune.fiss_sketch_candidates + 1)
+        && match r.Autotune.outcome with Autotune.Search_died _ -> true | _ -> false)
+  | Some r ->
+      if not (completed r) then fail "untriggered injection did not complete its search";
+      skipped ~aggregation:`Environment ~backend:backend_name partial_claim
+  | None -> fail "expected the post-admission search report");
 
   (* --- timing_ctx on a different backend is rejected (Codex P2 on PR #109): candidates timed
      elsewhere do not predict the target device, and the winner would be cached under the target

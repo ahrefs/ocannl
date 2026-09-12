@@ -3894,6 +3894,14 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                     | Ok timing_result ->
                         let ms = Option.value_exn (admitted_timing_ms timing_result) in
                         Int.incr n_timed;
+                        (* Publish window accounting before the post-admission injection seam: it
+                           can raise, and the partial report still owns this completed window. *)
+                        (match spec with
+                        | Fiss (F_sketch { entries; fine }) ->
+                            Int.incr n_fiss_sketch_timed;
+                            if (not fine) && List.length entries >= 2 then
+                              fs_composite_timed := true
+                        | _ -> ());
                         !on_candidate_timed c.routine.Context.name ~timed_so_far:!n_timed;
                         Hashtbl.set timed_ms_by_digest ~key:c.digest_after ~data:ms;
                         Hashtbl.set label_by_digest ~key:c.digest_after ~data:(spec_label spec);
@@ -4201,9 +4209,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               let result = try_spec spec in
               (match (spec, result) with
               | Fiss (F_sketch { entries = [ (key, p) ]; fine }), Some (_, ms) ->
-                  Int.incr n_fiss_sketch_timed;
                   fiss_single_results := (key, fine, (p, ms)) :: !fiss_single_results
-              | Fiss (F_sketch _), Some _ -> Int.incr n_fiss_sketch_timed
               | Fiss (F_split { sites = [ (s, b) ] }), Some (_, ms) ->
                   Int.incr n_sr_timed;
                   sr_single_results := (s, b, ms) :: !sr_single_results;
@@ -4236,12 +4242,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
           in
           fs_composite_eligible := List.length recombined >= 2;
           if !fs_composite_eligible then
-            Option.iter
-              (try_spec (Fiss (F_sketch { entries = recombined; fine = false })))
-              ~f:(fun timed ->
-                Int.incr n_fiss_sketch_timed;
-                fs_composite_timed := true;
-                admit timed);
+            Option.iter (try_spec (Fiss (F_sketch { entries = recombined; fine = false }))) ~f:admit;
           (* The fine composite (gh-ocannl-574): the fine winner in a multi-segment routine needs
              the freed site's best AND the other segments' bests in one candidate. Keys address the
              fine segmentation; segments unchanged by the finer cuts share their digest with the
@@ -4258,9 +4259,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
           if List.length fine_recombined >= 2 then
             Option.iter
               (try_spec (Fiss (F_sketch { entries = fine_recombined; fine = true })))
-              ~f:(fun timed ->
-                Int.incr n_fiss_sketch_timed;
-                admit timed);
+              ~f:admit;
           (* Multi-site split-reduce recombination: apply each detected site's best-timed
              [num_blocks] simultaneously — the sites are distinct statements, so their preludes
              compose. Same rationale as the sketch recombination above: singles keep every value
