@@ -2403,8 +2403,16 @@ if [ "$life_posix" = 1 ] && [ "$have_state" = 1 ] && [ "$have_pgid" = 1 ]; then
   life_check 0 'verdict: pass' 'launch succeeds after orphan recovery'
 
   rm -f "$life_prefix.child"
-  life_capture run --cap 15 background
-  life_check 0 'verdict: pass' 'background-child run finishes within the cap'
+  # The Dune cap does not bound cleanup after the supervisor starts finishing.
+  # Observe the attached launcher under our own deadline: waiting for the
+  # child's natural 60-second exit must fail even if the final verdict is 0.
+  OCANNL_TOOL_TEST_RUNS=$life_runs LIFECYCLE_PREFIX=$life_prefix \
+    LIFECYCLE_TOKEN_HELPER=$TMP/ps_token.sh PATH=$life_bin:$PATH \
+    "$life_root/tools/test-run.sh" run --cap 15 background \
+    >"$TMP/lifecycle.out" 2>"$TMP/lifecycle.err" &
+  life_pid=$!
+  life_wait_child
+  life_check 0 'verdict: pass' 'background-child run finishes within the fixture deadline'
   life_run=$(life paths run last)
   life_child=$(cat "$life_prefix.child")
   # This assertion is immediate, before cleanup. A descendant that closed its
@@ -2412,6 +2420,7 @@ if [ "$life_posix" = 1 ] && [ "$have_state" = 1 ] && [ "$have_pgid" = 1 ]; then
   if life_dead "$life_child"; then report 0 'lifecycle: background child is non-live before run returns'
   else report 1 'lifecycle: background child is non-live before run returns'; fi
   life_no_survivors 'background-child completion'
+  lifecycle_cleanup
 else
   skip 'lifecycle: attached signals, orphan group and background-child reaping' 'requires POSIX process groups and independent state/pgid readers'
 fi
