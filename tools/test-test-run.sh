@@ -1132,6 +1132,53 @@ else
   report 1 "queries: absolute runs ignore unrelated ambient state while current references validate it" "$query_bad"
 fi
 
+# A missing absolute reference must not select a matching state-root suffix.
+query_missing_absolute=/ocannl-query-missing-$$
+mkdir -p "$query_runs/$query_missing_absolute"
+cp "$query_dir/cmd" "$query_dir/cap" "$query_dir/wt" "$query_dir/runs" "$query_runs/$query_missing_absolute/"
+query_bad=
+for query_command in 'paths run' 'paths lock' 'lock-status'; do
+  query_out=$(query $query_command "$query_missing_absolute" 2>"$TMP/query-error")
+  query_rc=$?
+  if [ "$query_rc" != 2 ] || [ -n "$query_out" ] || [ ! -s "$TMP/query-error" ]; then
+    query_bad="$query_command: rc=$query_rc output=$query_out"; break
+  fi
+done
+if [ -z "$query_bad" ] && [ ! -e "$query_missing_absolute" ] && [ ! -e "$query_lock" ]; then
+  report 0 "queries: missing absolute references never fall back under the state root"
+else
+  report 1 "queries: missing absolute references never fall back under the state root" "$query_bad"
+fi
+
+# Explicit references use the same host-absolute grammar as recorded paths.
+case $(uname -s) in
+  MSYS* | MINGW*) query_drive_ref=$(cygpath -m "$query_dir"); query_drive_ref_rc=0 ;;
+  *)
+    query_drive_ref=C:/fixture
+    mkdir -p "$repeat_root/$query_drive_ref"
+    cp "$query_dir/cmd" "$query_dir/cap" "$query_dir/wt" "$query_dir/runs" "$repeat_root/$query_drive_ref/"
+    query_drive_ref_rc=2 ;;
+esac
+query_out=$(env -u HOME -u OCANNL_TOOL_TEST_RUNS \
+  "$repeat_root/tools/test-run.sh" paths run "$query_drive_ref" 2>"$TMP/query-error")
+query_rc=$?
+query_drive_lock=$(env -u HOME -u OCANNL_TOOL_TEST_RUNS \
+  "$repeat_root/tools/test-run.sh" lock-status "$query_drive_ref" 2>"$TMP/query-error")
+query_drive_lock_rc=$?
+query_bad=
+[ "$query_rc" = "$query_drive_ref_rc" ] && [ "$query_drive_lock_rc" = "$query_drive_ref_rc" ] || query_bad="rc=$query_rc lock=$query_drive_lock_rc"
+if [ "$query_drive_ref_rc" = 0 ]; then
+  [ "$query_out" = "$query_dir" ] && [ "$query_drive_lock" = idle ] || query_bad="native reference changed identity"
+else
+  [ -z "$query_out" ] && [ -z "$query_drive_lock" ] || query_bad="relative reference bypassed current state"
+  [ "$(query paths run "$query_drive_ref")" = "$query_wt/$query_drive_ref" ] || query_bad="relative reference no longer resolves with valid state"
+fi
+if [ -z "$query_bad" ] && [ ! -e "$query_lock" ]; then
+  report 0 "queries: explicit drive references follow host absolute-path semantics"
+else
+  report 1 "queries: explicit drive references follow host absolute-path semantics" "$query_bad"
+fi
+
 query_out=$(env -u HOME -u OCANNL_TOOL_TEST_RUNS \
   "$repeat_root/tools/test-run.sh" paths runs "$query_dir" 2>"$TMP/query-error")
 query_rc=$?
@@ -1264,6 +1311,36 @@ if [ -z "$query_bad" ] && [ "$(query paths run last)" = "$query_dir" ] \
   report 0 "queries: last pointer records are validated before capture"
 else
   report 1 "queries: last pointer records are validated before capture" "$query_bad"
+fi
+
+# Legacy pointer symlinks must preserve physical identity before capture too.
+if [ "$query_line_paths" = 1 ] && [ -L "$TMP/query-state-link" ]; then
+  query_bad=
+  query_pointer_target=$query_dir$'\n'
+  mkdir "$query_pointer_target"
+  rm "$query_last"
+  ln -s "$query_pointer_target" "$query_last"
+  for query_command in 'paths run' 'paths lock' 'lock-status'; do
+    query_out=$(query $query_command last 2>"$TMP/query-error")
+    query_rc=$?
+    if [ "$query_rc" != 2 ] || [ -n "$query_out" ] || [ ! -s "$TMP/query-error" ]; then
+      query_bad="$query_command: rc=$query_rc output=$query_out"; break
+    fi
+  done
+  [ -L "$query_last" ] || query_bad="query replaced the legacy pointer"
+  rm "$query_last"
+  ln -s "$query_dir" "$query_last"
+  if [ -z "$query_bad" ] && [ "$(query paths run last)" = "$query_dir" ] \
+     && [ "$(query lock-status last)" = idle ] && [ -L "$query_last" ] \
+     && [ ! -e "$query_lock" ]; then
+    report 0 "queries: legacy pointer symlinks retain physical identity before capture"
+  else
+    report 1 "queries: legacy pointer symlinks retain physical identity before capture" "$query_bad"
+  fi
+  rm "$query_last"
+  printf '%s\n' "$query_dir" >"$query_last"
+else
+  skip "queries: legacy pointer symlinks retain physical identity before capture" "requires POSIX symlink filenames"
 fi
 
 # Legacy paths come from the recorded worktree, not the querying script's root.

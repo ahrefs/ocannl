@@ -222,7 +222,7 @@ query_state_for() {
   # Absolute references carry their own recorded state. Do not inspect an
   # unrelated current root just to answer a question about that run.
   require_query_path "$1"
-  case $1 in /* | [A-Za-z]:/*) return 0 ;; esac
+  recorded_absolute_path "$1" && return 0
   if [ -z "$RUNS" ]; then
     [ -n "${HOME:-}" ] || die "HOME is unavailable; set OCANNL_TOOL_TEST_RUNS for current-state queries"
     RUNS=$HOME/.ocannl-test-runs
@@ -951,6 +951,13 @@ publish_run() { # 0 published; 1 error
 
 resolve_run() {
   local ref=${1:-last}
+  case $sub in
+    paths | lock-status)
+      # An absolute reference never falls back to an unrelated state entry.
+      if recorded_absolute_path "$ref" && [ ! -d "$ref" ]; then
+        die "no such run: $ref"
+      fi ;;
+  esac
   if [ "$ref" = last ]; then
     # The pointer is a plain file (see publish_run). A symlink there was
     # written by a version predating that change and may still name a run
@@ -965,7 +972,12 @@ resolve_run() {
     # nothing else), so a failed `readlink` means `cat` now applies. The
     # reverse order would still race -- `cat` fails on a symlink to a
     # directory, and the rename could land before the `readlink` retry.
-    run_dir=$(readlink "$LAST" 2>/dev/null) || run_dir=
+    case $sub in
+      # Resolve the symlink itself before capture: readlink's output can lose
+      # trailing LF and accidentally select another existing run directory.
+      paths | lock-status) run_dir=$(query_physical_path "$LAST" 2>/dev/null) || run_dir= ;;
+      *) run_dir=$(readlink "$LAST" 2>/dev/null) || run_dir= ;;
+    esac
     if [ -z "$run_dir" ]; then
       case $sub in
         paths | lock-status) run_dir=$(read_query_record "$LAST" 2>/dev/null) || run_dir= ;;
