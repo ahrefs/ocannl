@@ -44,6 +44,8 @@
 # (0) or held (3); an unreadable lock is an error (2), never idle. These are
 # snapshots, not reservations or evidence that a particular process is alive.
 # Neither query creates state, publishes pointers, or launches a toolchain.
+# Missing state directories are supported; a missing intermediate followed by
+# .. is refused (2) because it has no physical identity. Existing .. paths work.
 #
 # `repeat` runs each iteration through dune in a freshly cleaned, cache-disabled
 # build context, keeps its separate stdout/stderr and exit status, and compares
@@ -202,8 +204,9 @@ case ${1:-} in
   paths | lock-status)
     # Let the same shell `cd -P` as launch resolve the existing prefix. In
     # particular, Perl File::Spec under MSYS does not treat C:/ as Bash does.
-    # No mkdir: collect the missing suffix, then resolve it component by
-    # component (including missing/../existing-symlink) without writing.
+    # No mkdir: append only ordinary missing components. A missing prefix
+    # followed by .. has no physical identity to query; do not simulate how
+    # mkdir or platform-specific root traversal would interpret it.
     query_prefix=$RUNS query_suffix=
     while [ ! -d "$query_prefix" ]; do
       [ ! -e "$query_prefix" ] && [ ! -L "$query_prefix" ] ||
@@ -214,24 +217,16 @@ case ${1:-} in
         //?*) case $query_parent in / | //) die "cannot resolve UNC root: $RUNS" ;; esac ;;
       esac
       [ "$query_parent" != "$query_prefix" ] || die "cannot resolve $RUNS"
-      query_suffix=$(basename "$query_prefix")/$query_suffix
+      query_part=$(basename "$query_prefix")
+      case $query_part in
+        ..) die "cannot resolve missing state path containing ..: $RUNS" ;;
+        .) ;;
+        *) query_suffix=$query_part${query_suffix:+/$query_suffix} ;;
+      esac
       query_prefix=$query_parent
     done
-    query_prefix=$(cd "$query_prefix" && pwd -P) || die "cannot resolve $RUNS"
-    RUNS=$(perl -MCwd=abs_path -e '
-      my $out = $ARGV[0];
-      for my $part (split m{/+}, $ARGV[1]) {
-        next if $part eq "" || $part eq ".";
-        if ($part eq "..") { $out =~ s{/[^/]+$}{}; $out ||= "/"; next; }
-        $out =~ s{/$}{};
-        $out .= "/$part";
-        if (-e $out || -l $out) {
-          $out = abs_path($out) // die "cannot resolve $out\n";
-          -d $out or die "not a directory: $out\n";
-        }
-      }
-      print "$out\n";
-    ' "$query_prefix" "$query_suffix") || die "cannot resolve runs directory"
+    RUNS=$(cd "$query_prefix" && pwd -P) || die "cannot resolve $RUNS"
+    [ -z "$query_suffix" ] || RUNS=${RUNS%/}/$query_suffix
     ;;
   *) mkdir -p "$RUNS" || die "cannot create $RUNS"
      RUNS=$(cd "$RUNS" && pwd -P) || die "cannot resolve $RUNS" ;;

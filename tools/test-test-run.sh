@@ -800,7 +800,7 @@ cp "$GROUP_SRC" "$repeat_root/scripts/process-group.sh"
 chmod +x "$repeat_root/tools/test-run.sh"
 # Read-only query contract: no state store, no first run, and no lock file yet.
 # The fixture root (not the caller's cwd) owns all omitted-RUN queries.
-query_runs=$TMP/query-state/missing/../runs
+query_runs=$TMP/query-state/runs
 query_expected=$(cd "$TMP" && pwd -P)/query-state/runs
 query() {
   OCANNL_TOOL_TEST_RUNS=$query_runs "$repeat_root/tools/test-run.sh" "$@"
@@ -881,6 +881,40 @@ else
     "rc=$query_rc runs=$query_out"
 fi
 
+# Parent traversal is resolved only by the filesystem, never by a second
+# path grammar. Test both sides for local and shell-reported UNC prefixes.
+mkdir "$query_unc_root/existing"
+for query_style in local unc; do
+  query_env=$TMP/query-empty-env
+  : >"$query_env"
+  [ "$query_style" != unc ] || query_env=$TMP/query-unc-env
+  query_want=$query_unc_root/runs
+  [ "$query_style" != unc ] || query_want=//query-host/share/runs
+  query_good=$(BASH_ENV="$query_env" QUERY_TEST_UNC_ROOT="$query_unc_root" \
+    OCANNL_TOOL_TEST_RUNS="$query_unc_root/existing/../runs" \
+    "$repeat_root/tools/test-run.sh" paths runs)
+  query_good_rc=$?
+  query_bad=
+  for query_command in 'paths runs' 'lock-status'; do
+    query_out=$(BASH_ENV="$query_env" QUERY_TEST_UNC_ROOT="$query_unc_root" \
+      OCANNL_TOOL_TEST_RUNS="$query_unc_root/missing/../../target" \
+      "$repeat_root/tools/test-run.sh" $query_command 2>"$TMP/query-error")
+    query_rc=$?
+    if [ "$query_rc" != 2 ] || [ -n "$query_out" ] \
+       || ! grep -q 'missing state path containing ..' "$TMP/query-error"; then
+      query_bad="$query_command: rc=$query_rc runs=$query_out"; break
+    fi
+  done
+  if [ "$query_good_rc" = 0 ] && [ "$query_good" = "$query_want" ] \
+     && [ -z "$query_bad" ] && [ ! -e "$query_unc_root/missing" ] \
+     && [ ! -e "$query_unc_root/runs" ] && [ ! -e "$TMP/target" ]; then
+    report 0 "queries: $query_style existing parent traversal resolves; missing traversal refuses without writes"
+  else
+    report 1 "queries: $query_style existing parent traversal resolves; missing traversal refuses without writes" \
+      "resolved=$query_good_rc:$query_good expected=$query_want $query_bad"
+  fi
+done
+
 # MSYS accepts both /c/... and C:/... at launch. Its Perl File::Spec does
 # not necessarily share that interpretation, so compare both against Bash.
 case $(uname -s) in
@@ -895,8 +929,25 @@ case $(uname -s) in
       report 1 "queries: absent Windows drive spelling matches the launch shell" \
         "rc=$query_rc runs=$query_out expected=$query_expected"
     fi
+    query_native=$(cygpath -m "$query_unc_root")
+    query_good=$(OCANNL_TOOL_TEST_RUNS="$query_native/existing/../runs" \
+      "$repeat_root/tools/test-run.sh" paths runs)
+    query_good_rc=$?
+    query_out=$(OCANNL_TOOL_TEST_RUNS="$query_native/missing/../../target" \
+      "$repeat_root/tools/test-run.sh" lock-status 2>"$TMP/query-error")
+    query_rc=$?
+    if [ "$query_good_rc" = 0 ] && [ "$query_good" = "$query_unc_root/runs" ] \
+       && [ "$query_rc" = 2 ] && [ -z "$query_out" ] \
+       && grep -q 'missing state path containing ..' "$TMP/query-error" \
+       && [ ! -e "$query_unc_root/missing" ] && [ ! -e "$query_unc_root/runs" ]; then
+      report 0 "queries: drive existing parent traversal resolves; missing traversal refuses without writes"
+    else
+      report 1 "queries: drive existing parent traversal resolves; missing traversal refuses without writes" \
+        "resolved=$query_good_rc:$query_good refused=$query_rc:$query_out"
+    fi
     ;;
-  *) skip "queries: absent Windows drive spelling matches the launch shell" "requires Windows drive paths" ;;
+  *) skip "queries: absent Windows drive spelling matches the launch shell" "requires Windows drive paths"
+     skip "queries: drive existing parent traversal resolves; missing traversal refuses without writes" "requires Windows drive paths" ;;
 esac
 
 # The pointer returned by paths last must feed the SAME resolver as status and
