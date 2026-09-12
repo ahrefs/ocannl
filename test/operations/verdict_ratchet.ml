@@ -184,6 +184,14 @@ let exempt_computed_sites =
       "the body of `Verdict.p` itself -- the claim printer every converted site routes THROUGH, \
        which is the one place in the tree where printing `<label>: <bool>` is the gate rather than \
        a way around it" );
+    ( "test/operations/autotune_fission_sketch.ml:multi-site composite (not part of the golden): \
+       eligible=%b timed=",
+      "a measurement census on stderr: an ineligible composite correctly has no window; the \
+       adjacent Verdict claim checks eligibility against arrival and the exact CPU count" );
+    ( "test/operations/flip_bound_pruning.ml:bound pruning (not part of the golden): incumbent=%g \
+       ms, timed=%d refused=%d, searches=%d, inline=%d, decisive=",
+      "the evidence census on stderr: false means undecided, reported through Verdict.skipped; a \
+       decisive observation is checked by the adjacent pruning claim" );
     ( "test/operations/affine_extraction.ml:%s %s parallelizable: ",
       "the per-symbol parallelizability table: a reduced axis is legitimately not parallelizable, \
        so `false` is a fact the golden pins rather than a defect" );

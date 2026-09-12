@@ -104,6 +104,8 @@ type report = {
   epilogue_sketch_candidates : int;
   fiss_sketch_candidates : int;
   fiss_sketch_timed : int;
+  fiss_sketch_composite_eligible : bool;
+  fiss_sketch_composite_timed : bool;
   split_reduce_candidates : int;
   split_reduce_timed : int;
   split_reduce_composite_eligible : bool;
@@ -171,6 +173,8 @@ let no_search_report ~timing =
     epilogue_sketch_candidates = 0;
     fiss_sketch_candidates = 0;
     fiss_sketch_timed = 0;
+    fiss_sketch_composite_eligible = false;
+    fiss_sketch_composite_timed = false;
     split_reduce_candidates = 0;
     split_reduce_timed = 0;
     split_reduce_composite_eligible = false;
@@ -3291,6 +3295,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                     epilogue_sketch_candidates = 0;
                     fiss_sketch_candidates = 0;
                     fiss_sketch_timed = 0;
+                    fiss_sketch_composite_eligible = false;
+                    fiss_sketch_composite_timed = false;
                     split_reduce_candidates = 0;
                     split_reduce_timed = 0;
                     split_reduce_composite_eligible = false;
@@ -3552,6 +3558,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                     ~bytes:f.CM.fr_bytes ()) ~f:(fun sec -> sec *. 1e3))
         in
         let n_fiss_sketch_timed = ref 0
+        and fs_composite_eligible = ref false
+        and fs_composite_timed = ref false
         and n_sr_timed = ref 0
         and sr_composite_eligible = ref false
         and sr_composite_timed = ref false in
@@ -3694,6 +3702,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               epilogue_sketch_candidates = !n_epilogue_sketch_candidates;
               fiss_sketch_candidates = !n_fiss_sketch_candidates;
               fiss_sketch_timed = !n_fiss_sketch_timed;
+              fiss_sketch_composite_eligible = !fs_composite_eligible;
+              fiss_sketch_composite_timed = !fs_composite_timed;
               split_reduce_candidates = !n_split_reduce_candidates;
               split_reduce_timed = !n_sr_timed;
               split_reduce_composite_eligible = !sr_composite_eligible;
@@ -3861,7 +3871,10 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                            verdict. Keep that accounting stable under refusal; the historical
                            [timings_contended] counter covers every unusable timing result. *)
                         (match spec with
-                        | Fiss (F_sketch _) -> Int.incr n_fiss_sketch_timed
+                        | Fiss (F_sketch { entries; fine }) ->
+                            Int.incr n_fiss_sketch_timed;
+                            if (not fine) && List.length entries >= 2 then
+                              fs_composite_timed := true
                         | Fiss (F_split { sites }) ->
                             Int.incr n_sr_timed;
                             if List.length sites >= 2 then sr_composite_timed := true
@@ -4221,11 +4234,13 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
             List.filter_map fiss_sketch_entries ~f:(fun (key, _) ->
                 best_single_for ~fine_ok:false key)
           in
-          if List.length recombined >= 2 then
+          fs_composite_eligible := List.length recombined >= 2;
+          if !fs_composite_eligible then
             Option.iter
               (try_spec (Fiss (F_sketch { entries = recombined; fine = false })))
               ~f:(fun timed ->
                 Int.incr n_fiss_sketch_timed;
+                fs_composite_timed := true;
                 admit timed);
           (* The fine composite (gh-ocannl-574): the fine winner in a multi-segment routine needs
              the freed site's best AND the other segments' bests in one candidate. Keys address the
@@ -4437,6 +4452,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               epilogue_sketch_candidates = List.count sketch_params ~f:(fun p -> p.sk_epilogue);
               fiss_sketch_candidates = List.length fiss_sketch_specs;
               fiss_sketch_timed = !n_fiss_sketch_timed;
+              fiss_sketch_composite_eligible = !fs_composite_eligible;
+              fiss_sketch_composite_timed = !fs_composite_timed;
               split_reduce_candidates = List.length sr_specs;
               split_reduce_timed = !n_sr_timed;
               split_reduce_composite_eligible = !sr_composite_eligible;

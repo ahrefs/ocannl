@@ -524,23 +524,25 @@ let () =
     let ctx = Context.run ctx routine in
     let got = Context.get_values ctx y.Tensor.value in
     match !report with
-    | Some r -> ((r.Autotune.fiss_sketch_candidates, r.Autotune.fiss_sketch_timed), got)
-    | None -> ((-1, -1), got)
+    | Some r ->
+        accounting tag r;
+        (r, got)
+    | None -> failwith "expected a multi-site report"
   in
   let%op qd2 = qa + qb in
   Train.set_materialized qd2.Tensor.value;
   let%op qe2 = qd2 * qc in
-  let (cand_a, _), _ = tune_candidates "af_ms_a" (Train.forward qe2) qe2 in
+  let report_a, _ = tune_candidates "af_ms_a" (Train.forward qe2) qe2 in
   let%op qd3 = qa + qb in
   Train.set_materialized qd3.Tensor.value;
   let%op qf3 = qc16 * qd3 in
-  let (cand_b, _), _ = tune_candidates "af_ms_b" (Train.forward qf3) qf3 in
+  let report_b, _ = tune_candidates "af_ms_b" (Train.forward qf3) qf3 in
   let%op qd4 = qa + qb in
   Train.set_materialized qd4.Tensor.value;
   let%op qe4 = qd4 * qc in
   Train.set_materialized qe4.Tensor.value;
   let%op qg4 = qc16 * qe4 in
-  let (cand_ab, timed_ab), got_ms = tune_candidates "af_ms_ab" (Train.forward qg4) qg4 in
+  let report_ab, got_ms = tune_candidates "af_ms_ab" (Train.forward qg4) qg4 in
   let%op qd5 = qa + qb in
   Train.set_materialized qd5.Tensor.value;
   let%op qe5 = qd5 * qc in
@@ -553,12 +555,21 @@ let () =
   in
   let msctx = Context.run msctx msroutine in
   let got_ms_serial = Context.get_values msctx qg5.Tensor.value in
+  let cand_a = report_a.Autotune.fiss_sketch_candidates in
+  let cand_b = report_b.Autotune.fiss_sketch_candidates in
+  let cand_ab = report_ab.Autotune.fiss_sketch_candidates in
+  let timed_ab = report_ab.Autotune.fiss_sketch_timed in
+  let eligible = report_ab.Autotune.fiss_sketch_composite_eligible in
+  Stdio.eprintf "multi-site composite (not part of the golden): eligible=%b timed=%b\n" eligible
+    report_ab.Autotune.fiss_sketch_composite_timed;
   p "multi-site: both sites seed per-segment sketches" (cand_a > 1 && cand_b > 1);
   p "multi-site: unmasked singles combo count (a + b)" (cand_ab = cand_a + cand_b);
   p "multi-site: best-timed singles recombined into a composite candidate"
-    (* On cc every single compiles and times, so the composite is exactly one extra timing; on
-       backends where some singles fail validation only the looser bound is stable. *)
-    (if is_cpu then timed_ab = cand_ab + 1 else timed_ab > 0);
+    (* Refused single windows still count as timed, but cannot staff a composite. The eligibility
+       fact comes from usable singles for two distinct segments, never from a report-wide contention
+       waiver. Every eligible composite must reach its own window. *)
+    (((not eligible) || report_ab.Autotune.fiss_sketch_composite_timed)
+    && if is_cpu then timed_ab = cand_ab + Bool.to_int eligible else timed_ab > 0);
   p_all2 "multi-site: tuned two-matmul chain matches the serial twin" got_ms got_ms_serial ~f:approx;
 
   (* --- timing_ctx on a different backend is rejected (Codex P2 on PR #109): candidates timed
