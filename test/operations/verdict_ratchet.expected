@@ -314,6 +314,112 @@ binds a for loop's variable apart from an outer namesake: true
 accepts a for loop body's quantifier witnessed on the loop's own variable: true
 refuses a witness on a field the file assigns: true
 accepts a witness on a field nothing in the file assigns: true
+refuses a quantifier through an aliased Boolean conjunction: true
+accepts a witnessed quantifier through an aliased Boolean conjunction: true
+accepts a shadowed Boolean conjunction alias: true
+refuses a quantifier through an aliased Boolean disjunction: true
+accepts a witnessed quantifier through an aliased Boolean disjunction: true
+accepts a shadowed Boolean disjunction alias: true
+refuses a quantifier through a curried functor: true
+accepts a witnessed quantifier through a curried functor: true
+refuses a quantifier through a partially applied functor: true
+accepts a witnessed quantifier through a partially applied functor: true
+accepts the same population witness through a deferred helper: true
+refuses a different population witness through a deferred helper: true
+accepts the same population witness through a deferred partial helper: true
+refuses a different population witness through a deferred partial helper: true
+refuses a quantifier in Boolean greater or equal ordering: true
+accepts a witnessed quantifier in Boolean greater or equal ordering: true
+refuses a quantifier in Boolean greater ordering: true
+accepts a witnessed quantifier in Boolean greater ordering: true
+refuses a quantifier in Boolean less or equal ordering: true
+accepts a witnessed quantifier in Boolean less or equal ordering: true
+refuses a quantifier in Boolean less ordering: true
+accepts a witnessed quantifier in Boolean less ordering: true
+accepts an annihilated aliased Boolean conjunction: true
+refuses a quantifier through a partially applied Boolean conjunction: true
+accepts an annihilated aliased Boolean disjunction: true
+refuses a quantifier through a partially applied Boolean disjunction: true
+does not assume a qualified external operator is Boolean: true
+does not assume an opened external operator is Boolean: true
+refuses a quantifier through an explicitly qualified standard Boolean alias: true
+refuses a quantifier after reopening standard Boolean operators: true
+does not use Boolean ordering for tuples carrying a quantifier: true
+does not use Boolean ordering for bound tuples carrying a quantifier: true
+does not use Boolean ordering for constructor payloads: true
+does not use Boolean ordering for record payloads: true
+refuses ordering of a bound Boolean quantifier: true
+refuses an omitted partial Boolean default: true
+accepts a supplied replacement for a partial Boolean default: true
+accepts a supplied replacement for a selected partial Boolean default: true
+does not assume operators from an aliased external module are Boolean: true
+keeps unknown local opens out of the outer Boolean alias scope: true
+keeps unknown nested module opens out of the outer Boolean alias scope: true
+does not retain an earlier Boolean operator binding across an unknown open: true
+resolves a local Boolean operator defined after an unknown open: true
+reopening standard operators shadows an earlier local Boolean operator: true
+refuses a Boolean quantifier through a known standard module alias: true
+refuses Boolean ordering after an identity helper forwards a quantifier: true
+accepts witnessed Boolean ordering after an identity helper: true
+refuses Boolean ordering after a deferred call returns a quantifier: true
+accepts witnessed Boolean ordering after a deferred call: true
+keeps a helper constructor result separate from its Boolean argument: true
+refuses a Boolean literal comparison inside a helper: true
+accepts a witnessed Boolean literal comparison inside a helper: true
+refuses ordering after both helper operands are substituted: true
+accepts witnessed ordering after both helper operands are substituted: true
+refuses ordering after a partially applied comparison helper: true
+accepts witnessed ordering after a partially applied comparison helper: true
+keeps substituted aggregate ordering outside Boolean algebra: true
+refuses ordering in a nested helper capturing its outer operand: true
+accepts witnessed ordering in a nested helper capturing its outer operand: true
+refuses a claim inside a helper comparing two parameters: true
+does not apply Boolean ordering to a qualified external operator: true
+does not apply Boolean ordering after an unknown open: true
+does not apply Boolean ordering through an unknown module alias: true
+restores Boolean ordering after reopening standard operators: true
+resolves Boolean ordering through a known standard module alias: true
+keeps unknown local opens out of the outer ordering scope: true
+accepts a true annihilator captured through a disjunction helper: true
+refuses a quantifier behind a false operand captured through a disjunction helper: true
+accepts a false annihilator captured through a conjunction helper: true
+refuses a quantifier behind a true operand captured through a conjunction helper: true
+does not retain a local ordering operator across an unknown open: true
+reopening standard ordering shadows an earlier local operator: true
+refuses ordering through supplied optional Boolean parameters: true
+accepts witnessed ordering through optional Boolean parameters: true
+accepts ordering through omitted constant Boolean defaults: true
+accepts an omitted Boolean default annihilating ordering: true
+refuses ordering through an omitted quantified Boolean default: true
+accepts an explicit replacement of a quantified ordering default: true
+refuses ordering through a partially supplied optional helper: true
+accepts a captured outer default annihilating ordering: true
+refuses a Boolean alias returned through an identity helper: true
+accepts a witnessed Boolean alias returned through an identity helper: true
+accepts an annihilating Boolean alias returned through an identity helper: true
+accepts a local operator returned through an identity helper: true
+refuses a Boolean combinator forwarded through two helpers: true
+accepts a witnessed Boolean combinator forwarded through two helpers: true
+refuses an ordering call forwarded with two unresolved operands: true
+accepts witnessed ordering forwarded with two unresolved operands: true
+refuses a different population witness around forwarded ordering: true
+accepts an annihilating Boolean combinator forwarded through two helpers: true
+refuses a partially applied ordering with a branch-selected first operand: true
+accepts witnessed partial ordering with a branch-selected first operand: true
+refuses ordering of a branch-selected Boolean helper result: true
+accepts witnessed ordering of a branch-selected Boolean result: true
+refuses ordering when only the left operand establishes Boolean type: true
+keeps branch-selected aggregate ordering outside Boolean algebra: true
+does not reopen standard ordering through an empty local Base: true
+does not reopen standard Boolean aliases through an empty local Stdlib: true
+retains implicit standard ordering after opening an empty local module: true
+restores a captured standard namespace after an empty local Base: true
+refuses a vacuous operand captured by a Boolean conjunction predicate: true
+accepts a witnessed operand captured by a Boolean conjunction predicate: true
+refuses a vacuous operand captured by a Boolean disjunction predicate: true
+accepts an annihilated operand in a Boolean predicate: true
+refuses a vacuous operand in a selected Boolean predicate: true
+accepts a witnessed operand in a selected Boolean predicate: true
 the shipping ratchet process refuses the planted helper fixture: true
 the shipping ratchet process refuses a quantifier written directly in a native claim: true
 refuses a stale quantified-helper exemption: true

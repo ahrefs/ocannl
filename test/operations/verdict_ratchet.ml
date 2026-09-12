@@ -1700,6 +1700,490 @@ let () =
   let present = not (List.is_empty state.rows) in
   Verdict.p "all rows pass" (present && List.for_all state.rows ~f:Fn.id)|ocaml},
       [] );
+    (* gh-ocannl-968: first-class Boolean operators, residual functors, deferred populations, and
+       Boolean ordering retain the same provenance as their direct forms. *)
+    ( "refuses a quantifier through an aliased Boolean conjunction",
+      {ocaml|let both = ( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a witnessed quantifier through an aliased Boolean conjunction",
+      {ocaml|let both = ( && )
+let () = Verdict.p "all rows pass" (not (List.is_empty rows) && both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "accepts a shadowed Boolean conjunction alias",
+      {ocaml|let ( && ) _ _ = true
+let both = ( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "refuses a quantifier through an aliased Boolean disjunction",
+      {ocaml|let both = ( || )
+let () = Verdict.p "all rows pass" (both false (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a witnessed quantifier through an aliased Boolean disjunction",
+      {ocaml|let both = ( || )
+let () = Verdict.p "all rows pass" (not (List.is_empty rows) && both false (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "accepts a shadowed Boolean disjunction alias",
+      {ocaml|let ( || ) _ _ = true
+let both = ( || )
+let () = Verdict.p "all rows pass" (both false (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "refuses a quantifier through a curried functor",
+      {ocaml|module Make (A : S) (B : S) = struct let check = A.p let other = B.p end
+module Checks = Make (Verdict) (Verdict)
+let () = Checks.check "first" (List.for_all rows ~f:Fn.id); Checks.other "second" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "first"; "second" ] );
+    ( "accepts a witnessed quantifier through a curried functor",
+      {ocaml|module Make (A : S) (B : S) = struct let check = A.p let other = B.p end
+module Checks = Make (Verdict) (Verdict)
+let () = Checks.check "first" (not (List.is_empty rows) && List.for_all rows ~f:Fn.id); Checks.other "second" (not (List.is_empty rows) && List.for_all rows ~f:Fn.id)|ocaml},
+      [] );
+    ( "refuses a quantifier through a partially applied functor",
+      {ocaml|module Make (A : S) (B : S) = struct let check = A.p let other = B.p end
+module Partial = Make (Verdict)
+module Checks = Partial (Verdict)
+let () = Checks.check "first" (List.for_all rows ~f:Fn.id); Checks.other "second" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "first"; "second" ] );
+    ( "accepts a witnessed quantifier through a partially applied functor",
+      {ocaml|module Make (A : S) (B : S) = struct let check = A.p let other = B.p end
+module Partial = Make (Verdict)
+module Checks = Partial (Verdict)
+let () = Checks.check "first" (not (List.is_empty rows) && List.for_all rows ~f:Fn.id); Checks.other "second" (not (List.is_empty rows) && List.for_all rows ~f:Fn.id)|ocaml},
+      [] );
+    ( "accepts the same population witness through a deferred helper",
+      {ocaml|let apply f xs = f xs
+let all xs = List.for_all xs ~f:Fn.id
+let () = Verdict.p "all rows pass" (not (List.is_empty rows) && apply all rows)|ocaml},
+      [] );
+    ( "refuses a different population witness through a deferred helper",
+      {ocaml|let apply f xs = f xs
+let all xs = List.for_all xs ~f:Fn.id
+let () = Verdict.p "all rows pass" (not (List.is_empty other) && apply all rows)|ocaml},
+      [ "all" ] );
+    ( "accepts the same population witness through a deferred partial helper",
+      {ocaml|let apply f xs = f xs
+let all xs = List.for_all xs ~f:Fn.id
+let forward = apply all
+let () = Verdict.p "all rows pass" (not (List.is_empty rows) && forward rows)|ocaml},
+      [] );
+    ( "refuses a different population witness through a deferred partial helper",
+      {ocaml|let apply f xs = f xs
+let all xs = List.for_all xs ~f:Fn.id
+let forward = apply all
+let () = Verdict.p "all rows pass" (not (List.is_empty other) && forward rows)|ocaml},
+      [ "all" ] );
+    ( "refuses a quantifier in Boolean greater or equal ordering",
+      {ocaml|let () = Verdict.p "all rows pass" ((List.for_all rows ~f:Fn.id) >= true)|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a witnessed quantifier in Boolean greater or equal ordering",
+      {ocaml|let () = Verdict.p "all rows pass" (not (List.is_empty rows) && ((List.for_all rows ~f:Fn.id) >= true))|ocaml},
+      [] );
+    ( "refuses a quantifier in Boolean greater ordering",
+      {ocaml|let () = Verdict.p "all rows pass" ((List.for_all rows ~f:Fn.id) > false)|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a witnessed quantifier in Boolean greater ordering",
+      {ocaml|let () = Verdict.p "all rows pass" (not (List.is_empty rows) && ((List.for_all rows ~f:Fn.id) > false))|ocaml},
+      [] );
+    ( "refuses a quantifier in Boolean less or equal ordering",
+      {ocaml|let () = Verdict.p "all rows pass" (true <= (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a witnessed quantifier in Boolean less or equal ordering",
+      {ocaml|let () = Verdict.p "all rows pass" (not (List.is_empty rows) && (true <= (List.for_all rows ~f:Fn.id)))|ocaml},
+      [] );
+    ( "refuses a quantifier in Boolean less ordering",
+      {ocaml|let () = Verdict.p "all rows pass" (false < (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a witnessed quantifier in Boolean less ordering",
+      {ocaml|let () = Verdict.p "all rows pass" (not (List.is_empty rows) && (false < (List.for_all rows ~f:Fn.id)))|ocaml},
+      [] );
+    ( "accepts an annihilated aliased Boolean conjunction",
+      {ocaml|let both = ( && )
+let () = Verdict.p "all rows pass" (both false (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "refuses a quantifier through a partially applied Boolean conjunction",
+      {ocaml|let both = ( && ) true
+let () = Verdict.p "all rows pass" (both (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts an annihilated aliased Boolean disjunction",
+      {ocaml|let both = ( || )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "refuses a quantifier through a partially applied Boolean disjunction",
+      {ocaml|let both = ( || ) false
+let () = Verdict.p "all rows pass" (both (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    (* staging#697 round 1: provenance-carrying values are not necessarily Booleans, and captured
+       operands obey the same scope and default ownership as direct expressions. *)
+    ( "does not assume a qualified external operator is Boolean",
+      {ocaml|let both = External.( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "does not assume an opened external operator is Boolean",
+      {ocaml|open Base
+open External
+let both = ( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "refuses a quantifier through an explicitly qualified standard Boolean alias",
+      {ocaml|open External
+let both = Stdlib.( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a quantifier after reopening standard Boolean operators",
+      {ocaml|open External
+open Base
+let both = ( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "does not use Boolean ordering for tuples carrying a quantifier",
+      {ocaml|let () = Verdict.p "tuple ordering" ((true, List.for_all rows ~f:Fn.id) > (false, true))|ocaml},
+      [] );
+    ( "does not use Boolean ordering for bound tuples carrying a quantifier",
+      {ocaml|let pair = (true, List.for_all rows ~f:Fn.id)
+let () = Verdict.p "tuple ordering" (pair > (false, true))|ocaml},
+      [] );
+    ( "does not use Boolean ordering for constructor payloads",
+      {ocaml|let () = Verdict.p "constructor ordering" (Some (List.for_all rows ~f:Fn.id) > None)|ocaml},
+      [] );
+    ( "does not use Boolean ordering for record payloads",
+      {ocaml|let () = Verdict.p "record ordering" ({ first = true; second = List.for_all rows ~f:Fn.id } > { first = false; second = true })|ocaml},
+      [] );
+    ( "refuses ordering of a bound Boolean quantifier",
+      {ocaml|let all = List.for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" (all >= true)|ocaml},
+      [ "all" ] );
+    ( "refuses an omitted partial Boolean default",
+      {ocaml|let check ?(both = (&&) (List.for_all rows ~f:Fn.id)) value = Verdict.p "ok" (both value)
+let () = check true|ocaml},
+      [ "both" ] );
+    ( "accepts a supplied replacement for a partial Boolean default",
+      {ocaml|let check ?(both = (&&) (List.for_all rows ~f:Fn.id)) value = Verdict.p "ok" (both value)
+let () = check ~both:((||) true) true|ocaml},
+      [] );
+    ( "accepts a supplied replacement for a selected partial Boolean default",
+      {ocaml|let check ?(both = if flag then (&&) (List.for_all rows ~f:Fn.id) else (&&) true) value = Verdict.p "ok" (both value)
+let () = check ~both:((||) true) true|ocaml},
+      [] );
+    ( "does not assume operators from an aliased external module are Boolean",
+      {ocaml|module E = External
+let both = E.( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "keeps unknown local opens out of the outer Boolean alias scope",
+      {ocaml|let ignored = External.(let both = ( && ) in both)
+let both = ( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "keeps unknown nested module opens out of the outer Boolean alias scope",
+      {ocaml|module Hidden = struct open External let both = ( && ) end
+let both = ( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "does not retain an earlier Boolean operator binding across an unknown open",
+      {ocaml|let (&&) = Stdlib.( && )
+open External
+let both = ( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "resolves a local Boolean operator defined after an unknown open",
+      {ocaml|open External
+let (&&) _ value = value
+let both = ( && )
+let () = Verdict.p "all rows pass" (both false (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "reopening standard operators shadows an earlier local Boolean operator",
+      {ocaml|let (&&) _ _ = true
+open Base
+let both = ( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a Boolean quantifier through a known standard module alias",
+      {ocaml|module S = Stdlib
+let both = S.( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    (* staging#697 round 2: direct parameter results inherit the actual Boolean identity, while
+       constructors remain distinct; a Boolean literal establishes its comparison type. *)
+    ( "refuses Boolean ordering after an identity helper forwards a quantifier",
+      {ocaml|let id x = x
+let () = Verdict.p "ok" (id (List.for_all rows ~f:Fn.id) >= (n = 0))|ocaml},
+      [ "ok" ] );
+    ( "accepts witnessed Boolean ordering after an identity helper",
+      {ocaml|let id x = x
+let () = Verdict.p "ok" (not (List.is_empty rows) && id (List.for_all rows ~f:Fn.id) >= (n = 0))|ocaml},
+      [] );
+    ( "refuses Boolean ordering after a deferred call returns a quantifier",
+      {ocaml|let apply f xs = f xs
+let all xs = List.for_all xs ~f:Fn.id
+let () = Verdict.p "ok" (apply all rows >= (n = 0))|ocaml},
+      [ "all" ] );
+    ( "accepts witnessed Boolean ordering after a deferred call",
+      {ocaml|let apply f xs = f xs
+let all xs = List.for_all xs ~f:Fn.id
+let () = Verdict.p "ok" (not (List.is_empty rows) && apply all rows >= (n = 0))|ocaml},
+      [] );
+    ( "keeps a helper constructor result separate from its Boolean argument",
+      {ocaml|let wrap x = Some x
+let () = Verdict.p "constructor ordering" (wrap (List.for_all rows ~f:Fn.id) > None)|ocaml},
+      [] );
+    ( "refuses a Boolean literal comparison inside a helper",
+      {ocaml|let gt x = x > false
+let () = Verdict.p "ok" (gt (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "ok" ] );
+    ( "accepts a witnessed Boolean literal comparison inside a helper",
+      {ocaml|let gt x = x > false
+let () = Verdict.p "ok" (not (List.is_empty rows) && gt (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    (* staging#697 round 3: deferred ordering, namespace protection, and captured constants. *)
+    ( "refuses ordering after both helper operands are substituted",
+      {ocaml|let gt x y = x > y
+let () = Verdict.p "ok" (gt (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [ "ok" ] );
+    ( "accepts witnessed ordering after both helper operands are substituted",
+      {ocaml|let gt x y = x > y
+let () = Verdict.p "ok" (not (List.is_empty rows) && gt (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [] );
+    ( "refuses ordering after a partially applied comparison helper",
+      {ocaml|let gt x y = x > y
+let above = gt (List.for_all rows ~f:Fn.id)
+let () = Verdict.p "ok" (above false)|ocaml},
+      [ "above" ] );
+    ( "accepts witnessed ordering after a partially applied comparison helper",
+      {ocaml|let gt x y = x > y
+let above = gt (List.for_all rows ~f:Fn.id)
+let () = Verdict.p "ok" (not (List.is_empty rows) && above false)|ocaml},
+      [] );
+    ( "keeps substituted aggregate ordering outside Boolean algebra",
+      {ocaml|let gt x y = x > y
+let () = Verdict.p "ok" (gt (true, List.for_all rows ~f:Fn.id) (false, true))|ocaml},
+      [] );
+    ( "refuses ordering in a nested helper capturing its outer operand",
+      {ocaml|let make x = let gt y = x > y in gt
+let () = Verdict.p "ok" (make (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [ "ok" ] );
+    ( "accepts witnessed ordering in a nested helper capturing its outer operand",
+      {ocaml|let make x = let gt y = x > y in gt
+let () = Verdict.p "ok" (not (List.is_empty rows) && make (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [] );
+    ( "refuses a claim inside a helper comparing two parameters",
+      {ocaml|let check x y = Verdict.p "ok" (x > y)
+let () = check (List.for_all rows ~f:Fn.id) false|ocaml},
+      [ "check" ] );
+    ( "does not apply Boolean ordering to a qualified external operator",
+      {ocaml|let () = Verdict.p "ok" (External.( > ) (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [] );
+    ( "does not apply Boolean ordering after an unknown open",
+      {ocaml|open External
+let () = Verdict.p "ok" (List.for_all rows ~f:Fn.id > false)|ocaml},
+      [] );
+    ( "does not apply Boolean ordering through an unknown module alias",
+      {ocaml|module E = External
+let () = Verdict.p "ok" (E.( > ) (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [] );
+    ( "restores Boolean ordering after reopening standard operators",
+      {ocaml|open External
+open Base
+let () = Verdict.p "ok" (List.for_all rows ~f:Fn.id > false)|ocaml},
+      [ "ok" ] );
+    ( "resolves Boolean ordering through a known standard module alias",
+      {ocaml|module S = Stdlib
+let () = Verdict.p "ok" (S.( > ) (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [ "ok" ] );
+    ( "keeps unknown local opens out of the outer ordering scope",
+      {ocaml|let _ = let open External in 0
+let () = Verdict.p "ok" (List.for_all rows ~f:Fn.id > false)|ocaml},
+      [ "ok" ] );
+    ( "accepts a true annihilator captured through a disjunction helper",
+      {ocaml|let with_left x = (||) x
+let either = with_left true
+let () = Verdict.p "ok" (either (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "refuses a quantifier behind a false operand captured through a disjunction helper",
+      {ocaml|let with_left x = (||) x
+let either = with_left false
+let () = Verdict.p "ok" (either (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "ok" ] );
+    ( "accepts a false annihilator captured through a conjunction helper",
+      {ocaml|let with_left x = (&&) x
+let both = with_left false
+let () = Verdict.p "ok" (both (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "refuses a quantifier behind a true operand captured through a conjunction helper",
+      {ocaml|let with_left x = (&&) x
+let both = with_left true
+let () = Verdict.p "ok" (both (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "ok" ] );
+    ( "does not retain a local ordering operator across an unknown open",
+      {ocaml|let ( > ) x _ = x
+open External
+let () = Verdict.p "ok" (List.for_all rows ~f:Fn.id > false)|ocaml},
+      [] );
+    ( "reopening standard ordering shadows an earlier local operator",
+      {ocaml|let ( > ) _ _ = true
+open Base
+let () = Verdict.p "ok" (List.for_all rows ~f:Fn.id > false)|ocaml},
+      [ "ok" ] );
+    (* staging#697 round 4: optional defaults and direct callable parameter results. *)
+    ( "refuses ordering through supplied optional Boolean parameters",
+      {ocaml|let check ?(x=true) ?(y=false) () = Verdict.p "ok" (x > y)
+let () = check ~x:(List.for_all rows ~f:Fn.id) ()|ocaml},
+      [ "check" ] );
+    ( "accepts witnessed ordering through optional Boolean parameters",
+      {ocaml|let check ?(x=true) ?(y=false) () = Verdict.p "ok" (not (List.is_empty rows) && x > y)
+let () = check ~x:(List.for_all rows ~f:Fn.id) ()|ocaml},
+      [] );
+    ( "accepts ordering through omitted constant Boolean defaults",
+      {ocaml|let check ?(x=true) ?(y=false) () = Verdict.p "ok" (x > y)
+let () = check ()|ocaml},
+      [] );
+    ( "accepts an omitted Boolean default annihilating ordering",
+      {ocaml|let check ?(x=false) ?(y=false) () = Verdict.p "ok" (x <= y)
+let () = check ~y:(List.for_all rows ~f:Fn.id) ()|ocaml},
+      [] );
+    ( "refuses ordering through an omitted quantified Boolean default",
+      {ocaml|let check ?(x=List.for_all rows ~f:Fn.id) ?(y=false) () = Verdict.p "ok" (x > y)
+let () = check ()|ocaml},
+      [ "x" ] );
+    ( "accepts an explicit replacement of a quantified ordering default",
+      {ocaml|let check ?(x=List.for_all rows ~f:Fn.id) ?(y=false) () = Verdict.p "ok" (x > y)
+let () = check ~x:true ()|ocaml},
+      [] );
+    ( "refuses ordering through a partially supplied optional helper",
+      {ocaml|let check ?(x=true) ?(y=false) () = Verdict.p "ok" (x > y)
+let partial = check ~x:(List.for_all rows ~f:Fn.id)
+let () = partial ()|ocaml},
+      [ "partial" ] );
+    ( "accepts a captured outer default annihilating ordering",
+      {ocaml|let make a = let check ?(x=a) ?(y=false) () = Verdict.p "ok" (x <= y) in check
+let check = make false
+let () = check ~y:(List.for_all rows ~f:Fn.id) ()|ocaml},
+      [] );
+    ( "refuses a Boolean alias returned through an identity helper",
+      {ocaml|let id x = x
+let both = id (&&)
+let () = Verdict.p "ok" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "ok" ] );
+    ( "accepts a witnessed Boolean alias returned through an identity helper",
+      {ocaml|let id x = x
+let both = id (&&)
+let () = Verdict.p "ok" (not (List.is_empty rows) && both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "accepts an annihilating Boolean alias returned through an identity helper",
+      {ocaml|let id x = x
+let either = id (||)
+let () = Verdict.p "ok" (either true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "accepts a local operator returned through an identity helper",
+      {ocaml|let id x = x
+let (&&) _ _ = true
+let both = id (&&)
+let () = Verdict.p "ok" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    (* staging#697 round 5: replay ownership, operand type evidence, empty modules, predicates. *)
+    ( "refuses a Boolean combinator forwarded through two helpers",
+      {ocaml|let apply op x y = op x y
+let forward op x y = apply op x y
+let () = Verdict.p "ok" (forward (&&) true (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "ok" ] );
+    ( "accepts a witnessed Boolean combinator forwarded through two helpers",
+      {ocaml|let apply op x y = op x y
+let forward op x y = apply op x y
+let () = Verdict.p "ok" (not (List.is_empty rows) && forward (&&) true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "refuses an ordering call forwarded with two unresolved operands",
+      {ocaml|let gt x y = x > y
+let forward a b = gt a b
+let () = Verdict.p "ok" (forward (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [ "ok" ] );
+    ( "accepts witnessed ordering forwarded with two unresolved operands",
+      {ocaml|let gt x y = x > y
+let forward a b = gt a b
+let () = Verdict.p "ok" (not (List.is_empty rows) && forward (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [] );
+    ( "refuses a different population witness around forwarded ordering",
+      {ocaml|let gt x y = x > y
+let forward a b = gt a b
+let () = Verdict.p "ok" (not (List.is_empty other) && forward (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [ "ok" ] );
+    ( "accepts an annihilating Boolean combinator forwarded through two helpers",
+      {ocaml|let apply op x y = op x y
+let forward op x y = apply op x y
+let () = Verdict.p "ok" (forward (||) true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "refuses a partially applied ordering with a branch-selected first operand",
+      {ocaml|let choose c x y = if c then x else y
+let gt x y = x > y
+let above = gt (choose c (List.for_all rows ~f:Fn.id) false)
+let () = Verdict.p "ok" (above false)|ocaml},
+      [ "ok" ] );
+    ( "accepts witnessed partial ordering with a branch-selected first operand",
+      {ocaml|let choose c x y = if c then x else y
+let gt x y = x > y
+let above = gt (choose c (List.for_all rows ~f:Fn.id) false)
+let () = Verdict.p "ok" (not (List.is_empty rows) && above false)|ocaml},
+      [] );
+    ( "refuses ordering of a branch-selected Boolean helper result",
+      {ocaml|let choose c x y = if c then x else y
+let () = Verdict.p "ok" (choose c (List.for_all rows ~f:Fn.id) false > (n = 0))|ocaml},
+      [ "ok" ] );
+    ( "accepts witnessed ordering of a branch-selected Boolean result",
+      {ocaml|let choose c x y = if c then x else y
+let () = Verdict.p "ok" (not (List.is_empty rows) && choose c (List.for_all rows ~f:Fn.id) false > (n = 0))|ocaml},
+      [] );
+    ( "refuses ordering when only the left operand establishes Boolean type",
+      {ocaml|let choose c x y = if c then x else y
+let () = Verdict.p "ok" ((n = 0) < choose c (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [ "ok" ] );
+    ( "keeps branch-selected aggregate ordering outside Boolean algebra",
+      {ocaml|let choose c x y = if c then x else y
+let () = Verdict.p "ok" (choose c (true, List.for_all rows ~f:Fn.id) (true, true) > (false, true))|ocaml},
+      [] );
+    ( "does not reopen standard ordering through an empty local Base",
+      {ocaml|open External
+module Base = struct end
+open Base
+let () = Verdict.p "ok" (List.for_all rows ~f:Fn.id > false)|ocaml},
+      [] );
+    ( "does not reopen standard Boolean aliases through an empty local Stdlib",
+      {ocaml|open External
+module Stdlib = struct end
+open Stdlib
+let both = (&&)
+let () = Verdict.p "ok" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "retains implicit standard ordering after opening an empty local module",
+      {ocaml|module Base = struct end
+open Base
+let () = Verdict.p "ok" (List.for_all rows ~f:Fn.id > false)|ocaml},
+      [ "ok" ] );
+    ( "restores a captured standard namespace after an empty local Base",
+      {ocaml|module Real = Stdlib
+open External
+module Base = struct end
+open Base
+open Real
+let () = Verdict.p "ok" (List.for_all rows ~f:Fn.id > false)|ocaml},
+      [ "ok" ] );
+    ( "refuses a vacuous operand captured by a Boolean conjunction predicate",
+      {ocaml|let () = Verdict.p "ok" (List.exists groups ~f:((&&) (List.for_all rows ~f:Fn.id)))|ocaml},
+      [ "ok" ] );
+    ( "accepts a witnessed operand captured by a Boolean conjunction predicate",
+      {ocaml|let () = Verdict.p "ok" (not (List.is_empty rows) && List.exists groups ~f:((&&) (List.for_all rows ~f:Fn.id)))|ocaml},
+      [] );
+    ( "refuses a vacuous operand captured by a Boolean disjunction predicate",
+      {ocaml|let () = Verdict.p "ok" (List.exists groups ~f:((||) (List.for_all rows ~f:Fn.id)))|ocaml},
+      [ "ok" ] );
+    ( "accepts an annihilated operand in a Boolean predicate",
+      {ocaml|let () = Verdict.p "ok" (List.exists groups ~f:((&&) (false && List.for_all rows ~f:Fn.id)))|ocaml},
+      [] );
+    ( "refuses a vacuous operand in a selected Boolean predicate",
+      {ocaml|let pred = if flag then (&&) (List.for_all rows ~f:Fn.id) else (&&) true
+let () = Verdict.p "ok" (List.exists groups ~f:pred)|ocaml},
+      [ "pred" ] );
+    ( "accepts a witnessed operand in a selected Boolean predicate",
+      {ocaml|let pred = if flag then (&&) (List.for_all rows ~f:Fn.id) else (&&) true
+let () = Verdict.p "ok" (not (List.is_empty rows) && List.exists groups ~f:pred)|ocaml},
+      [] );
   ]
 
 (* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round

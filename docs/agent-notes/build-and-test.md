@@ -954,6 +954,18 @@ that they earn a lookup rather than always-loaded space.
   exact same-line shape the check must distinguish. Direct quantifiers reaching a claim through a
   wrapper or a native call use the claimed ARGUMENT offset, so one intentional exemption cannot
   silently cover another call through the same wrapper or another claimed slot in the same call.
+- Boolean operator aliases in `verdict_provenance.ml` (gh-ocannl-968) keep their first
+  argument until application, so constant annihilators and partial applications use the same
+  conjunction/disjunction algebra as direct syntax. Partial Boolean predicates retain their captured
+  operand views, and unresolved calls forwarded through helpers move to the enclosing closure. Implicit aliases after an unknown module
+  open are opaque; known qualified primitives and local definitions remain resolvable. Boolean
+  ordering uses that algebra after length witnesses only for known standard operators and Boolean
+  operands. Direct parameter returns transfer their Boolean identity, constants, and callable closures; ordering over
+  unresolved parameters reuses deferred-call placeholders until substitution establishes the operand
+  types. Optional defaults retain their result metadata until supplied or omitted arguments resolve
+  it. Aggregate payloads remain distinct from Boolean results. A deferred call carries its
+  argument's lexical population key alongside the walked value; only an exact whole-argument parameter inherits that key. Curried functors retain
+  each residual module expression with its captured environment, binding one argument at a time.
 - Mutation manifest rows use `tools/mutation-run.sh <module> <patch-file> <@alias>`
   (gh-ocannl-969), in an otherwise idle, isolated worktree. The patch is literal bytes
   `OLD@@@NEW`, with exactly one delimiter, a nonempty OLD occurring exactly once (overlapping

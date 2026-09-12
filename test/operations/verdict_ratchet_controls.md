@@ -330,3 +330,63 @@ ratchet; adding a form there adds its row here and its claim to the golden.
 | a tuple component destructured at binding | `a tuple component destructured at binding: every syntax matrix cell reads as expected` |
 | a field of a record binding | `a field of a record binding: every syntax matrix cell reads as expected` |
 | a comparison with true | `a comparison with true: every syntax matrix cell reads as expected` |
+
+## gh-ocannl-968 mutation runs
+
+All runs used tools/mutation-run.sh on the provenance module and the focused verdict_ratchet alias. Each exited 1 on the listed false claims and restored the source byte-for-byte with cmp. Other listed controls stayed green.
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| Boolean aliases retain constants and partial arguments | Unshadowed Boolean operator identifiers no longer resolve to closures | Failed: `refuses a quantifier through an aliased Boolean conjunction`, `refuses a quantifier through an aliased Boolean disjunction`, `refuses a quantifier through a partially applied Boolean conjunction`, `refuses a quantifier through a partially applied Boolean disjunction`. Stayed green: `accepts a witnessed quantifier through an aliased Boolean conjunction`, `accepts a shadowed Boolean conjunction alias`, `accepts a witnessed quantifier through an aliased Boolean disjunction`, `accepts a shadowed Boolean disjunction alias`, `accepts an annihilated aliased Boolean conjunction`, `accepts an annihilated aliased Boolean disjunction` | 20260912T202325Z-58660 |
+| Curried functors retain each residual expression and captured environment | A nested functor application cannot supply its next parameter | Failed: `refuses a quantifier through a curried functor`. Stayed green: `accepts a witnessed quantifier through a curried functor`, `refuses a quantifier through a partially applied functor`, `accepts a witnessed quantifier through a partially applied functor` | 20260912T202336Z-60784 |
+| Deferred calls preserve exact whole-argument population identity | Saved population keys discarded during replay | Failed: `accepts the same population witness through a deferred helper`, `accepts the same population witness through a deferred partial helper`. Stayed green: `refuses a different population witness through a deferred helper`, `refuses a different population witness through a deferred partial helper` | 20260912T202345Z-62925 |
+| Boolean ordering uses both operand views after length witnesses | All four Boolean ordering cases disabled | Failed: `refuses a quantifier in Boolean greater or equal ordering`, `refuses a quantifier in Boolean greater ordering`, `refuses a quantifier in Boolean less or equal ordering`, `refuses a quantifier in Boolean less ordering`. Stayed green: `accepts a witnessed quantifier in Boolean greater or equal ordering`, `accepts a witnessed quantifier in Boolean greater ordering`, `accepts a witnessed quantifier in Boolean less or equal ordering`, `accepts a witnessed quantifier in Boolean less ordering` | 20260912T202355Z-65492 |
+
+## staging PR 697 review mutations
+
+All three runs used the same mutation runner and focused alias, exited 1 on the named false claims, and restored the source byte-for-byte.
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| Boolean aliases respect known namespaces and lexical open ordering | Restore the pre-review operator resolver | Failed: `does not assume a qualified external operator is Boolean`, `does not assume an opened external operator is Boolean`, `does not assume operators from an aliased external module are Boolean`, `does not retain an earlier Boolean operator binding across an unknown open`, `reopening standard operators shadows an earlier local Boolean operator`. Stayed green: `refuses a quantifier through an explicitly qualified standard Boolean alias`, `refuses a quantifier after reopening standard Boolean operators`, `keeps unknown local opens out of the outer Boolean alias scope`, `keeps unknown nested module opens out of the outer Boolean alias scope`, `resolves a local Boolean operator defined after an unknown open`, `refuses a Boolean quantifier through a known standard module alias` | 20260912T210603Z-3772 |
+| Ordering algebra requires known Boolean operands | Remove the Boolean-result checks from all four ordering cases | Failed: `does not use Boolean ordering for tuples carrying a quantifier`, `does not use Boolean ordering for bound tuples carrying a quantifier`, `does not use Boolean ordering for constructor payloads`, `does not use Boolean ordering for record payloads`. Stayed green: `refuses ordering of a bound Boolean quantifier` | 20260912T210619Z-5721 |
+| Optional defaults tag captured Boolean operands | Restore top-level-only source tagging | Failed: `accepts a supplied replacement for a partial Boolean default`, `accepts a supplied replacement for a selected partial Boolean default`. Stayed green: `refuses an omitted partial Boolean default` | 20260912T210635Z-7642 |
+
+## staging PR 697 round 2 mutations
+
+Both runs used the mutation runner and focused alias, exited 1 on the named false claims, and restored the source byte-for-byte.
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| Direct parameter returns retain Boolean identity through substitution | Keep the parameter's unresolved Boolean metadata | Failed: `refuses Boolean ordering after an identity helper forwards a quantifier`, `refuses Boolean ordering after a deferred call returns a quantifier`. Stayed green: `accepts witnessed Boolean ordering after an identity helper`, `accepts witnessed Boolean ordering after a deferred call`, `keeps a helper constructor result separate from its Boolean argument` | 20260912T212236Z-53990 |
+| Boolean literals establish comparison operand type inside helpers | Remove the Boolean constant operand evidence | Failed: `refuses a Boolean literal comparison inside a helper`. Stayed green: `accepts a witnessed Boolean literal comparison inside a helper` | 20260912T212255Z-56040 |
+
+## staging PR 697 round 3 mutations
+
+All three runs used the mutation runner and focused alias, exited 1 on the named false claims, and restored the source byte-for-byte.
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| Ordering on unresolved operands uses deferred-call replay | Discard pending ordering results | Failed: `refuses ordering after both helper operands are substituted`, `refuses ordering after a partially applied comparison helper`, `refuses ordering in a nested helper capturing its outer operand`, `refuses a claim inside a helper comparing two parameters`. Stayed green: `accepts witnessed ordering after both helper operands are substituted`, `accepts witnessed ordering after a partially applied comparison helper`, `keeps substituted aggregate ordering outside Boolean algebra`, `accepts witnessed ordering in a nested helper capturing its outer operand` | 20260912T214647Z-27050 |
+| Ordering shares lexical operator namespace resolution | Treat every operator namespace as standard | Failed: `does not apply Boolean ordering to a qualified external operator`, `does not apply Boolean ordering after an unknown open`, `does not apply Boolean ordering through an unknown module alias`, `does not retain a local ordering operator across an unknown open`. Stayed green: `restores Boolean ordering after reopening standard operators`, `resolves Boolean ordering through a known standard module alias`, `keeps unknown local opens out of the outer ordering scope`, `reopening standard ordering shadows an earlier local operator` | 20260912T214700Z-29059 |
+| Captured direct parameters transfer Boolean constants | Retain the unresolved parameter constant | Failed: `accepts a true annihilator captured through a disjunction helper`, `accepts a false annihilator captured through a conjunction helper`. Stayed green: `refuses a quantifier behind a false operand captured through a disjunction helper`, `refuses a quantifier behind a true operand captured through a conjunction helper` | 20260912T214710Z-31003 |
+
+## staging PR 697 round 4 mutations
+
+Both runs used the mutation runner and focused alias, exited 1 on the named false claims, and restored the source byte-for-byte.
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| Optional parameters retain their default until replacement | Discard optional result identity | Failed: `refuses ordering through supplied optional Boolean parameters`, `refuses ordering through an omitted quantified Boolean default`, `refuses ordering through a partially supplied optional helper`. Stayed green: `accepts witnessed ordering through optional Boolean parameters`, `accepts ordering through omitted constant Boolean defaults`, `accepts an omitted Boolean default annihilating ordering`, `accepts an explicit replacement of a quantified ordering default`, `accepts a captured outer default annihilating ordering` | 20260912T220252Z-73975 |
+| Direct parameter returns retain callable closures | Keep only the formal closure during substitution | Failed: `refuses a Boolean alias returned through an identity helper`. Stayed green: `accepts a witnessed Boolean alias returned through an identity helper`, `accepts an annihilating Boolean alias returned through an identity helper`, `accepts a local operator returned through an identity helper` | 20260912T220324Z-75990 |
+
+## staging PR 697 round 5 mutations
+
+All four runs used the mutation runner and focused alias, exited 1 on the named false claims, and restored the source byte-for-byte.
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| Pending calls follow forwarded parameters into the enclosing closure | Drop surviving calls when the inner helper fires | Failed: `refuses a Boolean combinator forwarded through two helpers`, `refuses an ordering call forwarded with two unresolved operands`, `refuses a different population witness around forwarded ordering`. Stayed green: `accepts a witnessed Boolean combinator forwarded through two helpers`, `accepts witnessed ordering forwarded with two unresolved operands`, `accepts an annihilating Boolean combinator forwarded through two helpers` | 20260912T223328Z-37082 |
+| One known Boolean operand establishes standard comparison type | Reject an unknown result category beside a known Boolean | Failed: `refuses a partially applied ordering with a branch-selected first operand`, `refuses ordering of a branch-selected Boolean helper result`, `refuses ordering when only the left operand establishes Boolean type`. Stayed green: `accepts witnessed partial ordering with a branch-selected first operand`, `accepts witnessed ordering of a branch-selected Boolean result`, `keeps branch-selected aggregate ordering outside Boolean algebra` | 20260912T223344Z-38899 |
+| Empty local modules preserve namespace shadowing | Omit the empty local-module presence marker | Failed: `does not reopen standard ordering through an empty local Base`, `does not reopen standard Boolean aliases through an empty local Stdlib`. Stayed green: `retains implicit standard ordering after opening an empty local module`, `restores a captured standard namespace after an empty local Base` | 20260912T223353Z-40685 |
+| Boolean predicates retain captured operand views | Ignore saved Boolean predicate operands | Failed: `refuses a vacuous operand captured by a Boolean conjunction predicate`, `refuses a vacuous operand captured by a Boolean disjunction predicate`, `refuses a vacuous operand in a selected Boolean predicate`. Stayed green: `accepts a witnessed operand captured by a Boolean conjunction predicate`, `accepts an annihilated operand in a Boolean predicate`, `accepts a witnessed operand in a selected Boolean predicate` | 20260912T223403Z-42475 |
