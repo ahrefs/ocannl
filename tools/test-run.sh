@@ -44,8 +44,9 @@
 # (0) or held (3); an unreadable lock is an error (2), never idle. These are
 # snapshots, not reservations or evidence that a particular process is alive.
 # Neither query creates state, publishes pointers, or launches a toolchain.
-# Missing state directories are supported; a missing intermediate followed by
-# .. is refused (2) because it has no physical identity. Existing .. paths work.
+# Missing state directories are supported. Parent traversal must resolve through
+# the launch shell; unresolved missing/.. is refused (2). Native drive paths may
+# resolve missing/.. even where POSIX spellings do not. Queries follow that shell.
 #
 # `repeat` runs each iteration through dune in a freshly cleaned, cache-disabled
 # build context, keeps its separate stdout/stderr and exit status, and compares

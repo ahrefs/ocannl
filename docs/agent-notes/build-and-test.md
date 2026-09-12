@@ -537,11 +537,11 @@ that they earn a lookup rather than always-loaded space.
   names the pointer file. `lock-status [RUN|last]` without a run probes this worktree's current
   and legacy locks, with a run only its recorded lock; it prints `idle` (0) or `held` (3), with
   inspection/argument errors 2. Queries create no state, even before the first run, and are
-  snapshots, never reservations. Missing directories are supported, but a missing intermediate
-  followed by `..` is refused with exit 2: no physical identity exists to query. Existing `..`
-  paths resolve through the launch shell normally. The harness uses them for fixture pointers,
-  run discovery, and repeat lock assertions; deliberately tested process predicates/identity fixtures still extract
-  functions. Prefer foreground `run` launched through the agent harness's background mode
+  snapshots, never reservations. Missing directories are supported; parent traversal
+  must resolve through the launch shell or fail with exit 2. Native Windows drive spellings
+  can resolve `missing/..` where POSIX spellings cannot: queries follow the shell's identity.
+  The harness uses them for fixture pointers, run discovery, and repeat lock assertions;
+  deliberately tested process predicates/identity fixtures still extract functions. Prefer foreground `run` launched through the agent harness's background mode
   (the harness notifies on exit); `start`/`status`/
   `wait`/`stop` are only for runs that must outlive the launching session. Its own options go
   BETWEEN the subcommand and the dune arguments (`run --cap 900 build @alias`); both

@@ -933,21 +933,25 @@ case $(uname -s) in
     query_good=$(OCANNL_TOOL_TEST_RUNS="$query_native/existing/../runs" \
       "$repeat_root/tools/test-run.sh" paths runs)
     query_good_rc=$?
-    query_out=$(OCANNL_TOOL_TEST_RUNS="$query_native/missing/../../target" \
-      "$repeat_root/tools/test-run.sh" lock-status 2>"$TMP/query-error")
+    # Native C:/ paths resolve missing/.. through Windows before Bash cd.
+    # Match that actual launch-shell identity, not POSIX lexical semantics.
+    query_native_parent=$(cd "$query_native/missing/.." && pwd -P)
+    query_native_parent_rc=$?
+    query_out=$(OCANNL_TOOL_TEST_RUNS="$query_native/missing/../runs" \
+      "$repeat_root/tools/test-run.sh" paths runs)
     query_rc=$?
     if [ "$query_good_rc" = 0 ] && [ "$query_good" = "$query_unc_root/runs" ] \
-       && [ "$query_rc" = 2 ] && [ -z "$query_out" ] \
-       && grep -q 'missing state path containing ..' "$TMP/query-error" \
+       && [ "$query_native_parent_rc" = 0 ] && [ "$query_rc" = 0 ] \
+       && [ "$query_out" = "$query_native_parent/runs" ] \
        && [ ! -e "$query_unc_root/missing" ] && [ ! -e "$query_unc_root/runs" ]; then
-      report 0 "queries: drive existing parent traversal resolves; missing traversal refuses without writes"
+      report 0 "queries: drive parent traversal matches the native launch shell without writes"
     else
-      report 1 "queries: drive existing parent traversal resolves; missing traversal refuses without writes" \
-        "resolved=$query_good_rc:$query_good refused=$query_rc:$query_out"
+      report 1 "queries: drive parent traversal matches the native launch shell without writes" \
+        "resolved=$query_good_rc:$query_good parent=$query_native_parent_rc:$query_native_parent runs=$query_rc:$query_out"
     fi
     ;;
   *) skip "queries: absent Windows drive spelling matches the launch shell" "requires Windows drive paths"
-     skip "queries: drive existing parent traversal resolves; missing traversal refuses without writes" "requires Windows drive paths" ;;
+     skip "queries: drive parent traversal matches the native launch shell without writes" "requires Windows drive paths" ;;
 esac
 
 # The pointer returned by paths last must feed the SAME resolver as status and
