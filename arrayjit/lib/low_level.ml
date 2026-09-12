@@ -5762,9 +5762,20 @@ let rec reads_cell ~tn ~idcs (sc : scalar_t) =
   (* A scope NESTED inside a larger value — [a[i] = f(scope { … a[i] … })] — is a recurrence like
      any other read; the scope that IS the written value is the case above, judged by its shape. *)
   | Local_scope { body; _ } -> stmt_reads_cell ~tn ~idcs body
-  (* A dynamic gather from the written node may land on the written cell at runtime: a read of it,
-     conservatively, as well as whatever the selector reads. *)
-  | Get_dynamic { tn = tn'; dyn_value; _ } -> Tnode.equal tn tn' || arg dyn_value
+  (* The runtime slot cannot prove disjointness, but unequal fixed slots elsewhere can
+     (gh-ocannl-960). Symbolic slots may alias even when their expressions differ; a rank mismatch
+     is unknown too. The selector can read the written cell independently of the gathered cell. *)
+  | Get_dynamic { tn = tn'; idcs = idcs'; dyn_axis; dyn_value } ->
+      Tnode.equal tn tn'
+      && (Array.length idcs <> Array.length idcs'
+         || not
+              (Array.existsi idcs ~f:(fun k a ->
+                   k <> dyn_axis
+                   &&
+                   match (a, idcs'.(k)) with
+                   | Indexing.Fixed_idx x, Indexing.Fixed_idx y -> x <> y
+                   | _ -> false)))
+      || arg dyn_value
   | Ternop (_, a, b, c) -> arg a || arg b || arg c
   | Binop (op, a, b) -> (
       (* A projection's discarded operand is never rendered, hence never reads the cell (the same

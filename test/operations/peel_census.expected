@@ -29,3 +29,15 @@ an inner bracket summarizes only its own sites: true
 the enclosing bracket sees both, in emission order: true
 a completed bracket leaves the census global as it found it: true
 collection is off outside every bracket: true
+a gather from a different fixed first slot is not a cell recurrence: true
+a gather from a different fixed last slot is not a cell recurrence: true
+matching static slots keep a potentially aliasing gather in the census: true
+a one-axis gather cannot prove disjointness from its placeholder: true
+a symbolic static slot may alias a fixed written slot: true
+different symbolic static slots may alias each other: true
+an affine static slot may alias a differently spelled written slot: true
+a fixed disjoint slot wins even when another static slot is symbolic: true
+a mismatched index rank remains conservatively recurring: true
+a gather from another node is not a cell recurrence: true
+a disjoint gather still counts a selector that reads the written cell: true
+a gather from another node still counts a selector reading the written cell: true

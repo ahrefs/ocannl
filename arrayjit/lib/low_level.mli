@@ -427,7 +427,8 @@ val has_accumulating_cell : t -> bool
     only when its body actually reads that cell — {!has_accumulation} must count every scope
     conservatively, being the predicate that decides whether iteration independence may be asserted,
     and censusing on it recorded every non-reduction virtualized scope as a declined reduction site.
-*)
+    A dynamic gather may recur unless unequal fixed indices outside its runtime axis prove the cells
+    disjoint; symbolic slots remain potentially aliasing. The selector's reads count too. *)
 
 (** What {!peel_accum_nest} decided about one [If] it peeled through (gh-ocannl-733). Two shapes
     that render identically can earn different verdicts here, which is the whole point of reporting

@@ -476,3 +476,45 @@ let () =
   Verdict.p_empty "a completed bracket leaves the census global as it found it"
     ~over:outer_summary.Cs.sites !Cs.peel_census;
   p "collection is off outside every bracket" (not !Cs.peel_census_enabled)
+
+(* The census's recurrence gate distinguishes a disjoint gather from a possible self-read
+   (gh-ocannl-960). These are predicate tests: no value transformation or hardware legality decision
+   consumes this helper. Unknown static expressions must retain the conservative answer. *)
+let () =
+  let module L = Ll_test in
+  let node = L.node_factory ~first_id:960_000_000 ~dims:[| 4; 4; 4 |] () in
+  let a = node "gather_census" and other = node "gather_other" in
+  let i = L.sym () and j = L.sym () in
+  let fixed = L.fixed in
+  let target = [| fixed 0; fixed 2; fixed 0 |] in
+  let selector = (L.embed i, L.iprec ()) in
+  let census ?(tn = a) ?(dyn_value = selector) ?(written = target) idcs =
+    L.set a written (L.gather ~tn ~idcs ~dyn_axis:1 ~dyn_value) |> LL.has_accumulating_cell
+  in
+  p "a gather from a different fixed first slot is not a cell recurrence"
+    (not (census [| fixed 1; fixed 0; fixed 0 |]));
+  p "a gather from a different fixed last slot is not a cell recurrence"
+    (not (census [| fixed 0; fixed 0; fixed 1 |]));
+  p "matching static slots keep a potentially aliasing gather in the census"
+    (census [| fixed 0; fixed 0; fixed 0 |]);
+  (* Written slot 2 differs from the gather placeholder 0: comparing that placeholder would
+     manufacture disjointness even though the runtime selector can equal 2. *)
+  p "a one-axis gather cannot prove disjointness from its placeholder"
+    (L.set a [| fixed 2 |] (L.gather ~tn:a ~idcs:[| fixed 0 |] ~dyn_axis:0 ~dyn_value:selector)
+    |> LL.has_accumulating_cell);
+  p "a symbolic static slot may alias a fixed written slot"
+    (census [| L.iter i; fixed 0; fixed 0 |]);
+  p "different symbolic static slots may alias each other"
+    (census ~written:[| L.iter i; fixed 2; fixed 0 |] [| L.iter j; fixed 0; fixed 0 |]);
+  p "an affine static slot may alias a differently spelled written slot"
+    (census ~written:[| L.iter i; fixed 2; fixed 0 |] [| L.aff [ (1, j) ] 1; fixed 0; fixed 0 |]);
+  p "a fixed disjoint slot wins even when another static slot is symbolic"
+    (not (census [| L.iter i; fixed 0; fixed 1 |]));
+  p "a mismatched index rank remains conservatively recurring" (census [| fixed 1; fixed 0 |]);
+  p "a gather from another node is not a cell recurrence"
+    (not (census ~tn:other [| fixed 0; fixed 0; fixed 0 |]));
+  let dyn_value = (L.get a target, prec) in
+  p "a disjoint gather still counts a selector that reads the written cell"
+    (census ~dyn_value [| fixed 1; fixed 0; fixed 0 |]);
+  p "a gather from another node still counts a selector reading the written cell"
+    (census ~tn:other ~dyn_value [| fixed 0; fixed 0; fixed 0 |])
