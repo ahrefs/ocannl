@@ -1812,6 +1812,96 @@ let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocam
       {ocaml|let both = ( || ) false
 let () = Verdict.p "all rows pass" (both (List.for_all rows ~f:Fn.id))|ocaml},
       [ "all rows pass" ] );
+    (* staging#697 round 1: provenance-carrying values are not necessarily Booleans, and captured
+       operands obey the same scope and default ownership as direct expressions. *)
+    ( "does not assume a qualified external operator is Boolean",
+      {ocaml|let both = External.( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "does not assume an opened external operator is Boolean",
+      {ocaml|open Base
+open External
+let both = ( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "refuses a quantifier through an explicitly qualified standard Boolean alias",
+      {ocaml|open External
+let both = Stdlib.( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a quantifier after reopening standard Boolean operators",
+      {ocaml|open External
+open Base
+let both = ( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "does not use Boolean ordering for tuples carrying a quantifier",
+      {ocaml|let () = Verdict.p "tuple ordering" ((true, List.for_all rows ~f:Fn.id) > (false, true))|ocaml},
+      [] );
+    ( "does not use Boolean ordering for bound tuples carrying a quantifier",
+      {ocaml|let pair = (true, List.for_all rows ~f:Fn.id)
+let () = Verdict.p "tuple ordering" (pair > (false, true))|ocaml},
+      [] );
+    ( "does not use Boolean ordering for constructor payloads",
+      {ocaml|let () = Verdict.p "constructor ordering" (Some (List.for_all rows ~f:Fn.id) > None)|ocaml},
+      [] );
+    ( "does not use Boolean ordering for record payloads",
+      {ocaml|let () = Verdict.p "record ordering" ({ first = true; second = List.for_all rows ~f:Fn.id } > { first = false; second = true })|ocaml},
+      [] );
+    ( "refuses ordering of a bound Boolean quantifier",
+      {ocaml|let all = List.for_all rows ~f:Fn.id
+let () = Verdict.p "all rows pass" (all >= true)|ocaml},
+      [ "all" ] );
+    ( "refuses an omitted partial Boolean default",
+      {ocaml|let check ?(both = (&&) (List.for_all rows ~f:Fn.id)) value = Verdict.p "ok" (both value)
+let () = check true|ocaml},
+      [ "both" ] );
+    ( "accepts a supplied replacement for a partial Boolean default",
+      {ocaml|let check ?(both = (&&) (List.for_all rows ~f:Fn.id)) value = Verdict.p "ok" (both value)
+let () = check ~both:((||) true) true|ocaml},
+      [] );
+    ( "accepts a supplied replacement for a selected partial Boolean default",
+      {ocaml|let check ?(both = if flag then (&&) (List.for_all rows ~f:Fn.id) else (&&) true) value = Verdict.p "ok" (both value)
+let () = check ~both:((||) true) true|ocaml},
+      [] );
+    ( "does not assume operators from an aliased external module are Boolean",
+      {ocaml|module E = External
+let both = E.( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "keeps unknown local opens out of the outer Boolean alias scope",
+      {ocaml|let ignored = External.(let both = ( && ) in both)
+let both = ( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "keeps unknown nested module opens out of the outer Boolean alias scope",
+      {ocaml|module Hidden = struct open External let both = ( && ) end
+let both = ( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "does not retain an earlier Boolean operator binding across an unknown open",
+      {ocaml|let (&&) = Stdlib.( && )
+open External
+let both = ( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "resolves a local Boolean operator defined after an unknown open",
+      {ocaml|open External
+let (&&) _ value = value
+let both = ( && )
+let () = Verdict.p "all rows pass" (both false (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "reopening standard operators shadows an earlier local Boolean operator",
+      {ocaml|let (&&) _ _ = true
+open Base
+let both = ( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "refuses a Boolean quantifier through a known standard module alias",
+      {ocaml|module S = Stdlib
+let both = S.( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
   ]
 
 (* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round

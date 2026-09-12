@@ -340,6 +340,25 @@ accepts an annihilated aliased Boolean conjunction: true
 refuses a quantifier through a partially applied Boolean conjunction: true
 accepts an annihilated aliased Boolean disjunction: true
 refuses a quantifier through a partially applied Boolean disjunction: true
+does not assume a qualified external operator is Boolean: true
+does not assume an opened external operator is Boolean: true
+refuses a quantifier through an explicitly qualified standard Boolean alias: true
+refuses a quantifier after reopening standard Boolean operators: true
+does not use Boolean ordering for tuples carrying a quantifier: true
+does not use Boolean ordering for bound tuples carrying a quantifier: true
+does not use Boolean ordering for constructor payloads: true
+does not use Boolean ordering for record payloads: true
+refuses ordering of a bound Boolean quantifier: true
+refuses an omitted partial Boolean default: true
+accepts a supplied replacement for a partial Boolean default: true
+accepts a supplied replacement for a selected partial Boolean default: true
+does not assume operators from an aliased external module are Boolean: true
+keeps unknown local opens out of the outer Boolean alias scope: true
+keeps unknown nested module opens out of the outer Boolean alias scope: true
+does not retain an earlier Boolean operator binding across an unknown open: true
+resolves a local Boolean operator defined after an unknown open: true
+reopening standard operators shadows an earlier local Boolean operator: true
+refuses a Boolean quantifier through a known standard module alias: true
 the shipping ratchet process refuses the planted helper fixture: true
 the shipping ratchet process refuses a quantifier written directly in a native claim: true
 refuses a stale quantified-helper exemption: true

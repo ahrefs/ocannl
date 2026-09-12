@@ -109,6 +109,7 @@ and provenance = {
   when_true : view;
   when_false : view;
   constant : bool option;
+  boolean : bool;  (** The result is known to be Boolean, rather than an aggregate carrying one. *)
   closure : closure option;
 }
 
@@ -216,13 +217,14 @@ and label = Label_slot of binding | Label_expr of expression
 (* ---------------------------------------------------------------------------------------------- *)
 (* Views and their algebra. *)
 
-(* [f] applied to every function a closure could be: a quantifier function is left alone, and a
-   function selected by control flow is mapped through. *)
-let rec map_functions closure ~f =
+(* Map ordinary functions and saved Boolean operands through every control-flow alternative.
+   Quantifier partials have no captured Boolean operand here. *)
+let rec map_functions closure ~captured ~f =
   match closure with
-  | Quantifier_function _ | Boolean_function _ -> closure
+  | Quantifier_function _ -> closure
+  | Boolean_function (conjoin, first) -> Boolean_function (conjoin, Option.map first ~f:captured)
   | Function function_closure -> Function (f function_closure)
-  | Alternatives closures -> Alternatives (List.map closures ~f:(map_functions ~f))
+  | Alternatives closures -> Alternatives (List.map closures ~f:(map_functions ~captured ~f))
 
 (* Every function a closure could be. *)
 let rec functions_of = function
@@ -249,8 +251,17 @@ let select_closures closures =
 
 let no_populations = Set.empty (module String)
 let empty_view = { sources = []; witnesses = no_populations }
-let nothing = { when_true = empty_view; when_false = empty_view; constant = None; closure = None }
-let constant value = { nothing with constant = Some value }
+
+let nothing =
+  {
+    when_true = empty_view;
+    when_false = empty_view;
+    constant = None;
+    boolean = false;
+    closure = None;
+  }
+
+let constant value = { nothing with constant = Some value; boolean = true }
 let view_at provenance positive = if positive then provenance.when_true else provenance.when_false
 
 let covered witnesses source =
@@ -312,12 +323,45 @@ let either a b =
 
 let merge views = List.reduce views ~f:either |> Option.value ~default:empty_view
 
-let map_sources provenance ~f =
+let rec map_sources provenance ~f =
   let map_view view = { view with sources = List.map view.sources ~f } in
   {
     provenance with
     when_true = map_view provenance.when_true;
     when_false = map_view provenance.when_false;
+    closure =
+      Option.map provenance.closure ~f:(fun closure ->
+          let rec map_closure = function
+            | Boolean_function (conjoin, first) ->
+                Boolean_function (conjoin, Option.map first ~f:(map_sources ~f))
+            | Function fn ->
+                Function
+                  {
+                    fn with
+                    body = map_sources fn.body ~f;
+                    claims =
+                      List.map fn.claims ~f:(fun claim ->
+                          { claim with value = map_view claim.value });
+                    calls =
+                      List.map fn.calls ~f:(fun call ->
+                          {
+                            call with
+                            call_arguments =
+                              List.map call.call_arguments ~f:(fun (label, expr, value, key) ->
+                                  (label, expr, map_sources value ~f, key));
+                          });
+                  }
+            | Alternatives closures -> Alternatives (List.map closures ~f:map_closure)
+            | Quantifier_function partial ->
+                Quantifier_function
+                  {
+                    partial with
+                    predicate_sources =
+                      ( List.map (fst partial.predicate_sources) ~f,
+                        List.map (snd partial.predicate_sources) ~f );
+                  }
+          in
+          map_closure closure);
   }
 
 let reachable provenance positive =
@@ -328,19 +372,21 @@ let negate provenance =
     when_true = provenance.when_false;
     when_false = provenance.when_true;
     constant = Option.map provenance.constant ~f:not;
+    boolean = true;
     closure = None;
   }
 
 let conjunction a b =
   match (a.constant, b.constant) with
   | Some false, _ | _, Some false -> constant false
-  | Some true, _ -> { b with closure = None }
-  | _, Some true -> { a with closure = None }
+  | Some true, _ -> { b with closure = None; boolean = true }
+  | _, Some true -> { a with closure = None; boolean = true }
   | None, None ->
       {
         when_true = both a.when_true b.when_true;
         when_false = either a.when_false b.when_false;
         constant = None;
+        boolean = true;
         closure = None;
       }
 
@@ -361,6 +407,7 @@ let aggregate components =
     when_true = gather true;
     when_false = gather false;
     constant = None;
+    boolean = List.for_all components ~f:(fun value -> value.boolean);
     (* A projection out of the aggregate may be any callable component. *)
     closure = select_closures (List.filter_map components ~f:(fun c -> c.closure));
   }
@@ -465,7 +512,14 @@ let alternatives cases =
      reaches the value. *)
   match agreed with
   | Some value -> constant value
-  | None -> { when_true = at true; when_false = at false; constant = None; closure }
+  | None ->
+      {
+        when_true = at true;
+        when_false = at false;
+        constant = None;
+        boolean = List.for_all cases ~f:(fun case -> case.outcome.boolean);
+        closure;
+      }
 
 (* ---------------------------------------------------------------------------------------------- *)
 (* Syntax helpers. *)
@@ -698,6 +752,10 @@ type context = {
       (** The fields some assignment in the file writes; see [mutated_fields]. *)
 }
 
+(* Unknown opens may replace implicit Boolean operator names. Keep this fact in the lexical
+   environment without pretending to know the external module's value definitions. A later open of
+   Base/Stdlib restores the known primitive namespace. *)
+let unknown_boolean_exports = "<unknown-boolean-exports>"
 let lookup env name = List.find env ~f:(fun binding -> String.equal binding.name name)
 
 let make_binding ?(span = (0, 0)) ?(final = false) ~name ~site payload =
@@ -740,19 +798,17 @@ let rec own binding provenance =
     when_true = own_view provenance.when_true;
     when_false = own_view provenance.when_false;
     constant = provenance.constant;
+    boolean = provenance.boolean;
     closure =
-      Option.map provenance.closure ~f:(function
-        | Boolean_function (conjoin, first) ->
-            Boolean_function (conjoin, Option.map first ~f:(own binding))
-        | closure ->
-            map_functions closure ~f:(fun closure ->
-                {
-                  closure with
-                  body = own binding closure.body;
-                  claims =
-                    List.map closure.claims ~f:(fun claim ->
-                        { claim with value = own_view claim.value });
-                }));
+      Option.map provenance.closure ~f:(fun closure ->
+          map_functions closure ~captured:(own binding) ~f:(fun closure ->
+              {
+                closure with
+                body = own binding closure.body;
+                claims =
+                  List.map closure.claims ~f:(fun claim ->
+                      { claim with value = own_view claim.value });
+              }));
   }
 
 let parameter_provenance binding =
@@ -769,6 +825,7 @@ let parameter_provenance binding =
     when_true = { sources = [ source true ]; witnesses = no_populations };
     when_false = { sources = [ source false ]; witnesses = no_populations };
     constant = None;
+    boolean = false;
     closure = None;
   }
 
@@ -897,8 +954,21 @@ let quantifier kind populations ~written =
   let witnessed = { sources = []; witnesses = populations } in
   match kind with
   | For_all | For_all2 | Is_empty ->
-      { when_true = vacuous; when_false = witnessed; constant = None; closure = None }
-  | Not_exists -> { when_true = witnessed; when_false = vacuous; constant = None; closure = None }
+      {
+        when_true = vacuous;
+        when_false = witnessed;
+        constant = None;
+        boolean = true;
+        closure = None;
+      }
+  | Not_exists ->
+      {
+        when_true = witnessed;
+        when_false = vacuous;
+        constant = None;
+        boolean = true;
+        closure = None;
+      }
 
 (* What `open Verdict.Claims`, `open List` and `module L = List` bring into scope: the native
    closures under their unqualified names. *)
@@ -1158,6 +1228,7 @@ let rec substitute ~replacement ~populations provenance =
     when_true = substitute_view ~replacement ~populations provenance.when_true;
     when_false = substitute_view ~replacement ~populations provenance.when_false;
     constant = provenance.constant;
+    boolean = provenance.boolean;
     closure = Option.map provenance.closure ~f:closure;
   }
 
@@ -1187,19 +1258,17 @@ let drop_via labels provenance =
         when_true = drop_view provenance.when_true;
         when_false = drop_view provenance.when_false;
         constant = provenance.constant;
+        boolean = provenance.boolean;
         closure =
-          Option.map provenance.closure ~f:(function
-            | Boolean_function (conjoin, first) ->
-                Boolean_function (conjoin, Option.map first ~f:drop)
-            | closure ->
-                map_functions closure ~f:(fun closure ->
-                    {
-                      closure with
-                      body = drop closure.body;
-                      claims =
-                        List.map closure.claims ~f:(fun claim ->
-                            { claim with value = drop_view claim.value });
-                    }));
+          Option.map provenance.closure ~f:(fun closure ->
+              map_functions closure ~captured:drop ~f:(fun closure ->
+                  {
+                    closure with
+                    body = drop closure.body;
+                    claims =
+                      List.map closure.claims ~f:(fun claim ->
+                          { claim with value = drop_view claim.value });
+                  }));
       }
     in
     drop provenance
@@ -1223,17 +1292,18 @@ let rec walk ctx expr =
   | Pexp_ident _ -> resolve ctx expr
   | Pexp_construct ({ txt = Longident.Lident ("true" | "false"); _ }, None) ->
       constant (Option.value_exn (literal_bool expr))
-  | Pexp_construct ({ txt = Longident.Lident "Some"; _ }, Some payload) -> walk ctx payload
-  | Pexp_variant (_, Some payload) -> walk ctx payload
+  | Pexp_construct ({ txt = Longident.Lident "Some"; _ }, Some payload)
+  | Pexp_variant (_, Some payload) ->
+      { (walk ctx payload) with boolean = false; constant = None }
   | Pexp_construct (_, Some payload) ->
       (* [Ok b], [`Tag b], [Some b]: the payload's provenance, which a match will read out. *)
-      walk ctx payload
+      { (walk ctx payload) with boolean = false; constant = None }
   | Pexp_construct (_, None) | Pexp_constant _ -> nothing
   | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> walk ctx inner
   | Pexp_field (record, _) ->
       (* A projection reads one component the aggregate did not keep apart: conservatively the whole
          record's sources, as [fst]/[snd] below and a destructuring of a bound aggregate. *)
-      walk ctx record
+      { (walk ctx record) with boolean = false; constant = None }
   | Pexp_let (recursive, bindings, body) -> walk { ctx with env = bind ctx recursive bindings } body
   | Pexp_sequence (setup, result) ->
       discard ctx setup;
@@ -1291,11 +1361,15 @@ let rec walk ctx expr =
               ~producer:(Some (binding.pbop_exp, walk ctx binding.pbop_exp)))
       in
       walk { ctx with env } body
-  | Pexp_tuple items -> aggregate (List.map items ~f:(walk ctx))
+  | Pexp_tuple items -> { (aggregate (List.map items ~f:(walk ctx))) with boolean = false }
   | Pexp_record (fields, base) ->
-      aggregate
-        (List.map fields ~f:(fun (_, field) -> walk ctx field)
-        @ Option.to_list (Option.map base ~f:(walk ctx)))
+      {
+        (aggregate
+           (List.map fields ~f:(fun (_, field) -> walk ctx field)
+           @ Option.to_list (Option.map base ~f:(walk ctx))))
+        with
+        boolean = false;
+      }
   | Pexp_ifthenelse (condition, yes, no) -> (
       let condition = walk ctx condition in
       let yes = walk ctx yes in
@@ -1371,7 +1445,35 @@ and resolve ctx expr =
   match Read.longident_of expr with
   | None -> nothing
   | Some path -> (
-      match lookup ctx.env (String.concat ~sep:"." path) with
+      let unqualified_boolean = match path with [ ("&&" | "||") ] -> true | _ -> false in
+      let binding =
+        if unqualified_boolean then
+          List.find ctx.env ~f:(fun binding ->
+              String.equal binding.name (List.hd_exn path)
+              || String.equal binding.name unknown_boolean_exports)
+        else
+          match lookup ctx.env (String.concat ~sep:"." path) with
+          | Some _ as binding -> binding
+          | None -> (
+              match List.rev path with
+              | ("&&" | "||") :: reversed_prefix ->
+                  lookup ctx.env
+                    (String.concat ~sep:"."
+                       (List.rev reversed_prefix @ [ unknown_boolean_exports ]))
+              | _ -> None)
+      in
+      let primitive () =
+        {
+          nothing with
+          closure =
+            Some (Boolean_function (Option.equal String.equal (List.last path) (Some "&&"), None));
+        }
+      in
+      match binding with
+      | Some binding when String.is_suffix binding.name ~suffix:unknown_boolean_exports ->
+          if Option.equal Bool.equal (resolve_binding binding).constant (Some true) then
+            primitive ()
+          else nothing
       | Some binding -> own binding (resolve_binding binding)
       | None -> (
           match claim_kind_of_path path with
@@ -1381,14 +1483,10 @@ and resolve ctx expr =
                 closure = Some (native_claim kind ~site:(site_of_location expr.pexp_loc));
               }
           | None
-            when List.exists [ "&&"; "||" ] ~f:(fun name ->
-                     Option.equal String.equal (List.last path) (Some name)) ->
-              {
-                nothing with
-                closure =
-                  Some
-                    (Boolean_function (Option.equal String.equal (List.last path) (Some "&&"), None));
-              }
+            when match path with
+                 | [ ("&&" | "||") ] | [ ("Stdlib" | "Base"); ("&&" | "||") ] -> true
+                 | _ -> false ->
+              primitive ()
           | None when Option.equal String.equal (List.last path) (Some "not") ->
               let slot = parameter_binding ~name:"x" ~site:(site_of_location expr.pexp_loc) in
               {
@@ -1552,6 +1650,7 @@ and function_closure ctx parameters body =
                           when_true = either supplied.when_true default.when_true;
                           when_false = either supplied.when_false default.when_false;
                           constant = None;
+                          boolean = false;
                           closure = default.closure;
                         })
             | _ -> ());
@@ -1706,6 +1805,7 @@ and comparison ctx callee left right =
       let witness population =
         {
           nothing with
+          boolean = true;
           when_true = { sources = []; witnesses = Set.singleton (module String) population };
         }
       in
@@ -1734,11 +1834,15 @@ and comparison ctx callee left right =
               (conjunction (negate left_provenance) (negate right_provenance))
           in
           if equality then agree else negate agree
-      | _ when ge -> disjunction left_provenance (negate right_provenance)
-      | _ when gt -> conjunction left_provenance (negate right_provenance)
-      | _ when le -> disjunction (negate left_provenance) right_provenance
-      | _ when lt -> conjunction (negate left_provenance) right_provenance
-      | _ -> nothing)
+      | _ when ge && left_provenance.boolean && right_provenance.boolean ->
+          disjunction left_provenance (negate right_provenance)
+      | _ when gt && left_provenance.boolean && right_provenance.boolean ->
+          conjunction left_provenance (negate right_provenance)
+      | _ when le && left_provenance.boolean && right_provenance.boolean ->
+          disjunction (negate left_provenance) right_provenance
+      | _ when lt && left_provenance.boolean && right_provenance.boolean ->
+          conjunction (negate left_provenance) right_provenance
+      | _ -> { nothing with boolean = true })
 
 (* [valued] answers for an argument already walked where it was written -- a deferred call's --
    whose environment is gone: its saved provenance and population are used without re-walking it or
@@ -2220,7 +2324,11 @@ and module_exports ctx module_expr =
               then claim_exports ~site
               else if is_collection_module path then
                 quantifier_exports ~site ~stdlib:(stdlib_path path)
-              else []))
+              else if
+                List.equal String.equal path [ "Base" ] || List.equal String.equal path [ "Stdlib" ]
+              then [ make_binding ~name:unknown_boolean_exports ~site (Resolved (constant true)) ]
+              else [ make_binding ~name:unknown_boolean_exports ~site (Resolved (constant false)) ])
+      )
   | Pmod_functor (_, body) ->
       (* The functor's body, its parameter unresolved: what an application of it exports. *)
       module_exports ctx body

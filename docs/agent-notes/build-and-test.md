@@ -956,8 +956,9 @@ that they earn a lookup rather than always-loaded space.
   silently cover another call through the same wrapper or another claimed slot in the same call.
 - Boolean operator aliases in `verdict_provenance.ml` (gh-ocannl-968) keep their first
   argument until application, so constant annihilators and partial applications use the same
-  conjunction/disjunction algebra as direct syntax. Boolean ordering uses that algebra after
-  length witnesses. A deferred call carries its argument's lexical population key alongside the
+  conjunction/disjunction algebra as direct syntax. Implicit aliases after an unknown module
+  open are opaque; known qualified primitives and local definitions remain resolvable. Boolean
+  ordering uses that algebra after length witnesses only for known Boolean results. A deferred call carries its argument's lexical population key alongside the
   walked value; only an exact whole-argument parameter inherits that key. Curried functors retain
   each residual module expression with its captured environment, binding one argument at a time.
 - Mutation manifest rows use `tools/mutation-run.sh <module> <patch-file> <@alias>`
