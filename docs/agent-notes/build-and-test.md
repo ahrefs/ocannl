@@ -2103,6 +2103,7 @@ that they earn a lookup rather than always-loaded space.
 
 - Pure assembly dialect and anchor controls live in `test/operations/asm_census_cases.ml`
   (`@test/operations/runtest-asm_census_cases`), independent of the `cc_march_census` toolchain
-  matrix. The driver retains its cache-format probes. `Asm_census.census_source_in` shares the
+  matrix. Residual histogram controls there pin counts and bounded stderr formatting, without
+  compiler-sensitive mnemonic goldens (gh-ocannl-924). The driver retains its cache-format probes. `Asm_census.census_source_in` shares the
   exact-anchor-before-brace-range policy between the driver and the discriminating parser control
   (gh-ocannl-937).

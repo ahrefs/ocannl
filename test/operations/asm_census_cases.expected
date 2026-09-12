@@ -7,3 +7,6 @@ an instruction in an unknown dialect is reported as residual: true
 the brace range alone reads the staging loop gcc nested beside the accumulator: true
 the exact source anchor reads the accumulator loop: true
 a census row takes its exact source anchor ahead of the brace-range fallback: true
+residual mnemonics count only unclassified instructions, ordered by frequency: true
+residual display breaks frequency ties by mnemonic and bounds the omitted total: true
+a fully classified listing has an empty residual diagnostic: true

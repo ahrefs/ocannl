@@ -226,6 +226,8 @@ let dialect_probes () =
     | Some c ->
         c.Census.counts.Census.instructions = 2
         && c.Census.counts.Census.residual = 2
+        && String.is_substring (Census.to_line c)
+             ~substring:"residual_mnemonics=[jne:1,ocannl_future_dialect:1]"
         && c.Census.counts.Census.vector_ops = 0
         && c.Census.counts.Census.scalar_fp_ops = 0
     | None -> false)
@@ -328,6 +330,42 @@ let anchor_precedence_probe () =
           ~after_pattern:"/* Main logic. */")
        ~label:".Lk" ~span:8)
 
+(* Residual diagnostics use the same classification and selected span as the totals. Classified
+   arithmetic, calls and stack traffic must not appear, nor assembly directives or labels. *)
+let residual_probe () =
+  let profile instructions =
+    Census.profile_all Census.Fma ~asm:(String.concat ~sep:"\n" instructions)
+  in
+  let mixed =
+    profile
+      [
+        ".Lfixture:";
+        "\t.loc 1 3 0";
+        "\taddps %xmm1, %xmm0";
+        "\taddss %xmm1, %xmm0";
+        "\tcall fmaf";
+        "\tmovq %rax, (%rsp)";
+        "\tzzz foo";
+        "\tzzz bar";
+        "\taaa foo";
+      ]
+  in
+  Verdict.p "residual mnemonics count only unclassified instructions, ordered by frequency"
+    (mixed.residual = 3 && String.equal (Census.residual_to_line mixed) "[zzz:2,aaa:1]");
+  let crowded =
+    profile
+      (List.init 10 ~f:(fun i -> Printf.sprintf "\tunknown_%02d foo" (9 - i))
+      @ [ "\tunknown_09 bar"; "\tunknown_08 bar" ])
+  in
+  Verdict.p "residual display breaks frequency ties by mnemonic and bounds the omitted total"
+    (crowded.residual = 12
+    && String.equal (Census.residual_to_line crowded)
+         "[unknown_08:2,unknown_09:2,unknown_00:1,unknown_01:1,unknown_02:1,unknown_03:1,unknown_04:1,unknown_05:1,other:2]"
+    );
+  Verdict.p "a fully classified listing has an empty residual diagnostic"
+    (String.equal (Census.residual_to_line (profile [ "\taddps %xmm1, %xmm0" ])) "[]")
+
 let () =
   dialect_probes ();
-  anchor_precedence_probe ()
+  anchor_precedence_probe ();
+  residual_probe ()
