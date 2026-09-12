@@ -386,6 +386,18 @@ accepts a false annihilator captured through a conjunction helper: true
 refuses a quantifier behind a true operand captured through a conjunction helper: true
 does not retain a local ordering operator across an unknown open: true
 reopening standard ordering shadows an earlier local operator: true
+refuses ordering through supplied optional Boolean parameters: true
+accepts witnessed ordering through optional Boolean parameters: true
+accepts ordering through omitted constant Boolean defaults: true
+accepts an omitted Boolean default annihilating ordering: true
+refuses ordering through an omitted quantified Boolean default: true
+accepts an explicit replacement of a quantified ordering default: true
+refuses ordering through a partially supplied optional helper: true
+accepts a captured outer default annihilating ordering: true
+refuses a Boolean alias returned through an identity helper: true
+accepts a witnessed Boolean alias returned through an identity helper: true
+accepts an annihilating Boolean alias returned through an identity helper: true
+accepts a local operator returned through an identity helper: true
 the shipping ratchet process refuses the planted helper fixture: true
 the shipping ratchet process refuses a quantifier written directly in a native claim: true
 refuses a stale quantified-helper exemption: true

@@ -2023,6 +2023,62 @@ let () = Verdict.p "ok" (List.for_all rows ~f:Fn.id > false)|ocaml},
 open Base
 let () = Verdict.p "ok" (List.for_all rows ~f:Fn.id > false)|ocaml},
       [ "ok" ] );
+    (* staging#697 round 4: optional defaults and direct callable parameter results. *)
+    ( "refuses ordering through supplied optional Boolean parameters",
+      {ocaml|let check ?(x=true) ?(y=false) () = Verdict.p "ok" (x > y)
+let () = check ~x:(List.for_all rows ~f:Fn.id) ()|ocaml},
+      [ "check" ] );
+    ( "accepts witnessed ordering through optional Boolean parameters",
+      {ocaml|let check ?(x=true) ?(y=false) () = Verdict.p "ok" (not (List.is_empty rows) && x > y)
+let () = check ~x:(List.for_all rows ~f:Fn.id) ()|ocaml},
+      [] );
+    ( "accepts ordering through omitted constant Boolean defaults",
+      {ocaml|let check ?(x=true) ?(y=false) () = Verdict.p "ok" (x > y)
+let () = check ()|ocaml},
+      [] );
+    ( "accepts an omitted Boolean default annihilating ordering",
+      {ocaml|let check ?(x=false) ?(y=false) () = Verdict.p "ok" (x <= y)
+let () = check ~y:(List.for_all rows ~f:Fn.id) ()|ocaml},
+      [] );
+    ( "refuses ordering through an omitted quantified Boolean default",
+      {ocaml|let check ?(x=List.for_all rows ~f:Fn.id) ?(y=false) () = Verdict.p "ok" (x > y)
+let () = check ()|ocaml},
+      [ "x" ] );
+    ( "accepts an explicit replacement of a quantified ordering default",
+      {ocaml|let check ?(x=List.for_all rows ~f:Fn.id) ?(y=false) () = Verdict.p "ok" (x > y)
+let () = check ~x:true ()|ocaml},
+      [] );
+    ( "refuses ordering through a partially supplied optional helper",
+      {ocaml|let check ?(x=true) ?(y=false) () = Verdict.p "ok" (x > y)
+let partial = check ~x:(List.for_all rows ~f:Fn.id)
+let () = partial ()|ocaml},
+      [ "partial" ] );
+    ( "accepts a captured outer default annihilating ordering",
+      {ocaml|let make a = let check ?(x=a) ?(y=false) () = Verdict.p "ok" (x <= y) in check
+let check = make false
+let () = check ~y:(List.for_all rows ~f:Fn.id) ()|ocaml},
+      [] );
+    ( "refuses a Boolean alias returned through an identity helper",
+      {ocaml|let id x = x
+let both = id (&&)
+let () = Verdict.p "ok" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "ok" ] );
+    ( "accepts a witnessed Boolean alias returned through an identity helper",
+      {ocaml|let id x = x
+let both = id (&&)
+let () = Verdict.p "ok" (not (List.is_empty rows) && both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "accepts an annihilating Boolean alias returned through an identity helper",
+      {ocaml|let id x = x
+let either = id (||)
+let () = Verdict.p "ok" (either true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "accepts a local operator returned through an identity helper",
+      {ocaml|let id x = x
+let (&&) _ _ = true
+let both = id (&&)
+let () = Verdict.p "ok" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
   ]
 
 (* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round

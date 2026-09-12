@@ -105,7 +105,11 @@ and payload =
           environment like any other binding, so a module prefix, an alias or an open qualifies it
           as it does a value. *)
 
-and boolean_identity = Known_boolean | Boolean_parameter of binding | Unknown_boolean
+and boolean_identity =
+  | Known_boolean
+  | Boolean_parameter of binding
+  | Boolean_default of binding * provenance
+  | Unknown_boolean
 
 and provenance = {
   when_true : view;
@@ -269,13 +273,14 @@ let constant value = { nothing with constant = Some value; boolean = Known_boole
 
 let known_boolean = function
   | Known_boolean -> true
-  | Boolean_parameter _ | Unknown_boolean -> false
+  | Boolean_parameter _ | Boolean_default _ | Unknown_boolean -> false
 
 let common_boolean values =
   let same a b =
     match (a, b) with
     | Known_boolean, Known_boolean | Unknown_boolean, Unknown_boolean -> true
-    | Boolean_parameter a, Boolean_parameter b -> phys_equal a b
+    | Boolean_parameter a, Boolean_parameter b | Boolean_default (a, _), Boolean_default (b, _) ->
+        phys_equal a b
     | _ -> false
   in
   match values with
@@ -345,12 +350,18 @@ let either a b =
 
 let merge views = List.reduce views ~f:either |> Option.value ~default:empty_view
 
+let map_boolean_default identity ~f =
+  match identity with
+  | Boolean_default (parameter, default) -> Boolean_default (parameter, f default)
+  | Known_boolean | Boolean_parameter _ | Unknown_boolean -> identity
+
 let rec map_sources provenance ~f =
   let map_view view = { view with sources = List.map view.sources ~f } in
   {
     provenance with
     when_true = map_view provenance.when_true;
     when_false = map_view provenance.when_false;
+    boolean = map_boolean_default provenance.boolean ~f:(map_sources ~f);
     closure =
       Option.map provenance.closure ~f:(fun closure ->
           let rec map_closure = function
@@ -857,7 +868,7 @@ let rec own binding provenance =
     when_true = own_view provenance.when_true;
     when_false = own_view provenance.when_false;
     constant = provenance.constant;
-    boolean = provenance.boolean;
+    boolean = map_boolean_default provenance.boolean ~f:(own binding);
     closure =
       Option.map provenance.closure ~f:(fun closure ->
           map_functions closure ~captured:(own binding) ~f:(fun closure ->
@@ -1283,26 +1294,30 @@ let rec substitute ~replacement ~populations provenance =
           }
     | Alternatives closures -> Alternatives (List.map closures ~f:closure)
   in
+  let direct_actual =
+    let replace parameter absent =
+      match replacement parameter with
+      | Some (Some (_, actual)) -> Some actual
+      | Some None -> Some (absent ())
+      | None -> None
+    in
+    match provenance.boolean with
+    | Boolean_parameter parameter -> replace parameter (fun () -> nothing)
+    | Boolean_default (parameter, default) ->
+        replace parameter (fun () -> substitute ~replacement ~populations default)
+    | Known_boolean | Unknown_boolean -> None
+  in
   {
     when_true = substitute_view ~replacement ~populations provenance.when_true;
     when_false = substitute_view ~replacement ~populations provenance.when_false;
-    constant =
-      (match provenance.boolean with
-      | Boolean_parameter parameter -> (
-          match replacement parameter with
-          | Some (Some (_, actual)) -> actual.constant
-          | Some None -> None
-          | None -> provenance.constant)
-      | Known_boolean | Unknown_boolean -> provenance.constant);
+    constant = Option.value_map direct_actual ~default:provenance.constant ~f:(fun v -> v.constant);
     boolean =
-      (match provenance.boolean with
-      | Boolean_parameter parameter -> (
-          match replacement parameter with
-          | Some (Some (_, actual)) -> actual.boolean
-          | Some None -> Unknown_boolean
-          | None -> provenance.boolean)
-      | identity -> identity);
-    closure = Option.map provenance.closure ~f:closure;
+      Option.value_map direct_actual
+        ~default:(map_boolean_default provenance.boolean ~f:(substitute ~replacement ~populations))
+        ~f:(fun v -> v.boolean);
+    closure =
+      Option.value_map direct_actual ~default:provenance.closure ~f:(fun v -> v.closure)
+      |> Option.map ~f:closure;
   }
 
 and substitute_claim ~replacement ~populations claim =
@@ -1331,7 +1346,7 @@ let drop_via labels provenance =
         when_true = drop_view provenance.when_true;
         when_false = drop_view provenance.when_false;
         constant = provenance.constant;
-        boolean = provenance.boolean;
+        boolean = map_boolean_default provenance.boolean ~f:drop;
         closure =
           Option.map provenance.closure ~f:(fun closure ->
               map_functions closure ~captured:drop ~f:(fun closure ->
@@ -1718,7 +1733,7 @@ and function_closure ctx parameters body =
                           when_true = either supplied.when_true default.when_true;
                           when_false = either supplied.when_false default.when_false;
                           constant = None;
-                          boolean = Unknown_boolean;
+                          boolean = Boolean_default (binding, default);
                           closure = default.closure;
                         })
             | _ -> ());
@@ -1916,7 +1931,8 @@ and comparison ctx callee left right =
                 List.find ctx.env ~f:(fun binding ->
                     List.exists operands ~f:(fun operand ->
                         match operand.boolean with
-                        | Boolean_parameter parameter -> phys_equal binding parameter
+                        | Boolean_parameter parameter | Boolean_default (parameter, _) ->
+                            phys_equal binding parameter
                         | Known_boolean | Unknown_boolean -> false))
               in
               match applied with
@@ -2259,7 +2275,9 @@ and apply ?(valued = fun _ -> None) ctx ~site ~callee_name closure arguments =
                 | None ->
                     if
                       List.exists operands ~f:(fun value ->
-                          match value.boolean with Boolean_parameter _ -> true | _ -> false)
+                          match value.boolean with
+                          | Boolean_parameter _ | Boolean_default _ -> true
+                          | _ -> false)
                     then Some { call with call_arguments }
                     else (
                       table := (call.result, None) :: !table;
