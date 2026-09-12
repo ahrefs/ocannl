@@ -730,6 +730,15 @@ let census_in ?(selection = Innermost) ({ lines; edges = loops; files } : parsed
   Option.map best ~f:(fun (label, j, i) ->
       { loop_label = label; span = i - j; counts = count_range lines op_class ~from_:j ~to_:i })
 
+(** Prefer exact source anchors; only when none carries a loop, try the smallest enclosing construct
+    after [after_pattern]. Trying the range eagerly can select unrelated compiler loops nested
+    beside the accumulator (gh-ocannl-844). Shared by the real census and its pure controls. *)
+let census_source_in ?(selection = Innermost) parsed op_class ~source ~patterns ~after_pattern =
+  let read anchor = census_in ~selection parsed op_class ~anchor in
+  match read (anchor_lines ~source ~patterns) with
+  | Some _ as profile -> profile
+  | None -> read (anchor_block_lines ~source ~patterns ~after_pattern)
+
 (** {!census_in} over an assembly listing parsed for this one question. Convenient where a caller
     asks about one construct in one file; a caller asking about many should {!parse} once. *)
 let census op_class ~asm ~source_basename ~anchor =

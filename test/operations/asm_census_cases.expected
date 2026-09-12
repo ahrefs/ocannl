@@ -1,0 +1,9 @@
+the census models GCC/GAS and Clang assembly on x86-64 and aarch64: true
+both arm64 dialects' instructions are classified, not only their loops found: true
+a libm call spelled the Mach-O way is still counted as one: true
+clang line attribution is found through the construct range, not the exact anchor line: true
+the fp8 combine selector rejects a deliberate libm regression outside its codec loop: true
+an instruction in an unknown dialect is reported as residual: true
+the brace range alone reads the staging loop gcc nested beside the accumulator: true
+the exact source anchor reads the accumulator loop: true
+a census row takes its exact source anchor ahead of the brace-range fallback: true
