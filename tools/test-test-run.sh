@@ -919,6 +919,20 @@ done
 # not necessarily share that interpretation, so compare both against Bash.
 case $(uname -s) in
   MSYS* | MINGW*)
+    # Reach the drive root itself, not just an existing temporary prefix.
+    query_drive=$(cygpath -m "$TMP")
+    query_drive=${query_drive%%/*}/
+    query_drive_physical=$(cd "$query_drive" && pwd -P)
+    query_drive_runs=${query_drive}ocannl-query-root-${TMP##*/}
+    query_out=$(OCANNL_TOOL_TEST_RUNS="$query_drive_runs" "$repeat_root/tools/test-run.sh" paths runs)
+    query_rc=$?
+    if [ "$query_rc" = 0 ] && [ "$query_out" = "$query_drive_physical/ocannl-query-root-${TMP##*/}" ] \
+       && [ ! -e "$query_drive_runs" ]; then
+      report 0 "queries: missing state directly below a drive root matches the launch shell without writes"
+    else
+      report 1 "queries: missing state directly below a drive root matches the launch shell without writes" \
+        "rc=$query_rc runs=$query_out root=$query_drive_physical"
+    fi
     query_native=$(cygpath -m "$query_expected")
     query_out=$(OCANNL_TOOL_TEST_RUNS="$query_native" "$repeat_root/tools/test-run.sh" paths runs)
     query_rc=$?
@@ -950,7 +964,8 @@ case $(uname -s) in
         "resolved=$query_good_rc:$query_good parent=$query_native_parent_rc:$query_native_parent runs=$query_rc:$query_out"
     fi
     ;;
-  *) skip "queries: absent Windows drive spelling matches the launch shell" "requires Windows drive paths"
+  *) skip "queries: missing state directly below a drive root matches the launch shell without writes" "requires Windows drive paths"
+     skip "queries: absent Windows drive spelling matches the launch shell" "requires Windows drive paths"
      skip "queries: drive parent traversal matches the native launch shell without writes" "requires Windows drive paths" ;;
 esac
 
@@ -1024,6 +1039,33 @@ else
   report 1 "queries: an uninspectable lock is an error, never idle" "rc=$query_rc output=$query_out"
 fi
 rmdir "$query_lock"
+# Missing runs metadata is legacy; present broken metadata is an error.
+query_bad=
+for query_metadata in empty relative multiline directory; do
+  rm -f "$query_dir/runs"
+  case $query_metadata in
+    empty) : >"$query_dir/runs" ;;
+    relative) printf 'relative/runs\n' >"$query_dir/runs" ;;
+    multiline) printf '%s\nextra\n' "$query_runs" >"$query_dir/runs" ;;
+    directory) mkdir "$query_dir/runs" ;;
+  esac
+  for query_command in 'paths runs last' 'paths lock last' 'lock-status last'; do
+    query_out=$(query $query_command 2>"$TMP/query-error")
+    query_rc=$?
+    if [ "$query_rc" != 2 ] || [ -n "$query_out" ] || [ ! -s "$TMP/query-error" ]; then
+      query_bad="$query_metadata $query_command: rc=$query_rc output=$query_out"; break
+    fi
+  done
+  [ ! -d "$query_dir/runs" ] || rmdir "$query_dir/runs"
+  [ -z "$query_bad" ] || break
+done
+if [ -z "$query_bad" ] && [ ! -e "$query_lock" ] && [ ! -e "$query_owner" ]; then
+  report 0 "queries: present malformed state metadata is never mistaken for a legacy run"
+else
+  report 1 "queries: present malformed state metadata is never mistaken for a legacy run" "$query_bad"
+fi
+printf '%s\n' "$query_runs" >"$query_dir/runs"
+
 # Legacy paths come from the recorded worktree, not the querying script's root.
 rm "$query_dir/runs"
 printf '%s\n' "$STOP_WT" >"$query_dir/wt"

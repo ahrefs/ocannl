@@ -536,7 +536,8 @@ that they earn a lookup rather than always-loaded space.
   `last` default to this script's worktree, or use an explicit run's recorded metadata. `last`
   names the pointer file. `lock-status [RUN|last]` without a run probes this worktree's current
   and legacy locks, with a run only its recorded lock; it prints `idle` (0) or `held` (3), with
-  inspection/argument errors 2. Queries create no state, even before the first run, and are
+  inspection/argument errors 2. A present invalid `runs` entry is an error; only its absence
+  identifies legacy metadata. Queries create no state, even before the first run, and are
   snapshots, never reservations. Missing directories are supported; parent traversal
   must resolve through the launch shell or fail with exit 2. Native Windows drive spellings
   can resolve `missing/..` where POSIX spellings cannot: queries follow the shell's identity.

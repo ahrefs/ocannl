@@ -213,6 +213,11 @@ case ${1:-} in
       [ ! -e "$query_prefix" ] && [ ! -L "$query_prefix" ] ||
         die "not a directory: $query_prefix"
       query_parent=$(dirname "$query_prefix")
+      # dirname C:/missing returns C:, which MSYS directory predicates do
+      # not recognize as the drive root. Preserve the explicit root slash.
+      case $query_prefix:$query_parent in
+        [A-Za-z]:/*:[A-Za-z]:) query_parent=$query_parent/ ;;
+      esac
       # An unavailable UNC host/share must not fall back to a local / path.
       case $query_prefix in
         //?*) case $query_parent in / | //) die "cannot resolve UNC root: $RUNS" ;; esac ;;
@@ -700,17 +705,38 @@ lock_still_owned() {
   lock_paths_of "$1" || return 1
   [ "$(cat "$run_owner" 2>/dev/null)" = "$1" ] && lock_held "$run_lock"
 }
+recorded_absolute_path() {
+  case $1 in /* | [A-Za-z]:/*) ;; *) return 1 ;; esac
+  case $1 in *$'\n'* | *$'\r'*) return 1 ;; esac
+}
+
 # Where run-dir $1's lock and owner pointer live: under the state root it
 # recorded in `runs`, keyed by its worktree. A run with no `runs` on record
 # was launched by the version that kept both BESIDE the worktree
 # (`.test-run.lock`, `.test-run.lock.owner`); its leftovers, if any, hold
 # THAT lock, and only those paths can attribute and reap them. Sets
-# run_wt, run_lock, run_owner; fails when the run recorded no worktree.
+# run_wt, run_runs, run_lock, run_owner; fails when the run recorded no worktree.
+# Queries additionally reject present but invalid metadata rather than treating
+# it as an old run. Other callers retain their historical best-effort behavior.
 lock_paths_of() {
-  local r k
+  local r k r_read
+  if [ "${2:-}" = query ]; then
+    [ -f "$1/wt" ] && [ -r "$1/wt" ] || return 1
+    if [ -e "$1/runs" ] || [ -L "$1/runs" ]; then
+      [ -f "$1/runs" ] && [ -r "$1/runs" ] || return 1
+    fi
+  fi
   run_wt=$(cat "$1/wt" 2>/dev/null) || return 1
   [ -n "$run_wt" ] || return 1
-  r=$(cat "$1/runs" 2>/dev/null)
+  r=$(cat "$1/runs" 2>/dev/null); r_read=$?
+  if [ "${2:-}" = query ]; then
+    recorded_absolute_path "$run_wt" || return 1
+    if [ -e "$1/runs" ] || [ -L "$1/runs" ]; then
+      [ "$r_read" = 0 ] || return 1
+      recorded_absolute_path "$r" || return 1
+    fi
+  fi
+  run_runs=$r
   if [ -n "$r" ]; then
     k=$(wt_key_of "$run_wt")
     run_lock=$r/lock-$k
@@ -1057,9 +1083,9 @@ case $sub in
     query_wt=$PWD query_runs=$RUNS query_lock=$LOCK query_owner=$OWNER query_last=$LAST
     if [ $# -eq 2 ]; then
       resolve_run "$2"
-      lock_paths_of "$run_dir" || die "run has no recorded worktree: $run_dir"
+      lock_paths_of "$run_dir" query || die "run has unavailable or invalid path metadata: $run_dir"
       query_wt=$run_wt query_lock=$run_lock query_owner=$run_owner
-      query_runs=$(cat "$run_dir/runs" 2>/dev/null) || query_runs=
+      query_runs=$run_runs
       # Legacy runs have no stored state root; the run directory identifies it.
       [ -n "$query_runs" ] || query_runs=$(cd "$run_dir/.." && pwd -P)
       query_last=$query_runs/last-$(wt_key_of "$query_wt")
@@ -1076,7 +1102,7 @@ case $sub in
     [ $# -le 1 ] || die "usage: lock-status [RUN|last]"
     if [ $# -eq 1 ]; then
       resolve_run "$1"
-      lock_paths_of "$run_dir" || die "run has no recorded worktree: $run_dir"
+      lock_paths_of "$run_dir" query || die "run has unavailable or invalid path metadata: $run_dir"
       probe_locks "$run_lock"
     else
       probe_locks "$LOCK" "$PWD/.test-run.lock"
