@@ -28,8 +28,22 @@
 #   tools/test-run.sh wait   [RUN|last] [--timeout N]  # bounded; exits with the run's status
 #   tools/test-run.sh stop   [RUN|last]                # TERM the run's process group
 #   tools/test-run.sh list                             # recent runs and their states
+#   tools/test-run.sh paths FIELD [RUN|last]          # one absolute path (see below)
+#   tools/test-run.sh lock-status [RUN|last]          # idle/held; exits 0/3 (2 error)
 #   tools/test-run.sh idle                             # 0 idle, 3 locked, 2 unreadable
 #                                                     # snapshot, not a reservation
+#
+# Read-only queries: `paths run [RUN|last]` resolves a recorded run (default last).
+# `paths worktree|runs|lock|owner|last [RUN|last]` without a run names THIS
+# script's worktree and state root, even before its first launch; with a run it
+# names that run's recorded worktree/state (including legacy in-tree locks).
+# `paths last` names the pointer FILE, not the run it points to. Output is one
+# raw absolute path and a newline, never shell code; exit 2 means invalid input
+# or unavailable metadata. `lock-status` without a run probes THIS worktree's
+# current and legacy locks; with a run, only its recorded lock. It prints idle
+# (0) or held (3); an unreadable lock is an error (2), never idle. These are
+# snapshots, not reservations or evidence that a particular process is alive.
+# Neither query creates state, publishes pointers, or launches a toolchain.
 #
 # `repeat` runs each iteration through dune in a freshly cleaned, cache-disabled
 # build context, keeps its separate stdout/stderr and exit status, and compares
@@ -184,11 +198,32 @@ perl -e 'use Fcntl ":flock"; exit 0' 2>/dev/null || die "perl with Fcntl not fou
 # `OCANNL_...` variable it finds (gh-ocannl-629), and these are exported into the
 # environment of every test this script runs.
 RUNS=${OCANNL_TOOL_TEST_RUNS:-$HOME/.ocannl-test-runs}
-mkdir -p "$RUNS" || die "cannot create $RUNS"
+case ${1:-} in
+  paths | lock-status)
+    # Resolve existing symlink prefixes physically, but allow an absent state
+    # root without creating it. Walking components also handles missing/../x.
+    RUNS=$(perl -MCwd=abs_path -MFile::Spec -e '
+      my $path = File::Spec->rel2abs($ARGV[0]);
+      my $out = "/";
+      for my $part (split m{/+}, $path) {
+        next if $part eq "" || $part eq ".";
+        if ($part eq "..") { $out =~ s{/[^/]+$}{}; $out ||= "/"; next; }
+        $out =~ s{/$}{};
+        $out .= "/$part";
+        if (-e $out || -l $out) {
+          $out = abs_path($out) // die "cannot resolve $out\n";
+          -d $out or die "not a directory: $out\n";
+        }
+      }
+      print "$out\n";
+    ' "$RUNS") || die "cannot resolve runs directory"
+    ;;
+  *) mkdir -p "$RUNS" || die "cannot create $RUNS"
+     RUNS=$(cd "$RUNS" && pwd -P) || die "cannot resolve $RUNS" ;;
+esac
 # Canonicalized: run identities (owner pointer, `last`, wt cross-references)
 # are compared as strings, so a relative override must not record a
 # different spelling than a later absolute reference resolves to.
-RUNS=$(cd "$RUNS" && pwd -P) || die "cannot resolve $RUNS"
 # The worktree key makes every per-worktree fact under $RUNS -- the lock, its
 # owner pointer and the `last` pointer -- per-checkout, so concurrent sessions
 # in different worktrees never read each other's verdicts or contend on each
@@ -623,6 +658,30 @@ lock_held() { # <lock-file>; exits 0 iff some process holds its flock
            exit(flock($fh, LOCK_EX | LOCK_NB) ? 1 : 0)' "$1" 2>/dev/null
 }
 
+# Non-writing lock snapshot shared by the public queries and idle. Missing
+# locks are idle; inspection errors must never be mistaken for absence.
+probe_locks() {
+  perl -e '
+      use Fcntl ":flock";
+      use Errno qw(EWOULDBLOCK EAGAIN ENOENT);
+      my @handles;
+      for my $path (@ARGV) {
+        unless (lstat $path) {
+          next if $! == Errno::ENOENT;
+          exit 2;
+        }
+        -f $path or exit 2;
+        # Read/write access matches the existing lock on MSYS too, but this
+        # probe never writes, creates, truncates, or unlinks a lock file.
+        open my $fh, "+<", $path or exit 2;
+        flock($fh, LOCK_EX | LOCK_NB)
+          or exit(($! == EWOULDBLOCK || $! == EAGAIN) ? 3 : 2);
+        push @handles, $fh;
+      }
+      exit 0;
+  ' "$@"
+}
+
 # Is the RECORDED worktree of run-dir $1 still locked with $1 as the named
 # owner? Then $1's leftovers are what is holding it -- grounds both for
 # reaping them (stop) and for keeping $1's metadata alive (retention).
@@ -968,10 +1027,57 @@ finish_run() { # rc -> append sentinel, record verdict
 }
 
 sub=${1:-}
-[ -n "$sub" ] || die "usage: tools/test-run.sh run|start|repeat|status|wait|stop|list ... (see header)"
+[ -n "$sub" ] || die "usage: tools/test-run.sh run|start|repeat|status|wait|stop|list|idle|paths|lock-status ... (see header)"
 shift
 
 case $sub in
+  paths)
+    [ $# -ge 1 ] && [ $# -le 2 ] || die "usage: paths FIELD [RUN|last]"
+    field=$1
+    case $field in run | worktree | runs | lock | owner | last) ;;
+      *) die "unknown path field: $field (run, worktree, runs, lock, owner, last)" ;;
+    esac
+    if [ "$field" = run ]; then
+      resolve_run "${2:-last}"
+      # Legacy last symlinks may spell a run through a symlinked directory.
+      (cd "$run_dir" && pwd -P) || die "cannot resolve $run_dir"
+      exit 0
+    fi
+    query_wt=$PWD query_runs=$RUNS query_lock=$LOCK query_owner=$OWNER query_last=$LAST
+    if [ $# -eq 2 ]; then
+      resolve_run "$2"
+      lock_paths_of "$run_dir" || die "run has no recorded worktree: $run_dir"
+      query_wt=$run_wt query_lock=$run_lock query_owner=$run_owner
+      query_runs=$(cat "$run_dir/runs" 2>/dev/null) || query_runs=
+      # Legacy runs have no stored state root; the run directory identifies it.
+      [ -n "$query_runs" ] || query_runs=$(cd "$run_dir/.." && pwd -P)
+      query_last=$query_runs/last-$(wt_key_of "$query_wt")
+    fi
+    case $field in
+      worktree) printf '%s\n' "$query_wt" ;;
+      runs) printf '%s\n' "$query_runs" ;;
+      lock) printf '%s\n' "$query_lock" ;;
+      owner) printf '%s\n' "$query_owner" ;;
+      last) printf '%s\n' "$query_last" ;;
+    esac
+    ;;
+  lock-status)
+    [ $# -le 1 ] || die "usage: lock-status [RUN|last]"
+    if [ $# -eq 1 ]; then
+      resolve_run "$1"
+      lock_paths_of "$run_dir" || die "run has no recorded worktree: $run_dir"
+      probe_locks "$run_lock"
+    else
+      probe_locks "$LOCK" "$PWD/.test-run.lock"
+    fi
+    query_rc=$?
+    case $query_rc in
+      0) echo idle ;;
+      3) echo held ;;
+      *) die "cannot inspect worktree lock" ;;
+    esac
+    exit "$query_rc"
+    ;;
   repeat)
     cap=${OCANNL_TOOL_TEST_CAP:-3600}
     alone=0
@@ -1427,21 +1533,7 @@ case $sub in
     [ $# -eq 0 ] || die "idle takes no arguments"
     # Use the same flock as run/start/repeat, including inherited holders after
     # a launcher or supervisor dies. This snapshot does not reserve the tree.
-    perl -e '
-      use Fcntl ":flock";
-      use Errno qw(EWOULDBLOCK EAGAIN);
-      my @handles;
-      for my $path (@ARGV) {
-        next unless -e $path;
-        # Read/write access matches the existing lock on MSYS too, but this
-        # probe never writes, creates, truncates, or unlinks a lock file.
-        open my $fh, "+<", $path or exit 2;
-        flock($fh, LOCK_EX | LOCK_NB)
-          or exit(($! == EWOULDBLOCK || $! == EAGAIN) ? 3 : 2);
-        push @handles, $fh;
-      }
-      exit 0;
-    ' "$LOCK" "$PWD/.test-run.lock"
+    probe_locks "$LOCK" "$PWD/.test-run.lock"
     idle_rc=$?
     case $idle_rc in
       0) ;;

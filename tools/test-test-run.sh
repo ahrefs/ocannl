@@ -15,7 +15,7 @@
 #
 # It tests the WORKING-TREE copy: `group_alive` is extracted from the shared
 # scripts/process-group.sh; `ps_token`, `proc_identity_matches`, `proc_alive`
-# and `wt_key_of` come from tools/test-run.sh. The `stop` legs drive that same tool as a
+# come from tools/test-run.sh. The `stop` legs drive that same tool as a
 # subprocess. Each extraction is asserted structurally before use, so a sed
 # that matched nothing cannot leave every leg passing without testing anything.
 #
@@ -72,6 +72,8 @@
 #      refusals are told apart by whether dune was ever invoked.
 #  32. `repeat` stops after a refused first iteration and exits 2 under the
 #      same verdict, while a merely red iteration is still repeated in full.
+#  33. read-only paths and lock-status: absent state, invalid input, physical
+#      paths, recorded and legacy paths, held/released and uninspectable locks.
 
 set -u
 
@@ -256,12 +258,9 @@ trap 'exit 143' TERM
 # from the one the shipping script recomputes would leave every one of them
 # falling through to "nothing left to signal" -- passing no leg, but testing
 # neither sentence either.
-# `wt_key_of` is the worktree key the `last` pointer -- and now the lock and
-# its owner pointer -- are named by; the stop legs need it to place a fixture
-# where `stop last` will look. It is a one-liner, hence its own size floor.
-for fn in group_alive ps_token proc_identity_matches proc_alive wt_key_of; do
+for fn in group_alive ps_token proc_identity_matches proc_alive; do
   if [ "$fn" = group_alive ]; then fn_src="$GROUP_SRC"; else fn_src="$SRC"; fi
-  case $fn in wt_key_of) g_min=3 ;; *) g_min=10 ;; esac
+  g_min=10
   sed -n "/^$fn() {/,/^}/p" "$fn_src" >"$TMP/$fn.sh"
   g_lines="$(wc -l <"$TMP/$fn.sh" | tr -d ' ')"
   g_head="$(head -n1 "$TMP/$fn.sh")"
@@ -506,11 +505,8 @@ fi
 # pointed at this run's temp dir, so the `last` pointer these legs move is the
 # fixture's own and dies with the temp dir. `last` rather than an explicit run
 # directory, because that is the spelling an operator uses and it exercises the
-# pointer too; its name is keyed on the worktree, and the key is EXTRACTED from
-# the shipping script (its `wt_key=` line, evaluated over the `wt_key_of` it
-# calls) with the cwd that script gives itself (its own repo root, not the
-# caller's), so a change to the keying moves the fixture with it instead of
-# quietly leaving these legs unable to find a run.
+# pointer too; the public `paths last` query supplies its filename without
+# reconstructing the shipping script's worktree-key implementation.
 #
 # The fixture deliberately records no pid/ptoken and leaves no `exit` file: a
 # run with either is owned or finished, and the group branch is the one reached
@@ -519,15 +515,12 @@ l_ignored="stop: a group whose leader ignores TERM is reported with the unreaped
 l_killed="stop: that escalation kills the whole group, not just its leader"
 l_took="stop: a group whose leader takes the TERM is reported as TERMed, not as ignoring it"
 
-SRC_ROOT="$(cd -P "$HERE/.." && pwd -P)"
 STOP_RUNS="$TMP/runs"
 STOP_WT="$TMP/wt"
-wt_expr="$(sed -n '/^wt_key=/p' "$SRC")"
-key_for() { # <repo root> -> the `last` pointer key the script uses from there
-  ( cd -P "$1" 2>/dev/null || exit 0
-    eval "$wt_expr" 2>/dev/null
-    printf '%s' "${wt_key:-}" )
-}
+mkdir -p "$STOP_RUNS" "$STOP_WT"
+STOP_RUNS=$(cd "$STOP_RUNS" && pwd -P)
+STOP_WT=$(cd "$STOP_WT" && pwd -P)
+stop_last=$(OCANNL_TOOL_TEST_RUNS="$STOP_RUNS" "$SRC" paths last) || exit 1
 
 # A leg that cannot establish its premise must skip, not pass: without a pgid
 # reader the fixture could name THIS shell's group and stop would signal the
@@ -536,13 +529,11 @@ key_for() { # <repo root> -> the `last` pointer key the script uses from there
 stop_skip=""
 if [ "$have_pgid" = 0 ]; then
   stop_skip="no way to read a process's group, so a fixture group cannot be told from this shell's own"
-elif [ -z "$wt_expr" ] || [ -z "$(key_for "$SRC_ROOT")" ]; then
-  stop_skip="could not derive the \`last\` pointer key from $SRC"
 elif [ -z "$(ps_token $$)" ]; then
   stop_skip="this system records no start token, so a forged leader cannot be identity-verified"
 fi
 
-mk_fixture() { # <tag> <pgid> <pointer key>; 0 iff the run is reachable as `last`
+mk_fixture() { # <tag> <pgid> <last pointer path>; 0 iff the run is reachable as `last`
   local d="$STOP_RUNS/19700101-000000-$1"
   mkdir -p "$d" "$STOP_WT" || return 1
   # cmd and cap are what resolve_run demands before it will trust a directory
@@ -559,7 +550,7 @@ mk_fixture() { # <tag> <pgid> <pointer key>; 0 iff the run is reachable as `last
   # group_verified refuses an empty token outright, so it is checked here
   # rather than left to reappear as a wording failure three legs later.
   [ -s "$d/gtoken" ] || return 1
-  printf '%s\n' "$d" >"$STOP_RUNS/last-$3" || return 1
+  printf '%s\n' "$d" >"$3" || return 1
   return 0
 }
 
@@ -642,7 +633,7 @@ end_leader() { # whatever the leg concluded, the whole fixture group goes
 body_ignores='trap "" TERM; sleep 600 & echo $! >"$1"; exec sleep 600'
 body_takes='sleep 600 & echo $! >"$1"; exec sleep 600'
 stop_out=""; stop_rc=""; stop_pg=""; stop_member=""; stop_err=""; stop_diag=""
-stop_probe() { # <tag> <leader body> <script> <pointer key>
+stop_probe() { # <tag> <leader body> <script> <last pointer path>
   stop_out=""; stop_rc=""; stop_pg=""; stop_member=""; stop_err=""; stop_diag=""
   if ! start_leader "$TMP/$1.marker" "$2"; then
     stop_err="could not start a two-process group leader for the '$1' fixture"
@@ -687,12 +678,10 @@ if [ -n "$stop_skip" ]; then
   skip "$l_killed" "$stop_skip"
   skip "$l_took" "$stop_skip"
 else
-  stop_key="$(key_for "$SRC_ROOT")"
-
   # -------------------------------------------------------------------------
   # Leg 6: the leader ignores TERM
   # -------------------------------------------------------------------------
-  if stop_probe ignores "$body_ignores" "$SRC" "$stop_key"; then
+  if stop_probe ignores "$body_ignores" "$SRC" "$stop_last"; then
     said "$l_ignored" \
       "orphaned process group $stop_pg survived TERM (possibly only as unreaped exited processes); escalated to KILL"
     # The sentence is a claim about what stop DID, so the doing is checked too:
@@ -729,7 +718,7 @@ else
   # -------------------------------------------------------------------------
   # The difference from leg 6 is one `trap` in the leader and nothing else, so
   # a stop that reported both the same way would fail exactly one of them.
-  if stop_probe takes "$body_takes" "$SRC" "$stop_key"; then
+  if stop_probe takes "$body_takes" "$SRC" "$stop_last"; then
     said "$l_took" "sent TERM to the orphaned process group $stop_pg; re-run stop to confirm"
   else
     report 1 "$l_took" "$stop_err"
@@ -755,7 +744,7 @@ else
   printf '%s\n' "$STOP_WT" >"$legacy_dir/wt"
   : >"$legacy_dir/log"
   printf '%s\n' "$legacy_dir" >"$STOP_WT/.test-run.lock.owner"
-  printf '%s\n' "$legacy_dir" >"$STOP_RUNS/last-$stop_key"
+  printf '%s\n' "$legacy_dir" >"$stop_last"
   rm -f "$TMP/legacy.pid"
   perl -e 'use Fcntl ":flock";
            open(my $fh, ">>", $ARGV[0]) or exit 1;
@@ -768,9 +757,9 @@ else
     sleep 0.1
   done
   # The premise, checked: the lock really is held before stop is asked.
-  if [ ! -s "$TMP/legacy.pid" ] ||
-     perl -e 'use Fcntl ":flock"; open(my $fh, ">>", $ARGV[0]) or exit 1;
-              exit(flock($fh, LOCK_EX | LOCK_NB) ? 0 : 1)' "$STOP_WT/.test-run.lock"; then
+  legacy_lock_out=$(OCANNL_TOOL_TEST_RUNS="$STOP_RUNS" "$SRC" lock-status last)
+  legacy_lock_rc=$?
+  if [ ! -s "$TMP/legacy.pid" ] || [ "$legacy_lock_rc" != 3 ] || [ "$legacy_lock_out" != held ]; then
     report 1 "$l_legacy" "the fixture holder did not take the in-tree lock"
   else
     stop_out="$(OCANNL_TOOL_TEST_RUNS="$STOP_RUNS" "$SRC" stop last 2>"$TMP/legacy.stderr")"
@@ -786,8 +775,8 @@ else
     if kill -0 "$legacy_holder" 2>/dev/null; then
       report 1 "$l_legacy (the holder is gone and the lock is free)" \
         "pid $legacy_holder still holds $STOP_WT/.test-run.lock after stop"
-    elif perl -e 'use Fcntl ":flock"; open(my $fh, ">>", $ARGV[0]) or exit 1;
-                  exit(flock($fh, LOCK_EX | LOCK_NB) ? 0 : 1)' "$STOP_WT/.test-run.lock"; then
+    elif OCANNL_TOOL_TEST_RUNS="$STOP_RUNS" "$SRC" lock-status last >"$TMP/legacy-lock-after" \
+         && [ "$(cat "$TMP/legacy-lock-after")" = idle ]; then
       report 0 "$l_legacy (the holder is gone and the lock is free)"
     else
       report 1 "$l_legacy (the holder is gone and the lock is free)" \
@@ -809,24 +798,145 @@ mkdir -p "$repeat_root/tools" "$repeat_root/scripts" "$repeat_bin"
 cp "$SRC" "$repeat_root/tools/test-run.sh"
 cp "$GROUP_SRC" "$repeat_root/scripts/process-group.sh"
 chmod +x "$repeat_root/tools/test-run.sh"
+# Read-only query contract: no state store, no first run, and no lock file yet.
+# The fixture root (not the caller's cwd) owns all omitted-RUN queries.
+query_runs=$TMP/query-state/missing/../runs
+query_expected=$(cd "$TMP" && pwd -P)/query-state/runs
+query() {
+  OCANNL_TOOL_TEST_RUNS=$query_runs "$repeat_root/tools/test-run.sh" "$@"
+}
+query_rc=0
+query_out=$(query paths runs) || query_rc=$?
+query_wt=$(query paths worktree)
+query_lock=$(query paths lock)
+query_owner=$(query paths owner)
+query_last=$(query paths last)
+query_idle=$(query lock-status) || query_rc=$?
+if [ "$query_rc" = 0 ] && [ "$query_out" = "$query_expected" ] \
+   && [ "$query_wt" = "$(cd "$repeat_root" && pwd -P)" ] \
+   && [ "$query_idle" = idle ] && [ ! -e "$TMP/query-state" ] \
+   && [ -n "$query_lock" ] && [ -n "$query_owner" ] && [ -n "$query_last" ]; then
+  report 0 "queries: absent state resolves physically without creating files"
+else
+  report 1 "queries: absent state resolves physically without creating files" \
+    "rc=$query_rc runs=$query_out worktree=$query_wt lock=$query_lock idle=$query_idle"
+fi
+query_bad=
+for args in 'paths' 'paths bogus' 'paths lock last extra' 'paths run' \
+            'paths run missing' 'paths lock missing' 'lock-status last' \
+            'lock-status last extra'; do
+  query_out=$(query $args 2>"$TMP/query-error")
+  query_rc=$?
+  if [ "$query_rc" != 2 ] || [ -n "$query_out" ] || [ ! -s "$TMP/query-error" ]; then
+    query_bad="$args: rc=$query_rc output=$query_out"; break
+  fi
+done
+if [ -z "$query_bad" ] && [ ! -e "$TMP/query-state" ]; then
+  report 0 "queries: malformed arguments and missing runs fail without state mutation"
+else
+  report 1 "queries: malformed arguments and missing runs fail without state mutation" "$query_bad"
+fi
+
+# Physical normalization must agree with launch even when the caller uses a
+# symlinked script or state root. MSYS may copy rather than create a symlink.
+ln -s "$repeat_root" "$TMP/query-repo-link" 2>/dev/null
+ln -s "$repeat_root" "$TMP/query-state-link" 2>/dev/null
+if [ -L "$TMP/query-repo-link" ] && [ -L "$TMP/query-state-link" ]; then
+  query_out=$(OCANNL_TOOL_TEST_RUNS="$TMP/query-state-link/nonexistent/runs" \
+    "$TMP/query-repo-link/tools/test-run.sh" paths runs)
+  query_rc=$?
+  if [ "$query_rc" = 0 ] && [ "$query_out" = "$query_wt/nonexistent/runs" ] \
+     && [ ! -e "$repeat_root/nonexistent" ]; then
+    report 0 "queries: symlink spellings identify the same physical worktree and state root"
+  else
+    report 1 "queries: symlink spellings identify the same physical worktree and state root" \
+      "rc=$query_rc runs=$query_out expected=$query_wt/nonexistent/runs"
+  fi
+else
+  skip "queries: symlink spellings identify the same physical worktree and state root" \
+    "native symlinks unavailable"
+fi
+
+# The pointer returned by paths last must feed the SAME resolver as status and
+# stop; the published fixture has deliberately no live pid and no verdict.
+mkdir -p "$query_expected/fixture"
+query_runs=$query_expected
+query_dir=$query_expected/fixture
+printf 'fixture\n' >"$query_dir/cmd"
+printf '0\n' >"$query_dir/cap"
+printf '%s\n' "$query_wt" >"$query_dir/wt"
+printf '%s\n' "$query_runs" >"$query_dir/runs"
+printf '%s\n' "$query_dir" >"$query_last"
+query_bad=
+for ref in last fixture "$query_dir"; do
+  [ "$(query paths run "$ref")" = "$query_dir" ] \
+    && [ "$(query paths lock "$ref")" = "$query_lock" ] \
+    && [ "$(query paths owner "$ref")" = "$query_owner" ] \
+    && [ "$(query paths worktree "$ref")" = "$query_wt" ] \
+    && [ "$(query paths runs "$ref")" = "$query_runs" ] \
+    && [ "$(query paths last "$ref")" = "$query_last" ] \
+    || query_bad="$ref did not resolve the published fixture"
+done
+query_out=$(query lock-status last); query_rc=$?
+if [ -z "$query_bad" ] && [ "$query_rc" = 0 ] && [ "$query_out" = idle ] \
+   && [ ! -e "$query_lock" ] && [ ! -e "$query_owner" ]; then
+  report 0 "queries: last, bare id and absolute run share recorded paths without creating locks"
+else
+  report 1 "queries: last, bare id and absolute run share recorded paths without creating locks" "$query_bad"
+fi
+
+# A held lock needs no process metadata to be reported held. Run the holder
+# synchronously; Perl closes its nonstandard descriptors when execing the query.
+query_out=$(perl -MFcntl=:flock -e '
+  open my $fh, ">>", $ARGV[0] or die $!;
+  flock($fh, LOCK_EX | LOCK_NB) or die $!;
+  system @ARGV[1..$#ARGV];
+  exit($? >> 8);
+' "$query_lock" env OCANNL_TOOL_TEST_RUNS="$query_runs" \
+  "$repeat_root/tools/test-run.sh" lock-status last)
+query_rc=$?
+query_after=$(query lock-status); query_after_rc=$?
+if [ "$query_rc" = 3 ] && [ "$query_out" = held ] \
+   && [ "$query_after_rc" = 0 ] && [ "$query_after" = idle ] \
+   && [ ! -s "$query_lock" ]; then
+  report 0 "queries: occupied and released locks have distinct statuses without writes"
+else
+  report 1 "queries: occupied and released locks have distinct statuses without writes" \
+    "held=$query_rc:$query_out released=$query_after_rc:$query_after"
+fi
+rm "$query_lock"
+mkdir "$query_lock"
+query_out=$(query lock-status 2>"$TMP/query-error"); query_rc=$?
+if [ "$query_rc" = 2 ] && [ -z "$query_out" ] && [ -d "$query_lock" ]; then
+  report 0 "queries: an uninspectable lock is an error, never idle"
+else
+  report 1 "queries: an uninspectable lock is an error, never idle" "rc=$query_rc output=$query_out"
+fi
+rmdir "$query_lock"
+# Legacy paths come from the recorded worktree, not the querying script's root.
+rm "$query_dir/runs"
+printf '%s\n' "$STOP_WT" >"$query_dir/wt"
+if [ "$(query paths lock last)" = "$STOP_WT/.test-run.lock" ] \
+   && [ "$(query paths owner last)" = "$STOP_WT/.test-run.lock.owner" ]; then
+  report 0 "queries: legacy runs retain their recorded in-tree lock paths"
+else
+  report 1 "queries: legacy runs retain their recorded in-tree lock paths"
+fi
+
 cat >"$repeat_bin/dune" <<'EOF'
 #!/usr/bin/env bash
 set -u
 # Close the inherited lock descriptor before probing through a fresh open.
 # Acquiring here would prove repeat released its one set-wide lock too early.
-# The lock lives under the runs directory, keyed by the worktree; this fixture
-# is the only worktree using its private runs directory, so exactly one lock
-# file is expected there -- and its ABSENCE is a failure of its own, since a
-# probe against nothing would acquire and misreport an early release.
-lock_probe() { # a function, so the glob does not disturb this fixture's own argv
-  set -- "$OCANNL_TOOL_TEST_RUNS"/lock-*
-  if [ $# -ne 1 ] || [ ! -e "$1" ]; then
-    echo "repeat fixture found no single worktree lock under $OCANNL_TOOL_TEST_RUNS" >&2
-    exit 94
-  fi
-  if perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 1)' \
-     9>&- <"$1"; then
-    echo "repeat fixture acquired the supposedly held worktree lock" >&2
+# Ask the production read-only API; a held answer must come from the actual
+# lock, not a glob over implementation-private filenames. A separate absent
+# lock control below prevents a constant "held" query from blessing this leg.
+lock_probe() {
+  local answer rc
+  answer=$(tools/test-run.sh lock-status 9>&-)
+  rc=$?
+  if [ "$rc" != 3 ] || [ "$answer" != held ]; then
+    echo "repeat fixture expected held lock, got $rc: $answer" >&2
     exit 91
   fi
 }
@@ -970,7 +1080,7 @@ repeat_probe() { # tag mode [repeat options/count/dune argv...]
     "$repeat_root/tools/test-run.sh" repeat "$@" >"$TMP/$tag.out" 2>"$TMP/$tag.err"
   repeat_rc=$?
   repeat_out=$(cat "$TMP/$tag.out")
-  repeat_dir=$(find "$runs" -mindepth 1 -maxdepth 1 -type d -name '2*Z-*' | head -1)
+  repeat_dir=$(OCANNL_TOOL_TEST_RUNS="$runs" "$repeat_root/tools/test-run.sh" paths run last 2>/dev/null)
 }
 
 # This is an ordering invariant, not a timing lottery: once publish_run writes
@@ -1025,7 +1135,7 @@ touch "$repeat_red_cancel_prefix.release"
 wait "$repeat_pid"
 repeat_red_cancel_rc=$?
 repeat_pid=
-repeat_red_cancel_dir=$(find "$repeat_red_cancel_runs" -mindepth 1 -maxdepth 1 -type d -name '2*Z-*' | head -1)
+repeat_red_cancel_dir=$(OCANNL_TOOL_TEST_RUNS="$repeat_red_cancel_runs" "$repeat_root/tools/test-run.sh" paths run last 2>/dev/null)
 if [ "$red_cancel_stop_rc" = 0 ] \
    && grep -q '^sent TERM to the repeat coordinator; ' <<<"$red_cancel_stop" \
    && [ "$repeat_red_cancel_rc" = 7 ] \
@@ -1060,7 +1170,7 @@ PATH=$repeat_bin:$PATH \
   "$repeat_root/tools/test-run.sh" repeat 2 build @cheap \
   >"$TMP/repeat-orphan.out" 2>"$TMP/repeat-orphan.err"
 repeat_orphan_rc=$?
-repeat_orphan_dir=$(find "$repeat_orphan_runs" -mindepth 1 -maxdepth 1 -type d -name '2*Z-*' | head -1)
+repeat_orphan_dir=$(OCANNL_TOOL_TEST_RUNS="$repeat_orphan_runs" "$repeat_root/tools/test-run.sh" paths run last 2>/dev/null)
 orphan_pid=$(cat "$repeat_orphan_pid_file" 2>/dev/null)
 if [ "$repeat_orphan_rc" = 137 ] \
    && [ -e "$repeat_orphan_marker" ] \
@@ -1106,7 +1216,7 @@ if REPEAT_TEST_MODE=session_escape \
 else
   repeat_escape_rc=$?
 fi
-repeat_escape_dir=$(find "$repeat_escape_runs" -mindepth 1 -maxdepth 1 -type d -name '2*Z-*' | head -1)
+repeat_escape_dir=$(OCANNL_TOOL_TEST_RUNS="$repeat_escape_runs" "$repeat_root/tools/test-run.sh" paths run last 2>/dev/null)
 escape_pid=$(cat "$escape_pid_file" 2>/dev/null)
 escape_pgid=$(ppgid "$escape_pid")
 recorded_pgid=$(cat "$repeat_escape_dir/iteration-1/pgid" 2>/dev/null)
@@ -1309,7 +1419,7 @@ finalize_kill_rc=$?
 wait "$repeat_pid"
 repeat_finalize_rc=$?
 repeat_pid=
-repeat_finalize_dir=$(find "$repeat_finalize_runs" -mindepth 1 -maxdepth 1 -type d -name '2*Z-*' | head -1)
+repeat_finalize_dir=$(OCANNL_TOOL_TEST_RUNS="$repeat_finalize_runs" "$repeat_root/tools/test-run.sh" paths run last 2>/dev/null)
 if [ "$finalize_kill_rc" = 0 ] \
    && [ "$repeat_finalize_rc" = 143 ] \
    && [ -n "$repeat_finalize_dir" ] \
@@ -1388,7 +1498,7 @@ argv_probe() { # tag subcommand [argv...] -- drives the tool against the fixture
   argv_out=$(cat "$TMP/$tag.out")
   argv_err=$(cat "$TMP/$tag.err")
   argv_calls=$(cat "$TMP/$tag.calls")
-  argv_dir=$(find "$runs" -mindepth 1 -maxdepth 1 -type d -name '2*Z-*' | head -1)
+  argv_dir=$(OCANNL_TOOL_TEST_RUNS="$runs" "$repeat_root/tools/test-run.sh" paths run last 2>/dev/null)
 }
 argv_rc= argv_out= argv_err= argv_calls= argv_dir= argv_mode= argv_runs=
 
