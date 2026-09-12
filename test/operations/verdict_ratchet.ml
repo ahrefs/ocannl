@@ -1700,6 +1700,118 @@ let () =
   let present = not (List.is_empty state.rows) in
   Verdict.p "all rows pass" (present && List.for_all state.rows ~f:Fn.id)|ocaml},
       [] );
+    (* gh-ocannl-968: first-class Boolean operators, residual functors, deferred populations, and
+       Boolean ordering retain the same provenance as their direct forms. *)
+    ( "refuses a quantifier through an aliased Boolean conjunction",
+      {ocaml|let both = ( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a witnessed quantifier through an aliased Boolean conjunction",
+      {ocaml|let both = ( && )
+let () = Verdict.p "all rows pass" (not (List.is_empty rows) && both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "accepts a shadowed Boolean conjunction alias",
+      {ocaml|let ( && ) _ _ = true
+let both = ( && )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "refuses a quantifier through an aliased Boolean disjunction",
+      {ocaml|let both = ( || )
+let () = Verdict.p "all rows pass" (both false (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a witnessed quantifier through an aliased Boolean disjunction",
+      {ocaml|let both = ( || )
+let () = Verdict.p "all rows pass" (not (List.is_empty rows) && both false (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "accepts a shadowed Boolean disjunction alias",
+      {ocaml|let ( || ) _ _ = true
+let both = ( || )
+let () = Verdict.p "all rows pass" (both false (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "refuses a quantifier through a curried functor",
+      {ocaml|module Make (A : S) (B : S) = struct let check = A.p let other = B.p end
+module Checks = Make (Verdict) (Verdict)
+let () = Checks.check "first" (List.for_all rows ~f:Fn.id); Checks.other "second" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "first"; "second" ] );
+    ( "accepts a witnessed quantifier through a curried functor",
+      {ocaml|module Make (A : S) (B : S) = struct let check = A.p let other = B.p end
+module Checks = Make (Verdict) (Verdict)
+let () = Checks.check "first" (not (List.is_empty rows) && List.for_all rows ~f:Fn.id); Checks.other "second" (not (List.is_empty rows) && List.for_all rows ~f:Fn.id)|ocaml},
+      [] );
+    ( "refuses a quantifier through a partially applied functor",
+      {ocaml|module Make (A : S) (B : S) = struct let check = A.p let other = B.p end
+module Partial = Make (Verdict)
+module Checks = Partial (Verdict)
+let () = Checks.check "first" (List.for_all rows ~f:Fn.id); Checks.other "second" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "first"; "second" ] );
+    ( "accepts a witnessed quantifier through a partially applied functor",
+      {ocaml|module Make (A : S) (B : S) = struct let check = A.p let other = B.p end
+module Partial = Make (Verdict)
+module Checks = Partial (Verdict)
+let () = Checks.check "first" (not (List.is_empty rows) && List.for_all rows ~f:Fn.id); Checks.other "second" (not (List.is_empty rows) && List.for_all rows ~f:Fn.id)|ocaml},
+      [] );
+    ( "accepts the same population witness through a deferred helper",
+      {ocaml|let apply f xs = f xs
+let all xs = List.for_all xs ~f:Fn.id
+let () = Verdict.p "all rows pass" (not (List.is_empty rows) && apply all rows)|ocaml},
+      [] );
+    ( "refuses a different population witness through a deferred helper",
+      {ocaml|let apply f xs = f xs
+let all xs = List.for_all xs ~f:Fn.id
+let () = Verdict.p "all rows pass" (not (List.is_empty other) && apply all rows)|ocaml},
+      [ "all" ] );
+    ( "accepts the same population witness through a deferred partial helper",
+      {ocaml|let apply f xs = f xs
+let all xs = List.for_all xs ~f:Fn.id
+let forward = apply all
+let () = Verdict.p "all rows pass" (not (List.is_empty rows) && forward rows)|ocaml},
+      [] );
+    ( "refuses a different population witness through a deferred partial helper",
+      {ocaml|let apply f xs = f xs
+let all xs = List.for_all xs ~f:Fn.id
+let forward = apply all
+let () = Verdict.p "all rows pass" (not (List.is_empty other) && forward rows)|ocaml},
+      [ "all" ] );
+    ( "refuses a quantifier in Boolean greater or equal ordering",
+      {ocaml|let () = Verdict.p "all rows pass" ((List.for_all rows ~f:Fn.id) >= true)|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a witnessed quantifier in Boolean greater or equal ordering",
+      {ocaml|let () = Verdict.p "all rows pass" (not (List.is_empty rows) && ((List.for_all rows ~f:Fn.id) >= true))|ocaml},
+      [] );
+    ( "refuses a quantifier in Boolean greater ordering",
+      {ocaml|let () = Verdict.p "all rows pass" ((List.for_all rows ~f:Fn.id) > false)|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a witnessed quantifier in Boolean greater ordering",
+      {ocaml|let () = Verdict.p "all rows pass" (not (List.is_empty rows) && ((List.for_all rows ~f:Fn.id) > false))|ocaml},
+      [] );
+    ( "refuses a quantifier in Boolean less or equal ordering",
+      {ocaml|let () = Verdict.p "all rows pass" (true <= (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a witnessed quantifier in Boolean less or equal ordering",
+      {ocaml|let () = Verdict.p "all rows pass" (not (List.is_empty rows) && (true <= (List.for_all rows ~f:Fn.id)))|ocaml},
+      [] );
+    ( "refuses a quantifier in Boolean less ordering",
+      {ocaml|let () = Verdict.p "all rows pass" (false < (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts a witnessed quantifier in Boolean less ordering",
+      {ocaml|let () = Verdict.p "all rows pass" (not (List.is_empty rows) && (false < (List.for_all rows ~f:Fn.id)))|ocaml},
+      [] );
+    ( "accepts an annihilated aliased Boolean conjunction",
+      {ocaml|let both = ( && )
+let () = Verdict.p "all rows pass" (both false (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "refuses a quantifier through a partially applied Boolean conjunction",
+      {ocaml|let both = ( && ) true
+let () = Verdict.p "all rows pass" (both (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
+    ( "accepts an annihilated aliased Boolean disjunction",
+      {ocaml|let both = ( || )
+let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "refuses a quantifier through a partially applied Boolean disjunction",
+      {ocaml|let both = ( || ) false
+let () = Verdict.p "all rows pass" (both (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "all rows pass" ] );
   ]
 
 (* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round

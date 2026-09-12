@@ -99,10 +99,11 @@ and payload =
   | Pending of (unit -> provenance)
   | Resolving
   | Resolved of provenance
-  | Functor of string option * module_expr
-      (** A file-local functor: the parameter's name and the body, for an application to scan the
-          body with the argument's exports bound to the parameter. In the environment like any other
-          binding, so a module prefix, an alias or an open qualifies it as it does a value. *)
+  | Functor of module_expr * binding list
+      (** A file-local functor expression and its lexical environment; application binds one
+          parameter and retains any residual functor with that extended environment. In the
+          environment like any other binding, so a module prefix, an alias or an open qualifies it
+          as it does a value. *)
 
 and provenance = {
   when_true : view;
@@ -144,6 +145,8 @@ and origin =
           is that constant, the sources are the value's own; once it is the other, they are gone. *)
 
 and closure =
+  | Boolean_function of bool * provenance option
+      (** Conjunction when true, disjunction otherwise; an optional first argument. *)
   | Quantifier_function of quantifier_partial
   | Function of function_closure
   | Alternatives of closure list
@@ -166,8 +169,8 @@ and quantifier_partial = {
 and deferred_call = {
   applied : binding;  (** The parameter applied. *)
   call_site : site;
-  call_arguments : (Asttypes.arg_label * expression * provenance) list;
-      (** The arguments as written and as walked where they were written. *)
+  call_arguments : (Asttypes.arg_label * expression * provenance * string option) list;
+      (** Arguments as written, their walked provenance, and their lexical population keys. *)
   result : binding;
       (** A placeholder standing for the call's value in the body, substituted by the result once
           the call is made. *)
@@ -217,7 +220,7 @@ and label = Label_slot of binding | Label_expr of expression
    function selected by control flow is mapped through. *)
 let rec map_functions closure ~f =
   match closure with
-  | Quantifier_function _ -> closure
+  | Quantifier_function _ | Boolean_function _ -> closure
   | Function function_closure -> Function (f function_closure)
   | Alternatives closures -> Alternatives (List.map closures ~f:(map_functions ~f))
 
@@ -225,7 +228,7 @@ let rec map_functions closure ~f =
 let rec functions_of = function
   | Function function_ -> [ function_ ]
   | Alternatives closures -> List.concat_map closures ~f:functions_of
-  | Quantifier_function _ -> []
+  | Quantifier_function _ | Boolean_function _ -> []
 
 (* The functions a value selected by control flow could be, flattened, each once. *)
 let select_closures closures =
@@ -738,16 +741,18 @@ let rec own binding provenance =
     when_false = own_view provenance.when_false;
     constant = provenance.constant;
     closure =
-      Option.map provenance.closure
-        ~f:
-          (map_functions ~f:(fun closure ->
-               {
-                 closure with
-                 body = own binding closure.body;
-                 claims =
-                   List.map closure.claims ~f:(fun claim ->
-                       { claim with value = own_view claim.value });
-               }));
+      Option.map provenance.closure ~f:(function
+        | Boolean_function (conjoin, first) ->
+            Boolean_function (conjoin, Option.map first ~f:(own binding))
+        | closure ->
+            map_functions closure ~f:(fun closure ->
+                {
+                  closure with
+                  body = own binding closure.body;
+                  claims =
+                    List.map closure.claims ~f:(fun claim ->
+                        { claim with value = own_view claim.value });
+                }));
   }
 
 let parameter_provenance binding =
@@ -1117,6 +1122,8 @@ let rec substitute ~replacement ~populations provenance =
   (* A quantifier function that captured a population from a parameter has it substituted too, so
      its later completion ranges over the actual. *)
   let rec closure = function
+    | Boolean_function (conjoin, first) ->
+        Boolean_function (conjoin, Option.map first ~f:(substitute ~replacement ~populations))
     | Quantifier_function partial ->
         Quantifier_function
           {
@@ -1137,8 +1144,12 @@ let rec substitute ~replacement ~populations provenance =
                   {
                     call with
                     call_arguments =
-                      List.map call.call_arguments ~f:(fun (label, expr, provenance) ->
-                          (label, expr, substitute ~replacement ~populations provenance));
+                      List.map call.call_arguments ~f:(fun (label, expr, provenance, key) ->
+                          ( label,
+                            expr,
+                            substitute ~replacement ~populations provenance,
+                            Option.map key ~f:(fun key ->
+                                Option.value (populations key) ~default:key) ));
                   });
           }
     | Alternatives closures -> Alternatives (List.map closures ~f:closure)
@@ -1177,16 +1188,18 @@ let drop_via labels provenance =
         when_false = drop_view provenance.when_false;
         constant = provenance.constant;
         closure =
-          Option.map provenance.closure
-            ~f:
-              (map_functions ~f:(fun closure ->
-                   {
-                     closure with
-                     body = drop closure.body;
-                     claims =
-                       List.map closure.claims ~f:(fun claim ->
-                           { claim with value = drop_view claim.value });
-                   }));
+          Option.map provenance.closure ~f:(function
+            | Boolean_function (conjoin, first) ->
+                Boolean_function (conjoin, Option.map first ~f:drop)
+            | closure ->
+                map_functions closure ~f:(fun closure ->
+                    {
+                      closure with
+                      body = drop closure.body;
+                      claims =
+                        List.map closure.claims ~f:(fun claim ->
+                            { claim with value = drop_view claim.value });
+                    }));
       }
     in
     drop provenance
@@ -1367,9 +1380,16 @@ and resolve ctx expr =
                 nothing with
                 closure = Some (native_claim kind ~site:(site_of_location expr.pexp_loc));
               }
+          | None
+            when List.exists [ "&&"; "||" ] ~f:(fun name ->
+                     Option.equal String.equal (List.last path) (Some name)) ->
+              {
+                nothing with
+                closure =
+                  Some
+                    (Boolean_function (Option.equal String.equal (List.last path) (Some "&&"), None));
+              }
           | None when Option.equal String.equal (List.last path) (Some "not") ->
-              (* [not] as a value -- aliased, passed along -- is the closure that negates its
-                 argument. *)
               let slot = parameter_binding ~name:"x" ~site:(site_of_location expr.pexp_loc) in
               {
                 nothing with
@@ -1640,7 +1660,8 @@ and application ctx expr callee arguments =
       let deferred =
         Option.map applied ~f:(fun applied ->
             let call_arguments =
-              List.map arguments ~f:(fun (label, argument) -> (label, argument, walk ctx argument))
+              List.map arguments ~f:(fun (label, argument) ->
+                  (label, argument, walk ctx argument, population ctx argument))
             in
             let result = parameter_binding ~name:"" ~site in
             ctx.pending_calls :=
@@ -1713,20 +1734,24 @@ and comparison ctx callee left right =
               (conjunction (negate left_provenance) (negate right_provenance))
           in
           if equality then agree else negate agree
+      | _ when ge -> disjunction left_provenance (negate right_provenance)
+      | _ when gt -> conjunction left_provenance (negate right_provenance)
+      | _ when le -> disjunction (negate left_provenance) right_provenance
+      | _ when lt -> conjunction (negate left_provenance) right_provenance
       | _ -> nothing)
 
 (* [valued] answers for an argument already walked where it was written -- a deferred call's --
-   whose environment is gone: it is read from its provenance alone, never walked, projected or
-   resolved to a population here. *)
+   whose environment is gone: its saved provenance and population are used without re-walking it or
+   resolving its names in the replay environment. *)
 and apply ?(valued = fun _ -> None) ctx ~site ~callee_name closure arguments =
   let value_of argument =
-    match valued argument with Some provenance -> provenance | None -> walk ctx argument
+    match valued argument with Some (provenance, _) -> provenance | None -> walk ctx argument
   in
   let discard_unless_valued argument =
     if Option.is_none (valued argument) then discard ctx argument
   in
   let population_unless_valued argument =
-    if Option.is_none (valued argument) then population ctx argument else None
+    match valued argument with Some (_, key) -> key | None -> population ctx argument
   in
   match closure with
   | Alternatives closures ->
@@ -1738,6 +1763,12 @@ and apply ?(valued = fun _ -> None) ctx ~site ~callee_name closure arguments =
         (aggregate results) with
         closure = select_closures (List.filter_map results ~f:(fun result -> result.closure));
       }
+  | Boolean_function (conjoin, first) -> (
+      let supplied = Option.to_list first @ List.map (unlabelled arguments) ~f:value_of in
+      match supplied with
+      | [] -> { nothing with closure = Some closure }
+      | [ first ] -> { nothing with closure = Some (Boolean_function (conjoin, Some first)) }
+      | left :: right :: _ -> if conjoin then conjunction left right else disjunction left right)
   | Quantifier_function partial ->
       (* A quantifier is a value once every population and, but for [is_empty], its predicate have
          arrived; until then it stays the function it is, with what it has received. *)
@@ -1932,8 +1963,17 @@ and apply ?(valued = fun _ -> None) ctx ~site ~callee_name closure arguments =
               match actual with
               | None -> if fires then table := (name, None) :: !table
               | Some actual when Option.is_some (valued actual) ->
-                  (* Walked elsewhere: the whole argument for every name, no population named. *)
-                  table := (name, Option.map resolved_actual ~f:Fn.id) :: !table
+                  (* Preserve identity only for a pattern naming the whole argument; a destructured
+                     component cannot inherit the aggregate's identity. *)
+                  table := (name, Option.map resolved_actual ~f:Fn.id) :: !table;
+                  List.iter (projected_arguments parameter actual) ~f:(fun part ->
+                      if
+                        String.equal part.part_name name.name
+                        && part.exact
+                        && phys_equal part.part_expression actual
+                      then
+                        Option.iter (population_unless_valued actual) ~f:(fun key ->
+                            populations := (population_of_binding name, key) :: !populations))
               | Some actual -> (
                   let parts =
                     projected_arguments parameter actual
@@ -2002,8 +2042,11 @@ and apply ?(valued = fun _ -> None) ctx ~site ~callee_name closure arguments =
       let calls =
         List.filter_map closure.calls ~f:(fun call ->
             let call_arguments =
-              List.map call.call_arguments ~f:(fun (label, expr, provenance) ->
-                  (label, expr, substitute_all provenance))
+              List.map call.call_arguments ~f:(fun (label, expr, provenance, key) ->
+                  ( label,
+                    expr,
+                    substitute_all provenance,
+                    Option.map key ~f:(fun key -> Option.value (population_of key) ~default:key) ))
             in
             match replacement call.applied with
             | None -> Some { call with call_arguments }
@@ -2015,8 +2058,8 @@ and apply ?(valued = fun _ -> None) ctx ~site ~callee_name closure arguments =
                 | None -> table := (call.result, None) :: !table
                 | Some function_ ->
                     let valued expr =
-                      List.find_map call_arguments ~f:(fun (_, written, provenance) ->
-                          if phys_equal written expr then Some provenance else None)
+                      List.find_map call_arguments ~f:(fun (_, written, provenance, key) ->
+                          if phys_equal written expr then Some (provenance, key) else None)
                     in
                     (* Named by the function argument the parameter received, where it is a binding
                        in scope; otherwise by the helper that made the call. *)
@@ -2037,7 +2080,7 @@ and apply ?(valued = fun _ -> None) ctx ~site ~callee_name closure arguments =
                     in
                     let result =
                       apply ~valued ctx ~site:call.call_site ~callee_name function_
-                        (List.map call_arguments ~f:(fun (label, expr, _) -> (label, expr)))
+                        (List.map call_arguments ~f:(fun (label, expr, _, _) -> (label, expr)))
                     in
                     table := (call.result, Some (call.call_site, result)) :: !table);
                 None)
@@ -2181,20 +2224,10 @@ and module_exports ctx module_expr =
   | Pmod_functor (_, body) ->
       (* The functor's body, its parameter unresolved: what an application of it exports. *)
       module_exports ctx body
-  | Pmod_apply (functor_, argument) -> (
-      let argument_exports = module_exports ctx argument in
-      (* A file-local functor's body, scanned with the argument's exports bound to its parameter. *)
-      match
-        Option.bind (module_path functor_) ~f:(fun path ->
-            lookup ctx.env (String.concat ~sep:"." path))
-      with
-      | Some { payload = Functor (Some parameter, body); _ } ->
-          module_exports
-            { ctx with env = prefix_bindings parameter argument_exports @ ctx.env }
-            body
-      | Some { payload = Functor (None, body); _ } -> module_exports ctx body
-      | Some _ | None -> module_exports ctx functor_)
-  | Pmod_apply_unit functor_ -> module_exports ctx functor_
+  | Pmod_apply (functor_, _) | Pmod_apply_unit functor_ ->
+      let reduced_ctx, reduced = module_residual ctx module_expr in
+      if phys_equal reduced module_expr then module_exports ctx functor_
+      else module_exports reduced_ctx reduced
   | _ ->
       let iterator =
         object
@@ -2208,14 +2241,47 @@ and module_exports ctx module_expr =
       iterator#module_expr module_expr;
       []
 
+(* Reduce one functor parameter per application, retaining the environment of the residual body. *)
+and module_residual ctx module_expr =
+  match module_expr.pmod_desc with
+  | Pmod_constraint (inner, _) -> module_residual ctx inner
+  | Pmod_ident _ -> (
+      match
+        Option.bind (module_path module_expr) ~f:(fun path ->
+            lookup ctx.env (String.concat ~sep:"." path))
+      with
+      | Some { payload = Functor (body, env); _ } -> ({ ctx with env }, body)
+      | _ -> (ctx, module_expr))
+  | Pmod_apply (functor_, argument) -> (
+      let argument_exports = module_exports ctx argument in
+      let captured, residual = module_residual ctx functor_ in
+      match residual.pmod_desc with
+      | Pmod_functor (parameter, body) ->
+          let env =
+            match parameter with
+            | Named ({ txt = Some name; _ }, _) ->
+                prefix_bindings name argument_exports @ captured.env
+            | Named ({ txt = None; _ }, _) | Unit -> captured.env
+          in
+          module_residual { captured with env } body
+      | _ -> (ctx, module_expr))
+  | Pmod_apply_unit functor_ -> (
+      let captured, residual = module_residual ctx functor_ in
+      match residual.pmod_desc with
+      | Pmod_functor (Unit, body) -> module_residual captured body
+      | _ -> (ctx, module_expr))
+  | _ -> (ctx, module_expr)
+
 (* What binding a module to [name] adds to the scope: its exports under the prefix, and the module
    itself where it is a functor, so an application by any path that reaches it finds the body. *)
 and module_bindings ctx ~name module_expr =
-  let exports = module_exports ctx module_expr |> prefix_bindings name in
-  match module_expr.pmod_desc with
-  | Pmod_functor (parameter, body) ->
-      let parameter = match parameter with Named ({ txt; _ }, _) -> txt | Unit -> None in
-      make_binding ~name ~site:(site_of_location module_expr.pmod_loc) (Functor (parameter, body))
+  let captured, residual = module_residual ctx module_expr in
+  let exports = module_exports captured residual |> prefix_bindings name in
+  match residual.pmod_desc with
+  | Pmod_functor _ ->
+      make_binding ~name
+        ~site:(site_of_location module_expr.pmod_loc)
+        (Functor (residual, captured.env))
       :: exports
   | _ -> exports
 
