@@ -524,23 +524,28 @@ let () =
     let ctx = Context.run ctx routine in
     let got = Context.get_values ctx y.Tensor.value in
     match !report with
-    | Some r -> ((r.Autotune.fiss_sketch_candidates, r.Autotune.fiss_sketch_timed), got)
-    | None -> ((-1, -1), got)
+    | Some r ->
+        accounting tag r;
+        (r, got)
+    | None ->
+        fail "expected a multi-site report";
+        Stdlib.exit 1
   in
   let%op qd2 = qa + qb in
   Train.set_materialized qd2.Tensor.value;
   let%op qe2 = qd2 * qc in
-  let (cand_a, _), _ = tune_candidates "af_ms_a" (Train.forward qe2) qe2 in
+  let report_a, _ = tune_candidates "af_ms_a" (Train.forward qe2) qe2 in
   let%op qd3 = qa + qb in
   Train.set_materialized qd3.Tensor.value;
   let%op qf3 = qc16 * qd3 in
-  let (cand_b, _), _ = tune_candidates "af_ms_b" (Train.forward qf3) qf3 in
+  let report_b, _ = tune_candidates "af_ms_b" (Train.forward qf3) qf3 in
   let%op qd4 = qa + qb in
   Train.set_materialized qd4.Tensor.value;
   let%op qe4 = qd4 * qc in
   Train.set_materialized qe4.Tensor.value;
   let%op qg4 = qc16 * qe4 in
-  let (cand_ab, timed_ab), got_ms = tune_candidates "af_ms_ab" (Train.forward qg4) qg4 in
+  let ms_comp = Train.forward qg4 in
+  let report_ab, got_ms = tune_candidates "af_ms_ab" ms_comp qg4 in
   let%op qd5 = qa + qb in
   Train.set_materialized qd5.Tensor.value;
   let%op qe5 = qd5 * qc in
@@ -553,13 +558,83 @@ let () =
   in
   let msctx = Context.run msctx msroutine in
   let got_ms_serial = Context.get_values msctx qg5.Tensor.value in
+  let cand_a = report_a.Autotune.fiss_sketch_candidates in
+  let cand_b = report_b.Autotune.fiss_sketch_candidates in
+  let cand_ab = report_ab.Autotune.fiss_sketch_candidates in
+  let timed_ab = report_ab.Autotune.fiss_sketch_timed in
+  let composite_eligible r =
+    match r.Autotune.fiss_sketch_composite with
+    | `Proposed | `Refused | `Timed -> true
+    | `Ineligible | `Singles_refused -> false
+  in
+  let composite_timed r =
+    match r.Autotune.fiss_sketch_composite with
+    | `Refused | `Timed -> true
+    | `Ineligible | `Singles_refused | `Proposed -> false
+  in
+  let eligible = composite_eligible report_ab in
+  Stdio.eprintf "multi-site composite (not part of the golden): %s\n"
+    (match report_ab.Autotune.fiss_sketch_composite with
+    | `Ineligible -> "ineligible"
+    | `Singles_refused -> "missing singles were refused"
+    | `Proposed -> "proposed without a completed window"
+    | `Refused -> "composite window refused"
+    | `Timed -> "composite window admitted");
   p "multi-site: both sites seed per-segment sketches" (cand_a > 1 && cand_b > 1);
   p "multi-site: unmasked singles combo count (a + b)" (cand_ab = cand_a + cand_b);
   p "multi-site: best-timed singles recombined into a composite candidate"
-    (* On cc every single compiles and times, so the composite is exactly one extra timing; on
-       backends where some singles fail validation only the looser bound is stable. *)
-    (if is_cpu then timed_ab = cand_ab + 1 else timed_ab > 0);
+    (* Refused single windows still count as timed, but cannot staff a composite. The eligibility
+       fact comes from usable singles for two distinct segments, never from a report-wide contention
+       waiver. Every eligible composite must reach its own window. *)
+    (((not eligible) || composite_timed report_ab)
+    && if is_cpu then timed_ab = cand_ab + Bool.to_int eligible else timed_ab > 0);
   p_all2 "multi-site: tuned two-matmul chain matches the serial twin" got_ms got_ms_serial ~f:approx;
+
+  (* A post-admission failure must not erase the window from the partial report. The attempt label
+     identifies the coarse multi-entry candidate; the timed hook guarantees that the injection
+     happens after admission, not merely after dispatch. Pin this report-ordering control to cc,
+     where the normal leg's exact singles count establishes that both sites are viable; GPU
+     transform-capability differences must not gate a bookkeeping control. *)
+  let partial = ref None and injected = ref false and composite_attempt = ref false in
+  let old_attempt = !Autotune.on_candidate_attempt in
+  let old_timed = !Autotune.on_candidate_timed in
+  (Autotune.on_candidate_attempt :=
+     fun label ->
+       composite_attempt :=
+         String.is_prefix label ~prefix:"F_sketch["
+         && (not (String.is_prefix label ~prefix:"F_sketch[fine "))
+         && String.mem label ',');
+  (Autotune.on_candidate_timed :=
+     fun _ ~timed_so_far:_ ->
+       if !composite_attempt then (
+         injected := true;
+         raise Stdlib.Exit));
+  Exn.protect
+    ~finally:(fun () ->
+      Autotune.on_candidate_attempt := old_attempt;
+      Autotune.on_candidate_timed := old_timed)
+    ~f:(fun () ->
+      match
+        Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
+          ~report:(fun r -> partial := Some r)
+          (Context.cpu ()) (named "af_ms_partial" ms_comp) Ir.Indexing.Empty
+      with
+      | ctx, _ -> Context.release ctx
+      | exception Stdlib.Exit when !injected -> ());
+  let partial_claim = "multi-site: partial report retains admitted composite timing" in
+  (match !partial with
+  | Some r when !injected ->
+      p partial_claim
+        (Poly.equal r.Autotune.fiss_sketch_composite `Timed
+        && r.Autotune.fiss_sketch_timed > 0
+        && r.Autotune.fiss_sketch_timed = r.Autotune.fiss_sketch_candidates + 1
+        && match r.Autotune.outcome with Autotune.Search_died _ -> true | _ -> false)
+  | Some r -> (
+      if not (completed r) then fail "untriggered injection did not complete its search";
+      match r.Autotune.fiss_sketch_composite with
+      | `Singles_refused | `Refused -> skipped ~aggregation:`Environment ~backend:"cc" partial_claim
+      | `Ineligible | `Proposed | `Timed -> p partial_claim false)
+  | None -> fail "expected the post-admission search report");
 
   (* --- timing_ctx on a different backend is rejected (Codex P2 on PR #109): candidates timed
      elsewhere do not predict the target device, and the winner would be cached under the target

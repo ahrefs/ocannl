@@ -2032,7 +2032,7 @@ that they earn a lookup rather than always-loaded space.
   reached yet. Revert the constant afterwards. Read the control as a model, not a verdict: it is
   stronger than any real load, so a test it breaks whose claims a real sweep has never broken is
   not thereby a defect to weaken — the cc-pinned bound-pruning tests (`autotune_bound_pruning`,
-  `flip_bound_pruning`, `cost_model_selection`) time on a backend with no round trip to disperse,
+  `cost_model_selection`) time on a backend with no round trip to disperse,
   and `bandwidth_calibration`'s remaining claims are about rows existing AT ALL, which needs every
   one of the four stream kernels emptied at once. `autotune_timing_modes` fails the control because
   it pins the contention policy itself, which is the control working.
@@ -2107,3 +2107,17 @@ that they earn a lookup rather than always-loaded space.
   compiler-sensitive mnemonic goldens (gh-ocannl-924). The driver retains its cache-format probes. `Asm_census.census_source_in` shares the
   exact-anchor-before-brace-range policy between the driver and the discriminating parser control
   (gh-ocannl-937).
+
+- `flip_bound_pruning` needs a finite arm-A incumbent before its deliberately tiny envelope can
+  fathom materialize flips (gh-ocannl-962). An all-refused arm leaves infinity, so a finite roofline
+  cannot prune it; macOS CI run 34269878888 attempt 1 exhibited the failing count and attempt 2
+  passed at the same head. The test requires a
+  twofold floor/incumbent margin before deciding, otherwise reports environment-scoped undecided;
+  missing timings must have arm-A refusal evidence, while floor validity and numeric parity remain
+  unconditional. `autotune_fission_sketch` counts completed refused windows as timed, but those
+  windows cannot supply a best single for recombination. `fiss_sketch_composite` distinguishes
+  ineligibility, missing singles with per-segment refusal evidence, a proposal, and its own refused
+  or admitted window. The CPU count is singles plus one exactly when eligible, and eligibility
+  still requires the composite to reach timing; unrelated refusals waive nothing. Post-admission
+  injection preserves the partial report's admitted outcome and count; an untriggered injection
+  skips only on that coarse composite's explicit refusal outcome.

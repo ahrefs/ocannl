@@ -25,4 +25,5 @@ multi-site: both sites seed per-segment sketches: true
 multi-site: unmasked singles combo count (a + b): true
 multi-site: best-timed singles recombined into a composite candidate: true
 multi-site: tuned two-matmul chain matches the serial twin: true
+multi-site: partial report retains admitted composite timing: true
 timing_ctx on a different backend rejected: true

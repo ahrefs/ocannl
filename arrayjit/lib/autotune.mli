@@ -687,7 +687,16 @@ type report = {
       (** Of the seeded per-fission-segment sketch candidates, those that compiled and were actually
           timed (not rejected by op preconditions or hardware limits, not deduplicated by digest).
           Includes completed timing windows refused as unusable; [timings_contended] identifies
-          those verdicts. *)
+          those verdicts. Includes coarse and fine recombination windows, so it can exceed
+          [fiss_sketch_candidates]. *)
+  fiss_sketch_composite : [ `Ineligible | `Singles_refused | `Proposed | `Refused | `Timed ];
+      (** Coarse recombination's own outcome (excluding the finer-fission composite): [`Ineligible]
+          means no search, a decision not yet reached, or fewer than two usable coarse singles.
+          [`Singles_refused] refines that absence when every missing segment key has a refused
+          window and no admitted single. [`Proposed] means at least two usable singles staffed a
+          proposal, but it did not complete a timing window; [`Refused] and [`Timed] record that
+          proposal's refused or admitted window. Window outcomes are published before post-admission
+          callbacks can raise, including in partial reports. *)
   split_reduce_candidates : int;
       (** Split-reduce seeds (gh-ocannl-484 task 3): one candidate per {!split_reduce_sites} site
           within the [max_split_reduce_sites] cap and eligible [num_blocks] value — the two-pass

@@ -1,4 +1,7 @@
+pruning evidence requires a finite incumbent and a twofold floor margin: true
 the surface reports at least one materialize flip: true
 tuned routine values match the plain compile: true
 the public report callback keeps the positional A/B contract: true
+every materialize flip has a finite positive floor: true
+an absent incumbent has its own refused measurement evidence: true
 every materialize flip was fathomed: only the inline flips reached a search: true
