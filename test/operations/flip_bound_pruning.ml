@@ -70,7 +70,13 @@ let () =
   let got = Context.get_values ctx_t t2.Tensor.value in
   p_all2 "tuned routine values match the plain compile" got expected ~f:approx;
   p "the public report callback keeps the positional A/B contract" (List.length !arm_reports = 2);
-  let arm_a = List.last_exn !arm_reports in
+  let arm_a =
+    match List.last !arm_reports with
+    | Some report -> report
+    | None ->
+        fail "expected an arm report";
+        Stdlib.exit 1
+  in
   let incumbent = arm_a.Autotune.best_ms in
   let floors =
     List.map mat_flips ~f:(fun fc -> surface.Autotune.ps_floor_ms ~materialized:[ fc.LL.fc_tn ])
