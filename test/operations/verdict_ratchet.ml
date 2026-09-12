@@ -1934,6 +1934,95 @@ let () = Verdict.p "ok" (gt (List.for_all rows ~f:Fn.id))|ocaml},
       {ocaml|let gt x = x > false
 let () = Verdict.p "ok" (not (List.is_empty rows) && gt (List.for_all rows ~f:Fn.id))|ocaml},
       [] );
+    (* staging#697 round 3: deferred ordering, namespace protection, and captured constants. *)
+    ( "refuses ordering after both helper operands are substituted",
+      {ocaml|let gt x y = x > y
+let () = Verdict.p "ok" (gt (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [ "ok" ] );
+    ( "accepts witnessed ordering after both helper operands are substituted",
+      {ocaml|let gt x y = x > y
+let () = Verdict.p "ok" (not (List.is_empty rows) && gt (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [] );
+    ( "refuses ordering after a partially applied comparison helper",
+      {ocaml|let gt x y = x > y
+let above = gt (List.for_all rows ~f:Fn.id)
+let () = Verdict.p "ok" (above false)|ocaml},
+      [ "ok" ] );
+    ( "accepts witnessed ordering after a partially applied comparison helper",
+      {ocaml|let gt x y = x > y
+let above = gt (List.for_all rows ~f:Fn.id)
+let () = Verdict.p "ok" (not (List.is_empty rows) && above false)|ocaml},
+      [] );
+    ( "keeps substituted aggregate ordering outside Boolean algebra",
+      {ocaml|let gt x y = x > y
+let () = Verdict.p "ok" (gt (true, List.for_all rows ~f:Fn.id) (false, true))|ocaml},
+      [] );
+    ( "refuses ordering in a nested helper capturing its outer operand",
+      {ocaml|let make x = let gt y = x > y in gt
+let () = Verdict.p "ok" (make (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [ "ok" ] );
+    ( "accepts witnessed ordering in a nested helper capturing its outer operand",
+      {ocaml|let make x = let gt y = x > y in gt
+let () = Verdict.p "ok" (not (List.is_empty rows) && make (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [] );
+    ( "refuses a claim inside a helper comparing two parameters",
+      {ocaml|let check x y = Verdict.p "ok" (x > y)
+let () = check (List.for_all rows ~f:Fn.id) false|ocaml},
+      [ "check" ] );
+    ( "does not apply Boolean ordering to a qualified external operator",
+      {ocaml|let () = Verdict.p "ok" (External.( > ) (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [] );
+    ( "does not apply Boolean ordering after an unknown open",
+      {ocaml|open External
+let () = Verdict.p "ok" (List.for_all rows ~f:Fn.id > false)|ocaml},
+      [] );
+    ( "does not apply Boolean ordering through an unknown module alias",
+      {ocaml|module E = External
+let () = Verdict.p "ok" (E.( > ) (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [] );
+    ( "restores Boolean ordering after reopening standard operators",
+      {ocaml|open External
+open Base
+let () = Verdict.p "ok" (List.for_all rows ~f:Fn.id > false)|ocaml},
+      [ "ok" ] );
+    ( "resolves Boolean ordering through a known standard module alias",
+      {ocaml|module S = Stdlib
+let () = Verdict.p "ok" (S.( > ) (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [ "ok" ] );
+    ( "keeps unknown local opens out of the outer ordering scope",
+      {ocaml|let _ = let open External in 0
+let () = Verdict.p "ok" (List.for_all rows ~f:Fn.id > false)|ocaml},
+      [ "ok" ] );
+    ( "accepts a true annihilator captured through a disjunction helper",
+      {ocaml|let with_left x = (||) x
+let either = with_left true
+let () = Verdict.p "ok" (either (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "refuses a quantifier behind a false operand captured through a disjunction helper",
+      {ocaml|let with_left x = (||) x
+let either = with_left false
+let () = Verdict.p "ok" (either (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "ok" ] );
+    ( "accepts a false annihilator captured through a conjunction helper",
+      {ocaml|let with_left x = (&&) x
+let both = with_left false
+let () = Verdict.p "ok" (both (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
+    ( "refuses a quantifier behind a true operand captured through a conjunction helper",
+      {ocaml|let with_left x = (&&) x
+let both = with_left true
+let () = Verdict.p "ok" (both (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "ok" ] );
+    ( "does not retain a local ordering operator across an unknown open",
+      {ocaml|let ( > ) x _ = x
+open External
+let () = Verdict.p "ok" (List.for_all rows ~f:Fn.id > false)|ocaml},
+      [] );
+    ( "reopening standard ordering shadows an earlier local operator",
+      {ocaml|let ( > ) _ _ = true
+open Base
+let () = Verdict.p "ok" (List.for_all rows ~f:Fn.id > false)|ocaml},
+      [ "ok" ] );
   ]
 
 (* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round

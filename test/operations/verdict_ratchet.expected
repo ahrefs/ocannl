@@ -366,6 +366,26 @@ accepts witnessed Boolean ordering after a deferred call: true
 keeps a helper constructor result separate from its Boolean argument: true
 refuses a Boolean literal comparison inside a helper: true
 accepts a witnessed Boolean literal comparison inside a helper: true
+refuses ordering after both helper operands are substituted: true
+accepts witnessed ordering after both helper operands are substituted: true
+refuses ordering after a partially applied comparison helper: true
+accepts witnessed ordering after a partially applied comparison helper: true
+keeps substituted aggregate ordering outside Boolean algebra: true
+refuses ordering in a nested helper capturing its outer operand: true
+accepts witnessed ordering in a nested helper capturing its outer operand: true
+refuses a claim inside a helper comparing two parameters: true
+does not apply Boolean ordering to a qualified external operator: true
+does not apply Boolean ordering after an unknown open: true
+does not apply Boolean ordering through an unknown module alias: true
+restores Boolean ordering after reopening standard operators: true
+resolves Boolean ordering through a known standard module alias: true
+keeps unknown local opens out of the outer ordering scope: true
+accepts a true annihilator captured through a disjunction helper: true
+refuses a quantifier behind a false operand captured through a disjunction helper: true
+accepts a false annihilator captured through a conjunction helper: true
+refuses a quantifier behind a true operand captured through a conjunction helper: true
+does not retain a local ordering operator across an unknown open: true
+reopening standard ordering shadows an earlier local operator: true
 the shipping ratchet process refuses the planted helper fixture: true
 the shipping ratchet process refuses a quantifier written directly in a native claim: true
 refuses a stale quantified-helper exemption: true

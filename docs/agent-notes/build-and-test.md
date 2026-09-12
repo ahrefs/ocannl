@@ -958,8 +958,11 @@ that they earn a lookup rather than always-loaded space.
   argument until application, so constant annihilators and partial applications use the same
   conjunction/disjunction algebra as direct syntax. Implicit aliases after an unknown module
   open are opaque; known qualified primitives and local definitions remain resolvable. Boolean
-  ordering uses that algebra after length witnesses only for known Boolean results. A deferred call carries its argument's lexical population key alongside the
-  walked value; only an exact whole-argument parameter inherits that key. Curried functors retain
+  ordering uses that algebra after length witnesses only for known standard operators and Boolean
+  operands. Direct parameter returns transfer their Boolean identity and constants; ordering over
+  unresolved parameters reuses deferred-call placeholders until substitution establishes the operand
+  types. Aggregate payloads remain distinct from Boolean results. A deferred call carries its
+  argument's lexical population key alongside the walked value; only an exact whole-argument parameter inherits that key. Curried functors retain
   each residual module expression with its captured environment, binding one argument at a time.
 - Mutation manifest rows use `tools/mutation-run.sh <module> <patch-file> <@alias>`
   (gh-ocannl-969), in an otherwise idle, isolated worktree. The patch is literal bytes
