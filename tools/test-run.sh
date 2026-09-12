@@ -966,8 +966,12 @@ resolve_run() {
     # reverse order would still race -- `cat` fails on a symlink to a
     # directory, and the rename could land before the `readlink` retry.
     run_dir=$(readlink "$LAST" 2>/dev/null) || run_dir=
-    [ -n "$run_dir" ] ||
-      { run_dir=$(cat "$LAST" 2>/dev/null) || run_dir=; }
+    if [ -z "$run_dir" ]; then
+      case $sub in
+        paths | lock-status) run_dir=$(read_query_record "$LAST" 2>/dev/null) || run_dir= ;;
+        *) run_dir=$(cat "$LAST" 2>/dev/null) || run_dir= ;;
+      esac
+    fi
     [ -n "$run_dir" ] || die "no runs recorded for this worktree"
     [ -d "$run_dir" ] || die "no such run: $run_dir"
   elif [ -d "$ref" ]; then

@@ -1242,6 +1242,30 @@ else
 fi
 printf '%s\n' "$query_runs" >"$query_dir/runs"
 
+# The regular last pointer is a record too; shell capture must not repair it.
+query_bad=
+for query_pointer_kind in trailing_blank unterminated; do
+  case $query_pointer_kind in
+    trailing_blank) printf '%s\n\n' "$query_dir" >"$query_last" ;;
+    unterminated) printf '%s' "$query_dir" >"$query_last" ;;
+  esac
+  for query_command in 'paths run' 'paths runs' 'lock-status'; do
+    query_out=$(query $query_command last 2>"$TMP/query-error")
+    query_rc=$?
+    if [ "$query_rc" != 2 ] || [ -n "$query_out" ] || [ ! -s "$TMP/query-error" ]; then
+      query_bad="$query_pointer_kind $query_command: rc=$query_rc output=$query_out"; break
+    fi
+  done
+  [ -z "$query_bad" ] || break
+done
+printf '%s\n' "$query_dir" >"$query_last"
+if [ -z "$query_bad" ] && [ "$(query paths run last)" = "$query_dir" ] \
+   && [ "$(query lock-status last)" = idle ] && [ ! -e "$query_lock" ]; then
+  report 0 "queries: last pointer records are validated before capture"
+else
+  report 1 "queries: last pointer records are validated before capture" "$query_bad"
+fi
+
 # Legacy paths come from the recorded worktree, not the querying script's root.
 rm "$query_dir/runs"
 printf '%s\n' "$STOP_WT" >"$query_dir/wt"
