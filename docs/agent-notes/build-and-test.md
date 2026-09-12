@@ -2115,7 +2115,9 @@ that they earn a lookup rather than always-loaded space.
   twofold floor/incumbent margin before deciding, otherwise reports environment-scoped undecided;
   missing timings must have arm-A refusal evidence, while floor validity and numeric parity remain
   unconditional. `autotune_fission_sketch` counts completed refused windows as timed, but those
-  windows cannot supply a best single for recombination: `fiss_sketch_composite_eligible` records
-  usable singles from two coarse segments and `fiss_sketch_composite_timed` records the composite's
-  own window. The CPU count is singles plus one exactly when eligible, and eligibility still
-  requires the composite to reach timing; unrelated refusals waive nothing.
+  windows cannot supply a best single for recombination. `fiss_sketch_composite` distinguishes
+  ineligibility, missing singles with per-segment refusal evidence, a proposal, and its own refused
+  or admitted window. The CPU count is singles plus one exactly when eligible, and eligibility
+  still requires the composite to reach timing; unrelated refusals waive nothing. Post-admission
+  injection preserves the partial report's admitted outcome and count; an untriggered injection
+  skips only on that coarse composite's explicit refusal outcome.

@@ -562,22 +562,39 @@ let () =
   let cand_b = report_b.Autotune.fiss_sketch_candidates in
   let cand_ab = report_ab.Autotune.fiss_sketch_candidates in
   let timed_ab = report_ab.Autotune.fiss_sketch_timed in
-  let eligible = report_ab.Autotune.fiss_sketch_composite_eligible in
-  Stdio.eprintf "multi-site composite (not part of the golden): eligible=%b timed=%b\n" eligible
-    report_ab.Autotune.fiss_sketch_composite_timed;
+  let composite_eligible r =
+    match r.Autotune.fiss_sketch_composite with
+    | `Proposed | `Refused | `Timed -> true
+    | `Ineligible | `Singles_refused -> false
+  in
+  let composite_timed r =
+    match r.Autotune.fiss_sketch_composite with
+    | `Refused | `Timed -> true
+    | `Ineligible | `Singles_refused | `Proposed -> false
+  in
+  let eligible = composite_eligible report_ab in
+  Stdio.eprintf "multi-site composite (not part of the golden): %s\n"
+    (match report_ab.Autotune.fiss_sketch_composite with
+    | `Ineligible -> "ineligible"
+    | `Singles_refused -> "missing singles were refused"
+    | `Proposed -> "proposed without a completed window"
+    | `Refused -> "composite window refused"
+    | `Timed -> "composite window admitted");
   p "multi-site: both sites seed per-segment sketches" (cand_a > 1 && cand_b > 1);
   p "multi-site: unmasked singles combo count (a + b)" (cand_ab = cand_a + cand_b);
   p "multi-site: best-timed singles recombined into a composite candidate"
     (* Refused single windows still count as timed, but cannot staff a composite. The eligibility
        fact comes from usable singles for two distinct segments, never from a report-wide contention
        waiver. Every eligible composite must reach its own window. *)
-    (((not eligible) || report_ab.Autotune.fiss_sketch_composite_timed)
+    (((not eligible) || composite_timed report_ab)
     && if is_cpu then timed_ab = cand_ab + Bool.to_int eligible else timed_ab > 0);
   p_all2 "multi-site: tuned two-matmul chain matches the serial twin" got_ms got_ms_serial ~f:approx;
 
   (* A post-admission failure must not erase the window from the partial report. The attempt label
      identifies the coarse multi-entry candidate; the timed hook guarantees that the injection
-     happens after admission, not merely after dispatch. *)
+     happens after admission, not merely after dispatch. Pin this report-ordering control to cc,
+     where the normal leg's exact singles count establishes that both sites are viable; GPU
+     transform-capability differences must not gate a bookkeeping control. *)
   let partial = ref None and injected = ref false and composite_attempt = ref false in
   let old_attempt = !Autotune.on_candidate_attempt in
   let old_timed = !Autotune.on_candidate_timed in
@@ -600,7 +617,7 @@ let () =
       match
         Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
           ~report:(fun r -> partial := Some r)
-          (Context.auto ()) (named "af_ms_partial" ms_comp) Ir.Indexing.Empty
+          (Context.cpu ()) (named "af_ms_partial" ms_comp) Ir.Indexing.Empty
       with
       | ctx, _ -> Context.release ctx
       | exception Stdlib.Exit when !injected -> ());
@@ -608,13 +625,15 @@ let () =
   (match !partial with
   | Some r when !injected ->
       p partial_claim
-        (r.Autotune.fiss_sketch_composite_eligible && r.Autotune.fiss_sketch_composite_timed
-       && r.Autotune.fiss_sketch_timed > 0
-        && ((not is_cpu) || r.Autotune.fiss_sketch_timed = r.Autotune.fiss_sketch_candidates + 1)
+        (Poly.equal r.Autotune.fiss_sketch_composite `Timed
+        && r.Autotune.fiss_sketch_timed > 0
+        && r.Autotune.fiss_sketch_timed = r.Autotune.fiss_sketch_candidates + 1
         && match r.Autotune.outcome with Autotune.Search_died _ -> true | _ -> false)
-  | Some r ->
+  | Some r -> (
       if not (completed r) then fail "untriggered injection did not complete its search";
-      skipped ~aggregation:`Environment ~backend:backend_name partial_claim
+      match r.Autotune.fiss_sketch_composite with
+      | `Singles_refused | `Refused -> skipped ~aggregation:`Environment ~backend:"cc" partial_claim
+      | `Ineligible | `Proposed | `Timed -> p partial_claim false)
   | None -> fail "expected the post-admission search report");
 
   (* --- timing_ctx on a different backend is rejected (Codex P2 on PR #109): candidates timed

@@ -104,8 +104,7 @@ type report = {
   epilogue_sketch_candidates : int;
   fiss_sketch_candidates : int;
   fiss_sketch_timed : int;
-  fiss_sketch_composite_eligible : bool;
-  fiss_sketch_composite_timed : bool;
+  fiss_sketch_composite : [ `Ineligible | `Singles_refused | `Proposed | `Refused | `Timed ];
   split_reduce_candidates : int;
   split_reduce_timed : int;
   split_reduce_composite_eligible : bool;
@@ -173,8 +172,7 @@ let no_search_report ~timing =
     epilogue_sketch_candidates = 0;
     fiss_sketch_candidates = 0;
     fiss_sketch_timed = 0;
-    fiss_sketch_composite_eligible = false;
-    fiss_sketch_composite_timed = false;
+    fiss_sketch_composite = `Ineligible;
     split_reduce_candidates = 0;
     split_reduce_timed = 0;
     split_reduce_composite_eligible = false;
@@ -3295,8 +3293,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                     epilogue_sketch_candidates = 0;
                     fiss_sketch_candidates = 0;
                     fiss_sketch_timed = 0;
-                    fiss_sketch_composite_eligible = false;
-                    fiss_sketch_composite_timed = false;
+                    fiss_sketch_composite = `Ineligible;
                     split_reduce_candidates = 0;
                     split_reduce_timed = 0;
                     split_reduce_composite_eligible = false;
@@ -3558,11 +3555,12 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                     ~bytes:f.CM.fr_bytes ()) ~f:(fun sec -> sec *. 1e3))
         in
         let n_fiss_sketch_timed = ref 0
-        and fs_composite_eligible = ref false
-        and fs_composite_timed = ref false
+        and fs_composite = ref `Ineligible
         and n_sr_timed = ref 0
         and sr_composite_eligible = ref false
         and sr_composite_timed = ref false in
+        let coarse_single_measured = Hash_set.create (module String) in
+        let coarse_single_refused = Hash_set.create (module String) in
         let rounds_run = ref 0 in
         let n_sketch_candidates = ref 0
         and n_epilogue_sketch_candidates = ref 0
@@ -3702,8 +3700,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               epilogue_sketch_candidates = !n_epilogue_sketch_candidates;
               fiss_sketch_candidates = !n_fiss_sketch_candidates;
               fiss_sketch_timed = !n_fiss_sketch_timed;
-              fiss_sketch_composite_eligible = !fs_composite_eligible;
-              fiss_sketch_composite_timed = !fs_composite_timed;
+              fiss_sketch_composite = !fs_composite;
               split_reduce_candidates = !n_split_reduce_candidates;
               split_reduce_timed = !n_sr_timed;
               split_reduce_composite_eligible = !sr_composite_eligible;
@@ -3871,10 +3868,13 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                            verdict. Keep that accounting stable under refusal; the historical
                            [timings_contended] counter covers every unusable timing result. *)
                         (match spec with
-                        | Fiss (F_sketch { entries; fine }) ->
+                        | Fiss (F_sketch { entries; fine }) -> (
                             Int.incr n_fiss_sketch_timed;
-                            if (not fine) && List.length entries >= 2 then
-                              fs_composite_timed := true
+                            if not fine then
+                              match entries with
+                              | [ (key, _) ] -> Hash_set.add coarse_single_refused key
+                              | _ :: _ :: _ -> fs_composite := `Refused
+                              | [] -> ())
                         | Fiss (F_split { sites }) ->
                             Int.incr n_sr_timed;
                             if List.length sites >= 2 then sr_composite_timed := true
@@ -3897,10 +3897,13 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                         (* Publish window accounting before the post-admission injection seam: it
                            can raise, and the partial report still owns this completed window. *)
                         (match spec with
-                        | Fiss (F_sketch { entries; fine }) ->
+                        | Fiss (F_sketch { entries; fine }) -> (
                             Int.incr n_fiss_sketch_timed;
-                            if (not fine) && List.length entries >= 2 then
-                              fs_composite_timed := true
+                            if not fine then
+                              match entries with
+                              | [ (key, _) ] -> Hash_set.add coarse_single_measured key
+                              | _ :: _ :: _ -> fs_composite := `Timed
+                              | [] -> ())
                         | _ -> ());
                         !on_candidate_timed c.routine.Context.name ~timed_so_far:!n_timed;
                         Hashtbl.set timed_ms_by_digest ~key:c.digest_after ~data:ms;
@@ -4240,8 +4243,20 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
             List.filter_map fiss_sketch_entries ~f:(fun (key, _) ->
                 best_single_for ~fine_ok:false key)
           in
-          fs_composite_eligible := List.length recombined >= 2;
-          if !fs_composite_eligible then
+          (* Missing singles justify undecided only when every missing coarse key had a viable
+             window refused and no later equivalent single supplied a measurement. A refusal from an
+             unrelated segment or family cannot excuse a missing proposal. *)
+          fs_composite :=
+            if List.length recombined >= 2 then `Proposed
+            else if
+              List.length fiss_sketch_entries >= 2
+              && List.for_all fiss_sketch_entries ~f:(fun (key, _) ->
+                  List.Assoc.mem recombined key ~equal:String.equal
+                  || Hash_set.mem coarse_single_refused key
+                     && not (Hash_set.mem coarse_single_measured key))
+            then `Singles_refused
+            else `Ineligible;
+          if Poly.equal !fs_composite `Proposed then
             Option.iter (try_spec (Fiss (F_sketch { entries = recombined; fine = false }))) ~f:admit;
           (* The fine composite (gh-ocannl-574): the fine winner in a multi-segment routine needs
              the freed site's best AND the other segments' bests in one candidate. Keys address the
@@ -4451,8 +4466,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               epilogue_sketch_candidates = List.count sketch_params ~f:(fun p -> p.sk_epilogue);
               fiss_sketch_candidates = List.length fiss_sketch_specs;
               fiss_sketch_timed = !n_fiss_sketch_timed;
-              fiss_sketch_composite_eligible = !fs_composite_eligible;
-              fiss_sketch_composite_timed = !fs_composite_timed;
+              fiss_sketch_composite = !fs_composite;
               split_reduce_candidates = List.length sr_specs;
               split_reduce_timed = !n_sr_timed;
               split_reduce_composite_eligible = !sr_composite_eligible;
