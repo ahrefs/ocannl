@@ -105,11 +105,14 @@ and payload =
           environment like any other binding, so a module prefix, an alias or an open qualifies it
           as it does a value. *)
 
+and boolean_identity = Known_boolean | Boolean_parameter of binding | Unknown_boolean
+
 and provenance = {
   when_true : view;
   when_false : view;
   constant : bool option;
-  boolean : bool;  (** The result is known to be Boolean, rather than an aggregate carrying one. *)
+  boolean : boolean_identity;
+      (** The result is known to be Boolean, rather than an aggregate carrying one. *)
   closure : closure option;
 }
 
@@ -257,11 +260,29 @@ let nothing =
     when_true = empty_view;
     when_false = empty_view;
     constant = None;
-    boolean = false;
+    boolean = Unknown_boolean;
     closure = None;
   }
 
-let constant value = { nothing with constant = Some value; boolean = true }
+let constant value = { nothing with constant = Some value; boolean = Known_boolean }
+
+let known_boolean = function
+  | Known_boolean -> true
+  | Boolean_parameter _ | Unknown_boolean -> false
+
+let common_boolean values =
+  let same a b =
+    match (a, b) with
+    | Known_boolean, Known_boolean | Unknown_boolean, Unknown_boolean -> true
+    | Boolean_parameter a, Boolean_parameter b -> phys_equal a b
+    | _ -> false
+  in
+  match values with
+  | [] -> Unknown_boolean
+  | first :: rest ->
+      if List.for_all rest ~f:(fun value -> same first.boolean value.boolean) then first.boolean
+      else Unknown_boolean
+
 let view_at provenance positive = if positive then provenance.when_true else provenance.when_false
 
 let covered witnesses source =
@@ -372,21 +393,21 @@ let negate provenance =
     when_true = provenance.when_false;
     when_false = provenance.when_true;
     constant = Option.map provenance.constant ~f:not;
-    boolean = true;
+    boolean = Known_boolean;
     closure = None;
   }
 
 let conjunction a b =
   match (a.constant, b.constant) with
   | Some false, _ | _, Some false -> constant false
-  | Some true, _ -> { b with closure = None; boolean = true }
-  | _, Some true -> { a with closure = None; boolean = true }
+  | Some true, _ -> { b with closure = None; boolean = Known_boolean }
+  | _, Some true -> { a with closure = None; boolean = Known_boolean }
   | None, None ->
       {
         when_true = both a.when_true b.when_true;
         when_false = either a.when_false b.when_false;
         constant = None;
-        boolean = true;
+        boolean = Known_boolean;
         closure = None;
       }
 
@@ -407,7 +428,7 @@ let aggregate components =
     when_true = gather true;
     when_false = gather false;
     constant = None;
-    boolean = List.for_all components ~f:(fun value -> value.boolean);
+    boolean = common_boolean components;
     (* A projection out of the aggregate may be any callable component. *)
     closure = select_closures (List.filter_map components ~f:(fun c -> c.closure));
   }
@@ -517,7 +538,7 @@ let alternatives cases =
         when_true = at true;
         when_false = at false;
         constant = None;
-        boolean = List.for_all cases ~f:(fun case -> case.outcome.boolean);
+        boolean = common_boolean (List.map cases ~f:(fun case -> case.outcome));
         closure;
       }
 
@@ -825,7 +846,7 @@ let parameter_provenance binding =
     when_true = { sources = [ source true ]; witnesses = no_populations };
     when_false = { sources = [ source false ]; witnesses = no_populations };
     constant = None;
-    boolean = false;
+    boolean = Boolean_parameter binding;
     closure = None;
   }
 
@@ -958,7 +979,7 @@ let quantifier kind populations ~written =
         when_true = vacuous;
         when_false = witnessed;
         constant = None;
-        boolean = true;
+        boolean = Known_boolean;
         closure = None;
       }
   | Not_exists ->
@@ -966,7 +987,7 @@ let quantifier kind populations ~written =
         when_true = witnessed;
         when_false = vacuous;
         constant = None;
-        boolean = true;
+        boolean = Known_boolean;
         closure = None;
       }
 
@@ -1228,7 +1249,14 @@ let rec substitute ~replacement ~populations provenance =
     when_true = substitute_view ~replacement ~populations provenance.when_true;
     when_false = substitute_view ~replacement ~populations provenance.when_false;
     constant = provenance.constant;
-    boolean = provenance.boolean;
+    boolean =
+      (match provenance.boolean with
+      | Boolean_parameter parameter -> (
+          match replacement parameter with
+          | Some (Some (_, actual)) -> actual.boolean
+          | Some None -> Unknown_boolean
+          | None -> provenance.boolean)
+      | identity -> identity);
     closure = Option.map provenance.closure ~f:closure;
   }
 
@@ -1294,16 +1322,16 @@ let rec walk ctx expr =
       constant (Option.value_exn (literal_bool expr))
   | Pexp_construct ({ txt = Longident.Lident "Some"; _ }, Some payload)
   | Pexp_variant (_, Some payload) ->
-      { (walk ctx payload) with boolean = false; constant = None }
+      { (walk ctx payload) with boolean = Unknown_boolean; constant = None }
   | Pexp_construct (_, Some payload) ->
       (* [Ok b], [`Tag b], [Some b]: the payload's provenance, which a match will read out. *)
-      { (walk ctx payload) with boolean = false; constant = None }
+      { (walk ctx payload) with boolean = Unknown_boolean; constant = None }
   | Pexp_construct (_, None) | Pexp_constant _ -> nothing
   | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> walk ctx inner
   | Pexp_field (record, _) ->
       (* A projection reads one component the aggregate did not keep apart: conservatively the whole
          record's sources, as [fst]/[snd] below and a destructuring of a bound aggregate. *)
-      { (walk ctx record) with boolean = false; constant = None }
+      { (walk ctx record) with boolean = Unknown_boolean; constant = None }
   | Pexp_let (recursive, bindings, body) -> walk { ctx with env = bind ctx recursive bindings } body
   | Pexp_sequence (setup, result) ->
       discard ctx setup;
@@ -1361,14 +1389,15 @@ let rec walk ctx expr =
               ~producer:(Some (binding.pbop_exp, walk ctx binding.pbop_exp)))
       in
       walk { ctx with env } body
-  | Pexp_tuple items -> { (aggregate (List.map items ~f:(walk ctx))) with boolean = false }
+  | Pexp_tuple items ->
+      { (aggregate (List.map items ~f:(walk ctx))) with boolean = Unknown_boolean }
   | Pexp_record (fields, base) ->
       {
         (aggregate
            (List.map fields ~f:(fun (_, field) -> walk ctx field)
            @ Option.to_list (Option.map base ~f:(walk ctx))))
         with
-        boolean = false;
+        boolean = Unknown_boolean;
       }
   | Pexp_ifthenelse (condition, yes, no) -> (
       let condition = walk ctx condition in
@@ -1650,7 +1679,7 @@ and function_closure ctx parameters body =
                           when_true = either supplied.when_true default.when_true;
                           when_false = either supplied.when_false default.when_false;
                           constant = None;
-                          boolean = false;
+                          boolean = Unknown_boolean;
                           closure = default.closure;
                         })
             | _ -> ());
@@ -1792,6 +1821,12 @@ and comparison ctx callee left right =
   let inequality = is_name callee "<>" || is_name callee "!=" in
   let left_provenance = walk ctx left in
   let right_provenance = walk ctx right in
+  (* A Boolean constant also establishes its counterpart's type in a well-typed comparison. *)
+  let boolean_operands =
+    (known_boolean left_provenance.boolean && known_boolean right_provenance.boolean)
+    || Option.is_some left_provenance.constant
+    || Option.is_some right_provenance.constant
+  in
   let select constant other =
     if equality then if constant then other else negate other
     else if inequality then if constant then negate other else other
@@ -1805,7 +1840,7 @@ and comparison ctx callee left right =
       let witness population =
         {
           nothing with
-          boolean = true;
+          boolean = Known_boolean;
           when_true = { sources = []; witnesses = Set.singleton (module String) population };
         }
       in
@@ -1834,15 +1869,11 @@ and comparison ctx callee left right =
               (conjunction (negate left_provenance) (negate right_provenance))
           in
           if equality then agree else negate agree
-      | _ when ge && left_provenance.boolean && right_provenance.boolean ->
-          disjunction left_provenance (negate right_provenance)
-      | _ when gt && left_provenance.boolean && right_provenance.boolean ->
-          conjunction left_provenance (negate right_provenance)
-      | _ when le && left_provenance.boolean && right_provenance.boolean ->
-          disjunction (negate left_provenance) right_provenance
-      | _ when lt && left_provenance.boolean && right_provenance.boolean ->
-          conjunction (negate left_provenance) right_provenance
-      | _ -> { nothing with boolean = true })
+      | _ when ge && boolean_operands -> disjunction left_provenance (negate right_provenance)
+      | _ when gt && boolean_operands -> conjunction left_provenance (negate right_provenance)
+      | _ when le && boolean_operands -> disjunction (negate left_provenance) right_provenance
+      | _ when lt && boolean_operands -> conjunction (negate left_provenance) right_provenance
+      | _ -> { nothing with boolean = Known_boolean })
 
 (* [valued] answers for an argument already walked where it was written -- a deferred call's --
    whose environment is gone: its saved provenance and population are used without re-walking it or

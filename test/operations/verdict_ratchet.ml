@@ -1902,6 +1902,38 @@ let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocam
 let both = S.( && )
 let () = Verdict.p "all rows pass" (both true (List.for_all rows ~f:Fn.id))|ocaml},
       [ "all rows pass" ] );
+    (* staging#697 round 2: direct parameter results inherit the actual Boolean identity, while
+       constructors remain distinct; a Boolean literal establishes its comparison type. *)
+    ( "refuses Boolean ordering after an identity helper forwards a quantifier",
+      {ocaml|let id x = x
+let () = Verdict.p "ok" (id (List.for_all rows ~f:Fn.id) >= (n = 0))|ocaml},
+      [ "ok" ] );
+    ( "accepts witnessed Boolean ordering after an identity helper",
+      {ocaml|let id x = x
+let () = Verdict.p "ok" (not (List.is_empty rows) && id (List.for_all rows ~f:Fn.id) >= (n = 0))|ocaml},
+      [] );
+    ( "refuses Boolean ordering after a deferred call returns a quantifier",
+      {ocaml|let apply f xs = f xs
+let all xs = List.for_all xs ~f:Fn.id
+let () = Verdict.p "ok" (apply all rows >= (n = 0))|ocaml},
+      [ "all" ] );
+    ( "accepts witnessed Boolean ordering after a deferred call",
+      {ocaml|let apply f xs = f xs
+let all xs = List.for_all xs ~f:Fn.id
+let () = Verdict.p "ok" (not (List.is_empty rows) && apply all rows >= (n = 0))|ocaml},
+      [] );
+    ( "keeps a helper constructor result separate from its Boolean argument",
+      {ocaml|let wrap x = Some x
+let () = Verdict.p "constructor ordering" (wrap (List.for_all rows ~f:Fn.id) > None)|ocaml},
+      [] );
+    ( "refuses a Boolean literal comparison inside a helper",
+      {ocaml|let gt x = x > false
+let () = Verdict.p "ok" (gt (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "ok" ] );
+    ( "accepts a witnessed Boolean literal comparison inside a helper",
+      {ocaml|let gt x = x > false
+let () = Verdict.p "ok" (not (List.is_empty rows) && gt (List.for_all rows ~f:Fn.id))|ocaml},
+      [] );
   ]
 
 (* The syntax coverage matrix (gh-ocannl-931). The controls above each pin one shape a review round

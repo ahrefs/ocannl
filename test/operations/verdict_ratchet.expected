@@ -359,6 +359,13 @@ does not retain an earlier Boolean operator binding across an unknown open: true
 resolves a local Boolean operator defined after an unknown open: true
 reopening standard operators shadows an earlier local Boolean operator: true
 refuses a Boolean quantifier through a known standard module alias: true
+refuses Boolean ordering after an identity helper forwards a quantifier: true
+accepts witnessed Boolean ordering after an identity helper: true
+refuses Boolean ordering after a deferred call returns a quantifier: true
+accepts witnessed Boolean ordering after a deferred call: true
+keeps a helper constructor result separate from its Boolean argument: true
+refuses a Boolean literal comparison inside a helper: true
+accepts a witnessed Boolean literal comparison inside a helper: true
 the shipping ratchet process refuses the planted helper fixture: true
 the shipping ratchet process refuses a quantifier written directly in a native claim: true
 refuses a stale quantified-helper exemption: true
