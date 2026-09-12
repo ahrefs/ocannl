@@ -8,6 +8,10 @@ let fixture_exports =
   Scan.exports_of_source ~source:"arrayjit/lib/sample.ml"
     {|
 let plain = 1
+let _x = 1
+let x = 1
+let _pair, public_pair = (2, 3)
+let%trace _extended = 4
 let pair, alias = (2, 3)
 let (!@) x = x
 let%trace extended = 4
@@ -89,7 +93,15 @@ let () =
          "Sample.plain";
          "Sample.poly_of_sexp";
          "Sample.primitive";
+         "Sample.public_pair";
+         "Sample.x";
        ]);
+  Verdict.p_none "underscore-prefixed lets, patterns, and extensions are private by policy"
+    [ "Sample._x"; "Sample._pair"; "Sample._extended" ] ~f:(fun key ->
+      List.mem (export_keys fixture_exports) key ~equal:String.equal);
+  let private_counts = Scan.counts ~exports:fixture_exports [] in
+  Verdict.p "the opposing unprefixed value remains a detected zero-reference export"
+    (Hashtbl.find_exn private_counts "Sample.x" = 0);
   Verdict.p_none
     "derived and hand-written sexp_of converters are excluded from the census by policy"
     [

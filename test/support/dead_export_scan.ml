@@ -2,8 +2,11 @@
 
     This is deliberately a first cut. An implementation without an [.mli] exports every
     source-declared top-level [let] and [external], including helpers intended only for the
-    implementation. We enumerate those declarations in [arrayjit/lib/] and [tensor/], then count
-    references from every other OCaml source.
+    implementation. Source-declared [let] values whose name starts with [_] are excluded: the author
+    already marked them deliberately unused, matching OCaml warning 32. This also covers patterns
+    and extension payloads; externals and inferred deriving names retain their existing census
+    policy, including polymorphic-variant parser helpers. We enumerate those declarations in
+    [arrayjit/lib/] and [tensor/], then count references from every other OCaml source.
 
     A reference is conservative: a direct qualified path ([M.v]), a path through a module alias, or
     an unqualified identifier inside the lexical range of [open M]. Alias scopes are deliberately
@@ -119,7 +122,7 @@ let exports_of_source ~source contents =
         | Pstr_value (_, bindings) ->
             List.fold bindings ~init:acc ~f:(fun acc binding ->
                 List.fold (pattern_names binding.pvb_pat) ~init:acc ~f:(fun acc value ->
-                    if is_sexp_of_converter value then acc
+                    if String.is_prefix value ~prefix:"_" || is_sexp_of_converter value then acc
                     else
                       { module_name; value; source; line = binding.pvb_loc.loc_start.pos_lnum }
                       :: acc))

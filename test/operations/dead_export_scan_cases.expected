@@ -1,4 +1,6 @@
 top-level lets, patterns, extensions, and externals are exports: true
+underscore-prefixed lets, patterns, and extensions are private by policy: true
+the opposing unprefixed value remains a detected zero-reference export: true
 derived and hand-written sexp_of converters are excluded from the census by policy: true
 nested lets and nested-module derived values are not exports: true
 a deriving on the last declaration covers its whole recursive type group: true
