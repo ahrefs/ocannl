@@ -54,11 +54,14 @@
       gh-ocannl-614 measured.
     - {b residual}: instructions matched by none of those classifiers. Loop-control and integer
       bookkeeping legitimately live there, so it is reported rather than bounded; its purpose is to
-      make a newly encountered dialect visible instead of silently returning zeroes.
+      make a newly encountered dialect visible instead of silently returning zeroes. Stderr profiles
+      show the eight most frequent residual mnemonics, with spelling breaking frequency ties and
+      [other] counting remaining instructions (gh-ocannl-924).
 
     Both aarch64 spellings are read, because both are compiled in CI and a dialect must not change
     the reading: a count is a fact about the instruction, and the same loop assembled two ways has
-    to census the same. Both are exercised in [test/operations/cc_march_census]'s dialect probes.
+    to census the same. Both are exercised in [test/operations/asm_census_cases]'s pure dialect
+    probes.
 
     Moves are the fuzzy edge (an [%xmm] operand does not by itself say whether a [movq] moved a lane
     or a vector), so the mnemonic rule below is deliberately narrow and the counts are reported as a
@@ -219,6 +222,9 @@ type counts = {
   scalar_fp_ops : int;
   libm_calls : int;
   stack_refs : int;
+  residual_mnemonics : (string * int) list;
+      (** Exact residual histogram, sorted by descending frequency then mnemonic. Only its profile
+          display is bounded; this is diagnostic data, never a compiler-sensitive threshold. *)
   residual : int;
       (** Instructions recognized by none of the classifiers above. This is descriptive rather than
           a failure threshold: ordinary loop-control instructions live here too, but a dialect
@@ -638,6 +644,7 @@ let loop_edges ~asm = List.length (backward_edges (classify_asm asm))
    about a loop body, and {!profile_all}, which asks it about a whole listing. *)
 let count_range lines op_class ~from_ ~to_ =
   let libm = libm_names op_class in
+  let residual_mnemonics = Hashtbl.create (module String) in
   let counts =
     ref
       {
@@ -647,6 +654,7 @@ let count_range lines op_class ~from_ ~to_ =
         libm_calls = 0;
         stack_refs = 0;
         residual = 0;
+        residual_mnemonics = [];
       }
   in
   for k = from_ to to_ do
@@ -668,12 +676,21 @@ let count_range lines op_class ~from_ ~to_ =
         let c = if stack_ref then { c with stack_refs = c.stack_refs + 1 } else c in
         let c =
           if vector || scalar_fp || libm_call || stack_ref then c
-          else { c with residual = c.residual + 1 }
+          else (
+            Hashtbl.update residual_mnemonics mnemonic ~f:(function None -> 1 | Some n -> n + 1);
+            { c with residual = c.residual + 1 })
         in
         counts := c
     | _ -> ()
   done;
-  !counts
+  {
+    !counts with
+    residual_mnemonics =
+      Hashtbl.to_alist residual_mnemonics
+      |> List.sort ~compare:(fun (a, na) (b, nb) ->
+          let frequency = Int.compare nb na in
+          if frequency = 0 then String.compare a b else frequency);
+  }
 
 (** [profile_all op_class ~asm] is the instruction profile of an ENTIRE listing, with no loop
     selection and no source anchoring.
@@ -744,12 +761,28 @@ let census_source_in ?(selection = Innermost) parsed op_class ~source ~patterns 
 let census op_class ~asm ~source_basename ~anchor =
   census_in (parse ~asm ~source_basename) op_class ~anchor
 
+(** At most eight residual mnemonics keep stderr profiles readable, even for codec-heavy loops. The
+    remainder counts instructions, not distinct spellings. *)
+let residual_to_line counts =
+  let shown, omitted = List.split_n counts.residual_mnemonics 8 in
+  let entries = List.map shown ~f:(fun (mnemonic, n) -> Printf.sprintf "%s:%d" mnemonic n) in
+  let entries =
+    if List.is_empty omitted then entries
+    else
+      entries @ [ Printf.sprintf "other:%d" (List.sum (module Int) omitted ~f:(fun (_, n) -> n)) ]
+  in
+  "[" ^ String.concat ~sep:"," entries ^ "]"
+
 (** A one-line profile, for the stderr table a census run prints. *)
 let to_line
     {
       loop_label;
       span;
-      counts = { instructions; vector_ops; scalar_fp_ops; libm_calls; stack_refs; residual };
+      counts =
+        { instructions; vector_ops; scalar_fp_ops; libm_calls; stack_refs; residual; _ } as counts;
     } =
-  Printf.sprintf "%s span=%d insns=%d vector=%d scalar_fp=%d libm_calls=%d stack=%d residual=%d"
+  Printf.sprintf
+    "%s span=%d insns=%d vector=%d scalar_fp=%d libm_calls=%d stack=%d residual=%d \
+     residual_mnemonics=%s"
     loop_label span instructions vector_ops scalar_fp_ops libm_calls stack_refs residual
+    (residual_to_line counts)
