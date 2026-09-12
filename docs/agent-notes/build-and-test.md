@@ -544,6 +544,8 @@ that they earn a lookup rather than always-loaded space.
   snapshots, never reservations. Missing directories are supported; parent traversal
   must resolve through the launch shell or fail with exit 2. Native Windows drive spellings
   can resolve `missing/..` where POSIX spellings cannot: queries follow the shell's identity.
+  A missing suffix whose symlink-parent prefix differs between logical cd and physical
+  traversal is refused; already resolved roots and ordinary symlink prefixes work.
   The harness uses them for fixture pointers, run discovery, and repeat lock assertions;
   deliberately tested process predicates/identity fixtures still extract functions. Prefer foreground `run` launched through the agent harness's background mode
   (the harness notifies on exit); `start`/`status`/

@@ -51,6 +51,8 @@
 # Missing state directories are supported. Parent traversal must resolve through
 # the launch shell; unresolved missing/.. is refused (2). Native drive paths may
 # resolve missing/.. even where POSIX spellings do not. Queries follow that shell.
+# A missing suffix is refused if symlink-parent traversal gives logical cd and
+# physical mkdir different existing prefixes. Already resolved roots still work.
 #
 # `repeat` runs each iteration through dune in a freshly cleaned, cache-disabled
 # build context, keeps its separate stdout/stderr and exit status, and compares
@@ -261,7 +263,13 @@ query_state_for() {
     query_prefix=$query_parent
   done
   RUNS=$(query_physical_path "$query_prefix") || die "cannot resolve $RUNS"
-  [ -z "$query_suffix" ] || RUNS=${RUNS%/}/$query_suffix
+  if [ -n "$query_suffix" ]; then
+    # mkdir traverses symlink/.. physically. A logical cd of the existing
+    # prefix may name another directory; do not predict its missing child.
+    query_physical_prefix=$(cd -P -- "$query_prefix" && require_query_path "$PWD" && pwd -P) || die "cannot resolve missing state prefix"
+    [ "$query_physical_prefix" = "$RUNS" ] || die "cannot resolve missing state path with ambiguous symlink parent traversal"
+    RUNS=${RUNS%/}/$query_suffix
+  fi
   LOCK=$RUNS/lock-$wt_key
   OWNER=$RUNS/owner-$wt_key
   LAST=$RUNS/last-$wt_key
@@ -975,7 +983,11 @@ resolve_run() {
     case $sub in
       # Resolve the symlink itself before capture: readlink's output can lose
       # trailing LF and accidentally select another existing run directory.
-      paths | lock-status) run_dir=$(query_physical_path "$LAST" 2>/dev/null) || run_dir= ;;
+      paths | lock-status)
+        run_dir=
+        if [ -L "$LAST" ]; then
+          run_dir=$(query_physical_path "$LAST" 2>/dev/null) || run_dir=
+        fi ;;
       *) run_dir=$(readlink "$LAST" 2>/dev/null) || run_dir= ;;
     esac
     if [ -z "$run_dir" ]; then

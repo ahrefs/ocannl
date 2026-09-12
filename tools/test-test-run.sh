@@ -921,6 +921,35 @@ else
     "native symlinks unavailable"
 fi
 
+# Missing children of a symlink/.. prefix can differ between logical cd and
+# mkdir's physical traversal. Refuse that prediction, but accept a resolved root.
+mkdir -p "$TMP/query-parent-outside/child"
+ln -s "$TMP/query-parent-outside/child" "$repeat_root/query-parent-link" 2>/dev/null
+if [ -L "$repeat_root/query-parent-link" ]; then
+  query_bad=
+  for query_command in 'paths runs' 'lock-status'; do
+    query_out=$(OCANNL_TOOL_TEST_RUNS=query-parent-link/../fresh \
+      "$repeat_root/tools/test-run.sh" $query_command 2>"$TMP/query-error")
+    query_rc=$?
+    if [ "$query_rc" != 2 ] || [ -n "$query_out" ] || [ ! -s "$TMP/query-error" ]; then
+      query_bad="$query_command: rc=$query_rc output=$query_out"; break
+    fi
+  done
+  [ ! -e "$TMP/query-parent-outside/fresh" ] && [ ! -e "$repeat_root/fresh" ] || query_bad="query created state"
+  mkdir "$TMP/query-parent-outside/fresh"
+  query_out=$(OCANNL_TOOL_TEST_RUNS=query-parent-link/../fresh \
+    "$repeat_root/tools/test-run.sh" paths runs)
+  query_rc=$?
+  query_want=$(cd "$repeat_root" && cd query-parent-link/../fresh && pwd -P)
+  if [ -z "$query_bad" ] && [ "$query_rc" = 0 ] && [ "$query_out" = "$query_want" ]; then
+    report 0 "queries: ambiguous missing symlink parents refuse while resolved paths match launch"
+  else
+    report 1 "queries: ambiguous missing symlink parents refuse while resolved paths match launch" "$query_bad rc=$query_rc output=$query_out expected=$query_want"
+  fi
+else
+  skip "queries: ambiguous missing symlink parents refuse while resolved paths match launch" "native symlinks unavailable"
+fi
+
 # A plain symlink name can hide a physical path ending in LF. Refuse it
 # before command substitution trims that character into a different path.
 case $(uname -s) in MSYS* | MINGW*) query_line_paths=0 ;; *) query_line_paths=1 ;; esac
@@ -1312,6 +1341,27 @@ if [ -z "$query_bad" ] && [ "$(query paths run last)" = "$query_dir" ] \
 else
   report 1 "queries: last pointer records are validated before capture" "$query_bad"
 fi
+
+# A copied directory at LAST is not a legacy symlink or a regular pointer.
+rm "$query_last"
+mkdir "$query_last"
+cp "$query_dir/cmd" "$query_dir/cap" "$query_dir/wt" "$query_dir/runs" "$query_last/"
+query_bad=
+for query_command in 'paths run' 'paths lock' 'lock-status'; do
+  query_out=$(query $query_command last 2>"$TMP/query-error")
+  query_rc=$?
+  if [ "$query_rc" != 2 ] || [ -n "$query_out" ] || [ ! -s "$TMP/query-error" ]; then
+    query_bad="$query_command: rc=$query_rc output=$query_out"; break
+  fi
+done
+if [ -z "$query_bad" ] && [ -d "$query_last" ] && [ ! -e "$query_lock" ]; then
+  report 0 "queries: a directory at the last pointer is refused without mutation"
+else
+  report 1 "queries: a directory at the last pointer is refused without mutation" "$query_bad"
+fi
+rm "$query_last/cmd" "$query_last/cap" "$query_last/wt" "$query_last/runs"
+rmdir "$query_last"
+printf '%s\n' "$query_dir" >"$query_last"
 
 # Legacy pointer symlinks must preserve physical identity before capture too.
 if [ "$query_line_paths" = 1 ] && [ -L "$TMP/query-state-link" ]; then
