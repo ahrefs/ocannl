@@ -956,7 +956,8 @@ that they earn a lookup rather than always-loaded space.
   silently cover another call through the same wrapper or another claimed slot in the same call.
 - Boolean operator aliases in `verdict_provenance.ml` (gh-ocannl-968) keep their first
   argument until application, so constant annihilators and partial applications use the same
-  conjunction/disjunction algebra as direct syntax. Implicit aliases after an unknown module
+  conjunction/disjunction algebra as direct syntax. Partial Boolean predicates retain their captured
+  operand views, and unresolved calls forwarded through helpers move to the enclosing closure. Implicit aliases after an unknown module
   open are opaque; known qualified primitives and local definitions remain resolvable. Boolean
   ordering uses that algebra after length witnesses only for known standard operators and Boolean
   operands. Direct parameter returns transfer their Boolean identity, constants, and callable closures; ordering over

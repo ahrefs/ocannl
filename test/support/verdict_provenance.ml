@@ -426,8 +426,9 @@ let conjunction a b =
 let disjunction a b = negate (conjunction (negate a) (negate b))
 
 let boolean_ordering operator left right =
+  (* Standard comparisons require equal operand types: one known Boolean establishes both. *)
   let boolean_operands =
-    (known_boolean left.boolean && known_boolean right.boolean)
+    (known_boolean left.boolean || known_boolean right.boolean)
     || Option.is_some left.constant || Option.is_some right.constant
   in
   if not boolean_operands then None
@@ -438,6 +439,13 @@ let boolean_ordering operator left right =
     | "<=" -> Some (disjunction (negate left) right)
     | "<" -> Some (conjunction (negate left) right)
     | _ -> None
+
+let rec boolean_predicate_values = function
+  | Boolean_function (conjoin, Some first) ->
+      let argument = { nothing with boolean = Known_boolean } in
+      [ (if conjoin then conjunction first argument else disjunction first argument) ]
+  | Alternatives closures -> List.concat_map closures ~f:boolean_predicate_values
+  | Boolean_function (_, None) | Function _ | Quantifier_function _ -> []
 
 (* Aggregates -- tuples, records -- carry every component's sources at either polarity, since which
    component a later destructuring will read is not known here. *)
@@ -843,6 +851,15 @@ let standard_operator env expr =
           String.is_suffix binding.name ~suffix:unknown_boolean_exports
           && Option.equal Bool.equal (resolve_binding binding).constant (Some true)
       | None -> ( match path with [ _ ] | [ "Stdlib"; _ ] | [ "Base"; _ ] -> true | _ -> false))
+
+let result_parameter = function
+  | Boolean_parameter parameter | Boolean_default (parameter, _) -> Some parameter
+  | Known_boolean | Unknown_boolean -> None
+
+let pending_parameter env values =
+  List.find env ~f:(fun binding ->
+      List.exists values ~f:(fun value ->
+          Option.exists (result_parameter value.boolean) ~f:(phys_equal binding)))
 
 (* Quantifiers nobody owns yet, or owned by a local written inside this binding's expression, become
    this binding's when it is referenced. *)
@@ -1927,14 +1944,7 @@ and comparison ctx callee left right =
           | Some result -> result
           | None -> (
               let operands = [ left_provenance; right_provenance ] in
-              let applied =
-                List.find ctx.env ~f:(fun binding ->
-                    List.exists operands ~f:(fun operand ->
-                        match operand.boolean with
-                        | Boolean_parameter parameter | Boolean_default (parameter, _) ->
-                            phys_equal binding parameter
-                        | Known_boolean | Unknown_boolean -> false))
-              in
+              let applied = pending_parameter ctx.env operands in
               match applied with
               | None -> { nothing with boolean = Known_boolean }
               | Some applied ->
@@ -2030,6 +2040,17 @@ and apply ?(valued = fun _ -> None) ctx ~site ~callee_name closure arguments =
             in
             (at predicate.body.when_true, at predicate.body.when_false)
         | _ -> partial.predicate_sources
+      in
+      let captured_predicates =
+        Option.value_map
+          (Option.bind predicate_value ~f:(fun value -> value.closure))
+          ~default:[] ~f:boolean_predicate_values
+      in
+      let predicate_sources =
+        ( fst predicate_sources
+          @ List.concat_map captured_predicates ~f:(fun value -> value.when_true.sources),
+          snd predicate_sources
+          @ List.concat_map captured_predicates ~f:(fun value -> value.when_false.sources) )
       in
       let complete =
         List.length populations >= quantifier_arity partial.kind
@@ -2272,22 +2293,31 @@ and apply ?(valued = fun _ -> None) ctx ~site ~callee_name closure arguments =
                 | Some result ->
                     table := (call.result, Some (call.call_site, result)) :: !table;
                     None
-                | None ->
-                    if
-                      List.exists operands ~f:(fun value ->
-                          match value.boolean with
-                          | Boolean_parameter _ | Boolean_default _ -> true
-                          | _ -> false)
-                    then Some { call with call_arguments }
-                    else (
-                      table := (call.result, None) :: !table;
-                      None))
+                | None -> (
+                    match
+                      Option.first_some
+                        (pending_parameter ctx.env operands)
+                        (List.find_map operands ~f:(fun value -> result_parameter value.boolean))
+                    with
+                    | Some applied -> Some { call with applied; call_arguments }
+                    | None ->
+                        table := (call.result, None) :: !table;
+                        None))
             | None -> (
                 match replacement call.applied with
                 | None -> Some { call with call_arguments }
                 | Some None ->
                     table := (call.result, None) :: !table;
                     None
+                | Some (Some (_, actual))
+                  when Option.is_none actual.closure
+                       && Option.is_some (result_parameter actual.boolean) ->
+                    Some
+                      {
+                        call with
+                        applied = Option.value_exn (result_parameter actual.boolean);
+                        call_arguments;
+                      }
                 | Some (Some (_, actual)) ->
                     (match actual.closure with
                     | None -> table := (call.result, None) :: !table
@@ -2343,6 +2373,7 @@ and apply ?(valued = fun _ -> None) ctx ~site ~callee_name closure arguments =
       in
       let body = substitute_all closure.body in
       if fires then (
+        ctx.pending_calls := List.rev_append calls !(ctx.pending_calls);
         let helper = if closure.native then None else callee_name in
         List.iter claims ~f:(emit ctx ~site ~helper);
         match (leftover, body.closure) with
@@ -2522,7 +2553,14 @@ and module_bindings ctx ~name module_expr =
         ~site:(site_of_location module_expr.pmod_loc)
         (Functor (residual, captured.env))
       :: exports
-  | _ -> exports
+  | _ ->
+      if List.is_empty exports then
+        [
+          make_binding ~name:(name ^ ".<local-module>")
+            ~site:(site_of_location module_expr.pmod_loc)
+            (Resolved nothing);
+        ]
+      else exports
 
 (* Every field some assignment in [structure] writes: a population read through such a field is what
    it is at that moment, so a witness taken on one reading says nothing about another. *)

@@ -398,6 +398,28 @@ refuses a Boolean alias returned through an identity helper: true
 accepts a witnessed Boolean alias returned through an identity helper: true
 accepts an annihilating Boolean alias returned through an identity helper: true
 accepts a local operator returned through an identity helper: true
+refuses a Boolean combinator forwarded through two helpers: true
+accepts a witnessed Boolean combinator forwarded through two helpers: true
+refuses an ordering call forwarded with two unresolved operands: true
+accepts witnessed ordering forwarded with two unresolved operands: true
+refuses a different population witness around forwarded ordering: true
+accepts an annihilating Boolean combinator forwarded through two helpers: true
+refuses a partially applied ordering with a branch-selected first operand: true
+accepts witnessed partial ordering with a branch-selected first operand: true
+refuses ordering of a branch-selected Boolean helper result: true
+accepts witnessed ordering of a branch-selected Boolean result: true
+refuses ordering when only the left operand establishes Boolean type: true
+keeps branch-selected aggregate ordering outside Boolean algebra: true
+does not reopen standard ordering through an empty local Base: true
+does not reopen standard Boolean aliases through an empty local Stdlib: true
+retains implicit standard ordering after opening an empty local module: true
+restores a captured standard namespace after an empty local Base: true
+refuses a vacuous operand captured by a Boolean conjunction predicate: true
+accepts a witnessed operand captured by a Boolean conjunction predicate: true
+refuses a vacuous operand captured by a Boolean disjunction predicate: true
+accepts an annihilated operand in a Boolean predicate: true
+refuses a vacuous operand in a selected Boolean predicate: true
+accepts a witnessed operand in a selected Boolean predicate: true
 the shipping ratchet process refuses the planted helper fixture: true
 the shipping ratchet process refuses a quantifier written directly in a native claim: true
 refuses a stale quantified-helper exemption: true
