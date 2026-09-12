@@ -40,7 +40,9 @@
 # Absolute run references do not inspect the unrelated current state root;
 # current relative paths are interpreted at this worktree, ignoring CDPATH.
 # `paths last` names the pointer FILE, not the run it points to. Output is one
-# raw absolute path and a newline, never shell code; exit 2 means invalid input
+# raw absolute path and a newline, never shell code. Query paths must contain
+# no CR or LF (refused with exit 2); the launch metadata format is unchanged.
+# Exit 2 also means invalid input
 # or unavailable metadata. `lock-status` without a run probes THIS worktree's
 # current and legacy locks; with a run, only its recorded lock. It prints idle
 # (0) or held (3); an unreadable lock is an error (2), never idle. These are
@@ -206,10 +208,23 @@ perl -e 'use Fcntl ":flock"; exit 0' 2>/dev/null || die "perl with Fcntl not fou
 # `OCANNL_...` variable it finds (gh-ocannl-629), and these are exported into the
 # environment of every test this script runs.
 RUNS=${OCANNL_TOOL_TEST_RUNS:-$HOME/.ocannl-test-runs}
+require_query_path() {
+  case $1 in *$'\n'* | *$'\r'*) die "queries require single-line paths (no CR/LF)" ;; esac
+}
+
+query_physical_path() {
+  # Resolve with launch-shell semantics, then inspect the physical PWD before
+  # command substitution can strip a trailing newline from the path itself.
+  (cd -- "$1" && cd -P . && require_query_path "$PWD" && pwd -P)
+}
+
 query_state_for() {
   # Absolute references carry their own recorded state. Do not inspect an
   # unrelated current root just to answer a question about that run.
+  require_query_path "$1"
   case $1 in /* | [A-Za-z]:/*) return 0 ;; esac
+  require_query_path "$RUNS"
+  require_query_path "$PWD"
   # Let the same shell `cd -P` as launch resolve the existing prefix. In
   # particular, Perl File::Spec under MSYS does not treat C:/ as Bash does.
   # No mkdir: append only ordinary missing components. A missing prefix
@@ -219,18 +234,21 @@ query_state_for() {
   while [ ! -d "$query_prefix" ]; do
     [ ! -e "$query_prefix" ] && [ ! -L "$query_prefix" ] ||
       die "not a directory: $query_prefix"
-    query_parent=$(dirname "$query_prefix")
+    query_parent=$(dirname -- "$query_prefix")
     # dirname C:/missing returns C:, which MSYS directory predicates do
     # not recognize as the drive root. Preserve the explicit root slash.
     case $query_prefix:$query_parent in
       [A-Za-z]:/*:[A-Za-z]:) query_parent=$query_parent/ ;;
     esac
     # An unavailable UNC host/share must not fall back to a local / path.
-    case $query_prefix in
-      //[!/]*) case $query_parent in / | //) die "cannot resolve UNC root: $RUNS" ;; esac ;;
+    case ${OSTYPE:-} in
+      msys* | cygwin*)
+        case $query_prefix in
+          //[!/]*) case $query_parent in / | //) die "cannot resolve UNC root: $RUNS" ;; esac ;;
+        esac ;;
     esac
     [ "$query_parent" != "$query_prefix" ] || die "cannot resolve $RUNS"
-    query_part=$(basename "$query_prefix")
+    query_part=$(basename -- "$query_prefix")
     case $query_part in
       ..) die "cannot resolve missing state path containing ..: $RUNS" ;;
       .) ;;
@@ -238,7 +256,7 @@ query_state_for() {
     esac
     query_prefix=$query_parent
   done
-  RUNS=$(cd "$query_prefix" && pwd -P) || die "cannot resolve $RUNS"
+  RUNS=$(query_physical_path "$query_prefix") || die "cannot resolve $RUNS"
   [ -z "$query_suffix" ] || RUNS=${RUNS%/}/$query_suffix
   LOCK=$RUNS/lock-$wt_key
   OWNER=$RUNS/owner-$wt_key
@@ -936,7 +954,10 @@ resolve_run() {
     # Canonicalized (physically -- symlink spellings differ per referrer)
     # for the same reason as $RUNS: identity is compared as a string
     # against recorded pointers.
-    run_dir=$(cd "$ref" && pwd -P) || die "cannot resolve $ref"
+    case $sub in
+      paths | lock-status) run_dir=$(query_physical_path "$ref") || die "cannot resolve $ref" ;;
+      *) run_dir=$(cd "$ref" && pwd -P) || die "cannot resolve $ref" ;;
+    esac
   elif [ -d "$RUNS/$ref" ]; then
     # The bare identifiers `list` prints resolve here.
     run_dir=$RUNS/$ref
@@ -1090,7 +1111,7 @@ case $sub in
     if [ "$field" = run ]; then
       resolve_run "${2:-last}"
       # Legacy last symlinks may spell a run through a symlinked directory.
-      (cd "$run_dir" && pwd -P) || die "cannot resolve $run_dir"
+      query_physical_path "$run_dir" || die "cannot resolve $run_dir"
       exit 0
     fi
     query_wt=$PWD query_runs=$RUNS query_lock=$LOCK query_owner=$OWNER query_last=$LAST
@@ -1100,16 +1121,18 @@ case $sub in
       query_wt=$run_wt query_lock=$run_lock query_owner=$run_owner
       query_runs=$run_runs
       # Legacy runs have no stored state root; the run directory identifies it.
-      [ -n "$query_runs" ] || query_runs=$(cd "$run_dir/.." && pwd -P)
+      [ -n "$query_runs" ] || query_runs=$(query_physical_path "$run_dir/..") || die "cannot resolve legacy state root"
       query_last=$query_runs/last-$(wt_key_of "$query_wt")
     fi
     case $field in
-      worktree) printf '%s\n' "$query_wt" ;;
-      runs) printf '%s\n' "$query_runs" ;;
-      lock) printf '%s\n' "$query_lock" ;;
-      owner) printf '%s\n' "$query_owner" ;;
-      last) printf '%s\n' "$query_last" ;;
+      worktree) query_out=$query_wt ;;
+      runs) query_out=$query_runs ;;
+      lock) query_out=$query_lock ;;
+      owner) query_out=$query_owner ;;
+      last) query_out=$query_last ;;
     esac
+    require_query_path "$query_out"
+    printf '%s\n' "$query_out"
     ;;
   lock-status)
     [ $# -le 1 ] || die "usage: lock-status [RUN|last]"

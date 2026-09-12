@@ -851,6 +851,41 @@ else
     "rc=$query_rc runs=$query_out root=$query_root"
 fi
 
+case $(uname -s) in
+  MSYS* | MINGW*) skip "queries: double slashes preserve the POSIX local root without writes" "Windows reserves UNC roots" ;;
+  *)
+    query_out=$(OCANNL_TOOL_TEST_RUNS="//$query_slash_root/runs" \
+      "$repeat_root/tools/test-run.sh" paths runs)
+    query_rc=$?
+    if [ "$query_rc" = 0 ] && [ "$query_out" = "${query_root%/}/$query_slash_root/runs" ] \
+       && [ ! -e "/$query_slash_root" ]; then
+      report 0 "queries: double slashes preserve the POSIX local root without writes"
+    else
+      report 1 "queries: double slashes preserve the POSIX local root without writes" "rc=$query_rc runs=$query_out"
+    fi ;;
+esac
+
+query_bad=
+for query_break in $'\n' $'\r'; do
+  query_break_root=$TMP/query-break${query_break}root
+  for query_command in 'paths runs' 'lock-status'; do
+    query_out=$(OCANNL_TOOL_TEST_RUNS="$query_break_root" \
+      "$repeat_root/tools/test-run.sh" $query_command 2>"$TMP/query-error")
+    query_rc=$?
+    if [ "$query_rc" != 2 ] || [ -n "$query_out" ] \
+       || ! grep -q 'single-line paths' "$TMP/query-error" \
+       || [ -e "$query_break_root" ]; then
+      query_bad="$query_command: rc=$query_rc output=$query_out"; break
+    fi
+  done
+  [ -z "$query_bad" ] || break
+done
+if [ -z "$query_bad" ]; then
+  report 0 "queries: CR and LF roots fail loudly without state writes"
+else
+  report 1 "queries: CR and LF roots fail loudly without state writes" "$query_bad"
+fi
+
 # A competing CDPATH location must neither redirect the identity nor leak cd's
 # announcement into the one-path stdout contract.
 mkdir -p "$repeat_root/query-relative" "$TMP/query-cdpath/query-relative"
@@ -884,6 +919,26 @@ if [ -L "$TMP/query-repo-link" ] && [ -L "$TMP/query-state-link" ]; then
 else
   skip "queries: symlink spellings identify the same physical worktree and state root" \
     "native symlinks unavailable"
+fi
+
+# A plain symlink name can hide a physical path ending in LF. Refuse it
+# before command substitution trims that character into a different path.
+case $(uname -s) in MSYS* | MINGW*) query_line_paths=0 ;; *) query_line_paths=1 ;; esac
+if [ "$query_line_paths" = 1 ] && [ -L "$TMP/query-state-link" ]; then
+  query_line_target=$TMP/query-physical$'\n'
+  mkdir "$query_line_target"
+  ln -s "$query_line_target" "$TMP/query-line-link"
+  query_out=$(OCANNL_TOOL_TEST_RUNS="$TMP/query-line-link" \
+    "$repeat_root/tools/test-run.sh" paths runs 2>"$TMP/query-error")
+  query_rc=$?
+  if [ "$query_rc" = 2 ] && [ -z "$query_out" ] \
+     && grep -q 'single-line paths' "$TMP/query-error"; then
+    report 0 "queries: physical line breaks behind symlinks are refused before capture"
+  else
+    report 1 "queries: physical line breaks behind symlinks are refused before capture" "rc=$query_rc runs=$query_out"
+  fi
+else
+  skip "queries: physical line breaks behind symlinks are refused before capture" "requires POSIX symlink filenames"
 fi
 
 # Exercise UNC preservation portably: the launch shell's physical-prefix

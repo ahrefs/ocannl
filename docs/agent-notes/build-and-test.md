@@ -538,7 +538,8 @@ that they earn a lookup rather than always-loaded space.
   root; relative current-state queries ignore `CDPATH`. `lock-status [RUN|last]` without a run probes this worktree's current
   and legacy locks, with a run only its recorded lock; it prints `idle` (0) or `held` (3), with
   inspection/argument errors 2. A present invalid `runs` entry is an error; only its absence
-  identifies legacy metadata. Queries create no state, even before the first run, and are
+  identifies legacy metadata. Query paths are line-oriented: CR/LF paths fail with exit 2;
+  this does not redesign the existing launch metadata format. Queries create no state, even before the first run, and are
   snapshots, never reservations. Missing directories are supported; parent traversal
   must resolve through the launch shell or fail with exit 2. Native Windows drive spellings
   can resolve `missing/..` where POSIX spellings cannot: queries follow the shell's identity.
