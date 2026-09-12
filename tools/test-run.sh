@@ -207,7 +207,7 @@ perl -e 'use Fcntl ":flock"; exit 0' 2>/dev/null || die "perl with Fcntl not fou
 # without being configuration: an OCANNL executable warns at startup about any other
 # `OCANNL_...` variable it finds (gh-ocannl-629), and these are exported into the
 # environment of every test this script runs.
-RUNS=${OCANNL_TOOL_TEST_RUNS:-$HOME/.ocannl-test-runs}
+RUNS=${OCANNL_TOOL_TEST_RUNS:-}
 require_query_path() {
   case $1 in *$'\n'* | *$'\r'*) die "queries require single-line paths (no CR/LF)" ;; esac
 }
@@ -223,6 +223,10 @@ query_state_for() {
   # unrelated current root just to answer a question about that run.
   require_query_path "$1"
   case $1 in /* | [A-Za-z]:/*) return 0 ;; esac
+  if [ -z "$RUNS" ]; then
+    [ -n "${HOME:-}" ] || die "HOME is unavailable; set OCANNL_TOOL_TEST_RUNS for current-state queries"
+    RUNS=$HOME/.ocannl-test-runs
+  fi
   require_query_path "$RUNS"
   require_query_path "$PWD"
   # Let the same shell `cd -P` as launch resolve the existing prefix. In
@@ -264,7 +268,8 @@ query_state_for() {
 }
 case ${1:-} in
   paths | lock-status) ;; # Initialize lazily, only if the query needs this root.
-  *) mkdir -p "$RUNS" || die "cannot create $RUNS"
+  *) RUNS=${RUNS:-$HOME/.ocannl-test-runs}
+     mkdir -p "$RUNS" || die "cannot create $RUNS"
      RUNS=$(cd "$RUNS" && pwd -P) || die "cannot resolve $RUNS" ;;
 esac
 # Canonicalized: run identities (owner pointer, `last`, wt cross-references)
@@ -736,8 +741,28 @@ lock_still_owned() {
   [ "$(cat "$run_owner" 2>/dev/null)" = "$1" ] && lock_held "$run_lock"
 }
 recorded_absolute_path() {
-  case $1 in /* | [A-Za-z]:/*) ;; *) return 1 ;; esac
+  case $1 in
+    /*) ;;
+    [A-Za-z]:/*) case ${OSTYPE:-} in msys* | cygwin*) ;; *) return 1 ;; esac ;;
+    *) return 1 ;;
+  esac
   case $1 in *$'\n'* | *$'\r'*) return 1 ;; esac
+}
+
+read_query_record() {
+  local record
+  [ -f "$1" ] && [ -r "$1" ] || return 1
+  # Validate the bytes before shell capture strips trailing LF. A record is
+  # exactly one nonempty, LF-terminated path; no CR, NUL, or second record.
+  record=$(perl -e '
+    open my $fh, "<:raw", $ARGV[0] or exit 1;
+    my $line = <$fh>;
+    defined($line) && $line =~ /\A[^\x00\r\n]+\n\z/ && eof($fh) or exit 1;
+    binmode STDOUT;
+    print $line;
+  ' -- "$1") || return 1
+  recorded_absolute_path "$record" || return 1
+  printf '%s\n' "$record"
 }
 
 # Where run-dir $1's lock and owner pointer live: under the state root it
@@ -749,22 +774,17 @@ recorded_absolute_path() {
 # Queries additionally reject present but invalid metadata rather than treating
 # it as an old run. Other callers retain their historical best-effort behavior.
 lock_paths_of() {
-  local r k r_read
+  local r k
   if [ "${2:-}" = query ]; then
-    [ -f "$1/wt" ] && [ -r "$1/wt" ] || return 1
+    run_wt=$(read_query_record "$1/wt") || return 1
+    r=
     if [ -e "$1/runs" ] || [ -L "$1/runs" ]; then
-      [ -f "$1/runs" ] && [ -r "$1/runs" ] || return 1
+      r=$(read_query_record "$1/runs") || return 1
     fi
-  fi
-  run_wt=$(cat "$1/wt" 2>/dev/null) || return 1
-  [ -n "$run_wt" ] || return 1
-  r=$(cat "$1/runs" 2>/dev/null); r_read=$?
-  if [ "${2:-}" = query ]; then
-    recorded_absolute_path "$run_wt" || return 1
-    if [ -e "$1/runs" ] || [ -L "$1/runs" ]; then
-      [ "$r_read" = 0 ] || return 1
-      recorded_absolute_path "$r" || return 1
-    fi
+  else
+    run_wt=$(cat "$1/wt" 2>/dev/null) || return 1
+    [ -n "$run_wt" ] || return 1
+    r=$(cat "$1/runs" 2>/dev/null)
   fi
   run_runs=$r
   if [ -n "$r" ]; then

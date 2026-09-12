@@ -535,10 +535,11 @@ that they earn a lookup rather than always-loaded space.
   absolute path: `run` defaults to the last recorded run; `worktree`, `runs`, `lock`, `owner`, and
   `last` default to this script's worktree, or use an explicit run's recorded metadata. `last`
   names the pointer file. An absolute run reference does not require a valid current state
-  root; relative current-state queries ignore `CDPATH`. `lock-status [RUN|last]` without a run probes this worktree's current
+  root or `HOME`; relative current-state queries ignore `CDPATH`. `lock-status [RUN|last]` without a run probes this worktree's current
   and legacy locks, with a run only its recorded lock; it prints `idle` (0) or `held` (3), with
   inspection/argument errors 2. A present invalid `runs` entry is an error; only its absence
-  identifies legacy metadata. Query paths are line-oriented: CR/LF paths fail with exit 2;
+  identifies legacy metadata. Recorded path entries must be exactly one LF-terminated absolute
+  path valid on this host (drive forms are Windows-only). Query paths are line-oriented: CR/LF paths fail with exit 2;
   this does not redesign the existing launch metadata format. Queries create no state, even before the first run, and are
   snapshots, never reservations. Missing directories are supported; parent traversal
   must resolve through the launch shell or fail with exit 2. Native Windows drive spellings

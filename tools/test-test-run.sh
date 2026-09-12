@@ -1132,6 +1132,25 @@ else
   report 1 "queries: absolute runs ignore unrelated ambient state while current references validate it" "$query_bad"
 fi
 
+query_out=$(env -u HOME -u OCANNL_TOOL_TEST_RUNS \
+  "$repeat_root/tools/test-run.sh" paths runs "$query_dir" 2>"$TMP/query-error")
+query_rc=$?
+query_home_lock=$(env -u HOME -u OCANNL_TOOL_TEST_RUNS \
+  "$repeat_root/tools/test-run.sh" lock-status "$query_dir" 2>"$TMP/query-error")
+query_home_lock_rc=$?
+query_home_current=$(env -u HOME -u OCANNL_TOOL_TEST_RUNS \
+  "$repeat_root/tools/test-run.sh" paths runs 2>"$TMP/query-error")
+query_home_current_rc=$?
+if [ "$query_rc" = 0 ] && [ "$query_out" = "$query_runs" ] \
+   && [ "$query_home_lock_rc" = 0 ] && [ "$query_home_lock" = idle ] \
+   && [ "$query_home_current_rc" = 2 ] && [ -z "$query_home_current" ] \
+   && [ ! -e "$query_lock" ]; then
+  report 0 "queries: HOME is required only when its current-root default is used"
+else
+  report 1 "queries: HOME is required only when its current-root default is used" \
+    "runs=$query_rc:$query_out lock=$query_home_lock_rc:$query_home_lock current=$query_home_current_rc:$query_home_current"
+fi
+
 # A held lock needs no process metadata to be reported held. Run the holder
 # synchronously; Perl closes its nonstandard descriptors when execing the query.
 query_out=$(perl -MFcntl=:flock -e '
@@ -1160,15 +1179,48 @@ else
   report 1 "queries: an uninspectable lock is an error, never idle" "rc=$query_rc output=$query_out"
 fi
 rmdir "$query_lock"
+# Drive-form records are absolute only on Windows. Both recorded path fields
+# follow host semantics rather than accepting a foreign relative spelling.
+query_bad=
+for query_record_field in wt runs; do
+  case $query_record_field in wt) query_record_path=$query_wt; query_field=worktree ;; runs) query_record_path=$query_runs; query_field=runs ;; esac
+  case $(uname -s) in
+    MSYS* | MINGW*) query_drive_record=$(cygpath -m "$query_record_path"); query_drive_rc=0 ;;
+    *) query_drive_record=C:/foreign-state; query_drive_rc=2 ;;
+  esac
+  printf '%s\n' "$query_drive_record" >"$query_dir/$query_record_field"
+  query_out=$(query paths "$query_field" "$query_dir" 2>"$TMP/query-error")
+  query_rc=$?
+  query_drive_lock=$(query lock-status "$query_dir" 2>"$TMP/query-error")
+  query_drive_lock_rc=$?
+  if [ "$query_rc" != "$query_drive_rc" ] || [ "$query_drive_lock_rc" != "$query_drive_rc" ]; then
+    query_bad="$query_record_field: path=$query_rc:$query_out lock=$query_drive_lock_rc:$query_drive_lock"
+  elif [ "$query_drive_rc" = 0 ]; then
+    [ "$query_out" = "$query_drive_record" ] && [ "$query_drive_lock" = idle ] || query_bad="native record changed identity"
+  else
+    [ -z "$query_out" ] && [ -z "$query_drive_lock" ] || query_bad="foreign record produced output"
+  fi
+  printf '%s\n' "$query_record_path" >"$query_dir/$query_record_field"
+  [ -z "$query_bad" ] || break
+done
+if [ -z "$query_bad" ] && [ ! -e "$query_lock" ]; then
+  report 0 "queries: recorded drive paths follow host absolute-path semantics"
+else
+  report 1 "queries: recorded drive paths follow host absolute-path semantics" "$query_bad"
+fi
+
 # Missing runs metadata is legacy; present broken metadata is an error.
 query_bad=
-for query_metadata in empty relative multiline directory; do
+for query_metadata in empty relative multiline directory trailing_blank unterminated nul; do
   rm -f "$query_dir/runs"
   case $query_metadata in
     empty) : >"$query_dir/runs" ;;
     relative) printf 'relative/runs\n' >"$query_dir/runs" ;;
     multiline) printf '%s\nextra\n' "$query_runs" >"$query_dir/runs" ;;
     directory) mkdir "$query_dir/runs" ;;
+    trailing_blank) printf '%s\n\n' "$query_runs" >"$query_dir/runs" ;;
+    unterminated) printf '%s' "$query_runs" >"$query_dir/runs" ;;
+    nul) printf '%s\000\n' "$query_runs" >"$query_dir/runs" ;;
   esac
   for query_ref in last "$query_dir"; do
     for query_command in 'paths runs' 'paths lock' 'lock-status'; do
