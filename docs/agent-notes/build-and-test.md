@@ -2100,3 +2100,9 @@ that they earn a lookup rather than always-loaded space.
   so package-filtered arrayjit builds with tests can resolve it. Optimization, execution,
   discriminating test data and traversals stay in `ll_test`; the builder tier depends only on
   `base` and `arrayjit.ir`. `set` accepts an optional debug label to preserve diagnostic fixtures.
+
+- Pure assembly dialect and anchor controls live in `test/operations/asm_census_cases.ml`
+  (`@test/operations/runtest-asm_census_cases`), independent of the `cc_march_census` toolchain
+  matrix. The driver retains its cache-format probes. `Asm_census.census_source_in` shares the
+  exact-anchor-before-brace-range policy between the driver and the discriminating parser control
+  (gh-ocannl-937).

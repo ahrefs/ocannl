@@ -3042,6 +3042,14 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; ocannl-backend: none -- pure assembly parsing; no emission, runtime context or toolchain.
+ (name asm_census_cases)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules asm_census_cases)
+ (libraries base arrayjit.verdict test_utils))
+
+(test
  ; ocannl-backend: cc -- censuses the cc backend's C emission and compiles it under foreign
  ; -march flags; the emit children are spawned with OCANNL_BACKEND=cc forced, and the driver
  ; itself never creates a context, so there is nothing here for an ambient backend to select.
