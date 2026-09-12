@@ -534,7 +534,8 @@ that they earn a lookup rather than always-loaded space.
   the same override. The read-only `paths FIELD [RUN|last]` contract (gh-ocannl-671) returns one
   absolute path: `run` defaults to the last recorded run; `worktree`, `runs`, `lock`, `owner`, and
   `last` default to this script's worktree, or use an explicit run's recorded metadata. `last`
-  names the pointer file. `lock-status [RUN|last]` without a run probes this worktree's current
+  names the pointer file. An absolute run reference does not require a valid current state
+  root; relative current-state queries ignore `CDPATH`. `lock-status [RUN|last]` without a run probes this worktree's current
   and legacy locks, with a run only its recorded lock; it prints `idle` (0) or `held` (3), with
   inspection/argument errors 2. A present invalid `runs` entry is an error; only its absence
   identifies legacy metadata. Queries create no state, even before the first run, and are

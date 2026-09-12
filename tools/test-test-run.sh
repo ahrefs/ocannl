@@ -837,6 +837,35 @@ else
   report 1 "queries: malformed arguments and missing runs fail without state mutation" "$query_bad"
 fi
 
+# Three or more leading slashes are a local root, not a UNC host/share.
+query_slash_root=ocannl-query-slashes-${TMP##*/}
+query_out=$(OCANNL_TOOL_TEST_RUNS="///$query_slash_root/runs" \
+  "$repeat_root/tools/test-run.sh" paths runs)
+query_rc=$?
+query_root=$(cd / && pwd -P)
+if [ "$query_rc" = 0 ] && [ "$query_out" = "${query_root%/}/$query_slash_root/runs" ] \
+   && [ ! -e "/$query_slash_root" ]; then
+  report 0 "queries: redundant leading slashes preserve the local root without writes"
+else
+  report 1 "queries: redundant leading slashes preserve the local root without writes" \
+    "rc=$query_rc runs=$query_out root=$query_root"
+fi
+
+# A competing CDPATH location must neither redirect the identity nor leak cd's
+# announcement into the one-path stdout contract.
+mkdir -p "$repeat_root/query-relative" "$TMP/query-cdpath/query-relative"
+query_out=$(CDPATH="$TMP/query-cdpath" OCANNL_TOOL_TEST_RUNS=query-relative/missing \
+  "$repeat_root/tools/test-run.sh" paths runs)
+query_rc=$?
+if [ "$query_rc" = 0 ] && [ "$query_out" = "$query_wt/query-relative/missing" ] \
+   && [ ! -e "$repeat_root/query-relative/missing" ] \
+   && [ ! -e "$TMP/query-cdpath/query-relative/missing" ]; then
+  report 0 "queries: CDPATH cannot redirect relative state roots or add stdout"
+else
+  report 1 "queries: CDPATH cannot redirect relative state roots or add stdout" \
+    "rc=$query_rc runs=$query_out"
+fi
+
 # Physical normalization must agree with launch even when the caller uses a
 # symlinked script or state root. MSYS may copy rather than create a symlink.
 ln -s "$repeat_root" "$TMP/query-repo-link" 2>/dev/null
@@ -1011,6 +1040,43 @@ else
   report 1 "queries: last, bare id and absolute run share recorded paths without creating locks" "$query_bad"
 fi
 
+# Absolute references remain useful after the caller's ambient root changes.
+# Omitted and bare-id references still require that current root to be valid.
+printf 'not a directory\n' >"$TMP/query-ambient-file"
+query_bad=
+for query_ambient in "$TMP/query-ambient-file" "$TMP/query-ambient-missing/../runs"; do
+  for field in run worktree runs lock owner last; do
+    case $field in
+      run) query_want=$query_dir ;; worktree) query_want=$query_wt ;;
+      runs) query_want=$query_runs ;; lock) query_want=$query_lock ;;
+      owner) query_want=$query_owner ;; last) query_want=$query_last ;;
+    esac
+    query_out=$(OCANNL_TOOL_TEST_RUNS="$query_ambient" \
+      "$repeat_root/tools/test-run.sh" paths "$field" "$query_dir" 2>"$TMP/query-error")
+    query_rc=$?
+    if [ "$query_rc" != 0 ] || [ "$query_out" != "$query_want" ]; then
+      query_bad="$field: rc=$query_rc output=$query_out expected=$query_want"; break
+    fi
+  done
+  query_out=$(OCANNL_TOOL_TEST_RUNS="$query_ambient" \
+    "$repeat_root/tools/test-run.sh" lock-status "$query_dir" 2>"$TMP/query-error")
+  query_rc=$?
+  [ "$query_rc" = 0 ] && [ "$query_out" = idle ] || query_bad="lock-status: $query_rc:$query_out"
+  for query_command in 'paths runs' 'paths runs fixture' 'lock-status'; do
+    query_out=$(OCANNL_TOOL_TEST_RUNS="$query_ambient" \
+      "$repeat_root/tools/test-run.sh" $query_command 2>"$TMP/query-error")
+    query_rc=$?
+    [ "$query_rc" = 2 ] && [ -z "$query_out" ] || query_bad="$query_command: $query_rc:$query_out"
+  done
+  [ -z "$query_bad" ] || break
+done
+if [ -z "$query_bad" ] && [ -f "$TMP/query-ambient-file" ] \
+   && [ ! -e "$TMP/query-ambient-missing" ] && [ ! -e "$query_lock" ]; then
+  report 0 "queries: absolute runs ignore unrelated ambient state while current references validate it"
+else
+  report 1 "queries: absolute runs ignore unrelated ambient state while current references validate it" "$query_bad"
+fi
+
 # A held lock needs no process metadata to be reported held. Run the holder
 # synchronously; Perl closes its nonstandard descriptors when execing the query.
 query_out=$(perl -MFcntl=:flock -e '
@@ -1049,12 +1115,15 @@ for query_metadata in empty relative multiline directory; do
     multiline) printf '%s\nextra\n' "$query_runs" >"$query_dir/runs" ;;
     directory) mkdir "$query_dir/runs" ;;
   esac
-  for query_command in 'paths runs last' 'paths lock last' 'lock-status last'; do
-    query_out=$(query $query_command 2>"$TMP/query-error")
-    query_rc=$?
-    if [ "$query_rc" != 2 ] || [ -n "$query_out" ] || [ ! -s "$TMP/query-error" ]; then
-      query_bad="$query_metadata $query_command: rc=$query_rc output=$query_out"; break
-    fi
+  for query_ref in last "$query_dir"; do
+    for query_command in 'paths runs' 'paths lock' 'lock-status'; do
+      query_out=$(query $query_command "$query_ref" 2>"$TMP/query-error")
+      query_rc=$?
+      if [ "$query_rc" != 2 ] || [ -n "$query_out" ] || [ ! -s "$TMP/query-error" ]; then
+        query_bad="$query_metadata $query_command $query_ref: rc=$query_rc output=$query_out"; break
+      fi
+    done
+    [ -z "$query_bad" ] || break
   done
   [ ! -d "$query_dir/runs" ] || rmdir "$query_dir/runs"
   [ -z "$query_bad" ] || break
