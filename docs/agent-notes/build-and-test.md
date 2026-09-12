@@ -669,6 +669,12 @@ that they earn a lookup rather than always-loaded space.
   under its recorded start token, the same gate the shipping script applies to any pid it did not
   itself fork, since `stop` having already killed it frees its pid for recycling before the EXIT
   trap runs.
+- `tools/test-test-run.sh` covers the `run`/`start` lifecycle (gh-ocannl-967): readiness precedes
+  status/stop/signals; completion checks verdict, sentinel, group and lock; competing launches
+  create no run directory. POSIX legs cover INT/HUP/group TERM, orphan recovery and background
+  children that close their locks. The forged publication window records settle sleeps before
+  checking reaping; `last` squatter/legacy lock cases end with a byte comparison of the fixture
+  tree. Fixtures use `paths`/`lock-status`, identity-checked cleanup and bounded child waits.
 - **`cmd 2>/dev/null` does not silence a failed REDIRECTION.** The shell reports that before the
   command's own stderr redirection applies, so `read -r line <"$f" 2>/dev/null` prints
   `/proc/NNN/stat: No such file or directory` whenever the entry vanishes mid-scan — routine, not
