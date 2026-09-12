@@ -857,6 +857,48 @@ else
     "native symlinks unavailable"
 fi
 
+# Exercise UNC preservation portably: the launch shell's physical-prefix
+# reader reports a network root. The query must retain that exact prefix,
+# not run it through a separate filesystem grammar that collapses // to /.
+query_unc_root=$TMP/query-unc
+mkdir "$query_unc_root"
+query_unc_root=$(cd "$query_unc_root" && pwd -P)
+cat >"$TMP/query-unc-env" <<'EOF'
+pwd() {
+  if [ "$PWD" = "$QUERY_TEST_UNC_ROOT" ]; then printf '//query-host/share\n';
+  else builtin pwd "$@"; fi
+}
+EOF
+query_out=$(BASH_ENV="$TMP/query-unc-env" QUERY_TEST_UNC_ROOT="$query_unc_root" \
+  OCANNL_TOOL_TEST_RUNS="$query_unc_root/missing/runs" \
+  "$repeat_root/tools/test-run.sh" paths runs)
+query_rc=$?
+if [ "$query_rc" = 0 ] && [ "$query_out" = //query-host/share/missing/runs ] \
+   && [ ! -e "$query_unc_root/missing" ]; then
+  report 0 "queries: the launch shell's UNC prefix survives missing-suffix normalization"
+else
+  report 1 "queries: the launch shell's UNC prefix survives missing-suffix normalization" \
+    "rc=$query_rc runs=$query_out"
+fi
+
+# MSYS accepts both /c/... and C:/... at launch. Its Perl File::Spec does
+# not necessarily share that interpretation, so compare both against Bash.
+case $(uname -s) in
+  MSYS* | MINGW*)
+    query_native=$(cygpath -m "$query_expected")
+    query_out=$(OCANNL_TOOL_TEST_RUNS="$query_native" "$repeat_root/tools/test-run.sh" paths runs)
+    query_rc=$?
+    if [ "$query_rc" = 0 ] && [ "$query_out" = "$query_expected" ] \
+       && [ ! -e "$TMP/query-state" ]; then
+      report 0 "queries: absent Windows drive spelling matches the launch shell"
+    else
+      report 1 "queries: absent Windows drive spelling matches the launch shell" \
+        "rc=$query_rc runs=$query_out expected=$query_expected"
+    fi
+    ;;
+  *) skip "queries: absent Windows drive spelling matches the launch shell" "requires Windows drive paths" ;;
+esac
+
 # The pointer returned by paths last must feed the SAME resolver as status and
 # stop; the published fixture has deliberately no live pid and no verdict.
 mkdir -p "$query_expected/fixture"
@@ -867,6 +909,20 @@ printf '0\n' >"$query_dir/cap"
 printf '%s\n' "$query_wt" >"$query_dir/wt"
 printf '%s\n' "$query_runs" >"$query_dir/runs"
 printf '%s\n' "$query_dir" >"$query_last"
+case $(uname -s) in
+  MSYS* | MINGW*)
+    query_native=$(cygpath -m "$query_runs")
+    query_out=$(OCANNL_TOOL_TEST_RUNS="$query_native" "$repeat_root/tools/test-run.sh" paths runs)
+    query_rc=$?
+    if [ "$query_rc" = 0 ] && [ "$query_out" = "$(cd "$query_native" && pwd -P)" ]; then
+      report 0 "queries: existing Windows drive spelling matches the launch shell"
+    else
+      report 1 "queries: existing Windows drive spelling matches the launch shell" \
+        "rc=$query_rc runs=$query_out"
+    fi
+    ;;
+  *) skip "queries: existing Windows drive spelling matches the launch shell" "requires Windows drive paths" ;;
+esac
 query_bad=
 for ref in last fixture "$query_dir"; do
   [ "$(query paths run "$ref")" = "$query_dir" ] \

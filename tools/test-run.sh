@@ -200,12 +200,27 @@ perl -e 'use Fcntl ":flock"; exit 0' 2>/dev/null || die "perl with Fcntl not fou
 RUNS=${OCANNL_TOOL_TEST_RUNS:-$HOME/.ocannl-test-runs}
 case ${1:-} in
   paths | lock-status)
-    # Resolve existing symlink prefixes physically, but allow an absent state
-    # root without creating it. Walking components also handles missing/../x.
-    RUNS=$(perl -MCwd=abs_path -MFile::Spec -e '
-      my $path = File::Spec->rel2abs($ARGV[0]);
-      my $out = "/";
-      for my $part (split m{/+}, $path) {
+    # Let the same shell `cd -P` as launch resolve the existing prefix. In
+    # particular, Perl File::Spec under MSYS does not treat C:/ as Bash does.
+    # No mkdir: collect the missing suffix, then resolve it component by
+    # component (including missing/../existing-symlink) without writing.
+    query_prefix=$RUNS query_suffix=
+    while [ ! -d "$query_prefix" ]; do
+      [ ! -e "$query_prefix" ] && [ ! -L "$query_prefix" ] ||
+        die "not a directory: $query_prefix"
+      query_parent=$(dirname "$query_prefix")
+      # An unavailable UNC host/share must not fall back to a local / path.
+      case $query_prefix in
+        //?*) case $query_parent in / | //) die "cannot resolve UNC root: $RUNS" ;; esac ;;
+      esac
+      [ "$query_parent" != "$query_prefix" ] || die "cannot resolve $RUNS"
+      query_suffix=$(basename "$query_prefix")/$query_suffix
+      query_prefix=$query_parent
+    done
+    query_prefix=$(cd "$query_prefix" && pwd -P) || die "cannot resolve $RUNS"
+    RUNS=$(perl -MCwd=abs_path -e '
+      my $out = $ARGV[0];
+      for my $part (split m{/+}, $ARGV[1]) {
         next if $part eq "" || $part eq ".";
         if ($part eq "..") { $out =~ s{/[^/]+$}{}; $out ||= "/"; next; }
         $out =~ s{/$}{};
@@ -216,7 +231,7 @@ case ${1:-} in
         }
       }
       print "$out\n";
-    ' "$RUNS") || die "cannot resolve runs directory"
+    ' "$query_prefix" "$query_suffix") || die "cannot resolve runs directory"
     ;;
   *) mkdir -p "$RUNS" || die "cannot create $RUNS"
      RUNS=$(cd "$RUNS" && pwd -P) || die "cannot resolve $RUNS" ;;
