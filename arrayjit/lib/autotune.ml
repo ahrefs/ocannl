@@ -3559,6 +3559,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
         and n_sr_timed = ref 0
         and sr_composite_eligible = ref false
         and sr_composite_timed = ref false in
+        let sr_single_results = ref [] in
         let coarse_single_measured = Hash_set.create (module String) in
         let coarse_single_refused = Hash_set.create (module String) in
         let rounds_run = ref 0 in
@@ -3904,11 +3905,20 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                               | [ (key, _) ] -> Hash_set.add coarse_single_measured key
                               | _ :: _ :: _ -> fs_composite := `Timed
                               | [] -> ())
+                        | Fiss (F_split { sites }) -> (
+                            Int.incr n_sr_timed;
+                            match sites with
+                            | [ (s, b) ] ->
+                                sr_single_results := (s, b, ms) :: !sr_single_results;
+                                sr_composite_eligible :=
+                                  List.exists !sr_single_results ~f:(fun (s2, _, _) ->
+                                      not (Idx.equal_symbol s2.sr_axis s.sr_axis))
+                            | _ :: _ :: _ -> sr_composite_timed := true
+                            | [] -> ())
                         | _ -> ());
-                        !on_candidate_timed c.routine.Context.name ~timed_so_far:!n_timed;
+                        if spec_expects_mma spec then Int.incr n_mma_timed;
                         Hashtbl.set timed_ms_by_digest ~key:c.digest_after ~data:ms;
                         Hashtbl.set label_by_digest ~key:c.digest_after ~data:(spec_label spec);
-                        if spec_expects_mma spec then Int.incr n_mma_timed;
                         (* Structural, not label-promised, and deliberately a different population
                            from [n_mma_timed]: with [rounds > 0] the beam menu appends a [Tensorize]
                            to a saved or preset incumbent, and the resulting [W_saved]/[F_saved]
@@ -3918,6 +3928,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                            whose winner tensorizes. *)
                         if saved_is_tensorized (flat_schedule c.form) && Float.(ms < !mma_best_ms)
                         then mma_best_ms := ms;
+                        if Float.(ms < snd !best_so_far) then best_so_far := (Some c, ms);
+                        !on_candidate_timed c.routine.Context.name ~timed_so_far:!n_timed;
                         logf "%s: %.4f ms (digest %s)" (spec_label spec) ms (dshort c.digest_after);
                         emit_calibration ~backend ~device ~limits ~routine:(Lazy.force routine_name)
                           ~label:(spec_label spec) ~digest:c.digest_after ~timing_result c.all_opts;
@@ -3941,7 +3953,6 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                             "%s: NOTE not-requested, tensorized candidate emitted no Tile_mma \
                              statement"
                             (spec_label spec);
-                        if Float.(ms < snd !best_so_far) then best_so_far := (Some c, ms);
                         Some (c, ms)
                     | Error (Outcome.Classified classified) -> (
                         record_decline declines classified;
@@ -4200,27 +4211,11 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
             @ fiss_sketch_specs @ sr_specs
           in
           let fiss_single_results = ref [] in
-          let sr_single_results = ref [] in
-          let update_sr_composite_eligible () =
-            sr_composite_eligible :=
-              List.count sr_sites ~f:(fun s ->
-                  List.exists !sr_single_results ~f:(fun (s2, _, _) ->
-                      Idx.equal_symbol s2.sr_axis s.sr_axis))
-              >= 2
-          in
           List.iter seed_specs ~f:(fun spec ->
               let result = try_spec spec in
               (match (spec, result) with
               | Fiss (F_sketch { entries = [ (key, p) ]; fine }), Some (_, ms) ->
                   fiss_single_results := (key, fine, (p, ms)) :: !fiss_single_results
-              | Fiss (F_split { sites = [ (s, b) ] }), Some (_, ms) ->
-                  Int.incr n_sr_timed;
-                  sr_single_results := (s, b, ms) :: !sr_single_results;
-                  (* Keep the live report honest if a later seed dies before the post-seed
-                     recombination step. Eligibility is about usable singles already collected, not
-                     about whether control reached composite proposal. *)
-                  update_sr_composite_eligible ()
-              | Fiss (F_split _), Some _ -> Int.incr n_sr_timed
               | _ -> ());
               Option.iter result ~f:admit);
           (match default_ms () with
@@ -4288,12 +4283,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
           in
           sr_composite_eligible := List.length recombined >= 2;
           if !sr_composite_eligible then
-            Option.iter
-              (try_spec (Fiss (F_split { sites = recombined })))
-              ~f:(fun timed ->
-                Int.incr n_sr_timed;
-                sr_composite_timed := true;
-                admit timed);
+            Option.iter (try_spec (Fiss (F_split { sites = recombined }))) ~f:admit;
           (* [None] iff the beam is empty: no candidate timed and the baseline was not eligible (an
              undispatched GPU baseline never enters the beam with a finite rank; a declined one does
              not enter it at all). *)

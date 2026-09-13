@@ -13,6 +13,8 @@ both accumulations are detected as split-reduce sites: true
 multi-site split-reduce singles seeded: true
 best-timed singles recombined into a composite: true
 tuned multi-site routine matches the serial reference: true
+partial report retains admitted split-reduce single: true
+partial report retains admitted split-reduce composite: true
 the bias gradient yields a split-reduce site: true
 the site carries an enabling interchange: true
 conv-gradient split-reduce candidates seeded: true
