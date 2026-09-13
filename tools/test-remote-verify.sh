@@ -158,6 +158,11 @@ check_case() { # NAME MODE RC DIAGNOSTIC [args]
   run_case "$SRC" "$name" "$mode" "$@" || ok=1
   [ "$(cat "$TMP/runs/$name/rc")" = "$expected" ] || ok=1
   grep -qE "$pattern" "$TMP/runs/$name/stdout" || ok=1
+  grep -qx "remote-verify: ssh exit: $expected" "$TMP/runs/$name/stdout" || ok=1
+  case $mode in
+    transport | ssh-timeout) ;;
+    *) grep -qx "remote-verify: exit: $expected" "$TMP/runs/$name/stdout" || ok=1 ;;
+  esac
   if [ "$expected" != 0 ] && [ "$mode" != cleanup-fail ] && grep -q '^remote-verify: verified ' "$TMP/runs/$name/stdout"; then ok=1; fi
   report "$ok" "$name: verdict, reason and checkout cleanup" "$TMP/runs/$name"
 }

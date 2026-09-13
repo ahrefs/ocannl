@@ -185,6 +185,8 @@ tools/test-pin-revisions.sh uses the shared harness contract: true
 tools/test-pin-revisions.sh parses: true
 tools/test-promote.sh uses the shared harness contract: true
 tools/test-promote.sh parses: true
+tools/test-remote-verify.sh uses the shared harness contract: true
+tools/test-remote-verify.sh parses: true
 tools/test-run.sh parses: true
 tools/test-test-run.sh uses the shared harness contract: true
 tools/test-test-run.sh parses: true
