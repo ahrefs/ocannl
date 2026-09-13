@@ -2154,16 +2154,27 @@ class CellTimeoutTest(unittest.TestCase):
         # risk is the same, what may be DONE about it is not (the cache is shared with every later
         # cell of the sweep, and the failure may have been a pre-search one).
         seen = []
+        real_spawn = cell_group.spawn
 
-        result, note, _ = self.run_cell(
-            "failed search",
-            self.python("import sys; sys.exit(3)"),
-            timeout=60,
-            on_incomplete=lambda killed: seen.append(killed) or "CACHE AT RISK: partial search",
-        )
+        def spawn_without_console(*args, **kwargs):
+            # A detached Windows supervisor otherwise gives this trivial cell a conhost.exe.
+            # That helper can still be alive after Python exits, so collecting it correctly
+            # reports killed=True. This fixture needs an ordinary exit with NO remaining member;
+            # suppress the console helper while retaining the real Job/observation/cleanup path.
+            if os.name == "nt":
+                kwargs["creationflags"] = subprocess.DETACHED_PROCESS
+            return real_spawn(*args, **kwargs)
+
+        with unittest.mock.patch.object(cell_group, "spawn", side_effect=spawn_without_console):
+            result, note, output = self.run_cell(
+                "failed search",
+                self.python("import sys; sys.exit(3)"),
+                timeout=60,
+                on_incomplete=lambda killed: seen.append(killed) or "CACHE AT RISK: partial search",
+            )
 
         self.assertIsNone(result)
-        self.assertEqual(seen, [False])
+        self.assertEqual(seen, [False], output)
         self.assertIn("exit 3", note)
         self.assertIn("CACHE AT RISK", note)
 
