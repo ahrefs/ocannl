@@ -531,7 +531,23 @@ that they earn a lookup rather than always-loaded space.
   tree: a run leaves the worktree exactly as clean as it found it, so a teardown that judges a
   worktree by its ignored files is not refused over lock residue. `OCANNL_TOOL_TEST_RUNS` relocates
   the lock with the diagnostics, so two sessions on one worktree see each other's lock only under
-  the same override. Prefer foreground `run` launched through the agent harness's background mode
+  the same override. The read-only `paths FIELD [RUN|last]` contract (gh-ocannl-671) returns one
+  absolute path: `run` defaults to the last recorded run; `worktree`, `runs`, `lock`, `owner`, and
+  `last` default to this script's worktree, or use an explicit run's recorded metadata. `last`
+  names the pointer file. An absolute run reference does not require a valid current state
+  root or `HOME`; relative current-state queries ignore `CDPATH`. `lock-status [RUN|last]` without a run probes this worktree's current
+  and legacy locks, with a run only its recorded lock; it prints `idle` (0) or `held` (3), with
+  inspection/argument errors 2. A present invalid `runs` entry is an error; only its absence
+  identifies legacy metadata. Recorded path entries must be exactly one LF-terminated absolute
+  path valid on this host (drive forms are Windows-only). Query paths are line-oriented: CR/LF paths fail with exit 2;
+  this does not redesign the existing launch metadata format. Queries create no state, even before the first run, and are
+  snapshots, never reservations. Missing directories are supported; parent traversal
+  must resolve through the launch shell or fail with exit 2. Native Windows drive spellings
+  can resolve `missing/..` where POSIX spellings cannot: queries follow the shell's identity.
+  A missing suffix whose symlink-parent prefix differs between logical cd and physical
+  traversal is refused; already resolved roots and ordinary symlink prefixes work.
+  The harness uses them for fixture pointers, run discovery, and repeat lock assertions;
+  deliberately tested process predicates/identity fixtures still extract functions. Prefer foreground `run` launched through the agent harness's background mode
   (the harness notifies on exit); `start`/`status`/
   `wait`/`stop` are only for runs that must outlive the launching session. Its own options go
   BETWEEN the subcommand and the dune arguments (`run --cap 900 build @alias`); both
@@ -634,7 +650,7 @@ that they earn a lookup rather than always-loaded space.
   a FORGED run directory (`cmd`, `cap`, `wt`, `log`, `pgid`, `gtoken`, and deliberately no
   `pid`/`exit`, so the surviving-group branch is the one reached), pointed at by `last` under
   a private `OCANNL_TOOL_TEST_RUNS` so the ambient run history is never touched, with the pointer's
-  worktree key EXTRACTED from the shipping script rather than guessed. Against it: a group whose
+  filename returned by `paths last`, rather than reconstructing a worktree key. Against it: a group whose
   leader ignores TERM — reported as ignoring it, and the escalation separately checked to have
   actually killed the WHOLE group, since announcing a KILL it did not send would leave the worktree
   lock held — and one whose leader takes the TERM, reported as TERMed with a re-run asked for. The
