@@ -33,14 +33,8 @@
 
 set -u
 
-KEEP=0
-for arg in "$@"; do
-  case "$arg" in
-    --keep) KEEP=1 ;;
-    -h|--help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) echo "test-setup-ocaml-env.sh: unknown argument '$arg'" >&2; exit 2 ;;
-  esac
-done
+. "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
+harness_args "$@"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 HOOK_SRC="$HERE/setup-ocaml-env.sh"
@@ -49,23 +43,6 @@ GROUP_SRC="$HERE/process-group.sh"
 [ -f "$GROUP_SRC" ] || { echo "no $GROUP_SRC" >&2; exit 2; }
 BASH_BIN="$(command -v bash)"
 
-failures=0
-report() { # report RC LABEL [DETAIL]
-  if [ "$1" -eq 0 ]; then
-    printf 'PASS  %s\n' "$2"
-  else
-    failures=$((failures + 1))
-    printf 'FAIL  %s\n' "$2"
-    [ $# -ge 3 ] && printf '      %s\n' "$3"
-  fi
-  return 0
-}
-skipped=0
-skip() { # skip LABEL REASON -- a leg this system cannot decide, not a failure
-  skipped=$((skipped + 1))
-  printf 'SKIP  %s\n      %s\n' "$1" "$2"
-  return 0
-}
 
 echo "testing $HOOK_SRC and $GROUP_SRC"
 printf '  digest %s\n' "$( (cksum <"$HOOK_SRC") 2>/dev/null || echo '?')"
@@ -86,12 +63,8 @@ fi
 # would resolve against the ROOT: `$TMP/bin` becomes /bin, and the symlink
 # farm would be installed there. Refuse rather than continue.
 zparent=""   # leg (f)'s self-stopping zombie maker; cleanup must resume it
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/setup-ocaml-env-test.XXXXXX" 2>/dev/null)" || TMP=""
-if [ -z "$TMP" ] || [ ! -d "$TMP" ]; then
-  echo "could not create a temporary directory under ${TMPDIR:-/tmp}" >&2
-  exit 2
-fi
-cleanup() {
+harness_scratch "test-setup-ocaml-env"
+cleanup_fixture() {
   # Leg (f)'s zombie maker STOPS ITSELF and is resumed at the end of the leg.
   # Interrupted in between, nothing else would ever resume it: it would be
   # reparented to PID 1 still stopped, still holding its zombie child. Killing
@@ -130,19 +103,11 @@ cleanup() {
      && [ -d "$LAUNCH_ROOT" ] && [ "$KEEP" != 1 ]; then
     rm -rf "$LAUNCH_ROOT"     # only when it was made outside TMP
   fi
-  if [ "$KEEP" = 1 ]; then
-    echo "kept $TMP"
-  elif [ -n "$TMP" ] && [ -d "$TMP" ] && [ "$TMP" != "/" ]; then
-    rm -rf "$TMP"
-  fi
   return 0
 }
-trap cleanup EXIT
 # Without these, a TERM or a Ctrl-C kills the shell outright and the EXIT trap
 # never runs — which is how an interrupted run left a stopped zombie maker
 # behind. Exiting from the handler is what gets EXIT to fire.
-trap 'exit 130' INT
-trap 'exit 143' TERM
 
 # ---------------------------------------------------------------------------
 # Leg 1: bounded

@@ -2174,3 +2174,13 @@ that they earn a lookup rather than always-loaded space.
   default resolves; and a supplied replacement for an unapplied Boolean callable default.
   Those refusals are boundaries, not evidence that the corresponding OCaml claims are invalid.
   General module typing and polymorphic structural comparison remain outside this reader.
+- Hand-run shell tests source `scripts/harness-support.sh`: `harness_args`,
+  `harness_scratch`, `report`/`skip`, and `finish` share the counted SKIP contract,
+  complete header help and signal cleanup. `cleanup_fixture` releases owned children even with
+  `--keep`. `shell_scripts_parse` discovers `tools/test-*.sh` and `scripts/test-*.sh`
+  (except the production supervisor) and refuses private copies or missing lifecycle calls.
+  `mutant` retains checked AWK edits; `expect_rejected` can require a diagnostic pattern,
+  while `harness_rejected` requires both status and reason for in-process twins, including the
+  Dune-run sweep's Metal fingerprint check without nested Dune. Owned-child deadlines and
+  identity-checked cleanup are shared too; callers must probe their independent state reader
+  and retain unreaped direct-child ownership until `harness_wait_child` returns.

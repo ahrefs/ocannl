@@ -45,20 +45,8 @@
 
 set -u
 
-KEEP=0
-for arg in "$@"; do
-  case "$arg" in
-    --keep) KEEP=1 ;;
-    -h | --help)
-      sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'
-      exit 0
-      ;;
-    *)
-      echo "test-promote.sh: unknown argument '$arg'" >&2
-      exit 2
-      ;;
-  esac
-done
+. "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
+harness_args "$@"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC="$HERE/promote.sh"
@@ -67,42 +55,14 @@ SRC="$HERE/promote.sh"
   exit 2
 }
 command -v dune >/dev/null 2>&1 || . "$HERE/opam-env.sh"
-command -v dune >/dev/null 2>&1 || {
-  echo "no dune on PATH; every leg needs one" >&2
-  exit 2
-}
-command -v perl >/dev/null 2>&1 || {
-  echo "no perl on PATH; promote.sh needs one for the CR strip" >&2
-  exit 2
-}
+harness_require dune
+harness_require perl git
 
-failures=0
-report() { # report RC LABEL [DETAIL]
-  if [ "$1" -eq 0 ]; then
-    printf 'PASS  %s\n' "$2"
-  else
-    failures=$((failures + 1))
-    printf 'FAIL  %s\n' "$2"
-    [ $# -ge 3 ] && printf '      %s\n' "$3"
-  fi
-  return 0
-}
 
 # Checked, not assumed: nothing here uses `set -e`, so a `mktemp` that fails
 # would leave TMP empty and `rm -rf "$TMP"` would be handed the ROOT.
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-promote.XXXXXX" 2>/dev/null)" || TMP=""
-if [ -z "$TMP" ] || [ ! -d "$TMP" ]; then
-  echo "could not create a temporary directory under ${TMPDIR:-/tmp}" >&2
-  exit 2
-fi
-cleanup() {
-  if [ "$KEEP" = 1 ]; then
-    printf 'kept %s\n' "$TMP"
-  else
-    rm -rf "$TMP"
-  fi
-}
-trap cleanup EXIT INT TERM
+harness_scratch "test-promote"
+
 
 echo "testing $SRC"
 printf '  digest %s\n' "$( (cksum <"$SRC") 2>/dev/null || echo '?')"
@@ -434,10 +394,4 @@ SHIM
   esac
 fi
 
-echo
-if [ "$failures" -eq 0 ]; then
-  echo "all legs passed"
-else
-  printf '%d leg(s) failed\n' "$failures"
-fi
-exit $((failures > 0 ? 1 : 0))
+finish

@@ -80,16 +80,8 @@
 
 set -u
 
-KEEP=0
-for arg in "$@"; do
-  case "$arg" in
-    --keep) KEEP=1 ;;
-    # The whole leading comment block, however long it grows: a pinned line
-    # range silently truncates --help the first time a leg is added.
-    -h|--help) sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) echo "test-test-run.sh: unknown argument '$arg'" >&2; exit 2 ;;
-  esac
-done
+. "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
+harness_args "$@"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC="$HERE/test-run.sh"
@@ -99,23 +91,6 @@ HOOK_SRC="$HERE/../scripts/setup-ocaml-env.sh"
 [ -f "$GROUP_SRC" ] || { echo "no $GROUP_SRC" >&2; exit 2; }
 [ -f "$HOOK_SRC" ] || { echo "no $HOOK_SRC" >&2; exit 2; }
 
-failures=0
-report() { # report RC LABEL [DETAIL]
-  if [ "$1" -eq 0 ]; then
-    printf 'PASS  %s\n' "$2"
-  else
-    failures=$((failures + 1))
-    printf 'FAIL  %s\n' "$2"
-    [ $# -ge 3 ] && printf '      %s\n' "$3"
-  fi
-  return 0
-}
-skipped=0
-skip() { # skip LABEL REASON -- a leg this system cannot decide, not a failure
-  skipped=$((skipped + 1))
-  printf 'SKIP  %s\n      %s\n' "$1" "$2"
-  return 0
-}
 
 # The harness needs the two facts about a process that `group_alive` needs, read
 # INDEPENDENTLY of it: its state and its process group. Neither is available the
@@ -176,12 +151,8 @@ repeat_pid="" # leg 14's active repeat coordinator
 legacy_holder="" # leg 8's holder of the in-tree lock
 escape_pid="" # leg 24's session-escaped descendant
 escape_release=""
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-run-test.XXXXXX" 2>/dev/null)" || TMP=""
-if [ -z "$TMP" ] || [ ! -d "$TMP" ]; then
-  echo "could not create a temporary directory under ${TMPDIR:-/tmp}" >&2
-  exit 2
-fi
-cleanup() {
+harness_scratch "test-test-run"
+cleanup_fixture() {
   if declare -F lifecycle_cleanup >/dev/null; then lifecycle_cleanup; fi
   # Leg 4's zombie maker STOPS ITSELF and is resumed at the end of the leg.
   # Interrupted in between, nothing else would ever resume it: it would be
@@ -228,14 +199,8 @@ cleanup() {
   if [ -n "${escape_pid:-}" ] && kill -0 "$escape_pid" 2>/dev/null; then
     kill -KILL "$escape_pid" 2>/dev/null
   fi
-  if [ "$KEEP" = 1 ]; then
-    echo "kept $TMP"
-  elif [ -n "$TMP" ] && [ -d "$TMP" ] && [ "$TMP" != "/" ]; then
-    rm -rf "$TMP"
-  fi
   return 0
 }
-trap cleanup EXIT
 # Without these, a TERM or a Ctrl-C kills the shell outright and the EXIT trap
 # never runs -- which is how an interrupted run could leave a stopped zombie
 # maker behind, or a fixture process group outlive the harness that forked it.
@@ -246,8 +211,6 @@ trap cleanup EXIT
 # non-interactive shell -- such a child inherits SIGINT ignored, and a signal
 # ignored on entry cannot be re-trapped -- so a scripted test of the cleanup
 # path has to signal TERM to see anything happen.
-trap 'exit 130' INT
-trap 'exit 143' TERM
 
 # ---------------------------------------------------------------------------
 # Leg 1: extraction
@@ -1544,9 +1507,9 @@ if await_fixture_ready "$TMP/repeat-never-ready" 1; then
   echo "repeat fixture readiness accepted an absent marker" >&2
   exit 2
 fi
-repeat_probe() { # tag mode [repeat options/count/dune argv...]
-  local tag=$1 mode=$2 runs=$TMP/repeat-runs-$1
-  shift 2
+fixture_probe() { # tag mode runs subcommand [argv...]
+  local tag=$1 mode=$2 runs=$3
+  shift 3
   mkdir -p "$runs"
   : >"$TMP/$tag.counter"
   : >"$TMP/$tag.calls"
@@ -1561,10 +1524,18 @@ repeat_probe() { # tag mode [repeat options/count/dune argv...]
   REPEAT_TEST_REAL_DIFF="$(command -v diff)" \
   OCANNL_TOOL_TEST_RUNS=$runs \
   PATH=$repeat_bin:$PATH \
-    "$repeat_root/tools/test-run.sh" repeat "$@" >"$TMP/$tag.out" 2>"$TMP/$tag.err"
-  repeat_rc=$?
-  repeat_out=$(cat "$TMP/$tag.out")
-  repeat_dir=$(OCANNL_TOOL_TEST_RUNS="$runs" "$repeat_root/tools/test-run.sh" paths run last 2>/dev/null)
+    "$repeat_root/tools/test-run.sh" "$@" >"$TMP/$tag.out" 2>"$TMP/$tag.err"
+  fixture_rc=$?
+  fixture_out=$(cat "$TMP/$tag.out")
+  fixture_err=$(cat "$TMP/$tag.err")
+  fixture_calls=$(cat "$TMP/$tag.calls")
+  fixture_dir=$(OCANNL_TOOL_TEST_RUNS="$runs" "$repeat_root/tools/test-run.sh" paths run last 2>/dev/null)
+}
+repeat_probe() {
+  local tag=$1 mode=$2
+  shift 2
+  fixture_probe "$tag" "$mode" "$TMP/repeat-runs-$tag" repeat "$@"
+  repeat_rc=$fixture_rc repeat_out=$fixture_out repeat_dir=$fixture_dir
 }
 
 # This is an ordering invariant, not a timing lottery: once publish_run writes
@@ -1957,32 +1928,12 @@ fi
 # failing test, and a session acting on it debugs code that never ran. So the
 # refusal is asserted together with the CALLS file being empty: "runs nothing"
 # is the half that makes the exit code trustworthy.
-argv_probe() { # tag subcommand [argv...] -- drives the tool against the fixture dune
-  # `argv_mode` selects the fixture dune's behaviour (default: a green run);
-  # `argv_runs` reuses an earlier probe's run store, so `status`/`wait last`
-  # can read back the run an earlier `run` recorded there.
+argv_probe() { # tag subcommand [argv...]
   local tag=$1 runs=${argv_runs:-$TMP/argv-runs-$1}
   shift
-  mkdir -p "$runs"
-  : >"$TMP/$tag.counter"
-  : >"$TMP/$tag.calls"
-  REPEAT_TEST_MODE=${argv_mode:-stable} \
-  REPEAT_TEST_COUNTER=$TMP/$tag.counter \
-  REPEAT_TEST_CALLS=$TMP/$tag.calls \
-  REPEAT_TEST_WAIT_PREFIX= \
-  REPEAT_TEST_WAIT_AT= \
-  REPEAT_TEST_ORPHAN_PID= \
-  REPEAT_TEST_ORPHAN_REAPED= \
-  REPEAT_TEST_DIFF_WAIT_PREFIX= \
-  REPEAT_TEST_REAL_DIFF="$(command -v diff)" \
-  OCANNL_TOOL_TEST_RUNS=$runs \
-  PATH=$repeat_bin:$PATH \
-    "$repeat_root/tools/test-run.sh" "$@" >"$TMP/$tag.out" 2>"$TMP/$tag.err"
-  argv_rc=$?
-  argv_out=$(cat "$TMP/$tag.out")
-  argv_err=$(cat "$TMP/$tag.err")
-  argv_calls=$(cat "$TMP/$tag.calls")
-  argv_dir=$(OCANNL_TOOL_TEST_RUNS="$runs" "$repeat_root/tools/test-run.sh" paths run last 2>/dev/null)
+  fixture_probe "$tag" "${argv_mode:-stable}" "$runs" "$@"
+  argv_rc=$fixture_rc argv_out=$fixture_out argv_err=$fixture_err
+  argv_calls=$fixture_calls argv_dir=$fixture_dir
 }
 argv_rc= argv_out= argv_err= argv_calls= argv_dir= argv_mode= argv_runs=
 
@@ -2282,30 +2233,20 @@ life_await_dead() {
   return 1
 }
 life_wait_child() {
-  if ! life_await_dead "$life_pid"; then
-    report 1 "lifecycle: owned launcher finishes within 15 seconds"
-    kill -KILL "$life_pid" 2>/dev/null
-  fi
-  wait "$life_pid" 2>/dev/null
-  life_rc=$?
+  harness_wait_child "$life_pid" life_dead "lifecycle: owned launcher finishes within 15 seconds"
+  life_rc=$harness_child_rc
   life_pid=
 }
 lifecycle_cleanup() {
-  local d pid
+  local d
   # Recorded supervisors/groups belong to this private fixture. Identity is
   # checked even on failure: mutation controls deliberately leave survivors.
   for d in "$life_runs"/*/; do
     [ -d "$d" ] || continue
-    if proc_identity_matches "$d/pgid" "$d/gtoken"; then
-      pid=$(cat "$d/pgid"); kill -KILL -- "-$pid" 2>/dev/null
-    fi
-    if proc_identity_matches "$d/pid" "$d/ptoken"; then
-      pid=$(cat "$d/pid"); kill -KILL "$pid" 2>/dev/null
-    fi
+    harness_kill_recorded "$d/pgid" "$d/gtoken" group
+    harness_kill_recorded "$d/pid" "$d/ptoken"
   done
-  if [ -s "$life_prefix.child-token" ] && [ -s "$life_prefix.child" ] && proc_identity_matches "$life_prefix.child" "$life_prefix.child-token"; then
-    kill -KILL "$(cat "$life_prefix.child")" 2>/dev/null
-  fi
+  harness_kill_recorded "$life_prefix.child" "$life_prefix.child-token"
   if [ -n "$life_pid" ]; then kill -KILL "$life_pid" 2>/dev/null; wait "$life_pid" 2>/dev/null; life_pid=; fi
 }
 life_start() {

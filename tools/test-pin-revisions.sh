@@ -23,56 +23,22 @@
 
 set -u
 
-KEEP=0
-for arg in "$@"; do
-  case "$arg" in
-    --keep) KEEP=1 ;;
-    # The whole leading comment block, however long it grows: a pinned line
-    # range silently truncates --help the first time a leg is added.
-    -h | --help)
-      sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'
-      exit 0
-      ;;
-    *)
-      echo "test-pin-revisions.sh: unknown argument '$arg'" >&2
-      exit 2
-      ;;
-  esac
-done
+. "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
+harness_args "$@"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 SRC="$ROOT/.github/actions/pin-revisions/resolve.sh"
 [ -f "$SRC" ] || { echo "no $SRC" >&2; exit 2; }
 
-failures=0
-report() { # report RC LABEL [DETAIL]
-  if [ "$1" -eq 0 ]; then
-    printf 'PASS  %s\n' "$2"
-  else
-    failures=$((failures + 1))
-    printf 'FAIL  %s\n' "$2"
-    [ $# -ge 3 ] && printf '      %s\n' "$3"
-  fi
-  return 0
-}
 
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/pin-revisions-test.XXXXXX" 2>/dev/null)" || TMP=""
-if [ -z "$TMP" ] || [ ! -d "$TMP" ]; then
-  echo "could not create a temporary directory under ${TMPDIR:-/tmp}" >&2
-  exit 2
+harness_require bash awk sed grep sort git
+if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+  skip "every digest leg" "neither sha256sum nor shasum is on PATH"
+  finish
 fi
-cleanup() {
-  if [ "$KEEP" = 1 ]; then
-    printf 'kept %s\n' "$TMP"
-    return 0
-  fi
-  [ -n "$TMP" ] && [ -d "$TMP" ] && [ "$TMP" != / ] && rm -rf "$TMP"
-  return 0
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+harness_scratch "test-pin-revisions"
+
 
 mkdir -p "$TMP/bin" "$TMP/project"
 printf 'opam-version: "2.0"\n' >"$TMP/project/arrayjit.opam"
@@ -400,20 +366,6 @@ else
   report 1 "empty git resolution" "see $TMP/runs/shipping-resolution"
 fi
 
-mutant() { # mutant NAME AWK_PROGRAM
-  local name=$1 program=$2 out="$TMP/$1.sh"
-  awk "$program" "$SRC" >"$out" || return 1
-  bash -n "$out" || return 1
-  printf '%s' "$out"
-}
-expect_rejected() { # expect_rejected LABEL SUBJECT ORACLE
-  local label=$1 subject=$2 oracle=$3
-  if "$oracle" "$subject" "mutant-$(printf '%s' "$label" | tr ' ' '-')"; then
-    report 1 "negative control: $label" "the shipping oracle accepted the mutant"
-  else
-    report 0 "negative control: $label"
-  fi
-}
 
 local_mutant=$(mutant local-pin-filter \
   'index($0, "| sed") && index($0, "git+file:") { changed++; next } { print } END { if (changed != 1) exit 9 }')
@@ -502,5 +454,6 @@ if [ "$failures" -ne 0 ]; then
   # The run directories named above are inside $TMP, so without --keep the EXIT
   # trap removes them before anyone can look.
   [ "$KEEP" = 1 ] || printf 're-run with --keep to retain the run directories named above\n' >&2
-  exit 1
 fi
+
+finish

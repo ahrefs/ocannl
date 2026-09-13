@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-
 # Opposing controls for fmt-check.sh: clean output, a soft odoc warning, and a
 # formatter failure must remain three different outcomes.
 
-set -eu
+set -u
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 subject="$script_dir/fmt-check.sh"
-fixture_dir=$(mktemp -d "${TMPDIR:-/tmp}/ocannl-test-fmt-check.XXXXXX") || exit 2
-trap 'rm -rf "$fixture_dir"' EXIT
+. "$script_dir/../scripts/harness-support.sh"
+harness_args "$@"
+harness_scratch fmt-check
+fixture_dir=$TMP
 
 fixture="$fixture_dir/formatter"
 cat >"$fixture" <<'EOF'
@@ -34,7 +35,6 @@ esac
 EOF
 chmod +x "$fixture"
 
-failures=0
 
 check() {
   want=$1
@@ -47,9 +47,9 @@ check() {
   if [ "$got" -ne "$want" ]; then
     echo "FAIL: $label exited $got, expected $want" >&2
     printf '%s\n' "$output" >&2
-    failures=$((failures + 1))
+    report 1 "$label exits $want"
   else
-    echo "PASS: $label exits $want"
+    report 0 "$label exits $want"
   fi
 }
 
@@ -57,4 +57,4 @@ check 0 "clean formatter output" clean
 check 1 "invalid documentation warning" warning
 check 7 "formatter failure status preservation" failure
 
-exit "$failures"
+finish
