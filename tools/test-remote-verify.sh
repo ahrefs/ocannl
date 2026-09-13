@@ -9,6 +9,7 @@ set -u
 harness_args "$@"
 harness_require git perl bash
 harness_scratch test-remote-verify
+TMP=$(cd "$TMP" && pwd -P)
 HERE=$(cd "$(dirname "$0")" && pwd)
 SRC=$HERE/remote-verify.sh
 REAL_GIT=$(command -v git)
@@ -29,7 +30,7 @@ printf 'source\n' >"$TMP/seed/source.ml"
 SHA=$("$REAL_GIT" -C "$TMP/seed" rev-parse HEAD)
 "$REAL_GIT" -C "$TMP/seed" branch fixture "$SHA" || exit 2
 "$REAL_GIT" clone -q --bare "$TMP/seed" "$TMP/pushed.git" || exit 2
-"$REAL_GIT" config --global url."$TMP/pushed.git".insteadOf https://github.com/lukstafi/ocannl-staging.git || exit 2
+touch "$GIT_CONFIG_GLOBAL"
 cat >"$TMP/bin/ssh" <<'SH'
 #!/usr/bin/env bash
 case $MODE in
@@ -100,11 +101,16 @@ chmod +x "$TMP/bin/ssh" "$TMP/bin/opam" "$TMP/bin/dune"
 # every other operation is the real executable, including source assertions.
 cat >"$TMP/bin/git" <<'SH'
 #!/usr/bin/env bash
+fetching=0
+args=()
 for arg in "$@"; do
+  [ "$arg" != fetch ] || fetching=1
+  if [ "$fetching" = 1 ] && [ "$arg" = origin ]; then arg=$FIXTURE_PUSHED; fi
+  args+=("$arg")
   if [ "$MODE" = fetch-fail ] && [ "$arg" = fetch ]; then exit 44; fi
   if [ "$MODE" = cleanup-fail ] && [ "$arg" = remove ]; then exit 45; fi
 done
-exec "$REAL_GIT" "$@"
+exec "$REAL_GIT" "${args[@]}"
 SH
 chmod +x "$TMP/bin/git"
 
@@ -125,7 +131,7 @@ run_case() { # SUBJECT NAME MODE [verifier args]
   esac
   env -i PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$TMP/home" \
     GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$GIT_CONFIG_GLOBAL" REAL_GIT="$REAL_GIT" \
-    MODE="$mode" FIXTURE_REPO="$run/repo" FIXTURE_SHA="$SHA" AUDIT="$run/audit" \
+    FIXTURE_PUSHED="$TMP/pushed.git" MODE="$mode" FIXTURE_REPO="$run/repo" FIXTURE_SHA="$SHA" AUDIT="$run/audit" \
     OCANNL_PRINT_DECIMALS_PRECISION=ambient-secret OCANNL_BACKEND=cuda \
     bash "$subject" loopback fixture --backend cc --repo "$run/repo" \
     --worktree-root "$run/worktrees" --cap 10 --ssh-cap 30 "$@" >"$run/stdout" 2>&1 || rc=$?
