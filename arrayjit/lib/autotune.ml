@@ -3928,6 +3928,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                            whose winner tensorizes. *)
                         if saved_is_tensorized (flat_schedule c.form) && Float.(ms < !mma_best_ms)
                         then mma_best_ms := ms;
+                        if Float.(ms < snd !best_so_far) then best_so_far := (Some c, ms);
                         !on_candidate_timed c.routine.Context.name ~timed_so_far:!n_timed;
                         logf "%s: %.4f ms (digest %s)" (spec_label spec) ms (dshort c.digest_after);
                         emit_calibration ~backend ~device ~limits ~routine:(Lazy.force routine_name)
@@ -3952,7 +3953,6 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                             "%s: NOTE not-requested, tensorized candidate emitted no Tile_mma \
                              statement"
                             (spec_label spec);
-                        if Float.(ms < snd !best_so_far) then best_so_far := (Some c, ms);
                         Some (c, ms)
                     | Error (Outcome.Classified classified) -> (
                         record_decline declines classified;

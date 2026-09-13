@@ -442,6 +442,45 @@ let () =
       skipped ~aggregation:`Environment ~backend:"cc" "partial report retains admitted MMA timing"
   | _ -> fail "expected an admitted MMA failure injection");
 
+  (* On GPU the serial baseline binds no hardware dimension and is never timed. The first admitted
+     candidate must therefore replace the infinite incumbent, irrespective of host timing noise.
+     Cutting here pins the partial winner's time and identity together. *)
+  let best_claim = "partial report replaces the unmeasured incumbent after admission" in
+  (if not is_gpu then skipped ~backend:backend_name best_claim
+   else
+     let partial_best = ref None and injected_best = ref false and attempt = ref "" in
+     let old_attempt = !Autotune.on_candidate_attempt
+     and old_timed = !Autotune.on_candidate_timed in
+     (Autotune.on_candidate_attempt := fun label -> attempt := label);
+     (Autotune.on_candidate_timed :=
+        fun _ ~timed_so_far ->
+          if timed_so_far = 1 then (
+            injected_best := true;
+            raise Stdlib.Exit));
+     Exn.protect
+       ~finally:(fun () ->
+         Autotune.on_candidate_attempt := old_attempt;
+         Autotune.on_candidate_timed := old_timed)
+       ~f:(fun () ->
+         match
+           Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
+             ~report:(fun r -> partial_best := Some r)
+             (Context.auto ()) mm_comp Ir.Indexing.Empty
+         with
+         | ctx, _ -> Context.release ctx
+         | exception Stdlib.Exit when !injected_best -> ());
+     match !partial_best with
+     | Some r when !injected_best ->
+         p best_claim
+           (r.Autotune.candidates_timed = 1
+           && Float.is_finite r.Autotune.best_ms
+           && String.equal r.Autotune.best_label !attempt
+           && match r.Autotune.outcome with Autotune.Search_died _ -> true | _ -> false)
+     | Some r
+       when completed r && r.Autotune.candidates_timed = 0 && r.Autotune.candidates_contended > 0 ->
+         skipped ~aggregation:`Environment ~backend:backend_name best_claim
+     | _ -> fail "expected a first-admission partial best report");
+
   (* === Per-fission-segment sketches (F_sketch): qd = qa + qb (forced materialized), then the
      matmul qe = qd * qc. The chain fissions; the matmul's [Zero_out] lands in its own [`Zeros]
      segment, so the matmul segment's site is unzeroed — [detect_matmul] must fire per segment and
