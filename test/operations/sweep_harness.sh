@@ -796,9 +796,10 @@ assert_metal_options() {
   return 1
 }
 assert_metal_options "$rendered_metal_options" "${metal_log%.log}.fingerprint"
+printf 'metal options: %s-MUTANT\n' "$rendered_metal_options" >"$tmp/metal-mutant.fingerprint"
 harness_rejected 1 '^metal fingerprint differs from rendered options$' \
   "$tmp/metal-mutant-rejection" assert_metal_options \
-  "$rendered_metal_options-MUTANT" "${metal_log%.log}.fingerprint"
+  "$rendered_metal_options" "$tmp/metal-mutant.fingerprint"
 # And the same whole-line controls, for the same reason. With no sentinel to
 # corrupt, the alteration rewrites the first property's VALUE -- a spelling no
 # renderer output can produce -- rather than a slot the fixture invented.

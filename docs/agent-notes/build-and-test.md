@@ -2179,7 +2179,7 @@ that they earn a lookup rather than always-loaded space.
   complete header help and signal cleanup. `cleanup_fixture` releases owned children even with
   `--keep`. `shell_scripts_parse` discovers `tools/test-*.sh` and `scripts/test-*.sh`
   (except the production supervisor) and refuses private copies or missing lifecycle calls.
-  `mutant` retains checked AWK edits; `expect_rejected` can require a diagnostic pattern,
+  `mutant` retains checked AWK edits; `expect_rejected` requires a diagnostic pattern or reason callback,
   while `harness_rejected` requires both status and reason for in-process twins, including the
   Dune-run sweep's Metal fingerprint check without nested Dune. Owned-child deadlines and
   identity-checked cleanup are shared too; callers must probe their independent state reader
