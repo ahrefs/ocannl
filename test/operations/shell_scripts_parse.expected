@@ -161,6 +161,7 @@ scripts/test-harness-support.sh uses the shared harness contract: true
 scripts/test-harness-support.sh parses: true
 scripts/test-setup-ocaml-env.sh uses the shared harness contract: true
 scripts/test-setup-ocaml-env.sh parses: true
+test/operations/ci_matrix.sh uses the shared harness contract: true
 test/operations/ci_matrix.sh parses: true
 test/operations/sweep_harness.sh parses: true
 tools/aggregate-skips.sh parses: true

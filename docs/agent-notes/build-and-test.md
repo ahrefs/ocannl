@@ -2179,6 +2179,8 @@ that they earn a lookup rather than always-loaded space.
   complete header help and signal cleanup. `cleanup_fixture` releases owned children even with
   `--keep`. `shell_scripts_parse` discovers `tools/test-*.sh` and `scripts/test-*.sh`
   (except the production supervisor) and refuses private copies or missing lifecycle calls.
+  Standalone harnesses elsewhere declare `# ocannl-harness: standalone`, as
+  `test/operations/ci_matrix.sh` does; Dune actions use the function-only API without that marker.
   `mutant` retains checked AWK edits; `expect_rejected` requires a diagnostic pattern or reason callback,
   while `harness_rejected` requires both status and reason for in-process twins, including the
   Dune-run sweep's Metal fingerprint check without nested Dune. Owned-child deadlines and

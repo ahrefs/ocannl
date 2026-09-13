@@ -1535,12 +1535,14 @@ module Errexit_negation = struct
 end
 
 module Harness_contract = struct
-  (* test-run.sh is the production supervisor; every other hand-run test is a harness, including
-     newcomers. Dune actions opt into the function-only API. *)
-  let member path =
-    (String.is_prefix path ~prefix:"tools/test-" || String.is_prefix path ~prefix:"scripts/test-")
-    && String.is_suffix path ~suffix:".sh"
-    && not (String.equal path "tools/test-run.sh")
+  (* test-run.sh is the production supervisor. Standalone harnesses outside the filename convention
+     declare their lifecycle explicitly; Dune actions use the function-only API. *)
+  let member path text =
+    String.is_suffix path ~suffix:".sh"
+    && (not (String.equal path "tools/test-run.sh"))
+    && (String.is_prefix path ~prefix:"tools/test-"
+       || String.is_prefix path ~prefix:"scripts/test-"
+       || String.is_substring text ~substring:"# ocannl-harness: standalone\n")
 
   let compliant text =
     let lines = String.split_lines text |> List.map ~f:String.strip in
@@ -1568,8 +1570,12 @@ module Harness_contract = struct
       ". \"$HERE/harness-support.sh\"\nharness_args \"$@\"\nharness_scratch example\nfinish\n"
     in
     Verdict.p "shared harness source and lifecycle are accepted" (compliant correct);
-    Verdict.p "new hand-run harnesses are discovered" (member "scripts/test-new.sh");
-    Verdict.p "production test-run is outside the harness family" (not (member "tools/test-run.sh"));
+    Verdict.p "new hand-run harnesses are discovered"
+      (member "scripts/test-new.sh" ""
+      && member "test/operations/new.sh" "# ocannl-harness: standalone\n"
+      && not (member "test/operations/action.sh" ""));
+    Verdict.p "production test-run is outside the harness family"
+      (not (member "tools/test-run.sh" "# ocannl-harness: standalone\n"));
     List.iter [ "report()"; "skip()"; "finish()"; "mutant()"; "expect_rejected()" ] ~f:(fun name ->
         List.iter
           [
@@ -1627,9 +1633,9 @@ let () =
     |> List.dedup_and_sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
   in
   List.iter scripts ~f:(fun (rel, path) ->
-      if Harness_contract.member rel then
-        Verdict.pf "%s uses the shared harness contract" rel
-          (Harness_contract.compliant (In_channel.read_all path));
+      let text = In_channel.read_all path in
+      if Harness_contract.member rel text then
+        Verdict.pf "%s uses the shared harness contract" rel (Harness_contract.compliant text);
       let first_line = Option.value (first_line_of path) ~default:"" in
       Errexit_negation.report ~fail:Verdict.fail ~rel (In_channel.read_all path);
       match Shebang.parse first_line with
