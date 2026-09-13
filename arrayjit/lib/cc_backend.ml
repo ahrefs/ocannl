@@ -786,6 +786,7 @@ let codegen_tag () =
         @ [
             Int.to_string (parallel_grid_chunks_setting ());
             Int.to_string (Lazy.force C_syntax.per_chunk_private_bytes_cap);
+            "repeated-grid-updates=" ^ Int.to_string C_syntax.repeated_grid_min_updates;
           ]
   in
   String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string (String.concat ~sep:"\000" parts))) 8

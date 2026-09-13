@@ -227,4 +227,98 @@ let () =
   p_all2 "interleaved-write hazard values correct" got_hz want_hz ~f:approx;
   (let src = Generated.read "cpu_par_hazard" in
    p "interleaved covering write keeps the grid loop serial" (not (has_parallel_construct src)));
+  (* Repeated inner Grid regions: the enclosing dimensions do not amortize a launch. All values
+     depend on every index, and the large inner control must still use the pool. *)
+  let repeated_grid ~name ~outer ~middle ~inner ~width ~parallel =
+    phase name;
+    let dims = [| outer; middle; inner; width |] in
+    let values =
+      Array.init
+        (outer * middle * inner * width)
+        ~f:(Ll_test.cycle_flat ~dims ~modulus:31 ~offset:1. ~stride:0.25)
+    in
+    let input = TDSL.ndarray values ~label:[ name; "input" ] ~output_dims:(Array.to_list dims) () in
+    let%op output = input + input in
+    let comp = named name (Train.forward output) in
+    let ctx = Context.auto () in
+    let ctx, routine =
+      Context.compile
+        ~lowered_transform:(fun opt ->
+          let i = Ir.Indexing.get_symbol () and j = Ir.Indexing.get_symbol () in
+          let g = Ir.Indexing.get_symbol () and w = Ir.Indexing.get_symbol () in
+          let idcs = Array.map [| i; j; g; w |] ~f:(fun s -> Ir.Indexing.Iterator s) in
+          let read = (LL.Get (input.Tensor.value, idcs), Ir.Ops.single) in
+          let body =
+            LL.Set
+              {
+                tn = output.Tensor.value;
+                idcs;
+                llsc = LL.Binop (Ir.Ops.Add, read, read);
+                debug = "";
+              }
+          in
+          let body =
+            LL.For_loop { index = w; from_ = 0; to_ = width - 1; axis = LL.Serial; body }
+          in
+          let llc =
+            LL.For_loop
+              {
+                index = i;
+                from_ = 0;
+                to_ = outer - 1;
+                axis = LL.Serial;
+                body =
+                  LL.For_loop
+                    {
+                      index = j;
+                      from_ = 0;
+                      to_ = middle - 1;
+                      axis = LL.Serial;
+                      body =
+                        LL.For_loop { index = g; from_ = 0; to_ = inner - 1; axis = LL.Grid; body };
+                    };
+              }
+          in
+          [ { opt with LL.llc } ])
+        ctx comp Ir.Indexing.Empty
+    in
+    let ctx = Context.run ctx routine in
+    p_all2 (name ^ " executed values")
+      (Context.get_values ctx output.Tensor.value)
+      (Array.map values ~f:(fun x -> x +. x))
+      ~f:Float.equal;
+    p (name ^ " pool rendering")
+      (Bool.equal (has_parallel_construct (Generated.read name)) (on_cpu && parallel));
+    Context.release ctx
+  in
+  repeated_grid ~name:"cpu_par_repeat_six" ~outer:128 ~middle:1 ~inner:6 ~width:1 ~parallel:false;
+  repeated_grid ~name:"cpu_par_repeat_thirtytwo" ~outer:128 ~middle:15 ~inner:32 ~width:1
+    ~parallel:false;
+  repeated_grid ~name:"cpu_par_repeat_two_tiles" ~outer:128 ~middle:15 ~inner:2 ~width:128
+    ~parallel:false;
+  repeated_grid ~name:"cpu_par_repeat_large" ~outer:2 ~middle:1 ~inner:16384 ~width:1 ~parallel:true;
+  (* The old top-level fine-grained stress remains intentional and must not silently go serial. *)
+  repeated_grid ~name:"cpu_par_top_six" ~outer:1 ~middle:1 ~inner:6 ~width:1 ~parallel:true;
+  let update =
+    LL.Set
+      {
+        tn = hz.Tensor.value;
+        idcs = [| Ir.Indexing.Fixed_idx 0; Ir.Indexing.Fixed_idx 0 |];
+        llsc = LL.Constant 1.;
+        debug = "";
+      }
+  in
+  let loop from_ to_ body =
+    LL.For_loop { index = Ir.Indexing.get_symbol (); from_; to_; body; axis = LL.Serial }
+  in
+  let counts =
+    [
+      (loop 0 1 (loop 0 8190 update), 16382);
+      (loop 0 1 (loop 0 8191 update), 16384);
+      (loop Int.min_value Int.max_value update, 16384);
+      (loop 1 0 update, 0);
+    ]
+  in
+  p_all "update estimate handles threshold, saturation and empty ranges" counts
+    ~f:(fun (llc, expected) -> Ir.C_syntax.grid_update_count llc = expected);
   phase "done"

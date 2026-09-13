@@ -271,3 +271,11 @@ configuration.
   -- here a guarded `p[chunk] += 1.0f` over six cells of a six-cell buffer. Reach for that
   disassembly rather than for `build_files/`, whose same-named artifacts are overwritten by the next
   candidate.
+
+- Repeated inner CPU `Grid` loops require at least 16,384 scalar updates per native dispatch
+  (gh-ocannl-933, `C_syntax.grid_update_count`). The estimate multiplies only the Grid and its
+  body extents, includes scalar `Local_scope` work, and saturates before overflow; enclosing
+  serial iterations cannot amortize their own separate fork/joins. The floor is fixed across
+  machines, is applied after safety checks, and does not claim all larger regions are profitable.
+  Top-level small Grid stress remains parallel; `cpu_parallel` pins both that control and the
+  repeated 128-by-6 / 128-by-15-by-32 cases with executed index-dependent values.

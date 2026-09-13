@@ -52,6 +52,46 @@ let per_chunk_private_bytes_cap =
     | _ -> 256 * 1024
     | exception _ -> 256 * 1024)
 
+(* Repeated inner CPU Grid launches must amortize one native fork/join per enclosing iteration. A
+   fixed IR-work floor keeps eligibility independent of the host pool width (gh-ocannl-933). This is
+   a decline heuristic, not a prediction that every admitted loop will speed up. *)
+let repeated_grid_min_updates = 16384
+
+(* Scalar updates per invocation, capped before arithmetic can overflow. Conditional bodies are
+   charged in full: decline only when even that upper estimate is small. Scalar Local_scope bodies
+   matter because an apparently single store may contain an entire reduction. *)
+let grid_update_count (llc : Low_level.t) =
+  let cap = repeated_grid_min_updates in
+  let add a b = min cap (a + b) in
+  let mul a b = if a = 0 || b = 0 then 0 else if a > cap / b then cap else a * b in
+  let extent from_ to_ =
+    if to_ < from_ then 0
+    else
+      let diff = Int64.(of_int to_ - of_int from_) in
+      if Int64.compare diff (Int64.of_int (cap - 1)) >= 0 then cap else Int64.to_int_exn diff + 1
+  in
+  let rec scalar (s : Low_level.scalar_t) =
+    match s with
+    | Local_scope { body; _ } -> stmt body
+    | Get_dynamic { dyn_value = v, _; _ } | Unop (_, (v, _)) -> scalar v
+    | Binop (_, (a, _), (b, _)) -> add (scalar a) (scalar b)
+    | Ternop (_, (a, _), (b, _), (c, _)) -> add (scalar a) (add (scalar b) (scalar c))
+    | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> 0
+  and stmt (s : Low_level.t) =
+    match s with
+    | Noop | Comment _ | Declare_local _ -> 0
+    | Seq (a, b) -> add (stmt a) (stmt b)
+    | For_loop { from_; to_; body; _ } -> mul (extent from_ to_) (stmt body)
+    | If { cond = c, _; body } -> add (scalar c) (stmt body)
+    | Set { llsc; _ } | Set_local (_, llsc) -> add 1 (scalar llsc)
+    | Set_dynamic { dyn_value = v, _; llsc; _ } -> add 1 (add (scalar v) (scalar llsc))
+    | Set_from_vec { length; arg = v, _; _ } -> add (min cap length) (scalar v)
+    | Zero_out tn -> min cap (Tn.num_elems tn)
+    (* These renderings have their own safety/opacity rules. Do not guess their cost here. *)
+    | Staged_compilation _ | Workgroup_barrier | Scan_loop _ | Tile_mma _ -> cap
+  in
+  stmt llc
+
 (* Census of [Tile_mma] statement renderings, collected during codegen while [mma_census_enabled]
    (gh-ocannl-479): "the tensorized candidate lost" and "the tensorized candidate never ran
    tensorized" must be distinguishable in tuning logs. Entries are (kernel name, rendering), most
@@ -3580,25 +3620,30 @@ module C_syntax (B : C_syntax_config) = struct
       let syms = ref (Set.empty (module Indexing.Symbol)) in
       let privs = ref (Map.empty (module Indexing.Symbol)) in
       let aliases = ref (Set.empty (module Tn)) in
-      let rec go (llc : Low_level.t) =
+      let rec go ~repeated (llc : Low_level.t) =
         match llc with
         | Low_level.For_loop { axis = Grid; index; from_; to_; body; _ } -> (
             if from_ = 0 && to_ >= 1 then
               match parallel_grid_safe ~sym:index ~grid_range:(from_, to_) ~global_counts body with
+              | Some _ when repeated && grid_update_count llc < repeated_grid_min_updates ->
+                  declinef
+                    "Grid loop %s stays serial: repeated native fork/join has only %d scalar \
+                     updates per launch, below %d"
+                    (Indexing.symbol_ident index) (grid_update_count llc) repeated_grid_min_updates
               | Some (privatized, ptr_aliased) ->
                   syms := Set.add !syms index;
                   if not (List.is_empty privatized) then
                     privs := Map.set !privs ~key:index ~data:privatized;
                   aliases := List.fold ptr_aliased ~init:!aliases ~f:Set.add
               | None -> ())
-        | For_loop { body; _ } -> go body
-        | If { body; _ } -> go body
+        | For_loop { from_; to_; body; _ } -> go ~repeated:(repeated || to_ > from_) body
+        | If { body; _ } -> go ~repeated body
         | Seq (a, b) ->
-            go a;
-            go b
+            go ~repeated a;
+            go ~repeated b
         | _ -> ()
       in
-      go llc;
+      go ~repeated:false llc;
       (!syms, !privs, !aliases)
 
   (* Renders a [Local]-placement (routine-scope scratch) array declaration; shared by

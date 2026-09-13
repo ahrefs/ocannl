@@ -7,3 +7,14 @@ privatized matmul values match the twin: true
 privatized accumulator gets per-chunk storage, both nests parallel: true
 interleaved-write hazard values correct: true
 interleaved covering write keeps the grid loop serial: true
+cpu_par_repeat_six executed values: true
+cpu_par_repeat_six pool rendering: true
+cpu_par_repeat_thirtytwo executed values: true
+cpu_par_repeat_thirtytwo pool rendering: true
+cpu_par_repeat_two_tiles executed values: true
+cpu_par_repeat_two_tiles pool rendering: true
+cpu_par_repeat_large executed values: true
+cpu_par_repeat_large pool rendering: true
+cpu_par_top_six executed values: true
+cpu_par_top_six pool rendering: true
+update estimate handles threshold, saturation and empty ranges: true
