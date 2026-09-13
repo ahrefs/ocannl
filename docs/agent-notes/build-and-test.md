@@ -1570,6 +1570,10 @@ that they earn a lookup rather than always-loaded space.
   unpiped ssh output with a convenience pipe: the verifier source travels on a separate remote file
   descriptor while child stdin is `/dev/null`, and the far-side sentinel is the build verdict plus
   cleanup, and the local sentinel is ssh's transport verdict.
+  `tools/test-remote-verify.sh` runs that shipped script through fake SSH/opam/Dune and real
+  disposable Git repositories, directly in Ubuntu CI rather than inside Dune. It checks actual
+  checkout/environment observations, failure reasons, timeout statuses, cleanup ownership and
+  golden restoration; source-assertion and golden-scope mutants must fail the same oracles.
 - `tools/ci-compiler-test.sh` is the cheap local proxy for a compiler-sensitive Ubuntu CI failure
   (gh-ocannl-846): it downloads the GCC 13 packages with `apt-get download`, extracts them into a
   scratch prefix with `dpkg-deb -x`, and runs exactly one named `runtest-` alias in a fresh Dune
