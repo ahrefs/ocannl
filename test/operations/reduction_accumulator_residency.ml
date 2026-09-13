@@ -554,11 +554,11 @@ let () =
   and inner = Cs.Plain_accumulator "v2_inner" in
   let inner_summary, outer_summary =
     Cs.with_volatility_census (fun () ->
-        Cs.volatility_census := ("outer_kernel", outer) :: !Cs.volatility_census;
-        Cs.volatility_requested := true;
+        Cs.volatility_census () := ("outer_kernel", outer) :: !(Cs.volatility_census ());
+        Cs.volatility_requested () := true;
         let (), inner_summary =
           Cs.with_volatility_census (fun () ->
-              Cs.volatility_census := ("inner_kernel", inner) :: !Cs.volatility_census)
+              Cs.volatility_census () := ("inner_kernel", inner) :: !(Cs.volatility_census ()))
         in
         inner_summary)
   in
@@ -579,5 +579,6 @@ let () =
   (* Over what the outer bracket collected: the global is empty AFTER a bracket that recorded
      something, not one that never had anything to leave behind. *)
   Verdict.p_empty "a completed bracket leaves the census global as it found it"
-    ~over:outer_summary.Cs.entries !Cs.volatility_census;
-  Verdict.p "collection is off outside every bracket" (not !Cs.volatility_census_enabled)
+    ~over:outer_summary.Cs.entries
+    !(Cs.volatility_census ());
+  Verdict.p "collection is off outside every bracket" (not !(Cs.volatility_census_enabled ()))

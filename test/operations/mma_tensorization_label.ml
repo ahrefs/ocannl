@@ -191,10 +191,10 @@ let () =
     Cs.with_census (fun () ->
         let (), inner =
           Cs.with_census (fun () ->
-              Cs.mma_census := ("nested_kernel", Cs.Mma_register_tiled) :: !Cs.mma_census)
+              Cs.mma_census () := ("nested_kernel", Cs.Mma_register_tiled) :: !(Cs.mma_census ()))
         in
         inner_seen := inner.Cs.statements;
-        Cs.mma_census := ("outer_kernel", Cs.Mma_scalar_fallback) :: !Cs.mma_census)
+        Cs.mma_census () := ("outer_kernel", Cs.Mma_scalar_fallback) :: !(Cs.mma_census ()))
   in
   p "a nested bracket summarizes only its own entries" (!inner_seen = 1);
   p "an enclosing bracket observes the entries of a nested one"
@@ -202,7 +202,7 @@ let () =
   (* Over what the outer bracket collected: the global is empty AFTER a bracket that recorded
      something, not one that never had anything to leave behind. *)
   p_empty "a completed bracket leaves the census global as it found it" ~over:outer.Cs.renderings
-    !Cs.mma_census
+    !(Cs.mma_census ())
 
 (* === The report-level negative control === *)
 

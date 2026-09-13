@@ -455,10 +455,10 @@ let () =
   let site levels = Cs.Peel_localized { levels; guards = [] } in
   let inner_summary, outer_summary =
     Cs.with_peel_census (fun () ->
-        Cs.peel_census := ("outer_kernel", site 1) :: !Cs.peel_census;
+        Cs.peel_census () := ("outer_kernel", site 1) :: !(Cs.peel_census ());
         let (), inner =
           Cs.with_peel_census (fun () ->
-              Cs.peel_census := ("inner_kernel", site 2) :: !Cs.peel_census)
+              Cs.peel_census () := ("inner_kernel", site 2) :: !(Cs.peel_census ()))
         in
         inner)
   in
@@ -474,8 +474,9 @@ let () =
   (* Over what the outer bracket collected: the global is empty AFTER a bracket that recorded
      something, not one that never had anything to leave behind. *)
   Verdict.p_empty "a completed bracket leaves the census global as it found it"
-    ~over:outer_summary.Cs.sites !Cs.peel_census;
-  p "collection is off outside every bracket" (not !Cs.peel_census_enabled)
+    ~over:outer_summary.Cs.sites
+    !(Cs.peel_census ());
+  p "collection is off outside every bracket" (not !(Cs.peel_census_enabled ()))
 
 (* The census's recurrence gate distinguishes a disjoint gather from a possible self-read
    (gh-ocannl-960). These are predicate tests: no value transformation or hardware legality decision

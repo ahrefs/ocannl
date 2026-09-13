@@ -66,7 +66,6 @@ let exempt_zero_reference_exports =
     "C_syntax.compare_peel_verdict";
     "C_syntax.compare_tensorization";
     "C_syntax.compare_volatility_site";
-    "C_syntax.current_kernel_name";
     "C_syntax.empty_mma_summary";
     "C_syntax.empty_peel_summary";
     "C_syntax.empty_volatility_summary";

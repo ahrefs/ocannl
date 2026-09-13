@@ -40,7 +40,8 @@ let pp llc =
     let full_printf_support = true
   end))
   in
-  PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (Syntax.compile_main llc)
+  PPrint.ToChannel.pretty 0.9 100 Stdio.stdout
+    (Syntax.compile_main (Syntax.create_render_ctx ~name:"local_scope_init" optimized) llc)
 
 (* ===== reads_scope_before_set unit tests ===== *)
 
