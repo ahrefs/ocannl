@@ -241,6 +241,13 @@ let canary_sites =
    REFUSE the run; the fix is to give them separate names, or to hoist them into one. *)
 let exempt_quantified_helpers =
   [
+    ( "test/operations/shell_scripts_parse.ml:compliant",
+      "absence of private helper definitions is the passing evidence; missing lifecycle text is \
+       rejected separately, and negative controls deliberately accept malformed or empty text as a \
+       refusal" );
+    ( "test/operations/shell_scripts_parse.ml:Harness_contract.compliant",
+      "the qualified use of the same text classifier permits no private definitions; lifecycle \
+       presence and the nonempty source guard separately prevent an empty script from passing" );
     ( "test/operations/backend_golden_family_scan.ml:complete",
       "empty incomplete/error lists are the passing evidence; the non-empty synthetic-control \
        population is guarded in the same binding" );
