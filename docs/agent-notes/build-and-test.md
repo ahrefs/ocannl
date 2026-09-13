@@ -1727,7 +1727,7 @@ that they earn a lookup rather than always-loaded space.
   from the PR branch with both inputs; read the dispatched run's `head_sha` and job list, require
   both real Windows jobs to finish successfully, then re-read the PR head before merging through
   the regular exact-head checks gate. A moved head needs fresh Windows evidence; this selection
-  supplements ordinary PR checks and waives none of them. `tools/test-ci-matrix.sh` evaluates the
+  supplements ordinary PR checks and waives none of them. `test/operations/ci_matrix.sh` evaluates the
   workflow's actual expressions for normal, scheduled, extended and Windows-only events, rejects
   opposing matrix mutations, and executes the commit guard with obsolete-head/checkout controls.
   Twice weekly rather than weekly because actions/cache evicts entries unread for 7 days, and an

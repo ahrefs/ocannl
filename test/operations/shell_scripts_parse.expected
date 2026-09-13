@@ -133,6 +133,7 @@ docs/latex/gen-workshop-tex.sh parses: true
 scripts/process-group.sh parses: true
 scripts/setup-ocaml-env.sh parses: true
 scripts/test-setup-ocaml-env.sh parses: true
+test/operations/ci_matrix.sh parses: true
 test/operations/sweep_harness.sh parses: true
 tools/aggregate-skips.sh parses: true
 tools/ci-compiler-test.sh parses: true
@@ -145,7 +146,6 @@ tools/opam-env.sh parses: true
 tools/promote.sh parses: true
 tools/remote-verify.sh parses: true
 tools/sweep.sh parses: true
-tools/test-ci-matrix.sh parses: true
 tools/test-ci-times.sh parses: true
 tools/test-fmt-check.sh parses: true
 tools/test-mutation-run.sh parses: true

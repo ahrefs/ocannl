@@ -6,7 +6,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo 'SKIP ci matrix controls: no python3 on PATH (1 skipped)'
   exit 0
 fi
-python3 - "$(dirname "$0")/../.github/workflows/ci.yml" <<'PY'
+python3 - "$(dirname "$0")/../../.github/workflows/ci.yml" <<'PY'
 import ast
 import itertools
 import json

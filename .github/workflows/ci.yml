@@ -245,7 +245,7 @@ jobs:
         tools/test-mutation-run.sh || failures=$((failures + 1))
         scripts/test-setup-ocaml-env.sh || failures=$((failures + 1))
         tools/test-ci-times.sh || failures=$((failures + 1))
-        tools/test-ci-matrix.sh || failures=$((failures + 1))
+        test/operations/ci_matrix.sh || failures=$((failures + 1))
         exit $((failures > 0 ? 1 : 0))
     - uses: ocaml/setup-ocaml@v3
       with:
