@@ -371,7 +371,12 @@ fi
 # error must not satisfy the shipping oracle's rejection.
 reason_local_pin() { grep -q 'git+file:' "$TMP/runs/$1/stdout"; }
 reason_project_package() { grep -q '^project package reached opam show:' "$TMP/runs/$1/stderr"; }
-reason_project_only() { grep -q '^no package definitions parsed from opam show output$' "$TMP/runs/$1/stderr"; }
+reason_project_only() {
+  # Bash 3.2 diagnoses the empty array at expansion; newer Bash reaches the
+  # downstream empty-definition guard. Both show this specific guard was lost.
+  grep -qE '(^no package definitions parsed from opam show output$|definition_packages\[@\]: unbound variable$)' \
+    "$TMP/runs/$1/stderr"
+}
 reason_definitions() {
   [ "$(cat "$TMP/runs/$1/status")" = 0 ] && lacks_match '^Definition digests:' "$TMP/runs/$1/stdout"
 }
