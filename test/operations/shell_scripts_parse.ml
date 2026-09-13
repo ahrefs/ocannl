@@ -1557,7 +1557,11 @@ module Harness_contract = struct
     && not
          (List.exists lines ~f:(fun line ->
               List.exists [ "report()"; "skip()"; "finish()"; "mutant()"; "expect_rejected()" ]
-                ~f:(fun name -> String.is_prefix line ~prefix:name)))
+                ~f:(fun name ->
+                  let compact = String.filter line ~f:(Fn.non Char.is_whitespace) in
+                  String.is_prefix compact ~prefix:name
+                  || String.is_prefix compact ~prefix:("function" ^ name)
+                  || String.is_prefix compact ~prefix:("function" ^ String.drop_suffix name 2 ^ "{"))))
 
   let controls () =
     let correct =
@@ -1567,8 +1571,16 @@ module Harness_contract = struct
     Verdict.p "new hand-run harnesses are discovered" (member "scripts/test-new.sh");
     Verdict.p "production test-run is outside the harness family" (not (member "tools/test-run.sh"));
     List.iter [ "report()"; "skip()"; "finish()"; "mutant()"; "expect_rejected()" ] ~f:(fun name ->
-        Verdict.pf "duplicate harness %s is refused" name
-          (not (compliant (correct ^ name ^ " { :; }\n"))));
+        List.iter
+          [
+            name ^ " { :; }";
+            String.drop_suffix name 2 ^ " () { :; }";
+            "function " ^ name ^ " { :; }";
+            "function " ^ String.drop_suffix name 2 ^ " { :; }";
+          ]
+          ~f:(fun definition ->
+            Verdict.pf "duplicate harness %s is refused" name
+              (not (compliant (correct ^ definition ^ "\n")))));
     Verdict.p "a comment mentioning support cannot satisfy sourcing"
       (not
          (compliant "# harness-support.sh\nharness_args \"$@\"\nharness_scratch example\nfinish\n"))
