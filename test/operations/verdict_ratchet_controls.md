@@ -397,40 +397,42 @@ Functor-valued module arguments and first-class standard Boolean ordering are su
 
 | Mechanism | Controls | Mutation run |
 |---|---|---|
-| Higher-order export/substitution | `refuses full first-class ordering >` | pending |
-| Higher-order export/substitution | `accepts witnessed full first-class ordering >` | pending |
-| Higher-order export/substitution | `refuses partial first-class ordering >` | pending |
-| Higher-order export/substitution | `accepts witnessed partial first-class ordering >` | pending |
-| Higher-order export/substitution | `refuses full first-class ordering >=` | pending |
-| Higher-order export/substitution | `accepts witnessed full first-class ordering >=` | pending |
-| Higher-order export/substitution | `refuses partial first-class ordering >=` | pending |
-| Higher-order export/substitution | `accepts witnessed partial first-class ordering >=` | pending |
-| Higher-order export/substitution | `refuses full first-class ordering <` | pending |
-| Higher-order export/substitution | `accepts witnessed full first-class ordering <` | pending |
-| Higher-order export/substitution | `refuses partial first-class ordering <` | pending |
-| Higher-order export/substitution | `accepts witnessed partial first-class ordering <` | pending |
-| Higher-order export/substitution | `refuses full first-class ordering <=` | pending |
-| Higher-order export/substitution | `accepts witnessed full first-class ordering <=` | pending |
-| Higher-order export/substitution | `refuses partial first-class ordering <=` | pending |
-| Higher-order export/substitution | `accepts witnessed partial first-class ordering <=` | pending |
-| Higher-order export/substitution | `accepts opaque shadowed first-class ordering` | pending |
-| Higher-order export/substitution | `accepts opaque external first-class ordering` | pending |
-| Higher-order export/substitution | `accepts opaque unknown-open first-class ordering` | pending |
-| Higher-order export/substitution | `accepts opaque aggregate first-class ordering` | pending |
-| Higher-order export/substitution | `refuses qualified Stdlib first-class ordering` | pending |
-| Higher-order export/substitution | `refuses qualified Base first-class ordering` | pending |
-| Higher-order export/substitution | `refuses first-class ordering forwarded through a helper` | pending |
-| Higher-order export/substitution | `refuses named functor-valued module argument` | pending |
-| Higher-order export/substitution | `accepts witnessed named functor-valued module argument` | pending |
-| Higher-order export/substitution | `refuses anonymous functor-valued module argument` | pending |
-| Higher-order export/substitution | `accepts witnessed anonymous functor-valued module argument` | pending |
-| Higher-order export/substitution | `refuses partial functor-valued module argument` | pending |
-| Higher-order export/substitution | `accepts witnessed partial functor-valued module argument` | pending |
-| Higher-order export/substitution | `refuses qualified functor-valued module argument` | pending |
-| Higher-order export/substitution | `accepts witnessed qualified functor-valued module argument` | pending |
-| Higher-order export/substitution | `accepts shadowed functor-valued module argument` | pending |
-| Named conservative boundary | `retains named refusal recursive-empty-standard-namespace` | pending |
-| Named conservative boundary | `retains named refusal partial-ordering-optional-default` | pending |
-| Higher-order export/substitution | `accepts full ordering with an omitted annihilating default` | pending |
-| Named conservative boundary | `retains named refusal supplied-unapplied-callable-default` | pending |
-| Higher-order export/substitution | `refuses omitted unapplied callable default` | pending |
+| Ordering primitive closure disabled; Failed | `refuses full first-class ordering >` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts witnessed full first-class ordering >` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses partial first-class ordering >` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts witnessed partial first-class ordering >` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses full first-class ordering >=` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts witnessed full first-class ordering >=` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses partial first-class ordering >=` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts witnessed partial first-class ordering >=` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses full first-class ordering <` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts witnessed full first-class ordering <` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses partial first-class ordering <` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts witnessed partial first-class ordering <` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses full first-class ordering <=` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts witnessed full first-class ordering <=` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses partial first-class ordering <=` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts witnessed partial first-class ordering <=` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts opaque shadowed first-class ordering` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts opaque external first-class ordering` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts opaque unknown-open first-class ordering` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts opaque aggregate first-class ordering` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses qualified Stdlib first-class ordering` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses qualified Base first-class ordering` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses first-class ordering forwarded through a helper` | 20260913T195820Z-36571 |
+| Exact functor argument binding discarded; Failed | `refuses named functor-valued module argument` | 20260913T195843Z-38769 |
+| Exact functor argument binding discarded; Stayed green | `accepts witnessed named functor-valued module argument` | 20260913T195843Z-38769 |
+| Exact functor argument binding discarded; Failed | `refuses anonymous functor-valued module argument` | 20260913T195843Z-38769 |
+| Exact functor argument binding discarded; Stayed green | `accepts witnessed anonymous functor-valued module argument` | 20260913T195843Z-38769 |
+| Exact functor argument binding discarded; Failed | `refuses partial functor-valued module argument` | 20260913T195843Z-38769 |
+| Exact functor argument binding discarded; Stayed green | `accepts witnessed partial functor-valued module argument` | 20260913T195843Z-38769 |
+| Exact functor argument binding discarded; Failed | `refuses qualified functor-valued module argument` | 20260913T195843Z-38769 |
+| Exact functor argument binding discarded; Stayed green | `accepts witnessed qualified functor-valued module argument` | 20260913T195843Z-38769 |
+| Exact functor argument binding discarded; Stayed green | `accepts shadowed functor-valued module argument` | 20260913T195843Z-38769 |
+| Ordering primitive closure disabled; Stayed green (conservative boundary/control) | `retains named refusal recursive-empty-standard-namespace` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green (conservative boundary/control) | `retains named refusal partial-ordering-optional-default` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green (conservative boundary/control) | `accepts full ordering with an omitted annihilating default` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green (conservative boundary/control) | `retains named refusal supplied-unapplied-callable-default` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green (conservative boundary/control) | `refuses omitted unapplied callable default` | 20260913T195820Z-36571 |
+
+Both mutations exited 1 with exactly the failed controls listed above; each runner confirmed byte-identical restoration with cmp. The baseline run 20260913T195809Z-34949 and restored run 20260913T195852Z-40468 exited 0. Runs used tools/mutation-run.sh on macOS at source revision 12311e04d, with a 300-second cap. The named conservative boundaries also stayed green in the functor mutation.
