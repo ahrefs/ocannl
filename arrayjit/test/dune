@@ -370,3 +370,11 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (libraries base stdio arrayjit.ir arrayjit.context arrayjit.verdict))
+
+(test
+ ; ocannl-backend: none -- pure renderer reentrancy and domain-local census controls.
+ (name test_render_context)
+ (package arrayjit)
+ (modules test_render_context)
+ (deps ocannl_config)
+ (libraries arrayjit.ll_builders base arrayjit.ir arrayjit.verdict))

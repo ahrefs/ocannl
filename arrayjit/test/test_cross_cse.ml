@@ -199,5 +199,6 @@ let () =
   Utils.set_log_level 2;
   Utils.settings.debug_log_from_routines <- true;
   Stdio.printf "=== Scenario A: legitimate hoist (c_syntax pp_ll, after) ===\n";
-  PPrint.ToChannel.pretty 0.9 110 Stdio.stdout (Syntax.compile_main result);
+  PPrint.ToChannel.pretty 0.9 110 Stdio.stdout
+    (Syntax.compile_main (Syntax.create_render_ctx ~name:"cross_cse" optimized) result);
   Stdio.printf "\n%!"

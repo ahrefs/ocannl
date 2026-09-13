@@ -279,3 +279,11 @@ configuration.
   machines, is applied after safety checks, and does not claim all larger regions are profitable.
   Top-level small Grid stress remains parallel; `cpu_parallel` pins both that control and the
   repeated 128-by-6 / 128-by-15-by-32 cases with executed index-dependent values.
+
+- `C_syntax.render_ctx` owns the state of one emission, including volatility observers, zero seeds,
+  thread-binding analysis and codegen-minted accumulator scopes (gh-ocannl-769). `create_render_ctx`
+  requires an optimized procedure; body-only `compile_main` callers pass that context explicitly.
+  The loop strategies are siblings of `pp_ll`; `derive_kparams` preserves alias-candidate restrictions
+  independently of emission. Census brackets are domain-local and additive within one domain.
+  `arrayjit/test/test_render_context.ml` injects nested compilation and an emission exception;
+  its shared-zero-state negative control demonstrates the old lost-rezero failure.

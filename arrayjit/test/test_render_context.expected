@@ -1,0 +1,14 @@
+baseline retains the genuine second whole-node zero: true
+baseline exercises volatile device RMW rendering: true
+the nested compile ran while rendering the outer expression: true
+nested rendering retains the outer genuine second whole-node zero: true
+nested rendering preserves the outer volatility decision: true
+nested rendering attributes every outer volatility site to its own kernel: true
+the exception control interrupts emission: true
+rendering after an interrupted compile starts with fresh traversal state: true
+recovery records only the recovered kernel: true
+the negative control detects the old shared zero-state reset: true
+a child domain summarizes only its own renderings: true
+a main-domain census excludes a child domain's renderings: true
+main-domain attribution survives overlapping collection brackets: true
+suspending the outer peel census does not suspend a nested compile: true
