@@ -125,13 +125,26 @@ errexit-negation fixture bang-adjacent output redirect is classified as specifie
 errexit-negation fixture bang-adjacent input redirect is classified as specified: true
 errexit-negation fixture bang-prefixed command name is classified as specified: true
 the statement-position ! grep fixture reaches the absent()-style refusal: true
+shared harness source and lifecycle are accepted: true
+new hand-run harnesses are discovered: true
+production test-run is outside the harness family: true
+duplicate harness report() is refused: true
+duplicate harness skip() is refused: true
+duplicate harness finish() is refused: true
+duplicate harness mutant() is refused: true
+duplicate harness expect_rejected() is refused: true
+a comment mentioning support cannot satisfy sourcing: true
 .github/actions/pin-revisions/resolve.sh parses: true
 benchmarks/gh514_cells.sh parses: true
 benchmarks/gh612_cells.sh parses: true
 benchmarks/gh612v_session.sh parses: true
 docs/latex/gen-workshop-tex.sh parses: true
+scripts/harness-support.sh parses: true
 scripts/process-group.sh parses: true
 scripts/setup-ocaml-env.sh parses: true
+scripts/test-harness-support.sh uses the shared harness contract: true
+scripts/test-harness-support.sh parses: true
+scripts/test-setup-ocaml-env.sh uses the shared harness contract: true
 scripts/test-setup-ocaml-env.sh parses: true
 test/operations/ci_matrix.sh parses: true
 test/operations/sweep_harness.sh parses: true
@@ -146,12 +159,18 @@ tools/opam-env.sh parses: true
 tools/promote.sh parses: true
 tools/remote-verify.sh parses: true
 tools/sweep.sh parses: true
+tools/test-ci-times.sh uses the shared harness contract: true
 tools/test-ci-times.sh parses: true
+tools/test-fmt-check.sh uses the shared harness contract: true
 tools/test-fmt-check.sh parses: true
+tools/test-mutation-run.sh uses the shared harness contract: true
 tools/test-mutation-run.sh parses: true
+tools/test-pin-revisions.sh uses the shared harness contract: true
 tools/test-pin-revisions.sh parses: true
+tools/test-promote.sh uses the shared harness contract: true
 tools/test-promote.sh parses: true
 tools/test-run.sh parses: true
+tools/test-test-run.sh uses the shared harness contract: true
 tools/test-test-run.sh parses: true
 the scan reached at least the 12 shell scripts this repository is known to have: true
 the scan reached the session hook and the suite runner: true

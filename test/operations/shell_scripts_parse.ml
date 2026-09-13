@@ -1549,7 +1549,8 @@ module Harness_contract = struct
           (String.is_prefix line ~prefix:". " || String.is_prefix line ~prefix:"source ")
           && String.is_substring line ~substring:"harness-support.sh")
     in
-    source
+    (not (List.is_empty lines))
+    && source
     && List.mem lines "harness_args \"$@\"" ~equal:String.equal
     && List.exists lines ~f:(fun line -> String.is_prefix line ~prefix:"harness_scratch ")
     && List.mem lines "finish" ~equal:String.equal
