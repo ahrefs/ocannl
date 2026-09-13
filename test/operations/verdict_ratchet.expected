@@ -320,6 +320,43 @@ accepts a shadowed Boolean conjunction alias: true
 refuses a quantifier through an aliased Boolean disjunction: true
 accepts a witnessed quantifier through an aliased Boolean disjunction: true
 accepts a shadowed Boolean disjunction alias: true
+refuses full first-class ordering >: true
+accepts witnessed full first-class ordering >: true
+refuses partial first-class ordering >: true
+accepts witnessed partial first-class ordering >: true
+refuses full first-class ordering >=: true
+accepts witnessed full first-class ordering >=: true
+refuses partial first-class ordering >=: true
+accepts witnessed partial first-class ordering >=: true
+refuses full first-class ordering <: true
+accepts witnessed full first-class ordering <: true
+refuses partial first-class ordering <: true
+accepts witnessed partial first-class ordering <: true
+refuses full first-class ordering <=: true
+accepts witnessed full first-class ordering <=: true
+refuses partial first-class ordering <=: true
+accepts witnessed partial first-class ordering <=: true
+accepts opaque shadowed first-class ordering: true
+accepts opaque external first-class ordering: true
+accepts opaque unknown-open first-class ordering: true
+accepts opaque aggregate first-class ordering: true
+refuses qualified Stdlib first-class ordering: true
+refuses qualified Base first-class ordering: true
+refuses first-class ordering forwarded through a helper: true
+refuses named functor-valued module argument: true
+accepts witnessed named functor-valued module argument: true
+refuses anonymous functor-valued module argument: true
+accepts witnessed anonymous functor-valued module argument: true
+refuses partial functor-valued module argument: true
+accepts witnessed partial functor-valued module argument: true
+refuses qualified functor-valued module argument: true
+accepts witnessed qualified functor-valued module argument: true
+accepts shadowed functor-valued module argument: true
+retains named refusal recursive-empty-standard-namespace: true
+retains named refusal partial-ordering-optional-default: true
+accepts full ordering with an omitted annihilating default: true
+retains named refusal supplied-unapplied-callable-default: true
+refuses omitted unapplied callable default: true
 refuses a quantifier through a curried functor: true
 accepts a witnessed quantifier through a curried functor: true
 refuses a quantifier through a partially applied functor: true

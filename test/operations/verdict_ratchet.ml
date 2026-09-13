@@ -1728,6 +1728,191 @@ let () = Verdict.p "all rows pass" (not (List.is_empty rows) && both false (List
 let both = ( || )
 let () = Verdict.p "all rows pass" (both false (List.for_all rows ~f:Fn.id))|ocaml},
       [] );
+    ( "refuses full first-class ordering >",
+      {ocaml|let compare = (>)
+let () = Verdict.p "ok" (compare (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [ "ok" ] );
+    ( "accepts witnessed full first-class ordering >",
+      {ocaml|let compare = (>)
+let () = Verdict.p "ok" (not (List.is_empty rows) && compare (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [] );
+    ( "refuses partial first-class ordering >",
+      {ocaml|let compare = (>)
+let above = compare (List.for_all rows ~f:Fn.id)
+let () = Verdict.p "ok" (above false)|ocaml},
+      [ "above" ] );
+    ( "accepts witnessed partial first-class ordering >",
+      {ocaml|let compare = (>)
+let above = compare (List.for_all rows ~f:Fn.id)
+let () = Verdict.p "ok" (not (List.is_empty rows) && above false)|ocaml},
+      [] );
+    ( "refuses full first-class ordering >=",
+      {ocaml|let compare = (>=)
+let () = Verdict.p "ok" (compare (List.for_all rows ~f:Fn.id) true)|ocaml},
+      [ "ok" ] );
+    ( "accepts witnessed full first-class ordering >=",
+      {ocaml|let compare = (>=)
+let () = Verdict.p "ok" (not (List.is_empty rows) && compare (List.for_all rows ~f:Fn.id) true)|ocaml},
+      [] );
+    ( "refuses partial first-class ordering >=",
+      {ocaml|let compare = (>=)
+let above = compare (List.for_all rows ~f:Fn.id)
+let () = Verdict.p "ok" (above true)|ocaml},
+      [ "above" ] );
+    ( "accepts witnessed partial first-class ordering >=",
+      {ocaml|let compare = (>=)
+let above = compare (List.for_all rows ~f:Fn.id)
+let () = Verdict.p "ok" (not (List.is_empty rows) && above true)|ocaml},
+      [] );
+    ( "refuses full first-class ordering <",
+      {ocaml|let compare = (<)
+let () = Verdict.p "ok" (compare (not (List.for_all rows ~f:Fn.id)) true)|ocaml},
+      [ "ok" ] );
+    ( "accepts witnessed full first-class ordering <",
+      {ocaml|let compare = (<)
+let () = Verdict.p "ok" (not (List.is_empty rows) && compare (not (List.for_all rows ~f:Fn.id)) true)|ocaml},
+      [] );
+    ( "refuses partial first-class ordering <",
+      {ocaml|let compare = (<)
+let above = compare (not (List.for_all rows ~f:Fn.id))
+let () = Verdict.p "ok" (above true)|ocaml},
+      [ "above" ] );
+    ( "accepts witnessed partial first-class ordering <",
+      {ocaml|let compare = (<)
+let above = compare (not (List.for_all rows ~f:Fn.id))
+let () = Verdict.p "ok" (not (List.is_empty rows) && above true)|ocaml},
+      [] );
+    ( "refuses full first-class ordering <=",
+      {ocaml|let compare = (<=)
+let () = Verdict.p "ok" (compare (not (List.for_all rows ~f:Fn.id)) false)|ocaml},
+      [ "ok" ] );
+    ( "accepts witnessed full first-class ordering <=",
+      {ocaml|let compare = (<=)
+let () = Verdict.p "ok" (not (List.is_empty rows) && compare (not (List.for_all rows ~f:Fn.id)) false)|ocaml},
+      [] );
+    ( "refuses partial first-class ordering <=",
+      {ocaml|let compare = (<=)
+let above = compare (not (List.for_all rows ~f:Fn.id))
+let () = Verdict.p "ok" (above false)|ocaml},
+      [ "above" ] );
+    ( "accepts witnessed partial first-class ordering <=",
+      {ocaml|let compare = (<=)
+let above = compare (not (List.for_all rows ~f:Fn.id))
+let () = Verdict.p "ok" (not (List.is_empty rows) && above false)|ocaml},
+      [] );
+    ( "accepts opaque shadowed first-class ordering",
+      {ocaml|let (>) _ _ = true
+let compare = (>)
+let () = Verdict.p "ok" (compare (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [] );
+    ( "accepts opaque external first-class ordering",
+      {ocaml|let compare = External.(>)
+let () = Verdict.p "ok" (compare (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [] );
+    ( "accepts opaque unknown-open first-class ordering",
+      {ocaml|open External
+let compare = (>)
+let () = Verdict.p "ok" (compare (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [] );
+    ( "accepts opaque aggregate first-class ordering",
+      {ocaml|let compare = (>)
+let () = Verdict.p "ok" (compare (true, List.for_all rows ~f:Fn.id) (false, true))|ocaml},
+      [] );
+    ( "refuses qualified Stdlib first-class ordering",
+      {ocaml|open External
+let compare = Stdlib.(>)
+let () = Verdict.p "ok" (compare (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [ "ok" ] );
+    ( "refuses qualified Base first-class ordering",
+      {ocaml|open External
+let compare = Base.(>)
+let () = Verdict.p "ok" (compare (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [ "ok" ] );
+    ( "refuses first-class ordering forwarded through a helper",
+      {ocaml|let apply f x y = f x y
+let () = Verdict.p "ok" (apply (>) (List.for_all rows ~f:Fn.id) false)|ocaml},
+      [ "ok" ] );
+    ( "refuses named functor-valued module argument",
+      {ocaml|module Make (V : S) = struct let check = V.p end
+module Use (F : functor (V : S) -> S) = struct module C = F (Verdict) let check = C.check end
+module C = Use (Make)
+let () = C.check "ok" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "ok" ] );
+    ( "accepts witnessed named functor-valued module argument",
+      {ocaml|module Make (V : S) = struct let check = V.p end
+module Use (F : functor (V : S) -> S) = struct module C = F (Verdict) let check = C.check end
+module C = Use (Make)
+let () = C.check "ok" (not (List.is_empty rows) && List.for_all rows ~f:Fn.id)|ocaml},
+      [] );
+    ( "refuses anonymous functor-valued module argument",
+      {ocaml|module Make (V : S) = struct let check = V.p end
+module Use (F : functor (V : S) -> S) = struct module C = F (Verdict) let check = C.check end
+module C = Use ((functor (V : S) -> struct let check = V.p end))
+let () = C.check "ok" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "ok" ] );
+    ( "accepts witnessed anonymous functor-valued module argument",
+      {ocaml|module Make (V : S) = struct let check = V.p end
+module Use (F : functor (V : S) -> S) = struct module C = F (Verdict) let check = C.check end
+module C = Use ((functor (V : S) -> struct let check = V.p end))
+let () = C.check "ok" (not (List.is_empty rows) && List.for_all rows ~f:Fn.id)|ocaml},
+      [] );
+    ( "refuses partial functor-valued module argument",
+      {ocaml|module Make (Unused : S) (V : S) = struct let check = V.p end
+module Use (F : functor (V : S) -> S) = struct module C = F (Verdict) let check = C.check end
+module C = Use (Make (Verdict))
+let () = C.check "ok" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "ok" ] );
+    ( "accepts witnessed partial functor-valued module argument",
+      {ocaml|module Make (Unused : S) (V : S) = struct let check = V.p end
+module Use (F : functor (V : S) -> S) = struct module C = F (Verdict) let check = C.check end
+module C = Use (Make (Verdict))
+let () = C.check "ok" (not (List.is_empty rows) && List.for_all rows ~f:Fn.id)|ocaml},
+      [] );
+    ( "refuses qualified functor-valued module argument",
+      {ocaml|module Nested = struct module Make (V : S) = struct let check = V.p end
+end
+module Use (F : functor (V : S) -> S) = struct module C = F (Verdict) let check = C.check end
+module C = Use (Nested.Make)
+let () = C.check "ok" (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "ok" ] );
+    ( "accepts witnessed qualified functor-valued module argument",
+      {ocaml|module Nested = struct module Make (V : S) = struct let check = V.p end
+end
+module Use (F : functor (V : S) -> S) = struct module C = F (Verdict) let check = C.check end
+module C = Use (Nested.Make)
+let () = C.check "ok" (not (List.is_empty rows) && List.for_all rows ~f:Fn.id)|ocaml},
+      [] );
+    ( "accepts shadowed functor-valued module argument",
+      {ocaml|module Make (V : S) = struct let check = V.p end
+module Make (V : S) = struct let check _ _ = () end
+module Use (F : functor (V : S) -> S) = struct module C = F (Verdict) let check = C.check end
+module C = Use (Make)
+let () = C.check "ok" (List.for_all rows ~f:Fn.id)|ocaml},
+      [] );
+    ( "retains named refusal recursive-empty-standard-namespace",
+      {ocaml|open External
+module rec Base : sig end = struct end
+open Base
+let both = (&&)
+let () = Verdict.p "ok" (both true (List.for_all rows ~f:Fn.id))|ocaml},
+      [ "ok" ] );
+    ( "retains named refusal partial-ordering-optional-default",
+      {ocaml|let check ?(x=true) ?(y=false) () = Verdict.p "ok" (x >= y)
+let partial = check ~x:(List.for_all rows ~f:Fn.id)
+let () = partial ()|ocaml},
+      [ "partial" ] );
+    ( "accepts full ordering with an omitted annihilating default",
+      {ocaml|let check ?(x=true) ?(y=false) () = Verdict.p "ok" (x >= y)
+let () = check ~x:(List.for_all rows ~f:Fn.id) ()|ocaml},
+      [] );
+    ( "retains named refusal supplied-unapplied-callable-default",
+      {ocaml|let check ?(op=(&&)) value = Verdict.p "ok" (op true value)
+let () = check ~op:(fun _ _ -> true) (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "check" ] );
+    ( "refuses omitted unapplied callable default",
+      {ocaml|let check ?(op=(&&)) value = Verdict.p "ok" (op true value)
+let () = check (List.for_all rows ~f:Fn.id)|ocaml},
+      [ "check" ] );
     ( "refuses a quantifier through a curried functor",
       {ocaml|module Make (A : S) (B : S) = struct let check = A.p let other = B.p end
 module Checks = Make (Verdict) (Verdict)

@@ -390,3 +390,47 @@ All four runs used the mutation runner and focused alias, exited 1 on the named 
 | One known Boolean operand establishes standard comparison type | Reject an unknown result category beside a known Boolean | Failed: `refuses a partially applied ordering with a branch-selected first operand`, `refuses ordering of a branch-selected Boolean helper result`, `refuses ordering when only the left operand establishes Boolean type`. Stayed green: `accepts witnessed partial ordering with a branch-selected first operand`, `accepts witnessed ordering of a branch-selected Boolean result`, `keeps branch-selected aggregate ordering outside Boolean algebra` | 20260912T223344Z-38899 |
 | Empty local modules preserve namespace shadowing | Omit the empty local-module presence marker | Failed: `does not reopen standard ordering through an empty local Base`, `does not reopen standard Boolean aliases through an empty local Stdlib`. Stayed green: `retains implicit standard ordering after opening an empty local module`, `restores a captured standard namespace after an empty local Base` | 20260912T223353Z-40685 |
 | Boolean predicates retain captured operand views | Ignore saved Boolean predicate operands | Failed: `refuses a vacuous operand captured by a Boolean conjunction predicate`, `refuses a vacuous operand captured by a Boolean disjunction predicate`, `refuses a vacuous operand in a selected Boolean predicate`. Stayed green: `accepts a witnessed operand captured by a Boolean conjunction predicate`, `accepts an annihilated operand in a Boolean predicate`, `accepts a witnessed operand in a selected Boolean predicate` | 20260912T223403Z-42475 |
+
+## Bounded higher-order residual contract (gh-ocannl-973)
+
+Functor-valued module arguments and first-class standard Boolean ordering are supported. General module typing and polymorphic structural comparison remain outside the contract. The three named refusal controls deliberately assert conservative refusals, not semantic invalidity; they pin loud boundaries pending corpus demand.
+
+| Mechanism | Controls | Mutation run |
+|---|---|---|
+| Higher-order export/substitution | `refuses full first-class ordering >` | pending |
+| Higher-order export/substitution | `accepts witnessed full first-class ordering >` | pending |
+| Higher-order export/substitution | `refuses partial first-class ordering >` | pending |
+| Higher-order export/substitution | `accepts witnessed partial first-class ordering >` | pending |
+| Higher-order export/substitution | `refuses full first-class ordering >=` | pending |
+| Higher-order export/substitution | `accepts witnessed full first-class ordering >=` | pending |
+| Higher-order export/substitution | `refuses partial first-class ordering >=` | pending |
+| Higher-order export/substitution | `accepts witnessed partial first-class ordering >=` | pending |
+| Higher-order export/substitution | `refuses full first-class ordering <` | pending |
+| Higher-order export/substitution | `accepts witnessed full first-class ordering <` | pending |
+| Higher-order export/substitution | `refuses partial first-class ordering <` | pending |
+| Higher-order export/substitution | `accepts witnessed partial first-class ordering <` | pending |
+| Higher-order export/substitution | `refuses full first-class ordering <=` | pending |
+| Higher-order export/substitution | `accepts witnessed full first-class ordering <=` | pending |
+| Higher-order export/substitution | `refuses partial first-class ordering <=` | pending |
+| Higher-order export/substitution | `accepts witnessed partial first-class ordering <=` | pending |
+| Higher-order export/substitution | `accepts opaque shadowed first-class ordering` | pending |
+| Higher-order export/substitution | `accepts opaque external first-class ordering` | pending |
+| Higher-order export/substitution | `accepts opaque unknown-open first-class ordering` | pending |
+| Higher-order export/substitution | `accepts opaque aggregate first-class ordering` | pending |
+| Higher-order export/substitution | `refuses qualified Stdlib first-class ordering` | pending |
+| Higher-order export/substitution | `refuses qualified Base first-class ordering` | pending |
+| Higher-order export/substitution | `refuses first-class ordering forwarded through a helper` | pending |
+| Higher-order export/substitution | `refuses named functor-valued module argument` | pending |
+| Higher-order export/substitution | `accepts witnessed named functor-valued module argument` | pending |
+| Higher-order export/substitution | `refuses anonymous functor-valued module argument` | pending |
+| Higher-order export/substitution | `accepts witnessed anonymous functor-valued module argument` | pending |
+| Higher-order export/substitution | `refuses partial functor-valued module argument` | pending |
+| Higher-order export/substitution | `accepts witnessed partial functor-valued module argument` | pending |
+| Higher-order export/substitution | `refuses qualified functor-valued module argument` | pending |
+| Higher-order export/substitution | `accepts witnessed qualified functor-valued module argument` | pending |
+| Higher-order export/substitution | `accepts shadowed functor-valued module argument` | pending |
+| Named conservative boundary | `retains named refusal recursive-empty-standard-namespace` | pending |
+| Named conservative boundary | `retains named refusal partial-ordering-optional-default` | pending |
+| Higher-order export/substitution | `accepts full ordering with an omitted annihilating default` | pending |
+| Named conservative boundary | `retains named refusal supplied-unapplied-callable-default` | pending |
+| Higher-order export/substitution | `refuses omitted unapplied callable default` | pending |

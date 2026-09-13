@@ -2155,3 +2155,11 @@ that they earn a lookup rather than always-loaded space.
   still requires the composite to reach timing; unrelated refusals waive nothing. Post-admission
   injection preserves the partial report's admitted outcome and count; an untriggered injection
   skips only on that coarse composite's explicit refusal outcome.
+
+- The bounded gh-ocannl-973 provenance contract supports functor-valued module arguments through
+  `module_bindings` and first-class standard ordering through ordinary deferred-call closures.
+  Three conservative refusals remain named in `verdict_ratchet_controls.md`: an empty recursive
+  local standard namespace after an unknown open; partial ordering before an optional constant
+  default resolves; and a supplied replacement for an unapplied Boolean callable default.
+  Those refusals are boundaries, not evidence that the corresponding OCaml claims are invalid.
+  General module typing and polymorphic structural comparison remain outside this reader.
