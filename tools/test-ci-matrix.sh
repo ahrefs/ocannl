@@ -52,7 +52,12 @@ def expression(value, event, windows=False, extended=False):
 def matrix(text, event, windows=False, extended=False):
     systems = expression(field(text, 'os'), event, windows, extended)
     includes = expression(field(text, 'include'), event, windows, extended)
-    jobs = [(system, '5.5.x', 'main') for system in systems]
+    axes = []
+    for name in ('ocaml-compiler', 'suite'):
+        match = re.search(r'^        ' + name + r':\n((?:          - .+\n)+)', text, re.M)
+        assert match, name
+        axes.append([line.strip().removeprefix('- ') for line in match[1].splitlines()])
+    jobs = list(itertools.product(systems, *axes))
     jobs += [(entry['os'], entry['ocaml-compiler'], entry['suite']) for entry in includes]
     fmt = re.search(r'^  fmt:\n    if: (.*)$', text, re.M)
     assert fmt, 'Formatting selection missing'
