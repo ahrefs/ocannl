@@ -59,11 +59,12 @@ cat >"$TMP/bin/dune" <<'SH'
 [ -z "${OCANNL_PROFILE:-}" ] && [ -z "${OCANNL_PRINT_DECIMALS_PRECISION:-}" ] || {
   echo 'fixture: configuration leaked' >&2; exit 93;
 }
-[ "${OCANNL_BACKEND:-}" = cc ] || { echo 'fixture: backend not pinned' >&2; exit 94; }
+if [ "$1" = build ]; then wanted_backend=cc; else wanted_backend=; fi
+[ "${OCANNL_BACKEND:-}" = "$wanted_backend" ] || { echo 'fixture: backend not isolated' >&2; exit 94; }
 [ "$PWD" != "$FIXTURE_REPO" ] && [ "$(git rev-parse HEAD)" = "$FIXTURE_SHA" ] || exit 95
 if git symbolic-ref -q HEAD >/dev/null; then exit 96; fi
 [ -f ocannl_config ] && [ ! -s ocannl_config ] || { echo 'fixture: boundary missing' >&2; exit 97; }
-printf '%s|%s|%s\n' "$PWD" "$OCANNL_BACKEND" "$*" >>"$AUDIT"
+printf '%s|%s|%s\n' "$PWD" "${OCANNL_BACKEND:-none}" "$*" >>"$AUDIT"
 mkdir -p _build/default/test/config
 if [ "$1" = build ]; then
   for arg in "$@"; do
@@ -198,4 +199,12 @@ mutation_oracle() {
 }
 mutated=$(mutant no-source-assertion '/^assert_source_state\(\) \{/ { print; print "  return 0"; next } { print }') || exit 2
 expect_rejected 'source assertion removed' "$mutated" mutation_oracle '^remote-verify: verified '
+golden_mutation_oracle() {
+  local subject=$1 name=$2
+  run_case "$subject" "$name" golden-source-change --record-golden @golden || return 1
+  [ "$(cat "$TMP/runs/$name/rc")" = 2 ] &&
+    grep -q 'non-golden source change during golden recording' "$TMP/runs/$name/stdout"
+}
+mutated=$(mutant no-golden-scope '/^assert_only_promoted_goldens\(\) \{/ { print; print "  return 0"; next } { print }') || exit 2
+expect_rejected 'golden scope removed' "$mutated" golden_mutation_oracle '^remote-verify: verified '
 finish
