@@ -411,6 +411,36 @@ let () =
   p "matmul tune replays exactly after a contention-free search"
     (completed mr1 && Bool.equal (replayed mr2) (mr1.Autotune.timings_contended = 0));
   p_all2 "matmul cache-hit values match the serial twin" got_mm2 got_serial ~f:approx;
+  let partial_mma = ref None and injected_mma = ref false and mma_attempt = ref false in
+  let old_attempt = !Autotune.on_candidate_attempt and old_timed = !Autotune.on_candidate_timed in
+  (Autotune.on_candidate_attempt :=
+     fun label -> mma_attempt := String.is_prefix label ~prefix:"W_sketch[mma-cpu");
+  (Autotune.on_candidate_timed :=
+     fun _ ~timed_so_far:_ ->
+       if !mma_attempt then (
+         injected_mma := true;
+         raise Stdlib.Exit));
+  Exn.protect
+    ~finally:(fun () ->
+      Autotune.on_candidate_attempt := old_attempt;
+      Autotune.on_candidate_timed := old_timed)
+    ~f:(fun () ->
+      match
+        Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
+          ~report:(fun r -> partial_mma := Some r)
+          (Context.cpu ()) mm_comp Ir.Indexing.Empty
+      with
+      | ctx, _ -> Context.release ctx
+      | exception Stdlib.Exit when !injected_mma -> ());
+  (match !partial_mma with
+  | Some r when !injected_mma ->
+      p "partial report retains admitted MMA timing"
+        (r.Autotune.mma_timed > 0
+        && Float.is_finite r.Autotune.mma_best_ms
+        && match r.Autotune.outcome with Autotune.Search_died _ -> true | _ -> false)
+  | Some r when r.Autotune.timings_contended > 0 ->
+      skipped ~aggregation:`Environment ~backend:"cc" "partial report retains admitted MMA timing"
+  | _ -> fail "expected an admitted MMA failure injection");
 
   (* === Per-fission-segment sketches (F_sketch): qd = qa + qb (forced materialized), then the
      matmul qe = qd * qc. The chain fissions; the matmul's [Zero_out] lands in its own [`Zeros]

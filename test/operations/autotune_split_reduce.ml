@@ -343,7 +343,52 @@ let () =
   | None ->
       p "multi-site split-reduce singles seeded" false;
       p "best-timed singles recombined into a composite" false);
-  p_all2 "tuned multi-site routine matches the serial reference" got want ~f:approx
+  p_all2 "tuned multi-site routine matches the serial reference" got want ~f:approx;
+  (* Cut the report immediately after admission: the second site's first single must already
+     establish composite eligibility, and the composite must already own its completed window. *)
+  List.iter [ false; true ] ~f:(fun composite ->
+      let partial = ref None and injected = ref false and selected = ref false in
+      let old_attempt = !Autotune.on_candidate_attempt in
+      let old_timed = !Autotune.on_candidate_timed in
+      (Autotune.on_candidate_attempt :=
+         fun label ->
+           selected :=
+             String.is_prefix label ~prefix:"F_split["
+             && Bool.equal composite (String.mem label ','));
+      (Autotune.on_candidate_timed :=
+         fun _ ~timed_so_far:_ ->
+           if !selected then (
+             injected := true;
+             raise Stdlib.Exit));
+      Exn.protect
+        ~finally:(fun () ->
+          Autotune.on_candidate_attempt := old_attempt;
+          Autotune.on_candidate_timed := old_timed)
+        ~f:(fun () ->
+          match
+            Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
+              ~report:(fun r -> partial := Some r)
+              (Context.cpu ())
+              (named "asr_ms_partial" (Train.forward (make_pair "partial")))
+              Ir.Indexing.Empty
+          with
+          | ctx, _ -> Context.release ctx
+          | exception Stdlib.Exit when !injected -> ());
+      let claim =
+        if composite then "partial report retains admitted split-reduce composite"
+        else "partial report retains admitted split-reduce single"
+      in
+      match !partial with
+      | Some r when !injected ->
+          p claim
+            (r.Autotune.split_reduce_timed > 0
+            && ((not composite)
+               || r.Autotune.split_reduce_composite_timed
+                  && r.Autotune.split_reduce_composite_eligible)
+            && match r.Autotune.outcome with Autotune.Search_died _ -> true | _ -> false)
+      | Some r when r.Autotune.timings_contended > 0 ->
+          skipped ~aggregation:`Environment ~backend:"cc" claim
+      | _ -> fail "expected an admitted split-reduce failure injection")
 
 (* === Leg 6: the conv-gradient shape — the enabling interchange (gh-ocannl-537). ===
 
