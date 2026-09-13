@@ -236,6 +236,12 @@ files.
   a FAILED cell, not a successful one with a warning — the survivor holds the device, so the
   row's own timing and every later row of that run were measured against it.
 
+- A detached Windows supervisor can give even a trivial Python cell a live `conhost.exe` after
+  the Python leader exits (gh-ocannl-974). The Job accounting is correct: killing that member
+  means `on_incomplete(killed=True)`. A test requiring an ordinary exit with no remaining member
+  must suppress its console with `DETACHED_PROCESS`, as `test_orchestrate.py` does; changing the
+  production observer or adding a settling sleep would change the cleanup policy to fit a fixture.
+
 - A `bin/` bench's correctness guard is a position-weighted checksum of the WHOLE output, and its
   position dependence is the whole of it: a residue of the FLATTENED offset `t = i*n + j` loses its
   row dependence exactly when the modulus divides the row stride, so `1 + (t mod 251)` gives every
