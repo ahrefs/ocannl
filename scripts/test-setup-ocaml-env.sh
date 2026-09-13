@@ -871,10 +871,4 @@ fi
 fi
 
 # ---------------------------------------------------------------------------
-echo
-if [ "$failures" -eq 0 ]; then
-  echo "all legs passed ($skipped skipped)"
-else
-  echo "$failures leg(s) failed ($skipped skipped)"
-fi
-exit $(( failures > 0 ? 1 : 0 ))
+finish

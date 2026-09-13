@@ -2448,12 +2448,4 @@ if diff -r "$TMP/lifecycle-before" "$life_root" >"$TMP/lifecycle-tree.diff"; the
 else report 1 'lifecycle: every launch and recovery leaves the source tree byte-identical' "$(cat "$TMP/lifecycle-tree.diff")"; fi
 lifecycle_cleanup
 
-echo
-# The skip count is printed on every run, not only when it is nonzero: "all legs
-# passed" over a run that decided three of them is the reading to prevent.
-if [ "$failures" -eq 0 ]; then
-  echo "all legs passed ($skipped skipped)"
-else
-  echo "$failures leg(s) failed ($skipped skipped)"
-fi
-exit $(( failures > 0 ? 1 : 0 ))
+finish

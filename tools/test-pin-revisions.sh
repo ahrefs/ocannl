@@ -370,7 +370,8 @@ fi
 # Each mutant must reach its intended wrong result. A failed launch or unrelated
 # error must not satisfy the shipping oracle's rejection.
 reason_local_pin() { grep -q 'git+file:' "$TMP/runs/$1/stdout"; }
-reason_project_package() { grep -q '^  arrayjit\.dev [0-9a-f]' "$TMP/runs/$1/stdout"; }
+reason_project_package() { grep -q '^project package reached opam show:' "$TMP/runs/$1/stderr"; }
+reason_project_only() { grep -q '^no package definitions parsed from opam show output$' "$TMP/runs/$1/stderr"; }
 reason_definitions() {
   [ "$(cat "$TMP/runs/$1/status")" = 0 ] && lacks_match '^Definition digests:' "$TMP/runs/$1/stdout"
 }
@@ -414,7 +415,7 @@ fi
 project_guard_mutant=$(mutant project-only-guard \
   'index($0, "#definition_packages[@]") && index($0, "-gt 0") { print "true \\"; changed++; next } { print } END { if (changed != 1) exit 9 }')
 if [ -n "$project_guard_mutant" ]; then
-  expect_rejected "silent all-project digest is detected" "$project_guard_mutant" oracle_project_only_loud "" reason_solution_published
+  expect_rejected "silent all-project digest is detected" "$project_guard_mutant" oracle_project_only_loud "" reason_project_only
 else
   report 1 "negative control: project-only guard mutant constructed"
 fi
