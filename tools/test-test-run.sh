@@ -74,6 +74,9 @@
 #      same verdict, while a merely red iteration is still repeated in full.
 #  33. read-only paths and lock-status: absent state, invalid input, physical
 #      paths, recorded and legacy paths, held/released and uninspectable locks.
+#  34-41. run/start lifecycle: completion, signals, stop, competing launches,
+#      orphan/background groups, publication window, last and legacy locks,
+#      and byte-identical source-tree preservation.
 
 set -u
 
@@ -179,6 +182,7 @@ if [ -z "$TMP" ] || [ ! -d "$TMP" ]; then
   exit 2
 fi
 cleanup() {
+  if declare -F lifecycle_cleanup >/dev/null; then lifecycle_cleanup; fi
   # Leg 4's zombie maker STOPS ITSELF and is resumed at the end of the leg.
   # Interrupted in between, nothing else would ever resume it: it would be
   # reparented to PID 1 still stopped, still holding its zombie child. Killing
@@ -2216,6 +2220,292 @@ else
   report 1 "repeat: a red iteration is repeated in full and keeps dune's status" \
     "exit $repeat_rc; iterations $(cat "$TMP/repeat-red-error.counter"); stdout: $repeat_out"
 fi
+
+# ---------------------------------------------------------------------------
+# Legs 34-41: attached run and detached start lifecycle (gh-ocannl-967).
+# All fixture work is outside the source tree, including its run store. The
+# ready marker is written by Dune AFTER the supervisor/group records exist.
+# Direct children remain unreaped until checked; other processes are signalled
+# only under their recorded start token. Every fixture wait has a deadline.
+# ---------------------------------------------------------------------------
+life_root=$TMP/lifecycle-repo
+life_runs=$TMP/lifecycle-runs
+life_bin=$TMP/lifecycle-bin
+life_prefix=$TMP/lifecycle
+life_pid= life_run=
+mkdir -p "$life_root/tools" "$life_root/scripts" "$life_runs" "$life_bin"
+cp "$SRC" "$life_root/tools/test-run.sh"
+cp "$GROUP_SRC" "$life_root/scripts/process-group.sh"
+cp -R "$life_root" "$TMP/lifecycle-before"
+cat >"$life_bin/dune" <<'EOF'
+#!/usr/bin/env bash
+case $1 in
+  ok) echo 'built ok' ;;
+  hold)
+    touch "$LIFECYCLE_PREFIX.ready"
+    exec perl -e 'while (!-e "$ARGV[0].release") { select undef, undef, undef, .05 }' "$LIFECYCLE_PREFIX"
+    ;;
+  background)
+    # The child closes the lock as well: lock freedom alone cannot prove the
+    # supervisor reaped a descendant that could still modify the build tree.
+    perl -e '$SIG{TERM}="IGNORE"; open my $f, ">", "$ARGV[0].child" or die $!;
+      print {$f} "$$\n"; close $f; sleep 60' "$LIFECYCLE_PREFIX" 9>&- </dev/null >/dev/null 2>&1 &
+    while [ ! -s "$LIFECYCLE_PREFIX.child" ]; do sleep .05; done
+    . "$LIFECYCLE_TOKEN_HELPER"
+    ps_token "$(cat "$LIFECYCLE_PREFIX.child")" >"$LIFECYCLE_PREFIX.child-token"
+    echo 'left a background child'
+    ;;
+  *) exit 3 ;;
+esac
+EOF
+chmod +x "$life_bin/dune"
+life() {
+  OCANNL_TOOL_TEST_RUNS=$life_runs LIFECYCLE_PREFIX=$life_prefix \
+    LIFECYCLE_TOKEN_HELPER=$TMP/ps_token.sh PATH=$life_bin:$PATH \
+    "$life_root/tools/test-run.sh" "$@"
+}
+life_capture() {
+  life "$@" >"$TMP/lifecycle.out" 2>"$TMP/lifecycle.err"
+  life_rc=$?
+}
+life_check() { # expected status, output pattern, label
+  if [ "$life_rc" = "$1" ] && grep -q "$2" "$TMP/lifecycle.out"; then
+    report 0 "lifecycle: $3"
+  else
+    report 1 "lifecycle: $3" "exit $life_rc; $(cat "$TMP/lifecycle.out" "$TMP/lifecycle.err")"
+  fi
+}
+life_dead() { case $(pstate "$1") in ''|Z) return 0 ;; *) return 1 ;; esac; }
+life_await_dead() {
+  local i
+  for ((i=0; i<300; i++)); do life_dead "$1" && return 0; sleep .05; done
+  return 1
+}
+life_wait_child() {
+  if ! life_await_dead "$life_pid"; then
+    report 1 "lifecycle: owned launcher finishes within 15 seconds"
+    kill -KILL "$life_pid" 2>/dev/null
+  fi
+  wait "$life_pid" 2>/dev/null
+  life_rc=$?
+  life_pid=
+}
+lifecycle_cleanup() {
+  local d pid
+  # Recorded supervisors/groups belong to this private fixture. Identity is
+  # checked even on failure: mutation controls deliberately leave survivors.
+  for d in "$life_runs"/*/; do
+    [ -d "$d" ] || continue
+    if proc_identity_matches "$d/pgid" "$d/gtoken"; then
+      pid=$(cat "$d/pgid"); kill -KILL -- "-$pid" 2>/dev/null
+    fi
+    if proc_identity_matches "$d/pid" "$d/ptoken"; then
+      pid=$(cat "$d/pid"); kill -KILL "$pid" 2>/dev/null
+    fi
+  done
+  if [ -s "$life_prefix.child-token" ] && [ -s "$life_prefix.child" ] && proc_identity_matches "$life_prefix.child" "$life_prefix.child-token"; then
+    kill -KILL "$(cat "$life_prefix.child")" 2>/dev/null
+  fi
+  if [ -n "$life_pid" ]; then kill -KILL "$life_pid" 2>/dev/null; wait "$life_pid" 2>/dev/null; life_pid=; fi
+}
+life_start() {
+  rm -f "$life_prefix.ready" "$life_prefix.release"
+  life_capture start --cap 30 hold
+  life_check 0 '^started: ' 'start returns after publication'
+  life_run=$(life paths run last)
+  if ! await_fixture_ready "$life_prefix.ready"; then
+    report 1 'lifecycle: Dune reached readiness'; exit 1
+  fi
+}
+life_no_survivors() {
+  local pg idle
+  pg=$(cat "$life_run/pgid")
+  idle=$(life lock-status "$life_run"); life_rc=$?
+  if [ "$life_rc" = 0 ] && [ "$idle" = idle ] && ! group_alive "$pg"; then
+    report 0 "lifecycle: $1 leaves no live group or lock holder"
+  else
+    report 1 "lifecycle: $1 leaves no live group or lock holder" "group=$pg lock=$life_rc:$idle"
+  fi
+}
+life_capture run --cap 30 ok
+life_check 0 'verdict: pass' 'attached green run returns its verdict'
+life_start
+life_capture status last
+life_check 3 '^running: ' 'status observes the detached owner'
+life_capture list
+life_check 0 'running' 'list observes the detached owner'
+life_count_before=$(find "$life_runs" -mindepth 1 -maxdepth 1 -type d | wc -l)
+life_capture run --cap 30 ok
+if [ "$life_rc" = 2 ] && grep -Fq "status $life_run" "$TMP/lifecycle.err" \
+   && [ "$(find "$life_runs" -mindepth 1 -maxdepth 1 -type d | wc -l)" = "$life_count_before" ]; then
+  report 0 'lifecycle: competing launch names the active run and creates no run directory'
+else
+  report 1 'lifecycle: competing launch names the active run and creates no run directory' "$(cat "$TMP/lifecycle.err")"
+fi
+touch "$life_prefix.release"
+life_capture wait last --timeout 15
+life_check 0 'verdict: pass' 'wait observes detached completion'
+if [ "$(tail -n 1 "$life_run/log")" = 'exit: 0' ] && [ "$(cat "$life_run/exit")" = 0 ]; then
+  report 0 'lifecycle: completion publishes both verdict and final log sentinel'
+else report 1 'lifecycle: completion publishes both verdict and final log sentinel'; fi
+life_no_survivors 'normal completion'
+life_start
+life_capture stop last
+life_check 0 '^sent TERM; confirm' 'stop signals a live supervisor'
+life_capture wait last --timeout 15
+life_check 143 'verdict: CANCELLED' 'stop records cancellation'
+life_capture stop last
+life_check 0 '^already finished:' 'stop on a completed run is idempotent'
+life_no_survivors 'stop'
+
+# POSIX group delivery and ignored-on-entry INT are not native Windows signal
+# semantics. The general start/status/stop contract above still runs there.
+case $(uname -s) in MSYS*|MINGW*) life_posix=0 ;; *) life_posix=1 ;; esac
+if [ "$life_posix" = 1 ] && [ "$have_state" = 1 ] && [ "$have_pgid" = 1 ]; then
+  for life_signal in INT HUP GROUP_TERM; do
+    rm -f "$life_prefix.ready" "$life_prefix.release"
+    OCANNL_TOOL_TEST_RUNS=$life_runs LIFECYCLE_PREFIX=$life_prefix \
+    LIFECYCLE_TOKEN_HELPER=$TMP/ps_token.sh PATH=$life_bin:$PATH \
+      perl -MPOSIX -e '$SIG{INT}="DEFAULT"; POSIX::setpgid(0,0); exec @ARGV' \
+      "$life_root/tools/test-run.sh" run --cap 30 hold >"$TMP/lifecycle.out" 2>"$TMP/lifecycle.err" &
+    life_pid=$!
+    if ! await_fixture_ready "$life_prefix.ready"; then report 1 'lifecycle: signal fixture ready'; exit 1; fi
+    life_run=$(life paths run last)
+    case $life_signal in
+      GROUP_TERM) kill -TERM -- "-$life_pid"; life_want=143 ;;
+      INT) kill -INT "$life_pid"; life_want=130 ;;
+      HUP) kill -HUP "$life_pid"; life_want=143 ;;
+    esac
+    life_wait_child
+    life_check "$life_want" 'verdict: CANCELLED' "attached $life_signal returns cancellation"
+    if [ "$(cat "$life_run/exit")" = "$life_want" ] && [ "$(tail -n 1 "$life_run/log")" = "exit: $life_want" ]; then
+      report 0 "lifecycle: $life_signal publishes the matching verdict and sentinel"
+    else report 1 "lifecycle: $life_signal publishes the matching verdict and sentinel"; fi
+    life_no_survivors "$life_signal"
+  done
+  life_start
+  life_supervisor=$(cat "$life_run/pid")
+  kill -KILL "$life_supervisor"
+  life_await_dead "$life_supervisor" || report 1 'lifecycle: killed supervisor becomes non-live'
+  life_capture status last
+  life_check 1 'died without recording a verdict' 'status identifies a killed supervisor'
+  life_capture lock-status last
+  life_check 3 '^held$' 'orphan Dune retains the worktree lock'
+  life_capture run --cap 30 ok
+  if [ "$life_rc" = 2 ] && grep -Fq "status $life_run" "$TMP/lifecycle.err"; then
+    report 0 'lifecycle: orphan lock refuses a new launch naming its run'
+  else report 1 'lifecycle: orphan lock refuses a new launch naming its run'; fi
+  life_capture stop last
+  life_check 0 "orphaned process group $(cat "$life_run/pgid")" 'stop names the orphan group'
+  life_await_dead "$(cat "$life_run/pgid")" || report 1 'lifecycle: orphan leader terminates'
+  life_no_survivors 'orphan recovery'
+  life_capture run --cap 30 ok
+  life_check 0 'verdict: pass' 'launch succeeds after orphan recovery'
+
+  rm -f "$life_prefix.child"
+  # The Dune cap does not bound cleanup after the supervisor starts finishing.
+  # Observe the attached launcher under our own deadline: waiting for the
+  # child's natural 60-second exit must fail even if the final verdict is 0.
+  OCANNL_TOOL_TEST_RUNS=$life_runs LIFECYCLE_PREFIX=$life_prefix \
+    LIFECYCLE_TOKEN_HELPER=$TMP/ps_token.sh PATH=$life_bin:$PATH \
+    "$life_root/tools/test-run.sh" run --cap 15 background \
+    >"$TMP/lifecycle.out" 2>"$TMP/lifecycle.err" &
+  life_pid=$!
+  life_wait_child
+  life_check 0 'verdict: pass' 'background-child run finishes within the fixture deadline'
+  life_run=$(life paths run last)
+  life_child=$(cat "$life_prefix.child")
+  # This assertion is immediate, before cleanup. A descendant that closed its
+  # lock is still a live build-tree writer, even when lock-status says idle.
+  if life_dead "$life_child"; then report 0 'lifecycle: background child is non-live before run returns'
+  else report 1 'lifecycle: background child is non-live before run returns'; fi
+  life_no_survivors 'background-child completion'
+  lifecycle_cleanup
+else
+  skip 'lifecycle: attached signals, orphan group and background-child reaping' 'requires POSIX process groups and independent state/pgid readers'
+fi
+
+life_last=$(life paths last)
+rm -f "$life_last"
+mkdir "$life_last"
+life_capture run --cap 30 ok
+if [ "$life_rc" = 2 ] && grep -q 'not a regular file' "$TMP/lifecycle.err"; then
+  report 0 'lifecycle: a directory squatting at last refuses publication'
+else report 1 'lifecycle: a directory squatting at last refuses publication'; fi
+rmdir "$life_last"
+life_capture run --cap 30 ok
+life_check 0 'verdict: pass' 'removing the last squatter restores launch'
+
+# Forge only the state that cannot be paused externally: owner published but
+# supervisor not recorded. A sleep shim records every 0.1s settle, while still
+# sleeping normally; this proves stop traversed the grace rather than guessing
+# from wall-clock runtime (a slow census could otherwise fake that proof).
+life_run=$life_runs/20000101T000000Z-77777
+mkdir "$life_run"
+printf 'hold\n' >"$life_run/cmd"
+printf '30\n' >"$life_run/cap"
+life paths worktree >"$life_run/wt"
+life paths runs >"$life_run/runs"
+: >"$life_run/log"
+life_owner=$(life paths owner)
+life_lock=$(life paths lock)
+printf '%s\n' "$life_run" >"$life_owner"
+printf '%s\n' "$life_run" >"$life_last"
+life_hold_lock() {
+  rm -f "$life_prefix.lock-ready"
+  perl -MFcntl=:flock -e 'open my $f, ">>", $ARGV[0] or die $!;
+    flock($f, LOCK_EX|LOCK_NB) or die $!;
+    open my $r, ">", $ARGV[1] or die $!; close $r; sleep 60' \
+    "$1" "$life_prefix.lock-ready" &
+  life_pid=$!
+  if ! await_fixture_ready "$life_prefix.lock-ready"; then report 1 'lifecycle: lock fixture ready'; exit 1; fi
+}
+life_hold_lock "$life_lock"
+life_capture status last
+life_check 3 'launch in progress' 'status distinguishes the publication-to-record window'
+life_real_sleep=$(command -v sleep)
+cat >"$life_bin/sleep" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$1" >>"$TMP/lifecycle-sleeps"
+exec "$life_real_sleep" "\$@"
+EOF
+chmod +x "$life_bin/sleep"
+: >"$TMP/lifecycle-sleeps"
+life_capture stop last
+life_check 0 'held the worktree lock; reaped them' 'stop reaps an abandoned publication'
+if [ "$(grep -c '^0.1$' "$TMP/lifecycle-sleeps")" -ge 30 ] && life_dead "$life_pid"; then
+  report 0 'lifecycle: stop settles the publication window before reaping its holder'
+else report 1 'lifecycle: stop settles the publication window before reaping its holder'; fi
+rm "$life_bin/sleep"
+life_wait_child
+life_capture lock-status last
+life_check 0 '^idle$' 'abandoned publication recovery releases the lock'
+
+# Absence of runs is the legacy record discriminator. Ask the public queries
+# for its lock/owner paths, rather than reconstructing the retired layout.
+life_legacy=$life_runs/20000101T000000Z-legacy
+mkdir "$life_legacy"
+cp "$life_run/cmd" "$life_run/cap" "$life_run/wt" "$life_legacy/"
+life_legacy_lock=$(life paths lock "$life_legacy") || { report 1 'lifecycle: legacy lock query'; exit 1; }
+life_legacy_owner=$(life paths owner "$life_legacy") || { report 1 'lifecycle: legacy owner query'; exit 1; }
+printf '/nowhere/legacy-run\n' >"$life_legacy_owner"
+# No public query names this retired launcher record; its removal is part of
+# the migration's source-tree preservation contract.
+printf '1 x\n' >"$life_root/.test-run.lock.launcher"
+life_hold_lock "$life_legacy_lock"
+life_capture run --cap 30 ok
+if [ "$life_rc" = 2 ] && grep -q 'previous version is still active' "$TMP/lifecycle.err" \
+   && grep -q 'status /nowhere/legacy-run' "$TMP/lifecycle.err"; then
+  report 0 'lifecycle: held legacy lock refuses launch naming its owner'
+else report 1 'lifecycle: held legacy lock refuses launch naming its owner'; fi
+kill -TERM "$life_pid"
+life_wait_child
+life_capture run --cap 30 ok
+life_check 0 'verdict: pass' 'free legacy lock permits launch'
+if diff -r "$TMP/lifecycle-before" "$life_root" >"$TMP/lifecycle-tree.diff"; then
+  report 0 'lifecycle: every launch and recovery leaves the source tree byte-identical'
+else report 1 'lifecycle: every launch and recovery leaves the source tree byte-identical' "$(cat "$TMP/lifecycle-tree.diff")"; fi
+lifecycle_cleanup
 
 echo
 # The skip count is printed on every run, not only when it is nonzero: "all legs
