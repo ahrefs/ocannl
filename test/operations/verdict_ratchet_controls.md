@@ -390,3 +390,49 @@ All four runs used the mutation runner and focused alias, exited 1 on the named 
 | One known Boolean operand establishes standard comparison type | Reject an unknown result category beside a known Boolean | Failed: `refuses a partially applied ordering with a branch-selected first operand`, `refuses ordering of a branch-selected Boolean helper result`, `refuses ordering when only the left operand establishes Boolean type`. Stayed green: `accepts witnessed partial ordering with a branch-selected first operand`, `accepts witnessed ordering of a branch-selected Boolean result`, `keeps branch-selected aggregate ordering outside Boolean algebra` | 20260912T223344Z-38899 |
 | Empty local modules preserve namespace shadowing | Omit the empty local-module presence marker | Failed: `does not reopen standard ordering through an empty local Base`, `does not reopen standard Boolean aliases through an empty local Stdlib`. Stayed green: `retains implicit standard ordering after opening an empty local module`, `restores a captured standard namespace after an empty local Base` | 20260912T223353Z-40685 |
 | Boolean predicates retain captured operand views | Ignore saved Boolean predicate operands | Failed: `refuses a vacuous operand captured by a Boolean conjunction predicate`, `refuses a vacuous operand captured by a Boolean disjunction predicate`, `refuses a vacuous operand in a selected Boolean predicate`. Stayed green: `accepts a witnessed operand captured by a Boolean conjunction predicate`, `accepts an annihilated operand in a Boolean predicate`, `accepts a witnessed operand in a selected Boolean predicate` | 20260912T223403Z-42475 |
+
+## Bounded higher-order residual contract (gh-ocannl-973)
+
+Functor-valued module arguments and first-class standard Boolean ordering are supported. General module typing and polymorphic structural comparison remain outside the contract. The three named refusal controls deliberately assert conservative refusals, not semantic invalidity; they pin loud boundaries pending corpus demand.
+
+| Mechanism | Controls | Mutation run |
+|---|---|---|
+| Ordering primitive closure disabled; Failed | `refuses full first-class ordering >` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts witnessed full first-class ordering >` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses partial first-class ordering >` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts witnessed partial first-class ordering >` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses full first-class ordering >=` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts witnessed full first-class ordering >=` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses partial first-class ordering >=` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts witnessed partial first-class ordering >=` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses full first-class ordering <` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts witnessed full first-class ordering <` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses partial first-class ordering <` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts witnessed partial first-class ordering <` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses full first-class ordering <=` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts witnessed full first-class ordering <=` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses partial first-class ordering <=` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts witnessed partial first-class ordering <=` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts opaque shadowed first-class ordering` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts opaque external first-class ordering` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts opaque unknown-open first-class ordering` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green | `accepts opaque aggregate first-class ordering` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses qualified Stdlib first-class ordering` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses qualified Base first-class ordering` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Failed | `refuses first-class ordering forwarded through a helper` | 20260913T195820Z-36571 |
+| Exact functor argument binding discarded; Failed | `refuses named functor-valued module argument` | 20260913T195843Z-38769 |
+| Exact functor argument binding discarded; Stayed green | `accepts witnessed named functor-valued module argument` | 20260913T195843Z-38769 |
+| Exact functor argument binding discarded; Failed | `refuses anonymous functor-valued module argument` | 20260913T195843Z-38769 |
+| Exact functor argument binding discarded; Stayed green | `accepts witnessed anonymous functor-valued module argument` | 20260913T195843Z-38769 |
+| Exact functor argument binding discarded; Failed | `refuses partial functor-valued module argument` | 20260913T195843Z-38769 |
+| Exact functor argument binding discarded; Stayed green | `accepts witnessed partial functor-valued module argument` | 20260913T195843Z-38769 |
+| Exact functor argument binding discarded; Failed | `refuses qualified functor-valued module argument` | 20260913T195843Z-38769 |
+| Exact functor argument binding discarded; Stayed green | `accepts witnessed qualified functor-valued module argument` | 20260913T195843Z-38769 |
+| Exact functor argument binding discarded; Stayed green | `accepts shadowed functor-valued module argument` | 20260913T195843Z-38769 |
+| Ordering primitive closure disabled; Stayed green (conservative boundary/control) | `retains named refusal recursive-empty-standard-namespace` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green (conservative boundary/control) | `retains named refusal partial-ordering-optional-default` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green (conservative boundary/control) | `accepts full ordering with an omitted annihilating default` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green (conservative boundary/control) | `retains named refusal supplied-unapplied-callable-default` | 20260913T195820Z-36571 |
+| Ordering primitive closure disabled; Stayed green (conservative boundary/control) | `refuses omitted unapplied callable default` | 20260913T195820Z-36571 |
+
+Both mutations exited 1 with exactly the failed controls listed above; each runner confirmed byte-identical restoration with cmp. The baseline run 20260913T195809Z-34949 and restored run 20260913T195852Z-40468 exited 0. Runs used tools/mutation-run.sh on macOS at source revision 12311e04d, with a 300-second cap. The named conservative boundaries also stayed green in the functor mutation.

@@ -1561,17 +1561,52 @@ and resolve ctx expr =
         else lookup ctx.env (String.concat ~sep:"." path)
       in
       let primitive () =
-        {
-          nothing with
-          closure =
-            Some (Boolean_function (Option.equal String.equal (List.last path) (Some "&&"), None));
-        }
+        let operator = Option.value_exn (List.last path) in
+        let closure =
+          if String.equal operator "&&" || String.equal operator "||" then
+            Boolean_function (String.equal operator "&&", None)
+          else
+            (* Ordering values use the same deferred relation as a two-parameter helper. Keeping
+               both slots lets ordinary substitution handle partial applications. *)
+            let site = site_of_location expr.pexp_loc in
+            let left = parameter_binding ~name:"left" ~site in
+            let right = parameter_binding ~name:"right" ~site in
+            let result = parameter_binding ~name:"" ~site in
+            let operand slot =
+              let written =
+                { expr with pexp_desc = Pexp_ident { txt = Lident slot.name; loc = expr.pexp_loc } }
+              in
+              (Asttypes.Nolabel, written, parameter_provenance slot, None)
+            in
+            Function
+              {
+                parameters =
+                  List.map [ left; right ] ~f:(fun slot ->
+                      { slot; label = Asttypes.Nolabel; patterns = []; names = [] });
+                claims = [];
+                calls =
+                  [
+                    {
+                      ordering = Some operator;
+                      applied = left;
+                      call_site = site;
+                      call_arguments = [ operand left; operand right ];
+                      result;
+                    };
+                  ];
+                body = parameter_provenance result;
+                native = false;
+                format = false;
+                loose = false;
+              }
+        in
+        { nothing with closure = Some closure }
       in
       match binding with
       | Some binding when String.is_suffix binding.name ~suffix:unknown_boolean_exports ->
           if
             Option.equal Bool.equal (resolve_binding binding).constant (Some true)
-            && match List.last path with Some ("&&" | "||") -> true | _ -> false
+            && binary_operator
           then primitive ()
           else nothing
       | Some binding -> own binding (resolve_binding binding)
@@ -1584,7 +1619,9 @@ and resolve ctx expr =
               }
           | None
             when match path with
-                 | [ ("&&" | "||") ] | [ ("Stdlib" | "Base"); ("&&" | "||") ] -> true
+                 | [ ("&&" | "||" | ">" | ">=" | "<" | "<=") ]
+                 | [ ("Stdlib" | "Base"); ("&&" | "||" | ">" | ">=" | "<" | "<=") ] ->
+                     true
                  | _ -> false ->
               primitive ()
           | None when Option.equal String.equal (List.last path) (Some "not") ->
@@ -2523,18 +2560,20 @@ and module_residual ctx module_expr =
       | Some { payload = Functor (body, env); _ } -> ({ ctx with env }, body)
       | _ -> (ctx, module_expr))
   | Pmod_apply (functor_, argument) -> (
-      let argument_exports = module_exports ctx argument in
       let captured, residual = module_residual ctx functor_ in
       match residual.pmod_desc with
       | Pmod_functor (parameter, body) ->
           let env =
             match parameter with
-            | Named ({ txt = Some name; _ }, _) ->
-                prefix_bindings name argument_exports @ captured.env
-            | Named ({ txt = None; _ }, _) | Unit -> captured.env
+            | Named ({ txt = Some name; _ }, _) -> module_bindings ctx ~name argument @ captured.env
+            | Named ({ txt = None; _ }, _) | Unit ->
+                ignore (module_exports ctx argument : binding list);
+                captured.env
           in
           module_residual { captured with env } body
-      | _ -> (ctx, module_expr))
+      | _ ->
+          ignore (module_exports ctx argument : binding list);
+          (ctx, module_expr))
   | Pmod_apply_unit functor_ -> (
       let captured, residual = module_residual ctx functor_ in
       match residual.pmod_desc with
