@@ -133,6 +133,7 @@ docs/latex/gen-workshop-tex.sh parses: true
 scripts/process-group.sh parses: true
 scripts/setup-ocaml-env.sh parses: true
 scripts/test-setup-ocaml-env.sh parses: true
+test/operations/ci_matrix.sh parses: true
 test/operations/sweep_harness.sh parses: true
 tools/aggregate-skips.sh parses: true
 tools/ci-compiler-test.sh parses: true

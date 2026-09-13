@@ -23,6 +23,14 @@ on:
         description: "Also run the scheduled-only jobs (Windows, OCaml floor)"
         type: boolean
         default: true
+      windows_only:
+        description: "Run only Windows main and training jobs (overrides extended)"
+        type: boolean
+        default: false
+      expected_sha:
+        description: "Intended full commit SHA (required for Windows-only dispatch)"
+        type: string
+        default: ""
 # A push superseded by another push to the same ref no longer needs a verdict:
 # runs here serialize on a queue that is often hours deep, so without this a
 # review round of N pushes creates N queued runs and the head commit -- the only
@@ -69,9 +77,10 @@ jobs:
         # latter from a branch when touching .expected goldens or the cc
         # backend's toolchain handling, rather than waiting for the sweep.
         #
-        # The scheduled and dispatched runs carry ubuntu and macOS too: they are
-        # cheap next to Windows, and having them green in the same run is what
-        # distinguishes "Windows drifted" from "master is broken".
+        # Scheduled and extended runs carry ubuntu and macOS too, distinguishing
+        # "Windows drifted" from "master is broken". Windows-only dispatch instead
+        # supplements ordinary PR coverage without duplicating its runner cost.
+        # Guard the option by event name so scheduled coverage cannot be narrowed.
         #
         # `inputs` is empty (hence falsy) outside workflow_dispatch. The
         # parentheses are load-bearing: && binds tighter than ||, so without
@@ -82,7 +91,9 @@ jobs:
         # it is not available. (A comment cannot live inside the folded scalar
         # below -- YAML reads anything indented under it as content.)
         os: >-
-          ${{ fromJSON((github.event_name == 'schedule' || inputs.extended)
+          ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.windows_only
+          && '["windows-latest"]'
+          || (github.event_name == 'schedule' || inputs.extended)
           && '["ubuntu-latest", "macos-latest", "windows-latest"]'
           || '["ubuntu-latest", "macos-latest"]') }}
         ocaml-compiler:
@@ -115,7 +126,9 @@ jobs:
         # that omits a matrix key would otherwise match and EXTEND an existing
         # combination instead of adding a job.
         include: >-
-          ${{ fromJSON((github.event_name == 'schedule' || inputs.extended)
+          ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.windows_only
+          && '[{"os": "windows-latest", "ocaml-compiler": "5.5.x", "suite": "train"}]'
+          || (github.event_name == 'schedule' || inputs.extended)
           && '[{"os": "ubuntu-latest", "ocaml-compiler": "5.3.x", "suite": "main"},
                {"os": "macos-latest", "ocaml-compiler": "5.5.x", "suite": "train"},
                {"os": "windows-latest", "ocaml-compiler": "5.5.x", "suite": "train"}]'
@@ -183,6 +196,29 @@ jobs:
       if: runner.os == 'Linux'
       run: sudo apt-get update
     - uses: actions/checkout@v7
+    # Bind deliberate platform coverage to the caller's intended head before
+    # dependency setup or test execution. A branch advancing between the SHA
+    # read and dispatch must fail rather than certify a different commit.
+    - name: Verify dispatch commit
+      if: github.event_name == 'workflow_dispatch'
+      shell: bash
+      env:
+        EXPECTED_SHA: ${{ inputs.expected_sha }}
+        WINDOWS_ONLY: ${{ inputs.windows_only }}
+      run: |
+        if [ "$WINDOWS_ONLY" = true ] && [ -z "$EXPECTED_SHA" ]; then
+          echo "::error::Windows-only dispatch requires expected_sha"
+          exit 1
+        fi
+        if [ -n "$EXPECTED_SHA" ]; then
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] &&
+            [ "$GITHUB_SHA" = "$EXPECTED_SHA" ] &&
+            [ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ] || {
+            echo "::error::dispatch and checkout must match expected_sha=$EXPECTED_SHA (run=$GITHUB_SHA)"
+            exit 1
+          }
+        fi
+        echo "Dispatch checkout: $(git rev-parse HEAD)"
     # Hermetic composite-action coverage belongs on the POSIX runner where the
     # action's bash/sed/awk contract executes natively. It uses fake opam and
     # git binaries, so it needs neither setup-ocaml nor network and adds no
@@ -209,6 +245,7 @@ jobs:
         tools/test-mutation-run.sh || failures=$((failures + 1))
         scripts/test-setup-ocaml-env.sh || failures=$((failures + 1))
         tools/test-ci-times.sh || failures=$((failures + 1))
+        test/operations/ci_matrix.sh || failures=$((failures + 1))
         exit $((failures > 0 ? 1 : 0))
     - uses: ocaml/setup-ocaml@v3
       with:
@@ -483,6 +520,7 @@ jobs:
   # conflicts with every branch in flight, while on the author's branch it costs
   # one command. AGENTS.md says when to run it.)
   fmt:
+    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only
     name: Formatting
     runs-on: ubuntu-latest
     timeout-minutes: 15

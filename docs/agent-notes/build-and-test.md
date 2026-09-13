@@ -1719,8 +1719,19 @@ that they earn a lookup rather than always-loaded space.
   (`>= 5.3.0`, against 5.5 everywhere else). Both are reachable on demand through
   `workflow_dispatch` with `extended: true` — dispatch from a branch when touching `.expected`
   goldens or the cc backend's toolchain handling rather than waiting for the sweep, since those are
-  the changes that actually break on Windows (line endings, float formatting, mingw). Twice weekly
-  rather than weekly because actions/cache evicts entries unread for 7 days, and an exactly-weekly
+  the changes that actually break on Windows (line endings, float formatting, mingw). For a PR already
+  running its normal matrix, select `windows_only: true` to add only Windows main and training
+  coverage, overriding `extended` and omitting duplicate formatting, Linux, macOS and floor jobs
+  (gh-ocannl-971). Supply `expected_sha` as the full intended head: each Windows job refuses a
+  missing SHA or a run/checkout that differs from it before dependency setup. Dispatch `ci.yml`
+  from the PR branch with both inputs; read the dispatched run's `head_sha` and job list, require
+  both real Windows jobs to finish successfully, then re-read the PR head before merging through
+  the regular exact-head checks gate. A moved head needs fresh Windows evidence; this selection
+  supplements ordinary PR checks and waives none of them. `test/operations/ci_matrix.sh` evaluates the
+  workflow's actual expressions for normal, scheduled, extended and Windows-only events, rejects
+  opposing matrix mutations, and executes the commit guard with obsolete-head/checkout controls.
+  Twice weekly rather than weekly because actions/cache evicts entries unread for 7 days, and an
+  exactly-weekly
   cadence would pay the cold-switch cost every time. The two ride the same cadence because they
   fail the same way: slowly, and through the dependency cone or the toolchain rather than through
   a change under review.
