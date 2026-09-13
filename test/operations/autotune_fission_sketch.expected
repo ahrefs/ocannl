@@ -17,6 +17,7 @@ whole-routine MMA candidates stay out of the fission-scoped counter: true
 tuned matmul matches the serial twin: true
 matmul tune replays exactly after a contention-free search: true
 matmul cache-hit values match the serial twin: true
+partial report retains admitted MMA timing: true
 per-segment sketch candidates seeded: true
 per-segment tensorized sketch candidates seeded: true
 per-segment sketch candidates timed: true
