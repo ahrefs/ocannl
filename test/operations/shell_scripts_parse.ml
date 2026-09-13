@@ -1534,6 +1534,64 @@ module Errexit_negation = struct
     Verdict.p "the statement-position ! grep fixture reaches the absent()-style refusal" refused
 end
 
+module Harness_contract = struct
+  (* test-run.sh is the production supervisor. Standalone harnesses outside the filename convention
+     declare their lifecycle explicitly; Dune actions use the function-only API. *)
+  let member path text =
+    String.is_suffix path ~suffix:".sh"
+    && (not (String.equal path "tools/test-run.sh"))
+    && (String.is_prefix path ~prefix:"tools/test-"
+       || String.is_prefix path ~prefix:"scripts/test-"
+       || String.is_substring text ~substring:"# ocannl-harness: standalone\n")
+
+  let compliant text =
+    let lines = String.split_lines text |> List.map ~f:String.strip in
+    let source =
+      List.exists lines ~f:(fun line ->
+          (String.is_prefix line ~prefix:". " || String.is_prefix line ~prefix:"source ")
+          && String.is_substring line ~substring:"harness-support.sh")
+    in
+    (not (List.is_empty lines))
+    && source
+    && List.mem lines "harness_args \"$@\"" ~equal:String.equal
+    && List.exists lines ~f:(fun line -> String.is_prefix line ~prefix:"harness_scratch ")
+    && List.mem lines "finish" ~equal:String.equal
+    && not
+         (List.exists lines ~f:(fun line ->
+              List.exists [ "report()"; "skip()"; "finish()"; "mutant()"; "expect_rejected()" ]
+                ~f:(fun name ->
+                  let compact = String.filter line ~f:(Fn.non Char.is_whitespace) in
+                  String.is_prefix compact ~prefix:name
+                  || String.is_prefix compact ~prefix:("function" ^ name)
+                  || String.is_prefix compact ~prefix:("function" ^ String.drop_suffix name 2 ^ "{"))))
+
+  let controls () =
+    let correct =
+      ". \"$HERE/harness-support.sh\"\nharness_args \"$@\"\nharness_scratch example\nfinish\n"
+    in
+    Verdict.p "shared harness source and lifecycle are accepted" (compliant correct);
+    Verdict.p "new hand-run harnesses are discovered"
+      (member "scripts/test-new.sh" ""
+      && member "test/operations/new.sh" "# ocannl-harness: standalone\n"
+      && not (member "test/operations/action.sh" ""));
+    Verdict.p "production test-run is outside the harness family"
+      (not (member "tools/test-run.sh" "# ocannl-harness: standalone\n"));
+    List.iter [ "report()"; "skip()"; "finish()"; "mutant()"; "expect_rejected()" ] ~f:(fun name ->
+        List.iter
+          [
+            name ^ " { :; }";
+            String.drop_suffix name 2 ^ " () { :; }";
+            "function " ^ name ^ " { :; }";
+            "function " ^ String.drop_suffix name 2 ^ " { :; }";
+          ]
+          ~f:(fun definition ->
+            Verdict.pf "duplicate harness %s is refused" name
+              (not (compliant (correct ^ definition ^ "\n")))));
+    Verdict.p "a comment mentioning support cannot satisfy sourcing"
+      (not
+         (compliant "# harness-support.sh\nharness_args \"$@\"\nharness_scratch example\nfinish\n"))
+end
+
 let () =
   if Array.length Stdlib.Sys.argv < 2 then (
     eprintf "Usage: %s <workspace_root> <ocannl_config and shell scripts...>\n" Stdlib.Sys.argv.(0);
@@ -1554,6 +1612,7 @@ let () =
         (if expected then "a shell script this check reports on" else "outside this check's scope")
         (Bool.equal actual expected));
   Errexit_negation.controls ();
+  Harness_contract.controls ();
   let base = base_dir Stdlib.Sys.argv.(1) in
   (* Reported repository-relative, opened as dune handed them over: the working directory is deep in
      the build tree and the paths arrive relative to it. *)
@@ -1574,6 +1633,9 @@ let () =
     |> List.dedup_and_sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
   in
   List.iter scripts ~f:(fun (rel, path) ->
+      let text = In_channel.read_all path in
+      if Harness_contract.member rel text then
+        Verdict.pf "%s uses the shared harness contract" rel (Harness_contract.compliant text);
       let first_line = Option.value (first_line_of path) ~default:"" in
       Errexit_negation.report ~fail:Verdict.fail ~rel (In_channel.read_all path);
       match Shebang.parse first_line with

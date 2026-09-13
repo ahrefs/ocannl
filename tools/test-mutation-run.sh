@@ -3,8 +3,11 @@
 # isolated repository fixture, with a deterministic fake dune on PATH.
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
-fixture=$(mktemp -d "${TMPDIR:-/tmp}/mutation-tests.XXXXXXXX")
-trap 'rm -rf "$fixture"' EXIT
+. "$root/scripts/harness-support.sh"
+harness_args "$@"
+harness_require perl git
+harness_scratch mutation-tests
+fixture=$TMP
 mkdir -p "$fixture/repo/tools" "$fixture/repo/scripts" "$fixture/bin" "$fixture/runs"
 cp "$root/tools/mutation-run.sh" "$root/tools/test-run.sh" "$fixture/repo/tools/"
 cp "$root/scripts/process-group.sh" "$fixture/repo/scripts/"
@@ -335,3 +338,5 @@ tools/test-run.sh idle
 [ -f .test-run.lock ]
 rm .test-run.lock
 printf 'PASS idle observes the legacy lock without removing it\n'
+
+finish

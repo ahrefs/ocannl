@@ -5064,6 +5064,7 @@
   ../../tools/aggregate-skips.sh
   ../../tools/sweep.sh
   sweep_harness.sh
+  ../../scripts/harness-support.sh
   (env_var ProgramFiles)
   (env_var ProgramW6432)
   (env_var "ProgramFiles(x86)")

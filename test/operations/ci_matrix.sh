@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # Evaluate ci.yml's actual matrix expressions and execute its commit guard.
 # Requires only python3 and bash; run on the Ubuntu main leg before opam setup.
+# ocannl-harness: standalone
+# Usage: test/operations/ci_matrix.sh [--keep|--help]
 set -eu
-if ! command -v python3 >/dev/null 2>&1; then
-  echo 'SKIP ci matrix controls: no python3 on PATH (1 skipped)'
-  exit 0
-fi
-python3 - "$(dirname "$0")/../../.github/workflows/ci.yml" <<'PY'
+root=$(cd "$(dirname "$0")/../.." && pwd)
+. "$root/scripts/harness-support.sh"
+harness_args "$@"
+harness_require python3
+harness_scratch ci-matrix
+rc=0
+python3 - "$root/.github/workflows/ci.yml" "$TMP" <<'PY' || rc=$?
 import ast
 import itertools
 import json
@@ -15,7 +19,6 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import tempfile
 
 source = Path(sys.argv[1]).read_text()
 
@@ -102,34 +105,35 @@ assert "if: github.event_name == 'workflow_dispatch'" in step
 script = step.split('      run: |\n', 1)[1]
 script = '\n'.join(line[8:] for line in script.splitlines())
 sha, other = 'a' * 40, 'b' * 40
-with tempfile.TemporaryDirectory(prefix='ci-matrix-') as scratch:
-    git = Path(scratch) / 'git'
-    git.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$CHECKOUT_SHA"\n')
-    git.chmod(0o755)
+scratch = sys.argv[2]
+git = Path(scratch) / 'git'
+git.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$CHECKOUT_SHA"\n')
+git.chmod(0o755)
 
-    def guard(code, expected, run, checkout, only=True):
-        env = dict(os.environ, PATH=scratch + os.pathsep + os.environ['PATH'],
-                   EXPECTED_SHA=expected, GITHUB_SHA=run, CHECKOUT_SHA=checkout,
-                   WINDOWS_ONLY=str(only).lower())
-        result = subprocess.run(['bash', '-eo', 'pipefail', '-c', code], env=env,
-                                capture_output=True, text=True)
-        return result.returncode
+def guard(code, expected, run, checkout, only=True):
+    env = dict(os.environ, PATH=scratch + os.pathsep + os.environ['PATH'],
+               EXPECTED_SHA=expected, GITHUB_SHA=run, CHECKOUT_SHA=checkout,
+               WINDOWS_ONLY=str(only).lower())
+    result = subprocess.run(['bash', '-eo', 'pipefail', '-c', code], env=env,
+                            capture_output=True, text=True)
+    return result.returncode
 
-    assert guard(script, sha, sha, sha) == 0
-    assert guard(script, '', sha, sha, False) == 0  # existing extended dispatch
-    for label, expected, run, checkout in (
-        ('missing intended SHA', '', sha, sha), ('malformed SHA', 'abc', sha, sha),
-        ('obsolete run head', sha, other, other), ('wrong checkout', sha, sha, other),
-    ):
-        assert guard(script, expected, run, checkout) == 1, label
-        print('PASS rejects', label)
-    for label, check, args in (
-        ('run identity', '[ "$GITHUB_SHA" = "$EXPECTED_SHA" ] &&', (sha, other, sha)),
-        ('checkout identity', '[ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ]', (sha, sha, other)),
-    ):
-        assert check in script
-        mutant = script.replace(check, 'true &&' if check.endswith('&&') else 'true')
-        assert guard(mutant, *args) == 0, label  # proves the refusal owns this case
-        print('PASS negative control exposes removed', label)
-print('ci matrix controls: all passed (0 skipped)')
+assert guard(script, sha, sha, sha) == 0
+assert guard(script, '', sha, sha, False) == 0  # existing extended dispatch
+for label, expected, run, checkout in (
+    ('missing intended SHA', '', sha, sha), ('malformed SHA', 'abc', sha, sha),
+    ('obsolete run head', sha, other, other), ('wrong checkout', sha, sha, other),
+):
+    assert guard(script, expected, run, checkout) == 1, label
+    print('PASS rejects', label)
+for label, check, args in (
+    ('run identity', '[ "$GITHUB_SHA" = "$EXPECTED_SHA" ] &&', (sha, other, sha)),
+    ('checkout identity', '[ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ]', (sha, sha, other)),
+):
+    assert check in script
+    mutant = script.replace(check, 'true &&' if check.endswith('&&') else 'true')
+    assert guard(mutant, *args) == 0, label  # proves the refusal owns this case
+    print('PASS negative control exposes removed', label)
 PY
+report "$rc" "ci matrix controls"
+finish

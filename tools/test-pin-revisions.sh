@@ -23,56 +23,22 @@
 
 set -u
 
-KEEP=0
-for arg in "$@"; do
-  case "$arg" in
-    --keep) KEEP=1 ;;
-    # The whole leading comment block, however long it grows: a pinned line
-    # range silently truncates --help the first time a leg is added.
-    -h | --help)
-      sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'
-      exit 0
-      ;;
-    *)
-      echo "test-pin-revisions.sh: unknown argument '$arg'" >&2
-      exit 2
-      ;;
-  esac
-done
+. "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
+harness_args "$@"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 SRC="$ROOT/.github/actions/pin-revisions/resolve.sh"
 [ -f "$SRC" ] || { echo "no $SRC" >&2; exit 2; }
 
-failures=0
-report() { # report RC LABEL [DETAIL]
-  if [ "$1" -eq 0 ]; then
-    printf 'PASS  %s\n' "$2"
-  else
-    failures=$((failures + 1))
-    printf 'FAIL  %s\n' "$2"
-    [ $# -ge 3 ] && printf '      %s\n' "$3"
-  fi
-  return 0
-}
 
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/pin-revisions-test.XXXXXX" 2>/dev/null)" || TMP=""
-if [ -z "$TMP" ] || [ ! -d "$TMP" ]; then
-  echo "could not create a temporary directory under ${TMPDIR:-/tmp}" >&2
-  exit 2
+harness_require bash awk sed grep sort git
+if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+  skip "every digest leg" "neither sha256sum nor shasum is on PATH"
+  finish
 fi
-cleanup() {
-  if [ "$KEEP" = 1 ]; then
-    printf 'kept %s\n' "$TMP"
-    return 0
-  fi
-  [ -n "$TMP" ] && [ -d "$TMP" ] && [ "$TMP" != / ] && rm -rf "$TMP"
-  return 0
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+harness_scratch "test-pin-revisions"
+
 
 mkdir -p "$TMP/bin" "$TMP/project"
 printf 'opam-version: "2.0"\n' >"$TMP/project/arrayjit.opam"
@@ -400,25 +366,37 @@ else
   report 1 "empty git resolution" "see $TMP/runs/shipping-resolution"
 fi
 
-mutant() { # mutant NAME AWK_PROGRAM
-  local name=$1 program=$2 out="$TMP/$1.sh"
-  awk "$program" "$SRC" >"$out" || return 1
-  bash -n "$out" || return 1
-  printf '%s' "$out"
+
+# Each mutant must reach its intended wrong result. A failed launch or unrelated
+# error must not satisfy the shipping oracle's rejection.
+reason_local_pin() { grep -q 'git+file:' "$TMP/runs/$1/stdout"; }
+reason_project_package() { grep -q '^project package reached opam show:' "$TMP/runs/$1/stderr"; }
+reason_project_only() {
+  # Bash 3.2 diagnoses the empty array at expansion; newer Bash reaches the
+  # downstream empty-definition guard. Both show this specific guard was lost.
+  grep -qE '(^no package definitions parsed from opam show output$|definition_packages\[@\]: unbound variable$)' \
+    "$TMP/runs/$1/stderr"
 }
-expect_rejected() { # expect_rejected LABEL SUBJECT ORACLE
-  local label=$1 subject=$2 oracle=$3
-  if "$oracle" "$subject" "mutant-$(printf '%s' "$label" | tr ' ' '-')"; then
-    report 1 "negative control: $label" "the shipping oracle accepted the mutant"
-  else
-    report 0 "negative control: $label"
-  fi
+reason_definitions() {
+  [ "$(cat "$TMP/runs/$1/status")" = 0 ] && lacks_match '^Definition digests:' "$TMP/runs/$1/stdout"
+}
+reason_solution_published() {
+  [ "$(cat "$TMP/runs/$1/status")" = 0 ] && grep -q '^solution-digest=' "$TMP/runs/$1/github-output"
+}
+reason_digest_published() {
+  [ "$(cat "$TMP/runs/$1/status")" = 0 ] && grep -q '^digest=' "$TMP/runs/$1/github-output"
+}
+reason_storage() { grep -q 'repo/default/repo' "$TMP/runs/$1/stderr"; }
+reason_color() { has_escape "$TMP/runs/$1/stdout" "$TMP/runs/$1/stderr"; }
+reason_order() {
+  [ "$(cat "$TMP/runs/$1-a/status")" = 0 ] \
+    && ! cmp -s "$TMP/expected-output" "$TMP/runs/$1-a/github-output"
 }
 
 local_mutant=$(mutant local-pin-filter \
   'index($0, "| sed") && index($0, "git+file:") { changed++; next } { print } END { if (changed != 1) exit 9 }')
 if [ -n "$local_mutant" ]; then
-  expect_rejected "removing local-pin exclusion is detected" "$local_mutant" oracle_happy
+  expect_rejected "removing local-pin exclusion is detected" "$local_mutant" oracle_happy "" reason_local_pin
 else
   report 1 "negative control: local-pin mutant constructed"
 fi
@@ -426,7 +404,7 @@ fi
 project_mutant=$(mutant project-package-filter \
   'index($0, "grep -qxF -- \"$name\"") { print "  if false; then"; changed++; next } { print } END { if (changed != 1) exit 9 }')
 if [ -n "$project_mutant" ]; then
-  expect_rejected "removing project-package exclusion is detected" "$project_mutant" oracle_happy
+  expect_rejected "removing project-package exclusion is detected" "$project_mutant" oracle_happy "" reason_project_package
 else
   report 1 "negative control: project-package mutant constructed"
 fi
@@ -434,7 +412,7 @@ fi
 definitions_mutant=$(mutant definition-digest-listing \
   'index($0, "echo \"Definition digests:\"") { skip = 1 } skip { changed++; if (index($0, "paste -d")) skip = 0; next } { print } END { if (changed != 2) exit 9 }')
 if [ -n "$definitions_mutant" ]; then
-  expect_rejected "dropping the per-definition listing is detected" "$definitions_mutant" oracle_happy
+  expect_rejected "dropping the per-definition listing is detected" "$definitions_mutant" oracle_happy "" reason_definitions
 else
   report 1 "negative control: definition-listing mutant constructed"
 fi
@@ -442,7 +420,7 @@ fi
 project_guard_mutant=$(mutant project-only-guard \
   'index($0, "#definition_packages[@]") && index($0, "-gt 0") { print "true \\"; changed++; next } { print } END { if (changed != 1) exit 9 }')
 if [ -n "$project_guard_mutant" ]; then
-  expect_rejected "silent all-project digest is detected" "$project_guard_mutant" oracle_project_only_loud
+  expect_rejected "silent all-project digest is detected" "$project_guard_mutant" oracle_project_only_loud "" reason_project_only
 else
   report 1 "negative control: project-only guard mutant constructed"
 fi
@@ -450,7 +428,7 @@ fi
 definition_count_mutant=$(mutant definition-count-guard \
   '/^\[/ && index($0, "wc -l <\"$work_dir/labels\"") { print "true \\"; changed++; next } { print } END { if (changed != 1) exit 9 }')
 if [ -n "$definition_count_mutant" ]; then
-  expect_rejected "silent partial definition listing is detected" "$definition_count_mutant" oracle_partial_definitions_loud
+  expect_rejected "silent partial definition listing is detected" "$definition_count_mutant" oracle_partial_definitions_loud "" reason_solution_published
 else
   report 1 "negative control: definition-count guard mutant constructed"
 fi
@@ -458,7 +436,7 @@ fi
 empty_mutant=$(mutant empty-registry-guard \
   'index($0, "[ -n \"$specs\" ] ||") { print "if [ -z \"$specs\" ]; then"; print "  echo \"digest=$(printf %s \\\"\\\" | hash12)\" >>\"$GITHUB_OUTPUT\""; print "  exit 0"; print "fi"; changed++; next } { print } END { if (changed != 1) exit 9 }')
 if [ -n "$empty_mutant" ]; then
-  expect_rejected "silent empty-registry digest is detected" "$empty_mutant" oracle_empty_loud
+  expect_rejected "silent empty-registry digest is detected" "$empty_mutant" oracle_empty_loud "" reason_digest_published
 else
   report 1 "negative control: empty-registry mutant constructed"
 fi
@@ -466,7 +444,7 @@ fi
 storage_mutant=$(mutant opam-storage \
   '/^set -euo pipefail$/ { print; print "root=$(opam var root)"; print "repo_file=\"$root/repo/default/repo\""; print "stamp=$(sed -n '\''s/^stamp:.*\"\\([^\"]*\\)\".*/\\1/p'\'' \"$repo_file\")"; print "[ -n \"$stamp\" ] || exit 1"; changed++; next } { print } END { if (changed != 1) exit 9 }')
 if [ -n "$storage_mutant" ]; then
-  expect_rejected "opam 2.5.0 repository-stamp assumption is detected" "$storage_mutant" oracle_happy
+  expect_rejected "opam 2.5.0 repository-stamp assumption is detected" "$storage_mutant" oracle_happy "" reason_storage
 else
   report 1 "negative control: opam-storage mutant constructed"
 fi
@@ -476,7 +454,7 @@ sed 's/ --color=never//g' "$SRC" >"$color_mutant"
 if [ "$(grep -c -- '--color=never' "$SRC")" -eq 3 ] \
   && ! grep -q -- '--color=never' "$color_mutant" \
   && bash -n "$color_mutant"; then
-  expect_rejected "removing color suppression is detected" "$color_mutant" oracle_happy
+  expect_rejected "removing color suppression is detected" "$color_mutant" oracle_happy "" reason_color
 else
   report 1 "negative control: OPAMCOLOR mutant constructed"
 fi
@@ -484,7 +462,7 @@ fi
 sort_mutant=$(mutant pin-sort \
   'BEGIN { in_specs=0 } /^specs=\$\(/ { in_specs=1 } in_specs && /LC_ALL=C sort -u\)/ { sub(/LC_ALL=C sort -u/, "cat"); changed++; in_specs=0 } { print } END { if (changed != 1) exit 9 }')
 if [ -n "$sort_mutant" ]; then
-  expect_rejected "removing pin sort/dedup is detected" "$sort_mutant" oracle_deterministic
+  expect_rejected "removing pin sort/dedup is detected" "$sort_mutant" oracle_deterministic "" reason_order
 else
   report 1 "negative control: pin-sort mutant constructed"
 fi
@@ -492,7 +470,7 @@ fi
 resolution_mutant=$(mutant resolution-guard \
   'index($0, "[ -n \"$sha\" ] ||") { print "  [ -n \"$sha\" ] || sha=0000000000000000000000000000000000000000"; changed++; next } { print } END { if (changed != 1) exit 9 }')
 if [ -n "$resolution_mutant" ]; then
-  expect_rejected "silent empty resolution is detected" "$resolution_mutant" oracle_resolution_loud
+  expect_rejected "silent empty resolution is detected" "$resolution_mutant" oracle_resolution_loud "" reason_digest_published
 else
   report 1 "negative control: resolution mutant constructed"
 fi
@@ -502,5 +480,6 @@ if [ "$failures" -ne 0 ]; then
   # The run directories named above are inside $TMP, so without --keep the EXIT
   # trap removes them before anyone can look.
   [ "$KEEP" = 1 ] || printf 're-run with --keep to retain the run directories named above\n' >&2
-  exit 1
 fi
+
+finish

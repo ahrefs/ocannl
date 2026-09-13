@@ -6,6 +6,7 @@
 # ambiguous in the first place.
 
 set -euo pipefail
+. "$(dirname "$0")/../../scripts/harness-support.sh"
 
 # Most assertions below are deliberately quiet shell predicates. If one fails
 # under errexit, name the exact site before cleanup removes its evidence; the
@@ -789,7 +790,16 @@ altered_nvrtc_options=${rendered_nvrtc_options/sentinel/altered}
 [ "$altered_nvrtc_options" != "$rendered_nvrtc_options" ]
 absent -Fx "nvrtc options: $altered_nvrtc_options" "${metal_log%.log}.fingerprint"
 grep -Fxq "hiprtc options: $rendered_hip_options" "${metal_log%.log}.fingerprint"
-grep -Fxq "metal options: $rendered_metal_options" "${metal_log%.log}.fingerprint"
+assert_metal_options() {
+  if grep -Fxq "metal options: $1" "$2"; then return 0; fi
+  echo 'metal fingerprint differs from rendered options' >&2
+  return 1
+}
+assert_metal_options "$rendered_metal_options" "${metal_log%.log}.fingerprint"
+printf 'metal options: %s-MUTANT\n' "$rendered_metal_options" >"$tmp/metal-mutant.fingerprint"
+harness_rejected 1 '^metal fingerprint differs from rendered options$' \
+  "$tmp/metal-mutant-rejection" assert_metal_options \
+  "$rendered_metal_options" "$tmp/metal-mutant.fingerprint"
 # And the same whole-line controls, for the same reason. With no sentinel to
 # corrupt, the alteration rewrites the first property's VALUE -- a spelling no
 # renderer output can produce -- rather than a slot the fixture invented.

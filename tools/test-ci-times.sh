@@ -35,44 +35,13 @@
 
 set -u
 
-KEEP=0
-for arg in "$@"; do
-  case "$arg" in
-    --keep) KEEP=1 ;;
-    # The whole leading comment block, however long it grows: a pinned line
-    # range silently truncates --help the first time a leg is added.
-    -h | --help)
-      sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'
-      exit 0
-      ;;
-    *)
-      echo "test-ci-times.sh: unknown argument '$arg'" >&2
-      exit 2
-      ;;
-  esac
-done
+. "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
+harness_args "$@"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC="$HERE/ci-times.sh"
 [ -f "$SRC" ] || { echo "no $SRC" >&2; exit 2; }
 
-failures=0
-report() { # report RC LABEL [DETAIL]
-  if [ "$1" -eq 0 ]; then
-    printf 'PASS  %s\n' "$2"
-  else
-    failures=$((failures + 1))
-    printf 'FAIL  %s\n' "$2"
-    [ $# -ge 3 ] && printf '      %s\n' "$3"
-  fi
-  return 0
-}
-skipped=0
-skip() { # skip LABEL REASON -- a leg this system cannot decide, not a failure
-  skipped=$((skipped + 1))
-  printf 'SKIP  %s\n      %s\n' "$1" "$2"
-  return 0
-}
 
 # The one host fact this harness cannot work around: the subject invokes
 # `python3` by that name, so a host without one decides nothing about it.  That
@@ -83,37 +52,14 @@ command -v python3 >/dev/null 2>&1 || HAVE_PYTHON3=0
 
 # The skip count is printed on every run, not only when it is nonzero: "all
 # legs passed" over a run that decided none of them is the reading to prevent.
-finish() {
-  echo
-  if [ "$failures" -eq 0 ]; then
-    echo "ci-times.sh: all legs passed ($skipped skipped)"
-  else
-    echo "ci-times.sh: $failures leg(s) failed ($skipped skipped)"
-  fi
-  exit $((failures > 0 ? 1 : 0))
-}
 
 if [ "$HAVE_PYTHON3" = 0 ]; then
   skip "every leg" "no python3 on PATH; the subject invokes it under that name"
   finish
 fi
 
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/ci-times-test.XXXXXX" 2>/dev/null)" || TMP=""
-if [ -z "$TMP" ] || [ ! -d "$TMP" ]; then
-  echo "could not create a temporary directory under ${TMPDIR:-/tmp}" >&2
-  exit 2
-fi
-cleanup() {
-  if [ "$KEEP" = 1 ]; then
-    printf 'kept %s\n' "$TMP"
-    return 0
-  fi
-  [ -n "$TMP" ] && [ -d "$TMP" ] && [ "$TMP" != / ] && rm -rf "$TMP"
-  return 0
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+harness_scratch "test-ci-times"
+
 
 mkdir -p "$TMP/bin" "$TMP/work"
 
@@ -359,27 +305,6 @@ else
   report 1 "no completed run available" "see $TMP/runs/shipping-no-run"
 fi
 
-mutant() { # mutant NAME AWK_PROGRAM [AWK_OPTION...]
-  local name=$1 program=$2 out="$TMP/$1.sh"
-  shift 2
-  awk "$@" "$program" "$SRC" >"$out" || return 1
-  bash -n "$out" || return 1
-  printf '%s' "$out"
-}
-expect_rejected() { # expect_rejected LABEL SUBJECT ORACLE [GREP_PATTERN]
-  local label=$1 subject=$2 oracle=$3 pattern=${4-}
-  local run="mutant-$(printf '%s' "$label" | tr ' ' '-')"
-  if "$oracle" "$subject" "$run"; then
-    report 1 "negative control: $label" "the shipping oracle accepted the mutant"
-  elif [ -n "$pattern" ] && ! grep -qE -- "$pattern" "$TMP/runs/$run/stdout"; then
-    # Rejected, but not for the reason claimed -- a mutant that merely fails to
-    # run proves nothing about the guard it lost.
-    report 1 "negative control: $label" \
-      "rejected without printing /$pattern/; see $TMP/runs/$run"
-  else
-    report 0 "negative control: $label"
-  fi
-}
 
 # Drop the sign guard: the interval arithmetic goes back to reporting whatever
 # the subtraction says, so the two skipped jobs print negative durations.
