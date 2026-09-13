@@ -145,6 +145,7 @@ tools/opam-env.sh parses: true
 tools/promote.sh parses: true
 tools/remote-verify.sh parses: true
 tools/sweep.sh parses: true
+tools/test-ci-matrix.sh parses: true
 tools/test-ci-times.sh parses: true
 tools/test-fmt-check.sh parses: true
 tools/test-mutation-run.sh parses: true
