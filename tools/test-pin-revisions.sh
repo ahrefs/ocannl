@@ -367,10 +367,30 @@ else
 fi
 
 
+# Each mutant must reach its intended wrong result. A failed launch or unrelated
+# error must not satisfy the shipping oracle's rejection.
+reason_local_pin() { grep -q 'git+file:' "$TMP/runs/$1/stdout"; }
+reason_project_package() { grep -q '^  arrayjit\.dev [0-9a-f]' "$TMP/runs/$1/stdout"; }
+reason_definitions() {
+  [ "$(cat "$TMP/runs/$1/status")" = 0 ] && lacks_match '^Definition digests:' "$TMP/runs/$1/stdout"
+}
+reason_solution_published() {
+  [ "$(cat "$TMP/runs/$1/status")" = 0 ] && grep -q '^solution-digest=' "$TMP/runs/$1/github-output"
+}
+reason_digest_published() {
+  [ "$(cat "$TMP/runs/$1/status")" = 0 ] && grep -q '^digest=' "$TMP/runs/$1/github-output"
+}
+reason_storage() { grep -q 'repo/default/repo' "$TMP/runs/$1/stderr"; }
+reason_color() { has_escape "$TMP/runs/$1/stdout" "$TMP/runs/$1/stderr"; }
+reason_order() {
+  [ "$(cat "$TMP/runs/$1-a/status")" = 0 ] \
+    && ! cmp -s "$TMP/expected-output" "$TMP/runs/$1-a/github-output"
+}
+
 local_mutant=$(mutant local-pin-filter \
   'index($0, "| sed") && index($0, "git+file:") { changed++; next } { print } END { if (changed != 1) exit 9 }')
 if [ -n "$local_mutant" ]; then
-  expect_rejected "removing local-pin exclusion is detected" "$local_mutant" oracle_happy
+  expect_rejected "removing local-pin exclusion is detected" "$local_mutant" oracle_happy "" reason_local_pin
 else
   report 1 "negative control: local-pin mutant constructed"
 fi
@@ -378,7 +398,7 @@ fi
 project_mutant=$(mutant project-package-filter \
   'index($0, "grep -qxF -- \"$name\"") { print "  if false; then"; changed++; next } { print } END { if (changed != 1) exit 9 }')
 if [ -n "$project_mutant" ]; then
-  expect_rejected "removing project-package exclusion is detected" "$project_mutant" oracle_happy
+  expect_rejected "removing project-package exclusion is detected" "$project_mutant" oracle_happy "" reason_project_package
 else
   report 1 "negative control: project-package mutant constructed"
 fi
@@ -386,7 +406,7 @@ fi
 definitions_mutant=$(mutant definition-digest-listing \
   'index($0, "echo \"Definition digests:\"") { skip = 1 } skip { changed++; if (index($0, "paste -d")) skip = 0; next } { print } END { if (changed != 2) exit 9 }')
 if [ -n "$definitions_mutant" ]; then
-  expect_rejected "dropping the per-definition listing is detected" "$definitions_mutant" oracle_happy
+  expect_rejected "dropping the per-definition listing is detected" "$definitions_mutant" oracle_happy "" reason_definitions
 else
   report 1 "negative control: definition-listing mutant constructed"
 fi
@@ -394,7 +414,7 @@ fi
 project_guard_mutant=$(mutant project-only-guard \
   'index($0, "#definition_packages[@]") && index($0, "-gt 0") { print "true \\"; changed++; next } { print } END { if (changed != 1) exit 9 }')
 if [ -n "$project_guard_mutant" ]; then
-  expect_rejected "silent all-project digest is detected" "$project_guard_mutant" oracle_project_only_loud
+  expect_rejected "silent all-project digest is detected" "$project_guard_mutant" oracle_project_only_loud "" reason_solution_published
 else
   report 1 "negative control: project-only guard mutant constructed"
 fi
@@ -402,7 +422,7 @@ fi
 definition_count_mutant=$(mutant definition-count-guard \
   '/^\[/ && index($0, "wc -l <\"$work_dir/labels\"") { print "true \\"; changed++; next } { print } END { if (changed != 1) exit 9 }')
 if [ -n "$definition_count_mutant" ]; then
-  expect_rejected "silent partial definition listing is detected" "$definition_count_mutant" oracle_partial_definitions_loud
+  expect_rejected "silent partial definition listing is detected" "$definition_count_mutant" oracle_partial_definitions_loud "" reason_solution_published
 else
   report 1 "negative control: definition-count guard mutant constructed"
 fi
@@ -410,7 +430,7 @@ fi
 empty_mutant=$(mutant empty-registry-guard \
   'index($0, "[ -n \"$specs\" ] ||") { print "if [ -z \"$specs\" ]; then"; print "  echo \"digest=$(printf %s \\\"\\\" | hash12)\" >>\"$GITHUB_OUTPUT\""; print "  exit 0"; print "fi"; changed++; next } { print } END { if (changed != 1) exit 9 }')
 if [ -n "$empty_mutant" ]; then
-  expect_rejected "silent empty-registry digest is detected" "$empty_mutant" oracle_empty_loud
+  expect_rejected "silent empty-registry digest is detected" "$empty_mutant" oracle_empty_loud "" reason_digest_published
 else
   report 1 "negative control: empty-registry mutant constructed"
 fi
@@ -418,7 +438,7 @@ fi
 storage_mutant=$(mutant opam-storage \
   '/^set -euo pipefail$/ { print; print "root=$(opam var root)"; print "repo_file=\"$root/repo/default/repo\""; print "stamp=$(sed -n '\''s/^stamp:.*\"\\([^\"]*\\)\".*/\\1/p'\'' \"$repo_file\")"; print "[ -n \"$stamp\" ] || exit 1"; changed++; next } { print } END { if (changed != 1) exit 9 }')
 if [ -n "$storage_mutant" ]; then
-  expect_rejected "opam 2.5.0 repository-stamp assumption is detected" "$storage_mutant" oracle_happy
+  expect_rejected "opam 2.5.0 repository-stamp assumption is detected" "$storage_mutant" oracle_happy "" reason_storage
 else
   report 1 "negative control: opam-storage mutant constructed"
 fi
@@ -428,7 +448,7 @@ sed 's/ --color=never//g' "$SRC" >"$color_mutant"
 if [ "$(grep -c -- '--color=never' "$SRC")" -eq 3 ] \
   && ! grep -q -- '--color=never' "$color_mutant" \
   && bash -n "$color_mutant"; then
-  expect_rejected "removing color suppression is detected" "$color_mutant" oracle_happy
+  expect_rejected "removing color suppression is detected" "$color_mutant" oracle_happy "" reason_color
 else
   report 1 "negative control: OPAMCOLOR mutant constructed"
 fi
@@ -436,7 +456,7 @@ fi
 sort_mutant=$(mutant pin-sort \
   'BEGIN { in_specs=0 } /^specs=\$\(/ { in_specs=1 } in_specs && /LC_ALL=C sort -u\)/ { sub(/LC_ALL=C sort -u/, "cat"); changed++; in_specs=0 } { print } END { if (changed != 1) exit 9 }')
 if [ -n "$sort_mutant" ]; then
-  expect_rejected "removing pin sort/dedup is detected" "$sort_mutant" oracle_deterministic
+  expect_rejected "removing pin sort/dedup is detected" "$sort_mutant" oracle_deterministic "" reason_order
 else
   report 1 "negative control: pin-sort mutant constructed"
 fi
@@ -444,7 +464,7 @@ fi
 resolution_mutant=$(mutant resolution-guard \
   'index($0, "[ -n \"$sha\" ] ||") { print "  [ -n \"$sha\" ] || sha=0000000000000000000000000000000000000000"; changed++; next } { print } END { if (changed != 1) exit 9 }')
 if [ -n "$resolution_mutant" ]; then
-  expect_rejected "silent empty resolution is detected" "$resolution_mutant" oracle_resolution_loud
+  expect_rejected "silent empty resolution is detected" "$resolution_mutant" oracle_resolution_loud "" reason_digest_published
 else
   report 1 "negative control: resolution mutant constructed"
 fi

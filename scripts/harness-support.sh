@@ -80,13 +80,17 @@ harness_rejected() { # EXPECTED_RC PATTERN LOG COMMAND [ARG...]
   "$@" >"$log" 2>&1 || rc=$?
   [ "$rc" = "$expected" ] && grep -qE -- "$pattern" "$log"
 }
-expect_rejected() { # LABEL SUBJECT ORACLE [GREP_PATTERN]
-  local label=$1 subject=$2 oracle=$3 pattern=${4-}
+expect_rejected() { # LABEL SUBJECT ORACLE GREP_PATTERN [REASON_CALLBACK]
+  local label=$1 subject=$2 oracle=$3 pattern=${4-} reason=${5-}
   local run="mutant-$(printf '%s' "$label" | tr ' ' '-')"
   if "$oracle" "$subject" "$run"; then
     report 1 "negative control: $label" "the shipping oracle accepted the mutant"
   elif [ -n "$pattern" ] && ! grep -qE -- "$pattern" "$TMP/runs/$run/stdout"; then
     report 1 "negative control: $label" "rejected without printing /$pattern/; see $TMP/runs/$run"
+  elif [ -n "$reason" ] && ! "$reason" "$run"; then
+    report 1 "negative control: $label" "rejected for an unrelated reason; see $TMP/runs/$run"
+  elif [ -z "$pattern$reason" ]; then
+    report 1 "negative control: $label" "a diagnostic pattern or reason callback is required"
   else
     report 0 "negative control: $label"
   fi
