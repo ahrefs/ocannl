@@ -34,7 +34,7 @@ rule multichar_token = parse
   | '+'              { PLUS }
   | '*'              { STAR }
   | '^'              { CARET }
-  | '&'              { AMPERSAND }
+  | '&'              { raise (Syntax_error "'&' is reserved for future use") }
   | '_'              { UNDERSCORE }
   | "..."            { ELLIPSIS }
   | ".."             { DOT_DOT }

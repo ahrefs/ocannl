@@ -84,7 +84,6 @@ let make_parsed_labels (batch, implicit_batch) (input, implicit_input) output =
 %token PLUS
 %token STAR
 %token CARET        /* ^ */
-%token AMPERSAND    /* & - reserved for future use */
 %token UNDERSCORE   /* _ */
 %token ELLIPSIS     /* ... */
 %token DOT_DOT      /* .. */
@@ -203,14 +202,27 @@ affine_expr:
   | head = IDENT; CARET; tail = separated_nonempty_list(CARET, IDENT)
     { Concat_spec (head :: tail) }
 
-/* List of axis specifications - can be empty, allows trailing comma */
-axes_spec:
-  | /* empty */ { [] }
-  | l = axes_list { l }
-
+/* Comma-separated axis specifications, nonempty, with up to two trailing commas. Every axis is
+   followed by an optional comma because the single-char lexer emits a COMMA after each axis.
+   Right recursion stays LR(1): after [axis COMMA], the next token decides between another axis,
+   a second trailing comma, or the end of the list. */
 axes_list:
   | x = axis_spec { [x] }
-  | x = axis_spec; COMMA; xs = axes_spec { x :: xs }
+  | x = axis_spec; COMMA { [x] }
+  | x = axis_spec; COMMA; COMMA { [x] }
+  | x = axis_spec; COMMA; xs = axes_list { x :: xs }
+
+/* Axes before an ellipsis, or a whole row without one: possibly empty, a lone comma allowed. */
+axes_before:
+  | /* empty */ { [] }
+  | COMMA { [] }
+  | l = axes_list { l }
+
+/* Axes after an ellipsis: like [axes_before], plus an optional comma right after the ellipsis. */
+axes_after:
+  | l = axes_before { l }
+  | COMMA; COMMA { [] }
+  | COMMA; l = axes_list { l }
 
 /* Ellipsis specification */
 ellipsis_spec:
@@ -221,20 +233,11 @@ ellipsis_spec:
 
 /* Row specification with optional ellipsis (for one kind of axes) */
 row_spec:
-  /* beg_axes ellipsis end_axes */
-  | beg = axes_spec; option(COMMA); ell = ellipsis_spec; option(COMMA); end_ = axes_spec; option(COMMA)
+  /* beg_axes ellipsis end_axes (either side may be empty) */
+  | beg = axes_before; ell = ellipsis_spec; end_ = axes_after
     { (beg, Some ell, end_) }
-  /* beg_axes ellipsis */
-  | beg = axes_spec; option(COMMA); ell = ellipsis_spec; option(COMMA)
-    { (beg, Some ell, []) }
-  /* ellipsis end_axes */
-  | ell = ellipsis_spec; option(COMMA); end_ = axes_spec; option(COMMA)
-    { ([], Some ell, end_) }
-  /* just ellipsis */
-  | ell = ellipsis_spec; option(COMMA)
-    { ([], Some ell, []) }
   /* just axes (no ellipsis) */
-  | specs = axes_spec; option(COMMA)
+  | specs = axes_before
     { ([], None, specs) }
 
 /* Shape specification: [batch|][input->]output */
