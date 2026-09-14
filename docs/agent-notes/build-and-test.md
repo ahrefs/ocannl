@@ -1767,6 +1767,11 @@ that they earn a lookup rather than always-loaded space.
   MSYS perl's flock genuinely excludes a second process; and `proc_alive` does not in fact need
   its tokenless fallback there — MSYS `ps` has no `-o` at all, but MSYS *does* provide
   `/proc/<pid>/stat`, so `ps_token` takes the Linux branch and records real tokens.
+- A native Windows launcher using `bash --noprofile --norc` must prepend
+  `PATH=/usr/bin:/mingw64/bin:$PATH` before sourcing `tools/opam-env.sh`: a PowerShell-inherited
+  PATH can omit even `uname`, preventing the MSYS detection from running (gh-ocannl-770 fleet
+  verification). Invoke `C:/Program Files/Git/usr/bin/bash.exe` explicitly where `bash` resolves
+  to the WindowsApps WSL launcher.
 - The Git Bash requirement is specifically MSYS, not any bash on the box: opam's cygwin bash — or
   whatever `bash` resolves to once opam's cygwin is on PATH — reports `OSTYPE=cygwin` exactly like
   Git Bash, so the two are told apart by `uname -o` (`Msys` vs `Cygwin`). Only the MSYS one gets

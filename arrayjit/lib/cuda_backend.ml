@@ -320,12 +320,9 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
         Option.iter Slab.free_pool ~f:(fun free -> free device ~pool_id))
 
   let%diagn2_sexp cuda_to_ptx ~name cu_src =
-    (* Tensorize-mma T3: kernels containing wmma intrinsics need <mma.h> (nvrtc's default target is
-       below sm_70). Injected only when used, so kernels without tensor cores compile exactly as
-       before even where the toolkit headers are absent. *)
     let cu_src =
-      if String.is_substring cu_src ~substring:"nvcuda::wmma" then "#include <mma.h>\n" ^ cu_src
-      else cu_src
+      C_syntax.prepend_conditional_includes
+        ~conditional_includes:Cuda_like_config.Cuda.conditional_includes cu_src
     in
     let arch_opts = gpu_arch_options ~device_cc:(min_compute_capability ()) cu_src in
     let name_cu = name ^ ".cu" in
@@ -353,15 +350,13 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
     in
     [%log "nvrtc options", (options : string list)];
     let ptx =
-      try Nvrtc.compile_to_ptx ~cu_src ~name:name_cu ~options ~with_debug
-      with Nvrtc.Nvrtc_error { status; message } ->
-        (* Re-raise the SAME constructor and status -- [classify_failure] dispatches on them -- with
-           the effective option vector appended to the log nvrtc put in [message]. A compile failure
-           that travels to a sweep's fingerprint then carries the flags it was compiled under, which
-           is the diagnostic gh-ocannl-784 exists to add. *)
-        raise
-          (Nvrtc.Nvrtc_error
-             { status; message = message ^ "\nnvrtc options: " ^ Compiler_options.render options })
+      C_syntax.with_compiler_options ~compiler:"nvrtc" ~options
+        ~enrich:(fun exn ~suffix ->
+          match exn with
+          | Nvrtc.Nvrtc_error { status; message } ->
+              Some (Nvrtc.Nvrtc_error { status; message = message ^ suffix })
+          | _ -> None)
+        (fun () -> Nvrtc.compile_to_ptx ~cu_src ~name:name_cu ~options ~with_debug)
     in
     if Utils.settings.output_debug_files_in_build_directory then (
       let oc = Out_channel.open_text @@ Utils.build_file @@ name ^ ".ptx" in
@@ -525,51 +520,15 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
     val procs : Low_level.t array
   end) =
   struct
-    include C_syntax.Pure_C_config (struct
-      let procs = Input.procs
-      let full_printf_support = C_syntax.printf_support_unless_uniform ()
-    end)
+    include
+      Cuda_like_config.Make
+        (struct
+          include Cuda_like_config.Cuda
 
-    let ident_blacklist =
-      ident_blacklist
-      (* CUDA kernels are parsed by a C++ front end, so the C++ keywords are reserved here on top of
-         the C ones {!Pure_C_config} contributes (gh-ocannl-686). *)
-      @ C_syntax.cpp_keywords
-      @ C_syntax.builtin_idents Builtins_cuda.builtins
-      @ [
-          (* CUDA built-in variables — would shadow per-thread or per-block context *)
-          "threadIdx";
-          "blockIdx";
-          "blockDim";
-          "gridDim";
-          "warpSize";
-        ]
-
-    let main_kernel_prefix = "extern \"C\" __global__"
-
-    (* The pre-Phase-B single-thread guard is gone (axis-types proposal §4): an all-Serial kernel
-       launches 1x1x1, making the guard redundant; annotated kernels need every thread. *)
-    let kernel_prep_line = ""
-
-    (* Use native CUDA types for loop indices and arguments instead of stdint.h types. Signed index
-       arithmetic (docs/proposals/signed-index-precision.md). *)
-    let loop_index_type = if Utils.settings.large_models then "long long " else "int "
-    let arg_int_prefix = if Utils.settings.large_models then "const long long " else "const int "
-
-    (* Hardware axis bindings (docs/proposals/axis-types-for-loops.md §5); the binding site casts
-       the unsigned register to the signed [loop_index_type] (values fit by device limits and the
-       per-node numel contract). *)
-    let hardware_index ~kind ~slot =
-      let base = match kind with `Grid -> "blockIdx" | `Workgroup -> "threadIdx" in
-      match slot with
-      | 0 -> Some (base ^ ".x")
-      | 1 -> Some (base ^ ".y")
-      | 2 -> Some (base ^ ".z")
-      | _ -> None
-
-    let barrier_syntax = Some "__syncthreads();"
-    let shared_decl_prefix = Some "__shared__ "
-    let restrict_keyword = Some "__restrict__"
+          let builtins = Builtins_cuda.builtins
+          let extra_blacklist = []
+        end)
+        (Input)
 
     (* gh-ocannl-487 phase 2: [cp.async] staging for software-pipelined tiles (the
        [ocannl_cp_async*] builtins; their name doubles as the [gpu_arch_options] sm_80 floor
@@ -588,22 +547,6 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
             ac_wait_all = "ocannl_cp_async_wait_all();";
           }
       else None
-
-    (* Warp-shuffle rendering of [Workgroup_reduce] accumulation loops (gh-ocannl-462):
-       [ocannl_shfl_xor] wraps [__shfl_xor_sync] (builtins_cuda.ml). All supported devices have
-       32-wide warps. *)
-    let warp_size = 32
-
-    (* No vectorization pragmas in device code — SIMD-style gains on GPU come from memory
-       transactions: eligible [Vectorized] loops render 128-bit packed loads/stores through the
-       [__align__(16)] pack structs (gh-ocannl-463; llm.c's Packed128 shows LDG.128/STS.128 are the
-       baseline for bandwidth-bound kernels), and everything else falls back to plain serial loops.
-       Local arrays live in registers/local memory; no alignment attribute needed (packed accesses
-       require device-resident nodes). *)
-    let vectorize_pragma = []
-    let aligned_local_attr = None
-    let vector_bytes = 16
-    let vector_style = `Packed_struct
 
     (* gh-ocannl-663: serial-rendered reduction accumulators mirror the mma legs' residency, so a
        narrow reduction's width does not depend on whether a schedule tensorized it. bf16 has no
@@ -637,39 +580,6 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
       | Ops.Half_prec _ when Numerics.fp16_accum_wide () -> Ops.single
       | Ops.Fp8_prec _ when (Numerics.get ()).Numerics.narrow_compute_f32 -> Ops.single
       | _ -> prec
-
-    let typ_of_prec = function
-      | Ops.Byte_prec _ -> "unsigned char"
-      | Ops.Uint16_prec _ -> "unsigned short"
-      | Ops.Int32_prec _ -> "int"
-      | Ops.Int64_prec _ -> "long long"
-      | Ops.Uint4x32_prec _ -> "uint4x32_t"
-      | Ops.Half_prec _ -> "__half"
-      | Ops.Bfloat16_prec _ -> "__nv_bfloat16" (* CUDA bfloat16 type *)
-      | Ops.Fp8_prec _ -> "__nv_fp8_e5m2" (* CUDA FP8 type (E5M2 format) *)
-      | Ops.Single_prec _ -> "float"
-      | Ops.Double_prec _ -> "double"
-      | Ops.Void_prec -> "void"
-      | Ops.Uint32_prec _ -> "unsigned int"
-      | Ops.Uint64_prec _ -> "unsigned long long"
-
-    let vec_typ_of_prec ~length prec =
-      match (prec, length) with
-      | Ops.Single_prec _, 4 -> "float4_t"
-      | Ops.Double_prec _, 2 -> "double2_t"
-      | Ops.Int32_prec _, 4 -> "int32x4_t"
-      | Ops.Int64_prec _, 2 -> "int64x2_t"
-      | Ops.Byte_prec _, 16 -> "int8x16_t"
-      (* Fp8 needs [__nv_fp8_e5m2] elements: [Set_from_vec] assigns them to the fp8 array cells
-         without a cast, and [__nv_fp8_e5m2] has no assignment from integer types. *)
-      | Ops.Fp8_prec _, 16 -> "fp8x16_t"
-      | Ops.Uint16_prec _, 8 -> "uint16x8_t"
-      | Ops.Uint32_prec _, 4 -> "uint32x4_t"
-      | Ops.Uint64_prec _, 2 -> "uint64x2_t"
-      | Ops.Bfloat16_prec _, 8 -> "bfloat16x8_t"
-      | Ops.Half_prec _, 8 -> "half8_t"
-      | _, 1 -> typ_of_prec prec
-      | _ -> invalid_arg "Cuda_backend.vec_typ_of_prec: invalid combination"
 
     (* The wmma-supported precision combinations (tensorize-mma T3). Shared by [mma_syntax] and
        [mma_fragment_syntax] so a fragment scope accepts exactly when its nested update-only MMA
@@ -1492,489 +1402,6 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
                    ^^ hardline ^^ rbrace))
           | _ -> None)
 
-    let rec binop_syntax prec v =
-      (* The match stays exhaustive over (op, prec) -- that is what catches a newly added operator
-         here -- but arms whose spelling is plain C delegate to {!C_syntax.default_binop_syntax}
-         rather than restating the token. *)
-      let open PPrint in
-      let f op_str v1 v2 =
-        group
-          (parens (v1 ^^ string (" " ^ op_str) ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))))
-      in
-      let func fn v1 v2 =
-        group (string fn ^^ parens (v1 ^^ comma ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))))
-      in
-      match (v, prec) with
-      | Ops.Arg1, _ -> invalid_arg "Cuda_backend.binop_syntax: Arg1 is not an operator"
-      | Arg2, _ -> invalid_arg "Cuda_backend.binop_syntax: Arg2 is not an operator"
-      | _, Ops.Void_prec -> invalid_arg "Cuda_backend.binop_syntax: Void precision"
-      (* The RNG ops call the same builtins under the same precision contract on every C-family
-         backend, so they render through the shared helper. Must precede the fp8 bridge: the
-         Threefry errors should name the actual target precision, and the lane conversion's builtin
-         already yields the target precision. *)
-      | ((Threefry4x32_crypto | Threefry4x32_light | Uint4x32_to_prec_uniform_lane) as op), _ ->
-          C_syntax.rng_binop_syntax ~backend:"CUDA" ~call:func prec op
-      | _, Fp8_prec _ ->
-          (* __nv_fp8_e5m2 defines no arithmetic operators and all its constructors and conversion
-             operators are explicit (cuda_fp8.hpp), so bridge fp8 math through float, mirroring the
-             CC backend's fp8 handling. *)
-          fun v1 v2 ->
-            let fl v = string "(float)" ^^ parens v in
-            group (string "(__nv_fp8_e5m2)" ^^ parens (binop_syntax Ops.single v (fl v1) (fl v2)))
-      | Add, Half_prec _ -> func "__hadd"
-      | Sub, Half_prec _ -> func "__hsub"
-      | Mul, Half_prec _ -> func "__hmul"
-      | Div, Half_prec _ -> func "__hdiv"
-      | Add, Bfloat16_prec _ -> func "__hadd"
-      | Sub, Bfloat16_prec _ -> func "__hsub"
-      | Mul, Bfloat16_prec _ -> func "__hmul"
-      | Div, Bfloat16_prec _ -> func "__hdiv"
-      | Add, _ -> f "+"
-      | Sub, _ -> f "-"
-      | Mul, _ -> f "*"
-      | Div, _ -> f "/"
-      | ToPowOf, Double_prec _ -> func "pow"
-      | ToPowOf, Single_prec _ -> func "powf"
-      | ToPowOf, Half_prec _ ->
-          fun v1 v2 ->
-            group
-              (string "hexp2(hlog2(" ^^ v1 ^^ string "),"
-              ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))
-              ^^ string ")")
-      | ToPowOf, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Int64_prec _ | Uint4x32_prec _) ->
-          invalid_arg "Cuda_backend.binop_syntax: ToPowOf not supported for integer precisions"
-      | ToPowOf, Bfloat16_prec _ ->
-          fun v1 v2 ->
-            group
-              (string "__float2bfloat16(powf(__bfloat162float("
-              ^^ v1 ^^ string "), __bfloat162float(" ^^ v2 ^^ string ")))")
-      | Relu_gate, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Int64_prec _) ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group (parens (v1 ^^ string " > 0"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "0")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "0"))))
-      | Relu_gate, Bfloat16_prec _ ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group (parens (string "__bfloat162float(" ^^ v1 ^^ string ") > 0.0f"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "__float2bfloat16(0.0f)")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "__float2bfloat16(0.0f)"))))
-      | Relu_gate, Half_prec _ ->
-          (* [0.0h] is a clang extension (and valid MSL), but not CUDA C++: nvrtc rejects it with
-             "user-defined literal operator not found". Compare via [__hgt] against a bitcast zero,
-             mirroring [Satur01_gate] just below and the HIP backend. *)
-          fun v1 v2 ->
-            group
-              (parens
-                 (group
-                    (parens
-                       (string "__hgt(" ^^ v1
-                       ^^ string ", __ushort_as_half((unsigned short)0x0000U))"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                      ^^ string "__ushort_as_half((unsigned short)0x0000U)")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                         ^^ string "__ushort_as_half((unsigned short)0x0000U)"))))
-      | Relu_gate, Single_prec _ ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group (parens (v1 ^^ string " > 0.0f"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "0.0f")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "0.0f"))))
-      | Relu_gate, Double_prec _ ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group (parens (v1 ^^ string " > 0.0"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "0.0")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "0.0"))))
-      | Relu_gate, Uint4x32_prec _ ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group (parens (v1 ^^ string " > 0"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "0")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "0"))))
-      | Satur01_gate, Byte_prec _ ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group
-                    (parens
-                       (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1
-                      ^^ string " < 1.0f"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "(unsigned char)0")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "(unsigned char)0"))))
-      | Satur01_gate, Half_prec _ ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group
-                    (parens
-                       (string "__hgt(" ^^ v1 ^^ comma
-                       ^^ string " __ushort_as_half((unsigned short)0x0000U)) && __hlt("
-                       ^^ v1 ^^ comma
-                       ^^ string " __ushort_as_half((unsigned short)0x3C00U))"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                      ^^ string "__ushort_as_half((unsigned short)0x0000U)")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                         ^^ string "__ushort_as_half((unsigned short)0x0000U)"))))
-      | Satur01_gate, Single_prec _ ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group (parens (v1 ^^ string " > 0.0f && " ^^ v1 ^^ string " < 1.0f"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "0.0f")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "0.0f"))))
-      | Satur01_gate, Double_prec _ ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group (parens (v1 ^^ string " > 0.0 && " ^^ v1 ^^ string " < 1.0"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "0.0")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "0.0"))))
-      | Satur01_gate, Uint16_prec _ ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group
-                    (parens
-                       (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1
-                      ^^ string " < 1.0f"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "(unsigned short)0")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "(unsigned short)0"))))
-      | Satur01_gate, Int32_prec _ ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group
-                    (parens
-                       (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1
-                      ^^ string " < 1.0f"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "0")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "0"))))
-      | Satur01_gate, Int64_prec _ ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group
-                    (parens
-                       (string "(double)" ^^ v1 ^^ string " > 0.0 && (double)" ^^ v1
-                      ^^ string " < 1.0"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "0LL")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "0LL"))))
-      | Satur01_gate, Uint4x32_prec _ ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group
-                    (parens
-                       (string "(float)" ^^ v1 ^^ string " > 0.0f && (float)" ^^ v1
-                      ^^ string " < 1.0f"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "0u")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "0u"))))
-      | Satur01_gate, Bfloat16_prec _ ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group
-                    (parens
-                       (string "__bfloat162float(" ^^ v1
-                       ^^ string ") > 0.0f && __bfloat162float("
-                       ^^ v1 ^^ string ") < 1.0f"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "__float2bfloat16(0.0f)")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "__float2bfloat16(0.0f)"))))
-      | Max, Byte_prec _ -> func "max"
-      | Max, Half_prec _ -> func "__hmax"
-      | Max, Double_prec _ -> func "fmax"
-      | Max, Single_prec _ -> func "fmaxf"
-      | Max, Uint16_prec _ -> func "max"
-      | Max, Int32_prec _ -> func "max"
-      | Max, Int64_prec _ -> func "max"
-      | Max, Uint4x32_prec _ -> func "max"
-      | Max, Bfloat16_prec _ ->
-          (* FIXME: This might be wrong, definitely verify and maybe fix, here and elsewhere *)
-          func "__hmax"
-      | Min, Byte_prec _ -> func "min"
-      | Min, Half_prec _ -> func "__hmin"
-      | Min, Double_prec _ -> func "fmin"
-      | Min, Single_prec _ -> func "fminf"
-      | Min, Uint16_prec _ -> func "min"
-      | Min, Int32_prec _ -> func "min"
-      | Min, Int64_prec _ -> func "min"
-      | Min, Uint4x32_prec _ -> func "min"
-      | Min, Bfloat16_prec _ -> func "__hmin"
-      | ( Mod,
-          (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _)
-        ) ->
-          f "%"
-      (* Like the libm calls in [unop_syntax]: [fmod] on bfloat16 operands returns float, which only
-         fails once the placement inlines it into a bfloat16 binop (gh-ocannl-549). *)
-      | Mod, Bfloat16_prec _ ->
-          fun v1 v2 ->
-            group
-              (string "__float2bfloat16(fmodf(__bfloat162float("
-              ^^ v1 ^^ string "), __bfloat162float(" ^^ v2 ^^ string ")))")
-      | Mod, _ -> func "fmod"
-      (* Comparisons and logical connectives are precision-independent and spelled the same in CUDA
-         C++ as in C, so they render through the shared default -- fp8 already bridged above. The
-         constructors stay listed to keep the match exhaustiveness-checked. *)
-      | ((Cmplt | Cmple | Cmpne | Cmpeq | Or | And) as op), _ ->
-          C_syntax.default_binop_syntax prec op
-      | ToPowOf, (Uint32_prec _ | Uint64_prec _) ->
-          invalid_arg "Cuda_backend.binop_syntax: ToPowOf not supported for integer precisions"
-      | Relu_gate, Uint32_prec _ ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group (parens (v1 ^^ string " > 0u"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "0u")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "0u"))))
-      | Relu_gate, Uint64_prec _ ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group (parens (v1 ^^ string " > 0ULL"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "0ULL")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "0ULL"))))
-      | Satur01_gate, Uint32_prec _ ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group (parens (v1 ^^ string " > 0u && " ^^ v1 ^^ string " < 1u"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "0u")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "0u"))))
-      | Satur01_gate, Uint64_prec _ ->
-          fun v1 v2 ->
-            group
-              (parens
-                 (group (parens (v1 ^^ string " > 0ULL && " ^^ v1 ^^ string " < 1ULL"))
-                 ^^ ifflat
-                      (space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
-                     ^^ string "0ULL")
-                      (nest 2
-                         (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
-                        ^^ string "0ULL"))))
-      | Max, Uint32_prec _ -> func "max"
-      | Max, Uint64_prec _ -> func "max"
-      | Min, Uint32_prec _ -> func "min"
-      | Min, Uint64_prec _ -> func "min"
-
-    let rec unop_syntax prec v =
-      let open PPrint in
-      let f prefix suffix expr = group (string prefix ^^ expr ^^ string suffix) in
-      let func fn expr = group (string fn ^^ parens expr) in
-      (* A libm call on a bfloat16 operand resolves (the operand converts to float) but *returns
-         float*. Assigning that back to a bfloat16 cell is accepted -- __nv_bfloat16's converting
-         constructor is implicit -- so it goes unnoticed until the placement that inlines the call
-         instead makes the float an operand of a bfloat16 binop, where the arithmetic overloads
-         become ambiguous: nvrtc then reports a mixed-operand __hadd (gh-ocannl-549). Bridge the
-         result back the way [ToPowOf], [Recip] and [Satur01] already do, so the emission is
-         bfloat16-typed wherever it lands. *)
-      let bf16_func fn = f ("__float2bfloat16(" ^ fn ^ "(__bfloat162float(") ")))" in
-      match (v, prec) with
-      | Ops.Identity, _ -> f "" ""
-      | Uint4x32_to_prec_uniform1, Ops.Uint4x32_prec _ ->
-          invalid_arg
-            "Cuda_backend.unop_syntax: Uint4x32_to_prec_uniform1 not supported for Uint4x32"
-      (* Heterogeneous op: the argument is uint4x32 whatever the result precision, so it must stay
-         ahead of the fp8 float-bridging below; the fp8 builtin returns __nv_fp8_e5m2. *)
-      | Uint4x32_to_prec_uniform1, _ -> func ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform")
-      | _, Ops.Fp8_prec _ ->
-          (* __nv_fp8_e5m2 defines no arithmetic operators and all its constructors and conversion
-             operators are explicit (cuda_fp8.hpp), so bridge fp8 math through float, mirroring the
-             CC backend's fp8 handling. *)
-          fun expr ->
-            group
-              (string "(__nv_fp8_e5m2)"
-              ^^ parens (unop_syntax Ops.single v (string "(float)" ^^ parens expr)))
-      | Relu, Ops.Single_prec _ -> f "fmaxf(0.0, " ")"
-      | Relu, Ops.Half_prec _ -> f "__hmax_nan(__ushort_as_half((unsigned short)0x0000U), " ")"
-      | Relu, Ops.Bfloat16_prec _ ->
-          f "__hmax_nan(__ushort_as_bfloat16((unsigned short)0x0000U), " ")"
-      | Relu, Ops.Byte_prec _ -> f "fmax(0, " ")"
-      | Relu, _ -> f "fmax(0.0, " ")"
-      | Satur01, Byte_prec _ -> f "fmax(0, fmin(1, " "))"
-      (* Mixing a [__nv_bfloat16] with a literal of another arithmetic type is ambiguous under
-         nvrtc: the type has implicit conversion operators to float, int, short, ... , so the
-         [float], [double] and [_Float16] overloads of [fmin] are reached through *different*
-         conversion operators and their conversion sequences are indistinguishable. Bridge through
-         float, which additionally keeps the NaN result matching the CC reference in [builtins.c]
-         ([fmin]/[fmax] return the non-NaN operand, so [Satur01(NaN) = 1]) -- unlike the
-         [__hmax_nan]/[__hmin_nan] pair used for [Half_prec] just below, which propagates NaN. *)
-      | Satur01, Bfloat16_prec _ ->
-          f "__float2bfloat16(fmaxf(0.0f, fminf(1.0f, __bfloat162float(" "))))"
-      | Satur01, Half_prec _ ->
-          f
-            "__hmax_nan(__ushort_as_half((unsigned short)0x0000U), \
-             __hmin_nan(__ushort_as_half((unsigned short)0x3C00U), "
-            "))"
-      | Satur01, Single_prec _ -> f "fmaxf(0.0f, fminf(1.0f, " "))"
-      | Satur01, _ -> f "fmax(0.0, fmin(1.0, " "))"
-      | Exp, Half_prec _ -> func "hexp"
-      | Exp, Double_prec _ -> func "exp"
-      | Exp, Bfloat16_prec _ -> bf16_func "expf"
-      | Exp, _ -> func "expf"
-      | Log, Half_prec _ -> func "hlog"
-      | Log, Double_prec _ -> func "log"
-      | Log, Bfloat16_prec _ -> bf16_func "logf"
-      | Log, _ -> func "logf"
-      | Exp2, Half_prec _ -> func "hexp2"
-      | Exp2, Double_prec _ -> func "exp2"
-      | Exp2, Bfloat16_prec _ -> bf16_func "exp2f"
-      | Exp2, _ -> func "exp2f"
-      | Log2, Half_prec _ -> func "hlog2"
-      | Log2, Double_prec _ -> func "log2"
-      | Log2, Bfloat16_prec _ -> bf16_func "log2f"
-      | Log2, _ -> func "log2f"
-      | Sin, Half_prec _ -> func "hsin"
-      | Sin, Double_prec _ -> func "sin"
-      | Sin, Bfloat16_prec _ -> bf16_func "sinf"
-      | Sin, _ -> func "sinf"
-      | Cos, Half_prec _ -> func "hcos"
-      | Cos, Double_prec _ -> func "cos"
-      | Cos, Bfloat16_prec _ -> bf16_func "cosf"
-      | Cos, _ -> func "cosf"
-      | Sqrt, Half_prec _ -> func "hsqrt"
-      | Sqrt, Double_prec _ -> func "sqrt"
-      | Sqrt, Bfloat16_prec _ -> bf16_func "sqrtf"
-      | Sqrt, _ -> func "sqrtf"
-      | Recip, Byte_prec _ ->
-          invalid_arg "Cuda_backend.unop_syntax: Recip not supported for byte/integer precisions"
-      | Recip, Half_prec _ -> func "hrcp"
-      | Recip, Single_prec _ -> f "(1.0f / (" "))"
-      | Recip, Double_prec _ -> f "(1.0 / (" "))"
-      (* [1 / bf16] is ambiguous: the [int] operand can pair with any of the bfloat16 conversion
-         operators, so no candidate [operator/] is better than the rest. *)
-      | Recip, Bfloat16_prec _ -> f "__float2bfloat16(1.0f / __bfloat162float(" "))"
-      | Recip, _ -> f "(1 / (" "))"
-      | Recip_sqrt, Byte_prec _ ->
-          invalid_arg
-            "Cuda_backend.unop_syntax: Recip_sqrt not supported for byte/integer precisions"
-      | Recip_sqrt, Half_prec _ -> func "hrsqrt"
-      | Recip_sqrt, Double_prec _ -> f "(1.0 / sqrt(" "))"
-      | Recip_sqrt, Single_prec _ -> f "(1.0f / sqrtf(" "))"
-      | Recip_sqrt, Bfloat16_prec _ -> f "__float2bfloat16(1.0f / sqrtf(__bfloat162float(" ")))"
-      | Recip_sqrt, _ -> f "(1 / sqrtf(" "))"
-      | Neg, _ -> f "(-(" "))"
-      | Trunc, Double_prec _ -> func "trunc"
-      | Trunc, Bfloat16_prec _ -> bf16_func "truncf"
-      | Trunc, _ -> func "truncf"
-      | Tanh_approx, Byte_prec _ ->
-          invalid_arg
-            "Cuda_backend.unop_syntax: Tanh_approx not supported for byte/integer precisions"
-      | Tanh_approx, Half_prec _ -> func "htanh_approx"
-      | Tanh_approx, Single_prec _ -> func "__tanhf"
-      | Tanh_approx, Bfloat16_prec _ -> bf16_func "tanhf"
-      | Tanh_approx, _ -> func "tanh"
-      (* [bf16 == 0.0] is ambiguous for the same reason as [1 / bf16] above. *)
-      | Not, Bfloat16_prec _ -> f "__float2bfloat16(__bfloat162float(" ") == 0.0f ? 1.0f : 0.0f)"
-      | Not, _ -> f "(" " == 0.0 ? 1.0 : 0.0)"
-
-    let vec_unop_syntax prec op v =
-      let open PPrint in
-      match (op, prec) with
-      | Ops.Uint4x32_to_prec_uniform, _ ->
-          group (string ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform_vec(") ^^ v ^^ rparen)
-
-    let rec ternop_syntax prec v =
-      let open PPrint in
-      let func fn v1 v2 v3 = group (string fn ^^ parens (separate comma [ v1; v2; v3 ])) in
-      match (v, prec) with
-      | _, Ops.Fp8_prec _ ->
-          (* __nv_fp8_e5m2 defines no arithmetic operators and all its constructors and conversion
-             operators are explicit (cuda_fp8.hpp), so bridge fp8 math through float, mirroring the
-             CC backend's fp8 handling. *)
-          fun v1 v2 v3 ->
-            let fl v = string "(float)" ^^ parens v in
-            group
-              (string "(__nv_fp8_e5m2)"
-              ^^ parens (ternop_syntax Ops.single v (fl v1) (fl v2) (fl v3)))
-      | Ops.Where, _ ->
-          (* The whole ternary must be parenthesized, not just the condition: C's [?:] binds looser
-             than the surrounding arithmetic, so for an expression like [where(c,a,b) + 1] the
-             trailing [+ 1] would otherwise be absorbed into the else-branch ([c ? a : b + 1]),
-             silently dropping it from the then-branch. This off-by-one surfaced only on CUDA
-             (task-04f97340): CC wraps the conditional in [(... ? ... : ...)] via
-             [Ops.ternop_c_syntax] and Metal emits a fully-bracketed [select(...)] call. *)
-          fun v1 v2 v3 -> group (parens (parens v1 ^^ string " ? " ^^ v2 ^^ string " : " ^^ v3))
-      | FMA, Ops.Half_prec _ -> func "__hfma"
-      | FMA, Ops.Bfloat16_prec _ -> func "__hfma"
-      | FMA, Ops.Single_prec _ -> func "fmaf"
-      | FMA, _ -> func "fma"
-      | Mul3, _ -> fun v1 v2 v3 -> group (parens (v1 ^^ string " * " ^^ v2 ^^ string " * " ^^ v3))
-
     let convert_precision ~from ~to_ =
       match (from, to_) with
       | Ops.Double_prec _, Ops.Double_prec _
@@ -2024,32 +1451,6 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
       | Uint64_prec _, Uint4x32_prec _ -> ("uint64_to_uint4x32(", ")")
       | _, Uint4x32_prec _ -> ("{(unsigned int)(", "), 0, 0, 0}")
       | _ -> ("(" ^ typ_of_prec to_ ^ ")(", ")")
-
-    let kernel_log_param = Some ("int", "log_id")
-    let log_involves_file_management = false
-
-    let pp_log_statement ~log_param_c_expr_doc ~base_message_literal ~args_docs =
-      let open PPrint in
-      let format_string_literal =
-        let res = String.substr_replace_all base_message_literal ~pattern:"\n" ~with_:"$" in
-        let res =
-          if for_log_trace_tree && String.is_suffix res ~suffix:"$" then
-            String.drop_suffix res 1 ^ "\\n"
-          else res
-        in
-        !Utils.captured_log_prefix ^ "%d: " ^ res
-      in
-      let all_args =
-        match log_param_c_expr_doc with
-        | Some doc -> doc :: args_docs
-        | None -> args_docs (* Should not happen if kernel_log_param is Some *)
-      in
-      group
-        (string "printf("
-        ^^ dquotes (string format_string_literal)
-        ^^ comma
-        ^^ nest 4 (break 1 ^^ separate (comma ^^ break 1) all_args)
-        ^^ rparen ^^ semi)
   end
 
   let codegen_capabilities () =
@@ -2058,20 +1459,8 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
     end) in
     C_syntax.codegen_capabilities (module Config)
 
-  let%diagn2_sexp compile ~name bindings lowered =
-    (* TODO: The following link seems to claim it's better to expand into loops than use memset.
-       https://stackoverflow.com/questions/23712558/how-do-i-best-initialize-a-local-memory-array-to-0 *)
-    let module Syntax = C_syntax.C_syntax (Cuda_syntax_config (struct
-      let procs = [| lowered.Low_level.llc |]
-    end))
-    in
-    let idx_params = Indexing.bound_symbols bindings in
-    (* gh-ocannl-686: normalize the user-supplied routine name into a legal identifier ONCE, here,
-       so the emitted symbol, the module's function lookup and the source artifacts agree. *)
-    let name = Syntax.kernel_ident name in
-    let kparams, proc_doc, launch = Syntax.compile_proc ~name idx_params lowered in
-    let cuda_includes =
-      {|#include <cuda_fp16.h>
+  let cuda_includes () =
+    {|#include <cuda_fp16.h>
 #include <cuda_bf16.h>
 #include <cuda_fp8.h>
 
@@ -2082,61 +1471,28 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
 #ifndef NAN
 #define NAN __int_as_float(0x7fffffff)
 #endif|}
-      ^
-      if Utils.debug_log_from_routines () then
-        "\n__device__ int printf (const char * format, ... );"
-      else ""
+    ^
+    if Utils.debug_log_from_routines () then "\n__device__ int printf (const char * format, ... );"
+    else ""
+
+  module Compile = C_syntax.Compile_driver (Cuda_syntax_config)
+
+  let%diagn2_sexp compile ~name bindings lowered =
+    let ptx, kparams, name, launch =
+      Compile.compile ~name bindings lowered ~includes:(cuda_includes ())
+        ~builtins:Builtins_cuda.builtins
+        ~conditional_includes:Cuda_like_config.Cuda.conditional_includes ~compile_source:cuda_to_ptx
+        ()
     in
-    let source =
-      Syntax.filter_and_prepend_builtins ~routine_names:[ name ] ~includes:cuda_includes
-        ~builtins:Builtins_cuda.builtins ~proc_doc
-    in
-    let ptx = cuda_to_ptx ~name source in
     { ptx; kparams; bindings; name; launch }
 
   let%diagn2_sexp compile_batch ~names bindings lowereds =
-    let module Syntax = C_syntax.C_syntax (Cuda_syntax_config (struct
-      let procs = Array.map lowereds ~f:(fun l -> l.Low_level.llc)
-    end))
+    let ptx, kparams_and_names =
+      Compile.compile_batch ~names bindings lowereds ~includes:(cuda_includes ())
+        ~builtins:Builtins_cuda.builtins
+        ~conditional_includes:Cuda_like_config.Cuda.conditional_includes ~compile_source:cuda_to_ptx
+        ()
     in
-    let idx_params = Indexing.bound_symbols bindings in
-    (* gh-ocannl-686: normalize the user-supplied routine name into a legal identifier ONCE, here,
-       so the emitted symbol, the module's function lookup and the source artifacts agree. *)
-    let names = Array.map names ~f:Syntax.kernel_ident in
-    let kparams_and_docs =
-      Array.map2_exn names lowereds ~f:(fun name lowered ->
-          let kparams, doc, launch = Syntax.compile_proc ~name idx_params lowered in
-          ((kparams, name, launch), doc))
-    in
-    let all_proc_docs = List.map (Array.to_list kparams_and_docs) ~f:snd in
-    let final_doc = PPrint.(separate hardline all_proc_docs) in
-    let cuda_includes =
-      {|#include <cuda_fp16.h>
-#include <cuda_bf16.h>
-#include <cuda_fp8.h>
-
-/* Define math constants that would normally come from <math.h> */
-#ifndef INFINITY
-#define INFINITY __int_as_float(0x7f800000)
-#endif
-#ifndef NAN
-#define NAN __int_as_float(0x7fffffff)
-#endif|}
-      ^
-      if Utils.debug_log_from_routines () then
-        "\n__device__ int printf (const char * format, ... );"
-      else ""
-    in
-    let source =
-      Syntax.filter_and_prepend_builtins ~routine_names:(Array.to_list names)
-        ~includes:cuda_includes ~builtins:Builtins_cuda.builtins ~proc_doc:final_doc
-    in
-
-    let name : string =
-      String.(strip ~drop:(equal_char '_') @@ common_prefix (Array.to_list names))
-    in
-    let ptx = cuda_to_ptx ~name source in
-    let kparams_and_names = Array.map kparams_and_docs ~f:fst in
     { ptx; kparams_and_names; bindings }
 
   let link_proc ~prior_context ~name ~(kparams : (string * kparam_source) list)

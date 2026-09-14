@@ -287,3 +287,14 @@ configuration.
   independently of emission. Census brackets are domain-local and additive within one domain.
   `arrayjit/test/test_render_context.ml` injects nested compilation and an emission exception;
   its shared-zero-state negative control demonstrates the old lost-rezero failure.
+
+- `Cuda_like_config.Make` owns the CUDA/HIP scalar operator table (gh-ocannl-770); its live
+  `Cuda` and `Hip` descriptors retain bf16 arithmetic/ReLU, approximate-tanh and fp8 narrowing
+  differences. Vendor conversion overloads, accumulator residency and MMA hooks remain local.
+  `C_syntax.Compile_driver` owns single/batch naming, binding order and source assembly; Metal
+  retains source until link time, while cc/CUDA/HIP compile once per batch. Compiler callbacks
+  keep artifact ownership and typed exceptions; `with_compiler_options` attaches effective flags.
+- Conditional vendor headers and builtin selection share `C_syntax.Source_tokens` (gh-ocannl-770).
+  Qualified markers match across whitespace/comments, while longer identifiers and quoted literals
+  cannot activate a header. Direct CUDA/HIP compiler seams prepare headers idempotently too, so
+  the HIP compile-failure probe still exercises the production options and exception constructor.

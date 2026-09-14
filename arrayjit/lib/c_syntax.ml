@@ -1864,6 +1864,85 @@ struct
          ^^ rparen ^^ semi)
 end
 
+(** Tokens used for builtin and vendor-header selection. Comments and quoted literals cannot create
+    uses, and qualified markers match across whitespace without matching longer names. *)
+module Source_tokens : sig
+  type t
+
+  val scan : string -> t
+  val mentions : t -> string -> bool
+end = struct
+  type t = string list
+
+  let scan source =
+    let n = String.length source in
+    let ident c = Char.is_alphanum c || Char.equal c '_' in
+    let rec quoted quote i =
+      if i >= n then n
+      else if Char.equal source.[i] '\\' then quoted quote (i + 2)
+      else if Char.equal source.[i] quote then i + 1
+      else quoted quote (i + 1)
+    in
+    let rec block i =
+      if i + 1 >= n then n
+      else if Char.equal source.[i] '*' && Char.equal source.[i + 1] '/' then i + 2
+      else block (i + 1)
+    in
+    let rec line i = if i >= n || Char.equal source.[i] '\n' then i else line (i + 1) in
+    let rec word i = if i < n && ident source.[i] then word (i + 1) else i in
+    let rec scan i acc =
+      if i >= n then List.rev acc
+      else if Char.is_whitespace source.[i] then scan (i + 1) acc
+      else if i + 1 < n && Char.equal source.[i] '/' && Char.equal source.[i + 1] '*' then
+        scan (block (i + 2)) acc
+      else if i + 1 < n && Char.equal source.[i] '/' && Char.equal source.[i + 1] '/' then
+        scan (line (i + 2)) acc
+      else if Char.equal source.[i] '"' || Char.equal source.[i] '\'' then
+        scan (quoted source.[i] (i + 1)) ("<literal>" :: acc)
+      else if ident source.[i] then
+        let j = word (i + 1) in
+        scan j (String.sub source ~pos:i ~len:(j - i) :: acc)
+      else scan (i + 1) (String.of_char source.[i] :: acc)
+    in
+    scan 0 []
+
+  let mentions tokens marker =
+    let rec prefix pattern tokens =
+      match (pattern, tokens) with
+      | [], _ -> true
+      | p :: ps, t :: ts when String.equal p t -> prefix ps ts
+      | _ -> false
+    in
+    let pattern = scan marker in
+    let rec search = function
+      | [] -> false
+      | _ :: rest as tokens -> prefix pattern tokens || search rest
+    in
+    (not (List.is_empty pattern)) && search tokens
+end
+
+let source_mentions ~marker source = Source_tokens.mentions (Source_tokens.scan source) marker
+
+let prepend_conditional_includes ~conditional_includes source =
+  let tokens = Source_tokens.scan source in
+  let headers =
+    List.filter_map conditional_includes ~f:(fun (marker, header) ->
+        if Source_tokens.mentions tokens marker && not (Source_tokens.mentions tokens header) then
+          Some (header ^ "\n")
+        else None)
+  in
+  String.concat headers ^ source
+
+(** Keep the vendor exception constructor/status while attaching the actual option vector. The
+    mapper returns [None] for unrelated exceptions, which retain their original backtrace. *)
+let with_compiler_options ~compiler ~options ~enrich compile =
+  try compile ()
+  with exn ->
+    let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+    let suffix = "\n" ^ compiler ^ " options: " ^ Compiler_options.render options in
+    let exn = Option.value (enrich exn ~suffix) ~default:exn in
+    Stdlib.Printexc.raise_with_backtrace exn backtrace
+
 module C_syntax (B : C_syntax_config) = struct
   (* The backend's renderings must implement the operand-evaluation contract that
      [Low_level.affine_accesses] and both [Cost_model] walks read off {!Ops.binop_conditionality} /
@@ -2517,7 +2596,8 @@ module C_syntax (B : C_syntax_config) = struct
      collision from silent helper injection — which on CUDA could raise the architecture floor past
      the device (Codex P2 on PR #317, round 4) — into an ordinary compile error naming the
      conflict. *)
-  let filter_and_prepend_builtins ~routine_names ~includes ~builtins ~proc_doc =
+  let filter_and_prepend_builtins ?(conditional_includes = []) ~routine_names ~includes ~builtins
+      ~proc_doc () =
     let doc_buffer = Buffer.create 4096 in
     PPrint.ToBuffer.pretty 1.0 110 doc_buffer proc_doc;
     let doc_string = Buffer.contents doc_buffer in
@@ -2540,55 +2620,8 @@ module C_syntax (B : C_syntax_config) = struct
        floor — without any call (Codex P2 on PR #317, round 5). Strip both before scanning;
        genuine uses are code tokens and survive. Removed regions become a single space so tokens
        cannot concatenate across them. *)
-    let scannable =
-      let s = doc_string in
-      let n = String.length s in
-      let b = Buffer.create n in
-      let rec go i state =
-        if i < n then
-          match state with
-          | `Code ->
-              if i + 1 < n && Char.equal s.[i] '/' && Char.equal s.[i + 1] '*' then (
-                Buffer.add_char b ' ';
-                go (i + 2) `Block)
-              else if i + 1 < n && Char.equal s.[i] '/' && Char.equal s.[i + 1] '/' then
-                go (i + 2) `Line
-              else if Char.equal s.[i] '"' then (
-                Buffer.add_char b ' ';
-                go (i + 1) `Str)
-              else (
-                Buffer.add_char b s.[i];
-                go (i + 1) `Code)
-          | `Block ->
-              if i + 1 < n && Char.equal s.[i] '*' && Char.equal s.[i + 1] '/' then go (i + 2) `Code
-              else go (i + 1) `Block
-          | `Line ->
-              if Char.equal s.[i] '\n' then (
-                Buffer.add_char b '\n';
-                go (i + 1) `Code)
-              else go (i + 1) `Line
-          | `Str ->
-              if Char.equal s.[i] '\\' then go (i + 2) `Str
-              else if Char.equal s.[i] '"' then go (i + 1) `Code
-              else go (i + 1) `Str
-      in
-      go 0 `Code;
-      Buffer.contents b
-    in
-    let is_ident_char c = Char.is_alphanum c || Char.equal c '_' in
-    let mentions_token key =
-      let klen = String.length key in
-      let dlen = String.length scannable in
-      let rec scan pos =
-        match String.substr_index ~pos scannable ~pattern:key with
-        | None -> false
-        | Some i ->
-            let pre_ok = i = 0 || not (is_ident_char scannable.[i - 1]) in
-            let post_ok = i + klen >= dlen || not (is_ident_char scannable.[i + klen]) in
-            if pre_ok && post_ok then true else scan (i + 1)
-      in
-      scan 0
-    in
+    let tokens = Source_tokens.scan doc_string in
+    let mentions_token key = Source_tokens.mentions tokens key in
     let needed_keys = ref (Set.empty (module String)) in
     List.iter builtins ~f:(fun (key, _, _) ->
         if (not (List.mem routine_names key ~equal:String.equal)) && mentions_token key then
@@ -2612,7 +2645,7 @@ module C_syntax (B : C_syntax_config) = struct
           Buffer.add_string result_buffer definition;
           Buffer.add_string result_buffer "\n"));
     Buffer.add_string result_buffer doc_string;
-    Buffer.contents result_buffer
+    prepend_conditional_includes ~conditional_includes (Buffer.contents result_buffer)
 
   open Indexing
   open Doc_helpers
@@ -7365,4 +7398,53 @@ module C_syntax (B : C_syntax_config) = struct
       func_header ^^ space ^^ lbrace ^^ nest 2 (hardline ^^ !body) ^^ hardline ^^ rbrace
     in
     (sorted_params, func_doc, launch)
+end
+
+(** One driver owns naming, binding order, emission order and batch source assembly. The compiler
+    callback retains ownership of its artifacts and libraries; its return value is shared by every
+    batch member, and exceptions cross this boundary unchanged. *)
+module Compile_driver
+    (Config : functor
+      (Input : sig
+         val procs : Low_level.t array
+       end)
+      -> C_syntax_config) =
+struct
+  let drive ~batch ~names bindings lowereds ~includes ~builtins ?(conditional_includes = [])
+      ~compile_source () =
+    let module Syntax = C_syntax (Config (struct
+      let procs = Array.map lowereds ~f:(fun l -> l.Low_level.llc)
+    end))
+    in
+    let names = Array.map names ~f:Syntax.kernel_ident in
+    let idx_params = Indexing.bound_symbols bindings in
+    let entries =
+      Array.map2_exn names lowereds ~f:(fun name lowered ->
+          let kparams, doc, launch = Syntax.compile_proc ~name idx_params lowered in
+          ((kparams, name, launch), doc))
+    in
+    let proc_doc = PPrint.separate PPrint.hardline (List.map (Array.to_list entries) ~f:snd) in
+    let source =
+      Syntax.filter_and_prepend_builtins ~conditional_includes ~routine_names:(Array.to_list names)
+        ~includes ~builtins ~proc_doc ()
+    in
+    let name =
+      if batch then String.(strip ~drop:(equal_char '_') @@ common_prefix (Array.to_list names))
+      else names.(0)
+    in
+    let result = compile_source ~name source in
+    (result, Array.map entries ~f:fst)
+
+  let compile ~name bindings lowered ~includes ~builtins ?conditional_includes ~compile_source () =
+    let result, entries =
+      drive ~batch:false ~names:[| name |] bindings [| lowered |] ~includes ~builtins
+        ?conditional_includes ~compile_source ()
+    in
+    let kparams, name, launch = entries.(0) in
+    (result, kparams, name, launch)
+
+  let compile_batch ~names bindings lowereds ~includes ~builtins ?conditional_includes
+      ~compile_source () =
+    drive ~batch:true ~names bindings lowereds ~includes ~builtins ?conditional_includes
+      ~compile_source ()
 end

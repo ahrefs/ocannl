@@ -1,0 +1,9 @@
+CUDA bfloat16 addition keeps its intrinsic: true
+HIP bfloat16 addition keeps its native operator: true
+CUDA approximate tanh keeps its intrinsic: true
+HIP approximate tanh keeps its library function: true
+CUDA bfloat16 ReLU keeps NaN-propagating half intrinsic: true
+HIP bfloat16 ReLU keeps its float bridge: true
+every HIP arithmetic arity narrows fp8 through the guard: true
+every CUDA arithmetic arity narrows fp8 through the vendor type: true
+both shared dialects preserve operand evaluation contracts: true
