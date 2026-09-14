@@ -1,3 +1,5 @@
+a singleton shuffle phase needs no stages: true
+shuffle stages refuse nonpositive and non-power-of-two widths: true
 serial sum correct: true
 warp-shuffle sum parity: true
 two-phase shuffle rendering (GPU) or serial fallback (CPU): true
@@ -7,6 +9,7 @@ warp-shuffle max parity: true
 non-warp-multiple extent rejected (GPU) or runs serially (CPU): true
 guarded smaller-extent accumulation rejected (GPU) or runs serially (CPU): true
 an unguarded accumulation nest under the Workgroup_reduce level (a Serial level inside it) is refused loudly where a lane index is bound (GPU) or localized whole as a serial nest (CPU): true
+the old bf16 128-lane mod7 fixture collapses to 131/131/128: true
 the bf16 single-warp rival-rendering values are pairwise distinct: true
 the bf16 four-warp rival-rendering values are pairwise distinct: true
 a bf16 single-warp Workgroup_reduce accumulates at the widened residency (32 terms narrow once to 33.25, not the 33 a bf16-staged tree or the 32.75 a per-step narrowing gives): true
@@ -14,6 +17,7 @@ a bf16 four-warp Workgroup_reduce stages its per-warp partials at the widened re
 the emitted shuffle declares its staging register and its per-warp slots at the residency type, never at bf16 storage: true
 an f16 accumulator whose residency stays narrow, as the default fp16_arithmetic policy resolves it on every GPU backend, is refused by the warp-shuffle rendering (GPU) or runs serially (CPU): true
 a bf16 Workgroup_reduce whose contribution mentions an RNG conversion is refused where the residency is wider than storage (GPU) or runs serially (CPU): true
+the old f16 four-warp mod7 fixture cannot distinguish wide from storage-staged trees: true
 the f16 single-warp rival-rendering values are pairwise distinct: true
 the f16 four-warp rival-rendering values are pairwise distinct: true
 under Fp16_wide an f16 single-warp Workgroup_reduce accumulates at the widened residency (32 terms narrow once to 32.15625, not the 32.125 an f16-staged tree or the 32.09375 a per-step narrowing gives): true

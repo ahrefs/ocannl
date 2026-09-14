@@ -1,5 +1,6 @@
 Directories whose sources this scan reads:
   arrayjit/lib
+  arrayjit/lib/gen_builtins
   arrayjit/test
   benchmarks/runners/ocannl
   bin
@@ -240,8 +241,9 @@ inside its parentheses. What is held here is which WORDS a file's markers use, n
 stanzas carry each: the per-stanza reasons live next to the stanzas, where the next author
 will copy them from, and the tallies go to stderr (gh-ocannl-659, gh-ocannl-665).
   .claude/dune: nothing that runs a test executable
-  arrayjit/lib/dune: nothing that runs a test executable
-  arrayjit/test/dune: declares OCANNL_BACKEND; markers: cuda, metal, none
+  arrayjit/lib/dune: markers: none
+  arrayjit/lib/gen_builtins/dune: nothing that runs a test executable
+  arrayjit/test/dune: declares OCANNL_BACKEND; markers: cc, cuda, metal, none
   benchmarks/dune: markers: none
   benchmarks/runners/ocannl/dune: markers: metal
   bin/dune: markers: cc, none

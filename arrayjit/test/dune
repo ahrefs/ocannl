@@ -378,3 +378,18 @@
  (modules test_render_context)
  (deps ocannl_config)
  (libraries arrayjit.ll_builders base arrayjit.ir arrayjit.verdict))
+
+(test
+ ; ocannl-backend: cc -- directly compiles cc builtin definitions and compares the host stubs.
+ (name test_shared_builtins)
+ (package arrayjit)
+ (modules test_shared_builtins)
+ (deps
+  ocannl_config
+  (env_var OCANNL_CC_BACKEND_COMPILER_COMMAND))
+ (libraries
+  arrayjit.context
+  arrayjit.ir
+  arrayjit.verdict
+  ctypes
+  ctypes.foreign))

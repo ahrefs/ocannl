@@ -1,0 +1,11 @@
+; Compile the pure definition table independently of context: ir's C stubs need the header
+; before context (which depends on ir) can be built. No C parser or bootstrapping cycle.
+
+(rule
+ (target builtins_definitions.ml)
+ (action
+  (copy ../builtins_cc.ml %{target})))
+
+(executable
+ (name generate)
+ (modules generate builtins_definitions))

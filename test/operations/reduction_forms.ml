@@ -1871,8 +1871,8 @@ let rng_baseline prec_name = List.Assoc.find_exn rng_baselines ~equal:String.equ
    selection and one rounding, never a reduction), so they belong on stdout: a backend that consumed
    other bits prints another number, and the claim that each narrow draw IS the single draw narrowed
    by the library's own conversion fails on it. The host copy of the conversion ([Ops]'s stubs over
-   [builtins.c], the hand-synced twin of the cc builtins -- gh-ocannl-656) is held to the same draw,
-   which is the first mechanical check that the pair has not drifted. *)
+   [builtins.c], compiled from the shared cc definition table -- gh-ocannl-656) is held to the same
+   draw, which is the first mechanical check that the pair has not drifted. *)
 let device_draw (prec_name, prec) =
   Int.incr next_id;
   let uvals =
