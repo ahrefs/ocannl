@@ -469,88 +469,204 @@ let fiber_cardinality_ub ~(domain : (Idx.symbol * int) list) (idcs : Idx.axis_in
     zero-initialization before assignments; [is_injective] whether no LHS position is written twice
     — used with [is_surjective] to elide initialization entirely. *)
 
-let is_surjective (proj : Idx.projections) =
-  (* For surjectivity, we check if all target (LHS) positions will be written to. This is used to
-     determine if we need to zero-initialize before assignment. *)
+(* Value set of one axis component, abstracted as an arithmetic progression {ap_lo, ap_lo + ap_step,
+   ..., ap_hi} (ap_step = 0 iff singleton). For the write (superset) side the form must be dense —
+   actually attaining every progression point — for the read (subset) side a hull suffices (superset
+   of the actual set, sound on the left of ⊆). *)
+type ap = { ap_lo : int; ap_hi : int; ap_step : int } [@@deriving sexp_of]
 
-  (* Check if there are any fixed indices (except Fixed_idx 0 when dim is 1) *)
-  let has_non_trivial_fixed =
-    Array.exists2_exn proj.Idx.project_lhs proj.Idx.lhs_dims ~f:(fun idx dim ->
-        match idx with
-        | Idx.Fixed_idx i -> not (i = 0 && dim <= 1) (* Fixed_idx 0 is OK only when dim is 0 or 1 *)
-        | _ -> false)
-  in
-  if has_non_trivial_fixed then false
-  else
-    (* Collect symbols used in LHS *)
-    let lhs_symbols, has_affine, has_sub_axis, num_concat_axes =
-      Array.fold proj.Idx.project_lhs ~init:([], false, false, 0)
-        ~f:(fun (syms, has_aff, has_sub, num_concat) idx ->
-          match idx with
-          | Idx.Iterator s -> (s :: syms, has_aff, has_sub, num_concat)
-          | Idx.Fixed_idx _ -> (syms, has_aff, has_sub, num_concat)
-          | Idx.Affine { symbols; _ } ->
-              let coeff1_syms =
-                List.filter_map symbols ~f:(fun (coeff, s) -> if coeff = 1 then Some s else None)
-              in
-              (coeff1_syms @ syms, true, has_sub, num_concat)
-          | Idx.Sub_axis -> (syms, has_aff, true, num_concat)
-          | Idx.Concat syms_list -> (syms_list @ syms, has_aff, has_sub, num_concat + 1))
-    in
-    if num_concat_axes > 1 then
-      (* With multiple LHS Concat axes, we either have a block tensor (disjoint symbols in Concats),
-         or a partially-diagonal tensor (overlapping symbols in Concats). *)
-      false
-    else
-      let lhs_symbol_set = Set.of_list (module Idx.Symbol) lhs_symbols in
-      let product_symbol_set = Set.of_list (module Idx.Symbol) (Idx.all_iterators proj) in
-      (* Count only LHS axes that need coverage by iterator symbols. [Fixed_idx 0] on a trivial (dim
-         <= 1) axis is already covered: there is a single position and it is written. Counting such
-         axes would spuriously fail the symbol-count check below for scalar / all-dims-1 tensors,
-         falsely reporting them as non-surjective. *)
-      let non_trivial_lhs_count =
-        Array.foldi proj.Idx.project_lhs ~init:0 ~f:(fun i acc idx ->
-            match idx with Idx.Fixed_idx 0 when proj.Idx.lhs_dims.(i) <= 1 -> acc | _ -> acc + 1)
+let floor_div a b = if a >= 0 then a / b else -((-a + b - 1) / b)
+let ceil_div a b = if a >= 0 then (a + b - 1) / b else -(-a / b)
+
+(* [terms]: [(coeff, (lo, hi))] with nonzero coeffs and nondegenerate ranges (width-1 symbols are
+   folded into the offset by the caller). *)
+let ap_of_form ~exact terms offset : ap option =
+  match terms with
+  | [] -> Some { ap_lo = offset; ap_hi = offset; ap_step = 0 }
+  | _ ->
+      let lo, hi =
+        List.fold terms ~init:(offset, offset) ~f:(fun (lo, hi) (c, (vlo, vhi)) ->
+            (lo + min (c * vlo) (c * vhi), hi + max (c * vlo) (c * vhi)))
       in
+      let g = List.fold terms ~init:0 ~f:(fun g (c, _) -> gcd g c) in
+      let dense =
+        (* Sorted by ascending magnitude, each coefficient must not out-jump the span already
+           reachable plus one step: then every multiple of [g] in [lo, hi] is attained. *)
+        let sorted =
+          List.sort
+            (List.map terms ~f:(fun (c, (vlo, vhi)) -> (abs c, vhi - vlo)))
+            ~compare:(fun (c1, _) (c2, _) -> Int.compare c1 c2)
+        in
+        let rec go span = function
+          | [] -> true
+          | (c, w) :: tl -> c <= g + span && go (span + (c * w)) tl
+        in
+        go 0 sorted
+      in
+      if exact && not dense then None else Some { ap_lo = lo; ap_hi = hi; ap_step = g }
 
-      (* All lhs symbols must be from product iterators (no bound symbols) *)
-      if not (Set.is_subset lhs_symbol_set ~of_:product_symbol_set) then false
-      else if has_sub_axis then
-        (* Conservative: Sub_axis case is complex, so assume non-surjective. This is pessimistic but
-           safe - Sub_axis would require comparing lhs_dims and product-component dimensions
-           carefully. *)
-        false
-      else if has_affine then
-        (* For Affine indices with strides: check coefficient compatibility. A strided access
-           pattern may skip elements. *)
-        let symbol_dims =
-          Array.fold proj.Idx.components ~init:[] ~f:(fun acc comp ->
-              List.fold comp ~init:acc ~f:(fun acc (d, sym) ->
-                  if Set.mem lhs_symbol_set sym then (sym, d) :: acc else acc))
-          |> Map.of_alist_exn (module Idx.Symbol)
+(** Prove coverage of the actual row-major cell addresses, rather than counting symbols. A complete
+    concat component is one dense coordinate (its segments run sequentially); singleton components
+    are independent bounded coordinates. Reusing a coordinate coalesces its coefficients, preserving
+    dependencies between axes. [Sub_axis] contributes zero but retains its row-major stride, just as
+    in the renderer. The resulting affine image must attain every integer from zero to the last
+    cell, with no out-of-buffer addresses.
+
+    Partial concat coordinates can describe a target slice (the other segments do not write that
+    target). Mixing that slice with the whole concat, or two different slices of the same component,
+    is refused. Unknown/static symbols and runtime extent guards are refused too. *)
+let is_surjective (proj : Idx.projections) =
+  let exception Unknown in
+  (* Keep all proof arithmetic well inside the machine integer, including the dense-image helper's
+     intermediate span/gcd additions. Overflow is a refusal, never evidence. *)
+  let limit = Int.max_value / 4 in
+  let magnitude x = if x < -limit || x > limit then raise Unknown else abs x in
+  let add a b =
+    let _ = magnitude a and _ = magnitude b in
+    let c = a + b in
+    ignore (magnitude c : int);
+    c
+  in
+  let mul a b =
+    let aa = magnitude a and bb = magnitude b in
+    if aa <> 0 && bb > limit / aa then raise Unknown;
+    a * b
+  in
+  try
+    if Array.length proj.project_lhs <> Array.length proj.lhs_dims then raise Unknown;
+    if not (List.is_empty proj.extent_syms) then raise Unknown;
+    let total =
+      Array.fold proj.lhs_dims ~init:1 ~f:(fun n d ->
+          if d < 0 then raise Unknown;
+          mul n d)
+    in
+    if total = 0 then true
+    else begin
+      let owner = ref (Map.empty (module Idx.Symbol)) in
+      Array.iteri proj.components ~f:(fun i comp ->
+          if List.is_empty comp then raise Unknown;
+          List.iter comp ~f:(fun (d, sym) ->
+              if d <= 0 || Map.mem !owner sym then raise Unknown;
+              owner := Map.set !owner ~key:sym ~data:(i, d)));
+      (* One coordinate choice per component: a full concatenation or one active segment. *)
+      let choices = Hashtbl.create (module Int) in
+      let widths = ref (Map.empty (module Idx.Symbol)) in
+      let coordinate syms =
+        let first = match syms with s :: _ -> s | [] -> raise Unknown in
+        let i, _ = match Map.find !owner first with Some p -> p | None -> raise Unknown in
+        let comp = proj.components.(i) in
+        let all = List.map comp ~f:snd in
+        if not (List.equal Idx.equal_symbol syms all || List.length syms = 1) then raise Unknown;
+        List.iter syms ~f:(fun sym ->
+            match Map.find !owner sym with Some (j, _) when i = j -> () | _ -> raise Unknown);
+        (match Hashtbl.find choices i with
+        | Some prev when not (List.equal Idx.equal_symbol prev syms) -> raise Unknown
+        | Some _ -> ()
+        | None -> Hashtbl.set choices ~key:i ~data:syms);
+        let width =
+          List.fold syms ~init:0 ~f:(fun n sym -> add n (snd (Map.find_exn !owner sym)))
         in
-        let check_affine_surjective =
-          Array.for_all proj.Idx.project_lhs ~f:(function
-            | Idx.Affine { symbols; _ } ->
-                (* Find max dimension of coeff=1 symbols *)
-                let max_coeff1_dim =
-                  List.filter_map symbols ~f:(fun (coeff, s) ->
-                      if coeff = 1 then Map.find symbol_dims s else None)
-                  |> List.max_elt ~compare:Int.compare
-                  |> Option.value ~default:Int.max_value
-                in
-                (* Check that coeff=1 dimension is not smaller than any stride *)
-                List.for_all symbols ~f:(fun (coeff, _) -> coeff = 1 || max_coeff1_dim >= coeff)
-            | _ -> true)
+        widths := Map.set !widths ~key:first ~data:width;
+        first
+      in
+      let terms = ref (Map.empty (module Idx.Symbol)) and offset = ref 0 and stride = ref 1 in
+      let term c sym =
+        terms := Map.update !terms sym ~f:(function None -> c | Some prev -> add prev c)
+      in
+      for ax = Array.length proj.project_lhs - 1 downto 0 do
+        (match proj.project_lhs.(ax) with
+        | Idx.Fixed_idx k -> offset := add !offset (mul !stride k)
+        | Idx.Sub_axis -> ()
+        | Idx.Iterator sym -> term !stride (coordinate [ sym ])
+        | Idx.Concat syms -> term !stride (coordinate syms)
+        | Idx.Affine { symbols; offset = k } ->
+            offset := add !offset (mul !stride k);
+            List.iter symbols ~f:(fun (c, sym) ->
+                (* An affine term has no inactive-segment semantics in lowering. *)
+                let i, _ = match Map.find !owner sym with Some p -> p | None -> raise Unknown in
+                if List.length proj.components.(i) <> 1 then raise Unknown;
+                term (mul !stride c) (coordinate [ sym ])));
+        stride := mul !stride proj.lhs_dims.(ax)
+      done;
+      (* Without a flattened axis, lowering clamps each coordinate independently. Address
+         cancellation across out-of-range axes must not erase those guards in this proof. *)
+      if not (Array.exists proj.project_lhs ~f:(function Idx.Sub_axis -> true | _ -> false)) then
+        Array.iteri proj.project_lhs ~f:(fun ax idx ->
+            let bound symbols offset =
+              List.fold symbols ~init:(offset, offset) ~f:(fun (lo, hi) (c, sym) ->
+                  let w = Map.find_exn !widths (coordinate [ sym ]) in
+                  let delta = mul c (w - 1) in
+                  (add lo (min 0 delta), add hi (max 0 delta)))
+            in
+            let lo, hi =
+              match idx with
+              | Idx.Fixed_idx k -> (k, k)
+              | Idx.Iterator sym -> bound [ (1, sym) ] 0
+              | Idx.Affine { symbols; offset } -> bound symbols offset
+              | Idx.Concat syms -> (0, Map.find_exn !widths (coordinate syms) - 1)
+              | Idx.Sub_axis -> assert false
+            in
+            if lo < 0 || hi >= proj.lhs_dims.(ax) then raise Unknown);
+      (* A product block with no available RHS emits no store. Complete independent concat
+         coordinates alone therefore do not prove coverage of a sparse block matrix. Quantify over
+         the bounded segment choices (not over cells): each target-coordinate choice needs an
+         available producer; unused reduction components may provide an existential witness. *)
+      if not (Array.is_empty proj.project_rhs) then begin
+        let blocks =
+          Array.fold proj.components ~init:[ [] ] ~f:(fun blocks comp ->
+              if List.length blocks > 1024 / List.length comp then raise Unknown;
+              List.concat_map blocks ~f:(fun block -> List.map comp ~f:(fun (_, s) -> s :: block)))
+          |> List.map ~f:(fun block -> Array.of_list_rev block)
+          |> List.filter ~f:(fun block ->
+              Hashtbl.for_alli choices ~f:(fun ~key:i ~data:syms ->
+                  List.mem syms block.(i) ~equal:Idx.equal_symbol))
         in
-        if not check_affine_surjective then false
-        else
-          (* Check that we have enough unique symbols to cover all LHS dimensions *)
-          Set.length lhs_symbol_set >= non_trivial_lhs_count
-      else
-        (* Simple case: only Iterator and Fixed_idx *)
-        (* Need enough unique symbols to cover all dimensions *)
-        Set.length lhs_symbol_set >= non_trivial_lhs_count
+        let signature block =
+          Array.to_list block |> List.filteri ~f:(fun i _ -> Hashtbl.mem choices i)
+        in
+        let selector =
+          match
+            Array.filter_map proj.project_lhs ~f:(function
+              | Idx.Concat syms -> Some syms
+              | _ -> None)
+          with
+          | [| syms |] when List.length syms = Array.length proj.project_rhs ->
+              Some (Array.of_list syms)
+          | _ -> None
+        in
+        let available block =
+          let active s = Array.mem block s ~equal:Idx.equal_symbol in
+          let bound s = (not (Map.mem !owner s)) || active s in
+          Array.existsi proj.project_rhs ~f:(fun i idcs ->
+              (match selector with None -> true | Some syms -> active syms.(i))
+              && Array.for_all idcs ~f:(function
+                | Idx.Iterator s -> bound s
+                | Idx.Affine { symbols; _ } -> List.for_all symbols ~f:(fun (_, s) -> bound s)
+                | Idx.Concat syms -> List.exists syms ~f:active
+                | Idx.Fixed_idx _ | Idx.Sub_axis -> true))
+        in
+        let covered = List.filter blocks ~f:available |> List.map ~f:signature in
+        if
+          not
+            (List.for_all blocks ~f:(fun block ->
+                 List.mem covered (signature block) ~equal:(List.equal Idx.equal_symbol)))
+        then raise Unknown
+      end;
+      let ranged =
+        Map.to_alist !terms
+        |> List.filter_map ~f:(fun (sym, c) ->
+            let width = Map.find_exn !widths sym in
+            if c = 0 || width = 1 then None else Some (c, (0, width - 1)))
+      in
+      ignore
+        (List.fold ranged ~init:(magnitude !offset) ~f:(fun n (c, (_, hi)) ->
+             add n (mul (magnitude c) hi))
+          : int);
+      match ap_of_form ~exact:true ranged !offset with
+      | Some { ap_lo = 0; ap_hi; ap_step } -> ap_hi = total - 1 && (total = 1 || ap_step = 1)
+      | _ -> false
+    end
+  with Unknown -> false
 
 let is_injective (proj : Idx.projections) =
   let all_product_iterators = Set.of_list (module Idx.Symbol) (Idx.all_iterators proj) in
@@ -743,42 +859,6 @@ let may_touch_same_cell ?(static_range = fun _ -> None) (a : 'tn access) (b : 't
     ([Low_level.trace_node_facts] and the coverage queries take guards unconditionally), pre-filter
     [a_guarded] for execution-accurate coverage. [writes] must be accesses of the same node as
     [read]. *)
-
-(* Value set of one axis component, abstracted as an arithmetic progression {ap_lo, ap_lo + ap_step,
-   ..., ap_hi} (ap_step = 0 iff singleton). For the write (superset) side the form must be dense —
-   actually attaining every progression point — for the read (subset) side a hull suffices (superset
-   of the actual set, sound on the left of ⊆). *)
-type ap = { ap_lo : int; ap_hi : int; ap_step : int } [@@deriving sexp_of]
-
-let floor_div a b = if a >= 0 then a / b else -((-a + b - 1) / b)
-let ceil_div a b = if a >= 0 then (a + b - 1) / b else -(-a / b)
-
-(* [terms]: [(coeff, (lo, hi))] with nonzero coeffs and nondegenerate ranges (width-1 symbols are
-   folded into the offset by the caller). *)
-let ap_of_form ~exact terms offset : ap option =
-  match terms with
-  | [] -> Some { ap_lo = offset; ap_hi = offset; ap_step = 0 }
-  | _ ->
-      let lo, hi =
-        List.fold terms ~init:(offset, offset) ~f:(fun (lo, hi) (c, (vlo, vhi)) ->
-            (lo + min (c * vlo) (c * vhi), hi + max (c * vlo) (c * vhi)))
-      in
-      let g = List.fold terms ~init:0 ~f:(fun g (c, _) -> gcd g c) in
-      let dense =
-        (* Sorted by ascending magnitude, each coefficient must not out-jump the span already
-           reachable plus one step: then every multiple of [g] in [lo, hi] is attained. *)
-        let sorted =
-          List.sort
-            (List.map terms ~f:(fun (c, (vlo, vhi)) -> (abs c, vhi - vlo)))
-            ~compare:(fun (c1, _) (c2, _) -> Int.compare c1 c2)
-        in
-        let rec go span = function
-          | [] -> true
-          | (c, w) :: tl -> c <= g + span && go (span + (c * w)) tl
-        in
-        go 0 sorted
-      in
-      if exact && not dense then None else Some { ap_lo = lo; ap_hi = hi; ap_step = g }
 
 (* r ⊆ w, where w is dense. *)
 let ap_subset r w =

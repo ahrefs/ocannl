@@ -261,7 +261,7 @@ let () =
   p "Cmple lower bound breaks where its Cmplt encoding did" (is le_lower [ 3 ] && is lt_lower [ 3 ]);
   p "Cmple upper bound breaks where its Cmplt encoding did" (is le_upper [ 7 ] && is lt_upper [ 7 ]);
   (* A non-unit coefficient exercises the rounding: [2i <= 5] flips at [i = 3], as does [2i < 6]. *)
-  let coef2 n = (LL.Embed_index (Idx.Affine { symbols = [ (2, n) ]; offset = 0 }), iprec) in
+  let coef2 n = (LL.Embed_index (Idx.affine ~symbols:[ (2, n) ] ~offset:0), iprec) in
   let le_scaled = bps_of ~to_:9 (fun i -> LL.Binop (Ir.Ops.Cmple, coef2 i, fixed 5)) in
   let lt_scaled = bps_of ~to_:9 (fun i -> LL.Binop (Ir.Ops.Cmplt, coef2 i, fixed 6)) in
   p "Cmple with a scaled axis rounds like its Cmplt encoding"

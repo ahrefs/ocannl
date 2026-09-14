@@ -86,8 +86,7 @@ let over_budget_transform ~out_tn ~src_tn ~rows (opt : LL.optimized) : LL.optimi
               tn = out_tn;
               idcs = [| Idx.Iterator i |];
               llsc =
-                LL.Get
-                  (scratch, [| Idx.Affine { symbols = [ (-1, y) ]; offset = scratch_floats - 1 } |]);
+                LL.Get (scratch, [| Idx.affine ~symbols:[ (-1, y) ] ~offset:(scratch_floats - 1) |]);
               debug = "";
             };
       }

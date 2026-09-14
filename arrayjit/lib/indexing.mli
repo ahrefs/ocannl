@@ -54,13 +54,20 @@ val validate_bound_value : ?width64:bool -> static_symbol -> int -> unit
 val validate_lowered_bindings : ?width64:bool -> lowered_bindings -> unit
 val dims_to_string : ?with_axis_numbers:bool -> int array -> string
 
+type affine_index = private { symbols : (int * symbol) list; offset : int }
+[@@deriving compare, equal, sexp_of]
+
 type axis_index =
   | Fixed_idx of int
   | Iterator of symbol
-  | Affine of { symbols : (int * symbol) list; offset : int }
+  | Affine of affine_index
   | Sub_axis
   | Concat of symbol list
 [@@deriving compare, equal, sexp]
+
+val affine : symbols:(int * symbol) list -> offset:int -> axis_index
+(** Coalesce repeated symbols, remove zero terms, and use [Fixed_idx] or [Iterator] whenever
+    possible. The private payload prevents bypassing this normalization. *)
 
 val axis_index_mentions_symbol : symbol -> axis_index -> bool
 val axis_index_mentions_any : symbol list -> axis_index -> bool

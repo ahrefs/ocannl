@@ -35,7 +35,7 @@ let scatter_proj s1 s2 ~n1 ~n2 ~c1 ~c2 ~lhs_dim : Idx.projections =
     components = [| [ (n1, s1) ]; [ (n2, s2) ] |];
     lhs_dims = [| lhs_dim |];
     rhs_dims = [| [| n1; n2 |] |];
-    project_lhs = [| Idx.Affine { symbols = [ (c1, s1); (c2, s2) ]; offset = 0 } |];
+    project_lhs = [| Idx.affine ~symbols:[ (c1, s1); (c2, s2) ] ~offset:0 |];
     project_rhs = [| [| Idx.Iterator s1; Idx.Iterator s2 |] |];
     extent_syms = [];
     debug_info = dbg;
@@ -177,7 +177,7 @@ let tri_scatter_proj s1 s2 : Idx.projections =
     components = [| [ (3, s1) ]; [ (2, s2) ] |];
     lhs_dims = [| 3; 4 |];
     rhs_dims = [| [| 3; 2 |] |];
-    project_lhs = [| Idx.Iterator s1; Idx.Affine { symbols = [ (1, s1); (1, s2) ]; offset = 0 } |];
+    project_lhs = [| Idx.Iterator s1; Idx.affine ~symbols:[ (1, s1); (1, s2) ] ~offset:0 |];
     project_rhs = [| [| Idx.Iterator s1; Idx.Iterator s2 |] |];
     extent_syms = [];
     debug_info = dbg;

@@ -110,7 +110,7 @@ let guarded_nest ~guard_sym ~cell =
     match guard_sym with
     | `Peeled -> Idx.Iterator k
     | `Enclosing s -> Idx.Iterator s
-    | `Mixed s -> Idx.Affine { symbols = [ (1, s); (1, k) ]; offset = 0 }
+    | `Mixed s -> Idx.affine ~symbols:[ (1, s); (1, k) ] ~offset:0
   in
   let tn, idcs =
     match cell with
@@ -120,7 +120,7 @@ let guarded_nest ~guard_sym ~cell =
     | `Lane_sum (s1, s2) ->
         (* Two enclosing lanes collapsing onto one cell: [(0,1)] and [(1,0)] address [lanes[1]], so
            the cell tells neither of them apart even though it mentions both. *)
-        (lanes, [| Idx.Affine { symbols = [ (1, s1); (1, s2) ]; offset = 0 } |])
+        (lanes, [| Idx.affine ~symbols:[ (1, s1); (1, s2) ] ~offset:0 |])
   in
   LL.For_loop
     {

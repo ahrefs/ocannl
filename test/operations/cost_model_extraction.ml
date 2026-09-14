@@ -97,7 +97,7 @@ let () =
   (* Strided/gapped, size-8 nodes: for i: R[2*i] = A8[2*i] * 2 — touches 4 of 8 cells each. *)
   let a8 = fresh_tn "A8" [| 8 |] in
   let r8 = fresh_tn "R8" [| 8 |] in
-  let stride2 s = Idx.Affine { symbols = [ (2, s) ]; offset = 0 } in
+  let stride2 s = Idx.affine ~symbols:[ (2, s) ] ~offset:0 in
   let strided =
     Ll_test.loop_n i 4
       (Ll_test.set r8
@@ -154,7 +154,7 @@ let () =
      4-cell slices — the union is their sum, 8 cells = 32 rd bytes, exact. *)
   let a16 = fresh_tn "A16" [| 16 |] in
   let c2 = fresh_tn "C2" [| 4 |] in
-  let shift8 s = Idx.Affine { symbols = [ (1, s) ]; offset = 8 } in
+  let shift8 s = Idx.affine ~symbols:[ (1, s) ] ~offset:8 in
   let disjoint_slices =
     Ll_test.loop_n i 4
       (Ll_test.set c2
@@ -165,7 +165,7 @@ let () =
 
   (* Overlapping shifted reads: C2[i] = A16[i] + A16[i+1] — images {0..3} and {1..4} can share a
      cell, so the sum stays a flagged union bound. *)
-  let shift1 s = Idx.Affine { symbols = [ (1, s) ]; offset = 1 } in
+  let shift1 s = Idx.affine ~symbols:[ (1, s) ] ~offset:1 in
   let overlapping_slices =
     Ll_test.loop_n i 4
       (Ll_test.set c2
@@ -176,8 +176,8 @@ let () =
 
   (* Parity-disjoint reads: C2[i] = A16[2i] * A16[2i+1] — evens and odds never collide (the gcd
      argument), 8 cells = 32 rd bytes, exact. *)
-  let even s = Idx.Affine { symbols = [ (2, s) ]; offset = 0 } in
-  let odd s = Idx.Affine { symbols = [ (2, s) ]; offset = 1 } in
+  let even s = Idx.affine ~symbols:[ (2, s) ] ~offset:0 in
+  let odd s = Idx.affine ~symbols:[ (2, s) ] ~offset:1 in
   let parity =
     Ll_test.loop_n i 4
       (Ll_test.set c2
@@ -222,7 +222,7 @@ let () =
      cells written exactly. The random-bits source is read once per run. *)
   let v16 = fresh_tn "V16" [| 16 |] in
   let src = fresh_tn "U" [| 4 |] in
-  let base4 s = Idx.Affine { symbols = [ (4, s) ]; offset = 0 } in
+  let base4 s = Idx.affine ~symbols:[ (4, s) ] ~offset:0 in
   let vec_of idcs =
     Ll_test.loop_n i 4
       (LL.Set_from_vec

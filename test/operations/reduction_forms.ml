@@ -465,7 +465,7 @@ let make ~(prec : Ops.prec) ~(shape : shape) () : prog =
       let cond =
         LL.Binop
           ( Ops.Cmplt,
-            (LL.Embed_index (Idx.Affine { symbols = [ (1, r); (1, k) ]; offset = 0 }), iprec),
+            (LL.Embed_index (Idx.affine ~symbols:[ (1, r); (1, k) ] ~offset:0), iprec),
             (LL.Embed_index (Idx.Iterator s.Idx.static_symbol), iprec) )
       in
       {

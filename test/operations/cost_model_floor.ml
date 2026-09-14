@@ -156,7 +156,7 @@ let () =
      upper 48. *)
   let g2 = fresh_tn "G2" [| 4 |] in
   let h8 = fresh_tn "H8" [| 8 |] in
-  let shift1 s = Idx.Affine { symbols = [ (1, s) ]; offset = 1 } in
+  let shift1 s = Idx.affine ~symbols:[ (1, s) ] ~offset:1 in
   let overlapping_reads =
     for_over i
       (LL.Set

@@ -1748,7 +1748,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
     let flat_idx =
       match flat_of call_args with
       | [], offset -> Indexing.Fixed_idx offset
-      | terms, offset -> Indexing.Affine { symbols = terms; offset }
+      | terms, offset -> Indexing.affine ~symbols:terms ~offset
     in
     let iprec = Ops.index_prec () in
     let flat_sc = Embed_index flat_idx in
@@ -1868,7 +1868,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
                 | _ -> acc)
           in
           let new_offset = offset + offset_additions in
-          Indexing.Affine { symbols = all_terms; offset = new_offset }
+          Indexing.affine ~symbols:all_terms ~offset:new_offset
       | idx -> idx
     in
     (* gh-133 Stage B: a solved producer symbol can be bound to an affine expression that still
@@ -1987,7 +1987,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
                           if Indexing.equal_symbol s us then None else Some (-uc * c, s))
                     in
                     let value =
-                      Indexing.Affine { symbols = value_terms; offset = uc * (roff - offset) }
+                      Indexing.affine ~symbols:value_terms ~offset:(uc * (roff - offset))
                     in
                     env := Map.set !env ~key:us ~data:value;
                     (* Range guard [0 <= us < range], reformulated with NON-NEGATIVE operands so it
@@ -1995,12 +1995,10 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
                        underflow): [rest := Σ_{s≠us} c·s + offset], [rhs := call index]. uc=+1 needs
                        [rest <= rhs < rest+range]; uc=-1 needs [rhs <= rest < rhs+range]. *)
                     let rest_axis =
-                      Indexing.Affine
-                        {
-                          symbols =
-                            List.filter terms ~f:(fun (_, s) -> not (Indexing.equal_symbol s us));
-                          offset;
-                        }
+                      Indexing.affine
+                        ~symbols:
+                          (List.filter terms ~f:(fun (_, s) -> not (Indexing.equal_symbol s us)))
+                        ~offset
                     in
                     range_guards := (uc, rest_axis, call_args.(i), symbol_range us) :: !range_guards;
                     bound_pos.(i) <- true;
@@ -2098,9 +2096,8 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
             if d = 0 then idx
             else
               match idx with
-              | Indexing.Iterator s -> Indexing.Affine { symbols = [ (1, s) ]; offset = d }
-              | Indexing.Affine { symbols; offset } ->
-                  Indexing.Affine { symbols; offset = offset + d }
+              | Indexing.Iterator s -> Indexing.affine ~symbols:[ (1, s) ] ~offset:d
+              | Indexing.Affine { symbols; offset } -> Indexing.affine ~symbols ~offset:(offset + d)
               | Indexing.Fixed_idx i -> Indexing.Fixed_idx (i + d)
               | Indexing.Sub_axis | Indexing.Concat _ -> idx
           in
@@ -5976,11 +5973,9 @@ let unseparated_thread_write ~(active : thread_slot list)
         | Indexing.Fixed_idx c when c % length = 0 -> Indexing.Fixed_idx (c / length)
         | Indexing.Affine { symbols; offset }
           when offset % length = 0 && List.for_all symbols ~f:(fun (c, _) -> c % length = 0) ->
-            Indexing.Affine
-              {
-                symbols = List.map symbols ~f:(fun (c, s) -> (c / length, s));
-                offset = offset / length;
-              }
+            Indexing.affine
+              ~symbols:(List.map symbols ~f:(fun (c, s) -> (c / length, s)))
+              ~offset:(offset / length)
         | _ -> Indexing.Sub_axis);
       m
   in

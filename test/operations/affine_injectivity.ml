@@ -11,7 +11,7 @@ module Idx = Ir.Indexing
 module Aff = Ir.Affine
 
 let sym () = Idx.get_symbol ()
-let aff terms offset = Idx.Affine { symbols = terms; offset }
+let aff terms offset = Idx.affine ~symbols:terms ~offset
 let ranges pairs s = List.Assoc.find pairs s ~equal:Idx.equal_symbol |> Option.value ~default:1
 
 open Verdict.Claims

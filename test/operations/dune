@@ -5254,3 +5254,12 @@
  (deps ocannl_config)
  (modules access_fold)
  (libraries base arrayjit.ir arrayjit.ll_builders arrayjit.verdict))
+
+(test
+ (name affine_surjectivity)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules affine_surjectivity)
+ (libraries base ocannl stdio ll_test arrayjit.verdict))

@@ -65,7 +65,7 @@ let () =
           Idx.Iterator a_sym;
           Idx.Fixed_idx 2;
           Idx.Sub_axis;
-          Idx.Affine { symbols = [ (2, b_sym) ]; offset = 1 };
+          Idx.affine ~symbols:[ (2, b_sym) ] ~offset:1;
         |]
   in
   p_all "the mixed-constructor offset agrees with row-major arithmetic"

@@ -169,12 +169,12 @@ let () =
       (LL.Set
          {
            tn = x;
-           idcs = [| Idx.Affine { symbols = [ (1, t) ]; offset = 1 } |];
+           idcs = [| Idx.affine ~symbols:[ (1, t) ] ~offset:1 |];
            llsc =
              LL.Binop
                ( Ir.Ops.Add,
                  (get x [| Idx.Iterator t |], sp),
-                 (get x [| Idx.Affine { symbols = [ (1, t) ]; offset = 1 } |], sp) );
+                 (get x [| Idx.affine ~symbols:[ (1, t) ] ~offset:1 |], sp) );
            debug = "";
          })
   in

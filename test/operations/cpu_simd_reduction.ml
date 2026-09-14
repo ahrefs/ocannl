@@ -228,8 +228,8 @@ let () =
                    Binop
                      ( Ir.Ops.Add,
                        (Get (y1.Tensor.value, [| f0 |]), single),
-                       ( Get (u.Tensor.value, [| Idx.Affine { symbols = [ (2, i) ]; offset = 0 } |]),
-                         single ) );
+                       (Get (u.Tensor.value, [| Idx.affine ~symbols:[ (2, i) ] ~offset:0 |]), single)
+                     );
                  debug = "";
                }))
       y1

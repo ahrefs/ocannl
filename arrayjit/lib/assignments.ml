@@ -272,8 +272,8 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
               else
                 match idx with
                 | Fixed_idx n -> Fixed_idx (n + left_pad)
-                | Iterator s -> Affine { symbols = [ (1, s) ]; offset = left_pad }
-                | Affine { symbols; offset } -> Affine { symbols; offset = offset + left_pad }
+                | Iterator s -> affine ~symbols:[ (1, s) ] ~offset:left_pad
+                | Affine { symbols; offset } -> affine ~symbols ~offset:(offset + left_pad)
                 | Sub_axis -> Sub_axis
                 | Concat _ ->
                     raise
@@ -315,6 +315,21 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
       Low_level.scalar_arg list =
     let padding = Tn.get_padding tn in
     let sem_dims = Tn.dims_without_padding tn in
+    let idcs, sem_dims =
+      if Array.exists idcs ~f:(function Indexing.Sub_axis -> true | _ -> false) then (
+        (* Sub_axis indices describe one flat address, not independently bounded coordinates. The
+           renderer retains each axis's stride while dropping Sub_axis's contribution. *)
+        (match padding with
+        | Some (pads, _) when Array.exists pads ~f:(fun p -> p.Ops.left <> 0 || p.Ops.right <> 0) ->
+            raise
+            @@ Utils.User_error
+                 "Flattened Sub_axis access to a padded tensor has no supported \
+                  logical-to-physical layout; materialize an unpadded copy before flattening"
+        | _ -> ());
+        ( [| Indexing.reflect_projection ~dims:sem_dims ~projection:idcs |],
+          [| Array.fold sem_dims ~init:1 ~f:( * ) |] ))
+      else (idcs, sem_dims)
+    in
     let iprec = Ops.index_prec () in
     let embed idx = (Low_level.Embed_index idx, iprec) in
     Array.to_list
@@ -513,7 +528,7 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
                     failwith "Concat substitution in Affine index not supported"
                 | Some (Indexing.Fixed_idx _) | Some Indexing.Sub_axis | None -> (coeff, s))
           in
-          Indexing.Affine { symbols; offset }
+          Indexing.affine ~symbols ~offset
       | Indexing.Concat syms -> (
           match on_concat with
           | `Reject who -> raise @@ Utils.User_error ("Concat indexing not supported in " ^ who)
@@ -530,7 +545,7 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
               in
               match active with
               | Some (s', 0) -> Indexing.Iterator s'
-              | Some (s', offset) -> Indexing.Affine { symbols = [ (1, s') ]; offset }
+              | Some (s', offset) -> Indexing.affine ~symbols:[ (1, s') ] ~offset
               | None ->
                   raise
                   @@ Utils.User_error
@@ -717,9 +732,34 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
   and loop_accum_rev ~initialize_neutral ~accum ~(op : Ops.op) ~lhs ~lhses projections : Low_level.t
       =
     let projections : Indexing.projections = Lazy.force projections in
+    let selector =
+      match
+        Array.filter_map projections.project_lhs ~f:(function
+          | Indexing.Concat syms -> Some syms
+          | _ -> None)
+      with
+      | [| syms |] when List.length syms = Array.length lhses -> Some (Array.of_list syms)
+      | _ -> None
+    in
     let target_projections =
       Array.mapi projections.project_rhs ~f:(fun i project_lhs ->
-          { projections with lhs_dims = projections.rhs_dims.(i); project_lhs })
+          let components =
+            match selector with
+            | None -> projections.components
+            | Some syms ->
+                Array.map projections.components ~f:(fun comp ->
+                    if List.exists comp ~f:(fun (_, s) -> Indexing.equal_symbol s syms.(i)) then
+                      List.filter comp ~f:(fun (_, s) -> Indexing.equal_symbol s syms.(i))
+                    else comp)
+          in
+          {
+            projections with
+            components;
+            lhs_dims = projections.rhs_dims.(i);
+            project_lhs;
+            rhs_dims = [| projections.lhs_dims |];
+            project_rhs = [| projections.project_lhs |];
+          })
     in
     let target_can_skip =
       Array.map target_projections ~f:(fun proj -> can_skip_accumulation ~projections:proj)
