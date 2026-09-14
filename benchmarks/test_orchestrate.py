@@ -3,6 +3,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -13,6 +14,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
+import bench_venv
 import fixture_digest
 import cell_group
 import orchestrate
@@ -3286,6 +3288,64 @@ class AmbientEnvTest(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 orchestrate.report(rows, out)
             return (out / "report.md").read_text()
+
+
+class VenvInterpreterTest(unittest.TestCase):
+    """One rule finds the benchmark venv's interpreter, and every driver takes it from there.
+
+    Each measurement box shares one venv outside the checkout, reached through a `benchmarks/.venv`
+    symlink or through `BENCH_VENV_PY`. A driver spelling its own `.venv/bin/python` honours only
+    the symlink, and only on POSIX -- which `gh675_cells.py` did until it took `bench_venv`'s rule.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+
+    def test_the_override_wins_over_both_venv_layouts(self):
+        (self.dir / ".venv/Scripts").mkdir(parents=True)
+        (self.dir / ".venv/Scripts/python.exe").touch()
+        found = bench_venv.venv_python(self.dir, {"BENCH_VENV_PY": "/shared/venv/bin/python"})
+        self.assertEqual(found, Path("/shared/venv/bin/python"))
+
+    def test_the_windows_layout_is_taken_when_it_exists(self):
+        (self.dir / ".venv/Scripts").mkdir(parents=True)
+        (self.dir / ".venv/Scripts/python.exe").touch()
+        self.assertEqual(bench_venv.venv_python(self.dir, {}), self.dir / ".venv/Scripts/python.exe")
+
+    def test_the_posix_layout_is_the_fallback(self):
+        # Not conditional on existence: an unprovisioned checkout names the interpreter it is
+        # missing, so the spawn error says where the venv was expected.
+        self.assertEqual(bench_venv.venv_python(self.dir, {}), self.dir / ".venv/bin/python")
+
+    def test_the_default_environment_is_the_process_environment(self):
+        with unittest.mock.patch.dict(os.environ, {"BENCH_VENV_PY": "/from/the/process/python"}):
+            self.assertEqual(bench_venv.venv_python(self.dir), Path("/from/the/process/python"))
+
+    def test_every_driver_takes_the_shared_rule(self):
+        import gh675_cells
+
+        expected = bench_venv.venv_python(orchestrate.HERE)
+        self.assertEqual(orchestrate.VENV_PY, expected)
+        self.assertEqual(gh675_cells.HERE, orchestrate.HERE)
+        self.assertEqual(gh675_cells.VENV, expected)
+
+    def test_no_driver_spells_the_venv_interpreter_itself(self):
+        # The relationship test above covers the drivers that exist; this covers the next one,
+        # which would otherwise copy `HERE / ".venv/bin/python"` from wherever it started.
+        here = Path(orchestrate.HERE)
+        sources = sorted(here.glob("*.py")) + sorted(here.glob("runners/**/*.py"))
+        spelled = re.compile(r"""["']\.venv[/\\]""")
+        offenders = [
+            f"{src.relative_to(here)}:{n}"
+            for src in sources
+            if src.name not in ("bench_venv.py", "test_orchestrate.py")
+            for n, line in enumerate(src.read_text(encoding="utf-8").splitlines(), 1)
+            if spelled.search(line)
+        ]
+        self.assertTrue(len(sources) > 2, f"the scan found too few sources under {here}")
+        self.assertEqual(offenders, [], "use bench_venv.venv_python instead")
 
 
 class CommandLineTest(unittest.TestCase):

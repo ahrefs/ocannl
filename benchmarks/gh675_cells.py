@@ -38,11 +38,12 @@ import argparse, hashlib, json, os, shutil, subprocess, sys, time
 from collections import Counter
 from pathlib import Path
 
+import bench_venv
 import cell_group
 
 ROOT = Path(__file__).resolve().parent.parent
 HERE = ROOT / "benchmarks"
-VENV = HERE / ".venv/bin/python"
+VENV = bench_venv.venv_python(HERE)  # honours BENCH_VENV_PY and the Windows venv layout
 # Everything this driver writes -- the per-run records and the per-arm caches whose warmth IS the
 # experiment -- goes outside the checkout, under $GH675_OUT (default: a tmp dir).
 # Resolved, not as given: the children run with `cwd=benchmarks/`, so a RELATIVE GH675_OUT would
