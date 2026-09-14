@@ -1355,3 +1355,9 @@ files.
   bf16/fp8 remain floats despite integer host storage. Whole-family tests derive from
   `Ops.scalar_precs` / `Ops.integer_precs` / `Ops.float_precs`, while C-family renderer sweeps
   use `Ops.storage_precs`, which includes packed state and excludes void.
+
+- `C_syntax.warp_shuffle_stages` owns the ordered XOR masks for both phases of
+  `try_warp_reduce` and `hardware_warp_shuffle`'s storage-staged rival (gh-ocannl-875).
+  The simulator snapshots all lanes per stage, so it does not independently assume descending
+  association. Emitted single/multi-warp calls are checked against those masks; the old f16 mod7
+  and bf16 128-lane collisions remain executable witnesses beside the discriminating mod11 cases.

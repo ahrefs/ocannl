@@ -42,6 +42,7 @@ open Verdict.Claims
 
 let approx a b = Float.(abs (a - b) < 1e-3)
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let () = Stdio.eprintf "hardware_warp_shuffle: backend=%s (not part of the golden)\n%!" backend_name
 let on_gpu = Ir.Schedule.backend_is_gpu backend_name
 let on_cpu = Ir.Schedule.backend_is_cpu backend_name
 let codegen_capabilities = Context.codegen_capabilities (Context.auto ())
@@ -56,19 +57,44 @@ type rival_fixture = { n : int; term : int -> float; narrow : float -> float }
 let values { once_narrowed; storage_tree; per_step } = [ once_narrowed; storage_tree; per_step ]
 let warp_size = 32
 
-(* Host image of the renderer's descending [shfl_xor] offsets. Only the lower half needs updating:
-   those are exactly the lanes that can feed lane 0 at the next offset. [narrow] models the
-   plausible-wrong spelling whose staging register lives at storage precision. *)
+(* The renderer owns the stage order. Snapshot every lane before a stage: a lower-half-only shortcut
+   would silently assume descending masks even after the renderer changed association. [narrow]
+   models the plausible-wrong storage-precision staging register. *)
 let reduce_storage_tree ~narrow terms =
-  let lanes = Array.of_list terms in
-  let offset = ref (Array.length lanes / 2) in
-  while !offset > 0 do
-    for lane = 0 to !offset - 1 do
-      lanes.(lane) <- narrow (lanes.(lane) +. lanes.(lane + !offset))
-    done;
-    offset := !offset / 2
-  done;
+  let lanes =
+    List.fold
+      (Ir.C_syntax.warp_shuffle_stages ~width:(List.length terms))
+      ~init:(Array.of_list terms)
+      ~f:(fun previous mask ->
+        Array.mapi previous ~f:(fun lane value -> narrow (value +. previous.(lane lxor mask))))
+  in
   lanes.(0)
+
+let () =
+  p_empty "a singleton shuffle phase needs no stages" ~over:[ 1 ]
+    (Ir.C_syntax.warp_shuffle_stages ~width:1);
+  p_all "shuffle stages refuse nonpositive and non-power-of-two widths" [ -1; 0; 3; 6 ]
+    ~f:(fun width ->
+      match Ir.C_syntax.warp_shuffle_stages ~width with
+      | _ -> false
+      | exception Invalid_argument _ -> true)
+
+(* Read calls in the emitted kernel, excluding overload declarations in the prelude. This checks
+   both live phase consumers, including their ordering, against the stages the simulator uses. *)
+let emitted_shuffle_stages source =
+  String.split_lines source
+  |> List.filter_map ~f:(fun line ->
+      if not (String.is_substring line ~substring:"ocannl_shfl_xor(wred_v_") then None
+      else
+        let _, after_comma = String.rsplit2_exn line ~on:',' in
+        let mask, _ = String.lsplit2_exn after_comma ~on:')' in
+        Some (Int.of_string (String.strip mask)))
+
+let has_shuffle_stages source ~warps =
+  let expected =
+    Ir.C_syntax.warp_shuffle_stages ~width:warp_size @ Ir.C_syntax.warp_shuffle_stages ~width:warps
+  in
+  List.equal Int.equal (emitted_shuffle_stages source) expected
 
 let render_rivals { n; term; narrow } =
   if n % warp_size <> 0 || not (Int.is_pow2 (n / warp_size)) then
@@ -140,7 +166,7 @@ let () =
   (let src = Generated.read "sum_wshfl" in
    let has sub = String.is_substring src ~substring:sub in
    let ok =
-     if on_gpu then has "ocannl_shfl_xor" && has "wred_partials_"
+     if on_gpu then has_shuffle_stages src ~warps:4 && has "wred_partials_"
      else (not (has "ocannl_shfl_xor")) && not (has "wred_partials_")
    in
    p "two-phase shuffle rendering (GPU) or serial fallback (CPU)" ok);
@@ -169,7 +195,7 @@ let () =
   (let src = Generated.read "dot_wshfl" in
    let has sub = String.is_substring src ~substring:sub in
    let ok =
-     if on_gpu then has "ocannl_shfl_xor" && not (has "wred_partials_")
+     if on_gpu then has_shuffle_stages src ~warps:1 && not (has "wred_partials_")
      else not (has "ocannl_shfl_xor")
    in
    p "single-warp shuffle rendering (GPU) or serial fallback (CPU)" ok);
@@ -312,6 +338,15 @@ let bf16_1w_fixture = { n = 32; term = bf16_term; narrow = narrow_bf16 }
 let bf16_4w_fixture = { n = 128; term = bf16_term; narrow = narrow_bf16 }
 let bf16_1w_values = render_rivals bf16_1w_fixture
 let bf16_4w_values = render_rivals bf16_4w_fixture
+
+let () =
+  let collapsed =
+    render_rivals
+      { n = 128; term = (fun k -> 1.0 +. (Float.of_int (k % 7) /. 128.0)); narrow = narrow_bf16 }
+  in
+  p_all2 "the old bf16 128-lane mod7 fixture collapses to 131/131/128"
+    (Array.of_list (values collapsed))
+    [| 131.; 131.; 128. |] ~f:Float.equal
 
 let bf16_sum ~name ({ n; term; _ } : rival_fixture) =
   let x = NTDSL.init ~l:(name ^ "_x") ~prec:bf16 ~o:[ n ] ~f:(fun idcs -> term idcs.(0)) () in
@@ -478,6 +513,15 @@ let f16_1w_fixture = { n = 32; term = f16_term; narrow = narrow_f16 }
 let f16_4w_fixture = { n = 128; term = f16_term; narrow = narrow_f16 }
 let f16_1w_values = render_rivals f16_1w_fixture
 let f16_4w_values = render_rivals f16_4w_fixture
+
+let () =
+  let collapsed =
+    render_rivals
+      { n = 128; term = (fun k -> 1.0 +. (Float.of_int (k % 7) /. 1024.0)); narrow = narrow_f16 }
+  in
+  p "the old f16 four-warp mod7 fixture cannot distinguish wide from storage-staged trees"
+    (Float.equal collapsed.once_narrowed collapsed.storage_tree
+    && not (Float.equal collapsed.once_narrowed collapsed.per_step))
 
 let f16_sum ~name ({ n; term; _ } : rival_fixture) =
   let x = NTDSL.init ~l:(name ^ "_x") ~prec:half ~o:[ n ] ~f:(fun idcs -> term idcs.(0)) () in
