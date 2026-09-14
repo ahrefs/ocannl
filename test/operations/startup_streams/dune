@@ -52,7 +52,8 @@
  (name runtest)
  (deps
   (alias runtest-stdout_clean)
-  (alias runtest-default_stderr)))
+  (alias runtest-default_stderr)
+  (alias runtest-bootstrap_precedence)))
 
 ; gh-ocannl-593 / gh-ocannl-595: the two streams an OCANNL-linked executable writes at startup.
 ; The local ocannl_config (not the shared test/config one -- the config search stops at the first
@@ -62,7 +63,7 @@
 (executable
  (name startup_streams)
  (modules startup_streams)
- (libraries base arrayjit.utils stdio bench_args))
+ (libraries base arrayjit.utils arrayjit.verdict stdio bench_args))
 
 ; The stdout half, with the chatter turned all the way UP: `no_config_file` picks the
 ; "Configuration defaults file is disabled" welcome arm, and the sourcing trace reports every key
@@ -171,3 +172,61 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff default_stderr.expected default_stderr.actual)))
+
+; gh-ocannl-604: conflicting file values cannot override explicit commandline bootstrap keys.
+
+(rule
+ ; ocannl-backend: none -- startup bootstrap decisions and sourcing trace only.
+ (target bootstrap_precedence.raw)
+ (deps
+  ocannl_config
+  bootstrap_conflict/ocannl_config
+  (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
+  (env_var OCANNL_LOG_CONFIG_SOURCING)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_NO_CONFIG_FILE)
+  (env_var OCANNL_PROFILE))
+ (action
+  (with-stderr-to
+   %{target}
+   (chdir
+    bootstrap_conflict
+    (run
+     %{dep:startup_streams.exe}
+     --ocannl_no_config_file=false
+     --ocannl_suppress_welcome_message=false
+     --ocannl_log_config_sourcing=true
+     --ocannl_log_level=0
+     "--ocannl_profile= RePROducible ")))))
+
+(rule
+ ; ocannl-backend: none -- validates the captured startup trace, no backend linked.
+ (target bootstrap_precedence.actual)
+ (deps
+  ocannl_config
+  (env_var OCANNL_SUPPRESS_WELCOME_MESSAGE)
+  (env_var OCANNL_LOG_CONFIG_SOURCING)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_NO_CONFIG_FILE)
+  (env_var OCANNL_PROFILE))
+ (action
+  (with-stdin-from
+   %{dep:bootstrap_precedence.raw}
+   (with-stdout-to
+    %{target}
+    (run
+     %{dep:startup_streams.exe}
+     bootstrap-check
+     --ocannl_no_config_file=true
+     --ocannl_suppress_welcome_message=true
+     --ocannl_log_config_sourcing=false
+     --ocannl_log_level=0
+     --ocannl_profile=reproducible)))))
+
+(rule
+ (alias runtest-bootstrap_precedence)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff bootstrap_precedence.expected bootstrap_precedence.actual)))

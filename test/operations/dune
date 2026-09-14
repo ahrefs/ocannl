@@ -3438,6 +3438,14 @@
  (libraries base ocannl arrayjit.verdict ll_test))
 
 (test
+ ; ocannl-backend: none -- inspects precision witnesses and renderer enumeration, executes no backend.
+ (name precision_families)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules precision_families)
+ (libraries base stdio arrayjit.ir arrayjit.verdict))
+
+(test
  (name codegen_fma_precision)
  (package neural_nets_lib)
  (deps

@@ -73,6 +73,20 @@ let normalize () =
           String.substr_replace_all line ~pattern:prefix ~with_:"")
       |> printf "%s\n")
 
+(* The conflicting file sets suppression true; the commandline sets false. Both the banner and its
+   deferred provenance must reflect the commandline value, not an OR of source levels. *)
+let bootstrap_check () =
+  let text = In_channel.input_all In_channel.stdin in
+  let contains substring = String.is_substring text ~substring in
+  Verdict.p "explicit false overrides file welcome suppression"
+    (contains "Welcome to OCANNL! Reading configuration defaults from");
+  Verdict.p "bootstrap trace carries the commandline suppression source"
+    (contains "Found false, commandline --ocannl_suppress_welcome_message=false");
+  Verdict.p "bootstrap trace carries the commandline file-search source"
+    (contains "Found false, commandline --ocannl_no_config_file=false");
+  Verdict.p "profile trace carries the normalized commandline selection"
+    (contains "Found reproducible, commandline --ocannl_profile= RePROducible ")
+
 let () =
   (* The configuration flags a rule passes are addressed to the library, which read them during
      initialization; the mode is whatever else is on the commandline. *)
@@ -81,6 +95,7 @@ let () =
   | [] -> ()
   | "guard" :: _ -> guard ()
   | "normalize" :: _ -> normalize ()
+  | "bootstrap-check" :: _ -> bootstrap_check ()
   | arg :: _ ->
       eprintf "startup_streams: unknown mode %S (expected none, \"guard\" or \"normalize\")\n" arg;
       Stdlib.exit 1

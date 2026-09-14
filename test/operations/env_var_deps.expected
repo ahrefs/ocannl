@@ -93,11 +93,11 @@ on its own deps.
   OCANNL_TF32_MATMULS                    test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
   OCANNL_TUNE_INLINE_FLIPS               test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
   OCANNL_VIRTUALIZE_MAX_VISITS           test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
-  OCANNL_LOG_CONFIG_SOURCING             test/operations/startup_streams/dune, executable startup_streams (3 runs of startup_streams.exe)
-  OCANNL_LOG_LEVEL                       test/operations/startup_streams/dune, executable startup_streams (3 runs of startup_streams.exe)
-  OCANNL_NO_CONFIG_FILE                  test/operations/startup_streams/dune, executable startup_streams (3 runs of startup_streams.exe)
-  OCANNL_PROFILE                         test/operations/startup_streams/dune, executable startup_streams (3 runs of startup_streams.exe)
-  OCANNL_SUPPRESS_WELCOME_MESSAGE        test/operations/startup_streams/dune, executable startup_streams (3 runs of startup_streams.exe)
+  OCANNL_LOG_CONFIG_SOURCING             test/operations/startup_streams/dune, executable startup_streams (4 runs of startup_streams.exe)
+  OCANNL_LOG_LEVEL                       test/operations/startup_streams/dune, executable startup_streams (4 runs of startup_streams.exe)
+  OCANNL_NO_CONFIG_FILE                  test/operations/startup_streams/dune, executable startup_streams (4 runs of startup_streams.exe)
+  OCANNL_PROFILE                         test/operations/startup_streams/dune, executable startup_streams (4 runs of startup_streams.exe)
+  OCANNL_SUPPRESS_WELCOME_MESSAGE        test/operations/startup_streams/dune, executable startup_streams (4 runs of startup_streams.exe)
 
 Ambient environment gates, by dune file and every alias whose build runs one:
   arrayjit/test/dune                       @lifecycle
@@ -192,6 +192,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/profiles/dune            @runtest-from_env
   test/operations/profiles/dune            @runtest-host_profile_flag
   test/operations/startup_streams/dune     @runtest
+  test/operations/startup_streams/dune     @runtest-bootstrap_precedence
   test/operations/startup_streams/dune     @runtest-default_stderr
   test/operations/startup_streams/dune     @runtest-env_spelling_gate
   test/operations/startup_streams/dune     @runtest-stdout_clean

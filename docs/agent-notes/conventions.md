@@ -204,3 +204,9 @@ files.
   removing it, since the C runtime opens without `FILE_SHARE_DELETE`; and expect a rename to fail
   transiently while another process holds the target open, which is why the commit retries a
   bounded number of times.
+
+- Bootstrap configuration uses `Utils.resolve_config_value` with a truncated source list
+  (gh-ocannl-604): `no_config_file` never consults a file, and bootstrap keys never consult
+  profile payloads. Welcome suppression obeys ordinary precedence, including an explicit false
+  overriding a file's true. Deferred startup tracing reports the carried `config_source`;
+  `resolve_profile_selection` normalizes each source before the same resolver chooses its winner.

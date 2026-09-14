@@ -55,7 +55,6 @@ let exempt_zero_reference_exports =
     "Backend_intf.mma_input_format_of_sexp";
     "Backend_intf.mma_staged_layout_of_sexp";
     "Builtins_cc.source";
-    "C_syntax.all_precs";
     "C_syntax.c_float_literal";
     "C_syntax.c_keywords";
     "C_syntax.c_stdlib_idents";
@@ -208,7 +207,6 @@ let exempt_zero_reference_exports =
     "Ops.interpret_ternop";
     "Ops.is_assign_op";
     "Ops.is_binop_infix";
-    "Ops.pack_prec";
     "Ops.op_of_sexp";
     "Ops.precision_to_string";
     "Ops.ptr_to_string_hum";
@@ -293,8 +291,16 @@ let exempt_zero_reference_exports =
     "Utils.clean_filename";
     "Utils.compare_requirement";
     "Utils.config_table_of_lines";
+    (* gh-ocannl-604: bootstrap resolution and the sourced values carried from startup to its
+       deferred trace are intentionally internal, replacing the old unsourced bootstrap reader.
+       Utils has no .mli; publishing these staging details is not part of its consumer API. *)
+    "Utils.resolve_bootstrap_config";
+    "Utils.no_config_file_resolution";
+    "Utils.early_log_config_sourcing_resolution";
+    "Utils.log_config_sourcing_resolution";
+    "Utils.suppress_welcome_message_resolution";
+    "Utils.profile_selection";
     "Utils.default_indent";
-    "Utils.describe_config_source";
     "Utils.doc_of_sexp";
     "Utils.enable_runtime_debug";
     "Utils.ensure_artifacts_dir";
@@ -310,7 +316,6 @@ let exempt_zero_reference_exports =
     "Utils.input_scan_line";
     "Utils.!@";
     "Utils.log_config_sourcing";
-    "Utils.log_config_sourcing_arg";
     "Utils.log_files_dir";
     "Utils.log_trace_tree";
     "Utils.never_capture_stdout";
@@ -321,14 +326,12 @@ let exempt_zero_reference_exports =
     (* Not pre-existing: the third profile payload (gh-ocannl-719), listed like the two before it --
        named only through [Utils.profile_payloads]. *)
     "Utils.approximate_profile_payload";
-    "Utils.parse_profile_payload";
     "Utils.performance_profile_payload";
     "Utils.profile_ineligible_keys";
     (* Not pre-existing: the per-key half of [Utils.profile_payload_sources] (gh-ocannl-719),
        top-level only because the config-key scan's forwarding exemption does not reach a lambda. *)
     "Utils.profile_key_source";
     "Utils.profile_lookup";
-    "Utils.read_cmdline_or_env_var";
     "Utils.requirement_of_sexp";
     "Utils.reproducible_profile_payload";
     "Utils.same_env_name";

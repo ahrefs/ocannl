@@ -54,17 +54,17 @@ the packed layout really does leave a payload unmappable: true
 === Test 13: Mapped vs decoded payloads ===
   load ~mmap:false: 0 mapped, 12 decoded
   load ~mmap:true: 11 mapped, 1 decoded
-  single: 1.0; 2.0; 32.0; 5.0 (mapped identical)
-  double: 1.0; 2.0; 32.0; 5.0 (mapped identical)
-  half: 1.0; 2.0; 32.0; 5.0 (mapped identical)
-  bfloat16: 1.0; 2.0; 32.0; 5.0 (mapped identical)
   byte: 1.0; 2.0; 32.0; 5.0 (mapped identical)
-  fp8: 1.0; 2.0; 32.0; 5.0 (mapped identical)
   uint16: 1.0; 2.0; 32.0; 5.0 (mapped identical)
   int32: 1.0; 2.0; 32.0; 5.0 (mapped identical)
   uint32: 1.0; 2.0; 32.0; 5.0 (mapped identical)
   int64: 1.0; 2.0; 32.0; 5.0 (mapped identical)
   uint64: 1.0; 2.0; 32.0; 5.0 (mapped identical)
+  half: 1.0; 2.0; 32.0; 5.0 (mapped identical)
+  bfloat16: 1.0; 2.0; 32.0; 5.0 (mapped identical)
+  fp8: 1.0; 2.0; 32.0; 5.0 (mapped identical)
+  single: 1.0; 2.0; 32.0; 5.0 (mapped identical)
+  double: 1.0; 2.0; 32.0; 5.0 (mapped identical)
   padded/single: 4.0; 5.0; 6.0; 0.0 (mapped identical)
   restored with mapping (1 mapped): [1.0; 2.0; 32.0; 5.0]
 === Test 14: Truncated checkpoint ===

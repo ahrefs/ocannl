@@ -1,0 +1,10 @@
+precision enumeration has no duplicates: true
+canonical precisions round-trip through serialization: true
+storage precisions carry their canonical GADT witnesses: true
+C-family renderer sweep covers every storage precision: true
+void has no arithmetic or storage value: true
+uint4x32 is packed integer storage outside scalar arithmetic: true
+all: void, byte, uint16, int32, uint32, int64, uint64, uint4x32, half, bfloat16, fp8, single, double
+scalar: byte, uint16, int32, uint32, int64, uint64, half, bfloat16, fp8, single, double
+integer: byte, uint16, int32, uint32, int64, uint64
+float: half, bfloat16, fp8, single, double

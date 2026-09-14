@@ -87,3 +87,59 @@ let () =
       Option.equal String.equal (List.Assoc.find approximate key ~equal:String.equal) (Some value));
   Verdict.p "the approximate profile sets keys the performance profile does not"
     (List.length approximate > List.length performance)
+
+(* gh-ocannl-604: a truncated bootstrap source list uses the same walk and provenance formatter.
+   These cases distinguish explicit false from absence, and profile selection normalizes each source
+   before it competes, rather than normalizing only the winner. *)
+let () =
+  let tagged tag value _ = Option.map value ~f:(fun v -> (v, tag)) in
+  let cases =
+    [
+      (Some "false", Some "true", Some "true", "false", "Found false, commandline flag");
+      (None, Some "false", Some "true", "false", "Found false, environment VAR");
+      (None, None, Some "true", "true", "Found true, in the config file");
+      (None, None, None, "false", "Not found, using default false");
+    ]
+  in
+  Verdict.p_all "bootstrap resolution preserves precedence and source descriptions" cases
+    ~f:(fun (cmd, env, file, expected_value, expected_report) ->
+      let value, source =
+        Utils.resolve_config_value ~cmdline:(tagged "flag" cmd) ~env:(tagged "VAR" env)
+          ~file:(fun _ -> file)
+          ~profile:None ~default:"false" ~arg_name:"bootstrap"
+      in
+      String.equal value expected_value
+      && String.equal (Utils.describe_config_source ~value ~default:"false" source) expected_report);
+  let profile_cases =
+    [
+      (Some " RePROducible ", Some "performance", Some "approximate", "reproducible", "commandline");
+      (Some "  ", Some " PERFORMANCE ", Some "approximate", "performance", "environment");
+      (Some "", Some " ", Some " Approximate ", "approximate", "config file");
+      (Some " ", None, Some " ", "", "default");
+    ]
+  in
+  Verdict.p_all "profile selection normalizes and falls through each source" profile_cases
+    ~f:(fun (cmd, env, file, expected_value, expected_source) ->
+      let value, source =
+        Utils.resolve_profile_selection ~cmdline:(tagged "flag" cmd) ~env:(tagged "VAR" env)
+          ~file:(fun _ -> file)
+      in
+      String.equal value expected_value
+      && String.equal (Utils.config_source_label source) expected_source);
+  let value, source =
+    Utils.resolve_config_value ~cmdline:(tagged "flag" None) ~env:(tagged "VAR" None)
+      ~file:(fun _ -> None)
+      ~profile:None ~default:"false" ~arg_name:"no_config_file"
+  in
+  Verdict.p "truncated bootstrap sources report the ordinary default"
+    (String.equal value "false"
+    && String.equal
+         (Utils.describe_config_source ~value ~default:"false" source)
+         "Not found, using default false");
+  Verdict.p_all "profile payloads reject every bootstrap key"
+    [ "profile"; "no_config_file"; "log_config_sourcing"; "suppress_welcome_message" ]
+    ~f:(fun key ->
+      try
+        ignore (Utils.parse_profile_payload ~name:"forbidden" (key ^ "=true"));
+        false
+      with Failure message -> String.is_substring message ~substring:"resolved before profiles")

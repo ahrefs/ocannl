@@ -171,6 +171,7 @@ let () =
             [
               "bool_of_config_string";
               "resolve_config_value";
+              "resolve_bootstrap_config";
               "get_global_arg_with_source";
               "get_global_arg";
               "get_global_flag";
