@@ -63,3 +63,7 @@ Profile "approximate" sets:
 
 every key the performance profile sets, the approximate profile sets to the same value: true
 the approximate profile sets keys the performance profile does not: true
+bootstrap resolution preserves precedence and source descriptions: true
+profile selection normalizes and falls through each source: true
+truncated bootstrap sources report the ordinary default: true
+profile payloads reject every bootstrap key: true

@@ -49,7 +49,7 @@ let known_config_keys =
   Set.of_list
     (module String)
     [
-      (* Bootstrap keys (read before config file via read_cmdline_or_env_var directly) *)
+      (* Bootstrap keys (resolved without profiles, before ordinary per-key tracing) *)
       "suppress_welcome_message";
       "no_config_file";
       "log_config_sourcing";
@@ -861,119 +861,6 @@ let read_env_var n =
   | None | Some (_, "") -> None
   | Some (env_n, result) -> Some (result, env_n)
 
-(** The bootstrap reader: the few keys that are consulted before the config file exists (and hence
-    before profiles are resolved) come from the commandline or the environment only.
-
-    Silent, deliberately. These keys are read before {!log_config_sourcing} is resolved -- one of
-    the reads IS that resolution -- so nothing here can know whether anyone asked for a trace, and
-    each is read more than once besides (three call sites consult [suppress_welcome_message]). Their
-    provenance is reported once, in full, by [bootstrap_config_report] below. *)
-let read_cmdline_or_env_var n =
-  match read_cmdline_var n with
-  | Some (result, _arg) -> Some result
-  | None -> Option.map (read_env_var n) ~f:fst
-
-(* Originally from the library core.filename_base. *)
-let filename_parts filename =
-  let rec loop acc filename =
-    match (Stdlib.Filename.dirname filename, Stdlib.Filename.basename filename) with
-    | ("." as base), "." -> base :: acc
-    | ("/" as base), "/" -> base :: acc
-    | disk, base when String.is_suffix disk ~suffix:":\\" -> disk :: base :: acc
-    | rest, dir -> loop (dir :: acc) rest
-  in
-  loop [] filename
-
-(* Originally from the library core.filename_base. *)
-let filename_of_parts = function
-  | [] -> invalid_arg "Utils.filename_of_parts: empty parts list"
-  | root :: rest -> List.fold rest ~init:root ~f:Stdlib.Filename.concat
-
-let log_config_sourcing_arg = read_cmdline_or_env_var "log_config_sourcing"
-
-let () =
-  Option.iter log_config_sourcing_arg ~f:(fun v ->
-      log_config_sourcing := bool_of_config_string ~arg_name:"log_config_sourcing" v)
-
-(** Parses the [ocannl_config] syntax: one [key=value] per line, [#] and [~~] lines are comments,
-    empty values mean "unset", the [ocannl_] key prefix is optional and keys are case-insensitive.
-    Shared by the config file and by the embedded profile payloads (which are literally partial
-    config files); [source] names the origin in error messages. *)
-let parse_config_lines ~source lines =
-  lines
-  |> List.filter ~f:(fun l ->
-      not (String.is_prefix ~prefix:"~~" l || String.is_prefix ~prefix:"#" l))
-  |> List.map ~f:(String.split ~on:'=')
-  |> List.filter_map ~f:(function
-    | [] -> None
-    | [ s ] when String.is_empty (String.strip s) -> None
-    | key :: [ v ] ->
-        let key =
-          String.(lowercase @@ strip ~drop:(fun c -> equal_char '-' c || equal_char ' ' c) key)
-        in
-        let key =
-          if String.is_prefix key ~prefix:"ocannl" then
-            String.drop_prefix key 6 |> String.strip ~drop:(equal_char '_')
-          else key
-        in
-        str_nonempty ~f:(pair key) v
-    | l ->
-        failwith @@ "OCANNL: invalid syntax in " ^ source
-        ^ ", should have a single '=' on each non-empty line, found: " ^ String.concat l)
-
-let config_table_of_lines ~source lines =
-  match Hashtbl.of_alist (module String) (parse_config_lines ~source lines) with
-  | `Ok h -> h
-  | `Duplicate_key key -> failwith @@ "OCANNL: duplicate key in " ^ source ^ ": " ^ key
-
-let config_file_args =
-  let suppress_welcome_message () =
-    Option.value_map ~default:false ~f:Bool.of_string
-    @@ read_cmdline_or_env_var "suppress_welcome_message"
-  in
-  match read_cmdline_or_env_var "no_config_file" with
-  | None | Some "false" ->
-      let read = Stdio.In_channel.read_lines in
-      let fname, config_lines =
-        let rev_dirs = List.rev @@ filename_parts @@ Stdlib.Sys.getcwd () in
-        let rec find_up = function
-          | [] ->
-              if not (suppress_welcome_message ()) then
-                Stdio.eprintf
-                  "\nWelcome to OCANNL! No ocannl_config file found along current path.\n%!";
-              ("", [])
-          | _ :: tl as rev_dirs -> (
-              let fname = filename_of_parts (List.rev @@ ("ocannl_config" :: rev_dirs)) in
-              try (fname, read fname) with Sys_error _ -> find_up tl)
-        in
-        find_up rev_dirs
-      in
-      let result = config_table_of_lines ~source:("the config file " ^ fname) config_lines in
-      if String.length fname > 0 then
-        Hashtbl.iter_keys result ~f:(fun key ->
-            if not (Set.mem known_config_keys key) then
-              Stdio.eprintf "OCANNL warning: unknown config key %S in %s\n%!" key fname);
-      if
-        String.length fname > 0
-        && (not (suppress_welcome_message ()))
-        && not
-             (Option.value_map ~default:false ~f:Bool.of_string
-             @@ Hashtbl.find result "suppress_welcome_message")
-      then Stdio.eprintf "\nWelcome to OCANNL! Reading configuration defaults from %s.\n%!" fname;
-      result
-  | Some _ ->
-      if not (suppress_welcome_message ()) then
-        Stdio.eprintf "\nWelcome to OCANNL! Configuration defaults file is disabled.\n%!";
-      Hashtbl.create (module String)
-
-let () =
-  (* The commandline and the environment take precedence, and were already applied above. *)
-  if Option.is_none log_config_sourcing_arg then
-    Option.iter (Hashtbl.find config_file_args "log_config_sourcing") ~f:(fun v ->
-        log_config_sourcing := bool_of_config_string ~arg_name:"log_config_sourcing" v)
-
-(** {2 Configuration profiles (gh-ocannl-559)} *)
-
 (** The source levels a setting can come from, in decreasing priority. Each level splits into two
     sublevels: the keys stated explicitly at that level, then the payload of a profile {e picked} at
     that level -- so a specific setting always beats an aggregate one of equal immediacy, and a
@@ -1039,10 +926,124 @@ let resolve_config_value ~cmdline ~env ~file ~profile ~default ~arg_name =
   in
   Option.value (List.find_map sublevels ~f:(fun f -> f ())) ~default:(default, From_default)
 
+(** Bootstrap resolution uses the ordinary precedence walk, with no profile and, until the file
+    exists, no file source. Keep the returned provenance for the deferred startup trace. *)
+let resolve_bootstrap_config ?(file = fun _ -> None) ~default ~arg_name () =
+  resolve_config_value ~cmdline:read_cmdline_var ~env:read_env_var ~file ~profile:None ~default
+    ~arg_name
+
+let no_config_file_resolution =
+  resolve_bootstrap_config ~default:"false" ~arg_name:"no_config_file" ()
+
+(* Originally from the library core.filename_base. *)
+let filename_parts filename =
+  let rec loop acc filename =
+    match (Stdlib.Filename.dirname filename, Stdlib.Filename.basename filename) with
+    | ("." as base), "." -> base :: acc
+    | ("/" as base), "/" -> base :: acc
+    | disk, base when String.is_suffix disk ~suffix:":\\" -> disk :: base :: acc
+    | rest, dir -> loop (dir :: acc) rest
+  in
+  loop [] filename
+
+(* Originally from the library core.filename_base. *)
+let filename_of_parts = function
+  | [] -> invalid_arg "Utils.filename_of_parts: empty parts list"
+  | root :: rest -> List.fold rest ~init:root ~f:Stdlib.Filename.concat
+
+let early_log_config_sourcing_resolution =
+  resolve_bootstrap_config ~default:"false" ~arg_name:"log_config_sourcing" ()
+
+let () =
+  log_config_sourcing :=
+    bool_of_config_string ~arg_name:"log_config_sourcing" (fst early_log_config_sourcing_resolution)
+
+(** Parses the [ocannl_config] syntax: one [key=value] per line, [#] and [~~] lines are comments,
+    empty values mean "unset", the [ocannl_] key prefix is optional and keys are case-insensitive.
+    Shared by the config file and by the embedded profile payloads (which are literally partial
+    config files); [source] names the origin in error messages. *)
+let parse_config_lines ~source lines =
+  lines
+  |> List.filter ~f:(fun l ->
+      not (String.is_prefix ~prefix:"~~" l || String.is_prefix ~prefix:"#" l))
+  |> List.map ~f:(String.split ~on:'=')
+  |> List.filter_map ~f:(function
+    | [] -> None
+    | [ s ] when String.is_empty (String.strip s) -> None
+    | key :: [ v ] ->
+        let key =
+          String.(lowercase @@ strip ~drop:(fun c -> equal_char '-' c || equal_char ' ' c) key)
+        in
+        let key =
+          if String.is_prefix key ~prefix:"ocannl" then
+            String.drop_prefix key 6 |> String.strip ~drop:(equal_char '_')
+          else key
+        in
+        str_nonempty ~f:(pair key) v
+    | l ->
+        failwith @@ "OCANNL: invalid syntax in " ^ source
+        ^ ", should have a single '=' on each non-empty line, found: " ^ String.concat l)
+
+let config_table_of_lines ~source lines =
+  match Hashtbl.of_alist (module String) (parse_config_lines ~source lines) with
+  | `Ok h -> h
+  | `Duplicate_key key -> failwith @@ "OCANNL: duplicate key in " ^ source ^ ": " ^ key
+
+let config_file_args, suppress_welcome_message_resolution =
+  let early_suppression =
+    resolve_bootstrap_config ~default:"false" ~arg_name:"suppress_welcome_message" ()
+  in
+  let suppress_welcome_message () = Bool.of_string (fst early_suppression) in
+  match fst no_config_file_resolution with
+  | "false" ->
+      let read = Stdio.In_channel.read_lines in
+      let fname, config_lines =
+        let rev_dirs = List.rev @@ filename_parts @@ Stdlib.Sys.getcwd () in
+        let rec find_up = function
+          | [] ->
+              if not (suppress_welcome_message ()) then
+                Stdio.eprintf
+                  "\nWelcome to OCANNL! No ocannl_config file found along current path.\n%!";
+              ("", [])
+          | _ :: tl as rev_dirs -> (
+              let fname = filename_of_parts (List.rev @@ ("ocannl_config" :: rev_dirs)) in
+              try (fname, read fname) with Sys_error _ -> find_up tl)
+        in
+        find_up rev_dirs
+      in
+      let result = config_table_of_lines ~source:("the config file " ^ fname) config_lines in
+      if String.length fname > 0 then
+        Hashtbl.iter_keys result ~f:(fun key ->
+            if not (Set.mem known_config_keys key) then
+              Stdio.eprintf "OCANNL warning: unknown config key %S in %s\n%!" key fname);
+      let suppression =
+        resolve_bootstrap_config ~file:(Hashtbl.find result) ~default:"false"
+          ~arg_name:"suppress_welcome_message" ()
+      in
+      if String.length fname > 0 && not (Bool.of_string (fst suppression)) then
+        Stdio.eprintf "\nWelcome to OCANNL! Reading configuration defaults from %s.\n%!" fname;
+      (result, suppression)
+  | _ ->
+      if not (suppress_welcome_message ()) then
+        Stdio.eprintf "\nWelcome to OCANNL! Configuration defaults file is disabled.\n%!";
+      (Hashtbl.create (module String), early_suppression)
+
+let log_config_sourcing_resolution =
+  resolve_bootstrap_config ~file:(Hashtbl.find config_file_args) ~default:"false"
+    ~arg_name:"log_config_sourcing" ()
+
+let () =
+  log_config_sourcing :=
+    bool_of_config_string ~arg_name:"log_config_sourcing" (fst log_config_sourcing_resolution)
+
+(** {2 Configuration profiles (gh-ocannl-559)} *)
+
 (** The keys a profile payload may not set: they are read before profiles are resolved (or would
     make the resolution recursive). *)
 let profile_ineligible_keys =
-  Set.of_list (module String) [ "profile"; "no_config_file"; "log_config_sourcing" ]
+  Set.of_list
+    (module String)
+    [ "profile"; "no_config_file"; "log_config_sourcing"; "suppress_welcome_message" ]
 
 (* The payloads are embedded rather than installed as files: the config search walks up from the
    working directory and would find the USER's config, so a shipped preset file would need
@@ -1172,25 +1173,34 @@ let parse_profile_payload ~name text =
         failwith @@ "OCANNL: " ^ source ^ " sets the unknown config key " ^ key);
   table
 
-(** The profile picked for this run, if any: its level (which decides the priority of its payload),
-    its name, and the parsed payload. *)
-let active_profile =
-  (* An EMPTY value is unset, at each level independently: everywhere else in the configuration ""
-     means "as if absent", and a launcher expanding [--ocannl_profile=$PROFILE] with an unset
-     variable must not thereby disable a profile the environment or the config file names (Codex P2
-     on PR #291). So the fall-through tests each level's value, not just its presence. *)
+(** Pick a normalized profile name through ordinary source precedence, without consulting a profile
+    payload recursively. *)
+let resolve_profile_selection ~cmdline ~env ~file =
+  (* Normalize independently BEFORE resolving: an empty commandline profile must fall through to the
+     environment or file, including when it was expanded from an unset shell variable. *)
   let normalize name = str_nonempty ~f:Fn.id (String.lowercase (String.strip name)) in
+  let normalize_tagged lookup key =
+    Option.bind (lookup key) ~f:(fun (value, tag) ->
+        Option.map (normalize value) ~f:(fun value -> (value, tag)))
+  in
+  resolve_config_value ~cmdline:(normalize_tagged cmdline) ~env:(normalize_tagged env)
+    ~file:(fun key -> Option.bind (file key) ~f:normalize)
+    ~profile:None ~default:"" ~arg_name:"profile"
+
+let profile_selection =
+  resolve_profile_selection ~cmdline:read_cmdline_var ~env:read_env_var
+    ~file:(Hashtbl.find config_file_args)
+
+(** The profile picked for this run, if any: its level, name, and parsed payload. *)
+let active_profile =
+  let name, source = profile_selection in
   let picked =
-    List.find_map
-      [
-        (* [--ocannl_profile=...], not [--profile=...]: see [read_cmdline_var]'s
-           [qualified_only]. *)
-        (Cmdline_level, Option.map (read_cmdline_var ~qualified_only:true "profile") ~f:fst);
-        (Env_level, Option.map (read_env_var "profile") ~f:fst);
-        (Config_file_level, Hashtbl.find config_file_args "profile");
-      ]
-      ~f:(fun (level, value) ->
-        Option.map (Option.bind value ~f:normalize) ~f:(fun name -> (level, name)))
+    match source with
+    | From_cmdline _ -> Some (Cmdline_level, name)
+    | From_env _ -> Some (Env_level, name)
+    | From_config_file -> Some (Config_file_level, name)
+    | From_default -> None
+    | From_profile _ -> assert false (* Profile selection never consults a payload. *)
   in
   Option.map picked ~f:(fun (level, name) ->
       match List.Assoc.find profile_payloads name ~equal:String.equal with
@@ -1204,57 +1214,21 @@ let active_profile =
               (describe_config_level level);
           (level, name, parse_profile_payload ~name text))
 
-(** The provenance of the settings that resolve before {!get_global_arg_with_source} can report
-    them, which is exactly the four read directly above: the three bootstrap keys and [profile].
-    Everything else in OCANNL goes through that function and is traced as it goes.
-
-    They cannot report themselves as they go. Each bootstrap key is read before
-    {!log_config_sourcing} is settled -- one of the reads settles it -- and each is read more than
-    once; [profile] resolves before the trace has a place to put a "not picked" line. So the report
-    is assembled here instead, walking the same sources in the same order, and it covers the
-    DEFAULTED cases: a run that sets none of the four still says so, which is what makes enabling
-    the trace in a config file (the common way) report every setting the run read. Reporting only
-    what was found is where rounds 1 and 2 of Codex's review on PR #348 went wrong twice.
-
-    Recomputed rather than remembered: the lookups are pure functions of [Sys.argv], the environment
-    and the config table, so one place holding the whole precedence walk cannot drift from the
-    resolution the way scattered logging did. Two asymmetries are real, not oversights: a config
-    file cannot supply [no_config_file] (it is what decides whether the file is read at all), and no
-    profile can supply any of the bootstrap keys -- {!profile_ineligible_keys} rejects them,
-    profiles being resolved later still. The bootstrap keys all default to false, [profile] to
-    unset. *)
+(** Bootstrap values cannot trace themselves until the sourcing switch is settled. Report the
+    sourced resolutions already used above, without another precedence walk. [no_config_file]
+    deliberately has no file source, and every bootstrap read has no profile source. *)
 let () =
   if !log_config_sourcing then (
     Stdio.eprintf
       "\nOCANNL: settings resolved before the ordinary per-key trace could report them:\n%!";
-    let report n line =
+    let report n ~default (value, source) =
       Stdio.eprintf "Retrieving commandline, environment, or config file variable ocannl_%s\n%!" n;
-      Stdio.eprintf "%s\n%!" line
+      Stdio.eprintf "%s\n%!" (describe_config_source ~value ~default source)
     in
-    List.iter [ "log_config_sourcing"; "no_config_file"; "suppress_welcome_message" ] ~f:(fun n ->
-        let from_file =
-          if equal_string n "no_config_file" then None else Hashtbl.find config_file_args n
-        in
-        let value, source =
-          match read_cmdline_var n with
-          | Some (value, arg) -> (value, From_cmdline arg)
-          | None -> (
-              match read_env_var n with
-              | Some (value, var) -> (value, From_env var)
-              | None -> (
-                  match from_file with
-                  | Some value -> (value, From_config_file)
-                  | None -> ("false", From_default)))
-        in
-        report n (describe_config_source ~value ~default:"false" source));
-    (* Taken from the resolved profile rather than re-walked: the walk above it normalizes empty
-       values and falls through per level, and a second copy of that rule could disagree with the
-       one that decides. The banner it prints on the way is about the payload taking effect; this
-       line is about where the setting came from, and only it appears when no profile is picked. *)
-    report "profile"
-      (match active_profile with
-      | Some (level, name, _) -> Printf.sprintf "Found %s, in %s" name (describe_config_level level)
-      | None -> describe_config_source ~value:"" ~default:"" From_default))
+    report "log_config_sourcing" ~default:"false" log_config_sourcing_resolution;
+    report "no_config_file" ~default:"false" no_config_file_resolution;
+    report "suppress_welcome_message" ~default:"false" suppress_welcome_message_resolution;
+    report "profile" ~default:"" profile_selection)
 
 let profile_lookup =
   Option.map active_profile ~f:(fun (level, name, table) ->
