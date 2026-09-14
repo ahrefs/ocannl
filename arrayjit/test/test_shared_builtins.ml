@@ -23,7 +23,7 @@ let same_float x y =
 
 let run mode flags =
   let src = Filename.temp_file "ocannl_shared_builtins_" ".c" in
-  let dll = Filename.temp_file "ocannl_shared_builtins_" ".so" in
+  let dll = Filename.temp_file "ocannl_shared_builtins_" (if Sys.win32 then ".dll" else ".so") in
   let log = Filename.temp_file "ocannl_shared_builtins_" ".log" in
   let cleanup () =
     List.iter (fun p -> try Sys.remove p with Sys_error _ -> ()) [ src; dll; log ]
