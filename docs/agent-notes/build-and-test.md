@@ -1726,20 +1726,24 @@ that they earn a lookup rather than always-loaded space.
   and cache topology without publishing. Publishing pushes share `gh-pages-deploy` with the other
   Pages workflow, so the two deploys cannot race over the same branch (gh-ocannl-808,
   gh-ocannl-825).
-- Windows CI runs only on the independent twice-weekly schedule, together with an ubuntu job
+- Windows CI runs independently on the twice-weekly schedule, together with an ubuntu job
   on the OCaml floor the opam files claim (`>= 5.3.0`, against 5.5 everywhere else).
-  PR, push and `workflow_dispatch` runs use the ordinary Linux/macOS matrix; do not dispatch
-  remote Windows CI for development verification or wait for its scheduled run to merge a PR.
-  Run Windows checks on `rog-nv-win` or `minix-amd-win` in native Windows Git Bash, including
-  changes to `.expected` goldens, float formatting, line endings and the cc toolchain.
-  Use an isolated checkout of the intended commit, source `tools/opam-env.sh`, and run the
-  relevant aliases through `tools/test-run.sh`; retain the host, SHA, command and exit sentinel
-  as evidence. WSL does not establish native Windows coverage. A changed tested path needs fresh
-  relevant Windows evidence, while the ordinary current-head PR checks remain the merge gate.
-  If both Windows hosts are unavailable, report the missing verification instead of substituting
-  a GitHub-hosted Windows dispatch. `test/operations/ci_matrix.sh` evaluates the workflow's actual
-  matrix expressions for PR, push, manual and scheduled events and rejects mutations that put
-  Windows back on a development trigger or remove scheduled coverage.
+  PR, push and ordinary `workflow_dispatch` runs use the Linux/macOS matrix.
+  Use `rog-nv-win` or `minix-amd-win` first for development Windows checks, including changes
+  to `.expected` goldens, float formatting, line endings and the cc toolchain. Use native
+  Windows Git Bash in an isolated checkout of the intended commit, source `tools/opam-env.sh`,
+  and run relevant aliases through `tools/test-run.sh`; retain host, SHA, command and exit
+  sentinel as evidence. WSL does not establish native Windows coverage.
+  Remote Windows CI is a fallback when neither host is available or able to provide the needed
+  check, not a routine extra PR gate. Dispatch `ci.yml` on the chosen branch with
+  `windows_only: true` and the full `expected_sha`; this opt-in runs only Windows main/training,
+  without duplicating Linux/macOS, formatting or floor jobs. Each job rejects a missing or
+  mismatched intended SHA before dependency setup. Verify the run's `head_sha` and both jobs'
+  executed results before counting fallback evidence; an existing commit needs no new push.
+  Do not wait for the independent scheduled sweep to merge a PR. Ordinary current-head PR checks
+  remain required, and a relevant Windows verification requirement can be satisfied on the fleet
+  or through this fallback. `test/operations/ci_matrix.sh` evaluates the actual matrix expressions,
+  pins the opt-in default and trigger separation, and exercises the dispatch commit guard.
   Twice weekly rather than weekly because actions/cache evicts entries unread for 7 days, and an
   exactly-weekly cadence would pay the cold-switch cost every time. Windows and the OCaml floor
   ride the same cadence because they fail slowly through the dependency cone or toolchain.

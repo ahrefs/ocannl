@@ -61,11 +61,12 @@ opam install hipjit   # for AMD HIP backend
 
 **Windows shells**: use **Git Bash** (MSYS) — not a Cygwin bash — and source `tools/opam-env.sh` before building: `opam env` emits cygwin-style paths that leave an MSYS session with a half-working toolchain (dune found, linking broken) until the script rewrites them. Route dune through `tools/dune-quiet.sh`, which filters the benign binutils warnings that flood link stderr on Windows while preserving dune's exit status. How to tell the two bashes apart, and why Cygwin's is refused (gh-ocannl-662), is in docs/agent-notes/build-and-test.md.
 
-**Windows verification placement**: run development and PR Windows checks on `rog-nv-win` or
-`minix-amd-win`, using native Windows Git Bash and `tools/test-run.sh`. GitHub-hosted Windows
-CI is schedule-only and independent of PR verification; do not dispatch it or wait for it as a PR
-merge gate. Manual CI dispatch runs the ordinary Linux/macOS matrix. Retain the tested host,
-commit and exit sentinel; if neither Windows host is available, report the verification gap.
+**Windows verification placement**: use `rog-nv-win` or `minix-amd-win` first for development
+and PR Windows checks, using native Windows Git Bash and `tools/test-run.sh`. GitHub-hosted
+Windows CI runs independently on schedule. Remote Windows CI is an opt-in fallback when neither
+host can provide the needed check: dispatch `windows_only: true` with the full `expected_sha`.
+Ordinary manual dispatch runs Linux/macOS. Do not routinely add Windows CI to PR verification or
+wait for its scheduled sweep to merge. Retain the host (or fallback run), tested commit and verdict.
 
 **Format before the first push** (gh-ocannl-938): CI's `fmt` job runs `dune build @fmt` on every PR and is red on any unformatted `.ml`, `.mli` or dune file, so run `dune fmt` before pushing — a formatting-only fix push costs a CI round AND a review round, since reviews fire on every push. Order matters where a file carries `~here` goldens: `dune fmt`, then the test run, then promote, because a reformat shifts the `file:line` those goldens embed. Prose re-wrapped by hand in a review-fix commit is the usual way an unformatted hunk slips in; `dune fmt` after editing prose too. Master is always formatted, so `dune fmt` from a branch touches only your own files. New ppx-expectation files (`test/ppx/*_expected.ml`, compared against pretty-printed ppx output) must stay unformatted — add them to `.ocamlformat-ignore` (`test/operations/ocamlformat_ignore_scan` enforces it), or `@fmt` reformats them and their test promotes them back, forever. The formatter is pinned by `.ocamlformat` and installed locally by `opam install . --deps-only --with-dev-setup`.
 
