@@ -9,6 +9,17 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
 
 ### Added
 
+- `profile=approximate` bundles the numerics-changing performance settings, with a separate
+  benchmark parity envelope and regime/provenance columns; fleet acceptance remains open
+  (gh-ocannl-719, gh-ocannl-720).
+- `Low_level.Scan_loop` expresses forward/backward scalar recurrences with separate previous
+  and next state; fused attention and high-level cumulative operations remain future work
+  (gh-ocannl-696, gh-ocannl-483, gh-ocannl-952).
+- Register-tile geometry is a schedule and cache value that autotune can compare; callers of
+  `Sched.tensorize` now supply a final `()`, with optional `?tile` (gh-ocannl-619).
+- Pure IR construction helpers install as `arrayjit.ll_builders`, usable without the tensor
+  framework (gh-ocannl-954).
+
 - `fp16_arithmetic` is ternary (`auto|true|false`, default `auto`): `false` gives every f16
   reduction accumulator f32 residency. `Numerics.policy.fp16_arithmetic` is `Fp16_auto` (old
   `false`) | `Fp16_narrow` (old `true`) | `Fp16_wide` (new) (gh-ocannl-680, gh-ocannl-789).
@@ -39,6 +50,18 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
   default to tinygrad `PARALLEL=0`, with `--beam-parallel N` the opt-in (gh-ocannl-843).
 
 ### Changed
+
+- `Tensor.remove_fwd_root` / `remove_bprop_root` are replaced by `take_forward_code` /
+  `discard_backprop_code`; tensor records carry shared consumption state for handout diagnostics
+  (`lukstafi/ocannl-staging` PR #665, gh-ocannl-955).
+- Already handed-out tensor forward/backprop code can be requested again for recompilation;
+  callers still own input availability, execution order, and gradient zeroing/seeding
+  (gh-ocannl-955).
+- `test-run.sh` keeps locks and run pointers outside the worktree, exposes read-only path/lock
+  queries, and distinguishes Dune CLI refusal (exit 2) from a failed test (gh-ocannl-606,
+  gh-ocannl-671, gh-ocannl-944).
+- `opam install . --deps-only --with-test --with-dev-setup` installs the pinned formatter and
+  language server; formatting is checked on PRs instead of a daily sweep (gh-ocannl-938).
 
 - Autotune's default `Queued` timing measures candidates under queue depth (`Isolated` stays
   selectable), withholds contended or non-finite timings from ranking, and reports
@@ -91,6 +114,25 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
   `Utils.known_config_keys`, so a renamed key fails the scans instead of drifting (gh-ocannl-790).
 
 ### Fixed
+
+- Serial, SIMD and shuffle reductions share one accumulator-width decision, fixing RNG
+  reductions at reduced precision whose vectorized result differed from serial execution
+  (gh-ocannl-754).
+- Hardware-bound stores must separate threads by destination cell, rejecting colliding affine
+  indices even when they mention the lane; cross-statement barrier-region analysis remains open
+  (gh-ocannl-950, gh-ocannl-959, gh-ocannl-963).
+- Metal workgroup barriers fence device as well as threadgroup memory, ordering distributed
+  zeroing before lane-0 MMA fallback stores (gh-ocannl-963).
+- CPU scalar half `uniform1` uses the same 32-bit random-key conversion as GPU backends,
+  restoring matching initialization for the same key (gh-ocannl-951).
+- Routine logging formats loop indices and array offsets at the selected index width, including
+  64-bit `large_models` offsets (gh-ocannl-953; `lukstafi/ocannl-staging` PR #668).
+- Tiny CPU Grid loops repeated inside serial loops avoid per-iteration pool dispatch, removing
+  excessive fork/join overhead during transformer autotuning (gh-ocannl-933).
+- Nested C-syntax rendering owns separate traversal state and preserves the outer render's
+  placements, zero tracking and volatility attribution (gh-ocannl-769).
+- Autotune partial reports retain completed fission, MMA and split-reduce timing admissions and
+  the running best when a post-admission callback raises (gh-ocannl-962, gh-ocannl-972).
 
 - `multidev_cc` launched kernels on whichever static index the host had raced ahead to, so
   `Train.sequential_loop` skipped and repeated batches on that backend alone; launches now bind

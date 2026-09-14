@@ -1,6 +1,6 @@
 # OCANNL Roadmap
 
-**v1.0.1 released August 26, 2026. Next: v1.0.2 (robustness pulled forward), targeted for September 16, 2026.**
+**v1.0.1 released August 26, 2026. Next: v1.0.2, targeted for September 16, 2026; followed by v1.1 on October 2 and v1.2 around November 3, 2026.**
 
 This roadmap outlines the development plan for OCANNL through version 1.0 and beyond. Dates indicate **end of period** targets. Through v1.0 the schedule was pinned to conference deadlines; it is now project-internal, and the dates below are aspirational rather than external commitments.
 
@@ -10,7 +10,7 @@ This roadmap outlines the development plan for OCANNL through version 1.0 and be
 > - **v0.7.2 is consolidated into v0.7.** The compiler-optimization and memory-management work that was scheduled separately (loop hoisting, CSE, the universal pool allocator) is part of the single **v0.7** milestone.
 > - **v0.7.1 was dissolved.** Its two tracks were redistributed: the **AMD HIP backend (#411)** shipped in **v0.8**; completed examples and tokenizer work landed subsequently, while remaining examples now follow their current GitHub milestone assignments. The GitHub milestone has been deleted.
 >
-> **Update (August 2026):** the v0.9 milestone closed on schedule, and two rebalances came with that: CUDA/HIP graph capture (#488) moved from v0.9 to v1.0, and the training/deployment utilities plus the `lib/` design study moved out of v1.0, in favor of the compiler-tier and diagnostics work the v0.9 sweep exposed. (Their current homes are v1.0.1 and v1.1.1 — see the rebalance and renumbering notes below.)
+> **Update (August 2026):** the v0.9 milestone closed on schedule, and two rebalances came with that: CUDA/HIP graph capture (#488) moved from v0.9 to v1.0, and the training/deployment utilities plus the `lib/` design study moved out of v1.0, in favor of the compiler-tier and diagnostics work the v0.9 sweep exposed. (Their current homes are v1.0.1 and v1.1.2 — see the rebalance and renumbering notes below.)
 >
 > **Venue history (August 2026):** the OCaml Workshop submission was not accepted — the article was written as a research report rather than as an introductory demonstration, which put it outside that audience's scope. IFL 2026 was then considered as the next target and **decided against as a poor fit**. No conference submission is currently scheduled; the paper-facing artifacts below stay in the repository and the formal core technical report continues as live work. The workshop article and its PDF are kept unchanged, as a historical artifact capturing the state of the project at v0.8.
 >
@@ -20,9 +20,11 @@ This roadmap outlines the development plan for OCANNL through version 1.0 and be
 >
 > **Renumbering (August 26, 2026):** the ladder was renumbered so that version-number depth tracks release *scope*, as it did through the 0.6.x line (0.6.1 shipped features; this project does not follow semver, and 0.x releases never did). Consolidation and robustness releases take a third component; feature releases take a second. Concretely: the release planned as v1.1 shipped as **v1.0.1**; a new **v1.0.2** pulls the robustness and engineering-hygiene backlog forward out of the feature milestones, so refactoring issues are worked while they still describe the code they were filed against; the performance milestone (formerly v1.2) is now **v1.1**; the consumers/demos milestone (formerly v1.3) is now **v1.1.1**; and a new **v1.2** holds the ambitious feature-grade work (shape schemes #404, CDNA MFMA #477, PoPE #444, mmap zero-copy #585, CUDA pinned host buffers #170 and `__constant__` arrays #195).
 >
-> **Dating (September 7, 2026):** the post-1.0.1 ladder is dated again, aspirationally. v1.2 targets **October 28, 2026**, and the milestones before it split the interval from September 7 by the scope their version depth signals (a feature release counts twice a third-component release, so 1 : 2 : 1 : 2 — issue counts were rejected as the weight, since v1.0.2's are review-filed follow-ups and the later milestones' are design spaces): **v1.0.2 September 16, v1.1 October 3, v1.1.1 October 11**. These are end-of-period targets rather than commitments; the GitHub milestone due dates carry the same values.
+> **Dating (September 7, 2026):** the post-1.0.1 ladder is dated again, aspirationally. v1.2 targets **October 28, 2026**, and the milestones before it split the interval from September 7 by the scope their version depth signals (a feature release counts twice a third-component release, so 1 : 2 : 1 : 2 — issue counts were rejected as the weight, since v1.0.2's are review-filed follow-ups and the later milestones' are design spaces): **v1.0.2 September 16, v1.1 October 3, v1.1.1 October 11**. These are end-of-period targets rather than commitments; the GitHub milestone due dates then carried the same values.
 >
-> The version sequence is: `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.2`. Milestone *scope* below tracks the GitHub milestones, which are the source of truth.
+> **Rebalance (September 14, 2026):** finish v1.0.2 with a bounded compiler-deduplication set, then start performance work promptly. The deferred consolidation becomes **v1.1.1**, and the former consumers milestone becomes **v1.1.2**. Working backward from **November 3** for v1.2 gives **October 18** for consumers, **October 10** for consolidation and **October 2** for v1.1, after **September 16** for v1.0.2. The 48 days after that cut split 16 : 8 : 8 : 16 (feature : consolidation : consumers : feature), preserving the scope weighting used in September. These are soft end-of-period targets, not requirements to empty each milestone; protect the early-November anchor by reducing scope when necessary.
+>
+> The version sequence is: `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.2`. Milestone *scope* below tracks the GitHub milestones, which are the source of truth. The September 14 rebalance below supersedes the September 7 dates and adds a consolidation milestone after v1.1.
 
 ---
 
@@ -192,7 +194,7 @@ Planned and worked as "v1.1" until the August 26 renumbering. GitHub milestone s
 - Benchmarks and CI: result JSON records which pass produced `step_ms` (#644), fixtures are digested (#645), a diverged cell reports its divergence rather than a runner failure (#676); Windows CI runs under the Git Bash it was verified on (#661, #662); a non-compiling master cannot survive a merge (#694); one argv convention across `bin/` (#634); the Metal ops suite baseline green (#632); an `Ir.Ops` startup SIGBUS (#688).
 
 **Training-loop mechanics (done):**
-- LR schedules, global-norm clipping and gradient accumulation (#465); mmap-backed checkpoint loading with aligned payloads and zero-copy hosted arrays (#467, #587), its Windows arm verified (#588); `trainable_params` derived as distinct from "needs initialization" (#673), and params-driven helpers refusing a paramless loss rather than compiling empty routines (#670). The user-facing training *experience* — resumable checkpoints, tracking, plots — is v1.1.1.
+- LR schedules, global-norm clipping and gradient accumulation (#465); mmap-backed checkpoint loading with aligned payloads and zero-copy hosted arrays (#467, #587), its Windows arm verified (#588); `trainable_params` derived as distinct from "needs initialization" (#673), and params-driven helpers refusing a paramless loss rather than compiling empty routines (#670). The user-facing training *experience* — resumable checkpoints, tracking, plots — is v1.1.2.
 
 **Closed in the final stretch:** whether the tinygrad BEAM and torch.compile cells need the two-pass protocol — measured, they do not (#675); post-finalization placement seams in `ll_test` (#631); the fault-injection inventory for resource-owning seams (#571); and the accumulator-width and reduction-forms arc (#639, #663, #664, #682, #693, #721, #722, #735).
 
@@ -203,54 +205,143 @@ Quantization (#137, #271), the WebGPU/WASM target (#123), the LLVM backend (#200
 ---
 
 ## v1.0.2 — September 16, 2026
-**Theme: Robustness pulled forward — the review-filed hygiene, worked before it rots**
+**Theme: Robustness and compiler elegance through shared structure**
 
-GitHub milestone scope: *"Robustness pulled forward ahead of the feature milestones, while the issues still describe the code they were filed against."* The engineering-hygiene, dedup and test-seam backlog that had accumulated inside the feature milestones, made a release of its own by the August 26 renumbering: refactoring issues drift fastest between filing and execution, so they are sequenced directly after v1.0.1 rather than behind two feature releases. ~59 issues at creation, drawn from the old v1.3's hygiene lists and the old v1.2's soundness fringe.
+The milestone had **55 open issues before the September 14 rebalance**. The sequencing plan
+is useful for dependencies and placement, but its work-wave queue need not delay the performance
+milestone. The goal of this rebalance is to reach v1.1 sooner. This update reviews staging PRs **#660–#708**, after the previous editorial pass
+in #659 (which covered through #658); merged work is unreleased until the next tag.
 
-**Soundness and benchmark trust** (from the performance milestone's fringe):
-- The Metal pooled-accumulation compiler bug's standalone reproducer and widened-predicate measurement (#782), the two independent accumulator-width analyses that can diverge on a retype (#754), the affine-normalization duplication and unenforced unambiguity invariant (#774), autotune's min-over-single-sync'd timing bias (#755), the empty fixtures digest file (#759), and tinygrad's intermittently deadlocking parallel beam (#760).
+**Already landed for the next release:**
 
-**Dedup and structural cleanups:**
-- `tensor.ml` and `train.ml` internal triplication (#771, #772), the `arrayjit` dead-code sweep (#773), CUDA/HIP syntax-config near-duplication and the four backends' repeated compile skeleton (#770), `C_syntax`'s ~17 functor-level mutable refs (#769), lowering's thrice-written product-loop walker (#764), the cc builtins' 45 hand-synced copies of `builtins.c` (#656), the merge-slab ownership transaction hand-copied three ways (#779), the backends' compile-path duplication (#767, #768), the hand-rolled `Low_level` walkers re-deriving evaluated-operand conventions (#630), store-time simplification of algebraically dead reads (#625), projections' parallel arrays merged into one components field (#775), and the ~50 raw `LL.optimize` test call sites migrating to `Ll_test.optimize_in` (#785).
+- Reduction-width unification (#754), hardware-write cell separation (#950/#959), Metal's
+  device-memory barrier fence (the fence half of #963), matching CPU/GPU half initialization
+  (#951), and avoiding tiny repeated CPU pool dispatch (#933).
+- Explicit C renderer state (#769), replayable tensor code (#955), wide-index routine logging
+  (#953), and partial autotune reports that preserve admitted work (#962/#972).
+- The earlier cache, merge-buffer dependency, optimizer, API and precision fixes are recorded
+  in [CHANGES.md](CHANGES.md); they are no longer future-work checklists.
+- Test-run launch consolidation and supported queries (#606/#671), verdict provenance
+  (#908/#931/#968/#973), shared IR builders (#954), and restored Windows CI setup (#935).
+  These improve release verification; they do not close the remaining analysis gaps.
 
-**Test and scan seams:**
-- The empty-quantifier hole in `Array.for_all2_exn` parity claims (#746), the env-var guard lists nothing relates to their `(env_var ...)` deps (#749), the settings predicates named twice (#750), the emitter frontier derived instead of listed (#748), multi-executable stanza attribution (#747), `config_dep_completeness`'s untested resolution half (#603), `reduction_forms` pinning which form rendered rather than which decision produced it (#733), backend-shared goldens of sampled names that `multidev_cc` legitimately diverges on (#787), the ppx's AST-constructor surface ratchet (#705), fault-injection phase 2's hardware-gated legs (#778), resource-owning seam follow-ups (#780), goldens pinning session node ids (#642) and `~here` line numbers (#672), and the sweep/`test-run.sh`/CI tooling residue (#606, #607, #671, #742, #732, #781, #783, #784).
+**Retain eight compiler-structure and coverage issues in v1.0.2, then start v1.1.**
 
-**Configuration, caching and diagnostics:**
-- Per-device schedule-cache identity (#594), digest classification-vs-tag blindness (#596), the thrice-written bootstrap precedence walk (#604), placement provenance without a decoder (#609), one-element constant literals with no host-backed form (#641), `cleanup_virtual_llc`'s unactionable provenance collision (#734), routine names colliding with vendor-header identifiers (#707), `Context.t.device_id` naming (#776), the recomputation half of the virtual-node observability contract (#777), the merge-buffer read edge invisible to execution-dependency tracking (#766), and concat lowering's reused loop symbol (#765).
+Compiler-side deduplication is retained for the intrinsic value of a simpler, more elegant
+implementation: one expression of a shared idea, with differences made explicit. Easier feature
+work is a hoped-for consequence, not a benefit that must be demonstrated before this work earns
+its place. Testing-side refactorings and the wider consolidation backlog move after v1.1.
+The September 16 cut is soft; keep this set bounded and protect the early-November v1.2 anchor
+if it takes longer. Do not add a separate v1.0.3 detour.
 
-**Documentation and floors:**
-- AGENTS.md/CLAUDE.md drift (#653), the dune 3.20 recipe fallback (#654), uncompiled doc examples (#660), the ppxlib ceiling migration when 0.39 ships (#695), sub-x86-64-v3 FMA visibility (#753), the `-march` census coverage (#752), vendor-arm compile coverage (#758), and cc rendering for workgroup-shared staging so GPU-sketch parity legs run off-GPU (#678).
+| Retain | Structural improvement |
+|--------|------------------------|
+| #770 + #794 | Express the common CUDA/HIP syntax and backend compilation structure once, with backend differences explicit; #794 supplies actual vendor-arm compile coverage for that refactoring. |
+| #630 | Express evaluated-operand, guard and dead-code traversal semantics in a shared IR fold rather than reconstructing them in each walker. |
+| #656 + #917 | Give shared C builtins and the renderer/test precision enumeration one source of truth. |
+| #774 | Centralize affine normalization and enforce its invariant; put the issue's surjectivity reasoning on a principled footing. |
+| #604 | Express configuration precedence through one resolver, with bootstrap differences represented as arguments. |
+| #875 | Give the shuffle-stage sequence one renderer-owned description, also consumed by its simulator. Like #917, this spans implementation and tests rather than refactoring test infrastructure alone. |
+
+The Assignments leaf-type split (#818) stays deferred until a new leaf constructor needs it;
+its issue explicitly names that trigger. Scanner resolution, harness deduplication and report
+plumbing remain after v1.1 unless an experiment exposes an immediate need.
+
+**September 14 disposition of all 55 remaining issues:**
+
+| Destination | Issues | Why / when to work them |
+|-------------|--------|------------------------|
+| v1.0.2, compiler elegance and coverage (8) | #770, #794, #630, #656, #917, #774, #604, #875 | The bounded deduplication and compile-coverage set above. |
+| v1.1, alongside affected experiments (5) | #963, #975, #833, #834, #922 | Scheduling legality, candidate ownership, timing-objective evidence and calibration accounting support the work v1.1 will exercise. They are not a five-issue entrance exam: take each with the feature or measurement that needs it. |
+| v1.1, lower-priority performance evidence (2) | #594, #819 | Per-device cache identity and cache-hit benefit measurement fit the performance theme. Neither blocks the single-GPU fleet's initial experiments. |
+| v1.1.2 (2) | #793, #777 | Explicit persistent optimizer state and computed-value observability support the training/debugging experience. The current SGD materialization fix is already landed. |
+| v1.1.1, trigger-gated (2) | #695, #966 | PPX migration depends on the upstream AST release; legacy-lock deletion follows its retirement trigger, with October 10 the sequencing plan's proposed date. |
+| v1.1.1, post-performance consolidation (24) | #603, #607, #609, #625, #641, #642, #660, #672, #678, #705, #707, #778, #797, #798, #799, #818, #907, #910, #911, #913, #914, #915, #916, #920 | Scanner and harness refactoring, diagnostics and remaining IR/API work. Renderer/backend deduplication itself is retained in v1.0.2. |
+| v1.1.1 (12 more) | #928, #929, #940, #596, #926, #919, #921, #932, #942, #946, #918, #934 | Symbolic-extent/API guard work, evidence meta-checks, historical report provenance and tooling/docs improvements. Pull a bounded fix forward only if a chosen v1.1 workload actually depends on it. |
+
+The concrete boundary matters. #928 → #929 concerns symbolic-extent semantics and gradients;
+start the performance comparisons at fixed extents unless an experiment needs dynamic ones.
+#940 concerns forgotten launch assignments; explicitly initialize bindings in those experiments
+while the stronger production API waits. #919 concerns historical Metal fixtures: use newly
+recorded fixture provenance for v1.1 measurements, without presenting old numbers as matched
+controls. #596 and #926 improve verification machinery, but no current defect requires making
+their generalization a prerequisite to a measured compiler improvement.
+
+Within v1.1, #963's Metal device-memory fence is already fixed; the remaining barrier-region
+analysis matters when new schedules cross its boundary. Establish legality for the schedules a
+feature proposes, using a conservative refusal where necessary, instead of front-loading a
+general analysis. #975 is a suspected callback-cleanup gap, not a measured leak: investigate it
+when exercising tuning callbacks. #794's real select-arm compile checks accompany #770 in
+v1.0.2; hosted Metal CI evaluation (#942) need not precede them. #833/#834 should share
+measurement sessions with the performance work, and #922 belongs with calibration consumers.
+
+The redistribution leaves **eight open issues in v1.0.2, 37 in v1.1, 38 in the new v1.1.1,
+17 in the renamed v1.1.2 and seven in v1.2**. The new consolidation milestone is a queue to
+prioritize after performance work, not a promise to clear all 38 issues.
+This rebalance does not cut a release or close the v1.0.2 milestone; tagging remains separate.
 
 ---
 
-## v1.1 — October 3, 2026
+## v1.1 — October 2, 2026
 **Theme: Performance-chasing in the approximate profile, demonstrated on benchmarks**
 
-GitHub milestone scope: *"Performance-chasing in the approximate profile, demonstrated on benchmarks."* The `performance` profile is defined as the fastest configuration *at unchanged semantics*; this milestone chases performance past that line, under a third preset whose results differ from the exact profiles by a tolerance the benchmark parity envelope names. An issue here closes with a before/after benchmark cell in a report. Targeted for October 3, 2026, aspirationally; the pace is what the measurements say.
+GitHub milestone scope: *"Performance-chasing in the approximate profile, demonstrated on benchmarks."* The `performance` profile is defined as the fastest configuration *at unchanged semantics*; this milestone chases performance past that line, under a third preset whose results differ from the exact profiles by a tolerance the benchmark parity envelope names. An issue here closes with a before/after benchmark cell in a report. Targeted for October 2, 2026, aspirationally; the pace is what the measurements say.
+
+**Recommended first work, once v1.0.2 is cut:**
+
+1. Complete a bounded `approximate` acceptance run (#719) and choose the first #720 comparison
+   cells. Diagnose the recorded approximate-CPU load failure and tf32 timeout as measurement
+   blockers, without waiting for the whole benchmark-expansion wishlist.
+2. Use the already-landed `Scan_loop` to implement online-softmax/fused attention (#483), with
+   the sequence-length comparison as its acceptance evidence. The high-level cumulative/top-k
+   surface (#952) is not a prerequisite for this IR rewrite.
+3. Run the register-tile follow-through (#947/#948 → #620 → #627) and substrate-specific MMA
+   improvements (#923/#925/#838) where hardware and clear comparison cells are available.
+   Take Winograd (#505) when the 3×3 convolution cell is ready; avoid opening every design
+   space (#565, #576, #616) at once.
+
+The criterion is a demonstrated compiler improvement, including a useful measured null—not
+throughput measured in closed hygiene issues. Bring forward deferred work when an experiment
+exposes its cost, rather than treating the entire robustness queue as prerequisite infrastructure.
 
 **The regime and its evidence:**
-- The `approximate` profile (#719): a third built-in preset bundling tf32 matmuls, fp16 arithmetic, fast-math, and every algebraic-rewrite gate as it lands, with a benchmark regime column whose torch counterpart runs torch's own defaults (tf32, SDPA, cudnn autotuning) rather than the pinned-exact settings the parity oracle needs.
+- The `approximate` profile and benchmark regime column **landed in staging PR #661** (#719); fleet tf32 acceptance remains open. Future algebraic-rewrite gates join the payload as they land. Benchmark rows now record ambient `OCANNL_*` settings too (PR #667, part of #720). The September 14 plan records an acceptance-run timeout and an approximate-CPU library-load failure; profile availability is not completed performance acceptance.
 - The benchmark expansion (#720): sequence-length and batch-size scaling curves, a 3×3 padded conv workload, roofline-attainment and device-memory columns, thread-count parity on the CPU column — each leg the demonstration for named issues below. Gemma 3 (270M/1B) as the real-weights long-context target (#570).
 
 **Algebraic rewrites — the numerics-changing tier:**
-- Fused attention via online softmax (#483), on the minimal loop-carried-recurrence construct the IR needs for it (#696) — the `seq²` materialization is what the scaling curve exposes.
+- Fused attention via online softmax (#483): `Low_level.Scan_loop` **landed in staging PR #660** (#696), removing the IR recurrence blocker. The rewrite and its long-sequence measurements remain open; high-level cumulative operations/top-k are a separate surface (#952).
 - Winograd F(2×2, 3×3) (#505), and the zero-nest workgroup geometry that lets whole-routine GPU conv candidates be proposed (#503).
-- fp16 accumulator width aligned with `fp16_arithmetic` (#680). (Warp-shuffle reductions at the named accumulator residency, #682, and vector `Max`/`Min` reductions off the per-lane loop, #649, landed early — in v1.0.1.)
+- fp16 accumulator-width policy (#680/#789) and shared rendering decisions (#754) have landed. Remaining MMA width work is substrate-specific: Metal f16 inputs with f32 storage (#923), CUDA persistent-fragment wide-f16 destinations (#925), and HIP wide bf16 accumulation (#838).
 
 **Exact-numerics performance residue:**
-- Footprint-scoped materialization — a middle ground between inlining and a full buffer (#616); register-tile geometry as a schedule decision the tuner can time (#619), the column-remainder peel cliff (#620), and packed GEBP schedules at non-dividing extents so the cost model can be measured where it is questioned (#627).
+- Footprint-scoped materialization — a middle ground between inlining and a full buffer (#616); register-tile geometry **landed in staging PR #662** (#619), leaving cost-model-derived ranking and geometry census (#947/#948), the column-remainder peel cliff (#620), and packed GEBP schedules at non-dividing extents so the cost model can be measured where it is questioned (#627).
 - Cost-model fidelity: the advisory envelope's two consumers with opposite biases (#636) and hoisted scope bodies in `sc_flops` (#637).
+- Backend zero-copy from mmap-backed checkpoints (#585) is assigned to **v1.1**, not v1.2; measure loading cost and memory residency separately from steady-state execution. Placement-decision persistence (#786) also remains open.
+- Convolution family search (#697), zero-nest geometry (#503), pad economics (#740/#741), head-axis coalescing (#728), and benchmark/cost-model follow-ups remain a measured backlog rather than completed work.
 - Async-copy staging refinements — Metal `simdgroup_async_copy`, HIP direct-to-LDS, pipeline depths > 2 (#576); device memory management under pressure (#565), whose first consumer the long-context legs are expected to be.
 
 ---
 
-## v1.1.1 — October 11, 2026
+## v1.1.1 — October 10, 2026
+**Theme: Consolidation after the performance work**
+
+The 38 deferred issues from v1.0.2 are listed in the redistribution table above: testing-side
+refactorings, scanner maintenance, diagnostics, stable goldens, test tooling and remaining IR/API
+work. Renderer and backend deduplication stays in v1.0.2, motivated by compiler elegance. The
+v1.1 experience can inform the ordering of this later queue. This is a bounded consolidation
+period, not a gate requiring every issue to close before consumers or v1.2 can proceed. The PPX migration (#695) remains upstream-release-gated; legacy-lock
+retirement (#966) reaches its proposed October 10 trigger at this milestone's target.
+
+---
+
+## v1.1.2 — October 18, 2026
 **Theme: Consumers and explorations**
 
-GitHub milestone scope: *"Consumers and explorations: models, reproductions, demos, integrations, and the training experience (checkpointing, tracking, plots). Paced by interest."* Everything that consumes the compiler rather than building it. Its former hygiene lists moved to v1.0.2 in the renumbering, and its hardware-gated and feature-grade items to v1.2.
+GitHub milestone scope: *"Consumers and explorations: models, reproductions, demos, integrations, and the training experience (checkpointing, tracking, plots). Paced by interest."* Everything that consumes the compiler rather than building it. Renamed from v1.1.1 on September 14 to put consolidation immediately after v1.1; its existing 15 issues retain their home, joined by #793 and #777. Hardware-gated and feature-grade items remain in v1.2.
 
 **Training experience:**
+- Explicit persistent optimizer state (#793) and computed-value observability (#777), moved from consolidation to the consumer-facing work they support.
+- Batch-norm running-stat momentum (#879) and the MobileNet width multiplier (#880), the feature halves behind the currently underscored placeholder options.
 - Resumable checkpoints (#96), experiment tracking — graphs of observables such as loss and device health (#122), plot legends and axis ticks (#103).
 
 **Models, reproductions and demos:**
@@ -261,16 +352,49 @@ GitHub milestone scope: *"Consumers and explorations: models, reproductions, dem
 
 ---
 
-## v1.2 — October 28, 2026
-**Theme: Ambitious feature-grade work**
+## v1.2 — November 3, 2026
+**Proposed theme: Reusable tensor programs on a standalone ArrayJIT compiler**
 
-GitHub milestone scope: *"Ambitious feature-grade work: larger design-space and hardware-gated features."* Targeted for October 28, 2026; each item is a design space of its own rather than a follow-up.
+GitHub currently calls this *"Ambitious feature-grade work"*, with **seven open issues**:
+#404, #903, #852, #444, #477, #170 and #195. The old list omitted the two architectural
+anchors, #852 and #903, and incorrectly included #585, which is now in v1.1. Seven issues
+understates the scope: three are substantial design spaces. November 3 is the early-November anchor used to schedule the preceding milestones,
+not a promise to finish all seven.
 
-- Shape schemes for tensor functions (#404) — the exemplar of the tier.
-- PoPE, polar position embeddings (#444).
-- Backend zero-copy from mmap-backed checkpoints — constant pools referencing the mapping (#585).
-- HIP CDNA tensor cores via MFMA (#477) — no CDNA box in the fleet.
-- CUDA pinned host buffers (#170) and CUDA `__constant__` arrays (#195).
+**Recommended core, with concrete completion criteria:**
+
+| Track | Existing issue | Proposed deliverable |
+|-------|----------------|----------------------|
+| Standalone compiler | #852 | ArrayJIT accepts a loop-nest program without depending on tensor/Assignments orchestration, with a reference driver, documented package boundary and an executed non-neural example. The public `arrayjit.ll_builders` from PR #686 is useful groundwork, not completion of the package split. |
+| Recoverable inference sessions | #903 | Solver state belongs to a session; a failed tensor construction can rewind without contaminating a later valid one. Exercise shared operand state and two independent sessions. The maintainer still needs to choose the transaction representation. |
+| Reusable tensor functions | #404 | Infer a function's constraint scheme once, freshen it at multiple applications and report contradictory shapes at the appropriate boundary. Demonstrate reuse at different shapes, error provenance and measured inference cost against retracing. |
+
+Sequence the session ownership/rollback contract before committing to shape-scheme storage and
+freshening. The package split can progress alongside that design, but agree the frontend/compiler
+boundary first to avoid moving APIs twice. C renderer state isolation (PR #707) removes one
+source of shared mutable state; it does **not** establish compiler-wide or solver reentrance.
+
+Flesh out these three issues with acceptance work packages rather than adding unrelated features:
+a package-dependency/install check and standalone example for #852; failure-recovery and session
+isolation examples for #903; polymorphic reuse, diagnostics and an inference benchmark for #404.
+A release demonstration should pair the standalone ArrayJIT example with one reusable tensor
+block compiled at several shapes, including a failed application followed by a valid one.
+These are proposed scope refinements, not newly filed issues.
+
+**Optional companions, not core release gates:**
+
+- PoPE (#444) can demonstrate a reusable position-embedding block; it should not determine the
+  session architecture or hold the release if interest lies elsewhere.
+- CUDA pinned host buffers (#170) and `__constant__` arrays (#195) need explicit ownership,
+  capability and transfer/read benchmarks before promotion into the core scope. They may ship
+  independently when measured.
+- CDNA MFMA (#477) requires a CDNA machine; the current fleet's gfx1151 HIP results do not cover
+  wave64 MFMA. Keep it hardware-gated and propose a later backend milestone only when hardware
+  access exists, rather than inventing a v1.3 date now.
+
+If the three architectural tracks cannot fit by November 3, finish a coherent subset and defer
+the remainder explicitly, preserving the early-November landing target. A useful v1.2 advances reusable programs and clear ownership; clearing
+seven heterogeneous issue numbers is not its acceptance criterion.
 
 ---
 
@@ -287,10 +411,11 @@ GitHub milestone scope: *"Ambitious feature-grade work: larger design-space and 
 | **0.9** | Aug 3, 2026 | **released** | **Schedule quality, deterministic parallelism, mixed precision, convolution performance, and search survivability** |
 | **1.0** | Aug 13, 2026 | **released** | **Branch-and-bound schedule inference, inlining as a searchable decision, graph capture, software pipelining, rematerialization, CPU reduced precision, and the 2x `gpt2_mini` step** |
 | **1.0.1** | Aug 26, 2026 | **released** | **Consolidation after v1.0** (planned as "v1.1"): search follow-through, inlining and reduction soundness, test and benchmark seams that cannot report a false pass, and the training-loop mechanics |
-| 1.0.2  | Sep 16, 2026 | planned | Robustness pulled forward: the review-filed hygiene, dedup and test-seam backlog, worked before it drifts from the code |
-| 1.1    | Oct 3, 2026 | planned | Performance-chasing in the approximate profile, demonstrated on benchmarks: the `approximate` preset, fused attention and Winograd, the exact-numerics residue, and the benchmark legs that expose wins and losses |
-| 1.1.1  | Oct 11, 2026 | planned | Consumers and explorations: models, reproductions, demos, integrations, and the training experience |
-| 1.2    | Oct 28, 2026 | planned | Ambitious feature-grade work: shape schemes, PoPE, checkpoint zero-copy, CDNA MFMA, CUDA pinned-host and `__constant__` memory |
+| 1.0.2  | Sep 16, 2026 | planned | Landed robustness plus eight compiler-structure/coverage issues, motivated by elegance |
+| 1.1    | Oct 2, 2026 | planned | Performance-chasing in the approximate profile, demonstrated on benchmarks: fleet acceptance of the landed `approximate` preset, fused attention and Winograd, the exact-numerics residue, and the benchmark legs that expose wins and losses |
+| 1.1.1  | Oct 10, 2026 | planned | Post-performance consolidation: the 38 deferred issues, prioritized by v1.1 experience |
+| 1.1.2  | Oct 18, 2026 | planned | Consumers and explorations: models, reproductions, demos, integrations, and the training experience |
+| 1.2    | Nov 3, 2026 | planned; theme refinement proposed | Standalone ArrayJIT, session transactions and shape schemes; PoPE and hardware features optional |
 
 ---
 
