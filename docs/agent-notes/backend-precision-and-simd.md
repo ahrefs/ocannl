@@ -228,11 +228,11 @@ files.
   the GPUs and no cc-vs-GPU parity test could seed through it. `reduction_forms` prints the f32,
   bf16 and f16 draws of one fixed key on stdout — exact by construction, so they are golden lines —
   and claims each narrow draw is the f32 draw narrowed, and that the host stubs over `builtins.c`
-  (`Ops.uint4x32_to_*_uniform`) draw the same number, which is the mechanical check on the
-  `builtins_cc.ml`/`builtins.c` pair gh-ocannl-656 wants. A trap in that pair: a host stub that
-  returns `uint16_t` must go through `single_to_half` (`HALF_TO_UINT16`), since `FLOAT_TO_HALF`
-  under native `_Float16` converts the value numerically into the integer return type and every
-  draw in [0, 1) becomes 0.
+  (`Ops.uint4x32_to_*_uniform`) draw the same number, which checks the compiled host and kernel
+  consumers even though they now share their C definition table (gh-ocannl-656). The shared
+  scalar function returns `HALF_T`; the OCaml stub extracts `HALF_TO_UINT16` bits explicitly.
+  Assigning its native `_Float16` result numerically to `uint16_t` would truncate every draw
+  in [0, 1) to 0.
 - Convert-on-load/store is what makes the `Vectorized` renderings reachable for 16-bit nodes: the
   lane count comes from the **compute** vector, so the narrow side is a half-width vector, and the
   conversion happens at the memory boundary rather than per lane inside the body (per-lane
@@ -1355,3 +1355,10 @@ files.
   bf16/fp8 remain floats despite integer host storage. Whole-family tests derive from
   `Ops.scalar_precs` / `Ops.integer_precs` / `Ops.float_precs`, while C-family renderer sweeps
   use `Ops.storage_precs`, which includes packed state and excludes void.
+
+- Shared host/kernel C builtins live in `builtins_cc.ml` (gh-ocannl-656). The stdlib-only
+  `arrayjit/lib/gen_builtins` generator compiles a Dune copy of that table and emits the header
+  included by `builtins.c`; the `OCANNL_` SIMD namespace and platform includes remain cc-only.
+  The shared half RNG function returns `HALF_T`, while its OCaml wrapper explicitly extracts bits
+  with `HALF_TO_UINT16`. `test_shared_builtins` executes separately compiled default and emulated
+  half variants against the shipped stubs, with inlining disabled to exercise the C ABI.

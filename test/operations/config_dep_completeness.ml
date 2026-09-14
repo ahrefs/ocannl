@@ -68,6 +68,9 @@ module Scan = Test_utils.Dune_stanza_scan
    claim about what a program links, and a claim that stops being true is not a free pass. *)
 let exempt_sites =
   [
+    ( "arrayjit/lib:gen_builtins/generate.exe",
+      "the builtin header generator links only the OCaml stdlib and a pure C definition table; it \
+       reads no OCANNL configuration" );
     ( "test/ppx:pp.exe",
       "the ppx driver, run to expand a source file and diff the expansion: `ppx_ocannl` links \
        base, ppxlib, str and einsum_parser -- no configuration reader -- so no `ocannl_config` can \
