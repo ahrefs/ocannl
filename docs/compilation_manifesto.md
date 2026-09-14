@@ -12,6 +12,9 @@ would make the compilation side a research identity rather than an implementatio
 also names what is deliberately boring, because the identity claims are only credible if
 the table-stakes engineering underneath is unremarkable and correct.
 
+For a dated, issue-linked account of the remaining work and its milestone homes, see
+[What remains for OCANNL](blog/2026-09-14-what-remains-for-ocannl.md).
+
 ## 1. Schedule the step, not the kernel *(deliberate)*
 
 The unit of compilation is the whole training step. Forward, backward, and the optimizer
