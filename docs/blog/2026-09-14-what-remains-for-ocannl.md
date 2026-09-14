@@ -191,7 +191,9 @@ reader footprints, reuse and cost. This proposal is more specific than “add an
 
 At runtime, device-memory pressure introduces a different problem ([#565](https://github.com/ahrefs/ocannl/issues/565)). Device memory can
 be scarce while the OCaml heap is small, and the pool tables hold references that ordinary
-garbage collection cannot release. Explicit release already handles known candidate lifetimes.
+garbage collection cannot release. Explicit release handles a candidate’s context-specific
+pools, but excludes per-device constants: packed constants created by hoisted staging can
+remain rooted after the candidate is released.
 General pressure management goes further: it raises choices about eviction, recomputation, host
 spill and pool policy. Captured GPU graphs and pointer-based identities constrain what can move or
 be freed. The issue is deliberately a design space, not an already selected eviction algorithm.
