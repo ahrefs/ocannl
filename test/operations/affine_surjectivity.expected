@@ -1,0 +1,57 @@
+normalization cancels repeated symbols: true
+normalization collapses a unit coefficient: true
+normalization keeps a nonzero offset: true
+normalization is independent of term order: true
+deserialization also normalizes affine indices: true
+iterator must reach the last cell: true
+positive offset leaves a prefix gap: true
+negative offset cannot prove coverage: true
+reversal covers every cell: true
+stride holes are refused: true
+dense overlapping sum is surjective: true
+diagonal dependence leaves holes: true
+out-of-axis offsets cannot cancel through flattening: true
+flattened Sub_axis covers the whole buffer: true
+trailing Sub_axis stride leaves holes: true
+an empty loop cannot cover a nonempty target: true
+empty target coverage is vacuous: true
+static symbols are refused: true
+overflow cannot prove coverage: true
+two independent concat axes cover their product: true
+repeated concat axis preserves diagonal dependence: true
+partial and complete concat coordinates cannot be mixed: true
+two diagonal RHS blocks do not cover the off-diagonal blocks: true
+four RHS blocks cover two concatenated axes: true
+runtime extent guard cannot justify full-buffer init elision: true
+every admitted bounded affine image covers its target: true
+coverage_reverse: initialization decision: true
+coverage_reverse: executed values match the enumerated scatter: true
+coverage_reverse: elision agrees with explicit initialization: true
+coverage_prefix_gap: initialization decision: true
+coverage_prefix_gap: executed values match the enumerated scatter: true
+coverage_prefix_gap: elision agrees with explicit initialization: true
+coverage_stride_gap: initialization decision: true
+coverage_stride_gap: executed values match the enumerated scatter: true
+coverage_stride_gap: elision agrees with explicit initialization: true
+coverage_collision: initialization decision: true
+coverage_collision: executed values match the enumerated scatter: true
+coverage_collision: elision agrees with explicit initialization: true
+coverage_sub_axis: initialization decision: true
+coverage_sub_axis: executed values match the enumerated scatter: true
+coverage_sub_axis: elision agrees with explicit initialization: true
+coverage_diagonal: initialization decision: true
+coverage_diagonal: executed values match the enumerated scatter: true
+coverage_diagonal: elision agrees with explicit initialization: true
+coverage_two_concats: initialization decision: true
+coverage_two_concats: executed values match the enumerated scatter: true
+coverage_two_concats: elision agrees with explicit initialization: true
+padded flattened layout is refused explicitly: true
+coverage_sparse_block: initialization decision: true
+coverage_sparse_block: executed values match the enumerated scatter: true
+coverage_sparse_block: elision agrees with explicit initialization: true
+coverage_sparse_reverse: initialization decision: true
+coverage_sparse_reverse: executed values match the enumerated scatter: true
+coverage_sparse_reverse: elision agrees with explicit initialization: true
+coverage_dependent_reverse_selector: unavailable source retains initialization: true
+coverage_dependent_reverse_selector: executed selected values: true
+coverage_dependent_reverse_selector: explicit initialization agrees: true

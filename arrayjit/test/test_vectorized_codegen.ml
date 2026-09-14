@@ -153,7 +153,7 @@ let () =
   let strided =
     B.loop ~upto:3 ~axis:LL.Vectorized i
       (B.set out5 [| Idx.Iterator i |]
-         (LL.Get (inp2, [| Idx.Affine { symbols = [ (2, i) ]; offset = 0 } |])))
+         (LL.Get (inp2, [| Idx.affine ~symbols:[ (2, i) ] ~offset:0 |])))
   in
   let doc5 =
     compile_with_vector_config ~name:"vec_strided_kernel" (make_optimized strided [ inp2; out5 ])
@@ -251,7 +251,7 @@ let () =
          (LL.Binop
             ( Ops.Add,
               (LL.Get (sacc, [| Idx.Fixed_idx 0 |]), Ops.single),
-              (LL.Get (sa, [| Idx.Affine { symbols = [ (2, i) ]; offset = 0 } |]), Ops.single) )))
+              (LL.Get (sa, [| Idx.affine ~symbols:[ (2, i) ] ~offset:0 |]), Ops.single) )))
   in
   let doc9 =
     compile_with_pure_config ~name:"vec_strided_reduce_kernel"

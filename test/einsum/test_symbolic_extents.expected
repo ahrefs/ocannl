@@ -13,7 +13,7 @@ c dims: 4
 c values (a + b + 1 = 1.75 each): 1.75 1.75 1.75 1.75
 
 === Error cases ===
-set_sym_dim without static_range: correctly raised: Row: static index i23 used as a symbolic dimension has no declared range; symbolic dimensions require ~static_range (it is the maximum extent, used for allocation sizing)
+set_sym_dim without static_range: correctly raised: Row: static index i25 used as a symbolic dimension has no declared range; symbolic dimensions require ~static_range (it is the maximum extent, used for allocation sizing)
 set_sym_dim after set_dim: correctly raised: Cannot set symbolic dimension for variable reference with label ref2: already set to a concrete dimension
 set_dim after set_sym_dim: correctly raised: Cannot set a concrete dimension for variable reference with label ref3: already set to a symbolic dimension
 set_sym_dim with a different symbol: correctly raised: Cannot set symbolic dimension for variable reference with label ref3: already set to a different symbolic dimension
@@ -23,5 +23,5 @@ symbolic vs concrete axis: correctly raised: dimension comparison for axis: mism
 two distinct symbols must not unify: correctly raised: dimension comparison for axis: mismatch
 set_sym_dim on a row variable: correctly raised: Cannot set symbolic dimension for variable reference with label r: it is bound to a row variable (set_sym_dim does not support row variables)
 Total_elems over a symbolic dimension: correctly raised: Total_elems constraints are not supported with symbolic dimensions
-extent after slice use: correctly raised: Row: static index i30 already slices a batch axis and cannot also be used as a symbolic dimension extent
-slice after extent use: correctly raised: Static index i31 is used as a symbolic dimension extent and cannot also slice a batch axis
+extent after slice use: correctly raised: Row: static index i32 already slices a batch axis and cannot also be used as a symbolic dimension extent
+slice after extent use: correctly raised: Static index i33 is used as a symbolic dimension extent and cannot also slice a batch axis

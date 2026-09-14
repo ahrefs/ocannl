@@ -347,3 +347,15 @@ files.
   max-arm scalar algebra: a union traversal is not a conditional cost bound. Rewriters, affine
   path construction and cleanup's placement-dependent survival checks retain their own semantics;
   do not infer execution order among hoisted sibling scope definitions from scalar source order.
+
+- `Indexing.affine` is the construction boundary for affine indices (gh-ocannl-774): its private
+  payload preserves pattern matching while forcing coalescing and `Fixed_idx`/`Iterator`
+  normalization; sexp decoding normalizes too. `Affine.is_surjective` proves dense row-major
+  address coverage from component extents, sharing the arithmetic-progression image proof with
+  access coverage. Repeated symbols remain correlated; complete concat components are cumulative
+  coordinates. A bounded segment-choice proof also requires a viable RHS for every target block;
+  `Rev_sides` target queries carry the actual read map and retain inactive iterator identities.
+  A selector target must select only its own segment before coverage can elide initialization;
+  deleting other segments would misclassify unavailable source iterators as static. Static/runtime
+  extents, mixed slice/whole concat coordinates and proof-arithmetic overflow decline. `test/operations/affine_surjectivity.ml` checks finite images and executed
+  scatters against explicit neutral initialization.

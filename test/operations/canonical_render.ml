@@ -87,7 +87,7 @@ let build_rich (table, ids, out, acc) =
             LL.Set
               {
                 tn = out;
-                idcs = [| Idx.Affine { symbols = [ (2, i); (1, j) ]; offset = 5 } |];
+                idcs = [| Idx.affine ~symbols:[ (2, i); (1, j) ] ~offset:5 |];
                 llsc =
                   LL.Local_scope
                     {

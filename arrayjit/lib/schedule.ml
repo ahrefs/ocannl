@@ -103,20 +103,7 @@ let split_reduce ~axis ~target ~num_blocks =
 
 type affine_subst = { terms : (int * Indexing.symbol) list; offset : int }
 
-let rec add_term acc (c, s) =
-  match acc with
-  | [] -> [ (c, s) ]
-  | (c', s') :: tl when Indexing.equal_symbol s s' -> (c + c', s') :: tl
-  | hd :: tl -> hd :: add_term tl (c, s)
-
-(* Merge duplicate symbols, drop zero coefficients, and restore the [Fixed_idx] / [Iterator] /
-   [Affine] canonical forms ([Affine] must have >1 term or a coefficient other than 0/1). *)
-let normalize_affine ~terms ~offset : Indexing.axis_index =
-  let terms = List.fold terms ~init:[] ~f:add_term |> List.filter ~f:(fun (c, _) -> c <> 0) in
-  match (terms, offset) with
-  | [], _ -> Indexing.Fixed_idx offset
-  | [ (1, s) ], 0 -> Indexing.Iterator s
-  | _ -> Indexing.Affine { symbols = terms; offset }
+let normalize_affine ~terms ~offset = Indexing.affine ~symbols:terms ~offset
 
 let subst_axis_index ~sym ~(by : affine_subst) (idx : Indexing.axis_index) : Indexing.axis_index =
   match idx with
@@ -768,7 +755,7 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
               let cond =
                 Binop
                   ( Ops.Cmplt,
-                    (Embed_index (Indexing.Affine { symbols = terms; offset = 0 }), iprec),
+                    (Embed_index (Indexing.affine ~symbols:terms ~offset:0), iprec),
                     (Constant (Float.of_int n), iprec) )
               in
               If { cond = (cond, iprec); body }
@@ -2688,8 +2675,9 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
               Binop
                 ( Ops.Cmplt,
                   ( Embed_index
-                      (Indexing.Affine
-                         { symbols = [ (chunk, block_index); (1, inner_index) ]; offset = 0 }),
+                      (Indexing.affine
+                         ~symbols:[ (chunk, block_index); (1, inner_index) ]
+                         ~offset:0),
                     iprec ),
                   (Constant (Float.of_int n), iprec) )
             in
@@ -5015,8 +5003,7 @@ let crosscheck_scratch_containment (opt : Low_level.optimized) (chains : Low_lev
       match idx with
       | Indexing.Iterator s -> Indexing.Iterator (rename_sym m s)
       | Indexing.Affine { symbols; offset } ->
-          Indexing.Affine
-            { symbols = List.map symbols ~f:(fun (c, s) -> (c, rename_sym m s)); offset }
+          Indexing.affine ~symbols:(List.map symbols ~f:(fun (c, s) -> (c, rename_sym m s))) ~offset
       | Indexing.Fixed_idx _ | Indexing.Sub_axis -> idx
       | Indexing.Concat syms -> Indexing.Concat (List.map syms ~f:(rename_sym m))
     in

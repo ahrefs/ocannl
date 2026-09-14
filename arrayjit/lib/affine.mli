@@ -164,6 +164,13 @@ val fiber_cardinality_ub :
     entirely. *)
 
 val is_surjective : Indexing.projections -> bool
+(** Proves exact dense coverage of the row-major LHS buffer from the product-component extents.
+    Handles signed affine sums, shared symbols, [Sub_axis] strides and independent complete
+    concatenations. Returns [false] for holes, unknown/runtime extents, unsupported
+    concat-coordinate mixtures or arithmetic outside the proof's safe integer range. When RHS maps
+    are supplied, every target block must have a viable producer (segment-choice proof capped at
+    1024 combinations); an empty RHS array asks only about the mathematical LHS map. *)
+
 val is_injective : Indexing.projections -> bool
 
 (** {2 Access records}

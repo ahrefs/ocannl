@@ -11,7 +11,7 @@ module Idx = Ir.Indexing
 module Aff = Ir.Affine
 
 let sym = Idx.get_symbol
-let aff terms offset = Idx.Affine { symbols = terms; offset }
+let aff terms offset = Idx.affine ~symbols:terms ~offset
 let find_range ranges s = List.Assoc.find ranges s ~equal:Idx.equal_symbol
 
 (* Enumerate all assignments of [syms] within [ranges] (inclusive bounds). *)

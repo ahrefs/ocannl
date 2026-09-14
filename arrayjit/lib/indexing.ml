@@ -151,10 +151,23 @@ let dims_to_string ?(with_axis_numbers = false) dims =
     @@ Array.mapi dims ~f:(fun d s -> Int.to_string d ^ ":" ^ Int.to_string s)
   else String.concat_array ~sep:"x" @@ Array.map dims ~f:Int.to_string
 
+(** Coalesce an affine [symbols] list into canonical [(coeff, symbol)] terms: repeated symbols are
+    summed and zero-coefficient terms dropped. Order is unspecified. *)
+let coalesce_affine_terms symbols =
+  List.fold symbols
+    ~init:(Map.empty (module Symbol))
+    ~f:(fun acc (coeff, s) ->
+      Map.update acc s ~f:(function None -> coeff | Some c0 -> c0 + coeff))
+  |> Map.to_alist
+  |> List.filter_map ~f:(fun (s, c) -> if c = 0 then None else Some (c, s))
+
+type affine_index = { symbols : (int * symbol) list; offset : int }
+[@@deriving compare, equal, sexp]
+
 type axis_index =
   | Fixed_idx of int  (** A fixed position along an axis *)
   | Iterator of symbol  (** A simple iterator symbol *)
-  | Affine of { symbols : (int * symbol) list; offset : int }
+  | Affine of affine_index
       (** An affine combination of symbols with coefficients and an offset. Represents:
 
           Σ(coeff_i * symbol_i) + offset
@@ -162,12 +175,36 @@ type axis_index =
           For convolutions: [symbols = [(stride, i1); (dilation, i2)]] and [offset = ~-padding].
           Note: for readability, we use [Fixed_idx] and [Iterator] as separate variants and require
           [Affine] to not be ambiguous: [symbols] should be longer than 1 or have a coefficient
-          different from 1 and 0. *)
+          different from 1 and 0, or a nonzero offset. Construction goes through [affine]. *)
   | Sub_axis  (** This axis belongs to an adjacent multi-axis index. *)
   | Concat of symbol list
       (** This axis is formed by concatenating multiple axes, each represented by an iterator
           symbol. [Concat] indices are eliminated during lowering. *)
 [@@deriving compare, equal, sexp]
+
+(** The only construction boundary for affine indices. *)
+let affine ~symbols ~offset =
+  match coalesce_affine_terms symbols with
+  | [] -> Fixed_idx offset
+  | [ (1, s) ] when offset = 0 -> Iterator s
+  | symbols -> Affine { symbols; offset }
+
+(* Deserialization observes the same invariant as programmatic construction. *)
+let sexp_of_axis_index idx =
+  match sexp_of_axis_index idx with
+  | Sexp.List [ Sexp.Atom "Affine"; Sexp.List fields ] -> Sexp.List (Sexp.Atom "Affine" :: fields)
+  | sexp -> sexp
+
+let axis_index_of_sexp sexp =
+  (* Preserve the former inline-record wire format when sealing the payload. *)
+  let sexp =
+    match sexp with
+    | Sexp.List (Sexp.Atom "Affine" :: fields) -> Sexp.List [ Sexp.Atom "Affine"; Sexp.List fields ]
+    | sexp -> sexp
+  in
+  match axis_index_of_sexp sexp with
+  | Affine { symbols; offset } -> affine ~symbols ~offset
+  | idx -> idx
 
 (** Whether the value of [idx] depends on [s]: [s] is the axis's own iterator, appears as a term of
     its affine combination, or is one of the iterators a [Concat] axis is formed from. A
@@ -240,16 +277,6 @@ let iterator_sizes (p : projections) : int Map.M(Symbol).t =
     ~init:(Map.empty (module Symbol))
     ~f:(fun acc comp ->
       List.fold comp ~init:acc ~f:(fun acc (d, iter) -> Map.set acc ~key:iter ~data:d))
-
-(** Coalesce an affine [symbols] list into canonical [(coeff, symbol)] terms: repeated symbols are
-    summed and zero-coefficient terms dropped. Order is unspecified. *)
-let coalesce_affine_terms symbols =
-  List.fold symbols
-    ~init:(Map.empty (module Symbol))
-    ~f:(fun acc (coeff, s) ->
-      Map.update acc s ~f:(function None -> coeff | Some c0 -> c0 + coeff))
-  |> Map.to_alist
-  |> List.filter_map ~f:(fun (s, c) -> if c = 0 then None else Some (c, s))
 
 (* gh-133 Stage B: injectivity of an affine LHS map over its non-static symbols.
 
@@ -391,7 +418,7 @@ let reflect_projection ~(dims : int array) ~(projection : axis_index array) =
           @@ Utils.User_error
                "Indexing.reflect_projection: a concatenated axis has no single affine offset; \
                 Concat indices are eliminated during lowering and cannot reach this function")
-  |> fun (_, symbols, offset) -> Affine { symbols; offset }
+  |> fun (_, symbols, offset) -> affine ~symbols ~offset
 
 type variable_ref = {
   ref_label : string;

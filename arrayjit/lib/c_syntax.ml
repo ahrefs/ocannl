@@ -3895,12 +3895,8 @@ module C_syntax (B : C_syntax_config) = struct
       let bound s = List.mem syms s ~equal:Indexing.equal_symbol in
       match idx with
       | Indexing.Iterator s when bound s -> Indexing.Fixed_idx 0
-      | Indexing.Affine { symbols; offset } -> (
-          let symbols = List.filter symbols ~f:(fun (_, s) -> not (bound s)) in
-          match (symbols, offset) with
-          | [], k -> Indexing.Fixed_idx k
-          | [ (1, s) ], 0 -> Indexing.Iterator s
-          | _ -> Indexing.Affine { symbols; offset })
+      | Indexing.Affine { symbols; offset } ->
+          Indexing.affine ~symbols:(List.filter symbols ~f:(fun (_, s) -> not (bound s))) ~offset
       | other -> other
     in
     let operand_space tn : mma_space = ((thread_storage ctx) tn :> mma_space) in
@@ -6013,10 +6009,10 @@ module C_syntax (B : C_syntax_config) = struct
       let shift_idx ~by (idx : Indexing.axis_index) =
         match idx with
         | Indexing.Iterator s when Indexing.equal_symbol s i ->
-            Indexing.Affine { symbols = [ (1, s) ]; offset = by }
+            Indexing.affine ~symbols:[ (1, s) ] ~offset:by
         | Indexing.Affine { symbols; offset }
           when List.exists symbols ~f:(fun (_, s) -> Indexing.equal_symbol s i) ->
-            Indexing.Affine { symbols; offset = offset + by }
+            Indexing.affine ~symbols ~offset:(offset + by)
         | _ -> idx
       in
       let rec shift ~by (llsc : Low_level.scalar_t) : Low_level.scalar_t =

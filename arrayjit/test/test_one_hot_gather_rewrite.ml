@@ -156,10 +156,11 @@ let () =
   let dyn, loops = summarize (LL.rewrite_one_hot_reductions neg_partial) in
   p "partial loop bounds are not rewritten" (dyn = 0 && loops = 1);
 
-  (* Negative: affine table index at the gathered axis. *)
+  (* Negative: genuinely strided table index at the gathered axis. A unit-coefficient zero-offset
+     index now normalizes to Iterator and is intentionally eligible. *)
   let neg_affine =
     make_local_scope_reduction ~table ~ids ~result
-      ~table_idcs:(fun k d -> [| Idx.Affine { symbols = [ (1, k) ]; offset = 0 }; Idx.Iterator d |])
+      ~table_idcs:(fun k d -> [| Idx.affine ~symbols:[ (2, k) ] ~offset:0; Idx.Iterator d |])
       ~vocab
       ~bounds:(0, vocab - 1)
       ~reversed:false ~use_mul:false

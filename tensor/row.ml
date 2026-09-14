@@ -4915,7 +4915,7 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
         | (0 | 1), None -> Idx.Fixed_idx 0
         | _ -> unknown_projection proj_id d)
     | Solved idx -> idx
-    | Conv_input { stride; over; conv = None; stride_offset; target_id = _ } -> (
+    | Conv_input { stride; over; conv = None; stride_offset; target_id = _ } ->
         (* Strided iteration: skip kernel computation since no convolution *)
         let over_idx = loop over in
         let symbols = ref [] in
@@ -4931,23 +4931,7 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
             offset := !offset + (stride * over_offset)
         | Idx.Concat syms -> symbols := List.map syms ~f:(fun s -> (stride, s)) @ !symbols);
 
-        (* Combine and simplify symbols *)
-        let symbols =
-          !symbols
-          |> List.filter ~f:(fun (c, _) -> c <> 0)
-          |> List.sort ~compare:(fun (_, s1) (_, s2) -> Idx.compare_symbol s1 s2)
-          |> List.group ~break:(fun (_, s1) (_, s2) -> not (Idx.equal_symbol s1 s2))
-          |> List.map ~f:(fun group ->
-              let s = snd (List.hd_exn group) in
-              let coeff = List.sum (module Int) group ~f:fst in
-              (coeff, s))
-          |> List.filter ~f:(fun (c, _) -> c <> 0)
-        in
-
-        match symbols with
-        | [] -> Idx.Fixed_idx !offset
-        | [ (1, s) ] when !offset = 0 -> Idx.Iterator s
-        | _ -> Idx.Affine { symbols; offset = !offset })
+        Idx.affine ~symbols:!symbols ~offset:!offset
     | Conv_input
         {
           stride;
@@ -4955,7 +4939,7 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
           conv = Some { dilation; kernel; kernel_size; use_padding };
           stride_offset;
           target_id;
-        } -> (
+        } ->
         let over_idx = loop over in
         let kernel_idx = loop kernel in
         let symbols = ref [] in
@@ -5042,23 +5026,7 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
           else !offset
         in
 
-        (* Combine and simplify symbols *)
-        let symbols =
-          !symbols
-          |> List.filter ~f:(fun (c, _) -> c <> 0)
-          |> List.sort ~compare:(fun (_, s1) (_, s2) -> Idx.compare_symbol s1 s2)
-          |> List.group ~break:(fun (_, s1) (_, s2) -> not (Idx.equal_symbol s1 s2))
-          |> List.map ~f:(fun group ->
-              let s = snd (List.hd_exn group) in
-              let coeff = List.sum (module Int) group ~f:fst in
-              (coeff, s))
-          |> List.filter ~f:(fun (c, _) -> c <> 0)
-        in
-
-        match symbols with
-        | [] -> Idx.Fixed_idx offset
-        | [ (1, s) ] when offset = 0 -> Idx.Iterator s
-        | _ -> Idx.Affine { symbols; offset })
+        Idx.affine ~symbols:!symbols ~offset
     | Var v when Hashtbl.mem proj_env.v_env v -> loop (Hashtbl.find_exn proj_env.v_env v)
     | Var v ->
         raise

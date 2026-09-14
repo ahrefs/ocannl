@@ -163,7 +163,7 @@ let make shape : prog =
   | Lane_private_guard ->
       let s, bindings = extent_symbol () in
       {
-        llc = nest (guard (lt (Idx.Affine { symbols = [ (1, r); (1, k) ]; offset = 0 }) s) per_row);
+        llc = nest (guard (lt (Idx.affine ~symbols:[ (1, r); (1, k) ] ~offset:0) s) per_row);
         materialized = [ out; x ];
         seed = seed_x;
         out;
@@ -399,8 +399,7 @@ let () =
                 cond =
                   ( LL.Binop
                       ( Ops.Cmplt,
-                        ( LL.Embed_index (Idx.Affine { symbols = [ (1, w); (1, k) ]; offset = 0 }),
-                          prec ),
+                        (LL.Embed_index (Idx.affine ~symbols:[ (1, w); (1, k) ] ~offset:0), prec),
                         (LL.Constant 1.0, prec) ),
                     prec );
                 body =

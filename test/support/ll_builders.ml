@@ -49,7 +49,7 @@ let iter s : Idx.axis_index = Idx.Iterator s
 let fixed n : Idx.axis_index = Idx.Fixed_idx n
 
 (** [aff terms offset] is the affine index [sum (coeff * symbol) + offset]. *)
-let aff terms offset : Idx.axis_index = Idx.Affine { symbols = terms; offset }
+let aff terms offset : Idx.axis_index = Idx.affine ~symbols:terms ~offset
 
 let set ?(debug = "") tn idcs llsc : LL.t = LL.Set { tn; idcs; llsc; debug }
 let get tn idcs : LL.scalar_t = LL.Get (tn, idcs)
