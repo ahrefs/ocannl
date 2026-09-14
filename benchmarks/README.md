@@ -457,6 +457,12 @@ benchmarks/.venv/bin/python benchmarks/gen_fixtures.py
 benchmarks/.venv/bin/python benchmarks/orchestrate.py
 ```
 
+A box that keeps one shared venv outside the checkout (the measurement boxes use
+`~/.venvs/ocannl-bench`) reaches it either by symlinking `benchmarks/.venv` to it or by exporting
+`BENCH_VENV_PY=~/.venvs/ocannl-bench/bin/python`; every driver (`orchestrate.py`, `gh675_cells.py`)
+resolves its interpreter through `bench_venv.py`, so the variable wins over the symlink, and a
+Windows venv's `Scripts/python.exe` is found without it.
+
 `gen_fixtures.py` rewrites `fixtures/DIGESTS.txt` for whatever it regenerates, under this box's
 origin. Review that diff before publishing numbers: a changed digest means the workload changed,
 and reports measured on either side of it are not comparable.

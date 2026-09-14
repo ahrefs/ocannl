@@ -32,21 +32,14 @@ import sys
 import time
 from pathlib import Path
 
+import bench_venv
 import fixture_digest
 import cell_group
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
-# BENCH_VENV_PY overrides the venv interpreter — for environments where benchmarks/.venv
-# is unusable (e.g. deep worktree paths hitting Windows MAX_PATH during torch install).
-VENV_PY = Path(
-    os.environ.get(
-        "BENCH_VENV_PY",
-        HERE / ".venv/Scripts/python.exe"
-        if (HERE / ".venv/Scripts/python.exe").exists()
-        else HERE / ".venv/bin/python",
-    )
-)
+# BENCH_VENV_PY overrides the venv interpreter; bench_venv owns the rule so drivers cannot drift.
+VENV_PY = bench_venv.venv_python(HERE)
 # BENCH_CELL_LOG_DIR: keep every cell's raw combined output under this directory, one file per
 # cell label. Unset (the default) discards a successful cell's output as before.
 CELL_LOG_DIR = (
