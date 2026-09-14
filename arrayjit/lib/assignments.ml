@@ -743,30 +743,44 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
     in
     let target_projections =
       Array.mapi projections.project_rhs ~f:(fun i project_lhs ->
-          let components =
+          (* Keep inactive symbols in the domain: removing one would make the source availability
+             proof mistake it for an always-available static parameter. *)
+          let selects_target =
             match selector with
-            | None -> projections.components
+            | None -> true
             | Some syms ->
-                Array.map projections.components ~f:(fun comp ->
-                    if List.exists comp ~f:(fun (_, s) -> Indexing.equal_symbol s syms.(i)) then
-                      List.filter comp ~f:(fun (_, s) -> Indexing.equal_symbol s syms.(i))
-                    else comp)
+                let selected = syms.(i) in
+                Array.exists project_lhs ~f:(Indexing.axis_index_mentions_symbol selected)
+                && Array.for_all projections.components ~f:(fun comp ->
+                    if List.exists comp ~f:(fun (_, s) -> Indexing.equal_symbol s selected) then
+                      let others =
+                        List.filter_map comp ~f:(fun (_, s) ->
+                            if Indexing.equal_symbol s selected then None else Some s)
+                      in
+                      not (Array.exists project_lhs ~f:(Indexing.axis_index_mentions_any others))
+                    else true)
           in
-          {
-            projections with
-            components;
-            lhs_dims = projections.rhs_dims.(i);
-            project_lhs;
-            rhs_dims = [| projections.lhs_dims |];
-            project_rhs = [| projections.project_lhs |];
-          })
+          if not selects_target then None
+          else
+            Some
+              {
+                projections with
+                lhs_dims = projections.rhs_dims.(i);
+                project_lhs;
+                rhs_dims = [| projections.lhs_dims |];
+                project_rhs = [| projections.project_lhs |];
+              })
     in
     let target_can_skip =
-      Array.map target_projections ~f:(fun proj -> can_skip_accumulation ~projections:proj)
+      Array.map target_projections ~f:(fun proj ->
+          Option.value_map proj ~default:false ~f:(fun projections ->
+              can_skip_accumulation ~projections))
     in
     let target_needs_init =
       Array.map target_projections ~f:(fun proj ->
-          initialize_neutral && not (Affine.is_surjective proj && Affine.is_injective proj))
+          initialize_neutral
+          && Option.value_map proj ~default:true ~f:(fun proj ->
+              not (Affine.is_surjective proj && Affine.is_injective proj)))
     in
     let target_tn_exn = function
       | Node tn -> tn

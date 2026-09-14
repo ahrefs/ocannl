@@ -313,3 +313,57 @@ let () =
   in
   run false "coverage_sparse_block";
   run true "coverage_sparse_reverse"
+
+let () =
+  let name = "coverage_dependent_reverse_selector" in
+  let run explicit_init =
+    let a = sym () and b = sym () in
+    let src = node [| 4; 2 |] (name ^ "_src") in
+    let dsts = Array.init 2 ~f:(fun k -> node [| 2 |] (name ^ Int.to_string k)) in
+    let projection =
+      {
+        (proj [| [ (2, a); (2, b) ] |] [| 4; 2 |] [| Idx.Concat [ a; b ]; Idx.Iterator b |]) with
+        rhs_dims = [| [| 2 |]; [| 2 |] |];
+        project_rhs = [| [| Idx.Iterator a |]; [| Idx.Iterator b |] |];
+      }
+    in
+    let scatter =
+      A.Accum_op
+        {
+          initialize_neutral = not explicit_init;
+          accum = Ir.Ops.Add;
+          lhs = src;
+          rhs = A.Rev_sides { op = Ir.Ops.Identity; lhses = Array.map dsts ~f:(fun n -> A.Node n) };
+          projections = lazy projection;
+          projections_debug = name;
+        }
+    in
+    let asgns =
+      if explicit_init then
+        Array.fold dsts ~init:scatter ~f:(fun rest dst ->
+            A.Seq (A.Fetch { array = dst; fetch_op = Constant 0.; dims = lazy [| 2 |] }, rest))
+      else scatter
+    in
+    let zeros = ref 0 in
+    Ll_test.walk (A.to_low_level asgns) ~on_stmt:(function
+      | LL.Zero_out tn when Tn.equal tn dsts.(0) -> Int.incr zeros
+      | _ -> ());
+    if not explicit_init then p (name ^ ": unavailable source retains initialization") (!zeros > 0);
+    let ctx = Context.auto () in
+    Stdio.eprintf "%s: backend=%s\n%!" name (Context.backend_name ctx);
+    let ctx = Context.set_values ctx src [| 11.; 12.; 21.; 22.; 31.; 32.; 41.; 42. |] in
+    let ctx =
+      Array.fold dsts ~init:ctx ~f:(fun ctx dst -> Context.set_values ctx dst [| 12345.; 12345. |])
+    in
+    let comp = { A.asgns; embedded_nodes = Set.of_array (module Tn) dsts } in
+    let ctx, routine =
+      Context.compile
+        ~name:(name ^ if explicit_init then "_reference" else "_candidate")
+        ctx comp Idx.Empty
+    in
+    let ctx = Context.run ctx routine in
+    Array.concat_map dsts ~f:(Context.get_values ctx)
+  in
+  let actual = run false and reference = run true in
+  p_all2 (name ^ ": executed selected values") actual [| 0.; 0.; 31.; 42. |] ~f:Float.equal;
+  p_all2 (name ^ ": explicit initialization agrees") actual reference ~f:Float.equal

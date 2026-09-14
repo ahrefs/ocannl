@@ -52,3 +52,6 @@ coverage_sparse_block: elision agrees with explicit initialization: true
 coverage_sparse_reverse: initialization decision: true
 coverage_sparse_reverse: executed values match the enumerated scatter: true
 coverage_sparse_reverse: elision agrees with explicit initialization: true
+coverage_dependent_reverse_selector: unavailable source retains initialization: true
+coverage_dependent_reverse_selector: executed selected values: true
+coverage_dependent_reverse_selector: explicit initialization agrees: true

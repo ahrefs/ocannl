@@ -354,6 +354,8 @@ files.
   address coverage from component extents, sharing the arithmetic-progression image proof with
   access coverage. Repeated symbols remain correlated; complete concat components are cumulative
   coordinates. A bounded segment-choice proof also requires a viable RHS for every target block;
-  `Rev_sides` target queries carry the actual read map and selector-restricted domain. Static/runtime
+  `Rev_sides` target queries carry the actual read map and retain inactive iterator identities.
+  A selector target must select only its own segment before coverage can elide initialization;
+  deleting other segments would misclassify unavailable source iterators as static. Static/runtime
   extents, mixed slice/whole concat coordinates and proof-arithmetic overflow decline. `test/operations/affine_surjectivity.ml` checks finite images and executed
   scatters against explicit neutral initialization.
