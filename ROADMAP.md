@@ -205,7 +205,7 @@ Quantization (#137, #271), the WebGPU/WASM target (#123), the LLVM backend (#200
 ---
 
 ## v1.0.2 — September 16, 2026
-**Theme: Robustness pulled forward; deduplicate the compiler paths v1.1 will extend**
+**Theme: Robustness and compiler elegance through shared structure**
 
 The milestone had **55 open issues before the September 14 rebalance**. The sequencing plan
 is useful for dependencies and placement, but its work-wave queue need not delay the performance
@@ -225,21 +225,23 @@ in #659 (which covered through #658); merged work is unreleased until the next t
   (#908/#931/#968/#973), shared IR builders (#954), and restored Windows CI setup (#935).
   These improve release verification; they do not close the remaining analysis gaps.
 
-**Retain eight enabling issues in v1.0.2, then start v1.1.**
+**Retain eight compiler-structure and coverage issues in v1.0.2, then start v1.1.**
 
-Deduplication is useful preparation when the feature work would otherwise extend several copies
-of the same semantics. Keep that work before v1.1, without turning the entire 55-issue backlog
-into prerequisites. The September 16 cut is soft; prioritize this bounded preparation set and
-protect the early-November v1.2 anchor if it takes longer. Do not add a separate v1.0.3 detour.
+Compiler-side deduplication is retained for the intrinsic value of a simpler, more elegant
+implementation: one expression of a shared idea, with differences made explicit. Easier feature
+work is a hoped-for consequence, not a benefit that must be demonstrated before this work earns
+its place. Testing-side refactorings and the wider consolidation backlog move after v1.1.
+The September 16 cut is soft; keep this set bounded and protect the early-November v1.2 anchor
+if it takes longer. Do not add a separate v1.0.3 detour.
 
-| Retain | Benefit to the coming feature work |
-|--------|-----------------------------------|
-| #770 + #794 | Share CUDA/HIP syntax configuration and the backend compile driver; prove the actual vendor arms compile while changing them. Direct preparation for MMA and other backend work. |
-| #630 | Share evaluated-operand, guard and dead-code traversal semantics before adding more recurrence/rewrite analyses for attention and materialization. |
-| #656 + #917 | Share the duplicated C builtin implementations and the precision enumeration used by renderers/tests, reducing repeated edits in mixed-precision work. |
-| #774 | Centralize affine normalization and enforce its invariant before extending convolution and tiling. Prioritize that foundation; judge the issue's broader surjectivity improvement by its measured benefit. |
-| #604 | Unify configuration precedence so profile work need not maintain several resolution paths. |
-| #875 | Share the shuffle-stage description between code generation and its simulator so reduction changes cannot silently leave the discrimination tests modelling a different tree. |
+| Retain | Structural improvement |
+|--------|------------------------|
+| #770 + #794 | Express the common CUDA/HIP syntax and backend compilation structure once, with backend differences explicit; #794 supplies actual vendor-arm compile coverage for that refactoring. |
+| #630 | Express evaluated-operand, guard and dead-code traversal semantics in a shared IR fold rather than reconstructing them in each walker. |
+| #656 + #917 | Give shared C builtins and the renderer/test precision enumeration one source of truth. |
+| #774 | Centralize affine normalization and enforce its invariant; put the issue's surjectivity reasoning on a principled footing. |
+| #604 | Express configuration precedence through one resolver, with bootstrap differences represented as arguments. |
+| #875 | Give the shuffle-stage sequence one renderer-owned description, also consumed by its simulator. Like #917, this spans implementation and tests rather than refactoring test infrastructure alone. |
 
 The Assignments leaf-type split (#818) stays deferred until a new leaf constructor needs it;
 its issue explicitly names that trigger. Scanner resolution, harness deduplication and report
@@ -249,12 +251,12 @@ plumbing remain after v1.1 unless an experiment exposes an immediate need.
 
 | Destination | Issues | Why / when to work them |
 |-------------|--------|------------------------|
-| v1.0.2, compiler preparation (8) | #770, #794, #630, #656, #917, #774, #604, #875 | The bounded deduplication and compile-coverage set above. |
+| v1.0.2, compiler elegance and coverage (8) | #770, #794, #630, #656, #917, #774, #604, #875 | The bounded deduplication and compile-coverage set above. |
 | v1.1, alongside affected experiments (5) | #963, #975, #833, #834, #922 | Scheduling legality, candidate ownership, timing-objective evidence and calibration accounting support the work v1.1 will exercise. They are not a five-issue entrance exam: take each with the feature or measurement that needs it. |
 | v1.1, lower-priority performance evidence (2) | #594, #819 | Per-device cache identity and cache-hit benefit measurement fit the performance theme. Neither blocks the single-GPU fleet's initial experiments. |
 | v1.1.2 (2) | #793, #777 | Explicit persistent optimizer state and computed-value observability support the training/debugging experience. The current SGD materialization fix is already landed. |
 | v1.1.1, trigger-gated (2) | #695, #966 | PPX migration depends on the upstream AST release; legacy-lock deletion follows its retirement trigger, with October 10 the sequencing plan's proposed date. |
-| v1.1.1, post-performance consolidation (24) | #603, #607, #609, #625, #641, #642, #660, #672, #678, #705, #707, #778, #797, #798, #799, #818, #907, #910, #911, #913, #914, #915, #916, #920 | Scanner, renderer, diagnostics and harness consolidation. Known mechanisms and workarounds are adequate to start v1.1; do not do these merely because the next wave can absorb them. |
+| v1.1.1, post-performance consolidation (24) | #603, #607, #609, #625, #641, #642, #660, #672, #678, #705, #707, #778, #797, #798, #799, #818, #907, #910, #911, #913, #914, #915, #916, #920 | Scanner and harness refactoring, diagnostics and remaining IR/API work. Renderer/backend deduplication itself is retained in v1.0.2. |
 | v1.1.1 (12 more) | #928, #929, #940, #596, #926, #919, #921, #932, #942, #946, #918, #934 | Symbolic-extent/API guard work, evidence meta-checks, historical report provenance and tooling/docs improvements. Pull a bounded fix forward only if a chosen v1.1 workload actually depends on it. |
 
 The concrete boundary matters. #928 → #929 concerns symbolic-extent semantics and gradients;
@@ -323,11 +325,11 @@ exposes its cost, rather than treating the entire robustness queue as prerequisi
 ## v1.1.1 — October 10, 2026
 **Theme: Consolidation after the performance work**
 
-The 38 deferred issues from v1.0.2 are listed in the redistribution table above. Their priority
-should reflect what v1.1 implementation and measurements actually found costly: renderer and
-backend duplication, scanner maintenance, diagnostics, stable goldens and test tooling. This
-is a bounded consolidation period, not a gate requiring every issue to close before consumers
-or v1.2 can proceed. The PPX migration (#695) remains upstream-release-gated; legacy-lock
+The 38 deferred issues from v1.0.2 are listed in the redistribution table above: testing-side
+refactorings, scanner maintenance, diagnostics, stable goldens, test tooling and remaining IR/API
+work. Renderer and backend deduplication stays in v1.0.2, motivated by compiler elegance. The
+v1.1 experience can inform the ordering of this later queue. This is a bounded consolidation
+period, not a gate requiring every issue to close before consumers or v1.2 can proceed. The PPX migration (#695) remains upstream-release-gated; legacy-lock
 retirement (#966) reaches its proposed October 10 trigger at this milestone's target.
 
 ---
@@ -409,7 +411,7 @@ seven heterogeneous issue numbers is not its acceptance criterion.
 | **0.9** | Aug 3, 2026 | **released** | **Schedule quality, deterministic parallelism, mixed precision, convolution performance, and search survivability** |
 | **1.0** | Aug 13, 2026 | **released** | **Branch-and-bound schedule inference, inlining as a searchable decision, graph capture, software pipelining, rematerialization, CPU reduced precision, and the 2x `gpt2_mini` step** |
 | **1.0.1** | Aug 26, 2026 | **released** | **Consolidation after v1.0** (planned as "v1.1"): search follow-through, inlining and reduction soundness, test and benchmark seams that cannot report a false pass, and the training-loop mechanics |
-| 1.0.2  | Sep 16, 2026 | planned | Landed robustness plus eight compiler-deduplication/coverage issues that prepare v1.1 |
+| 1.0.2  | Sep 16, 2026 | planned | Landed robustness plus eight compiler-structure/coverage issues, motivated by elegance |
 | 1.1    | Oct 2, 2026 | planned | Performance-chasing in the approximate profile, demonstrated on benchmarks: fleet acceptance of the landed `approximate` preset, fused attention and Winograd, the exact-numerics residue, and the benchmark legs that expose wins and losses |
 | 1.1.1  | Oct 10, 2026 | planned | Post-performance consolidation: the 38 deferred issues, prioritized by v1.1 experience |
 | 1.1.2  | Oct 18, 2026 | planned | Consumers and explorations: models, reproductions, demos, integrations, and the training experience |
