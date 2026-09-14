@@ -13,6 +13,16 @@ module Tn = Tnode
 
 type t = PPrint.document
 
+(** Ordered XOR lane masks for one warp-shuffle reduction phase. The renderer and numeric reference
+    models consume the same association (gh-ocannl-875). [width] is the active power-of-two prefix,
+    either the warp width or the number of staged warp partials; a singleton needs no shuffle. Each
+    stage combines a lane with [lane lxor mask] simultaneously. *)
+let warp_shuffle_stages ~width =
+  if width <= 0 || not (Int.is_pow2 width) then
+    invalid_arg "warp_shuffle_stages: width must be a positive power of two";
+  let rec halvings mask = if mask = 0 then [] else mask :: halvings (mask / 2) in
+  halvings (width / 2)
+
 (* gh-ocannl-344: integer width of the Metal pooled slot table (pool_index, byte_offset per node).
    With [large_models] the per-pool 4 GB cap is lifted (see {!Backends.plan_pool_segments}), so a
    byte offset can exceed [UINT32_MAX] and the slot table -- together with the MSL type the shader
@@ -6309,7 +6319,6 @@ module C_syntax (B : C_syntax_config) = struct
           let cast = "(" ^ String.strip B.loop_index_type ^ ")" in
           let vname = "wred_v_" ^ ident ^ "__" in
           let combine a b = B.binop_syntax prec op a b in
-          let rec halvings n = if n < 1 then [] else n :: halvings (n / 2) in
           let shuffle_stage off =
             string (vname ^ " = ")
             ^^ combine (string vname) (string (Printf.sprintf "ocannl_shfl_xor(%s, %d)" vname off))
@@ -6357,7 +6366,8 @@ module C_syntax (B : C_syntax_config) = struct
                              (Printf.sprintf "if (%s < %d) { %s = %s[%s]; }" ident num_warps vname
                                 pname ident)
                         ^^ hardline
-                        ^^ separate hardline (List.map (halvings (num_warps / 2)) ~f:shuffle_stage)
+                        ^^ separate hardline
+                             (List.map (warp_shuffle_stages ~width:num_warps) ~f:shuffle_stage)
                         ^^ hardline ^^ fold_total)
                    ^^ hardline ^^ rbrace)
               ^^ hardline ^^ barrier
@@ -6385,7 +6395,7 @@ module C_syntax (B : C_syntax_config) = struct
                  ^^ (if PPrint.is_empty local_defs then empty else local_defs ^^ hardline)
                  ^^ string (ctyp ^ " " ^ vname ^ " = ")
                  ^^ contrib_doc ^^ semi ^^ hardline
-                 ^^ separate hardline (List.map (halvings (warp / 2)) ~f:shuffle_stage)
+                 ^^ separate hardline (List.map (warp_shuffle_stages ~width:warp) ~f:shuffle_stage)
                  ^^ hardline ^^ tail)
             ^^ hardline ^^ rbrace)
   (* gh-ocannl-639 / gh-ocannl-693: the plain-serial fallback of a reduction nest holds its
