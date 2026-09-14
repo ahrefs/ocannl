@@ -393,3 +393,19 @@
   arrayjit.verdict
   ctypes
   ctypes.foreign))
+
+(test
+ ; ocannl-backend: none -- tests the common source driver with an injected compiler callback.
+ (name test_backend_compile_driver)
+ (package arrayjit)
+ (modules test_backend_compile_driver)
+ (deps ocannl_config)
+ (libraries base pprint arrayjit.ir arrayjit.verdict))
+
+(test
+ ; ocannl-backend: none -- tests the live CUDA/HIP scalar descriptors without optional runtimes.
+ (name test_cuda_like_config)
+ (package arrayjit)
+ (modules test_cuda_like_config)
+ (deps ocannl_config)
+ (libraries base pprint arrayjit.ir arrayjit.verdict))

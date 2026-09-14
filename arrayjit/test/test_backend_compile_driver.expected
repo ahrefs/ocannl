@@ -1,0 +1,16 @@
+vendor headers follow real identifier and namespace tokens: true
+longer identifiers comments and literals cannot inject vendor headers: true
+qualified tokens match across spaces and comments: true
+a commented include cannot suppress a required header: true
+direct compiler preparation is idempotent: true
+builtin dependencies retain declaration order: true
+builtin decoys share the vendor token scan: true
+single compiler receives the sanitized emitted symbol once: true
+single compile returns the original compiler-owned object: true
+static parameters retain binding order: true
+batch compiles one source and shares compiler ownership: true
+batch artifact uses the trimmed common prefix: true
+batch metadata preserves routine order: true
+batch source preserves procedure order: true
+compiler failure crosses the driver without replacing its identity: true
+failure context appends the exact effective option vector: true

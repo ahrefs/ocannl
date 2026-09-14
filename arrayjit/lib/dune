@@ -100,7 +100,8 @@
   backend_intf
   backend_impl
   compiler_options
-  c_syntax)
+  c_syntax
+  cuda_like_config)
  (modes best))
 
 (library

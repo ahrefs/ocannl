@@ -1289,61 +1289,30 @@ module Impl = struct
       Stdio.prerr_endline error_msg;
       failwith error_msg
 
-  (* The simdgroup-matrix types and functions are declared in <metal_simdgroup_matrix>.
-     <metal_stdlib> is the umbrella header and pulls them in on current toolchains (the tensorized
-     parity tests compile and run against it alone), but the dedicated header is the documented
-     home, so inject it into kernels that emit the intrinsics — and only those, keeping every other
-     kernel's source byte-identical (PR #101 review; mirrors [cuda_to_ptx]'s <mma.h> injection). *)
-  let maybe_include_simdgroup_matrix source =
-    if String.is_substring source ~substring:"simdgroup_load" then
-      "#include <metal_simdgroup_matrix>\n" ^ source
-    else source
+  module Compile = C_syntax.Compile_driver (C_syntax_config)
+
+  let metal_includes = {|#include <metal_stdlib>
+using namespace metal;|}
+
+  let conditional_includes = [ ("simdgroup_load", "#include <metal_simdgroup_matrix>") ]
+
+  (* Metal compiles at link time, when a device is available. Retain source here. *)
+  let compile_source ~name:_ source = source
 
   let compile ~name bindings lowered =
-    let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
-      let procs = [| lowered.Low_level.llc |]
-    end))
+    let metal_source, kparams, func_name, launch =
+      Compile.compile ~name bindings lowered ~includes:metal_includes
+        ~builtins:Builtins_metal.builtins ~conditional_includes ~compile_source ()
     in
-    (* gh-ocannl-686: normalize the user-supplied routine name into a legal MSL identifier ONCE,
-       here, so the emitted symbol, [new_function_with_name] and the [.metal] artifact agree. *)
-    let name = Syntax.kernel_ident name in
-    let idx_params = Indexing.bound_symbols bindings in
-    (* Add Metal address space qualifiers *)
-    let kparams, proc_doc, launch = Syntax.compile_proc ~name idx_params lowered in
-    let metal_includes = {|#include <metal_stdlib>
-using namespace metal;|} in
-    let source =
-      maybe_include_simdgroup_matrix
-      @@ Syntax.filter_and_prepend_builtins ~routine_names:[ name ] ~includes:metal_includes
-           ~builtins:Builtins_metal.builtins ~proc_doc
-    in
-    { metal_source = source; func_name = name; kparams; bindings; launch }
+    { metal_source; func_name; kparams; bindings; launch }
 
   let compile_batch ~names bindings lowereds =
-    let module Syntax = C_syntax.C_syntax (C_syntax_config (struct
-      let procs = Array.map lowereds ~f:(fun l -> l.Low_level.llc)
-    end))
+    let metal_source, entries =
+      Compile.compile_batch ~names bindings lowereds ~includes:metal_includes
+        ~builtins:Builtins_metal.builtins ~conditional_includes ~compile_source ()
     in
-    (* gh-ocannl-686: normalize the user-supplied routine name into a legal MSL identifier ONCE,
-       here, so the emitted symbol, [new_function_with_name] and the [.metal] artifact agree. *)
-    let names = Array.map names ~f:Syntax.kernel_ident in
-    let idx_params = Indexing.bound_symbols bindings in
-    let funcs_and_docs =
-      Array.map2_exn names lowereds ~f:(fun name lowered ->
-          let kparams, doc, launch = Syntax.compile_proc ~name idx_params lowered in
-          ((name, kparams, launch), doc))
-    in
-    let all_proc_docs = List.map (Array.to_list funcs_and_docs) ~f:snd in
-    let final_doc = PPrint.(separate hardline all_proc_docs) in
-    let metal_includes = {|#include <metal_stdlib>
-using namespace metal;|} in
-    let source =
-      maybe_include_simdgroup_matrix
-      @@ Syntax.filter_and_prepend_builtins ~routine_names:(Array.to_list names)
-           ~includes:metal_includes ~builtins:Builtins_metal.builtins ~proc_doc:final_doc
-    in
-    let funcs = Array.map funcs_and_docs ~f:fst in
-    { metal_source = source; funcs; bindings }
+    let funcs = Array.map entries ~f:(fun (kparams, name, launch) -> (name, kparams, launch)) in
+    { metal_source; funcs; bindings }
 
   (* gh-ocannl-344: from the routine's materialized nodes, assign each distinct pool an index (first
      use order), build the [(pool_index, byte_offset)] slot table (one [uint] pair per node,

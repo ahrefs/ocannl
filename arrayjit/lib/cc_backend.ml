@@ -1193,61 +1193,28 @@ let compilation_copy ~name (build_file : Utils.build_file_channel) filtered_code
     tmp)
   else build_file.f_path
 
-let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized) : procedure =
-  let module Syntax = C_syntax.C_syntax (CC_syntax_config (struct
-    let procs = [| lowered.Low_level.llc |]
-  end))
-  in
-  (* gh-ocannl-686: normalize the user-supplied routine name into a legal C identifier ONCE, here,
-     so the emitted symbol, the [dlsym] below and the [.c] artifact all name the same thing. *)
-  let name = Syntax.kernel_ident name in
-  let idx_params = Indexing.bound_symbols bindings in
-  let build_file = Utils.open_build_file ~base_name:name ~extension:".c" in
-  (* Launch dims are ignored: the C backends render annotated loops as serial [for] loops (legal
-     absent barriers, which [pp_ll] rejects via [barrier_syntax = None]). *)
-  let kparams, proc_doc, _launch = Syntax.compile_proc ~name idx_params lowered in
-  let filtered_code =
-    Syntax.filter_and_prepend_builtins ~routine_names:[ name ] ~includes:Builtins_cc.includes
-      ~builtins:Builtins_cc.builtins ~proc_doc
-  in
-  (* Use ribbon = 1.0 for usual code formatting, width 110 *)
-  Out_channel.output_string build_file.oc filtered_code;
-  build_file.finalize ();
+module Compile = C_syntax.Compile_driver (CC_syntax_config)
 
-  let result_library =
-    c_compile_and_load ~f_path:(compilation_copy ~name build_file filtered_code)
+let compile_source ~name source =
+  let build_file = Utils.open_build_file ~base_name:name ~extension:".c" in
+  Out_channel.output_string build_file.oc source;
+  build_file.finalize ();
+  c_compile_and_load ~f_path:(compilation_copy ~name build_file source)
+
+let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized) : procedure =
+  let result, kparams, name, _launch =
+    Compile.compile ~name bindings lowered ~includes:Builtins_cc.includes
+      ~builtins:Builtins_cc.builtins ~compile_source ()
   in
-  { result = result_library; kparams; bindings; name }
+  { result; kparams; bindings; name }
 
 let%diagn_sexp compile_batch ~names bindings (lowereds : Low_level.optimized array) :
     procedure array =
-  let module Syntax = C_syntax.C_syntax (CC_syntax_config (struct
-    let procs = Array.map lowereds ~f:(fun l -> l.Low_level.llc)
-  end))
+  let result, entries =
+    Compile.compile_batch ~names bindings lowereds ~includes:Builtins_cc.includes
+      ~builtins:Builtins_cc.builtins ~compile_source ()
   in
-  (* gh-ocannl-686: as in [compile] — mangle before anything derives a file name or a symbol. *)
-  let names = Array.map names ~f:Syntax.kernel_ident in
-  (* FIXME: do we really want all of them, or only the used ones? *)
-  let idx_params = Indexing.bound_symbols bindings in
-  let base_name = String.(strip ~drop:(equal_char '_') @@ common_prefix (Array.to_list names)) in
-  let build_file = Utils.open_build_file ~base_name ~extension:".c" in
-  let params_and_docs =
-    Array.map2_exn names lowereds ~f:(fun name lowered ->
-        Syntax.compile_proc ~name idx_params lowered)
-  in
-  let all_proc_docs = List.map (Array.to_list params_and_docs) ~f:(fun (_, doc, _) -> doc) in
-  let combined_proc_doc = PPrint.separate PPrint.hardline all_proc_docs in
-  let filtered_code =
-    Syntax.filter_and_prepend_builtins ~routine_names:(Array.to_list names)
-      ~includes:Builtins_cc.includes ~builtins:Builtins_cc.builtins ~proc_doc:combined_proc_doc
-  in
-  Out_channel.output_string build_file.oc filtered_code;
-  build_file.finalize ();
-  let result_library =
-    c_compile_and_load ~f_path:(compilation_copy ~name:base_name build_file filtered_code)
-  in
-  Array.mapi params_and_docs ~f:(fun i (kparams, _doc, _launch) ->
-      { result = result_library; kparams; bindings; name = names.(i) })
+  Array.map entries ~f:(fun (kparams, name, _launch) -> { result; kparams; bindings; name })
 
 let%track3_sexp link_compiled ?lowered_bindings ~merge_buffer ~resolve ~runner_label ctx_buffers
     (code : procedure) =

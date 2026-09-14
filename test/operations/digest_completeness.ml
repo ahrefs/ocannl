@@ -47,6 +47,7 @@ let codegen_stage_modules =
     "c_syntax.ml";
     "cc_backend.ml";
     "cuda_backend.ml";
+    "cuda_like_config.ml";
     "hip_backend.ml";
     "metal_backend.ml";
     "schedule_cache.ml";

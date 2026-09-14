@@ -1,6 +1,6 @@
 Sources scanned: arrayjit/lib, benchmarks/runners/ocannl, bin, lib, tensor, tools
 Cache-key components (Schedule_cache.key_components): digest, backend, numerics, codegen, pool, timing
-Keys read at codegen (c_syntax.ml, cc_backend.ml, cuda_backend.ml, hip_backend.ml, metal_backend.ml, schedule_cache.ml): 30
+Keys read at codegen (c_syntax.ml, cc_backend.ml, cuda_backend.ml, cuda_like_config.ml, hip_backend.ml, metal_backend.ml, schedule_cache.ml): 30
 
 aggregate -- picks the values other keys take; each of those carries its own classification
   no_config_file
