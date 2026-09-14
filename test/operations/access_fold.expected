@@ -1,0 +1,21 @@
+projection discards its unrendered scope body: true
+structural policy includes discarded operands: true
+second projection selects only its second operand: true
+every binop follows the operator classifier: true
+guard read precedes conditional operands and hoisted scope reads: true
+scope hoisting clears operand gating but preserves statement guard: true
+direct Where arm remains gated: true
+guard policy can suppress statement context: true
+gated skip is explicit subtree pruning: true
+scope policy skips bodies: true
+structural dead reads register without becoming live: true
+dead-loop skip omits only the dead body: true
+dynamic index reads precede gather read and final scatter write: true
+scan init precedes body update and trailing implicit rotation: true
+scan implicit policy retains only explicit body assignments: true
+scan init reads remain visible when implicit statements are skipped: true
+live scope census propagates scan update symbols through rotation: true
+loop bounds sees scalar-position loops: true
+statement-local census excludes assignments instantiated inside scopes: true
+tile footprint comes from fallback: true
+pruning an opaque construct skips descendants: true

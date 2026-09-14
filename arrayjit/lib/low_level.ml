@@ -255,6 +255,144 @@ and carried = { prev : scope_id; next : scope_id; init : scalar_t }
     [prev := next] after each iteration, [prev := init] before the first. Both ids name the same
     virtual node, whose precision is the state's precision. *)
 
+(** Ordered analysis of Low_level IR. This is not a rewriting or execution engine. *)
+module Access_fold = struct
+  type visit = Visit | Skip
+  type guards = Track | Ignore
+  type implicit = Explicit | Scan_init | Scan_rotate
+
+  type policy = {
+    discarded_operands : visit;
+    gated_operands : visit;
+    dead_loops : visit;
+    local_scopes : visit;
+    guards : guards;
+    scan_implicit : visit;
+  }
+
+  type context = {
+    live : bool;
+    guards : scalar_arg list;
+    gated : bool;
+    scope_depth : int;
+    implicit : implicit;
+  }
+
+  type 'a descent = Continue of 'a | Prune of 'a
+
+  type 'a hooks = {
+    statement : context -> 'a -> t -> 'a descent;
+    scalar : context -> 'a -> scalar_t -> 'a descent;
+    after_statement : context -> 'a -> t -> 'a;
+    after_scalar : context -> 'a -> scalar_t -> 'a;
+  }
+
+  let hooks () =
+    {
+      statement = (fun _ acc _ -> Continue acc);
+      scalar = (fun _ acc _ -> Continue acc);
+      after_statement = (fun _ acc _ -> acc);
+      after_scalar = (fun _ acc _ -> acc);
+    }
+
+  let initial = { live = true; guards = []; gated = false; scope_depth = 0; implicit = Explicit }
+
+  let fold ~policy ~hooks ~init code =
+    let rec stmt ctx acc code =
+      match hooks.statement ctx acc code with
+      | Prune acc -> acc
+      | Continue acc ->
+          let acc =
+            match code with
+            | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _
+            | Zero_out _ ->
+                acc
+            | Seq (a, b) -> stmt ctx (stmt ctx acc a) b
+            | For_loop { from_; to_; body; _ } -> loop ctx acc ~from_ ~to_ body
+            | Scan_loop { from_; to_; carried; body; _ } -> (
+                let acc =
+                  List.fold carried ~init:acc ~f:(fun acc c ->
+                      match policy.scan_implicit with
+                      | Visit ->
+                          stmt { ctx with implicit = Scan_init } acc (Set_local (c.prev, c.init))
+                      | Skip -> scalar ctx acc c.init)
+                in
+                let acc = loop ctx acc ~from_ ~to_ body in
+                match policy.scan_implicit with
+                | Skip -> acc
+                | Visit ->
+                    List.fold carried ~init:acc ~f:(fun acc c ->
+                        stmt
+                          { ctx with implicit = Scan_rotate; live = ctx.live && to_ >= from_ }
+                          acc
+                          (Set_local (c.prev, Get_local c.next))))
+            | If { cond; body } ->
+                let acc = scalar ctx acc (fst cond) in
+                let ctx =
+                  match policy.guards with
+                  | Track -> { ctx with guards = cond :: ctx.guards }
+                  | Ignore -> ctx
+                in
+                stmt ctx acc body
+            | Tile_mma { fallback; _ } -> stmt ctx acc fallback
+            | Set { llsc; _ } | Set_local (_, llsc) -> scalar ctx acc llsc
+            | Set_from_vec { arg; _ } -> scalar ctx acc (fst arg)
+            | Set_dynamic { dyn_value; llsc; _ } -> scalar ctx (scalar ctx acc (fst dyn_value)) llsc
+          in
+          hooks.after_statement ctx acc code
+    and loop ctx acc ~from_ ~to_ body =
+      if to_ < from_ && Poly.equal policy.dead_loops Skip then acc
+      else stmt { ctx with live = ctx.live && to_ >= from_ } acc body
+    and scalar ctx acc code =
+      match hooks.scalar ctx acc code with
+      | Prune acc -> acc
+      | Continue acc ->
+          let acc =
+            match code with
+            | Constant _ | Constant_bits _ | Embed_index _ | Get_local _ | Get _
+            | Get_merge_buffer _ ->
+                acc
+            | Get_dynamic { dyn_value; _ } -> scalar ctx acc (fst dyn_value)
+            | Local_scope { body; _ } -> (
+                match policy.local_scopes with
+                | Skip -> acc
+                | Visit ->
+                    (* Scope definitions are hoisted out of scalar conditionals, but remain inside
+                       enclosing statement guards. Discarded operands never reach this point unless
+                       the caller explicitly requested structural traversal. *)
+                    stmt { ctx with scope_depth = ctx.scope_depth + 1; gated = false } acc body)
+            | Unop (_, a) -> scalar ctx acc (fst a)
+            | Binop (op, a, b) ->
+                let first, second =
+                  match Ops.binop_conditionality op with
+                  | Ops.Both_operands -> (`Always, `Always)
+                  | Ops.Gated_second -> (`Always, `Gated)
+                  | Ops.Only_first -> (`Always, `Discarded)
+                  | Ops.Only_second -> (`Discarded, `Always)
+                in
+                operand ctx (operand ctx acc first a) second b
+            | Ternop (op, a, b, c) ->
+                let rest =
+                  match Ops.ternop_conditionality op with
+                  | Ops.All_three -> `Always
+                  | Ops.Cond_and_one_arm -> `Gated
+                in
+                operand ctx (operand ctx (scalar ctx acc (fst a)) rest b) rest c
+          in
+          hooks.after_scalar ctx acc code
+    and operand ctx acc kind arg =
+      match kind with
+      | `Always -> scalar ctx acc (fst arg)
+      | `Discarded -> (
+          match policy.discarded_operands with Skip -> acc | Visit -> scalar ctx acc (fst arg))
+      | `Gated -> (
+          match policy.gated_operands with
+          | Skip -> acc
+          | Visit -> scalar { ctx with gated = true } acc (fst arg))
+    in
+    stmt initial init code
+end
+
 (* gh-563: the one canonical rendering of lowered code, shared by both digest consumers —
    [analysis_digest] (the analysis cache, consulted inside [optimize]) and
    [Schedule_cache.canonicalize] (schedule replay across sessions). The walk is the same for both:
@@ -1487,42 +1625,37 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_
    shared-loop stored body carries SIBLING setters that [inline_computation] filters out, so only
    [self]'s own setters' right-hand sides (and shared control scalars — [If] conditions — which
    inlining keeps) can taint (review round 6). *)
-let rec computation_reads_merge ~self : t -> bool = function
-  | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Zero_out _ ->
-      false
-  | Seq (c1, c2) -> computation_reads_merge ~self c1 || computation_reads_merge ~self c2
-  (* A dead loop's body replays zero times: no taint from it (review round 10), mirroring
-     [drop_dead_loop_accesses] and the fan-in collector's dead-loop skip. *)
-  | For_loop { from_; to_; body; _ } -> to_ >= from_ && computation_reads_merge ~self body
-  | Scan_loop { from_; to_; carried; body; _ } ->
-      List.exists carried ~f:(fun c -> scalar_reads_merge_buffer ~self c.init)
-      || (to_ >= from_ && computation_reads_merge ~self body)
-  | Set { tn; llsc; _ } -> Tn.equal tn self && scalar_reads_merge_buffer ~self llsc
-  | Set_local (_, llsc) -> scalar_reads_merge_buffer ~self llsc
-  | Set_from_vec { tn; arg = s, _; _ } -> Tn.equal tn self && scalar_reads_merge_buffer ~self s
-  | Set_dynamic { tn; dyn_value = v, _; llsc; _ } ->
-      Tn.equal tn self && (scalar_reads_merge_buffer ~self v || scalar_reads_merge_buffer ~self llsc)
-  | If { cond = c0, _; body } ->
-      scalar_reads_merge_buffer ~self c0 || computation_reads_merge ~self body
-  | Tile_mma { fallback; _ } -> computation_reads_merge ~self fallback
-
-and scalar_reads_merge_buffer ~self : scalar_t -> bool = function
-  | Constant _ | Constant_bits _ | Embed_index _ | Get_local _ | Get _ -> false
-  | Get_merge_buffer _ -> true
-  | Get_dynamic { dyn_value = v, _; _ } -> scalar_reads_merge_buffer ~self v
-  | Local_scope { body; _ } -> computation_reads_merge ~self body
-  | Ternop (_, (a, _), (b, _), (d, _)) ->
-      scalar_reads_merge_buffer ~self a || scalar_reads_merge_buffer ~self b
-      || scalar_reads_merge_buffer ~self d
-  | Binop (op, (a, _), (b, _)) -> (
-      (* A projection's discarded operand is never rendered, hence never reads anything: it must not
-         taint (review round 3). A gated second operand may evaluate, so it counts. *)
-      match Ops.binop_conditionality op with
-      | Ops.Only_first -> scalar_reads_merge_buffer ~self a
-      | Ops.Only_second -> scalar_reads_merge_buffer ~self b
-      | Ops.Both_operands | Ops.Gated_second ->
-          scalar_reads_merge_buffer ~self a || scalar_reads_merge_buffer ~self b)
-  | Unop (_, (a, _)) -> scalar_reads_merge_buffer ~self a
+let computation_reads_merge ~self code =
+  let open Access_fold in
+  let policy =
+    {
+      discarded_operands = Skip;
+      gated_operands = Visit;
+      dead_loops = Skip;
+      local_scopes = Visit;
+      guards = Ignore;
+      scan_implicit = Skip;
+    }
+  in
+  let hooks =
+    {
+      (hooks ()) with
+      statement =
+        (fun _ found stmt ->
+          if found then Prune found
+          else
+            match stmt with
+            | (Set { tn; _ } | Set_dynamic { tn; _ } | Set_from_vec { tn; _ })
+              when not (Tn.equal tn self) ->
+                Prune found
+            | _ -> Continue found);
+      scalar =
+        (fun _ found scalar ->
+          if found then Prune found
+          else match scalar with Get_merge_buffer _ -> Prune true | _ -> Continue found);
+    }
+  in
+  fold ~policy ~hooks ~init:false code
 
 let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
     (optim_ctx : optimize_ctx) (traced : traced_array)
@@ -2159,48 +2292,30 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
      records: the nested [Get] routes through the same arm while the local setter is processed for
      storage. *)
   let spliced_reads = Hash_set.create (module Tnode) in
-  let rec record_spliced_reads (c : t) =
-    match c with
-    | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Zero_out _ ->
-        ()
-    | Seq (c1, c2) ->
-        record_spliced_reads c1;
-        record_spliced_reads c2
-    | For_loop { body; _ } -> record_spliced_reads body
-    | Scan_loop { carried; body; _ } ->
-        List.iter carried ~f:(fun c -> record_spliced_scalar c.init);
-        record_spliced_reads body
-    | Set { llsc; _ } | Set_local (_, llsc) -> record_spliced_scalar llsc
-    | Set_from_vec { arg = sc, _; _ } -> record_spliced_scalar sc
-    | Set_dynamic { dyn_value = v, _; llsc; _ } ->
-        record_spliced_scalar v;
-        record_spliced_scalar llsc
-    | If { cond = c0, _; body } ->
-        record_spliced_scalar c0;
-        record_spliced_reads body
-    | Tile_mma { fallback; _ } -> record_spliced_reads fallback
-  and record_spliced_scalar (sc : scalar_t) =
-    match sc with
-    | Constant _ | Constant_bits _ | Embed_index _ | Get_local _ | Get_merge_buffer _ -> ()
-    | Get (tn, _) -> Hash_set.add spliced_reads tn
-    | Get_dynamic { tn; dyn_value = v, _; _ } ->
-        Hash_set.add spliced_reads tn;
-        record_spliced_scalar v
-    | Local_scope { body; _ } -> record_spliced_reads body
-    | Ternop (_, (a, _), (b, _), (d, _)) ->
-        record_spliced_scalar a;
-        record_spliced_scalar b;
-        record_spliced_scalar d
-    | Binop (op, (a, _), (b, _)) -> (
-        (* A projection's discarded operand is never evaluated: its reads are not spliced (review
-           round 8) — same dispatch as the reconcile and merge-taint walkers. *)
-        match Ops.binop_conditionality op with
-        | Ops.Only_first -> record_spliced_scalar a
-        | Ops.Only_second -> record_spliced_scalar b
-        | Ops.Both_operands | Ops.Gated_second ->
-            record_spliced_scalar a;
-            record_spliced_scalar b)
-    | Unop (_, (a, _)) -> record_spliced_scalar a
+  let record_spliced_reads code =
+    let open Access_fold in
+    let policy =
+      {
+        discarded_operands = Skip;
+        gated_operands = Visit;
+        dead_loops = Visit;
+        local_scopes = Visit;
+        guards = Ignore;
+        scan_implicit = Skip;
+      }
+    in
+    let hooks =
+      {
+        (hooks ()) with
+        scalar =
+          (fun _ () sc ->
+            (match sc with
+            | Get (tn, _) | Get_dynamic { tn; _ } -> Hash_set.add spliced_reads tn
+            | _ -> ());
+            Continue ());
+      }
+    in
+    fold ~policy ~hooks ~init:() code
   in
   (* The entry-time snapshot of merge-tainted deferred computations: everything in the table at this
      point was stored by an earlier routine of the lineage (this routine's own computations are
@@ -4903,46 +5018,30 @@ let input_and_output_nodes optimized =
 (** All [For_loop] bindings within [llc] (loop symbols are unique within a routine), with inclusive
     iteration bounds — the box environment for {!Affine} queries over the routine's accesses. *)
 let loop_bounds (llc : t) : (Indexing.symbol * (int * int)) list =
-  let acc = ref [] in
-  let rec go = function
-    | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Zero_out _ ->
-        ()
-    | Seq (a, b) ->
-        go a;
-        go b
-    | For_loop { index; from_; to_; body; _ } ->
-        acc := (index, (from_, to_)) :: !acc;
-        go body
-    | Scan_loop { index; from_; to_; carried; body; _ } ->
-        (* gh-ocannl-696: the scan index bounds its body's accesses like a loop index does; what
-           differs about a scan is the order its values are produced in, not their footprint. *)
-        acc := (index, (from_, to_)) :: !acc;
-        List.iter carried ~f:(fun c -> go_sc c.init);
-        go body
-    | If { cond = c, _; body } ->
-        go_sc c;
-        go body
-    | Tile_mma { fallback; _ } -> go fallback
-    | Set { llsc; _ } | Set_local (_, llsc) -> go_sc llsc
-    | Set_dynamic { dyn_value = v, _; llsc; _ } ->
-        go_sc v;
-        go_sc llsc
-    | Set_from_vec { arg = a, _; _ } -> go_sc a
-  and go_sc = function
-    | Local_scope { body; _ } -> go body
-    | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
-    | Get_dynamic { dyn_value = v, _; _ } -> go_sc v
-    | Ternop (_, (a, _), (b, _), (c, _)) ->
-        go_sc a;
-        go_sc b;
-        go_sc c
-    | Binop (_, (a, _), (b, _)) ->
-        go_sc a;
-        go_sc b
-    | Unop (_, (a, _)) -> go_sc a
+  let open Access_fold in
+  let policy =
+    {
+      discarded_operands = Visit;
+      gated_operands = Visit;
+      dead_loops = Visit;
+      local_scopes = Visit;
+      guards = Ignore;
+      scan_implicit = Skip;
+    }
   in
-  go llc;
-  List.rev !acc
+  let hooks =
+    {
+      (hooks ()) with
+      statement =
+        (fun _ acc stmt ->
+          Continue
+            (match stmt with
+            | For_loop { index; from_; to_; _ } | Scan_loop { index; from_; to_; _ } ->
+                (index, (from_, to_)) :: acc
+            | _ -> acc));
+    }
+  in
+  List.rev (fold ~policy ~hooks ~init:[] llc)
 
 (* Loop symbols a scalar expression's value depends on, syntactically, resolving scalar scope-locals
    through [locals] — accumulated per-scope-id assignment symbols (see {!scope_value_syms}). *)
@@ -5006,53 +5105,29 @@ let scope_value_syms (llc : t) : (int, Indexing.symbol list) Hashtbl.t =
       Hashtbl.set locals ~key:id.scope_id ~data:merged;
       changed := true)
   in
-  let rec stmt ~depth (llc : t) =
-    match llc with
-    | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Zero_out _ ->
-        ()
-    | Seq (a, b) ->
-        stmt ~depth a;
-        stmt ~depth b
-    | For_loop { body; _ } -> stmt ~depth body
-    | Scan_loop { carried; body; _ } ->
-        (* gh-ocannl-696: [prev] is assigned by the init and, through the rotation, by [next] --
-           recorded as the two statement-level assignments they are, so a value routed through the
-           carried state keeps the symbols the body's update depends on. *)
-        List.iter carried ~f:(fun c ->
-            if depth = 0 then (
-              record c.prev c.init;
-              record c.prev (Get_local c.next));
-            scalar ~depth c.init);
-        stmt ~depth body
-    | If { cond = c, _; body } ->
-        scalar ~depth c;
-        stmt ~depth body
-    | Set_local (id, llsc) ->
-        if depth = 0 then record id llsc;
-        scalar ~depth llsc
-    | Set { llsc; _ } -> scalar ~depth llsc
-    | Set_dynamic { dyn_value = v, _; llsc; _ } ->
-        scalar ~depth v;
-        scalar ~depth llsc
-    | Set_from_vec { arg = a, _; _ } -> scalar ~depth a
-    | Tile_mma { fallback; _ } -> stmt ~depth fallback
-  and scalar ~depth (llsc : scalar_t) =
-    match llsc with
-    | Local_scope { body; _ } -> stmt ~depth:(depth + 1) body
-    | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ | Get _ -> ()
-    | Get_dynamic { dyn_value = v, _; _ } -> scalar ~depth v
-    | Ternop (_, (a, _), (b, _), (c, _)) ->
-        scalar ~depth a;
-        scalar ~depth b;
-        scalar ~depth c
-    | Binop (_, (a, _), (b, _)) ->
-        scalar ~depth a;
-        scalar ~depth b
-    | Unop (_, (a, _)) -> scalar ~depth a
+  let open Access_fold in
+  let policy =
+    {
+      discarded_operands = Visit;
+      gated_operands = Visit;
+      dead_loops = Visit;
+      local_scopes = Skip;
+      guards = Ignore;
+      scan_implicit = Visit;
+    }
+  in
+  let hooks =
+    {
+      (hooks ()) with
+      statement =
+        (fun _ () stmt ->
+          (match stmt with Set_local (id, llsc) -> record id llsc | _ -> ());
+          Continue ());
+    }
   in
   while !changed do
     changed := false;
-    stmt ~depth:0 llc
+    fold ~policy ~hooks ~init:() llc
   done;
   locals
 
@@ -6661,26 +6736,27 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
        [Local_scope] bodies hoist to statement level and execute unconditionally — both [Where]
        arms' bodies really run — so their reads join [stmt], while directly conditional arm
        expressions collect into fresh [cur] sinks maxed by the [Cond_and_one_arm] case. *)
-    let rec reads_of_proc ~self acc (c : t) =
-      match c with
-      | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Zero_out _
-        ->
-          acc
-      | Tile_mma _ -> acc (* post-optimization construct; never in stored computations *)
-      | Seq (c1, c2) -> reads_of_proc ~self (reads_of_proc ~self acc c1) c2
-      | For_loop { from_; to_; body; _ } ->
-          (* A dead loop ([to_ < from_]) replays zero times: charge nothing, mirroring
-             [trace_node_facts] (which records no facts from dead-loop bodies). *)
-          if to_ >= from_ then reads_of_proc ~self acc body else acc
-      | Scan_loop { from_; to_; carried; body; _ } ->
-          let acc = List.fold carried ~init:acc ~f:(fun acc c -> scalar_into ~self acc c.init) in
-          if to_ >= from_ then reads_of_proc ~self acc body else acc
-      | Set { llsc; _ } -> scalar_into ~self acc llsc
-      | Set_dynamic { dyn_value = v, _; llsc; _ } ->
-          scalar_into ~self (scalar_into ~self acc v) llsc
-      | Set_from_vec { arg = v, _; _ } -> scalar_into ~self acc v
-      | Set_local (_, llsc) -> scalar_into ~self acc llsc
-      | If { cond = c0, _; body } -> reads_of_proc ~self (scalar_into ~self acc c0) body
+    let rec reads_of_proc ~self acc code =
+      let open Access_fold in
+      let policy =
+        {
+          discarded_operands = Skip;
+          gated_operands = Visit;
+          dead_loops = Skip;
+          local_scopes = Visit;
+          guards = Ignore;
+          scan_implicit = Skip;
+        }
+      in
+      let hooks =
+        {
+          (hooks ()) with
+          statement =
+            (fun _ acc stmt -> match stmt with Tile_mma _ -> Prune acc | _ -> Continue acc);
+          scalar = (fun _ acc sc -> Prune (scalar_into ~self acc sc));
+        }
+      in
+      fold ~policy ~hooks ~init:acc code
     and scalar_into ~self acc v =
       let stmt, cur = reads_of_scalar ~self (acc, Set.empty (module Tnode)) v in
       Set.union stmt cur
@@ -6919,81 +6995,58 @@ let reconcile_traced_store (plc : Tn.Placements.t) (traced_store : traced_store)
       Hash_set.add written_seen tn;
       if not (Hashtbl.mem traced_store tn) then Hash_set.add fresh_written tn)
   in
-  let rec proc ~live (c : t) =
-    match c with
-    | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ -> ()
-    | Seq (c1, c2) ->
-        proc ~live c1;
-        proc ~live c2
-    | For_loop { from_; to_; body; _ } -> proc ~live:(live && to_ >= from_) body
-    | Scan_loop { from_; to_; carried; body; _ } ->
-        List.iter carried ~f:(fun c -> scalar ~live c.init);
-        proc ~live:(live && to_ >= from_) body
-    | Zero_out tn -> written ~live tn
-    | Set { tn; llsc; _ } ->
-        scalar ~live llsc;
-        written ~live tn
-    | Set_from_vec { tn; arg = s, _; _ } ->
-        scalar ~live s;
-        written ~live tn
-    | Set_dynamic { tn; dyn_value = v, _; llsc; _ } ->
-        scalar ~live v;
-        scalar ~live llsc;
-        written ~live tn
-    | Set_local (_, llsc) -> scalar ~live llsc
-    | If { cond = c0, _; body } ->
-        scalar ~live c0;
-        proc ~live body
-    (* Pre-schedule construct, unreachable here; defensively scan the semantically-equivalent
-       fallback. *)
-    | Tile_mma { fallback; _ } -> proc ~live fallback
-  and scalar ~live (sc : scalar_t) =
-    match sc with
-    | Constant _ | Constant_bits _ | Embed_index _ | Get_local _ -> ()
-    | Get_merge_buffer (source, _) ->
-        (* Dead merge reads mirror the raw tracer's dead-body skip (review round 9): the read never
-           executes, so it neither validates against the declared merge node nor keeps the
-           declaration alive. The SOURCE deliberately does not enter [accessed] in either case: the
-           merge buffer is the parameter, and an ordinary traced entry for the source would mint a
-           duplicate buffer through [C_syntax.compile_proc]/[allocate_delta] — the raw tracer
-           records only [merge_node] (review round 5). *)
-        if live then (
-          (match merge_node with
-          | Some m when Tn.equal m source -> ()
-          | _ ->
-              raise
-                (Utils.User_error
-                   [%string
-                     "an inlined cross-routine computation reads the merge buffer of \
-                      %{Tn.debug_name source}, which is not this routine's declared merge node: \
-                      merge-buffer contents are transient to the routine receiving the transfer, \
-                      so a computation reading them must not be deferred across routines. Mark the \
-                      node computed from the merge buffer as materialized (e.g. via \
-                      Train.set_materialized) in the routine that reads the transfer."]));
-          uses_merge := true)
-    | Get (tn, _) -> read ~live tn
-    | Get_dynamic { tn; dyn_value = v, _; _ } ->
-        scalar ~live v;
-        read ~live tn
-    | Local_scope { body; _ } -> proc ~live body
-    | Ternop (_, (a, _), (b, _), (d, _)) ->
-        scalar ~live a;
-        scalar ~live b;
-        scalar ~live d
-    | Binop (op, (a, _), (b, _)) -> (
-        (* The discarded operand of a projection is never rendered, hence never evaluated:
-           registering its reads would invent phantom parameters — dispatch through the operand
-           conditionality classifier like the affine and tracing walkers (review round 3). A gated
-           second operand IS rendered, so it registers. *)
-        match Ops.binop_conditionality op with
-        | Ops.Only_first -> scalar ~live a
-        | Ops.Only_second -> scalar ~live b
-        | Ops.Both_operands | Ops.Gated_second ->
-            scalar ~live a;
-            scalar ~live b)
-    | Unop (_, (a, _)) -> scalar ~live a
+  let open Access_fold in
+  let policy =
+    {
+      discarded_operands = Skip;
+      gated_operands = Visit;
+      dead_loops = Visit;
+      local_scopes = Visit;
+      guards = Track;
+      scan_implicit = Skip;
+    }
   in
-  proc ~live:true llc;
+  let hooks =
+    {
+      (hooks ()) with
+      after_statement =
+        (fun ctx () stmt ->
+          match stmt with
+          | Zero_out tn | Set { tn; _ } | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } ->
+              written ~live:ctx.live tn
+          | _ -> ());
+      after_scalar =
+        (fun ctx () sc ->
+          let live = ctx.live in
+          match sc with
+          | Get_merge_buffer (source, _) ->
+              (* Dead merge reads mirror the raw tracer's dead-body skip (review round 9): the read
+                 never executes, so it neither validates against the declared merge node nor keeps
+                 the declaration alive. The SOURCE deliberately does not enter [accessed] in either
+                 case: the merge buffer is the parameter, and an ordinary traced entry for the
+                 source would mint a duplicate buffer through
+                 [C_syntax.compile_proc]/[allocate_delta] — the raw tracer records only [merge_node]
+                 (review round 5). *)
+              if live then (
+                (match merge_node with
+                | Some m when Tn.equal m source -> ()
+                | _ ->
+                    raise
+                      (Utils.User_error
+                         [%string
+                           "an inlined cross-routine computation reads the merge buffer of \
+                            %{Tn.debug_name source}, which is not this routine's declared merge \
+                            node: merge-buffer contents are transient to the routine receiving the \
+                            transfer, so a computation reading them must not be deferred across \
+                            routines. Mark the node computed from the merge buffer as materialized \
+                            (e.g. via Train.set_materialized) in the routine that reads the \
+                            transfer."]));
+                uses_merge := true)
+          | Get (tn, _) | Get_dynamic { tn; _ } -> read ~live tn
+          | _ -> ());
+    }
+  in
+  fold ~policy ~hooks ~init:() llc;
   let final_accs = lazy (drop_dead_loop_accesses (affine_accesses llc)) in
   (* Reads that follow a write of their node in program order: whether the write actually covers
      them is a per-cell, guard-aware question, answered by the same query that judged the raw reads.
@@ -7137,53 +7190,34 @@ let hosted_constant_inits_to_link_time (plc : Tn.Placements.t) (traced_store : t
     if eligible tn then
       Hashtbl.update candidates tn ~f:(function None -> ok | Some prev -> prev && ok)
   in
-  let rec scan_scalar (sc : scalar_t) =
-    match sc with
-    | Constant _ | Constant_bits _ | Embed_index _ | Get_local _ | Get_merge_buffer _ -> ()
-    | Get (tn, _) -> Hash_set.add reads tn
-    | Get_dynamic { tn; dyn_value = v, _; _ } ->
-        Hash_set.add reads tn;
-        scan_scalar v
-    | Local_scope { body; _ } -> scan body
-    | Ternop (_, (a, _), (b, _), (d, _)) ->
-        scan_scalar a;
-        scan_scalar b;
-        scan_scalar d
-    | Binop (_, (a, _), (b, _)) ->
-        scan_scalar a;
-        scan_scalar b
-    | Unop (_, (a, _)) -> scan_scalar a
-  and scan (c : t) =
-    match c with
-    | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ -> ()
-    | Seq (c1, c2) ->
-        scan c1;
-        scan c2
-    | For_loop { body; _ } -> scan body
-    | Scan_loop { carried; body; _ } ->
-        List.iter carried ~f:(fun c -> scan_scalar c.init);
-        scan body
-    | If { cond = c0, _; body } ->
-        scan_scalar c0;
-        scan body
-    | Set_local (_, llsc) -> scan_scalar llsc
-    | Zero_out tn -> note_write tn true
-    | Set { tn; llsc; _ } ->
-        scan_scalar llsc;
-        note_write tn (match llsc with Constant _ -> true | _ -> false)
-    | Set_dynamic { tn; dyn_value = v, _; llsc; _ } ->
-        scan_scalar v;
-        scan_scalar llsc;
-        note_write tn false
-    | Set_from_vec { tn; arg = a, _; _ } ->
-        scan_scalar a;
-        note_write tn false
-    (* Pre-schedule construct, unreachable here; defensively treat the target as disqualified. *)
-    | Tile_mma { d = tn, _; fallback; _ } ->
-        scan fallback;
-        note_write tn false
+  let open Access_fold in
+  let policy =
+    {
+      discarded_operands = Visit;
+      gated_operands = Visit;
+      dead_loops = Visit;
+      local_scopes = Visit;
+      guards = Ignore;
+      scan_implicit = Skip;
+    }
   in
-  scan llc;
+  let hooks =
+    {
+      (hooks ()) with
+      after_scalar =
+        (fun _ () sc ->
+          match sc with Get (tn, _) | Get_dynamic { tn; _ } -> Hash_set.add reads tn | _ -> ());
+      after_statement =
+        (fun _ () stmt ->
+          match stmt with
+          | Zero_out tn -> note_write tn true
+          | Set { tn; llsc; _ } -> note_write tn (match llsc with Constant _ -> true | _ -> false)
+          | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } | Tile_mma { d = tn, _; _ } ->
+              note_write tn false
+          | _ -> ());
+    }
+  in
+  fold ~policy ~hooks ~init:() llc;
   let hosted =
     Hashtbl.fold candidates ~init:[] ~f:(fun ~key:tn ~data:ok acc ->
         if ok && Hash_set.mem reads tn && Tn.Placements.is_materialized_peek plc tn then tn :: acc
