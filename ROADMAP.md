@@ -22,7 +22,7 @@ This roadmap outlines the development plan for OCANNL through version 1.0 and be
 >
 > **Dating (September 7, 2026):** the post-1.0.1 ladder is dated again, aspirationally. v1.2 targets **October 28, 2026**, and the milestones before it split the interval from September 7 by the scope their version depth signals (a feature release counts twice a third-component release, so 1 : 2 : 1 : 2 — issue counts were rejected as the weight, since v1.0.2's are review-filed follow-ups and the later milestones' are design spaces): **v1.0.2 September 16, v1.1 October 3, v1.1.1 October 11**. These are end-of-period targets rather than commitments; the GitHub milestone due dates then carried the same values.
 >
-> **Rebalance (September 14, 2026):** close v1.0.2 on landed work and start performance work promptly. The deferred consolidation becomes **v1.1.1**, and the former consumers milestone becomes **v1.1.2**. Working backward from **November 3** for v1.2 gives **October 18** for consumers, **October 10** for consolidation and **October 2** for v1.1, after **September 16** for v1.0.2. The 48 days after that cut split 16 : 8 : 8 : 16 (feature : consolidation : consumers : feature), preserving the scope weighting used in September. These are soft end-of-period targets, not requirements to empty each milestone; protect the early-November anchor by reducing scope when necessary.
+> **Rebalance (September 14, 2026):** finish v1.0.2 with a bounded compiler-deduplication set, then start performance work promptly. The deferred consolidation becomes **v1.1.1**, and the former consumers milestone becomes **v1.1.2**. Working backward from **November 3** for v1.2 gives **October 18** for consumers, **October 10** for consolidation and **October 2** for v1.1, after **September 16** for v1.0.2. The 48 days after that cut split 16 : 8 : 8 : 16 (feature : consolidation : consumers : feature), preserving the scope weighting used in September. These are soft end-of-period targets, not requirements to empty each milestone; protect the early-November anchor by reducing scope when necessary.
 >
 > The version sequence is: `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.2`. Milestone *scope* below tracks the GitHub milestones, which are the source of truth. The September 14 rebalance below supersedes the September 7 dates and adds a consolidation milestone after v1.1.
 
@@ -205,7 +205,7 @@ Quantization (#137, #271), the WebGPU/WASM target (#123), the LLVM backend (#200
 ---
 
 ## v1.0.2 — September 16, 2026
-**Theme: Robustness pulled forward; close consolidation and start v1.1**
+**Theme: Robustness pulled forward; deduplicate the compiler paths v1.1 will extend**
 
 The milestone had **55 open issues before the September 14 rebalance**. The sequencing plan
 is useful for dependencies and placement, but its work-wave queue need not delay the performance
@@ -225,23 +225,36 @@ in #659 (which covered through #658); merged work is unreleased until the next t
   (#908/#931/#968/#973), shared IR builders (#954), and restored Windows CI setup (#935).
   These improve release verification; they do not close the remaining analysis gaps.
 
-**Finish v1.0.2 with the work already landed, then start v1.1.**
+**Retain eight enabling issues in v1.0.2, then start v1.1.**
 
-Do not turn its 55 remaining issues into another pre-performance wave. None should stay a
-v1.0.2 blocker solely because it is a correctness issue, an unmeasured claim or a worthwhile
-cleanup: prioritize whether it actually obstructs the next performance experiment. Ordinary
-verification of the tag still applies, but broadening that verification is not the goal of this
-release. A new v1.0.3 before v1.1 would preserve the delay under a different number.
+Deduplication is useful preparation when the feature work would otherwise extend several copies
+of the same semantics. Keep that work before v1.1, without turning the entire 55-issue backlog
+into prerequisites. The September 16 cut is soft; prioritize this bounded preparation set and
+protect the early-November v1.2 anchor if it takes longer. Do not add a separate v1.0.3 detour.
+
+| Retain | Benefit to the coming feature work |
+|--------|-----------------------------------|
+| #770 + #794 | Share CUDA/HIP syntax configuration and the backend compile driver; prove the actual vendor arms compile while changing them. Direct preparation for MMA and other backend work. |
+| #630 | Share evaluated-operand, guard and dead-code traversal semantics before adding more recurrence/rewrite analyses for attention and materialization. |
+| #656 + #917 | Share the duplicated C builtin implementations and the precision enumeration used by renderers/tests, reducing repeated edits in mixed-precision work. |
+| #774 | Centralize affine normalization and enforce its invariant before extending convolution and tiling. Prioritize that foundation; judge the issue's broader surjectivity improvement by its measured benefit. |
+| #604 | Unify configuration precedence so profile work need not maintain several resolution paths. |
+| #875 | Share the shuffle-stage description between code generation and its simulator so reduction changes cannot silently leave the discrimination tests modelling a different tree. |
+
+The Assignments leaf-type split (#818) stays deferred until a new leaf constructor needs it;
+its issue explicitly names that trigger. Scanner resolution, harness deduplication and report
+plumbing remain after v1.1 unless an experiment exposes an immediate need.
 
 **September 14 disposition of all 55 remaining issues:**
 
 | Destination | Issues | Why / when to work them |
 |-------------|--------|------------------------|
-| v1.1, alongside affected experiments (6) | #963, #975, #833, #834, #922, #794 | Scheduling legality, candidate ownership, timing-objective evidence, calibration accounting and real vendor-arm compilation support the work v1.1 will exercise. They are not a six-issue entrance exam: take each with the feature or measurement that needs it. |
+| v1.0.2, compiler preparation (8) | #770, #794, #630, #656, #917, #774, #604, #875 | The bounded deduplication and compile-coverage set above. |
+| v1.1, alongside affected experiments (5) | #963, #975, #833, #834, #922 | Scheduling legality, candidate ownership, timing-objective evidence and calibration accounting support the work v1.1 will exercise. They are not a five-issue entrance exam: take each with the feature or measurement that needs it. |
 | v1.1, lower-priority performance evidence (2) | #594, #819 | Per-device cache identity and cache-hit benefit measurement fit the performance theme. Neither blocks the single-GPU fleet's initial experiments. |
 | v1.1.2 (2) | #793, #777 | Explicit persistent optimizer state and computed-value observability support the training/debugging experience. The current SGD materialization fix is already landed. |
 | v1.1.1, trigger-gated (2) | #695, #966 | PPX migration depends on the upstream AST release; legacy-lock deletion follows its retirement trigger, with October 10 the sequencing plan's proposed date. |
-| v1.1.1, post-performance consolidation (31) | #603, #604, #607, #609, #625, #630, #641, #642, #656, #660, #672, #678, #705, #707, #770, #774, #778, #797, #798, #799, #818, #875, #907, #910, #911, #913, #914, #915, #916, #917, #920 | Scanner, renderer, diagnostics and harness consolidation. Known mechanisms and workarounds are adequate to start v1.1; do not do these merely because the next wave can absorb them. |
+| v1.1.1, post-performance consolidation (24) | #603, #607, #609, #625, #641, #642, #660, #672, #678, #705, #707, #778, #797, #798, #799, #818, #907, #910, #911, #913, #914, #915, #916, #920 | Scanner, renderer, diagnostics and harness consolidation. Known mechanisms and workarounds are adequate to start v1.1; do not do these merely because the next wave can absorb them. |
 | v1.1.1 (12 more) | #928, #929, #940, #596, #926, #919, #921, #932, #942, #946, #918, #934 | Symbolic-extent/API guard work, evidence meta-checks, historical report provenance and tooling/docs improvements. Pull a bounded fix forward only if a chosen v1.1 workload actually depends on it. |
 
 The concrete boundary matters. #928 → #929 concerns symbolic-extent semantics and gradients;
@@ -256,13 +269,13 @@ Within v1.1, #963's Metal device-memory fence is already fixed; the remaining ba
 analysis matters when new schedules cross its boundary. Establish legality for the schedules a
 feature proposes, using a conservative refusal where necessary, instead of front-loading a
 general analysis. #975 is a suspected callback-cleanup gap, not a measured leak: investigate it
-when exercising tuning callbacks. #794's real select-arm compile checks belong with vendor
-backend edits; hosted Metal CI evaluation (#942) need not precede them. #833/#834 should share
+when exercising tuning callbacks. #794's real select-arm compile checks accompany #770 in
+v1.0.2; hosted Metal CI evaluation (#942) need not precede them. #833/#834 should share
 measurement sessions with the performance work, and #922 belongs with calibration consumers.
 
-The redistribution leaves **38 open issues in v1.1, 45 in the new v1.1.1, 17 in the
-renamed v1.1.2 and seven in v1.2**, with none remaining open in v1.0.2. The new consolidation
-milestone is a queue to prioritize after performance work, not a promise to clear all 45 issues.
+The redistribution leaves **eight open issues in v1.0.2, 37 in v1.1, 38 in the new v1.1.1,
+17 in the renamed v1.1.2 and seven in v1.2**. The new consolidation milestone is a queue to
+prioritize after performance work, not a promise to clear all 38 issues.
 This rebalance does not cut a release or close the v1.0.2 milestone; tagging remains separate.
 
 ---
@@ -310,7 +323,7 @@ exposes its cost, rather than treating the entire robustness queue as prerequisi
 ## v1.1.1 — October 10, 2026
 **Theme: Consolidation after the performance work**
 
-The 45 deferred issues from v1.0.2 are listed in the redistribution table above. Their priority
+The 38 deferred issues from v1.0.2 are listed in the redistribution table above. Their priority
 should reflect what v1.1 implementation and measurements actually found costly: renderer and
 backend duplication, scanner maintenance, diagnostics, stable goldens and test tooling. This
 is a bounded consolidation period, not a gate requiring every issue to close before consumers
@@ -396,9 +409,9 @@ seven heterogeneous issue numbers is not its acceptance criterion.
 | **0.9** | Aug 3, 2026 | **released** | **Schedule quality, deterministic parallelism, mixed precision, convolution performance, and search survivability** |
 | **1.0** | Aug 13, 2026 | **released** | **Branch-and-bound schedule inference, inlining as a searchable decision, graph capture, software pipelining, rematerialization, CPU reduced precision, and the 2x `gpt2_mini` step** |
 | **1.0.1** | Aug 26, 2026 | **released** | **Consolidation after v1.0** (planned as "v1.1"): search follow-through, inlining and reduction soundness, test and benchmark seams that cannot report a false pass, and the training-loop mechanics |
-| 1.0.2  | Sep 16, 2026 | planned cut on landed work | End the consolidation cycle and start v1.1; move all 55 remaining issues by relevance to performance work |
+| 1.0.2  | Sep 16, 2026 | planned | Landed robustness plus eight compiler-deduplication/coverage issues that prepare v1.1 |
 | 1.1    | Oct 2, 2026 | planned | Performance-chasing in the approximate profile, demonstrated on benchmarks: fleet acceptance of the landed `approximate` preset, fused attention and Winograd, the exact-numerics residue, and the benchmark legs that expose wins and losses |
-| 1.1.1  | Oct 10, 2026 | planned | Post-performance consolidation: the 45 deferred issues, prioritized by v1.1 experience |
+| 1.1.1  | Oct 10, 2026 | planned | Post-performance consolidation: the 38 deferred issues, prioritized by v1.1 experience |
 | 1.1.2  | Oct 18, 2026 | planned | Consumers and explorations: models, reproductions, demos, integrations, and the training experience |
 | 1.2    | Nov 3, 2026 | planned; theme refinement proposed | Standalone ArrayJIT, session transactions and shape schemes; PoPE and hardware features optional |
 
