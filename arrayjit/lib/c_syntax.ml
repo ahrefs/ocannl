@@ -1098,21 +1098,9 @@ let extract_idents s =
   done;
   !result
 
-(** The precisions a backend's renderers are exercised over -- by {!op_syntax_idents} and by
-    {!operand_conditionality_violations}. The operator sweeps use [Ops]' derived enumerations
-    ([Ops.all_of_binop] and friends), so a newly added operator joins both checks automatically;
-    [Ops.prec] cannot be derived the same way -- its constructors carry the phantom-typed
-    [precision] witness -- so the exhaustive match below stands in for it: adding a precision is a
-    build error here, and the fix is to extend this list (or to leave the precision out
-    deliberately, as [Void_prec] is, since every renderer rejects it). *)
-let all_precs =
-  Ops.[ byte; uint16; int32; uint32; int64; uint64; uint4x32; half; bfloat16; fp8; single; double ]
-
-let _all_precs_is_complete : Ops.prec -> unit = function
-  | Void_prec | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
-  | Uint64_prec _ | Uint4x32_prec _ | Half_prec _ | Bfloat16_prec _ | Fp8_prec _ | Single_prec _
-  | Double_prec _ ->
-      ()
+(** Compatibility alias for the Ops-owned storage-bearing precision enumeration. Includes packed RNG
+    state, excludes void; both renderer sweeps share {!Ops.storage_precs}. *)
+let all_precs = Ops.storage_precs
 
 (** Every function and type name a backend's operator rendering can emit, obtained by rendering each
     (precision, operator) pair over a placeholder operand and harvesting the identifiers.

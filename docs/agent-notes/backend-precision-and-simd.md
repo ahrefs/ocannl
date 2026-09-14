@@ -1348,3 +1348,10 @@ files.
   nothing meaningful — load, launcher, concurrency — so do not chase the correlation. To reproduce
   deterministically, put the short block at the top of a fresh minor heap: `Gc.minor (); let a =
   Array.make 1 0 in <call>`. That turns a 3-in-5 flake into 5-in-5 (`test/operations/uint4x32_stub_bounds.ml`).
+
+- `Ops.all_precs` owns canonical precision witnesses (gh-ocannl-917); its exhaustive sentinel
+  makes a new constructor require an enumeration decision beside the list. `Ops.prec_family`
+  separates scalar integers, scalar floats, packed `uint4x32` RNG state, and value-less void;
+  bf16/fp8 remain floats despite integer host storage. Whole-family tests derive from
+  `Ops.scalar_precs` / `Ops.integer_precs` / `Ops.float_precs`, while C-family renderer sweeps
+  use `Ops.storage_precs`, which includes packed state and excludes void.
