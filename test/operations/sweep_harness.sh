@@ -29,7 +29,7 @@ on_error() {
     local_identity_error unsafe_identity_error only_typo_error matrix_error state_first state_same \
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
     capped capped_target remote_opt_in serial_red serial_clean serial_two_inline \
-    serial_many_inline serial_control; do
+    serial_many_inline serial_control lanes after_cancel; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
   done
@@ -61,7 +61,8 @@ absent() {
 unset SWEEP_TEST_CALLS SWEEP_TEST_WAIT_PREFIX SWEEP_TEST_OPAM_RC \
   SWEEP_TEST_OPAM_OUT SWEEP_TEST_OPAM_OUT_CC SWEEP_TEST_OPAM_OUT_MULTIDEV_CC \
   SWEEP_TEST_OPAM_OUT_METAL SWEEP_TEST_LOCAL_BOX SWEEP_TEST_JOBS \
-  SWEEP_TEST_OPAM_SERIAL_RED SWEEP_TEST_OPAM_OUT_SERIAL SWEEP_TEST_SSH_CALLS
+  SWEEP_TEST_OPAM_SERIAL_RED SWEEP_TEST_OPAM_OUT_SERIAL SWEEP_TEST_SSH_CALLS \
+  SWEEP_TEST_SSH_MODE SWEEP_TEST_OWN_GROUP SWEEP_TEST_WAIT_TICKS
 
 sweep=$1
 aggregate=$2
@@ -88,6 +89,12 @@ state=$tmp/state
 fake_bin=$tmp/bin
 calls=$tmp/opam.calls
 ssh_calls=$tmp/ssh.calls
+# Every fixture wait in this file -- the fake opam's hold, the fake ssh's
+# release and hang, and the harness's own readiness checks -- is bounded by
+# this many 50ms ticks. Each wait ends as soon as its condition holds, so the
+# bound is paid only by a run that is already failing; it is generous so that a
+# loaded CI runner starting a nested sweep slowly is not mistaken for one.
+wait_ticks=2400
 mkdir -p "$state/logs" "$fake_bin"
 
 git init -q --bare "$origin"
@@ -137,17 +144,33 @@ esac
 # Stands in for what a test run writes to the unit's log. The common output
 # drives failure-fingerprint coverage; the per-backend outputs let the skip
 # aggregation controls distinguish an intersection from a union without GPUs.
+# A fixture that arms the wait prefix also gets two witnesses of the lanes
+# contract (sweep.sh's run_lane): this process's pid, which the cancellation
+# controls check is gone once the sweep returns, and an exclusivity marker a
+# second concurrent call on the local worktree cannot take -- local units run
+# one at a time, so an overlap is a red unit rather than a silent pass. The
+# marker is released on TERM too, which is how a cancelled unit ends.
+if [ -n "${SWEEP_TEST_WAIT_PREFIX:-}" ]; then
+  printf '%s\n' "$$" >>"$SWEEP_TEST_WAIT_PREFIX.opam-pids"
+  if ! mkdir "$SWEEP_TEST_WAIT_PREFIX.busy" 2>/dev/null; then
+    printf 'overlapping local unit: %s\n' "$*" >>"$SWEEP_TEST_WAIT_PREFIX.overlap"
+    exit 98
+  fi
+  trap 'rmdir "$SWEEP_TEST_WAIT_PREFIX.busy"' EXIT
+  trap 'exit 143' TERM
+fi
 [ -n "${SWEEP_TEST_OPAM_OUT:-}" ] && printf '%s\n' "$SWEEP_TEST_OPAM_OUT"
 case ${OCANNL_BACKEND:-} in
   cc) [ -n "${SWEEP_TEST_OPAM_OUT_CC:-}" ] && printf '%s\n' "$SWEEP_TEST_OPAM_OUT_CC" ;;
+  # A backend no nested local sweep runs (multidev_cc's unit is on minix), so
+  # that the hermeticity control can hand the nested sweep an AMBIENT backend
+  # belonging to neither unit and still be answered. Without an arm here a
+  # leaked `multidev_cc` produces nothing and the control passes for the wrong
+  # reason.
   multidev_cc)
     [ -n "${SWEEP_TEST_OPAM_OUT_MULTIDEV_CC:-}" ] &&
       printf '%s\n' "$SWEEP_TEST_OPAM_OUT_MULTIDEV_CC"
     ;;
-  # A backend no aggregation control selects, so that the hermeticity control
-  # can hand the nested sweep an AMBIENT backend belonging to neither unit and
-  # still be answered. Without an arm here a leaked `metal` produces nothing and
-  # the control passes for the wrong reason.
   metal) [ -n "${SWEEP_TEST_OPAM_OUT_METAL:-}" ] && printf '%s\n' "$SWEEP_TEST_OPAM_OUT_METAL" ;;
 esac
 if [ -n "${SWEEP_TEST_WAIT_PREFIX:-}" ]; then
@@ -156,7 +179,7 @@ if [ -n "${SWEEP_TEST_WAIT_PREFIX:-}" ]; then
   while [ ! -e "$SWEEP_TEST_WAIT_PREFIX.release" ]; do
     sleep 0.05
     waited=$((waited + 1))
-    [ "$waited" -lt 200 ] || exit 99
+    [ "$waited" -lt "$SWEEP_TEST_WAIT_TICKS" ] || exit 99
   done
 fi
 exit "${SWEEP_TEST_OPAM_RC:-0}"
@@ -168,9 +191,37 @@ chmod +x "$fake_bin/opam"
 # hit this recorder. A failed ssh is an ordinary unreachable remote to the
 # sweep, so the assertions on this file are the part that makes accidental
 # contact fail the harness.
+#
+# Two opt-in modes stand in for a live remote lane without reaching one:
+# `release` waits for the local unit to report ready and releases it, which a
+# serial loop -- where the local unit must finish before any remote unit starts
+# -- can never do; `hang` answers the reachability probe and then keeps its
+# connection busy until killed, so a cancellation control has a remote lane
+# in flight. Both stay bounded, and both still end as an unreachable box.
 cat >"$fake_bin/ssh" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SWEEP_TEST_SSH_CALLS"
+case ${SWEEP_TEST_SSH_MODE:-} in
+  release)
+    waited=0
+    while [ ! -e "$SWEEP_TEST_WAIT_PREFIX.ready" ]; do
+      sleep 0.05
+      waited=$((waited + 1))
+      [ "$waited" -lt "$SWEEP_TEST_WAIT_TICKS" ] || exit 1
+    done
+    : >"$SWEEP_TEST_WAIT_PREFIX.release"
+    ;;
+  hang)
+    case $* in *'printf %s "$HOME"'*) printf '%s' "$HOME"; exit 0 ;; esac
+    printf '%s\n' "$$" >>"$SWEEP_TEST_WAIT_PREFIX.ssh-pids"
+    : >"$SWEEP_TEST_WAIT_PREFIX.ssh-running"
+    waited=0
+    while [ "$waited" -lt "$SWEEP_TEST_WAIT_TICKS" ]; do
+      sleep 0.05
+      waited=$((waited + 1))
+    done
+    ;;
+esac
 exit 1
 EOF
 chmod +x "$fake_bin/ssh"
@@ -200,7 +251,7 @@ run_sweep_args() {
   # Quoted, unlike the assignment prefix this replaces: these are `env`'s
   # ARGUMENTS now, so the multi-line fixture logs would otherwise be split into
   # words and `env` would try to run one of them as the command.
-  env -u OCANNL_BACKEND -u OCANNL_TOOL_SWEEP_CAP -u OCANNL_TOOL_SWEEP_CONTEXT_CAP \
+  local environment=(-u OCANNL_BACKEND -u OCANNL_TOOL_SWEEP_CAP -u OCANNL_TOOL_SWEEP_CONTEXT_CAP \
     -u OCANNL_TOOL_SWEEP_LOCAL_BOX \
     "HOME=$tmp/home" \
     "PATH=$fake_bin:$PATH" \
@@ -214,11 +265,20 @@ run_sweep_args() {
     "SWEEP_TEST_OPAM_SERIAL_RED=${SWEEP_TEST_OPAM_SERIAL_RED:-}" \
     "SWEEP_TEST_OPAM_OUT_SERIAL=${SWEEP_TEST_OPAM_OUT_SERIAL:-}" \
     "SWEEP_TEST_SSH_CALLS=$ssh_calls" \
+    "SWEEP_TEST_SSH_MODE=${SWEEP_TEST_SSH_MODE:-}" \
+    "SWEEP_TEST_WAIT_TICKS=$wait_ticks" \
     "OCANNL_TOOL_SWEEP_LOCAL_BOX=${SWEEP_TEST_LOCAL_BOX-m4-max}" \
     "OCANNL_TOOL_SWEEP_JOBS=${SWEEP_TEST_JOBS:-}" \
     "OCANNL_TOOL_SWEEP_REPO=$main" \
-    "OCANNL_TOOL_SWEEP_STATE=$state" \
-    "$sweep" "${args[@]}"
+    "OCANNL_TOOL_SWEEP_STATE=$state")
+  # The cancellation controls need the sweep's own pid, and a process group
+  # that holds nothing but the sweep: `exec` makes the caller's `$!` name the
+  # sweep itself, and perl's setpgrp gives it a group of its own to signal.
+  if [ -n "${SWEEP_TEST_OWN_GROUP:-}" ]; then
+    exec perl -e 'setpgrp(0, 0); exec @ARGV or exit 127' -- \
+      env "${environment[@]}" "$sweep" "${args[@]}"
+  fi
+  env "${environment[@]}" "$sweep" "${args[@]}"
 }
 
 run_sweep_backend() {
@@ -380,25 +440,26 @@ grep -q "^golden.$fix_sha.test/unit.cc_expected.ml$" "$unit_state"
 # must not leak into the report merely because it occurred somewhere. A skip
 # whose gate belongs to the environment occurs in both logs too. These two
 # backends share one box, so they prove no cross-box fact and environment
-# aggregation stays explicitly insufficient.
+# aggregation stays explicitly insufficient. (cc and metal: multidev_cc runs on
+# minix, which this harness never reaches.)
 common=$'SKIPPED on fixture (vacuous): common unevaluated claim\nOCANNL_TOOL_VERDICT_SKIP\tbackend\tfixture.exe\tcommon unevaluated claim'
 cc_only=$'SKIPPED on fixture (vacuous): cc-only unevaluated claim\nOCANNL_TOOL_VERDICT_SKIP\tbackend\tfixture.exe\tcc-only unevaluated claim'
-multidev_only=$'SKIPPED on fixture (vacuous): multidev-only unevaluated claim\nOCANNL_TOOL_VERDICT_SKIP\tbackend\tfixture.exe\tmultidev-only unevaluated claim'
+metal_only=$'SKIPPED on fixture (vacuous): metal-only unevaluated claim\nOCANNL_TOOL_VERDICT_SKIP\tbackend\tfixture.exe\tmetal-only unevaluated claim'
 environment=$'SKIPPED on fixture gate (vacuous): environment-gated claim\nOCANNL_TOOL_VERDICT_SKIP\tenvironment\tfixture.exe\tenvironment-gated claim'
 outside=$'SKIPPED on external matrix (vacuous): independently-covered claim\nOCANNL_TOOL_VERDICT_SKIP\toutside-sweep\tfixture.exe\tindependently-covered claim'
 cc_unit_log=$common$'\n'$cc_only$'\n'$environment$'\n'$outside
-multidev_unit_log=$common$'\n'$multidev_only$'\n'$environment$'\n'$outside
+metal_unit_log=$common$'\n'$metal_only$'\n'$environment$'\n'$outside
 coverage=$(SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log \
-  SWEEP_TEST_OPAM_OUT_MULTIDEV_CC=$multidev_unit_log \
-  run_sweep_args --force --only cc --only multidev_cc)
+  SWEEP_TEST_OPAM_OUT_METAL=$metal_unit_log \
+  run_sweep_args --force --only cc --only metal)
 coverage_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$coverage" | tail -1)
 [ -f "$coverage_report" ]
 grep -q '^status: partial (2 of 5 known backends completed)$' "$coverage_report"
-grep -q '^missing backends: metal, cuda, hip$' "$coverage_report"
+grep -q '^missing backends: cuda, hip, multidev_cc$' "$coverage_report"
 grep -q '^POTENTIAL: skipped on every completed backend: fixture.exe: common unevaluated claim$' \
   "$coverage_report"
 absent 'cc-only unevaluated claim' "$coverage_report"
-absent 'multidev-only unevaluated claim' "$coverage_report"
+absent 'metal-only unevaluated claim' "$coverage_report"
 absent 'environment-gated claim' "$coverage_report"
 absent 'independently-covered claim' "$coverage_report"
 grep -q '^completed boxes: m4-max$' "$coverage_report"
@@ -419,7 +480,7 @@ grep -q '^  result: POTENTIAL -- 1 claim(s) skipped on every completed backend; 
 grep -q '^  POTENTIAL: skipped on every completed backend: fixture.exe: common unevaluated claim$' \
   <<<"$coverage"
 absent 'cc-only unevaluated claim' <<<"$coverage"
-absent 'multidev-only unevaluated claim' <<<"$coverage"
+absent 'metal-only unevaluated claim' <<<"$coverage"
 absent 'environment-gated claim' <<<"$coverage"
 absent 'independently-covered claim' <<<"$coverage"
 
@@ -429,8 +490,9 @@ absent 'independently-covered claim' <<<"$coverage"
 # choice of backend is exported into every test action of that unit, this one
 # included. It used to reach the nested sweep, whose forced-clean leg names no
 # backend of its own -- so the fake opam answered the AMBIENT one and wrote the
-# cc unit's skip records into the multidev_cc unit's log, turning the
-# intersection this exists to take into a union (gh-ocannl-893). The ambient
+# cc unit's skip records into the multidev_cc unit's log (both were local
+# then), turning the intersection this exists to take into a union
+# (gh-ocannl-893). The ambient
 # value names a backend NEITHER selected unit runs, carrying a claim of its own:
 # a leak then appears in both units' logs and grows the intersection, so what is
 # pinned is that the nested sweep answers only the backends the SWEEP selected,
@@ -442,11 +504,11 @@ absent 'independently-covered claim' <<<"$coverage"
 # vacuously, which is the failure mode a comparison invites.
 leaked=$'SKIPPED on fixture (vacuous): leaked-ambient claim\nOCANNL_TOOL_VERDICT_SKIP\tbackend\tfixture.exe\tleaked-ambient claim'
 coverage_findings=$(grep -E '^  (result|FAIL|POTENTIAL): ' <<<"$coverage")
-hostile=$(OCANNL_BACKEND=metal \
+hostile=$(OCANNL_BACKEND=multidev_cc \
   SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log \
-  SWEEP_TEST_OPAM_OUT_MULTIDEV_CC=$multidev_unit_log \
-  SWEEP_TEST_OPAM_OUT_METAL=$leaked \
-  run_sweep_args --force --only cc --only multidev_cc)
+  SWEEP_TEST_OPAM_OUT_METAL=$metal_unit_log \
+  SWEEP_TEST_OPAM_OUT_MULTIDEV_CC=$leaked \
+  run_sweep_args --force --only cc --only metal)
 [ "$(grep -E '^  (result|FAIL|POTENTIAL): ' <<<"$hostile")" = "$coverage_findings" ]
 
 # A single-backend forced run cannot aggregate, and its summary says so through
@@ -465,9 +527,9 @@ for backend in cc multidev_cc metal cuda hip; do
   "$verdict_probe" "$backend" >"$log" 2>&1
   aggregate_args+=(--known "$backend")
   case $backend in
-    cc | multidev_cc | metal) box=m4-max ;;
+    cc | metal) box=m4-max ;;
     cuda) box=rog-nv ;;
-    hip) box=minix ;;
+    hip | multidev_cc) box=minix ;;
   esac
   aggregate_args+=(--run "$backend" "$box" "$log")
 done
@@ -509,8 +571,8 @@ grep -q '^environment result: PASS -- no claim was skipped on every declared box
 
 # Two of three boxes make an all-observed environment skip POTENTIAL, never a
 # FAIL: the absent box may execute it. This also proves completeness is counted
-# by distinct box rather than by the number of logs (m4-max contributes three
-# in the complete case above).
+# by distinct box rather than by the number of logs (m4-max and minix each
+# contribute two in the complete case above).
 "$verdict_probe" cc >"$tmp/cc.log" 2>&1
 "$verdict_probe" hip >"$tmp/hip.log" 2>&1
 partial_matrix=$("$aggregate" \
@@ -538,7 +600,7 @@ mixed_scope_fail=$("$aggregate" \
   --known cc --known multidev_cc --known metal --known cuda --known hip \
   --known-box m4-max --known-box minix --known-box rog-nv \
   --run cc m4-max "$tmp/mixed-cc.log" \
-  --run multidev_cc m4-max "$tmp/mixed-multidev.log" \
+  --run multidev_cc minix "$tmp/mixed-multidev.log" \
   --run cuda rog-nv "$tmp/mixed-cuda.log" --run hip minix "$tmp/mixed-hip.log" 2>&1)
 mixed_scope_fail_rc=$?
 set -e
@@ -556,7 +618,7 @@ mixed_scope_cleared=$("$aggregate" \
   --known cc --known multidev_cc --known metal --known cuda --known hip \
   --known-box m4-max --known-box minix --known-box rog-nv \
   --run cc m4-max "$tmp/mixed-cc.log" \
-  --run multidev_cc m4-max "$tmp/mixed-multidev.log" \
+  --run multidev_cc minix "$tmp/mixed-multidev.log" \
   --run metal m4-max "$tmp/mixed-metal.log" \
   --run cuda rog-nv "$tmp/mixed-cuda.log" --run hip minix "$tmp/mixed-hip.log" 2>&1)
 mixed_scope_cleared_rc=$?
@@ -697,7 +759,7 @@ grep -q '^aggregate-skips: cannot write report$' "$tmp/report-write.err"
 wait_prefix=$tmp/migration-lock
 SWEEP_TEST_WAIT_PREFIX=$wait_prefix run_sweep >"$tmp/holder.out" 2>"$tmp/holder.err" &
 holder_pid=$!
-for _ in {1..200}; do
+for ((waited = 0; waited < wait_ticks; waited++)); do
   [ -e "$wait_prefix.ready" ] && break
   sleep 0.05
 done
@@ -937,7 +999,7 @@ only_typo_error=$(run_sweep_backend cudaa 2>&1)
 only_typo_error_rc=$?
 set -e
 [ "$only_typo_error_rc" -eq 2 ]
-grep -q "^sweep: unknown backend 'cudaa'; known: cc multidev_cc metal cuda hip" <<<"$only_typo_error"
+grep -q "^sweep: unknown backend 'cudaa'; known: cc metal cuda hip multidev_cc" <<<"$only_typo_error"
 
 # A unit with a dune job cap -- the per-unit table names minix/hip, a unit this
 # harness cannot reach, so the run-wide override stands in -- compiles at full
@@ -1088,6 +1150,80 @@ grep -q 'm4-max/cc: fail ' <<<"$serial_control"
 absent 'serial rerun' <<<"$serial_control"
 serial_control_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
 absent 'serial rerun' "${serial_control_log%.log}.fingerprint"
+
+# Lanes (gh-ocannl-976): one per machine, concurrent across machines and
+# sequential within one. The local cc unit holds until a REMOTE unit's probe
+# releases it, which a serial loop -- every local unit ahead of every remote one
+# -- can never do: there cc would time out red and the remote probes would
+# arrive after the fact. The local metal unit follows cc in the same lane, and
+# the fake opam's exclusivity marker turns any overlap of the two into a red
+# unit. The lanes line is derived from the table's machine column.
+lanes=$(SWEEP_TEST_WAIT_PREFIX=$tmp/lanes SWEEP_TEST_SSH_MODE=release \
+  run_sweep_args --only cc --only metal --only cuda --only hip --only multidev_cc \
+  --target lane-probe)
+grep -q '^lanes:  m4-max(cc,metal)  rog-nv(cuda)  minix(hip,multidev_cc)$' <<<"$lanes"
+grep -q '^  m4-max/cc: incremental-pass ' <<<"$lanes"
+grep -q '^  m4-max/metal: incremental-pass ' <<<"$lanes"
+grep -q '^  rog-nv/cuda: skip (unreachable)$' <<<"$lanes"
+grep -q '^  minix/hip: skip (unreachable)$' <<<"$lanes"
+grep -q '^  minix/multidev_cc: skip (unreachable)$' <<<"$lanes"
+[ ! -e "$tmp/lanes.overlap" ]
+# The rows are those of a serial run in everything but their order: one per
+# unit, each under its own machine.
+[ "$(awk -F '\t' '$7 == "lane-probe" { print $2 "/" $3 ":" $5 }' "$state/history.tsv" | sort)" = \
+  "$(printf '%s\n' m4-max/cc:incremental-pass m4-max/metal:incremental-pass \
+    minix/hip:skip minix/multidev_cc:skip rog-nv/cuda:skip | sort)" ]
+
+# Cancelling a sweep stops EVERY lane: here the local lane's unit is held in its
+# test leg and the rog-nv lane's in its preparation ssh, both under supervisors.
+# TERM to the sweep's pid must be relayed through each lane to its supervisor,
+# and a TERM to the process group reaches them directly; either way the sweep
+# returns only after every unit process is gone, which the pids and the lock
+# (taken again by the follow-up run) witness.
+cancel_sweep() { # pid|group
+  local how=$1 prefix=$tmp/cancel-$1 pid rc
+  wait_prefix=$prefix
+  SWEEP_TEST_OWN_GROUP=1 SWEEP_TEST_WAIT_PREFIX=$prefix SWEEP_TEST_SSH_MODE=hang \
+    run_sweep_args --only cc --only cuda --target cancel-probe \
+    >"$prefix.out" 2>"$prefix.err" &
+  pid=$!
+  holder_pid=$pid
+  waited=0
+  until [ -e "$prefix.ready" ] && [ -e "$prefix.ssh-running" ]; do
+    [ "$waited" -lt "$wait_ticks" ] || break
+    sleep 0.05
+    waited=$((waited + 1))
+  done
+  [ -e "$prefix.ready" ] && [ -e "$prefix.ssh-running" ]
+  case $how in
+    pid) kill -TERM "$pid" ;;
+    group) kill -TERM -- "-$pid" ;;
+  esac
+  set +e
+  wait "$pid"
+  rc=$?
+  set -e
+  holder_pid=
+  wait_prefix=
+  if [ "$rc" -ne 143 ]; then
+    printf 'sweep_harness: sweep cancelled by %s TERM exited %s\n' "$how" "$rc" >&2
+    cat "$prefix.out" "$prefix.err" >&2
+    return 1
+  fi
+  while IFS= read -r pid; do
+    if kill -0 "$pid" 2>/dev/null; then
+      printf 'sweep_harness: unit process %s outlived the cancelled sweep\n' "$pid" >&2
+      return 1
+    fi
+  done < <(cat "$prefix.opam-pids" "$prefix.ssh-pids")
+  [ ! -e "$prefix.busy" ]
+}
+# Called directly, not captured: errexit does not reach inside a command
+# substitution, and the assertions are in the function.
+cancel_sweep pid
+cancel_sweep group
+after_cancel=$(run_sweep_args --target cancel-probe)
+grep -q '^  m4-max/cc: incremental-pass ' <<<"$after_cancel"
 
 # A historical target may declare fewer boxes than today's execution map. The
 # extra local unit still proves backend facts, but cannot be counted as a member

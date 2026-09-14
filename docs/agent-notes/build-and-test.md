@@ -1321,8 +1321,9 @@ that they earn a lookup rather than always-loaded space.
   `(alias (name runtest) (deps (alias runtest-<name>)))` stanza, both of which `env_var_deps`
   checks.
 - Splitting a golden per backend is a decision about WHAT the golden holds, not a formatting choice,
-  and the bar is high in both directions. Its cost is a golden only some machine re-records — cc,
-  multidev_cc and metal on the reference Mac, cuda and hip only on the sweep's GPU boxes — so a
+  and the bar is high in both directions. Its cost is a golden only some machine re-records — cc
+  and metal on the reference Mac, multidev_cc, cuda and hip only on the sweep's minix and rog-nv
+  lanes (a local multidev_cc run refreshes nothing the sweep then checks on the Mac) — so a
   codegen change that moves the output leaves the members no local run touches stale until the daily
   sweep says so. That is the gh-ocannl-700 lesson, and it makes a split worth paying for only where
   the difference is a genuine backend fact. **A member that keeps diverging from its siblings AFTER
@@ -1778,9 +1779,15 @@ that they earn a lookup rather than always-loaded space.
   `test-run.sh` now points `last` with a plain file holding the path (written through a temporary
   and renamed, so still atomic), which needs no symlink privilege on any platform. Reach for a
   pointer file, not a symlink, in anything that must work from Git Bash.
-- `tools/sweep.sh` is the coverage for every backend CI does not run: cc, multidev_cc and metal
-  locally, cuda on `rog-nv-wsl`, hip on `minix-amd-wsl`, all pinned to ONE resolved commit so a
-  mid-sweep merge cannot leave the machines testing different trees. multidev_cc needs no hardware
+- `tools/sweep.sh` is the coverage for every backend CI does not run: cc and metal locally
+  (the macOS host), cuda on `rog-nv-wsl`, hip and then multidev_cc on `minix-amd-wsl`, all pinned
+  to ONE resolved commit so a mid-sweep merge cannot leave the machines testing different trees.
+  Each machine's units form a lane — sequential within the box, which shares one worktree, lock and
+  device, concurrent with the other boxes' lanes (gh-ocannl-976) — so wall-clock is the longest lane
+  (the local one, metal's suite), and the remote units start while the routine's freshly woken WSL
+  VMs are still up. The CPU pair is split across boxes on purpose: it takes a unit off that longest
+  lane, and runs a CPU backend's goldens under Linux as well as macOS every day. Rows reach the
+  history in completion order, each appended under a lock. multidev_cc needs no hardware
   and is there anyway: it keeps its own `micrograd_demo_logging` debug-log golden, which
   `dune runtest` diffs only under `OCANNL_BACKEND=multidev_cc` — a spelling neither test/config's
   pinned `backend=cc` nor CI ever sets. gh-ocannl-700 is the cost of that gap: `eefa827e`
