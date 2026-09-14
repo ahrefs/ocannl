@@ -237,3 +237,13 @@
  (libraries base stdio unix mtime mtime.clock.os utils ir context)
  (modules autotune sketch_families)
  (modes best))
+
+; Host stubs and kernel text consume the same C definitions (gh-ocannl-656).
+
+(rule
+ ; ocannl-backend: none -- stdlib-only header generator; no configuration or backend selection.
+ (target builtins_shared.h)
+ (action
+  (with-stdout-to
+   %{target}
+   (run gen_builtins/generate.exe))))

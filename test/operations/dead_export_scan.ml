@@ -54,7 +54,6 @@ let exempt_zero_reference_exports =
     "Backend_intf.mma_capability_of_sexp";
     "Backend_intf.mma_input_format_of_sexp";
     "Backend_intf.mma_staged_layout_of_sexp";
-    "Builtins_cc.source";
     "C_syntax.c_float_literal";
     "C_syntax.c_keywords";
     "C_syntax.c_stdlib_idents";

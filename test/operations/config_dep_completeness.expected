@@ -5,7 +5,8 @@ directory gains its first stanza of a kind or loses its last, and within a direc
 raw-text floor reported by the claim at the end holds the count up.
 
 .claude/dune: nothing that runs a test executable
-arrayjit/lib/dune: nothing that runs a test executable
+arrayjit/lib/dune: exempt rules (gen_builtins/generate.exe)
+arrayjit/lib/gen_builtins/dune: nothing that runs a test executable
 arrayjit/test/dune: tests, exe-running rules
 benchmarks/dune: exempt rules (python3, handed %{dep:test_orchestrate.py})
 benchmarks/runners/ocannl/dune: exempt rules (metal_queue_probe.exe)
@@ -31,6 +32,7 @@ Actions that execute a program: run, dynamic-run, system, bash.
 Actions that do not: progn, concurrent, chdir, setenv, with-stdout-to, with-stderr-to, with-outputs-to, with-stdin-from, with-accepted-exit-codes, ignore-stdout, ignore-stderr, ignore-outputs, no-infer, echo, write-file, cat, copy, copy#, copy-and-add-line-directive, diff, diff?, cmp, pipe-stdout, pipe-stderr, pipe-outputs, format-dune-file, or, and, not. Anything else fails above.
 
 Exempt from the dependency, running an executable that reads no configuration:
+  arrayjit/lib:gen_builtins/generate.exe -- the builtin header generator links only the OCaml stdlib and a pure C definition table; it reads no OCANNL configuration
   test/ppx:pp.exe -- the ppx driver, run to expand a source file and diff the expansion: `ppx_ocannl` links base, ppxlib, str and einsum_parser -- no configuration reader -- so no `ocannl_config` can reach its output
   benchmarks/runners/ocannl:metal_queue_probe.exe -- the standalone Metal queue probe, run on `@bin-smoke` as the bindings' runtime canary (gh-ocannl-905): it links `metal`, `ctypes` and `unix` and no arrayjit at all -- no configuration reader, so no `ocannl_config` can reach what it does
   benchmarks:python3, handed %{dep:test_orchestrate.py} -- the benchmark orchestrator's own unit tests, in Python: the interpreter runs a script that imports orchestrate.py and runners/bench_common.py and calls no OCANNL executable, so there is no configuration in reach -- and a Python process would not read one anyway

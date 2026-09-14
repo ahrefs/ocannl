@@ -49,3 +49,8 @@ val has_native_fp16_arithmetic : unit -> bool
     by test-compiling; overridable with [cc_fp16_arithmetic]. Exposed for
     [Schedulers.cpu_mma_limits]'s [native_fp16_arithmetic] and for the compute-precision decision in
     [CC_syntax_config]. *)
+
+val kernel_link_flags : string Lazy.t
+(** Platform-specific kernel shared-library flags. In particular, ELF kernels bind their own builtin
+    calls locally even when the host stubs use a different native-half ABI. Runtime compiler probes
+    use this same policy rather than restating the linker flags. *)

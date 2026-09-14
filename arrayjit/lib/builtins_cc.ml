@@ -1,3 +1,7 @@
+(* Canonical C builtin definitions for kernels and host stubs (gh-ocannl-656). gen_builtins emits
+   builtins_shared.h from this table, excluding the cc-only OCANNL_ SIMD namespace. Keep platform
+   includes here; host headers are owned by the generator. *)
+
 let includes =
   {|
 #include <stdio.h>
