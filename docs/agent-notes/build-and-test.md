@@ -1500,7 +1500,10 @@ that they earn a lookup rather than always-loaded space.
   Paravirtual device` there, and `@bin-smoke`'s `metal_queue_probe` run uses it — library compile,
   three command-buffer submission shapes and SharedEvent signal/wait, about 50 ms on every macOS
   `main` leg (gh-ocannl-905). That is a canary for the Metal BINDINGS; OCANNL's Metal backend, its
-  codegen and its scheduling are still reached by no CI leg.
+  codegen and its scheduling are reached by no CI leg, and that is a decision (gh-ocannl-942,
+  closed): Metal is the development Macs' everyday backend and a leg of `tools/sweep.sh`, while a
+  hosted leg on the paravirtual device would have to skip simdgroup matrix work and would inherit
+  the macOS runners' contention — runner time for a subset of what the reference Mac already runs.
 - A red on merged master is presumptively CLAIMED work. `ci.yml`'s `notify-triage-routine` job
   fires the "ocannl-staging CI-red triage" Claude Code cloud routine on any non-PR master red —
   push and scheduled sweeps alike (a logged no-op until the `ROUTINE_FIRE_URL`/`ROUTINE_FIRE_TOKEN`
@@ -1535,8 +1538,12 @@ that they earn a lookup rather than always-loaded space.
   build is a free negative control. `@check` also proves compilation and never execution, so pair it
   with a runnable probe wherever one exists. Two PRs in two days paid for this: gh-ocannl-758
   (staging#490) shipped a HIP arm unparsed beyond syntax and edited the CUDA arm blind the next day, and
-  gh-ocannl-773 (staging#494) touched both again. gh-ocannl-794 is the executable follow-up for CI
-  coverage, gh-ocannl-796 for scripting the off-box loop.
+  gh-ocannl-773 (staging#494) touched both again. `tools/remote-verify.sh` (gh-ocannl-796) scripts
+  that off-box loop, and it stays the pre-merge check: CI compiling either file is a decision NOT
+  to (gh-ocannl-794, closed). Installing cudajit or hipjit on a runner means a CUDA or ROCm toolkit
+  per run, and a stub-externals typecheck would be a hand-kept second copy of both binding APIs;
+  the daily sweep compiles and runs both backends on their boxes, so a vendor-arm break that
+  skipped remote verification surfaces on master within a day, under the roll-forward policy.
 - `tools/remote-verify.sh` is the one-off counterpart to the scheduled sweep for a pushed branch:
   it derives the remote pointing to the staging repository by URL, fetches the named branch,
   without rewriting the checkout's `FETCH_HEAD`, resolves one commit, creates a fresh detached
@@ -1593,7 +1600,7 @@ that they earn a lookup rather than always-loaded space.
   host; `--dry-run` validates and prints the complete staging plan on macOS and other hosts. This is compiler/codegen evidence, not an OS emulator: the
   GCC patch release is whichever candidate the configured apt indexes serve (the exact version and
   target are printed and major 13 is enforced), and the clang leg has a Linux cross sysroot rather
-  than the macOS SDK, ABI, linker or runtime. It therefore complements CI and gh-ocannl-794 rather
+  than the macOS SDK, ABI, linker or runtime. It therefore complements CI and the GPU boxes rather
   than replacing either. Fetches, extraction and the test harness are attached children: an outer
   cancellation forwards `TERM` and reaps the active child before scratch cleanup.
 - `tools/ci-durations.sh` is the source for revisiting the `timeout-minutes` ceilings in

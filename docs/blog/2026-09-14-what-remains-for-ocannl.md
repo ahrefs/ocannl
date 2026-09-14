@@ -64,8 +64,8 @@ The recent renderer refactor made each render own its traversal state. The next 
 make the shared structure of backend compilation equally visible. CUDA and HIP still repeat
 much of their syntax configuration; several backends repeat the outline of compilation and
 conditional header inclusion. The goal is a common description with explicit backend
-variation, supported by checks that compile the real vendor implementations
-([#770](https://github.com/ahrefs/ocannl/issues/770), [#794](https://github.com/ahrefs/ocannl/issues/794)). This is a structural change, not a claim that CUDA and HIP are interchangeable.
+variation, checked by compiling the real vendor implementations on the GPU machines
+([#770](https://github.com/ahrefs/ocannl/issues/770)). This is a structural change, not a claim that CUDA and HIP are interchangeable.
 
 A deeper form of duplication appears in IR traversal. Several analyses independently answer
 questions such as “which operands are actually evaluated?” and “does this loop run at all?”
@@ -239,8 +239,8 @@ actual coverage owner, and a cache-key classification should agree with what cha
 
 The queue also includes shared child-process testing, safer harness retention, better CI timing
 analysis, compiled documentation examples and a reading aid for editorial API changes ([#910](https://github.com/ahrefs/ocannl/issues/910),
-[#607](https://github.com/ahrefs/ocannl/issues/607), [#918](https://github.com/ahrefs/ocannl/issues/918), [#660](https://github.com/ahrefs/ocannl/issues/660), [#946](https://github.com/ahrefs/ocannl/issues/946)). Hosted Metal CI is an evaluation of available coverage, not a
-replacement for performance measurements on physical hardware ([#942](https://github.com/ahrefs/ocannl/issues/942)).
+[#607](https://github.com/ahrefs/ocannl/issues/607), [#918](https://github.com/ahrefs/ocannl/issues/918), [#660](https://github.com/ahrefs/ocannl/issues/660), [#946](https://github.com/ahrefs/ocannl/issues/946)). Metal, CUDA and HIP stay
+covered by the daily cross-machine sweep on physical hardware rather than by hosted CI legs.
 
 Some deferred issues concern production contracts rather than tests. What happens to cells
 past a bound symbolic extent? The forward and gradient behavior should express one decision
@@ -353,7 +353,7 @@ not semantic-versioning compatibility.
 
 | Milestone | Soft target | Role |
 |-----------|-------------|------|
-| v1.0.2 | September 16 | Landed robustness plus the eight retained compiler-elegance and coverage issues. |
+| v1.0.2 | September 16 | Landed robustness plus the seven retained compiler-elegance and coverage issues. |
 | v1.1 | October 2 | Performance improvements supported by meaningful comparisons. |
 | v1.1.1 | October 10 | Deferred consolidation, especially testing-side refactoring. |
 | v1.1.2 | October 18 | Training experience, models, reproductions and integrations. |
@@ -366,15 +366,15 @@ date. For the current calendar and assignments, follow the roadmap and linked is
 
 ## Issue directory
 
-This directory covers all 107 open OCANNL issues in the September 14 snapshot, after the
+This directory covers all 105 open OCANNL issues in the September 14 snapshot, after the
 reshuffle. It is a map from subjects to the detailed discussions, not an implementation order.
 Completed foundations mentioned above do not appear in this open-issue directory.
 
-### v1.0.2 — 8 open issues
+### v1.0.2 — 7 open issues
 
 | Subject | Issues |
 |---------|--------|
-| Backend structure and actual vendor compilation | [#770](https://github.com/ahrefs/ocannl/issues/770), [#794](https://github.com/ahrefs/ocannl/issues/794) |
+| Backend structure and actual vendor compilation | [#770](https://github.com/ahrefs/ocannl/issues/770) |
 | Shared IR semantics and affine structure | [#630](https://github.com/ahrefs/ocannl/issues/630), [#774](https://github.com/ahrefs/ocannl/issues/774) |
 | Builtins, precision, configuration and shuffle stages | [#656](https://github.com/ahrefs/ocannl/issues/656), [#917](https://github.com/ahrefs/ocannl/issues/917), [#604](https://github.com/ahrefs/ocannl/issues/604), [#875](https://github.com/ahrefs/ocannl/issues/875) |
 
@@ -391,7 +391,7 @@ Completed foundations mentioned above do not appear in this open-issue directory
 | Materialization, memory pressure, staging and cache identity | [#616](https://github.com/ahrefs/ocannl/issues/616), [#565](https://github.com/ahrefs/ocannl/issues/565), [#576](https://github.com/ahrefs/ocannl/issues/576), [#585](https://github.com/ahrefs/ocannl/issues/585), [#594](https://github.com/ahrefs/ocannl/issues/594) |
 | Barrier-region legality and candidate ownership | [#963](https://github.com/ahrefs/ocannl/issues/963), [#975](https://github.com/ahrefs/ocannl/issues/975) |
 
-### v1.1.1 — 38 open issues
+### v1.1.1 — 37 open issues
 
 | Subject | Issues |
 |---------|--------|
@@ -401,7 +401,7 @@ Completed foundations mentioned above do not appear in this open-issue directory
 | Generated references and the dead-export census | [#913](https://github.com/ahrefs/ocannl/issues/913), [#914](https://github.com/ahrefs/ocannl/issues/914), [#915](https://github.com/ahrefs/ocannl/issues/915) |
 | Test support, coverage ownership, goldens and GPU-free execution | [#910](https://github.com/ahrefs/ocannl/issues/910), [#926](https://github.com/ahrefs/ocannl/issues/926), [#642](https://github.com/ahrefs/ocannl/issues/642), [#672](https://github.com/ahrefs/ocannl/issues/672), [#778](https://github.com/ahrefs/ocannl/issues/778), [#678](https://github.com/ahrefs/ocannl/issues/678) |
 | Diagnostics and remaining tensor/IR contracts | [#609](https://github.com/ahrefs/ocannl/issues/609), [#641](https://github.com/ahrefs/ocannl/issues/641), [#707](https://github.com/ahrefs/ocannl/issues/707), [#625](https://github.com/ahrefs/ocannl/issues/625), [#818](https://github.com/ahrefs/ocannl/issues/818), [#940](https://github.com/ahrefs/ocannl/issues/940), [#928](https://github.com/ahrefs/ocannl/issues/928), [#929](https://github.com/ahrefs/ocannl/issues/929) |
-| Documentation, historical evidence, CI and harness retention | [#660](https://github.com/ahrefs/ocannl/issues/660), [#918](https://github.com/ahrefs/ocannl/issues/918), [#919](https://github.com/ahrefs/ocannl/issues/919), [#934](https://github.com/ahrefs/ocannl/issues/934), [#942](https://github.com/ahrefs/ocannl/issues/942), [#946](https://github.com/ahrefs/ocannl/issues/946), [#607](https://github.com/ahrefs/ocannl/issues/607) |
+| Documentation, historical evidence, CI and harness retention | [#660](https://github.com/ahrefs/ocannl/issues/660), [#918](https://github.com/ahrefs/ocannl/issues/918), [#919](https://github.com/ahrefs/ocannl/issues/919), [#934](https://github.com/ahrefs/ocannl/issues/934), [#946](https://github.com/ahrefs/ocannl/issues/946), [#607](https://github.com/ahrefs/ocannl/issues/607) |
 | PPX compatibility and constructor-surface discipline | [#695](https://github.com/ahrefs/ocannl/issues/695), [#705](https://github.com/ahrefs/ocannl/issues/705) |
 | Dated retirement of legacy test-run locks | [#966](https://github.com/ahrefs/ocannl/issues/966) |
 
