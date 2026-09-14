@@ -13,7 +13,7 @@ also names what is deliberately boring, because the identity claims are only cre
 the table-stakes engineering underneath is unremarkable and correct.
 
 For a dated, issue-linked account of the remaining work and its milestone homes, see
-[What remains for OCANNL](development-outlook.md).
+[What remains for OCANNL](blog/2026-09-14-what-remains-for-ocannl.md).
 
 ## 1. Schedule the step, not the kernel *(deliberate)*
 

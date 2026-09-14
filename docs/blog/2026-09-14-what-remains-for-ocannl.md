@@ -16,8 +16,8 @@ them can stand on its own.
 This guide explains those ambitions and the gaps between them and the current implementation.
 It is an OCANNL-focused companion to the operational sequencing plan, incorporating the
 September 14 milestone reshuffle. It leaves machine assignments, daily waves, review histories
-and other repositories' backlogs in that plan. [ROADMAP.md](../ROADMAP.md) owns the release
-calendar; [CHANGES.md](../CHANGES.md) records what has landed. Issue links below point to
+and other repositories' backlogs in that plan. [ROADMAP.md](../../ROADMAP.md) owns the release
+calendar; [CHANGES.md](../../CHANGES.md) records what has landed. Issue links below point to
 `ahrefs/ocannl`, while implementation PRs live in `lukstafi/ocannl-staging`. The descriptions and
 issue directory are a dated snapshot, not a second live tracker.
 
@@ -50,8 +50,8 @@ understand its implicit reads and writes. A fast candidate needs both a reliable
 clear owner for its allocated resources. A reusable tensor function needs a shape solver whose
 state can be separated from one particular application.
 
-For the detailed architecture, see [the life of a training step](life_of_a_training_step.md)
-and [the compilation manifesto](compilation_manifesto.md). Here the focus is on what remains.
+For the detailed architecture, see [the life of a training step](../life_of_a_training_step.md)
+and [the compilation manifesto](../compilation_manifesto.md). Here the focus is on what remains.
 
 ## 1. Give shared ideas one expression
 
