@@ -1863,13 +1863,24 @@ that they earn a lookup rather than always-loaded space.
   *environment-red* and gets a **serial rerun** (gh-ocannl-945): every failing stanza again as
   `dune build -j 1 @<dir>/runtest-<name>` (or `@<dir>/<alias>` for an explicit rule), one dune
   call each, under the same worktree lock and the unit's own cap, appended to the unit's log.
+  rog-nv's CUDA shows the class is not minix-only, and that a status is not a diagnosis: the
+  2026-09-13 forced unit lost exactly one stanza, `tensor_puzzles`, at its first `Context.auto`
+  with `CUDA_ERROR_OUT_OF_MEMORY`, while the journal recorded the unit's only
+  `vmbus_sendpacket failed: fffffff5` burst (three failed `dxgkio_create_allocation`s in its
+  first minute, after two `TimeSync` host resumes overnight) — the only such lines across the
+  box's journal from 2026-09-01 on. VRAM was not the limit: under WSL2 the card oversubscribes into host memory (a
+  probe held 28.9 GB of a 12 GB RTX 5070 Ti and the test still passed beside it), 48 concurrent
+  copies of the test peaked at 8.1 GB with no refusal, and alone it passes adding 155 MiB. One
+  lost stanza in a full-width unit is no evidence for a `unit_jobs` cap there; the serial rerun
+  covers it.
 
-| name (`Fatal error: exception <name>:`) | call site | statuses seen (minix, 2026-09-05) |
+| name (`Fatal error: exception <name>:`) | call site | statuses seen |
 | --- | --- | --- |
-| `hip_init` | `Hip.init`, backend `ensure_initialized` | `HIP_ERROR_INVALID_DEVICE` (11), `HIP_ERROR_NO_DEVICE` (1) |
-| `hip_module_load_data_ex` | `Hip.Module.load_data_ex`, backend `link` | `HIP_ERROR_NO_BINARY_FOR_GPU` (34) |
-| `hip_stream_create_with_priority` | `Hip.Stream.create`, backend `get_device` | `HIP_ERROR_OUT_OF_MEMORY` (4) |
+| `hip_init` | `Hip.init`, backend `ensure_initialized` | minix, 2026-09-05: `HIP_ERROR_INVALID_DEVICE` (11), `HIP_ERROR_NO_DEVICE` (1) |
+| `hip_module_load_data_ex` | `Hip.Module.load_data_ex`, backend `link` | minix, 2026-09-05: `HIP_ERROR_NO_BINARY_FOR_GPU` (34) |
+| `hip_stream_create_with_priority` | `Hip.Stream.create`, backend `get_device` | minix, 2026-09-05: `HIP_ERROR_OUT_OF_MEMORY` (4) |
 | `cu_init` | `Cu.init` | analogue by construction — rog-nv reaches its GPU through the same dxg bridge; not yet observed |
+| `cu_device_primary_ctx_retain` | `Cu.Context.get_primary`, backend `get_device` | rog-nv, 2026-09-13: `CUDA_ERROR_OUT_OF_MEMORY` (1) |
 | `cu_module_load_data_ex` | `Cu.Module.load_data_ex` | analogue, not yet observed |
 | `cu_stream_create_with_priority` | `Cu.Stream.create` | analogue, not yet observed |
 

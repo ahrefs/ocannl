@@ -163,10 +163,12 @@ unit_jobs() {
 # test judging it. On minix the dxg bridge described above surfaces its lost
 # messages as three HIP exceptions; rog-nv's CUDA reaches its GPU through the
 # same WSL2 bridge, so the cudajit checks at the same three call sites are
-# listed by analogy (not yet observed there). A unit whose log carries any of
-# them is environment-red: its stanzas were refused a device, not judged, and
-# whatever test-logic failures it also holds are hidden under that noise until
-# the environment is repaired -- days, for a WSL box. The 2026-09-05 wide run
+# listed by analogy, plus the primary-context retain every CUDA process makes
+# first -- where rog-nv's one lost bridge message was reported, as
+# CUDA_ERROR_OUT_OF_MEMORY on a device with VRAM to spare. A unit whose log
+# carries any of them is environment-red: its stanzas were refused a device,
+# not judged, and whatever test-logic failures it also holds are hidden under
+# that noise until the environment is repaired -- days, for a WSL box. The 2026-09-05 wide run
 # hid a genuine hip-only regression that way (gh-ocannl-943; the executable
 # segfaulted after its hip_init was refused, so no fingerprint could have shown
 # it), and only rerunning the failing stanzas at `-j 1` on the box told the two
@@ -181,6 +183,7 @@ ENVIRONMENT_REFUSALS='hip_init
 hip_module_load_data_ex
 hip_stream_create_with_priority
 cu_init
+cu_device_primary_ctx_retain
 cu_module_load_data_ex
 cu_stream_create_with_priority'
 
