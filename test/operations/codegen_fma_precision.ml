@@ -21,18 +21,10 @@ let direct_fma_case ~prec ~first_id label =
   (Ll_test.set_at output (Idx.Fixed_idx 0) rhs, a, b, c, output)
 
 let () =
-  let integer_precs =
-    [
-      ("byte", Ops.byte, 8730);
-      ("uint16", Ops.uint16, 8740);
-      ("int32", Ops.int32, 8750);
-      ("uint32", Ops.uint32, 8760);
-      ("int64", Ops.int64, 8770);
-      ("uint64", Ops.uint64, 8780);
-    ]
-  in
-  p_all ~min:6 "every integer FMA is rejected at the C-family codegen boundary" integer_precs
-    ~f:(fun (label, prec, first_id) ->
+  let cases = List.mapi Ops.integer_precs ~f:(fun i prec -> (prec, 8730 + (10 * i))) in
+  p_all ~min:6 "every integer FMA is rejected at the C-family codegen boundary" cases
+    ~f:(fun (prec, first_id) ->
+      let label = Ops.prec_string prec in
       let llc, _, _, _, _ = direct_fma_case ~prec ~first_id label in
       let name = label ^ "_fma_codegen" in
       let optimized = Ll_test.optimize ~name llc in
@@ -44,7 +36,8 @@ let () =
               (Printf.sprintf "C_syntax.pp_scalar: FMA requires floating-point precision, got %s"
                  label));
 
-  let float_llc, a, b, c, output = direct_fma_case ~prec:Ops.single ~first_id:8800 "single" in
+  let first_id = 8730 + (10 * List.length cases) in
+  let float_llc, a, b, c, output = direct_fma_case ~prec:Ops.single ~first_id "single" in
   let float_optimized = Ll_test.optimize ~name:"float_fma_codegen" float_llc in
   let got =
     Ll_test.execute ~name:"float_fma_codegen" float_optimized

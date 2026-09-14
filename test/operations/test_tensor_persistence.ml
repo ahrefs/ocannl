@@ -332,21 +332,7 @@ let () =
   (* The mapping reinterprets the payload bytes as the host buffer, so precisions whose in-memory
      representation is not the payload's would silently decode to garbage: check them all. The
      padded node exercises the fallback -- its payload holds only the logical region. *)
-  let precisions =
-    [
-      ("single", Ops.single);
-      ("double", Ops.double);
-      ("half", Ops.half);
-      ("bfloat16", Ops.bfloat16);
-      ("byte", Ops.byte);
-      ("fp8", Ops.fp8);
-      ("uint16", Ops.uint16);
-      ("int32", Ops.int32);
-      ("uint32", Ops.uint32);
-      ("int64", Ops.int64);
-      ("uint64", Ops.uint64);
-    ]
-  in
+  let precisions = List.map Ops.scalar_precs ~f:(fun prec -> (Ops.prec_string prec, prec)) in
   let values = [| 1.0; 2.0; 32.0; 5.0 |] in
   let padding = Some ([| Ops.{ left = 1; right = 1 } |], 0.0) in
   let path = tmp_file "mapped" in
@@ -388,7 +374,12 @@ let () =
   (* Restore takes the same path, into already-existing device buffers. *)
   Tensor.unsafe_reinitialize ();
   let ctx = Context.cpu () in
-  let ctx, tn = make_tn ctx ~id:0 ~label:[ "p" ] Ops.single [| 4 |] [| 0.0; 0.0; 0.0; 0.0 |] in
+  let single_id, _ =
+    List.findi precisions ~f:(fun _ (_, prec) -> Ops.equal_prec prec Ops.single) |> Option.value_exn
+  in
+  let ctx, tn =
+    make_tn ctx ~id:single_id ~label:[ "p" ] Ops.single [| 4 |] [| 0.0; 0.0; 0.0; 0.0 |]
+  in
   let t_set = Set.of_list (module Tn) [ tn ] in
   let mapped_before, _ = Nd.ingestion_counts () in
   let ctx = Persistence.restore ~ctx ~mmap:true t_set path in

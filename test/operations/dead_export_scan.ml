@@ -55,7 +55,6 @@ let exempt_zero_reference_exports =
     "Backend_intf.mma_input_format_of_sexp";
     "Backend_intf.mma_staged_layout_of_sexp";
     "Builtins_cc.source";
-    "C_syntax.all_precs";
     "C_syntax.c_float_literal";
     "C_syntax.c_keywords";
     "C_syntax.c_stdlib_idents";
@@ -208,7 +207,6 @@ let exempt_zero_reference_exports =
     "Ops.interpret_ternop";
     "Ops.is_assign_op";
     "Ops.is_binop_infix";
-    "Ops.pack_prec";
     "Ops.op_of_sexp";
     "Ops.precision_to_string";
     "Ops.ptr_to_string_hum";

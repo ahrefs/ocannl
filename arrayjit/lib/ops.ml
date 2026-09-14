@@ -60,6 +60,60 @@ let fp8 = Fp8_prec Fp8
 let single = Single_prec Single
 let double = Double_prec Double
 
+(** Canonical witnesses for every precision, including [Void_prec]. [prec] carries GADT witnesses,
+    so its enumeration cannot use [@@deriving enumerate]. Keep the exhaustive sentinel beside this
+    list: a new constructor requires an explicit enumeration decision here. *)
+let all_precs =
+  [
+    Void_prec;
+    byte;
+    uint16;
+    int32;
+    uint32;
+    int64;
+    uint64;
+    uint4x32;
+    half;
+    bfloat16;
+    fp8;
+    single;
+    double;
+  ]
+
+let _all_precs_is_complete : prec -> unit = function
+  | Void_prec | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
+  | Uint64_prec _ | Uint4x32_prec _ | Half_prec _ | Bfloat16_prec _ | Fp8_prec _ | Single_prec _
+  | Double_prec _ ->
+      ()
+
+(** Families describe arithmetic, not the Bigarray representation: bf16 and fp8 are floats despite
+    integer storage witnesses. [Uint4x32_prec] is packed RNG state, not a scalar integer;
+    [Void_prec] represents no value and belongs to neither arithmetic family. *)
+type prec_family = No_value | Scalar_integer | Packed_integer | Scalar_float
+
+let prec_family = function
+  | Void_prec -> No_value
+  | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _ ->
+      Scalar_integer
+  | Uint4x32_prec _ -> Packed_integer
+  | Half_prec _ | Bfloat16_prec _ | Fp8_prec _ | Single_prec _ | Double_prec _ -> Scalar_float
+
+(** Scalar integer arithmetic only; excludes packed [uint4x32] and [Void_prec]. *)
+let is_integer prec = match prec_family prec with Scalar_integer -> true | _ -> false
+
+let is_float prec = match prec_family prec with Scalar_float -> true | _ -> false
+
+(** Scalar arithmetic formats, including integer and floating-point formats. *)
+let scalar_precs = List.filter all_precs ~f:(fun prec -> is_integer prec || is_float prec)
+
+let integer_precs = List.filter scalar_precs ~f:is_integer
+let float_precs = List.filter scalar_precs ~f:is_float
+
+(** All storage-bearing formats, including packed RNG state; [Void_prec] is excluded. Backend
+    rendering sweeps use this set even though individual operators can reject particular pairs. *)
+let storage_precs =
+  List.filter all_precs ~f:(fun prec -> match prec_family prec with No_value -> false | _ -> true)
+
 (** Returns the precision to use for indexing arithmetic: {b signed} int32, or int64 under the
     [large_models] setting (docs/proposals/signed-index-precision.md). Signedness makes machine
     index arithmetic agree with mathematical integers (no wrap traps for negative intermediates such
@@ -255,21 +309,6 @@ let prec_in_bytes = function
    suffices for AVX/AVX2 and NEON vector loads; AVX-512 would need 64 — raise it here
    (gh-ocannl-164; every consumer parameterizes on this constant, nothing hardcodes 32). *)
 let buffer_alignment = 32
-
-let is_float = function
-  | Void_prec -> false
-  | Byte_prec _ -> false
-  | Uint16_prec _ -> false
-  | Int32_prec _ -> false
-  | Uint32_prec _ -> false
-  | Int64_prec _ -> false
-  | Uint64_prec _ -> false
-  | Uint4x32_prec _ -> false
-  | Half_prec _ -> true
-  | Bfloat16_prec _ -> true
-  | Fp8_prec _ -> true
-  | Single_prec _ -> true
-  | Double_prec _ -> true
 
 (** Prefer precision which is more likely to remain functional in the resulting computations.
     uint4x32 always dominates, because operations that work on uint4x32 do not support other
