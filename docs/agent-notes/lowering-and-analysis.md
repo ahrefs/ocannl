@@ -337,3 +337,13 @@ files.
   descend-only walkers (`hoist_cross_statement_cse`, `proc_contains_set_from_vec`,
   `stmt_reads_cell`, the stored-computation scanners) need an explicit arm. Test-side walkers
   (`Ll_test.walk_t`, `bench_harness`, a few tests) surface only under the full `dune build @check`.
+
+- `Low_level.Access_fold` is the ordered analysis traversal for Low_level IR (gh-ocannl-630).
+  Its mandatory policy distinguishes structural discarded/dead-code visits from rendered operands,
+  scope descent, gated subtrees, statement guard context and synthetic scan assignments. Scan inits
+  precede the body and rotations follow it; after-statement hooks see RHS reads before writes.
+  Merge taint, spliced reads, traced-store reconciliation, hosted-init classification, loop bounds
+  and the statement-local symbol census use it. Fan-in shares its statement spine but keeps the
+  max-arm scalar algebra: a union traversal is not a conditional cost bound. Rewriters, affine
+  path construction and cleanup's placement-dependent survival checks retain their own semantics;
+  do not infer execution order among hoisted sibling scope definitions from scalar source order.

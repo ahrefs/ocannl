@@ -5246,3 +5246,11 @@
  (libraries base ocannl arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ ; ocannl-backend: none -- pure Low_level traversal and analysis, no execution.
+ (name access_fold)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules access_fold)
+ (libraries base arrayjit.ir arrayjit.ll_builders arrayjit.verdict))

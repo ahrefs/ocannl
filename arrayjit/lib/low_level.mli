@@ -271,6 +271,60 @@ and carried = { prev : scope_id; next : scope_id; init : scalar_t }
     [prev := next] after each iteration, [prev := init] before the first. Both ids name the same
     virtual node, whose precision is the state's precision. *)
 
+(** Ordered read-only Low_level traversal. Every policy decision is mandatory. Statements are
+    visited before children and after their reads; Seq is left-to-right. Tile_mma descends through
+    its equivalent fallback. A Prune skips children AND the after hook. Hooks may prune Tile_mma or
+    Scan_loop when the consumer treats them as opaque.
+
+    [Visit] discarded operands is structural; [Skip] follows rendering. Gated operands are visited
+    in source order (both Where arms), never combined as a cost bound. [Skip] gated operands skips
+    the entire subtree, including hoisted definitions: it is NOT an execution floor. Consumers with
+    branch algebras can prune scalars and supply their own reduction. Scope bodies reset [gated]
+    because definitions hoist, while preserving statement guards. Dead-loop bodies visited
+    structurally carry [live=false]; this does not evaluate constant guards or perform cleanup's
+    placement-dependent setter elimination.
+
+    Scan init assignments precede the body; rotation assignments follow it. With
+    [scan_implicit = Skip], init expressions are still visited but synthetic Set_local events are
+    absent. Scans must satisfy [validate_scan_loops] (in particular nonempty ranges). The fold
+    visits a loop body once, not once per iteration; rotation events describe value dependencies
+    rather than simulating simultaneous assignment. [implicit] identifies synthetic statements and
+    their descendants; [scope_depth] counts Local_scope bodies. *)
+module Access_fold : sig
+  type visit = Visit | Skip
+  type guards = Track | Ignore
+  type implicit = Explicit | Scan_init | Scan_rotate
+
+  type policy = {
+    discarded_operands : visit;
+    gated_operands : visit;
+    dead_loops : visit;
+    local_scopes : visit;
+    guards : guards;
+    scan_implicit : visit;
+  }
+
+  type context = {
+    live : bool;
+    guards : scalar_arg list;
+    gated : bool;
+    scope_depth : int;
+    implicit : implicit;
+  }
+
+  type 'a descent = Continue of 'a | Prune of 'a
+
+  type 'a hooks = {
+    statement : context -> 'a -> t -> 'a descent;
+    scalar : context -> 'a -> scalar_t -> 'a descent;
+    after_statement : context -> 'a -> t -> 'a;
+    after_scalar : context -> 'a -> scalar_t -> 'a;
+  }
+
+  val hooks : unit -> 'a hooks
+  val fold : policy:policy -> hooks:'a hooks -> init:'a -> t -> 'a
+end
+
 module Canonical_render : sig
   (** gh-563: the one canonical rendering of lowered code, shared by both digest consumers —
       {!analysis_cache_stats}' cache (keyed inside [optimize]) and [Schedule_cache.canonicalize]
