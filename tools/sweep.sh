@@ -347,12 +347,23 @@ printf '' >>"$HISTORY" || die "cannot append to $HISTORY"
 # tearing down would let the next one take a worktree that is still in use.
 # Space-separated strings rather than arrays: bash 3.2 (macOS's /bin/bash, the
 # scheduled host's) refuses an empty array expansion under `set -u`.
+#
+# A lane is registered as `pid:machine`, and signalled only while its
+# `alive.<machine>` marker exists. bash reaps an exited child in the background,
+# so a finished lane's pid is free for the system to reuse while the top level
+# is still waiting on a slower lane -- 90 minutes, on a hung unit -- and a relay
+# that trusted the bare pid could TERM an unrelated process. The marker is
+# created before the lane is forked and removed by the lane itself on its way
+# out (lane_exit), while its pid is still its own.
 UNIT_PID=
 LANE_PIDS=
 relay() {
-  local pid
-  for pid in $UNIT_PID $LANE_PIDS; do kill -TERM "$pid" 2>/dev/null; done
-  for pid in $UNIT_PID $LANE_PIDS; do wait "$pid" 2>/dev/null; done
+  local pid entry live=
+  for entry in $LANE_PIDS; do
+    [ -e "$LANE_DIR/alive.${entry#*:}" ] && live="$live ${entry%%:*}"
+  done
+  for pid in $UNIT_PID $live; do kill -TERM "$pid" 2>/dev/null; done
+  for pid in $UNIT_PID $live; do wait "$pid" 2>/dev/null; done
   exit "$1"
 }
 trap 'relay 130' INT
@@ -1441,9 +1452,9 @@ run_unit() { # machine backend host
 }
 
 # Publish the lane's buffered unit lines as one block, under a run-wide lock so
-# two lanes finishing together cannot interleave their blocks. Also the lane's
-# EXIT trap: a lane that dies or is cancelled mid-unit still publishes what the
-# unit had said, as the serial loop's lines were already on stdout by then.
+# two lanes finishing together cannot interleave their blocks. The buffer is
+# emptied only after a publication that succeeded: a failed one returns non-zero
+# with the lines still in it, for the caller to die over and lane_exit to rescue.
 flush_lane_output() {
   [ -s "$LANE_OUT" ] || return 0
   perl -e 'use Fcntl ":flock";
@@ -1451,8 +1462,19 @@ flush_lane_output() {
     flock($l, LOCK_EX) or exit 1;
     open(my $in, "<", $ARGV[1]) or exit 1;
     print while <$in>;
-    close(STDOUT) or exit 1;' "$LANE_DIR/output.lock" "$LANE_OUT"
+    close($in) or exit 1;
+    close(STDOUT) or exit 1;' "$LANE_DIR/output.lock" "$LANE_OUT" || return 1
   : >"$LANE_OUT"
+}
+
+# The lane's EXIT trap. A lane that dies or is cancelled mid-unit still publishes
+# what its unit had said -- the serial loop's lines were already on stdout by
+# then -- or, if stdout itself is what failed, puts them on stderr rather than
+# losing them. bash 3.2 runs a subshell's EXIT trap only on an explicit `exit`,
+# which is why run_lane ends with one.
+lane_exit() {
+  flush_lane_output || cat "$LANE_OUT" >&2
+  rm -f "$LANE_DIR/alive.$LANE_NAME"
 }
 
 # One machine's units, in table order, one at a time: the local units share one
@@ -1466,21 +1488,23 @@ flush_lane_output() {
 # loop did. The one way a lane ends early is `die` -- a row or state file that
 # could not be written -- and that fails only its lane; the top level lets the
 # others finish recording and then exits 2.
-run_lane() { # machine
+run_lane() { # machine -- only ever as a background job: it ends in `exit`
   local lane=$1 unit machine backend host
   LANE_PIDS=
   UNIT_PID=
+  LANE_NAME=$lane
   LANE_OUT=$LANE_DIR/output.$lane
   trap 'relay 130' INT
   trap 'relay 143' TERM
-  trap flush_lane_output EXIT
+  trap lane_exit EXIT
   for unit in "${UNITS[@]}"; do
     IFS=: read -r machine backend host <<<"$unit"
     [ "$machine" = "$lane" ] || continue
     wanted "$backend" || continue
     run_unit "$machine" "$backend" "$host"
-    flush_lane_output
+    flush_lane_output || die "cannot publish the $machine/$backend summary to stdout"
   done
+  exit 0
 }
 
 # Lanes, in first-appearance order of the table's machine column: a new box or
@@ -1515,12 +1539,24 @@ echo "sweep $stamp  ref=$REF ($run_sha)  slow=$SLOW  target=${TARGET:-<all>}  ex
 echo "lanes:$lanes_summary"
 echo
 
+# Registration is atomic with respect to the relay: a signal arriving between a
+# lane's fork and its entry in LANE_PIDS would otherwise let the relay return
+# past a lane it could not see, which would keep running -- and holding fd 9 --
+# for the rest of its cap. Signals during the launch are only noted, and relayed
+# once every lane is registered.
 LANE_PID_LIST=()
+pending_signal=
+trap 'pending_signal=130' INT
+trap 'pending_signal=143' TERM
 for lane in "${LANES[@]}"; do
+  : >"$LANE_DIR/alive.$lane" || die "cannot create the $lane lane's marker"
   run_lane "$lane" &
   LANE_PID_LIST+=("$!")
-  LANE_PIDS="$LANE_PIDS $!"
+  LANE_PIDS="$LANE_PIDS $!:$lane"
 done
+trap 'relay 130' INT
+trap 'relay 143' TERM
+[ -z "$pending_signal" ] || relay "$pending_signal"
 
 # Wait for EVERY lane before anything that summarises the run. A lane's non-zero
 # exit is its `die` (already reported on stderr), or a lane signalled on its own;

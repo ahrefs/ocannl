@@ -62,7 +62,7 @@ unset SWEEP_TEST_CALLS SWEEP_TEST_WAIT_PREFIX SWEEP_TEST_OPAM_RC \
   SWEEP_TEST_OPAM_OUT SWEEP_TEST_OPAM_OUT_CC SWEEP_TEST_OPAM_OUT_MULTIDEV_CC \
   SWEEP_TEST_OPAM_OUT_METAL SWEEP_TEST_LOCAL_BOX SWEEP_TEST_JOBS \
   SWEEP_TEST_OPAM_SERIAL_RED SWEEP_TEST_OPAM_OUT_SERIAL SWEEP_TEST_SSH_CALLS \
-  SWEEP_TEST_SSH_MODE SWEEP_TEST_OWN_GROUP
+  SWEEP_TEST_SSH_MODE SWEEP_TEST_OWN_GROUP SWEEP_TEST_WAIT_TICKS
 
 sweep=$1
 aggregate=$2
@@ -89,6 +89,12 @@ state=$tmp/state
 fake_bin=$tmp/bin
 calls=$tmp/opam.calls
 ssh_calls=$tmp/ssh.calls
+# Every fixture wait in this file -- the fake opam's hold, the fake ssh's
+# release and hang, and the harness's own readiness checks -- is bounded by
+# this many 50ms ticks. Each wait ends as soon as its condition holds, so the
+# bound is paid only by a run that is already failing; it is generous so that a
+# loaded CI runner starting a nested sweep slowly is not mistaken for one.
+wait_ticks=2400
 mkdir -p "$state/logs" "$fake_bin"
 
 git init -q --bare "$origin"
@@ -173,7 +179,7 @@ if [ -n "${SWEEP_TEST_WAIT_PREFIX:-}" ]; then
   while [ ! -e "$SWEEP_TEST_WAIT_PREFIX.release" ]; do
     sleep 0.05
     waited=$((waited + 1))
-    [ "$waited" -lt 200 ] || exit 99
+    [ "$waited" -lt "$SWEEP_TEST_WAIT_TICKS" ] || exit 99
   done
 fi
 exit "${SWEEP_TEST_OPAM_RC:-0}"
@@ -201,7 +207,7 @@ case ${SWEEP_TEST_SSH_MODE:-} in
     while [ ! -e "$SWEEP_TEST_WAIT_PREFIX.ready" ]; do
       sleep 0.05
       waited=$((waited + 1))
-      [ "$waited" -lt 200 ] || exit 1
+      [ "$waited" -lt "$SWEEP_TEST_WAIT_TICKS" ] || exit 1
     done
     : >"$SWEEP_TEST_WAIT_PREFIX.release"
     ;;
@@ -210,7 +216,7 @@ case ${SWEEP_TEST_SSH_MODE:-} in
     printf '%s\n' "$$" >>"$SWEEP_TEST_WAIT_PREFIX.ssh-pids"
     : >"$SWEEP_TEST_WAIT_PREFIX.ssh-running"
     waited=0
-    while [ "$waited" -lt 200 ]; do
+    while [ "$waited" -lt "$SWEEP_TEST_WAIT_TICKS" ]; do
       sleep 0.05
       waited=$((waited + 1))
     done
@@ -260,6 +266,7 @@ run_sweep_args() {
     "SWEEP_TEST_OPAM_OUT_SERIAL=${SWEEP_TEST_OPAM_OUT_SERIAL:-}" \
     "SWEEP_TEST_SSH_CALLS=$ssh_calls" \
     "SWEEP_TEST_SSH_MODE=${SWEEP_TEST_SSH_MODE:-}" \
+    "SWEEP_TEST_WAIT_TICKS=$wait_ticks" \
     "OCANNL_TOOL_SWEEP_LOCAL_BOX=${SWEEP_TEST_LOCAL_BOX-m4-max}" \
     "OCANNL_TOOL_SWEEP_JOBS=${SWEEP_TEST_JOBS:-}" \
     "OCANNL_TOOL_SWEEP_REPO=$main" \
@@ -752,7 +759,7 @@ grep -q '^aggregate-skips: cannot write report$' "$tmp/report-write.err"
 wait_prefix=$tmp/migration-lock
 SWEEP_TEST_WAIT_PREFIX=$wait_prefix run_sweep >"$tmp/holder.out" 2>"$tmp/holder.err" &
 holder_pid=$!
-for _ in {1..200}; do
+for ((waited = 0; waited < wait_ticks; waited++)); do
   [ -e "$wait_prefix.ready" ] && break
   sleep 0.05
 done
@@ -1181,9 +1188,11 @@ cancel_sweep() { # pid|group
     >"$prefix.out" 2>"$prefix.err" &
   pid=$!
   holder_pid=$pid
-  for _ in {1..200}; do
-    [ -e "$prefix.ready" ] && [ -e "$prefix.ssh-running" ] && break
+  waited=0
+  until [ -e "$prefix.ready" ] && [ -e "$prefix.ssh-running" ]; do
+    [ "$waited" -lt "$wait_ticks" ] || break
     sleep 0.05
+    waited=$((waited + 1))
   done
   [ -e "$prefix.ready" ] && [ -e "$prefix.ssh-running" ]
   case $how in

@@ -1321,9 +1321,9 @@ that they earn a lookup rather than always-loaded space.
   `(alias (name runtest) (deps (alias runtest-<name>)))` stanza, both of which `env_var_deps`
   checks.
 - Splitting a golden per backend is a decision about WHAT the golden holds, not a formatting choice,
-  and the bar is high in both directions. Its cost is a golden only some machine re-records — cc,
-  multidev_cc and metal on the reference Mac, cuda and hip only on the sweep's GPU boxes (whose
-  minix lane also carries the sweep's multidev_cc leg) — so a
+  and the bar is high in both directions. Its cost is a golden only some machine re-records — cc
+  and metal on the reference Mac, multidev_cc, cuda and hip only on the sweep's minix and rog-nv
+  lanes (a local multidev_cc run refreshes nothing the sweep then checks on the Mac) — so a
   codegen change that moves the output leaves the members no local run touches stale until the daily
   sweep says so. That is the gh-ocannl-700 lesson, and it makes a split worth paying for only where
   the difference is a genuine backend fact. **A member that keeps diverging from its siblings AFTER
