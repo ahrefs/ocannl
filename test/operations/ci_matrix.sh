@@ -32,14 +32,14 @@ def field(text, name):
     return ' '.join(line.strip() for line in content)
 
 
-def expression(value, event, windows=False, extended=False):
+def expression(value, event, windows=False):
     # This is the workflow's small expression vocabulary, not a second matrix.
     # Parse and whitelist the translated AST so a new operator fails loudly.
     value = value.removeprefix('${{').removesuffix('}}').strip()
     tokens = re.findall(r"'(?:[^']*)'|github\.event_name|inputs\.[a-z_]+|fromJSON|&&|\|\||!=|==|!|[(),]|\s+", value)
     assert ''.join(tokens) == value, value
     mapping = {'github.event_name': 'event', 'inputs.windows_only': 'windows',
-               'inputs.extended': 'extended', '&&': ' and ', '||': ' or ', '!': ' not '}
+               '&&': ' and ', '||': ' or ', '!': ' not '}
     translated = ''.join(mapping.get(token, token) for token in tokens).strip()
     tree = ast.parse(translated, mode='eval')
     permitted = (ast.Expression, ast.BoolOp, ast.And, ast.Or, ast.UnaryOp, ast.Not,
@@ -49,12 +49,12 @@ def expression(value, event, windows=False, extended=False):
         if isinstance(node, ast.Call):
             assert isinstance(node.func, ast.Name) and node.func.id == 'fromJSON'
     return eval(compile(tree, '<workflow expression>', 'eval'), {'__builtins__': {}},
-                dict(event=event, windows=windows, extended=extended, fromJSON=json.loads))
+                dict(event=event, windows=windows, fromJSON=json.loads))
 
 
-def matrix(text, event, windows=False, extended=False):
-    systems = expression(field(text, 'os'), event, windows, extended)
-    includes = expression(field(text, 'include'), event, windows, extended)
+def matrix(text, event, windows=False):
+    systems = expression(field(text, 'os'), event, windows)
+    includes = expression(field(text, 'include'), event, windows)
     axes = []
     for name in ('ocaml-compiler', 'suite'):
         match = re.search(r'^        ' + name + r':\n((?:          - .+\n)+)', text, re.M)
@@ -64,7 +64,7 @@ def matrix(text, event, windows=False, extended=False):
     jobs += [(entry['os'], entry['ocaml-compiler'], entry['suite']) for entry in includes]
     fmt = re.search(r'^  fmt:\n    if: (.*)$', text, re.M)
     assert fmt, 'Formatting selection missing'
-    return sorted(jobs), bool(expression(fmt[1], event, windows, extended))
+    return sorted(jobs), bool(expression(fmt[1], event, windows))
 
 
 normal = sorted([('ubuntu-latest', '5.5.x', 'main'),
@@ -75,29 +75,34 @@ windows = [('windows-latest', '5.5.x', 'main'), ('windows-latest', '5.5.x', 'tra
 
 
 def controls(text):
-    for event in ('pull_request', 'push'):
-        assert matrix(text, event) == (normal, True), event
+    # Opt-in stays false in the actual dispatch schema, not just this evaluator.
+    option = text.split('      windows_only:\n', 1)[1].split('      expected_sha:', 1)[0]
+    assert 'default: false' in option, 'fallback must be opt-in'
     for option in (False, True):
+        for event in ('pull_request', 'push'):
+            assert matrix(text, event, option) == (normal, True), event
         assert matrix(text, 'schedule', option) == (full, True), 'scheduled full coverage'
-        assert matrix(text, 'workflow_dispatch', True, option) == (windows, False), 'Windows only'
-    assert matrix(text, 'workflow_dispatch', False, False) == (normal, True)
-    assert matrix(text, 'workflow_dispatch', False, True) == (full, True)
+    assert matrix(text, 'workflow_dispatch', False) == (normal, True), 'ordinary manual run'
+    assert matrix(text, 'workflow_dispatch', True) == (windows, False), 'explicit Windows fallback'
 
 
 controls(source)
-print('PASS normal, scheduled, extended and Windows-only matrix selections')
+print('PASS normal, scheduled and explicit Windows fallback matrix selections')
 for label, mutant in (
-    ('duplicate platform jobs', source.replace("github.event_name == 'workflow_dispatch' && inputs.windows_only", 'inputs.extended')),
-    ('schedule loses extended coverage', source.replace("github.event_name == 'schedule' || inputs.extended", 'inputs.extended')),
+    ('fallback enabled by default', source.replace('default: false', 'default: true')),
+    ('automatic Windows jobs', source.replace("github.event_name == 'schedule'", "github.event_name != 'workflow_dispatch'")),
+    ('schedule loses coverage', source.replace("github.event_name == 'schedule'", "github.event_name == 'never'")),
     ('schedule narrowed by dispatch input', source.replace("github.event_name == 'workflow_dispatch' && inputs.windows_only", 'inputs.windows_only')),
     ('duplicate formatting job', source.replace("github.event_name != 'workflow_dispatch' || !inputs.windows_only", "github.event_name != 'never'")),
 ):
+    assert mutant != source, label
     try:
         controls(mutant)
     except AssertionError:
         print('PASS rejected mutant:', label)
     else:
         raise AssertionError('accepted mutant: ' + label)
+
 
 # Run the exact bash guard from the workflow with git reporting a fixture HEAD.
 step = source.split('    - name: Verify dispatch commit\n', 1)[1].split('    # Hermetic', 1)[0]
@@ -119,7 +124,7 @@ def guard(code, expected, run, checkout, only=True):
     return result.returncode
 
 assert guard(script, sha, sha, sha) == 0
-assert guard(script, '', sha, sha, False) == 0  # existing extended dispatch
+assert guard(script, '', sha, sha, False) == 0  # ordinary manual dispatch
 for label, expected, run, checkout in (
     ('missing intended SHA', '', sha, sha), ('malformed SHA', 'abc', sha, sha),
     ('obsolete run head', sha, other, other), ('wrong checkout', sha, sha, other),
