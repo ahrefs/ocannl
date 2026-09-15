@@ -1225,14 +1225,21 @@ lane_stopped_record=$(sed -n 's/^run:  *//p' <<<"$lane_stopped")
 # beside the script -- on a forced unscoped run, which is the only shape that
 # aggregates. The units all recorded, so their rows stay real; it is the run-level
 # kind that has to tell the truth about how the process ended.
-# Everything else the script resolves beside itself comes along -- only
-# aggregate-skips.sh is withheld -- so the run reaches the aggregation step
-# instead of refusing at startup over the box declaration it parses with
-# fixture_digest.py.
+# Everything the script resolves beside itself is SYMLINKED in and only
+# aggregate-skips.sh is withheld, so the run reaches the aggregation step instead
+# of refusing at startup over some other sibling. Symlinked as a set rather than
+# copied by name: sweep.sh reaches for its neighbours (box-jobs.sh, and the
+# benchmarks fixture parser one level up) and a fixture naming them individually
+# goes red the next time one is added -- which is exactly how this one first
+# failed, on a base that had grown one.
+lonely_tools=$(cd "$(dirname "$sweep")" && pwd)
 mkdir -p "$tmp/lonely/tools" "$tmp/lonely/benchmarks"
-cp "$sweep" "$tmp/lonely/tools/sweep.sh"
-cp "$(dirname "$sweep")/../benchmarks/fixture_digest.py" "$tmp/lonely/benchmarks/"
-chmod +x "$tmp/lonely/tools/sweep.sh"
+for lonely_sibling in "$lonely_tools"/*; do
+  if [ "$(basename "$lonely_sibling")" = aggregate-skips.sh ]; then continue; fi
+  ln -s "$lonely_sibling" "$tmp/lonely/tools/$(basename "$lonely_sibling")"
+done
+ln -s "$lonely_tools/../benchmarks/fixture_digest.py" "$tmp/lonely/benchmarks/fixture_digest.py"
+[ ! -e "$tmp/lonely/tools/aggregate-skips.sh" ]
 sweep_with_aggregator=$sweep
 sweep=$tmp/lonely/tools/sweep.sh
 set +e
