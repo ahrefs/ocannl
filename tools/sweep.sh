@@ -660,20 +660,6 @@ loaded_rtc_cmd() {
   printf '%s' "${tmpl//RTC/$rtc}"
 }
 
-# Read the kernel's log for the window on the box that ran the unit. `journalctl
-# -k --since` rather than `dmesg`, because the VM can DIE inside the window: on
-# 2026-09-15 minix's went away twice mid-unit (a Windows Update restart, then an
-# unheld VM powering off), and `dmesg` in the next session starts from the new
-# boot and loses exactly the evidence being collected. The persistent journal
-# spans boots. `dmesg -T` stays as the fallback for a box whose journald keeps no
-# kernel log, where losing a dead boot's window is better than collecting nothing.
-dxg_window_cmd() { # start-epoch
-  printf 'if command -v journalctl >/dev/null 2>&1 && '
-  printf 'journalctl -k -n 1 >/dev/null 2>&1; then '
-  printf 'journalctl -k --since @%s --no-pager 2>/dev/null; ' "$1"
-  printf 'else dmesg -T 2>/dev/null; fi; true'
-}
-
 # Appended to the unit's log, and carried into its fingerprint, like the
 # rtc-context block. Its own budget, for the reason collect_rtc_context documents:
 # a diagnostic must not be able to overwrite the verdict it explains.

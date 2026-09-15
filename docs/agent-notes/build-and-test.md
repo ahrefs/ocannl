@@ -1956,10 +1956,16 @@ that they earn a lookup rather than always-loaded space.
   (`dxgvmb_send_sync_msg`, `create_existing_sysmem`, `dxgkio_create_allocation`), so counting the
   `fffffff5` status would count it twice. Everything else in the window is kept and shown,
   counted or not: an unrecognised signature is what this exists to surface. Collected with
-  `journalctl -k --since @<start>`, with `dmesg -T` only as the fallback where journald keeps no
-  kernel log — the VM can DIE inside the window (minix's went away twice on 2026-09-15), and
-  `dmesg` in the next session starts from the new boot and loses exactly the evidence being
-  collected, while the persistent journal spans boots. The window and the count are also fields of
+  `journalctl _TRANSPORT=kernel --since @<start>` — **not `journalctl -k`, which is that same match
+  plus an implied `-b`** and so answers only about the CURRENT boot. Both sweep boxes keep a
+  persistent journal (`/var/log/journal`), which is what lets a window span the VM dying inside it
+  (minix's went away twice on 2026-09-15, and `dmesg` in the next session starts from the new boot
+  and loses exactly the evidence being collected); `-k` throws that away again at the boot
+  boundary, silently. Measured while building this: over a minix window covering three boots, `-k`
+  returned 123 of its `vmbus_sendpacket` lines and the bare match all 365, and `-k` reported ZERO
+  dxg lines for rog-nv's 2026-09-13 window, which actually holds 255 of them and that unit's
+  three-message burst — the burst the issue was filed about. `dmesg -T` stays as the fallback only
+  where journald keeps no kernel log. The window and the count are also fields of
   the run record's `unit` row, so the consuming routine reads them without parsing a log.
 - **Reading a rerun's verdict.** Adding a name means adding it in both places: the table in
   `sweep.sh` gates the rerun, this one records what the name has been seen with. A name is worth

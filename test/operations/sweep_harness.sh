@@ -30,7 +30,7 @@ on_error() {
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
     capped capped_target remote_opt_in serial_red serial_clean serial_two_inline \
     serial_many_inline serial_control lanes lane_stop_seed lane_stopped \
-    aggregator_missing stamp_advance dxg_clean dxg_red dxg_trigger dxg_no_trigger \
+    aggregator_missing stamp_advance dxg_clean dxg_red dxg_collection dxg_trigger dxg_no_trigger \
     after_cancel; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
@@ -1326,6 +1326,19 @@ done
 # same advanced stamp, so the row and its artifacts still name one run.
 [ -n "$(awk -F '\t' -v s="$advanced_stamp" '$1 == s && $7 == "stamp-probe"' "$state/history.tsv")" ]
 rm -f "$state"/logs/*-seed.log
+
+# The collection reads the journal ACROSS boots. `journalctl -k` is the same
+# kernel match plus an implied `-b`, which truncates the answer at the current
+# boot -- and a window spanning a VM death is the one case this collection exists
+# for. Measured on minix (2026-09-15, three boots): `-k` returned 123 of the
+# window's vmbus lines against 365 for the match, and the same implied `-b`
+# reported zero dxg lines for rog-nv's 2026-09-13 window, which holds 255 and that
+# unit's burst. Pinned on the emitted command because no fixture has a journal:
+# this is the trap, not the spelling.
+dxg_collection=$(dxg_window_cmd 1757894400)
+grep -q '_TRANSPORT=kernel --since @1757894400' <<<"$dxg_collection"
+absent 'journalctl -k' <<<"$dxg_collection"
+grep -q 'dmesg -T' <<<"$dxg_collection"
 
 # The kernel-evidence trigger, both directions (gh-ocannl-979). The failure text
 # is the one the negative control above uses -- a red carrying NO name from

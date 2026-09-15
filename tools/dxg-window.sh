@@ -62,3 +62,26 @@ dxg_bursts() { # log
     2>/dev/null | tail -1
 }
 
+# Read the kernel's log for the window on the box that ran the unit. The journal
+# rather than `dmesg`, because the VM can DIE inside the window: on 2026-09-15
+# minix's went away twice mid-unit (a Windows Update restart, then an unheld VM
+# powering off), and `dmesg` in the next session starts from the new boot and
+# loses exactly the evidence being collected. Both sweep boxes keep a persistent
+# journal (`/var/log/journal`), so it spans those deaths; `dmesg -T` stays as the
+# fallback for a box whose journald keeps no kernel log, where losing a dead
+# boot's window beats collecting nothing.
+#
+# `_TRANSPORT=kernel` and NOT `-k`, which is the same match plus an implied `-b`:
+# `-k` restricts the answer to the CURRENT boot, so a window spanning a VM death
+# -- the one case this collection exists for -- would come back truncated at the
+# boot boundary, with nothing to say it had been. Measured on minix, 2026-09-15,
+# over a window covering three boots: `-k --since` returned 123 of the window's
+# `vmbus_sendpacket` lines, `_TRANSPORT=kernel --since` all 365. The same implied
+# `-b` reported ZERO dxg lines for rog-nv's 2026-09-13 window, which in fact holds
+# 255 of them and that unit's three-message burst.
+dxg_window_cmd() { # start-epoch
+  printf 'if command -v journalctl >/dev/null 2>&1 && '
+  printf 'journalctl _TRANSPORT=kernel -n 1 >/dev/null 2>&1; then '
+  printf 'journalctl _TRANSPORT=kernel --since @%s --no-pager 2>/dev/null; ' "$1"
+  printf 'else dmesg -T 2>/dev/null; fi; true'
+}
