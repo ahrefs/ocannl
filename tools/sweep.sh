@@ -952,7 +952,8 @@ write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-r
       wanted "$backend" || continue
       # A lane publishes its completion marker as its last act, so its absence
       # covers every way a lane can fail to finish -- its own `die`, a signal
-      # relayed to it -- with no second bookkeeping channel to keep in step.
+      # relayed to it -- and the top level removes the marker of any lane whose
+      # wait status was nonzero, so the flag cannot disagree with the exit kind.
       if [ -e "$LANE_DIR/lane-done.$machine" ]; then stopped=0; else stopped=1; fi
       # The last row this run wrote for the unit, or none. A unit is recorded
       # once, so `tail -1` only matters if a future change records twice: the
@@ -1738,7 +1739,16 @@ failed_lanes=
 for ((i = 0; i < ${#LANES[@]}; i++)); do
   wait "${LANE_PID_LIST[$i]}"
   lane_rc=$?
-  [ "$lane_rc" -eq 0 ] || failed_lanes="$failed_lanes ${LANES[$i]} (exit $lane_rc)"
+  if [ "$lane_rc" -ne 0 ]; then
+    failed_lanes="$failed_lanes ${LANES[$i]} (exit $lane_rc)"
+    # The wait status outranks the marker. A lane signalled or killed AFTER
+    # publishing its marker but before its shell exited would otherwise be
+    # recorded `stopped=0` inside a `lane-stopped` run -- a record contradicting
+    # itself and naming no failed lane. Where no status exists to outrank it (the
+    # cancellation path, which never reaches this loop), the marker keeps its own
+    # meaning: a lane that published it had finished its units.
+    rm -f "$LANE_DIR/lane-done.${LANES[$i]}"
+  fi
 done
 LANE_PIDS=
 
