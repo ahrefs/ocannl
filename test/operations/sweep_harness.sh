@@ -1514,13 +1514,11 @@ printf 'fixture unit log\n' >"$dxg_trigger_log"
 printf '%s\n' "$dxg_window_block" >"$(dxg_sidecar "$dxg_trigger_log")"
 dxg_window_red "$dxg_trigger_log"
 [ "$(dxg_bursts "$dxg_trigger_log")" = 1 ]
-[ "$(dxg_window_bounds "$dxg_trigger_log")" = \
-  "$(printf '20260915T090000Z\t20260915T091000Z')" ]
+[ "$(dxg_window_bounds "$dxg_trigger_log")" = '20260915T090000Z 20260915T091000Z' ]
 grep -q '^dxg window: burst present$' <<<"$(dxg_fingerprint_lines "$dxg_trigger_log")"
 # A failed collection reaches the record as `unavailable` -- never as `-`, which
 # is the unit nobody tried to read -- keeping the window it knows.
-[ "$(dxg_window_bounds "$tmp/dxg-unavailable.log")" = \
-  "$(printf '20260915T090000Z\t20260915T091000Z')" ]
+[ "$(dxg_window_bounds "$tmp/dxg-unavailable.log")" = '20260915T090000Z 20260915T091000Z' ]
 [ "$(dxg_bursts "$tmp/dxg-unavailable.log")" = unavailable ]
 # And where it failed before the box could report any bounds -- an unreachable
 # probe, a box whose `date` said nothing -- the bounds are `-` and the count is
@@ -1528,7 +1526,7 @@ grep -q '^dxg window: burst present$' <<<"$(dxg_fingerprint_lines "$dxg_trigger_
 # that has no window because none was ever collected.
 dxg_window_unavailable - - 'no clock reading from rog-nv' \
   >"$(dxg_sidecar "$tmp/dxg-noclock.log")"
-[ "$(dxg_window_bounds "$tmp/dxg-noclock.log")" = "$(printf -- '-\t-')" ]
+[ "$(dxg_window_bounds "$tmp/dxg-noclock.log")" = '- -' ]
 [ "$(dxg_bursts "$tmp/dxg-noclock.log")" = unavailable ]
 if dxg_window_red "$tmp/dxg-noclock.log"; then
   printf 'sweep_harness: a collection with no bounds was read as environment-red\n' >&2

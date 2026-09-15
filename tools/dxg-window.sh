@@ -116,13 +116,18 @@ dxg_bursts() { # log
 # a dmesg without it fails the collection rather than reporting an unbounded ring
 # as this window.
 dxg_window_cmd() { # remote-start-epoch
-  # The probe must see an ENTRY, not merely output: journalctl with no readable
-  # kernel journal exits 0 and prints `-- No entries --` on stdout (the
+  # The probe must see an ENTRY, and one INSIDE THIS WINDOW. journalctl with no
+  # readable kernel journal exits 0 and prints `-- No entries --` on stdout (the
   # explanation goes to stderr), so both a status test and a nonempty test select
   # journald there and query a second empty journal instead of falling back --
   # recording a burst still sitting in the kernel ring as zero. Keying on "a line
   # that is not a `--` marker" holds whatever journalctl decides to print, which
-  # `--quiet` alone does not guarantee.
+  # `--quiet` alone does not guarantee. Bounding the probe to the window covers
+  # the other half of the same hazard: a journal holding historical entries but
+  # not recording the CURRENT boot answers an unbounded probe from its history,
+  # and the bounded query that follows then returns nothing while the burst sits
+  # in the dmesg ring nobody consulted. A window genuinely quiet in the journal
+  # falls through to dmesg, which -- bounded the same way -- simply agrees.
   #
   # BOTH bounds are instants of the remote's own clock -- the start read by the
   # reachability probe when the unit began there, the end read here -- because the
@@ -149,8 +154,8 @@ dxg_window_cmd() { # remote-start-epoch
   printf 'dxg_start=%s; ' "$1"
   printf 'echo "dxg-window-bounds $dxg_start $dxg_end"; '
   printf 'if command -v journalctl >/dev/null 2>&1 && '
-  printf 'journalctl -q _TRANSPORT=kernel -n 1 --no-pager 2>/dev/null | '
-  printf 'grep -qv "^--"; then '
+  printf 'journalctl -q _TRANSPORT=kernel --since @$dxg_start --until @$dxg_end '
+  printf -- '-n 1 --no-pager 2>/dev/null | grep -qv "^--"; then '
   # Both ends bounded, on both branches: the block and the record row claim a
   # CLOSED window, so an event arriving after the unit finished -- while this
   # query is on its way, or from whatever ran next -- must not be attributed to
@@ -205,8 +210,12 @@ dxg_fingerprint_lines() { # log
 # collected none. `-` for both bounds is what a collection that failed before the
 # remote could report them writes, and it is a state of its own: the record must
 # show that unit as `unavailable`, not as one where collection was never tried.
-dxg_window_bounds() { # log
-  sed -n 's/^=== dxg window \([0-9TZ-]*\)\.\.\([0-9TZ-]*\) (utc) ===$/\1\t\2/p' \
+# SPACE-separated, not tab: a tab would have to come from a `\t` in a sed
+# replacement, which is a GNU extension that this repository's macOS controller
+# happens to honour but no standard requires. Neither bound can contain a space,
+# so the separator costs nothing and depends on no dialect.
+dxg_window_bounds() { # log -> "<start> <end>", or nothing
+  sed -n 's/^=== dxg window \([0-9TZ-]*\)\.\.\([0-9TZ-]*\) (utc) ===$/\1 \2/p' \
     "$(dxg_sidecar "$1")" 2>/dev/null | tail -1
 }
 

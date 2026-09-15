@@ -1103,8 +1103,8 @@ write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-r
       if [ "$log" != - ]; then
         window=$(dxg_window_bounds "$log")
         if [ -n "$window" ]; then
-          window_start=${window%%$'\t'*}
-          window_end=${window#*$'\t'}
+          window_start=${window%% *}
+          window_end=${window##* }
           # `-` no window, a number a window that was read, `unavailable` a
           # window whose collection failed: three distinguishable states, since
           # "not collected" and "collected and clean" mean opposite things. A
