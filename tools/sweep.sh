@@ -679,14 +679,33 @@ publish_dxg_sidecar() { # sidecar log writer args... -- stdin is the writer's
   cat "$sidecar" >>"$log"
 }
 
-collect_dxg_window() { # host log remote-start-epoch
-  local host=$1 log=$2 remote_start=$3 kernel rc bounds start_utc end_utc sidecar
+# A publication that failed must not leave the unit looking like one where no
+# collection was attempted. The sidecar is the only provenance channel, so an
+# absent one reads as `-` in the record -- "no window" -- which is the reading
+# that loses the rerun for a bridge failure nobody listed. One direct retry with
+# the unavailable marker, since the staged write is what failed; if even that
+# cannot be written, the disk is gone and the only honest thing left is to say so
+# where a human reads the run.
+publish_dxg_unavailable_fallback() { # sidecar log label reason
+  dxg_window_unavailable - - "$3" >"$2.dxg-fallback.$$" 2>/dev/null &&
+    mv "$2.dxg-fallback.$$" "$1" 2>/dev/null && {
+      cat "$1" >>"$2"
+      return 0
+    }
+  rm -f "$2.dxg-fallback.$$"
+  say "  $4: WARNING -- could not record the dxg window ($3); its record fields say no window"
+  return 1
+}
+
+collect_dxg_window() { # host log remote-start-epoch label
+  local host=$1 log=$2 remote_start=$3 label=$4 kernel rc bounds start_utc end_utc sidecar
   sidecar=$(dxg_sidecar "$log")
   # No start instant from the box means no window to bound. Reported as a failed
   # collection, which is what it is, rather than guessed.
   if [ -z "$remote_start" ]; then
     publish_dxg_sidecar "$sidecar" "$log" dxg_window_unavailable - - \
-      "no clock reading from $host"
+      "no clock reading from $host" ||
+      publish_dxg_unavailable_fallback "$sidecar" "$log" "no clock reading from $host" "$label"
     return 0
   fi
   # Written to a file rather than captured in a command substitution, which runs
@@ -727,13 +746,20 @@ collect_dxg_window() { # host log remote-start-epoch
   if [ "$rc" -ne 0 ]; then
     rm -f "$kernel"
     publish_dxg_sidecar "$sidecar" "$log" dxg_window_unavailable "$start_utc" "$end_utc" \
-      "kernel log unreadable on $host (exit $rc)"
+      "kernel log unreadable on $host (exit $rc)" ||
+      publish_dxg_unavailable_fallback "$sidecar" "$log" \
+        "kernel log unreadable on $host (exit $rc)" "$label"
   else
     # Filtered HERE rather than on the far side: the filter is the part with a
     # judgement in it, so it belongs where a fixture can feed it lines directly
-    # instead of behind an ssh no test can reach.
+    # instead of behind an ssh no test can reach. The publication's status is read
+    # BEFORE the cleanup below, which would otherwise replace it with its own.
     publish_dxg_sidecar "$sidecar" "$log" dxg_window_summary "$start_utc" "$end_utc" <"$kernel"
+    rc=$?
     rm -f "$kernel"
+    [ "$rc" -eq 0 ] ||
+      publish_dxg_unavailable_fallback "$sidecar" "$log" \
+        "the collected window could not be published" "$label"
   fi
 }
 
@@ -1770,7 +1796,7 @@ run_unit() { # machine backend host
       # time. Both ends therefore come from the clock that timestamps the log, and
       # nothing is reconstructed from a duration measured on another machine.
       [ -n "$host" ] &&
-        collect_dxg_window "$host" "$log" "${remote_started:-}"
+        collect_dxg_window "$host" "$log" "${remote_started:-}" "$machine/$backend"
       ;;
   esac
   # Diagnosis, strictly after the row and the elapsed time it reports: this phase
