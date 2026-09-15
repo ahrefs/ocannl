@@ -96,12 +96,29 @@ let dynamic reason = Verdict.fail reason
       (* A reworded format changes its marker: name both sides of the difference and the row to
          paste, so the author never has to recover a digest from another failure line. *)
       if not row_holds then (
-        let absent_from ~markers marker = not (List.mem markers marker ~equal:String.equal) in
+        (* Markers repeat when formats do, so each side is a multiset: [minus xs ys] removes one
+           occurrence per [ys] element. A move within the source leaves both sides empty and differs
+           only in order, reported at its first differing position. *)
+        let minus xs ys =
+          List.fold ys ~init:xs ~f:(fun remaining y ->
+              let before, after = List.split_while remaining ~f:(Fn.non (String.equal y)) in
+              before @ Option.value (List.tl after) ~default:[])
+        in
         eprintf "%s: refusal-control row differs from extraction (not part of the golden):\n" source;
-        List.filter extracted ~f:(absent_from ~markers:registered)
-        |> List.iter ~f:(eprintf "  extracted, absent from the row: %s\n");
-        List.filter registered ~f:(absent_from ~markers:extracted)
-        |> List.iter ~f:(eprintf "  in the row, no longer extracted: %s\n");
+        let absent = minus extracted registered and no_longer = minus registered extracted in
+        List.iter absent ~f:(eprintf "  extracted, absent from the row: %s\n");
+        List.iter no_longer ~f:(eprintf "  in the row, no longer extracted: %s\n");
+        (if List.is_empty absent && List.is_empty no_longer then
+           match
+             List.findi (List.zip_exn extracted registered) ~f:(fun _ (e, r) ->
+                 not (String.equal e r))
+           with
+           | Some (position, (e, r)) ->
+               eprintf
+                 "  same markers in a different order; first difference at entry %d: extracted %s, \
+                  the row has %s\n"
+                 (position + 1) e r
+           | None -> ());
         eprintf
           "  replace its `raw_entries` row in test/support/refusal_control_manifest.ml with:\n%s"
           (Manifest.row ~source diagnostics));
