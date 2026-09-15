@@ -1842,11 +1842,16 @@ that they earn a lookup rather than always-loaded space.
   spanning the unit — and the HIP runtime reports the lost messages under those three names,
   while `rocminfo`, a standalone `hipGetDeviceCount`/hiprtc/`hipModuleLoadData` probe, and the
   single tests all pass. The 2026-09-05 sweep recorded it twice (60+ red tests, zero test-logic
-  failures) after the box had kept its VM across two host resumes (dmesg shows
-  `hv_utils: TimeSync IC version` renegotiations between the last green unit and the first
-  burst): a fresh VM had tolerated the full width for eleven daily sweeps, so the degraded
-  bridge lowers the tolerance rather than removing it, and a fresh VM removes the refusal
-  class. Under WSL2 `/dev/kfd` and `/dev/dri` are never present and `rocm-smi` always reports
+  failures) after the box had kept its VM across two host resumes, and the resumes were first
+  read as the cause. **A fresh VM does not remove the refusal class.** On 2026-09-15 three freshly
+  booted VMs overflowed at dune's default width within minutes (160-320 refusals, 44-85 red
+  stanzas): two started by an ssh `wsl.exe` from session 0, one started by the owner's console
+  WSL shell, and on both sides of a 690-line `hip_backend.ml` refactor — so neither the session
+  that started the VM nor the commit decides it, the job count does. The same VMs ran the
+  failing stanzas clean serially, and the console-started one then ran a cold `-j 2`
+  `@runtest @train` clean in 37 minutes, both adding no refusals. So a MANUAL hip run on minix
+  (`OCANNL_BACKEND=hip tools/test-run.sh run build …`) needs the cap too: pass `-j 2`, or the red
+  suite reads as a backend regression. Under WSL2 `/dev/kfd` and `/dev/dri` are never present and `rocm-smi` always reports
   the driver as uninitialized — neither is evidence of a lost passthrough; `hipGetDeviceCount`
   is. The `unit_jobs` table in `tools/sweep.sh` holds the cap (`OCANNL_TOOL_SWEEP_JOBS=<n>`
   overrides it for one run), applied to the test phase only: `test_cmd` compiles under `@check`
@@ -1982,11 +1987,28 @@ that they earn a lookup rather than always-loaded space.
   refused. Kick it with `ssh <box>-win 'wsl.exe -d Ubuntu -e true'` and re-probe for a minute or two
   while tailscaled registers. On a box woken from power-down (as opposed to resuming from
   sleep/hibernate with the owner's interactive WSL shell still open, in which case the VM survives
-  the resume and none of this applies), a kicked VM can also terminate again within minutes if
-  nothing connects to it — `-win` up, `-wsl` refused again — so re-kick right before actually using
-  `-wsl` rather than trusting a wake from earlier; once a real ssh session is running inside, the
-  VM stays up for the duration. What IS a failure is silent non-coverage: track the age of the last
-  `pass` per backend, because nothing else in the project tests CUDA or HIP at all — and read a long
+  the resume and none of this applies), a kicked VM can also terminate again within seconds to
+  minutes — `-win` up, `-wsl` refused again. **A session running INSIDE the VM does not keep it
+  alive; a `wsl.exe` process on the Windows side does.** The kick's `wsl.exe` returns at once, and
+  the VM then shuts down in an orderly way (its journal ends in `systemd-poweroff`, not a panic)
+  under whatever ssh sessions are running in it: 2026-09-08 lost three minix launches mid-fetch
+  and mid-build that way, and on 2026-09-15 the sweep's recovery rerun lost its hip unit 76 s in,
+  the VM powering off 18 s after boot. For an unattended run, hold the VM from the Windows side until
+  the work on that box is over —
+  `ssh -o ServerAliveInterval=15 <box>-win 'wsl.exe -d Ubuntu -e sleep infinity'` in the
+  background, killed explicitly once the box's last unit (and its diagnostics) has finished. Do not
+  size a fixed `sleep N` to the expected run: a lane runs several capped units back to back, with
+  preparation outside the caps, and a holder that expires first shuts the VM down under whatever
+  unit remains. The owner's console WSL shell plays the same role, and normally does. A Windows Update restart takes that shell away with no notice (it
+  logs the console session off), so the first sweep after a patch reboot runs against an unheld
+  VM. Windows schedules those restarts outside its **active hours**, which on both boxes had
+  been 10:00 to midnight or 01:00, leaving the early-morning sweep exposed: the 2026-09-15 cumulative update rebooted minix at
+  05:29 UTC, 21 minutes into its hip unit, as the two previous cumulative updates had inside the
+  same slot. Both boxes now set `HKLM\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings`
+  `ActiveHoursStart=6`, `ActiveHoursEnd=0` (the 18-hour maximum, confining restarts to 00:00–06:00
+  local); `System` event 1074 from `MoUsoCoreWorker.exe`/`TrustedInstaller.exe` is the signature
+  of an update restart when a unit dies with `Operation timed out`. What IS a failure is silent
+  non-coverage: track the age of the last `pass` per backend, because nothing else in the project tests CUDA or HIP at all — and read a long
   skip streak as a decision nobody made, not as coverage that was unavailable.
 - Report changes in the failure set, not the presence of failures. A backend's suite goes red in
   bursts and comes back (Metal's `test/operations` was red for a stretch, green again after
