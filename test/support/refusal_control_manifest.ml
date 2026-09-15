@@ -733,6 +733,35 @@ let evidence_observed ~passed_labels evidence =
   | Some label -> List.mem passed_labels label ~equal:String.equal
   | None -> List.mem passed_labels evidence ~equal:String.equal
 
+(** The [raw_entries] row for [source] (its key without the [test/operations/] prefix) listing
+    [diagnostics]' markers in extraction order, ready to paste. *)
+let row ~source diagnostics =
+  match diagnostics with
+  | [] -> Printf.sprintf "    (%S, []);\n" source
+  | _ ->
+      String.concat
+        (Printf.sprintf "    ( %S,\n      [\n" source
+         :: List.map diagnostics ~f:(fun diagnostic ->
+             Printf.sprintf "        %S;\n" (Refusal_control_scan.marker diagnostic))
+        @ [ "      ] );\n" ])
+
+(** The [direct_evidence] keys no current direct-failure diagnostic answers to: [diagnostics_of]
+    gives a catalogued source's extracted diagnostics, [None] for a source outside the catalogue. A
+    reworded failure format changes its identity, leaving its old key silently dead. *)
+let stale_direct_evidence ~diagnostics_of =
+  List.filter_map direct_evidence ~f:(fun (key, _) ->
+      let source, identity = String.rsplit2_exn key ~on:':' in
+      let answered =
+        Option.value_map (diagnostics_of source) ~default:false ~f:(fun diagnostics ->
+            List.exists diagnostics ~f:(fun diagnostic ->
+                String.equal diagnostic.Refusal_control_scan.identity identity
+                &&
+                match diagnostic.Refusal_control_scan.kind with
+                | Refusal_control_scan.Fail -> true
+                | Refusal_control_scan.Claim -> false))
+      in
+      if answered then None else Some key)
+
 let print source =
   let source_path =
     if Stdlib.Sys.file_exists source then source
@@ -772,12 +801,7 @@ let print source =
        test/support/refusal_control_manifest.ml (not part of the golden):\n"
       source
       (if Option.is_some registered then "an empty" else "no");
-    if List.is_empty diagnostics then eprintf "    (%S, []);\n" row_source
-    else (
-      eprintf "    ( %S,\n      [\n" row_source;
-      List.iter diagnostics ~f:(fun diagnostic ->
-          eprintf "        %S;\n" (Refusal_control_scan.marker diagnostic));
-      eprintf "      ] );\n"));
+    eprintf "%s" (row ~source:row_source diagnostics));
   diagnostics
   |> List.iter ~f:(fun diagnostic ->
       let marker = Refusal_control_scan.marker diagnostic in

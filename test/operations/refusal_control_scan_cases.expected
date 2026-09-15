@@ -419,3 +419,4 @@ workflow_job_timeouts.ml: [scanner-refusal:63a7ea671879e6eb8a95504d21ae4856] doc
 workflow_job_timeouts.ml: [scanner-refusal:501e8a68f00d9f02dc169f32d4980a9f] reader measuring indentation (claim) is catalogued beside workflow_job_timeouts.expected: true
 workflow_job_timeouts.ml: [scanner-refusal:de56c44843177e1b1a86d6d0970e8ec9] refused rather than (claim) is catalogued beside workflow_job_timeouts.expected: true
 workflow_job_timeouts.ml: [scanner-refusal:ea2e7502608bb8e1195b7ec15868624a] nested under github/workflows (claim) is catalogued beside workflow_job_timeouts.expected: true
+every `raw_direct_evidence` key names a current direct failure of a catalogued scanner source: true

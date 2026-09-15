@@ -288,7 +288,10 @@ that they earn a lookup rather than always-loaded space.
   `raw_entries`, on stderr (the golden keeps only the section header).
   `refusal_control_scan_cases.expected` holds the manifest equal to mechanical extraction, every entry present in the assigned live/case
   golden union, and the manifest's repo-relative source paths equal to `env_var_deps`' derived
-  scanner census. The
+  scanner census. Rewording a refusal format moves its marker digest: when a row differs, that
+  audit writes the markers on each side and the whole replacement row on stderr, and its
+  `raw_direct_evidence` claim names on stderr every `<source>:<md5>` key no current direct failure
+  answers to -- re-key those from the row difference. The
   audit is itself on `@scans` and excluded from the evidence corpus, so it cannot answer for itself.
   Consequence for authoring: EVERY Verdict claim in a scanner source is a refusal to the ratchet,
   so a claim that is not about the scan's refusals -- a relationship pin between two library values,

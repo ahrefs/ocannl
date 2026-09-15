@@ -78,6 +78,7 @@ let dynamic reason = Verdict.fail reason
         []
   in
   printf "\nScanner refusal formats and the permanent control suite assigned to their source:\n";
+  let catalogued = Hashtbl.create (module String) in
   pairs arguments
   |> List.iter ~f:(fun (source, control) ->
       let controls = String.split control ~on:',' in
@@ -86,9 +87,24 @@ let dynamic reason = Verdict.fail reason
       let extracted = List.map diagnostics ~f:Scan.marker in
       let source_key = "test/operations/" ^ source in
       let coverage = Scan.coverage ~control_text diagnostics in
+      Hashtbl.set catalogued ~key:source_key ~data:diagnostics;
+      let registered = Manifest.markers source_key in
+      let row_holds = List.equal String.equal extracted registered in
       Verdict.p
         (Printf.sprintf "%s has exactly the explicitly assigned refusal controls" source)
-        (List.equal String.equal extracted (Manifest.markers source_key));
+        row_holds;
+      (* A reworded format changes its marker: name both sides of the difference and the row to
+         paste, so the author never has to recover a digest from another failure line. *)
+      if not row_holds then (
+        let absent_from ~markers marker = not (List.mem markers marker ~equal:String.equal) in
+        eprintf "%s: refusal-control row differs from extraction (not part of the golden):\n" source;
+        List.filter extracted ~f:(absent_from ~markers:registered)
+        |> List.iter ~f:(eprintf "  extracted, absent from the row: %s\n");
+        List.filter registered ~f:(absent_from ~markers:extracted)
+        |> List.iter ~f:(eprintf "  in the row, no longer extracted: %s\n");
+        eprintf
+          "  replace its `raw_entries` row in test/support/refusal_control_manifest.ml with:\n%s"
+          (Manifest.row ~source diagnostics));
       List.iter2_exn diagnostics coverage ~f:(fun diagnostic covered ->
           Verdict.p
             (Printf.sprintf "%s: %s (%s) is catalogued beside %s" source (Scan.marker diagnostic)
@@ -96,4 +112,13 @@ let dynamic reason = Verdict.fail reason
                | Scan.Fail -> "direct failure"
                | Scan.Claim -> "claim")
                (String.concat ~sep:", " controls))
-            covered))
+            covered));
+  let stale = Manifest.stale_direct_evidence ~diagnostics_of:(Hashtbl.find catalogued) in
+  List.iter stale ~f:(fun key ->
+      eprintf
+        "%s: `raw_direct_evidence` key answers to no current direct-failure diagnostic of its \
+         source; re-key it from the row difference above or drop it (not part of the golden)\n"
+        (Option.value (String.chop_prefix key ~prefix:"test/operations/") ~default:key));
+  Verdict.p_empty
+    "every `raw_direct_evidence` key names a current direct failure of a catalogued scanner source"
+    ~over:Manifest.direct_evidence stale
