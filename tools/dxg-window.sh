@@ -136,12 +136,15 @@ dxg_window_cmd() { # remote-start-epoch
   # disguise. The remote echoes the bounds it used, so the block reports the
   # window that was actually queried.
   #
-  # `+ 1` on the end: a burst timestamped N.xxx in the same second the collection
-  # begins is excluded by `--until @N`, and losing a terminal burst to a rounding
-  # boundary is exactly the failure this exists to catch. The extra fraction of a
-  # second can only contain the unit's own activity -- its lane runs one unit at a
-  # time on that box -- so widening is the safe direction, and the reported bound
-  # is widened with it so the claim stays the query.
+  # `+ 1` on the end, as the start rounds up off the probe's second: both bounds
+  # round AWAY from the neighbouring units, in whole seconds, so a window can
+  # never inherit the burst of whatever ran beside it. Whole seconds because finer
+  # ones are not available here: measured on both sweep boxes (2026-09-15),
+  # `journalctl --since "@<epoch>.<frac>"` is refused and returns ZERO lines
+  # rather than an error -- silently blanking the evidence, which is the failure
+  # this exists to prevent -- while `dmesg --since` accepts the fractional form,
+  # on the branch neither box takes. The residual that leaves (a burst inside the
+  # probe's own second, before the unit's first GPU call) is gh-ocannl-984.
   printf 'dxg_end=$(date +%%s); dxg_end=$((dxg_end + 1)); '
   printf 'dxg_start=%s; ' "$1"
   printf 'echo "dxg-window-bounds $dxg_start $dxg_end"; '

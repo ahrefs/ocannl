@@ -1976,7 +1976,14 @@ that they earn a lookup rather than always-loaded space.
   returned 123 of its `vmbus_sendpacket` lines and the bare match all 365, and `-k` reported ZERO
   dxg lines for rog-nv's 2026-09-13 window, which actually holds 255 of them and that unit's
   three-message burst — the burst the issue was filed about. `dmesg -T` stays as the fallback only
-  where journald keeps no kernel log. The window and the count are also fields of
+  where journald keeps no kernel log. **The window's bounds are whole seconds, and cannot portably
+  be finer**: `journalctl --since "@<epoch>.<frac>"` is REFUSED on both sweep boxes and returns zero
+  lines rather than an error (measured 2026-09-15), so a fractional bound would silently blank the
+  evidence; `dmesg --since` accepts it, on the branch neither box takes. Both bounds therefore round
+  away from the neighbouring units — the start to the second after the reachability probe, the end
+  to the second after collection — so a window can never inherit the burst of whatever ran beside
+  it, at the price of a residual in the other direction (gh-ocannl-984, with the fallback's
+  wall-clock bounds). The window and the count are also fields of
   the run record's `unit` row, so the consuming routine reads them without parsing a log. What the
   FINGERPRINT gets is only the block's stable half — which signatures appeared, and whether there
   was a burst at all — never the window instants, the kernel timestamps or the count: a fingerprint
