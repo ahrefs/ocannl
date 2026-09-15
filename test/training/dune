@@ -105,6 +105,7 @@
  (name train)
  (deps
   (alias train-env_spelling_gate)
+  (alias train-bigram)
   (alias train-mlp_names)
   (alias train-mlp_bn_names)
   (alias train-circles_conv)
@@ -167,20 +168,32 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-; bigram is a training integration run: in the default runtest suite since its sgd step is
-; autotuned (materialized intermediates + Autotune.tune), which keeps Metal wall time bounded.
+; The complete bigram training/generation tutorial belongs beside the other toy integrations.
 
-(test
+(executable
  (name bigram)
- (package neural_nets_lib)
- (locks ocannl_training_test)
- (deps
-  ocannl_config
-  (env_var OCANNL_BACKEND))
  (modules bigram)
  (libraries ocannl dataprep arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(rule
+ (alias train-bigram)
+ (package neural_nets_lib)
+ (locks ocannl_training_test)
+ (deps
+  (alias train-env_spelling_gate)
+  bigram.expected
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ ; no-infer keeps the tutorial off @default as well as @runtest.
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     bigram.actual
+     (run %{dep:bigram.exe}))
+    (diff bigram.expected bigram.actual)))))
 
 (test
  (name embedding_ids)
