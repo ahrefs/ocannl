@@ -1809,7 +1809,9 @@ that they earn a lookup rather than always-loaded space.
 - **The per-run record `~/.ocannl-sweep/logs/<stamp>-run.tsv` is what a consumer reads; the stdout
   summary is for humans** (gh-ocannl-977). Its absence is itself a verdict: a run that refused at
   startup swept nothing and writes no record, which is what distinguishes that exit 2 from a
-  lane-stopped one. Tab-separated kind-tagged rows follow a `schema` line, and the sweep prints the
+  lane-stopped one. Tab-separated kind-tagged rows follow a `schema` line — **2** since the `unit`
+  row gained the dxg fields, and a consumer picks its parser from that number (the per-unit *state*
+  files under `unit-state/` carry an unrelated schema 1 of their own) — and the sweep prints the
   record's path as a `run:` line on every exit that writes one, cancellation included — that line is
   the only locator a cancelled run gives, since it ends before the summary block. The stamp naming
   it (and every other per-run artifact) is advanced until it names nothing that exists yet —
@@ -1827,7 +1829,12 @@ that they earn a lookup rather than always-loaded space.
     post-lane phase, such as the skip aggregation, aborted the run). The kind always agrees with
     how the process exited: the record is published before those post-lane steps so a failure
     there leaves a record that explains itself, and each such failure rewrites the kind first.
-  - `unit`: machine, backend, outcome or `no-row`, lane-stopped flag, log path or `-`. One per
+  - `unit`: machine, backend, outcome or `no-row`, lane-stopped flag, log path or `-`, then the
+    unit's dxg window start and end and its `vmbus_sendpacket failed` count (gh-ocannl-979). That
+    count has **three** permitted values, and a consumer must not validate it as numeric: `-` for a
+    unit with no window (a local one, or one that never ran), a number for a window that was read,
+    and `unavailable` where the collection itself failed. They mean different things — "nobody read
+    the box" is not "the bridge was fine", and only the middle one is a positive finding. One per
     SELECTED unit, so `no-row` names a unit that should have run and whose lane never got as far as
     recording it, never one `--only` excluded. The outcome is read back out of the run's OWN
     `history.tsv` rows under the same lock that writes them, not staged beside them in a second
@@ -1937,8 +1944,58 @@ that they earn a lookup rather than always-loaded space.
 | `cu_module_load_data_ex` | `Cu.Module.load_data_ex` | analogue, not yet observed |
 | `cu_stream_create_with_priority` | `Cu.Stream.create` | analogue, not yet observed |
 
+- **A name is no longer the only trigger: the kernel's own evidence in the unit's window is the
+  other** (gh-ocannl-979). A remote `cuda` or `hip` unit records its UTC window and, at the end,
+  appends the kernel's dxg lines from it to its log and fingerprint; any `vmbus_sendpacket failed`
+  in that window makes the unit environment-red exactly as a listed name does, and the serial
+  rerun's `still red` / `all clean` stays the judge. That matters because a list of names can only
+  ever grow AFTER a miss — rog-nv's `cu_device_primary_ctx_retain` cost a remote session to
+  attribute — and because some failures have no name to list at all: the 2026-09-15 minix runs
+  produced `Command got signal SEGV`, which can never become a table row. A unit's collected evidence lives in a SIDECAR beside its log
+  (`<stamp>-<machine>-<backend>.dxg-window`), and the trigger, the fingerprint and the record read
+  only that: a log holds whatever the unit's tests printed, and this repository's own sweep harness
+  dumps dxg fixtures on failure while running as a test action inside a sweep unit, so a local `cc`
+  unit's log really can contain a complete synthetic burst block. Provenance is the file. The
+  window's two bounds are both instants of the REMOTE's clock — the start read by the reachability
+  probe when the unit began there, the end read at collection — because the log's timestamps are in
+  that clock and no other, and these VMs resynchronise after host resumes. The filter lives in
+  `tools/dxg-window.sh`, sourced by the sweep and driven directly by the harness, and its two
+  judgements come from that day's evidence on both boxes: `dxgkio_query_adapter_info` and
+  `dxgkio_is_feature_enabled` failures are dropped **regardless of errno** (every VM boot logs
+  them, at -22, -2, -11 and -1, and nvidia-smi emits the first constantly), while the burst is
+  counted on `vmbus_sendpacket failed` **alone** — one lost message is reported as a triple
+  (`dxgvmb_send_sync_msg`, `create_existing_sysmem`, `dxgkio_create_allocation`), so counting the
+  `fffffff5` status would count it twice. Everything else in the window is kept and shown,
+  counted or not: an unrecognised signature is what this exists to surface. Collected with
+  `journalctl _TRANSPORT=kernel --since @<start>` — **not `journalctl -k`, which is that same match
+  plus an implied `-b`** and so answers only about the CURRENT boot. Both sweep boxes keep a
+  persistent journal (`/var/log/journal`), which is what lets a window span the VM dying inside it
+  (minix's went away twice on 2026-09-15, and `dmesg` in the next session starts from the new boot
+  and loses exactly the evidence being collected); `-k` throws that away again at the boot
+  boundary, silently. Measured while building this: over a minix window covering three boots, `-k`
+  returned 123 of its `vmbus_sendpacket` lines and the bare match all 365, and `-k` reported ZERO
+  dxg lines for rog-nv's 2026-09-13 window, which actually holds 255 of them and that unit's
+  three-message burst — the burst the issue was filed about. `dmesg -T` stays as the fallback only
+  where journald keeps no kernel log. **The window's bounds are whole seconds, and cannot portably
+  be finer**: `journalctl --since "@<epoch>.<frac>"` is REFUSED on both sweep boxes and returns zero
+  lines rather than an error (measured 2026-09-15), so a fractional bound would silently blank the
+  evidence; `dmesg --since` accepts it, on the branch neither box takes. Both bounds therefore round
+  away from the neighbouring units — the start to the second after the reachability probe, the end
+  to the second after collection — so a window can never inherit the burst of whatever ran beside
+  it, at the price of a residual in the other direction (gh-ocannl-984, with the fallback's
+  wall-clock bounds). The window and the count are also fields of
+  the run record's `unit` row, so the consuming routine reads them without parsing a log. What the
+  FINGERPRINT gets is only the block's stable half — which signatures appeared, and whether there
+  was a burst at all — never the window instants, the kernel timestamps or the count: a fingerprint
+  is compared bytewise against the previous failure's, and all three differ between two equally
+  broken runs (161 bursts and 123 on minix within one hour), so carrying them would report
+  `fingerprint moved` on every repeat of a standing environment red and cost the suppression that
+  makes this output readable. A bridge that starts failing, stops, or fails in a NEW way still
+  moves it — which is why the block carries its deduplicated signature list uncapped even though
+  the raw lines it shows are capped at 40.
 - **Reading a rerun's verdict.** Adding a name means adding it in both places: the table in
-  `sweep.sh` gates the rerun, this one records what the name has been seen with. The verdict is written as `serial
+  `sweep.sh` gates the rerun, this one records what the name has been seen with. A name is worth
+  adding even now that the kernel evidence triggers too: it names the call site for the table. The verdict is written as `serial
   rerun:` lines in the log AND the fingerprint (outside the fingerprint's 60-entry bound, so a
   wide red cannot drop it), and quoted in the sweep's summary: `still red: <aliases>` names the
   stanzas red on their own — including one generated alias per member of a `(tests (names …))`

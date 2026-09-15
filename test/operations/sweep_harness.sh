@@ -30,7 +30,9 @@ on_error() {
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
     capped capped_target remote_opt_in serial_red serial_clean serial_two_inline \
     serial_many_inline serial_control lanes lane_stop_seed lane_stopped \
-    aggregator_missing stamp_advance after_cancel; do
+    aggregator_missing stamp_advance dxg_clean dxg_red dxg_collection dxg_unavailable \
+    dxg_many dxg_bounds dxg_no_trigger \
+    after_cancel; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
   done
@@ -213,7 +215,15 @@ case ${SWEEP_TEST_SSH_MODE:-} in
     : >"$SWEEP_TEST_WAIT_PREFIX.release"
     ;;
   hang)
-    case $* in *'printf %s "$HOME"'*) printf '%s' "$HOME"; exit 0 ;; esac
+    # The reachability probe, answered rather than hung: it is NOT under a
+    # cancellation-visible supervisor, so hanging here would wait out its own 60s
+    # cap and the control would never reach the preparation call whose relay and
+    # reap it exists to test. Matched on `$HOME` alone, so that what the probe
+    # asks for besides it -- the box's clock, since gh-ocannl-979 -- can change
+    # without silently turning this control into a 60-second sleep.
+    case $* in
+      *'"$HOME"'*) printf '%s\n%s\n' "$HOME" "$(date +%s)"; exit 0 ;;
+    esac
     printf '%s\n' "$$" >>"$SWEEP_TEST_WAIT_PREFIX.ssh-pids"
     : >"$SWEEP_TEST_WAIT_PREFIX.ssh-running"
     waited=0
@@ -1143,6 +1153,68 @@ grep -q '^serial rerun: unmapped: \[File "test/compile_error.ml", line 1\] \[Fil
   "$many_inline_log"
 absent '^serial rerun: directory fallback' "$many_inline_log"
 
+# The dxg window filter (gh-ocannl-979), driven directly: tools/dxg-window.sh is
+# sourced by the sweep and by this harness for exactly that reason. The input is
+# the 2026-09-15 evidence as the two boxes recorded it -- minix's benign boot
+# lines at four different errnos, and one real lost message, which the bridge
+# reports as a TRIPLE.
+. "$(cd "$(dirname "$sweep")" && pwd)/dxg-window.sh"
+dxg_benign='Sep 15 09:00:01 box kernel: misc dxg: dxgk: dxgkio_is_feature_enabled: Ioctl failed: -22
+Sep 15 09:00:01 box kernel: misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -22
+Sep 15 09:00:01 box kernel: misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -2
+Sep 15 09:00:01 box kernel: misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -11
+Sep 15 09:00:01 box kernel: misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -1'
+dxg_burst='Sep 15 09:05:00 box kernel: misc dxg: dxgk: dxgvmb_send_sync_msg: vmbus_sendpacket failed: fffffff5
+Sep 15 09:05:00 box kernel: misc dxg: dxgk: create_existing_sysmem: failed set existing pages: fffffff5
+Sep 15 09:05:00 box kernel: misc dxg: dxgk: dxgkio_create_allocation: Ioctl failed: -11'
+dxg_unrelated='Sep 15 09:05:01 box kernel: hv_balloon: Max. dynamic memory size: 32 GB'
+
+# Benign-only, at every errno the boxes have shown: nothing kept, no burst. An
+# errno-keyed filter would have kept four of these five.
+dxg_clean=$(printf '%s\n%s\n' "$dxg_benign" "$dxg_unrelated" |
+  dxg_window_summary 20260915T090000Z 20260915T091000Z)
+grep -q '^=== dxg window 20260915T090000Z..20260915T091000Z (utc) ===$' <<<"$dxg_clean"
+grep -q '^=== dxg window: 0 vmbus_sendpacket failures ===$' <<<"$dxg_clean"
+absent 'dxgkio_query_adapter_info' <<<"$dxg_clean"
+absent 'dxgkio_is_feature_enabled' <<<"$dxg_clean"
+absent 'hv_balloon' <<<"$dxg_clean"
+
+# One lost message reported as three lines counts ONCE: keying on the fffffff5
+# status instead would count the vmbus line and the sysmem line as two bursts.
+# All three lines are kept and shown -- a new signature is what this exists to
+# surface -- but only the vmbus one is counted.
+dxg_red=$(printf '%s\n%s\n%s\n' "$dxg_benign" "$dxg_burst" "$dxg_unrelated" |
+  dxg_window_summary 20260915T090000Z 20260915T091000Z)
+grep -q '^=== dxg window: 1 vmbus_sendpacket failures ===$' <<<"$dxg_red"
+[ "$(grep 'misc dxg' <<<"$dxg_red" | grep -cv '^dxg signature: ')" -eq 3 ]
+grep -q 'create_existing_sysmem: failed set existing pages: fffffff5' <<<"$dxg_red"
+absent 'dxgkio_query_adapter_info' <<<"$dxg_red"
+# and the block carries the distinct signatures, which is what a fingerprint reads
+[ "$(grep -c '^dxg signature: ' <<<"$dxg_red")" -eq 3 ]
+
+# Two lost messages are two bursts, and an empty window is zero rather than one
+# (the `grep -c` of an empty line).
+[ "$(printf '%s\n%s\n' "$dxg_burst" "$dxg_burst" |
+  dxg_window_summary A B | sed -n 's/^=== dxg window: \([0-9]*\) .*/\1/p')" = 2 ]
+[ "$(printf '' | dxg_window_summary A B |
+  sed -n 's/^=== dxg window: \([0-9]*\) .*/\1/p')" = 0 ]
+
+# And the count the rest of the sweep reads back out of a unit's log is the one
+# the filter wrote: the block goes into a log, `dxg_bursts` takes it out.
+# Evidence is read from the collector's SIDECAR beside a unit's log, never from
+# the log: a log holds whatever the unit's tests printed.
+printf '%s\n' "$dxg_red" >"$(dxg_sidecar "$tmp/dxg-probe.log")"
+[ "$(dxg_bursts "$tmp/dxg-probe.log")" = 1 ]
+[ -z "$(dxg_bursts "$tmp/absent.log")" ]
+# A block sitting in the LOG is not evidence -- that is the whole point of the
+# sidecar -- so it neither counts nor makes the unit red.
+printf '%s\n' "$dxg_red" >"$tmp/log-only.log"
+[ -z "$(dxg_bursts "$tmp/log-only.log")" ]
+if dxg_window_red "$tmp/log-only.log"; then
+  printf 'sweep_harness: a dxg block in a unit log was read as evidence\n' >&2
+  exit 1
+fi
+
 # Negative control: a red whose failures are the tests' own gets no second run.
 serial_control=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$state_failure \
   run_sweep_backend cc --target serial-probe)
@@ -1181,7 +1253,7 @@ grep -q '^  minix/multidev_cc: skip (unreachable)$' <<<"$lanes"
 # a consumer can age a backend's staleness against the box that owns it now.
 lanes_record=$(sed -n 's/^run:  *//p' <<<"$lanes")
 [ -f "$lanes_record" ]
-[ "$(head -1 "$lanes_record")" = "$(printf 'schema\t1')" ]
+[ "$(head -1 "$lanes_record")" = "$(printf 'schema\t2')" ]
 [ "$(awk -F '\t' '$1 == "run" { print $8 }' "$lanes_record")" = complete ]
 [ "$(awk -F '\t' '$1 == "run" { print $5 "\t" $6 }' "$lanes_record")" = \
   "$(printf 'lane-probe\t0')" ]
@@ -1276,6 +1348,191 @@ done
 [ -n "$(awk -F '\t' -v s="$advanced_stamp" '$1 == s && $7 == "stamp-probe"' "$state/history.tsv")" ]
 rm -f "$state"/logs/*-seed.log
 
+# The collection reads the journal ACROSS boots. `journalctl -k` is the same
+# kernel match plus an implied `-b`, which truncates the answer at the current
+# boot -- and a window spanning a VM death is the one case this collection exists
+# for. Measured on minix (2026-09-15, three boots): `-k` returned 123 of the
+# window's vmbus lines against 365 for the match, and the same implied `-b`
+# reported zero dxg lines for rog-nv's 2026-09-13 window, which holds 255 and that
+# unit's burst. Pinned on the emitted command because no fixture has a journal:
+# this is the trap, not the spelling.
+dxg_collection=$(dxg_window_cmd 1757894400)
+absent 'journalctl -k' <<<"$dxg_collection"
+# The journal is selected only if it produces an ENTRY. A host with journalctl and
+# no readable kernel journal exits 0 AND prints `-- No entries --` on stdout, so
+# neither a status test nor a nonempty test falls back, and the burst still in the
+# kernel ring is recorded as zero.
+grep -q 'grep -qv "\^--"' <<<"$dxg_collection"
+# Both ends bounded, on both branches: an event after the unit finished must not be
+# attributed to it, and `dmesg -T` alone returns the whole current-boot ring, so an
+# EARLIER unit's burst would buy this one a rerun it did not earn.
+grep -q 'journalctl -q _TRANSPORT=kernel --since @\$dxg_start --until @\$dxg_end' \
+  <<<"$dxg_collection"
+grep -q 'dmesg -T --since @\$dxg_start --until @\$dxg_end' <<<"$dxg_collection"
+# BOTH bounds belong to the clock that timestamps the log: the start is the
+# instant the reachability probe read on that box when the unit began there, and
+# the end is that box's clock at collection time. The controller and a WSL VM do
+# not share a wall clock (these boxes resynchronise after host resumes), so a
+# controller instant carried across -- or a start reconstructed by subtracting a
+# locally measured duration, which assumes the remote clock advanced continuously
+# meanwhile -- would put a terminal burst outside the window and lose the rerun.
+# Evaluated by running the emitted command here, which is local shell and `date`.
+# `|| true` on the capture, not on the command: the emitted command DELIBERATELY
+# ends nonzero where it could not read a kernel log (this host has no journalctl
+# and a dmesg that rejects the bounds), because collect_dxg_window reads that
+# status as `unavailable` rather than as a clean window. Only the bounds line,
+# printed before either branch runs, is under test here.
+# Evaluated against FAKE kernel tools, never the host's own: on a box with a
+# readable persistent journal -- either sweep box, and CI's Linux runner -- the
+# emitted query would stream every kernel entry since the fixture's start epoch,
+# which is a year-and-growing of them, to test two numbers printed before the
+# query runs. The fakes also make the branch taken here independent of whatever
+# the host happens to have.
+cat >"$fake_bin/journalctl" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+cat >"$fake_bin/dmesg" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$fake_bin/journalctl" "$fake_bin/dmesg"
+dxg_now=$(date +%s)
+dxg_bounds=$(PATH=$fake_bin:$PATH eval "$dxg_collection" 2>/dev/null |
+  sed -n 's/^dxg-window-bounds \([0-9]*\) \([0-9]*\)$/\1 \2/p;/^dxg-window-bounds /q') || true
+[ -n "$dxg_bounds" ]
+# The start is the instant passed in, untouched -- not recomputed from anything.
+[ "${dxg_bounds%% *}" = 1757894400 ]
+# The end is the box's own clock plus the one second of slack that keeps a burst
+# timestamped inside the collection's own second from falling outside the bound.
+[ "$(( ${dxg_bounds##* } - dxg_now ))" -ge 1 ]
+[ "$(( ${dxg_bounds##* } - dxg_now ))" -le 3 ]
+
+# A window bigger than the shown cap still surfaces every distinct signature: the
+# RAW lines are capped (496 in one minix boot, and the log is for reading) but the
+# signature list is not, because a new kernel signature appearing at line 300 that
+# neither shows nor moves the fingerprint is precisely the blindness this feature
+# exists to remove.
+dxg_many=$({ i=0; while [ "$i" -lt 60 ]; do printf '%s\n' "$dxg_burst"; i=$((i + 1)); done
+  printf 'Sep 15 09:09:09 box kernel: misc dxg: dxgk: dxgkio_late_signature: Ioctl failed: -7\n'; } |
+  dxg_window_summary 20260915T090000Z 20260915T091000Z)
+[ "$(grep 'misc dxg' <<<"$dxg_many" | grep -cv '^dxg signature: ')" -eq 40 ]
+grep -q '^(181 lines in the window; the first 40 are shown)$' <<<"$dxg_many"
+grep -q '^dxg signature: misc dxg: dxgk: dxgkio_late_signature: Ioctl failed: -7$' <<<"$dxg_many"
+[ "$(grep -c '^dxg signature: ' <<<"$dxg_many")" -eq 4 ]
+grep -q '^=== dxg window: 60 vmbus_sendpacket failures ===$' <<<"$dxg_many"
+# And that late signature moves the fingerprint, which is the point of keeping it.
+printf '%s\n' "$dxg_many" >"$(dxg_sidecar "$tmp/dxg-many.log")"
+printf '%s\n' "$({ i=0; while [ "$i" -lt 60 ]; do printf '%s\n' "$dxg_burst"; i=$((i + 1)); done; } |
+  dxg_window_summary 20260915T090000Z 20260915T091000Z)" >"$(dxg_sidecar "$tmp/dxg-many-plain.log")"
+[ "$(dxg_fingerprint_lines "$tmp/dxg-many.log")" != \
+  "$(dxg_fingerprint_lines "$tmp/dxg-many-plain.log")" ]
+
+
+# A collection that did not happen is not a clean window. `unavailable` is
+# distinguishable from `0` everywhere it travels -- the block, the burst reader,
+# and the run record -- because "nobody read the box" and "the bridge was fine"
+# mean opposite things, and the second would lose the rerun.
+dxg_unavailable=$(dxg_window_unavailable 20260915T090000Z 20260915T091000Z 'ssh exit 255')
+grep -q '^collection failed: ssh exit 255$' <<<"$dxg_unavailable"
+grep -q '^=== dxg window: unavailable vmbus_sendpacket failures ===$' <<<"$dxg_unavailable"
+printf '%s\n' "$dxg_unavailable" >"$(dxg_sidecar "$tmp/dxg-unavailable.log")"
+[ "$(dxg_bursts "$tmp/dxg-unavailable.log")" = unavailable ]
+
+# What the FINGERPRINT gets is the block's stable half. A fingerprint is compared
+# bytewise against the previous failure's, and a standing environment red repeats:
+# the window instants, the kernel timestamps and the count all differ between two
+# equally broken runs (161 and 123 on minix within one hour), so the verbatim
+# block would report `fingerprint moved` every time and cost the suppression that
+# keeps sweep output actionable.
+printf '%s\n' "$dxg_red" >"$(dxg_sidecar "$tmp/dxg-red-a.log")"
+printf '%s\n' "$(printf '%s\n%s\n%s\n' "$dxg_benign" "$dxg_burst" "$dxg_burst" |
+  dxg_window_summary 20260915T230000Z 20260915T234500Z)" >"$(dxg_sidecar "$tmp/dxg-red-b.log")"
+[ "$(dxg_bursts "$tmp/dxg-red-a.log")" = 1 ]
+[ "$(dxg_bursts "$tmp/dxg-red-b.log")" = 2 ]
+# Different windows, different counts, same signatures: the fingerprint halves
+# must be identical, or a standing red is reported as moving every run.
+[ "$(dxg_fingerprint_lines "$tmp/dxg-red-a.log")" = \
+  "$(dxg_fingerprint_lines "$tmp/dxg-red-b.log")" ]
+grep -q '^dxg window: burst present$' <<<"$(dxg_fingerprint_lines "$tmp/dxg-red-a.log")"
+absent '20260915T090000Z' <<<"$(dxg_fingerprint_lines "$tmp/dxg-red-a.log")"
+# But a bridge that stops failing, or fails in a NEW way, still moves it.
+printf '%s\n' "$dxg_clean" >"$(dxg_sidecar "$tmp/dxg-clean.log")"
+[ "$(dxg_fingerprint_lines "$tmp/dxg-clean.log")" != \
+  "$(dxg_fingerprint_lines "$tmp/dxg-red-a.log")" ]
+grep -q '^dxg window: no burst$' <<<"$(dxg_fingerprint_lines "$tmp/dxg-clean.log")"
+grep -q '^dxg window: collection unavailable$' \
+  <<<"$(dxg_fingerprint_lines "$tmp/dxg-unavailable.log")"
+printf '%s\n' "$(printf '%s\nSep 15 09:05:02 box kernel: misc dxg: dxgk: dxgkio_destroy_allocation: Ioctl failed: -9\n' \
+  "$dxg_burst" | dxg_window_summary 20260915T090000Z 20260915T091000Z)" >"$(dxg_sidecar "$tmp/dxg-new-sig.log")"
+[ "$(dxg_fingerprint_lines "$tmp/dxg-new-sig.log")" != \
+  "$(dxg_fingerprint_lines "$tmp/dxg-red-a.log")" ]
+
+# The kernel-evidence trigger (gh-ocannl-979), at the seam that decides it and in
+# the one end-to-end direction a fixture can reach. A POSITIVE count only: a clean
+# window is a finding the other way, an unavailable one establishes nothing in
+# either direction, and absent evidence -- a local unit, or one that never ran --
+# is not red. Without the negative legs the trigger would be "any unit that
+# collected a window", which is not a trigger at all.
+dxg_window_red "$tmp/dxg-probe.log"
+for quiet in dxg-clean dxg-unavailable absent; do
+  if dxg_window_red "$tmp/$quiet.log"; then
+    printf 'sweep_harness: %s was read as environment-red\n' "$quiet" >&2
+    exit 1
+  fi
+done
+
+# End to end: a LOCAL unit whose test leg printed a complete burst block into its
+# log gets no rerun, no dxg fingerprint lines and no record window. This harness
+# itself dumps such fixtures on failure and runs as a test action inside a sweep
+# unit, so the log of a local cc unit really can contain one; reading evidence out
+# of the log would mark a unit that never touched /dev/dxg environment-red, buy it
+# the expensive serial rerun, and report a bridge failure in its record row.
+dxg_window_block=$(printf '%s\n%s\n' "$dxg_benign" "$dxg_burst" |
+  dxg_window_summary 20260915T090000Z 20260915T091000Z)
+dxg_no_trigger=$(SWEEP_TEST_OPAM_RC=1 \
+  SWEEP_TEST_OPAM_OUT="$state_failure
+$dxg_window_block" \
+  run_sweep_backend cc --target state-probe)
+grep -q 'm4-max/cc: fail ' <<<"$dxg_no_trigger"
+absent 'serial rerun' <<<"$dxg_no_trigger"
+absent 'environment-red' <<<"$dxg_no_trigger"
+dxg_no_trigger_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
+grep -q '^=== dxg window: 1 vmbus_sendpacket failures ===$' "$dxg_no_trigger_log"
+[ -z "$(dxg_bursts "$dxg_no_trigger_log")" ]
+[ ! -e "$(dxg_sidecar "$dxg_no_trigger_log")" ]
+absent '^dxg window: ' "${dxg_no_trigger_log%.log}.fingerprint"
+absent '^dxg signature: ' "${dxg_no_trigger_log%.log}.fingerprint"
+dxg_no_trigger_record=$(sed -n 's/^run:  *//p' <<<"$dxg_no_trigger")
+[ "$(awk -F '\t' '$1 == "unit" && $3 == "cc" { print $7 "\t" $8 "\t" $9 }' \
+  "$dxg_no_trigger_record")" = "$(printf -- '-\t-\t-')" ]
+
+# What a collected window DOES put in the record and the fingerprint, driven
+# through the same readers the sweep uses, with the sidecar a collection writes.
+dxg_trigger_log=$tmp/collected-unit.log
+printf 'fixture unit log\n' >"$dxg_trigger_log"
+printf '%s\n' "$dxg_window_block" >"$(dxg_sidecar "$dxg_trigger_log")"
+dxg_window_red "$dxg_trigger_log"
+[ "$(dxg_bursts "$dxg_trigger_log")" = 1 ]
+[ "$(dxg_window_bounds "$dxg_trigger_log")" = '20260915T090000Z 20260915T091000Z' ]
+grep -q '^dxg window: burst present$' <<<"$(dxg_fingerprint_lines "$dxg_trigger_log")"
+# A failed collection reaches the record as `unavailable` -- never as `-`, which
+# is the unit nobody tried to read -- keeping the window it knows.
+[ "$(dxg_window_bounds "$tmp/dxg-unavailable.log")" = '20260915T090000Z 20260915T091000Z' ]
+[ "$(dxg_bursts "$tmp/dxg-unavailable.log")" = unavailable ]
+# And where it failed before the box could report any bounds -- an unreachable
+# probe, a box whose `date` said nothing -- the bounds are `-` and the count is
+# still `unavailable`, which is what distinguishes it in the record from a unit
+# that has no window because none was ever collected.
+dxg_window_unavailable - - 'no clock reading from rog-nv' \
+  >"$(dxg_sidecar "$tmp/dxg-noclock.log")"
+[ "$(dxg_window_bounds "$tmp/dxg-noclock.log")" = '- -' ]
+[ "$(dxg_bursts "$tmp/dxg-noclock.log")" = unavailable ]
+if dxg_window_red "$tmp/dxg-noclock.log"; then
+  printf 'sweep_harness: a collection with no bounds was read as environment-red\n' >&2
+  exit 1
+fi
+
 # Cancelling a sweep stops EVERY lane: here the local lane's unit is held in its
 # test leg and the rog-nv lane's in its preparation ssh, both under supervisors.
 # TERM to the sweep's pid must be relayed through each lane to its supervisor,
@@ -1369,4 +1626,4 @@ grep -q "^sweep: declared measurement box 'spare' has no sweep unit$" <<<"$matri
 # signal, and it is what distinguishes this exit 2 from a lane-stopped one.
 [ "$(ls "$state"/logs/*-run.tsv | wc -l)" -eq "$records_before" ]
 
-printf 'sweep execution accounting, RTC context, fingerprinting, run record and skip aggregation: PASS\n'
+printf 'sweep execution accounting, RTC context, dxg window evidence, fingerprinting, run record and skip aggregation: PASS\n'
