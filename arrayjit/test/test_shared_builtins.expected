@@ -2,6 +2,8 @@ default: scalar half draws match the shipped host wrapper: true
 default: a nonzero half draw preserves its bits across the C ABI: true
 default: every half encoding widens as on the host: true
 default: half narrowing preserves finite values, ties and special values: true
+default: half narrowing rounds the smallest-subnormal midpoint interval, both signs: true
+default: the shipped host stub narrows that interval the same way: true
 default: every fp8 encoding widens as on the host: true
 default: both fp8 codecs preserve positive and negative NaN signs: true
 default: fp8 f64 narrowing preserves ties, underflow, overflow and NaN sign: true
@@ -11,6 +13,8 @@ emulated: scalar half draws match the shipped host wrapper: true
 emulated: a nonzero half draw preserves its bits across the C ABI: true
 emulated: every half encoding widens as on the host: true
 emulated: half narrowing preserves finite values, ties and special values: true
+emulated: half narrowing rounds the smallest-subnormal midpoint interval, both signs: true
+emulated: the shipped host stub narrows that interval the same way: true
 emulated: every fp8 encoding widens as on the host: true
 emulated: both fp8 codecs preserve positive and negative NaN signs: true
 emulated: fp8 f64 narrowing preserves ties, underflow, overflow and NaN sign: true
