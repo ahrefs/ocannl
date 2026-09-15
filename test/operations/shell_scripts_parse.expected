@@ -165,6 +165,7 @@ test/operations/ci_matrix.sh uses the shared harness contract: true
 test/operations/ci_matrix.sh parses: true
 test/operations/sweep_harness.sh parses: true
 tools/aggregate-skips.sh parses: true
+tools/box-jobs.sh parses: true
 tools/ci-compiler-test.sh parses: true
 tools/ci-durations.sh parses: true
 tools/ci-times.sh parses: true

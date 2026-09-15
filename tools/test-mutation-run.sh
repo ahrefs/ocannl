@@ -10,7 +10,19 @@ harness_scratch mutation-tests
 fixture=$TMP
 mkdir -p "$fixture/repo/tools" "$fixture/repo/scripts" "$fixture/bin" "$fixture/runs"
 cp "$root/tools/mutation-run.sh" "$root/tools/test-run.sh" "$fixture/repo/tools/"
-cp "$root/scripts/process-group.sh" "$fixture/repo/scripts/"
+# Whatever the shipping test-run.sh SOURCES, derived from the script itself
+# rather than listed here: it dies at startup on a file the fixture lacks, and
+# the failure surfaces as this harness's own exit 2 where a 1 was expected --
+# which is how gh-ocannl-983's `. tools/box-jobs.sh` reddened CI. The floor
+# makes a regex that stopped matching fail loudly instead of staging nothing.
+staged=0
+while IFS= read -r rel; do
+  mkdir -p "$fixture/repo/$(dirname "$rel")"
+  cp "$root/$rel" "$fixture/repo/$rel"
+  staged=$((staged + 1))
+done < <(sed -n 's/^\. \([A-Za-z0-9_./-]*\)$/\1/p' "$root/tools/test-run.sh")
+[ "$staged" -ge 2 ] ||
+  { echo "only $staged sourced file(s) found in tools/test-run.sh; the scan is broken" >&2; exit 2; }
 cat > "$fixture/bin/dune" <<'DUNE'
 #!/usr/bin/env bash
 set -eu
