@@ -1993,10 +1993,13 @@ that they earn a lookup rather than always-loaded space.
   the VM then shuts down in an orderly way (its journal ends in `systemd-poweroff`, not a panic)
   under whatever ssh sessions are running in it: 2026-09-08 lost three minix launches mid-fetch
   and mid-build that way, and on 2026-09-15 the sweep's recovery rerun lost its hip unit 76 s in,
-  the VM powering off 18 s after boot. For an unattended run, hold the VM from the Windows side for
-  the run's duration — `ssh -o ServerAliveInterval=15 <box>-win 'wsl.exe -d Ubuntu -e sleep 10800'`
-  in the background, ended when the run is — or have the owner's console WSL shell open, which is
-  what normally plays that role. A Windows Update restart takes that shell away with no notice (it
+  the VM powering off 18 s after boot. For an unattended run, hold the VM from the Windows side until
+  the work on that box is over —
+  `ssh -o ServerAliveInterval=15 <box>-win 'wsl.exe -d Ubuntu -e sleep infinity'` in the
+  background, killed explicitly once the box's last unit (and its diagnostics) has finished. Do not
+  size a fixed `sleep N` to the expected run: a lane runs several capped units back to back, with
+  preparation outside the caps, and a holder that expires first shuts the VM down under whatever
+  unit remains. The owner's console WSL shell plays the same role, and normally does. A Windows Update restart takes that shell away with no notice (it
   logs the console session off), so the first sweep after a patch reboot runs against an unheld
   VM. Windows schedules those restarts outside its **active hours**, which on both boxes had
   been 10:00 to midnight or 01:00, leaving the early-morning sweep exposed: the 2026-09-15 cumulative update rebooted minix at
