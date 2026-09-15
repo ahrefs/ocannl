@@ -1850,21 +1850,32 @@ that they earn a lookup rather than always-loaded space.
   that started the VM nor the commit decides it, the job count does. The same VMs ran the
   failing stanzas clean serially, and the console-started one then ran a cold `-j 2`
   `@runtest @train` clean in 37 minutes, both adding no refusals. So a MANUAL hip run on minix
-  (`OCANNL_BACKEND=hip tools/test-run.sh run build …`) needs the cap too: pass `-j 2`, or the red
-  suite reads as a backend regression. Under WSL2 `/dev/kfd` and `/dev/dri` are never present and `rocm-smi` always reports
-  the driver as uninitialized — neither is evidence of a lost passthrough; `hipGetDeviceCount`
-  is. The `unit_jobs` table in `tools/sweep.sh` holds the cap (`OCANNL_TOOL_SWEEP_JOBS=<n>`
-  overrides it for one run), applied to the test phase only: `test_cmd` compiles under `@check`
-  at full width first, since the cap bounds GPU-holding processes, not the build. The value is
-  measured, not guessed: on the degraded bridge dune's default lost 67 stanzas (356 kernel-side
-  refusals), `-j 4` still lost 27 (120), and `-j 2` ran a forced full `@runtest @train` unit
-  clean in 18.5 minutes (the sweep harness pins the call shape). A single GPU serialises the
-  kernels anyway, so the capped test phase is not much slower. Recovery for the bridge itself
-  is `wsl --shutdown` from the Windows side, then a kick from the coordinator
-  (`wake-lab.sh kick-wsl minix`) — from inside the VM the shutdown kills the session issuing
-  it. A retry scoped to module loading would cover one of the three names: the refusal lands on
-  `hipInit` and on stream creation too, per VM-bus message, so it would have to sit at the
-  binding's error check, and it cannot help a process whose `hip_init` was refused
+  (`OCANNL_BACKEND=hip tools/test-run.sh run build …`) needs the cap too — and gets it: since gh-ocannl-983 `tools/test-run.sh run`/`start` injects `-j 2` and
+  announces it on stderr and in the run's log whenever `/dev/dxg` is present, `OCANNL_BACKEND`
+  names a GPU backend (`cuda`, `hip`) and the dune arguments carry no width of their own. An
+  explicit `-j` is always honored, and only reported. The ONE case the launcher cannot decide is a
+  backend named in an `ocannl_config` file rather than the environment: resolving that means the
+  config search, the `--ocannl_backend` flags and the profile precedence, in shell, where a wrong
+  answer would halve a legitimate run's width — so the run is left uncapped and the caller is told
+  to pass `-j 2` if the suite is a GPU one. Export `OCANNL_BACKEND` on these boxes and the cap is
+  automatic. Under WSL2 `/dev/kfd` and `/dev/dri` are never present and `rocm-smi` always reports
+  the driver as uninitialized — neither is evidence of a lost passthrough; `hipGetDeviceCount` is.
+  The cap itself is `tools/box-jobs.sh`, the single source `tools/sweep.sh`'s `unit_jobs` and
+  `tools/test-run.sh` both read, so the sweep's width and a manual run's cannot drift
+  (`OCANNL_TOOL_SWEEP_JOBS=<n>` still overrides the sweep's for one run). It is applied to the
+  test phase only: `test_cmd` compiles under `@check` at full width first, since the cap bounds
+  GPU-holding processes, not the build. Only minix's hip unit is in that file's sweep table:
+  rog-nv's CUDA crosses the same bridge and a manual run there IS capped by the device probe, but
+  no measurement says what width its discrete GPU tolerates, so its daily unit is left at full
+  width until one does. The value is measured, not guessed: on the degraded bridge dune's default
+  lost 67 stanzas (356 kernel-side refusals), `-j 4` still lost 27 (120), and `-j 2` ran a forced
+  full `@runtest @train` unit clean in 18.5 minutes (the sweep harness pins the call shape). A
+  single GPU serialises the kernels anyway, so the capped test phase is not much slower. Recovery
+  for the bridge itself is `wsl --shutdown` from the Windows side, then a kick from the
+  coordinator (`wake-lab.sh kick-wsl minix`) — from inside the VM the shutdown kills the session
+  issuing it. A retry scoped to module loading would cover one of the three names: the refusal
+  lands on `hipInit` and on stream creation too, per VM-bus message, so it would have to sit at
+  the binding's error check, and it cannot help a process whose `hip_init` was refused
   (gh-ocannl-927).
 - **Runtime-refusal signature table.** These are the exception names `tools/sweep.sh`'s
   `ENVIRONMENT_REFUSALS` treats as the environment refusing a run rather than a test judging it;

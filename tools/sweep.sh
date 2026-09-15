@@ -47,6 +47,13 @@ UNIT_STATES=$STATE/unit-state
 MAIN=${OCANNL_TOOL_SWEEP_REPO:-$HOME/ocannl-staging}
 SWEEP_TOOLS=$(cd "$(dirname "$0")" && pwd)
 AGGREGATE_SKIPS=$SWEEP_TOOLS/aggregate-skips.sh
+# The per-box width cap, shared with tools/test-run.sh so the two cannot drift.
+[ -r "$SWEEP_TOOLS/box-jobs.sh" ] || {
+  echo "sweep: cannot read $SWEEP_TOOLS/box-jobs.sh" >&2
+  exit 2
+}
+# shellcheck source=box-jobs.sh
+. "$SWEEP_TOOLS/box-jobs.sh"
 REF=origin/master
 TARGET=
 SLOW=0
@@ -130,37 +137,25 @@ UNITS=(
 )
 
 # Dune's job count for the TEST phase of a unit, empty for dune's default (one
-# per core). The hip box's GPU is an iGPU reached through WSL2's dxg bridge --
-# every allocation and every module load is a synchronous message over a Hyper-V
-# VM bus ring -- and that ring overflows when the suite's test executables hold
-# the device at once (dune's default on that box is 32 jobs, 16 of them GPU
-# processes at the moment it was measured). The kernel logs
-# `dxgvmb_send_sync_msg: vmbus_sendpacket failed: fffffff5` (-EAGAIN) and the
-# HIP runtime surfaces the lost messages as HIP_ERROR_INVALID_DEVICE at
-# hip_init, HIP_ERROR_NO_BINARY_FOR_GPU at module load, and failed stream
-# creation: 60+ red tests in a suite whose logic never ran, with a device that
-# passes every standalone probe (2026-09-05, minix after two host resumes kept
-# the VM alive with a degraded bridge; a fresh VM tolerated the full width for
-# eleven daily sweeps before that). Measured on that degraded bridge the same
-# day: full width 67 red, `-j 4` still 27 red with 120 kernel-side refusals,
-# `-j 2` zero of either over a forced full unit in 18.5 minutes, `-j 1` clean
-# on every rerun. A single GPU serialises the kernels anyway, so the cap costs
-# the test phase little; the compile phase stays uncapped (`test_cmd` runs
-# `@check` first). Override for one run with OCANNL_TOOL_SWEEP_JOBS=<n>, which
-# then applies to every unit.
+# per core). The cap itself, which boxes it covers and why it is the number it
+# is now live in tools/box-jobs.sh, the single source this and tools/test-run.sh
+# both read: the same bridge overflows a MANUAL GPU suite on such a box, and a
+# cap only the sweep knew about was rediscovered the hard way (gh-ocannl-983).
+# Applied to the test phase only -- the compile phase stays uncapped, since
+# `test_cmd` runs `@check` first and the cap bounds GPU-holding processes, not
+# the build. Override for one run with OCANNL_TOOL_SWEEP_JOBS=<n>, which then
+# applies to every unit.
 unit_jobs() {
   if [ -n "${OCANNL_TOOL_SWEEP_JOBS:-}" ]; then
     printf '%s' "$OCANNL_TOOL_SWEEP_JOBS"
     return
   fi
-  case "$1:$2" in
-    minix:hip) printf 2 ;;
-    *) ;;
-  esac
+  box_jobs_sweep_cap "$1" "$2"
 }
 
 # The failure names that mean the ENVIRONMENT refused the run rather than a
-# test judging it. On minix the dxg bridge described above surfaces its lost
+# test judging it. On minix the WSL2 dxg bridge (tools/box-jobs.sh, and the dxg
+# bullet in docs/agent-notes/build-and-test.md) surfaces its lost
 # messages as three HIP exceptions; rog-nv's CUDA reaches its GPU through the
 # same WSL2 bridge, so the cudajit checks at the same three call sites are
 # listed by analogy, plus the primary-context retain every CUDA process makes

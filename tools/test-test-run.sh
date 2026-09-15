@@ -15,7 +15,8 @@
 #
 # It tests the WORKING-TREE copy: `group_alive` is extracted from the shared
 # scripts/process-group.sh; `ps_token`, `proc_identity_matches`, `proc_alive`
-# come from tools/test-run.sh. The `stop` legs drive that same tool as a
+# come from tools/test-run.sh; the dxg legs read the shipping tools/box-jobs.sh
+# and extract tools/sweep.sh's `unit_jobs`. The `stop` legs drive that same tool as a
 # subprocess. Each extraction is asserted structurally before use, so a sed
 # that matched nothing cannot leave every leg passing without testing anything.
 #
@@ -60,21 +61,32 @@
 #      nothing -- the misplacement dune would otherwise digest as a red run.
 #  27. the same option in its documented place is consumed, not forwarded.
 #  28. past dune's own `--` the same word is a program argument, untouched.
-#  29. an invocation dune's own parser refuses -- unknown option, unknown
+#  29. the dxg width cap is injected, announced on stderr, written into the run
+#      log and recorded in the command, for a GPU run that named no width.
+#  30. a width the caller named is honored in every spelling dune takes, and
+#      says so; one past dune's own `--` is the program's, so it still caps.
+#  31. a CPU backend, or a box with no bridge, is neither capped nor told
+#      anything.
+#  32. with OCANNL_BACKEND unset the backend is unreadable here: the run is not
+#      capped and the caller is told what to pass -- unless it named a width.
+#  33. hip caps too, and the width is spliced after dune's subcommand.
+#  34. tools/sweep.sh's `unit_jobs` and the injected cap read one table, with
+#      the sweep's own override still winning.
+#  35. an invocation dune's own parser refuses -- unknown option, unknown
 #      subcommand, malformed operand -- digests as INVOCATION REFUSED quoting
 #      dune's complaint: `run`/`wait` exit 2 over a RECORDED exit 1, `status`
 #      keeps its publication 0, and dune was invoked exactly once.
-#  30. controls: a red run (`Error:`/`File` lines, exit 1) still digests as
+#  36. controls: a red run (`Error:`/`File` lines, exit 1) still digests as
 #      FAIL with exit 1 -- including one whose output opens with a `dune:`
 #      line, and one that prints a complete nested dune refusal and then
 #      goes on (the shape must be alone in the log, not merely first).
-#  31. the `--cap` guard still refuses BEFORE dune is spawned: the two exit-2
+#  37. the `--cap` guard still refuses BEFORE dune is spawned: the two exit-2
 #      refusals are told apart by whether dune was ever invoked.
-#  32. `repeat` stops after a refused first iteration and exits 2 under the
+#  38. `repeat` stops after a refused first iteration and exits 2 under the
 #      same verdict, while a merely red iteration is still repeated in full.
-#  33. read-only paths and lock-status: absent state, invalid input, physical
+#  39. read-only paths and lock-status: absent state, invalid input, physical
 #      paths, recorded and legacy paths, held/released and uninspectable locks.
-#  34-41. run/start lifecycle: completion, signals, stop, competing launches,
+#  40-47. run/start lifecycle: completion, signals, stop, competing launches,
 #      orphan/background groups, publication window, last and legacy locks,
 #      and byte-identical source-tree preservation.
 
@@ -87,9 +99,13 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC="$HERE/test-run.sh"
 GROUP_SRC="$HERE/../scripts/process-group.sh"
 HOOK_SRC="$HERE/../scripts/setup-ocaml-env.sh"
+JOBS_SRC="$HERE/box-jobs.sh"
+SWEEP_SRC="$HERE/sweep.sh"
 [ -f "$SRC" ] || { echo "no $SRC" >&2; exit 2; }
 [ -f "$GROUP_SRC" ] || { echo "no $GROUP_SRC" >&2; exit 2; }
 [ -f "$HOOK_SRC" ] || { echo "no $HOOK_SRC" >&2; exit 2; }
+[ -f "$JOBS_SRC" ] || { echo "no $JOBS_SRC" >&2; exit 2; }
+[ -f "$SWEEP_SRC" ] || { echo "no $SWEEP_SRC" >&2; exit 2; }
 
 
 # The harness needs the two facts about a process that `group_alive` needs, read
@@ -764,6 +780,9 @@ repeat_bin=$TMP/repeat-bin
 mkdir -p "$repeat_root/tools" "$repeat_root/scripts" "$repeat_bin"
 cp "$SRC" "$repeat_root/tools/test-run.sh"
 cp "$GROUP_SRC" "$repeat_root/scripts/process-group.sh"
+# The width table the script sources: without it every subcommand below --
+# including the fixture dune's own lock probe -- would die before running.
+cp "$JOBS_SRC" "$repeat_root/tools/box-jobs.sh"
 chmod +x "$repeat_root/tools/test-run.sh"
 # Read-only query contract: no state store, no first run, and no lock file yet.
 # The fixture root (not the caller's cwd) owns all omitted-RUN queries.
@@ -1988,7 +2007,196 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Legs 29-32: an invocation dune's own parser refused is a verdict of its own
+# Legs 29-34: the dxg width cap (gh-ocannl-983)
+# ---------------------------------------------------------------------------
+# A box that reaches its GPU through WSL2's `/dev/dxg` bridge overflows the
+# bridge's VM-bus ring at dune's default width, and the runtime reports the lost
+# messages as device/binary/stream-creation refusals: a red suite in the very
+# stanzas a real backend regression lands in. tools/sweep.sh capped its unit
+# there; a manual run did not, and an hour of box time went into rediscovering
+# the cap by bisection. So `run`/`start` injects it -- but ONLY where the caller
+# expressed no width at all, which is what keeps "runs dune as given" true.
+#
+# Every leg drives the real launch path against the fixture dune and reads the
+# recorded argv, so what is pinned is the command dune was actually given, not a
+# decision variable. The bridge is faked through OCANNL_TOOL_DXG_DEVICE (the
+# device path the table probes), which is the only reason these run on a Mac.
+dxg_present=$TMP/fake-dxg-device
+dxg_absent=$TMP/fake-dxg-device-absent
+: >"$dxg_present"
+rm -f "$dxg_absent"
+# The fixture is the whole experiment: a present path that is absent, or an
+# absent one that exists, would make every leg below agree with itself.
+if [ ! -e "$dxg_present" ] || [ -e "$dxg_absent" ]; then
+  echo "dxg fixture paths are not what the legs assume" >&2
+  exit 2
+fi
+dxg_probe() { # tag device backend subcommand [argv...]
+  local tag=$1 device=$2 backend=$3
+  shift 3
+  # Exported rather than written as a prefix: bash's rules for assignments
+  # before a FUNCTION call differ between modes, and a leg that silently ran
+  # without its backend would pass by testing the no-op case.
+  export OCANNL_TOOL_DXG_DEVICE=$device
+  if [ -n "$backend" ]; then export OCANNL_BACKEND=$backend; else unset OCANNL_BACKEND; fi
+  argv_probe "$tag" "$@"
+  unset OCANNL_TOOL_DXG_DEVICE OCANNL_BACKEND
+}
+
+# The injection, in all four places it has to appear: dune's argv, the RECORDED
+# command (so a later digest shows the width too), stderr, and the run's log --
+# the artifact whoever triages the red suite reads.
+dxg_probe cap-inject "$dxg_present" cuda run build @cheap
+dxg_detail=
+[ "$argv_rc" = 0 ] || dxg_detail="exit $argv_rc"
+[ -n "$dxg_detail" ] || [ "$argv_calls" = "build -j 2 @cheap" ] ||
+  dxg_detail="calls: ${argv_calls:-<none>}"
+[ -n "$dxg_detail" ] || grep -q -- 'capping dune at -j 2' <<<"$argv_err" ||
+  dxg_detail="stderr did not announce the cap: $argv_err"
+[ -n "$dxg_detail" ] || grep -q -- 'box-jobs.sh' <<<"$argv_err" ||
+  dxg_detail="stderr did not name the cap's source: $argv_err"
+[ -n "$dxg_detail" ] || grep -q -- 'agent-notes/build-and-test.md' <<<"$argv_err" ||
+  dxg_detail="stderr did not name the agent note: $argv_err"
+[ -n "$dxg_detail" ] || { [ -n "$argv_dir" ] && grep -q -- 'capping dune at -j 2' "$argv_dir/log"; } ||
+  dxg_detail="the run log does not carry the cap: ${argv_dir:-<no run>}"
+[ -n "$dxg_detail" ] || { [ -n "$argv_dir" ] && grep -q -- '-j 2' "$argv_dir/cmd"; } ||
+  dxg_detail="the recorded command does not carry the cap: $(cat "$argv_dir/cmd" 2>/dev/null)"
+if [ -z "$dxg_detail" ]; then
+  report 0 "dxg: a GPU run that named no width is capped, announced and recorded"
+else
+  report 1 "dxg: a GPU run that named no width is capped, announced and recorded" "$dxg_detail"
+fi
+
+# A width the caller named is honored, in every spelling dune takes -- and
+# `-j` PAST dune's own separator is the program's argument, not a width, so
+# that one is still capped. The negative control matters: a scan that stopped
+# at the wrong place would either forward two widths or cap nothing.
+dxg_detail=
+for probe in "sp-space:-j 8:build -j 8 @cheap" \
+             "sp-glued:-j8:build -j8 @cheap" \
+             "sp-long:--jobs 8:build --jobs 8 @cheap" \
+             "sp-eq:--jobs=8:build --jobs=8 @cheap" \
+             "sp-auto:-jauto:build -jauto @cheap"; do
+  tag=${probe%%:*}; rest=${probe#*:}; want=${rest#*:}
+  # shellcheck disable=SC2086
+  dxg_probe "cap-$tag" "$dxg_present" cuda run build ${rest%%:*} @cheap
+  if [ "$argv_rc" != 0 ] || [ "$argv_calls" != "$want" ]; then
+    dxg_detail="${rest%%:*}: exit $argv_rc; calls: ${argv_calls:-<none>} (want $want)"; break
+  fi
+  case $argv_err in
+    *"names its own dune width"*"NOT injected"*) ;;
+    *) dxg_detail="${rest%%:*}: the honored width was not reported: ${argv_err:-<nothing>}"; break ;;
+  esac
+done
+if [ -z "$dxg_detail" ]; then
+  dxg_probe cap-past-sep "$dxg_present" cuda run exec ./prog.exe -- -j 8
+  [ "$argv_rc" = 0 ] && [ "$argv_calls" = "exec -j 2 ./prog.exe -- -j 8" ] ||
+    dxg_detail="past the separator: exit $argv_rc; calls: ${argv_calls:-<none>}"
+fi
+if [ -z "$dxg_detail" ]; then
+  report 0 "dxg: a width the caller named is honored; one past dune's -- is not a width"
+else
+  report 1 "dxg: a width the caller named is honored; one past dune's -- is not a width" "$dxg_detail"
+fi
+
+# The two halves of the condition, each denied on its own. Silence is part of
+# the contract here: an announcement on an ordinary box or a CPU suite is noise
+# that trains its reader to skip the one line that matters.
+dxg_detail=
+for probe in "cpu:$dxg_present:cc" "cpu-multidev:$dxg_present:multidev_cc" \
+             "offbox-cuda:$dxg_absent:cuda" "offbox-hip:$dxg_absent:hip"; do
+  tag=${probe%%:*}; rest=${probe#*:}
+  dxg_probe "cap-$tag" "${rest%%:*}" "${rest#*:}" run build @cheap
+  if [ "$argv_rc" != 0 ] || [ "$argv_calls" != "build @cheap" ] ||
+     grep -qi 'cap\|dxg' <<<"$argv_err"; then
+    dxg_detail="$tag: exit $argv_rc; calls: ${argv_calls:-<none>}; stderr: ${argv_err:-<none>}"; break
+  fi
+done
+if [ -z "$dxg_detail" ]; then
+  report 0 "dxg: no cap and no announcement for a CPU backend, or off a dxg host"
+else
+  report 1 "dxg: no cap and no announcement for a CPU backend, or off a dxg host" "$dxg_detail"
+fi
+
+# The documented gap: the backend can also come from an ocannl_config file, and
+# this launcher deliberately does not resolve one (that is the config search,
+# the CLI flags and the profile precedence, in shell, where a wrong answer
+# halves a legitimate run's width). Unreadable is said, not guessed -- and only
+# where the caller named no width, since one who did needs no advice.
+dxg_probe cap-unset "$dxg_present" "" run build @cheap
+dxg_detail=
+[ "$argv_rc" = 0 ] && [ "$argv_calls" = "build @cheap" ] ||
+  dxg_detail="exit $argv_rc; calls: ${argv_calls:-<none>}"
+[ -n "$dxg_detail" ] || grep -q 'OCANNL_BACKEND is unset' <<<"$argv_err" ||
+  dxg_detail="no advisory: ${argv_err:-<nothing>}"
+[ -n "$dxg_detail" ] || grep -q -- '-j 2 yourself' <<<"$argv_err" ||
+  dxg_detail="the advisory does not say what to pass: $argv_err"
+if [ -z "$dxg_detail" ]; then
+  dxg_probe cap-unset-explicit "$dxg_present" "" run build -j 8 @cheap
+  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build -j 8 @cheap" ] &&
+    ! grep -qi 'cap\|dxg' <<<"$argv_err"; } ||
+    dxg_detail="with a width named: exit $argv_rc; calls: ${argv_calls:-<none>}; stderr: ${argv_err:-<none>}"
+fi
+if [ -z "$dxg_detail" ]; then
+  report 0 "dxg: an unreadable backend is reported, never guessed, and never capped"
+else
+  report 1 "dxg: an unreadable backend is reported, never guessed, and never capped" "$dxg_detail"
+fi
+
+# The other GPU backend, and the position the width is spliced at: immediately
+# after dune's subcommand, which is where dune accepts it for every target --
+# and always before dune's own `--`, past which it would be an argument to the
+# program dune runs.
+dxg_probe cap-hip "$dxg_present" hip run exec ./prog.exe -- alpha
+dxg_detail=
+[ "$argv_rc" = 0 ] && [ "$argv_calls" = "exec -j 2 ./prog.exe -- alpha" ] ||
+  dxg_detail="exit $argv_rc; calls: ${argv_calls:-<none>}"
+if [ -z "$dxg_detail" ]; then
+  report 0 "dxg: hip is capped too, and the width precedes dune's own separator"
+else
+  report 1 "dxg: hip is capped too, and the width precedes dune's own separator" "$dxg_detail"
+fi
+
+# The anti-drift half. The cap this script injects and the one tools/sweep.sh
+# gives its dxg unit must be the same number for the same reason, which is why
+# they now come from one table. sweep.sh cannot be sourced (it runs a sweep), so
+# its unit_jobs is EXTRACTED -- and the extraction is asserted to have matched
+# and to delegate, or a sed that caught nothing would leave this leg agreeing
+# with an empty function.
+sed -n '/^unit_jobs() {/,/^}/p' "$SWEEP_SRC" >"$TMP/unit-jobs.sh"
+dxg_detail=
+grep -q 'box_jobs_sweep_cap' "$TMP/unit-jobs.sh" ||
+  dxg_detail="sweep.sh's unit_jobs does not read the shared table: $(cat "$TMP/unit-jobs.sh")"
+[ -n "$dxg_detail" ] || grep -q '^\. "\$SWEEP_TOOLS/box-jobs.sh"$' "$SWEEP_SRC" ||
+  dxg_detail="sweep.sh does not source tools/box-jobs.sh"
+[ -n "$dxg_detail" ] || grep -q '^\. tools/box-jobs\.sh$' "$SRC" ||
+  dxg_detail="test-run.sh does not source tools/box-jobs.sh"
+if [ -z "$dxg_detail" ]; then
+  # The values themselves, from the shipping table, in one shell: the sweep's
+  # dxg unit, the local probe, and the override that must still win.
+  sweep_cap=$(
+    . "$JOBS_SRC"
+    . "$TMP/unit-jobs.sh"
+    printf '%s|%s|%s|%s|%s' \
+      "$(unit_jobs minix hip)" \
+      "$(OCANNL_TOOL_SWEEP_JOBS=7 unit_jobs minix hip)" \
+      "$(unit_jobs m4-max metal)" \
+      "$(OCANNL_TOOL_DXG_DEVICE=$dxg_present box_jobs_local_cap cuda)" \
+      "$BOX_JOBS_DXG_CAP"
+  )
+  case $sweep_cap in
+    "2|7||2|2") ;;
+    *) dxg_detail="shared table disagrees: $sweep_cap (want 2|7||2|2)" ;;
+  esac
+fi
+if [ -z "$dxg_detail" ]; then
+  report 0 "dxg: sweep.sh's unit_jobs and the injected cap come from one table"
+else
+  report 1 "dxg: sweep.sh's unit_jobs and the injected cap come from one table" "$dxg_detail"
+fi
+
+# ---------------------------------------------------------------------------
+# Legs 35-38: an invocation dune's own parser refused is a verdict of its own
 # ---------------------------------------------------------------------------
 # The guard above knows two words. Everything else dune's CLI refuses -- an
 # unknown option, an unknown subcommand, a malformed operand -- prints
@@ -2173,7 +2381,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Legs 34-41: attached run and detached start lifecycle (gh-ocannl-967).
+# Legs 40-47: attached run and detached start lifecycle (gh-ocannl-967).
 # All fixture work is outside the source tree, including its run store. The
 # ready marker is written by Dune AFTER the supervisor/group records exist.
 # Direct children remain unreaped until checked; other processes are signalled
@@ -2187,6 +2395,7 @@ life_pid= life_run=
 mkdir -p "$life_root/tools" "$life_root/scripts" "$life_runs" "$life_bin"
 cp "$SRC" "$life_root/tools/test-run.sh"
 cp "$GROUP_SRC" "$life_root/scripts/process-group.sh"
+cp "$JOBS_SRC" "$life_root/tools/box-jobs.sh"
 cp -R "$life_root" "$TMP/lifecycle-before"
 cat >"$life_bin/dune" <<'EOF'
 #!/usr/bin/env bash

@@ -156,6 +156,90 @@ reject_misplaced_options() {
   done
 }
 
+# The dxg width cap (gh-ocannl-983). A box that reaches its GPU through WSL2's
+# `/dev/dxg` bridge overflows the bridge's VM-bus ring when the suite's test
+# executables hold the device at once, and the runtime reports the lost messages
+# as device/binary/stream-creation refusals -- a red suite in exactly the
+# stanzas a real backend regression lands in. tools/sweep.sh has capped its unit
+# there since 2026-09-05; every other way in ran at dune's default width, and an
+# hour of box time plus a misleading bisect went into rediscovering the cap.
+#
+# So a `run`/`start` that expressed NO width at all, on such a box, with a GPU
+# backend selected, gets the cap injected and is told so -- loudly, because the
+# alternative reading of what follows is a backend regression. The "runs dune as
+# given" contract is untouched wherever the caller named a width: an explicit
+# `-j`/`--jobs` (in any of dune's spellings, and any abbreviation of the long
+# one) is always honored, and only says that the cap exists.
+#
+# The backend is read from the ENVIRONMENT, never from an `ocannl_config` file.
+# Resolving it properly means the ancestor-directory search, `--ocannl_backend`
+# flags and the profile precedence rules, i.e. reimplementing Utils' config
+# resolution in shell where a wrong answer would silently halve a legitimate
+# run's width, or inject nothing while claiming the box was checked. A launcher
+# that cannot read a value says so instead: where the bridge is present and
+# OCANNL_BACKEND is unset, the run is not capped and the caller is told what to
+# pass if the suite is in fact a GPU one.
+explicit_jobs() { # dune argv; 0 iff it names a width before dune's own `--`
+  for arg do
+    case $arg in
+      # Past the separator the words belong to an executable dune runs.
+      --) return 1 ;;
+      # `-j`, `-j4`, `-jauto`, `--jobs 4`, `--jobs=4` -- and any unambiguous
+      # abbreviation cmdliner accepts for the long form. Erring towards "the
+      # caller named a width" is the safe direction: it only declines to inject.
+      -j | -j?* | --j?*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+dxg_cap=          # the width to inject, empty for none
+dxg_announce=     # what to say about it, on stderr and in the run's log
+plan_dxg_cap() { # dune argv
+  local backend=${OCANNL_BACKEND:-} cap
+  dxg_cap= dxg_announce=
+  box_jobs_dxg_host || return 0
+  if [ -z "$backend" ]; then
+    explicit_jobs "$@" && return 0
+    dxg_announce="this box reaches its GPU through the WSL2 $(box_jobs_dxg_device) bridge, where a
+  GPU suite must run at -j $BOX_JOBS_DXG_CAP (the cap is tools/box-jobs.sh; gh-ocannl-983).
+  OCANNL_BACKEND is unset here, so this run's backend comes from ocannl_config
+  or the stanza and cannot be read from a launcher: if it is cuda or hip, pass
+  -j $BOX_JOBS_DXG_CAP yourself, or the suite can come back red like a backend regression."
+    return 0
+  fi
+  cap=$(box_jobs_local_cap "$backend")
+  [ -n "$cap" ] || return 0
+  if explicit_jobs "$@"; then
+    dxg_announce="dxg host with OCANNL_BACKEND=$backend: this command names its own dune width,
+  so the -j $cap cap (tools/box-jobs.sh, gh-ocannl-983) was NOT injected."
+    return 0
+  fi
+  dxg_cap=$cap
+  dxg_announce="capping dune at -j $cap. This box reaches its GPU through the WSL2
+  $(box_jobs_dxg_device) bridge and OCANNL_BACKEND=$backend holds that device. At dune's default
+  width the bridge's VM-bus ring overflows, and the suite comes back red in the
+  same stanzas a real backend regression lands in (gh-ocannl-983). The cap lives
+  in tools/box-jobs.sh, shared with tools/sweep.sh; the refusal signature and the
+  recovery are the dxg bullet of docs/agent-notes/build-and-test.md. Pass an
+  explicit -j to run at a width of your own."
+}
+
+dxg_said=         # stderr is said once, whichever call gets there first
+dxg_logged=
+say_dxg_plan() { # -> stderr, and into the run's log once there is one
+  [ -n "$dxg_announce" ] || return 0
+  if [ -z "$dxg_said" ]; then
+    printf 'test-run: %s\n' "$dxg_announce" >&2
+    dxg_said=1
+  fi
+  if [ -z "$dxg_logged" ] && [ -n "${run_dir:-}" ] && [ -f "$run_dir/log" ]; then
+    printf 'test-run: %s\n' "$dxg_announce" >>"$run_dir/log"
+    dxg_logged=1
+  fi
+  return 0
+}
+
 select_dune() {
   # On Windows the environment rewrite is required even if dune is already on
   # PATH: opam's native output otherwise leaves an MSYS shell half-configured.
@@ -184,6 +268,12 @@ cd -P "$(dirname "$0")/.." || die "cannot cd to repo root"
 [ -r scripts/process-group.sh ] || die "cannot read scripts/process-group.sh"
 # shellcheck source=../scripts/process-group.sh
 . scripts/process-group.sh
+
+# The per-box dune width cap, shared with tools/sweep.sh so the two cannot
+# drift. See dxg_cap below for what this script does with it.
+[ -r tools/box-jobs.sh ] || die "cannot read tools/box-jobs.sh"
+# shellcheck source=box-jobs.sh
+. tools/box-jobs.sh
 
 # perl is load-bearing rather than a convenience: the per-worktree flock, the
 # cap supervisor and the atomic rename behind the `last` pointer are all
@@ -1547,6 +1637,18 @@ case $sub in
     normalize_cap
     reject_misplaced_options "$@"
     [ $# -gt 0 ] || set -- runtest
+    # Before new_run, so the injected width is part of the RECORDED command and
+    # of every later digest -- not a decision the log alone remembers. The
+    # width goes immediately after dune's subcommand, where dune accepts it
+    # whatever the target is, and always before dune's own `--`.
+    plan_dxg_cap "$@"
+    if [ -n "$dxg_cap" ]; then
+      dxg_sub=$1
+      shift
+      set -- "$dxg_sub" -j "$dxg_cap" "$@"
+    fi
+    # Stderr first: it must be readable even if the launch itself fails below.
+    say_dxg_plan
     # Toolchain checks gate only launches: status/wait/stop/list remain usable
     # from a shell whose opam environment is no longer active.
     select_dune
@@ -1578,6 +1680,9 @@ case $sub in
     trap 'fwd_sig TERM' TERM
     trap 'fwd_sig HUP' HUP
     new_run "$@"
+    # And into the run's own log, so the cap is in the artifact triage reads
+    # rather than only in the launching terminal's scrollback.
+    say_dxg_plan
     take_lock
     publish_run || { rm -rf "$run_dir"; die "cannot publish $run_dir"; }
     # The supervisor inherits lock fd 9 and owns the run from here: it records
