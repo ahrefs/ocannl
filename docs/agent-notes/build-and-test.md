@@ -1813,12 +1813,15 @@ that they earn a lookup rather than always-loaded space.
   record's path as a `run:` line on both exits. Why a separate file rather than columns on
   `history.tsv`: history rows are per unit and append-only, so neither the run-level exit kind nor
   today's backend→box map has a unit row to live on. `test/operations/sweep_harness.sh` pins the
-  record for every shape it builds — lanes, remote skips, a lane stopped mid-lane, cancellation, and
-  the startup refusal that writes nothing. The kinds, each row's first column, with the columns
+  record for every shape it builds — lanes, remote skips, a lane stopped mid-lane, a post-lane
+  harness failure, cancellation, and the startup refusal that writes nothing. The kinds, each row's first column, with the columns
   after it in order:
   - `run`: stamp, short sha, ref, target (`<all>` when unscoped), slow flag, execution, exit kind —
     where the exit kind is `complete`, `lane-stopped` (the exit-2 shape whose recorded rows are
-    real) or `cancelled`.
+    real), `cancelled`, or `post-run-failed` (every unit recorded, then a harness failure in the
+    post-lane phase, such as the skip aggregation, aborted the run). The kind always agrees with
+    how the process exited: the record is published before those post-lane steps so a failure
+    there leaves a record that explains itself, and each such failure rewrites the kind first.
   - `unit`: machine, backend, outcome or `no-row`, lane-stopped flag, log path or `-`. One per
     SELECTED unit, so `no-row` names a unit that should have run and whose lane never got as far as
     recording it, never one `--only` excluded. A lane publishes a completion marker as its last act,

@@ -29,7 +29,8 @@ on_error() {
     local_identity_error unsafe_identity_error only_typo_error matrix_error state_first state_same \
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
     capped capped_target remote_opt_in serial_red serial_clean serial_two_inline \
-    serial_many_inline serial_control lanes lane_stop_seed lane_stopped after_cancel; do
+    serial_many_inline serial_control lanes lane_stop_seed lane_stopped \
+    aggregator_missing after_cancel; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
   done
@@ -1217,6 +1218,34 @@ lane_stopped_record=$(sed -n 's/^run:  *//p' <<<"$lane_stopped")
 [ "$(awk -F '\t' '$1 == "run" { print $8 }' "$lane_stopped_record")" = lane-stopped ]
 [ "$(awk -F '\t' '$1 == "unit" { print $2 "/" $3 ":" $4 ":" $5 }' "$lane_stopped_record" | sort)" = \
   "$(printf '%s\n' m4-max/cc:incremental-pass:1 m4-max/metal:no-row:1 rog-nv/cuda:skip:0 | sort)" ]
+
+# A post-lane harness failure rewrites the exit kind rather than leaving a record
+# that claims `complete` over an exit 2. Provoked by running a copy of the sweep
+# from a directory that holds no aggregate-skips.sh -- the aggregator is resolved
+# beside the script -- on a forced unscoped run, which is the only shape that
+# aggregates. The units all recorded, so their rows stay real; it is the run-level
+# kind that has to tell the truth about how the process ended.
+# Everything else the script resolves beside itself comes along -- only
+# aggregate-skips.sh is withheld -- so the run reaches the aggregation step
+# instead of refusing at startup over the box declaration it parses with
+# fixture_digest.py.
+mkdir -p "$tmp/lonely/tools" "$tmp/lonely/benchmarks"
+cp "$sweep" "$tmp/lonely/tools/sweep.sh"
+cp "$(dirname "$sweep")/../benchmarks/fixture_digest.py" "$tmp/lonely/benchmarks/"
+chmod +x "$tmp/lonely/tools/sweep.sh"
+sweep_with_aggregator=$sweep
+sweep=$tmp/lonely/tools/sweep.sh
+set +e
+aggregator_missing=$(run_sweep --force 2>&1)
+aggregator_missing_rc=$?
+set -e
+sweep=$sweep_with_aggregator
+[ "$aggregator_missing_rc" -eq 2 ]
+grep -q '^sweep: skip aggregator is not executable: ' <<<"$aggregator_missing"
+aggregator_missing_record=$(sed -n 's/^run:  *//p' <<<"$aggregator_missing")
+[ "$(awk -F '\t' '$1 == "run" { print $8 }' "$aggregator_missing_record")" = post-run-failed ]
+[ "$(awk -F '\t' '$1 == "unit" { print $2 "/" $3 ":" $4 ":" $5 }' "$aggregator_missing_record")" = \
+  m4-max/cc:pass:0 ]
 
 # Cancelling a sweep stops EVERY lane: here the local lane's unit is held in its
 # test leg and the rog-nv lane's in its preparation ssh, both under supervisors.
