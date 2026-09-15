@@ -90,6 +90,36 @@ let run mode flags =
               let got = half x and want = Ir.Ops.single_to_half x in
               if Float.is_nan x then got land 0x7c00 = 0x7c00 && got land 0x03ff <> 0
               else got = want);
+          (* The rounding interval just above half of the smallest half subnormal (gh-ocannl-981):
+             the emulated narrowing used to flush all of it. Expectations are an independent bit
+             oracle over f32 patterns, not a second reading of either converter: the exact midpoint
+             0x1p-25 ties down to signed zero, while its next f32 neighbour, 0x1.8p-25, the last
+             pattern below 2^-24 and 2^-24 itself all round to the smallest subnormal. *)
+          let f32_of_bits b = Int32.float_of_bits (Int32.of_int b) in
+          let underflow =
+            [
+              (0x33000000, 0x0000);
+              (0x33000001, 0x0001);
+              (0x33400000, 0x0001);
+              (0x337fffff, 0x0001);
+              (0x33800000, 0x0001);
+            ]
+          in
+          let signed =
+            Array.of_list
+              (List.concat_map
+                 (fun (bits, h) -> [ (bits, h); (bits lor 0x80000000, h lor 0x8000) ])
+                 underflow)
+          in
+          let want = Array.map snd signed in
+          p_all2
+            (label "half narrowing rounds the smallest-subnormal midpoint interval, both signs")
+            (Array.map (fun (bits, _) -> half (f32_of_bits bits)) signed)
+            want ~f:Int.equal;
+          p_all2
+            (label "the shipped host stub narrows that interval the same way")
+            (Array.map (fun (bits, _) -> Ir.Ops.single_to_half (f32_of_bits bits)) signed)
+            want ~f:Int.equal;
           let fp8_codes = List.init 256 Fun.id in
           p_all (label "every fp8 encoding widens as on the host") fp8_codes ~f:(fun x ->
               same_float (fp8_widen x) (Ir.Ops.fp8_to_single x));

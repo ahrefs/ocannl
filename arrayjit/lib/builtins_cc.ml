@@ -198,8 +198,15 @@ static uint16_t float_to_half_emulated(float f) {
         /* For subnormal, we need to shift right by (shift + 13) total bits */
         uint32_t total_shift = shift + 13;
         
-        if (total_shift >= 24) {
-            /* Would shift away all bits */
+        /* new_exp is in [-10, 0] here, so total_shift is in [14, 24] and every shift below stays
+           in range. At total_shift == 24 the quotient is zero but the guard bit is the mantissa's
+           implicit leading one, so round-to-nearest-even still yields the smallest subnormal for
+           anything strictly above the midpoint 2^-25: 0x1.8p-25 narrows to half bits 0x0001, and
+           only the exact midpoint ties down to zero (gh-ocannl-981). Zero is unconditional only
+           once the guard bit itself is shifted away, total_shift > 24 -- which the new_exp < -10
+           arm above has already returned, so this is the boundary and not a flush. */
+        if (total_shift > 24) {
+            /* Would shift away all bits, guard bit included */
             return sign << 15;
         }
         
