@@ -57,7 +57,9 @@
 # `repeat` runs each iteration through dune in a freshly cleaned, cache-disabled
 # build context, keeps its separate stdout/stderr and exit status, and compares
 # every pair. `--alone` adds `-j 1`,
-# so no sibling dune action overlaps the selected target. Its cap is per
+# so no sibling dune action overlaps the selected target. Unlike `run`/`start`,
+# `repeat` never injects the dxg `-j` cap (see dxg_cap below): an isolation tool
+# runs at the width it is given, so on a dxg box pass `--alone` or `-j` yourself. Its cap is per
 # iteration; N must be at least 2. An stdout/status difference is red (exit 1
 # when dune itself stayed green); stderr-only drift is reported distinctly but
 # is not red. Any red dune iteration keeps a nonzero dune status.
