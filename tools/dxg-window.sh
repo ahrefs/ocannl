@@ -113,7 +113,7 @@ dxg_bursts() { # log
 # `--since @<epoch>` is accepted by util-linux dmesg (2.41.3 on both sweep boxes);
 # a dmesg without it fails the collection rather than reporting an unbounded ring
 # as this window.
-dxg_window_cmd() { # start-epoch end-epoch
+dxg_window_cmd() { # elapsed-seconds
   # The probe must see an ENTRY, not merely output: journalctl with no readable
   # kernel journal exits 0 and prints `-- No entries --` on stdout (the
   # explanation goes to stderr), so both a status test and a nonempty test select
@@ -121,6 +121,26 @@ dxg_window_cmd() { # start-epoch end-epoch
   # recording a burst still sitting in the kernel ring as zero. Keying on "a line
   # that is not a `--` marker" holds whatever journalctl decides to print, which
   # `--quiet` alone does not guarantee.
+  #
+  # The bounds are computed ON THE BOX whose log is being read, from the unit's
+  # ELAPSED seconds rather than from this machine's instants. The controller and a
+  # WSL VM do not share a wall clock -- these boxes resynchronise after host
+  # resumes, which is documented in the note as having preceded a burst -- and the
+  # log's timestamps are the remote's, so a remote clock ahead of ours would put
+  # the unit's terminal burst after `--until` and one behind ours would put it
+  # before `--since`, either way reporting a false clean window and losing the
+  # rerun. A duration survives that; an instant does not. The remote also prints
+  # the bounds it used, so the block reports the window that was actually queried.
+  #
+  # `+ 1` on the end: a burst timestamped N.xxx in the same second the collection
+  # begins is excluded by `--until @N`, and losing a terminal burst to a rounding
+  # boundary is exactly the failure this exists to catch. The extra fraction of a
+  # second can only contain the unit's own activity -- its lane runs one unit at a
+  # time on that box -- so widening is the safe direction, and the reported bound
+  # is widened with it so the claim stays the query.
+  printf 'dxg_end=$(date +%%s); dxg_end=$((dxg_end + 1)); '
+  printf 'dxg_start=$((dxg_end - %s - 1)); ' "$1"
+  printf 'echo "dxg-window-bounds $dxg_start $dxg_end"; '
   printf 'if command -v journalctl >/dev/null 2>&1 && '
   printf 'journalctl -q _TRANSPORT=kernel -n 1 --no-pager 2>/dev/null | '
   printf 'grep -qv "^--"; then '
@@ -128,8 +148,9 @@ dxg_window_cmd() { # start-epoch end-epoch
   # CLOSED window, so an event arriving after the unit finished -- while this
   # query is on its way, or from whatever ran next -- must not be attributed to
   # it, inflating its count and buying it a rerun it did not earn.
-  printf 'journalctl -q _TRANSPORT=kernel --since @%s --until @%s --no-pager 2>/dev/null; ' "$1" "$2"
-  printf 'else dmesg -T --since @%s --until @%s 2>/dev/null; fi' "$1" "$2"
+  printf 'journalctl -q _TRANSPORT=kernel --since @$dxg_start --until @$dxg_end '
+  printf -- '--no-pager 2>/dev/null; '
+  printf 'else dmesg -T --since @$dxg_start --until @$dxg_end 2>/dev/null; fi'
 }
 
 # The block's stable half, for the fingerprint. The log and the run record keep
@@ -143,7 +164,16 @@ dxg_window_cmd() { # start-epoch end-epoch
 # fails in a new way, still moves the fingerprint; the same failure twice does not.
 dxg_fingerprint_lines() { # log
   local block
-  block=$(sed -n '/^=== dxg window /,/^=== dxg window: .* ===$/p' "$1" 2>/dev/null)
+  # Only the LAST such block, which is the collector's own: a unit's log is
+  # whatever its test leg wrote plus what the post-unit phases append, and a test
+  # leg can print marker-delimited text of its own -- this repository's sweep
+  # harness dumps its dxg fixtures on failure, and it runs as a test action inside
+  # a sweep unit. A range expression over the whole log would fold those fixture
+  # signatures into the unit's fingerprint and report bridge failures that never
+  # happened.
+  block=$(awk '/^=== dxg window /{ b = "" } { if (b != "" || /^=== dxg window /) b = b $0 "\n" }
+    /^=== dxg window: .* ===$/ { last = b; b = "" } END { printf "%s", last }' \
+    "$1" 2>/dev/null)
   [ -n "$block" ] || return 0
   # The block's own signature lines, which dxg_window_summary emits uncapped --
   # NOT a re-derivation from the raw lines it shows, which are capped at 40 and

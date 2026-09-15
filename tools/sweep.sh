@@ -663,8 +663,8 @@ loaded_rtc_cmd() {
 # Appended to the unit's log, and carried into its fingerprint, like the
 # rtc-context block. Its own budget, for the reason collect_rtc_context documents:
 # a diagnostic must not be able to overwrite the verdict it explains.
-collect_dxg_window() { # host log start-epoch end-epoch start-utc end-utc
-  local host=$1 log=$2 start=$3 end=$4 start_utc=$5 end_utc=$6 kernel rc
+collect_dxg_window() { # host log elapsed-seconds
+  local host=$1 log=$2 elapsed=$3 kernel rc bounds start_utc end_utc
   # Written to a file rather than captured in a command substitution, which runs
   # in a SUBSHELL: the UNIT_PID `run_capped` publishes would be invisible to the
   # lane, so a cancellation could neither relay TERM to this supervisor nor reap
@@ -673,9 +673,24 @@ collect_dxg_window() { # host log start-epoch end-epoch start-utc end-utc
   kernel=$log.dxg.$$
   run_capped "$(( CONTEXT_CAP + 60 ))" ssh -o BatchMode=yes -o ConnectTimeout=8 \
     -o ServerAliveInterval=30 -o ServerAliveCountMax=4 \
-    "$host" "$(remote_capped "$CONTEXT_CAP" "$(dxg_window_cmd "$start" "$end")")" \
+    "$host" "$(remote_capped "$CONTEXT_CAP" "$(dxg_window_cmd "$elapsed")")" \
     >"$kernel" 2>/dev/null
   rc=$?
+  # The bounds the REMOTE used, in its own clock domain -- the only one the log's
+  # timestamps are in. Reported rather than recomputed here, so the block and the
+  # record row name the window that was actually queried.
+  bounds=$(sed -n 's/^dxg-window-bounds \([0-9][0-9]*\) \([0-9][0-9]*\)$/\1 \2/p' \
+    "$kernel" 2>/dev/null | head -1)
+  if [ -n "$bounds" ]; then
+    start_utc=$(utc_of "${bounds%% *}")
+    end_utc=$(utc_of "${bounds##* }")
+  else
+    # No bounds line means the far side never got as far as printing one, so there
+    # is no window to report and nothing trustworthy to filter.
+    start_utc=-
+    end_utc=-
+    [ "$rc" -eq 0 ] && rc=1
+  fi
   # A collection that did not happen is NOT a clean window. The ssh can time out
   # or lose the connection after a unit that ran for an hour, and an empty answer
   # filtered as kernel lines would report zero bursts -- "the bridge was fine" --
@@ -1529,7 +1544,6 @@ fi
 run_unit() { # machine backend host
   local machine=$1 backend=$2 host=$3
   local log started remote_home wt path_prefix= remote_repo remote_prep remote rc elapsed outcome
-  local dxg_end
   WRITTEN_FINGERPRINT=
 
   log=$LOGS/$stamp-$machine-$backend.log
@@ -1691,15 +1705,13 @@ run_unit() { # machine backend host
   case $outcome:$backend in
     skip:*) ;;
     *:cuda | *:hip)
-      if [ -n "$host" ]; then
-        # One instant for the end, used both as the query's bound and as what the
-        # block and the record row claim: taking it twice would let an event
-        # between the two readings fall inside the claimed window and outside the
-        # queried one, or the reverse.
-        dxg_end=$(date +%s)
-        collect_dxg_window "$host" "$log" "$started" "$dxg_end" \
-          "$(utc_of "$started")" "$(utc_of "$dxg_end")"
-      fi
+      # The unit's ELAPSED seconds, not its instants: the window is computed on
+      # the box whose log is read, whose wall clock is its own (see
+      # dxg_window_cmd). Measured to here rather than reusing $elapsed, which
+      # stops at the unit's verdict -- the phases between must be inside the
+      # window, since a refusal during them is still this unit's.
+      [ -n "$host" ] &&
+        collect_dxg_window "$host" "$log" "$(( $(date +%s) - started ))"
       ;;
   esac
   # Only a `fail` can be environment-red: a `timeout` had its process group

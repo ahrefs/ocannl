@@ -31,7 +31,7 @@ on_error() {
     capped capped_target remote_opt_in serial_red serial_clean serial_two_inline \
     serial_many_inline serial_control lanes lane_stop_seed lane_stopped \
     aggregator_missing stamp_advance dxg_clean dxg_red dxg_collection dxg_unavailable \
-    dxg_many dxg_trigger dxg_no_trigger \
+    dxg_many dxg_bounds dxg_trigger dxg_no_trigger \
     after_cancel; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
@@ -1338,18 +1338,37 @@ rm -f "$state"/logs/*-seed.log
 # reported zero dxg lines for rog-nv's 2026-09-13 window, which holds 255 and that
 # unit's burst. Pinned on the emitted command because no fixture has a journal:
 # this is the trap, not the spelling.
-dxg_collection=$(dxg_window_cmd 1757894400 1757898000)
-grep -q '_TRANSPORT=kernel --since @1757894400 --until @1757898000' <<<"$dxg_collection"
+dxg_collection=$(dxg_window_cmd 3600)
 absent 'journalctl -k' <<<"$dxg_collection"
 # The journal is selected only if it produces an ENTRY. A host with journalctl and
 # no readable kernel journal exits 0 AND prints `-- No entries --` on stdout, so
 # neither a status test nor a nonempty test falls back, and the burst still in the
 # kernel ring is recorded as zero.
 grep -q 'grep -qv "\^--"' <<<"$dxg_collection"
-# Both ends bounded, on both branches: an event after the unit finished must not
-# be attributed to it, and `dmesg -T` alone returns the whole current-boot ring,
-# so an EARLIER unit's burst would buy this one a rerun it did not earn.
-grep -q 'dmesg -T --since @1757894400 --until @1757898000' <<<"$dxg_collection"
+# Both ends bounded, on both branches: an event after the unit finished must not be
+# attributed to it, and `dmesg -T` alone returns the whole current-boot ring, so an
+# EARLIER unit's burst would buy this one a rerun it did not earn.
+grep -q 'journalctl -q _TRANSPORT=kernel --since @\$dxg_start --until @\$dxg_end' \
+  <<<"$dxg_collection"
+grep -q 'dmesg -T --since @\$dxg_start --until @\$dxg_end' <<<"$dxg_collection"
+# The bounds are computed on the REMOTE, from the unit's elapsed seconds, and the
+# remote reports them: the controller and a WSL VM do not share a wall clock (these
+# boxes resynchronise after host resumes), and the log's timestamps are the
+# remote's, so an instant carried across would put a terminal burst outside the
+# window in one direction or the other and lose the rerun. Evaluated by running the
+# emitted command here, which is all local shell arithmetic and `date`.
+# `|| true` on the capture, not on the command: the emitted command DELIBERATELY
+# ends nonzero where it could not read a kernel log (this host has no journalctl
+# and a dmesg that rejects the bounds), because collect_dxg_window reads that
+# status as `unavailable` rather than as a clean window. Only the bounds line,
+# which is printed before either branch runs, is under test here.
+dxg_bounds=$(eval "$dxg_collection" 2>/dev/null |
+  sed -n 's/^dxg-window-bounds \([0-9]*\) \([0-9]*\)$/\1 \2/p') || true
+[ -n "$dxg_bounds" ]
+# The window spans the elapsed seconds, plus the one second of slack that keeps a
+# burst timestamped inside the collection's own second from falling outside the
+# bound.
+[ "$(( ${dxg_bounds##* } - ${dxg_bounds%% *} ))" -eq 3601 ]
 
 # A window bigger than the shown cap still surfaces every distinct signature: the
 # RAW lines are capped (496 in one minix boot, and the log is for reading) but the
@@ -1370,6 +1389,18 @@ printf '%s\n' "$({ i=0; while [ "$i" -lt 60 ]; do printf '%s\n' "$dxg_burst"; i=
   dxg_window_summary 20260915T090000Z 20260915T091000Z)" >"$tmp/dxg-many-plain.log"
 [ "$(dxg_fingerprint_lines "$tmp/dxg-many.log")" != \
   "$(dxg_fingerprint_lines "$tmp/dxg-many-plain.log")" ]
+
+# The fingerprint reads the collector's OWN block -- the last one in the log --
+# not every marker-delimited block the log happens to contain. A unit's log is
+# whatever its test leg wrote plus what the post-unit phases append, and a test leg
+# can print such text itself: this very harness dumps its dxg fixtures on failure,
+# and it runs as a test action inside a sweep unit, so a range expression over the
+# whole log would fold fixture signatures into a real unit's fingerprint.
+{ printf '%s\n' "$dxg_many"; printf '%s\n' "$dxg_red"; } >"$tmp/dxg-two-blocks.log"
+[ "$(dxg_fingerprint_lines "$tmp/dxg-two-blocks.log")" = \
+  "$(dxg_fingerprint_lines "$tmp/dxg-probe.log")" ]
+absent 'dxgkio_late_signature' <<<"$(dxg_fingerprint_lines "$tmp/dxg-two-blocks.log")"
+[ "$(dxg_bursts "$tmp/dxg-two-blocks.log")" = 1 ]
 
 # A collection that did not happen is not a clean window. `unavailable` is
 # distinguishable from `0` everywhere it travels -- the block, the burst reader,
