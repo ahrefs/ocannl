@@ -1628,6 +1628,16 @@ run_unit() { # machine backend host
     # A box whose `date` said nothing leaves no window to bound; the collection
     # below reports that as unavailable rather than guessing one.
     case $remote_started in "" | *[!0-9]*) remote_started= ;; esac
+    # The NEXT second, not the probe's own. `date +%s` floors, so the probe's
+    # second also contains whatever happened earlier in it -- the previous unit's
+    # RTC diagnostic crossing the same bridge, say -- and including it would mark
+    # this unit environment-red for a burst that predates it, buying a rerun and
+    # filing its real failures under "environment". Rounding the other way can
+    # only lose a sub-second sliver in which this unit has done nothing yet: its
+    # next act is another ssh round trip, and nothing touches the GPU until dune
+    # runs. The end bound rounds outward for the mirror-image reason, so the
+    # window is closed on both sides against its neighbours.
+    [ -n "$remote_started" ] && remote_started=$(( remote_started + 1 ))
     wt="$remote_home/ocannl-staging-worktrees/sweep"
     # rog needs the CUDA and WSL lib dirs on PATH; harmless elsewhere.
     path_prefix="export PATH=/usr/local/cuda/bin:/usr/lib/wsl/lib:\$PATH;"
