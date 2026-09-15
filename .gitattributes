@@ -9,3 +9,7 @@ test/ppx/*_expected.ml text eol=lf
 # Shell scripts must check out with LF: bash chokes on CR under
 # core.autocrlf=true checkouts (the default on Windows installs).
 *.sh text eol=lf
+
+# The agent guide is measured in bytes against Claude Code's 32 KiB import cap
+# (test/operations/agents_md_size); a CRLF checkout must not add a byte per line.
+AGENTS.md text eol=lf

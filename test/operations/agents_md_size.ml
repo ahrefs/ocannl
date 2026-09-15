@@ -43,16 +43,27 @@ let () =
           (List.length args);
         Stdlib.exit 1
   in
-  let bytes = String.length (Stdlib.In_channel.with_open_bin path Stdlib.In_channel.input_all) in
+  let content = Stdlib.In_channel.with_open_bin path Stdlib.In_channel.input_all in
+  let bytes = String.length content in
   eprintf "AGENTS.md: %d bytes; cap %d, floor %d (not part of the golden)\n" bytes cap floor;
+  (* The guide's identity, held independently of its size: the file dune handed over is named
+     AGENTS.md and opens with the guide's own title line. A floor alone accepts any prose of the
+     right size, and a misrouted rule would then measure the wrong document forever. *)
+  let is_the_guide =
+    String.equal (Stdlib.Filename.basename path) "AGENTS.md"
+    && String.is_prefix content ~prefix:"# OCANNL Agent Guide\n"
+  in
   printf
     "Size of AGENTS.md against the cap Claude Code applies to an imported instructions file. The\n\
      byte count goes to stderr, since a tally in a golden moves on every edit (gh-ocannl-665).\n\n";
-  p "the scan was handed the agent guide, not an empty or misrouted file" (bytes >= floor);
+  p "the scan was handed the agent guide, not an empty or misrouted file"
+    (is_the_guide && bytes >= floor);
   p "AGENTS.md is under 32 KiB, so no session works from a truncated guide" (fits ~bytes);
   (* The control: the refusal on a byte count built to cross the cap, and the acceptance one byte
-     short of it, so a cap that drifted -- or a comparison that flipped -- fails here rather than
-     waiting for the live file to grow into it. *)
-  p "a synthesized guide of exactly 32 KiB is refused" (not (fits ~bytes:cap));
-  p "a synthesized guide one byte under the cap is accepted" (fits ~bytes:(cap - 1));
+     short of it. The inputs are LITERALS, not derived from [cap] -- a control fed [cap] itself
+     holds for any positive cap, so a cap edited to 64 KiB would pass it and the live file would
+     grow into truncation unnoticed. Written this way, a cap that drifts or a comparison that flips
+     fails here first. *)
+  p "a synthesized guide of exactly 32 KiB is refused" (not (fits ~bytes:32_768));
+  p "a synthesized guide one byte under the cap is accepted" (fits ~bytes:32_767);
   Test_utils.Refusal_control_manifest.print "agents_md_size.ml"
