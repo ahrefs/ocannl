@@ -1812,9 +1812,10 @@ that they earn a lookup rather than always-loaded space.
   lane-stopped one. Tab-separated kind-tagged rows follow a `schema` line, and the sweep prints the
   record's path as a `run:` line on every exit that writes one, cancellation included — that line is
   the only locator a cancelled run gives, since it ends before the summary block. The stamp naming
-  it (and every other per-run artifact) is advanced until it names nothing that exists yet: at
-  one-second resolution a run that ends inside a second releases the worktree lock inside it too,
-  so a retry could otherwise overwrite the logs, fingerprints and record of the run it retries. Why a separate file rather than columns on
+  it (and every other per-run artifact) is advanced until it names nothing that exists yet —
+  neither a file in the log directory nor a history row: at one-second resolution a run that ends
+  inside a second releases the worktree lock inside it too, so a retry could otherwise overwrite the
+  logs, fingerprints and record of the run it retries, or inherit its rows as its own units. Why a separate file rather than columns on
   `history.tsv`: history rows are per unit and append-only, so neither the run-level exit kind nor
   today's backend→box map has a unit row to live on. `test/operations/sweep_harness.sh` pins the
   record for every shape it builds — lanes, remote skips, a lane stopped mid-lane, a post-lane
@@ -1828,7 +1829,10 @@ that they earn a lookup rather than always-loaded space.
     there leaves a record that explains itself, and each such failure rewrites the kind first.
   - `unit`: machine, backend, outcome or `no-row`, lane-stopped flag, log path or `-`. One per
     SELECTED unit, so `no-row` names a unit that should have run and whose lane never got as far as
-    recording it, never one `--only` excluded. A lane publishes a completion marker as its last act,
+    recording it, never one `--only` excluded. The outcome is read back out of the run's OWN
+    `history.tsv` rows under the same lock that writes them, not staged beside them in a second
+    per-unit channel: any second channel can disagree with the history in both directions, and no
+    ordering of the two writes survives a signal landing between them, so the row is the evidence. A lane publishes a completion marker as its last act,
     so the flag covers a lane's own `die` and a relayed signal alike, and a stopped lane's earlier
     units keep their real rows (minix records hip before it stops on multidev_cc).
   - `backend`: backend, machine. One per unit of the execution table whether or not this run

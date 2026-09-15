@@ -361,6 +361,18 @@ LANE_PIDS=
 # particular -- and a lane installs the same traps, so the two cannot be told
 # apart by the trap alone.
 IN_LANE=0
+# The record's locator, printed at most once however the run ends: a cancellation
+# arriving after the completing path has already announced it would otherwise
+# print a second line, and a caller extracting "the" locator would read two paths
+# where the contract promises one. A cancelled run is exactly the one whose
+# record an operator cannot otherwise find, since it ends before the summary
+# block, so the announcement belongs on both paths -- once.
+RUN_RECORD_ANNOUNCED=0
+announce_run_record() {
+  [ "$RUN_RECORD_ANNOUNCED" = 0 ] || return 0
+  RUN_RECORD_ANNOUNCED=1
+  echo "run:     $RUN_RECORD"
+}
 # Declared before the traps below are installed, not where it is later given its
 # path: `relay` reads it, and under `set -u` a signal arriving in between would
 # abort the trap with an unbound variable -- turning a cancellation into a
@@ -382,10 +394,7 @@ relay() {
   # is reported rather than fatal.
   if [ -n "$RUN_RECORD" ] && [ "$IN_LANE" = 0 ]; then
     if write_run_record cancelled; then
-      # The same locator the completing path prints: a cancelled run's record is
-      # exactly the one an operator cannot otherwise find, since the run ends
-      # before the summary block that would have named it.
-      echo "run:     $RUN_RECORD"
+      announce_run_record
     else
       echo "sweep: cannot write $RUN_RECORD" >&2
     fi
@@ -421,12 +430,17 @@ run_capped() {
 # Advanced rather than made unique with a pid or subsecond suffix: the stamp is
 # the run's identity in the history's `when` column as well, where consumers
 # read it as a UTC timestamp, so it has to stay exactly this format.
-stamp_taken() { # stamp -- does any artifact of a previous run already use it?
+# A previous invocation claims a stamp by either of the two things it leaves: an
+# artifact named after it, or a history row carrying it. The rows matter as much
+# as the files now that the record derives its units from them -- an invocation
+# killed after recording a remote unit's `skip` leaves a row and no file at all,
+# and a retry reusing that stamp would put the dead run's units in its record.
+stamp_taken() { # stamp -- does anything of a previous run already use it?
   local candidate
   for candidate in "$LOGS/$1-"*; do
     [ -e "$candidate" ] && return 0
   done
-  return 1
+  awk -F '\t' -v s="$1" '$1 == s { found = 1; exit } END { exit !found }' "$HISTORY"
 }
 stamp=$(date -u +%Y%m%dT%H%M%SZ) || die "cannot read the clock"
 stamp_offset=0
@@ -860,17 +874,9 @@ prep_cmd() {
 # consumer keys on the machine/backend columns (the routine's diff and staleness
 # steps take the most recent row per backend), none on position within a run.
 #
-# The run record's view of the unit is written by the SAME perl, strictly after
-# the row it describes, rather than by a following shell command. Two reasons,
-# and the second is the load-bearing one: staging it here rather than at the
-# four call sites makes the entry exist exactly when the history row does --
-# `no-row` in the record then means a selected unit whose lane never got as far
-# as recording it, which is the distinction the consumer cannot otherwise draw
-# -- and bash defers a lane's TERM trap until the foreground command it is in
-# returns, so a cancellation arriving during the append would have run `relay`,
-# and exited the lane, before a separate `printf` could publish the entry. The
-# record would then say `no-row` over a real history row. One command cannot be
-# interrupted between its two writes.
+# This append is also what the run record reads a unit's outcome from: the record
+# derives its unit rows from the rows of THIS stamp rather than from a second
+# per-unit channel written beside them (see write_run_record).
 record() {
   local row
   row=$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
@@ -879,16 +885,8 @@ record() {
   perl -e 'use Fcntl ":flock";
     open(my $h, ">>", $ARGV[0]) or exit 1;
     flock($h, LOCK_EX) or exit 1;
-    # The EVIDENCE is published first, under the lock, and the row goes in only
-    # once it is on disk. Two files cannot be written atomically, so the order
-    # decides which way an interrupted write can be inconsistent, and only this
-    # way round leaves the record able to overstate nothing: a row without its
-    # entry would be read as `no-row` over a real outcome, while an entry
-    # without a row is undone here -- and either way the lane dies loudly.
-    open(my $e, ">", $ARGV[2]) or exit 1;
-    unless (print($e "$ARGV[3]\n") && close($e)) { unlink($ARGV[2]); exit 1; }
-    unless (print($h "$ARGV[1]\n") && close($h)) { unlink($ARGV[2]); exit 1; }' \
-    "$HISTORY" "$row" "$LANE_DIR/unit.$1.$2" "$(printf '%s\t%s' "$3" "${5:--}")" ||
+    print $h "$ARGV[1]\n" or exit 1;
+    close($h) or exit 1;' "$HISTORY" "$row" ||
     die "cannot record $1/$2 outcome in $HISTORY"
 }
 
@@ -914,11 +912,37 @@ record() {
 # that runs that backend today whether or not this run touched it. Columns are
 # documented in docs/agent-notes/build-and-test.md.
 #
+# A unit's outcome comes from the HISTORY ROWS OF THIS RUN, read back under the
+# same lock that writes them -- not from a per-unit file staged beside them. That
+# is what makes `no-row` mean exactly "no history row": with a second channel the
+# two can disagree in both directions, and every way of ordering the two writes
+# leaves a window where a signal lands between them (a lane's deferred TERM trap,
+# a group TERM reaching the writer itself) and the record then either hides a
+# real outcome or asserts one that was never recorded. There is no ordering that
+# closes that, so there is no second channel: the row IS the evidence, and the
+# stamp is what makes the rows of this run identifiable (hence the advance).
+#
+# Reading with a shared lock, since a lane may be appending: without it the last
+# line can be read half-written.
+run_rows() { # -> machine, backend, outcome, log for each row of this run
+  perl -e 'use Fcntl ":flock";
+    open(my $h, "<", $ARGV[0]) or exit 1;
+    flock($h, LOCK_SH) or exit 1;
+    while (my $line = <$h>) {
+      chomp $line;
+      my @f = split(/\t/, $line, -1);
+      next unless @f >= 9 && $f[0] eq $ARGV[1];
+      print join("\t", $f[1], $f[2], $f[4], $f[8]), "\n" or exit 1;
+    }
+    close($h) or exit 1;' "$HISTORY" "$stamp"
+}
+
 # Given its path once the lanes have been forked, which is what makes a record
 # owed at all: before that nothing has been swept and the absence is the signal.
 write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-run-failed
-  local kind=$1 unit machine backend host outcome log stopped stage
+  local kind=$1 unit machine backend host outcome log stopped stage rows
   stage=$RUN_RECORD.stage.$$
+  rows=$(run_rows) || return 1
   {
     printf 'schema\t1\n'
     printf 'run\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
@@ -930,24 +954,21 @@ write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-r
       # covers every way a lane can fail to finish -- its own `die`, a signal
       # relayed to it -- with no second bookkeeping channel to keep in step.
       if [ -e "$LANE_DIR/lane-done.$machine" ]; then stopped=0; else stopped=1; fi
-      # An entry is evidence of a row only if it carries an outcome. A file that
-      # exists but does not is residue -- a write interrupted between `open` and
-      # the line it was going to hold -- and reading it as an outcome would put
-      # an empty field where the consumer expects `no-row` or a verdict. `record`
-      # unlinks its own failures, so this is the second lock on the same door
-      # rather than the only one; a partial entry is the one shape of this record
-      # that could mislead silently, and no fixture can reach the lanes'
-      # coordination directory to produce it.
-      outcome=
-      log=
-      if [ -f "$LANE_DIR/unit.$machine.$backend" ]; then
-        IFS=$'\t' read -r outcome log <"$LANE_DIR/unit.$machine.$backend"
-      fi
+      # The last row this run wrote for the unit, or none. A unit is recorded
+      # once, so `tail -1` only matters if a future change records twice: the
+      # later row is then the current verdict, which is what the history's own
+      # consumers take too.
+      outcome=$(printf '%s\n' "$rows" |
+        awk -F '\t' -v m="$machine" -v b="$backend" \
+          '$1 == m && $2 == b { o = $3; l = $4 } END { if (o != "") print o "\t" l }')
       if [ -z "$outcome" ]; then
-        outcome=no-row
         log=-
+        outcome=no-row
+      else
+        log=${outcome#*$'\t'}
+        outcome=${outcome%%$'\t'*}
+        [ -n "$log" ] || log=-
       fi
-      : "${log:=-}"
       printf 'unit\t%s\t%s\t%s\t%s\t%s\n' "$machine" "$backend" "$outcome" \
         "$stopped" "$log"
     done
@@ -1728,7 +1749,7 @@ LANE_PIDS=
 run_exit_kind=complete
 [ -z "$failed_lanes" ] || run_exit_kind=lane-stopped
 write_run_record "$run_exit_kind" || die "cannot write the run record $RUN_RECORD"
-echo "run:     $RUN_RECORD"
+announce_run_record
 [ -z "$failed_lanes" ] || die "lane(s) stopped before finishing:$failed_lanes"
 
 # Everything past this point runs with every unit recorded, so it cannot change
