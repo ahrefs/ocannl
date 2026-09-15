@@ -30,7 +30,8 @@ on_error() {
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
     capped capped_target remote_opt_in serial_red serial_clean serial_two_inline \
     serial_many_inline serial_control lanes lane_stop_seed lane_stopped \
-    aggregator_missing stamp_advance dxg_clean dxg_red dxg_collection dxg_trigger dxg_no_trigger \
+    aggregator_missing stamp_advance dxg_clean dxg_red dxg_collection dxg_unavailable \
+    dxg_trigger dxg_no_trigger \
     after_cancel; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
@@ -1232,7 +1233,7 @@ grep -q '^  minix/multidev_cc: skip (unreachable)$' <<<"$lanes"
 # a consumer can age a backend's staleness against the box that owns it now.
 lanes_record=$(sed -n 's/^run:  *//p' <<<"$lanes")
 [ -f "$lanes_record" ]
-[ "$(head -1 "$lanes_record")" = "$(printf 'schema\t1')" ]
+[ "$(head -1 "$lanes_record")" = "$(printf 'schema\t2')" ]
 [ "$(awk -F '\t' '$1 == "run" { print $8 }' "$lanes_record")" = complete ]
 [ "$(awk -F '\t' '$1 == "run" { print $5 "\t" $6 }' "$lanes_record")" = \
   "$(printf 'lane-probe\t0')" ]
@@ -1338,7 +1339,54 @@ rm -f "$state"/logs/*-seed.log
 dxg_collection=$(dxg_window_cmd 1757894400)
 grep -q '_TRANSPORT=kernel --since @1757894400' <<<"$dxg_collection"
 absent 'journalctl -k' <<<"$dxg_collection"
-grep -q 'dmesg -T' <<<"$dxg_collection"
+# The journal is chosen on whether it ANSWERS, not on the probe's exit status: a
+# host with journalctl and no kernel journal prints "No journal files were found"
+# and exits 0, and selecting it there queries a second empty journal instead of
+# falling back, recording a burst still in the kernel ring as zero.
+grep -q '\[ -n "\$(journalctl _TRANSPORT=kernel -n 1 --no-pager 2>/dev/null)" \]' \
+  <<<"$dxg_collection"
+# And the fallback is bounded to the same window: `dmesg -T` alone returns the
+# whole current-boot ring, so an EARLIER unit's burst would buy this one a rerun.
+grep -q 'dmesg -T --since @1757894400' <<<"$dxg_collection"
+
+# A collection that did not happen is not a clean window. `unavailable` is
+# distinguishable from `0` everywhere it travels -- the block, the burst reader,
+# and the run record -- because "nobody read the box" and "the bridge was fine"
+# mean opposite things, and the second would lose the rerun.
+dxg_unavailable=$(dxg_window_unavailable 20260915T090000Z 20260915T091000Z 'ssh exit 255')
+grep -q '^collection failed: ssh exit 255$' <<<"$dxg_unavailable"
+grep -q '^=== dxg window: unavailable vmbus_sendpacket failures ===$' <<<"$dxg_unavailable"
+printf '%s\n' "$dxg_unavailable" >"$tmp/dxg-unavailable.log"
+[ "$(dxg_bursts "$tmp/dxg-unavailable.log")" = unavailable ]
+
+# What the FINGERPRINT gets is the block's stable half. A fingerprint is compared
+# bytewise against the previous failure's, and a standing environment red repeats:
+# the window instants, the kernel timestamps and the count all differ between two
+# equally broken runs (161 and 123 on minix within one hour), so the verbatim
+# block would report `fingerprint moved` every time and cost the suppression that
+# keeps sweep output actionable.
+printf '%s\n' "$dxg_red" >"$tmp/dxg-red-a.log"
+printf '%s\n' "$(printf '%s\n%s\n%s\n' "$dxg_benign" "$dxg_burst" "$dxg_burst" |
+  dxg_window_summary 20260915T230000Z 20260915T234500Z)" >"$tmp/dxg-red-b.log"
+[ "$(dxg_bursts "$tmp/dxg-red-a.log")" = 1 ]
+[ "$(dxg_bursts "$tmp/dxg-red-b.log")" = 2 ]
+# Different windows, different counts, same signatures: the fingerprint halves
+# must be identical, or a standing red is reported as moving every run.
+[ "$(dxg_fingerprint_lines "$tmp/dxg-red-a.log")" = \
+  "$(dxg_fingerprint_lines "$tmp/dxg-red-b.log")" ]
+grep -q '^dxg window: burst present$' <<<"$(dxg_fingerprint_lines "$tmp/dxg-red-a.log")"
+absent '20260915T090000Z' <<<"$(dxg_fingerprint_lines "$tmp/dxg-red-a.log")"
+# But a bridge that stops failing, or fails in a NEW way, still moves it.
+printf '%s\n' "$dxg_clean" >"$tmp/dxg-clean.log"
+[ "$(dxg_fingerprint_lines "$tmp/dxg-clean.log")" != \
+  "$(dxg_fingerprint_lines "$tmp/dxg-red-a.log")" ]
+grep -q '^dxg window: no burst$' <<<"$(dxg_fingerprint_lines "$tmp/dxg-clean.log")"
+grep -q '^dxg window: collection unavailable$' \
+  <<<"$(dxg_fingerprint_lines "$tmp/dxg-unavailable.log")"
+printf '%s\n' "$(printf '%s\nSep 15 09:05:02 box kernel: misc dxg: dxgk: dxgkio_destroy_allocation: Ioctl failed: -9\n' \
+  "$dxg_burst" | dxg_window_summary 20260915T090000Z 20260915T091000Z)" >"$tmp/dxg-new-sig.log"
+[ "$(dxg_fingerprint_lines "$tmp/dxg-new-sig.log")" != \
+  "$(dxg_fingerprint_lines "$tmp/dxg-red-a.log")" ]
 
 # The kernel-evidence trigger, both directions (gh-ocannl-979). The failure text
 # is the one the negative control above uses -- a red carrying NO name from
@@ -1364,7 +1412,11 @@ dxg_trigger_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | t
 # The window block is carried into the fingerprint, beside the failures it
 # explains, so a caller diffing yesterday's sees a bridge that started -- or
 # stopped -- losing messages.
-grep -q '^=== dxg window: 1 vmbus_sendpacket failures ===$' "${dxg_trigger_log%.log}.fingerprint"
+grep -q '^dxg window: burst present$' "${dxg_trigger_log%.log}.fingerprint"
+grep -q '^dxg signature: misc dxg: dxgk: dxgvmb_send_sync_msg: vmbus_sendpacket failed: fffffff5$' \
+  "${dxg_trigger_log%.log}.fingerprint"
+# The per-run window instants stay OUT of it (the P1 of round 1 on PR #727).
+absent '20260915T090000Z' "${dxg_trigger_log%.log}.fingerprint"
 
 # The run record carries the unit's window and burst count as fields of its row
 # (the #977 record), read from the log that row names.

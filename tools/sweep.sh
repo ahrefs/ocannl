@@ -664,10 +664,21 @@ loaded_rtc_cmd() {
 # rtc-context block. Its own budget, for the reason collect_rtc_context documents:
 # a diagnostic must not be able to overwrite the verdict it explains.
 collect_dxg_window() { # host log start-epoch start-utc end-utc
-  local host=$1 log=$2 start=$3 start_utc=$4 end_utc=$5 kernel
+  local host=$1 log=$2 start=$3 start_utc=$4 end_utc=$5 kernel rc
   kernel=$(run_capped "$(( CONTEXT_CAP + 60 ))" ssh -o BatchMode=yes -o ConnectTimeout=8 \
     -o ServerAliveInterval=30 -o ServerAliveCountMax=4 \
     "$host" "$(remote_capped "$CONTEXT_CAP" "$(dxg_window_cmd "$start")")" 2>/dev/null)
+  rc=$?
+  # A collection that did not happen is NOT a clean window. The ssh can time out
+  # or lose the connection after a unit that ran for an hour, and an empty answer
+  # filtered as kernel lines would report zero bursts -- "the bridge was fine" --
+  # over a box nobody read, losing the rerun for exactly the unlisted failure this
+  # trigger exists to catch.
+  if [ "$rc" -ne 0 ]; then
+    dxg_window_unavailable "$start_utc" "$end_utc" \
+      "kernel log unreadable on $host (exit $rc)" >>"$log"
+    return 0
+  fi
   # Filtered HERE rather than on the far side: the filter is the part with a
   # judgement in it, so it belongs where a fixture can feed it lines directly
   # instead of behind an ssh no test can reach.
@@ -971,7 +982,12 @@ write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-r
   stage=$RUN_RECORD.stage.$$
   rows=$(run_rows) || return 1
   {
-    printf 'schema\t1\n'
+    # Schema 2: the `unit` row gained the dxg window and burst count
+    # (gh-ocannl-979). A consumer picks its parser from this number, so widening a
+    # row without it would make a strict schema-1 reader reject a current record
+    # and a dxg-aware reader mis-read a historical one. The unit-STATE files below
+    # keep their own schema 1: different file, different contract.
+    printf 'schema\t2\n'
     printf 'run\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$stamp" "$run_sha" "$REF" "${TARGET:-<all>}" "$SLOW" "$execution" "$kind"
     for unit in "${UNITS[@]}"; do
@@ -1011,6 +1027,9 @@ write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-r
         if [ -n "$window" ]; then
           window_start=${window%%$'\t'*}
           window_end=${window#*$'\t'}
+          # `-` no window, a number a window that was read, `unavailable` a
+          # window whose collection failed: three distinguishable states, since
+          # "not collected" and "collected and clean" mean opposite things.
           bursts=$(dxg_bursts "$log")
           [ -n "$bursts" ] || bursts=-
         fi
@@ -1150,11 +1169,15 @@ fingerprint() {
   # vector then shows up as a diff beside the failure it explains, which is the
   # whole point (gh-ocannl-784).
   sed -n '/^=== rtc-context /,/^=== end rtc-context ===$/p' "$1" 2>/dev/null | head -40
-  # The dxg window block a WSL GPU unit collected (collect_dxg_window), verbatim:
-  # like the rtc-context block it is a small ordered report, and it belongs in the
-  # fingerprint because a caller diffing yesterday's sees a bridge that started
-  # losing messages -- or stopped -- beside the failures it explains.
-  sed -n '/^=== dxg window /,/^=== dxg window: .* ===$/p' "$1" 2>/dev/null | head -45
+  # The dxg window's STABLE half (dxg_fingerprint_lines): which signatures the
+  # window held, and whether the bridge was losing messages at all. Not the block
+  # verbatim -- the window instants, the kernel timestamps and the exact count all
+  # differ between two equally broken runs, and a fingerprint is compared bytewise
+  # against the previous failure's, so the verbatim block would report `fingerprint
+  # moved` on every repeat of a standing environment red, costing the suppression
+  # that keeps this output readable. The full block stays in the log, and the
+  # window and count are fields of the run record.
+  dxg_fingerprint_lines "$1" | head -45
   # The serial rerun's verdict (serial_rerun), after the sorted block and
   # outside its bound: which of the red stanzas stayed red on their own is the
   # first line a reader of an environment-red unit needs, and the one a

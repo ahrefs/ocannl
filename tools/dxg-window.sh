@@ -57,8 +57,19 @@ dxg_window_summary() { # start-utc end-utc -- kernel lines on stdin, block on st
 
 # The burst count a unit's collected window recorded, or nothing if it has no
 # window (a local unit, or one that never ran).
+# What a collection that did not happen writes instead of a count. It must not be
+# `0`: a zero-burst window is a POSITIVE finding -- the bridge was fine -- and an
+# ssh that timed out establishes nothing, so reading one as the other would hide
+# exactly the unlisted failure (a SEGV, say) this trigger exists to catch.
+DXG_UNAVAILABLE=unavailable
+dxg_window_unavailable() { # start-utc end-utc reason
+  printf '=== dxg window %s..%s (utc) ===\n' "$1" "$2"
+  printf 'collection failed: %s\n' "$3"
+  printf '=== dxg window: %s vmbus_sendpacket failures ===\n' "$DXG_UNAVAILABLE"
+}
+
 dxg_bursts() { # log
-  sed -n 's/^=== dxg window: \([0-9][0-9]*\) vmbus_sendpacket failures ===$/\1/p' "$1" \
+  sed -n 's/^=== dxg window: \([0-9a-z][0-9a-z]*\) vmbus_sendpacket failures ===$/\1/p' "$1" \
     2>/dev/null | tail -1
 }
 
@@ -79,9 +90,44 @@ dxg_bursts() { # log
 # `vmbus_sendpacket` lines, `_TRANSPORT=kernel --since` all 365. The same implied
 # `-b` reported ZERO dxg lines for rog-nv's 2026-09-13 window, which in fact holds
 # 255 of them and that unit's three-message burst.
+#
+# The journal is chosen on whether it ANSWERS, not on whether the command exits 0:
+# a host with journalctl installed and no kernel journal prints "No journal files
+# were found" and exits 0, and selecting it there means querying a second empty
+# journal instead of falling back -- a burst still in the kernel ring would be
+# recorded as zero. And the fallback is bounded to the window like the journal
+# query is: `dmesg -T` alone returns the whole current-boot ring, so an EARLIER
+# unit's burst would be attributed to this one and buy it a rerun it did not earn.
+# `--since @<epoch>` is accepted by util-linux dmesg (2.41.3 on both sweep boxes);
+# a dmesg without it fails the collection rather than reporting an unbounded ring
+# as this window.
 dxg_window_cmd() { # start-epoch
   printf 'if command -v journalctl >/dev/null 2>&1 && '
-  printf 'journalctl _TRANSPORT=kernel -n 1 >/dev/null 2>&1; then '
+  printf '[ -n "$(journalctl _TRANSPORT=kernel -n 1 --no-pager 2>/dev/null)" ]; then '
   printf 'journalctl _TRANSPORT=kernel --since @%s --no-pager 2>/dev/null; ' "$1"
-  printf 'else dmesg -T 2>/dev/null; fi; true'
+  printf 'else dmesg -T --since @%s 2>/dev/null; fi' "$1"
+}
+
+# The block's stable half, for the fingerprint. The log and the run record keep
+# the window, its lines and the exact count; a fingerprint must not, because it is
+# compared BYTEWISE against the previous failure's and a standing environment red
+# would otherwise report `fingerprint moved` on every single run -- the window
+# instants differ, the kernel timestamps differ, and the count differs between two
+# equally broken runs (161 and 123 on minix within an hour). What is stable, and
+# is what a reader wants from a diff, is WHICH signatures appeared and whether the
+# bridge was losing messages at all: a bridge that starts or stops failing, or
+# fails in a new way, still moves the fingerprint; the same failure twice does not.
+dxg_fingerprint_lines() { # log
+  local block
+  block=$(sed -n '/^=== dxg window /,/^=== dxg window: .* ===$/p' "$1" 2>/dev/null)
+  [ -n "$block" ] || return 0
+  printf '%s\n' "$block" | grep 'misc dxg' |
+    sed 's/^.*misc dxg: /dxg signature: misc dxg: /' | sort -u
+  case $(printf '%s\n' "$block" | sed -n \
+    's/^=== dxg window: \([0-9a-z][0-9a-z]*\) vmbus_sendpacket failures ===$/\1/p' | tail -1) in
+    "$DXG_UNAVAILABLE") printf 'dxg window: collection unavailable\n' ;;
+    0) printf 'dxg window: no burst\n' ;;
+    "") ;;
+    *) printf 'dxg window: burst present\n' ;;
+  esac
 }
