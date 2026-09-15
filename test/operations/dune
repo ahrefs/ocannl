@@ -64,6 +64,11 @@
  (action
   (run %{dep:env_spelling_gate.exe})))
 
+; Broad autotuner integrations enumerate and compile many candidate schedules, often across
+; several searches per test. Keep their complete geometry, search and replay assertions on slow;
+; runtest retains autotune_smoke, inline_flip_tune, autotune_candidate_release and the focused
+; schedule/cache probes. Each integration is still compiled by @check and can be run individually.
+;
 ; This directory's `slow` suite. Each slow rule attaches to its own `slow-<name>` alias, so that
 ; ONE slow test can be rerun after a change -- `OCANNL_BACKEND=cc dune build
 ; @test/operations/slow-hip_scratch_budget` -- without rebuilding the whole `@slow` suite; this stanza is what
@@ -74,6 +79,11 @@
  (name slow)
  (deps
   (alias slow-env_spelling_gate)
+  (alias slow-autotune_batched_companion)
+  (alias slow-autotune_fission_sketch)
+  (alias slow-autotune_mma_companion)
+  (alias slow-autotune_arm_containment)
+  (alias slow-tune_ship_arm)
   (alias slow-fp8_codec_exhaustive)
   (alias slow-hip_scratch_budget)
   (alias slow-hip_scratch_tune_survives)))
@@ -3258,38 +3268,82 @@
  (modules autotune_timing_modes)
  (libraries base ocannl stdio mtime.clock.os arrayjit.verdict ll_test))
 
-(test
+(executable
  (name autotune_fission_sketch)
- (package neural_nets_lib)
- (deps
-  ocannl_config
-  (env_var OCANNL_BACKEND))
  (modules autotune_fission_sketch)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-(test
- (name autotune_mma_companion)
+(rule
+ (alias slow-autotune_fission_sketch)
  (package neural_nets_lib)
+ (locks ocannl_training_test)
  (deps
+  (alias slow-env_spelling_gate)
+  autotune_fission_sketch.expected
   ocannl_config
   (env_var OCANNL_BACKEND))
+ ; Keep execution off @default as well as @runtest; @check still compiles the source.
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     autotune_fission_sketch.actual
+     (run %{dep:autotune_fission_sketch.exe}))
+    (diff autotune_fission_sketch.expected autotune_fission_sketch.actual)))))
+
+(executable
+ (name autotune_mma_companion)
  (modules autotune_mma_companion)
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-(test
- (name autotune_batched_companion)
+(rule
+ (alias slow-autotune_mma_companion)
  (package neural_nets_lib)
+ (locks ocannl_training_test)
  (deps
+  (alias slow-env_spelling_gate)
+  autotune_mma_companion.expected
   ocannl_config
   (env_var OCANNL_BACKEND))
+ ; Keep execution off @default as well as @runtest; @check still compiles the source.
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     autotune_mma_companion.actual
+     (run %{dep:autotune_mma_companion.exe}))
+    (diff autotune_mma_companion.expected autotune_mma_companion.actual)))))
+
+(executable
+ (name autotune_batched_companion)
  (modules autotune_batched_companion)
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(rule
+ (alias slow-autotune_batched_companion)
+ (package neural_nets_lib)
+ (locks ocannl_training_test)
+ (deps
+  (alias slow-env_spelling_gate)
+  autotune_batched_companion.expected
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ ; Keep execution off @default as well as @runtest; @check still compiles the source.
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     autotune_batched_companion.actual
+     (run %{dep:autotune_batched_companion.exe}))
+    (diff
+     autotune_batched_companion.expected
+     autotune_batched_companion.actual)))))
 
 ; gh-ocannl-686: routine names that collide with a reserved word or a builtin. Executes the
 ; colliding routines and reads their emitted sources, so it needs both the backend selection and
@@ -4087,16 +4141,30 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-(test
+(executable
  (name tune_ship_arm)
- (package neural_nets_lib)
- (deps
-  ocannl_config
-  (env_var OCANNL_BACKEND))
  (modules tune_ship_arm)
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(rule
+ (alias slow-tune_ship_arm)
+ (package neural_nets_lib)
+ (locks ocannl_training_test)
+ (deps
+  (alias slow-env_spelling_gate)
+  tune_ship_arm.expected
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ ; Keep execution off @default as well as @runtest; @check still compiles the source.
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     tune_ship_arm.actual
+     (run %{dep:tune_ship_arm.exe}))
+    (diff tune_ship_arm.expected tune_ship_arm.actual)))))
 
 (test
  (name inline_flip_tune)
@@ -4135,16 +4203,30 @@
  (preprocess
   (pps ppx_here)))
 
-(test
+(executable
  (name autotune_arm_containment)
- (package neural_nets_lib)
- (deps
-  ocannl_config
-  (env_var OCANNL_BACKEND))
  (modules autotune_arm_containment)
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(rule
+ (alias slow-autotune_arm_containment)
+ (package neural_nets_lib)
+ (locks ocannl_training_test)
+ (deps
+  (alias slow-env_spelling_gate)
+  autotune_arm_containment.expected
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ ; Keep execution off @default as well as @runtest; @check still compiles the source.
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     autotune_arm_containment.actual
+     (run %{dep:autotune_arm_containment.exe}))
+    (diff autotune_arm_containment.expected autotune_arm_containment.actual)))))
 
 ; Disabled on Metal: both tests have a double-precision case, and Metal has no f64 (Ops.fp8, the
 ; original blocker, works there since gh-ocannl-632). Enabling them needs the f64 case to become

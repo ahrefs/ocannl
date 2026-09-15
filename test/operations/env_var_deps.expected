@@ -180,10 +180,15 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-zero_out_local_decl-unoptimized
   test/operations/dune                     @scans
   test/operations/dune                     @slow
+  test/operations/dune                     @slow-autotune_arm_containment
+  test/operations/dune                     @slow-autotune_batched_companion
+  test/operations/dune                     @slow-autotune_fission_sketch
+  test/operations/dune                     @slow-autotune_mma_companion
   test/operations/dune                     @slow-env_spelling_gate
   test/operations/dune                     @slow-fp8_codec_exhaustive
   test/operations/dune                     @slow-hip_scratch_budget
   test/operations/dune                     @slow-hip_scratch_tune_survives
+  test/operations/dune                     @slow-tune_ship_arm
   test/operations/profiles/dune            @runtest
   test/operations/profiles/dune            @runtest-empty_cmdline_falls_through
   test/operations/profiles/dune            @runtest-env_spelling_gate
@@ -211,6 +216,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/training/dune                       @slow-env_spelling_gate
   test/training/dune                       @slow-mnist_conv
   test/training/dune                       @train
+  test/training/dune                       @train-bigram
   test/training/dune                       @train-circles_conv
   test/training/dune                       @train-env_spelling_gate
   test/training/dune                       @train-fsm_transformer

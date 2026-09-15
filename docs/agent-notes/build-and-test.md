@@ -1639,7 +1639,7 @@ that they earn a lookup rather than always-loaded space.
   SKIP contract they share), here because the subject invokes `python3` under that exact name,
   which is not what every platform `dune runtest` covers calls it — so a host without one skips
   every leg rather than deciding none of them quietly.
-- The per-PR suite does not run the training integrations. `mlp_names`, `mlp_bn_names`,
+- The regular suite does not run the training integrations. `bigram`, `mlp_names`, `mlp_bn_names`,
   `circles_conv`, `fsm_transformer` and `transformer_names` sit on the `train` alias — a third
   tier beside `runtest` and `slow`, for runs that are toy-sized by intent but serialized on the
   `ocannl_training_test` lock, which made them CI's wall-clock tail on every substrate measured
@@ -2354,3 +2354,11 @@ that they earn a lookup rather than always-loaded space.
   Dune-run sweep's Metal fingerprint check without nested Dune. Owned-child deadlines and
   identity-checked cleanup are shared too; callers must probe their independent state reader
   and retain unreaped direct-child ownership until `harness_wait_child` returns.
+
+- Broad autotuner integration searches live on `@slow`: `autotune_batched_companion`,
+  `autotune_fission_sketch`, `autotune_mma_companion`, `autotune_arm_containment` and
+  `tune_ship_arm`. Their sources and golden assertions remain intact; each runs through
+  `@test/operations/slow-<name>`, with `no-infer` keeping its execution off `@default` too.
+  The regular suite retains `autotune_smoke`, `inline_flip_tune`, `autotune_candidate_release`
+  and the focused scheduling/cache tests. Run the affected slow integrations before pushing
+  changes to their search, placement, fission or failure-containment paths.
