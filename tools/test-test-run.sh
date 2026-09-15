@@ -775,14 +775,28 @@ fi
 # ---------------------------------------------------------------------------
 # Legs 9-17: repeat mode's output, lifecycle and exit-code contract
 # ---------------------------------------------------------------------------
+# Everything the shipping script SOURCES has to exist in a fixture root, and the
+# list is derived from the script rather than kept here: a `. tools/<new>.sh`
+# added to test-run.sh otherwise makes every leg below die at startup, with the
+# real message buried under forty failures (the Ubuntu leg of gh-ocannl-983's
+# first CI round, where the mutation harness hit exactly this). The floor is the
+# other half: a regex that stops matching must fail loudly, not stage nothing.
+stage_sourced() { # <fixture root>
+  local dest=$1 rel staged=0
+  while IFS= read -r rel; do
+    mkdir -p "$dest/$(dirname "$rel")" || exit 2
+    cp "$HERE/../$rel" "$dest/$rel" || { echo "cannot stage $rel into $dest" >&2; exit 2; }
+    staged=$((staged + 1))
+  done < <(sed -n 's/^\. \([A-Za-z0-9_./-]*\)$/\1/p' "$SRC")
+  [ "$staged" -ge 2 ] ||
+    { echo "only $staged sourced file(s) found in $SRC; the scan is broken" >&2; exit 2; }
+}
+
 repeat_root=$TMP/repeat-repo
 repeat_bin=$TMP/repeat-bin
 mkdir -p "$repeat_root/tools" "$repeat_root/scripts" "$repeat_bin"
 cp "$SRC" "$repeat_root/tools/test-run.sh"
-cp "$GROUP_SRC" "$repeat_root/scripts/process-group.sh"
-# The width table the script sources: without it every subcommand below --
-# including the fixture dune's own lock probe -- would die before running.
-cp "$JOBS_SRC" "$repeat_root/tools/box-jobs.sh"
+stage_sourced "$repeat_root"
 chmod +x "$repeat_root/tools/test-run.sh"
 # Read-only query contract: no state store, no first run, and no lock file yet.
 # The fixture root (not the caller's cwd) owns all omitted-RUN queries.
@@ -2394,8 +2408,7 @@ life_prefix=$TMP/lifecycle
 life_pid= life_run=
 mkdir -p "$life_root/tools" "$life_root/scripts" "$life_runs" "$life_bin"
 cp "$SRC" "$life_root/tools/test-run.sh"
-cp "$GROUP_SRC" "$life_root/scripts/process-group.sh"
-cp "$JOBS_SRC" "$life_root/tools/box-jobs.sh"
+stage_sourced "$life_root"
 cp -R "$life_root" "$TMP/lifecycle-before"
 cat >"$life_bin/dune" <<'EOF'
 #!/usr/bin/env bash
