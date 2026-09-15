@@ -1382,9 +1382,24 @@ grep -q 'dmesg -T --since @\$dxg_start --until @\$dxg_end' <<<"$dxg_collection"
 # and a dmesg that rejects the bounds), because collect_dxg_window reads that
 # status as `unavailable` rather than as a clean window. Only the bounds line,
 # printed before either branch runs, is under test here.
+# Evaluated against FAKE kernel tools, never the host's own: on a box with a
+# readable persistent journal -- either sweep box, and CI's Linux runner -- the
+# emitted query would stream every kernel entry since the fixture's start epoch,
+# which is a year-and-growing of them, to test two numbers printed before the
+# query runs. The fakes also make the branch taken here independent of whatever
+# the host happens to have.
+cat >"$fake_bin/journalctl" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+cat >"$fake_bin/dmesg" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$fake_bin/journalctl" "$fake_bin/dmesg"
 dxg_now=$(date +%s)
-dxg_bounds=$(eval "$dxg_collection" 2>/dev/null |
-  sed -n 's/^dxg-window-bounds \([0-9]*\) \([0-9]*\)$/\1 \2/p') || true
+dxg_bounds=$(PATH=$fake_bin:$PATH eval "$dxg_collection" 2>/dev/null |
+  sed -n 's/^dxg-window-bounds \([0-9]*\) \([0-9]*\)$/\1 \2/p;/^dxg-window-bounds /q') || true
 [ -n "$dxg_bounds" ]
 # The start is the instant passed in, untouched -- not recomputed from anything.
 [ "${dxg_bounds%% *}" = 1757894400 ]

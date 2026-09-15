@@ -1257,13 +1257,14 @@ fingerprint() {
   # moved` on every repeat of a standing environment red, costing the suppression
   # that keeps this output readable. The full block stays in the log, and the
   # window and count are fields of the run record.
-  # The signatures bounded, the VERDICT outside the bound -- as the serial rerun's
-  # is, and for the same reason: a bound that can drop the one line saying whether
-  # the bridge was losing messages defeats the block it is summarising. Capping the
-  # signatures at all is a concession to the fingerprint's overall size; capping
-  # them together with the verdict, as a single `head`, was the bug.
-  dxg_fingerprint_lines "$1" | grep -v '^dxg window: ' | head -44
-  dxg_fingerprint_lines "$1" | grep '^dxg window: '
+  # UNCAPPED, unlike everything above it, and deliberately: this list is already
+  # deduplicated, so it is bounded by the number of distinct kernel message shapes
+  # the bridge can produce -- a handful, where the raw lines it summarises run to
+  # hundreds. A cap here would drop exactly what the list exists for, a signature
+  # never seen before, and would do it to the lexicographically last ones, which is
+  # no one's idea of the least interesting. The verdict follows them for the reason
+  # the serial rerun's line does: it is the one line that must survive.
+  dxg_fingerprint_lines "$1"
   # The serial rerun's verdict (serial_rerun), after the sorted block and
   # outside its bound: which of the red stanzas stayed red on their own is the
   # first line a reader of an environment-red unit needs, and the one a
