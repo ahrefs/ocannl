@@ -2173,7 +2173,10 @@ let main () =
         (Printf.sprintf
            "%s:%d scanner refusal `%s` appears in no permanent control golden -- exercise that \
             refusal in a *_cases.expected or *_control.expected test, add it to an embedded \
-            `Synthetic controls:` section, or exempt the exact fragment with a reason"
+            `Synthetic controls:` section, or exempt the exact fragment with a reason; an embedded \
+            section also needs the source's row in `raw_entries` of \
+            test/support/refusal_control_manifest.ml, which `Refusal_control_manifest.print` \
+            writes ready to paste on stderr while the row is missing or empty"
            source diagnostic.Refusals.line diagnostic.fragment));
   let stale_refusal_exemptions =
     Set.diff
@@ -2500,6 +2503,16 @@ let main () =
         List.Assoc.mem sources source ~equal:String.equal);
     Verdict.p "the refusal-control manifest source set equals the derived scanner census"
       (List.equal String.equal manifest_sources derived_scanner_sources);
+    let not_among these those =
+      List.filter these ~f:(fun source -> not (List.mem those source ~equal:String.equal))
+    in
+    List.iter (not_among derived_scanner_sources manifest_sources) ~f:(fun source ->
+        eprintf
+          "  %s has no row in `raw_entries` of test/support/refusal_control_manifest.ml -- its \
+           golden run's `Refusal_control_manifest.print` writes the row on stderr\n"
+          source);
+    List.iter (not_among manifest_sources derived_scanner_sources) ~f:(fun source ->
+        eprintf "  %s has a manifest row but is no repository-wide scan's source\n" source);
     Verdict.p_all ~min:10 "the permanent control-golden corpus is present" control_goldens
       ~f:(fun (_path, on_disk) -> not (String.is_empty (In_channel.read_all on_disk)));
     let orphan_keys =
