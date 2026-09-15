@@ -1810,7 +1810,11 @@ that they earn a lookup rather than always-loaded space.
   summary is for humans** (gh-ocannl-977). Its absence is itself a verdict: a run that refused at
   startup swept nothing and writes no record, which is what distinguishes that exit 2 from a
   lane-stopped one. Tab-separated kind-tagged rows follow a `schema` line, and the sweep prints the
-  record's path as a `run:` line on both exits. Why a separate file rather than columns on
+  record's path as a `run:` line on every exit that writes one, cancellation included — that line is
+  the only locator a cancelled run gives, since it ends before the summary block. The stamp naming
+  it (and every other per-run artifact) is advanced until it names nothing that exists yet: at
+  one-second resolution a run that ends inside a second releases the worktree lock inside it too,
+  so a retry could otherwise overwrite the logs, fingerprints and record of the run it retries. Why a separate file rather than columns on
   `history.tsv`: history rows are per unit and append-only, so neither the run-level exit kind nor
   today's backend→box map has a unit row to live on. `test/operations/sweep_harness.sh` pins the
   record for every shape it builds — lanes, remote skips, a lane stopped mid-lane, a post-lane

@@ -381,7 +381,14 @@ relay() {
   # failure to write it must not replace the cancellation's exit status, so it
   # is reported rather than fatal.
   if [ -n "$RUN_RECORD" ] && [ "$IN_LANE" = 0 ]; then
-    write_run_record cancelled || echo "sweep: cannot write $RUN_RECORD" >&2
+    if write_run_record cancelled; then
+      # The same locator the completing path prints: a cancelled run's record is
+      # exactly the one an operator cannot otherwise find, since the run ends
+      # before the summary block that would have named it.
+      echo "run:     $RUN_RECORD"
+    else
+      echo "sweep: cannot write $RUN_RECORD" >&2
+    fi
   fi
   exit "$1"
 }
@@ -403,7 +410,33 @@ run_capped() {
   return "$rc"
 }
 
-stamp=$(date -u +%Y%m%dT%H%M%SZ)
+# The stamp names every per-run artifact -- each unit's log, its fingerprint, the
+# skip-coverage report and the run record -- and at one-second resolution two
+# invocations can choose the same one. They cannot RUN concurrently (the
+# per-worktree lock sees to that), but a run that ends inside a second releases
+# the lock inside it too, so a retry -- after a cancellation, notably -- can
+# start in the same second and overwrite the artifacts of the run it is
+# retrying, leaving two invocations' history rows behind one invocation's
+# evidence. So the stamp is advanced until it names nothing that exists yet.
+# Advanced rather than made unique with a pid or subsecond suffix: the stamp is
+# the run's identity in the history's `when` column as well, where consumers
+# read it as a UTC timestamp, so it has to stay exactly this format.
+stamp_taken() { # stamp -- does any artifact of a previous run already use it?
+  local candidate
+  for candidate in "$LOGS/$1-"*; do
+    [ -e "$candidate" ] && return 0
+  done
+  return 1
+}
+stamp=$(date -u +%Y%m%dT%H%M%SZ) || die "cannot read the clock"
+stamp_offset=0
+while stamp_taken "$stamp"; do
+  stamp_offset=$((stamp_offset + 1))
+  [ "$stamp_offset" -le 600 ] || die "no free run stamp near $stamp in $LOGS"
+  stamp=$(perl -MPOSIX -e \
+    'print strftime("%Y%m%dT%H%M%SZ", gmtime(time + $ARGV[0]))' "$stamp_offset") ||
+    die "cannot advance the run stamp"
+done
 # Resolve the ref to a commit ONCE, here, and pin every machine to that commit.
 # Letting each box resolve `origin/master` itself would have them testing
 # different commits whenever a merge lands mid-sweep, which is exactly the
@@ -846,11 +879,15 @@ record() {
   perl -e 'use Fcntl ":flock";
     open(my $h, ">>", $ARGV[0]) or exit 1;
     flock($h, LOCK_EX) or exit 1;
-    print $h "$ARGV[1]\n" or exit 1;
-    close($h) or exit 1;
+    # The EVIDENCE is published first, under the lock, and the row goes in only
+    # once it is on disk. Two files cannot be written atomically, so the order
+    # decides which way an interrupted write can be inconsistent, and only this
+    # way round leaves the record able to overstate nothing: a row without its
+    # entry would be read as `no-row` over a real outcome, while an entry
+    # without a row is undone here -- and either way the lane dies loudly.
     open(my $e, ">", $ARGV[2]) or exit 1;
-    print $e "$ARGV[3]\n" or exit 1;
-    close($e) or exit 1;' \
+    print($e "$ARGV[3]\n") && close($e) or exit 1;
+    unless (print($h "$ARGV[1]\n") && close($h)) { unlink($ARGV[2]); exit 1; }' \
     "$HISTORY" "$row" "$LANE_DIR/unit.$1.$2" "$(printf '%s\t%s' "$3" "${5:--}")" ||
     die "cannot record $1/$2 outcome in $HISTORY"
 }

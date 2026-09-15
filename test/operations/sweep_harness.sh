@@ -30,7 +30,7 @@ on_error() {
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
     capped capped_target remote_opt_in serial_red serial_clean serial_two_inline \
     serial_many_inline serial_control lanes lane_stop_seed lane_stopped \
-    aggregator_missing after_cancel; do
+    aggregator_missing stamp_advance after_cancel; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
   done
@@ -1247,6 +1247,28 @@ aggregator_missing_record=$(sed -n 's/^run:  *//p' <<<"$aggregator_missing")
 [ "$(awk -F '\t' '$1 == "unit" { print $2 "/" $3 ":" $4 ":" $5 }' "$aggregator_missing_record")" = \
   m4-max/cc:pass:0 ]
 
+# The stamp names every per-run artifact, and two invocations a second apart can
+# otherwise choose the same one -- a cancelled run releases the lock inside the
+# second it ends, so its retry can land on top of its logs, fingerprints and
+# record. Seeding the next few seconds' stamps as taken forces the advance
+# whichever second the sweep starts in, rather than relying on it being slow.
+seeded_stamps=$(perl -MPOSIX -e \
+  'print join(" ", map { strftime("%Y%m%dT%H%M%SZ", gmtime(time + $_)) } 0 .. 5)')
+for seeded in $seeded_stamps; do : >"$state/logs/$seeded-seed.log"; done
+stamp_advance=$(run_sweep_args --target stamp-probe)
+advanced_record=$(sed -n 's/^run:  *//p' <<<"$stamp_advance")
+advanced_stamp=$(basename "$advanced_record" -run.tsv)
+for seeded in $seeded_stamps; do
+  if [ "$advanced_stamp" = "$seeded" ]; then
+    printf 'sweep_harness: run stamp %s collided with a seeded artifact\n' "$advanced_stamp" >&2
+    exit 1
+  fi
+done
+# And the advance is what produced that: the run's own history row carries the
+# same advanced stamp, so the row and its artifacts still name one run.
+[ -n "$(awk -F '\t' -v s="$advanced_stamp" '$1 == s && $7 == "stamp-probe"' "$state/history.tsv")" ]
+rm -f "$state"/logs/*-seed.log
+
 # Cancelling a sweep stops EVERY lane: here the local lane's unit is held in its
 # test leg and the rog-nv lane's in its preparation ssh, both under supervisors.
 # TERM to the sweep's pid must be relayed through each lane to its supervisor,
@@ -1292,7 +1314,11 @@ cancel_sweep() { # pid|group
   [ ! -e "$prefix.busy" ]
   # A cancelled run ended, so it owes a record too: the rows its lanes wrote
   # before the signal are real, and the exit kind says why the rest are missing.
-  cancel_record=$(ls -t "$state"/logs/*-run.tsv | head -1)
+  # Located through the sweep's OWN `run:` line, not by scanning the log
+  # directory: a cancelled run ends before the summary block, so that locator is
+  # the only thing standing between an operator and its record.
+  cancel_record=$(sed -n 's/^run:  *//p' "$prefix.out")
+  [ -f "$cancel_record" ]
   [ "$(awk -F '\t' '$1 == "run" { print $8 }' "$cancel_record")" = cancelled ]
 }
 # Called directly, not captured: errexit does not reach inside a command
