@@ -747,7 +747,13 @@ let print source =
     | Some position -> String.drop_prefix normalized position
     | None ->
         let local = "test/operations/" ^ Stdlib.Filename.basename normalized in
-        if List.Assoc.mem entries local ~equal:String.equal then local else normalized
+        (* A bare or [./]-prefixed name is this directory's scan whether or not it has a row yet;
+           the bootstrap below must print the key the census derives, not the spelling. *)
+        if
+          List.Assoc.mem entries local ~equal:String.equal
+          || String.equal (Stdlib.Filename.dirname normalized) "."
+        then local
+        else normalized
   in
   let diagnostics = Refusal_control_scan.diagnostics (In_channel.read_all source_path) in
   let passed_labels = ref (Verdict.passed_labels ()) in
