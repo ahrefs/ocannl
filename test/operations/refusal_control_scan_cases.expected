@@ -219,7 +219,7 @@ env_var_deps.ml: [scanner-refusal:55f2feade4e139b5abb073d0b89c42cb] reaches the 
 env_var_deps.ml: [scanner-refusal:267a42b2812f4679c4463495cc199d36] reads the configuration (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:41d9bc729b5b8b3908a48d45b1e0203c] reads the configuration (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:a323f01100bfd685e76c62154cf4eaae] reads the configuration (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
-env_var_deps.ml: [scanner-refusal:e45e166af22d229414296459a3ca022a] scanner refusal (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:8340c017c83e73ac4649ceb92fa15ee7] scanner refusal (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:0b33370125e32eaa4bb0f50c6cc3bc1a] exempted declarations no (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:638620a0745d0a136810c5b0256e0ec0] directories exempted from (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true

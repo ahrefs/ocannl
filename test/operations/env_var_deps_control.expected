@@ -161,7 +161,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:267a42b2812f4679c4463495cc199d36] reads the configuration
   [scanner-refusal:41d9bc729b5b8b3908a48d45b1e0203c] reads the configuration
   [scanner-refusal:a323f01100bfd685e76c62154cf4eaae] reads the configuration
-  [scanner-refusal:e45e166af22d229414296459a3ca022a] scanner refusal
+  [scanner-refusal:8340c017c83e73ac4649ceb92fa15ee7] scanner refusal
   [scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no
   [scanner-refusal:0b33370125e32eaa4bb0f50c6cc3bc1a] exempted declarations no
   [scanner-refusal:638620a0745d0a136810c5b0256e0ec0] directories exempted from

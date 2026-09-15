@@ -283,8 +283,10 @@ that they earn a lookup rather than always-loaded space.
   exact successful negative-control line assigned to that refusal or an explicit observation from
   the caught branch itself. Marker occurrences are consumed as a multiset, so two identical
   formats require two exercised controls. A new manifest row therefore
-  prints nothing until its arm supplies runtime evidence. `refusal_control_scan_cases.expected`
-  holds the manifest equal to mechanical extraction, every entry present in the assigned live/case
+  prints nothing until its arm supplies runtime evidence. Never compute a marker by hand: while a
+  scan's row is missing or empty, its golden run's `print` writes the whole row, ready to paste into
+  `raw_entries`, on stderr (the golden keeps only the section header).
+  `refusal_control_scan_cases.expected` holds the manifest equal to mechanical extraction, every entry present in the assigned live/case
   golden union, and the manifest's repo-relative source paths equal to `env_var_deps`' derived
   scanner census. The
   audit is itself on `@scans` and excluded from the evidence corpus, so it cannot answer for itself.

@@ -253,7 +253,7 @@ let raw_entries =
         "[scanner-refusal:267a42b2812f4679c4463495cc199d36] reads the configuration";
         "[scanner-refusal:41d9bc729b5b8b3908a48d45b1e0203c] reads the configuration";
         "[scanner-refusal:a323f01100bfd685e76c62154cf4eaae] reads the configuration";
-        "[scanner-refusal:e45e166af22d229414296459a3ca022a] scanner refusal";
+        "[scanner-refusal:8340c017c83e73ac4649ceb92fa15ee7] scanner refusal";
         "[scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no";
         "[scanner-refusal:0b33370125e32eaa4bb0f50c6cc3bc1a] exempted declarations no";
         "[scanner-refusal:638620a0745d0a136810c5b0256e0ec0] directories exempted from";
@@ -631,7 +631,7 @@ let raw_direct_evidence =
     ( "env_var_deps.ml:a323f01100bfd685e76c62154cf4eaae",
       "the checker reports the key and exits 1 when the rule running the guard neither declares \
        nor pins it: true" );
-    ( "env_var_deps.ml:e45e166af22d229414296459a3ca022a",
+    ( "env_var_deps.ml:8340c017c83e73ac4649ceb92fa15ee7",
       "appears in no permanent control golden in the negative arm, and appears in the positive arm."
     );
     ( "env_var_deps.ml:fe4c53f899eb08a9ae67e7a797a5a841",
@@ -747,12 +747,37 @@ let print source =
     | Some position -> String.drop_prefix normalized position
     | None ->
         let local = "test/operations/" ^ Stdlib.Filename.basename normalized in
-        if List.Assoc.mem entries local ~equal:String.equal then local else normalized
+        (* A bare or [./]-prefixed name is this directory's scan whether or not it has a row yet;
+           the bootstrap below must print the key the census derives, not the spelling. *)
+        if
+          List.Assoc.mem entries local ~equal:String.equal
+          || String.equal (Stdlib.Filename.dirname normalized) "."
+        then local
+        else normalized
   in
   let diagnostics = Refusal_control_scan.diagnostics (In_channel.read_all source_path) in
-  let expected = markers source in
   let passed_labels = ref (Verdict.passed_labels ()) in
   printf "\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n";
+  (* Bootstrap: a scan with no row, or an empty one, gets its row written out on stderr -- never
+     into the golden, and never into the manifest, so the census claim in env_var_deps still decides
+     whether the row was added. A registered row with no diagnostics to list has nothing to say. *)
+  let registered = List.Assoc.find entries source ~equal:String.equal in
+  let expected = Option.value registered ~default:[] in
+  if List.is_empty expected && not (List.is_empty diagnostics && Option.is_some registered) then (
+    let row_source =
+      Option.value (String.chop_prefix source ~prefix:"test/operations/") ~default:source
+    in
+    eprintf
+      "%s has %s row in Refusal_control_manifest; add this row to `raw_entries` in \
+       test/support/refusal_control_manifest.ml (not part of the golden):\n"
+      source
+      (if Option.is_some registered then "an empty" else "no");
+    if List.is_empty diagnostics then eprintf "    (%S, []);\n" row_source
+    else (
+      eprintf "    ( %S,\n      [\n" row_source;
+      List.iter diagnostics ~f:(fun diagnostic ->
+          eprintf "        %S;\n" (Refusal_control_scan.marker diagnostic));
+      eprintf "      ] );\n"));
   diagnostics
   |> List.iter ~f:(fun diagnostic ->
       let marker = Refusal_control_scan.marker diagnostic in
