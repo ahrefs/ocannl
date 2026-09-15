@@ -31,7 +31,7 @@ on_error() {
     capped capped_target remote_opt_in serial_red serial_clean serial_two_inline \
     serial_many_inline serial_control lanes lane_stop_seed lane_stopped \
     aggregator_missing stamp_advance dxg_clean dxg_red dxg_collection dxg_unavailable \
-    dxg_trigger dxg_no_trigger \
+    dxg_many dxg_trigger dxg_no_trigger \
     after_cancel; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
@@ -1178,9 +1178,11 @@ absent 'hv_balloon' <<<"$dxg_clean"
 dxg_red=$(printf '%s\n%s\n%s\n' "$dxg_benign" "$dxg_burst" "$dxg_unrelated" |
   dxg_window_summary 20260915T090000Z 20260915T091000Z)
 grep -q '^=== dxg window: 1 vmbus_sendpacket failures ===$' <<<"$dxg_red"
-[ "$(grep -c 'misc dxg' <<<"$dxg_red")" -eq 3 ]
+[ "$(grep 'misc dxg' <<<"$dxg_red" | grep -cv '^dxg signature: ')" -eq 3 ]
 grep -q 'create_existing_sysmem: failed set existing pages: fffffff5' <<<"$dxg_red"
 absent 'dxgkio_query_adapter_info' <<<"$dxg_red"
+# and the block carries the distinct signatures, which is what a fingerprint reads
+[ "$(grep -c '^dxg signature: ' <<<"$dxg_red")" -eq 3 ]
 
 # Two lost messages are two bursts, and an empty window is zero rather than one
 # (the `grep -c` of an empty line).
@@ -1336,18 +1338,38 @@ rm -f "$state"/logs/*-seed.log
 # reported zero dxg lines for rog-nv's 2026-09-13 window, which holds 255 and that
 # unit's burst. Pinned on the emitted command because no fixture has a journal:
 # this is the trap, not the spelling.
-dxg_collection=$(dxg_window_cmd 1757894400)
-grep -q '_TRANSPORT=kernel --since @1757894400' <<<"$dxg_collection"
+dxg_collection=$(dxg_window_cmd 1757894400 1757898000)
+grep -q '_TRANSPORT=kernel --since @1757894400 --until @1757898000' <<<"$dxg_collection"
 absent 'journalctl -k' <<<"$dxg_collection"
-# The journal is chosen on whether it ANSWERS, not on the probe's exit status: a
-# host with journalctl and no kernel journal prints "No journal files were found"
-# and exits 0, and selecting it there queries a second empty journal instead of
-# falling back, recording a burst still in the kernel ring as zero.
-grep -q '\[ -n "\$(journalctl _TRANSPORT=kernel -n 1 --no-pager 2>/dev/null)" \]' \
-  <<<"$dxg_collection"
-# And the fallback is bounded to the same window: `dmesg -T` alone returns the
-# whole current-boot ring, so an EARLIER unit's burst would buy this one a rerun.
-grep -q 'dmesg -T --since @1757894400' <<<"$dxg_collection"
+# The journal is selected only if it produces an ENTRY. A host with journalctl and
+# no readable kernel journal exits 0 AND prints `-- No entries --` on stdout, so
+# neither a status test nor a nonempty test falls back, and the burst still in the
+# kernel ring is recorded as zero.
+grep -q 'grep -qv "\^--"' <<<"$dxg_collection"
+# Both ends bounded, on both branches: an event after the unit finished must not
+# be attributed to it, and `dmesg -T` alone returns the whole current-boot ring,
+# so an EARLIER unit's burst would buy this one a rerun it did not earn.
+grep -q 'dmesg -T --since @1757894400 --until @1757898000' <<<"$dxg_collection"
+
+# A window bigger than the shown cap still surfaces every distinct signature: the
+# RAW lines are capped (496 in one minix boot, and the log is for reading) but the
+# signature list is not, because a new kernel signature appearing at line 300 that
+# neither shows nor moves the fingerprint is precisely the blindness this feature
+# exists to remove.
+dxg_many=$({ i=0; while [ "$i" -lt 60 ]; do printf '%s\n' "$dxg_burst"; i=$((i + 1)); done
+  printf 'Sep 15 09:09:09 box kernel: misc dxg: dxgk: dxgkio_late_signature: Ioctl failed: -7\n'; } |
+  dxg_window_summary 20260915T090000Z 20260915T091000Z)
+[ "$(grep 'misc dxg' <<<"$dxg_many" | grep -cv '^dxg signature: ')" -eq 40 ]
+grep -q '^(181 lines in the window; the first 40 are shown)$' <<<"$dxg_many"
+grep -q '^dxg signature: misc dxg: dxgk: dxgkio_late_signature: Ioctl failed: -7$' <<<"$dxg_many"
+[ "$(grep -c '^dxg signature: ' <<<"$dxg_many")" -eq 4 ]
+grep -q '^=== dxg window: 60 vmbus_sendpacket failures ===$' <<<"$dxg_many"
+# And that late signature moves the fingerprint, which is the point of keeping it.
+printf '%s\n' "$dxg_many" >"$tmp/dxg-many.log"
+printf '%s\n' "$({ i=0; while [ "$i" -lt 60 ]; do printf '%s\n' "$dxg_burst"; i=$((i + 1)); done; } |
+  dxg_window_summary 20260915T090000Z 20260915T091000Z)" >"$tmp/dxg-many-plain.log"
+[ "$(dxg_fingerprint_lines "$tmp/dxg-many.log")" != \
+  "$(dxg_fingerprint_lines "$tmp/dxg-many-plain.log")" ]
 
 # A collection that did not happen is not a clean window. `unavailable` is
 # distinguishable from `0` everywhere it travels -- the block, the burst reader,

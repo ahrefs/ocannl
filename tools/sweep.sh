@@ -663,11 +663,18 @@ loaded_rtc_cmd() {
 # Appended to the unit's log, and carried into its fingerprint, like the
 # rtc-context block. Its own budget, for the reason collect_rtc_context documents:
 # a diagnostic must not be able to overwrite the verdict it explains.
-collect_dxg_window() { # host log start-epoch start-utc end-utc
-  local host=$1 log=$2 start=$3 start_utc=$4 end_utc=$5 kernel rc
-  kernel=$(run_capped "$(( CONTEXT_CAP + 60 ))" ssh -o BatchMode=yes -o ConnectTimeout=8 \
+collect_dxg_window() { # host log start-epoch end-epoch start-utc end-utc
+  local host=$1 log=$2 start=$3 end=$4 start_utc=$5 end_utc=$6 kernel rc
+  # Written to a file rather than captured in a command substitution, which runs
+  # in a SUBSHELL: the UNIT_PID `run_capped` publishes would be invisible to the
+  # lane, so a cancellation could neither relay TERM to this supervisor nor reap
+  # it, and it would hold the inherited lock until its own cap expired. The
+  # unit's own ssh calls document the same trap.
+  kernel=$log.dxg.$$
+  run_capped "$(( CONTEXT_CAP + 60 ))" ssh -o BatchMode=yes -o ConnectTimeout=8 \
     -o ServerAliveInterval=30 -o ServerAliveCountMax=4 \
-    "$host" "$(remote_capped "$CONTEXT_CAP" "$(dxg_window_cmd "$start")")" 2>/dev/null)
+    "$host" "$(remote_capped "$CONTEXT_CAP" "$(dxg_window_cmd "$start" "$end")")" \
+    >"$kernel" 2>/dev/null
   rc=$?
   # A collection that did not happen is NOT a clean window. The ssh can time out
   # or lose the connection after a unit that ran for an hour, and an empty answer
@@ -675,6 +682,7 @@ collect_dxg_window() { # host log start-epoch start-utc end-utc
   # over a box nobody read, losing the rerun for exactly the unlisted failure this
   # trigger exists to catch.
   if [ "$rc" -ne 0 ]; then
+    rm -f "$kernel"
     dxg_window_unavailable "$start_utc" "$end_utc" \
       "kernel log unreadable on $host (exit $rc)" >>"$log"
     return 0
@@ -682,7 +690,8 @@ collect_dxg_window() { # host log start-epoch start-utc end-utc
   # Filtered HERE rather than on the far side: the filter is the part with a
   # judgement in it, so it belongs where a fixture can feed it lines directly
   # instead of behind an ssh no test can reach.
-  printf '%s\n' "$kernel" | dxg_window_summary "$start_utc" "$end_utc" >>"$log"
+  dxg_window_summary "$start_utc" "$end_utc" <"$kernel" >>"$log"
+  rm -f "$kernel"
 }
 
 rtc_context_cmd() {
@@ -1520,6 +1529,7 @@ fi
 run_unit() { # machine backend host
   local machine=$1 backend=$2 host=$3
   local log started remote_home wt path_prefix= remote_repo remote_prep remote rc elapsed outcome
+  local dxg_end
   WRITTEN_FINGERPRINT=
 
   log=$LOGS/$stamp-$machine-$backend.log
@@ -1681,9 +1691,15 @@ run_unit() { # machine backend host
   case $outcome:$backend in
     skip:*) ;;
     *:cuda | *:hip)
-      [ -n "$host" ] &&
-        collect_dxg_window "$host" "$log" "$started" "$(utc_of "$started")" \
-          "$(utc_of "$(date +%s)")"
+      if [ -n "$host" ]; then
+        # One instant for the end, used both as the query's bound and as what the
+        # block and the record row claim: taking it twice would let an event
+        # between the two readings fall inside the claimed window and outside the
+        # queried one, or the reverse.
+        dxg_end=$(date +%s)
+        collect_dxg_window "$host" "$log" "$started" "$dxg_end" \
+          "$(utc_of "$started")" "$(utc_of "$dxg_end")"
+      fi
       ;;
   esac
   # Only a `fail` can be environment-red: a `timeout` had its process group

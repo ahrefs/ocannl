@@ -42,14 +42,26 @@ utc_of() { # epoch-seconds -> the stamp format, so a window reads like every oth
 
 DXG_BENIGN='dxgkio_query_adapter_info|dxgkio_is_feature_enabled'
 dxg_window_summary() { # start-utc end-utc -- kernel lines on stdin, block on stdout
-  local kept bursts
+  local kept bursts shown
   kept=$(grep -E 'misc dxg' | grep -Ev "$DXG_BENIGN") || true
   bursts=$(printf '%s\n' "$kept" | grep -c 'vmbus_sendpacket failed') || true
   # `grep -c` counts an empty line as no match, but say so explicitly rather than
   # relying on it: an empty `kept` must read as zero, never as one.
   [ -n "$kept" ] || bursts=0
   printf '=== dxg window %s..%s (utc) ===\n' "$1" "$2"
-  [ -n "$kept" ] && printf '%s\n' "$kept" | head -40
+  if [ -n "$kept" ]; then
+    # The raw lines are capped: a bad window runs to hundreds of them (496 on
+    # minix in one boot) and the log is for reading.
+    printf '%s\n' "$kept" | head -40
+    shown=$(printf '%s\n' "$kept" | wc -l | tr -d ' ')
+    [ "$shown" -gt 40 ] && printf '(%s lines in the window; the first 40 are shown)\n' "$shown"
+    # The distinct SIGNATURES, timestamps stripped, never capped -- there are a
+    # handful however bad the window is, and they are what the fingerprint reads.
+    # Capping these instead of the raw lines is the difference between a new
+    # kernel signature at line 300 being surfaced and being invisible, which is
+    # the whole purpose of keeping unrecognised lines at all.
+    printf '%s\n' "$kept" | sed 's/^.*misc dxg: /dxg signature: misc dxg: /' | sort -u
+  fi
   # The line environment_red keys on, and the field the run record carries. Last,
   # so that a truncated block still ends with its verdict.
   printf '=== dxg window: %s vmbus_sendpacket failures ===\n' "$bursts"
@@ -101,11 +113,23 @@ dxg_bursts() { # log
 # `--since @<epoch>` is accepted by util-linux dmesg (2.41.3 on both sweep boxes);
 # a dmesg without it fails the collection rather than reporting an unbounded ring
 # as this window.
-dxg_window_cmd() { # start-epoch
+dxg_window_cmd() { # start-epoch end-epoch
+  # The probe must see an ENTRY, not merely output: journalctl with no readable
+  # kernel journal exits 0 and prints `-- No entries --` on stdout (the
+  # explanation goes to stderr), so both a status test and a nonempty test select
+  # journald there and query a second empty journal instead of falling back --
+  # recording a burst still sitting in the kernel ring as zero. Keying on "a line
+  # that is not a `--` marker" holds whatever journalctl decides to print, which
+  # `--quiet` alone does not guarantee.
   printf 'if command -v journalctl >/dev/null 2>&1 && '
-  printf '[ -n "$(journalctl _TRANSPORT=kernel -n 1 --no-pager 2>/dev/null)" ]; then '
-  printf 'journalctl _TRANSPORT=kernel --since @%s --no-pager 2>/dev/null; ' "$1"
-  printf 'else dmesg -T --since @%s 2>/dev/null; fi' "$1"
+  printf 'journalctl -q _TRANSPORT=kernel -n 1 --no-pager 2>/dev/null | '
+  printf 'grep -qv "^--"; then '
+  # Both ends bounded, on both branches: the block and the record row claim a
+  # CLOSED window, so an event arriving after the unit finished -- while this
+  # query is on its way, or from whatever ran next -- must not be attributed to
+  # it, inflating its count and buying it a rerun it did not earn.
+  printf 'journalctl -q _TRANSPORT=kernel --since @%s --until @%s --no-pager 2>/dev/null; ' "$1" "$2"
+  printf 'else dmesg -T --since @%s --until @%s 2>/dev/null; fi' "$1" "$2"
 }
 
 # The block's stable half, for the fingerprint. The log and the run record keep
@@ -121,8 +145,10 @@ dxg_fingerprint_lines() { # log
   local block
   block=$(sed -n '/^=== dxg window /,/^=== dxg window: .* ===$/p' "$1" 2>/dev/null)
   [ -n "$block" ] || return 0
-  printf '%s\n' "$block" | grep 'misc dxg' |
-    sed 's/^.*misc dxg: /dxg signature: misc dxg: /' | sort -u
+  # The block's own signature lines, which dxg_window_summary emits uncapped --
+  # NOT a re-derivation from the raw lines it shows, which are capped at 40 and
+  # would silently drop a signature that first appeared late in a bad window.
+  printf '%s\n' "$block" | grep '^dxg signature: ' | sort -u
   case $(printf '%s\n' "$block" | sed -n \
     's/^=== dxg window: \([0-9a-z][0-9a-z]*\) vmbus_sendpacket failures ===$/\1/p' | tail -1) in
     "$DXG_UNAVAILABLE") printf 'dxg window: collection unavailable\n' ;;

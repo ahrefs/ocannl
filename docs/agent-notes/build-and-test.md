@@ -1809,7 +1809,9 @@ that they earn a lookup rather than always-loaded space.
 - **The per-run record `~/.ocannl-sweep/logs/<stamp>-run.tsv` is what a consumer reads; the stdout
   summary is for humans** (gh-ocannl-977). Its absence is itself a verdict: a run that refused at
   startup swept nothing and writes no record, which is what distinguishes that exit 2 from a
-  lane-stopped one. Tab-separated kind-tagged rows follow a `schema` line, and the sweep prints the
+  lane-stopped one. Tab-separated kind-tagged rows follow a `schema` line — **2** since the `unit`
+  row gained the dxg fields, and a consumer picks its parser from that number (the per-unit *state*
+  files under `unit-state/` carry an unrelated schema 1 of their own) — and the sweep prints the
   record's path as a `run:` line on every exit that writes one, cancellation included — that line is
   the only locator a cancelled run gives, since it ends before the summary block. The stamp naming
   it (and every other per-run artifact) is advanced until it names nothing that exists yet —
@@ -1828,9 +1830,11 @@ that they earn a lookup rather than always-loaded space.
     how the process exited: the record is published before those post-lane steps so a failure
     there leaves a record that explains itself, and each such failure rewrites the kind first.
   - `unit`: machine, backend, outcome or `no-row`, lane-stopped flag, log path or `-`, then the
-    unit's dxg window start and end and its `vmbus_sendpacket failed` count, each `-` for a unit
-    with no window — a local one, or one that never ran (gh-ocannl-979), so `0` (collected and
-    clean) is distinguishable from `-` (never collected). One per
+    unit's dxg window start and end and its `vmbus_sendpacket failed` count (gh-ocannl-979). That
+    count has **three** permitted values, and a consumer must not validate it as numeric: `-` for a
+    unit with no window (a local one, or one that never ran), a number for a window that was read,
+    and `unavailable` where the collection itself failed. They mean different things — "nobody read
+    the box" is not "the bridge was fine", and only the middle one is a positive finding. One per
     SELECTED unit, so `no-row` names a unit that should have run and whose lane never got as far as
     recording it, never one `--only` excluded. The outcome is read back out of the run's OWN
     `history.tsv` rows under the same lock that writes them, not staged beside them in a second
@@ -1966,7 +1970,15 @@ that they earn a lookup rather than always-loaded space.
   dxg lines for rog-nv's 2026-09-13 window, which actually holds 255 of them and that unit's
   three-message burst — the burst the issue was filed about. `dmesg -T` stays as the fallback only
   where journald keeps no kernel log. The window and the count are also fields of
-  the run record's `unit` row, so the consuming routine reads them without parsing a log.
+  the run record's `unit` row, so the consuming routine reads them without parsing a log. What the
+  FINGERPRINT gets is only the block's stable half — which signatures appeared, and whether there
+  was a burst at all — never the window instants, the kernel timestamps or the count: a fingerprint
+  is compared bytewise against the previous failure's, and all three differ between two equally
+  broken runs (161 bursts and 123 on minix within one hour), so carrying them would report
+  `fingerprint moved` on every repeat of a standing environment red and cost the suppression that
+  makes this output readable. A bridge that starts failing, stops, or fails in a NEW way still
+  moves it — which is why the block carries its deduplicated signature list uncapped even though
+  the raw lines it shows are capped at 40.
 - **Reading a rerun's verdict.** Adding a name means adding it in both places: the table in
   `sweep.sh` gates the rerun, this one records what the name has been seen with. A name is worth
   adding even now that the kernel evidence triggers too: it names the call site for the table. The verdict is written as `serial
