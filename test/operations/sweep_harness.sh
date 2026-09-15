@@ -215,7 +215,15 @@ case ${SWEEP_TEST_SSH_MODE:-} in
     : >"$SWEEP_TEST_WAIT_PREFIX.release"
     ;;
   hang)
-    case $* in *'printf %s "$HOME"'*) printf '%s' "$HOME"; exit 0 ;; esac
+    # The reachability probe, answered rather than hung: it is NOT under a
+    # cancellation-visible supervisor, so hanging here would wait out its own 60s
+    # cap and the control would never reach the preparation call whose relay and
+    # reap it exists to test. Matched on `$HOME` alone, so that what the probe
+    # asks for besides it -- the box's clock, since gh-ocannl-979 -- can change
+    # without silently turning this control into a 60-second sleep.
+    case $* in
+      *'"$HOME"'*) printf '%s\n%s\n' "$HOME" "$(date +%s)"; exit 0 ;;
+    esac
     printf '%s\n' "$$" >>"$SWEEP_TEST_WAIT_PREFIX.ssh-pids"
     : >"$SWEEP_TEST_WAIT_PREFIX.ssh-running"
     waited=0

@@ -664,14 +664,29 @@ loaded_rtc_cmd() {
 # Appended to the unit's log, and carried into its fingerprint, like the
 # rtc-context block. Its own budget, for the reason collect_rtc_context documents:
 # a diagnostic must not be able to overwrite the verdict it explains.
+# A sidecar appears complete or not at all. A cancellation reaching the lane
+# mid-write would otherwise leave the top level to build the run record from a
+# half-written file -- known bounds with no count line, which the record would
+# then spell `-`, the value that means no window was ever collected. Staged and
+# renamed, like the run record and the unit-state files.
+publish_dxg_sidecar() { # sidecar log writer args... -- stdin is the writer's
+  local sidecar=$1 log=$2
+  shift 2
+  "$@" >"$sidecar.stage.$$" && mv "$sidecar.stage.$$" "$sidecar" || {
+    rm -f "$sidecar.stage.$$"
+    return 1
+  }
+  cat "$sidecar" >>"$log"
+}
+
 collect_dxg_window() { # host log remote-start-epoch
   local host=$1 log=$2 remote_start=$3 kernel rc bounds start_utc end_utc sidecar
   sidecar=$(dxg_sidecar "$log")
   # No start instant from the box means no window to bound. Reported as a failed
   # collection, which is what it is, rather than guessed.
   if [ -z "$remote_start" ]; then
-    dxg_window_unavailable - - "no clock reading from $host" >"$sidecar"
-    cat "$sidecar" >>"$log"
+    publish_dxg_sidecar "$sidecar" "$log" dxg_window_unavailable - - \
+      "no clock reading from $host"
     return 0
   fi
   # Written to a file rather than captured in a command substitution, which runs
@@ -711,16 +726,15 @@ collect_dxg_window() { # host log remote-start-epoch
   # from the log itself.
   if [ "$rc" -ne 0 ]; then
     rm -f "$kernel"
-    dxg_window_unavailable "$start_utc" "$end_utc" \
-      "kernel log unreadable on $host (exit $rc)" >"$sidecar"
+    publish_dxg_sidecar "$sidecar" "$log" dxg_window_unavailable "$start_utc" "$end_utc" \
+      "kernel log unreadable on $host (exit $rc)"
   else
     # Filtered HERE rather than on the far side: the filter is the part with a
     # judgement in it, so it belongs where a fixture can feed it lines directly
     # instead of behind an ssh no test can reach.
-    dxg_window_summary "$start_utc" "$end_utc" <"$kernel" >"$sidecar"
+    publish_dxg_sidecar "$sidecar" "$log" dxg_window_summary "$start_utc" "$end_utc" <"$kernel"
     rm -f "$kernel"
   fi
-  cat "$sidecar" >>"$log"
 }
 
 rtc_context_cmd() {
@@ -1217,7 +1231,13 @@ fingerprint() {
   # moved` on every repeat of a standing environment red, costing the suppression
   # that keeps this output readable. The full block stays in the log, and the
   # window and count are fields of the run record.
-  dxg_fingerprint_lines "$1" | head -45
+  # The signatures bounded, the VERDICT outside the bound -- as the serial rerun's
+  # is, and for the same reason: a bound that can drop the one line saying whether
+  # the bridge was losing messages defeats the block it is summarising. Capping the
+  # signatures at all is a concession to the fingerprint's overall size; capping
+  # them together with the verdict, as a single `head`, was the bug.
+  dxg_fingerprint_lines "$1" | grep -v '^dxg window: ' | head -44
+  dxg_fingerprint_lines "$1" | grep '^dxg window: '
   # The serial rerun's verdict (serial_rerun), after the sorted block and
   # outside its bound: which of the red stanzas stayed red on their own is the
   # first line a reader of an environment-red unit needs, and the one a
@@ -1723,19 +1743,15 @@ run_unit() { # machine backend host
     printf '%s\n' "$log" >"$LANE_DIR/skip-run.$machine.$backend" ||
       die "cannot stage skip evidence for $machine/$backend"
   fi
-  # Diagnosis, strictly after the row and the elapsed time it reports: this phase
-  # has its own budget, and nothing it does can reach $outcome or $elapsed. It
-  # runs before the fingerprint so that what it appends to the log is carried in.
-  case $outcome:$backend in
-    fail:cuda | fail:hip | fail:metal)
-      collect_rtc_context "$backend" "$host" "$wt" "$log" "${path_prefix:-}"
-      ;;
-  esac
   # The kernel's own dxg evidence for THIS unit's window, before the rerun
-  # decision that reads it. Remote GPU units only: the bridge is what /dev/dxg
-  # is, so a local unit has no window and minix's multidev_cc -- CPU, on a WSL
-  # box -- would only ever collect another unit's noise. A unit that never ran
-  # (`skip`) has no window either.
+  # decision that reads it -- and before the RTC diagnostics below, which is not
+  # mere ordering: `nvidia-smi` and `rocminfo` cross /dev/dxg themselves, so a
+  # window whose end were taken after them could count the DIAGNOSTIC's lost
+  # messages as the unit's and mark a plainly test-logic failure environment-red.
+  # The end bound is the remote's clock at this point, so those fall outside it.
+  # Remote GPU units only: the bridge is what /dev/dxg is, so a local unit has no
+  # window and minix's multidev_cc -- CPU, on a WSL box -- would only ever collect
+  # another unit's noise. A unit that never ran (`skip`) has no window either.
   case $outcome:$backend in
     skip:*) ;;
     *:cuda | *:hip)
@@ -1745,6 +1761,14 @@ run_unit() { # machine backend host
       # nothing is reconstructed from a duration measured on another machine.
       [ -n "$host" ] &&
         collect_dxg_window "$host" "$log" "${remote_started:-}"
+      ;;
+  esac
+  # Diagnosis, strictly after the row and the elapsed time it reports: this phase
+  # has its own budget, and nothing it does can reach $outcome or $elapsed. It
+  # runs before the fingerprint so that what it appends to the log is carried in.
+  case $outcome:$backend in
+    fail:cuda | fail:hip | fail:metal)
+      collect_rtc_context "$backend" "$host" "$wt" "$log" "${path_prefix:-}"
       ;;
   esac
   # Only a `fail` can be environment-red: a `timeout` had its process group
