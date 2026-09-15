@@ -669,14 +669,19 @@ loaded_rtc_cmd() {
 # half-written file -- known bounds with no count line, which the record would
 # then spell `-`, the value that means no window was ever collected. Staged and
 # renamed, like the run record and the unit-state files.
+# Its failures are silent on stderr, as is the fallback's: the lane buffers its
+# summary lines but not its stderr, so the shell's own complaint about a failed
+# redirection would reach the terminal at once, unlabelled and ahead of the unit's
+# block, while the WARNING that names the unit waits for that block's flush. The
+# `2>/dev/null` goes BEFORE each redirection it covers, which is processed first.
 publish_dxg_sidecar() { # sidecar log writer args... -- stdin is the writer's
   local sidecar=$1 log=$2
   shift 2
-  "$@" >"$sidecar.stage.$$" && mv "$sidecar.stage.$$" "$sidecar" || {
+  "$@" 2>/dev/null >"$sidecar.stage.$$" && mv "$sidecar.stage.$$" "$sidecar" 2>/dev/null || {
     rm -f "$sidecar.stage.$$"
     return 1
   }
-  cat "$sidecar" >>"$log"
+  cat "$sidecar" 2>/dev/null >>"$log"
 }
 
 # A publication that failed must not leave the unit looking like one where no
@@ -686,10 +691,10 @@ publish_dxg_sidecar() { # sidecar log writer args... -- stdin is the writer's
 # the unavailable marker, since the staged write is what failed; if even that
 # cannot be written, the disk is gone and the only honest thing left is to say so
 # where a human reads the run.
-publish_dxg_unavailable_fallback() { # sidecar log label reason
-  dxg_window_unavailable - - "$3" >"$2.dxg-fallback.$$" 2>/dev/null &&
+publish_dxg_unavailable_fallback() { # sidecar log reason label
+  dxg_window_unavailable - - "$3" 2>/dev/null >"$2.dxg-fallback.$$" &&
     mv "$2.dxg-fallback.$$" "$1" 2>/dev/null && {
-      cat "$1" >>"$2"
+      cat "$1" 2>/dev/null >>"$2"
       return 0
     }
   rm -f "$2.dxg-fallback.$$"
