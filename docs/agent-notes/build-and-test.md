@@ -1806,6 +1806,27 @@ that they earn a lookup rather than always-loaded space.
   `~/.ocannl-sweep/history.tsv` and never
   exits non-zero for test failures — its exit code is not a verdict, the history file is. A daily
   scheduled task drives it.
+- **The per-run record `~/.ocannl-sweep/logs/<stamp>-run.tsv` is what a consumer reads; the stdout
+  summary is for humans** (gh-ocannl-977). Its absence is itself a verdict: a run that refused at
+  startup swept nothing and writes no record, which is what distinguishes that exit 2 from a
+  lane-stopped one. Tab-separated kind-tagged rows follow a `schema` line, and the sweep prints the
+  record's path as a `run:` line on both exits. Why a separate file rather than columns on
+  `history.tsv`: history rows are per unit and append-only, so neither the run-level exit kind nor
+  today's backend→box map has a unit row to live on. `test/operations/sweep_harness.sh` pins the
+  record for every shape it builds — lanes, remote skips, a lane stopped mid-lane, cancellation, and
+  the startup refusal that writes nothing. The kinds, each row's first column, with the columns
+  after it in order:
+  - `run`: stamp, short sha, ref, target (`<all>` when unscoped), slow flag, execution, exit kind —
+    where the exit kind is `complete`, `lane-stopped` (the exit-2 shape whose recorded rows are
+    real) or `cancelled`.
+  - `unit`: machine, backend, outcome or `no-row`, lane-stopped flag, log path or `-`. One per
+    SELECTED unit, so `no-row` names a unit that should have run and whose lane never got as far as
+    recording it, never one `--only` excluded. A lane publishes a completion marker as its last act,
+    so the flag covers a lane's own `die` and a relayed signal alike, and a stopped lane's earlier
+    units keep their real rows (minix records hip before it stops on multidev_cc).
+  - `backend`: backend, machine. One per unit of the execution table whether or not this run
+    selected it — staleness must be aged against the box that runs a backend TODAY, or a pre-move
+    box's passes certify a path that has never run there.
 - `timeout(1)` is not a portable group-killing bound, and the failure is silent in both directions.
   macOS ships none at all, which is why the repo reaches for `perl -e 'alarm N; exec @ARGV'`; and
   where one exists it is not necessarily GNU's — uutils coreutils (Rust, Ubuntu's default since
