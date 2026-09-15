@@ -1,6 +1,6 @@
 # OCANNL Roadmap
 
-**v1.0.1 released August 26, 2026. Next: v1.0.2, targeted for September 16, 2026; followed by v1.1 on October 2 and v1.2 around November 3, 2026.**
+**v1.0.2 released September 16, 2026. Next: v1.1, targeted for October 2, 2026; followed by v1.1.1 on October 10, v1.1.2 on October 18 and v1.2 around November 3, 2026.**
 
 This roadmap outlines the development plan for OCANNL through version 1.0 and beyond. Dates indicate **end of period** targets. Through v1.0 the schedule was pinned to conference deadlines; it is now project-internal, and the dates below are aspirational rather than external commitments.
 
@@ -204,15 +204,17 @@ Quantization (#137, #271), the WebGPU/WASM target (#123), the LLVM backend (#200
 
 ---
 
-## v1.0.2 — September 16, 2026
+## v1.0.2 — September 16, 2026 (released)
 **Theme: Robustness and compiler elegance through shared structure**
 
-The milestone had **55 open issues before the September 14 rebalance**. The sequencing plan
-is useful for dependencies and placement, but its work-wave queue need not delay the performance
-milestone. The goal of this rebalance is to reach v1.1 sooner. This update reviews staging PRs **#660–#708**, after the previous editorial pass
-in #659 (which covered through #658); merged work is unreleased until the next tag.
+Created in the August 26 renumbering to pull the robustness and engineering-hygiene backlog out
+of the feature milestones, so refactoring issues were worked while they still described the code
+they were filed against. The milestone closed with **175 issues**, all of them closed after the
+1.0.1 tag; it had 55 open before the September 14 rebalance, which bounded the remainder to eight
+compiler-structure and coverage issues and moved the rest past v1.1. See
+[CHANGES.md](CHANGES.md) for the release's entries.
 
-**Already landed for the next release:**
+**Robustness, landed through the milestone:**
 
 - Reduction-width unification (#754), hardware-write cell separation (#950/#959), Metal's
   device-memory barrier fence (the fence half of #963), matching CPU/GPU half initialization
@@ -225,14 +227,24 @@ in #659 (which covered through #658); merged work is unreleased until the next t
   (#908/#931/#968/#973), shared IR builders (#954), and restored Windows CI setup (#935).
   These improve release verification; they do not close the remaining analysis gaps.
 
-**Retain eight compiler-structure and coverage issues in v1.0.2, then start v1.1.**
+**The eight compiler-structure and coverage issues shipped, and v1.1 starts.**
 
-Compiler-side deduplication is retained for the intrinsic value of a simpler, more elegant
-implementation: one expression of a shared idea, with differences made explicit. Easier feature
-work is a hoped-for consequence, not a benefit that must be demonstrated before this work earns
-its place. Testing-side refactorings and the wider consolidation backlog move after v1.1.
-The September 16 cut is soft; keep this set bounded and protect the early-November v1.2 anchor
-if it takes longer. Do not add a separate v1.0.3 detour.
+Compiler-side deduplication was kept in the milestone for its own sake: one expression of a
+shared idea, with differences made explicit. All eight closed on September 14 (#604, #917, #630, #656, #875, #774, #770, #794): one
+configuration resolver, one `Ops`-owned precision enumeration, one ordered `Low_level` access
+traversal, one C builtins table compiled by host stubs and cc kernels alike, one warp-shuffle
+stage description its own simulator consumes, one normalizing `Indexing.affine` construction with
+a coverage proof behind initialization elision, and shared CUDA/HIP scalar semantics behind one
+compilation driver for all four backends, with #794 supplying the vendor-arm compile coverage.
+
+**Closed after that set, on the way to the tag:** emulated half narrowing rounding the interval
+just above half of the smallest subnormal instead of flushing it (#981); the sweep's
+machine-readable per-run record (#977); the dxg bridge's own kernel evidence as an
+environment-red trigger (#979); and the `/dev/dxg` `-j` cap as a single source that manual GPU
+suites get automatically (#983). The conflict-free einsum grammar landed alongside them
+(`lukstafi/ocannl-staging` PR #712).
+
+Testing-side refactorings and the wider consolidation backlog follow v1.1, in v1.1.1.
 
 | Retain | Structural improvement |
 |--------|------------------------|
@@ -280,6 +292,10 @@ The redistribution leaves **eight open issues in v1.0.2, 37 in v1.1, 38 in the n
 prioritize after performance work, not a promise to clear all 38 issues.
 This rebalance does not cut a release or close the v1.0.2 milestone; tagging remains separate.
 
+**At the September 16 tag** those counts read **none open in v1.0.2, 37 in v1.1, 46 in v1.1.1,
+17 in v1.1.2 and seven in v1.2**: the eight retained issues closed, and v1.1.1 grew by the
+follow-ups the v1.0.2 review cycles filed against it.
+
 ---
 
 ## v1.1 — October 2, 2026
@@ -325,9 +341,10 @@ exposes its cost, rather than treating the entire robustness queue as prerequisi
 ## v1.1.1 — October 10, 2026
 **Theme: Consolidation after the performance work**
 
-The 38 deferred issues from v1.0.2 are listed in the redistribution table above: testing-side
+The issues deferred from v1.0.2 — 38 at the September 14 rebalance, 46 open at the September 16
+tag — are listed in the redistribution table above: testing-side
 refactorings, scanner maintenance, diagnostics, stable goldens, test tooling and remaining IR/API
-work. Renderer and backend deduplication stays in v1.0.2, motivated by compiler elegance. The
+work. Renderer and backend deduplication shipped in v1.0.2. The
 v1.1 experience can inform the ordering of this later queue. This is a bounded consolidation
 period, not a gate requiring every issue to close before consumers or v1.2 can proceed. The PPX migration (#695) remains upstream-release-gated; legacy-lock
 retirement (#966) reaches its proposed October 10 trigger at this milestone's target.
@@ -411,9 +428,9 @@ seven heterogeneous issue numbers is not its acceptance criterion.
 | **0.9** | Aug 3, 2026 | **released** | **Schedule quality, deterministic parallelism, mixed precision, convolution performance, and search survivability** |
 | **1.0** | Aug 13, 2026 | **released** | **Branch-and-bound schedule inference, inlining as a searchable decision, graph capture, software pipelining, rematerialization, CPU reduced precision, and the 2x `gpt2_mini` step** |
 | **1.0.1** | Aug 26, 2026 | **released** | **Consolidation after v1.0** (planned as "v1.1"): search follow-through, inlining and reduction soundness, test and benchmark seams that cannot report a false pass, and the training-loop mechanics |
-| 1.0.2  | Sep 16, 2026 | planned | Landed robustness plus eight compiler-structure/coverage issues, motivated by elegance |
+| **1.0.2** | Sep 16, 2026 | **released** | **Robustness pulled forward, plus compiler elegance through shared structure**: the landed robustness fixes and eight compiler-structure/coverage issues |
 | 1.1    | Oct 2, 2026 | planned | Performance-chasing in the approximate profile, demonstrated on benchmarks: fleet acceptance of the landed `approximate` preset, fused attention and Winograd, the exact-numerics residue, and the benchmark legs that expose wins and losses |
-| 1.1.1  | Oct 10, 2026 | planned | Post-performance consolidation: the 38 deferred issues, prioritized by v1.1 experience |
+| 1.1.1  | Oct 10, 2026 | planned | Post-performance consolidation: the issues deferred from v1.0.2 (46 open at the 1.0.2 tag), prioritized by v1.1 experience |
 | 1.1.2  | Oct 18, 2026 | planned | Consumers and explorations: models, reproductions, demos, integrations, and the training experience |
 | 1.2    | Nov 3, 2026 | planned; theme refinement proposed | Standalone ArrayJIT, session transactions and shape schemes; PoPE and hardware features optional |
 

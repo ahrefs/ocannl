@@ -60,11 +60,17 @@ NOTE: debug logging from CUDA or HIP in complex settings is a bit tricky, as it 
 
 ## Milestones
 
-See [ROADMAP.md](ROADMAP.md) for the detailed schedule, its history of rebalances and renumberings, and the venue history of the paper artifacts. GitHub issue assignments are the source of truth for release scope. **v1.0.1 was released on August 26, 2026**; the next target is **v1.0.2** (robustness and compiler elegance), September 16, 2026, followed by **v1.1** performance work, **v1.1.1** consolidation and **v1.1.2** consumers, with **v1.2** targeted for November 3, 2026. Release dates are now project-internal and aspirational — through v1.0 they were pinned to conference deadlines. The version sequence is `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.2`: version-number depth tracks release *scope* (feature releases take a second component, consolidation/robustness releases a third), not semver.
+See [ROADMAP.md](ROADMAP.md) for the detailed schedule, its history of rebalances and renumberings, and the venue history of the paper artifacts. GitHub issue assignments are the source of truth for release scope. **v1.0.2 was released on September 16, 2026**; the next target is **v1.1** performance work, October 2, 2026, followed by **v1.1.1** consolidation and **v1.1.2** consumers, with **v1.2** targeted for November 3, 2026. Release dates are now project-internal and aspirational — through v1.0 they were pinned to conference deadlines. The version sequence is `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.2`: version-number depth tracks release *scope* (feature releases take a second component, consolidation/robustness releases a third), not semver.
 
 ### Releases
 
 For more details, see [CHANGES](CHANGES.md).
+
+* **1.0.2: Robustness pulled forward, plus compiler elegance through shared structure.**
+  * One expression of each shared idea, with the differences made explicit: configuration precedence is one resolver, scalar precisions one `Ops`-owned enumeration, `Low_level`'s analyses one ordered access traversal, the C builtins one table that host stubs and cc kernels both compile, the warp-shuffle stages one description its own simulator consumes, and CUDA/HIP scalar semantics one table behind a compilation driver all four backends share.
+  * `Indexing.affine` is the single normalizing construction for affine indices, and neutral initialization before an affine assignment is elided only under a bounded coverage proof — shifted iterators, strided holes and sparse blocks keep it.
+  * Robustness landed across the milestone: one accumulator-width decision across serial, SIMD and shuffle reductions, hardware-bound stores that must separate threads by destination cell, merge-buffer reads as execution dependencies, schedule-cache directories that refuse a foreign regime, and replayable tensor forward and backprop code.
+  * A conflict-free einsum grammar (no Menhir warnings, the same accepted language), and emulated half narrowing that rounds the interval just above half of the smallest subnormal instead of flushing it.
 
 * **1.0.1: Consolidation after v1.0 — making a green result mean what it says.**
   * Soundness of inlining: a guarded or looped setter is rejected for virtualization rather than replayed without its `If` or its repetition loop; cross-routine splices declare their leaf reads and are reconciled into the routine interface; `Local_scope` has an enforced purity contract, and a scope over a materialized node is an error rather than a silent collapse.

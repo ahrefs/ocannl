@@ -7,6 +7,30 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
 
 ## [Unreleased]
 
+## [1.0.2] -- 2026-09-16
+
+> Release note: theme — robustness pulled forward, and compiler elegance through shared
+> structure. The milestone was created in the August 26 renumbering to work the robustness and
+> engineering-hygiene backlog while its issues still described the code they were filed against;
+> it closed 175 issues. The robustness half: one accumulator-width decision across serial, SIMD
+> and shuffle reductions; hardware-bound stores that separate threads by destination cell;
+> merge-buffer reads as execution dependencies; schedule-cache directories that refuse a foreign
+> regime; replayable tensor forward and backprop code; and the int64 FMA, symbolic-extent, Metal
+> compile-path, momentum and routine-logging fixes. The last fix in is arithmetic: emulated half
+> narrowing rounds the interval just above half of the smallest subnormal instead of flushing it
+> (gh-ocannl-981).
+>
+> The compiler half is the September 14 rebalance's set of eight deduplication issues, each
+> expressing a shared idea once with the differences explicit: configuration precedence is one
+> resolver, scalar precisions one enumeration, `Low_level`'s analyses one ordered access
+> traversal, the C builtins one table that host stubs and cc kernels both compile, the
+> warp-shuffle stages one description its own simulator consumes, affine normalization one
+> construction with a private payload, and CUDA/HIP scalar semantics one table behind a
+> compilation driver all four backends share.
+>
+> This release quotes no benchmark numbers; performance is v1.1's theme, on the `approximate`
+> profile that landed here with fleet acceptance still open (gh-ocannl-719, gh-ocannl-720).
+
 ### Added
 
 - `profile=approximate` bundles the numerics-changing performance settings, with a separate
@@ -48,6 +72,12 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
 - Benchmarks: `fixtures/DIGESTS.txt` declares the measurement fleet (`# measurement-boxes:`), so a
   box with no record for a fixture is reported rather than invisible (gh-ocannl-850); beam cells
   default to tinygrad `PARALLEL=0`, with `--beam-parallel N` the opt-in (gh-ocannl-843).
+- A reader-oriented account of OCANNL's remaining design work ships as
+  `docs/blog/2026-09-14-what-remains-for-ocannl.md`, linked from the compilation manifesto, with a
+  dated directory of every open issue under its milestone (`lukstafi/ocannl-staging` PR #710).
+- The cross-machine sweep writes a machine-readable per-run record, `<stamp>-run.tsv`, beside its
+  logs: the run's exit kind, a row per selected unit with its outcome or `no-row`, and the
+  backend-to-box map as it stands today (gh-ocannl-977).
 
 ### Changed
 
@@ -112,6 +142,44 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
 - Scripts under `tools/`, `scripts/` and `benchmarks/`, dune files, workflow YAML,
   `ocannl_config` files and the docs under `docs/`, `AGENTS.md`, `README.md` are scanned against
   `Utils.known_config_keys`, so a renamed key fails the scans instead of drifting (gh-ocannl-790).
+- Bootstrap configuration reads go through the ordinary `resolve_config_value` precedence walk, and
+  an explicit command-line or environment `suppress_welcome_message=false` now overrides a config
+  file's `true`, matching every other key and the source the startup trace reports (gh-ocannl-604).
+- CUDA and HIP render scalar operators from one shared table, and cc, CUDA, HIP and Metal share one
+  single/batch compilation driver; the dialect differences — vendor types, bf16 arithmetic and
+  ReLU, approximate tanh, fp8 narrowing — are explicit arguments (gh-ocannl-770, gh-ocannl-794).
+- Host stubs and cc kernels compile the same C builtin definitions, emitted from one table rather
+  than restated by hand; the shared half RNG function returns `HALF_T` on both sides, with the
+  OCaml wrapper extracting its uint16 bits, so the OCaml API is unchanged (gh-ocannl-656).
+- `Ops` owns the canonical scalar-precision enumeration and arithmetic families that renderer and
+  precision-family coverage derive from, instead of each restating the list (gh-ocannl-917).
+- `Low_level`'s merge-read, spliced-read, loop-bound, scope-symbol, traced-store, hosted-constant
+  and fan-in analyses share one ordered access traversal, with explicit policies for discarded
+  operands, branches, dead loops, guards and `Scan_loop` initialization (gh-ocannl-630).
+- `Indexing.affine` is the single normalizing construction for affine indices and its record
+  payload is `private`: callers that built the record directly use the constructor, while pattern
+  matching and the s-expression wire format are unchanged (gh-ocannl-774).
+- Neutral initialization before an affine assignment is elided only under a bounded coverage proof:
+  shifted iterators, strided holes and sparse blocks keep it, while full-extent injective scatters,
+  flattened axes and complete concatenations can omit it (gh-ocannl-774).
+- The warp-shuffle renderer and its host-side numeric rivals consume one
+  `C_syntax.warp_shuffle_stages ~width` sequence; emitted behaviour and accumulator precision
+  policy are unchanged (gh-ocannl-875).
+- The einsum grammar is conflict-free: `tensor/parser.mly` generates with no Menhir warnings and
+  accepts exactly the language it did before, and `&` — which no rule consumed — now raises a lexer
+  error naming it as reserved, not a generic parse error (`lukstafi/ocannl-staging` PR #712).
+- `tools/test-run.sh` caps dune at `-j 2`, announcing it, when the box reaches its GPU through the
+  WSL2 `/dev/dxg` bridge, `OCANNL_BACKEND` names a GPU backend and the caller named no width of its
+  own; `tools/box-jobs.sh` is the single source the sweep's own cap now delegates to (gh-ocannl-983).
+- `tools/sweep.sh` runs one concurrent lane per machine, units still serial within a lane, so
+  remote units start immediately and the wall clock is the longest lane; `multidev_cc` moves from
+  the Mac to minix (gh-ocannl-976).
+- A remote CUDA or HIP sweep unit collects the kernel's `/dev/dxg` lines from its own window, and
+  any `vmbus_sendpacket failed` burst there makes the unit environment-red beside the known-name
+  list, so a lost-message burst gets its serial rerun on the first miss (gh-ocannl-979).
+- Windows development verification uses the fleet hosts first: manual CI dispatch now defaults to
+  the ordinary Linux/macOS matrix, with `windows_only` plus an `expected_sha` the explicit fallback
+  and the twice-weekly schedule keeping its Windows leg (gh-ocannl-971).
 
 ### Fixed
 
@@ -157,6 +225,9 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
 - `debug_backend=flushing` ignored `location_format=no_location`, on both the log-file and the
   stdout-prefixed destinations (gh-ocannl-876).
 - `OCANNL_LOG_LEVEL_CC_BACKEND=1` and `=3` compile again (gh-ocannl-823).
+- Emulated half narrowing rounds the round-to-nearest-even interval just above half of the smallest
+  half subnormal instead of flushing it: `0x1.8p-25` gives half bits `0x0001`, and the cutoff now
+  matches `single_to_fp8`'s analogous subnormal path (gh-ocannl-981).
 
 ## [1.0.1] -- 2026-08-26
 
