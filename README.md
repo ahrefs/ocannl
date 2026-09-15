@@ -71,7 +71,6 @@ For more details, see [CHANGES](CHANGES.md).
   * `Indexing.affine` is the single normalizing construction for affine indices, and neutral initialization before an affine assignment is elided only under a bounded coverage proof — shifted iterators, strided holes and sparse blocks keep it.
   * Robustness landed across the milestone: one accumulator-width decision across serial, SIMD and shuffle reductions, hardware-bound stores that must separate threads by destination cell, merge-buffer reads as execution dependencies, schedule-cache directories that refuse a foreign regime, and replayable tensor forward and backprop code.
   * A conflict-free einsum grammar (no Menhir warnings, the same accepted language), and emulated half narrowing that rounds the interval just above half of the smallest subnormal instead of flushing it.
-  * No benchmark number is claimed for this release: the deduplication set was taken for intrinsic elegance, with easier feature work a hoped-for consequence rather than a precondition. Performance-chasing is v1.1.
 
 * **1.0.1: Consolidation after v1.0 — making a green result mean what it says.**
   * Soundness of inlining: a guarded or looped setter is rejected for virtualization rather than replayed without its `If` or its repetition loop; cross-routine splices declare their leaf reads and are reconciled into the routine interface; `Local_scope` has an enforced purity contract, and a scope over a materialized node is an error rather than a silent collapse.

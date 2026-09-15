@@ -9,32 +9,27 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
 
 ## [1.0.2] -- 2026-09-16
 
-> Release note: theme — the robustness backlog pulled forward, and compiler elegance through
-> shared structure. The milestone was created in the August 26 renumbering to work the robustness
-> and engineering-hygiene backlog while its issues still described the code they were filed
-> against; its 175 closed issues are that backlog and the review cycles it generated. The second
-> half is the September 14 rebalance: a bounded set of eight deduplication issues, retained for the
-> intrinsic value of expressing a shared idea once with the differences made explicit, rather than
-> for a benefit that had to be demonstrated first. Configuration precedence is now one resolver,
-> scalar precisions one enumeration, `Low_level`'s analyses one ordered access traversal, the C
-> builtins one table that host stubs and cc kernels both compile, the warp-shuffle stages one
-> description its own simulator consumes, affine normalization one construction with a private
-> payload, and CUDA/HIP scalar semantics one table behind a compilation driver all four backends
-> share.
+> Release note: theme — robustness pulled forward, and compiler elegance through shared
+> structure. The milestone was created in the August 26 renumbering to work the robustness and
+> engineering-hygiene backlog while its issues still described the code they were filed against;
+> it closed 175 issues. The robustness half: one accumulator-width decision across serial, SIMD
+> and shuffle reductions; hardware-bound stores that separate threads by destination cell;
+> merge-buffer reads as execution dependencies; schedule-cache directories that refuse a foreign
+> regime; replayable tensor forward and backprop code; and the int64 FMA, symbolic-extent, Metal
+> compile-path, momentum and routine-logging fixes. The last fix in is arithmetic: emulated half
+> narrowing rounds the interval just above half of the smallest subnormal instead of flushing it
+> (gh-ocannl-981).
 >
-> The robustness half landed before that cut and is recorded below: one accumulator-width decision
-> across serial, SIMD and shuffle reductions; hardware-bound stores that must separate threads by
-> destination cell; merge-buffer reads as execution dependencies; schedule-cache directories that
-> refuse a foreign regime; replayable tensor forward and backprop code; and the int64 FMA,
-> symbolic-extent, Metal compile-path, momentum and routine-logging fixes. The last one in is
-> arithmetic: emulated half narrowing now rounds the interval just above half of the smallest
-> subnormal instead of flushing it (gh-ocannl-981).
+> The compiler half is the September 14 rebalance's set of eight deduplication issues, each
+> expressing a shared idea once with the differences explicit: configuration precedence is one
+> resolver, scalar precisions one enumeration, `Low_level`'s analyses one ordered access
+> traversal, the C builtins one table that host stubs and cc kernels both compile, the
+> warp-shuffle stages one description its own simulator consumes, affine normalization one
+> construction with a private payload, and CUDA/HIP scalar semantics one table behind a
+> compilation driver all four backends share.
 >
-> Honest nulls, recorded as such: this release quotes no benchmark numbers. Nothing in it was
-> undertaken to move a measurement, and the deduplication set was accepted with easier feature work
-> named as a hoped-for consequence rather than a precondition. Performance-chasing is v1.1's theme,
-> on the `approximate` profile that landed here with fleet acceptance still open (gh-ocannl-719,
-> gh-ocannl-720).
+> This release quotes no benchmark numbers; performance is v1.1's theme, on the `approximate`
+> profile that landed here with fleet acceptance still open (gh-ocannl-719, gh-ocannl-720).
 
 ### Added
 

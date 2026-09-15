@@ -229,11 +229,8 @@ compiler-structure and coverage issues and moved the rest past v1.1. See
 
 **The eight compiler-structure and coverage issues shipped, and v1.1 starts.**
 
-Compiler-side deduplication was retained for the intrinsic value of a simpler, more elegant
-implementation: one expression of a shared idea, with differences made explicit. Easier feature
-work was named as a hoped-for consequence, not a benefit that had to be demonstrated before this
-work earned its place — and that is how it shipped, with no benchmark number claimed for it.
-All eight closed on September 14 (#604, #917, #630, #656, #875, #774, #770, #794): one
+Compiler-side deduplication was kept in the milestone for its own sake: one expression of a
+shared idea, with differences made explicit. All eight closed on September 14 (#604, #917, #630, #656, #875, #774, #770, #794): one
 configuration resolver, one `Ops`-owned precision enumeration, one ordered `Low_level` access
 traversal, one C builtins table compiled by host stubs and cc kernels alike, one warp-shuffle
 stage description its own simulator consumes, one normalizing `Indexing.affine` construction with
@@ -247,8 +244,7 @@ environment-red trigger (#979); and the `/dev/dxg` `-j` cap as a single source t
 suites get automatically (#983). The conflict-free einsum grammar landed alongside them
 (`lukstafi/ocannl-staging` PR #712).
 
-Testing-side refactorings and the wider consolidation backlog are after v1.1, in v1.1.1. There was
-no v1.0.3 detour.
+Testing-side refactorings and the wider consolidation backlog follow v1.1, in v1.1.1.
 
 | Retain | Structural improvement |
 |--------|------------------------|
@@ -348,7 +344,7 @@ exposes its cost, rather than treating the entire robustness queue as prerequisi
 The issues deferred from v1.0.2 — 38 at the September 14 rebalance, 46 open at the September 16
 tag — are listed in the redistribution table above: testing-side
 refactorings, scanner maintenance, diagnostics, stable goldens, test tooling and remaining IR/API
-work. Renderer and backend deduplication stays in v1.0.2, motivated by compiler elegance. The
+work. Renderer and backend deduplication shipped in v1.0.2. The
 v1.1 experience can inform the ordering of this later queue. This is a bounded consolidation
 period, not a gate requiring every issue to close before consumers or v1.2 can proceed. The PPX migration (#695) remains upstream-release-gated; legacy-lock
 retirement (#966) reaches its proposed October 10 trigger at this milestone's target.
@@ -432,7 +428,7 @@ seven heterogeneous issue numbers is not its acceptance criterion.
 | **0.9** | Aug 3, 2026 | **released** | **Schedule quality, deterministic parallelism, mixed precision, convolution performance, and search survivability** |
 | **1.0** | Aug 13, 2026 | **released** | **Branch-and-bound schedule inference, inlining as a searchable decision, graph capture, software pipelining, rematerialization, CPU reduced precision, and the 2x `gpt2_mini` step** |
 | **1.0.1** | Aug 26, 2026 | **released** | **Consolidation after v1.0** (planned as "v1.1"): search follow-through, inlining and reduction soundness, test and benchmark seams that cannot report a false pass, and the training-loop mechanics |
-| **1.0.2** | Sep 16, 2026 | **released** | **Robustness pulled forward, plus compiler elegance through shared structure**: the landed robustness fixes and eight compiler-structure/coverage issues taken for intrinsic elegance, with no benchmark number claimed |
+| **1.0.2** | Sep 16, 2026 | **released** | **Robustness pulled forward, plus compiler elegance through shared structure**: the landed robustness fixes and eight compiler-structure/coverage issues |
 | 1.1    | Oct 2, 2026 | planned | Performance-chasing in the approximate profile, demonstrated on benchmarks: fleet acceptance of the landed `approximate` preset, fused attention and Winograd, the exact-numerics residue, and the benchmark legs that expose wins and losses |
 | 1.1.1  | Oct 10, 2026 | planned | Post-performance consolidation: the issues deferred from v1.0.2 (46 open at the 1.0.2 tag), prioritized by v1.1 experience |
 | 1.1.2  | Oct 18, 2026 | planned | Consumers and explorations: models, reproductions, demos, integrations, and the training experience |
