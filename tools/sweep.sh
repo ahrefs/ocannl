@@ -886,7 +886,7 @@ record() {
     # entry would be read as `no-row` over a real outcome, while an entry
     # without a row is undone here -- and either way the lane dies loudly.
     open(my $e, ">", $ARGV[2]) or exit 1;
-    print($e "$ARGV[3]\n") && close($e) or exit 1;
+    unless (print($e "$ARGV[3]\n") && close($e)) { unlink($ARGV[2]); exit 1; }
     unless (print($h "$ARGV[1]\n") && close($h)) { unlink($ARGV[2]); exit 1; }' \
     "$HISTORY" "$row" "$LANE_DIR/unit.$1.$2" "$(printf '%s\t%s' "$3" "${5:--}")" ||
     die "cannot record $1/$2 outcome in $HISTORY"
@@ -930,12 +930,24 @@ write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-r
       # covers every way a lane can fail to finish -- its own `die`, a signal
       # relayed to it -- with no second bookkeeping channel to keep in step.
       if [ -e "$LANE_DIR/lane-done.$machine" ]; then stopped=0; else stopped=1; fi
+      # An entry is evidence of a row only if it carries an outcome. A file that
+      # exists but does not is residue -- a write interrupted between `open` and
+      # the line it was going to hold -- and reading it as an outcome would put
+      # an empty field where the consumer expects `no-row` or a verdict. `record`
+      # unlinks its own failures, so this is the second lock on the same door
+      # rather than the only one; a partial entry is the one shape of this record
+      # that could mislead silently, and no fixture can reach the lanes'
+      # coordination directory to produce it.
+      outcome=
+      log=
       if [ -f "$LANE_DIR/unit.$machine.$backend" ]; then
         IFS=$'\t' read -r outcome log <"$LANE_DIR/unit.$machine.$backend"
-      else
+      fi
+      if [ -z "$outcome" ]; then
         outcome=no-row
         log=-
       fi
+      : "${log:=-}"
       printf 'unit\t%s\t%s\t%s\t%s\t%s\n' "$machine" "$backend" "$outcome" \
         "$stopped" "$log"
     done
