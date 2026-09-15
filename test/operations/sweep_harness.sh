@@ -30,7 +30,8 @@ on_error() {
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
     capped capped_target remote_opt_in serial_red serial_clean serial_two_inline \
     serial_many_inline serial_control lanes lane_stop_seed lane_stopped \
-    aggregator_missing stamp_advance after_cancel; do
+    aggregator_missing stamp_advance dxg_clean dxg_red dxg_trigger dxg_no_trigger \
+    after_cancel; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
   done
@@ -1143,6 +1144,56 @@ grep -q '^serial rerun: unmapped: \[File "test/compile_error.ml", line 1\] \[Fil
   "$many_inline_log"
 absent '^serial rerun: directory fallback' "$many_inline_log"
 
+# The dxg window filter (gh-ocannl-979), driven directly: tools/dxg-window.sh is
+# sourced by the sweep and by this harness for exactly that reason. The input is
+# the 2026-09-15 evidence as the two boxes recorded it -- minix's benign boot
+# lines at four different errnos, and one real lost message, which the bridge
+# reports as a TRIPLE.
+. "$(cd "$(dirname "$sweep")" && pwd)/dxg-window.sh"
+dxg_benign='Sep 15 09:00:01 box kernel: misc dxg: dxgk: dxgkio_is_feature_enabled: Ioctl failed: -22
+Sep 15 09:00:01 box kernel: misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -22
+Sep 15 09:00:01 box kernel: misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -2
+Sep 15 09:00:01 box kernel: misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -11
+Sep 15 09:00:01 box kernel: misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -1'
+dxg_burst='Sep 15 09:05:00 box kernel: misc dxg: dxgk: dxgvmb_send_sync_msg: vmbus_sendpacket failed: fffffff5
+Sep 15 09:05:00 box kernel: misc dxg: dxgk: create_existing_sysmem: failed set existing pages: fffffff5
+Sep 15 09:05:00 box kernel: misc dxg: dxgk: dxgkio_create_allocation: Ioctl failed: -11'
+dxg_unrelated='Sep 15 09:05:01 box kernel: hv_balloon: Max. dynamic memory size: 32 GB'
+
+# Benign-only, at every errno the boxes have shown: nothing kept, no burst. An
+# errno-keyed filter would have kept four of these five.
+dxg_clean=$(printf '%s\n%s\n' "$dxg_benign" "$dxg_unrelated" |
+  dxg_window_summary 20260915T090000Z 20260915T091000Z)
+grep -q '^=== dxg window 20260915T090000Z..20260915T091000Z (utc) ===$' <<<"$dxg_clean"
+grep -q '^=== dxg window: 0 vmbus_sendpacket failures ===$' <<<"$dxg_clean"
+absent 'dxgkio_query_adapter_info' <<<"$dxg_clean"
+absent 'dxgkio_is_feature_enabled' <<<"$dxg_clean"
+absent 'hv_balloon' <<<"$dxg_clean"
+
+# One lost message reported as three lines counts ONCE: keying on the fffffff5
+# status instead would count the vmbus line and the sysmem line as two bursts.
+# All three lines are kept and shown -- a new signature is what this exists to
+# surface -- but only the vmbus one is counted.
+dxg_red=$(printf '%s\n%s\n%s\n' "$dxg_benign" "$dxg_burst" "$dxg_unrelated" |
+  dxg_window_summary 20260915T090000Z 20260915T091000Z)
+grep -q '^=== dxg window: 1 vmbus_sendpacket failures ===$' <<<"$dxg_red"
+[ "$(grep -c 'misc dxg' <<<"$dxg_red")" -eq 3 ]
+grep -q 'create_existing_sysmem: failed set existing pages: fffffff5' <<<"$dxg_red"
+absent 'dxgkio_query_adapter_info' <<<"$dxg_red"
+
+# Two lost messages are two bursts, and an empty window is zero rather than one
+# (the `grep -c` of an empty line).
+[ "$(printf '%s\n%s\n' "$dxg_burst" "$dxg_burst" |
+  dxg_window_summary A B | sed -n 's/^=== dxg window: \([0-9]*\) .*/\1/p')" = 2 ]
+[ "$(printf '' | dxg_window_summary A B |
+  sed -n 's/^=== dxg window: \([0-9]*\) .*/\1/p')" = 0 ]
+
+# And the count the rest of the sweep reads back out of a unit's log is the one
+# the filter wrote: the block goes into a log, `dxg_bursts` takes it out.
+printf '%s\n' "$dxg_red" >"$tmp/dxg-probe.log"
+[ "$(dxg_bursts "$tmp/dxg-probe.log")" = 1 ]
+[ -z "$(dxg_bursts "$tmp/absent.log")" ]
+
 # Negative control: a red whose failures are the tests' own gets no second run.
 serial_control=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$state_failure \
   run_sweep_backend cc --target serial-probe)
@@ -1276,6 +1327,57 @@ done
 [ -n "$(awk -F '\t' -v s="$advanced_stamp" '$1 == s && $7 == "stamp-probe"' "$state/history.tsv")" ]
 rm -f "$state"/logs/*-seed.log
 
+# The kernel-evidence trigger, both directions (gh-ocannl-979). The failure text
+# is the one the negative control above uses -- a red carrying NO name from
+# ENVIRONMENT_REFUSALS -- so what decides the rerun here is the window and
+# nothing else. The window block reaches the log the way the real one does, by
+# being in what the unit's test leg wrote; the sweep appends it there itself for
+# a WSL GPU unit, and no fixture can put a fake /dev/dxg behind an ssh.
+dxg_window_block=$(printf '%s\n%s\n' "$dxg_benign" "$dxg_burst" |
+  dxg_window_summary 20260915T090000Z 20260915T091000Z)
+dxg_trigger=$(SWEEP_TEST_OPAM_RC=1 \
+  SWEEP_TEST_OPAM_OUT="$state_failure
+$dxg_window_block" \
+  SWEEP_TEST_OPAM_SERIAL_RED='@test/runtest-state-probe' \
+  SWEEP_TEST_OPAM_OUT_SERIAL='Error: still the claim' \
+  run_sweep_backend cc --target state-probe)
+grep -q 'm4-max/cc: fail ' <<<"$dxg_trigger"
+# A burst and no listed name: the unit is rerun anyway, which is the whole point
+# -- a call site nobody has seen yet, or a SEGV that can never become a name.
+grep -q 'm4-max/cc: environment-red, ' <<<"$dxg_trigger"
+grep -q 'm4-max/cc: serial rerun: still red: @test/runtest-state-probe$' <<<"$dxg_trigger"
+dxg_trigger_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
+[ "$(dxg_bursts "$dxg_trigger_log")" = 1 ]
+# The window block is carried into the fingerprint, beside the failures it
+# explains, so a caller diffing yesterday's sees a bridge that started -- or
+# stopped -- losing messages.
+grep -q '^=== dxg window: 1 vmbus_sendpacket failures ===$' "${dxg_trigger_log%.log}.fingerprint"
+
+# The run record carries the unit's window and burst count as fields of its row
+# (the #977 record), read from the log that row names.
+dxg_trigger_record=$(sed -n 's/^run:  *//p' <<<"$dxg_trigger")
+[ "$(awk -F '\t' '$1 == "unit" && $3 == "cc" { print $7 "\t" $8 "\t" $9 }' \
+  "$dxg_trigger_record")" = "$(printf '20260915T090000Z\t20260915T091000Z\t1')" ]
+
+# The other direction: the same red, a window collected and CLEAN, still no
+# listed name -- no rerun. Without this the trigger could be "any unit that
+# collected a window", which is not a trigger at all.
+dxg_no_trigger=$(SWEEP_TEST_OPAM_RC=1 \
+  SWEEP_TEST_OPAM_OUT="$state_failure
+$(printf '%s\n' "$dxg_benign" | dxg_window_summary 20260915T100000Z 20260915T101000Z)" \
+  run_sweep_backend cc --target state-probe)
+grep -q 'm4-max/cc: fail ' <<<"$dxg_no_trigger"
+absent 'serial rerun' <<<"$dxg_no_trigger"
+dxg_no_trigger_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
+[ "$(dxg_bursts "$dxg_no_trigger_log")" = 0 ]
+absent '^serial rerun' "${dxg_no_trigger_log%.log}.fingerprint"
+# A unit with no window at all keeps `-` in those record fields, so a consumer
+# can tell "collected and clean" from "never collected".
+dxg_no_trigger_record=$(sed -n 's/^run:  *//p' <<<"$dxg_no_trigger")
+[ "$(awk -F '\t' '$1 == "unit" && $3 == "cc" { print $9 }' "$dxg_no_trigger_record")" = 0 ]
+[ "$(awk -F '\t' '$1 == "unit" && $3 == "cc" { print $7 "\t" $8 "\t" $9 }' \
+  "$lanes_record")" = "$(printf -- '-\t-\t-')" ]
+
 # Cancelling a sweep stops EVERY lane: here the local lane's unit is held in its
 # test leg and the rog-nv lane's in its preparation ssh, both under supervisors.
 # TERM to the sweep's pid must be relayed through each lane to its supervisor,
@@ -1369,4 +1471,4 @@ grep -q "^sweep: declared measurement box 'spare' has no sweep unit$" <<<"$matri
 # signal, and it is what distinguishes this exit 2 from a lane-stopped one.
 [ "$(ls "$state"/logs/*-run.tsv | wc -l)" -eq "$records_before" ]
 
-printf 'sweep execution accounting, RTC context, fingerprinting, run record and skip aggregation: PASS\n'
+printf 'sweep execution accounting, RTC context, dxg window evidence, fingerprinting, run record and skip aggregation: PASS\n'

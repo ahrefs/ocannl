@@ -1827,7 +1827,10 @@ that they earn a lookup rather than always-loaded space.
     post-lane phase, such as the skip aggregation, aborted the run). The kind always agrees with
     how the process exited: the record is published before those post-lane steps so a failure
     there leaves a record that explains itself, and each such failure rewrites the kind first.
-  - `unit`: machine, backend, outcome or `no-row`, lane-stopped flag, log path or `-`. One per
+  - `unit`: machine, backend, outcome or `no-row`, lane-stopped flag, log path or `-`, then the
+    unit's dxg window start and end and its `vmbus_sendpacket failed` count, each `-` for a unit
+    with no window — a local one, or one that never ran (gh-ocannl-979), so `0` (collected and
+    clean) is distinguishable from `-` (never collected). One per
     SELECTED unit, so `no-row` names a unit that should have run and whose lane never got as far as
     recording it, never one `--only` excluded. The outcome is read back out of the run's OWN
     `history.tsv` rows under the same lock that writes them, not staged beside them in a second
@@ -1937,8 +1940,30 @@ that they earn a lookup rather than always-loaded space.
 | `cu_module_load_data_ex` | `Cu.Module.load_data_ex` | analogue, not yet observed |
 | `cu_stream_create_with_priority` | `Cu.Stream.create` | analogue, not yet observed |
 
+- **A name is no longer the only trigger: the kernel's own evidence in the unit's window is the
+  other** (gh-ocannl-979). A remote `cuda` or `hip` unit records its UTC window and, at the end,
+  appends the kernel's dxg lines from it to its log and fingerprint; any `vmbus_sendpacket failed`
+  in that window makes the unit environment-red exactly as a listed name does, and the serial
+  rerun's `still red` / `all clean` stays the judge. That matters because a list of names can only
+  ever grow AFTER a miss — rog-nv's `cu_device_primary_ctx_retain` cost a remote session to
+  attribute — and because some failures have no name to list at all: the 2026-09-15 minix runs
+  produced `Command got signal SEGV`, which can never become a table row. The filter lives in
+  `tools/dxg-window.sh`, sourced by the sweep and driven directly by the harness, and its two
+  judgements come from that day's evidence on both boxes: `dxgkio_query_adapter_info` and
+  `dxgkio_is_feature_enabled` failures are dropped **regardless of errno** (every VM boot logs
+  them, at -22, -2, -11 and -1, and nvidia-smi emits the first constantly), while the burst is
+  counted on `vmbus_sendpacket failed` **alone** — one lost message is reported as a triple
+  (`dxgvmb_send_sync_msg`, `create_existing_sysmem`, `dxgkio_create_allocation`), so counting the
+  `fffffff5` status would count it twice. Everything else in the window is kept and shown,
+  counted or not: an unrecognised signature is what this exists to surface. Collected with
+  `journalctl -k --since @<start>`, with `dmesg -T` only as the fallback where journald keeps no
+  kernel log — the VM can DIE inside the window (minix's went away twice on 2026-09-15), and
+  `dmesg` in the next session starts from the new boot and loses exactly the evidence being
+  collected, while the persistent journal spans boots. The window and the count are also fields of
+  the run record's `unit` row, so the consuming routine reads them without parsing a log.
 - **Reading a rerun's verdict.** Adding a name means adding it in both places: the table in
-  `sweep.sh` gates the rerun, this one records what the name has been seen with. The verdict is written as `serial
+  `sweep.sh` gates the rerun, this one records what the name has been seen with. A name is worth
+  adding even now that the kernel evidence triggers too: it names the call site for the table. The verdict is written as `serial
   rerun:` lines in the log AND the fingerprint (outside the fingerprint's 60-entry bound, so a
   wide red cannot drop it), and quoted in the sweep's summary: `still red: <aliases>` names the
   stanzas red on their own — including one generated alias per member of a `(tests (names …))`

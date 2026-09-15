@@ -54,6 +54,13 @@ AGGREGATE_SKIPS=$SWEEP_TOOLS/aggregate-skips.sh
 }
 # shellcheck source=box-jobs.sh
 . "$SWEEP_TOOLS/box-jobs.sh"
+# The dxg window filter and its burst count, shared with the harness that pins it.
+[ -r "$SWEEP_TOOLS/dxg-window.sh" ] || {
+  echo "sweep: cannot read $SWEEP_TOOLS/dxg-window.sh" >&2
+  exit 2
+}
+# shellcheck source=dxg-window.sh
+. "$SWEEP_TOOLS/dxg-window.sh"
 REF=origin/master
 TARGET=
 SLOW=0
@@ -182,11 +189,18 @@ cu_device_primary_ctx_retain
 cu_module_load_data_ex
 cu_stream_create_with_priority'
 
+# Either the name list or the kernel's own evidence. The second arm is what lets a
+# call site nobody has seen yet -- or a failure with no exception name at all,
+# such as the SEGV the 2026-09-15 minix runs produced -- get its serial rerun on
+# the FIRST miss instead of after one (gh-ocannl-979). The rerun's `still red` /
+# `all clean` verdict remains the judge either way: this decides that the unit is
+# rerun, never that its failures were the environment's.
 environment_red() { # log
   local name
   while IFS= read -r name; do
     [ -n "$name" ] && grep -q "^Fatal error: exception $name:" "$1" && return 0
   done <<<"$ENVIRONMENT_REFUSALS"
+  dxg_bursts "$1" | grep -qv '^0$' && return 0
   return 1
 }
 
@@ -447,9 +461,7 @@ stamp_offset=0
 while stamp_taken "$stamp"; do
   stamp_offset=$((stamp_offset + 1))
   [ "$stamp_offset" -le 600 ] || die "no free run stamp near $stamp in $LOGS"
-  stamp=$(perl -MPOSIX -e \
-    'print strftime("%Y%m%dT%H%M%SZ", gmtime(time + $ARGV[0]))' "$stamp_offset") ||
-    die "cannot advance the run stamp"
+  stamp=$(utc_of "$(( $(date +%s) + stamp_offset ))") || die "cannot advance the run stamp"
 done
 # Resolve the ref to a commit ONCE, here, and pin every machine to that commit.
 # Letting each box resolve `origin/master` itself would have them testing
@@ -646,6 +658,34 @@ loaded_rtc_cmd() {
   tmpl=$tmpl'if [ -n "$so" ]; then echo "loaded RTC: $(readlink -f "$so")"; '
   tmpl=$tmpl'else echo "loaded RTC: unresolved -- no RTC stub in this opam switch, or no ldd"; fi; '
   printf '%s' "${tmpl//RTC/$rtc}"
+}
+
+# Read the kernel's log for the window on the box that ran the unit. `journalctl
+# -k --since` rather than `dmesg`, because the VM can DIE inside the window: on
+# 2026-09-15 minix's went away twice mid-unit (a Windows Update restart, then an
+# unheld VM powering off), and `dmesg` in the next session starts from the new
+# boot and loses exactly the evidence being collected. The persistent journal
+# spans boots. `dmesg -T` stays as the fallback for a box whose journald keeps no
+# kernel log, where losing a dead boot's window is better than collecting nothing.
+dxg_window_cmd() { # start-epoch
+  printf 'if command -v journalctl >/dev/null 2>&1 && '
+  printf 'journalctl -k -n 1 >/dev/null 2>&1; then '
+  printf 'journalctl -k --since @%s --no-pager 2>/dev/null; ' "$1"
+  printf 'else dmesg -T 2>/dev/null; fi; true'
+}
+
+# Appended to the unit's log, and carried into its fingerprint, like the
+# rtc-context block. Its own budget, for the reason collect_rtc_context documents:
+# a diagnostic must not be able to overwrite the verdict it explains.
+collect_dxg_window() { # host log start-epoch start-utc end-utc
+  local host=$1 log=$2 start=$3 start_utc=$4 end_utc=$5 kernel
+  kernel=$(run_capped "$(( CONTEXT_CAP + 60 ))" ssh -o BatchMode=yes -o ConnectTimeout=8 \
+    -o ServerAliveInterval=30 -o ServerAliveCountMax=4 \
+    "$host" "$(remote_capped "$CONTEXT_CAP" "$(dxg_window_cmd "$start")")" 2>/dev/null)
+  # Filtered HERE rather than on the far side: the filter is the part with a
+  # judgement in it, so it belongs where a fixture can feed it lines directly
+  # instead of behind an ssh no test can reach.
+  printf '%s\n' "$kernel" | dxg_window_summary "$start_utc" "$end_utc" >>"$log"
 }
 
 rtc_context_cmd() {
@@ -941,6 +981,7 @@ run_rows() { # -> machine, backend, outcome, log for each row of this run
 # owed at all: before that nothing has been swept and the absence is the signal.
 write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-run-failed
   local kind=$1 unit machine backend host outcome log stopped stage rows
+  local window window_start window_end bursts
   stage=$RUN_RECORD.stage.$$
   rows=$(run_rows) || return 1
   {
@@ -970,8 +1011,26 @@ write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-r
         outcome=${outcome%%$'\t'*}
         [ -n "$log" ] || log=-
       fi
-      printf 'unit\t%s\t%s\t%s\t%s\t%s\n' "$machine" "$backend" "$outcome" \
-        "$stopped" "$log"
+      # The unit's dxg window and burst count (gh-ocannl-979), read from the log
+      # the row names -- the only artifact that holds them, and one this row
+      # already points at, so no third place can disagree. `-` for a unit with
+      # no window: a local one, or one that never ran.
+      window_start=-
+      window_end=-
+      bursts=-
+      if [ "$log" != - ] && [ -f "$log" ]; then
+        window=$(sed -n \
+          's/^=== dxg window \([0-9TZ]*\)\.\.\([0-9TZ]*\) (utc) ===$/\1\t\2/p' \
+          "$log" | tail -1)
+        if [ -n "$window" ]; then
+          window_start=${window%%$'\t'*}
+          window_end=${window#*$'\t'}
+          bursts=$(dxg_bursts "$log")
+          [ -n "$bursts" ] || bursts=-
+        fi
+      fi
+      printf 'unit\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$machine" "$backend" \
+        "$outcome" "$stopped" "$log" "$window_start" "$window_end" "$bursts"
     done
     for unit in "${UNITS[@]}"; do
       IFS=: read -r machine backend host <<<"$unit"
@@ -1105,6 +1164,11 @@ fingerprint() {
   # vector then shows up as a diff beside the failure it explains, which is the
   # whole point (gh-ocannl-784).
   sed -n '/^=== rtc-context /,/^=== end rtc-context ===$/p' "$1" 2>/dev/null | head -40
+  # The dxg window block a WSL GPU unit collected (collect_dxg_window), verbatim:
+  # like the rtc-context block it is a small ordered report, and it belongs in the
+  # fingerprint because a caller diffing yesterday's sees a bridge that started
+  # losing messages -- or stopped -- beside the failures it explains.
+  sed -n '/^=== dxg window /,/^=== dxg window: .* ===$/p' "$1" 2>/dev/null | head -45
   # The serial rerun's verdict (serial_rerun), after the sorted block and
   # outside its bound: which of the red stanzas stayed red on their own is the
   # first line a reader of an environment-red unit needs, and the one a
@@ -1600,10 +1664,23 @@ run_unit() { # machine backend host
       collect_rtc_context "$backend" "$host" "$wt" "$log" "${path_prefix:-}"
       ;;
   esac
+  # The kernel's own dxg evidence for THIS unit's window, before the rerun
+  # decision that reads it. Remote GPU units only: the bridge is what /dev/dxg
+  # is, so a local unit has no window and minix's multidev_cc -- CPU, on a WSL
+  # box -- would only ever collect another unit's noise. A unit that never ran
+  # (`skip`) has no window either.
+  case $outcome:$backend in
+    skip:*) ;;
+    *:cuda | *:hip)
+      [ -n "$host" ] &&
+        collect_dxg_window "$host" "$log" "$started" "$(utc_of "$started")" \
+          "$(utc_of "$(date +%s)")"
+      ;;
+  esac
   # Only a `fail` can be environment-red: a `timeout` had its process group
   # destroyed and may still hold the box, and an `error` never reached dune.
-  # Gated inside on the signature table, so a red whose failures are the
-  # tests' own gets no second run.
+  # Gated inside on the signature table AND on the collected window, so a red
+  # whose failures are the tests' own gets no second run.
   case $outcome in
     fail) serial_rerun "$backend" "$host" "$wt" "$log" "$machine/$backend" "${path_prefix:-}" ;;
   esac
