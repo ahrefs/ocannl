@@ -22,6 +22,12 @@ that they earn a lookup rather than always-loaded space.
   is anchored to the directory that generates them. And where the premise is "this value happens to
   equal that constant", read the constant from where it is defined rather than restating the
   coincidence: an unchecked default is the one name no call site spells.
+- `AGENTS.md` stays under 32 KiB, and `test/operations/agents_md_size` holds it there. Claude Code
+  truncates an imported instructions file at that size -- silently, from the end, which is where
+  the PR, configuration and syntax sections sit -- and the guide crossed the line one review-fix
+  bullet at a time, each rule carrying its mechanism and failure story with it. The September 2026
+  trim moved the mechanisms into these notes and left the rules as one sentence plus a pointer,
+  which is the shape to keep: a new rule in `AGENTS.md` is a line, and what it rests on goes here.
 - The repository's PROSE is checkable where its structure carries meaning, and the agent notes are
   the case in point: `agent_notes_structure` (gh-ocannl-691) reads `docs/agent-notes.md` and
   `docs/agent-notes/` as structure rather than as text. It holds five things true — no bullet cut
@@ -744,7 +750,10 @@ that they earn a lookup rather than always-loaded space.
   hex-float format sidesteps decimal rounding entirely, and tie-free test data sidesteps it too;
   `test/support/test_utils.ml` packages the rules — `hex_float` and `set_binary_stdout` are
   portable by construction, while `print_float`/`print_floats` delegate to `concise_float` and so
-  still need tie-free inputs.
+  still need tie-free inputs. The line endings are the other half: `.gitattributes` pins
+  `*.expected` and `test/ppx/*_expected.ml` to LF, and PowerShell's `Set-Content`/`Out-File` write
+  CRLF, so goldens are edited with bash tools and promoted through `tools/promote.sh`, which
+  strips CRLF on Windows.
 - Three more Windows facts, each of which makes POSIX-shaped code silently wrong rather than broken,
   all measured on a stock Windows 11 box while making the scheduled sweep green again (gh-ocannl-588):
   - `Unix.sleepf` cannot sleep for less than the system timer tick. A request below 1 ms truncates to
@@ -1009,7 +1018,10 @@ that they earn a lookup rather than always-loaded space.
   `pass_fail`'s lazy failure detail while adding the structural empty, floor-shortfall, or
   length-mismatch reason. A compound claim that joins independent parity pairs stays out of a
   many-pair combinator: split it into separately labeled `p_all2` claims, so the transcript names
-  which readback failed rather than merely saying that one of them did.
+  which readback failed rather than merely saying that one of them did. Pairwise distinctness has its own
+  combinator, `p_pairwise_distinct name xs ~equal ~to_string`: it refuses fewer than two source
+  values, since distinctness over one element is as vacuous as `for_all` over none, and reports the
+  first collision by `to_string` on stderr.
 - Guarantees that fire only on an empty collection are never exercised by a green suite, so
   `verdict_quantified` stages them: the satisfied forms run directly, and each refusal runs as a
   CHILD process whose streams the parent captures. Capturing is not tidiness — a refusal prints
