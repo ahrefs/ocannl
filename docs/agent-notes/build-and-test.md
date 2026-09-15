@@ -1951,7 +1951,14 @@ that they earn a lookup rather than always-loaded space.
   rerun's `still red` / `all clean` stays the judge. That matters because a list of names can only
   ever grow AFTER a miss — rog-nv's `cu_device_primary_ctx_retain` cost a remote session to
   attribute — and because some failures have no name to list at all: the 2026-09-15 minix runs
-  produced `Command got signal SEGV`, which can never become a table row. The filter lives in
+  produced `Command got signal SEGV`, which can never become a table row. A unit's collected evidence lives in a SIDECAR beside its log
+  (`<stamp>-<machine>-<backend>.dxg-window`), and the trigger, the fingerprint and the record read
+  only that: a log holds whatever the unit's tests printed, and this repository's own sweep harness
+  dumps dxg fixtures on failure while running as a test action inside a sweep unit, so a local `cc`
+  unit's log really can contain a complete synthetic burst block. Provenance is the file. The
+  window's two bounds are both instants of the REMOTE's clock — the start read by the reachability
+  probe when the unit began there, the end read at collection — because the log's timestamps are in
+  that clock and no other, and these VMs resynchronise after host resumes. The filter lives in
   `tools/dxg-window.sh`, sourced by the sweep and driven directly by the harness, and its two
   judgements come from that day's evidence on both boxes: `dxgkio_query_adapter_info` and
   `dxgkio_is_feature_enabled` failures are dropped **regardless of errno** (every VM boot logs

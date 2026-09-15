@@ -189,7 +189,8 @@ cu_device_primary_ctx_retain
 cu_module_load_data_ex
 cu_stream_create_with_priority'
 
-# Either the name list or the kernel's own evidence. The second arm is what lets a
+# Either the name list or the kernel's own evidence (dxg_window_red, which reads
+# the unit's collected-evidence sidecar and answers only to a positive count). The second arm is what lets a
 # call site nobody has seen yet -- or a failure with no exception name at all,
 # such as the SEGV the 2026-09-15 minix runs produced -- get its serial rerun on
 # the FIRST miss instead of after one (gh-ocannl-979). The rerun's `still red` /
@@ -200,7 +201,7 @@ environment_red() { # log
   while IFS= read -r name; do
     [ -n "$name" ] && grep -q "^Fatal error: exception $name:" "$1" && return 0
   done <<<"$ENVIRONMENT_REFUSALS"
-  dxg_bursts "$1" | grep -qv '^0$' && return 0
+  dxg_window_red "$1" && return 0
   return 1
 }
 
@@ -663,8 +664,16 @@ loaded_rtc_cmd() {
 # Appended to the unit's log, and carried into its fingerprint, like the
 # rtc-context block. Its own budget, for the reason collect_rtc_context documents:
 # a diagnostic must not be able to overwrite the verdict it explains.
-collect_dxg_window() { # host log elapsed-seconds
-  local host=$1 log=$2 elapsed=$3 kernel rc bounds start_utc end_utc
+collect_dxg_window() { # host log remote-start-epoch
+  local host=$1 log=$2 remote_start=$3 kernel rc bounds start_utc end_utc sidecar
+  sidecar=$(dxg_sidecar "$log")
+  # No start instant from the box means no window to bound. Reported as a failed
+  # collection, which is what it is, rather than guessed.
+  if [ -z "$remote_start" ]; then
+    dxg_window_unavailable - - "no clock reading from $host" >"$sidecar"
+    cat "$sidecar" >>"$log"
+    return 0
+  fi
   # Written to a file rather than captured in a command substitution, which runs
   # in a SUBSHELL: the UNIT_PID `run_capped` publishes would be invisible to the
   # lane, so a cancellation could neither relay TERM to this supervisor nor reap
@@ -673,7 +682,7 @@ collect_dxg_window() { # host log elapsed-seconds
   kernel=$log.dxg.$$
   run_capped "$(( CONTEXT_CAP + 60 ))" ssh -o BatchMode=yes -o ConnectTimeout=8 \
     -o ServerAliveInterval=30 -o ServerAliveCountMax=4 \
-    "$host" "$(remote_capped "$CONTEXT_CAP" "$(dxg_window_cmd "$elapsed")")" \
+    "$host" "$(remote_capped "$CONTEXT_CAP" "$(dxg_window_cmd "$remote_start")")" \
     >"$kernel" 2>/dev/null
   rc=$?
   # The bounds the REMOTE used, in its own clock domain -- the only one the log's
@@ -696,17 +705,22 @@ collect_dxg_window() { # host log elapsed-seconds
   # filtered as kernel lines would report zero bursts -- "the bridge was fine" --
   # over a box nobody read, losing the rerun for exactly the unlisted failure this
   # trigger exists to catch.
+  # The block is written to the SIDECAR, which is the collector's own channel and
+  # the only one the trigger, the fingerprint and the record read, and copied into
+  # the log for whoever reads that. See dxg_sidecar for why provenance cannot come
+  # from the log itself.
   if [ "$rc" -ne 0 ]; then
     rm -f "$kernel"
     dxg_window_unavailable "$start_utc" "$end_utc" \
-      "kernel log unreadable on $host (exit $rc)" >>"$log"
-    return 0
+      "kernel log unreadable on $host (exit $rc)" >"$sidecar"
+  else
+    # Filtered HERE rather than on the far side: the filter is the part with a
+    # judgement in it, so it belongs where a fixture can feed it lines directly
+    # instead of behind an ssh no test can reach.
+    dxg_window_summary "$start_utc" "$end_utc" <"$kernel" >"$sidecar"
+    rm -f "$kernel"
   fi
-  # Filtered HERE rather than on the far side: the filter is the part with a
-  # judgement in it, so it belongs where a fixture can feed it lines directly
-  # instead of behind an ssh no test can reach.
-  dxg_window_summary "$start_utc" "$end_utc" <"$kernel" >>"$log"
-  rm -f "$kernel"
+  cat "$sidecar" >>"$log"
 }
 
 rtc_context_cmd() {
@@ -1041,19 +1055,21 @@ write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-r
       # the row names -- the only artifact that holds them, and one this row
       # already points at, so no third place can disagree. `-` for a unit with
       # no window: a local one, or one that never ran.
+      # From the unit's collected-evidence sidecar, never from its log: a log
+      # holds whatever the unit's tests printed (see dxg_sidecar).
       window_start=-
       window_end=-
       bursts=-
-      if [ "$log" != - ] && [ -f "$log" ]; then
-        window=$(sed -n \
-          's/^=== dxg window \([0-9TZ]*\)\.\.\([0-9TZ]*\) (utc) ===$/\1\t\2/p' \
-          "$log" | tail -1)
+      if [ "$log" != - ]; then
+        window=$(dxg_window_bounds "$log")
         if [ -n "$window" ]; then
           window_start=${window%%$'\t'*}
           window_end=${window#*$'\t'}
           # `-` no window, a number a window that was read, `unavailable` a
           # window whose collection failed: three distinguishable states, since
-          # "not collected" and "collected and clean" mean opposite things.
+          # "not collected" and "collected and clean" mean opposite things. A
+          # collection that failed before the box reported its bounds writes `-`
+          # for both of those and `unavailable` here, which is still that state.
           bursts=$(dxg_bursts "$log")
           [ -n "$bursts" ] || bursts=-
         fi
@@ -1543,7 +1559,8 @@ fi
 # after the lane has moved on to its next unit.
 run_unit() { # machine backend host
   local machine=$1 backend=$2 host=$3
-  local log started remote_home wt path_prefix= remote_repo remote_prep remote rc elapsed outcome
+  local log started remote_home remote_probe remote_started wt path_prefix= remote_repo
+  local remote_prep remote rc elapsed outcome
   WRITTEN_FINGERPRINT=
 
   log=$LOGS/$stamp-$machine-$backend.log
@@ -1565,15 +1582,32 @@ run_unit() { # machine backend host
     # would be invisible to the lane's trap. Its 60s budget bounds how
     # long a cancellation can be delayed here, which is the reason that is
     # tolerable where a 900s preparation leg was not.
-    if ! remote_home=$(capped 60 ssh -o BatchMode=yes -o ConnectTimeout=8 \
+    # The probe reads the remote's CLOCK as well as its home, on the same round
+    # trip. The dxg window's start has to be an instant in the clock that
+    # timestamps that box's kernel log, and this is the moment the unit begins on
+    # it; deriving it later by subtracting a locally measured duration assumes the
+    # remote clock advanced continuously meanwhile, which is the assumption a WSL
+    # VM breaks when it resynchronises after a host resume.
+    if ! remote_probe=$(capped 60 ssh -o BatchMode=yes -o ConnectTimeout=8 \
          -o ServerAliveInterval=30 -o ServerAliveCountMax=4 \
-         "$host" 'printf %s "$HOME"' 2>/dev/null) ||
-       [ -z "$remote_home" ]; then
+         "$host" 'printf "%s\n%s\n" "$HOME" "$(date +%s)"' 2>/dev/null) ||
+       [ -z "$remote_probe" ]; then
       say "  $machine/$backend: skip (unreachable)"
       record "$machine" "$backend" skip 0
       update_unit_state "$machine" "$backend" skip
       return 0
     fi
+    remote_home=$(printf '%s\n' "$remote_probe" | sed -n 1p)
+    remote_started=$(printf '%s\n' "$remote_probe" | sed -n 2p)
+    [ -n "$remote_home" ] || {
+      say "  $machine/$backend: skip (unreachable)"
+      record "$machine" "$backend" skip 0
+      update_unit_state "$machine" "$backend" skip
+      return 0
+    }
+    # A box whose `date` said nothing leaves no window to bound; the collection
+    # below reports that as unavailable rather than guessing one.
+    case $remote_started in "" | *[!0-9]*) remote_started= ;; esac
     wt="$remote_home/ocannl-staging-worktrees/sweep"
     # rog needs the CUDA and WSL lib dirs on PATH; harmless elsewhere.
     path_prefix="export PATH=/usr/local/cuda/bin:/usr/lib/wsl/lib:\$PATH;"
@@ -1705,13 +1739,12 @@ run_unit() { # machine backend host
   case $outcome:$backend in
     skip:*) ;;
     *:cuda | *:hip)
-      # The unit's ELAPSED seconds, not its instants: the window is computed on
-      # the box whose log is read, whose wall clock is its own (see
-      # dxg_window_cmd). Measured to here rather than reusing $elapsed, which
-      # stops at the unit's verdict -- the phases between must be inside the
-      # window, since a refusal during them is still this unit's.
+      # The window's start is the remote's own clock at the unit's beginning,
+      # read by the reachability probe; its end is that same clock at collection
+      # time. Both ends therefore come from the clock that timestamps the log, and
+      # nothing is reconstructed from a duration measured on another machine.
       [ -n "$host" ] &&
-        collect_dxg_window "$host" "$log" "$(( $(date +%s) - started ))"
+        collect_dxg_window "$host" "$log" "${remote_started:-}"
       ;;
   esac
   # Only a `fail` can be environment-red: a `timeout` had its process group

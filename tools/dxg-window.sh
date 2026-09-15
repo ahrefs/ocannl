@@ -80,9 +80,11 @@ dxg_window_unavailable() { # start-utc end-utc reason
   printf '=== dxg window: %s vmbus_sendpacket failures ===\n' "$DXG_UNAVAILABLE"
 }
 
+# Reads the sidecar, so a block printed by a unit's tests is not mistaken for one
+# the collector wrote.
 dxg_bursts() { # log
-  sed -n 's/^=== dxg window: \([0-9a-z][0-9a-z]*\) vmbus_sendpacket failures ===$/\1/p' "$1" \
-    2>/dev/null | tail -1
+  sed -n 's/^=== dxg window: \([0-9a-z][0-9a-z]*\) vmbus_sendpacket failures ===$/\1/p' \
+    "$(dxg_sidecar "$1")" 2>/dev/null | tail -1
 }
 
 # Read the kernel's log for the window on the box that ran the unit. The journal
@@ -113,7 +115,7 @@ dxg_bursts() { # log
 # `--since @<epoch>` is accepted by util-linux dmesg (2.41.3 on both sweep boxes);
 # a dmesg without it fails the collection rather than reporting an unbounded ring
 # as this window.
-dxg_window_cmd() { # elapsed-seconds
+dxg_window_cmd() { # remote-start-epoch
   # The probe must see an ENTRY, not merely output: journalctl with no readable
   # kernel journal exits 0 and prints `-- No entries --` on stdout (the
   # explanation goes to stderr), so both a status test and a nonempty test select
@@ -122,15 +124,17 @@ dxg_window_cmd() { # elapsed-seconds
   # that is not a `--` marker" holds whatever journalctl decides to print, which
   # `--quiet` alone does not guarantee.
   #
-  # The bounds are computed ON THE BOX whose log is being read, from the unit's
-  # ELAPSED seconds rather than from this machine's instants. The controller and a
-  # WSL VM do not share a wall clock -- these boxes resynchronise after host
-  # resumes, which is documented in the note as having preceded a burst -- and the
-  # log's timestamps are the remote's, so a remote clock ahead of ours would put
-  # the unit's terminal burst after `--until` and one behind ours would put it
-  # before `--since`, either way reporting a false clean window and losing the
-  # rerun. A duration survives that; an instant does not. The remote also prints
-  # the bounds it used, so the block reports the window that was actually queried.
+  # BOTH bounds are instants of the remote's own clock -- the start read by the
+  # reachability probe when the unit began there, the end read here -- because the
+  # log's timestamps are in that clock and no other. The controller and a WSL VM
+  # do not share a wall clock (these boxes resynchronise after host resumes, which
+  # the note records as having preceded a burst), so a controller instant carried
+  # across would put a terminal burst after `--until` or before `--since`,
+  # reporting a false clean window and losing the rerun; and reconstructing the
+  # start from a locally measured duration assumes the remote clock advanced
+  # continuously through the unit, which is the same assumption in a thinner
+  # disguise. The remote echoes the bounds it used, so the block reports the
+  # window that was actually queried.
   #
   # `+ 1` on the end: a burst timestamped N.xxx in the same second the collection
   # begins is excluded by `--until @N`, and losing a terminal burst to a rounding
@@ -139,7 +143,7 @@ dxg_window_cmd() { # elapsed-seconds
   # time on that box -- so widening is the safe direction, and the reported bound
   # is widened with it so the claim stays the query.
   printf 'dxg_end=$(date +%%s); dxg_end=$((dxg_end + 1)); '
-  printf 'dxg_start=$((dxg_end - %s - 1)); ' "$1"
+  printf 'dxg_start=%s; ' "$1"
   printf 'echo "dxg-window-bounds $dxg_start $dxg_end"; '
   printf 'if command -v journalctl >/dev/null 2>&1 && '
   printf 'journalctl -q _TRANSPORT=kernel -n 1 --no-pager 2>/dev/null | '
@@ -153,6 +157,21 @@ dxg_window_cmd() { # elapsed-seconds
   printf 'else dmesg -T --since @$dxg_start --until @$dxg_end 2>/dev/null; fi'
 }
 
+# Where a unit's collected evidence lives, beside its log rather than inside it.
+# The log is appended by the unit's own test leg, and a test leg can print
+# anything -- this repository's sweep harness dumps dxg FIXTURES on failure, and
+# it runs as a test action inside a sweep unit, so a local cc unit's log can end
+# up holding a complete synthetic burst block. Parsing the log for evidence
+# therefore cannot distinguish what the collector wrote from what the tests
+# printed, and the consequences are not cosmetic: a local unit that never touched
+# /dev/dxg would be marked environment-red and given the expensive serial rerun,
+# and its record row and fingerprint would report a bridge failure. Provenance is
+# the file: only collect_dxg_window writes this one, and only remote GPU units get
+# one at all. The block is ALSO appended to the log, for whoever reads it there.
+dxg_sidecar() { # log -> the path of its collected-evidence file
+  printf '%s.dxg-window' "${1%.log}"
+}
+
 # The block's stable half, for the fingerprint. The log and the run record keep
 # the window, its lines and the exact count; a fingerprint must not, because it is
 # compared BYTEWISE against the previous failure's and a standing environment red
@@ -164,16 +183,7 @@ dxg_window_cmd() { # elapsed-seconds
 # fails in a new way, still moves the fingerprint; the same failure twice does not.
 dxg_fingerprint_lines() { # log
   local block
-  # Only the LAST such block, which is the collector's own: a unit's log is
-  # whatever its test leg wrote plus what the post-unit phases append, and a test
-  # leg can print marker-delimited text of its own -- this repository's sweep
-  # harness dumps its dxg fixtures on failure, and it runs as a test action inside
-  # a sweep unit. A range expression over the whole log would fold those fixture
-  # signatures into the unit's fingerprint and report bridge failures that never
-  # happened.
-  block=$(awk '/^=== dxg window /{ b = "" } { if (b != "" || /^=== dxg window /) b = b $0 "\n" }
-    /^=== dxg window: .* ===$/ { last = b; b = "" } END { printf "%s", last }' \
-    "$1" 2>/dev/null)
+  block=$(cat "$(dxg_sidecar "$1")" 2>/dev/null)
   [ -n "$block" ] || return 0
   # The block's own signature lines, which dxg_window_summary emits uncapped --
   # NOT a re-derivation from the raw lines it shows, which are capped at 40 and
@@ -186,4 +196,22 @@ dxg_fingerprint_lines() { # log
     "") ;;
     *) printf 'dxg window: burst present\n' ;;
   esac
+}
+
+# The window a unit's collected evidence claims, tab-separated, or nothing if it
+# collected none. `-` for both bounds is what a collection that failed before the
+# remote could report them writes, and it is a state of its own: the record must
+# show that unit as `unavailable`, not as one where collection was never tried.
+dxg_window_bounds() { # log
+  sed -n 's/^=== dxg window \([0-9TZ-]*\)\.\.\([0-9TZ-]*\) (utc) ===$/\1\t\2/p' \
+    "$(dxg_sidecar "$1")" 2>/dev/null | tail -1
+}
+
+# Whether a unit's collected evidence makes it environment-red. A POSITIVE count
+# only: `0` is a positive finding the other way (the bridge was fine), and
+# `unavailable` establishes nothing in either direction -- an unread box must not
+# buy a rerun any more than it may certify a clean one. Absent evidence (a local
+# unit, or one that never ran) is likewise not red.
+dxg_window_red() { # log
+  dxg_bursts "$1" | grep -qE '^[1-9][0-9]*$'
 }
