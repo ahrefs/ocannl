@@ -29,7 +29,8 @@ on_error() {
     local_identity_error unsafe_identity_error only_typo_error matrix_error state_first state_same \
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
     capped capped_target remote_opt_in serial_red serial_clean serial_two_inline \
-    serial_many_inline serial_control lanes after_cancel; do
+    serial_many_inline serial_control lanes lane_stop_seed lane_stopped \
+    aggregator_missing stamp_advance after_cancel; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
   done
@@ -1174,6 +1175,107 @@ grep -q '^  minix/multidev_cc: skip (unreachable)$' <<<"$lanes"
   "$(printf '%s\n' m4-max/cc:incremental-pass m4-max/metal:incremental-pass \
     minix/hip:skip minix/multidev_cc:skip rog-nv/cuda:skip | sort)" ]
 
+# The run record (gh-ocannl-977). A complete run's record names the exit kind,
+# every selected unit's outcome with its lane's completion, and today's whole
+# backend->box map -- the last one covering backends this run did not select, so
+# a consumer can age a backend's staleness against the box that owns it now.
+lanes_record=$(sed -n 's/^run:  *//p' <<<"$lanes")
+[ -f "$lanes_record" ]
+[ "$(head -1 "$lanes_record")" = "$(printf 'schema\t1')" ]
+[ "$(awk -F '\t' '$1 == "run" { print $8 }' "$lanes_record")" = complete ]
+[ "$(awk -F '\t' '$1 == "run" { print $5 "\t" $6 }' "$lanes_record")" = \
+  "$(printf 'lane-probe\t0')" ]
+[ "$(awk -F '\t' '$1 == "unit" { print $2 "/" $3 ":" $4 ":" $5 }' "$lanes_record" | sort)" = \
+  "$(printf '%s\n' m4-max/cc:incremental-pass:0 m4-max/metal:incremental-pass:0 \
+    minix/hip:skip:0 minix/multidev_cc:skip:0 rog-nv/cuda:skip:0 | sort)" ]
+[ "$(awk -F '\t' '$1 == "backend" { print $2 ":" $3 }' "$lanes_record")" = \
+  "$(printf '%s\n' cc:m4-max metal:m4-max cuda:rog-nv hip:minix multidev_cc:minix)" ]
+# The log column points at the unit's own log, so a consumer needs no second
+# rule for reconstructing the path a row's diagnostics live in.
+[ -f "$(awk -F '\t' '$1 == "unit" && $3 == "cc" { print $6 }' "$lanes_record")" ]
+
+# A lane that stops before finishing (the exit-2 shape the consumer could not
+# tell from a startup refusal): the record is written anyway, the rows the lane
+# DID write are in it, the units it never reached are `no-row`, and both are
+# marked as belonging to a lane that stopped -- while the other lane, which
+# finished, is not. Provoked by corrupting the unit-state file of the first unit
+# of the local lane, which kills that lane strictly AFTER its history row: the
+# seeding run writes that file rather than the harness recomputing its keyed
+# name, which would only restate what unit_state_path already says.
+lane_stop_seed=$(run_sweep_args --only cc --only metal --only cuda --target lane-stop-probe)
+grep -q '^  m4-max/cc: incremental-pass ' <<<"$lane_stop_seed"
+lane_stop_state=$(ls "$state"/unit-state/m4-max-cc-lane-stop-probe-*.state)
+[ -f "$lane_stop_state" ]
+printf 'schema\t9\n' >"$lane_stop_state"
+set +e
+lane_stopped=$(run_sweep_args --only cc --only metal --only cuda --target lane-stop-probe 2>&1)
+lane_stopped_rc=$?
+set -e
+[ "$lane_stopped_rc" -eq 2 ]
+grep -q '^sweep: lane(s) stopped before finishing: m4-max (exit 2)$' <<<"$lane_stopped"
+lane_stopped_record=$(sed -n 's/^run:  *//p' <<<"$lane_stopped")
+[ -f "$lane_stopped_record" ]
+[ "$(awk -F '\t' '$1 == "run" { print $8 }' "$lane_stopped_record")" = lane-stopped ]
+[ "$(awk -F '\t' '$1 == "unit" { print $2 "/" $3 ":" $4 ":" $5 }' "$lane_stopped_record" | sort)" = \
+  "$(printf '%s\n' m4-max/cc:incremental-pass:1 m4-max/metal:no-row:1 rog-nv/cuda:skip:0 | sort)" ]
+
+# A post-lane harness failure rewrites the exit kind rather than leaving a record
+# that claims `complete` over an exit 2. Provoked by running a copy of the sweep
+# from a directory that holds no aggregate-skips.sh -- the aggregator is resolved
+# beside the script -- on a forced unscoped run, which is the only shape that
+# aggregates. The units all recorded, so their rows stay real; it is the run-level
+# kind that has to tell the truth about how the process ended.
+# Everything the script resolves beside itself is SYMLINKED in and only
+# aggregate-skips.sh is withheld, so the run reaches the aggregation step instead
+# of refusing at startup over some other sibling. Symlinked as a set rather than
+# copied by name: sweep.sh reaches for its neighbours (box-jobs.sh, and the
+# benchmarks fixture parser one level up) and a fixture naming them individually
+# goes red the next time one is added -- which is exactly how this one first
+# failed, on a base that had grown one.
+lonely_tools=$(cd "$(dirname "$sweep")" && pwd)
+mkdir -p "$tmp/lonely/tools" "$tmp/lonely/benchmarks"
+for lonely_sibling in "$lonely_tools"/*; do
+  if [ "$(basename "$lonely_sibling")" = aggregate-skips.sh ]; then continue; fi
+  ln -s "$lonely_sibling" "$tmp/lonely/tools/$(basename "$lonely_sibling")"
+done
+ln -s "$lonely_tools/../benchmarks/fixture_digest.py" "$tmp/lonely/benchmarks/fixture_digest.py"
+[ ! -e "$tmp/lonely/tools/aggregate-skips.sh" ]
+sweep_with_aggregator=$sweep
+sweep=$tmp/lonely/tools/sweep.sh
+set +e
+aggregator_missing=$(run_sweep --force 2>&1)
+aggregator_missing_rc=$?
+set -e
+sweep=$sweep_with_aggregator
+[ "$aggregator_missing_rc" -eq 2 ]
+grep -q '^sweep: skip aggregator is not executable: ' <<<"$aggregator_missing"
+aggregator_missing_record=$(sed -n 's/^run:  *//p' <<<"$aggregator_missing")
+[ "$(awk -F '\t' '$1 == "run" { print $8 }' "$aggregator_missing_record")" = post-run-failed ]
+[ "$(awk -F '\t' '$1 == "unit" { print $2 "/" $3 ":" $4 ":" $5 }' "$aggregator_missing_record")" = \
+  m4-max/cc:pass:0 ]
+
+# The stamp names every per-run artifact, and two invocations a second apart can
+# otherwise choose the same one -- a cancelled run releases the lock inside the
+# second it ends, so its retry can land on top of its logs, fingerprints and
+# record. Seeding the next few seconds' stamps as taken forces the advance
+# whichever second the sweep starts in, rather than relying on it being slow.
+seeded_stamps=$(perl -MPOSIX -e \
+  'print join(" ", map { strftime("%Y%m%dT%H%M%SZ", gmtime(time + $_)) } 0 .. 5)')
+for seeded in $seeded_stamps; do : >"$state/logs/$seeded-seed.log"; done
+stamp_advance=$(run_sweep_args --target stamp-probe)
+advanced_record=$(sed -n 's/^run:  *//p' <<<"$stamp_advance")
+advanced_stamp=$(basename "$advanced_record" -run.tsv)
+for seeded in $seeded_stamps; do
+  if [ "$advanced_stamp" = "$seeded" ]; then
+    printf 'sweep_harness: run stamp %s collided with a seeded artifact\n' "$advanced_stamp" >&2
+    exit 1
+  fi
+done
+# And the advance is what produced that: the run's own history row carries the
+# same advanced stamp, so the row and its artifacts still name one run.
+[ -n "$(awk -F '\t' -v s="$advanced_stamp" '$1 == s && $7 == "stamp-probe"' "$state/history.tsv")" ]
+rm -f "$state"/logs/*-seed.log
+
 # Cancelling a sweep stops EVERY lane: here the local lane's unit is held in its
 # test leg and the rog-nv lane's in its preparation ssh, both under supervisors.
 # TERM to the sweep's pid must be relayed through each lane to its supervisor,
@@ -1217,6 +1319,14 @@ cancel_sweep() { # pid|group
     fi
   done < <(cat "$prefix.opam-pids" "$prefix.ssh-pids")
   [ ! -e "$prefix.busy" ]
+  # A cancelled run ended, so it owes a record too: the rows its lanes wrote
+  # before the signal are real, and the exit kind says why the rest are missing.
+  # Located through the sweep's OWN `run:` line, not by scanning the log
+  # directory: a cancelled run ends before the summary block, so that locator is
+  # the only thing standing between an operator and its record.
+  cancel_record=$(sed -n 's/^run:  *//p' "$prefix.out")
+  [ -f "$cancel_record" ]
+  [ "$(awk -F '\t' '$1 == "run" { print $8 }' "$cancel_record")" = cancelled ]
 }
 # Called directly, not captured: errexit does not reach inside a command
 # substitution, and the assertions are in the function.
@@ -1248,11 +1358,15 @@ printf '# measurement-boxes: m4-max minix rog-nv spare\n' \
 git -C "$main" add benchmarks/fixtures/DIGESTS.txt
 git -C "$main" commit -qm 'add unscheduled declared box'
 git -C "$main" push -q origin master
+records_before=$(ls "$state"/logs/*-run.tsv | wc -l)
 set +e
 matrix_error=$(run_sweep 2>&1)
 matrix_error_rc=$?
 set -e
 [ "$matrix_error_rc" -eq 2 ]
 grep -q "^sweep: declared measurement box 'spare' has no sweep unit$" <<<"$matrix_error"
+# A startup refusal swept nothing and writes NO record: that absence is the
+# signal, and it is what distinguishes this exit 2 from a lane-stopped one.
+[ "$(ls "$state"/logs/*-run.tsv | wc -l)" -eq "$records_before" ]
 
-printf 'sweep execution accounting, RTC context, fingerprinting and skip aggregation: PASS\n'
+printf 'sweep execution accounting, RTC context, fingerprinting, run record and skip aggregation: PASS\n'

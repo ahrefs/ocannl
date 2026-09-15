@@ -1806,6 +1806,38 @@ that they earn a lookup rather than always-loaded space.
   `~/.ocannl-sweep/history.tsv` and never
   exits non-zero for test failures — its exit code is not a verdict, the history file is. A daily
   scheduled task drives it.
+- **The per-run record `~/.ocannl-sweep/logs/<stamp>-run.tsv` is what a consumer reads; the stdout
+  summary is for humans** (gh-ocannl-977). Its absence is itself a verdict: a run that refused at
+  startup swept nothing and writes no record, which is what distinguishes that exit 2 from a
+  lane-stopped one. Tab-separated kind-tagged rows follow a `schema` line, and the sweep prints the
+  record's path as a `run:` line on every exit that writes one, cancellation included — that line is
+  the only locator a cancelled run gives, since it ends before the summary block. The stamp naming
+  it (and every other per-run artifact) is advanced until it names nothing that exists yet —
+  neither a file in the log directory nor a history row: at one-second resolution a run that ends
+  inside a second releases the worktree lock inside it too, so a retry could otherwise overwrite the
+  logs, fingerprints and record of the run it retries, or inherit its rows as its own units. Why a separate file rather than columns on
+  `history.tsv`: history rows are per unit and append-only, so neither the run-level exit kind nor
+  today's backend→box map has a unit row to live on. `test/operations/sweep_harness.sh` pins the
+  record for every shape it builds — lanes, remote skips, a lane stopped mid-lane, a post-lane
+  harness failure, cancellation, and the startup refusal that writes nothing. The kinds, each row's first column, with the columns
+  after it in order:
+  - `run`: stamp, short sha, ref, target (`<all>` when unscoped), slow flag, execution, exit kind —
+    where the exit kind is `complete`, `lane-stopped` (the exit-2 shape whose recorded rows are
+    real), `cancelled`, or `post-run-failed` (every unit recorded, then a harness failure in the
+    post-lane phase, such as the skip aggregation, aborted the run). The kind always agrees with
+    how the process exited: the record is published before those post-lane steps so a failure
+    there leaves a record that explains itself, and each such failure rewrites the kind first.
+  - `unit`: machine, backend, outcome or `no-row`, lane-stopped flag, log path or `-`. One per
+    SELECTED unit, so `no-row` names a unit that should have run and whose lane never got as far as
+    recording it, never one `--only` excluded. The outcome is read back out of the run's OWN
+    `history.tsv` rows under the same lock that writes them, not staged beside them in a second
+    per-unit channel: any second channel can disagree with the history in both directions, and no
+    ordering of the two writes survives a signal landing between them, so the row is the evidence. A lane publishes a completion marker as its last act,
+    so the flag covers a lane's own `die` and a relayed signal alike, and a stopped lane's earlier
+    units keep their real rows (minix records hip before it stops on multidev_cc).
+  - `backend`: backend, machine. One per unit of the execution table whether or not this run
+    selected it — staleness must be aged against the box that runs a backend TODAY, or a pre-move
+    box's passes certify a path that has never run there.
 - `timeout(1)` is not a portable group-killing bound, and the failure is silent in both directions.
   macOS ships none at all, which is why the repo reaches for `perl -e 'alarm N; exec @ARGV'`; and
   where one exists it is not necessarily GNU's — uutils coreutils (Rust, Ubuntu's default since

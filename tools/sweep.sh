@@ -356,6 +356,28 @@ printf '' >>"$HISTORY" || die "cannot append to $HISTORY"
 # included, where a marker the child removes on its way out would not.
 UNIT_PID=
 LANE_PIDS=
+# Which level of the run this shell is: the top level (0) or a lane subshell
+# (1). Only the top level owns run-wide artifacts -- the run record, in
+# particular -- and a lane installs the same traps, so the two cannot be told
+# apart by the trap alone.
+IN_LANE=0
+# The record's locator, printed at most once however the run ends: a cancellation
+# arriving after the completing path has already announced it would otherwise
+# print a second line, and a caller extracting "the" locator would read two paths
+# where the contract promises one. A cancelled run is exactly the one whose
+# record an operator cannot otherwise find, since it ends before the summary
+# block, so the announcement belongs on both paths -- once.
+RUN_RECORD_ANNOUNCED=0
+announce_run_record() {
+  [ "$RUN_RECORD_ANNOUNCED" = 0 ] || return 0
+  RUN_RECORD_ANNOUNCED=1
+  echo "run:     $RUN_RECORD"
+}
+# Declared before the traps below are installed, not where it is later given its
+# path: `relay` reads it, and under `set -u` a signal arriving in between would
+# abort the trap with an unbound variable -- turning a cancellation into a
+# harness error. Empty means no record is owed yet (see write_run_record).
+RUN_RECORD=
 relay() {
   local pid running live=
   running=" $(jobs -rp | tr '\n' ' ') "
@@ -364,6 +386,19 @@ relay() {
   done
   for pid in $live; do kill -TERM "$pid" 2>/dev/null; done
   for pid in $live; do wait "$pid" 2>/dev/null; done
+  # A cancelled run still ended, and the rows its lanes managed to write before
+  # the signal are real; the record says which those were. Only the top level
+  # writes it -- a lane runs this same relay for its own supervisor -- and only
+  # once there is a coordination directory to read the lanes' evidence from. A
+  # failure to write it must not replace the cancellation's exit status, so it
+  # is reported rather than fatal.
+  if [ -n "$RUN_RECORD" ] && [ "$IN_LANE" = 0 ]; then
+    if write_run_record cancelled; then
+      announce_run_record
+    else
+      echo "sweep: cannot write $RUN_RECORD" >&2
+    fi
+  fi
   exit "$1"
 }
 trap 'relay 130' INT
@@ -384,7 +419,38 @@ run_capped() {
   return "$rc"
 }
 
-stamp=$(date -u +%Y%m%dT%H%M%SZ)
+# The stamp names every per-run artifact -- each unit's log, its fingerprint, the
+# skip-coverage report and the run record -- and at one-second resolution two
+# invocations can choose the same one. They cannot RUN concurrently (the
+# per-worktree lock sees to that), but a run that ends inside a second releases
+# the lock inside it too, so a retry -- after a cancellation, notably -- can
+# start in the same second and overwrite the artifacts of the run it is
+# retrying, leaving two invocations' history rows behind one invocation's
+# evidence. So the stamp is advanced until it names nothing that exists yet.
+# Advanced rather than made unique with a pid or subsecond suffix: the stamp is
+# the run's identity in the history's `when` column as well, where consumers
+# read it as a UTC timestamp, so it has to stay exactly this format.
+# A previous invocation claims a stamp by either of the two things it leaves: an
+# artifact named after it, or a history row carrying it. The rows matter as much
+# as the files now that the record derives its units from them -- an invocation
+# killed after recording a remote unit's `skip` leaves a row and no file at all,
+# and a retry reusing that stamp would put the dead run's units in its record.
+stamp_taken() { # stamp -- does anything of a previous run already use it?
+  local candidate
+  for candidate in "$LOGS/$1-"*; do
+    [ -e "$candidate" ] && return 0
+  done
+  awk -F '\t' -v s="$1" '$1 == s { found = 1; exit } END { exit !found }' "$HISTORY"
+}
+stamp=$(date -u +%Y%m%dT%H%M%SZ) || die "cannot read the clock"
+stamp_offset=0
+while stamp_taken "$stamp"; do
+  stamp_offset=$((stamp_offset + 1))
+  [ "$stamp_offset" -le 600 ] || die "no free run stamp near $stamp in $LOGS"
+  stamp=$(perl -MPOSIX -e \
+    'print strftime("%Y%m%dT%H%M%SZ", gmtime(time + $ARGV[0]))' "$stamp_offset") ||
+    die "cannot advance the run stamp"
+done
 # Resolve the ref to a commit ONCE, here, and pin every machine to that commit.
 # Letting each box resolve `origin/master` itself would have them testing
 # different commits whenever a merge lands mid-sweep, which is exactly the
@@ -807,6 +873,10 @@ prep_cmd() {
 # with another lane's. Rows land in COMPLETION order, not table order; every
 # consumer keys on the machine/backend columns (the routine's diff and staleness
 # steps take the most recent row per backend), none on position within a run.
+#
+# This append is also what the run record reads a unit's outcome from: the record
+# derives its unit rows from the rows of THIS stamp rather than from a second
+# per-unit channel written beside them (see write_run_record).
 record() {
   local row
   row=$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
@@ -818,6 +888,99 @@ record() {
     print $h "$ARGV[1]\n" or exit 1;
     close($h) or exit 1;' "$HISTORY" "$row" ||
     die "cannot record $1/$2 outcome in $HISTORY"
+}
+
+# The per-run record (gh-ocannl-977): one machine-readable file beside the logs,
+# holding the three facts a consumer otherwise re-derives from this script's
+# stdout prose -- which kind of exit happened, which rows a stopped lane still
+# wrote, and which box runs a backend TODAY. The scheduled routine that gates
+# five backends reconstructed all three by parsing summary lines against
+# history.tsv, and every sweep feature (lanes, a moved backend) reopened the
+# derivation; five review rounds went into keeping that prose true.
+#
+# A SEPARATE file rather than columns on history.tsv: history rows are per unit
+# and append-only, so the run-level exit kind and today's backend->box map have
+# no unit row to live on -- and an ABSENT record is exactly the startup-refusal
+# signal. A run that died before any lane started swept nothing and says so by
+# leaving no file; a cancellation that early is indistinguishable from it and
+# means the same thing.
+#
+# Kind-tagged rows, as the unit-state files are: one `run` row; one `unit` row
+# per SELECTED unit, so `no-row` names a unit that should have run and did not
+# rather than one `--only` excluded; and one `backend` row per unit of the
+# table, selected or not, because staleness must be aged by rows from the box
+# that runs that backend today whether or not this run touched it. Columns are
+# documented in docs/agent-notes/build-and-test.md.
+#
+# A unit's outcome comes from the HISTORY ROWS OF THIS RUN, read back under the
+# same lock that writes them -- not from a per-unit file staged beside them. That
+# is what makes `no-row` mean exactly "no history row": with a second channel the
+# two can disagree in both directions, and every way of ordering the two writes
+# leaves a window where a signal lands between them (a lane's deferred TERM trap,
+# a group TERM reaching the writer itself) and the record then either hides a
+# real outcome or asserts one that was never recorded. There is no ordering that
+# closes that, so there is no second channel: the row IS the evidence, and the
+# stamp is what makes the rows of this run identifiable (hence the advance).
+#
+# Reading with a shared lock, since a lane may be appending: without it the last
+# line can be read half-written.
+run_rows() { # -> machine, backend, outcome, log for each row of this run
+  perl -e 'use Fcntl ":flock";
+    open(my $h, "<", $ARGV[0]) or exit 1;
+    flock($h, LOCK_SH) or exit 1;
+    while (my $line = <$h>) {
+      chomp $line;
+      my @f = split(/\t/, $line, -1);
+      next unless @f >= 9 && $f[0] eq $ARGV[1];
+      print join("\t", $f[1], $f[2], $f[4], $f[8]), "\n" or exit 1;
+    }
+    close($h) or exit 1;' "$HISTORY" "$stamp"
+}
+
+# Given its path once the lanes have been forked, which is what makes a record
+# owed at all: before that nothing has been swept and the absence is the signal.
+write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-run-failed
+  local kind=$1 unit machine backend host outcome log stopped stage rows
+  stage=$RUN_RECORD.stage.$$
+  rows=$(run_rows) || return 1
+  {
+    printf 'schema\t1\n'
+    printf 'run\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$stamp" "$run_sha" "$REF" "${TARGET:-<all>}" "$SLOW" "$execution" "$kind"
+    for unit in "${UNITS[@]}"; do
+      IFS=: read -r machine backend host <<<"$unit"
+      wanted "$backend" || continue
+      # A lane publishes its completion marker as its last act, so its absence
+      # covers every way a lane can fail to finish -- its own `die`, a signal
+      # relayed to it -- and the top level removes the marker of any lane whose
+      # wait status was nonzero, so the flag cannot disagree with the exit kind.
+      if [ -e "$LANE_DIR/lane-done.$machine" ]; then stopped=0; else stopped=1; fi
+      # The last row this run wrote for the unit, or none. A unit is recorded
+      # once, so `tail -1` only matters if a future change records twice: the
+      # later row is then the current verdict, which is what the history's own
+      # consumers take too.
+      outcome=$(printf '%s\n' "$rows" |
+        awk -F '\t' -v m="$machine" -v b="$backend" \
+          '$1 == m && $2 == b { o = $3; l = $4 } END { if (o != "") print o "\t" l }')
+      if [ -z "$outcome" ]; then
+        log=-
+        outcome=no-row
+      else
+        log=${outcome#*$'\t'}
+        outcome=${outcome%%$'\t'*}
+        [ -n "$log" ] || log=-
+      fi
+      printf 'unit\t%s\t%s\t%s\t%s\t%s\n' "$machine" "$backend" "$outcome" \
+        "$stopped" "$log"
+    done
+    for unit in "${UNITS[@]}"; do
+      IFS=: read -r machine backend host <<<"$unit"
+      printf 'backend\t%s\t%s\n' "$backend" "$machine"
+    done
+  } >"$stage" && mv "$stage" "$RUN_RECORD" || {
+    rm -f "$stage"
+    return 1
+  }
 }
 
 # A unit's summary lines. Written to its lane's buffer rather than to stdout, and
@@ -1490,6 +1653,7 @@ lane_exit() {
 run_lane() { # machine -- only ever as a background job: it ends in `exit`
   local lane=$1 unit machine backend host
   LANE_PIDS=
+  IN_LANE=1
   UNIT_PID=
   LANE_OUT=$LANE_DIR/output.$lane
   trap 'relay 130' INT
@@ -1502,6 +1666,11 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
     run_unit "$machine" "$backend" "$host"
     flush_lane_output || die "cannot publish the $machine/$backend summary to stdout"
   done
+  # The lane's completion marker, published as its last act: the run record
+  # reads its absence as a lane that stopped before finishing, so nothing may
+  # come between this and the `exit` -- and a lane that dies or is signalled
+  # anywhere above leaves it absent without having to know the record exists.
+  : >"$LANE_DIR/lane-done.$lane" || die "cannot mark the $lane lane finished"
   exit 0
 }
 
@@ -1551,6 +1720,14 @@ for lane in "${LANES[@]}"; do
   LANE_PID_LIST+=("$!")
   LANE_PIDS="$LANE_PIDS $!"
 done
+# Only now is a record owed: a run that ends from here on -- completely, with a
+# stopped lane, or cancelled -- swept something and says what. Armed after the
+# fork loop rather than with the coordination directory, because a cancellation
+# in between would otherwise publish a record of nothing but `no-row` units,
+# contradicting the absence that a run which never started a lane must leave.
+# The launch window itself only notes a signal (pending_signal above), so the
+# relay below is the first thing that can reach this.
+RUN_RECORD=$LOGS/$stamp-run.tsv
 trap 'relay 130' INT
 trap 'relay 143' TERM
 [ -z "$pending_signal" ] || relay "$pending_signal"
@@ -1562,10 +1739,41 @@ failed_lanes=
 for ((i = 0; i < ${#LANES[@]}; i++)); do
   wait "${LANE_PID_LIST[$i]}"
   lane_rc=$?
-  [ "$lane_rc" -eq 0 ] || failed_lanes="$failed_lanes ${LANES[$i]} (exit $lane_rc)"
+  if [ "$lane_rc" -ne 0 ]; then
+    failed_lanes="$failed_lanes ${LANES[$i]} (exit $lane_rc)"
+    # The wait status outranks the marker. A lane signalled or killed AFTER
+    # publishing its marker but before its shell exited would otherwise be
+    # recorded `stopped=0` inside a `lane-stopped` run -- a record contradicting
+    # itself and naming no failed lane. Where no status exists to outrank it (the
+    # cancellation path, which never reaches this loop), the marker keeps its own
+    # meaning: a lane that published it had finished its units.
+    rm -f "$LANE_DIR/lane-done.${LANES[$i]}"
+  fi
 done
 LANE_PIDS=
+
+# The record is written before anything that summarises the run, and on BOTH
+# paths out of it: a lane-stopped exit 2 is exactly the case where the consumer
+# most needs to know which rows are real, and it is also the case a script that
+# wrote the record only on the happy path would leave unexplained.
+run_exit_kind=complete
+[ -z "$failed_lanes" ] || run_exit_kind=lane-stopped
+write_run_record "$run_exit_kind" || die "cannot write the run record $RUN_RECORD"
+announce_run_record
 [ -z "$failed_lanes" ] || die "lane(s) stopped before finishing:$failed_lanes"
+
+# Everything past this point runs with every unit recorded, so it cannot change
+# a unit's row -- but it can still abort the run, and a record left saying
+# `complete` over an exit 2 would tell the consumer the opposite of what
+# happened. Every post-lane harness failure therefore rewrites the exit kind
+# first. The record is published BEFORE these steps rather than after them, so
+# that a failure here leaves a record that explains itself instead of the
+# absence that means a startup refusal.
+die_post_run() {
+  write_run_record post-run-failed ||
+    echo "sweep: cannot rewrite $RUN_RECORD as post-run-failed" >&2
+  die "$@"
+}
 
 for unit in "${UNITS[@]}"; do
   IFS=: read -r machine backend host <<<"$unit"
@@ -1578,7 +1786,7 @@ done
 
 echo
 if [ "$FORCE" = 1 ] && [ -z "$TARGET" ]; then
-  [ -x "$AGGREGATE_SKIPS" ] || die "skip aggregator is not executable: $AGGREGATE_SKIPS"
+  [ -x "$AGGREGATE_SKIPS" ] || die_post_run "skip aggregator is not executable: $AGGREGATE_SKIPS"
   aggregate_args=()
   while IFS= read -r backend; do
     [ -n "$backend" ] && aggregate_args+=(--known "$backend")
@@ -1601,8 +1809,8 @@ if [ "$FORCE" = 1 ] && [ -z "$TARGET" ]; then
   } >"$report_stage"
   aggregate_rc=$?
   case $aggregate_rc in
-    0 | 1) mv "$report_stage" "$report" || die "cannot publish $report" ;;
-    *) rm -f "$report_stage"; die "skip aggregation failed (exit $aggregate_rc)" ;;
+    0 | 1) mv "$report_stage" "$report" || die_post_run "cannot publish $report" ;;
+    *) rm -f "$report_stage"; die_post_run "skip aggregation failed (exit $aggregate_rc)" ;;
   esac
   if [ "$aggregate_rc" -eq 1 ]; then
     echo "skip coverage: FAIL -- $report"
