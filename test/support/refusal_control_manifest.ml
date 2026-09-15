@@ -31,6 +31,13 @@ let raw_entries =
         "[scanner-refusal:698fae6b12a0d52a71f789bc962a882b] raw rename exemption";
         "[scanner-refusal:ed6060063668d409574488fcb7fc8897] exemption matches exactly";
       ] );
+    ( "agents_md_size.ml",
+      [
+        "[scanner-refusal:9b96dba1c5b1fe8c4a37c837ecca6ddd] empty or misrouted";
+        "[scanner-refusal:b9a291d865e79e74582ef22daf02fd3a] AGENTS.md";
+        "[scanner-refusal:2bd517cf99304ae6d8358f4bfc6d3995] synthesized guide of";
+        "[scanner-refusal:6e5c887df5f7f65a45a232ef22d04e62] synthesized guide one";
+      ] );
     ( "agent_notes_structure.ml",
       [
         "[scanner-refusal:bc4968cf04b3b7f3212afef877977199] handed the notes";

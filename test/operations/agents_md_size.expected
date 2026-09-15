@@ -1,0 +1,13 @@
+Size of AGENTS.md against the cap Claude Code applies to an imported instructions file. The
+byte count goes to stderr, since a tally in a golden moves on every edit (gh-ocannl-665).
+
+the scan was handed the agent guide, not an empty or misrouted file: true
+AGENTS.md is under 32 KiB, so no session works from a truncated guide: true
+a synthesized guide of exactly 32 KiB is refused: true
+a synthesized guide one byte under the cap is accepted: true
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:9b96dba1c5b1fe8c4a37c837ecca6ddd] empty or misrouted
+  [scanner-refusal:b9a291d865e79e74582ef22daf02fd3a] AGENTS.md
+  [scanner-refusal:2bd517cf99304ae6d8358f4bfc6d3995] synthesized guide of
+  [scanner-refusal:6e5c887df5f7f65a45a232ef22d04e62] synthesized guide one

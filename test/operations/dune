@@ -124,6 +124,7 @@
   (alias runtest-codegen_text_inventory_control)
   (alias runtest-agent_notes_structure)
   (alias runtest-changelog_unreleased_scan)
+  (alias runtest-agents_md_size)
   (alias runtest-config_usage_scan)
   (alias runtest-config_usage_scan_control)
   (alias runtest-config_usage_scan_refusal_control)
@@ -233,6 +234,7 @@
   (alias runtest-model_default_placements)
   (alias runtest-agent_notes_structure)
   (alias runtest-changelog_unreleased_scan)
+  (alias runtest-agents_md_size)
   (alias runtest-codegen_text_inventory)
   (alias runtest-codegen_text_inventory_control)
   (alias runtest-config_usage_scan)
@@ -5266,6 +5268,33 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff changelog_unreleased_scan.expected changelog_unreleased_scan.actual)))
+
+; AGENTS.md is imported into every session through CLAUDE.md, and Claude Code truncates an imported
+; instructions file at 32 KiB -- silently, from the end. The guide crossed the cap one review-fix
+; bullet at a time; the mechanisms now live in docs/agent-notes/ and this holds the line.
+
+(executable
+ (name agents_md_size)
+ (modules agents_md_size)
+ (libraries base stdio test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- links no backend: it measures AGENTS.md as bytes.
+ (target agents_md_size.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config ../../AGENTS.md)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:agents_md_size.exe} ../../AGENTS.md))))
+
+(rule
+ (alias runtest-agents_md_size)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff agents_md_size.expected agents_md_size.actual)))
 
 ; gh-ocannl-909: consecutive runs of one routine execute in order on every backend without host
 ; synchronization between them -- an executed probe of the queue-ordering invariant each backend's
