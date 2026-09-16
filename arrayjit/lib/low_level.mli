@@ -1033,6 +1033,15 @@ val rewrite_one_hot_reductions : ?static_indices:Indexing.static_symbol list -> 
     Unmatched or unsupported reductions are left unchanged. Called internally by [optimize] between
     [simplify_llc] and [eliminate_common_subexpressions]; exposed for testing. *)
 
+val writes_of_stmt : t -> Set.M(Tnode).t
+(** The tensor nodes a statement writes, at any depth. *)
+
+val reads_of_body : t -> Set.M(Tnode).t
+(** The tensor nodes a statement reads through [Get], at any depth. *)
+
+val scalar_mentions_tn : Tnode.t -> scalar_t -> bool
+(** Whether a scalar reads the node, descending into scope bodies and dynamic index values. *)
+
 val eliminate_common_subexpressions : t -> t
 (** Eliminates common subexpressions within each statement's scalar expression tree. Replaces
     duplicate [Local_scope] nodes (structurally identical modulo [scope_id]) with [Get_local]
