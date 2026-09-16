@@ -77,7 +77,10 @@ let rec has_opaque (stmt : LL.t) =
   match stmt with
   | LL.Staged_compilation _ | LL.Workgroup_barrier -> true
   | LL.Seq (a, b) -> has_opaque a || has_opaque b
-  | LL.For_loop { body; _ } | LL.Scan_loop { body; _ } | LL.If { body; _ } -> has_opaque body
+  | LL.For_loop { body; _ } -> has_opaque body
+  | LL.Scan_loop { carried; body; _ } ->
+      List.exists carried ~f:(fun (c : LL.carried) -> scalar_has_opaque c.init) || has_opaque body
+  | LL.If { cond = c, _; body } -> scalar_has_opaque c || has_opaque body
   | LL.Tile_mma { fallback; _ } -> has_opaque fallback
   | LL.Set { llsc; _ } | LL.Set_local (_, llsc) -> scalar_has_opaque llsc
   | LL.Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar_has_opaque v || scalar_has_opaque llsc
@@ -383,6 +386,13 @@ let find_normalizer r (a : int) : normalizer option =
 let state_prec (tn : Tn.t) =
   match Lazy.force tn.Tn.storage_prec with Ops.Double_prec _ as p -> p | _ -> Ops.single
 
+(* The most negative finite value of a state precision. The masking guards compare against it rather
+   than against [-inf]: a C compiler's finite-math licence ([cc_backend_fast_math], on in the same
+   [approximate] profile that turns this rewrite on) may fold a comparison with an infinity, never
+   one between a runtime value and a finite constant. A score at or below it is masked for every
+   purpose -- its exponential underflows to 0 against any live score. *)
+let lowest_finite = function Ops.Double_prec _ -> -.Float.max_value | _ -> -3.4028234663852886e38
+
 let emit_normalizer (nz : normalizer) : LL.t =
   let open LL in
   let m_st = scalar_node ~label:"online_max" ~like:nz.m (state_prec nz.m) in
@@ -397,15 +407,17 @@ let emit_normalizer (nz : normalizer) : LL.t =
   (* A row whose prefix is entirely masked ([-inf] scores) keeps [m' = -inf], where the rescaling
      factor would be [exp (-inf - -inf) = nan]; its carried normalizer stays 0 until the first live
      score, whose rescaling of the empty prefix is [exp (-inf - x) = 0]. The guard also asks the
-     score itself: [max] drops a NaN score against [-inf], and only [-inf] may be dropped -- a NaN
-     score reaches [exp (nan - m')] and poisons the normalizer, as in the composed form. And an
-     all-masked step carries the normalizer UNCHANGED rather than writing zero: zero for a genuine
-     prefix, and a poison already there stays. *)
-  let neg_inf v = binop Ops.Cmpeq v (Constant Float.neg_infinity) in
+     score itself: [max] drops a NaN score against [-inf], and only a masked score may be dropped --
+     a NaN score reaches [exp (nan - m')] and poisons the normalizer, as in the composed form. And
+     an all-masked step carries the normalizer UNCHANGED rather than writing zero: zero for a
+     genuine prefix, and a poison already there stays. "Masked" is a comparison against the format's
+     lowest finite value ([lowest_finite]), never against [-inf] itself. *)
+  let masked v prec = Binop (Ops.Cmple, (v, prec), (Constant (lowest_finite prec), prec)) in
+  let m_masked = masked m_next (state_prec nz.m) in
   let l_next =
     apply_op (Ops.Ternop Ops.Where)
       [|
-        binop Ops.And (neg_inf m_next) (neg_inf (Get_local x));
+        binop Ops.And m_masked (masked (Get_local x) (state_prec nz.x));
         l_prev;
         binop Ops.Add
           (binop Ops.Mul l_prev (exp_ (binop Ops.Sub m_prev m_next)))
@@ -417,7 +429,7 @@ let emit_normalizer (nz : normalizer) : LL.t =
      NaN. The state stays 0 so the first live score can rescale an empty prefix; the tensor gets the
      composed NaN, which the next live score's write overwrites and a fully masked row keeps. *)
   let l_stored =
-    apply_op (Ops.Ternop Ops.Where) [| neg_inf m_next; Constant Float.nan; Get_local l.next |]
+    apply_op (Ops.Ternop Ops.Where) [| m_masked; Constant Float.nan; Get_local l.next |]
   in
   let body =
     unflat_lines

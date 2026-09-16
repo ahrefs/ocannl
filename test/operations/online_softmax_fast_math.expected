@@ -1,4 +1,4 @@
-regime: cc_backend_fast_math=false (NaN-propagation claims asserted)
+regime: cc_backend_fast_math=true (NaN-propagation claims skipped: finite-math-only makes them undefined in both forms)
 --- leg 1: the gate -- key off keeps the composed form ---
 composed: no scan in the routine: true
 composed: the routine writes seq^2-sized intermediates: true

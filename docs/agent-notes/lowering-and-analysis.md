@@ -375,5 +375,10 @@ files.
   `[seq, seq]` buffers disappear -- a lineage decision binds every later routine, and the composed
   backward reads the scores with value-width multiplicity, so a forced-virtual score chain is
   replayed `d_v`-fold there; leave the score matrix to `virtualize_max_inline_reduction` and pin
-  both readings (`test/operations/online_softmax.ml` leg 3).
+  both readings (`test/operations/online_softmax.ml` leg 3); (c) an emitted guard never compares
+  against `-inf` -- `cc_backend_fast_math` (in the same `approximate` profile) is a finite-math
+  licence under which the C compiler folds such a comparison, which turned masked-prefix rows
+  into NaN; compare against the format's lowest finite value (`Online_softmax.lowest_finite`),
+  and rerun the test under the flag (`runtest-online_softmax_fast_math`), where NaN-propagation
+  claims are undefined in both forms and reported skipped.
 

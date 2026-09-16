@@ -41,6 +41,18 @@ module LL = Ir.Low_level
 module Tn = Ir.Tnode
 module Online_softmax = Ir.Online_softmax
 
+(* Under the cc backend's fast-math licence ([cc_backend_fast_math], on in the same [approximate]
+   profile as the rewrite), finite-math-only makes NaN propagation undefined in BOTH forms, so the
+   NaN-propagation claims are reported skipped there and the masked-prefix claims -- the ones the
+   licence could have folded -- carry the run. The dune rule [runtest-online_softmax_fast_math] is
+   that run, with its own golden. *)
+let fast_math = Utils.get_global_flag ~default:false ~arg_name:"cc_backend_fast_math"
+let backend_name = Utils.get_global_arg ~arg_name:"backend" ~default:"cc"
+
+let nan_claim name ok =
+  if fast_math then Verdict.skipped ~aggregation:`Outside_sweep ~backend:backend_name name
+  else p name ok
+
 let batch = 2
 
 (* Distinct from every other extent in the models, so a node with two axes of this extent is one of
@@ -116,8 +128,10 @@ let report label (got : float array) =
        (Array.to_list (Array.map (Array.sub got ~pos:0 ~len:8) ~f:(Printf.sprintf "%.9g"))))
 
 let () =
-  eprintf "backend: %s (not part of the golden)\n%!"
-    (Utils.get_global_arg ~arg_name:"backend" ~default:"cc");
+  eprintf "backend: %s (not part of the golden)\n%!" backend_name;
+  printf "regime: cc_backend_fast_math=%b (NaN-propagation claims %s)\n" fast_math
+    (if fast_math then "skipped: finite-math-only makes them undefined in both forms"
+     else "asserted");
   printf "--- leg 1: the gate -- key off keeps the composed form ---\n";
   let composed = forward ~on:false ~layers:1 ~d_k:8 ~prefix:0 () in
   p "composed: no scan in the routine" (scans composed.optimized = 0);
@@ -229,6 +243,8 @@ let () =
     let x = mk "x" and nn = mk "n" and e = mk "e" in
     let m = mk1 "m" and y = mk1 "y" and l = mkl "l" in
     List.iter [ x; nn; e; m; y; l ] ~f:B.materialize;
+    let v = mk1 "v" in
+    B.virtualize v;
     let op o args = LL.apply_op o args in
     let cell tn = B.get tn [| B.fixed 0 |] in
     let stmt = function
@@ -256,6 +272,18 @@ let () =
       | `Read_l -> B.set_at y (B.fixed 0) (cell l)
       | `C_init_cell -> B.set_at l (B.fixed 0) (B.c 0.)
       | `Opaque -> LL.Staged_compilation (fun () -> PPrint.empty)
+      | `Opaque_cond ->
+          (* Staged code reachable only through a guard's condition, inside a scope body. *)
+          let scope =
+            LL.Local_scope
+              {
+                id = LL.get_scope v;
+                orig_indices = [||];
+                mint = LL.Inlined_computation;
+                body = LL.Staged_compilation (fun () -> PPrint.empty);
+              }
+          in
+          LL.If { cond = (scope, Ir.Ops.single); body = LL.Noop }
     in
     (LL.unflat_lines (List.map order ~f:stmt), x, l)
   in
@@ -282,6 +310,8 @@ let () =
     (declined [ `A_init; `A; `Opaque; `N; `E; `C_init; `C ]);
   p "staged code outside that span is no objection"
     (scans_of (rewritten [ `Opaque; `A_init; `A; `N; `E; `C_init; `C ]) = 1);
+  p "staged code reachable only through a guard's condition inside the span is declined too"
+    (declined [ `A_init; `A; `N; `Opaque_cond; `E; `C_init; `C ]);
   p "a whole-node zeroing of a normalizer wider than the reduction's cells is declined"
     (declined ~l_dims:[| 2 |] [ `A_init; `A; `N; `E; `C_init; `C ]);
   p "the same reduction with a cell-wise zeroing is accepted: the scan writes what the fill did"
@@ -304,8 +334,9 @@ let () =
   let c_nan, o_nan = both "os_nan_seq" poisoned in
   eprintf "normalizers for [nan; -inf; 0; 1; 2]: composed %g online %g (not part of the golden)\n%!"
     c_nan o_nan;
-  p "composed: a NaN score ahead of a masked one poisons the normalizer" (Float.is_nan c_nan);
-  p "rewritten: the all-masked step after the NaN keeps the poison" (Float.is_nan o_nan);
+  nan_claim "composed: a NaN score ahead of a masked one poisons the normalizer"
+    (Float.is_nan c_nan);
+  nan_claim "rewritten: the all-masked step after the NaN keeps the poison" (Float.is_nan o_nan);
   let c_fin, o_fin = both "os_masked_seq" masked in
   eprintf
     "normalizers for [-inf; -inf; 0; 1; 2]: composed %.9g online %.9g (not part of the golden)\n%!"
@@ -315,8 +346,8 @@ let () =
   let c_all, o_all = both "os_all_masked" (Array.create ~len:n Float.neg_infinity) in
   eprintf "normalizers for an all-masked row: composed %g online %g (not part of the golden)\n%!"
     c_all o_all;
-  p "a fully masked row leaves the composed normalizer NaN" (Float.is_nan c_all);
-  p "and the rewritten normalizer stores that NaN too, though its carried state stayed zero"
+  nan_claim "a fully masked row leaves the composed normalizer NaN" (Float.is_nan c_all);
+  nan_claim "and the rewritten normalizer stores that NaN too, though its carried state stayed zero"
     (Float.is_nan o_all);
   let rec carried_of = function
     | LL.Scan_loop { carried; _ } -> Some carried
@@ -344,10 +375,16 @@ let () =
      masked position -- which, under the prefix mask, is every row. *)
   let composed = forward ~mask_fill:Float.nan ~on:false ~layers:1 ~d_k:8 ~prefix:3 () in
   let fused = forward ~mask_fill:Float.nan ~on:true ~layers:1 ~d_k:8 ~prefix:3 () in
-  p_all "the composed output is NaN in every row: every row has a NaN-filled position"
-    (Array.to_list composed.values) ~f:Float.is_nan;
-  p_all2 "the rewritten output is NaN exactly where the composed output is" fused.values
-    composed.values ~f:(fun f c -> Bool.equal (Float.is_nan f) (Float.is_nan c));
+  if fast_math then (
+    Verdict.skipped ~aggregation:`Outside_sweep ~backend:backend_name
+      "the composed output is NaN in every row: every row has a NaN-filled position";
+    Verdict.skipped ~aggregation:`Outside_sweep ~backend:backend_name
+      "the rewritten output is NaN exactly where the composed output is")
+  else (
+    p_all "the composed output is NaN in every row: every row has a NaN-filled position"
+      (Array.to_list composed.values) ~f:Float.is_nan;
+    p_all2 "the rewritten output is NaN exactly where the composed output is" fused.values
+      composed.values ~f:(fun f c -> Bool.equal (Float.is_nan f) (Float.is_nan c)));
   printf "--- leg 8b: sibling lowerings of one rewritten program hit the analysis cache ---\n";
   (* Placement arms and autotune candidates re-lower one program; the minted locals must be the same
      nodes each time, or the identity-keyed analysis cache misses on every sibling. *)
