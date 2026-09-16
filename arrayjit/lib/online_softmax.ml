@@ -530,6 +530,13 @@ let hoist r ~ls (n : nest) : LL.t option =
       | Idx.Fixed_idx _ -> true
       | _ -> false)
   in
+  (* Sound when the moved loops address distinct cells: every inner loop occurs in the target's
+     indices as a PLAIN iterator ([mentions] never looks inside an affine index), so for fixed outer
+     values two inner-loop tuples that differ in any symbol differ in that symbol's plain entry, and
+     no two contributions moved past each other land in one cell. A loop that reaches the target
+     only through an affine index, [o[i + j]], counts as inner and fails this test -- it would fold
+     distinct pairs onto one cell and reorder their sum. The moved loops must not be reduction loops
+     either, which the same test says: a loop absent from the target reduces. *)
   let sound =
     (not (List.is_empty inner))
     && plain_loops wi && plain_loops vi

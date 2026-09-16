@@ -250,7 +250,9 @@ let () =
     let pp = mk "p" and ws = List.init 10 ~f:(fun k -> mk ("w" ^ Int.to_string k)) in
     let vals = B.node_factory ~first_id:48600 ~dims:[| n; width |] () "vals" in
     let out = B.node_factory ~first_id:48700 ~dims:[| width |] () "out" in
-    List.iter ((pp :: ws) @ [ vals; out ]) ~f:B.materialize;
+    (* A target whose cell is [t + j]: distinct (t, j) pairs collide. *)
+    let out2 = B.node_factory ~first_id:48701 ~dims:[| n + width - 1 |] () "out2" in
+    List.iter ((pp :: ws) @ [ vals; out; out2 ]) ~f:B.materialize;
     let op o args = LL.apply_op o args in
     let cell tn = B.get tn [| B.fixed 0 |] in
     let stmt = function
@@ -312,6 +314,23 @@ let () =
                       (op (Ir.Ops.Binop Ir.Ops.Add)
                          [|
                            B.get out [| B.iter j |];
+                           op (Ir.Ops.Binop Ir.Ops.Mul)
+                             [| B.get w [| B.iter t |]; B.get vals [| B.iter t; B.iter j |] |];
+                         |])));
+            ]
+      | `PV_affine ->
+          let t = B.sym () and j = B.sym () in
+          let w = List.last_exn ws in
+          let cell = [| B.aff [ (1, t); (1, j) ] 0 |] in
+          LL.unflat_lines
+            [
+              B.zero out2;
+              B.loop_n t n
+                (B.loop_n j width
+                   (B.set out2 cell
+                      (op (Ir.Ops.Binop Ir.Ops.Add)
+                         [|
+                           B.get out2 cell;
                            op (Ir.Ops.Binop Ir.Ops.Mul)
                              [| B.get w [| B.iter t |]; B.get vals [| B.iter t; B.iter j |] |];
                          |])));
@@ -436,6 +455,8 @@ let () =
   let locals llc = Ll_test.count_stmt ~f:(function LL.Declare_local _ -> true | _ -> false) llc in
   p "the value reduction is hoisted through a ten-nest elementwise chain from the probabilities"
     (locals (rewritten (composed @ [ `D; `Chain; `PV ])) = 2);
+  p "a reduction whose target cell is [t + j] is not hoisted: distinct pairs share a cell"
+    (locals (rewritten (composed @ [ `D; `Chain; `PV_affine ])) = 1);
   p "an integer normalizer node is declined: its own reduction truncated after every step"
     (declined ~l_prec:Ir.Ops.int32 composed);
   p "an auxiliary subtraction and exponential ahead of the normalizer's own do not hide it"
