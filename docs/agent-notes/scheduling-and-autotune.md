@@ -739,6 +739,62 @@ files.
   template every report starts from, `Autotune.no_search_report`, therefore takes `~timing` — it is
   a function of the objective rather than a constant, which is the only reason the field can be
   plain (the option it briefly had existed solely to let that constant exist).
+- **A batched per-launch reading is not comparable to a synchronized round trip, on any constant**
+  (gh-ocannl-994). `autotune_timing_modes` bracketed its `Queued` reading from below at
+  `floor_ms / 16`, where `floor_ms` is a minimum over one-launch-plus-one-sync round trips. Those
+  are two different physical quantities — the round trip includes exactly the host synchronization
+  queueing exists to amortize away — so the fraction between them is the backend's sync cost over
+  its launch cost, not a noise allowance. Measured over 534 runs of that instrument on five hosts,
+  four backends and loads from idle to 6x oversubscription, it spans **0.0077 to 1.2**: on Linux
+  `multidev_cc` the worker-domain round trip is 20-57 us against a 0.4-0.5 us amortized launch,
+  while on `cc` the round trip *is* about one launch. That 160x spread is wider than the factor of
+  `depth` such a check has to resolve, so the divisor had no admissible value — it refused 23% of
+  the sweep's non-contended readings, all on Linux `multidev_cc` (30 of 30 on one box), and stayed
+  green only because those readings were usually flagged `contended` and took the claim's escape
+  hatch. A bound on a batched reading belongs on the SAME quantity, and specifically on the WINDOW
+  the reading is a minimum over: the timed batches and their summed wall, which `time_routine`
+  reports through `Autotune.on_timed_window` (payload: `~samples` — counted by the loop, not
+  restated from its result, so a test can hold the two against each other — `~wall_ms` and
+  `~median_wall_ms`). Not the whole call — its wall also holds the warmup
+  and the calibration's synchronized singles, and on a backend whose round trip is two orders of
+  magnitude above an amortized launch those few dozen singles are ~40% of the call against tens of
+  thousands of timed dispatches, so a whole-call mean is diluted by construction and a stall in the
+  untimed part moves it without moving the reading. And within that window, the MEDIAN batch
+  rather than the mean: `contended` is declared on a MAJORITY of the window's batches exceeding
+  twice its floor, so the regime a claim must survive is exactly the one a median is unmoved over,
+  while one arbitrarily long batch among 64 moves the mean without limit (measured on the same 342
+  runs: the minimum sat at 0.19 of its window's median at worst, against 0.064 of its mean).
+  Against either the ratio is at most 1 by construction (min ≤ the middle of the same samples),
+  which makes the refusal of a twice-divided reading structural rather than calibrated: it cannot
+  exceed `median / depth`, so a bound at `2 * median / depth` refuses it at every depth with
+  nothing measured, and a per-batch reading overshoots a `2 * median` upper side by `depth / 2`.
+  The trade to know: a statistic with a longer tail above the minimum refuses a division by the RUN
+  count more often (the mean's tail reaches 15x, the median's 1.35x) and false-fails on precisely
+  the stalls the bound exists to survive — the guaranteed refusal is the depth one, and a
+  shallow-depth regime where an error is inside the envelope's own factor is a skip, not a pass —
+  and that skip is gated on the DEPTH, never on a quantity derived from the reading under test,
+  which decides whether to check using the very number in question (it passed a per-batch reading
+  at depth 2 in review). The gate is DERIVED, not measured: `sample_min` declares `contended` when
+  at least half a window's batches exceed twice its minimum, so in any window these claims judge
+  the median is at most TWICE the minimum. A per-batch reading is that minimum, so an
+  `f * median / depth` upper side refuses it once `depth > f * (median / minimum)` — `depth > 4` at
+  `f = 2` — and the low side admits a correct reading from `depth >= 4` by the same bound. Each side
+  therefore gates at its own threshold, 5 and 4 rather than one shared 5, and both are structural on every window not already bypassed. A fleet-measured gate
+  stood here for one round and was 32, which would have left depths 5 to 31 unchecked; read the
+  sweep's tail back through the invariant instead — a window measured below half its median was
+  necessarily contended. `Isolated` keeps ONE side, against the round trip (`>= floor/3`): at depth
+  1 a window-anchored upper side is a theorem, and a round-trip one compares two separately sampled
+  windows, which a uniformly delayed window does not report as contended. The error it would have
+  refused — a window summed instead of minimized — belongs on the injected clock, where it needs no
+  device and no second window.
+  The dispersion argument that rejected the mean for `Isolated` (a stall-cut 6-dispatch call read
+  22x its own minimum, gh-ocannl-851) does not transfer to `Queued`: a stall lands inside one batch
+  of `depth` dispatches among `samples` batches, so it moves the mean by a fraction of itself.
+  Recipe for re-deriving any such constant: the instrument prints its raw readings to stderr as
+  "(not part of the golden)" including both contention flags, so running the built exe in a loop
+  against a spinner-generated load ladder (`_build/default/test/operations/`, `OCANNL_BACKEND=...`
+  pinned) yields the distribution directly — and CPU-backend depths sit at the 200 cap, Metal's at
+  31-80, HIP's at 200-750 and CUDA's at ~1700, so one box cannot stand in for the fleet.
 - The schedule-cache directory carries one key-regime stamp, independent of the serialized entry's
   `entry_version` (gh-ocannl-835). Bump `Schedule_cache.cache_regime_version` whenever
   `key_components` changes: the next cache-open deletes every `.sexp` entry under an older or
