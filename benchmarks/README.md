@@ -101,8 +101,9 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   letters, digits, dots, underscores, and hyphens. The same IDs key cross-box sweep log paths, so
   path separators and platform-specific filename punctuation are refused before a file is written.
   The current declaration names `m4-max` (the Apple M4 Max/macOS measurement host), `minix`, and
-  `rog-nv`. The Metal reports predate per-origin recording, so `m4-max` deliberately has no rows
-  yet: its absence is now an explicit missing-record warning rather than an omitted host.
+  `rog-nv`. The Metal reports before gh-ocannl-483 predate per-origin recording, so `m4-max` has
+  rows only for the fixtures that report is on (`gpt2_mini` and the long-context legs); for the
+  others its absence is an explicit missing-record warning rather than an omitted host.
   - **Entries are per box, and today the boxes differ.** `mlp_small` and `gpt2_mini` hash
     differently on minix and rog-nv at identical sizes — two venvs, two numpy streams, one
     workload spec — so `report-hip.md` and `report-gh675-cuda.md` are **not cross-box
