@@ -1826,8 +1826,9 @@ that they earn a lookup rather than always-loaded space.
 - **The per-run record `~/.ocannl-sweep/logs/<stamp>-run.tsv` is what a consumer reads; the stdout
   summary is for humans** (gh-ocannl-977). Its absence is itself a verdict: a run that refused at
   startup swept nothing and writes no record, which is what distinguishes that exit 2 from a
-  lane-stopped one. Tab-separated kind-tagged rows follow a `schema` line — **2** since the `unit`
-  row gained the dxg fields, and a consumer picks its parser from that number (the per-unit *state*
+  lane-stopped one. Tab-separated kind-tagged rows follow a `schema` line — **3** since the dxg
+  count gained its fourth value (`vm-replaced`); **2** added the dxg fields to the `unit` row, and a
+  consumer picks its parser from that number (the per-unit *state*
   files under `unit-state/` carry an unrelated schema 1 of their own) — and the sweep prints the
   record's path as a `run:` line on every exit that writes one, cancellation included — that line is
   the only locator a cancelled run gives, since it ends before the summary block. The stamp naming
@@ -1848,10 +1849,16 @@ that they earn a lookup rather than always-loaded space.
     there leaves a record that explains itself, and each such failure rewrites the kind first.
   - `unit`: machine, backend, outcome or `no-row`, lane-stopped flag, log path or `-`, then the
     unit's dxg window start and end and its `vmbus_sendpacket failed` count (gh-ocannl-979). That
-    count has **three** permitted values, and a consumer must not validate it as numeric: `-` for a
+    count has **four** permitted values, and a consumer must not validate it as numeric: `-` for a
     unit with no window (a local one, or one that never ran), a number for a window that was read,
-    and `unavailable` where the collection itself failed. They mean different things — "nobody read
-    the box" is not "the bridge was fine", and only the middle one is a positive finding. One per
+    `unavailable` where the collection itself failed, and `vm-replaced` where the guest was
+    destroyed and recreated mid-window. They mean different things — "nobody read the box" is not
+    "the bridge was fine", and only the number is a positive finding about the bridge. `vm-replaced`
+    is the strongest of the four and is why the schema is 3: the window spans two boots, so its
+    lines describe no single machine, and a fresh guest that came up clean would otherwise report
+    the `0` that reads as "the bridge was fine" over a machine that had ceased to exist. A unit
+    carrying it is environment-red, and where its outcome is one a rerun cannot reach (an `error`,
+    which is what a mid-unit replacement produces) the sweep says so on its own output line. One per
     SELECTED unit, so `no-row` names a unit that should have run and whose lane never got as far as
     recording it, never one `--only` excluded. The outcome is read back out of the run's OWN
     `history.tsv` rows under the same lock that writes them, not staged beside them in a second
