@@ -1,0 +1,35 @@
+--- leg 1: the gate -- key off keeps the composed form ---
+composed: no scan in the routine: true
+composed: the routine writes seq^2-sized intermediates: true
+composed: every output is finite: true
+--- leg 2: causal attention, head width under the recompute cap ---
+rewritten: exactly one scan, the attention's online normalizer: true
+the pass changes the raw lowering: true
+the pass is idempotent on its own output: true
+rewritten: no seq^2-sized node is written at all: true
+rewritten output matches the composed output within 1e-5 relative: true
+--- leg 3: head width above the recompute cap -- the cap owns the scores ---
+seq^2 buffers: composed 2, rewritten 1
+rewritten: the scores are the one seq^2 buffer left (the probabilities are gone): true
+rewritten output matches the composed output within 1e-5 relative: true
+a cap admitting the head width recomputes the scores: no seq^2 buffer at all: true
+recomputed scores give the same output within 1e-5 relative: true
+--- leg 4: masked key prefixes -- the recurrence survives -inf scores ---
+rewritten: every output is finite: true
+rewritten output matches the composed output within 1e-5 relative: true
+--- leg 5: two stacked blocks -- one scan each ---
+rewritten: two scans: true
+rewritten: no seq^2-sized node is written: true
+rewritten output matches the composed output within 1e-5 relative: true
+--- leg 6: training -- parameter gradients agree with the composed forward ---
+the loss agrees within 1e-5 relative: true
+parameters with gradients: 4
+the same parameters carry gradients in both runs: true
+w_q_attn0.grad agrees within 1e-4 relative: true
+w_q_attn0.grad is not identically zero: true
+w_k_attn0.grad agrees within 1e-4 relative: true
+w_k_attn0.grad is not identically zero: true
+w_v_attn0.grad agrees within 1e-4 relative: true
+w_v_attn0.grad is not identically zero: true
+w_o_attn0.grad agrees within 1e-4 relative: true
+w_o_attn0.grad is not identically zero: true

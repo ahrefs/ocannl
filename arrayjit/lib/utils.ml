@@ -168,6 +168,8 @@ let known_config_keys =
       "tf32_matmuls";
       "narrow_compute_f32";
       "fp16_arithmetic";
+      (* Algebraic rewrites over lowered code *)
+      "online_softmax";
       (* Identifiers and other *)
       "ll_ident_style";
       "cd_ident_style";
@@ -226,6 +228,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "inline_simple_computations";
         "inline_complex_computations";
         "memory_budget";
+        "online_softmax";
       ] );
     ( Code_borne,
       "it changes the assignments the front end builds, hence the code they lower to",
@@ -1141,6 +1144,9 @@ fp16_arithmetic=true
 # f32 matmul operands computed at tf32 (10-bit mantissa, f32 accumulation) on the backends with
 # a tf32 tile shape (CUDA sm_80+); a no-op elsewhere.
 tf32_matmuls=true
+# The online-softmax attention rewrite (gh-ocannl-483): the softmax normalizer's summation is
+# reassociated into a per-row scan, and the probabilities are never materialized.
+online_softmax=true
 # The C compiler's licence to reassociate (fast-math) and to contract a*b+c into one rounding
 # across statements (fp-contract=fast). Both change results per compiler and target, which is
 # why `reproducible` pins them off and `performance` leaves them at their defaults.

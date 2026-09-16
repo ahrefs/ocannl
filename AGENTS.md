@@ -241,3 +241,4 @@ without skill support read the files directly. In brief:
 - New primitive ops: `arrayjit/lib/ops.ml` (+ `Ir.Ops`), wired into `tensor/operation.ml`
 - New tensor convenience functions: `tensor/operation.ml` (use `%cd` for forward/backprop)
 - Shape/projection changes: `tensor/shape.ml`, `tensor/row.ml`, `arrayjit/lib/indexing.ml`
+- Algebraic rewrites over raw lowered code (pattern-directed substitutions that change the computation, each behind its own config key): a member of the `arrayjit/lib/rewrites.ml` tier, which `Assignments.lower` runs to a fixpoint ahead of the analyses; `online_softmax.ml` is the exemplar, design record `docs/proposals/gh-ocannl-483.md`

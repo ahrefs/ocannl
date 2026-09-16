@@ -1102,6 +1102,20 @@
 # Programmatic override: `Ir.Numerics.set_policy`.
 #fp16_arithmetic=auto
 
+# Algebraic rewrite over lowered code (gh-ocannl-483): the online-softmax attention rewrite. The
+# composed softmax's max-reduction and sum-of-exp reduction over one axis become a single scan per
+# row carrying the running max and the rescaled running sum (the online-softmax recurrence, on
+# the loop-carried construct of gh-ocannl-696), and a reduction consuming the normalized
+# probabilities -- the attention's `probabilities * v` -- reads each probability once into a local
+# ahead of the loops it does not index, so the [seq, seq] probability matrix is never materialized.
+# The normalizer's summation is reassociated (results move within rounding); the hoist is exact.
+# Off by default, like tf32_matmuls: it changes numerics. The `approximate` profile turns it on.
+# The score matrix `q * k^T` keeps its own placement: `virtualize_max_inline_reduction` decides
+# whether it is recomputed at its two read sites (flash attention's trade, right for inference and
+# long contexts) or stored once (cheaper for a training step, whose backward reads it again).
+# Programmatic override: `Ir.Online_softmax.set_enabled`.
+#online_softmax=false
+
 # Whether the cc backend's target has native _Float16 arithmetic. "auto" (the default) probes the
 # configured compiler once per process: "none" if _Float16 is missing, "native" if the target
 # defines __ARM_FEATURE_FP16_VECTOR_ARITHMETIC or __AVX512FP16__, "promoted" if the type exists
@@ -1241,6 +1255,9 @@
 # # f32 matmul operands computed at tf32 (10-bit mantissa, f32 accumulation) on the backends with
 # # a tf32 tile shape (CUDA sm_80+); a no-op elsewhere.
 # tf32_matmuls=true
+# # The online-softmax attention rewrite (gh-ocannl-483): the softmax normalizer's summation is
+# # reassociated into a per-row scan, and the probabilities are never materialized.
+# online_softmax=true
 # # The C compiler's licence to reassociate (fast-math) and to contract a*b+c into one rounding
 # # across statements (fp-contract=fast). Both change results per compiler and target, which is
 # # why `reproducible` pins them off and `performance` leaves them at their defaults.
