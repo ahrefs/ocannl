@@ -370,44 +370,81 @@ let () =
   if que.contended || iso.contended || batches_here then
     p claim (que.contended || iso.contended || que.dispatches > iso.dispatches)
   else Verdict.skipped ~aggregation:`Environment ~backend:(backend ()) claim;
-  (* Per launch, not per batch. The two sides refuse mirror errors, and they are anchored on
-     different quantities because of it.
+  (* Per launch, not per batch. The two sides refuse mirror errors: a reading that forgot to divide
+     by the depth is about [depth] times the cost of a launch in that call, and a reading divided by
+     the depth TWICE is that cost's [1/depth]. Both errors are claims about the same quantity the
+     reading is -- the cost of one launch inside THIS call -- so both sides are written against that
+     call's own per-dispatch wall mean, which bounds it from above: a minimum over the call's
+     batches cannot exceed the call's average over every dispatch, the slower calibration singles
+     included. Contention only inflates that mean, so a busy runner makes the upper side stricter
+     rather than looser.
 
-     The upper side refuses a reading that forgot to divide by the depth: such a reading is about
-     [depth] times the mean cost of a launch in that call -- up to 2048x -- which the whole call's
-     wall mean bounds with a factor of 3. Contention only inflates that mean, so a busy runner makes
-     this side stricter rather than looser, and it stays written against it.
+     The low side used to be anchored on [floor_ms] instead, at a fixed fraction of it (1/16), on
+     the argument that both are minima and so face the same noise. They are -- but they are minima
+     of DIFFERENT quantities: [floor_ms] is a launch plus the host synchronization that queueing
+     exists to amortize away, and a queued reading is a launch without it. Their ratio is the
+     backend's sync cost over its launch cost, which no fraction calibrated on one family of
+     machines describes on another; three widenings of that divisor (gh-ocannl-839, -841, -851) were
+     measuring it one machine at a time. gh-ocannl-994 measured it on purpose -- 534 runs of this
+     instrument over five hosts, four backends and loads from idle to 6x oversubscription -- and
+     found it spanning 0.0077 (idle multidev_cc on a 32-core Linux box: a 57 us worker-domain round
+     trip against a 0.44 us amortized launch) to 1.2 (cc on the same boxes, where the round trip IS
+     about one launch). That 160x spread is wider than the factor of [depth] the check has to
+     resolve (200 on the cc, multidev_cc and Metal cap), so no constant fraction of [floor_ms] both
+     admits every legitimate reading and refuses a twice-divided one -- the window is empty, not
+     mis-centred. The 1/16 in force refused 23% of the sweep's non-contended readings, all of them
+     multidev_cc under Linux (30 of 30 on one box), where the claim had been surviving on its
+     contention hatch rather than on its envelope.
 
-     The low side refuses the reading divided by the depth TWICE, and it cannot use that mean,
-     because the mean is exactly where contention lands. [ms] is a MINIMUM over the call's batches;
-     the mean is the call's average with the warmup, the calibration and every host stall folded in.
-     On a busy runner the two part company without either being wrong -- gh-ocannl-851 widened this
-     divisor for the 4.3x gap CI showed, and the HIP sweep then produced 22x (a 0.342 ms launch
-     against a 7.48 ms mean, the call cut to 6 dispatches by stalls). No fraction of a mean survives
-     that, so the fix is not a wider fraction: it is an anchor that is a minimum too, [floor_ms], so
-     that both sides of the comparison face the same noise.
-
-     [Isolated] IS that round trip, so its reading and the anchor are two minima of the SAME
-     quantity: the factor of 3 is a bound rather than an envelope, and from an idle box to one at 6x
-     oversubscription the measured ratio stayed above 0.86. What it refuses is the low-side error a
-     depth-1 mode can still make -- a reading divided by the run count on top of the launch count.
-     [Queued] amortizes the round trip away, so its reading sits legitimately BELOW the anchor (6x
-     below on an idle HIP box, 0.16 of it at worst across the same sweep of loads), and its divisor
-     is 16: clear of that worst legitimate ratio by 2.6x, while a twice-divided reading, sitting at
-     [1/depth] of a correct one, is refused across the deep-batch regime the divisor exists for. At
-     small depths a double division is a small under-read inside the noise floor and out of this
-     instrument's reach, as it already was under the pre-widening factor of 3. *)
+     Against the call's own mean the slack is dispersion rather than a cost ratio, and the queued
+     minimum stayed within 13.8x of its call's mean across that whole sweep. Dispersion is what
+     defeated a mean anchor for [Isolated] -- a 6-dispatch call cut by host stalls read 22x its own
+     minimum (gh-ocannl-851) -- and it is what a queued call does not do: a stall lands inside one
+     batch of [depth] dispatches among [samples] of them, moving the mean by a fraction of itself
+     instead of by multiples. So [Isolated] keeps the round trip it is DEFINED as (worst measured
+     ratio 0.61, 1.8x clear of its factor of 3) and [Queued] takes the mean. *)
   let mean r = r.wall_ms /. Float.of_int (max 1 r.dispatches) in
-  let per_launch ~low_div r = Float.(r.ms <= 3. * mean r && r.ms >= floor_ms / low_div) in
   Verdict.pass_fail "isolated reading is a per-launch time or reports contention"
-    (iso.contended || per_launch ~low_div:3. iso)
+    (iso.contended || Float.(iso.ms <= 3. * mean iso && iso.ms >= floor_ms / 3.))
     ~detail:(fun () ->
       Printf.sprintf "%.6f ms vs mean %.6f ms, round trip %.6f ms" iso.ms (mean iso) floor_ms);
-  Verdict.pass_fail "queued reading is a per-launch time or reports contention"
-    (que.contended || per_launch ~low_div:16. que)
+  Verdict.pass_fail
+    "queued reading is a per-launch time rather than a per-batch one, or reports contention"
+    (que.contended || Float.(que.ms <= 3. * mean que))
     ~detail:(fun () ->
-      Printf.sprintf "%.6f ms vs mean %.6f ms, round trip %.6f ms (depth %d)" que.ms (mean que)
-        floor_ms que.depth);
+      Printf.sprintf "%.6f ms vs mean %.6f ms (depth %d)" que.ms (mean que) que.depth);
+  (* The low side, as the larger of two terms that refuse on different grounds. [2 / depth] is
+     structural: the reading cannot exceed the mean, so a twice-divided one cannot exceed [mean /
+     depth], and a bound at twice that refuses it at EVERY depth with nothing measured -- the
+     largest min/mean ratio the sweep produced, 0.98, is the ceiling the 2 sits above. [1 / 64] is
+     empirical, and it keeps the bound from going slack where [2 / depth] falls far below any real
+     reading: at CUDA's depth 2048 it is what still refuses a reading divided by the sample count,
+     and it sits 4.6x below the worst min/mean ratio measured. All 406 non-contended readings of the
+     sweep clear the bound, the tightest by 4.35x -- Metal at 6x oversubscription, where the shallow
+     depth makes [2 / depth] the binding term. *)
+  let queued_low_bound =
+    Float.max (mean que /. 64.) (2. *. mean que /. Float.of_int (max 1 que.depth))
+  in
+  let low_claim =
+    "queued reading is not that per-launch time divided by the batch depth as well, or reports \
+     contention"
+  in
+  (* Below depth 16 the [2 / depth] term would demand a min/mean ratio above 1/8, which is a claim
+     about dispersion this instrument has no evidence for -- a double division is not separable from
+     the noise there, and the leg says so rather than passing vacuously. The shallowest batch in the
+     sweep was 31, so this guards a regime the counter routine does not reach rather than a routine
+     outcome. *)
+  if que.depth >= 16 then
+    Verdict.pass_fail low_claim
+      (que.contended || Float.(que.ms >= queued_low_bound))
+      ~detail:(fun () ->
+        Printf.sprintf
+          "%.6f ms vs bound %.6f ms (mean %.6f ms, depth %d); a twice-divided reading would be \
+           %.6f ms, round trip %.6f ms"
+          que.ms queued_low_bound (mean que) que.depth
+          (que.ms /. Float.of_int (max 1 que.depth))
+          floor_ms)
+  else Verdict.skipped ~aggregation:`Environment ~backend:(backend ()) low_claim;
   (* Amortizing a round trip can only remove time, so a queued reading above the isolated one is the
      instrument reporting the wrong quantity, not a slow machine. The factor absorbs the noise a
      min-of-N leaves; the point of the claim is the direction.
