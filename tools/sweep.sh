@@ -851,6 +851,51 @@ collect_dxg_window() { # host log remote-start-epoch label start-boot-id
   fi
 }
 
+# Collect a remote GPU unit's dxg window and say what it shows about the guest.
+#
+# Factored out because it has to happen on EVERY path that ends a remote unit, not only the one
+# that ran dune. A guest replaced during the up-to-600s remote PREPARATION ends the unit through
+# the preparation's own `error` return, which collected nothing at all -- so an uncoordinated
+# reboot in that window produced neither `vm-replaced` evidence nor the warning, on the path least
+# likely to be looked at afterwards. Any future early return from a remote unit belongs here too.
+#
+# Called BEFORE write_fingerprint on each path, so the fingerprint carries the window: a replaced
+# guest is part of what distinguishes this failure from the same failure on a healthy box.
+finish_remote_window() { # machine backend host log outcome remote-start-epoch start-boot-id
+  local machine=$1 backend=$2 host=$3 log=$4 outcome=$5 remote_start=$6 start_boot=$7
+  # Remote GPU units only: the bridge is what /dev/dxg is, so a local unit has no window and
+  # minix's multidev_cc -- CPU, on a WSL box -- would only ever collect another unit's noise. A
+  # unit that never ran (`skip`) has no window either.
+  case $outcome:$backend in
+    skip:*) return 0 ;;
+    *:cuda | *:hip) ;;
+    *) return 0 ;;
+  esac
+  [ -n "$host" ] || return 0
+  collect_dxg_window "$host" "$log" "$remote_start" "$machine/$backend" "$start_boot"
+  # A replaced guest on an outcome that cannot be rerun. `vm-replaced` makes a unit
+  # environment-red, and on a `fail` that is the whole story: serial_rerun reads the window and the
+  # unit gets its second run. On an `error` -- which is what a mid-unit replacement actually
+  # produces, the ssh dying with the VM and run_capped returning 255 -- there is nothing for
+  # serial_rerun to do: it reruns the FAILING STANZAS under -j 1, and an error never reached dune,
+  # so no stanza was ever recorded. Rerunning the whole unit is a different mechanism, and not one
+  # to add here: the row and the elapsed time are already published, so a second attempt would need
+  # a second history row for one unit in one run, which is exactly the kind of second channel the
+  # record's own design refuses (see write_run_record).
+  #
+  # What was missing is that nobody was TOLD. The sidecar knew, and on 2026-09-16 the operator did
+  # not: two units read `error (818s)` and the day went to the GPU. So say it where the scheduled
+  # routine quotes the sweep's output, for the reason the empty fingerprint is said there too
+  # (gh-ocannl-792) -- a finding that lives only in a written file is one nobody reads.
+  case $outcome in
+    error | timeout)
+      dxg_guest_replaced "$log" &&
+        say "  $machine/$backend: the guest was REPLACED mid-unit -- this unit tested nothing, and its result is about the box, not the code; rerun it (reruns are incremental)"
+      ;;
+  esac
+  return 0
+}
+
 rtc_context_cmd() {
   local backend=$1 alias_name=
   case $backend in
@@ -1789,6 +1834,10 @@ run_unit() { # machine backend host
          >"$log" 2>&1; then
       say "  $machine/$backend: error (cannot pin $host to $run_sha)"
       record "$machine" "$backend" error "$(( $(date +%s) - started ))" "$log"
+      # The preparation can run for ten minutes, and a guest replaced inside it ends the unit
+      # right here -- so this path collects the window exactly like the one below.
+      finish_remote_window "$machine" "$backend" "$host" "$log" error \
+        "${remote_started:-}" "${remote_boot:-}"
       write_fingerprint "$log" "$machine/$backend"
       update_unit_state "$machine" "$backend" error "$WRITTEN_FINGERPRINT"
       return 0
@@ -1888,18 +1937,12 @@ run_unit() { # machine backend host
   # Remote GPU units only: the bridge is what /dev/dxg is, so a local unit has no
   # window and minix's multidev_cc -- CPU, on a WSL box -- would only ever collect
   # another unit's noise. A unit that never ran (`skip`) has no window either.
-  case $outcome:$backend in
-    skip:*) ;;
-    *:cuda | *:hip)
-      # The window's start is the remote's own clock at the unit's beginning,
-      # read by the reachability probe; its end is that same clock at collection
-      # time. Both ends therefore come from the clock that timestamps the log, and
-      # nothing is reconstructed from a duration measured on another machine.
-      [ -n "$host" ] &&
-        collect_dxg_window "$host" "$log" "${remote_started:-}" "$machine/$backend" \
-          "${remote_boot:-}"
-      ;;
-  esac
+  # The window's start is the remote's own clock at the unit's beginning, read by the
+  # reachability probe; its end is that same clock at collection time. Both ends therefore come
+  # from the clock that timestamps the log, and nothing is reconstructed from a duration measured
+  # on another machine. Same helper as the preparation-failure path above, so the two cannot drift.
+  finish_remote_window "$machine" "$backend" "$host" "$log" "$outcome" \
+    "${remote_started:-}" "${remote_boot:-}"
   # Diagnosis, strictly after the row and the elapsed time it reports: this phase
   # has its own budget, and nothing it does can reach $outcome or $elapsed. It
   # runs before the fingerprint so that what it appends to the log is carried in.
@@ -1914,26 +1957,6 @@ run_unit() { # machine backend host
   # whose failures are the tests' own gets no second run.
   case $outcome in
     fail) serial_rerun "$backend" "$host" "$wt" "$log" "$machine/$backend" "${path_prefix:-}" ;;
-  esac
-  # A replaced guest on an outcome that cannot be rerun. `vm-replaced` makes a unit environment-red,
-  # and on a `fail` that is the whole story: serial_rerun reads the window and the unit gets its
-  # second run. On an `error` -- which is what a mid-unit replacement actually produces, the ssh
-  # dying with the VM and run_capped returning 255 -- there is nothing for serial_rerun to do: it
-  # reruns the FAILING STANZAS under -j 1, and an error never reached dune, so no stanza was ever
-  # recorded. Rerunning the whole unit is a different mechanism, and not one to add here: the row
-  # and the elapsed time are already published above, so a second attempt would need a second
-  # history row for one unit in one run, which is exactly the kind of second channel the record's
-  # own design refuses (see write_run_record).
-  #
-  # What was missing is that nobody was TOLD. The sidecar knew, and on 2026-09-16 the operator did
-  # not: two units read `error (818s)` and the day went to the GPU. So say it where the scheduled
-  # routine quotes the sweep's output, for the reason the empty fingerprint is said there too
-  # (gh-ocannl-792) -- a finding that lives only in a written file is one nobody reads.
-  case $outcome in
-    error | timeout)
-      [ -n "$host" ] && dxg_guest_replaced "$log" &&
-        say "  $machine/$backend: the guest was REPLACED mid-unit -- this unit tested nothing, and its result is about the box, not the code; rerun it (reruns are incremental)"
-      ;;
   esac
   case $outcome in
     fail | timeout | error) write_fingerprint "$log" "$machine/$backend" ;;
