@@ -83,11 +83,18 @@ LAB_LOCK_DIR=${WAKE_LAB_LOCK_DIR:-$HOME/.local/state/wake-lab}
 # behind it, which is minutes rather than seconds. A lane that waits longer than this skips its
 # units rather than running them on a box that is being torn down underneath it.
 LAB_LOCK_WAIT=${OCANNL_TOOL_SWEEP_LAB_LOCK_WAIT:-300}
-# The cap on ONE identity probe -- a single `cat` of the guest's boot id, retried when a failed
-# collection left the question open. Small on purpose, and deliberately not the diagnostic cap the
-# window query carries: the point of asking this separately is that it cannot wedge for minutes.
-# A plain constant rather than a knob; nothing outside this file has a reason to retune it.
+# The identity probe: a single `cat` of the guest's boot id, asked when nothing else could say
+# which guest is there. Three budgets, and each answers a different way the far side misbehaves.
+# Plain constants rather than knobs; nothing outside this file has a reason to retune them.
+#   CAP     one attempt, so a far side that connects and then wedges cannot hold the lane. Small
+#           on purpose, and deliberately NOT the diagnostic cap the window query carries.
+#   WINDOW  the whole probe, so a guest that never comes back is bounded too.
+#   PAUSE   between attempts. A guest that is still booting REFUSES connections rather than
+#           dropping them, and a refusal returns at once -- so without this the attempts all land
+#           inside the same millisecond and there is no retry window at all.
 DXG_IDENTITY_CAP=30
+DXG_IDENTITY_WINDOW=90
+DXG_IDENTITY_PAUSE=10
 
 # The wake-lab box whose lock covers an ssh alias. The two real ones are named rather than derived,
 # so a renamed alias fails loudly here instead of silently reserving a box nobody checks; the
@@ -779,9 +786,34 @@ publish_dxg_unavailable_fallback() { # sidecar log reason label [boot-verdict]
   return 1
 }
 
+# Which guest is on the box now, or nothing if it could not be asked inside the window.
+#
+# Written to a file rather than captured in a command substitution, for the reason collect_dxg_window
+# gives about its own query: a substitution runs in a SUBSHELL, so the UNIT_PID that `run_capped`
+# publishes there is invisible to the lane -- a cancellation could then neither relay TERM to the
+# supervisor nor reap it, and it would hold the inherited locks until its own cap expired. The
+# pause between attempts goes through run_capped for exactly the same reason: a bare `sleep` is
+# invisible to the lane's trap, and an orphaned one keeps the lab reservation and the worktree lock
+# alive after the lane has gone.
+# The answer is LEFT IN THE FILE rather than printed, and the callers read it from there: a
+# function that printed it would have to be called in a command substitution, which is the very
+# subshell this is avoiding. GUEST_ID carries it for a caller that wants one line instead.
+remote_guest_id() { # host scratch-path -- leaves the boot id in the file, and in $GUEST_ID
+  local host=$1 probe=$2 deadline=$(( SECONDS + DXG_IDENTITY_WINDOW ))
+  GUEST_ID=
+  while :; do
+    run_capped "$DXG_IDENTITY_CAP" ssh -o BatchMode=yes -o ConnectTimeout=8 \
+      "$host" 'cat /proc/sys/kernel/random/boot_id 2>/dev/null' >"$probe" 2>/dev/null
+    read -r GUEST_ID < "$probe" 2>/dev/null || GUEST_ID=
+    [ -n "$GUEST_ID" ] && return 0
+    [ "$SECONDS" -ge "$deadline" ] && return 0
+    run_capped "$(( DXG_IDENTITY_PAUSE + 5 ))" sleep "$DXG_IDENTITY_PAUSE"
+  done
+}
+
 collect_dxg_window() { # host log remote-start-epoch label start-boot-id
   local host=$1 log=$2 remote_start=$3 label=$4 start_boot=${5:-}
-  local kernel rc bounds start_utc end_utc sidecar end_boot boot=unknown attempt
+  local kernel rc bounds start_utc end_utc sidecar end_boot boot=unknown
   sidecar=$(dxg_sidecar "$log")
   # No start instant from the box means no window to bound. Reported as a failed
   # collection, which is what it is, rather than guessed.
@@ -829,11 +861,9 @@ collect_dxg_window() { # host log remote-start-epoch label start-boot-id
   # after the lane had gone -- and the connect timeout of a box that is still down already spaces
   # the attempts by about as much as a sleep would.
   if [ -z "$end_boot" ] && [ -n "$start_boot" ]; then
-    for attempt in 1 2 3; do
-      end_boot=$(run_capped "$DXG_IDENTITY_CAP" ssh -o BatchMode=yes -o ConnectTimeout=8 \
-        "$host" 'cat /proc/sys/kernel/random/boot_id 2>/dev/null' 2>/dev/null | head -1)
-      [ -n "$end_boot" ] && break
-    done
+    remote_guest_id "$host" "$log.boot.$$"
+    end_boot=$GUEST_ID
+    rm -f "$log.boot.$$"
   fi
   if [ -n "$start_boot" ] && [ -n "$end_boot" ]; then
     if [ "$start_boot" = "$end_boot" ]; then boot=same; else boot=replaced; fi
@@ -889,16 +919,32 @@ collect_dxg_window() { # host log remote-start-epoch label start-boot-id
 # guest is part of what distinguishes this failure from the same failure on a healthy box.
 finish_remote_window() { # machine backend host log outcome remote-start-epoch start-boot-id
   local machine=$1 backend=$2 host=$3 log=$4 outcome=$5 remote_start=$6 start_boot=$7
-  # Remote GPU units only: the bridge is what /dev/dxg is, so a local unit has no window and
-  # minix's multidev_cc -- CPU, on a WSL box -- would only ever collect another unit's noise. A
-  # unit that never ran (`skip`) has no window either.
-  case $outcome:$backend in
-    skip:*) return 0 ;;
-    *:cuda | *:hip) ;;
-    *) return 0 ;;
-  esac
+  REMOTE_GUEST_REPLACED=0
+  # A local unit has no remote guest, and a unit that never ran (`skip`) has nothing to account for.
   [ -n "$host" ] || return 0
-  collect_dxg_window "$host" "$log" "$remote_start" "$machine/$backend" "$start_boot"
+  case $outcome in skip) return 0 ;; esac
+  # The dxg WINDOW is GPU-only -- the bridge is what /dev/dxg is, so minix's multidev_cc (CPU, on a
+  # WSL box) would only ever collect another unit's noise -- but the GUEST is not. multidev_cc runs
+  # in the same replaceable VM as hip, so a replacement takes it down just the same, and before
+  # this it was recorded as a bare `error` with nothing saying the machine had gone. The two
+  # questions are separate and only one of them is about the bridge, so only one of them is gated
+  # on the backend.
+  case $backend in
+    cuda | hip)
+      collect_dxg_window "$host" "$log" "$remote_start" "$machine/$backend" "$start_boot"
+      ;;
+    *)
+      # No sidecar for a non-GPU unit: the dxg channel is the bridge's, and writing one here would
+      # make a CPU unit environment-red through dxg_window_red and put a bridge verdict in its
+      # record row. The identity answer is reported below instead, which is the part an operator
+      # acts on.
+      if [ -n "$start_boot" ]; then
+        remote_guest_id "$host" "$log.boot.$$"
+        [ -n "$GUEST_ID" ] && [ "$GUEST_ID" != "$start_boot" ] && REMOTE_GUEST_REPLACED=1
+        rm -f "$log.boot.$$"
+      fi
+      ;;
+  esac
   # A replaced guest on an outcome that cannot be rerun. `vm-replaced` makes a unit
   # environment-red, and on a `fail` that is the whole story: serial_rerun reads the window and the
   # unit gets its second run. On an `error` -- which is what a mid-unit replacement actually
@@ -915,7 +961,7 @@ finish_remote_window() { # machine backend host log outcome remote-start-epoch s
   # (gh-ocannl-792) -- a finding that lives only in a written file is one nobody reads.
   case $outcome in
     error | timeout)
-      dxg_guest_replaced "$log" &&
+      { [ "$REMOTE_GUEST_REPLACED" = 1 ] || dxg_guest_replaced "$log"; } &&
         say "  $machine/$backend: the guest was REPLACED mid-unit -- this unit tested nothing, and its result is about the box, not the code; rerun it (reruns are incremental)"
       ;;
   esac
