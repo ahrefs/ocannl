@@ -268,6 +268,13 @@ dxg_window_bounds() { # log -> "<start> <end>", or nothing
 # `unavailable` establishes nothing in either direction -- an unread box must not
 # buy a rerun any more than it may certify a clean one. Absent evidence (a local
 # unit, or one that never ran) is likewise not red.
+# Whether a unit's guest was destroyed and recreated during its window. Its own predicate because
+# the two readers want it for opposite reasons: dxg_window_red folds it into "this unit earned a
+# rerun", and the `error` path below needs it as a plain fact about the box, where no rerun exists.
+dxg_guest_replaced() { # log
+  [ "$(dxg_bursts "$1")" = "$DXG_VM_REPLACED" ]
+}
+
 dxg_window_red() { # log
   dxg_bursts "$1" | grep -qE "^([1-9][0-9]*|$DXG_VM_REPLACED)$"
 }

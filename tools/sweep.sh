@@ -100,11 +100,17 @@ lab_box_of() { # ssh-alias
 # crash, and no state that can outlive the process that made it. The flock idiom is the run lock's
 # above: perl takes it and exits, and the lock survives because it belongs to the open file
 # DESCRIPTION behind fd 8, which this shell keeps open.
-take_lab_lock() { # box -- true iff the box is now reserved by this lane
+# Three-valued, because two of the outcomes mean opposite things to the operator: 0 the box is
+# reserved, 1 another holder still has it after the wait (contention -- a fact about the lab), 2
+# this harness could not make a lock at all (a read-only or full state directory -- a fact about
+# THIS machine). Collapsing 2 into 1 would publish `skip (box ... reserved by ...)` over a local
+# failure, which reads as another run legitimately holding the box and hides the broken harness
+# behind coverage the operator would not think to question.
+take_lab_lock() { # box -- 0 reserved, 1 held by someone else, 2 this harness cannot lock at all
   local box=$1 path deadline=$((SECONDS + LAB_LOCK_WAIT)) waited=0
   path=$LAB_LOCK_DIR/$box.lock
-  mkdir -p "$LAB_LOCK_DIR" 2>/dev/null || return 1
-  exec 8>>"$path" || return 1
+  mkdir -p "$LAB_LOCK_DIR" 2>/dev/null || return 2
+  exec 8>>"$path" || return 2
   while :; do
     if perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 1)' <&8; then
       # The holder line is advisory -- it names who to go and look at, and nothing reads it to make
@@ -1142,12 +1148,16 @@ write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-r
   stage=$RUN_RECORD.stage.$$
   rows=$(run_rows) || return 1
   {
-    # Schema 2: the `unit` row gained the dxg window and burst count
+    # Schema 3: that count gained a fourth value, `vm-replaced` (a guest that
+    # was destroyed and recreated mid-window). A schema-2 consumer's contract
+    # permits only `-`, a number and `unavailable`, so a strict one would reject
+    # the record at exactly the moment a replacement happened -- the record it
+    # most needs to read. Schema 2: the `unit` row gained the dxg window and burst count
     # (gh-ocannl-979). A consumer picks its parser from this number, so widening a
     # row without it would make a strict schema-1 reader reject a current record
     # and a dxg-aware reader mis-read a historical one. The unit-STATE files below
     # keep their own schema 1: different file, different contract.
-    printf 'schema\t2\n'
+    printf 'schema\t3\n'
     printf 'run\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$stamp" "$run_sha" "$REF" "${TARGET:-<all>}" "$SLOW" "$execution" "$kind"
     for unit in "${UNITS[@]}"; do
@@ -1905,6 +1915,26 @@ run_unit() { # machine backend host
   case $outcome in
     fail) serial_rerun "$backend" "$host" "$wt" "$log" "$machine/$backend" "${path_prefix:-}" ;;
   esac
+  # A replaced guest on an outcome that cannot be rerun. `vm-replaced` makes a unit environment-red,
+  # and on a `fail` that is the whole story: serial_rerun reads the window and the unit gets its
+  # second run. On an `error` -- which is what a mid-unit replacement actually produces, the ssh
+  # dying with the VM and run_capped returning 255 -- there is nothing for serial_rerun to do: it
+  # reruns the FAILING STANZAS under -j 1, and an error never reached dune, so no stanza was ever
+  # recorded. Rerunning the whole unit is a different mechanism, and not one to add here: the row
+  # and the elapsed time are already published above, so a second attempt would need a second
+  # history row for one unit in one run, which is exactly the kind of second channel the record's
+  # own design refuses (see write_run_record).
+  #
+  # What was missing is that nobody was TOLD. The sidecar knew, and on 2026-09-16 the operator did
+  # not: two units read `error (818s)` and the day went to the GPU. So say it where the scheduled
+  # routine quotes the sweep's output, for the reason the empty fingerprint is said there too
+  # (gh-ocannl-792) -- a finding that lives only in a written file is one nobody reads.
+  case $outcome in
+    error | timeout)
+      [ -n "$host" ] && dxg_guest_replaced "$log" &&
+        say "  $machine/$backend: the guest was REPLACED mid-unit -- this unit tested nothing, and its result is about the box, not the code; rerun it (reruns are incremental)"
+      ;;
+  esac
   case $outcome in
     fail | timeout | error) write_fingerprint "$log" "$machine/$backend" ;;
   esac
@@ -1949,7 +1979,7 @@ lane_exit() {
 # could not be written -- and that fails only its lane; the top level lets the
 # others finish recording and then exits 2.
 run_lane() { # machine -- only ever as a background job: it ends in `exit`
-  local lane=$1 unit machine backend host lane_host= lab_box
+  local lane=$1 unit machine backend host lane_host= lab_box lab_lock_rc
   LANE_PIDS=
   IN_LANE=1
   UNIT_PID=
@@ -1970,7 +2000,13 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
   done
   if [ -n "$lane_host" ]; then
     lab_box=$(lab_box_of "$lane_host")
-    if ! take_lab_lock "$lab_box"; then
+    take_lab_lock "$lab_box"; lab_lock_rc=$?
+    # A harness that cannot lock at all fails the lane rather than reporting contention it did not
+    # observe: `skip (box ... reserved by ...)` over a read-only state directory is a local fault
+    # wearing the costume of a legitimate one.
+    [ "$lab_lock_rc" = 2 ] &&
+      die "cannot take the lab lock for $lab_box under $LAB_LOCK_DIR (check the directory)"
+    if [ "$lab_lock_rc" != 0 ]; then
       # Skipped, not errored: nothing was tested and nothing failed. `error` would fingerprint a
       # box someone else is legitimately working on as a broken one, and the run record's skip
       # coverage is already the channel for a backend that went untested.

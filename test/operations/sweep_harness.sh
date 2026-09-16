@@ -1242,6 +1242,19 @@ dxg_window_red "$tmp/dxg-replaced.log"
 # moved` while a unit that starts or stops losing its guest does.
 dxg_fingerprint_lines "$tmp/dxg-replaced.log" | grep -q '^dxg window: guest replaced mid-window$'
 
+# The replaced-guest predicate the `error` path reads, which is a different question from
+# "does this unit earn a rerun": an error never reached dune, so serial_rerun has no stanza to run.
+dxg_guest_replaced "$tmp/dxg-replaced.log"
+printf '%s\n' "$dxg_red" >"$(dxg_sidecar "$tmp/dxg-burst-only.log")"
+if dxg_guest_replaced "$tmp/dxg-burst-only.log"; then
+  printf 'sweep_harness: a plain burst was read as a replaced guest\n' >&2
+  exit 1
+fi
+if dxg_guest_replaced "$tmp/absent.log"; then
+  printf 'sweep_harness: a unit with no window was read as a replaced guest\n' >&2
+  exit 1
+fi
+
 # `same` is the ordinary case and changes nothing; `unknown` is the pre-existing state under a
 # name, for a box whose kernel publishes no boot id -- it must not become an alarm.
 dxg_same=$(printf '%s\n' "$dxg_unrelated" |
@@ -1301,7 +1314,7 @@ grep -q '^  minix/multidev_cc: skip (unreachable)$' <<<"$lanes"
 # a consumer can age a backend's staleness against the box that owns it now.
 lanes_record=$(sed -n 's/^run:  *//p' <<<"$lanes")
 [ -f "$lanes_record" ]
-[ "$(head -1 "$lanes_record")" = "$(printf 'schema\t2')" ]
+[ "$(head -1 "$lanes_record")" = "$(printf 'schema\t3')" ]
 [ "$(awk -F '\t' '$1 == "run" { print $8 }' "$lanes_record")" = complete ]
 [ "$(awk -F '\t' '$1 == "run" { print $5 "\t" $6 }' "$lanes_record")" = \
   "$(printf 'lane-probe\t0')" ]
