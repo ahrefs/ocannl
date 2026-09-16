@@ -2548,6 +2548,14 @@
 
 ; The same production checker on a synthetic public executable omitted from the smoke alias. Exit
 ; 1 is the evidence: if the checker stops detecting the omission, this rule receives 0 and fails.
+;
+; Both of the refused run's streams are dropped, for the reason `generated_provenance` states above
+; (gh-ocannl-692): a refusal announces itself with this repository's failure marker -- `FAIL:` and
+; `FAILED:` -- and this one is DESIGNED to fail, so letting its stderr through printed those words
+; into the log of a green `dune build @test/operations/scans` on every re-run of this target, where
+; it has already sent one reader to file a flake issue against a check that was doing its job.
+; `ignore-stderr` drops the announcement, not the evidence: the evidence is the exit status, which
+; `with-accepted-exit-codes 1` still requires, so a control that stops failing still fails the rule.
 
 (rule
  ; ocannl-backend: none -- links no backend and scans an embedded synthetic dune file.
@@ -2559,9 +2567,10 @@
    %{target}
    (progn
     (ignore-stdout
-     (with-accepted-exit-codes
-      1
-      (run %{dep:bin_smoke_membership_scan.exe} --negative-control)))
+     (ignore-stderr
+      (with-accepted-exit-codes
+       1
+       (run %{dep:bin_smoke_membership_scan.exe} --negative-control))))
     (echo
      "synthetic public executable omitted from @bin-smoke is refused: true\n")))))
 
