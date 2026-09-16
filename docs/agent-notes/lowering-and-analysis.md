@@ -375,10 +375,16 @@ files.
   `[seq, seq]` buffers disappear -- a lineage decision binds every later routine, and the composed
   backward reads the scores with value-width multiplicity, so a forced-virtual score chain is
   replayed `d_v`-fold there; leave the score matrix to `virtualize_max_inline_reduction` and pin
-  both readings (`test/operations/online_softmax.ml` leg 3); (c) an emitted guard never compares
-  against `-inf` -- `cc_backend_fast_math` (in the same `approximate` profile) is a finite-math
-  licence under which the C compiler folds such a comparison, which turned masked-prefix rows
-  into NaN; compare against the format's lowest finite value (`Online_softmax.lowest_finite`),
-  and rerun the test under the flag (`runtest-online_softmax_fast_math`), where NaN-propagation
-  claims are undefined in both forms and reported skipped.
+  both readings (`test/operations/online_softmax.ml` leg 3); (c) emit no comparison against
+  `-inf` -- `cc_backend_fast_math` (in the same `approximate` profile) is a finite-math licence
+  under which the C compiler folds such a comparison, which turned masked-prefix rows into NaN,
+  and a comparison against the lowest finite value misclassifies that value itself; the
+  recurrence instead floors the running max at `Online_softmax.lowest_finite` where it is
+  subtracted, so `-inf` never meets itself -- and no formulation survives finite-math-only
+  anyway (a probe showed clang mis-evaluating `exp(-inf - floor)` at a peeled first iteration),
+  so `cc_backend_fast_math` now takes `-ffinite-math-only` back, and the test is rerun under the
+  flag (`runtest-online_softmax_fast_math`) with every claim asserted; (d) do not rely on an
+  exact identity such as `l + (m - m)` to inject a NaN -- `simplify_llc` reassociates it into
+  `(l + m) - m`, which cancels catastrophically (the generated C is the evidence; gh-ocannl-998
+  is the issue).
 

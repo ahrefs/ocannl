@@ -830,7 +830,15 @@ let%track7_sexp c_compile_and_load ~f_path =
     let optimization_flag = "-O" ^ Int.to_string (optimization_level ()) in
     let arch_flag = String.strip (arch_flags ()) in
     let simd_flag = String.strip (simd_flags ()) in
-    let fast_math_flag = if fast_math_enabled () then Some "-ffast-math" else None in
+    (* [-ffast-math] minus [-ffinite-math-only]: the licence is reassociation, contraction,
+       reciprocal approximation and no trapping -- never "assume no infinities". The lowering itself
+       emits [-inf] (the [Max] neutral element, the default attention mask fill), and the
+       online-softmax recurrence (gh-ocannl-483) rests on IEEE infinity arithmetic; under
+       finite-math-only clang folds and reorders those into NaN (a masked-prefix row went NaN in the
+       review of staging PR #737, reproduced on a five-line probe). *)
+    let fast_math_flag =
+      if fast_math_enabled () then Some "-ffast-math -fno-finite-math-only" else None
+    in
     (* [-fopenmp] must also reach the link step (this command compiles and links); harmless for
        kernels without parallel Grid loops. *)
     let parallel_flag =

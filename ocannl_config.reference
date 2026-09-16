@@ -898,7 +898,12 @@
 # CPU does have an FMA that a conservative target was hiding, raising the target is the fix to reach
 # for instead of this one; where the CPU has no FMA at all, there is no target to raise to and
 # changing the arithmetic is the only lever left -- which is what this flag does, at two roundings
-# and with everything else `-ffast-math` implies.
+# and with everything else `-ffast-math` implies -- except `-ffinite-math-only`, which the flag
+# takes back (`-fno-finite-math-only` follows it): the lowering itself emits `-inf` (the `Max`
+# neutral element, the default attention mask fill) and the online-softmax recurrence
+# (gh-ocannl-483) rests on IEEE infinity arithmetic, which a finite-math licence lets the compiler
+# fold and reorder into NaN. Reassociation, contraction, reciprocal approximation and no-trapping
+# remain the licence.
 #cc_backend_fast_math=false
 
 # If true, compiled dynamic libraries (.dll/.so files) for the CC backend are placed 
@@ -1112,8 +1117,10 @@
 # Off by default, like tf32_matmuls: it changes numerics. The `approximate` profile turns it on
 # and `reproducible` pins it off.
 # The score matrix `q * k^T` keeps its own placement: `virtualize_max_inline_reduction` decides
-# whether it is recomputed at its two read sites (flash attention's trade, right for inference and
-# long contexts) or stored once (cheaper for a training step, whose backward reads it again).
+# whether it is recomputed at its two read sites (flash attention's memory trade: no [seq, seq]
+# buffer at all) or stored once. Storing measured faster on both cc and Metal at every length in
+# benchmarks/report-gh483-online-softmax.md, and a training step's backward reads the scores
+# again; recompute when the [seq, seq] buffer itself is the constraint.
 # Programmatic override: `Ir.Online_softmax.set_enabled`.
 #online_softmax=false
 

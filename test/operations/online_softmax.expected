@@ -1,4 +1,4 @@
-regime: cc_backend_fast_math=false (NaN-propagation claims asserted)
+--- run under cc_backend_fast_math=false ---
 --- leg 1: the gate -- key off keeps the composed form ---
 composed: no scan in the routine: true
 composed: the routine writes seq^2-sized intermediates: true
@@ -44,11 +44,13 @@ the zeroing ahead of the max with nothing reading the normalizer in between is a
 staged code inside the span the rewrite reorders is declined: true
 staged code outside that span is no objection: true
 staged code reachable only through a guard's condition inside the span is declined too: true
+a scope body inside the span is beyond the write census and declines the rewrite: true
 a whole-node zeroing of a normalizer wider than the reduction's cells is declined: true
 the same reduction with a cell-wise zeroing is accepted: the scan writes what the fill did: true
 composed: a NaN score ahead of a masked one poisons the normalizer: true
 rewritten: the all-masked step after the NaN keeps the poison: true
 a genuinely all-masked prefix leaves both normalizers finite and equal within 1e-6 relative: true
+a row of scores at the format's lowest finite value is a finite maximum in both forms, with the row length as normalizer: true
 a fully masked row leaves the composed normalizer NaN: true
 and the rewritten normalizer stores that NaN too, though its carried state stayed zero: true
 the max's state stays single and the normalizer's takes its node's double: true

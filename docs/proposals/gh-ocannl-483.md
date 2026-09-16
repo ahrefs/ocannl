@@ -52,10 +52,15 @@ which every nest mints afresh.
    each at its own node's precision widened to f32 — `m' = max(m, x)`, `l' = l * exp(m - m') + exp(x - m')` —
    writing both trajectories to the original `m` and `l` nodes, so every downstream reader is
    unaffected. A prefix of masked keys (`-inf` scores) keeps `m' = -inf`, where the rescaling
-   would be `exp(-inf - -inf) = nan`; the update is guarded on `m' = -inf` (and on the score
-   itself, so a NaN score still poisons) and the carried normalizer stays 0 until the first live
-   score, while the stored trajectory carries the composed form's NaN for a row whose max is still
-   `-inf` — so a fully masked row reads NaN in both forms. The pointwise nests stay as their nodes' definitions.
+   would be `exp(-inf - -inf) = nan`; the rescaling reads both maxima floored at the format's
+   lowest finite value, so a masked prefix rescales by `exp 0` against a zero normalizer, the
+   first live score rescales the empty prefix by `exp(lowest - x) = 0`, a NaN score poisons as in
+   the composed form, and the update emits no comparison (a C compiler's finite-math licence has
+   nothing to fold that a finite result depends on). The stored trajectory selects the composed
+   form's NaN on `m' = -inf`, the one comparison, deciding only what a row with no live score yet
+   stores — so a fully masked row reads NaN in both forms. (The exact `l' + (m' - m')` was tried
+   first; the simplifier reassociates it into `(l' + m') - m'`, which cancels catastrophically —
+   a live instance of gh-ocannl-998.) The pointwise nests stay as their nodes' definitions.
 2. **Hoisting the probabilities.** A reduction `o[.., e] += w[rows, t] * v[..]` whose `w` is
    defined elementwise from a rewritten normalizer has the loops `w` does not index moved
    innermost, behind one read of `w` into a scope local. Bitwise exact — every moved loop indexes
@@ -71,7 +76,9 @@ loop nest — schedulable, and the shape a fused backward recomputes from `(m, l
 
 - **The score matrix's placement.** `q * k^T` keeps its own decision: the recompute cap
   `virtualize_max_inline_reduction` decides whether it is replayed at its two read sites (flash
-  attention's trade, right for inference and long contexts) or stored once. The rewrite does not
+  attention's memory trade: no `[seq, seq]` buffer at all) or stored once; storing measured faster
+  on both backends at every length in the report, so recompute is for when the buffer itself is
+  the constraint. The rewrite does not
   force it virtual: a lineage decision binds every later routine, and the composed backward reads
   the scores at several sites with value-width multiplicity, so a forced-virtual score chain would
   be replayed `d_v`-fold there. The test pins both readings.

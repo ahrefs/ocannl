@@ -552,9 +552,8 @@
 
 ; The same executable on cc under `cc_backend_fast_math` (gh-ocannl-483 review round 5): the
 ; `approximate` profile turns on both this rewrite and the C compiler's fast-math licence, whose
-; finite-math assumption would fold a masking guard that compared scores against -inf. The same
-; claims, less the NaN-propagation ones (reported skipped: finite-math-only makes them undefined
-; in both forms), so the golden differs from online_softmax.expected in its regime line only.
+; finite-math assumption would fold -inf arithmetic (which is why the flag takes it back). The
+; same claims, so the golden differs from online_softmax.expected in its regime line only.
 
 (rule
  ; ocannl-backend: cc -- the flag under test is the cc backend's; the command line pins both.

@@ -89,7 +89,11 @@ let rec has_opaque (stmt : LL.t) =
 
 and scalar_has_opaque (llsc : LL.scalar_t) =
   match llsc with
-  | LL.Local_scope { body; _ } -> has_opaque body
+  | LL.Local_scope _ ->
+      (* Raw lowering emits no scopes; a body's purity is checked only by the optimizer, downstream
+         of the tier, and the write census does not enter one -- so a scope in the span is code the
+         census cannot see. *)
+      true
   | LL.Get_dynamic { dyn_value = v, _; _ } -> scalar_has_opaque v
   | LL.Ternop (_, (a, _), (b, _), (c, _)) ->
       scalar_has_opaque a || scalar_has_opaque b || scalar_has_opaque c
@@ -386,11 +390,8 @@ let find_normalizer r (a : int) : normalizer option =
 let state_prec (tn : Tn.t) =
   match Lazy.force tn.Tn.storage_prec with Ops.Double_prec _ as p -> p | _ -> Ops.single
 
-(* The most negative finite value of a state precision. The masking guards compare against it rather
-   than against [-inf]: a C compiler's finite-math licence ([cc_backend_fast_math], on in the same
-   [approximate] profile that turns this rewrite on) may fold a comparison with an infinity, never
-   one between a runtime value and a finite constant. A score at or below it is masked for every
-   purpose -- its exponential underflows to 0 against any live score. *)
+(* The most negative finite value of a state precision: the floor the rescaling reads the running
+   max through, so that [-inf] never meets itself in a subtraction (see the recurrence below). *)
 let lowest_finite = function Ops.Double_prec _ -> -.Float.max_value | _ -> -3.4028234663852886e38
 
 let emit_normalizer (nz : normalizer) : LL.t =
@@ -404,32 +405,38 @@ let emit_normalizer (nz : normalizer) : LL.t =
   let binop op a b = apply_op (Ops.Binop op) [| a; b |] in
   let exp_ a = apply_op (Ops.Unop Ops.Exp) [| a |] in
   let m_prev = Get_local m.prev and m_next = Get_local m.next and l_prev = Get_local l.prev in
-  (* A row whose prefix is entirely masked ([-inf] scores) keeps [m' = -inf], where the rescaling
-     factor would be [exp (-inf - -inf) = nan]; its carried normalizer stays 0 until the first live
-     score, whose rescaling of the empty prefix is [exp (-inf - x) = 0]. The guard also asks the
-     score itself: [max] drops a NaN score against [-inf], and only a masked score may be dropped --
-     a NaN score reaches [exp (nan - m')] and poisons the normalizer, as in the composed form. And
-     an all-masked step carries the normalizer UNCHANGED rather than writing zero: zero for a
-     genuine prefix, and a poison already there stays. "Masked" is a comparison against the format's
-     lowest finite value ([lowest_finite]), never against [-inf] itself. *)
-  let masked v prec = Binop (Ops.Cmple, (v, prec), (Constant (lowest_finite prec), prec)) in
-  let m_masked = masked m_next (state_prec nz.m) in
+  (* No comparison in the update: a masked score is [-inf], and the arithmetic is arranged so that
+     [-inf] never meets itself. The rescaling reads both maxima FLOORED at the format's lowest
+     finite value. While a row's prefix is entirely masked the floored max is that value on both
+     sides, so the rescale factor is [exp 0 = 1] against a zero normalizer and each masked score
+     contributes [exp (-inf - lowest) = 0]; the first live score [x] rescales the empty prefix by
+     [exp (lowest - x) = 0] and contributes [exp 0 = 1]; a score exactly at the lowest finite value
+     is what the composed form makes of it, a finite maximum contributing [exp 0] per occurrence. A
+     NaN score reaches [exp (nan - m')] and poisons the normalizer, and the poison rides every later
+     step ([nan * alpha + p]), as in the composed form. Having no [-inf] comparison in the update
+     leaves a C compiler's finite-math licence ([cc_backend_fast_math], on in the same [approximate]
+     profile) nothing to fold that a finite result depends on. *)
+  let floor_at prec v = Binop (Ops.Max, (v, prec), (Constant (lowest_finite prec), prec)) in
+  let m_prec = state_prec nz.m in
+  let m_floor_prev = floor_at m_prec m_prev and m_floor_next = floor_at m_prec m_next in
   let l_next =
+    binop Ops.Add
+      (binop Ops.Mul l_prev (exp_ (binop Ops.Sub m_floor_prev m_floor_next)))
+      (exp_ (binop Ops.Sub (Get_local x) m_floor_next))
+  in
+  (* The stored trajectory: the composed form's normalizer for a row whose max is still [-inf] is
+     NaN (a sum of [exp (-inf - -inf)]). This is the recurrence's one comparison against [-inf], and
+     it decides only what a row with no live score yet stores; a row's final write has a finite max
+     and takes [l'] whatever a finite-math licence makes of the test. (Not the exact [l' + (m' -
+     m')]: the simplifier reassociates it into [(l' + m') - m'], which cancels catastrophically --
+     gh-ocannl-998.) *)
+  let l_stored =
     apply_op (Ops.Ternop Ops.Where)
       [|
-        binop Ops.And m_masked (masked (Get_local x) (state_prec nz.x));
-        l_prev;
-        binop Ops.Add
-          (binop Ops.Mul l_prev (exp_ (binop Ops.Sub m_prev m_next)))
-          (exp_ (binop Ops.Sub (Get_local x) m_next));
+        Binop (Ops.Cmpeq, (m_next, m_prec), (Constant Float.neg_infinity, m_prec));
+        Constant Float.nan;
+        Get_local l.next;
       |]
-  in
-  (* The stored trajectory differs from the carried state in one case: a row whose max is still
-     [-inf] has no live score yet, and the composed sum of [exp (-inf - -inf)] over such a row is
-     NaN. The state stays 0 so the first live score can rescale an empty prefix; the tensor gets the
-     composed NaN, which the next live score's write overwrites and a fully masked row keeps. *)
-  let l_stored =
-    apply_op (Ops.Ternop Ops.Where) [| m_masked; Constant Float.nan; Get_local l.next |]
   in
   let body =
     unflat_lines
