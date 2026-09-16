@@ -529,9 +529,13 @@ let on_batch_depth : (int -> calibration_samples:int -> unit) ref =
    amortized launch (Linux multidev_cc: ~57 us against ~0.44 us) those few dozen singles are a
    comparable share of the call to the tens of thousands of timed dispatches -- about 40% of it --
    so the whole-call mean is diluted by construction, and a host stall landing in the untimed part
-   moves it without moving the reading. Default no-op; no configuration key selects it. *)
-let on_timed_window : (samples:int -> wall_ms:float -> unit) ref =
-  ref (fun ~samples:_ ~wall_ms:_ -> ())
+   moves it without moving the reading. The MEDIAN batch wall accompanies the sum because this
+   window's mean is still a stalled minority's to move: [contended] is declared on a MAJORITY of the
+   window's batches exceeding twice its floor, so a bound meant to hold whenever the claim is not
+   bypassed belongs on a statistic a minority cannot move -- which the median is over exactly the
+   regime the contention rule leaves to it. Default no-op; no configuration key selects it. *)
+let on_timed_window : (samples:int -> wall_ms:float -> median_wall_ms:float -> unit) ref =
+  ref (fun ~samples:_ ~wall_ms:_ ~median_wall_ms:_ -> ())
 
 (* [routine.bindings] exposes the routine's live binding refs — restore them after timing (Codex P2
    on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)
@@ -778,15 +782,24 @@ let time_routine ?(tag_failures = false) ~timing ~repeats cctx routine =
       !on_batch_depth depth ~calibration_samples:calibration_dispatches;
       (* The calibration's own contention verdict is not consulted (gh-ocannl-888): it judged single
          dispatches, and the window that gets judged for refusal is the batch below. *)
-      let timed_wall_ms = ref 0. and timed_batches = ref 0 in
+      let timed_wall_ms = ref 0. and timed_batches = ref 0 and timed_walls = ref [] in
       let result =
         sample_min ~repeats ~sample:(fun () ->
             let wall = batch depth in
             timed_wall_ms := !timed_wall_ms +. wall;
+            timed_walls := wall :: !timed_walls;
             Int.incr timed_batches;
             { per_launch_ms = wall /. Float.of_int depth; contention_ms = wall })
       in
-      !on_timed_window ~samples:!timed_batches ~wall_ms:!timed_wall_ms;
+      let median_wall_ms =
+        let sorted = Array.of_list !timed_walls in
+        Array.sort sorted ~compare:Float.compare;
+        let n = Array.length sorted in
+        if n = 0 then 0.
+        else if n % 2 = 1 then sorted.(n / 2)
+        else (sorted.((n / 2) - 1) +. sorted.(n / 2)) /. 2.
+      in
+      !on_timed_window ~samples:!timed_batches ~wall_ms:!timed_wall_ms ~median_wall_ms;
       result)
 
 (* gh-ocannl-532: on a GPU backend, code that binds no hardware dimension runs the whole routine in

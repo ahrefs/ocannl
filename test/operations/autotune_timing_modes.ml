@@ -272,6 +272,7 @@ type reading = {
   depth : int;
   calibration_dispatches : int;
   timed_wall_ms : float;
+  timed_median_ms : float;
   timed_batches : int;
 }
 
@@ -297,11 +298,12 @@ let () =
      batches the timed loop ran and their summed wall. The per-launch envelope below is written
      against THIS window rather than against the call the test wraps a clock around, whose wall also
      holds the warmup and the calibration's synchronized singles. *)
-  let timed_wall_seen = ref 0. and timed_batches_seen = ref 0 in
+  let timed_wall_seen = ref 0. and timed_batches_seen = ref 0 and timed_median_seen = ref 0. in
   (Autotune.on_timed_window :=
-     fun ~samples ~wall_ms ->
+     fun ~samples ~wall_ms ~median_wall_ms ->
        timed_batches_seen := samples;
-       timed_wall_seen := wall_ms);
+       timed_wall_seen := wall_ms;
+       timed_median_seen := median_wall_ms);
   let measure timing =
     let before = count () in
     let c0 = Mtime_clock.counter () in
@@ -316,6 +318,7 @@ let () =
       depth = !depth_seen;
       calibration_dispatches = !calibration_dispatches_seen;
       timed_wall_ms = !timed_wall_seen;
+      timed_median_ms = !timed_median_seen;
       timed_batches = !timed_batches_seen;
     }
   in
@@ -424,65 +427,88 @@ let () =
      the round trip it is DEFINED as on its low side (worst measured ratio 0.61, 1.8x clear of its
      factor of 3) and [Queued] takes the window. *)
   let timed_mean r = r.timed_wall_ms /. Float.of_int (max 1 (r.timed_batches * r.depth)) in
+  (* The statistic both sides are written against: the MEDIAN batch's cost per launch. A minimum
+     over the window cannot exceed it, which is what makes both refusals below structural, and --
+     unlike the window's mean -- a minority of stalled batches cannot move it. That distinction is
+     not a refinement but the condition under which these claims are made at all: [contended]
+     declares the reading bypassed when a MAJORITY of the window's batches exceed twice its floor,
+     so the regime the claims must survive is exactly the one a median is unmoved over, while one
+     arbitrarily long batch among 64 moves the mean without limit (Codex P2, round 2 on PR #735).
+     The mean is still reported on stderr, since the dilution argument above is about it. *)
+  let median_per_launch r = r.timed_median_ms /. Float.of_int (max 1 r.depth) in
   (* The seam's window is the one the reading summarizes: the loop counts its own batches, so an
      anchor taken from a window other than the one [samples] describes fails here rather than
      silently rescaling both sides of the envelope. *)
   p "both readings are anchored on the timed window they reported"
     (iso.timed_batches = iso.samples && que.timed_batches = que.samples);
   Verdict.pass_fail "isolated reading is a per-launch time or reports contention"
-    (iso.contended || Float.(iso.ms <= 3. * timed_mean iso && iso.ms >= floor_ms / 3.))
+    (iso.contended || Float.(iso.ms <= 3. * median_per_launch iso && iso.ms >= floor_ms / 3.))
     ~detail:(fun () ->
-      Printf.sprintf "%.6f ms vs timed mean %.6f ms, round trip %.6f ms" iso.ms (timed_mean iso)
-        floor_ms);
-  Verdict.pass_fail
+      Printf.sprintf "%.6f ms vs median batch %.6f ms, round trip %.6f ms" iso.ms
+        (median_per_launch iso) floor_ms);
+  (* The upper side, and the depth regime in which it discriminates. A reading left per-batch is
+     [depth] times a correct one, and the envelope's own factor is 3, so at depth 2 or 3 that error
+     lands inside the envelope and the claim would pass over it (Codex P2, round 2 on PR #735). The
+     gate is that error formed from the reading in hand -- multiply it back up by the depth and ask
+     whether the bound would catch it -- so a reading that IS per-batch makes the gate true by a
+     further factor of [depth] and cannot dodge the claim by it, while a legitimate reading at depth
+     2 skips a check that could not have failed. *)
+  let per_batch_reading = que.ms *. Float.of_int (max 1 que.depth) in
+  let upper_claim =
     "queued reading is a per-launch time rather than a per-batch one, or reports contention"
-    (que.contended || Float.(que.ms <= 3. * timed_mean que))
-    ~detail:(fun () ->
-      Printf.sprintf "%.6f ms vs timed mean %.6f ms (depth %d)" que.ms (timed_mean que) que.depth);
+  in
+  if Float.(per_batch_reading > 3. * median_per_launch que) then
+    p upper_claim (que.contended || Float.(que.ms <= 3. * median_per_launch que))
+  else Verdict.skipped ~aggregation:`Environment ~backend:(backend ()) upper_claim;
   (* The low side, as the larger of two terms that refuse on different grounds. [2 / depth] is
-     structural: the reading is a minimum over the batches this mean averages, so it cannot exceed
-     that mean, a twice-divided one cannot exceed [mean / depth], and a bound at twice that refuses
-     it at EVERY depth with nothing measured. The 64 of the other term is not a round number: it is
-     [Autotune.max_timing_runs], the top-up cap the sample-count claims above pin, so at that cap --
-     where the budget lands for any routine fast enough to batch at all -- the same structural
-     argument refuses a reading divided by the RUN count on top of the launch count. Below the cap
-     that second refusal weakens, which is the honest reach of this instrument: the batch-depth
-     division refused at every depth, the run-count division at the run counts a batching routine
-     actually reaches. That term is also what keeps the bound from going slack where [2 / depth]
-     falls far below any real reading, at CUDA's depth 2048. What the constants have to clear, now
-     that the dilution is gone, is the dispersion of the batch walls themselves: a stall landing in
-     a minority of the timed batches still moves this mean, and that is the quantity 342 further
-     runs of the same load ladder measured. The minimum stayed at 0.090 of its window's mean at
-     worst (Linux multidev_cc at 2x oversubscription; it was 0.073 against the whole call), and
-     every reading cleared the bound -- contended ones included, since the sweep did not sort them
-     out -- the tightest by 3.4x: Metal at 6x oversubscription on a 16-core host, where a depth of
-     49 makes [2 / depth] the binding term. *)
+     structural: the reading is a minimum over the batches this median is a middle of, so it cannot
+     exceed that median, a twice-divided one cannot exceed [median / depth], and a bound at twice
+     that refuses it at EVERY depth with nothing measured. The 64 of the other term is not a round
+     number: it is [Autotune.max_timing_runs], the top-up cap the sample-count claims above pin, so
+     at that cap -- where the budget lands for any routine fast enough to batch at all -- the same
+     structural argument refuses a reading divided by the RUN count on top of the launch count --
+     but only as far as the window's own spread reaches, since such a reading sits at the minimum
+     over 64 and the bound at the median over 64. That spread was 1.35x at the sweep's median and as
+     little as 1.01x, so THAT refusal is opportunistic where the batch-depth one is guaranteed, and
+     the anchor is not traded back for it: a statistic with a longer tail above the minimum would
+     refuse a run-count division more often and false-fail on the stalls this bound exists to
+     survive. The term's own job is to keep the bound from going slack where [2 / depth] falls far
+     below any real reading, at CUDA's depth 2048, and to refuse any reading below a 64th of its
+     window's middle. What the constants have to clear is the spread between a window's minimum and
+     that middle: over 342 runs of the load ladder that produced the numbers above, re-read against
+     the median, the minimum stayed at 0.19 of its window's median at worst and every reading
+     cleared the bound -- contended ones included, since the sweep did not sort them out -- the
+     tightest by 7.4x, Metal at 6x oversubscription on a 16-core host where a depth of 39 makes [2 /
+     depth] the binding term. The same runs put the minimum at 0.064 of their window's MEAN, which
+     is the tail the median is here to cut. *)
   let queued_low_bound =
-    Float.max (timed_mean que /. 64.) (2. *. timed_mean que /. Float.of_int (max 1 que.depth))
+    Float.max
+      (median_per_launch que /. 64.)
+      (2. *. median_per_launch que /. Float.of_int (max 1 que.depth))
   in
   Stdio.eprintf
-    "  (not part of the golden) timed windows: isolated %d batches in %.3f ms wall (mean %.6f ms); \
-     queued %d batches of %d in %.3f ms wall (mean %.6f ms, min/mean %.4f); queued low bound %.6f \
-     ms\n\
+    "  (not part of the golden) timed windows: isolated %d batches in %.3f ms wall (mean %.6f ms, \
+     median batch %.6f ms); queued %d batches of %d in %.3f ms wall (mean %.6f ms, median batch \
+     %.6f ms, min/mean %.4f, min/median %.4f); queued low bound %.6f ms\n\
      %!"
-    iso.timed_batches iso.timed_wall_ms (timed_mean iso) que.timed_batches que.depth
-    que.timed_wall_ms (timed_mean que)
+    iso.timed_batches iso.timed_wall_ms (timed_mean iso) iso.timed_median_ms que.timed_batches
+    que.depth que.timed_wall_ms (timed_mean que) que.timed_median_ms
     (que.ms /. timed_mean que)
+    (que.ms /. median_per_launch que)
     queued_low_bound;
-  (* Printed rather than left to [~detail], because this claim reports through [p]: a run whose
-     batch is too shallow for the low side skips it, and [Verdict.skipped] ends in [p name true], so
-     only the [true] dialect keeps a legitimate skip's stdout identical to an evaluated pass and the
-     golden intact (Codex P2, round 1 on PR #735). The numbers a failure would want are on stderr
-     above, where a calibration run can read them on a passing run too. *)
+  (* Both gated claims report through [p] rather than [Verdict.pass_fail]: [Verdict.skipped] ends in
+     [p name true], so only that dialect keeps a legitimate skip's stdout identical to an evaluated
+     pass and the golden intact (Codex P2, round 1 on PR #735). The numbers a failure would want are
+     on the stderr line above, where a calibration run reads them on a passing run too. *)
   let low_claim =
     "queued reading is not that per-launch time divided by the batch depth as well, or reports \
      contention"
   in
-  (* Below depth 16 the [2 / depth] term would demand a min/mean ratio above 1/8, which is a claim
-     about dispersion this instrument has no evidence for -- a double division is not separable from
-     the noise there, and the leg says so rather than passing vacuously. The shallowest batch in the
-     sweep was 31, so this guards a regime the counter routine does not reach rather than a routine
-     outcome. *)
+  (* Below depth 16 the [2 / depth] term would demand a minimum above an eighth of its window's
+     median. A median-anchored bound clears that with room at every depth the fleet produces, but
+     the shallow regime is where a double division stops being separable from ordinary spread at
+     all, and the leg says so rather than passing vacuously. The shallowest batch in the sweep was
+     31. *)
   if que.depth >= 16 then p low_claim (que.contended || Float.(que.ms >= queued_low_bound))
   else Verdict.skipped ~aggregation:`Environment ~backend:(backend ()) low_claim;
   (* Amortizing a round trip can only remove time, so a queued reading above the isolated one is the

@@ -757,12 +757,19 @@ files.
   and the calibration's synchronized singles, and on a backend whose round trip is two orders of
   magnitude above an amortized launch those few dozen singles are ~40% of the call against tens of
   thousands of timed dispatches, so a whole-call mean is diluted by construction and a stall in the
-  untimed part moves it without moving the reading. Against the timed window the ratio is at most 1
-  by construction (min ≤ mean over the same samples; largest observed 0.97, smallest 0.090 under 2x
-  oversubscription), which also makes the refusal of a twice-divided reading structural rather than
-  calibrated: it cannot exceed `mean / depth`, so a bound at `2 * mean / depth` refuses it at every
-  depth with nothing measured, and a per-batch reading overshoots a `3 * mean` upper side by
-  `depth / 3`.
+  untimed part moves it without moving the reading. And within that window, the MEDIAN batch
+  rather than the mean: `contended` is declared on a MAJORITY of the window's batches exceeding
+  twice its floor, so the regime a claim must survive is exactly the one a median is unmoved over,
+  while one arbitrarily long batch among 64 moves the mean without limit (measured on the same 342
+  runs: the minimum sat at 0.19 of its window's median at worst, against 0.064 of its mean).
+  Against either the ratio is at most 1 by construction (min ≤ the middle of the same samples),
+  which makes the refusal of a twice-divided reading structural rather than calibrated: it cannot
+  exceed `median / depth`, so a bound at `2 * median / depth` refuses it at every depth with
+  nothing measured, and a per-batch reading overshoots a `3 * median` upper side by `depth / 3`.
+  The trade to know: a statistic with a longer tail above the minimum refuses a division by the RUN
+  count more often (the mean's tail reaches 15x, the median's 1.35x) and false-fails on precisely
+  the stalls the bound exists to survive — the guaranteed refusal is the depth one, and a
+  shallow-depth regime where an error is inside the envelope's own factor is a skip, not a pass.
   The dispersion argument that rejected the mean for `Isolated` (a stall-cut 6-dispatch call read
   22x its own minimum, gh-ocannl-851) does not transfer to `Queued`: a stall lands inside one batch
   of `depth` dispatches among `samples` batches, so it moves the mean by a fraction of itself.
