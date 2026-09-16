@@ -61,6 +61,72 @@ AGGREGATE_SKIPS=$SWEEP_TOOLS/aggregate-skips.sh
 }
 # shellcheck source=dxg-window.sh
 . "$SWEEP_TOOLS/dxg-window.sh"
+
+# ---------------------------------------------------------------- the lab lock
+# The WSL boxes are shared, and `wsl.exe --shutdown` on one of them is HOST-GLOBAL: it destroys the
+# whole VM, so every session on that box dies with it. On 2026-09-16 that cost this sweep both GPU
+# units. Run 20260916T074913Z was 13 minutes into rog-nv/cuda and minix/hip when a second session,
+# verifying an unrelated fix to wake-lab.sh against the real lab, ran `wake-lab.sh --wait
+# --restart-wsl rog minix` at 08:02:30Z; both guests rebooted seconds later and both units died on
+# a reset connection. They were recorded as `error`, which reads as a box fault, and the failure
+# was attributed to the GPU autotune tests for two days -- they are the longest-running tests in
+# the suite, so a randomly-timed external kill lands in them far more often than anywhere else.
+#
+# So a remote lane RESERVES its box for as long as it is using it, and wake-lab.sh refuses to
+# destroy a VM whose box is reserved. The contract between the two tools is deliberately just a
+# directory, a filename and a one-line description -- this sweep takes its own flock and never
+# calls wake-lab.sh, so a checkout on a box that has no ~/bin/wake-lab.sh still reserves correctly.
+# `wake-lab.sh lock-path <box>` answers the same path for anyone who would rather ask than derive.
+LAB_LOCK_DIR=${WAKE_LAB_LOCK_DIR:-$HOME/.local/state/wake-lab}
+# How long a lane waits for a box someone else is using. Sized against what the holder is most
+# likely doing: a `--restart-wsl` is a shutdown plus a cold VM start plus the tailscaled wait
+# behind it, which is minutes rather than seconds. A lane that waits longer than this skips its
+# units rather than running them on a box that is being torn down underneath it.
+LAB_LOCK_WAIT=${OCANNL_SWEEP_LAB_LOCK_WAIT:-300}
+
+# The wake-lab box whose lock covers an ssh alias. The two real ones are named rather than derived,
+# so a renamed alias fails loudly here instead of silently reserving a box nobody checks; the
+# fallback is the alias's first component, which is the convention the aliases already follow.
+lab_box_of() { # ssh-alias
+  case $1 in
+    rog-nv-wsl) printf 'rog' ;;
+    minix-amd-wsl) printf 'minix' ;;
+    *) printf '%s' "${1%%-*}" ;;
+  esac
+}
+
+# Reserve a box on fd 8, for as long as this shell lives. Called only in a LANE subshell, so the
+# reservation is released when the lane ends however it ends -- there is nothing to reclaim after a
+# crash, and no state that can outlive the process that made it. The flock idiom is the run lock's
+# above: perl takes it and exits, and the lock survives because it belongs to the open file
+# DESCRIPTION behind fd 8, which this shell keeps open.
+take_lab_lock() { # box -- true iff the box is now reserved by this lane
+  local box=$1 path deadline=$((SECONDS + LAB_LOCK_WAIT)) waited=0
+  path=$LAB_LOCK_DIR/$box.lock
+  mkdir -p "$LAB_LOCK_DIR" 2>/dev/null || return 1
+  exec 8>>"$path" || return 1
+  while :; do
+    if perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 1)' <&8; then
+      # The holder line is advisory -- it names who to go and look at, and nothing reads it to make
+      # a decision. Written after the lock is held, so two racing lanes cannot interleave into it.
+      printf 'ocannl sweep %s (pid %s, since %s)\n' "$stamp" "$$" \
+        "$(date -u +%Y%m%dT%H%M%SZ)" >"$path" 2>/dev/null
+      [ "$waited" -gt 0 ] && say "  $box: reserved after waiting ${waited}s for the previous holder"
+      return 0
+    fi
+    [ "$SECONDS" -ge "$deadline" ] && { exec 8>&-; return 1; }
+    sleep 5
+    waited=$((waited + 5))
+  done
+}
+
+# Who holds a box, for the skip message. Never trusted for the decision.
+lab_lock_holder() { # box
+  local line
+  line=$(head -1 "$LAB_LOCK_DIR/$1.lock" 2>/dev/null | tr -d '\000-\037')
+  printf '%s' "${line:-an unnamed holder}"
+}
+
 REF=origin/master
 TARGET=
 SLOW=0
@@ -702,8 +768,9 @@ publish_dxg_unavailable_fallback() { # sidecar log reason label
   return 1
 }
 
-collect_dxg_window() { # host log remote-start-epoch label
-  local host=$1 log=$2 remote_start=$3 label=$4 kernel rc bounds start_utc end_utc sidecar
+collect_dxg_window() { # host log remote-start-epoch label start-boot-id
+  local host=$1 log=$2 remote_start=$3 label=$4 start_boot=${5:-}
+  local kernel rc bounds start_utc end_utc sidecar end_boot boot=unknown
   sidecar=$(dxg_sidecar "$log")
   # No start instant from the box means no window to bound. Reported as a failed
   # collection, which is what it is, rather than guessed.
@@ -729,6 +796,16 @@ collect_dxg_window() { # host log remote-start-epoch label
   # record row name the window that was actually queried.
   bounds=$(sed -n 's/^dxg-window-bounds \([0-9][0-9]*\) \([0-9][0-9]*\)$/\1 \2/p' \
     "$kernel" 2>/dev/null | head -1)
+  # Which guest answered THIS collection, against the one the unit started on. The
+  # comparison is three-valued on purpose: `replaced` is a finding, `same` is a
+  # finding, and a boot id missing from either end is neither -- a box that cannot
+  # report one is exactly as trustworthy as it was before this check existed, and
+  # turning that into an alarm would retire a working window on every host whose
+  # kernel does not publish the file.
+  end_boot=$(sed -n 's/^dxg-window-boot \(.*\)$/\1/p' "$kernel" 2>/dev/null | head -1)
+  if [ -n "$start_boot" ] && [ -n "$end_boot" ]; then
+    if [ "$start_boot" = "$end_boot" ]; then boot=same; else boot=replaced; fi
+  fi
   if [ -n "$bounds" ]; then
     start_utc=$(utc_of "${bounds%% *}")
     end_utc=$(utc_of "${bounds##* }")
@@ -759,7 +836,7 @@ collect_dxg_window() { # host log remote-start-epoch label
     # judgement in it, so it belongs where a fixture can feed it lines directly
     # instead of behind an ssh no test can reach. The publication's status is read
     # BEFORE the cleanup below, which would otherwise replace it with its own.
-    publish_dxg_sidecar "$sidecar" "$log" dxg_window_summary "$start_utc" "$end_utc" <"$kernel"
+    publish_dxg_sidecar "$sidecar" "$log" dxg_window_summary "$start_utc" "$end_utc" "$boot" <"$kernel"
     rc=$?
     rm -f "$kernel"
     [ "$rc" -eq 0 ] ||
@@ -1611,7 +1688,7 @@ fi
 # after the lane has moved on to its next unit.
 run_unit() { # machine backend host
   local machine=$1 backend=$2 host=$3
-  local log started remote_home remote_probe remote_started wt path_prefix= remote_repo
+  local log started remote_home remote_probe remote_started remote_boot wt path_prefix= remote_repo
   local remote_prep remote rc elapsed outcome
   WRITTEN_FINGERPRINT=
 
@@ -1642,7 +1719,8 @@ run_unit() { # machine backend host
     # VM breaks when it resynchronises after a host resume.
     if ! remote_probe=$(capped 60 ssh -o BatchMode=yes -o ConnectTimeout=8 \
          -o ServerAliveInterval=30 -o ServerAliveCountMax=4 \
-         "$host" 'printf "%s\n%s\n" "$HOME" "$(date +%s)"' 2>/dev/null) ||
+         "$host" 'printf "%s\n%s\n%s\n" "$HOME" "$(date +%s)" \
+           "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)"' 2>/dev/null) ||
        [ -z "$remote_probe" ]; then
       say "  $machine/$backend: skip (unreachable)"
       record "$machine" "$backend" skip 0
@@ -1651,6 +1729,12 @@ run_unit() { # machine backend host
     fi
     remote_home=$(printf '%s\n' "$remote_probe" | sed -n 1p)
     remote_started=$(printf '%s\n' "$remote_probe" | sed -n 2p)
+    # WHICH guest, not just which host. A WSL2 VM that is destroyed and recreated
+    # mid-unit comes back at the same alias with the same hostname and the same
+    # home directory, so nothing else the collection can see tells the two apart
+    # -- and the window it then reports spans both boots. Read on the same round
+    # trip as the clock, and compared against the same reading at collection time.
+    remote_boot=$(printf '%s\n' "$remote_probe" | sed -n 3p)
     [ -n "$remote_home" ] || {
       say "  $machine/$backend: skip (unreachable)"
       record "$machine" "$backend" skip 0
@@ -1802,7 +1886,8 @@ run_unit() { # machine backend host
       # time. Both ends therefore come from the clock that timestamps the log, and
       # nothing is reconstructed from a duration measured on another machine.
       [ -n "$host" ] &&
-        collect_dxg_window "$host" "$log" "${remote_started:-}" "$machine/$backend"
+        collect_dxg_window "$host" "$log" "${remote_started:-}" "$machine/$backend" \
+          "${remote_boot:-}"
       ;;
   esac
   # Diagnosis, strictly after the row and the elapsed time it reports: this phase
@@ -1864,7 +1949,7 @@ lane_exit() {
 # could not be written -- and that fails only its lane; the top level lets the
 # others finish recording and then exits 2.
 run_lane() { # machine -- only ever as a background job: it ends in `exit`
-  local lane=$1 unit machine backend host
+  local lane=$1 unit machine backend host lane_host= lab_box
   LANE_PIDS=
   IN_LANE=1
   UNIT_PID=
@@ -1872,6 +1957,36 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
   trap 'relay 130' INT
   trap 'relay 143' TERM
   trap lane_exit EXIT
+  # Reserve the box before the first unit touches it. A lane is one machine, so one reservation
+  # covers all of its units, and it is held for the whole lane rather than per unit: the gap
+  # between two units of the same lane is exactly when a restart would land, and a box handed back
+  # between minix/hip and minix/multidev_cc is one the second unit can still lose underneath it.
+  # Local lanes have no host and reserve nothing -- the lock is about the WSL VM, not the machine.
+  for unit in "${UNITS[@]}"; do
+    IFS=: read -r machine backend host <<<"$unit"
+    [ "$machine" = "$lane" ] || continue
+    wanted "$backend" || continue
+    [ -n "$host" ] && { lane_host=$host; break; }
+  done
+  if [ -n "$lane_host" ]; then
+    lab_box=$(lab_box_of "$lane_host")
+    if ! take_lab_lock "$lab_box"; then
+      # Skipped, not errored: nothing was tested and nothing failed. `error` would fingerprint a
+      # box someone else is legitimately working on as a broken one, and the run record's skip
+      # coverage is already the channel for a backend that went untested.
+      for unit in "${UNITS[@]}"; do
+        IFS=: read -r machine backend host <<<"$unit"
+        [ "$machine" = "$lane" ] || continue
+        wanted "$backend" || continue
+        say "  $machine/$backend: skip (box $lab_box reserved by $(lab_lock_holder "$lab_box"))"
+        record "$machine" "$backend" skip 0
+        update_unit_state "$machine" "$backend" skip
+        flush_lane_output || die "cannot publish the $machine/$backend summary to stdout"
+      done
+      : >"$LANE_DIR/lane-done.$lane" || die "cannot mark the $lane lane finished"
+      exit 0
+    fi
+  fi
   for unit in "${UNITS[@]}"; do
     IFS=: read -r machine backend host <<<"$unit"
     [ "$machine" = "$lane" ] || continue

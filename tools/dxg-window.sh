@@ -41,8 +41,24 @@ utc_of() { # epoch-seconds -> the stamp format, so a window reads like every oth
 }
 
 DXG_BENIGN='dxgkio_query_adapter_info|dxgkio_is_feature_enabled'
-dxg_window_summary() { # start-utc end-utc -- kernel lines on stdin, block on stdout
-  local kept bursts shown
+
+# What a window whose GUEST WAS REPLACED records instead of a count. Like DXG_UNAVAILABLE it must
+# not be `0`, and for a sharper reason: a window that spans a VM death collects the journal of BOTH
+# boots (the query is deliberately `_TRANSPORT=kernel` and not `-k`, so it spans them), and a new
+# VM that came up clean contributes no dxg lines at all. The window therefore reads `0
+# vmbus_sendpacket failures` -- "the bridge was fine" -- over a unit whose machine ceased to exist
+# underneath it.
+#
+# That is exactly what happened on 2026-09-16. Sweep 20260916T074913Z lost rog-nv/cuda and
+# minix/hip when a concurrent `wake-lab.sh --restart-wsl` destroyed both guests mid-unit, and both
+# sidecars recorded a clean window -- which was then cited as evidence AGAINST the VM having been
+# the problem, and the failure was attributed to the GPU autotune tests for two days. A replaced
+# guest is not a weaker finding than a burst; it is a stronger one, and it has to say so where
+# every reader of this block already looks.
+DXG_VM_REPLACED=vm-replaced
+
+dxg_window_summary() { # start-utc end-utc [boot-verdict] -- kernel lines on stdin, block on stdout
+  local kept bursts shown boot=${3:-}
   kept=$(grep -E 'misc dxg' | grep -Ev "$DXG_BENIGN") || true
   bursts=$(printf '%s\n' "$kept" | grep -c 'vmbus_sendpacket failed') || true
   # `grep -c` counts an empty line as no match, but say so explicitly rather than
@@ -62,6 +78,19 @@ dxg_window_summary() { # start-utc end-utc -- kernel lines on stdin, block on st
     # the whole purpose of keeping unrecognised lines at all.
     printf '%s\n' "$kept" | sed 's/^.*misc dxg: /dxg signature: misc dxg: /' | sort -u
   fi
+  # A replaced guest is reported with the count still visible above it -- the lines are real and
+  # worth reading -- but it TAKES THE VERDICT, because the count no longer describes one machine
+  # and `0` would read as a clean bridge over a VM that died. `unknown` is the pre-existing state
+  # under a new name: a box whose boot id could not be read is no worse off than it was before the
+  # check existed, and saying so beats both silence and a false alarm.
+  case $boot in
+    replaced)
+      printf 'the guest was REPLACED during this window: the VM that ran the unit is gone, so\n'
+      printf 'the count above spans two boots and certifies nothing about either.\n'
+      bursts=$DXG_VM_REPLACED ;;
+    unknown)
+      printf 'the guest boot id could not be read: this window is not known to cover one VM.\n' ;;
+  esac
   # The line environment_red keys on, and the field the run record carries. Last,
   # so that a truncated block still ends with its verdict.
   printf '=== dxg window: %s vmbus_sendpacket failures ===\n' "$bursts"
@@ -83,7 +112,9 @@ dxg_window_unavailable() { # start-utc end-utc reason
 # Reads the sidecar, so a block printed by a unit's tests is not mistaken for one
 # the collector wrote.
 dxg_bursts() { # log
-  sed -n 's/^=== dxg window: \([0-9a-z][0-9a-z]*\) vmbus_sendpacket failures ===$/\1/p' \
+  # `[0-9a-z-]`: the verdict is a count, `unavailable`, or `vm-replaced`. A `-` last in the bracket
+  # expression is a literal one in every dialect, and no dialect reads it as a range there.
+  sed -n 's/^=== dxg window: \([0-9a-z-][0-9a-z-]*\) vmbus_sendpacket failures ===$/\1/p' \
     "$(dxg_sidecar "$1")" 2>/dev/null | tail -1
 }
 
@@ -153,6 +184,12 @@ dxg_window_cmd() { # remote-start-epoch
   printf 'dxg_end=$(date +%%s); dxg_end=$((dxg_end + 1)); '
   printf 'dxg_start=%s; ' "$1"
   printf 'echo "dxg-window-bounds $dxg_start $dxg_end"; '
+  # The guest's identity as of the END of the window, against the one the start probe read. A WSL2
+  # VM that is destroyed and recreated comes back at the same ssh alias, with the same hostname and
+  # the same home directory, and answers this collection perfectly well -- nothing else in the
+  # round trip can tell the operator they are talking to a different machine than the unit ran on.
+  # /proc/sys/kernel/random/boot_id is regenerated per boot and needs no privilege to read.
+  printf 'echo "dxg-window-boot $(cat /proc/sys/kernel/random/boot_id 2>/dev/null)"; '
   printf 'if command -v journalctl >/dev/null 2>&1 && '
   printf 'journalctl -q _TRANSPORT=kernel --since @$dxg_start --until @$dxg_end '
   printf -- '-n 1 --no-pager 2>/dev/null | grep -qv "^--"; then '
@@ -196,10 +233,17 @@ dxg_fingerprint_lines() { # log
   # The block's own signature lines, which dxg_window_summary emits uncapped --
   # NOT a re-derivation from the raw lines it shows, which are capped at 40 and
   # would silently drop a signature that first appeared late in a bad window.
-  printf '%s\n' "$block" | grep '^dxg signature: ' | sort -u
+  # `|| true` for the same reason `kept` above has one, and it matters more here: a window with a
+  # VERDICT but no signature lines -- an unavailable collection, a replaced guest, a clean zero --
+  # makes this grep exit 1, and under `set -e` with `pipefail` that aborts the function before the
+  # case below, dropping the verdict line entirely. sweep.sh runs `set -uo pipefail` with no `-e`
+  # today, so nothing in production loses it; a caller that turns errexit on would, silently, and
+  # the line it would lose is the one that tells a standing red from a fingerprint that moved.
+  printf '%s\n' "$block" | grep '^dxg signature: ' | sort -u || true
   case $(printf '%s\n' "$block" | sed -n \
-    's/^=== dxg window: \([0-9a-z][0-9a-z]*\) vmbus_sendpacket failures ===$/\1/p' | tail -1) in
+    's/^=== dxg window: \([0-9a-z-][0-9a-z-]*\) vmbus_sendpacket failures ===$/\1/p' | tail -1) in
     "$DXG_UNAVAILABLE") printf 'dxg window: collection unavailable\n' ;;
+    "$DXG_VM_REPLACED") printf 'dxg window: guest replaced mid-window\n' ;;
     0) printf 'dxg window: no burst\n' ;;
     "") ;;
     *) printf 'dxg window: burst present\n' ;;
@@ -225,5 +269,5 @@ dxg_window_bounds() { # log -> "<start> <end>", or nothing
 # buy a rerun any more than it may certify a clean one. Absent evidence (a local
 # unit, or one that never ran) is likewise not red.
 dxg_window_red() { # log
-  dxg_bursts "$1" | grep -qE '^[1-9][0-9]*$'
+  dxg_bursts "$1" | grep -qE "^([1-9][0-9]*|$DXG_VM_REPLACED)$"
 }

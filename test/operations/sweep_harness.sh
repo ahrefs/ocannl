@@ -1215,6 +1215,54 @@ if dxg_window_red "$tmp/log-only.log"; then
   exit 1
 fi
 
+# A guest REPLACED during the window (2026-09-16). The journal query spans boots on purpose, so a
+# window covering a VM death collects both -- and a new VM that came up clean contributes no dxg
+# lines at all, which is how both GPU units of sweep 20260916T074913Z recorded `0
+# vmbus_sendpacket failures` over machines that had ceased to exist under them. That clean reading
+# was then cited as evidence against the VM having been the problem. The replacement has to take
+# the verdict, because the verdict is what every other reader keys on.
+dxg_replaced=$(printf '%s\n%s\n' "$dxg_benign" "$dxg_unrelated" |
+  dxg_window_summary 20260915T090000Z 20260915T091000Z replaced)
+grep -q '^=== dxg window: vm-replaced vmbus_sendpacket failures ===$' <<<"$dxg_replaced"
+grep -q 'the guest was REPLACED during this window' <<<"$dxg_replaced"
+# ...and a window that WOULD have read as a clean zero is exactly the case that must not.
+absent '=== dxg window: 0 vmbus_sendpacket failures ===' <<<"$dxg_replaced"
+# The lines and the count above it are still there to read: the replacement adds a finding, it does
+# not throw the window away.
+dxg_replaced_red=$(printf '%s\n%s\n' "$dxg_benign" "$dxg_burst" |
+  dxg_window_summary 20260915T090000Z 20260915T091000Z replaced)
+grep -q 'vmbus_sendpacket failed: fffffff5' <<<"$dxg_replaced_red"
+
+# A replaced guest is environment-red: the machine the unit ran on is gone, so whatever the unit
+# reported is not a judgement about the code, which is what the serial rerun exists to establish.
+printf '%s\n' "$dxg_replaced" >"$(dxg_sidecar "$tmp/dxg-replaced.log")"
+[ "$(dxg_bursts "$tmp/dxg-replaced.log")" = vm-replaced ]
+dxg_window_red "$tmp/dxg-replaced.log"
+# ...and it is a stable fingerprint line, so a unit red for it twice does not read as `fingerprint
+# moved` while a unit that starts or stops losing its guest does.
+dxg_fingerprint_lines "$tmp/dxg-replaced.log" | grep -q '^dxg window: guest replaced mid-window$'
+
+# `same` is the ordinary case and changes nothing; `unknown` is the pre-existing state under a
+# name, for a box whose kernel publishes no boot id -- it must not become an alarm.
+dxg_same=$(printf '%s\n' "$dxg_unrelated" |
+  dxg_window_summary 20260915T090000Z 20260915T091000Z same)
+grep -q '^=== dxg window: 0 vmbus_sendpacket failures ===$' <<<"$dxg_same"
+absent 'REPLACED' <<<"$dxg_same"
+dxg_unknown=$(printf '%s\n' "$dxg_unrelated" |
+  dxg_window_summary 20260915T090000Z 20260915T091000Z unknown)
+grep -q '^=== dxg window: 0 vmbus_sendpacket failures ===$' <<<"$dxg_unknown"
+grep -q 'boot id could not be read' <<<"$dxg_unknown"
+# The two-argument form is what the collector used before the boot check existed and what this
+# harness calls everywhere above: it must keep meaning "nothing known about the guest".
+dxg_legacy=$(printf '%s\n' "$dxg_unrelated" | dxg_window_summary A B)
+grep -q '^=== dxg window: 0 vmbus_sendpacket failures ===$' <<<"$dxg_legacy"
+absent 'REPLACED' <<<"$dxg_legacy"
+
+# The remote reports the guest it is running as, on the same round trip as the bounds -- there is
+# no second ssh to lose, and nothing else in the answer can tell one VM from its replacement.
+dxg_window_cmd 1757980800 | grep -q 'dxg-window-boot'
+dxg_window_cmd 1757980800 | grep -q '/proc/sys/kernel/random/boot_id'
+
 # Negative control: a red whose failures are the tests' own gets no second run.
 serial_control=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$state_failure \
   run_sweep_backend cc --target serial-probe)
