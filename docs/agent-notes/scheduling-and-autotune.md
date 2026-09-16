@@ -753,7 +753,9 @@ files.
   green only because those readings were usually flagged `contended` and took the claim's escape
   hatch. A bound on a batched reading belongs on the SAME quantity, and specifically on the WINDOW
   the reading is a minimum over: the timed batches and their summed wall, which `time_routine`
-  reports through `Autotune.on_timed_window`. Not the whole call — its wall also holds the warmup
+  reports through `Autotune.on_timed_window` (payload: `~samples` — counted by the loop, not
+  restated from its result, so a test can hold the two against each other — `~wall_ms` and
+  `~median_wall_ms`). Not the whole call — its wall also holds the warmup
   and the calibration's synchronized singles, and on a backend whose round trip is two orders of
   magnitude above an amortized launch those few dozen singles are ~40% of the call against tens of
   thousands of timed dispatches, so a whole-call mean is diluted by construction and a stall in the
@@ -769,7 +771,14 @@ files.
   The trade to know: a statistic with a longer tail above the minimum refuses a division by the RUN
   count more often (the mean's tail reaches 15x, the median's 1.35x) and false-fails on precisely
   the stalls the bound exists to survive — the guaranteed refusal is the depth one, and a
-  shallow-depth regime where an error is inside the envelope's own factor is a skip, not a pass.
+  shallow-depth regime where an error is inside the envelope's own factor is a skip, not a pass —
+  and that skip is gated on the DEPTH, never on a quantity derived from the reading under test,
+  which decides whether to check using the very number in question (it passed a per-batch reading
+  at depth 2 in review). The arithmetic: a per-batch reading is the window's minimum batch wall, so
+  a `f * median / depth` bound refuses it once `depth > f * (median / minimum)`; the sweep's widest
+  spread was 5.3, so `f = 2` discriminates from depth ~11 and the gate sits at 32. `Isolated` is
+  bracketed against the round trip on both sides instead ([floor/3, 8*floor]; measured ratio 0.61
+  to 3.4) — at depth 1 a window-anchored upper side is a theorem, not a check.
   The dispersion argument that rejected the mean for `Isolated` (a stall-cut 6-dispatch call read
   22x its own minimum, gh-ocannl-851) does not transfer to `Queued`: a stall lands inside one batch
   of `depth` dispatches among `samples` batches, so it moves the mean by a fraction of itself.

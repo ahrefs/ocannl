@@ -441,24 +441,41 @@ let () =
      silently rescaling both sides of the envelope. *)
   p "both readings are anchored on the timed window they reported"
     (iso.timed_batches = iso.samples && que.timed_batches = que.samples);
+  (* [Isolated] is bracketed against the round trip on BOTH sides, and not against the window at
+     all: at depth 1 a batch IS a launch, so a minimum over the window cannot exceed that window's
+     median by construction and an upper side written there would be a theorem rather than a check
+     -- which is what re-anchoring it produced, and what this restores. The round trip is measured
+     independently, by hand, off the same two primitives, so both sides of this bracket compare two
+     implementations of one quantity. What the upper side refuses is the mirror error a depth-1 mode
+     can make: a reading that summed its runs instead of minimizing over them, which is 16 to 64
+     times a correct one. The factor is 8: the measured ratio reached 3.4 across the sweep (min
+     0.61, median 1.03), so it clears the widest legitimate reading by 2.4x and still refuses the
+     narrowest run-count multiple by 2x. *)
   Verdict.pass_fail "isolated reading is a per-launch time or reports contention"
-    (iso.contended || Float.(iso.ms <= 3. * median_per_launch iso && iso.ms >= floor_ms / 3.))
+    (iso.contended || Float.(iso.ms <= 8. * floor_ms && iso.ms >= floor_ms / 3.))
     ~detail:(fun () ->
-      Printf.sprintf "%.6f ms vs median batch %.6f ms, round trip %.6f ms" iso.ms
-        (median_per_launch iso) floor_ms);
-  (* The upper side, and the depth regime in which it discriminates. A reading left per-batch is
-     [depth] times a correct one, and the envelope's own factor is 3, so at depth 2 or 3 that error
-     lands inside the envelope and the claim would pass over it (Codex P2, round 2 on PR #735). The
-     gate is that error formed from the reading in hand -- multiply it back up by the depth and ask
-     whether the bound would catch it -- so a reading that IS per-batch makes the gate true by a
-     further factor of [depth] and cannot dodge the claim by it, while a legitimate reading at depth
-     2 skips a check that could not have failed. *)
-  let per_batch_reading = que.ms *. Float.of_int (max 1 que.depth) in
+      Printf.sprintf "%.6f ms vs round trip %.6f ms (median batch %.6f ms)" iso.ms floor_ms
+        (median_per_launch iso));
+  (* The depth from which either side of the queued envelope discriminates, and it is a statement
+     about the DEPTH rather than about the reading. Round 2 gated the upper side on the error formed
+     from the reading in hand, which decides whether to check using the very number in question: at
+     depth 2 or 3 that ran the claim on exactly the per-batch reading it cannot refuse, since the
+     reading would then be the window's minimum batch wall and the bound three halves of its median
+     (Codex P2, round 3 on PR #735).
+
+     Written on the depth it is arithmetic. A per-batch reading IS that minimum, so the upper side
+     refuses it when [minimum > 2 * median / depth] -- when the depth exceeds twice the window's own
+     spread [median / minimum] -- and the low side's structural term needs the same depth for the
+     mirror error. The widest spread over the sweep was 5.3, so both sides discriminate from a depth
+     of about 11, and the gate stands at 32: a 3x margin on that spread, and still below the 36 of
+     the shallowest batch the fleet produced (Metal at 6x oversubscription on a 16-core host). Below
+     it the leg says so rather than passing over an error it cannot see. *)
+  let discriminating_depth = 32 in
   let upper_claim =
     "queued reading is a per-launch time rather than a per-batch one, or reports contention"
   in
-  if Float.(per_batch_reading > 3. * median_per_launch que) then
-    p upper_claim (que.contended || Float.(que.ms <= 3. * median_per_launch que))
+  if que.depth >= discriminating_depth then
+    p upper_claim (que.contended || Float.(que.ms <= 2. * median_per_launch que))
   else Verdict.skipped ~aggregation:`Environment ~backend:(backend ()) upper_claim;
   (* The low side, as the larger of two terms that refuse on different grounds. [2 / depth] is
      structural: the reading is a minimum over the batches this median is a middle of, so it cannot
@@ -504,12 +521,10 @@ let () =
     "queued reading is not that per-launch time divided by the batch depth as well, or reports \
      contention"
   in
-  (* Below depth 16 the [2 / depth] term would demand a minimum above an eighth of its window's
-     median. A median-anchored bound clears that with room at every depth the fleet produces, but
-     the shallow regime is where a double division stops being separable from ordinary spread at
-     all, and the leg says so rather than passing vacuously. The shallowest batch in the sweep was
-     31. *)
-  if que.depth >= 16 then p low_claim (que.contended || Float.(que.ms >= queued_low_bound))
+  (* The same gate, for the mirror error: below it a double division stops being separable from the
+     window's ordinary spread, and the leg says so rather than passing vacuously. *)
+  if que.depth >= discriminating_depth then
+    p low_claim (que.contended || Float.(que.ms >= queued_low_bound))
   else Verdict.skipped ~aggregation:`Environment ~backend:(backend ()) low_claim;
   (* Amortizing a round trip can only remove time, so a queued reading above the isolated one is the
      instrument reporting the wrong quantity, not a slow machine. The factor absorbs the noise a
