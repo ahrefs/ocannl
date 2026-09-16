@@ -778,8 +778,8 @@ files.
   at least half a window's batches exceed twice its minimum, so in any window these claims judge
   the median is at most TWICE the minimum. A per-batch reading is that minimum, so an
   `f * median / depth` upper side refuses it once `depth > f * (median / minimum)` — `depth > 4` at
-  `f = 2` — and the low side admits a correct reading from `depth >= 4` by the same bound. Hence a
-  gate of 5, and both sides structural on every window not already bypassed. A fleet-measured gate
+  `f = 2` — and the low side admits a correct reading from `depth >= 4` by the same bound. Each side
+  therefore gates at its own threshold, 5 and 4 rather than one shared 5, and both are structural on every window not already bypassed. A fleet-measured gate
   stood here for one round and was 32, which would have left depths 5 to 31 unchecked; read the
   sweep's tail back through the invariant instead — a window measured below half its median was
   necessarily contended. `Isolated` keeps ONE side, against the round trip (`>= floor/3`): at depth

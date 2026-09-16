@@ -476,20 +476,22 @@ let () =
      the minimum. Both sides follow from that bound. A per-batch reading IS the window's minimum, so
      the upper side refuses it when [minimum > 2 * median / depth], which [median <= 2 * minimum]
      turns into [depth > 4]. The low side admits a correct reading when [minimum >= max(1 / 64, 2 /
-     depth) * median], which the same bound turns into [depth >= 4]. So the gate is 5, and both
-     sides are structural on every window that is not already bypassed -- no constant from a sweep
-     stands between a regression and this leg. Fleet-derived constants stood here for one round and
-     were 32, which would have left depths 5 through 31 unchecked on slower backend/host pairs
-     (Codex P2, round 4 on PR #735).
+     depth) * median], which the same bound turns into [depth >= 4]. So each side takes the
+     threshold its own arithmetic gives -- 5 and 4, not one shared 5, since a host settling on
+     exactly depth 4 would otherwise skip a control provably safe and discriminating there (Codex
+     P2, round 6 on PR #735) -- and both are structural on every window that is not already bypassed
+     -- no constant from a sweep stands between a regression and this leg. Fleet-derived constants
+     stood here for one round and were 32, which would have left depths 5 through 31 unchecked on
+     slower backend/host pairs (Codex P2, round 4 on PR #735).
 
      The sweep below then reads as corroboration rather than as justification, and its own tail
      reads back: every window it measured at below half its median WAS a contended one, because the
      invariant leaves no other possibility. *)
-  let discriminating_depth = 5 in
+  let upper_discriminating_depth = 5 and low_discriminating_depth = 4 in
   let upper_claim =
     "queued reading is a per-launch time rather than a per-batch one, or reports contention"
   in
-  if que.depth >= discriminating_depth then
+  if que.depth >= upper_discriminating_depth then
     p upper_claim (que.contended || Float.(que.ms <= 2. * median_per_launch que))
   else Verdict.skipped ~aggregation:`Environment ~backend:(backend ()) upper_claim;
   (* The low side, as the larger of two terms that refuse on different grounds. [2 / depth] is
@@ -537,9 +539,12 @@ let () =
     "queued reading is not that per-launch time divided by the batch depth as well, or reports \
      contention"
   in
-  (* The same gate, for the mirror error: below it a double division stops being separable from the
-     window's ordinary spread, and the leg says so rather than passing vacuously. *)
-  if que.depth >= discriminating_depth then
+  (* The low side's own threshold, one shallower than the upper side's: at depth 4 the bound is half
+     the window's median, which [median <= 2 * minimum] puts at or below a correct reading, while a
+     twice-divided one -- a quarter of the minimum -- falls under it. Below that, a double division
+     stops being separable from the window's ordinary spread and the leg says so rather than passing
+     vacuously. *)
+  if que.depth >= low_discriminating_depth then
     p low_claim (que.contended || Float.(que.ms >= queued_low_bound))
   else Verdict.skipped ~aggregation:`Environment ~backend:(backend ()) low_claim;
   (* Amortizing a round trip can only remove time, so a queued reading above the isolated one is the
