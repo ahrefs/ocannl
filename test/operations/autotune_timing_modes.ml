@@ -402,23 +402,31 @@ let () =
      by the depth is about [depth] times the cost of a launch in that call, and a reading divided by
      the depth TWICE is that cost's [1/depth]. Both errors are claims about the same quantity the
      reading is -- the cost of one launch inside THIS call -- so both sides are written against the
-     mean of the window the reading is a MINIMUM over: the batches the timed loop ran, and their
-     summed wall, reported by [Autotune.on_timed_window]. A minimum cannot exceed the mean of the
-     same samples, so a correct reading satisfies the upper side by construction and a reading left
-     per-batch overshoots it by [depth / 2]; the low side is below.
+     window the reading is a MINIMUM over, and against that window's MEDIAN batch, per launch.
+     [Autotune.on_timed_window] reports the window: the batches the timed loop ran, their summed
+     wall, and their median. A minimum cannot exceed the median of the same samples, so a correct
+     reading satisfies the upper side by construction and a reading left per-batch overshoots it by
+     [depth / 2]; the low side is below, and the depth from which either discriminates is derived
+     further down from the same contention rule.
 
-     Not the wall the test clocks around the whole call, which was this leg's first attempt at the
-     same idea: that wall also holds the warmup and the calibration's synchronized singles, and on a
-     backend whose host round trip is two orders of magnitude above an amortized launch those few
-     dozen singles are about 40% of the call -- so the whole-call mean is diluted by construction,
-     and a host stall landing in the untimed part moves the anchor without moving the reading (Codex
-     P2, round 1 on PR #735).
+     The window, rather than the whole call the test clocks around: that wall also holds the warmup
+     and the calibration's synchronized singles, and on a backend whose host round trip is two
+     orders of magnitude above an amortized launch those few dozen singles are about 40% of the call
+     -- so a whole-call mean is diluted by construction, and a host stall landing in the untimed
+     part moves the anchor without moving the reading (Codex P2, round 1 on PR #735).
 
-     The low side used to be anchored on [floor_ms] instead, at a fixed fraction of it (1/16), on
-     the argument that both are minima and so face the same noise. They are -- but they are minima
-     of DIFFERENT quantities: [floor_ms] is a launch plus the host synchronization that queueing
-     exists to amortize away, and a queued reading is a launch without it. Their ratio is the
-     backend's sync cost over its launch cost, which no fraction calibrated on one family of
+     The median, rather than that window's mean: [contended] declares the reading bypassed when a
+     MAJORITY of the window's batches exceed twice its floor, so the regime these claims must
+     survive is exactly the one a median is unmoved over, while one arbitrarily long batch among 64
+     moves a mean without limit (Codex P2, round 2 on PR #735). The mean is still printed on stderr,
+     since the dilution argument above is about it, and because the two together say how stalled a
+     window was.
+
+     And neither, rather than [floor_ms], where the low side used to be anchored at a fixed fraction
+     (1/16) on the argument that both are minima and so face the same noise. They are -- but they
+     are minima of DIFFERENT quantities: [floor_ms] is a launch plus the host synchronization that
+     queueing exists to amortize away, and a queued reading is a launch without it. Their ratio is
+     the backend's sync cost over its launch cost, which no fraction calibrated on one family of
      machines describes on another; three widenings of that divisor (gh-ocannl-839, -841, -851) were
      measuring it one machine at a time. gh-ocannl-994 measured it on purpose -- 534 runs of this
      instrument over five hosts, four backends and loads from idle to 6x oversubscription -- and
@@ -431,22 +439,10 @@ let () =
      multidev_cc under Linux (30 of 30 on one box), where the claim had been surviving on its
      contention hatch rather than on its envelope.
 
-     Against the timed window's own mean the slack is dispersion among batches rather than a cost
-     ratio between two quantities. Dispersion is what defeated a mean anchor for [Isolated] -- a
-     6-dispatch call cut by host stalls read 22x its own minimum (gh-ocannl-851) -- and it is what a
-     queued call does not do: a stall lands inside one batch of [depth] dispatches among [samples]
-     of them, moving the mean by a fraction of itself instead of by multiples. So [Isolated] keeps
-     the round trip it is DEFINED as on its low side (worst measured ratio 0.61, 1.8x clear of its
-     factor of 3) and [Queued] takes the window. *)
+     [Isolated] is the one reading still compared to that round trip, and only on its low side: it
+     IS that quantity by definition, so the two are one quantity's two implementations, and the
+     factor of 3 stood at 1.8x clear of the worst measured ratio (0.61) across the same sweep. *)
   let timed_mean r = r.timed_wall_ms /. Float.of_int (max 1 (r.timed_batches * r.depth)) in
-  (* The statistic both sides are written against: the MEDIAN batch's cost per launch. A minimum
-     over the window cannot exceed it, which is what makes both refusals below structural, and --
-     unlike the window's mean -- a minority of stalled batches cannot move it. That distinction is
-     not a refinement but the condition under which these claims are made at all: [contended]
-     declares the reading bypassed when a MAJORITY of the window's batches exceed twice its floor,
-     so the regime the claims must survive is exactly the one a median is unmoved over, while one
-     arbitrarily long batch among 64 moves the mean without limit (Codex P2, round 2 on PR #735).
-     The mean is still reported on stderr, since the dilution argument above is about it. *)
   let median_per_launch r = r.timed_median_ms /. Float.of_int (max 1 r.depth) in
   (* The seam's window is the one the reading summarizes: the loop counts its own batches, so an
      anchor taken from a window other than the one [samples] describes fails here rather than
