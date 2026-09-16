@@ -83,11 +83,11 @@ LAB_LOCK_DIR=${WAKE_LAB_LOCK_DIR:-$HOME/.local/state/wake-lab}
 # behind it, which is minutes rather than seconds. A lane that waits longer than this skips its
 # units rather than running them on a box that is being torn down underneath it.
 LAB_LOCK_WAIT=${OCANNL_TOOL_SWEEP_LAB_LOCK_WAIT:-300}
-# How hard collect_dxg_window tries to reach a box whose guest may have just been replaced. Plain
-# constants rather than knobs: nothing outside this file has a reason to retune them, and the
-# reasoning that picks the numbers lives at the call site.
-DXG_COLLECT_TRIES=3
-DXG_COLLECT_RETRY_DELAY=10
+# The cap on ONE identity probe -- a single `cat` of the guest's boot id, retried when a failed
+# collection left the question open. Small on purpose, and deliberately not the diagnostic cap the
+# window query carries: the point of asking this separately is that it cannot wedge for minutes.
+# A plain constant rather than a knob; nothing outside this file has a reason to retune it.
+DXG_IDENTITY_CAP=30
 
 # The wake-lab box whose lock covers an ssh alias. The two real ones are named rather than derived,
 # so a renamed alias fails loudly here instead of silently reserving a box nobody checks; the
@@ -797,30 +797,11 @@ collect_dxg_window() { # host log remote-start-epoch label start-boot-id
   # it, and it would hold the inherited lock until its own cap expired. The
   # unit's own ssh calls document the same trap.
   kernel=$log.dxg.$$
-  # Retried, within a bound. The guest most likely to refuse this collection is exactly the one
-  # this collection exists to catch: a replacement drops the unit's connection the moment the old
-  # VM dies, and the new one is typically still starting when the collector arrives seconds later.
-  # A single attempt therefore comes back empty in the motivating case -- no boot id, no journal --
-  # and the window records `unavailable`, which is the reading that says nothing happened.
-  #
-  # Bounded rather than patient: a box that is really gone must not hold the lane for minutes, and
-  # everything here runs after the unit's own row is already published. Three attempts over ~20s
-  # covers a WSL2 VM coming back (seconds to tens of seconds) and costs a dead box three connect
-  # timeouts instead of one. The retry is on the WHOLE collection, not the boot id alone: the same
-  # unreachability lost the journal, and a window that can report its kernel lines is worth more
-  # than one that can only report that the guest changed.
-  attempt=1
-  while :; do
-    run_capped "$(( CONTEXT_CAP + 60 ))" ssh -o BatchMode=yes -o ConnectTimeout=8 \
-      -o ServerAliveInterval=30 -o ServerAliveCountMax=4 \
-      "$host" "$(remote_capped "$CONTEXT_CAP" "$(dxg_window_cmd "$remote_start")")" \
-      >"$kernel" 2>/dev/null
-    rc=$?
-    [ "$rc" -eq 0 ] && break
-    [ "$attempt" -ge "$DXG_COLLECT_TRIES" ] && break
-    attempt=$(( attempt + 1 ))
-    sleep "$DXG_COLLECT_RETRY_DELAY"
-  done
+  run_capped "$(( CONTEXT_CAP + 60 ))" ssh -o BatchMode=yes -o ConnectTimeout=8 \
+    -o ServerAliveInterval=30 -o ServerAliveCountMax=4 \
+    "$host" "$(remote_capped "$CONTEXT_CAP" "$(dxg_window_cmd "$remote_start")")" \
+    >"$kernel" 2>/dev/null
+  rc=$?
   # The bounds the REMOTE used, in its own clock domain -- the only one the log's
   # timestamps are in. Reported rather than recomputed here, so the block and the
   # record row name the window that was actually queried.
@@ -833,6 +814,27 @@ collect_dxg_window() { # host log remote-start-epoch label start-boot-id
   # turning that into an alarm would retire a working window on every host whose
   # kernel does not publish the file.
   end_boot=$(sed -n 's/^dxg-window-boot \(.*\)$/\1/p' "$kernel" 2>/dev/null | head -1)
+  # A collection that failed leaves no boot id, and the guest most likely to refuse it is exactly
+  # the one this exists to catch: a replacement drops the unit's connection the moment the old VM
+  # dies, and the new one is often still starting when the collector arrives. So ask the cheap
+  # question on its own -- WHICH guest is there now -- rather than retrying the whole collection.
+  #
+  # Retrying the collection is what the previous round did, and it multiplied the wrong budget: the
+  # window query carries the five-minute diagnostic cap, so three attempts at it could hold the lane
+  # and its lab reservation for the better part of twenty minutes whenever the remote WEDGED rather
+  # than failing fast. This probe reads one small file, so its own short cap bounds each attempt no
+  # matter how the far side misbehaves, and three of them cannot add up to more than a minute and a
+  # half. There is no sleep between attempts either: a bare `sleep` here is invisible to the
+  # cancellation supervisor, so a TERM would leave it holding the inherited lab and worktree locks
+  # after the lane had gone -- and the connect timeout of a box that is still down already spaces
+  # the attempts by about as much as a sleep would.
+  if [ -z "$end_boot" ] && [ -n "$start_boot" ]; then
+    for attempt in 1 2 3; do
+      end_boot=$(run_capped "$DXG_IDENTITY_CAP" ssh -o BatchMode=yes -o ConnectTimeout=8 \
+        "$host" 'cat /proc/sys/kernel/random/boot_id 2>/dev/null' 2>/dev/null | head -1)
+      [ -n "$end_boot" ] && break
+    done
+  fi
   if [ -n "$start_boot" ] && [ -n "$end_boot" ]; then
     if [ "$start_boot" = "$end_boot" ]; then boot=same; else boot=replaced; fi
   fi
