@@ -739,6 +739,31 @@ files.
   template every report starts from, `Autotune.no_search_report`, therefore takes `~timing` — it is
   a function of the objective rather than a constant, which is the only reason the field can be
   plain (the option it briefly had existed solely to let that constant exist).
+- **A batched per-launch reading is not comparable to a synchronized round trip, on any constant**
+  (gh-ocannl-994). `autotune_timing_modes` bracketed its `Queued` reading from below at
+  `floor_ms / 16`, where `floor_ms` is a minimum over one-launch-plus-one-sync round trips. Those
+  are two different physical quantities — the round trip includes exactly the host synchronization
+  queueing exists to amortize away — so the fraction between them is the backend's sync cost over
+  its launch cost, not a noise allowance. Measured over 534 runs of that instrument on five hosts,
+  four backends and loads from idle to 6x oversubscription, it spans **0.0077 to 1.2**: on Linux
+  `multidev_cc` the worker-domain round trip is 20-57 us against a 0.4-0.5 us amortized launch,
+  while on `cc` the round trip *is* about one launch. That 160x spread is wider than the factor of
+  `depth` such a check has to resolve, so the divisor had no admissible value — it refused 23% of
+  the sweep's non-contended readings, all on Linux `multidev_cc` (30 of 30 on one box), and stayed
+  green only because those readings were usually flagged `contended` and took the claim's escape
+  hatch. A bound on a batched reading belongs on the SAME quantity: the call's own per-dispatch
+  wall mean, of which the reading is a minimum (so their ratio is at most 1 by construction — the
+  largest observed was 0.98, and the smallest 0.073 under 2x oversubscription). That also makes the
+  refusal of a twice-divided reading structural rather than calibrated: it cannot exceed
+  `mean / depth`, so a bound at `2 * mean / depth` refuses it at every depth with nothing measured.
+  The dispersion argument that rejected the mean for `Isolated` (a stall-cut 6-dispatch call read
+  22x its own minimum, gh-ocannl-851) does not transfer to `Queued`: a stall lands inside one batch
+  of `depth` dispatches among `samples` batches, so it moves the mean by a fraction of itself.
+  Recipe for re-deriving any such constant: the instrument prints its raw readings to stderr as
+  "(not part of the golden)" including both contention flags, so running the built exe in a loop
+  against a spinner-generated load ladder (`_build/default/test/operations/`, `OCANNL_BACKEND=...`
+  pinned) yields the distribution directly — and CPU-backend depths sit at the 200 cap, Metal's at
+  31-80, HIP's at 200-750 and CUDA's at ~1700, so one box cannot stand in for the fleet.
 - The schedule-cache directory carries one key-regime stamp, independent of the serialized entry's
   `entry_version` (gh-ocannl-835). Bump `Schedule_cache.cache_regime_version` whenever
   `key_components` changes: the next cache-open deletes every `.sexp` entry under an older or
