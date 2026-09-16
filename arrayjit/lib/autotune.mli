@@ -1276,6 +1276,18 @@ val on_batch_depth : (int -> calibration_samples:int -> unit) ref
     depth-validation calibration for {!Queued}. The default is a no-op and no configuration selects
     it. *)
 
+val on_timed_window : (samples:int -> wall_ms:float -> unit) ref
+(** Observation seam for the timing tests (gh-ocannl-994), called by each {!time_routine} call once
+    its timed loop has finished, with the number of batches that loop ran — counted by the loop
+    rather than restated from its result, so a test can hold the two against each other — and their
+    summed wall. It is the window the returned minimum was taken over, and so the window a bound on
+    that minimum belongs against: the whole call's wall also holds the warmup and the calibration's
+    synchronized singles, which on a backend whose host round trip is two orders of magnitude above
+    an amortized launch are a comparable share of the call to every timed dispatch put together. A
+    mean over the whole call is therefore diluted by construction, and a host stall in the untimed
+    part moves it without moving the reading. The default is a no-op and no configuration selects
+    it. *)
+
 val on_candidate_attempt : (string -> unit) ref
 (** Fault-injection seam for the containment tests (gh-ocannl-550), called with each candidate's
     label just before its compile — including the baseline's, which is a candidate (gh-ocannl-533);

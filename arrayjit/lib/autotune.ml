@@ -521,6 +521,18 @@ let on_candidate_timed : (string -> timed_so_far:int -> unit) ref =
 let on_batch_depth : (int -> calibration_samples:int -> unit) ref =
   ref (fun _depth ~calibration_samples:_ -> ())
 
+(* Observation seam for the timing tests (gh-ocannl-994), reporting the window the returned minimum
+   was actually taken over: how many batches the timed loop ran, counted by the loop itself rather
+   than restated from its result, and their summed wall. A bound written on the reading needs THAT
+   window's mean, not the whole call's: the call's wall also holds the warmup and the calibration's
+   synchronized singles, and on a backend whose host round trip is two orders of magnitude above an
+   amortized launch (Linux multidev_cc: ~57 us against ~0.44 us) those few dozen singles are a
+   comparable share of the call to the tens of thousands of timed dispatches -- about 40% of it --
+   so the whole-call mean is diluted by construction, and a host stall landing in the untimed part
+   moves it without moving the reading. Default no-op; no configuration key selects it. *)
+let on_timed_window : (samples:int -> wall_ms:float -> unit) ref =
+  ref (fun ~samples:_ ~wall_ms:_ -> ())
+
 (* [routine.bindings] exposes the routine's live binding refs — restore them after timing (Codex P2
    on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)
 let time_routine ?(tag_failures = false) ~timing ~repeats cctx routine =
@@ -766,9 +778,16 @@ let time_routine ?(tag_failures = false) ~timing ~repeats cctx routine =
       !on_batch_depth depth ~calibration_samples:calibration_dispatches;
       (* The calibration's own contention verdict is not consulted (gh-ocannl-888): it judged single
          dispatches, and the window that gets judged for refusal is the batch below. *)
-      sample_min ~repeats ~sample:(fun () ->
-          let wall = batch depth in
-          { per_launch_ms = wall /. Float.of_int depth; contention_ms = wall }))
+      let timed_wall_ms = ref 0. and timed_batches = ref 0 in
+      let result =
+        sample_min ~repeats ~sample:(fun () ->
+            let wall = batch depth in
+            timed_wall_ms := !timed_wall_ms +. wall;
+            Int.incr timed_batches;
+            { per_launch_ms = wall /. Float.of_int depth; contention_ms = wall })
+      in
+      !on_timed_window ~samples:!timed_batches ~wall_ms:!timed_wall_ms;
+      result)
 
 (* gh-ocannl-532: on a GPU backend, code that binds no hardware dimension runs the whole routine in
    a single work-item — every nest a serial scalar loop, at one lane's throughput. Such a candidate

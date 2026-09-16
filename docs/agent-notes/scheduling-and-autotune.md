@@ -751,11 +751,18 @@ files.
   `depth` such a check has to resolve, so the divisor had no admissible value — it refused 23% of
   the sweep's non-contended readings, all on Linux `multidev_cc` (30 of 30 on one box), and stayed
   green only because those readings were usually flagged `contended` and took the claim's escape
-  hatch. A bound on a batched reading belongs on the SAME quantity: the call's own per-dispatch
-  wall mean, of which the reading is a minimum (so their ratio is at most 1 by construction — the
-  largest observed was 0.98, and the smallest 0.073 under 2x oversubscription). That also makes the
-  refusal of a twice-divided reading structural rather than calibrated: it cannot exceed
-  `mean / depth`, so a bound at `2 * mean / depth` refuses it at every depth with nothing measured.
+  hatch. A bound on a batched reading belongs on the SAME quantity, and specifically on the WINDOW
+  the reading is a minimum over: the timed batches and their summed wall, which `time_routine`
+  reports through `Autotune.on_timed_window`. Not the whole call — its wall also holds the warmup
+  and the calibration's synchronized singles, and on a backend whose round trip is two orders of
+  magnitude above an amortized launch those few dozen singles are ~40% of the call against tens of
+  thousands of timed dispatches, so a whole-call mean is diluted by construction and a stall in the
+  untimed part moves it without moving the reading. Against the timed window the ratio is at most 1
+  by construction (min ≤ mean over the same samples; largest observed 0.97, smallest 0.090 under 2x
+  oversubscription), which also makes the refusal of a twice-divided reading structural rather than
+  calibrated: it cannot exceed `mean / depth`, so a bound at `2 * mean / depth` refuses it at every
+  depth with nothing measured, and a per-batch reading overshoots a `3 * mean` upper side by
+  `depth / 3`.
   The dispersion argument that rejected the mean for `Isolated` (a stall-cut 6-dispatch call read
   22x its own minimum, gh-ocannl-851) does not transfer to `Queued`: a stall lands inside one batch
   of `depth` dispatches among `samples` batches, so it moves the mean by a fraction of itself.

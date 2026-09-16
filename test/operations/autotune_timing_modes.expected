@@ -33,9 +33,10 @@ isolated timing either reports contention or dispatches one launch per timed run
 isolated timing reports batch depth 1: true
 queued timing either refuses contention or dispatches whole batches at the reported depth: true
 queued timing either reports contention or dispatches more launches than isolated: true
+both readings are anchored on the timed window they reported: true
 isolated reading is a per-launch time or reports contention: PASS
 queued reading is a per-launch time rather than a per-batch one, or reports contention: PASS
-queued reading is not that per-launch time divided by the batch depth as well, or reports contention: PASS
+queued reading is not that per-launch time divided by the batch depth as well, or reports contention: true
 queued timing does not read above isolated timing or reports contention: PASS
 queued timing either reports contention or stays within the 64-batch dispatch cap: true
 
