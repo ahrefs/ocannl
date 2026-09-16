@@ -52,8 +52,10 @@ which every nest mints afresh.
    each at its own node's precision widened to f32 — `m' = max(m, x)`, `l' = l * exp(m - m') + exp(x - m')` —
    writing both trajectories to the original `m` and `l` nodes, so every downstream reader is
    unaffected. A prefix of masked keys (`-inf` scores) keeps `m' = -inf`, where the rescaling
-   would be `exp(-inf - -inf) = nan`; the update is guarded on `m' = -inf` and the normalizer stays
-   0 until the first live score. The pointwise nests stay as their nodes' definitions.
+   would be `exp(-inf - -inf) = nan`; the update is guarded on `m' = -inf` (and on the score
+   itself, so a NaN score still poisons) and the carried normalizer stays 0 until the first live
+   score, while the stored trajectory carries the composed form's NaN for a row whose max is still
+   `-inf` — so a fully masked row reads NaN in both forms. The pointwise nests stay as their nodes' definitions.
 2. **Hoisting the probabilities.** A reduction `o[.., e] += w[rows, t] * v[..]` whose `w` is
    defined elementwise from a rewritten normalizer has the loops `w` does not index moved
    innermost, behind one read of `w` into a scope local. Bitwise exact — every moved loop indexes

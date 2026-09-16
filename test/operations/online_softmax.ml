@@ -312,6 +312,12 @@ let () =
     c_fin o_fin;
   p "a genuinely all-masked prefix leaves both normalizers finite and equal within 1e-6 relative"
     (Float.is_finite c_fin && close ~tol:1e-6 o_fin c_fin);
+  let c_all, o_all = both "os_all_masked" (Array.create ~len:n Float.neg_infinity) in
+  eprintf "normalizers for an all-masked row: composed %g online %g (not part of the golden)\n%!"
+    c_all o_all;
+  p "a fully masked row leaves the composed normalizer NaN" (Float.is_nan c_all);
+  p "and the rewritten normalizer stores that NaN too, though its carried state stayed zero"
+    (Float.is_nan o_all);
   let rec carried_of = function
     | LL.Scan_loop { carried; _ } -> Some carried
     | LL.Seq (a, b) -> Option.first_some (carried_of a) (carried_of b)

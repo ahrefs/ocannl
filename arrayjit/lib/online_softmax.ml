@@ -395,13 +395,12 @@ let emit_normalizer (nz : normalizer) : LL.t =
   let exp_ a = apply_op (Ops.Unop Ops.Exp) [| a |] in
   let m_prev = Get_local m.prev and m_next = Get_local m.next and l_prev = Get_local l.prev in
   (* A row whose prefix is entirely masked ([-inf] scores) keeps [m' = -inf], where the rescaling
-     factor would be [exp (-inf - -inf) = nan]; its normalizer stays 0 until the first live score,
-     whose rescaling of the empty prefix is [exp (-inf - x) = 0]. A fully masked row ends with [l =
-     0], the composed form's NaN in a different coat. The guard also asks the score itself: [max]
-     drops a NaN score against [-inf], and only [-inf] may be dropped -- a NaN score reaches [exp
-     (nan - m')] and poisons the normalizer, as in the composed form. And an all-masked step carries
-     the normalizer UNCHANGED rather than writing zero: zero for a genuine prefix, and a poison
-     already there stays. *)
+     factor would be [exp (-inf - -inf) = nan]; its carried normalizer stays 0 until the first live
+     score, whose rescaling of the empty prefix is [exp (-inf - x) = 0]. The guard also asks the
+     score itself: [max] drops a NaN score against [-inf], and only [-inf] may be dropped -- a NaN
+     score reaches [exp (nan - m')] and poisons the normalizer, as in the composed form. And an
+     all-masked step carries the normalizer UNCHANGED rather than writing zero: zero for a genuine
+     prefix, and a poison already there stays. *)
   let neg_inf v = binop Ops.Cmpeq v (Constant Float.neg_infinity) in
   let l_next =
     apply_op (Ops.Ternop Ops.Where)
@@ -413,6 +412,13 @@ let emit_normalizer (nz : normalizer) : LL.t =
           (exp_ (binop Ops.Sub (Get_local x) m_next));
       |]
   in
+  (* The stored trajectory differs from the carried state in one case: a row whose max is still
+     [-inf] has no live score yet, and the composed sum of [exp (-inf - -inf)] over such a row is
+     NaN. The state stays 0 so the first live score can rescale an empty prefix; the tensor gets the
+     composed NaN, which the next live score's write overwrites and a fully masked row keeps. *)
+  let l_stored =
+    apply_op (Ops.Ternop Ops.Where) [| neg_inf m_next; Constant Float.nan; Get_local l.next |]
+  in
   let body =
     unflat_lines
       [
@@ -421,7 +427,7 @@ let emit_normalizer (nz : normalizer) : LL.t =
         Set_local (m.next, binop Ops.Max m_prev (Get_local x));
         Set_local (l.next, l_next);
         Set { tn = nz.m; idcs = nz.m_idcs; llsc = m_next; debug = "" };
-        Set { tn = nz.l; idcs = nz.l_idcs; llsc = Get_local l.next; debug = "" };
+        Set { tn = nz.l; idcs = nz.l_idcs; llsc = l_stored; debug = "" };
       ]
   in
   wrap nz.rows
