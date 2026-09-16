@@ -1078,6 +1078,9 @@ let%track5_sexp unsafe_reinitialize ?(namespace = Tn.default_namespace) () : uni
   (* The analysis cache retains recent routines' lowered code (gh-560): release the old session's
      nodes promptly. Stale entries could never alias fresh nodes anyway (uids are not reused). *)
   Ir.Low_level.clear_analysis_cache ();
+  (* The rewrite tier's members memoize the scope-local nodes they mint per source node, so that
+     sibling lowerings share one analysis-cache key; the memo retains them like the cache does. *)
+  Ir.Rewrites.reset ();
   Shape.unsafe_reinitialize ()
 
 let header t =

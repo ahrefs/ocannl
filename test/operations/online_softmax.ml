@@ -257,11 +257,15 @@ let () =
       | `C_init_cell -> B.set_at l (B.fixed 0) (B.c 0.)
       | `Opaque -> LL.Staged_compilation (fun () -> PPrint.empty)
     in
-    LL.unflat_lines (List.map order ~f:stmt)
+    (LL.unflat_lines (List.map order ~f:stmt), x, l)
   in
-  let rewritten ?l_prec ?l_dims order = Online_softmax.rewrite (build ?l_prec ?l_dims order) in
+  let raw ?l_prec ?l_dims order =
+    let llc, _, _ = build ?l_prec ?l_dims order in
+    llc
+  in
+  let rewritten ?l_prec ?l_dims order = Online_softmax.rewrite (raw ?l_prec ?l_dims order) in
   let declined ?l_dims order =
-    let raw = build ?l_dims order in
+    let raw = raw ?l_dims order in
     LL.equal (Online_softmax.rewrite raw) raw
   in
   let composed = [ `A_init; `A; `N; `E; `C_init; `C ] in
@@ -282,6 +286,32 @@ let () =
     (declined ~l_dims:[| 2 |] [ `A_init; `A; `N; `E; `C_init; `C ]);
   p "the same reduction with a cell-wise zeroing is accepted: the scan writes what the fill did"
     (scans_of (rewritten ~l_dims:[| 2 |] [ `A_init; `A; `N; `E; `C_init_cell; `C ]) = 1);
+  (* Executed special values, on the same hand-built row: a NaN score ahead of a masked one. [max]
+     drops the NaN against [-inf] and then meets a genuinely all-masked step, whose branch must not
+     overwrite the poison the NaN left in the normalizer. *)
+  let normalizer label scores (llc, x, l) =
+    let o = B.optimize ~name:label llc in
+    (List.hd_exn (B.execute ~name:label o ~seed:[ (x, scores); (l, [| B.sentinel |]) ] ~read:[ l ])).(
+    0)
+  in
+  let poisoned = [| Float.nan; Float.neg_infinity; 0.; 1.; 2. |] in
+  let masked = [| Float.neg_infinity; Float.neg_infinity; 0.; 1.; 2. |] in
+  let both label scores =
+    let ((llc, x, l) as built) = build composed in
+    ( normalizer (label ^ "_composed") scores built,
+      normalizer (label ^ "_online") scores (Online_softmax.rewrite llc, x, l) )
+  in
+  let c_nan, o_nan = both "os_nan_seq" poisoned in
+  eprintf "normalizers for [nan; -inf; 0; 1; 2]: composed %g online %g (not part of the golden)\n%!"
+    c_nan o_nan;
+  p "composed: a NaN score ahead of a masked one poisons the normalizer" (Float.is_nan c_nan);
+  p "rewritten: the all-masked step after the NaN keeps the poison" (Float.is_nan o_nan);
+  let c_fin, o_fin = both "os_masked_seq" masked in
+  eprintf
+    "normalizers for [-inf; -inf; 0; 1; 2]: composed %.9g online %.9g (not part of the golden)\n%!"
+    c_fin o_fin;
+  p "a genuinely all-masked prefix leaves both normalizers finite and equal within 1e-6 relative"
+    (Float.is_finite c_fin && close ~tol:1e-6 o_fin c_fin);
   let rec carried_of = function
     | LL.Scan_loop { carried; _ } -> Some carried
     | LL.Seq (a, b) -> Option.first_some (carried_of a) (carried_of b)

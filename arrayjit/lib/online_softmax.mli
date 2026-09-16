@@ -42,6 +42,11 @@ val set_enabled : bool option -> unit
 (** Programmatic override of the config key, for experiments and tests; [None] restores the key.
     Takes effect at the next lowering. *)
 
+val reset : unit -> unit
+(** Drops the memoized scope-local nodes (the tier's session-reset hook; also run ahead of an
+    accessibility snapshot). Sibling lowerings of one program mint the same nodes, which is what
+    keeps them on one analysis-cache key; a reset only makes the next lowering mint afresh. *)
+
 val rewrite : Low_level.t -> Low_level.t
 (** The pass over raw lowered code (no gate: the tier consults {!enabled}). Every normalizer pattern
     in the routine is rewritten; a routine without one is returned as is. The minted scope-local

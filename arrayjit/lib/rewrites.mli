@@ -19,12 +19,18 @@ type rewrite = {
   name : string;  (** The config key that gates it. *)
   enabled : unit -> bool;
   apply : Low_level.t -> Low_level.t;
+  reset : unit -> unit;
+      (** Drops whatever the member retains across lowerings (memoized nodes, say): the
+          session-reset hook, run by [Tensor.unsafe_reinitialize] through {!reset}. *)
 }
 
 val tier : rewrite list
 (** The members, in application order: {!Online_softmax} (gh-ocannl-483). *)
 
 val max_rounds : int
+
+val reset : unit -> unit
+(** Every member's [reset], for the session-reset boundary. *)
 
 val apply : Low_level.t -> Low_level.t
 (** The enabled members to a fixpoint; the identity when none is enabled. *)

@@ -2,11 +2,24 @@
 
 open Base
 
-type rewrite = { name : string; enabled : unit -> bool; apply : Low_level.t -> Low_level.t }
+type rewrite = {
+  name : string;
+  enabled : unit -> bool;
+  apply : Low_level.t -> Low_level.t;
+  reset : unit -> unit;
+}
 
 let tier : rewrite list =
-  [ { name = "online_softmax"; enabled = Online_softmax.enabled; apply = Online_softmax.rewrite } ]
+  [
+    {
+      name = "online_softmax";
+      enabled = Online_softmax.enabled;
+      apply = Online_softmax.rewrite;
+      reset = Online_softmax.reset;
+    };
+  ]
 
+let reset () = List.iter tier ~f:(fun r -> r.reset ())
 let max_rounds = 8
 
 let apply (llc : Low_level.t) : Low_level.t =

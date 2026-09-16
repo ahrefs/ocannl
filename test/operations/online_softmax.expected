@@ -44,6 +44,9 @@ staged code inside the span the rewrite reorders is declined: true
 staged code outside that span is no objection: true
 a whole-node zeroing of a normalizer wider than the reduction's cells is declined: true
 the same reduction with a cell-wise zeroing is accepted: the scan writes what the fill did: true
+composed: a NaN score ahead of a masked one poisons the normalizer: true
+rewritten: the all-masked step after the NaN keeps the poison: true
+a genuinely all-masked prefix leaves both normalizers finite and equal within 1e-6 relative: true
 the max's state stays single and the normalizer's takes its node's double: true
 --- leg 8: a NaN mask fill poisons the rewritten rows exactly where it poisons the composed ---
 the composed output is NaN in every row: every row has a NaN-filled position: true

@@ -32,16 +32,15 @@ let fresh_id =
 (* Sibling lowerings of one program -- placement arms, autotune candidates -- must mint the SAME
    nodes, or the analysis cache, which keys nodes by identity, misses on every one of them: a local
    is memoized by the node it stands for and its role, and the memo is cleared with the other
-   node-retaining caches ahead of an accessibility snapshot. *)
+   node-retaining caches: ahead of an accessibility snapshot, and at a session reset through the
+   tier's [Rewrites.reset]. *)
 module Minted_key = struct
   type t = int * string [@@deriving compare, hash, sexp_of]
 end
 
 let minted : (Minted_key.t, Tn.t) Hashtbl.t = Hashtbl.create (module Minted_key)
-
-let () =
-  Tn.before_accessibility_snapshot :=
-    (fun () -> Hashtbl.clear minted) :: !Tn.before_accessibility_snapshot
+let reset () = Hashtbl.clear minted
+let () = Tn.before_accessibility_snapshot := reset :: !Tn.before_accessibility_snapshot
 
 let scalar_node ~label ~(like : Tn.t) prec =
   Hashtbl.find_or_add minted (like.Tn.uid, label) ~default:(fun () ->
@@ -400,13 +399,15 @@ let emit_normalizer (nz : normalizer) : LL.t =
      whose rescaling of the empty prefix is [exp (-inf - x) = 0]. A fully masked row ends with [l =
      0], the composed form's NaN in a different coat. The guard also asks the score itself: [max]
      drops a NaN score against [-inf], and only [-inf] may be dropped -- a NaN score reaches [exp
-     (nan - m')] and poisons the normalizer, as in the composed form. *)
+     (nan - m')] and poisons the normalizer, as in the composed form. And an all-masked step carries
+     the normalizer UNCHANGED rather than writing zero: zero for a genuine prefix, and a poison
+     already there stays. *)
   let neg_inf v = binop Ops.Cmpeq v (Constant Float.neg_infinity) in
   let l_next =
     apply_op (Ops.Ternop Ops.Where)
       [|
         binop Ops.And (neg_inf m_next) (neg_inf (Get_local x));
-        Constant 0.;
+        l_prev;
         binop Ops.Add
           (binop Ops.Mul l_prev (exp_ (binop Ops.Sub m_prev m_next)))
           (exp_ (binop Ops.Sub (Get_local x) m_next));
