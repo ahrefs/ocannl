@@ -82,7 +82,7 @@ LAB_LOCK_DIR=${WAKE_LAB_LOCK_DIR:-$HOME/.local/state/wake-lab}
 # likely doing: a `--restart-wsl` is a shutdown plus a cold VM start plus the tailscaled wait
 # behind it, which is minutes rather than seconds. A lane that waits longer than this skips its
 # units rather than running them on a box that is being torn down underneath it.
-LAB_LOCK_WAIT=${OCANNL_SWEEP_LAB_LOCK_WAIT:-300}
+LAB_LOCK_WAIT=${OCANNL_TOOL_SWEEP_LAB_LOCK_WAIT:-300}
 
 # The wake-lab box whose lock covers an ssh alias. The two real ones are named rather than derived,
 # so a renamed alias fails loudly here instead of silently reserving a box nobody checks; the
