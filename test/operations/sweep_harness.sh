@@ -259,12 +259,23 @@ run_sweep_args() {
   # the cancellation controls below depend on. The hostile-ambient control after
   # the coverage assertions is what keeps this from rotting back.
   #
+  # The lab lock directory is PINNED rather than merely left to $HOME. The nested sweep reserves
+  # each remote lane's box for real, and this harness's remote lanes are fake -- so a run that
+  # reached the true lab's locks could wait out OCANNL_TOOL_SWEEP_LAB_LOCK_WAIT on a reservation a
+  # genuine sweep was holding, or skip its lanes for that reason, instead of producing the
+  # `skip (unreachable)` rows the cases assert. $HOME above already covers the DEFAULT path, but an
+  # ambient WAKE_LAB_LOCK_DIR -- the supported way to move that directory, and what the ludics-lite
+  # suite sets -- overrides the default and would be inherited straight through. Its wait budget is
+  # unset for the reason the caps above are: an ambient one would rewrite a budget these cases
+  # depend on.
+  #
   # Quoted, unlike the assignment prefix this replaces: these are `env`'s
   # ARGUMENTS now, so the multi-line fixture logs would otherwise be split into
   # words and `env` would try to run one of them as the command.
   local environment=(-u OCANNL_BACKEND -u OCANNL_TOOL_SWEEP_CAP -u OCANNL_TOOL_SWEEP_CONTEXT_CAP \
-    -u OCANNL_TOOL_SWEEP_LOCAL_BOX \
+    -u OCANNL_TOOL_SWEEP_LOCAL_BOX -u OCANNL_TOOL_SWEEP_LAB_LOCK_WAIT \
     "HOME=$tmp/home" \
+    "WAKE_LAB_LOCK_DIR=$tmp/lab-locks" \
     "PATH=$fake_bin:$PATH" \
     "SWEEP_TEST_CALLS=$calls" \
     "SWEEP_TEST_WAIT_PREFIX=${SWEEP_TEST_WAIT_PREFIX:-}" \
@@ -521,6 +532,7 @@ hostile=$(OCANNL_BACKEND=multidev_cc \
   SWEEP_TEST_OPAM_OUT_MULTIDEV_CC=$leaked \
   run_sweep_args --force --only cc --only metal)
 [ "$(grep -E '^  (result|FAIL|POTENTIAL): ' <<<"$hostile")" = "$coverage_findings" ]
+
 
 # A single-backend forced run cannot aggregate, and its summary says so through
 # the same channel rather than staying silent about the report it wrote.
@@ -1242,6 +1254,27 @@ dxg_window_red "$tmp/dxg-replaced.log"
 # moved` while a unit that starts or stops losing its guest does.
 dxg_fingerprint_lines "$tmp/dxg-replaced.log" | grep -q '^dxg window: guest replaced mid-window$'
 
+# A failed collection over a guest KNOWN to have been replaced keeps the replacement verdict. The
+# two coincide often -- a VM that has just been destroyed and recreated is exactly the one whose
+# journal query fails -- so letting `unavailable` win would drop the stronger evidence in the case
+# it was collected for.
+dxg_lost=$(dxg_window_unavailable 20260915T090000Z 20260915T091000Z "kernel log unreadable" replaced)
+grep -q '^=== dxg window: vm-replaced vmbus_sendpacket failures ===$' <<<"$dxg_lost"
+grep -q 'the guest was REPLACED during this window' <<<"$dxg_lost"
+# ...while a failed collection that establishes nothing about the guest still says so.
+dxg_lost_plain=$(dxg_window_unavailable 20260915T090000Z 20260915T091000Z "kernel log unreadable")
+grep -q "^=== dxg window: $DXG_UNAVAILABLE vmbus_sendpacket failures ===\$" <<<"$dxg_lost_plain"
+absent 'REPLACED' <<<"$dxg_lost_plain"
+# ...and so does one whose guest was known to have SURVIVED: `unavailable` is the right verdict
+# there, and only `replaced` may override it.
+dxg_lost_same=$(dxg_window_unavailable A B "kernel log unreadable" same)
+grep -q "^=== dxg window: $DXG_UNAVAILABLE vmbus_sendpacket failures ===\$" <<<"$dxg_lost_same"
+# The stronger verdict survives the round trip through the sidecar, so the record and the rerun
+# trigger read it rather than the collection failure.
+printf '%s\n' "$dxg_lost" >"$(dxg_sidecar "$tmp/dxg-lost.log")"
+[ "$(dxg_bursts "$tmp/dxg-lost.log")" = vm-replaced ]
+dxg_window_red "$tmp/dxg-lost.log"
+
 # The replaced-guest predicate the `error` path reads, which is a different question from
 # "does this unit earn a rerun": an error never reached dune, so serial_rerun has no stanza to run.
 dxg_guest_replaced "$tmp/dxg-replaced.log"
@@ -1302,6 +1335,39 @@ grep -q '^  rog-nv/cuda: skip (unreachable)$' <<<"$lanes"
 grep -q '^  minix/hip: skip (unreachable)$' <<<"$lanes"
 grep -q '^  minix/multidev_cc: skip (unreachable)$' <<<"$lanes"
 [ ! -e "$tmp/lanes.overlap" ]
+
+# The same ambient-leak control as the hostile backend above, for the lab lock directory, which is
+# inherited the same way and fails far more quietly. A nested sweep that reached the REAL directory
+# would reserve boxes a genuine sweep may be holding: its fake remote lanes would then wait out the
+# lock budget and report `skip (box ... reserved by ...)` instead of the `skip (unreachable)` rows
+# just asserted. $HOME above already moves the DEFAULT path, but an ambient WAKE_LAB_LOCK_DIR --
+# the supported way to move that directory, and what the ludics-lite suite sets for its own
+# hermeticity -- overrides the default, so two suites that are each hermetic alone would contend
+# once run together.
+#
+# It has to select REMOTE units to prove anything: a lane reserves a box only when it has a host,
+# so the same control over the two local units reserves nothing and passes whatever leaks. The
+# ambient directory holds a genuinely HELD flock for both boxes, so a leak stops those lanes dead.
+lab_leak=$tmp/ambient-lab-locks
+mkdir -p "$lab_leak"
+printf 'a genuine sweep (pid 1)\n' >"$lab_leak/rog.lock"
+printf 'a genuine sweep (pid 1)\n' >"$lab_leak/minix.lock"
+exec 6>>"$lab_leak/rog.lock"
+exec 5>>"$lab_leak/minix.lock"
+perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 1)' <&6
+perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 1)' <&5
+# Its OWN target: the history rows of this run are keyed by it, and reusing the lanes probe's
+# target would add a second set of rows under that name and break the row assertion below.
+lab_hostile=$(WAKE_LAB_LOCK_DIR=$lab_leak \
+  SWEEP_TEST_WAIT_PREFIX=$tmp/lab-lanes SWEEP_TEST_SSH_MODE=release \
+  run_sweep_args --only cc --only metal --only cuda --only hip --only multidev_cc \
+  --target lab-lock-probe)
+grep -q '^  rog-nv/cuda: skip (unreachable)$' <<<"$lab_hostile"
+grep -q '^  minix/hip: skip (unreachable)$' <<<"$lab_hostile"
+grep -q '^  minix/multidev_cc: skip (unreachable)$' <<<"$lab_hostile"
+absent 'reserved by' <<<"$lab_hostile"
+exec 6>&- 5>&-
+
 # The rows are those of a serial run in everything but their order: one per
 # unit, each under its own machine.
 [ "$(awk -F '\t' '$7 == "lane-probe" { print $2 "/" $3 ":" $5 }' "$state/history.tsv" | sort)" = \

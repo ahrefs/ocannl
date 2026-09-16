@@ -763,8 +763,8 @@ publish_dxg_sidecar() { # sidecar log writer args... -- stdin is the writer's
 # the unavailable marker, since the staged write is what failed; if even that
 # cannot be written, the disk is gone and the only honest thing left is to say so
 # where a human reads the run.
-publish_dxg_unavailable_fallback() { # sidecar log reason label
-  dxg_window_unavailable - - "$3" 2>/dev/null >"$2.dxg-fallback.$$" &&
+publish_dxg_unavailable_fallback() { # sidecar log reason label [boot-verdict]
+  dxg_window_unavailable - - "$3" "${5:-}" 2>/dev/null >"$2.dxg-fallback.$$" &&
     mv "$2.dxg-fallback.$$" "$1" 2>/dev/null && {
       cat "$1" 2>/dev/null >>"$2"
       return 0
@@ -834,9 +834,9 @@ collect_dxg_window() { # host log remote-start-epoch label start-boot-id
   if [ "$rc" -ne 0 ]; then
     rm -f "$kernel"
     publish_dxg_sidecar "$sidecar" "$log" dxg_window_unavailable "$start_utc" "$end_utc" \
-      "kernel log unreadable on $host (exit $rc)" ||
+      "kernel log unreadable on $host (exit $rc)" "$boot" ||
       publish_dxg_unavailable_fallback "$sidecar" "$log" \
-        "kernel log unreadable on $host (exit $rc)" "$label"
+        "kernel log unreadable on $host (exit $rc)" "$label" "$boot"
   else
     # Filtered HERE rather than on the far side: the filter is the part with a
     # judgement in it, so it belongs where a fixture can feed it lines directly
@@ -847,7 +847,7 @@ collect_dxg_window() { # host log remote-start-epoch label start-boot-id
     rm -f "$kernel"
     [ "$rc" -eq 0 ] ||
       publish_dxg_unavailable_fallback "$sidecar" "$log" \
-        "the collected window could not be published" "$label"
+        "the collected window could not be published" "$label" "$boot"
   fi
 }
 

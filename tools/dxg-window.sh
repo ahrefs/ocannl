@@ -103,10 +103,20 @@ dxg_window_summary() { # start-utc end-utc [boot-verdict] -- kernel lines on std
 # ssh that timed out establishes nothing, so reading one as the other would hide
 # exactly the unlisted failure (a SEGV, say) this trigger exists to catch.
 DXG_UNAVAILABLE=unavailable
-dxg_window_unavailable() { # start-utc end-utc reason
+# A failed collection over a guest KNOWN to have been replaced still reports the replacement. The
+# two verdicts are not equal in strength and the weaker one must not win by arriving last: a
+# replaced guest is a positive finding about the box, while `unavailable` says only that nobody
+# read the kernel log. They also coincide often -- a VM that has just been destroyed and recreated
+# is exactly the one whose journal query is most likely to fail -- so reporting `unavailable`
+# there would drop the stronger evidence precisely in the case it was collected for.
+dxg_window_unavailable() { # start-utc end-utc reason [boot-verdict]
+  local verdict=$DXG_UNAVAILABLE
+  [ "${4:-}" = replaced ] && verdict=$DXG_VM_REPLACED
   printf '=== dxg window %s..%s (utc) ===\n' "$1" "$2"
   printf 'collection failed: %s\n' "$3"
-  printf '=== dxg window: %s vmbus_sendpacket failures ===\n' "$DXG_UNAVAILABLE"
+  [ "$verdict" = "$DXG_VM_REPLACED" ] &&
+    printf 'the guest was REPLACED during this window: the VM that ran the unit is gone.\n'
+  printf '=== dxg window: %s vmbus_sendpacket failures ===\n' "$verdict"
 }
 
 # Reads the sidecar, so a block printed by a unit's tests is not mistaken for one
