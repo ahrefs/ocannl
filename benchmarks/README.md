@@ -65,6 +65,13 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   OCANNL a parameter has no batch axes, so the trained `wpe` is a `[seq]x[d_model]`
   output-axis table added by an einsum that places its seq axis onto the sequence batch axis
   (inference keeps the plain broadcast add over a `[seq]`-batched constant).
+- **gpt2_mini_s512** / **gpt2_mini_s1024** (`model: gpt`, `mode: infer`): the long-context legs
+  of gh-ocannl-483 — the `gpt2_mini` architecture at seq 512 and 1024 (GPT-2's native context),
+  with the batch shrunk to keep a step near 1024 tokens (2 and 1 sequences per batch). The
+  `[seq, seq]` attention intermediates grow 16x and 64x over `gpt2_mini`'s while the matmul
+  work grows 4x and 8x, which is what makes these the workloads the online-softmax rewrite
+  (`online_softmax=true`, in the `approximate` profile) exists for; `gpt2_mini` at seq 128 is
+  matmul-dominated and the rewrite's prize there is a few percent of the step.
 
 ## Layout
 

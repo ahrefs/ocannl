@@ -57,6 +57,7 @@ Profile "approximate" sets:
   cc_backend_simd_flags=auto
   fp16_arithmetic=true
   tf32_matmuls=true
+  online_softmax=true
   cc_backend_fast_math=true
   cc_backend_fp_contract=fast
   tune_inline_flips=2

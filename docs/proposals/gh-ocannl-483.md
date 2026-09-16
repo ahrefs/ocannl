@@ -94,4 +94,7 @@ loop nest — schedulable, and the shape a fused backward recomputes from `(m, l
       backward; structural pins that the probabilities are never written, that no `[seq, seq]` node
       is written under a cap admitting the head width, and that the scores are the one left above
       it.
-- [x] Measured on `gpt2_mini` and on long-context legs — see the PR's report.
+- [x] Measured on `gpt2_mini` and on the long-context legs `gpt2_mini_s512` / `gpt2_mini_s1024`
+      (cc and Metal, `benchmarks/report-gh483-online-softmax.md`): neutral to +28% on cc, -8% to
+      +18% on Metal with the crossover between seq 512 and 1024; storing the scores beats
+      recomputing them on both backends.

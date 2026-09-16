@@ -1,0 +1,17 @@
+{
+  "name": "gpt2_mini_s1024",
+  "model": "gpt",
+  "mode": "infer",
+  "n_layer": 4,
+  "n_head": 8,
+  "d_model": 256,
+  "d_ff": 1024,
+  "vocab": 1024,
+  "seq_len": 1024,
+  "batch_size": 1,
+  "n_batches": 4,
+  "seed": 42,
+  "parity_steps": 4,
+  "warmup_steps": 3,
+  "timed_steps": 10
+}
