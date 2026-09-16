@@ -767,18 +767,26 @@ files.
   Against either the ratio is at most 1 by construction (min ≤ the middle of the same samples),
   which makes the refusal of a twice-divided reading structural rather than calibrated: it cannot
   exceed `median / depth`, so a bound at `2 * median / depth` refuses it at every depth with
-  nothing measured, and a per-batch reading overshoots a `3 * median` upper side by `depth / 3`.
+  nothing measured, and a per-batch reading overshoots a `2 * median` upper side by `depth / 2`.
   The trade to know: a statistic with a longer tail above the minimum refuses a division by the RUN
   count more often (the mean's tail reaches 15x, the median's 1.35x) and false-fails on precisely
   the stalls the bound exists to survive — the guaranteed refusal is the depth one, and a
   shallow-depth regime where an error is inside the envelope's own factor is a skip, not a pass —
   and that skip is gated on the DEPTH, never on a quantity derived from the reading under test,
   which decides whether to check using the very number in question (it passed a per-batch reading
-  at depth 2 in review). The arithmetic: a per-batch reading is the window's minimum batch wall, so
-  a `f * median / depth` bound refuses it once `depth > f * (median / minimum)`; the sweep's widest
-  spread was 5.3, so `f = 2` discriminates from depth ~11 and the gate sits at 32. `Isolated` is
-  bracketed against the round trip on both sides instead ([floor/3, 8*floor]; measured ratio 0.61
-  to 3.4) — at depth 1 a window-anchored upper side is a theorem, not a check.
+  at depth 2 in review). The gate is DERIVED, not measured: `sample_min` declares `contended` when
+  at least half a window's batches exceed twice its minimum, so in any window these claims judge
+  the median is at most TWICE the minimum. A per-batch reading is that minimum, so an
+  `f * median / depth` upper side refuses it once `depth > f * (median / minimum)` — `depth > 4` at
+  `f = 2` — and the low side admits a correct reading from `depth >= 4` by the same bound. Hence a
+  gate of 5, and both sides structural on every window not already bypassed. A fleet-measured gate
+  stood here for one round and was 32, which would have left depths 5 to 31 unchecked; read the
+  sweep's tail back through the invariant instead — a window measured below half its median was
+  necessarily contended. `Isolated` keeps ONE side, against the round trip (`>= floor/3`): at depth
+  1 a window-anchored upper side is a theorem, and a round-trip one compares two separately sampled
+  windows, which a uniformly delayed window does not report as contended. The error it would have
+  refused — a window summed instead of minimized — belongs on the injected clock, where it needs no
+  device and no second window.
   The dispersion argument that rejected the mean for `Isolated` (a stall-cut 6-dispatch call read
   22x its own minimum, gh-ocannl-851) does not transfer to `Queued`: a stall lands inside one batch
   of `depth` dispatches among `samples` batches, so it moves the mean by a fraction of itself.

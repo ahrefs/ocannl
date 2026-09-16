@@ -58,6 +58,18 @@ let () =
   p "a stall burst cannot spend the budget before the 16-sample floor"
     (!calls = 16 && burst.samples = 16 && Float.equal burst.ms 0.08);
   p "a mostly stalled sample window reports contention" burst.contended;
+  (* The mirror error a depth-1 mode can make -- a window reported as its sum, or its mean, instead
+     of its minimum -- pinned where it needs no device. The executed leg below cannot refuse it
+     without comparing two separately sampled windows, and a uniformly delayed window is not
+     [contended] (dispersion is measured WITHIN it), so such a comparison fails valid readings on an
+     oversubscribed host (Codex P2, round 4 on PR #735). Its own window, rather than a second
+     assertion on the burst above: one clean sample among fifteen slower ones, none of them stalled
+     enough to be called contention, so the three statistics are 2, 2.9375 and 47 and one equality
+     separates all three. *)
+  let sample, _ = sample_from [ 2. ] 3. in
+  let spread = Autotune.sample_min ~repeats:3 ~sample in
+  p "a window's reading is its minimum, not its sum or its mean"
+    (Float.equal spread.ms 2. && spread.samples = 16 && not spread.contended);
   p "a refused positive timing cannot enter ranking or calibration"
     (Option.is_none (Autotune.admitted_timing_ms { ms = 0.0002; contended = true; samples = 16 }));
   (* gh-ocannl-888: the contention verdict judged single dispatches, whose dispersion on a GPU is
@@ -393,7 +405,7 @@ let () =
      mean of the window the reading is a MINIMUM over: the batches the timed loop ran, and their
      summed wall, reported by [Autotune.on_timed_window]. A minimum cannot exceed the mean of the
      same samples, so a correct reading satisfies the upper side by construction and a reading left
-     per-batch overshoots it by [depth / 3]; the low side is below.
+     per-batch overshoots it by [depth / 2]; the low side is below.
 
      Not the wall the test clocks around the whole call, which was this leg's first attempt at the
      same idea: that wall also holds the warmup and the calibration's synchronized singles, and on a
@@ -441,36 +453,43 @@ let () =
      silently rescaling both sides of the envelope. *)
   p "both readings are anchored on the timed window they reported"
     (iso.timed_batches = iso.samples && que.timed_batches = que.samples);
-  (* [Isolated] is bracketed against the round trip on BOTH sides, and not against the window at
-     all: at depth 1 a batch IS a launch, so a minimum over the window cannot exceed that window's
-     median by construction and an upper side written there would be a theorem rather than a check
-     -- which is what re-anchoring it produced, and what this restores. The round trip is measured
-     independently, by hand, off the same two primitives, so both sides of this bracket compare two
-     implementations of one quantity. What the upper side refuses is the mirror error a depth-1 mode
-     can make: a reading that summed its runs instead of minimizing over them, which is 16 to 64
-     times a correct one. The factor is 8: the measured ratio reached 3.4 across the sweep (min
-     0.61, median 1.03), so it clears the widest legitimate reading by 2.4x and still refuses the
-     narrowest run-count multiple by 2x. *)
+  (* [Isolated] is compared to the round trip, which is measured independently and by hand off the
+     same two primitives, so this is one quantity's two implementations against each other. One side
+     only, and deliberately: at depth 1 a batch IS a launch, so a window-anchored upper side would
+     be [min <= median] of the same samples -- a theorem, not a check -- while an upper side against
+     the round trip compares two SEPARATELY sampled windows, and a uniformly delayed window is not
+     [contended], so it fails valid readings on an oversubscribed host (Codex P2, round 4 on PR
+     #735). The error such an upper side would refuse, a window summed or averaged instead of
+     minimized, is refused on the injected clock above, where it needs no device and no second
+     window. *)
   Verdict.pass_fail "isolated reading is a per-launch time or reports contention"
-    (iso.contended || Float.(iso.ms <= 8. * floor_ms && iso.ms >= floor_ms / 3.))
+    (iso.contended || Float.(iso.ms >= floor_ms / 3.))
     ~detail:(fun () ->
       Printf.sprintf "%.6f ms vs round trip %.6f ms (median batch %.6f ms)" iso.ms floor_ms
         (median_per_launch iso));
-  (* The depth from which either side of the queued envelope discriminates, and it is a statement
-     about the DEPTH rather than about the reading. Round 2 gated the upper side on the error formed
-     from the reading in hand, which decides whether to check using the very number in question: at
-     depth 2 or 3 that ran the claim on exactly the per-batch reading it cannot refuse, since the
-     reading would then be the window's minimum batch wall and the bound three halves of its median
-     (Codex P2, round 3 on PR #735).
+  (* The depth from which either side of the queued envelope discriminates, derived rather than
+     measured -- and it is a statement about the DEPTH, never about the reading. Round 2 gated the
+     upper side on the error formed from the reading in hand, which decides whether to check using
+     the very number in question: at depth 2 or 3 that ran the claim on exactly the per-batch
+     reading it cannot refuse (Codex P2, round 3 on PR #735).
 
-     Written on the depth it is arithmetic. A per-batch reading IS that minimum, so the upper side
-     refuses it when [minimum > 2 * median / depth] -- when the depth exceeds twice the window's own
-     spread [median / minimum] -- and the low side's structural term needs the same depth for the
-     mirror error. The widest spread over the sweep was 5.3, so both sides discriminate from a depth
-     of about 11, and the gate stands at 32: a 3x margin on that spread, and still below the 36 of
-     the shallowest batch the fleet produced (Metal at 6x oversubscription on a 16-core host). Below
-     it the leg says so rather than passing over an error it cannot see. *)
-  let discriminating_depth = 32 in
+     The derivation is [sample_min]'s own contention rule, which is the condition under which these
+     claims are made at all. It declares [contended] when at least half the window's batches exceed
+     twice its minimum, so in a window these claims judge, FEWER than half do -- and the median,
+     which sits at or below the middle of that majority at either parity, is therefore at most TWICE
+     the minimum. Both sides follow from that bound. A per-batch reading IS the window's minimum, so
+     the upper side refuses it when [minimum > 2 * median / depth], which [median <= 2 * minimum]
+     turns into [depth > 4]. The low side admits a correct reading when [minimum >= max(1 / 64, 2 /
+     depth) * median], which the same bound turns into [depth >= 4]. So the gate is 5, and both
+     sides are structural on every window that is not already bypassed -- no constant from a sweep
+     stands between a regression and this leg. Fleet-derived constants stood here for one round and
+     were 32, which would have left depths 5 through 31 unchecked on slower backend/host pairs
+     (Codex P2, round 4 on PR #735).
+
+     The sweep below then reads as corroboration rather than as justification, and its own tail
+     reads back: every window it measured at below half its median WAS a contended one, because the
+     invariant leaves no other possibility. *)
+  let discriminating_depth = 5 in
   let upper_claim =
     "queued reading is a per-launch time rather than a per-batch one, or reports contention"
   in
@@ -492,12 +511,13 @@ let () =
      survive. The term's own job is to keep the bound from going slack where [2 / depth] falls far
      below any real reading, at CUDA's depth 2048, and to refuse any reading below a 64th of its
      window's middle. What the constants have to clear is the spread between a window's minimum and
-     that middle: over 342 runs of the load ladder that produced the numbers above, re-read against
-     the median, the minimum stayed at 0.19 of its window's median at worst and every reading
-     cleared the bound -- contended ones included, since the sweep did not sort them out -- the
-     tightest by 7.4x, Metal at 6x oversubscription on a 16-core host where a depth of 39 makes [2 /
-     depth] the binding term. The same runs put the minimum at 0.064 of their window's MEAN, which
-     is the tail the median is here to cut. *)
+     that middle, which the contention rule caps at 2 for every window these claims judge: over 342
+     runs of the load ladder that produced the numbers above, re-read against the median, the
+     minimum stayed at 0.19 of its window's median at worst -- a window the invariant says was
+     contended, and so bypassed -- and every reading cleared the bound -- contended ones included,
+     since the sweep did not sort them out -- the tightest by 7.4x, Metal at 6x oversubscription on
+     a 16-core host where a depth of 39 makes [2 / depth] the binding term. The same runs put the
+     minimum at 0.064 of their window's MEAN, which is the tail the median is here to cut. *)
   let queued_low_bound =
     Float.max
       (median_per_launch que /. 64.)

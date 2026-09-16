@@ -2,6 +2,7 @@
 a fast routine reaches the 64-sample cap: true
 a stall burst cannot spend the budget before the 16-sample floor: true
 a mostly stalled sample window reports contention: true
+a window's reading is its minimum, not its sum or its mean: true
 a refused positive timing cannot enter ranking or calibration: true
 a contended calibration still gets the depth its estimate is owed: true
 an unresolved zero clock window is refused by ranking without being called contention: true
