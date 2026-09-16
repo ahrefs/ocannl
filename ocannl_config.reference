@@ -1118,10 +1118,9 @@
 # and `reproducible` pins it off.
 # The score matrix `q * k^T` keeps its own placement: `virtualize_max_inline_reduction` decides
 # whether it is recomputed at its two read sites (flash attention's memory trade: no [seq, seq]
-# buffer at all) or stored once. Storing was the faster choice in the measured regimes
-# (benchmarks/report-gh483-online-softmax.md: faster on both cc and Metal at seq 128 and 1024,
-# within the run-to-run spread on cc at seq 512), and a training step's backward reads the
-# scores again; recompute when the [seq, seq] buffer itself is the constraint.
+# buffer at all) or stored once. Storing was faster at every cell measured on cc and Metal
+# (benchmarks/report-gh483-online-softmax.md, seq 128 to 1024), and a training step's backward
+# reads the scores again; recompute when the [seq, seq] buffer itself is the constraint.
 # Programmatic override: `Ir.Online_softmax.set_enabled`.
 #online_softmax=false
 

@@ -76,9 +76,9 @@ loop nest — schedulable, and the shape a fused backward recomputes from `(m, l
 
 - **The score matrix's placement.** `q * k^T` keeps its own decision: the recompute cap
   `virtualize_max_inline_reduction` decides whether it is replayed at its two read sites (flash
-  attention's memory trade: no `[seq, seq]` buffer at all) or stored once; storing was the faster
-  choice in the report's regimes (both backends at seq 128 and 1024; within the spread on cc at
-  seq 512), so recompute is for when the buffer itself is the constraint. The rewrite does not
+  attention's memory trade: no `[seq, seq]` buffer at all) or stored once; storing was faster at
+  every cell the report measured (both backends, seq 128 to 1024), so recompute is for when the
+  buffer itself is the constraint. The rewrite does not
   force it virtual: a lineage decision binds every later routine, and the composed backward reads
   the scores at several sites with value-width multiplicity, so a forced-virtual score chain would
   be replayed `d_v`-fold there. The test pins both readings.
@@ -104,6 +104,6 @@ loop nest — schedulable, and the shape a fused backward recomputes from `(m, l
       is written under a cap admitting the head width, and that the scores are the one left above
       it.
 - [x] Measured on `gpt2_mini` and on the long-context legs `gpt2_mini_s512` / `gpt2_mini_s1024`
-      (cc and Metal, `benchmarks/report-gh483-online-softmax.md`): neutral to +28% on cc, -8% to
-      +18% on Metal with the crossover between seq 512 and 1024; storing the scores beats
-      recomputing them on both backends.
+      (cc and Metal, `benchmarks/report-gh483-online-softmax.md`, re-measured on the final
+      recurrence): 3% to 30% faster on cc, 8% slower to 17% faster on Metal with the crossover
+      between seq 512 and 1024; storing the scores beats recomputing them at every cell.
