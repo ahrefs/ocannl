@@ -56,6 +56,8 @@ and the rewritten normalizer stores that NaN too, though its carried state staye
 the value reduction is hoisted through a ten-nest elementwise chain from the probabilities: true
 an integer normalizer node is declined: its own reduction truncated after every step: true
 an auxiliary subtraction and exponential ahead of the normalizer's own do not hide it: true
+scores wider than the max node are declined: the composed max rounds them to -inf: true
+a max node at least as wide as the scores is accepted: true
 the max's state stays single and the normalizer's takes its node's double: true
 --- leg 8: a NaN mask fill poisons the rewritten rows exactly where it poisons the composed ---
 the composed output is NaN in every row: every row has a NaN-filled position: true

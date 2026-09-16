@@ -228,15 +228,18 @@ let () =
   (* One row of the composed softmax -- the four nests and the two initializations -- in the
      statement order [order], with the normalizer node at [l_prec]; [`Read_l] is a bystander
      statement reading the normalizer into an output. *)
-  let build ?(l_prec = Ir.Ops.single) ?(l_dims = [| 1 |]) order =
+  let build ?(l_prec = Ir.Ops.single) ?(l_dims = [| 1 |]) ?(m_prec = Ir.Ops.single)
+      ?(x_prec = Ir.Ops.single) order =
     let mk = B.node_factory ~first_id:48300 ~dims:[| n |] () in
     let mk1 = B.node_factory ~first_id:48400 ~dims:[| 1 |] () in
     let mkl = B.node_factory ~prec:l_prec ~first_id:48500 ~dims:l_dims () in
-    let x = mk "x" and nn = mk "n" and e = mk "e" in
+    let mkm = B.node_factory ~prec:m_prec ~first_id:48800 ~dims:[| 1 |] () in
+    let mkx = B.node_factory ~prec:x_prec ~first_id:48900 ~dims:[| n |] () in
+    let x = mkx "x" and nn = mk "n" and e = mk "e" in
     (* An auxiliary chain off the same max that never reaches a sum. *)
     let n2 = mk "n2" and e2 = mk "e2" in
     List.iter [ n2; e2 ] ~f:B.materialize;
-    let m = mk1 "m" and y = mk1 "y" and l = mkl "l" in
+    let m = mkm "m" and y = mk1 "y" and l = mkl "l" in
     List.iter [ x; nn; e; m; y; l ] ~f:B.materialize;
     let v = mk1 "v" in
     B.virtualize v;
@@ -338,13 +341,15 @@ let () =
     in
     (LL.unflat_lines (List.map order ~f:stmt), x, l)
   in
-  let raw ?l_prec ?l_dims order =
-    let llc, _, _ = build ?l_prec ?l_dims order in
+  let raw ?l_prec ?l_dims ?m_prec ?x_prec order =
+    let llc, _, _ = build ?l_prec ?l_dims ?m_prec ?x_prec order in
     llc
   in
-  let rewritten ?l_prec ?l_dims order = Online_softmax.rewrite (raw ?l_prec ?l_dims order) in
-  let declined ?l_prec ?l_dims order =
-    let raw = raw ?l_prec ?l_dims order in
+  let rewritten ?l_prec ?l_dims ?m_prec ?x_prec order =
+    Online_softmax.rewrite (raw ?l_prec ?l_dims ?m_prec ?x_prec order)
+  in
+  let declined ?l_prec ?l_dims ?m_prec ?x_prec order =
+    let raw = raw ?l_prec ?l_dims ?m_prec ?x_prec order in
     LL.equal (Online_softmax.rewrite raw) raw
   in
   let composed = [ `A_init; `A; `N; `E; `C_init; `C ] in
@@ -420,6 +425,10 @@ let () =
     (declined ~l_prec:Ir.Ops.int32 composed);
   p "an auxiliary subtraction and exponential ahead of the normalizer's own do not hide it"
     (scans_of (rewritten [ `A_init; `A; `N_aux; `E_aux; `N; `E; `C_init; `C ]) = 1);
+  p "scores wider than the max node are declined: the composed max rounds them to -inf"
+    (declined ~m_prec:Ir.Ops.half composed);
+  p "a max node at least as wide as the scores is accepted"
+    (scans_of (rewritten ~x_prec:Ir.Ops.half composed) = 1);
   let rec carried_of = function
     | LL.Scan_loop { carried; _ } -> Some carried
     | LL.Seq (a, b) -> Option.first_some (carried_of a) (carried_of b)

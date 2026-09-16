@@ -284,6 +284,15 @@ let definition r tn =
   | [ pos ] -> Option.bind r.nests.(pos) ~f:(fun n -> Option.some_if (pointwise n) (pos, n))
   | _ -> None
 
+(* The exponent range of a float precision, ordered: the question is which values a node can hold,
+   not how many digits it keeps -- bf16 shares f32's range at f16's width. *)
+let range_rank = function
+  | Ops.Double_prec _ -> 3
+  | Ops.Single_prec _ | Ops.Bfloat16_prec _ -> 2
+  | Ops.Half_prec _ -> 1
+  | Ops.Fp8_prec _ -> 0
+  | _ -> -1
+
 let find_normalizer r (a : int) : normalizer option =
   let* an = r.nests.(a) in
   let* voc, x, x_idcs, sig_x, sig_m, t = max_reduce an in
@@ -333,6 +342,14 @@ let find_normalizer r (a : int) : normalizer option =
        truncated after every step, which the scan would not reproduce. *)
     let float_node (tn : Tn.t) = Ops.is_float (Lazy.force tn.Tn.storage_prec) in
     let* () = Option.some_if (List.for_all [ m; l; x; n_tn; e_tn ] ~f:float_node) () in
+    (* The max node must hold every score: a composed max stored narrower than its scores rounds an
+       out-of-range score to [-inf], and the subtraction then yields [+inf] -- which the carried
+       state, widened to f32, would not reproduce. *)
+    let* () =
+      Option.some_if
+        (range_rank (Lazy.force m.Tn.storage_prec) >= range_rank (Lazy.force x.Tn.storage_prec))
+        ()
+    in
     (* [m]'s neutral-element fill covering all of [m]'s rows, and [l]'s zeroing. *)
     let covers sg (n : nest) = Option.is_some (reads_in voc n [ (sg, n.idcs) ]) in
     let filled tn sg value pos =
