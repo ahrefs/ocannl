@@ -25,9 +25,10 @@
     What stays as it was: the score reduction [q * k^T] keeps its own placement decision -- the
     recompute cap [virtualize_max_inline_reduction] decides whether it is replayed at its two read
     sites (the scan and the hoisted read) or stored once. Recomputing is flash attention's memory
-    trade (no [seq, seq] buffer at all); storing measured faster on both cc and Metal at every
-    length in benchmarks/report-gh483-online-softmax.md, and a training step's backward reads the
-    scores again through cross-routine splicing.
+    trade (no [seq, seq] buffer at all); storing was the faster choice in the measured regimes
+    (benchmarks/report-gh483-online-softmax.md: faster on both cc and Metal at seq 128 and 1024,
+    within the run-to-run spread on cc at seq 512), and a training step's backward reads the scores
+    again through cross-routine splicing.
 
     The pass runs at lowering, ahead of the analyses ({!Rewrites.apply}, from [Assignments.lower],
     over the raw lowered code), so the traced store and the placements see the rewritten routine and

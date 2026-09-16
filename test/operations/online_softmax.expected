@@ -53,6 +53,7 @@ a genuinely all-masked prefix leaves both normalizers finite and equal within 1e
 a row of scores at the format's lowest finite value is a finite maximum in both forms, with the row length as normalizer: true
 a fully masked row leaves the composed normalizer NaN: true
 and the rewritten normalizer stores that NaN too, though its carried state stayed zero: true
+the value reduction is hoisted through a ten-nest elementwise chain from the probabilities: true
 the max's state stays single and the normalizer's takes its node's double: true
 --- leg 8: a NaN mask fill poisons the rewritten rows exactly where it poisons the composed ---
 the composed output is NaN in every row: every row has a NaN-filled position: true

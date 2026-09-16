@@ -237,6 +237,12 @@ let () =
     List.iter [ x; nn; e; m; y; l ] ~f:B.materialize;
     let v = mk1 "v" in
     B.virtualize v;
+    (* A value reduction fed through a long elementwise chain from the probabilities. *)
+    let width = 3 in
+    let pp = mk "p" and ws = List.init 10 ~f:(fun k -> mk ("w" ^ Int.to_string k)) in
+    let vals = B.node_factory ~first_id:48600 ~dims:[| n; width |] () "vals" in
+    let out = B.node_factory ~first_id:48700 ~dims:[| width |] () "out" in
+    List.iter ((pp :: ws) @ [ vals; out ]) ~f:B.materialize;
     let op o args = LL.apply_op o args in
     let cell tn = B.get tn [| B.fixed 0 |] in
     let stmt = function
@@ -263,6 +269,36 @@ let () =
                (op (Ir.Ops.Binop Ir.Ops.Add) [| cell l; B.get e [| B.iter t |] |]))
       | `Read_l -> B.set_at y (B.fixed 0) (cell l)
       | `C_init_cell -> B.set_at l (B.fixed 0) (B.c 0.)
+      | `D ->
+          let t = B.sym () in
+          B.loop_n t n
+            (B.set_at pp (B.iter t)
+               (op (Ir.Ops.Binop Ir.Ops.Div) [| B.get e [| B.iter t |]; cell l |]))
+      | `Chain ->
+          LL.unflat_lines
+            (List.mapi ws ~f:(fun k w ->
+                 let src = if k = 0 then pp else List.nth_exn ws (k - 1) in
+                 let t = B.sym () in
+                 B.loop_n t n
+                   (B.set_at w (B.iter t)
+                      (op (Ir.Ops.Binop Ir.Ops.Add) [| B.get src [| B.iter t |]; B.c 0. |]))))
+      | `PV ->
+          let t = B.sym () and j = B.sym () in
+          let w = List.last_exn ws in
+          LL.unflat_lines
+            [
+              B.zero out;
+              B.loop_n t n
+                (B.loop_n j width
+                   (B.set out
+                      [| B.iter j |]
+                      (op (Ir.Ops.Binop Ir.Ops.Add)
+                         [|
+                           B.get out [| B.iter j |];
+                           op (Ir.Ops.Binop Ir.Ops.Mul)
+                             [| B.get w [| B.iter t |]; B.get vals [| B.iter t; B.iter j |] |];
+                         |])));
+            ]
       | `Opaque -> LL.Staged_compilation (fun () -> PPrint.empty)
       | `Scope_write ->
           (* A scope whose body writes a tensor: impure by the optimizer's contract, but the tier
@@ -363,6 +399,11 @@ let () =
   p "a fully masked row leaves the composed normalizer NaN" (Float.is_nan c_all);
   p "and the rewritten normalizer stores that NaN too, though its carried state stayed zero"
     (Float.is_nan o_all);
+  (* The hoist follows the probabilities through elementwise definitions however many: ten nests
+     between the normalizer and the value reduction, and the reduction still gets its local. *)
+  let locals llc = Ll_test.count_stmt ~f:(function LL.Declare_local _ -> true | _ -> false) llc in
+  p "the value reduction is hoisted through a ten-nest elementwise chain from the probabilities"
+    (locals (rewritten (composed @ [ `D; `Chain; `PV ])) = 2);
   let rec carried_of = function
     | LL.Scan_loop { carried; _ } -> Some carried
     | LL.Seq (a, b) -> Option.first_some (carried_of a) (carried_of b)

@@ -76,9 +76,9 @@ loop nest — schedulable, and the shape a fused backward recomputes from `(m, l
 
 - **The score matrix's placement.** `q * k^T` keeps its own decision: the recompute cap
   `virtualize_max_inline_reduction` decides whether it is replayed at its two read sites (flash
-  attention's memory trade: no `[seq, seq]` buffer at all) or stored once; storing measured faster
-  on both backends at every length in the report, so recompute is for when the buffer itself is
-  the constraint. The rewrite does not
+  attention's memory trade: no `[seq, seq]` buffer at all) or stored once; storing was the faster
+  choice in the report's regimes (both backends at seq 128 and 1024; within the spread on cc at
+  seq 512), so recompute is for when the buffer itself is the constraint. The rewrite does not
   force it virtual: a lineage decision binds every later routine, and the composed backward reads
   the scores at several sites with value-width multiplicity, so a forced-virtual score chain would
   be replayed `d_v`-fold there. The test pins both readings.

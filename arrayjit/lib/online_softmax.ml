@@ -470,23 +470,26 @@ let emit_normalizer (nz : normalizer) : LL.t =
    while [w] is read once per cell: the whole probability chain then inlines into that one read. *)
 
 (* Whether [tn] is defined elementwise from one of the [ls], through elementwise nests only. *)
-let rec normalized r ~ls ~depth tn =
-  depth < 8
-  &&
-  match definition r tn with
-  | None -> false
-  | Some (pos, _) ->
-      let reads = reads_at r pos in
-      List.exists ls ~f:(Set.mem reads)
-      || Set.exists reads ~f:(fun d ->
-          (not (Tn.equal d tn)) && normalized r ~ls ~depth:(depth + 1) d)
+let normalized r ~ls tn =
+  let visited = Hash_set.create (module Tn) in
+  let rec go tn =
+    (not (Hash_set.mem visited tn))
+    &&
+    (Hash_set.add visited tn;
+     match definition r tn with
+     | None -> false
+     | Some (pos, _) ->
+         let reads = reads_at r pos in
+         List.exists ls ~f:(Set.mem reads) || Set.exists reads ~f:go)
+  in
+  go tn
 
 let hoist r ~ls (n : nest) : LL.t option =
   let* w, wi, v, vi, w_first =
     match reduction n with
     | Some (Ops.Add, LL.Binop (Ops.Mul, (LL.Get (w, wi), _), (LL.Get (v, vi), _))) ->
-        if normalized r ~ls ~depth:0 w then Some (w, wi, v, vi, true)
-        else if normalized r ~ls ~depth:0 v then Some (v, vi, w, wi, false)
+        if normalized r ~ls w then Some (w, wi, v, vi, true)
+        else if normalized r ~ls v then Some (v, vi, w, wi, false)
         else None
     | _ -> None
   in
