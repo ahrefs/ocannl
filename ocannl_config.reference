@@ -1109,7 +1109,8 @@
 # probabilities -- the attention's `probabilities * v` -- reads each probability once into a local
 # ahead of the loops it does not index, so the [seq, seq] probability matrix is never materialized.
 # The normalizer's summation is reassociated (results move within rounding); the hoist is exact.
-# Off by default, like tf32_matmuls: it changes numerics. The `approximate` profile turns it on.
+# Off by default, like tf32_matmuls: it changes numerics. The `approximate` profile turns it on
+# and `reproducible` pins it off.
 # The score matrix `q * k^T` keeps its own placement: `virtualize_max_inline_reduction` decides
 # whether it is recomputed at its two read sites (flash attention's trade, right for inference and
 # long contexts) or stored once (cheaper for a training step, whose backward reads it again).
@@ -1208,6 +1209,9 @@
 # tf32_matmuls=false
 # fp16_arithmetic=auto
 # narrow_compute_f32=true
+# # The algebraic-rewrite gates likewise at their defaults: no rewrite reassociates a reduction
+# # under this profile.
+# online_softmax=false
 # --- END PROFILE PAYLOAD reproducible ---
 
 # --- BEGIN PROFILE PAYLOAD performance ---

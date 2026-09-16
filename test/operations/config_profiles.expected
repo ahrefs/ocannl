@@ -38,6 +38,7 @@ Profile "reproducible" sets:
   tf32_matmuls=false
   fp16_arithmetic=auto
   narrow_compute_f32=true
+  online_softmax=false
 
 Profile "performance" sets:
   autotune_search=true

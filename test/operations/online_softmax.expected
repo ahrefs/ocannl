@@ -33,3 +33,11 @@ w_v_attn0.grad agrees within 1e-4 relative: true
 w_v_attn0.grad is not identically zero: true
 w_o_attn0.grad agrees within 1e-4 relative: true
 w_o_attn0.grad is not identically zero: true
+--- leg 7: the recognizer declines what it cannot prove, on hand-built lowerings ---
+the composed order is rewritten into one scan: true
+the subtraction ahead of the max is declined: true
+the exponential after the sum is declined: true
+a read of the normalizer between its zeroing and the max is declined: true
+a read of the normalizer between the max and the sum is declined: true
+the zeroing ahead of the max with nothing reading the normalizer in between is accepted: true
+the max's state stays single and the normalizer's takes its node's double: true

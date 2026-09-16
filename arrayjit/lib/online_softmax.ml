@@ -245,12 +245,12 @@ let find_normalizer r (a : int) : normalizer option =
   (* The one elementwise definition whose reads are [reads], signing its node. *)
   let defined_by reads (n : nest) =
     let* env = reads_in voc n reads in
-    let* _ = definition r n.tn in
+    let* pos, _ = definition r n.tn in
     let* sg = sign env n.idcs in
-    Some (sg, n.tn)
+    Some (sg, n.tn, pos)
   in
   (* [n := x - m], elementwise over the max's rows and reduced axis. *)
-  let* sig_n, n_tn =
+  let* sig_n, n_tn, n_pos =
     Array.find_map r.nests ~f:(function
       | Some ({ llsc = LL.Binop (Ops.Sub, (LL.Get (x', xi), _), (LL.Get (m', mi), _)); _ } as nn)
         when Tn.equal x' x && Tn.equal m' m ->
@@ -258,7 +258,7 @@ let find_normalizer r (a : int) : normalizer option =
       | _ -> None)
   in
   (* [e := exp n]. *)
-  let* sig_e, e_tn =
+  let* sig_e, e_tn, e_pos =
     Array.find_map r.nests ~f:(function
       | Some ({ llsc = LL.Unop (Ops.Exp, (LL.Get (n', ni), _)); _ } as en) when Tn.equal n' n_tn ->
           defined_by [ (sig_n, ni) ] en
@@ -293,14 +293,19 @@ let find_normalizer r (a : int) : normalizer option =
         Some (a_init, c_init)
     | _ -> None
   in
-  (* [m] and [l] are consumed only once each is complete: the scan writes them at [a], earlier than
-     [l]'s original definition, so nothing between [a] and [c] may read [l] -- and nothing may
-     redefine [x] once the max has read it. *)
+  let reads_between lo hi tn =
+    List.exists (List.range (lo + 1) hi) ~f:(fun pos -> Set.mem (reads_at r pos) tn)
+  in
+  (* The chain runs in program order, max first and sum last, with its pointwise definitions in
+     between: a definition outside that span consumed a stale [m] or a stale [n] in the original,
+     which the scan would not reproduce. Between its initialization and the max, [l] holds its zero
+     and [m] its neutral fill, and the scan deletes both fills -- so nothing may read either there,
+     and nothing may redefine [x] once the max has read it. *)
   let untouched =
-    a < c
+    a < n_pos && n_pos < e_pos && e_pos < c
     && List.for_all (writers r x) ~f:(fun w -> w < a)
-    && (not (List.exists (List.range (a + 1) c) ~f:(fun pos -> Set.mem (reads_at r pos) l)))
-    && not (List.exists (List.range (a_init + 1) a) ~f:(fun pos -> Set.mem (reads_at r pos) m))
+    && (not (reads_between (Int.min a c_init) c l))
+    && not (reads_between a_init a m)
   in
   let* () = Option.some_if untouched () in
   let rows = List.filter an.loops ~f:(fun lp -> not (Idx.equal_symbol lp.index t.index)) in
@@ -314,15 +319,16 @@ let find_normalizer r (a : int) : normalizer option =
   in
   Some { a_init; a; c_init; c; m; l; x; x_idcs; rows; t; m_idcs = an.idcs; l_idcs }
 
+(* A local's precision: its node's, widened to f32 -- the state must not round per step under narrow
+   storage, and a double node keeps its double. *)
 let state_prec (tn : Tn.t) =
   match Lazy.force tn.Tn.storage_prec with Ops.Double_prec _ as p -> p | _ -> Ops.single
 
 let emit_normalizer (nz : normalizer) : LL.t =
   let open LL in
-  let prec = state_prec nz.m in
-  let m_st = scalar_node ~label:"online_max" ~like:nz.m prec in
-  let l_st = scalar_node ~label:"online_sum" ~like:nz.l prec in
-  let x_st = scalar_node ~label:"online_score" ~like:nz.x prec in
+  let m_st = scalar_node ~label:"online_max" ~like:nz.m (state_prec nz.m) in
+  let l_st = scalar_node ~label:"online_sum" ~like:nz.l (state_prec nz.l) in
+  let x_st = scalar_node ~label:"online_score" ~like:nz.x (state_prec nz.x) in
   let m = { prev = get_scope m_st; next = get_scope m_st; init = Constant Float.neg_infinity } in
   let l = { prev = get_scope l_st; next = get_scope l_st; init = Constant 0. } in
   let x = get_scope x_st in

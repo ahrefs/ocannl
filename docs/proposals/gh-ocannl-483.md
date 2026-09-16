@@ -48,8 +48,8 @@ row/reduced/fixed roles, fixed by the max-reduction's own loops), never through 
 which every nest mints afresh.
 
 1. **The online normalizer.** `m := max over t of x; n := x - m; e := exp n; l := sum over t of e`
-   (with `m`'s neutral fill and `l`'s zeroing) becomes one `Scan_loop` per row carrying `(m, l)`
-   in f32 (f64 under f64 storage) — `m' = max(m, x)`, `l' = l * exp(m - m') + exp(x - m')` —
+   (with `m`'s neutral fill and `l`'s zeroing) becomes one `Scan_loop` per row carrying `(m, l)`,
+   each at its own node's precision widened to f32 — `m' = max(m, x)`, `l' = l * exp(m - m') + exp(x - m')` —
    writing both trajectories to the original `m` and `l` nodes, so every downstream reader is
    unaffected. A prefix of masked keys (`-inf` scores) keeps `m' = -inf`, where the rescaling
    would be `exp(-inf - -inf) = nan`; the update is guarded on `m' = -inf` and the normalizer stays

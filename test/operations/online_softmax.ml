@@ -26,7 +26,10 @@
    [-inf] scores the recurrence has to survive): parity and finiteness; 6. training -- the rewritten
    forward under the composed backward, which reads the forward's intermediates through
    cross-routine splicing: parameter gradients agree -- last, since it runs the composed backward's
-   own routine; 5. two stacked blocks: two scans. *)
+   own routine; 5. two stacked blocks: two scans; 7. what the recognizer DECLINES, on hand-built raw
+   lowerings the pipeline never emits but the exposed [rewrite] accepts: a pointwise definition
+   outside the max..sum span, a read of the normalizer between its zeroing and the max -- each left
+   untouched -- and the carried state taking each node's own precision. *)
 
 open Base
 open Stdio
@@ -80,7 +83,8 @@ let inspect (t : Tensor.t) : LL.optimized =
     ~cd_source:None ~name:"probe" [] t.Tensor.forward.Ir.Assignments.asgns
 
 let is_scan = function LL.Scan_loop _ -> true | _ -> false
-let scans (o : LL.optimized) = Ll_test.count_stmt ~f:is_scan o.LL.llc
+let scans_of (llc : LL.t) = Ll_test.count_stmt ~f:is_scan llc
+let scans (o : LL.optimized) = scans_of o.LL.llc
 
 (* The nodes the optimized code writes that have two axes of extent [seq]: the attention's [seq,
    seq] intermediates (scores, probabilities) and nothing else in these models. *)
@@ -208,3 +212,77 @@ let () =
   List.iter2_exn grads_f grads_c ~f:(fun (name, gf) (_, gc) ->
       p_all2 (name ^ ".grad agrees within 1e-4 relative") gf gc ~f:(close ~tol:1e-4);
       p (name ^ ".grad is not identically zero") (Array.exists gc ~f:(fun v -> Float.(v <> 0.))))
+
+(* --- Leg 7: what the recognizer declines, on hand-built raw lowerings. --- *)
+
+let () =
+  printf "--- leg 7: the recognizer declines what it cannot prove, on hand-built lowerings ---\n";
+  let module B = Ll_test in
+  let n = 5 in
+  (* One row of the composed softmax -- the four nests and the two initializations -- in the
+     statement order [order], with the normalizer node at [l_prec]; [`Read_l] is a bystander
+     statement reading the normalizer into an output. *)
+  let build ?(l_prec = Ir.Ops.single) order =
+    let mk = B.node_factory ~first_id:48300 ~dims:[| n |] () in
+    let mk1 = B.node_factory ~first_id:48400 ~dims:[| 1 |] () in
+    let mkl = B.node_factory ~prec:l_prec ~first_id:48500 ~dims:[| 1 |] () in
+    let x = mk "x" and nn = mk "n" and e = mk "e" in
+    let m = mk1 "m" and y = mk1 "y" and l = mkl "l" in
+    List.iter [ x; nn; e; m; y; l ] ~f:B.materialize;
+    let op o args = LL.apply_op o args in
+    let cell tn = B.get tn [| B.fixed 0 |] in
+    let stmt = function
+      | `A_init -> B.set_at m (B.fixed 0) (B.c Float.neg_infinity)
+      | `A ->
+          let t = B.sym () in
+          B.loop_n t n
+            (B.set_at m (B.fixed 0)
+               (op (Ir.Ops.Binop Ir.Ops.Max) [| cell m; B.get x [| B.iter t |] |]))
+      | `N ->
+          let t = B.sym () in
+          B.loop_n t n
+            (B.set_at nn (B.iter t)
+               (op (Ir.Ops.Binop Ir.Ops.Sub) [| B.get x [| B.iter t |]; cell m |]))
+      | `E ->
+          let t = B.sym () in
+          B.loop_n t n
+            (B.set_at e (B.iter t) (op (Ir.Ops.Unop Ir.Ops.Exp) [| B.get nn [| B.iter t |] |]))
+      | `C_init -> B.zero l
+      | `C ->
+          let t = B.sym () in
+          B.loop_n t n
+            (B.set_at l (B.fixed 0)
+               (op (Ir.Ops.Binop Ir.Ops.Add) [| cell l; B.get e [| B.iter t |] |]))
+      | `Read_l -> B.set_at y (B.fixed 0) (cell l)
+    in
+    LL.unflat_lines (List.map order ~f:stmt)
+  in
+  let rewritten ?l_prec order = Online_softmax.rewrite (build ?l_prec order) in
+  let declined order =
+    let raw = build order in
+    LL.equal (Online_softmax.rewrite raw) raw
+  in
+  let composed = [ `A_init; `A; `N; `E; `C_init; `C ] in
+  p "the composed order is rewritten into one scan" (scans_of (rewritten composed) = 1);
+  p "the subtraction ahead of the max is declined" (declined [ `N; `A_init; `A; `E; `C_init; `C ]);
+  p "the exponential after the sum is declined" (declined [ `A_init; `A; `N; `C_init; `C; `E ]);
+  p "a read of the normalizer between its zeroing and the max is declined"
+    (declined [ `C_init; `Read_l; `A_init; `A; `N; `E; `C ]);
+  p "a read of the normalizer between the max and the sum is declined"
+    (declined [ `C_init; `A_init; `A; `Read_l; `N; `E; `C ]);
+  p "the zeroing ahead of the max with nothing reading the normalizer in between is accepted"
+    (scans_of (rewritten [ `C_init; `A_init; `A; `N; `E; `C ]) = 1);
+  let rec carried_of = function
+    | LL.Scan_loop { carried; _ } -> Some carried
+    | LL.Seq (a, b) -> Option.first_some (carried_of a) (carried_of b)
+    | LL.For_loop { body; _ } -> carried_of body
+    | _ -> None
+  in
+  let precs =
+    Option.map
+      (carried_of (rewritten ~l_prec:Ir.Ops.double composed))
+      ~f:(fun carried ->
+        List.map carried ~f:(fun (c : LL.carried) -> Lazy.force c.prev.tn.Tn.storage_prec))
+  in
+  p "the max's state stays single and the normalizer's takes its node's double"
+    (Option.equal (List.equal Ir.Ops.equal_prec) precs (Some [ Ir.Ops.single; Ir.Ops.double ]))

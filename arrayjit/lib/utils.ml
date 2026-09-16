@@ -1097,6 +1097,9 @@ cc_vector_bytes=0
 tf32_matmuls=false
 fp16_arithmetic=auto
 narrow_compute_f32=true
+# The algebraic-rewrite gates likewise at their defaults: no rewrite reassociates a reduction
+# under this profile.
+online_softmax=false
 |}
 
 let performance_profile_payload =
