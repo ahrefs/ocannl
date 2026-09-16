@@ -50,14 +50,17 @@ the same reduction with a cell-wise zeroing is accepted: the scan writes what th
 composed: a NaN score ahead of a masked one poisons the normalizer: true
 rewritten: the all-masked step after the NaN keeps the poison: true
 a genuinely all-masked prefix leaves both normalizers finite and equal within 1e-6 relative: true
+f16 scores under an f32 chain: the normalizers agree within 1e-6 relative: true
 a row of scores at the format's lowest finite value is a finite maximum in both forms, with the row length as normalizer: true
 a fully masked row leaves the composed normalizer NaN: true
 and the rewritten normalizer stores that NaN too, though its carried state stayed zero: true
 the value reduction is hoisted through a ten-nest elementwise chain from the probabilities: true
 an integer normalizer node is declined: its own reduction truncated after every step: true
 an auxiliary subtraction and exponential ahead of the normalizer's own do not hide it: true
-scores wider than the max node are declined: the composed max rounds them to -inf: true
-a max node at least as wide as the scores is accepted: true
+a max node narrower than the scores is declined: the composed max rounds where the state does not: true
+a max node of the scores' range but fewer digits (bf16 under f32) is declined too: true
+an exponential node narrower than the scores is declined: small terms round to zero there: true
+a chain at least as wide as the scores is accepted (f16 scores under an f32 chain): true
 the max's state stays single and the normalizer's takes its node's double: true
 --- leg 8: a NaN mask fill poisons the rewritten rows exactly where it poisons the composed ---
 the composed output is NaN in every row: every row has a NaN-filled position: true

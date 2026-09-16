@@ -284,14 +284,21 @@ let definition r tn =
   | [ pos ] -> Option.bind r.nests.(pos) ~f:(fun n -> Option.some_if (pointwise n) (pos, n))
   | _ -> None
 
-(* The exponent range of a float precision, ordered: the question is which values a node can hold,
-   not how many digits it keeps -- bf16 shares f32's range at f16's width. *)
-let range_rank = function
-  | Ops.Double_prec _ -> 3
-  | Ops.Single_prec _ | Ops.Bfloat16_prec _ -> 2
-  | Ops.Half_prec _ -> 1
-  | Ops.Fp8_prec _ -> 0
-  | _ -> -1
+(* Whether every value of [narrow] is a value of [wide]. The chain's nodes -- max, subtraction,
+   exponential, normalizer -- may widen the scores but never narrow them: the composed form rounds
+   at each materialized node, and a node narrower than the scores rounds where the carried state
+   (f32, or the node's own f64) does not -- an out-of-range score to [-inf], a running max to a
+   neighbour, a small exponential to zero -- which is more than a change of summation order. *)
+let represents ~wide ~narrow =
+  match (wide, narrow) with
+  | Ops.Double_prec _, _ -> true
+  | Ops.Single_prec _, (Ops.Single_prec _ | Ops.Half_prec _ | Ops.Bfloat16_prec _ | Ops.Fp8_prec _)
+    ->
+      true
+  | Ops.Half_prec _, (Ops.Half_prec _ | Ops.Fp8_prec _) -> true
+  | Ops.Bfloat16_prec _, (Ops.Bfloat16_prec _ | Ops.Fp8_prec _) -> true
+  | Ops.Fp8_prec _, Ops.Fp8_prec _ -> true
+  | _ -> false
 
 let find_normalizer r (a : int) : normalizer option =
   let* an = r.nests.(a) in
@@ -342,12 +349,12 @@ let find_normalizer r (a : int) : normalizer option =
        truncated after every step, which the scan would not reproduce. *)
     let float_node (tn : Tn.t) = Ops.is_float (Lazy.force tn.Tn.storage_prec) in
     let* () = Option.some_if (List.for_all [ m; l; x; n_tn; e_tn ] ~f:float_node) () in
-    (* The max node must hold every score: a composed max stored narrower than its scores rounds an
-       out-of-range score to [-inf], and the subtraction then yields [+inf] -- which the carried
-       state, widened to f32, would not reproduce. *)
+    (* No node of the chain narrows the scores (see [represents]). *)
+    let prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
     let* () =
       Option.some_if
-        (range_rank (Lazy.force m.Tn.storage_prec) >= range_rank (Lazy.force x.Tn.storage_prec))
+        (List.for_all [ m; n_tn; e_tn; l ] ~f:(fun tn ->
+             represents ~wide:(prec tn) ~narrow:(prec x)))
         ()
     in
     (* [m]'s neutral-element fill covering all of [m]'s rows, and [l]'s zeroing. *)

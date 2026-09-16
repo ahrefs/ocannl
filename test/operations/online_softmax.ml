@@ -229,13 +229,14 @@ let () =
      statement order [order], with the normalizer node at [l_prec]; [`Read_l] is a bystander
      statement reading the normalizer into an output. *)
   let build ?(l_prec = Ir.Ops.single) ?(l_dims = [| 1 |]) ?(m_prec = Ir.Ops.single)
-      ?(x_prec = Ir.Ops.single) order =
+      ?(x_prec = Ir.Ops.single) ?(e_prec = Ir.Ops.single) order =
     let mk = B.node_factory ~first_id:48300 ~dims:[| n |] () in
     let mk1 = B.node_factory ~first_id:48400 ~dims:[| 1 |] () in
     let mkl = B.node_factory ~prec:l_prec ~first_id:48500 ~dims:l_dims () in
     let mkm = B.node_factory ~prec:m_prec ~first_id:48800 ~dims:[| 1 |] () in
     let mkx = B.node_factory ~prec:x_prec ~first_id:48900 ~dims:[| n |] () in
-    let x = mkx "x" and nn = mk "n" and e = mk "e" in
+    let mke = B.node_factory ~prec:e_prec ~first_id:49000 ~dims:[| n |] () in
+    let x = mkx "x" and nn = mk "n" and e = mke "e" in
     (* An auxiliary chain off the same max that never reaches a sum. *)
     let n2 = mk "n2" and e2 = mk "e2" in
     List.iter [ n2; e2 ] ~f:B.materialize;
@@ -341,15 +342,15 @@ let () =
     in
     (LL.unflat_lines (List.map order ~f:stmt), x, l)
   in
-  let raw ?l_prec ?l_dims ?m_prec ?x_prec order =
-    let llc, _, _ = build ?l_prec ?l_dims ?m_prec ?x_prec order in
+  let raw ?l_prec ?l_dims ?m_prec ?x_prec ?e_prec order =
+    let llc, _, _ = build ?l_prec ?l_dims ?m_prec ?x_prec ?e_prec order in
     llc
   in
-  let rewritten ?l_prec ?l_dims ?m_prec ?x_prec order =
-    Online_softmax.rewrite (raw ?l_prec ?l_dims ?m_prec ?x_prec order)
+  let rewritten ?l_prec ?l_dims ?m_prec ?x_prec ?e_prec order =
+    Online_softmax.rewrite (raw ?l_prec ?l_dims ?m_prec ?x_prec ?e_prec order)
   in
-  let declined ?l_prec ?l_dims ?m_prec ?x_prec order =
-    let raw = raw ?l_prec ?l_dims ?m_prec ?x_prec order in
+  let declined ?l_prec ?l_dims ?m_prec ?x_prec ?e_prec order =
+    let raw = raw ?l_prec ?l_dims ?m_prec ?x_prec ?e_prec order in
     LL.equal (Online_softmax.rewrite raw) raw
   in
   let composed = [ `A_init; `A; `N; `E; `C_init; `C ] in
@@ -384,8 +385,8 @@ let () =
   in
   let poisoned = [| Float.nan; Float.neg_infinity; 0.; 1.; 2. |] in
   let masked = [| Float.neg_infinity; Float.neg_infinity; 0.; 1.; 2. |] in
-  let both label scores =
-    let ((llc, x, l) as built) = build composed in
+  let both ?x_prec label scores =
+    let ((llc, x, l) as built) = build ?x_prec composed in
     ( normalizer (label ^ "_composed") scores built,
       normalizer (label ^ "_online") scores (Online_softmax.rewrite llc, x, l) )
   in
@@ -400,6 +401,16 @@ let () =
     c_fin o_fin;
   p "a genuinely all-masked prefix leaves both normalizers finite and equal within 1e-6 relative"
     (Float.is_finite c_fin && close ~tol:1e-6 o_fin c_fin);
+  (* Executed on the accepted mixed-precision pair: f16 scores (exact at these values) under an f32
+     chain, where the composed form widens once at the read and the state does the same. *)
+  let c_h, o_h = both ~x_prec:Ir.Ops.half "os_half_scores" [| 0.5; 2.; -1.; 3.; 1.5 |] in
+  eprintf
+    "normalizers for f16 scores under an f32 chain: composed %.9g online %.9g (not part of the \
+     golden)\n\
+     %!"
+    c_h o_h;
+  p "f16 scores under an f32 chain: the normalizers agree within 1e-6 relative"
+    (Float.is_finite c_h && close ~tol:1e-6 o_h c_h);
   let c_min, o_min = both "os_min_finite" (Array.create ~len:n (-3.4028234663852886e38)) in
   eprintf
     "normalizers for a row at the lowest finite value: composed %.9g online %.9g (not part of the \
@@ -425,9 +436,15 @@ let () =
     (declined ~l_prec:Ir.Ops.int32 composed);
   p "an auxiliary subtraction and exponential ahead of the normalizer's own do not hide it"
     (scans_of (rewritten [ `A_init; `A; `N_aux; `E_aux; `N; `E; `C_init; `C ]) = 1);
-  p "scores wider than the max node are declined: the composed max rounds them to -inf"
+  p
+    "a max node narrower than the scores is declined: the composed max rounds where the state does \
+     not"
     (declined ~m_prec:Ir.Ops.half composed);
-  p "a max node at least as wide as the scores is accepted"
+  p "a max node of the scores' range but fewer digits (bf16 under f32) is declined too"
+    (declined ~m_prec:Ir.Ops.bfloat16 composed);
+  p "an exponential node narrower than the scores is declined: small terms round to zero there"
+    (declined ~e_prec:Ir.Ops.half composed);
+  p "a chain at least as wide as the scores is accepted (f16 scores under an f32 chain)"
     (scans_of (rewritten ~x_prec:Ir.Ops.half composed) = 1);
   let rec carried_of = function
     | LL.Scan_loop { carried; _ } -> Some carried
