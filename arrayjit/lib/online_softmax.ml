@@ -295,24 +295,30 @@ let find_normalizer r (a : int) : normalizer option =
     let* sg = sign env n.idcs in
     Some (sg, n.tn, pos)
   in
+  (* The three links of the chain, each as the list of its candidates: a max may feed more than one
+     subtraction (an auxiliary chain that never reaches a sum), so the first candidate at a link can
+     dead-end while a later one is the normalizer -- the search below tries every subtraction, every
+     exponential of it and every sum of that before giving up. *)
+  let candidates f = Array.to_list r.nests |> List.filter_map ~f in
   (* [n := x - m], elementwise over the max's rows and reduced axis. *)
-  let* sig_n, n_tn, n_pos =
-    Array.find_map r.nests ~f:(function
+  let subtractions =
+    candidates (function
       | Some ({ llsc = LL.Binop (Ops.Sub, (LL.Get (x', xi), _), (LL.Get (m', mi), _)); _ } as nn)
         when Tn.equal x' x && Tn.equal m' m ->
           defined_by [ (sig_x, xi); (sig_m, mi) ] nn
       | _ -> None)
   in
   (* [e := exp n]. *)
-  let* sig_e, e_tn, e_pos =
-    Array.find_map r.nests ~f:(function
+  let exponentials (sig_n, n_tn, _) =
+    candidates (function
       | Some ({ llsc = LL.Unop (Ops.Exp, (LL.Get (n', ni), _)); _ } as en) when Tn.equal n' n_tn ->
           defined_by [ (sig_n, ni) ] en
       | _ -> None)
   in
   (* [l := sum over t of e], reducing the same axis into the same rows. *)
-  let* c, l, l_sig =
-    Array.find_mapi r.nests ~f:(fun c nest ->
+  let sums (sig_e, e_tn, _) =
+    Array.to_list r.nests
+    |> List.filter_mapi ~f:(fun c nest ->
         let* cn = nest in
         match reduction cn with
         | Some (Ops.Add, LL.Get (e', ei)) when Tn.equal e' e_tn ->
@@ -321,69 +327,80 @@ let find_normalizer r (a : int) : normalizer option =
             Option.some_if (same_roles sig_l sig_m) (c, cn.tn, sig_l)
         | _ -> None)
   in
-  (* [m]'s neutral-element fill covering all of [m]'s rows, and [l]'s zeroing. *)
-  let covers sg (n : nest) = Option.is_some (reads_in voc n [ (sg, n.idcs) ]) in
-  let filled tn sg value pos =
-    match r.nests.(pos) with
-    | Some ({ llsc = LL.Constant v; _ } as n) ->
-        Tn.equal n.tn tn && Float.equal v value && covers sg n
-    | _ -> false
+  (* The rest of the contract, for one complete chain. *)
+  let complete (_, n_tn, n_pos) (_, e_tn, e_pos) (c, l, l_sig) : normalizer option =
+    (* The state accumulates fractional exponentials at f32 or f64; an integer node's own reduction
+       truncated after every step, which the scan would not reproduce. *)
+    let float_node (tn : Tn.t) = Ops.is_float (Lazy.force tn.Tn.storage_prec) in
+    let* () = Option.some_if (List.for_all [ m; l; x; n_tn; e_tn ] ~f:float_node) () in
+    (* [m]'s neutral-element fill covering all of [m]'s rows, and [l]'s zeroing. *)
+    let covers sg (n : nest) = Option.is_some (reads_in voc n [ (sg, n.idcs) ]) in
+    let filled tn sg value pos =
+      match r.nests.(pos) with
+      | Some ({ llsc = LL.Constant v; _ } as n) ->
+          Tn.equal n.tn tn && Float.equal v value && covers sg n
+      | _ -> false
+    in
+    (* A whole-node zeroing clears every cell; the scan writes the reduction's cells, so it may only
+       replace the zeroing when those are all of them. *)
+    let covers_node (tn : Tn.t) (sg : signature) =
+      let dims = Lazy.force tn.Tn.dims in
+      Array.length dims = Array.length sg
+      && Array.for_alli sg ~f:(fun a slot ->
+          match slot with
+          | Fixed k -> k = 0 && dims.(a) = 1
+          | Role role ->
+              Option.equal Int.equal
+                (List.Assoc.find voc.extents ~equal:equal_role role)
+                (Some (dims.(a) - 1)))
+    in
+    let zeroed tn sg pos =
+      match r.stmts.(pos) with
+      | LL.Zero_out tn' -> Tn.equal tn' tn && covers_node tn sg
+      | _ -> false
+    in
+    let* a_init, c_init =
+      match (writers r m, writers r l) with
+      | [ a_init; a' ], [ c_init; c' ]
+        when a' = a && c' = c
+             && filled m sig_m Float.neg_infinity a_init
+             && (zeroed l l_sig c_init || filled l l_sig 0. c_init) ->
+          Some (a_init, c_init)
+      | _ -> None
+    in
+    let reads_between lo hi tn =
+      List.exists (List.range (lo + 1) hi) ~f:(fun pos -> Set.mem (reads_at r pos) tn)
+    in
+    (* The chain runs in program order, max first and sum last, with its pointwise definitions in
+       between: a definition outside that span consumed a stale [m] or a stale [n] in the original,
+       which the scan would not reproduce. Between its initialization and the max, [l] holds its
+       zero and [m] its neutral fill, and the scan deletes both fills -- so nothing may read either
+       there, and nothing may redefine [x] once the max has read it. Staged code and barriers are
+       invisible to the write census, so none may sit in the span the rewrite reorders. *)
+    let untouched =
+      a < n_pos && n_pos < e_pos && e_pos < c
+      && List.for_all (writers r x) ~f:(fun w -> w < a)
+      && (not (reads_between (Int.min a c_init) c l))
+      && (not (reads_between a_init a m))
+      && not
+           (List.exists
+              (List.range (Int.min a_init c_init) (c + 1))
+              ~f:(fun pos -> has_opaque r.stmts.(pos)))
+    in
+    let* () = Option.some_if untouched () in
+    let rows = List.filter an.loops ~f:(fun lp -> not (Idx.equal_symbol lp.index t.index)) in
+    let symbol_of role =
+      List.find_map_exn voc.env ~f:(fun (s, r) -> Option.some_if (equal_role r role) s)
+    in
+    let l_idcs =
+      Array.map l_sig ~f:(function
+        | Fixed k -> Idx.Fixed_idx k
+        | Role r -> Idx.Iterator (symbol_of r))
+    in
+    Some { a_init; a; c_init; c; m; l; x; x_idcs; rows; t; m_idcs = an.idcs; l_idcs }
   in
-  (* A whole-node zeroing clears every cell; the scan writes the reduction's cells, so it may only
-     replace the zeroing when those are all of them. *)
-  let covers_node (tn : Tn.t) (sg : signature) =
-    let dims = Lazy.force tn.Tn.dims in
-    Array.length dims = Array.length sg
-    && Array.for_alli sg ~f:(fun a slot ->
-        match slot with
-        | Fixed k -> k = 0 && dims.(a) = 1
-        | Role role ->
-            Option.equal Int.equal
-              (List.Assoc.find voc.extents ~equal:equal_role role)
-              (Some (dims.(a) - 1)))
-  in
-  let zeroed tn sg pos =
-    match r.stmts.(pos) with LL.Zero_out tn' -> Tn.equal tn' tn && covers_node tn sg | _ -> false
-  in
-  let* a_init, c_init =
-    match (writers r m, writers r l) with
-    | [ a_init; a' ], [ c_init; c' ]
-      when a' = a && c' = c
-           && filled m sig_m Float.neg_infinity a_init
-           && (zeroed l l_sig c_init || filled l l_sig 0. c_init) ->
-        Some (a_init, c_init)
-    | _ -> None
-  in
-  let reads_between lo hi tn =
-    List.exists (List.range (lo + 1) hi) ~f:(fun pos -> Set.mem (reads_at r pos) tn)
-  in
-  (* The chain runs in program order, max first and sum last, with its pointwise definitions in
-     between: a definition outside that span consumed a stale [m] or a stale [n] in the original,
-     which the scan would not reproduce. Between its initialization and the max, [l] holds its zero
-     and [m] its neutral fill, and the scan deletes both fills -- so nothing may read either there,
-     and nothing may redefine [x] once the max has read it. Staged code and barriers are invisible
-     to the write census, so none may sit in the span the rewrite reorders. *)
-  let untouched =
-    a < n_pos && n_pos < e_pos && e_pos < c
-    && List.for_all (writers r x) ~f:(fun w -> w < a)
-    && (not (reads_between (Int.min a c_init) c l))
-    && (not (reads_between a_init a m))
-    && not
-         (List.exists
-            (List.range (Int.min a_init c_init) (c + 1))
-            ~f:(fun pos -> has_opaque r.stmts.(pos)))
-  in
-  let* () = Option.some_if untouched () in
-  let rows = List.filter an.loops ~f:(fun lp -> not (Idx.equal_symbol lp.index t.index)) in
-  let symbol_of role =
-    List.find_map_exn voc.env ~f:(fun (s, r) -> Option.some_if (equal_role r role) s)
-  in
-  let l_idcs =
-    Array.map l_sig ~f:(function
-      | Fixed k -> Idx.Fixed_idx k
-      | Role r -> Idx.Iterator (symbol_of r))
-  in
-  Some { a_init; a; c_init; c; m; l; x; x_idcs; rows; t; m_idcs = an.idcs; l_idcs }
+  List.find_map subtractions ~f:(fun n ->
+      List.find_map (exponentials n) ~f:(fun e -> List.find_map (sums e) ~f:(complete n e)))
 
 (* A local's precision: its node's, widened to f32 -- the state must not round per step under narrow
    storage, and a double node keeps its double. *)

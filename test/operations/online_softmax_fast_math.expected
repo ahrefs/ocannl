@@ -54,6 +54,8 @@ a row of scores at the format's lowest finite value is a finite maximum in both 
 a fully masked row leaves the composed normalizer NaN: true
 and the rewritten normalizer stores that NaN too, though its carried state stayed zero: true
 the value reduction is hoisted through a ten-nest elementwise chain from the probabilities: true
+an integer normalizer node is declined: its own reduction truncated after every step: true
+an auxiliary subtraction and exponential ahead of the normalizer's own do not hide it: true
 the max's state stays single and the normalizer's takes its node's double: true
 --- leg 8: a NaN mask fill poisons the rewritten rows exactly where it poisons the composed ---
 the composed output is NaN in every row: every row has a NaN-filled position: true
