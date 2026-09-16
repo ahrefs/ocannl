@@ -60,7 +60,7 @@ let mask ~prefix =
 
 (* [layers] attention blocks over a ramp input, residually stacked; the output keeps the model width
    through the residual. *)
-let model ~layers ~d_k ~prefix () =
+let model ?mask_fill ~layers ~d_k ~prefix () =
   let x =
     TDSL.range_of_shape ~label:[ "x" ] ~batch_dims:[ batch; seq ] ~input_dims:[]
       ~output_dims:[ d_model ] ()
@@ -70,7 +70,7 @@ let model ~layers ~d_k ~prefix () =
     List.init layers ~f:(fun i ->
         Nn_blocks.multi_head_attention
           ~label:[ "attn" ^ Int.to_string i ]
-          ~num_heads:heads ~d_k ~d_v:d_k ())
+          ~num_heads:heads ~d_k ~d_v:d_k ?mask_fill ())
   in
   List.fold blocks ~init:x ~f:(fun x block ->
       let%op y = x + block ~train_step:None ~mask x in
@@ -98,10 +98,10 @@ type run = { values : float array; optimized : LL.optimized; raw : LL.t }
 let raw (t : Tensor.t) : LL.t = Ir.Assignments.to_low_level t.Tensor.forward.Ir.Assignments.asgns
 
 (* Build and run the forward of [model ()] with the rewrite [on] or off. *)
-let forward ~on ~layers ~d_k ~prefix =
+let forward ?mask_fill ~on ~layers ~d_k ~prefix () =
   Tensor.unsafe_reinitialize ();
   Online_softmax.set_enabled (Some on);
-  let t = model ~layers ~d_k ~prefix () in
+  let t = model ?mask_fill ~layers ~d_k ~prefix () in
   let ctx = Train.forward_once (Context.auto ()) t in
   let values = Context.get_values ctx t.Tensor.value in
   let optimized = inspect t and raw = raw t in
@@ -119,14 +119,14 @@ let () =
   eprintf "backend: %s (not part of the golden)\n%!"
     (Utils.get_global_arg ~arg_name:"backend" ~default:"cc");
   printf "--- leg 1: the gate -- key off keeps the composed form ---\n";
-  let composed = forward ~on:false ~layers:1 ~d_k:8 ~prefix:0 in
+  let composed = forward ~on:false ~layers:1 ~d_k:8 ~prefix:0 () in
   p "composed: no scan in the routine" (scans composed.optimized = 0);
   p "composed: the routine writes seq^2-sized intermediates"
     (not (Set.is_empty (square_buffers composed.optimized)));
   p_all "composed: every output is finite" (Array.to_list composed.values) ~f:Float.is_finite;
 
   printf "--- leg 2: causal attention, head width under the recompute cap ---\n";
-  let fused = forward ~on:true ~layers:1 ~d_k:8 ~prefix:0 in
+  let fused = forward ~on:true ~layers:1 ~d_k:8 ~prefix:0 () in
   report "composed" composed.values;
   report "rewritten" fused.values;
   p "rewritten: exactly one scan, the attention's online normalizer" (scans fused.optimized = 1);
@@ -142,8 +142,8 @@ let () =
 
   printf "--- leg 3: head width above the recompute cap -- the cap owns the scores ---\n";
   let d_k = 32 in
-  let composed = forward ~on:false ~layers:1 ~d_k ~prefix:0 in
-  let fused = forward ~on:true ~layers:1 ~d_k ~prefix:0 in
+  let composed = forward ~on:false ~layers:1 ~d_k ~prefix:0 () in
+  let fused = forward ~on:true ~layers:1 ~d_k ~prefix:0 () in
   let n_fused = Set.length (square_buffers fused.optimized) in
   printf "seq^2 buffers: composed %d, rewritten %d\n"
     (Set.length (square_buffers composed.optimized))
@@ -154,7 +154,7 @@ let () =
     composed.values ~f:(close ~tol:1e-5);
   let cap = LL.virtualize_settings.LL.max_inline_reduction in
   LL.virtualize_settings.LL.max_inline_reduction <- d_k;
-  let recomputed = forward ~on:true ~layers:1 ~d_k ~prefix:0 in
+  let recomputed = forward ~on:true ~layers:1 ~d_k ~prefix:0 () in
   LL.virtualize_settings.LL.max_inline_reduction <- cap;
   p "a cap admitting the head width recomputes the scores: no seq^2 buffer at all"
     (Set.is_empty (square_buffers recomputed.optimized));
@@ -162,8 +162,8 @@ let () =
     composed.values ~f:(close ~tol:1e-5);
 
   printf "--- leg 4: masked key prefixes -- the recurrence survives -inf scores ---\n";
-  let composed = forward ~on:false ~layers:1 ~d_k:8 ~prefix:3 in
-  let fused = forward ~on:true ~layers:1 ~d_k:8 ~prefix:3 in
+  let composed = forward ~on:false ~layers:1 ~d_k:8 ~prefix:3 () in
+  let fused = forward ~on:true ~layers:1 ~d_k:8 ~prefix:3 () in
   report "composed" composed.values;
   report "rewritten" fused.values;
   p_all "rewritten: every output is finite" (Array.to_list fused.values) ~f:Float.is_finite;
@@ -171,8 +171,8 @@ let () =
     composed.values ~f:(close ~tol:1e-5);
 
   printf "--- leg 5: two stacked blocks -- one scan each ---\n";
-  let composed = forward ~on:false ~layers:2 ~d_k:8 ~prefix:0 in
-  let fused = forward ~on:true ~layers:2 ~d_k:8 ~prefix:0 in
+  let composed = forward ~on:false ~layers:2 ~d_k:8 ~prefix:0 () in
+  let fused = forward ~on:true ~layers:2 ~d_k:8 ~prefix:0 () in
   p "rewritten: two scans" (scans fused.optimized = 2);
   p "rewritten: no seq^2-sized node is written" (Set.is_empty (square_buffers fused.optimized));
   p_all2 "rewritten output matches the composed output within 1e-5 relative" fused.values
@@ -222,10 +222,10 @@ let () =
   (* One row of the composed softmax -- the four nests and the two initializations -- in the
      statement order [order], with the normalizer node at [l_prec]; [`Read_l] is a bystander
      statement reading the normalizer into an output. *)
-  let build ?(l_prec = Ir.Ops.single) order =
+  let build ?(l_prec = Ir.Ops.single) ?(l_dims = [| 1 |]) order =
     let mk = B.node_factory ~first_id:48300 ~dims:[| n |] () in
     let mk1 = B.node_factory ~first_id:48400 ~dims:[| 1 |] () in
-    let mkl = B.node_factory ~prec:l_prec ~first_id:48500 ~dims:[| 1 |] () in
+    let mkl = B.node_factory ~prec:l_prec ~first_id:48500 ~dims:l_dims () in
     let x = mk "x" and nn = mk "n" and e = mk "e" in
     let m = mk1 "m" and y = mk1 "y" and l = mkl "l" in
     List.iter [ x; nn; e; m; y; l ] ~f:B.materialize;
@@ -254,12 +254,14 @@ let () =
             (B.set_at l (B.fixed 0)
                (op (Ir.Ops.Binop Ir.Ops.Add) [| cell l; B.get e [| B.iter t |] |]))
       | `Read_l -> B.set_at y (B.fixed 0) (cell l)
+      | `C_init_cell -> B.set_at l (B.fixed 0) (B.c 0.)
+      | `Opaque -> LL.Staged_compilation (fun () -> PPrint.empty)
     in
     LL.unflat_lines (List.map order ~f:stmt)
   in
-  let rewritten ?l_prec order = Online_softmax.rewrite (build ?l_prec order) in
-  let declined order =
-    let raw = build order in
+  let rewritten ?l_prec ?l_dims order = Online_softmax.rewrite (build ?l_prec ?l_dims order) in
+  let declined ?l_dims order =
+    let raw = build ?l_dims order in
     LL.equal (Online_softmax.rewrite raw) raw
   in
   let composed = [ `A_init; `A; `N; `E; `C_init; `C ] in
@@ -272,6 +274,14 @@ let () =
     (declined [ `C_init; `A_init; `A; `Read_l; `N; `E; `C ]);
   p "the zeroing ahead of the max with nothing reading the normalizer in between is accepted"
     (scans_of (rewritten [ `C_init; `A_init; `A; `N; `E; `C ]) = 1);
+  p "staged code inside the span the rewrite reorders is declined"
+    (declined [ `A_init; `A; `Opaque; `N; `E; `C_init; `C ]);
+  p "staged code outside that span is no objection"
+    (scans_of (rewritten [ `Opaque; `A_init; `A; `N; `E; `C_init; `C ]) = 1);
+  p "a whole-node zeroing of a normalizer wider than the reduction's cells is declined"
+    (declined ~l_dims:[| 2 |] [ `A_init; `A; `N; `E; `C_init; `C ]);
+  p "the same reduction with a cell-wise zeroing is accepted: the scan writes what the fill did"
+    (scans_of (rewritten ~l_dims:[| 2 |] [ `A_init; `A; `N; `E; `C_init_cell; `C ]) = 1);
   let rec carried_of = function
     | LL.Scan_loop { carried; _ } -> Some carried
     | LL.Seq (a, b) -> Option.first_some (carried_of a) (carried_of b)
@@ -286,3 +296,32 @@ let () =
   in
   p "the max's state stays single and the normalizer's takes its node's double"
     (Option.equal (List.equal Ir.Ops.equal_prec) precs (Some [ Ir.Ops.single; Ir.Ops.double ]))
+
+(* --- Leg 8: special values, and the analysis cache across sibling lowerings. --- *)
+
+let () =
+  printf
+    "--- leg 8: a NaN mask fill poisons the rewritten rows exactly where it poisons the composed ---\n";
+  (* A NaN where the mask fill goes: [max] drops it against [-inf], so an online normalizer that
+     guarded on [m' = -inf] alone would discard the NaN at the head of every masked prefix and leave
+     those rows finite, while the composed form's [exp (nan - max)] poisons every row that has a
+     masked position -- which, under the prefix mask, is every row. *)
+  let composed = forward ~mask_fill:Float.nan ~on:false ~layers:1 ~d_k:8 ~prefix:3 () in
+  let fused = forward ~mask_fill:Float.nan ~on:true ~layers:1 ~d_k:8 ~prefix:3 () in
+  p_all "the composed output is NaN in every row: every row has a NaN-filled position"
+    (Array.to_list composed.values) ~f:Float.is_nan;
+  p_all2 "the rewritten output is NaN exactly where the composed output is" fused.values
+    composed.values ~f:(fun f c -> Bool.equal (Float.is_nan f) (Float.is_nan c));
+  printf "--- leg 8b: sibling lowerings of one rewritten program hit the analysis cache ---\n";
+  (* Placement arms and autotune candidates re-lower one program; the minted locals must be the same
+     nodes each time, or the identity-keyed analysis cache misses on every sibling. *)
+  Tensor.unsafe_reinitialize ();
+  Online_softmax.set_enabled (Some true);
+  let t = model ~layers:1 ~d_k:8 ~prefix:0 () in
+  let _ctx = Train.forward_once (Context.auto ()) t in
+  ignore (inspect t : LL.optimized);
+  let h1, m1 = LL.analysis_cache_stats () in
+  ignore (inspect t : LL.optimized);
+  let h2, m2 = LL.analysis_cache_stats () in
+  Online_softmax.set_enabled None;
+  p "re-lowering the rewritten forward is an analysis-cache hit, not a miss" (h2 = h1 + 1 && m2 = m1)

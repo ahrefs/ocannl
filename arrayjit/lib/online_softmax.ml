@@ -29,15 +29,30 @@ let fresh_id =
     Int.incr c;
     !c
 
+(* Sibling lowerings of one program -- placement arms, autotune candidates -- must mint the SAME
+   nodes, or the analysis cache, which keys nodes by identity, misses on every one of them: a local
+   is memoized by the node it stands for and its role, and the memo is cleared with the other
+   node-retaining caches ahead of an accessibility snapshot. *)
+module Minted_key = struct
+  type t = int * string [@@deriving compare, hash, sexp_of]
+end
+
+let minted : (Minted_key.t, Tn.t) Hashtbl.t = Hashtbl.create (module Minted_key)
+
+let () =
+  Tn.before_accessibility_snapshot :=
+    (fun () -> Hashtbl.clear minted) :: !Tn.before_accessibility_snapshot
+
 let scalar_node ~label ~(like : Tn.t) prec =
-  let tn =
-    Tn.create ~namespace (Tn.Specified prec) ~id:(fresh_id ()) ~label:(label :: like.Tn.label)
-      ~unpadded_dims:(lazy [| 1 |])
-      ~padding:(lazy None)
-      ()
-  in
-  Tn.update_memory_mode tn Tn.Virtual provenance;
-  tn
+  Hashtbl.find_or_add minted (like.Tn.uid, label) ~default:(fun () ->
+      let tn =
+        Tn.create ~namespace (Tn.Specified prec) ~id:(fresh_id ()) ~label:(label :: like.Tn.label)
+          ~unpadded_dims:(lazy [| 1 |])
+          ~padding:(lazy None)
+          ()
+      in
+      Tn.update_memory_mode tn Tn.Virtual provenance;
+      tn)
 
 (* {1 Nests}
 
@@ -56,6 +71,31 @@ let nest_of (stmt : LL.t) : nest option =
     | _ -> None
   in
   go [] stmt
+
+(* Whether a statement holds code the write census cannot see: staged code, or a barrier the rewrite
+   would move a write across. *)
+let rec has_opaque (stmt : LL.t) =
+  match stmt with
+  | LL.Staged_compilation _ | LL.Workgroup_barrier -> true
+  | LL.Seq (a, b) -> has_opaque a || has_opaque b
+  | LL.For_loop { body; _ } | LL.Scan_loop { body; _ } | LL.If { body; _ } -> has_opaque body
+  | LL.Tile_mma { fallback; _ } -> has_opaque fallback
+  | LL.Set { llsc; _ } | LL.Set_local (_, llsc) -> scalar_has_opaque llsc
+  | LL.Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar_has_opaque v || scalar_has_opaque llsc
+  | LL.Set_from_vec { arg = a, _; _ } -> scalar_has_opaque a
+  | LL.Noop | LL.Comment _ | LL.Zero_out _ | LL.Declare_local _ -> false
+
+and scalar_has_opaque (llsc : LL.scalar_t) =
+  match llsc with
+  | LL.Local_scope { body; _ } -> has_opaque body
+  | LL.Get_dynamic { dyn_value = v, _; _ } -> scalar_has_opaque v
+  | LL.Ternop (_, (a, _), (b, _), (c, _)) ->
+      scalar_has_opaque a || scalar_has_opaque b || scalar_has_opaque c
+  | LL.Binop (_, (a, _), (b, _)) -> scalar_has_opaque a || scalar_has_opaque b
+  | LL.Unop (_, (a, _)) -> scalar_has_opaque a
+  | LL.Get _ | LL.Get_local _ | LL.Get_merge_buffer _ | LL.Constant _ | LL.Constant_bits _
+  | LL.Embed_index _ ->
+      false
 
 let wrap loops body =
   List.fold_right loops ~init:body ~f:(fun { index; from_; to_ } body ->
@@ -283,13 +323,28 @@ let find_normalizer r (a : int) : normalizer option =
         Tn.equal n.tn tn && Float.equal v value && covers sg n
     | _ -> false
   in
-  let zeroed tn pos = match r.stmts.(pos) with LL.Zero_out tn' -> Tn.equal tn' tn | _ -> false in
+  (* A whole-node zeroing clears every cell; the scan writes the reduction's cells, so it may only
+     replace the zeroing when those are all of them. *)
+  let covers_node (tn : Tn.t) (sg : signature) =
+    let dims = Lazy.force tn.Tn.dims in
+    Array.length dims = Array.length sg
+    && Array.for_alli sg ~f:(fun a slot ->
+        match slot with
+        | Fixed k -> k = 0 && dims.(a) = 1
+        | Role role ->
+            Option.equal Int.equal
+              (List.Assoc.find voc.extents ~equal:equal_role role)
+              (Some (dims.(a) - 1)))
+  in
+  let zeroed tn sg pos =
+    match r.stmts.(pos) with LL.Zero_out tn' -> Tn.equal tn' tn && covers_node tn sg | _ -> false
+  in
   let* a_init, c_init =
     match (writers r m, writers r l) with
     | [ a_init; a' ], [ c_init; c' ]
       when a' = a && c' = c
            && filled m sig_m Float.neg_infinity a_init
-           && (zeroed l c_init || filled l l_sig 0. c_init) ->
+           && (zeroed l l_sig c_init || filled l l_sig 0. c_init) ->
         Some (a_init, c_init)
     | _ -> None
   in
@@ -300,12 +355,17 @@ let find_normalizer r (a : int) : normalizer option =
      between: a definition outside that span consumed a stale [m] or a stale [n] in the original,
      which the scan would not reproduce. Between its initialization and the max, [l] holds its zero
      and [m] its neutral fill, and the scan deletes both fills -- so nothing may read either there,
-     and nothing may redefine [x] once the max has read it. *)
+     and nothing may redefine [x] once the max has read it. Staged code and barriers are invisible
+     to the write census, so none may sit in the span the rewrite reorders. *)
   let untouched =
     a < n_pos && n_pos < e_pos && e_pos < c
     && List.for_all (writers r x) ~f:(fun w -> w < a)
     && (not (reads_between (Int.min a c_init) c l))
-    && not (reads_between a_init a m)
+    && (not (reads_between a_init a m))
+    && not
+         (List.exists
+            (List.range (Int.min a_init c_init) (c + 1))
+            ~f:(fun pos -> has_opaque r.stmts.(pos)))
   in
   let* () = Option.some_if untouched () in
   let rows = List.filter an.loops ~f:(fun lp -> not (Idx.equal_symbol lp.index t.index)) in
@@ -338,11 +398,14 @@ let emit_normalizer (nz : normalizer) : LL.t =
   (* A row whose prefix is entirely masked ([-inf] scores) keeps [m' = -inf], where the rescaling
      factor would be [exp (-inf - -inf) = nan]; its normalizer stays 0 until the first live score,
      whose rescaling of the empty prefix is [exp (-inf - x) = 0]. A fully masked row ends with [l =
-     0], the composed form's NaN in a different coat. *)
+     0], the composed form's NaN in a different coat. The guard also asks the score itself: [max]
+     drops a NaN score against [-inf], and only [-inf] may be dropped -- a NaN score reaches [exp
+     (nan - m')] and poisons the normalizer, as in the composed form. *)
+  let neg_inf v = binop Ops.Cmpeq v (Constant Float.neg_infinity) in
   let l_next =
     apply_op (Ops.Ternop Ops.Where)
       [|
-        binop Ops.Cmpeq m_next (Constant Float.neg_infinity);
+        binop Ops.And (neg_inf m_next) (neg_inf (Get_local x));
         Constant 0.;
         binop Ops.Add
           (binop Ops.Mul l_prev (exp_ (binop Ops.Sub m_prev m_next)))
