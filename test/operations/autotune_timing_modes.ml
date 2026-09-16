@@ -416,12 +416,18 @@ let () =
   (* The low side, as the larger of two terms that refuse on different grounds. [2 / depth] is
      structural: the reading cannot exceed the mean, so a twice-divided one cannot exceed [mean /
      depth], and a bound at twice that refuses it at EVERY depth with nothing measured -- the
-     largest min/mean ratio the sweep produced, 0.98, is the ceiling the 2 sits above. [1 / 64] is
-     empirical, and it keeps the bound from going slack where [2 / depth] falls far below any real
-     reading: at CUDA's depth 2048 it is what still refuses a reading divided by the sample count,
-     and it sits 4.6x below the worst min/mean ratio measured. All 406 non-contended readings of the
-     sweep clear the bound, the tightest by 4.35x -- Metal at 6x oversubscription, where the shallow
-     depth makes [2 / depth] the binding term. *)
+     largest min/mean ratio the sweep produced, 0.98, is the ceiling the 2 sits above. The 64 of the
+     other term is not a round number: it is [Autotune.max_timing_runs], the top-up cap the
+     sample-count claims above pin, so at that cap -- where the budget lands for any routine fast
+     enough to batch at all -- the same structural argument refuses a reading divided by the RUN
+     count on top of the launch count. Below the cap that second refusal weakens: at the 16-sample
+     floor it would need a min/mean ratio above 1/4 and the sweep measured 0.073, which is the
+     honest reach of this instrument -- the batch-depth division refused at every depth, the
+     run-count division at the run counts a batching routine actually reaches. That term is also
+     what keeps the bound from going slack where [2 / depth] falls far below any real reading, at
+     CUDA's depth 2048, and it sits 4.6x below the worst min/mean ratio measured. All 406
+     non-contended readings of the sweep clear the bound, the tightest by 4.35x -- Metal at 6x
+     oversubscription, where the shallow depth makes [2 / depth] the binding term. *)
   let queued_low_bound =
     Float.max (mean que /. 64.) (2. *. mean que /. Float.of_int (max 1 que.depth))
   in
