@@ -359,3 +359,32 @@ files.
   deleting other segments would misclassify unavailable source iterators as static. Static/runtime
   extents, mixed slice/whole concat coordinates and proof-arithmetic overflow decline. `test/operations/affine_surjectivity.ml` checks finite images and executed
   scatters against explicit neutral initialization.
+
+- **The algebraic-rewrite tier over raw lowered code is `Rewrites`, applied by `Assignments.lower`
+  between `to_low_level` and `Low_level.optimize`** (gh-ocannl-483; first member `Online_softmax`):
+  ahead of the analyses, so the traced store and the placements see the rewritten routine, and a
+  member may REMOVE a node's definition (the online normalizer replaces a max- and a sum-reduction
+  with one `Scan_loop`), which a post-analysis pass such as `rewrite_one_hot_reductions` may not.
+  A member is a static list entry with its own `Code_borne` gate key -- not a `Numerics.t` field:
+  the rewritten code carries the decision, while a numerics field enters every cache fingerprint
+  and would split entries for routines the rewrite never touched. The tier runs the enabled
+  members to a fixpoint under a round cap, so a member must be idempotent and consume a pattern
+  instance per application. Two traps from writing the first member: (a) relate nests through the axes of the nodes they
+  share (a role signature per node), never through loop symbols -- every nest mints its own, and
+  the reduced iterator is not reliably innermost; (b) do not force a chain virtual to make the
+  `[seq, seq]` buffers disappear -- a lineage decision binds every later routine, and the composed
+  backward reads the scores with value-width multiplicity, so a forced-virtual score chain is
+  replayed `d_v`-fold there; leave the score matrix to `virtualize_max_inline_reduction` and pin
+  both readings (`test/operations/online_softmax.ml` leg 3); (c) emit no comparison against
+  `-inf` -- `cc_backend_fast_math` (in the same `approximate` profile) is a finite-math licence
+  under which the C compiler folds such a comparison, which turned masked-prefix rows into NaN,
+  and a comparison against the lowest finite value misclassifies that value itself; the
+  recurrence instead floors the running max at `Online_softmax.lowest_finite` where it is
+  subtracted, so `-inf` never meets itself -- and no formulation survives finite-math-only
+  anyway (a probe showed clang mis-evaluating `exp(-inf - floor)` at a peeled first iteration),
+  so `cc_backend_fast_math` now takes `-ffinite-math-only` back, and the test is rerun under the
+  flag (`runtest-online_softmax_fast_math`) with every claim asserted; (d) do not rely on an
+  exact identity such as `l + (m - m)` to inject a NaN -- `simplify_llc` reassociates it into
+  `(l + m) - m`, which cancels catastrophically (the generated C is the evidence; gh-ocannl-998
+  is the issue).
+

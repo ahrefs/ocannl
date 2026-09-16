@@ -1367,4 +1367,7 @@ let%track6_sexp lower optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name s
   | None -> ()
   | Some callback -> callback (to_doc ~name ~static_indices () proc));
   let llc : Low_level.t = to_low_level ~static_indices proc in
+  (* The algebraic-rewrite tier over raw lowered code (gh-ocannl-483): ahead of the analyses, so the
+     traced store and the placements see the rewritten routine. *)
+  let llc = Rewrites.apply llc in
   Low_level.optimize optim_ctx ~unoptim_ll_source ~ll_source ~name static_indices llc

@@ -1136,17 +1136,23 @@ class FixtureDigestTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(out.getvalue(), "")
 
-    def test_the_unrecorded_metal_box_is_reported_for_checked_in_fixtures(self):
+    def test_every_declared_box_is_on_its_own_bytes_for_checked_in_fixtures(self):
+        # Until gh-ocannl-483 recorded m4-max's bytes for the gpt fixtures, this pinned that the
+        # unrecorded metal box is reported divergent for every checked-in fixture. Recorded or
+        # not, no two boxes are on the same bytes today: for every fixture and every box that
+        # recorded it, every OTHER declared box is reported divergent -- absent, or on different
+        # bytes -- so a regenerating box is told about all of them.
         digests = HERE / "fixtures" / fixture_digest.DIGEST_FILE
-        entries = fixture_digest.read_digests(digests)
+        entries, declared = fixture_digest._read_document(digests)
 
         for name, recorded in entries.items():
             self.assertTrue(recorded, name)
-            self.assertIn(
-                "m4-max",
-                fixture_digest.divergent_origins(digests, [name], recorded[0].origin),
-                name,
-            )
+            for entry in recorded:
+                self.assertEqual(
+                    set(fixture_digest.divergent_origins(digests, [name], entry.origin)),
+                    set(declared) - {entry.origin},
+                    f"{name} from {entry.origin}",
+                )
 
     def test_a_duplicate_box_declaration_is_refused(self):
         digests = self.dir / fixture_digest.DIGEST_FILE
@@ -1407,9 +1413,17 @@ class FixtureDigestTest(unittest.TestCase):
         # that forgets the other box -- or a standing report is retroactively on a workload
         # nothing pins. (Their digests are deliberately NOT pinned here: a coordinated
         # regeneration is allowed to change them, it is only allowed to change them for BOTH.)
+        # gh-ocannl-483 added m4-max's bytes for gpt2_mini (its report is on them) and the
+        # long-context legs it introduced, which only m4-max has recorded so far.
         entries = fixture_digest.read_digests(HERE / "fixtures" / fixture_digest.DIGEST_FILE)
-        for name in ("mlp_small.safetensors", "gpt2_mini.safetensors"):
-            self.assertEqual({e.origin for e in entries[name]}, {"minix", "rog-nv"}, name)
+        published = {
+            "mlp_small.safetensors": {"minix", "rog-nv"},
+            "gpt2_mini.safetensors": {"minix", "rog-nv", "m4-max"},
+            "gpt2_mini_s512.safetensors": {"m4-max"},
+            "gpt2_mini_s1024.safetensors": {"m4-max"},
+        }
+        for name, boxes in published.items():
+            self.assertTrue(boxes <= {e.origin for e in entries[name]}, name)
 
     def test_the_sweep_refuses_bytes_nothing_records(self):
         fx = self.fixture("lenet.safetensors")

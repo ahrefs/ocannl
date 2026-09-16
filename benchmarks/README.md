@@ -65,6 +65,13 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   OCANNL a parameter has no batch axes, so the trained `wpe` is a `[seq]x[d_model]`
   output-axis table added by an einsum that places its seq axis onto the sequence batch axis
   (inference keeps the plain broadcast add over a `[seq]`-batched constant).
+- **gpt2_mini_s512** / **gpt2_mini_s1024** (`model: gpt`, `mode: infer`): the long-context legs
+  of gh-ocannl-483 — the `gpt2_mini` architecture at seq 512 and 1024 (GPT-2's native context),
+  with the batch shrunk to keep a step near 1024 tokens (2 and 1 sequences per batch). The
+  `[seq, seq]` attention intermediates grow 16x and 64x over `gpt2_mini`'s while the matmul
+  work grows 4x and 8x, which is what makes these the workloads the online-softmax rewrite
+  (`online_softmax=true`, in the `approximate` profile) exists for; `gpt2_mini` at seq 128 is
+  matmul-dominated and the rewrite's prize there is a few percent of the step.
 
 ## Layout
 
@@ -94,8 +101,9 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   letters, digits, dots, underscores, and hyphens. The same IDs key cross-box sweep log paths, so
   path separators and platform-specific filename punctuation are refused before a file is written.
   The current declaration names `m4-max` (the Apple M4 Max/macOS measurement host), `minix`, and
-  `rog-nv`. The Metal reports predate per-origin recording, so `m4-max` deliberately has no rows
-  yet: its absence is now an explicit missing-record warning rather than an omitted host.
+  `rog-nv`. The Metal reports before gh-ocannl-483 predate per-origin recording, so `m4-max` has
+  rows only for the fixtures that report is on (`gpt2_mini` and the long-context legs); for the
+  others its absence is an explicit missing-record warning rather than an omitted host.
   - **Entries are per box, and today the boxes differ.** `mlp_small` and `gpt2_mini` hash
     differently on minix and rog-nv at identical sizes — two venvs, two numpy streams, one
     workload spec — so `report-hip.md` and `report-gh675-cuda.md` are **not cross-box

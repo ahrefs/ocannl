@@ -12,6 +12,7 @@ code-borne (digest) -- an optimizer decision: it changes the code that comes out
   inline_scalar_constexprs
   inline_simple_computations
   memory_budget
+  online_softmax
   virtualize_max_inline_fanin
   virtualize_max_inline_reduction
   virtualize_max_visits
@@ -161,7 +162,7 @@ execution-neutral -- memoization of toolchain probes: it changes how long resolv
   cc_backend_probe_cache [read at codegen]
 
 every scanned root meets its source-count floor: true
-OK: 114 config keys classified against 6 cache-key components.
+OK: 115 config keys classified against 6 cache-key components.
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count

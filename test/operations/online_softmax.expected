@@ -1,0 +1,73 @@
+--- run under cc_backend_fast_math=false ---
+--- leg 1: the gate -- key off keeps the composed form ---
+composed: no scan in the routine: true
+composed: the routine writes seq^2-sized intermediates: true
+composed: every output is finite: true
+--- leg 2: causal attention, head width under the recompute cap ---
+rewritten: exactly one scan, the attention's online normalizer: true
+the pass changes the raw lowering: true
+the pass is idempotent on its own output: true
+rewritten: no seq^2-sized node is written at all: true
+rewritten output matches the composed output within 1e-5 relative: true
+--- leg 3: head width above the recompute cap -- the cap owns the scores ---
+seq^2 buffers: composed 2, rewritten 1
+rewritten: the scores are the one seq^2 buffer left (the probabilities are gone): true
+rewritten output matches the composed output within 1e-5 relative: true
+a cap admitting the head width recomputes the scores: no seq^2 buffer at all: true
+recomputed scores give the same output within 1e-5 relative: true
+--- leg 4: masked key prefixes -- the recurrence survives -inf scores ---
+rewritten: every output is finite: true
+rewritten output matches the composed output within 1e-5 relative: true
+--- leg 5: two stacked blocks -- one scan each ---
+rewritten: two scans: true
+rewritten: no seq^2-sized node is written: true
+rewritten output matches the composed output within 1e-5 relative: true
+--- leg 6: training -- parameter gradients agree with the composed forward ---
+the loss agrees within 1e-5 relative: true
+parameters with gradients: 4
+the same parameters carry gradients in both runs: true
+w_q_attn0.grad agrees within 1e-4 relative: true
+w_q_attn0.grad is not identically zero: true
+w_k_attn0.grad agrees within 1e-4 relative: true
+w_k_attn0.grad is not identically zero: true
+w_v_attn0.grad agrees within 1e-4 relative: true
+w_v_attn0.grad is not identically zero: true
+w_o_attn0.grad agrees within 1e-4 relative: true
+w_o_attn0.grad is not identically zero: true
+--- leg 7: the recognizer declines what it cannot prove, on hand-built lowerings ---
+the composed order is rewritten into one scan: true
+the subtraction ahead of the max is declined: true
+the exponential after the sum is declined: true
+a read of the normalizer between its zeroing and the max is declined: true
+a read of the normalizer between the max and the sum is declined: true
+the zeroing ahead of the max with nothing reading the normalizer in between is accepted: true
+staged code inside the span the rewrite reorders is declined: true
+staged code outside that span is no objection: true
+staged code reachable only through a guard's condition inside the span is declined too: true
+a scope body inside the span is beyond the write census and declines the rewrite: true
+a whole-node zeroing of a normalizer wider than the reduction's cells is declined: true
+the same reduction with a cell-wise zeroing is accepted: the scan writes what the fill did: true
+composed: a NaN score ahead of a masked one poisons the normalizer: true
+rewritten: the all-masked step after the NaN keeps the poison: true
+a genuinely all-masked prefix leaves both normalizers finite and equal within 1e-6 relative: true
+an f16 chain: the f32-carried normalizer agrees with the per-step-rounded one within 2e-3: true
+a row of scores at the format's lowest finite value is a finite maximum in both forms, with the row length as normalizer: true
+a fully masked row leaves the composed normalizer NaN: true
+and the rewritten normalizer stores that NaN too, though its carried state stayed zero: true
+the value reduction is hoisted through a ten-nest elementwise chain from the probabilities: true
+a reduction whose target cell is [t + j] is not hoisted: distinct pairs share a cell: true
+an integer normalizer node is declined: its own reduction truncated after every step: true
+an auxiliary subtraction and exponential ahead of the normalizer's own do not hide it: true
+a max node narrower than the scores is declined: the composed max rounds where the state does not: true
+a max node of the scores' range but fewer digits (bf16 under f32) is declined too: true
+an exponential node narrower than the scores is declined: small terms round to zero there: true
+a normalizer wider than the chain (f64 under f32) is declined: it would sum unrounded terms: true
+scores narrower than the chain (f16 under f32) are declined as well: one precision throughout: true
+a chain at one precision is accepted at f16: true
+an f64 chain carries both states at double: true
+an f16 chain carries both states at single: widened, never per-step at the storage width: true
+--- leg 8: a NaN mask fill poisons the rewritten rows exactly where it poisons the composed ---
+the composed output is NaN in every row: every row has a NaN-filled position: true
+the rewritten output is NaN exactly where the composed output is: true
+--- leg 8b: sibling lowerings of one rewritten program hit the analysis cache ---
+re-lowering the rewritten forward is an analysis-cache hit, not a miss: true

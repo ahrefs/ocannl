@@ -19,6 +19,17 @@ let optimization_level () =
 
 let fast_math_enabled () = Utils.get_global_flag ~default:false ~arg_name:"cc_backend_fast_math"
 
+(* The flag as passed to the compiler, shared by the compile line and the codegen tag so that the
+   schedule cache's identity follows the flag's EXPANSION, not the boolean: [-ffast-math] minus
+   [-ffinite-math-only]. The licence is reassociation, contraction, reciprocal approximation and no
+   trapping -- never "assume no infinities". The lowering itself emits [-inf] (the [Max] neutral
+   element, the default attention mask fill), and the online-softmax recurrence (gh-ocannl-483)
+   rests on IEEE infinity arithmetic; under finite-math-only clang folds and reorders those into NaN
+   (a masked-prefix row went NaN in the review of staging PR #737, reproduced on a five-line
+   probe). *)
+let fast_math_flag () =
+  if fast_math_enabled () then Some "-ffast-math -fno-finite-math-only" else None
+
 (* Toolchain probing -- resolving the compiler command, [arch_flags], [simd_flags],
    [parallel_grid_syntax_setting], [fp16_arithmetic_support] -- costs the better part of a dozen
    subprocesses per process: one [ocamlc -config], plus compile and link probes for each of the
@@ -723,7 +734,7 @@ let codegen_tag () =
       compiler_command ();
       Lazy.force target_fingerprint;
       Int.to_string (optimization_level ());
-      Bool.to_string (fast_math_enabled ());
+      Option.value (fast_math_flag ()) ~default:"fast-math-off";
       Option.value (fp_contract_flag ()) ~default:"fp-contract-default";
       arch_flags ();
       simd_flags ();
@@ -830,7 +841,7 @@ let%track7_sexp c_compile_and_load ~f_path =
     let optimization_flag = "-O" ^ Int.to_string (optimization_level ()) in
     let arch_flag = String.strip (arch_flags ()) in
     let simd_flag = String.strip (simd_flags ()) in
-    let fast_math_flag = if fast_math_enabled () then Some "-ffast-math" else None in
+    let fast_math_flag = fast_math_flag () in
     (* [-fopenmp] must also reach the link step (this command compiles and links); harmless for
        kernels without parallel Grid loops. *)
     let parallel_flag =

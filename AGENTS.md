@@ -178,7 +178,7 @@ or golden format.
 2. Environment variables: `OCANNL_<OPTION>=<value>` (e.g., `OCANNL_BACKEND=cuda`)
 3. Config file: `ocannl_config` in current or ancestor directories
 
-**Config profiles** (gh-ocannl-559): `profile=reproducible|performance|approximate` applies a preset bundle (embedded in `arrayjit/lib/utils.ml`) just below the explicit keys of the source that picked it, so explicit keys beat a profile of equal immediacy and a CLI-picked profile beats a config file; `test_config_consistency` checks the payloads and the reference file's quote of them. `approximate` (gh-ocannl-719) is `performance` plus every numerics-changing knob, gated in the benchmarks at `PARITY_TOL_APPROX`; a new numerics-changing gate lands in that payload and in the schedule cache's numerics digest in the PR that adds its key (`test/operations/config_profiles` pins approximate ⊇ performance).
+**Config profiles** (gh-ocannl-559): `profile=reproducible|performance|approximate` applies a preset bundle (embedded in `arrayjit/lib/utils.ml`) just below the explicit keys of the source that picked it, so explicit keys beat a profile of equal immediacy and a CLI-picked profile beats a config file; `test_config_consistency` checks the payloads and the reference file's quote of them. `approximate` (gh-ocannl-719) is `performance` plus every numerics-changing knob, gated in the benchmarks at `PARITY_TOL_APPROX`; a new numerics-changing gate lands in that payload, pinned at its default in `reproducible`, and in the schedule cache's identity in the PR that adds its key — the numerics digest for a codegen-time gate (`Keyed "numerics"`), the code digest for a lowering-time rewrite gate (`Code_borne`, gh-ocannl-483: the rewritten code carries the decision, and a numerics field would split cache entries for routines the rewrite never touches) (`test/operations/config_profiles` pins approximate ⊇ performance).
 
 **Testing with Different Configurations**:
 
@@ -241,3 +241,4 @@ without skill support read the files directly. In brief:
 - New primitive ops: `arrayjit/lib/ops.ml` (+ `Ir.Ops`), wired into `tensor/operation.ml`
 - New tensor convenience functions: `tensor/operation.ml` (use `%cd` for forward/backprop)
 - Shape/projection changes: `tensor/shape.ml`, `tensor/row.ml`, `arrayjit/lib/indexing.ml`
+- Algebraic rewrites over raw lowered code (pattern-directed substitutions that change the computation, each behind its own config key): a member of the `arrayjit/lib/rewrites.ml` tier, which `Assignments.lower` runs to a fixpoint ahead of the analyses; `online_softmax.ml` is the exemplar, design record `docs/proposals/gh-ocannl-483.md`
