@@ -49,7 +49,7 @@ which every nest mints afresh.
 
 1. **The online normalizer.** `m := max over t of x; n := x - m; e := exp n; l := sum over t of e`
    (with `m`'s neutral fill and `l`'s zeroing) becomes one `Scan_loop` per row carrying `(m, l)`,
-   each at its own node's precision widened to f32 — `m' = max(m, x)`, `l' = l * exp(m - m') + exp(x - m')` —
+   at the chain's precision widened to f32 (the chain -- max, subtraction, exponential, normalizer -- is recognized only at one precision, the scores') — `m' = max(m, x)`, `l' = l * exp(m - m') + exp(x - m')` —
    writing both trajectories to the original `m` and `l` nodes, so every downstream reader is
    unaffected. A prefix of masked keys (`-inf` scores) keeps `m' = -inf`, where the rescaling
    would be `exp(-inf - -inf) = nan`; the rescaling reads both maxima floored at the format's

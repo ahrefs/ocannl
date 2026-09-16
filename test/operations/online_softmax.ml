@@ -229,14 +229,15 @@ let () =
      statement order [order], with the normalizer node at [l_prec]; [`Read_l] is a bystander
      statement reading the normalizer into an output. *)
   let build ?(l_prec = Ir.Ops.single) ?(l_dims = [| 1 |]) ?(m_prec = Ir.Ops.single)
-      ?(x_prec = Ir.Ops.single) ?(e_prec = Ir.Ops.single) order =
+      ?(x_prec = Ir.Ops.single) ?(e_prec = Ir.Ops.single) ?(n_prec = Ir.Ops.single) order =
     let mk = B.node_factory ~first_id:48300 ~dims:[| n |] () in
     let mk1 = B.node_factory ~first_id:48400 ~dims:[| 1 |] () in
     let mkl = B.node_factory ~prec:l_prec ~first_id:48500 ~dims:l_dims () in
     let mkm = B.node_factory ~prec:m_prec ~first_id:48800 ~dims:[| 1 |] () in
     let mkx = B.node_factory ~prec:x_prec ~first_id:48900 ~dims:[| n |] () in
     let mke = B.node_factory ~prec:e_prec ~first_id:49000 ~dims:[| n |] () in
-    let x = mkx "x" and nn = mk "n" and e = mke "e" in
+    let mkn = B.node_factory ~prec:n_prec ~first_id:49100 ~dims:[| n |] () in
+    let x = mkx "x" and nn = mkn "n" and e = mke "e" in
     (* An auxiliary chain off the same max that never reaches a sum. *)
     let n2 = mk "n2" and e2 = mk "e2" in
     List.iter [ n2; e2 ] ~f:B.materialize;
@@ -342,15 +343,20 @@ let () =
     in
     (LL.unflat_lines (List.map order ~f:stmt), x, l)
   in
-  let raw ?l_prec ?l_dims ?m_prec ?x_prec ?e_prec order =
-    let llc, _, _ = build ?l_prec ?l_dims ?m_prec ?x_prec ?e_prec order in
+  (* A chain at one precision throughout. *)
+  let uniform prec = (prec, prec, prec, prec, prec) in
+  let build_at (x_prec, m_prec, n_prec, e_prec, l_prec) ?l_dims order =
+    build ~x_prec ~m_prec ~n_prec ~e_prec ~l_prec ?l_dims order
+  in
+  let raw ?l_prec ?l_dims ?m_prec ?x_prec ?e_prec ?n_prec order =
+    let llc, _, _ = build ?l_prec ?l_dims ?m_prec ?x_prec ?e_prec ?n_prec order in
     llc
   in
-  let rewritten ?l_prec ?l_dims ?m_prec ?x_prec ?e_prec order =
-    Online_softmax.rewrite (raw ?l_prec ?l_dims ?m_prec ?x_prec ?e_prec order)
+  let rewritten ?l_prec ?l_dims ?m_prec ?x_prec ?e_prec ?n_prec order =
+    Online_softmax.rewrite (raw ?l_prec ?l_dims ?m_prec ?x_prec ?e_prec ?n_prec order)
   in
-  let declined ?l_prec ?l_dims ?m_prec ?x_prec ?e_prec order =
-    let raw = raw ?l_prec ?l_dims ?m_prec ?x_prec ?e_prec order in
+  let declined ?l_prec ?l_dims ?m_prec ?x_prec ?e_prec ?n_prec order =
+    let raw = raw ?l_prec ?l_dims ?m_prec ?x_prec ?e_prec ?n_prec order in
     LL.equal (Online_softmax.rewrite raw) raw
   in
   let composed = [ `A_init; `A; `N; `E; `C_init; `C ] in
@@ -385,8 +391,8 @@ let () =
   in
   let poisoned = [| Float.nan; Float.neg_infinity; 0.; 1.; 2. |] in
   let masked = [| Float.neg_infinity; Float.neg_infinity; 0.; 1.; 2. |] in
-  let both ?x_prec label scores =
-    let ((llc, x, l) as built) = build ?x_prec composed in
+  let both ?(precs = uniform Ir.Ops.single) label scores =
+    let ((llc, x, l) as built) = build_at precs composed in
     ( normalizer (label ^ "_composed") scores built,
       normalizer (label ^ "_online") scores (Online_softmax.rewrite llc, x, l) )
   in
@@ -401,16 +407,14 @@ let () =
     c_fin o_fin;
   p "a genuinely all-masked prefix leaves both normalizers finite and equal within 1e-6 relative"
     (Float.is_finite c_fin && close ~tol:1e-6 o_fin c_fin);
-  (* Executed on the accepted mixed-precision pair: f16 scores (exact at these values) under an f32
-     chain, where the composed form widens once at the read and the state does the same. *)
-  let c_h, o_h = both ~x_prec:Ir.Ops.half "os_half_scores" [| 0.5; 2.; -1.; 3.; 1.5 |] in
-  eprintf
-    "normalizers for f16 scores under an f32 chain: composed %.9g online %.9g (not part of the \
-     golden)\n\
-     %!"
-    c_h o_h;
-  p "f16 scores under an f32 chain: the normalizers agree within 1e-6 relative"
-    (Float.is_finite c_h && close ~tol:1e-6 o_h c_h);
+  (* Executed at a narrow uniform precision: the composed form rounds every intermediate to f16 per
+     step while the carried pair lives at f32 -- the one difference beyond summation order, and it
+     stays within f16's own resolution. *)
+  let c_h, o_h = both ~precs:(uniform Ir.Ops.half) "os_half_chain" [| 0.5; 2.; -1.; 3.; 1.5 |] in
+  eprintf "normalizers for an f16 chain: composed %.9g online %.9g (not part of the golden)\n%!" c_h
+    o_h;
+  p "an f16 chain: the f32-carried normalizer agrees with the per-step-rounded one within 2e-3"
+    (Float.is_finite c_h && close ~tol:2e-3 o_h c_h);
   let c_min, o_min = both "os_min_finite" (Array.create ~len:n (-3.4028234663852886e38)) in
   eprintf
     "normalizers for a row at the lowest finite value: composed %.9g online %.9g (not part of the \
@@ -444,22 +448,37 @@ let () =
     (declined ~m_prec:Ir.Ops.bfloat16 composed);
   p "an exponential node narrower than the scores is declined: small terms round to zero there"
     (declined ~e_prec:Ir.Ops.half composed);
-  p "a chain at least as wide as the scores is accepted (f16 scores under an f32 chain)"
-    (scans_of (rewritten ~x_prec:Ir.Ops.half composed) = 1);
+  p "a normalizer wider than the chain (f64 under f32) is declined: it would sum unrounded terms"
+    (declined ~l_prec:Ir.Ops.double composed);
+  p "scores narrower than the chain (f16 under f32) are declined as well: one precision throughout"
+    (declined ~x_prec:Ir.Ops.half composed);
+  p "a chain at one precision is accepted at f16"
+    (scans_of
+       (Online_softmax.rewrite
+          (let llc, _, _ = build_at (uniform Ir.Ops.half) composed in
+           llc))
+    = 1);
   let rec carried_of = function
     | LL.Scan_loop { carried; _ } -> Some carried
     | LL.Seq (a, b) -> Option.first_some (carried_of a) (carried_of b)
     | LL.For_loop { body; _ } -> carried_of body
     | _ -> None
   in
-  let precs =
+  let state_precs precs =
+    let llc, _, _ = build_at precs composed in
     Option.map
-      (carried_of (rewritten ~l_prec:Ir.Ops.double composed))
+      (carried_of (Online_softmax.rewrite llc))
       ~f:(fun carried ->
         List.map carried ~f:(fun (c : LL.carried) -> Lazy.force c.prev.tn.Tn.storage_prec))
   in
-  p "the max's state stays single and the normalizer's takes its node's double"
-    (Option.equal (List.equal Ir.Ops.equal_prec) precs (Some [ Ir.Ops.single; Ir.Ops.double ]))
+  p "an f64 chain carries both states at double"
+    (Option.equal (List.equal Ir.Ops.equal_prec)
+       (state_precs (uniform Ir.Ops.double))
+       (Some [ Ir.Ops.double; Ir.Ops.double ]));
+  p "an f16 chain carries both states at single: widened, never per-step at the storage width"
+    (Option.equal (List.equal Ir.Ops.equal_prec)
+       (state_precs (uniform Ir.Ops.half))
+       (Some [ Ir.Ops.single; Ir.Ops.single ]))
 
 (* --- Leg 8: special values, and the analysis cache across sibling lowerings. --- *)
 

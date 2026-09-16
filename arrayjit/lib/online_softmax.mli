@@ -12,10 +12,13 @@
     - The (max, sum-of-exp-shifted-by-max) reduction pair over one axis becomes ONE
       {!Ir.Low_level.t.Scan_loop} per row carrying the running max and the rescaled running sum --
       the online-softmax recurrence, {!Ir.Low_level.t.Scan_loop}'s founding use case -- writing both
-      trajectories to the original nodes so every downstream reader is unaffected. The elementwise
-      nests in between stay as the definitions of their nodes. This reassociates the normalizer's
-      summation, which is why the pass is a numerics policy rather than an optimizer decision:
-      results move within rounding.
+      trajectories to the original nodes so every downstream reader is unaffected. The chain is
+      recognized only at one precision, the scores', and the carried pair lives at that precision
+      widened to f32 (f64 stays f64): under narrow scores the state does not round per step, which
+      is the one difference from the composed form beyond summation order. The elementwise nests in
+      between stay as the definitions of their nodes. This reassociates the normalizer's summation,
+      which is why the pass is a numerics policy rather than an optimizer decision: results move
+      within rounding.
     - A reduction consuming the normalized probabilities (through elementwise nests only) has the
       loops the probabilities do not index moved innermost, behind one read of the probability cell
       into a scope local. Bitwise exact: every moved loop indexes the reduction's target, so no

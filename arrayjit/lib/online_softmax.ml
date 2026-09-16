@@ -284,22 +284,6 @@ let definition r tn =
   | [ pos ] -> Option.bind r.nests.(pos) ~f:(fun n -> Option.some_if (pointwise n) (pos, n))
   | _ -> None
 
-(* Whether every value of [narrow] is a value of [wide]. The chain's nodes -- max, subtraction,
-   exponential, normalizer -- may widen the scores but never narrow them: the composed form rounds
-   at each materialized node, and a node narrower than the scores rounds where the carried state
-   (f32, or the node's own f64) does not -- an out-of-range score to [-inf], a running max to a
-   neighbour, a small exponential to zero -- which is more than a change of summation order. *)
-let represents ~wide ~narrow =
-  match (wide, narrow) with
-  | Ops.Double_prec _, _ -> true
-  | Ops.Single_prec _, (Ops.Single_prec _ | Ops.Half_prec _ | Ops.Bfloat16_prec _ | Ops.Fp8_prec _)
-    ->
-      true
-  | Ops.Half_prec _, (Ops.Half_prec _ | Ops.Fp8_prec _) -> true
-  | Ops.Bfloat16_prec _, (Ops.Bfloat16_prec _ | Ops.Fp8_prec _) -> true
-  | Ops.Fp8_prec _, Ops.Fp8_prec _ -> true
-  | _ -> false
-
 let find_normalizer r (a : int) : normalizer option =
   let* an = r.nests.(a) in
   let* voc, x, x_idcs, sig_x, sig_m, t = max_reduce an in
@@ -349,12 +333,17 @@ let find_normalizer r (a : int) : normalizer option =
        truncated after every step, which the scan would not reproduce. *)
     let float_node (tn : Tn.t) = Ops.is_float (Lazy.force tn.Tn.storage_prec) in
     let* () = Option.some_if (List.for_all [ m; l; x; n_tn; e_tn ] ~f:float_node) () in
-    (* No node of the chain narrows the scores (see [represents]). *)
+    (* The chain -- max, subtraction, exponential, normalizer -- is at one precision, the scores'.
+       The composed form rounds at each materialized node, so a node narrower than the scores rounds
+       where the carried state does not (an out-of-range score to [-inf], a small exponential to
+       zero), and a node wider than the others accumulates terms the composed form had rounded
+       through the narrower ones. At one precision the two forms differ by the state's widening to
+       f32 alone, which is the contract: the running pair lives at f32 under narrow scores
+       (gh-ocannl-483), never per-step at the storage width. *)
     let prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
     let* () =
       Option.some_if
-        (List.for_all [ m; n_tn; e_tn; l ] ~f:(fun tn ->
-             represents ~wide:(prec tn) ~narrow:(prec x)))
+        (List.for_all [ m; n_tn; e_tn; l ] ~f:(fun tn -> Ops.equal_prec (prec tn) (prec x)))
         ()
     in
     (* [m]'s neutral-element fill covering all of [m]'s rows, and [l]'s zeroing. *)
