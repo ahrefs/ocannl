@@ -334,13 +334,18 @@ let () =
   let iso2 = measure Autotune.Isolated in
   let after = ref_round_trip () in
   let floor_ms = Float.min before (Float.min between after) in
+  (* [contended] is reported here because it is the escape hatch every executed claim below is
+     written around: a reading that took it is outside the envelope those claims calibrate, so a
+     calibration run has to be able to tell the two apart. *)
+  let contention r = if r.contended then " (contended)" else "" in
   Stdio.eprintf
-    "  (not part of the golden) isolated %.6f ms over %d dispatches in %.1f ms wall; queued %.6f \
-     ms over %d dispatches (batch depth %d) in %.1f ms wall; second round isolated %.6f ms, queued \
-     %.6f ms (batch depth %d); round trip %.6f ms (%.6f/%.6f/%.6f)\n\
+    "  (not part of the golden) isolated %.6f ms%s over %d dispatches in %.1f ms wall; queued %.6f \
+     ms%s over %d dispatches (batch depth %d) in %.1f ms wall; second round isolated %.6f ms%s, \
+     queued %.6f ms%s (batch depth %d); round trip %.6f ms (%.6f/%.6f/%.6f); queued/round-trip %.4f\n\
      %!"
-    iso.ms iso.dispatches iso.wall_ms que.ms que.dispatches que.depth que.wall_ms iso2.ms que2.ms
-    que2.depth floor_ms before between after;
+    iso.ms (contention iso) iso.dispatches iso.wall_ms que.ms (contention que) que.dispatches
+    que.depth que.wall_ms iso2.ms (contention iso2) que2.ms (contention que2) que2.depth floor_ms
+    before between after (que.ms /. floor_ms);
   let finite r = Float.is_finite r.ms && Float.is_positive r.ms in
   p "both modes returned a positive finite per-launch time or reported contention"
     ((finite iso || iso.contended) && (finite que || que.contended));
