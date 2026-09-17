@@ -178,6 +178,7 @@
   (alias runtest-env_spelling_gate)
   (alias runtest-resource_fault_injection)
   (alias runtest-schedule_cache_regime_race)
+  (alias runtest-alloc_census_peak)
   (alias runtest-autotune_candidate_release)))
 
 ; This directory's golden-diff rules, aggregated back onto `runtest` (gh-ocannl-726). Each of them
@@ -4888,6 +4889,23 @@
   (env_var OCANNL_BACKEND))
  (modules schedule_contraction_nest)
  (libraries base ocannl stdio arrayjit.verdict test_utils)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1006: the device-footprint high-water mark that the benchmark report's memory column is
+; read from -- that a free does not lower it, that a rebase brackets one window, and that the shared
+; allocator seam feeds it on whatever backend is configured. Drives a real compile, so it declares
+; OCANNL_BACKEND; the claims compare byte counts with each other and never with a fixed number, so
+; the golden is backend-uniform.
+
+(test
+ (name alloc_census_peak)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules alloc_census_peak)
+ (libraries base ocannl arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

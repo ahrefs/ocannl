@@ -35,6 +35,18 @@ val forget_pool : device_id:int -> pool_id:int -> unit
 (** Drops a pool from the live set, counting a free. Idempotent: a second call for a pool already
     forgotten does nothing, so a backend whose [free_pool] runs twice cannot double-count. *)
 
+val reset_peak : unit -> unit
+(** Rebases the high-water mark of {!t.peak_pool_bytes} to the bytes live right now, so that the
+    peak that follows describes one bracketed window rather than everything since process start
+    (gh-ocannl-1006).
+
+    A window's reading therefore starts at what is already live and can only rise: it is the
+    footprint of the work inside the bracket {e plus} whatever the process was already holding,
+    which is the quantity a benchmark cell's memory column reports and the one a leaked search
+    buffer shows up in. The benchmark harness brackets the timed steps with this
+    ([benchmarks/runners/ocannl/bench_harness.ml]); a tuner's candidate buffers allocated before it
+    are counted only insofar as they were never given back. *)
+
 val count_context_created : unit -> unit
 val count_context_released : unit -> unit
 val count_module_loaded : unit -> unit
@@ -52,6 +64,22 @@ type t = {
   contexts_released : int;
   modules_loaded : int;
   modules_unloaded : int;
+  peak_pool_bytes : int;
+      (** The high-water mark of {!live_pool_bytes} since {!reset_peak} was last called, or since
+          process start (gh-ocannl-1006).
+
+          A {e counter}, not a sample, and that is the point: every backend's own
+          [Context.get_used_memory] is a current gauge, and two of them ([metal], [cc]) give the
+          bytes back from a GC finalizer, so reading one after a window has closed reports whatever
+          collection happened to have run by then rather than the footprint of the work. This mark
+          is raised at the allocation site and never lowered by a free, so it is reproducible across
+          runs and comparable with [torch.cuda.max_memory_allocated].
+
+          It covers exactly what the rest of the census covers -- the pools recorded at the shared
+          allocator seam, in requested bytes -- so it is not a device-memory total: a device's
+          reserved merge-buffer slab, the loaded code modules and the host-side {!Ndarray} arrays
+          are all outside it. Process-global and summed across devices, like every other field here.
+      *)
 }
 [@@deriving sexp_of, equal]
 (** A point-in-time reading. The [live_*] fields come from the live table, the rest are cumulative

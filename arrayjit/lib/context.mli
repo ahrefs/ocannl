@@ -424,7 +424,14 @@ val ordinal : t -> int
 val get_used_memory : t -> int
 (** (An upper bound of) the memory used for arrays on the context's device, in bytes. Device-wide:
     covers all contexts sharing the device. Useful for asserting the footprint effect of the
-    liveness memory planner (config [buffer_aliasing], gh-ocannl-489). *)
+    liveness memory planner (config [buffer_aliasing], gh-ocannl-489).
+
+    A CURRENT gauge, so it answers "what is held now" and not "what did this cost": on [metal] and
+    [cc] the bytes come back from a GC finalizer, so a reading taken after some work has finished
+    depends on when a collection happened to run. For the footprint of a window of work, bracket it
+    with {!Ir.Alloc_census.reset_peak} and read [peak_pool_bytes] — a high-water counter raised at
+    the shared allocator seam and never lowered by a free, hence backend-uniform (gh-ocannl-1006).
+*)
 
 val release : t -> unit
 (** Eagerly frees the device buffers this context owns — the pools holding nodes it allocated that
