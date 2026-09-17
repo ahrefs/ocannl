@@ -306,12 +306,9 @@ falls back to materialization via `Non_virtual 13` if a particular site cannot b
 #### Non_virtual Exit Tags
 
 When validation fails, `check_and_store_virtual` (or `inline_computation`) raises `Non_virtual i`,
-and the handler commits the tensor to `Never_virtual i` (the provenance `i` records *why*). Since
-gh-ocannl-609 a provenance is a tag spelled `"<code>:<reason>"` (see `Tnode.provenance`), so it is
-self-describing wherever it is printed; the code is the integer the provenance used to be, kept so
-older references still resolve. A tag no code reads back — every one in this table — is a
-`Site "..."`; the handful that other code interrogates are constructors instead, so the
-interrogation is an exhaustive match:
+and the handler commits the tensor to `Never_virtual i` (the provenance `i` records *why*), so a
+refusal is self-describing wherever it is printed. What a provenance is, and how provenances
+compose, is under Memory Mode Management below. The exit codes:
 
 - `4:lhs-idcs-differ` — Inconsistent index patterns between accesses.
 - `5:index-not-groundable` — Symbol coverage/groundability failure (a non-static symbol is neither
@@ -499,11 +496,12 @@ The optimization process works closely with OCANNL's memory mode system:
   the node, after gh-ocannl-333).
 
 The optimizer uses provenance tracking (the `Tnode.provenance` in memory mode updates) to explain
-memory mode decisions and to debug conflicts between them. The type has two kinds of tag, and the
-split is a layering decision: a decision that only ever gets *recorded* is a `Site "<code>:<reason>"`
-carrying its own explanation — some sixty of those are minted across nine modules, and a constructor
-apiece would make `Tnode`, which sits at the bottom of the dependency graph, enumerate the vocabulary
-of every module above it — while a tag some other code *reads back* is a constructor
+memory mode decisions and to debug conflicts between them. Since gh-ocannl-609 the type has two kinds
+of tag, and the split is a layering decision: a decision that only ever gets *recorded* is a
+`Site "<code>:<reason>"` carrying its own explanation (the code is the integer the provenance used to
+be, kept so older references still resolve) — some sixty of those are minted across nine modules, and
+a constructor apiece would make `Tnode`, which sits at the bottom of the dependency graph, enumerate
+the vocabulary of every module above it — while a tag some other code *reads back* is a constructor
 (`Visit_cap`, `Inline_reduction_cap`, `Inline_fanin_cap`, `Read_before_write`, `Scope_local`,
 `Surviving_read`), so the reading is an exhaustive match rather than a comparison that can silently
 stop matching. `Low_level.is_cap_provenance` and `cap_provenance_setting` are the two such readers.
