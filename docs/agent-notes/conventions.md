@@ -19,6 +19,38 @@ files.
   always had — blank lines, `### ` subheadings, `- ` bullets and two-space continuations — and any
   other Markdown in it fails the scan by name rather than being parsed: the scan decides one
   grammar, so its imprecision cannot pass a bullet nobody checked.
+- API stability is not promised and deprecation cycles are not run: exported surface that is dead,
+  superseded or in the way is REMOVED, in whatever release finds it. The README's Development
+  section states this for users; the practice behind it is `CHANGES.md`'s 1.0.2 `### Changed`, a
+  third-component point release, which retires `Backend.compile_batch` / `link_batch`
+  (gh-ocannl-767), collapses `Tensor.raw_unop` / `raw_binop` / `raw_ternop` onto
+  `Tensor.raw_accum` plus `Tensor.buffer_of` (gh-ocannl-812), replaces `Tensor.remove_fwd_root` /
+  `remove_bprop_root` with `take_forward_code` / `discard_backprop_code`, moves
+  `Context.Backends_deprecated.footprint` to `Ir.Low_level.footprint` (gh-ocannl-810), and gives
+  `Assignments`, `Indexing`, `Affine`, `Interval`, `Host_inits`, `Compiler_options` and
+  `Cpu_topology` explicit interfaces that hide their zero-reference helpers (gh-ocannl-806) — the
+  closest precedent for surface nobody calls. None of it went through a compatibility window, and
+  the tree carries no `[@@deprecated]` attribute at all (`grep -rn '@@deprecated' lib/ tensor/
+  arrayjit/lib/` is empty). Removal is the default, not a rule: surface is retained where keeping
+  it costs nothing or serves something other than caller convenience — `lib/ocannl.ml`'s
+  backward-compatibility module re-exports, `Parallel.handle.sync_params_to_host` after
+  gh-ocannl-333 removed the copying it did, `Operation.centered_uniform1_param_init` and its
+  default, which exist to reproduce pre-0.9 random streams. Version depth is no argument against removal either: it tracks release
+  scope, not semver (README's Milestones, ROADMAP.md's August 26, 2026 renumbering). The exception
+  is a STRING a user typed rather than a name a compiler resolves — `big_models` for `large_models`
+  (`arrayjit/lib/utils.ml`), `sync_cc` / `multicore_cc` for `cc` / `multidev_cc`
+  (`arrayjit/lib/backends.ml`) — kept as runtime aliases as a matter of course, because a renamed
+  key in a stale `ocannl_config` draws `OCANNL warning: unknown config key` and the run CONTINUES
+  on the default (`Utils.config_file_args`, quoted in `ocannl_config.reference`), silently changing
+  what it computes, where a renamed value constructor fails at the user's compiler with the old
+  name in the message. So when a PR finds dead
+  exported surface, remove it and say so in the PR body; the `Retired API` changelog line is
+  written later, in the editorial pass.
+- That argument recurs on removal PRs because it is cheap to raise and, until this bullet, was only
+  reconstructible from release practice: staging#742's review raised "deprecate the exported record
+  before removing it" as a P2 and cited `AGENTS.md:L17`, which is the Structure and Ownership
+  bullet naming `lib/` and states no policy at all. A review citation to a line that does not say
+  the thing is a finding about the review — check the citation before complying with it.
 - `ocannl_config.reference` ships with every setting COMMENTED OUT, and the two forms are
   load-bearing: a commented-out setting is `#key=value` with NO space after the `#`, while prose
   (and the verbatim profile-payload blocks at the end of the file) always uses `# `. That is how
