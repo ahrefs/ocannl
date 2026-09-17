@@ -1686,11 +1686,15 @@ that they earn a lookup rather than always-loaded space.
   77s/111s under 2.5.2 to 89s/87s under 2.6.0, and the pin and resolve steps moved by seconds in
   both directions. Do not expect opam upgrades to move CI's Windows wall-clock at all — that job
   is priced by its cache restore, its dune build and, when cold, by building the compiler. Two of
-  those are where to look first, and one of them is currently broken: the Windows `_opam` restore
-  dies in `tar` on the cygwin CA symlinks, wasting ~9min per job on an extraction that then
-  reports the key as missed, while the suite stays green on the half-extracted tree
-  (gh-ocannl-1014, filed 2026-09-17; it also makes `Install opam dependencies (Windows)` return in
-  3s, which is NOT evidence of a warm switch).
+  those are where to look first. The restore is the big one and it is not free even when it works:
+  restoring the 893 MB Windows entry costs ~530s on every job, which is what it buys off the 6-10
+  min dependency install. It also has a transition-time failure mode worth recognising rather than
+  re-diagnosing (gh-ocannl-1014): on the first Windows run after an opam or setup-ocaml change,
+  setup-ocaml materialises a fresh internal cygwin, our cache then tries to overlay symlinks onto
+  those now-regular CA files, `tar` exits 2, and the ~9min extraction ends with the key reported
+  as MISSED — while the job still passes on the half-extracted tree, with `Install opam
+  dependencies (Windows)` returning in 3s, which is NOT evidence of a warm switch. The next
+  ordinary run restores the same entry, same key, same bytes, cleanly.
   Our own `_opam` key deliberately does NOT carry the opam version: a switch built by 2.5.2
   restores and runs green under 2.6.0 (the 2026-09-17 master runs hit that cache), so keying on it
   would buy nothing and cost a ~180-package rebuild per platform at every bump.
