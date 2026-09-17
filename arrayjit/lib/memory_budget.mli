@@ -58,8 +58,9 @@ val fit :
   Ir.Indexing.unit_bindings ->
   Context.t * plan
 (** gh-ocannl-498 rematerialization: choose which materialized intermediates to demote to
-    recompute-at-use so that the routine's scored footprint ({!footprint}) fits [budget], and return
-    a child context that decides them inline ({!Context.decide_inline}) together with the plan.
+    recompute-at-use — or, since gh-ocannl-616, to footprint-scoped scratch — so that the routine's
+    scored footprint ({!footprint}) fits [budget], and return a child context that decides them so
+    ({!Context.decide_inline} / {!Context.decide_footprint}) together with the plan.
 
     A deterministic planning pass, not a timed search: recompute-vs-store under a budget is
     decidable from the two cost sides — the recompute-cost bound each [`Inline] flip candidate
@@ -97,12 +98,14 @@ val fit :
     ([memory_budget=minimize]) cannot raise a cap. Passing it explicitly bounds either kind, at two
     lowerings per candidate scored.
 
-    Only the [`Inline] direction is considered — the opposite of the [`Materialize] chain
-    {!Ir.Low_level.field-flip_candidates} feeds in [Train.tune_placements]. Legality and
-    observability are not this pass's to enforce and it does not try: {!Context.decide_inline}
-    records a preference, the virtualizer's [check_and_store_virtual] settles legality, and a
-    rejected preference simply reproduces the materialized placement — which is why relief is scored
-    from a real lowering rather than assumed.
+    The [`Inline] and [`Footprint] directions are considered — the opposite of the [`Materialize]
+    chain {!Ir.Low_level.field-flip_candidates} feeds in [Train.tune_placements]. A node carrying
+    both records is scored in each (their reliefs differ: an inlined reading keeps the template's
+    leaves live up to the late consumer, a footprint-scoped one only its scratch), and the first
+    direction that pays takes the node. Legality and observability are not this pass's to enforce
+    and it does not try: the decisions record preferences, the virtualizer's
+    [check_and_store_virtual] settles legality, and a rejected preference simply reproduces the
+    materialized placement — which is why relief is scored from a real lowering rather than assumed.
 
     Raises {!Ir.Utils.User_error} when config [buffer_aliasing] is off: without the liveness planner
     every node is always-live and the score has nothing to do with what the allocator would do. *)

@@ -2781,15 +2781,17 @@ let model_default ?name ?report ctx comp bindings =
           let cands = List.take surface.ps_candidates placement_budget in
           if List.is_empty cands then None
           else
-            let level_name fc =
-              (* The flip is part of the name: a node carries one record per open direction
-                 (gh-ocannl-616). *)
+            let flip_name (fc : LL.flip_candidate) =
+              match fc.LL.fc_flip with
+              | `Materialize -> "materialize"
+              | `Inline -> "inline"
+              | `Footprint -> "footprint"
+            in
+            let level_name (group : LL.flip_candidate list) =
+              let fc = List.hd_exn group in
               Printf.sprintf "placement#%d %s %s" fc.LL.fc_tn.Ir.Tnode.uid
                 (Ir.Tnode.debug_name fc.LL.fc_tn)
-                (match fc.LL.fc_flip with
-                | `Materialize -> "materialize"
-                | `Inline -> "inline"
-                | `Footprint -> "footprint")
+                (String.concat ~sep:"/" (List.map group ~f:flip_name))
             in
             (* The placement levels commit to DATA like the family levels do (gh-ocannl-591): each
                child carries the candidate it decides and which way, so the bound below reads the
@@ -2798,14 +2800,26 @@ let model_default ?name ?report ctx comp bindings =
             let rec build vector = function
               | [] -> Sspace.Leaf (List.rev vector)
               | fc :: rest ->
+                  (* One MULTIWAY level per node (gh-ocannl-616): its records are mutually exclusive
+                     readings, so a level keeps them all or flips exactly one — two binary levels
+                     would spend leaves on vectors flipping both, of which only one reading can take
+                     effect. *)
+                  let siblings, rest =
+                    List.partition_tf rest ~f:(fun (o : LL.flip_candidate) ->
+                        Ir.Tnode.equal o.LL.fc_tn fc.LL.fc_tn)
+                  in
+                  let group = fc :: siblings in
+                  let kept = List.map group ~f:(fun g -> (g, false)) in
+                  let flip_one (g : LL.flip_candidate) =
+                    List.map group ~f:(fun o -> (o, Poly.equal o.LL.fc_flip g.LL.fc_flip))
+                  in
                   Sspace.Choice
                     {
-                      level = level_name fc;
+                      level = level_name group;
                       children =
-                        [
-                          ((fc, `Keep), Sspace.Child (lazy (build ((fc, false) :: vector) rest)));
-                          ((fc, `Flip), Sspace.Child (lazy (build ((fc, true) :: vector) rest)));
-                        ];
+                        ((fc, `Keep), Sspace.Child (lazy (build (kept @ vector) rest)))
+                        :: List.map group ~f:(fun g ->
+                            ((g, `Flip), Sspace.Child (lazy (build (flip_one g @ vector) rest))));
                     }
             in
             let decisions vector =
@@ -2833,35 +2847,21 @@ let model_default ?name ?report ctx comp bindings =
               let mat =
                 List.filter_map path ~f:(fun (_level, ((fc : LL.flip_candidate), commitment)) ->
                     (* Certainly materialized below this node: a committed Materialize flip, or a
-                       kept DEFAULT-MATERIALIZED candidate — one with no [`Materialize] record,
-                       since a node carrying one is virtual or footprint-scoped by default
-                       (gh-ocannl-616) and keeping its [`Inline] record keeps it so — whose every
-                       non-materialize record ([`Inline], [`Footprint]; one node may carry both) is
-                       kept on the path. The other commitments (and every open level) contribute
-                       zero. *)
+                       kept DEFAULT-MATERIALIZED node — one with no [`Materialize] record, since a
+                       node carrying one is virtual or footprint-scoped by default and keeping its
+                       records keeps it so. A level keeps or flips every record of its node at once,
+                       so a kept level is the whole node kept. The other commitments (and every open
+                       level) contribute zero. *)
                     let tn = fc.LL.fc_tn in
                     let default_materialized =
                       not
                         (List.exists cands ~f:(fun (o : LL.flip_candidate) ->
                              Ir.Tnode.equal o.LL.fc_tn tn && Poly.equal o.LL.fc_flip `Materialize))
                     in
-                    let kept flip =
-                      List.exists path ~f:(fun (_, ((o : LL.flip_candidate), c)) ->
-                          Ir.Tnode.equal o.LL.fc_tn tn && Poly.equal o.LL.fc_flip flip
-                          && Poly.equal c `Keep)
-                    in
                     match (commitment, fc.LL.fc_flip) with
                     | `Flip, `Materialize -> Some tn
-                    | `Keep, ((`Inline | `Footprint) as flip) ->
-                        if
-                          default_materialized
-                          && List.for_all cands ~f:(fun (o : LL.flip_candidate) ->
-                              (not (Ir.Tnode.equal o.LL.fc_tn tn))
-                              || Poly.equal o.LL.fc_flip `Materialize
-                              || Poly.equal o.LL.fc_flip flip || kept o.LL.fc_flip)
-                        then Some tn
-                        else None
-                    | _ -> None)
+                    | `Keep, _ -> if default_materialized then Some tn else None
+                    | `Flip, (`Inline | `Footprint) -> None)
               in
               (* [ps_floor_ms] is milliseconds; [select]'s scores are roofline seconds. *)
               Option.map (surface.ps_floor_ms ~materialized:mat) ~f:(fun ms -> ms /. 1e3)

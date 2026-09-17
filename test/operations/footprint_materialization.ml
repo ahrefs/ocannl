@@ -508,6 +508,40 @@ let case_inherited_operand () =
   in
   p "inherited-operand: executed values are the diagonal over the operand" (same got [ expected ])
 
+(* === The producer's own statement writes one of the template's inputs after the producer (a shared
+   loop): the prologue would run after the whole statement and read the updated input, so the site
+   is ineligible and the cap materializes. === *)
+let case_producer_statement_writes_input () =
+  let a = mk "ap2" and x = mk ~dims:[| n |] "xp2" and o = mk ~dims:[| n |] "op2" in
+  materialize o;
+  materialize x;
+  let i = sym () and j = sym () and k = sym () and i' = sym () in
+  let producer =
+    seq (zero a)
+      (loop i
+         (seq
+            (loop j
+               (loop_n k kk
+                  (set a
+                     [| iter i; iter j |]
+                     (add
+                        (get a [| iter i; iter j |])
+                        (add (get x [| iter i |]) (add (tag i j) (mul (c 100.) (embed k))))))))
+            (set x [| iter i |] (mul (c 2.) (get x [| iter i |])))))
+  in
+  let consumer = loop i' (set o [| iter i' |] (get a [| iter i'; iter i' |])) in
+  let llc = seq producer consumer in
+  let opt = optimize ~name:"fp_shared_producer" llc in
+  p "shared-producer: the reduction cap materializes the producer"
+    (is_cap opt a Tn.Inline_reduction_cap);
+  p_empty "shared-producer: no scratch" ~over:(Hashtbl.keys opt.LL.traced_store) (scratches opt);
+  let xs = Array.init n ~f:(fun i -> Float.of_int (1 + i)) in
+  let expected = Array.init n ~f:(fun i -> reduced_plus (1 + i) i i) in
+  let doubled = Array.map xs ~f:(fun v -> 2. *. v) in
+  let got = execute ~name:"fp_shared_producer" opt ~seed:[ (x, xs); (o, blank n) ] ~read:[ o; x ] in
+  p "shared-producer: executed values read the input as the producer did"
+    (same got [ expected; doubled ])
+
 let () =
   case_diagonal_reduction ();
   case_visit_cap ();
@@ -524,4 +558,5 @@ let () =
   case_reader_between_setters ();
   case_inherited_recurrence ();
   case_inherited_operand ();
+  case_producer_statement_writes_input ();
   Stdio.printf "%!"

@@ -70,3 +70,6 @@ recurrence: executed values read the pre-write cell, as inlining does: true
 inherited-operand: the producer routine leaves the node virtual: true
 inherited-operand: the consumer footprint-scopes the inherited node: true
 inherited-operand: executed values are the diagonal over the operand: true
+shared-producer: the reduction cap materializes the producer: true
+shared-producer: no scratch: true
+shared-producer: executed values read the input as the producer did: true

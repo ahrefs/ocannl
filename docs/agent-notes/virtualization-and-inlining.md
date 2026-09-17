@@ -304,7 +304,9 @@ files.
   (review round 1 found the reader-side placement diverging from the cap's reading there) — and
   ahead of the reader's statement for an inherited template, the recompute-at-read reading
   inlining gives it, which is why an inherited template reading the reader's own target declines
-  (`template_leaves`), and why a reader placed before the producer's last write is ineligible.
+  (`template_leaves`), why a reader placed before the producer's last write is ineligible, and
+  why the producer's last statement must write nothing else (a shared loop rewriting an input
+  after the producer would precede the prologue; round 2).
   Four more things that are easy to get wrong: (a) the decision is per ROUTINE, not a placement — a
   consumer routine footprint-scopes a node an earlier routine left `Virtual` on the template's own
   reduction extent (`template_facts`, over a SNAPSHOT of the traced store: reading the template
@@ -322,10 +324,13 @@ files.
   which would otherwise read the scratch's write-then-read as a fresh node's read-before-write and
   demand it from a prior context; (d) a footprint-scoped node carries TWO flip records
   (`` `Materialize`` and `` `Inline``), a cap-materialized one whose footprint would be strictly
-  smaller `` `Inline`` and `` `Footprint`` — every consumer of `flip_candidates` deduplicates by (node, flip), and the
-  placement search's certainty bounds count a kept or rejected node as materialized only when it
-  has no `` `Materialize`` record (a node with one is virtual or footprint-scoped by default, and
-  keeping or losing its `` `Inline`` record keeps it so) and every other record of it is kept.
+  smaller `` `Inline`` and `` `Footprint`` — every consumer of `flip_candidates`
+  treats a node's records as ONE group of mutually exclusive readings: `tune_placements` measures
+  them against the same incumbent and commits the best, `model_default`'s placement tree gives the
+  node one multiway level, the memory planner scores each direction and lets the first that pays
+  take the node, and the certainty bounds count a node as materialized only when it has no
+  `` `Materialize`` record (a node with one is virtual or footprint-scoped by default) and every
+  record of it was kept or rejected.
   Structural probe for "inlined": `count_get` of the node, never `count_scopes` — the simplifier
   collapses a single-assignment scope into its expression. Pinned row by row, with executed parity
   against the materialized and (where the cap alone stands in the way) the inlined reading, by

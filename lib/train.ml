@@ -1225,12 +1225,12 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
            completion the chain can still reach; the other two outcomes leave it open (inline
            commitments never tighten the floor). *)
         let certain_mat = ref [] in
-        (* A node's alternatives are mutually exclusive readings, so once one of its flips is
-           accepted its sibling record is skipped: applied on top of the accepted one it would only
-           re-measure the accepted reading (gh-ocannl-616). Nodes with no [`Materialize] record are
-           the default-materialized ones — the only ones a rejected [`Inline] / [`Footprint] flip
-           leaves certainly materialized. *)
-        let accepted_nodes = ref [] in
+        (* A node's records are its mutually exclusive readings (gh-ocannl-616), so they are
+           measured as ONE group, each from the chain's own context against the same incumbent, and
+           the best of them is committed when it beats the incumbent — applied one after another,
+           the second would be measured on top of the first's acceptance. Nodes with no
+           [`Materialize] record are the default-materialized ones — the only ones a group whose
+           every alternative lost leaves certainly materialized. *)
         let default_materialized tn =
           not
             (List.exists candidates ~f:(fun (o : LL.flip_candidate) ->
@@ -1245,65 +1245,79 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
              A/B winner is already in hand — so the refinement just stops. *)
           | _ when lineage_poisoned () ->
               logf "flip refinement stopped: the shared lineage is poisoned"
-          | fc :: rest when List.mem !accepted_nodes fc.LL.fc_tn ~equal:Tn.equal ->
-              logf "flip %s skipped: a sibling flip of the node was accepted"
-                (Tn.debug_name fc.LL.fc_tn);
-              walk rest
-          | fc :: rest -> (
+          | fc :: rest ->
+              let tn = fc.LL.fc_tn in
+              let siblings, rest =
+                List.partition_tf rest ~f:(fun (o : LL.flip_candidate) -> Tn.equal o.LL.fc_tn tn)
+              in
+              let group = fc :: siblings in
               let _, chain_ms, base_ctx, base_timing = !chain in
-              let arm =
-                Printf.sprintf "flip %s %s (cost %d%s)"
-                  (match fc.LL.fc_flip with
-                  | `Inline -> "inline"
-                  | `Materialize -> "materialize"
-                  | `Footprint -> "footprint")
-                  (Tn.debug_name fc.LL.fc_tn) fc.LL.fc_recompute_cost
-                  (if Set.mem surface.Autotune.ps_enablement fc.LL.fc_tn then ", enablement" else "")
-              in
-              let floor =
-                match fc.LL.fc_flip with
-                | `Materialize when bound_pruning ->
-                    surface.Autotune.ps_floor_ms ~materialized:(fc.LL.fc_tn :: !certain_mat)
-                | `Materialize | `Inline | `Footprint -> None
-              in
-              match floor with
-              | Some fl when Float.(fl >= chain_ms) ->
-                  (* Fathomed: the floor lower-bounds every completion with this node materialized,
-                     so no nested search from here can beat the incumbent. The node's placement
-                     stays open — nothing to commit. *)
-                  Int.incr pruned;
-                  logf "%s bound-pruned: floor %.4f ms >= incumbent %.4f ms" arm fl chain_ms;
-                  walk rest
-              | _ ->
-                  let apply c =
-                    match fc.LL.fc_flip with
-                    | `Materialize -> Context.decide_materialized c [ fc.LL.fc_tn ]
-                    | `Inline -> Context.decide_inline c [ fc.LL.fc_tn ]
-                    | `Footprint -> Context.decide_footprint c [ fc.LL.fc_tn ]
+              let try_alternative (fc : LL.flip_candidate) =
+                if !measured >= inline_flips then None
+                else
+                  let arm =
+                    Printf.sprintf "flip %s %s (cost %d%s)"
+                      (match fc.LL.fc_flip with
+                      | `Inline -> "inline"
+                      | `Materialize -> "materialize"
+                      | `Footprint -> "footprint")
+                      (Tn.debug_name tn) fc.LL.fc_recompute_cost
+                      (if Set.mem surface.Autotune.ps_enablement tn then ", enablement" else "")
                   in
-                  let ctx' = apply base_ctx in
-                  let timing' = Option.map base_timing ~f:apply in
-                  let r, ms, _rep = tune_or_release ~to_report:flip_report arm ctx' timing' in
-                  record r;
-                  Int.incr measured;
-                  let accepted = Float.(ms < chain_ms) in
-                  if accepted then (
-                    chain := (r, ms, ctx', timing');
-                    accepted_nodes := fc.LL.fc_tn :: !accepted_nodes);
-                  (match (fc.LL.fc_flip, accepted) with
-                  | `Materialize, true -> certain_mat := fc.LL.fc_tn :: !certain_mat
-                  | (`Inline | `Footprint), false
-                    when default_materialized fc.LL.fc_tn
-                         && not
-                              (List.exists rest ~f:(fun (o : LL.flip_candidate) ->
-                                   Tn.equal o.LL.fc_tn fc.LL.fc_tn)) ->
-                      (* A cap-materialized node carries a record per open direction
-                         (gh-ocannl-616); it is certainly materialized only once its last one is
-                         rejected — and a footprint-scoped node, which also carries an [`Inline]
-                         record, never is by a rejection: it keeps its footprint reading. *)
-                      certain_mat := fc.LL.fc_tn :: !certain_mat
-                  | `Materialize, false | (`Inline | `Footprint), _ -> ());
-                  walk rest)
+                  let floor =
+                    match fc.LL.fc_flip with
+                    | `Materialize when bound_pruning ->
+                        surface.Autotune.ps_floor_ms ~materialized:(tn :: !certain_mat)
+                    | `Materialize | `Inline | `Footprint -> None
+                  in
+                  match floor with
+                  | Some fl when Float.(fl >= chain_ms) ->
+                      (* Fathomed: the floor lower-bounds every completion with this node
+                         materialized, so no nested search from here can beat the incumbent. The
+                         node's placement stays open — nothing to commit. *)
+                      Int.incr pruned;
+                      logf "%s bound-pruned: floor %.4f ms >= incumbent %.4f ms" arm fl chain_ms;
+                      None
+                  | _ ->
+                      let apply c =
+                        match fc.LL.fc_flip with
+                        | `Materialize -> Context.decide_materialized c [ tn ]
+                        | `Inline -> Context.decide_inline c [ tn ]
+                        | `Footprint -> Context.decide_footprint c [ tn ]
+                      in
+                      let ctx' = apply base_ctx in
+                      let timing' = Option.map base_timing ~f:apply in
+                      let r, ms, _rep = tune_or_release ~to_report:flip_report arm ctx' timing' in
+                      record r;
+                      Int.incr measured;
+                      Some (fc, r, ms, ctx', timing')
+              in
+              let results = List.filter_map group ~f:try_alternative in
+              let best =
+                List.min_elt results ~compare:(fun (_, _, a, _, _) (_, _, b, _, _) ->
+                    Float.compare a b)
+              in
+              (match best with
+              | Some (bfc, r, ms, ctx', timing') when Float.(ms < chain_ms) -> (
+                  chain := (r, ms, ctx', timing');
+                  if List.length group > 1 then
+                    logf "flip group %s: %s wins at %.4f ms" (Tn.debug_name tn)
+                      (match bfc.LL.fc_flip with
+                      | `Inline -> "inline"
+                      | `Materialize -> "materialize"
+                      | `Footprint -> "footprint")
+                      ms;
+                  match bfc.LL.fc_flip with
+                  | `Materialize -> certain_mat := tn :: !certain_mat
+                  | `Inline | `Footprint -> ())
+              | _ ->
+                  (* Every alternative measured and rejected: a default-materialized node stays
+                     materialized in every completion the chain can still reach; a virtual or
+                     footprint-scoped one keeps its reading and stays open. A pruned or unmeasured
+                     alternative leaves the node open too. *)
+                  if default_materialized tn && List.length results = List.length group then
+                    certain_mat := tn :: !certain_mat);
+              walk rest
         in
         walk candidates;
         if !pruned > 0 then

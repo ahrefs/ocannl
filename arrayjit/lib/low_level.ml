@@ -6981,6 +6981,15 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list)
     let own_last =
       List.fold own_writes ~init:(-1) ~f:(fun acc w -> max acc (Affine.stmt_head w.Affine.a_path))
     in
+    (* That statement must write nothing else: a sibling write inside it (a shared loop updating one
+       of the template's inputs after the producer) would precede a prologue placed after the
+       statement, where the materialized producer had read the earlier value. *)
+    let producer_statement_clean =
+      List.is_empty own_writes
+      || Set.equal
+           (Hashtbl.find writers_by_stmt own_last |> Option.value ~default:(Set.empty (module Tn)))
+           (Set.singleton (module Tn) tn)
+    in
     let site (a : _ Affine.access) =
       if List.exists own_writes ~f:(fun w -> Affine.same_statement w.Affine.a_path a.a_path) then
         Ok (0, Set.empty (module Tn))
@@ -6988,6 +6997,8 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list)
       else if a.a_guarded then Error "guarded read"
       else if (not (List.is_empty own_writes)) && Affine.stmt_head a.a_path <= own_last then
         Error "reader precedes the producer's last write"
+      else if not producer_statement_clean then
+        Error "the producer's last statement writes another node"
       else
         let writers =
           Hashtbl.find writers_by_stmt (Affine.stmt_head a.a_path)
