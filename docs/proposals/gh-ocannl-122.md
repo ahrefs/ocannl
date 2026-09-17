@@ -6,10 +6,9 @@ ROADMAP: v1.0 completeness
 ## Current state
 
 Training examples print metrics ad hoc; `moons_demo` additionally retains
-lists for terminal plots. OCANNL already exposes `Context.get_used_memory` and
-uses `ppx_minidebug` for computation debugging, but it has no run-level
-metrics format or guidance for external trackers. `Train.example_train_result`
-is an unused historical record, not an experiment-tracking abstraction.
+lists for terminal plots. OCANNL already exposes `Context.get_used_memory`, the
+`Ir.Alloc_census` counters, and `ppx_minidebug` for computation debugging, but
+it has no run-level metrics format or guidance for external trackers.
 
 ## Goal
 
@@ -23,8 +22,11 @@ without turning the core library into a tracking service.
    and analyze or import the result with the user's tool of choice.
 2. Add one deterministic example or tiny utility that writes such records and
    still feeds the same values to `PrintBox_utils.plot`.
-3. Explain how to include device memory via `Context.get_used_memory`, and
-   distinguish metrics from `ppx_minidebug` traces.
+3. Explain how to include device memory: `Ir.Alloc_census.peak_pool_bytes`
+   bracketed by `reset_peak` for a footprint that is reproducible across runs,
+   rather than the `Context.get_used_memory` gauge, which on `metal` and `cc`
+   decrements from a GC finalizer and so drifts with collection timing
+   (gh-ocannl-1006). Distinguish metrics from `ppx_minidebug` traces.
 4. Mention external systems as consumers of the portable data, not as
    supported integrations.
 
