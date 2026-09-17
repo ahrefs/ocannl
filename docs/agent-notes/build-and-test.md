@@ -1690,7 +1690,11 @@ that they earn a lookup rather than always-loaded space.
   tracking opam — `.github/actions/pin-revisions/resolve.sh` does it for both `opam show --raw
   --sort` and `opam pin list`. Re-verified against a real opam 2.6.0 (2026-09-17): the definition
   blocks still open with `opam-version:` at column 0 and the pin table still carries its
-  `git+<url>#<ref>` column, and the whole action ran to matching digests. opam 2.6's one
+  `git+<url>#<ref>` column, and the whole action ran to matching digests. Do not advance that
+  pin with opam: a declared CLI version is a floor on the binary (`--cli=2.6` exits 2 on an opam
+  2.5.0), it buys no speed (the storage work is in the repository backend, and `opam list -A`
+  times the same either way), and it would opt the parser into the layout changes it exists to
+  sit out — opam 2.6.0 accepts 2.0 through 2.5, deprecating none, and 2.6 is not a CLI version. opam 2.6's one
   script-visible break, safe mode no longer forcing debug level 0, does not reach it either:
   opam's debug output goes to stderr and the script reads stdout. Upgrading a DEV machine is the
   part that is not free — opam 2.6 migrates the root from the 2.2 layout irreversibly, and an
