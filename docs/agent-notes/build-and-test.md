@@ -1664,6 +1664,31 @@ that they earn a lookup rather than always-loaded space.
   serialized lock chain (what remains of it) against an otherwise idle runner after every file
   target finished, and the quotes are for PowerShell on the Windows leg, which splats unquoted
   `@` tokens to nothing.
+- **Nothing in this repository pins the opam version.** `ocaml/setup-ocaml@v3` is a moving tag,
+  and the action resolves the latest STABLE opam release under its own upper bound at run time, so
+  a release reaches CI as soon as that bound admits it and no commit here marks the change: opam
+  2.6.0 arrived on its release day, 2026-09-17, in the first run after setup-ocaml v3.9.0 raised
+  the bound from `<2.6.0` to `<2.7.0`. Which version a run actually used is in the `Installing
+  opam` group of its setup-ocaml step — read it before blaming a change of ours for a CI-wide
+  shift in timing or behaviour. Two consequences to expect at every bump. setup-ocaml's OWN cache
+  key carries the opam version AND the repository URLs, so the first run after one rebuilds the
+  root and bare switch: for 2.6.0 (which also moved setup-ocaml's default repository from the git
+  opam-repository to HTTP `opam.ocaml.org`) the step went from ~70s to 278-347s once on
+  ubuntu/macOS, then settled at 45-50s — below the old warm number, the HTTP repository's
+  `index.tar.gz` being what opam 2.6 reads in memory instead of extracting. The Windows leg's cold
+  switch is far more than that, and it is a bill paid once per bump, not a regression to chase.
+  Our own `_opam` key deliberately does NOT carry the opam version: a switch built by 2.5.2
+  restores and runs green under 2.6.0 (the 2026-09-17 master runs hit that cache), so keying on it
+  would buy nothing and cost a ~180-package rebuild per platform at every bump.
+- Where this repository PARSES opam's output, it freezes the format with `--cli=2.1` rather than
+  tracking opam — `.github/actions/pin-revisions/resolve.sh` does it for both `opam show --raw
+  --sort` and `opam pin list`. Re-verified against a real opam 2.6.0 (2026-09-17): the definition
+  blocks still open with `opam-version:` at column 0 and the pin table still carries its
+  `git+<url>#<ref>` column, and the whole action ran to matching digests. opam 2.6's one
+  script-visible break, safe mode no longer forcing debug level 0, does not reach it either:
+  opam's debug output goes to stderr and the script reads stdout. Upgrading a DEV machine is the
+  part that is not free — opam 2.6 migrates the root from the 2.2 layout irreversibly, and an
+  older opam binary cannot read a migrated root afterwards.
 - Both `ci.yml` and `gh-pages-api.yml` cache the built local dependency switch `_opam`, where the
   ~180 compiled packages live; setup-ocaml separately caches opam's root and bare compiler switch.
   Their entries stay separate because the CI matrix and the fixed docs runner have different key
@@ -1708,9 +1733,13 @@ that they earn a lookup rather than always-loaded space.
   older switch. And both install non-Windows depexts unconditionally after restore, because those
   are system packages absent from `_opam` (gh-ocannl-809).
 - Every workflow that installs dependencies sets opam's global `archive-mirrors` to
-  `https://opam.ocaml.org/cache` right after setup-ocaml, before any pin or install. setup-ocaml
-  points opam at the GIT opam-repository, whose `repo` file declares no mirror (the HTTP one at
-  opam.ocaml.org does), so a bare CI switch downloads every archive from its package's upstream
+  `https://opam.ocaml.org/cache` right after setup-ocaml, before any pin or install. It was
+  written against a setup-ocaml default that has since moved: through v3.8.0 the action pointed
+  opam at the GIT opam-repository, whose `repo` file declares no mirror, while the HTTP repository
+  at opam.ocaml.org declares one; v3.9.0 (2026-09-17) made the HTTP repository the default, so the
+  mirror now arrives with the repository and the line is redundant with today's default. It stays
+  as an explicit guard — one opam call, and the protection is then ours rather than a default's.
+  Without a mirror a bare CI switch downloads every archive from its package's upstream
   `url` — and GitLab builds tag archives on demand with no byte-stability promise, so a pinned
   checksum can stop matching what `gitlab.inria.fr` serves until opam-repository re-pins it
   (menhir 20260209, gh-ocannl-889: `Bad checksum`, exit 40, on every leg that had to fetch, while
