@@ -40,8 +40,9 @@ producer: x1 and x2 inlined into x3's setter: true
   x3's setter nest, per cell                   flops=3 bytes=16 exact
 producer: three adds and four leaf cells per written cell: true
 producer: a node the code never sets has no producer cost: true
-  two-component producer, per read             flops=2 bytes=8 exact
-two-component producer: components sum (2 ops, 8 bytes per read): true
+  two-component producer, per read             flops=2 bytes=8 approx
+two-component producer: components sum (2 ops, 8 bytes per read), a bound: true
+an affine setter map prices as a bound: true
 a setter reading a hoisted local it does not define prices as a bound: true
   broadcast operands, per read                 flops=1 bytes=8 exact
 broadcast operands: one add and both cells per read, exact: true

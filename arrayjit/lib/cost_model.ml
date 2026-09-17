@@ -585,24 +585,26 @@ let collapse_loops ~(bound : Idx.symbol -> bool) (code : Low_level.t) : Low_leve
   in
   go code
 
+(* Whether the binding of an index vector's symbols depends on the reader: a symbol inside an affine
+   position may be bound by the structural match or left free by unit solving (its loop kept,
+   range-guarded), and a bare symbol repeated across positions ([t[i; i]], a diagonal producer)
+   binds at its first occurrence and turns the later ones into call-site consistency guards — either
+   way the work depends on the reader's arguments, which the price cannot see. *)
+let substitution_dependent (at : Idx.axis_index array) =
+  let repeated s =
+    Array.count at ~f:(function Idx.Iterator s' -> Idx.equal_symbol s s' | _ -> false) > 1
+  in
+  Array.exists at ~f:(function
+    | Idx.Affine { symbols; _ } -> not (List.is_empty symbols)
+    | Idx.Concat _ | Idx.Sub_axis -> true
+    | Idx.Iterator s -> repeated s
+    | Idx.Fixed_idx _ -> false)
+
 let collapse_bound_loops ~(at : Idx.axis_index array) (code : Low_level.t) : Low_level.t * bool =
   let bound s =
     Array.exists at ~f:(function Idx.Iterator s' -> Idx.equal_symbol s s' | _ -> false)
   in
-  (* A bare symbol repeated across positions ([t[i; i]], a diagonal producer) binds at its first
-     occurrence and turns the later ones into call-site consistency guards, whose work depends on
-     the reader's arguments: substitution-dependent like an affine position. *)
-  let repeated s =
-    Array.count at ~f:(function Idx.Iterator s' -> Idx.equal_symbol s s' | _ -> false) > 1
-  in
-  let substitution_dependent =
-    Array.exists at ~f:(function
-      | Idx.Affine { symbols; _ } -> not (List.is_empty symbols)
-      | Idx.Concat _ | Idx.Sub_axis -> true
-      | Idx.Iterator s -> repeated s
-      | Idx.Fixed_idx _ -> false)
-  in
-  (collapse_loops ~bound code, substitution_dependent)
+  (collapse_loops ~bound code, substitution_dependent at)
 
 (* Keep only [self]'s own setters — or, with [~nth], only its [nth] setter statement in program
    order: a shared-loop template carries sibling setters that instantiation filters out, and a
@@ -759,54 +761,60 @@ let recompute_cost ?(static_indices = []) (ctx : Low_level.optimize_ctx) : Tn.t 
           | None -> None
           | Some comps ->
               let visiting = Set.add visiting tn in
-              Some
-                (List.fold comps ~init:zero_recompute ~f:(fun acc (at, body) ->
-                     let body, bound_only = instantiation ~static_indices ~self:tn ?at body in
-                     let s = analyze body in
-                     let own = cost_of_self ~self:tn s in
-                     let own = { own with rc_approx = own.rc_approx || bound_only } in
-                     (* Reads of producers that will themselves inline at instantiation add their
-                        own recompute per enclosing iteration; their read cells are then not
-                        traffic. A producer without a stored template is a leaf whatever its
-                        placement — its read already counted as bytes. *)
-                     let accs = Low_level.affine_accesses body in
-                     let expanded, expanded_nodes =
-                       List.fold accs
-                         ~init:(zero_recompute, Set.empty (module Tn))
-                         ~f:(fun (exp, nodes) a ->
-                           let p = a.Affine.a_tn in
-                           if a.a_write || Tn.equal p tn then (exp, nodes)
-                           else if
-                             Tn.Placements.known_non_virtual ctx.placements p || Set.mem visiting p
-                           then (exp, nodes)
-                           else
-                             match cost ~visiting p with
-                             | None -> (exp, nodes)
-                             | Some r ->
-                                 let scale =
-                                   List.fold a.a_loops ~init:1 ~f:(fun acc (_, (lo, hi)) ->
-                                       acc * max 0 (hi - lo + 1))
-                                 in
-                                 ( add_recompute exp
-                                     {
-                                       rc_flops = scale * r.rc_flops;
-                                       rc_bytes = scale * r.rc_bytes;
-                                       rc_approx = r.rc_approx || a.a_guarded;
-                                       rc_opaque = r.rc_opaque;
-                                     },
-                                   Set.add nodes p ))
-                     in
-                     (* An expanded producer's cells are not traffic, whatever the number of sites
-                        reading it: its footprint leaves the leaf bytes once. *)
-                     let leaf_bytes =
-                       List.sum
-                         (module Int)
-                         s.per_node
-                         ~f:(fun (p, fp) ->
-                           if Set.mem expanded_nodes p then fp.fp_read_bytes else 0)
-                     in
-                     let own = { own with rc_bytes = own.rc_bytes - leaf_bytes } in
-                     add_recompute acc (add_recompute own expanded)))
+              (* The inliner guards every component of a multi-setter node with the range
+                 comparisons and the [Where] that select it: work no template carries, so their sum
+                 is a bound ([set_computation_count > 1] in [inline_computation]). *)
+              let guarded_components = List.count comps ~f:(fun (at, _) -> Option.is_some at) > 1 in
+              Option.map ~f:(fun r -> { r with rc_approx = r.rc_approx || guarded_components })
+              @@ Some
+                   (List.fold comps ~init:zero_recompute ~f:(fun acc (at, body) ->
+                        let body, bound_only = instantiation ~static_indices ~self:tn ?at body in
+                        let s = analyze body in
+                        let own = cost_of_self ~self:tn s in
+                        let own = { own with rc_approx = own.rc_approx || bound_only } in
+                        (* Reads of producers that will themselves inline at instantiation add their
+                           own recompute per enclosing iteration; their read cells are then not
+                           traffic. A producer without a stored template is a leaf whatever its
+                           placement — its read already counted as bytes. *)
+                        let accs = Low_level.affine_accesses body in
+                        let expanded, expanded_nodes =
+                          List.fold accs
+                            ~init:(zero_recompute, Set.empty (module Tn))
+                            ~f:(fun (exp, nodes) a ->
+                              let p = a.Affine.a_tn in
+                              if a.a_write || Tn.equal p tn then (exp, nodes)
+                              else if
+                                Tn.Placements.known_non_virtual ctx.placements p
+                                || Set.mem visiting p
+                              then (exp, nodes)
+                              else
+                                match cost ~visiting p with
+                                | None -> (exp, nodes)
+                                | Some r ->
+                                    let scale =
+                                      List.fold a.a_loops ~init:1 ~f:(fun acc (_, (lo, hi)) ->
+                                          acc * max 0 (hi - lo + 1))
+                                    in
+                                    ( add_recompute exp
+                                        {
+                                          rc_flops = scale * r.rc_flops;
+                                          rc_bytes = scale * r.rc_bytes;
+                                          rc_approx = r.rc_approx || a.a_guarded;
+                                          rc_opaque = r.rc_opaque;
+                                        },
+                                      Set.add nodes p ))
+                        in
+                        (* An expanded producer's cells are not traffic, whatever the number of
+                           sites reading it: its footprint leaves the leaf bytes once. *)
+                        let leaf_bytes =
+                          List.sum
+                            (module Int)
+                            s.per_node
+                            ~f:(fun (p, fp) ->
+                              if Set.mem expanded_nodes p then fp.fp_read_bytes else 0)
+                        in
+                        let own = { own with rc_bytes = own.rc_bytes - leaf_bytes } in
+                        add_recompute acc (add_recompute own expanded)))
         in
         Hashtbl.set memo ~key:tn ~data:r;
         r
@@ -846,21 +854,37 @@ let setter_cost ~(self : Tn.t) (pruned : Low_level.t) : recompute =
       {
         r with
         rc_approx =
-          r.rc_approx || (not injective) || has_set_from_vec pruned || reads_undefined_local pruned;
+          r.rc_approx || (not injective) || substitution_dependent w.a_map
+          || has_set_from_vec pruned || reads_undefined_local pruned;
       }
 
 (* Re-inlining a node with several setters (a block/concat node, one range-guarded component per
    setter) replays EVERY component at each read site — the guards select the value, the hoisted
    component bodies all execute — so the per-read cost is the SUM of the per-cell costs of the
    setters, not the node's total work averaged over the cells it writes. *)
+(* Whether a pruned single-setter statement is the node's zero-initialization: not a component the
+   inliner guards ([set_computation_count] counts the value-carrying computations only). *)
+let rec zero_out_only (c : Low_level.t) =
+  match c with
+  | Low_level.Zero_out _ -> true
+  | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> zero_out_only body
+  | Seq (a, b) -> zero_out_only a || zero_out_only b
+  | _ -> false
+
 let producer_cost ~(self : Tn.t) (code : Low_level.t) : recompute option =
   match prune_to_setters ~self code with
   | Low_level.Noop, _ -> None
   | _, n ->
-      Some
-        (List.fold (List.init n ~f:Fn.id) ~init:zero_recompute ~f:(fun acc k ->
-             let pruned, _ = prune_to_setters ~nth:k ~self code in
-             add_recompute acc (setter_cost ~self pruned)))
+      let r, components =
+        List.fold (List.init n ~f:Fn.id) ~init:(zero_recompute, 0) ~f:(fun (acc, comps) k ->
+            let pruned, _ = prune_to_setters ~nth:k ~self code in
+            ( add_recompute acc (setter_cost ~self pruned),
+              if zero_out_only pruned then comps else comps + 1 ))
+      in
+      (* [inline_computation] wraps each value-carrying component of a multi-setter node in the
+         range guards and the [Where] that select it — work the setters do not carry, so the sum is
+         a bound. *)
+      Some { r with rc_approx = r.rc_approx || components > 1 }
 
 let modeled_recompute_flops (ctx : Low_level.optimize_ctx) ~static_indices (llc : Low_level.t) :
     Tn.t -> [ `Materialize | `Inline ] -> int option =

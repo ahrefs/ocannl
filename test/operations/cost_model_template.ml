@@ -301,7 +301,8 @@ let () =
   (* Review round 1: a node with several setters (block/concat components) replays every component
      at a read site, so the per-read cost sums the setters' per-cell costs rather than averaging the
      node's work over its cells: B[i] = P[i] * 2 for i < 2 and B[2 + i] = Q[i] * 3 price two ops per
-     read, not one. *)
+     read, not one — and only as a bound (round 4): the inliner's per-component range guards and
+     selects are work the setters do not carry. *)
   let b = mk "B" and pp = mk "P" and q = mk "Q" and i1 = sym () and i2 = sym () in
   let two_setters =
     seq
@@ -311,10 +312,15 @@ let () =
   (match CM.producer_cost ~self:b two_setters with
   | None -> Stdio.printf "  none\n"
   | Some r -> show "two-component producer, per read" r);
-  p "two-component producer: components sum (2 ops, 8 bytes per read)"
+  p "two-component producer: components sum (2 ops, 8 bytes per read), a bound"
     (match CM.producer_cost ~self:b two_setters with
-    | Some r -> r.CM.rc_flops = 2 && r.CM.rc_bytes = 8 && not r.CM.rc_approx
+    | Some r -> r.CM.rc_flops = 2 && r.CM.rc_bytes = 8 && r.CM.rc_approx
     | None -> false);
+  (* Review round 4: a setter writing through an affine map is substitution-dependent like a
+     template's affine position — the replay may keep a loop and range-guard it. *)
+  let shifted = loop_n i2 2 (set b [| aff [ (1, i2) ] 2 |] (mul (get q [| iter i2 |]) (c 3.))) in
+  p "an affine setter map prices as a bound"
+    (match CM.producer_cost ~self:b shifted with Some r -> r.CM.rc_approx | None -> false);
   (* Review round 2: cross-statement hoisting can leave a setter reading a scope local whose
      definition sits in a preceding statement the pruning drops; the shared body is work a
      re-inlining executes, so such a setter prices as a bound. *)

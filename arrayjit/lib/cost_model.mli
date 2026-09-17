@@ -207,12 +207,13 @@ val recompute_cost :
   recompute option
 (** The transitive cost of one inlined computation of the node, summed over its stored templates
     (every component of a multi-setter node replays at a read site, guarded — and its body hoists,
-    so all execute): each template's {!template_cost}, plus, for every read of a producer with a
-    stored template that is not committed non-virtual in the lineage, that producer's own recompute
-    per enclosing iteration (its read cells then are not traffic). [None] when the node has no
-    stored computation — a materialized node prices through {!producer_cost}. Memoized per lineage:
-    partially apply to the context once per compile. Cycles (a node reached through its own
-    producers) are cut at the node, priced once. *)
+    so all execute; the guards themselves are the inliner's work no template carries, so a
+    multi-setter node's price is a bound): each template's {!template_cost}, plus, for every read of
+    a producer with a stored template that is not committed non-virtual in the lineage, that
+    producer's own recompute per enclosing iteration (its read cells then are not traffic). [None]
+    when the node has no stored computation — a materialized node prices through {!producer_cost}.
+    Memoized per lineage: partially apply to the context once per compile. Cycles (a node reached
+    through its own producers) are cut at the node, priced once. *)
 
 val producer_cost : self:Tnode.t -> Low_level.t -> recompute option
 (** The per-cell cost of a materialized producer in optimized code — the twin of {!recompute_cost}
@@ -223,9 +224,11 @@ val producer_cost : self:Tnode.t -> Low_level.t -> recompute option
     it) — summed over the setters: re-inlining a multi-setter node replays every component at a read
     site, guards selecting the value while the hoisted bodies all execute. Its virtual producers are
     already inlined there, so the count is transitive by construction. A bound rather than exact
-    when the write is not injective over the collapsed loops, for a packed-uniform setter, or when
-    the pruning left a scope local's hoisted definition behind, as in {!template_cost}. [None] when
-    the code sets the node nowhere. *)
+    when the write is not injective over the collapsed loops or its index vector is
+    substitution-dependent (an affine or repeated position, as in {!template_cost}), when the node
+    has several setters (the inliner wraps each component in the range guards and the [Where] that
+    select it, work the setters do not carry), for a packed-uniform setter, or when the pruning left
+    a scope local's hoisted definition behind. [None] when the code sets the node nowhere. *)
 
 module Calibration : sig
   (** The calibration TSV schema (config [autotune_calibration_file], gh-ocannl-491 task 4) and the
