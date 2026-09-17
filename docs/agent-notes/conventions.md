@@ -31,13 +31,19 @@ files.
   `Cpu_topology` explicit interfaces that hide their zero-reference helpers (gh-ocannl-806) — the
   closest precedent for surface nobody calls. None of it went through a compatibility window, and
   the tree carries no `[@@deprecated]` attribute at all (`grep -rn '@@deprecated' lib/ tensor/
-  arrayjit/lib/` is empty). Version depth is no argument against removal either: it tracks release
+  arrayjit/lib/` is empty). Removal is the default, not a rule: surface is retained where keeping
+  it costs nothing or serves something other than caller convenience — `lib/ocannl.ml`'s
+  backward-compatibility module re-exports, `Parallel.handle.sync_params_to_host` after
+  gh-ocannl-333 removed the copying it did, `Operation.centered_uniform1_param_init` and its
+  default, which exist to reproduce pre-0.9 random streams. Version depth is no argument against removal either: it tracks release
   scope, not semver (README's Milestones, ROADMAP.md's August 26, 2026 renumbering). The exception
   is a STRING a user typed rather than a name a compiler resolves — `big_models` for `large_models`
   (`arrayjit/lib/utils.ml`), `sync_cc` / `multicore_cc` for `cc` / `multidev_cc`
-  (`arrayjit/lib/backends.ml`) — kept as runtime aliases, because a renamed key in a stale
-  `ocannl_config` fails at startup with nothing to point the user at, where a renamed value
-  constructor fails at their compiler with the old name in the message. So when a PR finds dead
+  (`arrayjit/lib/backends.ml`) — kept as runtime aliases as a matter of course, because a renamed
+  key in a stale `ocannl_config` draws `OCANNL warning: unknown config key` and the run CONTINUES
+  on the default (`Utils.config_file_args`, quoted in `ocannl_config.reference`), silently changing
+  what it computes, where a renamed value constructor fails at the user's compiler with the old
+  name in the message. So when a PR finds dead
   exported surface, remove it and say so in the PR body; the `Retired API` changelog line is
   written later, in the editorial pass.
 - That argument recurs on removal PRs because it is cheap to raise and, until this bullet, was only
