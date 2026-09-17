@@ -18,9 +18,11 @@
       over-count, as does summing multiple same-direction accesses of one node (a union bound,
       capped by the node's size) — except that a direction whose accesses are all exact and pairwise
       provably disjoint ({!Affine.may_touch_same_cell}) sums exactly (gh-ocannl-578). Conditional
-      evaluation also over-counts: a read the renderers may skip — a [Where] arm, the gated right
-      operand of [&&]/[||]/a gate — or any access under a dead loop keeps its direction approximate,
-      since the image can exceed what executes. [fp_approx] is [false] only when the count is exact.
+      evaluation also over-counts: a read the renderers may skip — a [Where] arm's or a gated right
+      operand's ([&&]/[||]/a gate) inline read — or any access under a dead loop keeps its direction
+      approximate, since the image can exceed what executes; a read inside a [Local_scope] body
+      under such an operand is certain, the body being hoisted out of the conditional
+      (gh-ocannl-637). [fp_approx] is [false] only when the count is exact.
     - The op count is an upper bound in the same guards-taken sense, and counts every scalar
       [Unop]/[Binop]/[Ternop] evaluation as one "FLOP" regardless of precision or integerness —
       except the two-operation ternaries [FMA]/[Mul3], which count two (matching [peak_flops]'
@@ -49,9 +51,11 @@ type summary = {
   flops : int;  (** Whole-kernel arithmetic-op count (loop extents times per-statement ops). *)
   flops_approx : bool;
       (** [true] when guarded ([If]) code contributed (guards-taken bound), or a short-circuiting
-          form was charged in full while executing only in part — a [Where] whose arms contribute
-          any cost (only one arm executes; a cost residing in always-run hoisted scope bodies is
-          conservatively flagged too), a gated right operand with nonzero cost (gh-ocannl-578). *)
+          form was charged in full while executing only in part — a [Where] whose arms carry any
+          inline cost (only one arm's expression executes), a gated right operand with nonzero
+          inline cost (gh-ocannl-578). A cost residing in a hoisted [Local_scope] body executes
+          unconditionally — every renderer emits scope definitions before the statement's expression
+          — so it is charged exactly and never flags (gh-ocannl-637). *)
   opaque : bool;
       (** [true] when the code contains [Staged_compilation] or merge-buffer reads: some traffic and
           ops are invisible to the analysis, so counts may UNDER-estimate. *)
@@ -88,23 +92,25 @@ val completion_floor : ?open_placement:(Tnode.t -> bool) -> Low_level.t -> floor
 
     - [fr_flops]: guarded ([If]) bodies count zero (guards-never-taken, dual to guards-taken); the
       short-circuiting forms count only their certain part — [Where] its condition plus the cheaper
-      arm (rendered as [?:]), [And]/[Or] the left operand (rendered as [&&]/[||]), the [Arg1]/[Arg2]
-      projections only the selected operand (the discarded one is never rendered); opaque code
-      counts zero (an under-count is sound in this direction); [Tile_mma] keeps the lane-cooperative
-      attribution, exact when the lane binding is in scope. Statements producing an [open_placement]
-      node — the [Set] family and [Tile_mma] with an open accumulator — count zero: an inline
-      completion instantiates the producer only at surviving consumer sites, possibly {e fewer}
-      cells than the setter loop covers, so "recomputation only adds ops" does not hold and the
-      producer's whole effect attributes to the open placement. Call this on the
-      {e all-materialized} specialization of the decision surface, where every open node's work sits
-      in its own producer statement.
+      arm's inline work (rendered as [?:]), [And]/[Or] the left operand's (rendered as [&&]/[||]),
+      both sides' hoisted scope bodies in either case (they execute regardless, gh-ocannl-637), the
+      [Arg1]/[Arg2] projections only the selected operand (the discarded one is never rendered,
+      hoisted definitions included); opaque code counts zero (an under-count is sound in this
+      direction); [Tile_mma] keeps the lane-cooperative attribution, exact when the lane binding is
+      in scope. Statements producing an [open_placement] node — the [Set] family and [Tile_mma] with
+      an open accumulator — count zero: an inline completion instantiates the producer only at
+      surviving consumer sites, possibly {e fewer} cells than the setter loop covers, so
+      "recomputation only adds ops" does not hold and the producer's whole effect attributes to the
+      open placement. Call this on the {e all-materialized} specialization of the decision surface,
+      where every open node's work sits in its own producer statement.
     - [fr_bytes]: per node and direction, the sum of the exact images when they are pairwise
       provably disjoint (a disjoint union attains its sum — both extractions then agree,
       gh-ocannl-578), otherwise the largest exact image (a union is at least its largest member —
       dual to the upper extraction's capped sum; a second nonzero contribution then marks the floor
-      loose); guarded, non-exact, dead-loop-enclosed, conditionally-evaluated ([Where] arm,
-      [And]/[Or] right operand) and open-producer-operand accesses contribute zero — their execution
-      is not certain in every completion. Nodes with [open_placement] contribute zero.
+      loose); guarded, non-exact, dead-loop-enclosed, conditionally-evaluated (a [Where] arm's or an
+      [And]/[Or] right operand's inline read — not a hoisted scope body's) and open-producer-operand
+      accesses contribute zero — their execution is not certain in every completion. Nodes with
+      [open_placement] contribute zero.
 
     {e Committing} a placement decision is re-evaluation with the narrowed [open_placement]: the
     suppression sets only shrink, so the floor is monotone in refinement — the property that lets a
@@ -138,6 +144,91 @@ val roofline_seconds :
     advisory {!Backend_intf.hardware_limits} fields); [None] when neither is given. Monotone:
     raising either constant never increases the bound. A lower bound only up to the model's
     upper-bound byte/op counts — rank with it, do not predict. *)
+
+(** {2 The cost of one inlined computation (gh-ocannl-637 Part 2)}
+
+    The cost model's account of what a virtual node costs to recompute at ONE read site — the flops
+    and bytes of one instantiation of its computation, with the exactness the extraction tracks. The
+    reader's multiplicity stays outside, as in the virtualizer's traced proxy
+    ([inline_reduction_extent × read multiplicity × inline_fanin]); these queries replace the extent
+    × fan-in factor with the modeled arithmetic, and {!Low_level.recompute_pricer} feeds them to the
+    flip-candidate ordering (gh-ocannl-555), the memory-budget planner and, through
+    [fc_recompute_cost], footprint-scoped materialization (gh-ocannl-616). Priced per Part 1: a
+    hoisted scope body under a [Where] counts as what executes.
+
+    The exactness contract: a count is exact for ONE instantiation of the computation as it stands
+    under a generic point read, after the passes the emitted code receives. What a particular reader
+    does on top of that — folding arithmetic once a constant stands for an index, collapsing a loop
+    over a sub-image, or sharing one instantiation between sibling statements through
+    [hoist_cross_statement_cse] — only LOWERS what executes, so a modeled count times a read
+    multiplicity is an upper bound in the same sense the traced proxy's is; the reader's side of the
+    account stays outside these queries, as the issue scoped it. *)
+
+type recompute = {
+  rc_flops : int;  (** Operations of one instantiation. *)
+  rc_bytes : int;
+      (** Bytes one instantiation reads from nodes other than the computed one — its own cells are a
+          scope local once inlined. Distinct cells within the instantiation's own body; an expanded
+          producer's traffic ({!recompute_cost}) multiplies by the enclosing trip count. *)
+  rc_approx : bool;  (** Either count is an upper bound rather than exact ({!analyze}'s flags). *)
+  rc_opaque : bool;  (** Opaque code: the counts may under-estimate. *)
+}
+[@@deriving sexp_of]
+
+val template_cost :
+  ?static_indices:Indexing.static_symbol list ->
+  self:Tnode.t ->
+  ?at:Indexing.axis_index array ->
+  Low_level.t ->
+  recompute
+(** One stored template body ([optimize_ctx.computations]' [(at, body)] entry) as one instantiation:
+    sibling setters (a shared-loop template) are dropped as instantiation drops them, the loops
+    binding a bare iterator position of [at] — the ones the ordinary point read substitutes away —
+    collapse to a single iteration, so a reduction loop is the only trip count left, and the passes
+    the emitted code receives after virtualization run over the result, in their order and under the
+    routine's [static_indices] interval environment — the simplifier, the one-hot reduction rewrite
+    and the scalar CSE, which a stored template predates: a single-assignment scope under a [Where]
+    arm collapses into the arm's expression (conditional, hence a bound), a dense one-hot reduction
+    becomes a dynamic gather, two alpha-equivalent scope bodies execute once. What the query cannot
+    see is the substitution a reader applies, and where it changes the count the result is only a
+    bound ([rc_approx]): a symbol occurring inside an affine position of [at], or repeated across
+    bare positions (a diagonal producer's consistency guards), may be bound or left free with its
+    loop range-guarded or guarded, depending on the reader's index; a packed-uniform producer
+    ([Set_from_vec]) inlines as the lane-extract form rather than its vector store; and a scope
+    local read without its definition in the priced code stands for hoisted work the price cannot
+    see. A consumer instantiating over a sub-image that collapses a further loop (gh-ocannl-616)
+    applies that correction itself. Reads of other virtual nodes count as reads here;
+    {!recompute_cost} expands them. *)
+
+val recompute_cost :
+  ?static_indices:Indexing.static_symbol list ->
+  Low_level.optimize_ctx ->
+  Tnode.t ->
+  recompute option
+(** The transitive cost of one inlined computation of the node, summed over its stored templates
+    (every component of a multi-setter node replays at a read site, guarded — and its body hoists,
+    so all execute; the guards themselves are the inliner's work no template carries, so a
+    multi-setter node's price is a bound): each template's {!template_cost}, plus, for every read of
+    a producer with a stored template that is not committed non-virtual in the lineage, that
+    producer's own recompute per enclosing iteration (its read cells then are not traffic). [None]
+    when the node has no stored computation — a materialized node prices through {!producer_cost}.
+    Memoized per lineage: partially apply to the context once per compile. Cycles (a node reached
+    through its own producers) are cut at the node, priced once. *)
+
+val producer_cost : self:Tnode.t -> Low_level.t -> recompute option
+(** The per-cell cost of a materialized producer in optimized code — the twin of {!recompute_cost}
+    for a node a heuristic cap materialized, whose computation was never stored: per setter
+    statement of the node, one instantiation — the code pruned to that setter with the loops its
+    index vector mentions collapsed to one iteration, so an operand read at a fixed position counts
+    for every cell's computation (an aggregate footprint averaged over the written cells would lose
+    it) — summed over the setters: re-inlining a multi-setter node replays every component at a read
+    site, guards selecting the value while the hoisted bodies all execute. Its virtual producers are
+    already inlined there, so the count is transitive by construction. A bound rather than exact
+    when the write is not injective over the collapsed loops or its index vector is
+    substitution-dependent (an affine or repeated position, as in {!template_cost}), when the node
+    has several setters (the inliner wraps each component in the range guards and the [Where] that
+    select it, work the setters do not carry), for a packed-uniform setter, or when the pruning left
+    a scope local's hoisted definition behind. [None] when the code sets the node nowhere. *)
 
 module Calibration : sig
   (** The calibration TSV schema (config [autotune_calibration_file], gh-ocannl-491 task 4) and the

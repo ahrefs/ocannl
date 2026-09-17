@@ -25,9 +25,6 @@ let exemptions =
     ( "test/operations/buffer_aliasing.ml",
       Scan.Migration { records = 1; traversals = 0 },
       "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/cost_model_floor.ml",
-      Scan.Migration { records = 16; traversals = 0 },
-      "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/cpu_simd_reduction.ml",
       Scan.Migration { records = 5; traversals = 1 },
       "existing migration debt; adopt ll_test when touched" );

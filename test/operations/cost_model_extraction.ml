@@ -9,9 +9,11 @@
    fallback to whole-node bytes; - overlapping writes: the union bound capped by the node's size; -
    multi-read exactness (gh-ocannl-578): pairwise provably-disjoint exact reads sum exactly,
    overlapping ones stay a flagged union bound, and conditionally-evaluated reads (Where arms) stay
-   a flagged bound even when disjoint — with the op count flagged too when the arms' costs differ; -
-   vectorized runs (gh-ocannl-578): bases spaced by at least the run length (or on distinct
-   in-bounds rows) count exactly, close-spaced or row-spilling bases stay a flagged upper bound.
+   a flagged bound even when disjoint — with the op count flagged too when the arms' costs differ,
+   unless an arm's cost lives entirely in a hoisted scope body, which executes unconditionally
+   (gh-ocannl-637); - vectorized runs (gh-ocannl-578): bases spaced by at least the run length (or
+   on distinct in-bounds rows) count exactly, close-spaced or row-spilling bases stay a flagged
+   upper bound.
 
    The tail asserts the roofline bound is monotone in the envelope constants. *)
 
@@ -217,6 +219,52 @@ let () =
               (LL.Binop (Ops.Mul, (get a16 [| shift8 i |], sp), (LL.Constant 3., sp)), sp) )))
   in
   show_summary "where equal-cost arms (op count stays a bound)" (CM.analyze where_equal_arms);
+
+  (* gh-ocannl-637: an arm whose whole cost is a hoisted [Local_scope] body executes unconditionally
+     — every renderer emits the scope's definition before the statement — so charging it is exact:
+     C2[i] = where(K4[i], { lv := A16[i] * 2 }, 0) counts 2 ops per cell with no flag, and A16's
+     read inside the body is certain. *)
+  let lv = fresh_tn "lv" [||] in
+  Ll_test.virtualize lv;
+  let hoisted body =
+    LL.Local_scope
+      { id = LL.get_scope lv; body; orig_indices = [| it i |]; mint = LL.Inlined_computation }
+  in
+  let scoped_mul idx k =
+    hoisted
+      (LL.Set_local
+         (LL.get_scope lv, LL.Binop (Ops.Mul, (get a16 [| idx |], sp), (LL.Constant k, sp))))
+  in
+  let where_hoisted =
+    Ll_test.loop_n i 4
+      (Ll_test.set c2
+         [| it i |]
+         (LL.Ternop
+            (Ops.Where, (get k4 [| it i |], sp), (scoped_mul (it i) 2., sp), (LL.Constant 0., sp))))
+  in
+  show_summary "where arm cost hoisted into a scope body (exact)" (CM.analyze where_hoisted);
+  (* The same arm with one inline op on top of the hoisted body: only that op is conditional, and it
+     is what flags the count — the scope's read stays certain. *)
+  let where_hoisted_inline =
+    Ll_test.loop_n i 4
+      (Ll_test.set c2
+         [| it i |]
+         (LL.Ternop
+            ( Ops.Where,
+              (get k4 [| it i |], sp),
+              (LL.Binop (Ops.Add, (scoped_mul (it i) 2., sp), (LL.Constant 1., sp)), sp),
+              (LL.Constant 0., sp) )))
+  in
+  show_summary "where arm: hoisted body plus one inline op (bound)"
+    (CM.analyze where_hoisted_inline);
+  (* A gate's right operand hoisted likewise: C2[i] = relu_gate(K4[i], { lv := A16[i+8] * 3 }). *)
+  let gate_hoisted =
+    Ll_test.loop_n i 4
+      (Ll_test.set c2
+         [| it i |]
+         (LL.Binop (Ops.Relu_gate, (get k4 [| it i |], sp), (scoped_mul (shift8 i) 3., sp))))
+  in
+  show_summary "gated operand cost hoisted into a scope body (exact)" (CM.analyze gate_hoisted);
 
   (* Vectorized runs (gh-ocannl-578), strip-mined: setv4 V16[4*i] — bases 4 apart tile the node, 16
      cells written exactly. The random-bits source is read once per run. *)

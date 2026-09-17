@@ -4,20 +4,20 @@ it contains the site destination mc: true
 it does not contain the decoy us: true
 no site is eligible under default placements (empty disablement): true
 cost ranking:
-  inline      n11          cost 16384
-  inline      us           cost 32   
+  inline      n11          cost 1048576
+  inline      us           cost 256  
+  materialize n12          cost 144  
+  materialize relu_t2      cost 17   
   materialize mc           cost 16     [enablement]
-  materialize n12          cost 16   
   inline      mbs          cost 8      [enablement]
-  materialize relu_t2      cost 2    
-  materialize d2           cost 2    
+  materialize d2           cost 1    
 enablement ranking:
   materialize mc           cost 16     [enablement]
-  inline      n11          cost 16384
-  inline      us           cost 32   
-  materialize n12          cost 16   
-  materialize relu_t2      cost 2    
-  materialize d2           cost 2    
+  inline      n11          cost 1048576
+  inline      us           cost 256  
+  materialize n12          cost 144  
+  materialize relu_t2      cost 17   
+  materialize d2           cost 1    
   inline      mbs          cost 8      [enablement]
 cost ranking buries the enablement candidates below the decoy: true
 enablement ranking puts the family-unlocking materialize flip first: true

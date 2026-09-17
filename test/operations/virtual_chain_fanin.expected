@@ -2,7 +2,8 @@ chain: x7 stays virtual (fan-in 8, at the cap): true
 chain: x8 materialized by the fan-in cap: true
 chain: x9 and x10 virtual again past the reset: true
 chain: x8 written once, read as a buffer downstream: true
-chain: x8 is an Inline flip charged its fan-in (cost 9): true
+chain: x8's flip: inline, recompute cost 8
+chain: x8 is an Inline flip charged its modeled recompute (the chain prefix's 8 adds): true
 chain: executed values match the reference: true
 cap disabled: whole chain virtual (the pre-fix behavior): true
 cap disabled: executed values agree with the capped arm: true

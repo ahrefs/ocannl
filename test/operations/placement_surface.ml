@@ -9,10 +9,12 @@
    sketch_family_tree harness), the enablement prior must promote exactly the site's flip
    candidates: materializing them is what makes the tensorized family expressible.
 
-   The decoy [us] (a pointwise scale read with a 32-fold per-cell multiplicity by a broadcast
-   consumer) carries a larger recompute-cost bound than the site candidates — the gh-558 shape,
-   where cost ordering buries the family-unlocking flips below a candidate that unlocks nothing and
-   enablement ordering does not.
+   The decoy [us] (a pointwise scale read with a 256-fold per-cell multiplicity by a broadcast
+   consumer) carries a larger recompute cost than the site candidates — the gh-558 shape, where cost
+   ordering buries the family-unlocking flips below a candidate that unlocks nothing and enablement
+   ordering does not. The multiplicity is what makes it the second-dearest flip under the modeled
+   recompute cost (gh-ocannl-637), above the partial reduction [n12], whose one instantiation
+   replays a row of the matmul.
 
    The floor closure is asserted monotone in the committed materializations, under the envelope
    constants pinned by the rule's command line (cc carries none of its own).
@@ -49,7 +51,7 @@ let gpu_limits =
   }
 
 let n = 8
-let m = 32
+let m = 256
 
 let () =
   let mav = Array.init (n * n) ~f:(fun i -> Float.of_int (i % 7) *. 0.5) in

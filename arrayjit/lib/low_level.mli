@@ -774,7 +774,8 @@ type traced_array = {
           the per-setter maximum (a read of one cell executes one setter's computation). *)
   mutable inline_fanin : int;
       (** The transitive inline fan-in [decide_placements] computed for this node under the current
-          placements (at least 1); multiplies into [fc_recompute_cost]. *)
+          placements (at least 1); multiplies into the proxy [fc_recompute_cost] (gh-ocannl-637: the
+          fallback where the cost model's count is not exact). *)
 }
 [@@deriving sexp_of]
 
@@ -877,16 +878,39 @@ type flip_candidate = {
   fc_tn : Tnode.t;
   fc_flip : [ `Materialize | `Inline ];
   fc_recompute_cost : int;
+  fc_modeled : bool;
 }
 [@@deriving sexp_of]
 (** gh-555: one searchable inlining decision dimension of a compile — a node whose placement the
-    default policy decided, together with the flip a search can try and the recompute-cost bound of
-    the virtual placement (reduction extent × per-cell read multiplicity × transitive inline
-    fan-in). [`Materialize] flips a node the policy left virtual (via
+    default policy decided, together with the flip a search can try and the recompute cost of the
+    virtual placement: the modeled op count of one inlined computation ({!recompute_pricer},
+    gh-ocannl-637) times the per-cell read multiplicity when [fc_modeled], otherwise the traced
+    proxy (reduction extent × per-cell read multiplicity × transitive inline fan-in), the fallback
+    where the model's count is not exact. [`Materialize] flips a node the policy left virtual (via
     [Context.decide_materialized]); [`Inline] flips a node materialized by the heuristic caps (never
     by legality or observability), via [Context.decide_inline]. An [`Inline] flip's legality is
     settled only when the virtualizer replays: a rejected flip reproduces the materialized
     placement. *)
+
+val recompute_pricer :
+  (optimize_ctx ->
+  static_indices:Indexing.static_symbol list ->
+  t ->
+  Tnode.t ->
+  [ `Materialize | `Inline ] ->
+  int option)
+  ref
+(** gh-ocannl-637: the seam through which the cost model prices {!flip_candidate}s — given the
+    lineage, the routine's static indices (the interval environment the emitted code was simplified
+    under) and the optimized code, the exact per-instantiation op count of a candidate's recompute
+    ([None] when the model's count is only a bound, or the node has no priceable computation). Exact
+    for ONE instantiation as the stored computation stands under a generic point read: what a
+    particular reader folds away (a constant substituted for an index, a sub-image collapsing a
+    loop) or shares (sibling readers whose instantiations [hoist_cross_statement_cse] merges) only
+    lowers what executes, so the product with the per-cell read multiplicity is a bound in the same
+    sense the traced proxy's is. [Cost_model] registers it at module initialization; the default
+    prices nothing, so every candidate carries the traced proxy. A pricer must be pure:
+    [specialize_proc] consults it once per candidate of a compile. *)
 
 type pipelined_tile = { pt_depth : int; pt_rotor : Indexing.symbol } [@@deriving sexp_of]
 (** gh-487: a software-pipelined (double-buffered) staged tile — codegen allocates [pt_depth]

@@ -83,29 +83,35 @@ let access_uncertainty ~open_placement (code : Low_level.t) =
   let open_reads = Hashtbl.create (module Tn) in
   let dead = Hashtbl.create (module Tn) in
   let mark tbl tn = Hashtbl.set tbl ~key:tn ~data:() in
-  let rec sc_reads ~into (s : Low_level.scalar_t) =
+  (* [~through_scopes:false] stops at [Local_scope] bodies: the renderers hoist a scope's definition
+     out of the statement's expression, so a body under a [Where] arm or a gated operand executes
+     unconditionally and its reads are certain — only the arm's inline reads are gated
+     (gh-ocannl-637). The dead-loop and open-producer markings descend (a dead body never runs,
+     hoisted or not; an open producer's whole effect attributes to the open placement). *)
+  let rec sc_reads ~into ~through_scopes (s : Low_level.scalar_t) =
     match s with
     | Low_level.Get (tn, _) -> mark into tn
     | Get_dynamic { tn; dyn_value = v, _; _ } ->
         mark into tn;
-        sc_reads ~into v
+        sc_reads ~into ~through_scopes v
     | Get_merge_buffer _ | Get_local _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
-    | Local_scope { body; _ } -> code_reads ~into body
+    | Local_scope { body; _ } -> if through_scopes then code_reads ~into body
     | Ternop (_, (a, _), (b, _), (c, _)) ->
-        sc_reads ~into a;
-        sc_reads ~into b;
-        sc_reads ~into c
+        sc_reads ~into ~through_scopes a;
+        sc_reads ~into ~through_scopes b;
+        sc_reads ~into ~through_scopes c
     | Binop (op, (a, _), (b, _)) -> (
         (* A projection's discarded operand is never evaluated ([affine_accesses] omits it too), per
            {!Ops.binop_conditionality}. *)
         match Ops.binop_conditionality op with
-        | Ops.Only_first -> sc_reads ~into a
-        | Ops.Only_second -> sc_reads ~into b
+        | Ops.Only_first -> sc_reads ~into ~through_scopes a
+        | Ops.Only_second -> sc_reads ~into ~through_scopes b
         | Ops.Both_operands | Ops.Gated_second ->
-            sc_reads ~into a;
-            sc_reads ~into b)
-    | Unop (_, (a, _)) -> sc_reads ~into a
+            sc_reads ~into ~through_scopes a;
+            sc_reads ~into ~through_scopes b)
+    | Unop (_, (a, _)) -> sc_reads ~into ~through_scopes a
   and code_reads ~into (c : Low_level.t) =
+    let sc_reads = sc_reads ~through_scopes:true in
     match c with
     | Low_level.Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ -> ()
     | Zero_out tn -> mark into tn
@@ -129,6 +135,8 @@ let access_uncertainty ~open_placement (code : Low_level.t) =
         sc_reads ~into a
     | Tile_mma { fallback; _ } -> code_reads ~into fallback
   in
+  let gated_reads_of = sc_reads ~into:gated_reads ~through_scopes:false in
+  let sc_reads = sc_reads ~through_scopes:true in
   let rec sc_walk (s : Low_level.scalar_t) =
     match s with
     | Low_level.Ternop (op, (a, _), (b, _), (c, _)) -> (
@@ -139,9 +147,10 @@ let access_uncertainty ~open_placement (code : Low_level.t) =
             sc_walk c
         | Ops.Cond_and_one_arm ->
             sc_walk a;
-            (* The arms' reads are conditional; their nested structure still walks. *)
-            sc_reads ~into:gated_reads b;
-            sc_reads ~into:gated_reads c;
+            (* The arms' inline reads are conditional; their nested structure (hoisted scope bodies
+               included) still walks in its own right. *)
+            gated_reads_of b;
+            gated_reads_of c;
             sc_walk b;
             sc_walk c)
     | Binop (op, (a, _), (b, _)) -> (
@@ -149,9 +158,9 @@ let access_uncertainty ~open_placement (code : Low_level.t) =
         | Ops.Only_first -> sc_walk a
         | Ops.Only_second -> sc_walk b
         | Ops.Gated_second ->
-            (* Short-circuiting (&& / || and the gates' ?:): the right operand's reads are
+            (* Short-circuiting (&& / || and the gates' ?:): the right operand's inline reads are
                conditional. *)
-            sc_reads ~into:gated_reads b;
+            gated_reads_of b;
             sc_walk a;
             sc_walk b
         | Ops.Both_operands ->
@@ -287,37 +296,46 @@ let analyze (code : Low_level.t) : summary =
         in
         scale / max 1 lane_extent * (2 * m * n * k)
   and sc_flops (sc : Low_level.scalar_t) : int =
+    let inline, hoisted = sc_split sc in
+    inline + hoisted
+  (* The (inline, hoisted) components of a scalar's cost (gh-ocannl-637): [hoisted] is the work of
+     the [Local_scope] bodies it contains, [inline] the operations of the expression itself. The
+     distinction is what the renderers do with a scope: [C_syntax.pp_scalar] returns a scope's
+     definition separately and the statement emits every definition BEFORE its expression, so a
+     scope body under a [Where] arm or a gated operand executes unconditionally, while the arm's
+     inline operations sit inside the [?:] / [&&] and execute only when selected. Charging both
+     arms' hoisted bodies is therefore exact, and only inline arm work can make the count a
+     guards-taken bound. *)
+  and sc_split (sc : Low_level.scalar_t) : int * int =
     match sc with
-    | Low_level.Local_scope { body; _ } -> go ~scale:1 ~env:[] body
-    | Get_local _ | Get _ | Constant _ | Constant_bits _ | Embed_index _ -> 0
+    | Low_level.Local_scope { body; _ } -> (0, go ~scale:1 ~env:[] body)
+    | Get_local _ | Get _ | Constant _ | Constant_bits _ | Embed_index _ -> (0, 0)
     | Get_merge_buffer _ ->
         (* Merge-buffer traffic is not represented by [affine_accesses] either: flag the
            under-count. *)
         opaque := true;
-        0
-    | Get_dynamic { dyn_value = dv, _; _ } -> sc_flops dv
+        (0, 0)
+    | Get_dynamic { dyn_value = dv, _; _ } -> sc_split dv
     | Ternop (op, a1, a2, a3) ->
         (* FMA and Mul3 count as two arithmetic operations each — matching [peak_flops]'
            FMA-counted-as-two convention, so an FMA-form kernel scores the same compute leg as its
            mul+add form; the select is one.
 
            The upper walk charges every operand that is {e rendered}, which for a conditional one is
-           more than {!Ops.ternop_conditionality} says can execute: a [Where] arm's [Local_scope]
-           renders as statements hoisted OUT of the conditional expression ([C_syntax.pp_scalar]
-           returns its definitions separately), so both arms' scope bodies do run. Only an operand
-           no renderer emits at all — a projection's discarded one, below — may be dropped. The
-           floor's [Int.min] stays sound under the same hoisting: it only loosens. Charging both
-           arms of a short-circuiting [?:] is an over-count whenever either arm contributes any work
-           — only one arm's inline ops execute, equal costs notwithstanding — so any nonzero arm
-           flags the op count approximate (gh-ocannl-578; a cost residing entirely in hoisted scope
-           bodies does execute, so this conservatively over-flags such arms — the sound direction).
-           Only a zero-cost arm pair keeps the count exact. *)
+           more than {!Ops.ternop_conditionality} says can execute: both arms' hoisted scope bodies
+           run, and both arms' inline operations are charged although only one arm's execute. Only
+           an operand no renderer emits at all — a projection's discarded one, below — may be
+           dropped. Charging both arms' inline work of a short-circuiting [?:] is an over-count
+           whenever either arm has any — equal costs notwithstanding — so a nonzero inline arm flags
+           the op count approximate (gh-ocannl-578); arms whose whole cost is hoisted keep it exact
+           (gh-ocannl-637). The floor's [Int.min] over the inline parts stays sound under the same
+           hoisting. *)
         let ops = match op with Ops.FMA | Ops.Mul3 -> 2 | Ops.Where -> 1 in
-        let c2 = arg a2 and c3 = arg a3 in
+        let i1, h1 = arg a1 and i2, h2 = arg a2 and i3, h3 = arg a3 in
         (match Ops.ternop_conditionality op with
         | Ops.All_three -> ()
-        | Ops.Cond_and_one_arm -> if c2 <> 0 || c3 <> 0 then flops_approx := true);
-        ops + arg a1 + c2 + c3
+        | Ops.Cond_and_one_arm -> if i2 <> 0 || i3 <> 0 then flops_approx := true);
+        (ops + i1 + i2 + i3, h1 + h2 + h3)
     | Binop (op, a1, a2) -> (
         match Ops.binop_conditionality op with
         (* A projection is not an operation: it renders as its selected operand alone, and the
@@ -325,15 +343,20 @@ let analyze (code : Low_level.t) : summary =
         | Ops.Only_first -> arg a1
         | Ops.Only_second -> arg a2
         | Ops.Gated_second ->
-            (* Gates-taken: the right operand is charged as if the gate always passes — an
-               over-count whenever it costs anything (gh-ocannl-578). *)
-            let c2 = arg a2 in
-            if c2 <> 0 then flops_approx := true;
-            1 + arg a1 + c2
-        | Ops.Both_operands -> 1 + arg a1 + arg a2)
+            (* Gates-taken: the right operand's inline work is charged as if the gate always passes
+               — an over-count whenever there is any (gh-ocannl-578); its hoisted definitions run
+               regardless. *)
+            let i1, h1 = arg a1 and i2, h2 = arg a2 in
+            if i2 <> 0 then flops_approx := true;
+            (1 + i1 + i2, h1 + h2)
+        | Ops.Both_operands ->
+            let i1, h1 = arg a1 and i2, h2 = arg a2 in
+            (1 + i1 + i2, h1 + h2))
     | Unop (Ops.Identity, a1) -> arg a1
-    | Unop (_, a1) -> 1 + arg a1
-  and arg (sc, _prec) = sc_flops sc in
+    | Unop (_, a1) ->
+        let i1, h1 = arg a1 in
+        (1 + i1, h1)
+  and arg (sc, _prec) = sc_split sc in
   let flops = go ~scale:1 ~env:[] code in
   let read_uncertain, any_uncertain = access_uncertainty ~open_placement:(fun _ -> false) code in
   let per_node = footprints ~read_uncertain ~any_uncertain (Low_level.affine_accesses code) in
@@ -419,40 +442,51 @@ let floor_flops ~open_placement (code : Low_level.t) : int * bool =
     exact := false;
     0
   and sc (s : Low_level.scalar_t) : int =
+    let inline, hoisted = split s in
+    inline + hoisted
+  (* (inline, hoisted) as in the upper walk's [sc_split]: hoisted scope bodies are certain work
+     under every short-circuiting form (the renderers emit them before the statement), so the dual
+     minimizes over the inline parts only (gh-ocannl-637). *)
+  and split (s : Low_level.scalar_t) : int * int =
     match s with
-    | Low_level.Local_scope { body; _ } -> go ~scale:1 ~env:[] body
-    | Get_local _ | Get _ | Constant _ | Constant_bits _ | Embed_index _ -> 0
+    | Low_level.Local_scope { body; _ } -> (0, go ~scale:1 ~env:[] body)
+    | Get_local _ | Get _ | Constant _ | Constant_bits _ | Embed_index _ -> (0, 0)
     | Get_merge_buffer _ ->
         exact := false;
-        0
-    | Get_dynamic { dyn_value = dv, _; _ } -> sc dv
+        (0, 0)
+    | Get_dynamic { dyn_value = dv, _; _ } -> split dv
     | Ternop (op, a1, a2, a3) -> (
         (* The per-op arithmetic count is the upper walk's; only which operands are charged flips,
            per {!Ops.ternop_conditionality}. *)
         let ops = match op with Ops.FMA | Ops.Mul3 -> 2 | Ops.Where -> 1 in
+        let i1, h1 = arg a1 and i2, h2 = arg a2 and i3, h3 = arg a3 in
         match Ops.ternop_conditionality op with
-        | Ops.All_three -> ops + arg a1 + arg a2 + arg a3
+        | Ops.All_three -> (ops + i1 + i2 + i3, h1 + h2 + h3)
         | Ops.Cond_and_one_arm ->
-            (* Short-circuiting [?:] in every renderer: the condition and exactly one arm
-               execute. *)
-            let c1 = arg a2 and c2 = arg a3 in
-            if c1 <> c2 then exact := false;
-            ops + arg a1 + Int.min c1 c2)
+            (* Short-circuiting [?:] in every renderer: the condition and exactly one arm's inline
+               work execute; both arms' hoisted bodies do. *)
+            if i2 <> i3 then exact := false;
+            (ops + i1 + Int.min i2 i3, h1 + h2 + h3))
     | Binop (op, a1, a2) -> (
         match Ops.binop_conditionality op with
         (* The projections render only the selected operand ([C_syntax.pp_scalar]); the discarded
-           one's work cannot execute. *)
+           one's work cannot execute, hoisted definitions included. *)
         | Ops.Only_first -> arg a1
         | Ops.Only_second -> arg a2
         | Ops.Gated_second ->
-            (* Short-circuiting renderings: && / || and the gates' ?: evaluate the right operand
-               only when the left one passes. *)
-            if arg a2 <> 0 then exact := false;
-            1 + arg a1
-        | Ops.Both_operands -> 1 + arg a1 + arg a2)
+            (* Short-circuiting renderings: && / || and the gates' ?: evaluate the right operand's
+               inline work only when the left one passes; its hoisted definitions run regardless. *)
+            let i1, h1 = arg a1 and i2, h2 = arg a2 in
+            if i2 <> 0 then exact := false;
+            (1 + i1, h1 + h2)
+        | Ops.Both_operands ->
+            let i1, h1 = arg a1 and i2, h2 = arg a2 in
+            (1 + i1 + i2, h1 + h2))
     | Unop (Ops.Identity, a1) -> arg a1
-    | Unop (_, a1) -> 1 + arg a1
-  and arg (s, _prec) = sc s in
+    | Unop (_, a1) ->
+        let i1, h1 = arg a1 in
+        (1 + i1, h1)
+  and arg (s, _prec) = split s in
   let flops = go ~scale:1 ~env:[] code in
   (flops, !exact)
 
@@ -517,6 +551,351 @@ let roofline_seconds ?peak_flops ?peak_memory_bandwidth ~flops ~bytes () : float
       ]
   in
   match legs with [] -> None | l -> Some (List.reduce_exn l ~f:Float.max)
+
+(* {2 The cost of one inlined computation — gh-ocannl-637 Part 2}
+
+   What a virtual node costs to recompute at one read site, priced by the extraction above rather
+   than by the virtualizer's traced proxy (reduction extent × fan-in). Two sources, one per flip
+   direction of {!Low_level.flip_candidate}: a node the policy left virtual has its stored templates
+   ([optimize_ctx.computations]), a node a heuristic cap materialized has its setter nest in the
+   final code. Both reduce to [analyze] over a rewritten statement — the query walks no IR of its
+   own. *)
+
+type recompute = { rc_flops : int; rc_bytes : int; rc_approx : bool; rc_opaque : bool }
+[@@deriving sexp_of]
+
+(* A stored template's loops binding a symbol of its index vector are the ones the ordinary point
+   read substitutes away ([Low_level.inline_computation] binds them to the call-site indices and
+   drops the loop); a reduction loop stays. Only a BARE iterator position binds unconditionally (the
+   inliner's first pass); a symbol occurring inside an affine position may be bound by the
+   structural match or left free by unit solving — with its loop kept and range-guarded — depending
+   on the reader's index, which the query cannot see, so such a template prices with its loops
+   intact and only as a bound. Collapsing a bound loop to a single iteration keeps the symbol bound,
+   so [affine_accesses] still interprets every map, and gives the per-instantiation trip count. *)
+let collapse_loops ~(bound : Idx.symbol -> bool) (code : Low_level.t) : Low_level.t =
+  let rec go (c : Low_level.t) : Low_level.t =
+    match c with
+    | Low_level.For_loop ({ index; from_; body; _ } as f) when bound index ->
+        For_loop { f with to_ = from_; body = go body }
+    | For_loop ({ body; _ } as f) -> For_loop { f with body = go body }
+    | Scan_loop ({ body; _ } as sc) -> Scan_loop { sc with body = go body }
+    | Seq (a, b) -> Seq (go a, go b)
+    | If ({ body; _ } as i) -> If { i with body = go body }
+    | c -> c
+  in
+  go code
+
+(* Whether the binding of an index vector's symbols depends on the reader: a symbol inside an affine
+   position may be bound by the structural match or left free by unit solving (its loop kept,
+   range-guarded), and a bare symbol repeated across positions ([t[i; i]], a diagonal producer)
+   binds at its first occurrence and turns the later ones into call-site consistency guards — either
+   way the work depends on the reader's arguments, which the price cannot see. *)
+let substitution_dependent (at : Idx.axis_index array) =
+  let repeated s =
+    Array.count at ~f:(function Idx.Iterator s' -> Idx.equal_symbol s s' | _ -> false) > 1
+  in
+  Array.exists at ~f:(function
+    | Idx.Affine { symbols; _ } -> not (List.is_empty symbols)
+    | Idx.Concat _ | Idx.Sub_axis -> true
+    | Idx.Iterator s -> repeated s
+    | Idx.Fixed_idx _ -> false)
+
+let collapse_bound_loops ~(at : Idx.axis_index array) (code : Low_level.t) : Low_level.t * bool =
+  let bound s =
+    Array.exists at ~f:(function Idx.Iterator s' -> Idx.equal_symbol s s' | _ -> false)
+  in
+  (collapse_loops ~bound code, substitution_dependent at)
+
+(* Keep only [self]'s own setters — or, with [~nth], only its [nth] setter statement in program
+   order: a shared-loop template carries sibling setters that instantiation filters out, and a
+   routine's code carries everything else. A subtree without a kept setter becomes [Noop], so the
+   loops that survive are exactly the ones enclosing the kept work. Returns the pruned code and how
+   many setters of [self] the code carries. *)
+let prune_to_setters ?nth ~(self : Tn.t) (code : Low_level.t) : Low_level.t * int =
+  let seen = ref 0 in
+  let keep () =
+    let k = !seen in
+    Int.incr seen;
+    match nth with None -> true | Some n -> n = k
+  in
+  let rec go (c : Low_level.t) : Low_level.t =
+    match c with
+    | Low_level.Seq (a, b) -> (
+        (* Left to right, so [nth] counts in program order. *)
+        let a = go a in
+        match (a, go b) with Noop, c | c, Noop -> c | a, b -> Seq (a, b))
+    | For_loop ({ body; _ } as f) -> (
+        match go body with Noop -> Noop | body -> For_loop { f with body })
+    | Scan_loop ({ body; _ } as sc) -> (
+        match go body with Noop -> Noop | body -> Scan_loop { sc with body })
+    | If ({ body; _ } as i) -> ( match go body with Noop -> Noop | body -> If { i with body })
+    | (Set { tn; _ } | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } | Zero_out tn) as c ->
+        if Tn.equal tn self && keep () then c else Noop
+    | Tile_mma { d = d_tn, _; _ } as c -> if Tn.equal d_tn self && keep () then c else Noop
+    | Set_local _ | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ ->
+        Noop
+  in
+  let pruned = go code in
+  (pruned, !seen)
+
+(* A packed-uniform producer ([Set_from_vec]) inlines as the lane-extract scalar form, not as its
+   vector store (gh-ocannl-509 task 4), so neither its template nor its setter nest is the code a
+   read executes: such a node prices only as a bound. *)
+let rec has_set_from_vec (c : Low_level.t) =
+  match c with
+  | Low_level.Set_from_vec _ -> true
+  | Seq (a, b) -> has_set_from_vec a || has_set_from_vec b
+  | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> has_set_from_vec body
+  | Tile_mma { fallback; _ } -> has_set_from_vec fallback
+  | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Zero_out _
+  | Set _ | Set_dynamic _ | Set_local _ ->
+      false
+
+(* [analyze] over a rewritten statement, read as one computation of [self]: [self]'s own traffic is
+   not traffic (inlined, the node is a scope local), so only the other nodes' reads count as bytes;
+   the op count and its exactness are the extraction's own. *)
+let cost_of_self ~(self : Tn.t) (s : summary) : recompute =
+  let others = List.filter s.per_node ~f:(fun (tn, _) -> not (Tn.equal tn self)) in
+  {
+    rc_flops = s.flops;
+    rc_bytes = List.sum (module Int) others ~f:(fun (_, fp) -> fp.fp_read_bytes);
+    rc_approx = s.flops_approx || List.exists others ~f:(fun (_, fp) -> fp.fp_approx);
+    rc_opaque = s.opaque;
+  }
+
+(* Whether the code reads a scope local it does not define: pruning a routine to one node's setters
+   can separate a [Get_local] from the [Declare_local]/[Set_local] the cross-statement hoisting pass
+   ([hoist_cross_statement_cse]) gave it, and the shared body it stands for is work a re-inlining
+   executes — so such a price is only a bound. *)
+let reads_undefined_local (code : Low_level.t) =
+  let defined = Hash_set.create (module Low_level.Scope_id) in
+  let used = Hash_set.create (module Low_level.Scope_id) in
+  let rec sc (s : Low_level.scalar_t) =
+    match s with
+    | Low_level.Get_local id -> Hash_set.add used id
+    | Local_scope { id; body; _ } ->
+        Hash_set.add defined id;
+        go body
+    | Get_dynamic { dyn_value = v, _; _ } -> sc v
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        sc a;
+        sc b;
+        sc c
+    | Binop (_, (a, _), (b, _)) ->
+        sc a;
+        sc b
+    | Unop (_, (a, _)) -> sc a
+    | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
+  and go (c : Low_level.t) =
+    match c with
+    | Low_level.Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Zero_out _ -> ()
+    | Declare_local { id; _ } -> Hash_set.add defined id
+    | Set_local (id, v) ->
+        Hash_set.add defined id;
+        sc v
+    | Seq (a, b) ->
+        go a;
+        go b
+    | For_loop { body; _ } | If { body; _ } -> go body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun cr ->
+            Hash_set.add defined cr.Low_level.prev;
+            Hash_set.add defined cr.next;
+            sc cr.init);
+        go body
+    | Set { llsc; _ } -> sc llsc
+    | Set_dynamic { dyn_value = v, _; llsc; _ } ->
+        sc v;
+        sc llsc
+    | Set_from_vec { arg = a, _; _ } -> sc a
+    | Tile_mma { fallback; _ } -> go fallback
+  in
+  go code;
+  Hash_set.exists used ~f:(fun id -> not (Hash_set.mem defined id))
+
+(* The code one point read of the template executes, and whether that is only a bound: the
+   sibling-free body with the bound loops collapsed, then the passes the emitted code also receives
+   after virtualization — the simplifier ([simplify_llc]: a single-assignment scope under a [Where]
+   arm collapses into the arm's expression, where it IS conditional; identities vanish) and the
+   scalar CSE ([eliminate_common_subexpressions]: two alpha-equivalent scope bodies, a consumer
+   computing [x + x] of a virtual [x], execute once) — a stored template predates both. *)
+let instantiation ~static_indices ~self ?at body =
+  let body, _ = prune_to_setters ~self body in
+  let body, dependent =
+    match at with None -> (body, false) | Some at -> collapse_bound_loops ~at body
+  in
+  (* The post-virtualization pipeline of [specialize_proc], in its order: simplify under the
+     routine's interval environment, the one-hot reduction rewrite (a dense one-hot reduction
+     inlines as an O(1) dynamic gather), then the scalar CSE. *)
+  let body =
+    Low_level.eliminate_common_subexpressions
+      (Low_level.rewrite_one_hot_reductions ~static_indices
+         (Low_level.simplify_llc static_indices body))
+  in
+  (body, dependent || has_set_from_vec body || reads_undefined_local body)
+
+let template_cost ?(static_indices = []) ~(self : Tn.t) ?at (body : Low_level.t) : recompute =
+  let body, bound_only = instantiation ~static_indices ~self ?at body in
+  let r = cost_of_self ~self (analyze body) in
+  { r with rc_approx = r.rc_approx || bound_only }
+
+let add_recompute a b =
+  {
+    rc_flops = a.rc_flops + b.rc_flops;
+    rc_bytes = a.rc_bytes + b.rc_bytes;
+    rc_approx = a.rc_approx || b.rc_approx;
+    rc_opaque = a.rc_opaque || b.rc_opaque;
+  }
+
+let zero_recompute = { rc_flops = 0; rc_bytes = 0; rc_approx = false; rc_opaque = false }
+
+let recompute_cost ?(static_indices = []) (ctx : Low_level.optimize_ctx) : Tn.t -> recompute option
+    =
+  let memo = Hashtbl.create (module Tn) in
+  let rec cost ~visiting (tn : Tn.t) : recompute option =
+    match Hashtbl.find memo tn with
+    | Some r -> r
+    | None ->
+        let r =
+          match Hashtbl.find ctx.Low_level.computations tn with
+          | None -> None
+          | Some comps ->
+              let visiting = Set.add visiting tn in
+              (* The inliner guards every component of a multi-setter node with the range
+                 comparisons and the [Where] that select it: work no template carries, so their sum
+                 is a bound ([set_computation_count > 1] in [inline_computation]). *)
+              let guarded_components = List.count comps ~f:(fun (at, _) -> Option.is_some at) > 1 in
+              Option.map ~f:(fun r -> { r with rc_approx = r.rc_approx || guarded_components })
+              @@ Some
+                   (List.fold comps ~init:zero_recompute ~f:(fun acc (at, body) ->
+                        let body, bound_only = instantiation ~static_indices ~self:tn ?at body in
+                        let s = analyze body in
+                        let own = cost_of_self ~self:tn s in
+                        let own = { own with rc_approx = own.rc_approx || bound_only } in
+                        (* Reads of producers that will themselves inline at instantiation add their
+                           own recompute per enclosing iteration; their read cells are then not
+                           traffic. A producer without a stored template is a leaf whatever its
+                           placement — its read already counted as bytes. *)
+                        let accs = Low_level.affine_accesses body in
+                        let expanded, expanded_nodes =
+                          List.fold accs
+                            ~init:(zero_recompute, Set.empty (module Tn))
+                            ~f:(fun (exp, nodes) a ->
+                              let p = a.Affine.a_tn in
+                              if a.a_write || Tn.equal p tn then (exp, nodes)
+                              else if
+                                Tn.Placements.known_non_virtual ctx.placements p
+                                || Set.mem visiting p
+                              then (exp, nodes)
+                              else
+                                match cost ~visiting p with
+                                | None -> (exp, nodes)
+                                | Some r ->
+                                    let scale =
+                                      List.fold a.a_loops ~init:1 ~f:(fun acc (_, (lo, hi)) ->
+                                          acc * max 0 (hi - lo + 1))
+                                    in
+                                    ( add_recompute exp
+                                        {
+                                          rc_flops = scale * r.rc_flops;
+                                          rc_bytes = scale * r.rc_bytes;
+                                          rc_approx = r.rc_approx || a.a_guarded;
+                                          rc_opaque = r.rc_opaque;
+                                        },
+                                      Set.add nodes p ))
+                        in
+                        (* An expanded producer's cells are not traffic, whatever the number of
+                           sites reading it: its footprint leaves the leaf bytes once. *)
+                        let leaf_bytes =
+                          List.sum
+                            (module Int)
+                            s.per_node
+                            ~f:(fun (p, fp) ->
+                              if Set.mem expanded_nodes p then fp.fp_read_bytes else 0)
+                        in
+                        let own = { own with rc_bytes = own.rc_bytes - leaf_bytes } in
+                        add_recompute acc (add_recompute own expanded)))
+        in
+        Hashtbl.set memo ~key:tn ~data:r;
+        r
+  in
+  fun tn -> cost ~visiting:(Set.empty (module Tn)) tn
+
+(* One setter statement of [self], priced as one instantiation: the loops its index vector mentions
+   — the ones that enumerate the cells it writes — collapse to a single iteration, and what remains
+   (reduction loops, the operands' reads at ONE cell) is one cell's work, read directly rather than
+   averaged over the cells the nest writes (an operand read at a fixed position is read by every
+   cell's computation, which an aggregate footprint divided by the cell count loses). Exact only
+   when the write is injective (one cell per iteration of the collapsed loops,
+   [Affine.fiber_cardinality] = 1); a whole-node write ([Zero_out]) is free. *)
+let setter_cost ~(self : Tn.t) (pruned : Low_level.t) : recompute =
+  let write =
+    List.find (Low_level.affine_accesses pruned) ~f:(fun a ->
+        a.Affine.a_write && Tn.equal a.a_tn self)
+  in
+  match write with
+  | None | Some { Affine.a_whole = true; _ } -> zero_recompute
+  | Some w ->
+      let bound s = Array.exists w.a_map ~f:(Idx.axis_index_mentions_symbol s) in
+      let one = collapse_loops ~bound pruned in
+      (* Injective over the loops the map mentions — the ones that enumerate cells; a loop the map
+         does not mention is a reduction replayed inside one instantiation, and its repeated write
+         of the same cell is that instantiation's accumulation, not a second cell. *)
+      let injective =
+        (not w.a_dynamic) && (not w.a_vec_last)
+        &&
+        let domain =
+          List.filter_map w.a_loops ~f:(fun (s, (lo, hi)) ->
+              Option.some_if (bound s) (s, hi - lo + 1))
+        in
+        match Affine.fiber_cardinality ~domain w.a_map with `Exact 1 -> true | _ -> false
+      in
+      let r = cost_of_self ~self (analyze one) in
+      {
+        r with
+        rc_approx =
+          r.rc_approx || (not injective) || substitution_dependent w.a_map
+          || has_set_from_vec pruned || reads_undefined_local pruned;
+      }
+
+(* Re-inlining a node with several setters (a block/concat node, one range-guarded component per
+   setter) replays EVERY component at each read site — the guards select the value, the hoisted
+   component bodies all execute — so the per-read cost is the SUM of the per-cell costs of the
+   setters, not the node's total work averaged over the cells it writes. *)
+(* Whether a pruned single-setter statement is the node's zero-initialization: not a component the
+   inliner guards ([set_computation_count] counts the value-carrying computations only). *)
+let rec zero_out_only (c : Low_level.t) =
+  match c with
+  | Low_level.Zero_out _ -> true
+  | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> zero_out_only body
+  | Seq (a, b) -> zero_out_only a || zero_out_only b
+  | _ -> false
+
+let producer_cost ~(self : Tn.t) (code : Low_level.t) : recompute option =
+  match prune_to_setters ~self code with
+  | Low_level.Noop, _ -> None
+  | _, n ->
+      let r, components =
+        List.fold (List.init n ~f:Fn.id) ~init:(zero_recompute, 0) ~f:(fun (acc, comps) k ->
+            let pruned, _ = prune_to_setters ~nth:k ~self code in
+            ( add_recompute acc (setter_cost ~self pruned),
+              if zero_out_only pruned then comps else comps + 1 ))
+      in
+      (* [inline_computation] wraps each value-carrying component of a multi-setter node in the
+         range guards and the [Where] that select it — work the setters do not carry, so the sum is
+         a bound. *)
+      Some { r with rc_approx = r.rc_approx || components > 1 }
+
+let modeled_recompute_flops (ctx : Low_level.optimize_ctx) ~static_indices (llc : Low_level.t) :
+    Tn.t -> [ `Materialize | `Inline ] -> int option =
+  let by_template = recompute_cost ~static_indices ctx in
+  fun tn flip ->
+    let r =
+      match flip with `Materialize -> by_template tn | `Inline -> producer_cost ~self:tn llc
+    in
+    match r with Some r when (not r.rc_approx) && not r.rc_opaque -> Some r.rc_flops | _ -> None
+
+let () = Low_level.recompute_pricer := modeled_recompute_flops
 
 module Calibration = struct
   (* The calibration TSV schema and the envelope fitter over it (gh-ocannl-514 phase 0). This module

@@ -143,7 +143,9 @@ files.
   the pass under test — and check whether a sibling backend already fixed the same thing.
 - Rematerialization (gh-ocannl-498) is a PLANNING pass, not a search: `Memory_budget.fit` picks
   `Inline` flips from `Backends.score_footprint` (the arena layout's own bytes) versus the
-  recompute-cost bound `flip_candidates` already carries, and compiles nothing to decide. The trap
+  recompute cost `flip_candidates` already carries (the cost model's per-instantiation count since
+  gh-ocannl-637, the traced proxy where that count is only a bound), and compiles nothing to
+  decide. The trap
   it is built around: footprint relief is NOT per-node-local under aliasing. A node whose live span
   was already shared frees nothing by leaving, and inlining one node moves the others' spans — so
   both the solo pass and the cumulative prefix are scored against a real lowering, and a candidate

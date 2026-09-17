@@ -32,6 +32,11 @@
   floor: flops=12 bytes=16 inexact
   upper: flops=20 bytes=48
   floor <= upper: true
+== where arm hoisted into a scope body ==
+  floor: flops=12 bytes=48 exact
+  upper: flops=12 bytes=48
+  floor <= upper: true
+  hoisted arm: floor = upper on both legs, both exact: true
 == over-producing closed ==
   floor: flops=8 bytes=72 exact
   upper: flops=8 bytes=72

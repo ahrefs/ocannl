@@ -2,8 +2,9 @@
    [model_default_placements] = N > 0 branch-and-bounds over the top-N flip candidates of the
    decision surface before compiling, scoring each vector's hermetic lowering with the same
    selection that scores the pipelines, and applying the winning vector via the context-level
-   placement decisions. The dune rule pins the cc backend, [model_default_placements=3], and a
-   compute-bound envelope (peak_flops 1e9, peak_bandwidth 1e12).
+   placement decisions. The dune rule pins the cc backend, [model_default_placements=4] (the whole
+   surface: the modeled recompute cost of gh-ocannl-637 ranks [y]'s one exp per read last, below the
+   reductions that replay it), and a compute-bound envelope (peak_flops 1e9, peak_bandwidth 1e12).
 
    The graph makes a placement flip the model-argmin deterministically: [y = exp u] is read by two
    consumer statements yet stays policy-virtual, so both consumers replay the exp and the surface

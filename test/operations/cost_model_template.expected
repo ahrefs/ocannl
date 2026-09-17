@@ -1,0 +1,48 @@
+== template_cost on hand-built templates ==
+  reduction body, one instantiation            flops=5 bytes=20 exact
+reduction: kernel flops = instantiation flops x projected extent: true
+reduction: bytes are the operand's cells of one instantiation, self excluded: true
+reduction: no index vector, no collapse: true
+  where body, hoisted reduction arm            flops=6 bytes=24 exact
+where: exact, 6 ops and 24 bytes per instantiation: true
+  where body, arm the simplifier inlines (bound) flops=2 bytes=8 approx
+where: a collapsible arm prices as the simplified, conditional form: true
+  shared-loop body priced for S (sibling dropped) flops=1 bytes=4 exact
+shared loop: the sibling's ops and reads do not price: true
+  affine index position (loops kept, bound)    flops=4 bytes=16 approx
+  bare iterator positions (collapsed, exact)   flops=1 bytes=4 exact
+affine position: the loops stay and the count is a bound: true
+bare positions: both loops collapse, exact: true
+  packed-uniform producer (bound)              flops=4 bytes=4 approx
+packed-uniform producer prices as a bound: true
+  two alpha-equivalent scopes (CSE'd)          flops=6 bytes=20 exact
+alpha-equivalent scope bodies price once: true
+  diagonal producer (bound)                    flops=1 bytes=4 approx
+a repeated bare symbol prices as a bound: true
+== recompute_cost through optimize ==
+chain: both links virtual: true
+  x1 = x0 + w1                                 flops=1 bytes=8 exact
+  x2 = sin(x1), x1 expanded                    flops=2 bytes=8 exact
+chain: x2's recompute is transitive (2 ops, x0 and w1's cells): true
+chain: a materialized leaf has no template cost: true
+  flip candidates:
+    materialize x2   cost 2 (modeled)
+    materialize x1   cost 1 (modeled)
+chain: x2's Materialize flip is priced by the model (2 ops x multiplicity 1, one reader): true
+== ordering witness: proxy vs model ==
+  a    proxy (extent x fan-in) 3  modeled 2
+  b    proxy (extent x fan-in) 1  modeled 4
+witness: the proxy ranks the wide sum above the deep chain: true
+witness: the model ranks the deep chain above the wide sum: true
+witness: executed values match the reference: true
+== producer_cost on a materialized setter nest ==
+producer: x1 and x2 inlined into x3's setter: true
+  x3's setter nest, per cell                   flops=3 bytes=16 exact
+producer: three adds and four leaf cells per written cell: true
+producer: a node the code never sets has no producer cost: true
+  two-component producer, per read             flops=2 bytes=8 approx
+two-component producer: components sum (2 ops, 8 bytes per read), a bound: true
+an affine setter map prices as a bound: true
+a setter reading a hoisted local it does not define prices as a bound: true
+  broadcast operands, per read                 flops=1 bytes=8 exact
+broadcast operands: one add and both cells per read, exact: true

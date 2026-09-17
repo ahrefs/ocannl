@@ -24,12 +24,27 @@ files.
   escape either check by being left off a hand-maintained list. `Ops.prec` cannot be derived that
   way (its constructors carry the phantom-typed `precision` witness), so `C_syntax.all_precs` keeps
   a hand list next to an exhaustive match that turns a new precision into a build error.
-- The upper cost walk charges every operand that is *rendered*, which is more than can *execute*:
-  a `Where` arm's (or a gated operand's) `Local_scope` renders as statements hoisted OUT of the
-  conditional expression — `C_syntax.pp_scalar` returns its definitions separately — so both arms'
-  scope bodies really do run. Only an operand no renderer emits at all (a projection's discarded
-  one) may be dropped from the upper bound. The floor's `Int.min` is unaffected: hoisting only
-  loosens a lower bound.
+- The upper cost walk charges every operand that is *rendered*, which is more than can *execute*,
+  and the two differ in exactly one way (gh-ocannl-637): a `Local_scope` anywhere in a statement's
+  expression renders as statements hoisted OUT of it — `C_syntax.pp_scalar` returns definitions
+  separately and the statement emits them all before its expression — so a scope body under a
+  `Where` arm or a gated `&&`/`||`/gate operand executes unconditionally, while the arm's own
+  inline operations sit inside the `?:` and execute only when selected. `Cost_model.analyze`'s
+  scalar walk (`sc_split`) therefore returns (inline, hoisted) components: charging both arms'
+  hoisted bodies is exact and never flags `flops_approx`; only nonzero inline arm work does
+  (both-arms-charged is an over-count whenever either has any, equal costs included). The floor
+  (`floor_flops`) mirrors it — hoisted bodies are certain, `Int.min` runs over the inline parts —
+  and the byte-side certainty pre-pass (`access_uncertainty`) stops its gated-read marking at scope
+  bodies for the same reason (dead-loop and open-producer markings still descend). Only an operand
+  no renderer emits at all (a projection's discarded one) is dropped from both, hoisted definitions
+  included. Before the split every `Where` with a nonzero arm was flagged, which barred every
+  kernel whose arm cost was a hoisted reduction body from the calibration fitter's compute leg
+  (`fit_flops_approx`) although its count was exact: on a `bench_mlp` `mlp_wide` f32 tuning run on
+  Metal (M4 Max, the gh-514 cell-A flags, 131 calibration rows in both arms, every flops/bytes
+  count identical), the compute-leg exclusions went 107 -> 83 and the fitted `model_peak_flops`
+  4.55e11 -> 4.95e11 with the same binding-row family. Pinned in
+  `test/operations/cost_model_extraction` and `cost_model_floor` (the hoisted-arm cases, floor =
+  upper).
 - **A materialized constant literal's initialization is data, not code** (gh-ocannl-633): at or
   below `limit_constant_fill_size` a `Tensor.ndarray` literal carries an in-kernel `Constant_fill`
   fetch — its inlining recipe — AND registers its values in `Host_inits`. When a lineage's
