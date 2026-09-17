@@ -185,7 +185,7 @@ let drift ~dims = cycle ~dims ~modulus:13 ~offset:20. ~stride:0.015625
     right for every nest whose indices are all loop indices. *)
 let optimize_in ?(materialized = []) ?(static_indices = []) (ctx : LL.optimize_ctx) ~name llc :
     LL.optimized =
-  LL.decide_materialized ~provenance:"589:ll-test-materialize" ctx materialized;
+  LL.decide_materialized ~provenance:(Tn.Site "589:ll-test-materialize") ctx materialized;
   LL.optimize ctx ~unoptim_ll_source:None ~ll_source:None ~name static_indices llc
 
 (** [optimize ~name llc] is {!optimize_in} in a fresh lineage. *)
@@ -227,10 +227,14 @@ let known_local (o : LL.optimized) tn =
 (** The [Non_virtual] tag the virtualizer recorded for [tn], as the LEADING component of its
     placement's provenance.
 
-    Provenances COMPOSE: {!Ir.Tnode.Placements.default_to_most_local} appends its own tag when it
-    resolves a [Never_virtual] decision into a concrete placement, so the rejection tag is not the
-    whole string. [None] means no decision was recorded (the node is still undecided, which after a
-    full {!optimize} means it was never a candidate). *)
+    Provenances COMPOSE: {!Ir.Tnode.Placements.default_to_most_local} wraps the prior decision in a
+    [Refined] when it resolves a [Never_virtual] into a concrete placement, so the rejection tag is
+    the LEFT spine of that, not the whole value. [None] means no decision was recorded (the node is
+    still undecided, which after a full {!optimize} means it was never a candidate).
+
+    Compare the result with {!Ir.Tnode.equal_provenance} rather than on its rendering: a rejection
+    the virtualizer records is a [Site], a heuristic cap is a constructor, and the two spell
+    themselves the same way only by convention. *)
 let rejection_code (o : LL.optimized) tn =
   Option.map (Tn.Placements.get o.LL.optimize_ctx.placements tn) ~f:(fun (_, prov) ->
       Tn.leading_provenance prov)

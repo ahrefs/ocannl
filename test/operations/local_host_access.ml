@@ -128,8 +128,10 @@ let () =
   let capped_ctx, capped_h = with_max_inline_reduction 16 build_single_read in
   p "the cap leg is placed Local at the default cap"
     (match Ir.Tnode.Placements.get (Context.placements capped_ctx) capped_h.Tensor.value with
-    | Some (Ir.Tnode.Local, prov) ->
-        String.equal (Ir.Tnode.leading_provenance prov) "39:inline-reduction-cap"
+    | Some (Ir.Tnode.Local, prov) -> (
+        match Ir.Tnode.leading_provenance prov with
+        | Ir.Tnode.Inline_reduction_cap -> true
+        | _ -> false)
     | _ -> false);
   let raised_ctx, raised_h = with_max_inline_reduction 64 build_single_read in
   p "raising the setting the refusal names leaves that node virtual"

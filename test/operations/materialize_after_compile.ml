@@ -75,7 +75,7 @@ let () =
   let d1 = SC.digest (SC.canonicalize opt) in
   let flipped_ctx = LL.copy_optimize_ctx opt.LL.optimize_ctx in
   Tn.Placements.unsafe_restore flipped_ctx.LL.placements mc.Tensor.value
-    (Some (Tn.On_device, "999:test-setup"));
+    (Some (Tn.On_device, Tn.Site "999:test-setup"));
   let d2 = SC.digest (SC.canonicalize { opt with LL.optimize_ctx = flipped_ctx }) in
   p "canonical digest distinguishes placement classes" (not (String.equal d1 d2));
   (* Intent-level strengthening (the "materialized" benchmark variant) stays legal afterwards: it

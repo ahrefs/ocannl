@@ -53,7 +53,7 @@ let over_budget_transform ~out_tn ~src_tn ~rows (opt : LL.optimized) : LL.optimi
       ~padding:(lazy None)
       ()
   in
-  Tn.Placements.update opt.LL.optimize_ctx.LL.placements scratch Tn.Local "999:test-setup";
+  Tn.Placements.update opt.LL.optimize_ctx.LL.placements scratch Tn.Local (Site "999:test-setup");
   ignore (LL.get_node opt.LL.traced_store scratch : LL.traced_array);
   let i = Idx.get_symbol () and x = Idx.get_symbol () and y = Idx.get_symbol () in
   let fill =

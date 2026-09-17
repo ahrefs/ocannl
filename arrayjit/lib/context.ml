@@ -599,7 +599,7 @@ let refuse_local ~fn ctx (tn : Tn.t) prov =
            reach) what the routines compute. Request materialization -- e.g. \
            Train.set_materialized, Context.decide_materialized, or Tnode.set_observable -- before \
            the first routine using the node is compiled.%s Backend: %s"
-          fn (Tn.debug_name tn) prov alternative (backend_name ctx))
+          fn (Tn.debug_name tn) (Tn.provenance_to_string prov) alternative (backend_name ctx))
 
 (* For-print proxies (gh-ocannl-333 AC 5): when a tensor's node is not materialized in a context,
    [Train.printf] recompiles a copy ([%cd "for_print" =: t]) into a fresh node and registers it here

@@ -77,8 +77,8 @@ let () =
   let x = mk ~dims:[| n |] "x_shared" in
   let out1 = mk ~dims:[| n |] "out1" in
   let out2 = mk ~dims:[| n |] "out2" in
-  Tn.update_memory_mode out1 Tn.On_device "99:test-setup";
-  Tn.update_memory_mode out2 Tn.On_device "99:test-setup";
+  Tn.update_memory_mode out1 Tn.On_device (Site "99:test-setup");
+  Tn.update_memory_mode out2 Tn.On_device (Site "99:test-setup");
   (* Lineage A: x consumed at one visit per cell -> virtualizable. *)
   let comp_a = make_comp ~name:"sibling_a" ~src ~x ~out:out1 ~repeat_cell0:false in
   (* Lineage B: x's cell 0 re-read at every iteration -> over the visit cap, kept non-virtual. *)

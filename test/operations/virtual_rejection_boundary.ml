@@ -61,23 +61,31 @@ let equal_phase a b =
 
 type verdict = Rejected of phase * Ir.Tnode.provenance | Accepted
 
-(* The provenance table. Not derivable from any one place in the source: the tags are literals at
-   their raise sites, spread over three functions in [low_level.ml] plus the cleanup pass. A row
-   naming the wrong phase for its tag fails, so this table is under test rather than beside it.
-   Since gh-ocannl-609 each tag carries its own reason, so what is left to pin here is the PHASE
-   that minted it. *)
-let phase_of_code = function
-  | "1:visit-cap" | "39:inline-reduction-cap" | "41:inline-fanin-cap" -> Some Cap
-  | "4:lhs-idcs-differ" | "5:index-not-groundable" | "7:sibling-escaping-write-index"
-  | "8:staged-compilation" | "9:sibling-escaping-read-index" | "10:escaping-index-symbol"
-  | "11:already-non-virtual" | "12:no-setter" | "19:declare-local" | "51:affine-not-injective"
-  | "52:concat-index" | "141:workgroup-barrier" | "142:guarded-computation" | "143:tile-mma"
-  | "144:dynamic-write" | "147:enclosing-repetition-loop" ->
-      Some Store
-  | "13:call-site-index-mismatch" | "14:empty-inlined-body" | "140:vector-setter-unsupported"
-  | "145:lane-extract-layout" | "146:lane-extract-counter" ->
-      Some Consumption
-  | _ -> None
+(* The phase table. Not derivable from any one place in the source: the store- and consumption-time
+   tags are [Site] literals at their raise sites, spread over three functions in [low_level.ml] plus
+   the cleanup pass, with no exported owner to ask. Those arms are exemplars, and a row naming the
+   wrong phase for its tag fails, so they are under test rather than beside the source.
+
+   The Cap arm is the exception, and it is DERIVED rather than restated: [Low_level] owns the cap
+   set and answers for it exhaustively ([is_cap_provenance]), so a fourth cap is classified here
+   without an edit — and cannot be classified here as anything else. Since gh-ocannl-609 each tag
+   also carries its own reason, so what is left to pin is the PHASE that minted it. *)
+let phase_of_code tag =
+  if Ir.Low_level.is_cap_provenance tag then Some Cap
+  else
+    match tag with
+    | Ir.Tnode.Site
+        ( "4:lhs-idcs-differ" | "5:index-not-groundable" | "7:sibling-escaping-write-index"
+        | "8:staged-compilation" | "9:sibling-escaping-read-index" | "10:escaping-index-symbol"
+        | "11:already-non-virtual" | "12:no-setter" | "19:declare-local" | "51:affine-not-injective"
+        | "52:concat-index" | "141:workgroup-barrier" | "142:guarded-computation" | "143:tile-mma"
+        | "144:dynamic-write" | "147:enclosing-repetition-loop" ) ->
+        Some Store
+    | Ir.Tnode.Site
+        ( "13:call-site-index-mismatch" | "14:empty-inlined-body" | "140:vector-setter-unsupported"
+        | "145:lane-extract-layout" | "146:lane-extract-counter" ) ->
+        Some Consumption
+    | _ -> None
 
 let phase_name = function
   | Cap -> "by a heuristic cap"
@@ -86,7 +94,9 @@ let phase_name = function
 
 let claim = function
   | Accepted -> "inlined"
-  | Rejected (ph, code) -> Printf.sprintf "rejected %s as Non_virtual %s" (phase_name ph) code
+  | Rejected (ph, code) ->
+      Printf.sprintf "rejected %s as Non_virtual %s" (phase_name ph)
+        (Ir.Tnode.provenance_to_string code)
 
 (* One row: assert where the verdict was decided, then execute both readings of the same program. *)
 let row ~label ~llc ~cand ~out ~seed ~expected ~verdict =
@@ -97,7 +107,7 @@ let row ~label ~llc ~cand ~out ~seed ~expected ~verdict =
     | Rejected (ph, code) ->
         known_non_virtual o cand
         && count_get o cand >= 1
-        && Option.equal String.equal (rejection_code o cand) (Some code)
+        && Option.equal Ir.Tnode.equal_provenance (rejection_code o cand) (Some code)
         && Option.equal equal_phase (phase_of_code code) (Some ph)
   in
   p (label ^ ": " ^ claim verdict) placed;
@@ -130,7 +140,7 @@ let row_visit_cap () =
   row ~label:"visit_cap" ~llc ~cand:x ~out
     ~seed:[ (a, [| 1.; 2.; 3.; 4. |]) ]
     ~expected:(Array.create ~len:n 10.)
-    ~verdict:(Rejected (Cap, "1:visit-cap"))
+    ~verdict:(Rejected (Cap, Ir.Tnode.Visit_cap))
 
 (* === Store-time rejections === *)
 
@@ -151,7 +161,7 @@ let row_guarded_enclosing () =
   row ~label:"guard_enclosing" ~llc ~cand:x ~out
     ~seed:[ (flag, [| 0. |]) ]
     ~expected:(Array.create ~len:n 0.)
-    ~verdict:(Rejected (Store, "142:guarded-computation"))
+    ~verdict:(Rejected (Store, Ir.Tnode.Site "142:guarded-computation"))
 
 (* The guard is INTERIOR to the captured subtree, so the walk's own [If] arm finds it. Same code,
    different arm. *)
@@ -169,7 +179,7 @@ let row_guarded_interior () =
   row ~label:"guard_interior" ~llc ~cand:x ~out
     ~seed:[ (mask, Array.init n ~f:(fun i -> Float.of_int (i % 2))) ]
     ~expected:(Array.init n ~f:(fun i -> if i % 2 = 1 then 1. +. Float.of_int i else 0.))
-    ~verdict:(Rejected (Store, "142:guarded-computation"))
+    ~verdict:(Rejected (Store, Ir.Tnode.Site "142:guarded-computation"))
 
 (* An enclosing loop whose symbol the index map does not mention replays the nest into the same
    cells. Capture happens at the outermost loop whose symbol DOES occur, so this repetition loop
@@ -186,7 +196,7 @@ let row_repetition_above () =
   in
   row ~label:"repetition_above_capture" ~llc ~cand:x ~out ~seed:[]
     ~expected:(Array.create ~len:n 2.)
-    ~verdict:(Rejected (Store, "147:enclosing-repetition-loop"))
+    ~verdict:(Rejected (Store, Ir.Tnode.Site "147:enclosing-repetition-loop"))
 
 (* Same defect with no capture point at all: a symbol-free index map means no loop is ever a capture
    site, so the whole reduction is outside the stored statement. The sibling-read arm ([Non_virtual
@@ -202,7 +212,7 @@ let row_reduction_symbol_free () =
          (set out [| fixed 0 |] (get x [| fixed 0 |])))
   in
   row ~label:"reduction_symbol_free" ~llc ~cand:x ~out ~seed:[] ~expected:[| 4. |]
-    ~verdict:(Rejected (Store, "147:enclosing-repetition-loop"))
+    ~verdict:(Rejected (Store, Ir.Tnode.Site "147:enclosing-repetition-loop"))
 
 (* Two setters at different index maps WITHIN one captured subtree. The per-invocation index map is
    what [Non_virtual 4] compares, so this rejects while the same two setters as separate statements
@@ -217,7 +227,7 @@ let row_two_setters_one_subtree () =
       (loop_n t n (set out [| iter t |] (get x [| iter t |])))
   in
   row ~label:"two_setters_one_subtree" ~llc ~cand:x ~out ~seed:[] ~expected:[| 9.; 2.; 3.; 4. |]
-    ~verdict:(Rejected (Store, "4:lhs-idcs-differ"))
+    ~verdict:(Rejected (Store, Ir.Tnode.Site "4:lhs-idcs-differ"))
 
 (* A sibling READ at a symbol bound outside the captured subtree: inlining would move the read to a
    site where that symbol does not exist. Note this arm fires BEFORE the enclosing-loop check, which
@@ -237,7 +247,7 @@ let row_escaping_read () =
   row ~label:"escaping_sibling_read" ~llc ~cand:x ~out
     ~seed:[ (b, [| 1.; 10.; 0.; 0. |]) ]
     ~expected:(Array.create ~len:n 11.)
-    ~verdict:(Rejected (Store, "9:sibling-escaping-read-index"))
+    ~verdict:(Rejected (Store, Ir.Tnode.Site "9:sibling-escaping-read-index"))
 
 (* The same escape through a sibling SETTER rather than a sibling read: a distinct arm, and the
    reason it exists is the same — the write would move to a site where its symbol does not exist. *)
@@ -255,7 +265,7 @@ let row_escaping_setter () =
   row ~label:"escaping_sibling_setter" ~llc ~cand:x ~out
     ~seed:[ (side, blank 2) ]
     ~expected:(Array.init n ~f:(fun i -> 1. +. Float.of_int i))
-    ~verdict:(Rejected (Store, "7:sibling-escaping-write-index"))
+    ~verdict:(Rejected (Store, Ir.Tnode.Site "7:sibling-escaping-write-index"))
 
 (* The same escape through an [Embed_index] rather than an array read. *)
 let row_escaping_embed () =
@@ -270,7 +280,7 @@ let row_escaping_embed () =
          (loop_n t n (set out [| iter t |] (get x [| iter t |]))))
   in
   row ~label:"escaping_embed_index" ~llc ~cand:x ~out ~seed:[] ~expected:(Array.create ~len:n 3.)
-    ~verdict:(Rejected (Store, "10:escaping-index-symbol"))
+    ~verdict:(Rejected (Store, Ir.Tnode.Site "10:escaping-index-symbol"))
 
 (* A multi-symbol affine LHS position that is not injective: dropping the producer loops would fold
    a fiber away. The injective siblings of this shape are [virtual_affine.ml]'s accepted cases. *)
@@ -288,7 +298,7 @@ let row_noninjective () =
   in
   row ~label:"noninjective_multiaffine" ~llc ~cand:x ~out ~seed:[]
     ~expected:[| 1.; 11.; 21.; 22.; 23. |]
-    ~verdict:(Rejected (Store, "51:affine-not-injective"))
+    ~verdict:(Rejected (Store, Ir.Tnode.Site "51:affine-not-injective"))
 
 (* === Consumption-time rejection === *)
 
@@ -307,7 +317,7 @@ let row_fixed_component () =
   in
   row ~label:"fixed_component_symbolic_read" ~llc ~cand:x ~out ~seed:[]
     ~expected:[| 9.; 2.; 3.; 4. |]
-    ~verdict:(Rejected (Consumption, "13:call-site-index-mismatch"))
+    ~verdict:(Rejected (Consumption, Ir.Tnode.Site "13:call-site-index-mismatch"))
 
 (* === Accepted === *)
 

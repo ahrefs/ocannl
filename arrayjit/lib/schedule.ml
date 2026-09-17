@@ -1557,9 +1557,9 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
     (* A host-initialized constant: [Effectively_constant] intent, materialized in this lineage —
        [allocate_delta] routes it (read-only, host-init-backed) into the per-device constant pool,
        and [Host_inits.mem] keeps it out of the routine's required inputs. *)
-    Tn.update_memory_mode tile Effectively_constant "176:stage-packed-tile";
+    Tn.update_memory_mode tile Effectively_constant (Site "176:stage-packed-tile");
     Tn.Placements.update opt.Low_level.optimize_ctx.placements tile Tn.On_device
-      "176:stage-packed-tile";
+      (Site "176:stage-packed-tile");
     let traced = get_node opt.traced_store tile in
     traced.read_only <- true;
     (* The packing program: odometer enumeration of every tile and outer symbol, evaluated through
@@ -1692,7 +1692,8 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
         ~padding:(lazy None)
         ()
     in
-    Tn.Placements.update opt.Low_level.optimize_ctx.placements tile Tn.Local "175:stage-shared-tile";
+    Tn.Placements.update opt.Low_level.optimize_ctx.placements tile Tn.Local
+      (Site "175:stage-shared-tile");
     ignore (get_node opt.traced_store tile : traced_array);
     (* The load nest. *)
     let fresh = List.map iterated ~f:(fun s -> (s, Indexing.get_symbol ())) in
@@ -2375,7 +2376,7 @@ let apply_privatize ~target ~over (opt : Low_level.optimized) : Low_level.optimi
           ()
       in
       Tn.Placements.update opt.Low_level.optimize_ctx.placements tile Tn.Local
-        "176:tensorize-acc-tile";
+        (Site "176:tensorize-acc-tile");
       ignore (get_node opt.traced_store tile : traced_array);
       let tile_read_idcs =
         if scalar_acc then [| Indexing.Fixed_idx 0 |]
@@ -2573,7 +2574,7 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
         ()
     in
     Tn.Placements.update opt.Low_level.optimize_ctx.placements partials Tn.On_device
-      "184:split-reduce-partials";
+      (Site "184:split-reduce-partials");
     partials
   in
   (* The fixed-order balanced combine tree: a pure function of the schedule ([num_blocks]), so a
@@ -3057,7 +3058,7 @@ let contract_tensorized_accumulator ~lane ~(masks : pad_mask list) (opt : Low_le
             ~padding:(lazy None)
             ()
         in
-        Tn.Placements.update opt.optimize_ctx.placements fragment Tn.Local "178:mma-fragment";
+        Tn.Placements.update opt.optimize_ctx.placements fragment Tn.Local (Site "178:mma-fragment");
         ignore (get_node opt.traced_store fragment : traced_array);
         let fragment_idcs = [| Indexing.Iterator i; Indexing.Iterator j |] in
         let fragment_base = [| Indexing.Fixed_idx 0; Indexing.Fixed_idx 0 |] in
@@ -3760,7 +3761,7 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
     | Some (Tn.On_device, _) -> opt
     | _ ->
         Tn.Placements.update opt.optimize_ctx.placements target Tn.Local
-          "486:epilogue-workgroup-shared";
+          (Site "486:epilogue-workgroup-shared");
         { opt with workgroup_shared = Set.add opt.workgroup_shared target }
 
 let fuse_epilogue_witness ~target (opt : Low_level.optimized) : string option =
@@ -5666,7 +5667,7 @@ let promote_crossing plc (segs_with_replicas : (segment * funit list) list) :
         && List.count touched ~f:(fun t -> Set.mem t tn) >= 2
       then (
         let prior = Tn.Placements.raw_entry plc tn in
-        Tn.Placements.promote_local_to_device plc tn "177:fission-multi-segment";
+        Tn.Placements.promote_local_to_device plc tn (Site "177:fission-multi-segment");
         (tn, prior) :: undo)
       else undo)
 
@@ -5841,7 +5842,7 @@ let promote_statement_crossing_locals plc (stmts : Low_level.t list) :
             in
             if eligible && crossing tn i then (
               let prior = Tn.Placements.raw_entry plc tn in
-              Tn.Placements.promote_local_to_device plc tn "178:fission-live-range-crossing";
+              Tn.Placements.promote_local_to_device plc tn (Site "178:fission-live-range-crossing");
               (tn, prior) :: undo)
             else undo))
 

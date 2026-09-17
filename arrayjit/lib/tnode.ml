@@ -37,26 +37,65 @@ type memory_mode =
           context-mediated device-to-host transfers; no host copy is stored on the node. *)
 [@@deriving sexp, compare, equal]
 
-type provenance = string
-(** Why a memory mode was requested or decided: a short self-describing tag (gh-ocannl-609), spelled
-    ["<code>:<kebab-case-reason>"] -- the numeric code is the integer this used to be, kept so that
-    issues, comments and goldens citing e.g. [Non_virtual 13] or "provenance 39" still resolve,
-    while the reason makes a diagnostic readable without grepping the source for the literal. Codes
-    are not unique: two sites that were the same integer stay the same integer and are told apart by
-    their reasons.
+(** Why a memory mode was requested or decided (gh-ocannl-609).
 
-    Tags compose left to right when a decision refines an earlier one
-    ({!Placements.default_to_most_local}):
-    ["39:inline-reduction-cap -> 432:is-local-materialized-query"] is the recompute-cost cap's
-    decision, defaulted to a concrete placement at a codegen query -- what the old
-    [1000 * prior + own] arithmetic encoded as the undecodable [39432]. *)
+    Two kinds of tag, and the split is a layering decision, not a convenience. A decision that only
+    ever gets {e recorded} is a {!Site} carrying its own explanation: the ~60 of those are minted
+    across nine modules, from the C renderer's storage queries to the scheduler's tile placements,
+    and giving each a constructor would make this type -- which sits at the bottom of the dependency
+    graph, since {!module-Placements} is here -- enumerate the vocabulary of every module above it.
+    A tag that some other code {e reads back} gets a constructor instead, so the reading is an
+    exhaustive match rather than a string comparison that can silently stop matching.
 
-(** The first tag of a composed provenance: the decision the later tags refined. The composition it
-    undoes is {!Placements.default_to_most_local}'s, the only one there is. *)
-let leading_provenance (prov : provenance) =
-  match String.substr_index prov ~pattern:" -> " with
-  | None -> prov
-  | Some i -> String.sub prov ~pos:0 ~len:i
+    A [Site]'s string is spelled ["<code>:<kebab-case-reason>"], and so is every constructor's
+    rendering: the numeric code is the integer this used to be, kept so that issues, comments and
+    goldens citing e.g. [Non_virtual 13] or "provenance 39" still resolve. Codes are not unique --
+    two sites that were the same integer stay the same integer and are told apart by their reasons.
+*)
+type provenance =
+  | Visit_cap
+      (** Per-cell visits above [virtualize_max_visits], or an uncovered read. One of the three
+          heuristic caps of [Low_level.decide_placements]: policy priors, which the decision-vector
+          search may flip back to inlining, unlike a legality or observability verdict. *)
+  | Inline_reduction_cap  (** Reduction extent above [virtualize_max_inline_reduction]. *)
+  | Inline_fanin_cap  (** Transitive fan-in above [virtualize_max_inline_fanin]. *)
+  | Read_before_write
+      (** An uncovered read within the routine: the node is an input, so it owns a device buffer
+          whose prior contents are preserved. Minted from two sites -- the lenient verdict of
+          [decide_placements] and the strict re-classification in [reconcile_traced_store]. *)
+  | Scope_local  (** A scope local the inliner minted, committed [Virtual] by cleanup. *)
+  | Surviving_read
+      (** A read that survived inlining, so its target must be materialized. Cleanup is the
+          commitment point, not a re-assertion: a node read here but written only under a
+          virtualized setter is decided right now. *)
+  | Site of string
+      (** A decision no other code reads back, explained by its own tag. Keeping these out of the
+          constructor list is what stops this type from growing a case per backend query site. *)
+  | Refined of provenance * provenance
+      (** A decision that defaulted an earlier one into a concrete placement
+          ({!Placements.default_to_most_local}): the prior decision, then the one that resolved it.
+          Renders as ["39:inline-reduction-cap -> 432:is-local-materialized-query"] -- what the
+          retired [1000 * prior + own] arithmetic encoded as the undecodable [39432]. *)
+[@@deriving sexp_of, equal]
+
+let rec provenance_to_string = function
+  | Visit_cap -> "1:visit-cap"
+  | Inline_reduction_cap -> "39:inline-reduction-cap"
+  | Inline_fanin_cap -> "41:inline-fanin-cap"
+  | Read_before_write -> "36:read-before-write"
+  | Scope_local -> "16:scope-local"
+  | Surviving_read -> "17:surviving-read"
+  | Site s -> s
+  | Refined (prior, refinement) ->
+      provenance_to_string prior ^ " -> " ^ provenance_to_string refinement
+
+(** The decision the later ones refined: the leftmost tag of a {!Refined} chain, which
+    {!Placements.default_to_most_local} builds left-nested. *)
+let rec leading_provenance = function
+  | Refined (prior, _) -> leading_provenance prior
+  | ( Visit_cap | Inline_reduction_cap | Inline_fanin_cap | Read_before_write | Scope_local
+    | Surviving_read | Site _ ) as p ->
+      p
 
 type delayed_prec = Default of Ops.prec | Inferred of Ops.prec Lazy.t | Specified of Ops.prec
 [@@deriving sexp, equal]
@@ -138,11 +177,10 @@ type t = {
       (** Participates in the computation of {!field-storage_prec}. *)
   mutable bounds : bounds_state;
       (** Scalar value bounds summary; see {!bounds_state} for the lifecycle. *)
-  mutable memory_mode_intent : (memory_mode * string) option;
+  mutable memory_mode_intent : (memory_mode * provenance) option;
       (** The tnode's {e declared intent} -- requests made at graph-construction time (parameter and
           constant marking, [Train.set_materialized], op-support [Never_virtual]), paired with a
-          {!provenance} tag (spelled [string] here only so the record's [sexp_of] derivation stays
-          on the primitive). Since the context-scoped memory-modes split
+          {!provenance} tag saying which request it was. Since the context-scoped memory-modes split
           (docs/proposals/context-scoped-memory-modes.md) this is monotone, side-effect free to
           read, and never written by the compilation pipeline: placement {e decisions} are
           per-compilation-lineage, recorded in {!module-Placements} tables riding
@@ -160,7 +198,7 @@ type t = {
           registered host-init data (an ndarray-backed literal). Set by [Tensor.ndarray] (and
           eligible loaders), never cleared. This carries the constancy that [Effectively_constant]
           intent cannot: ndarray-backed nodes are minted [On_device] (provenance
-          ["49:ndarray-backed"]), so the memory-mode lattice has no room left for the constant
+          [Site "49:ndarray-backed"]), so the memory-mode lattice has no room left for the constant
           marking. Consumed by [Schedule.Stage]'s hoisted packing (gh-ocannl-470) to justify
           materializing a repacked copy once per device. *)
   mutable alias_of : ((t * Indexing.static_symbol) option[@sexp.opaque]);
@@ -262,7 +300,7 @@ let debug_memory_mode = function
         | Never_virtual -> "Non-virt"
         | Local -> "Local"
         | On_device -> "On-dev")
-      ^ "/" ^ prov
+      ^ "/" ^ provenance_to_string prov
 
 let log_debug_info ~from_log_level tn =
   [%debug_sexp
@@ -359,8 +397,8 @@ let transition_memory_mode ~debug_name:name current mode provenance =
       raise
       @@ Utils.User_error
            [%string
-             "Tnode.update_memory_mode: update %{prov2} -> %{provenance} for %{name}: cannot be \
-              virtual"]
+             "Tnode.update_memory_mode: update %{provenance_to_string prov2} -> \
+              %{provenance_to_string provenance} for %{name}: cannot be virtual"]
   | Some ((Virtual, _) as cur), Effectively_constant -> cur
   | Some (Never_virtual, _), Effectively_constant | Some (Effectively_constant, _), Never_virtual ->
       (* A constant that must be persisted is just a materialized (device-resident) node now; there
@@ -374,13 +412,14 @@ let transition_memory_mode ~debug_name:name current mode provenance =
       raise
       @@ Utils.User_error
            [%string
-             "Tnode.update_memory_mode: update %{prov2} -> %{provenance} for %{name} is already \
-              virtual"]
+             "Tnode.update_memory_mode: update %{provenance_to_string prov2} -> \
+              %{provenance_to_string provenance} for %{name} is already virtual"]
   | Some ((_, _) as cur), Never_virtual -> cur
   | Some (_, prov2), _ ->
       invalid_arg
         [%string
-          "Tnode.update_memory_mode: update %{prov2} -> %{provenance} inconsistent for %{name}"]
+          "Tnode.update_memory_mode: update %{provenance_to_string prov2} -> \
+           %{provenance_to_string provenance} inconsistent for %{name}"]
 
 let update_memory_mode tn mode provenance =
   tn.memory_mode_intent <-
@@ -624,7 +663,7 @@ module Placements = struct
   type nonrec t = { table : (tn, memory_mode * provenance) Hashtbl.t }
 
   let sexp_of_t p =
-    [%sexp_of: (string * (memory_mode * string)) list]
+    [%sexp_of: (string * (memory_mode * provenance)) list]
       (List.map (Hashtbl.to_alist p.table) ~f:(fun (tn, d) -> (debug_name tn, d)))
 
   let create () = { table = Hashtbl.create (module Key) }
@@ -684,11 +723,7 @@ module Placements = struct
         their registered host-init data. *)
   let default_to_most_local p tn provenance =
     let provenance =
-      (* The tags compose left to right, prior decision first -- what {!leading_provenance} reads
-         back, and what the retired [1000 * prior + own] arithmetic encoded. *)
-      match get p tn with
-      | Some (_, prior) -> prior ^ " -> " ^ provenance
-      | None -> provenance
+      match get p tn with Some (_, prior) -> Refined (prior, provenance) | None -> provenance
     in
     match get p tn with
     | None when is_observable tn -> Hashtbl.set p.table ~key:tn ~data:(On_device, provenance)
@@ -962,7 +997,7 @@ let create_from_padded ?namespace ~id ~label ~ndarray ~padding () =
       namespace;
       uid = fresh_uid ();
       label;
-      memory_mode_intent = Some (On_device, "49:ndarray-backed");
+      memory_mode_intent = Some (On_device, Site "49:ndarray-backed");
       observable = false;
       host_constant = false;
       alias_of = None;
@@ -1045,7 +1080,7 @@ let create_with_reshape ~id ~label ~base_ndarray ~unpadded_dims ~padding ~from_p
       namespace;
       uid = fresh_uid ();
       label;
-      memory_mode_intent = Some (On_device, "49:ndarray-backed");
+      memory_mode_intent = Some (On_device, Site "49:ndarray-backed");
       observable = false;
       host_constant = false;
       alias_of = None;

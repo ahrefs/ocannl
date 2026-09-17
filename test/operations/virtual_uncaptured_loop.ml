@@ -63,7 +63,8 @@ let case_repetition_above () =
   in
   p "repetition above the capture: candidate rejected (stays non-virtual)" (known_non_virtual o x);
   p "repetition above the capture: rejected as Non_virtual 147"
-    (Option.equal String.equal (rejection_code o x) (Some "147:enclosing-repetition-loop"))
+    (Option.equal Tn.equal_provenance (rejection_code o x)
+       (Some (Tn.Site "147:enclosing-repetition-loop")))
 
 (* === Case 2: no capture point at all ===
 
@@ -86,7 +87,8 @@ let case_symbol_free_map () =
   let o = both ~label:"symbol_free_map" ~llc ~cand:x ~out ~seed:[] ~expected:[| 4. |] in
   p "symbol-free index map: candidate rejected (stays non-virtual)" (known_non_virtual o x);
   p "symbol-free index map: rejected as Non_virtual 147"
-    (Option.equal String.equal (rejection_code o x) (Some "147:enclosing-repetition-loop"))
+    (Option.equal Tn.equal_provenance (rejection_code o x)
+       (Some (Tn.Site "147:enclosing-repetition-loop")))
 
 (* === Case 3 (positive control): the ordinary inner reduction still inlines ===
 

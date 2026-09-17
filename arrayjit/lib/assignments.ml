@@ -140,7 +140,8 @@ let%debug3_sexp context_nodes ~(plc : Tn.Placements.t) (asgns : t) : Tn.t_set =
   let open Utils.Set_O in
   let empty = Set.empty (module Tn) in
   let one tn =
-    if Tn.Placements.is_in_context_force plc tn "34:context-nodes" then Set.singleton (module Tn) tn
+    if Tn.Placements.is_in_context_force plc tn (Site "34:context-nodes") then
+      Set.singleton (module Tn) tn
     else empty
   in
   let of_node = function Node rhs -> one rhs | Merge_buffer _ -> empty in
@@ -1170,7 +1171,7 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
                persistent buffer in EVERY lineage that lowers this alias. Declare the intent
                globally, like the alias mark itself -- monotone and idempotent; mirrors
                [collect_nodes_guess_output]'s materialization of slice parents. *)
-            Tn.update_memory_mode sliced On_device "27:slice-alias-parent";
+            Tn.update_memory_mode sliced On_device (Site "27:slice-alias-parent");
             Tn.set_alias_of array ~parent:sliced ~batch_idx)
       | Fetch _ | Accum_op _ | Set_vec_unop _ | Noop | Seq _ | Block_comment _ -> ())
   in
