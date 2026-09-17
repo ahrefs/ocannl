@@ -12,10 +12,10 @@
    extractions (gh-ocannl-578); possibly-overlapping ones keep the asymmetry — the floor takes the
    larger exact image (a union is at least its largest member, flagged loose) where the upper takes
    the capped sum; - short-circuiting forms: Where arms, And/Or right operands (conditional —
-   cheaper-arm / left-operand floors, conditional reads zeroed) and Arg1/Arg2 discarded operands
-   (never rendered at all, so absent from both extractions); - the over-producing open producer,
-   dead loops, and the dynamic-gather fallback flooring to zero where the upper falls back to the
-   whole node.
+   cheaper-arm / left-operand floors, conditional reads zeroed — but an arm's hoisted scope body is
+   certain work in both extractions, gh-ocannl-637) and Arg1/Arg2 discarded operands (never rendered
+   at all, so absent from both extractions); - the over-producing open producer, dead loops, and the
+   dynamic-gather fallback flooring to zero where the upper falls back to the whole node.
 
    The last section pins the classifier those short-circuiting cases now read from
    ([Ops.binop_conditionality] / [Ops.ternop_conditionality], gh-ocannl-582) and its agreement with
@@ -30,21 +30,14 @@ module Ops = Ir.Ops
 module CM = Ir.Cost_model
 
 let fresh_tn =
-  let c = ref 980_000_000 in
-  fun label dims ->
-    Int.incr c;
-    Tn.create (Tn.Specified Ops.single) ~id:!c ~label:[ label ]
-      ~unpadded_dims:(lazy dims)
-      ~padding:(lazy None)
-      ()
+  let make = Ll_test.node_factory ~first_id:980_000_000 ~dims:[||] () in
+  fun label dims -> make ~dims label
 
 let sp = Ops.single
-
-let for_over ?(extent = 4) sym body =
-  LL.For_loop { index = sym; from_ = 0; to_ = extent - 1; body; axis = LL.Serial }
-
-let get tn idcs = LL.Get (tn, idcs)
-let it s = Idx.Iterator s
+let for_over ?(extent = 4) sym body = Ll_test.loop_n sym extent body
+let set = Ll_test.set
+let get = Ll_test.get
+let it = Ll_test.iter
 
 let show name ?open_placement code =
   let s = CM.analyze code in
@@ -66,13 +59,9 @@ let () =
   let pointwise =
     for_over i
       (for_over ~extent:5 j
-         (LL.Set
-            {
-              tn = c;
-              idcs = [| it i; it j |];
-              llsc = LL.Binop (Ops.Add, (get a [| it i; it j |], sp), (get b [| it j |], sp));
-              debug = "";
-            }))
+         (set c
+            [| it i; it j |]
+            (LL.Binop (Ops.Add, (get a [| it i; it j |], sp), (get b [| it j |], sp)))))
   in
   let _ = show "pointwise map" pointwise in
   (* 4x5x6 matmul, rmw accumulator: D[i][j] += A2[i][k] * B2[k][j]. Exact both ways: flops = 2*4*5*6
@@ -85,19 +74,14 @@ let () =
     for_over i
       (for_over ~extent:5 j
          (for_over ~extent:6 k
-            (LL.Set
-               {
-                 tn = d;
-                 idcs = [| it i; it j |];
-                 llsc =
-                   LL.Binop
-                     ( Ops.Add,
-                       (get d [| it i; it j |], sp),
-                       ( LL.Binop
-                           (Ops.Mul, (get a2 [| it i; it k |], sp), (get b2 [| it k; it j |], sp)),
-                         sp ) );
-                 debug = "";
-               })))
+            (set d
+               [| it i; it j |]
+               (LL.Binop
+                  ( Ops.Add,
+                    (get d [| it i; it j |], sp),
+                    ( LL.Binop
+                        (Ops.Mul, (get a2 [| it i; it k |], sp), (get b2 [| it k; it j |], sp)),
+                      sp ) )))))
   in
   let closed = show "matmul (rmw accumulator)" matmul in
   let opened = show "matmul, D's placement open" ~open_placement:(fun tn -> Tn.equal tn d) matmul in
@@ -119,13 +103,7 @@ let () =
          {
            cond = (LL.Binop (Ops.Cmplt, (LL.Constant 0., sp), (get e [| it i |], sp)), sp);
            body =
-             LL.Set
-               {
-                 tn = fq;
-                 idcs = [| it i |];
-                 llsc = LL.Binop (Ops.Mul, (get e [| it i |], sp), (LL.Constant 2., sp));
-                 debug = "";
-               };
+             set fq [| it i |] (LL.Binop (Ops.Mul, (get e [| it i |], sp), (LL.Constant 2., sp)));
          })
   in
   let _ = show "guarded write" guarded in
@@ -137,17 +115,12 @@ let () =
   let two_reads =
     for_over i
       (for_over ~extent:5 j
-         (LL.Set
-            {
-              tn = g;
-              idcs = [| it i; it j |];
-              llsc =
-                LL.Binop
-                  ( Ops.Add,
-                    (get h [| Idx.Fixed_idx 0; it j |], sp),
-                    (get h [| Idx.Fixed_idx 1; it j |], sp) );
-              debug = "";
-            }))
+         (set g
+            [| it i; it j |]
+            (LL.Binop
+               ( Ops.Add,
+                 (get h [| Idx.Fixed_idx 0; it j |], sp),
+                 (get h [| Idx.Fixed_idx 1; it j |], sp) ))))
   in
   let _ = show "two disjoint reads, both extractions sum" two_reads in
   (* Two exact reads that may overlap: G2[i] = H8[i] + H8[i+1]. The upper sums (8 cells = 32 rd
@@ -159,13 +132,7 @@ let () =
   let shift1 s = Idx.affine ~symbols:[ (1, s) ] ~offset:1 in
   let overlapping_reads =
     for_over i
-      (LL.Set
-         {
-           tn = g2;
-           idcs = [| it i |];
-           llsc = LL.Binop (Ops.Add, (get h8 [| it i |], sp), (get h8 [| shift1 i |], sp));
-           debug = "";
-         })
+      (set g2 [| it i |] (LL.Binop (Ops.Add, (get h8 [| it i |], sp), (get h8 [| shift1 i |], sp))))
   in
   let _ = show "two overlapping reads, union floor = larger image" overlapping_reads in
   (* Dynamic gather: P[i] = Q[R[i]]. Q's access is uninterpretable — the upper falls back to the
@@ -175,20 +142,15 @@ let () =
   let r = fresh_tn "R" [| 4 |] in
   let gather =
     for_over i
-      (LL.Set
-         {
-           tn = p;
-           idcs = [| it i |];
-           llsc =
-             LL.Get_dynamic
-               {
-                 tn = q;
-                 idcs = [| Idx.Fixed_idx 0 |];
-                 dyn_axis = 0;
-                 dyn_value = (get r [| it i |], sp);
-               };
-           debug = "";
-         })
+      (set p
+         [| it i |]
+         (LL.Get_dynamic
+            {
+              tn = q;
+              idcs = [| Idx.Fixed_idx 0 |];
+              dyn_axis = 0;
+              dyn_value = (get r [| it i |], sp);
+            }))
   in
   let _ = show "dynamic gather" gather in
   (* Where short-circuits (?: in every renderer): K[i] = where(E>0, E*2, E+M[i]+1). The floor counts
@@ -200,24 +162,52 @@ let () =
   let m = fresh_tn "M" [| 4 |] in
   let where_case =
     for_over i
-      (LL.Set
-         {
-           tn = kq;
-           idcs = [| it i |];
-           llsc =
-             LL.Ternop
-               ( Ops.Where,
-                 (LL.Binop (Ops.Cmplt, (LL.Constant 0., sp), (get e2 [| it i |], sp)), sp),
-                 (LL.Binop (Ops.Mul, (get e2 [| it i |], sp), (LL.Constant 2., sp)), sp),
-                 ( LL.Binop
-                     ( Ops.Add,
-                       (get e2 [| it i |], sp),
-                       (LL.Binop (Ops.Add, (get m [| it i |], sp), (LL.Constant 1., sp)), sp) ),
-                   sp ) );
-           debug = "";
-         })
+      (set kq
+         [| it i |]
+         (LL.Ternop
+            ( Ops.Where,
+              (LL.Binop (Ops.Cmplt, (LL.Constant 0., sp), (get e2 [| it i |], sp)), sp),
+              (LL.Binop (Ops.Mul, (get e2 [| it i |], sp), (LL.Constant 2., sp)), sp),
+              ( LL.Binop
+                  ( Ops.Add,
+                    (get e2 [| it i |], sp),
+                    (LL.Binop (Ops.Add, (get m [| it i |], sp), (LL.Constant 1., sp)), sp) ),
+                sp ) )))
   in
   let _ = show "where short-circuit" where_case in
+  (* gh-ocannl-637: an arm whose cost is a hoisted scope body executes whichever arm is selected
+     (the renderers emit scope definitions before the statement), so both extractions charge it:
+     K[i] = where(0 < M[i], { lv := E2[i] * 2 }, 0) — cond + select + the body's multiply, 3/iter,
+     floor = upper = 12, and E2's read inside the body is certain in both. *)
+  let lv = fresh_tn "lv" [||] in
+  Ll_test.virtualize lv;
+  let where_hoisted =
+    for_over i
+      (set kq
+         [| it i |]
+         (LL.Ternop
+            ( Ops.Where,
+              (LL.Binop (Ops.Cmplt, (LL.Constant 0., sp), (get m [| it i |], sp)), sp),
+              ( LL.Local_scope
+                  {
+                    id = LL.get_scope lv;
+                    body =
+                      LL.Set_local
+                        ( LL.get_scope lv,
+                          LL.Binop (Ops.Mul, (get e2 [| it i |], sp), (LL.Constant 2., sp)) );
+                    orig_indices = [| it i |];
+                    mint = LL.Inlined_computation;
+                  },
+                sp ),
+              (LL.Constant 0., sp) )))
+  in
+  let hoisted = show "where arm hoisted into a scope body" where_hoisted in
+  let upper = CM.analyze where_hoisted in
+  Verdict.p "  hoisted arm: floor = upper on both legs, both exact"
+    (hoisted.CM.fr_exact
+    && (not (CM.approximate upper))
+    && hoisted.CM.fr_flops = upper.CM.flops
+    && hoisted.CM.fr_bytes = CM.total_bytes upper);
   (* An open producer computing a larger domain than consumed: P2[0..7] = A3[0..7] * 2, then C3[0] =
      P2[0]. The inline completion instantiates one multiply and one A3 read and drops the setter
      loop, so with P2 open the floor keeps only C3's certain write — the producer's ops AND its A3
@@ -228,16 +218,8 @@ let () =
   let over_produce =
     LL.Seq
       ( for_over ~extent:8 j
-          (LL.Set
-             {
-               tn = p2;
-               idcs = [| it j |];
-               llsc = LL.Binop (Ops.Mul, (get a3 [| it j |], sp), (LL.Constant 2., sp));
-               debug = "";
-             }),
-        LL.Set
-          { tn = c3; idcs = [| Idx.Fixed_idx 0 |]; llsc = get p2 [| Idx.Fixed_idx 0 |]; debug = "" }
-      )
+          (set p2 [| it j |] (LL.Binop (Ops.Mul, (get a3 [| it j |], sp), (LL.Constant 2., sp)))),
+        set c3 [| Idx.Fixed_idx 0 |] (get p2 [| Idx.Fixed_idx 0 |]) )
   in
   let _ = show "over-producing closed" over_produce in
   let _ =
@@ -252,49 +234,34 @@ let () =
   let l = fresh_tn "L" [| 4 |] in
   let and_case =
     for_over i
-      (LL.Set
-         {
-           tn = l;
-           idcs = [| it i |];
-           llsc =
-             LL.Binop
-               ( Ops.And,
-                 (LL.Binop (Ops.Cmplt, (LL.Constant 0., sp), (get e2 [| it i |], sp)), sp),
-                 (LL.Binop (Ops.Cmplt, (get m [| it i |], sp), (LL.Constant 1., sp)), sp) );
-           debug = "";
-         })
+      (set l
+         [| it i |]
+         (LL.Binop
+            ( Ops.And,
+              (LL.Binop (Ops.Cmplt, (LL.Constant 0., sp), (get e2 [| it i |], sp)), sp),
+              (LL.Binop (Ops.Cmplt, (get m [| it i |], sp), (LL.Constant 1., sp)), sp) )))
   in
   let _ = show "and short-circuit" and_case in
   let arg1_case =
     for_over i
-      (LL.Set
-         {
-           tn = l;
-           idcs = [| it i |];
-           llsc =
-             LL.Binop
-               ( Ops.Arg1,
-                 (get e2 [| it i |], sp),
-                 (LL.Binop (Ops.Mul, (get m [| it i |], sp), (LL.Constant 3., sp)), sp) );
-           debug = "";
-         })
+      (set l
+         [| it i |]
+         (LL.Binop
+            ( Ops.Arg1,
+              (get e2 [| it i |], sp),
+              (LL.Binop (Ops.Mul, (get m [| it i |], sp), (LL.Constant 3., sp)), sp) )))
   in
   let _ = show "arg1 discarded operand" arg1_case in
   (* Relu_gate also renders with ?: — its right operand (the expensive product reading M) is
      conditional: floor = gate + left operand per iteration, M's read zeroed. *)
   let gate_case =
     for_over i
-      (LL.Set
-         {
-           tn = l;
-           idcs = [| it i |];
-           llsc =
-             LL.Binop
-               ( Ops.Relu_gate,
-                 (get e2 [| it i |], sp),
-                 (LL.Binop (Ops.Mul, (get m [| it i |], sp), (LL.Constant 3., sp)), sp) );
-           debug = "";
-         })
+      (set l
+         [| it i |]
+         (LL.Binop
+            ( Ops.Relu_gate,
+              (get e2 [| it i |], sp),
+              (LL.Binop (Ops.Mul, (get m [| it i |], sp), (LL.Constant 3., sp)), sp) )))
   in
   let _ = show "relu-gate short-circuit" gate_case in
   (* A dead loop's body never executes: its whole-node access must not reach the floor. *)

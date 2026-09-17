@@ -83,29 +83,35 @@ let access_uncertainty ~open_placement (code : Low_level.t) =
   let open_reads = Hashtbl.create (module Tn) in
   let dead = Hashtbl.create (module Tn) in
   let mark tbl tn = Hashtbl.set tbl ~key:tn ~data:() in
-  let rec sc_reads ~into (s : Low_level.scalar_t) =
+  (* [~through_scopes:false] stops at [Local_scope] bodies: the renderers hoist a scope's definition
+     out of the statement's expression, so a body under a [Where] arm or a gated operand executes
+     unconditionally and its reads are certain — only the arm's inline reads are gated
+     (gh-ocannl-637). The dead-loop and open-producer markings descend (a dead body never runs,
+     hoisted or not; an open producer's whole effect attributes to the open placement). *)
+  let rec sc_reads ~into ~through_scopes (s : Low_level.scalar_t) =
     match s with
     | Low_level.Get (tn, _) -> mark into tn
     | Get_dynamic { tn; dyn_value = v, _; _ } ->
         mark into tn;
-        sc_reads ~into v
+        sc_reads ~into ~through_scopes v
     | Get_merge_buffer _ | Get_local _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
-    | Local_scope { body; _ } -> code_reads ~into body
+    | Local_scope { body; _ } -> if through_scopes then code_reads ~into body
     | Ternop (_, (a, _), (b, _), (c, _)) ->
-        sc_reads ~into a;
-        sc_reads ~into b;
-        sc_reads ~into c
+        sc_reads ~into ~through_scopes a;
+        sc_reads ~into ~through_scopes b;
+        sc_reads ~into ~through_scopes c
     | Binop (op, (a, _), (b, _)) -> (
         (* A projection's discarded operand is never evaluated ([affine_accesses] omits it too), per
            {!Ops.binop_conditionality}. *)
         match Ops.binop_conditionality op with
-        | Ops.Only_first -> sc_reads ~into a
-        | Ops.Only_second -> sc_reads ~into b
+        | Ops.Only_first -> sc_reads ~into ~through_scopes a
+        | Ops.Only_second -> sc_reads ~into ~through_scopes b
         | Ops.Both_operands | Ops.Gated_second ->
-            sc_reads ~into a;
-            sc_reads ~into b)
-    | Unop (_, (a, _)) -> sc_reads ~into a
+            sc_reads ~into ~through_scopes a;
+            sc_reads ~into ~through_scopes b)
+    | Unop (_, (a, _)) -> sc_reads ~into ~through_scopes a
   and code_reads ~into (c : Low_level.t) =
+    let sc_reads = sc_reads ~through_scopes:true in
     match c with
     | Low_level.Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ -> ()
     | Zero_out tn -> mark into tn
@@ -129,6 +135,8 @@ let access_uncertainty ~open_placement (code : Low_level.t) =
         sc_reads ~into a
     | Tile_mma { fallback; _ } -> code_reads ~into fallback
   in
+  let gated_reads_of = sc_reads ~into:gated_reads ~through_scopes:false in
+  let sc_reads = sc_reads ~through_scopes:true in
   let rec sc_walk (s : Low_level.scalar_t) =
     match s with
     | Low_level.Ternop (op, (a, _), (b, _), (c, _)) -> (
@@ -139,9 +147,10 @@ let access_uncertainty ~open_placement (code : Low_level.t) =
             sc_walk c
         | Ops.Cond_and_one_arm ->
             sc_walk a;
-            (* The arms' reads are conditional; their nested structure still walks. *)
-            sc_reads ~into:gated_reads b;
-            sc_reads ~into:gated_reads c;
+            (* The arms' inline reads are conditional; their nested structure (hoisted scope bodies
+               included) still walks in its own right. *)
+            gated_reads_of b;
+            gated_reads_of c;
             sc_walk b;
             sc_walk c)
     | Binop (op, (a, _), (b, _)) -> (
@@ -149,9 +158,9 @@ let access_uncertainty ~open_placement (code : Low_level.t) =
         | Ops.Only_first -> sc_walk a
         | Ops.Only_second -> sc_walk b
         | Ops.Gated_second ->
-            (* Short-circuiting (&& / || and the gates' ?:): the right operand's reads are
+            (* Short-circuiting (&& / || and the gates' ?:): the right operand's inline reads are
                conditional. *)
-            sc_reads ~into:gated_reads b;
+            gated_reads_of b;
             sc_walk a;
             sc_walk b
         | Ops.Both_operands ->
@@ -287,37 +296,46 @@ let analyze (code : Low_level.t) : summary =
         in
         scale / max 1 lane_extent * (2 * m * n * k)
   and sc_flops (sc : Low_level.scalar_t) : int =
+    let inline, hoisted = sc_split sc in
+    inline + hoisted
+  (* The (inline, hoisted) components of a scalar's cost (gh-ocannl-637): [hoisted] is the work of
+     the [Local_scope] bodies it contains, [inline] the operations of the expression itself. The
+     distinction is what the renderers do with a scope: [C_syntax.pp_scalar] returns a scope's
+     definition separately and the statement emits every definition BEFORE its expression, so a
+     scope body under a [Where] arm or a gated operand executes unconditionally, while the arm's
+     inline operations sit inside the [?:] / [&&] and execute only when selected. Charging both
+     arms' hoisted bodies is therefore exact, and only inline arm work can make the count a
+     guards-taken bound. *)
+  and sc_split (sc : Low_level.scalar_t) : int * int =
     match sc with
-    | Low_level.Local_scope { body; _ } -> go ~scale:1 ~env:[] body
-    | Get_local _ | Get _ | Constant _ | Constant_bits _ | Embed_index _ -> 0
+    | Low_level.Local_scope { body; _ } -> (0, go ~scale:1 ~env:[] body)
+    | Get_local _ | Get _ | Constant _ | Constant_bits _ | Embed_index _ -> (0, 0)
     | Get_merge_buffer _ ->
         (* Merge-buffer traffic is not represented by [affine_accesses] either: flag the
            under-count. *)
         opaque := true;
-        0
-    | Get_dynamic { dyn_value = dv, _; _ } -> sc_flops dv
+        (0, 0)
+    | Get_dynamic { dyn_value = dv, _; _ } -> sc_split dv
     | Ternop (op, a1, a2, a3) ->
         (* FMA and Mul3 count as two arithmetic operations each — matching [peak_flops]'
            FMA-counted-as-two convention, so an FMA-form kernel scores the same compute leg as its
            mul+add form; the select is one.
 
            The upper walk charges every operand that is {e rendered}, which for a conditional one is
-           more than {!Ops.ternop_conditionality} says can execute: a [Where] arm's [Local_scope]
-           renders as statements hoisted OUT of the conditional expression ([C_syntax.pp_scalar]
-           returns its definitions separately), so both arms' scope bodies do run. Only an operand
-           no renderer emits at all — a projection's discarded one, below — may be dropped. The
-           floor's [Int.min] stays sound under the same hoisting: it only loosens. Charging both
-           arms of a short-circuiting [?:] is an over-count whenever either arm contributes any work
-           — only one arm's inline ops execute, equal costs notwithstanding — so any nonzero arm
-           flags the op count approximate (gh-ocannl-578; a cost residing entirely in hoisted scope
-           bodies does execute, so this conservatively over-flags such arms — the sound direction).
-           Only a zero-cost arm pair keeps the count exact. *)
+           more than {!Ops.ternop_conditionality} says can execute: both arms' hoisted scope bodies
+           run, and both arms' inline operations are charged although only one arm's execute. Only
+           an operand no renderer emits at all — a projection's discarded one, below — may be
+           dropped. Charging both arms' inline work of a short-circuiting [?:] is an over-count
+           whenever either arm has any — equal costs notwithstanding — so a nonzero inline arm flags
+           the op count approximate (gh-ocannl-578); arms whose whole cost is hoisted keep it exact
+           (gh-ocannl-637). The floor's [Int.min] over the inline parts stays sound under the same
+           hoisting. *)
         let ops = match op with Ops.FMA | Ops.Mul3 -> 2 | Ops.Where -> 1 in
-        let c2 = arg a2 and c3 = arg a3 in
+        let i1, h1 = arg a1 and i2, h2 = arg a2 and i3, h3 = arg a3 in
         (match Ops.ternop_conditionality op with
         | Ops.All_three -> ()
-        | Ops.Cond_and_one_arm -> if c2 <> 0 || c3 <> 0 then flops_approx := true);
-        ops + arg a1 + c2 + c3
+        | Ops.Cond_and_one_arm -> if i2 <> 0 || i3 <> 0 then flops_approx := true);
+        (ops + i1 + i2 + i3, h1 + h2 + h3)
     | Binop (op, a1, a2) -> (
         match Ops.binop_conditionality op with
         (* A projection is not an operation: it renders as its selected operand alone, and the
@@ -325,15 +343,20 @@ let analyze (code : Low_level.t) : summary =
         | Ops.Only_first -> arg a1
         | Ops.Only_second -> arg a2
         | Ops.Gated_second ->
-            (* Gates-taken: the right operand is charged as if the gate always passes — an
-               over-count whenever it costs anything (gh-ocannl-578). *)
-            let c2 = arg a2 in
-            if c2 <> 0 then flops_approx := true;
-            1 + arg a1 + c2
-        | Ops.Both_operands -> 1 + arg a1 + arg a2)
+            (* Gates-taken: the right operand's inline work is charged as if the gate always passes
+               — an over-count whenever there is any (gh-ocannl-578); its hoisted definitions run
+               regardless. *)
+            let i1, h1 = arg a1 and i2, h2 = arg a2 in
+            if i2 <> 0 then flops_approx := true;
+            (1 + i1 + i2, h1 + h2)
+        | Ops.Both_operands ->
+            let i1, h1 = arg a1 and i2, h2 = arg a2 in
+            (1 + i1 + i2, h1 + h2))
     | Unop (Ops.Identity, a1) -> arg a1
-    | Unop (_, a1) -> 1 + arg a1
-  and arg (sc, _prec) = sc_flops sc in
+    | Unop (_, a1) ->
+        let i1, h1 = arg a1 in
+        (1 + i1, h1)
+  and arg (sc, _prec) = sc_split sc in
   let flops = go ~scale:1 ~env:[] code in
   let read_uncertain, any_uncertain = access_uncertainty ~open_placement:(fun _ -> false) code in
   let per_node = footprints ~read_uncertain ~any_uncertain (Low_level.affine_accesses code) in
@@ -419,40 +442,51 @@ let floor_flops ~open_placement (code : Low_level.t) : int * bool =
     exact := false;
     0
   and sc (s : Low_level.scalar_t) : int =
+    let inline, hoisted = split s in
+    inline + hoisted
+  (* (inline, hoisted) as in the upper walk's [sc_split]: hoisted scope bodies are certain work
+     under every short-circuiting form (the renderers emit them before the statement), so the dual
+     minimizes over the inline parts only (gh-ocannl-637). *)
+  and split (s : Low_level.scalar_t) : int * int =
     match s with
-    | Low_level.Local_scope { body; _ } -> go ~scale:1 ~env:[] body
-    | Get_local _ | Get _ | Constant _ | Constant_bits _ | Embed_index _ -> 0
+    | Low_level.Local_scope { body; _ } -> (0, go ~scale:1 ~env:[] body)
+    | Get_local _ | Get _ | Constant _ | Constant_bits _ | Embed_index _ -> (0, 0)
     | Get_merge_buffer _ ->
         exact := false;
-        0
-    | Get_dynamic { dyn_value = dv, _; _ } -> sc dv
+        (0, 0)
+    | Get_dynamic { dyn_value = dv, _; _ } -> split dv
     | Ternop (op, a1, a2, a3) -> (
         (* The per-op arithmetic count is the upper walk's; only which operands are charged flips,
            per {!Ops.ternop_conditionality}. *)
         let ops = match op with Ops.FMA | Ops.Mul3 -> 2 | Ops.Where -> 1 in
+        let i1, h1 = arg a1 and i2, h2 = arg a2 and i3, h3 = arg a3 in
         match Ops.ternop_conditionality op with
-        | Ops.All_three -> ops + arg a1 + arg a2 + arg a3
+        | Ops.All_three -> (ops + i1 + i2 + i3, h1 + h2 + h3)
         | Ops.Cond_and_one_arm ->
-            (* Short-circuiting [?:] in every renderer: the condition and exactly one arm
-               execute. *)
-            let c1 = arg a2 and c2 = arg a3 in
-            if c1 <> c2 then exact := false;
-            ops + arg a1 + Int.min c1 c2)
+            (* Short-circuiting [?:] in every renderer: the condition and exactly one arm's inline
+               work execute; both arms' hoisted bodies do. *)
+            if i2 <> i3 then exact := false;
+            (ops + i1 + Int.min i2 i3, h1 + h2 + h3))
     | Binop (op, a1, a2) -> (
         match Ops.binop_conditionality op with
         (* The projections render only the selected operand ([C_syntax.pp_scalar]); the discarded
-           one's work cannot execute. *)
+           one's work cannot execute, hoisted definitions included. *)
         | Ops.Only_first -> arg a1
         | Ops.Only_second -> arg a2
         | Ops.Gated_second ->
-            (* Short-circuiting renderings: && / || and the gates' ?: evaluate the right operand
-               only when the left one passes. *)
-            if arg a2 <> 0 then exact := false;
-            1 + arg a1
-        | Ops.Both_operands -> 1 + arg a1 + arg a2)
+            (* Short-circuiting renderings: && / || and the gates' ?: evaluate the right operand's
+               inline work only when the left one passes; its hoisted definitions run regardless. *)
+            let i1, h1 = arg a1 and i2, h2 = arg a2 in
+            if i2 <> 0 then exact := false;
+            (1 + i1, h1 + h2)
+        | Ops.Both_operands ->
+            let i1, h1 = arg a1 and i2, h2 = arg a2 in
+            (1 + i1 + i2, h1 + h2))
     | Unop (Ops.Identity, a1) -> arg a1
-    | Unop (_, a1) -> 1 + arg a1
-  and arg (s, _prec) = sc s in
+    | Unop (_, a1) ->
+        let i1, h1 = arg a1 in
+        (1 + i1, h1)
+  and arg (s, _prec) = split s in
   let flops = go ~scale:1 ~env:[] code in
   (flops, !exact)
 

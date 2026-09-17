@@ -6,7 +6,6 @@ test/operations/affine_lowering.ml -- records<=0 traversals<=3: existing migrati
 test/operations/autotune_scope_menu.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
 test/operations/autotune_smoke.ml -- records<=3 traversals<=1: existing migration debt; adopt ll_test when touched
 test/operations/buffer_aliasing.ml -- records<=1 traversals<=0: existing migration debt; adopt ll_test when touched
-test/operations/cost_model_floor.ml -- records<=16 traversals<=0: existing migration debt; adopt ll_test when touched
 test/operations/cpu_simd_reduction.ml -- records<=5 traversals<=1: existing migration debt; adopt ll_test when touched
 test/operations/fission_schedule.ml -- records<=9 traversals<=2: existing migration debt; adopt ll_test when touched
 test/operations/hardware_axes_parity.ml -- records<=4 traversals<=4: existing migration debt; adopt ll_test when touched

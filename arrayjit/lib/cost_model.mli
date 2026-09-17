@@ -18,9 +18,11 @@
       over-count, as does summing multiple same-direction accesses of one node (a union bound,
       capped by the node's size) — except that a direction whose accesses are all exact and pairwise
       provably disjoint ({!Affine.may_touch_same_cell}) sums exactly (gh-ocannl-578). Conditional
-      evaluation also over-counts: a read the renderers may skip — a [Where] arm, the gated right
-      operand of [&&]/[||]/a gate — or any access under a dead loop keeps its direction approximate,
-      since the image can exceed what executes. [fp_approx] is [false] only when the count is exact.
+      evaluation also over-counts: a read the renderers may skip — a [Where] arm's or a gated right
+      operand's ([&&]/[||]/a gate) inline read — or any access under a dead loop keeps its direction
+      approximate, since the image can exceed what executes; a read inside a [Local_scope] body
+      under such an operand is certain, the body being hoisted out of the conditional
+      (gh-ocannl-637). [fp_approx] is [false] only when the count is exact.
     - The op count is an upper bound in the same guards-taken sense, and counts every scalar
       [Unop]/[Binop]/[Ternop] evaluation as one "FLOP" regardless of precision or integerness —
       except the two-operation ternaries [FMA]/[Mul3], which count two (matching [peak_flops]'
@@ -49,9 +51,11 @@ type summary = {
   flops : int;  (** Whole-kernel arithmetic-op count (loop extents times per-statement ops). *)
   flops_approx : bool;
       (** [true] when guarded ([If]) code contributed (guards-taken bound), or a short-circuiting
-          form was charged in full while executing only in part — a [Where] whose arms contribute
-          any cost (only one arm executes; a cost residing in always-run hoisted scope bodies is
-          conservatively flagged too), a gated right operand with nonzero cost (gh-ocannl-578). *)
+          form was charged in full while executing only in part — a [Where] whose arms carry any
+          inline cost (only one arm's expression executes), a gated right operand with nonzero
+          inline cost (gh-ocannl-578). A cost residing in a hoisted [Local_scope] body executes
+          unconditionally — every renderer emits scope definitions before the statement's expression
+          — so it is charged exactly and never flags (gh-ocannl-637). *)
   opaque : bool;
       (** [true] when the code contains [Staged_compilation] or merge-buffer reads: some traffic and
           ops are invisible to the analysis, so counts may UNDER-estimate. *)
@@ -88,23 +92,25 @@ val completion_floor : ?open_placement:(Tnode.t -> bool) -> Low_level.t -> floor
 
     - [fr_flops]: guarded ([If]) bodies count zero (guards-never-taken, dual to guards-taken); the
       short-circuiting forms count only their certain part — [Where] its condition plus the cheaper
-      arm (rendered as [?:]), [And]/[Or] the left operand (rendered as [&&]/[||]), the [Arg1]/[Arg2]
-      projections only the selected operand (the discarded one is never rendered); opaque code
-      counts zero (an under-count is sound in this direction); [Tile_mma] keeps the lane-cooperative
-      attribution, exact when the lane binding is in scope. Statements producing an [open_placement]
-      node — the [Set] family and [Tile_mma] with an open accumulator — count zero: an inline
-      completion instantiates the producer only at surviving consumer sites, possibly {e fewer}
-      cells than the setter loop covers, so "recomputation only adds ops" does not hold and the
-      producer's whole effect attributes to the open placement. Call this on the
-      {e all-materialized} specialization of the decision surface, where every open node's work sits
-      in its own producer statement.
+      arm's inline work (rendered as [?:]), [And]/[Or] the left operand's (rendered as [&&]/[||]),
+      both sides' hoisted scope bodies in either case (they execute regardless, gh-ocannl-637), the
+      [Arg1]/[Arg2] projections only the selected operand (the discarded one is never rendered,
+      hoisted definitions included); opaque code counts zero (an under-count is sound in this
+      direction); [Tile_mma] keeps the lane-cooperative attribution, exact when the lane binding is
+      in scope. Statements producing an [open_placement] node — the [Set] family and [Tile_mma] with
+      an open accumulator — count zero: an inline completion instantiates the producer only at
+      surviving consumer sites, possibly {e fewer} cells than the setter loop covers, so
+      "recomputation only adds ops" does not hold and the producer's whole effect attributes to the
+      open placement. Call this on the {e all-materialized} specialization of the decision surface,
+      where every open node's work sits in its own producer statement.
     - [fr_bytes]: per node and direction, the sum of the exact images when they are pairwise
       provably disjoint (a disjoint union attains its sum — both extractions then agree,
       gh-ocannl-578), otherwise the largest exact image (a union is at least its largest member —
       dual to the upper extraction's capped sum; a second nonzero contribution then marks the floor
-      loose); guarded, non-exact, dead-loop-enclosed, conditionally-evaluated ([Where] arm,
-      [And]/[Or] right operand) and open-producer-operand accesses contribute zero — their execution
-      is not certain in every completion. Nodes with [open_placement] contribute zero.
+      loose); guarded, non-exact, dead-loop-enclosed, conditionally-evaluated (a [Where] arm's or an
+      [And]/[Or] right operand's inline read — not a hoisted scope body's) and open-producer-operand
+      accesses contribute zero — their execution is not certain in every completion. Nodes with
+      [open_placement] contribute zero.
 
     {e Committing} a placement decision is re-evaluation with the narrowed [open_placement]: the
     suppression sets only shrink, so the floor is monotone in refinement — the property that lets a
