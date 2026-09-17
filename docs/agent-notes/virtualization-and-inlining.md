@@ -297,23 +297,35 @@ files.
   specialization-local `footprint_scoped` table instead; `virtual_llc` then serves each read from a
   fresh scratch node in the `footprint` namespace (`Low_level.footprint_namespace`, how a test tells
   them apart) shaped like the READER's box, filled by a prologue that is the ordinary
-  `inline_computation` instantiation at the read's indices under fresh loops, hoisted ahead of the
-  reader's whole top-level statement. Four things that are easy to get wrong: (a) the decision is
-  per ROUTINE, not a placement — a consumer routine footprint-scopes a node an earlier routine left
-  `Virtual` on the template's own reduction extent (`template_facts`), the gh-573 corner, and the
-  node stays `Virtual 152` in the lineage; (b) a read may be footprinted only in a MATERIALIZED
+  `inline_computation` instantiation at the read's indices under fresh loops. WHERE the prologue
+  runs is the semantics: right after the top-level statement of a local producer's last write —
+  the position its materialized buffer would have been complete at, so the scratch snapshots
+  exactly what that buffer would have held even when a later statement rewrites a template input
+  (review round 1 found the reader-side placement diverging from the cap's reading there) — and
+  ahead of the reader's statement for an inherited template, the recompute-at-read reading
+  inlining gives it, which is why an inherited template reading the reader's own target declines
+  (`template_leaves`), and why a reader placed before the producer's last write is ineligible.
+  Four more things that are easy to get wrong: (a) the decision is per ROUTINE, not a placement — a
+  consumer routine footprint-scopes a node an earlier routine left `Virtual` on the template's own
+  reduction extent (`template_facts`, over a SNAPSHOT of the traced store: reading the template
+  registers operands the routine never mentions), the gh-573 corner, and the node stays
+  `Virtual 152` in the lineage; (b) a read may be footprinted only in a MATERIALIZED
   consumer's setter, in a single-writer top-level statement, unguarded, outside a scan and outside
   a storage pass — anywhere else the read would land in a stored template (replayed by a later
   routine where the scratch does not exist), so the decision RETRACTS at that read: to the cap's
   own materialization for a local producer (recorded in `footprint_retracted`, so the decision
   surface stops offering the `` `Footprint`` flip), to plain inlining for an inherited node or an
-  explicit `Context.decide_footprint` preference; (c) the scratch's traced entry and its
+  explicit `Context.decide_footprint` preference (exclusive with `decide_inline` per node —
+  `prefer_inline` / `prefer_footprint` withdraw each other, so a search trying a node's sibling
+  flips does not accumulate them); (c) the scratch's traced entry and its
   `Never_virtual 153` placement are minted in the virtualizer, ahead of `reconcile_traced_store`,
   which would otherwise read the scratch's write-then-read as a fresh node's read-before-write and
   demand it from a prior context; (d) a footprint-scoped node carries TWO flip records
   (`` `Materialize`` and `` `Inline``), a cap-materialized one whose footprint would be strictly
   smaller `` `Inline`` and `` `Footprint`` — every consumer of `flip_candidates` deduplicates by (node, flip), and the
-  placement search's certainty bound counts a kept node only once its last record is kept.
+  placement search's certainty bounds count a kept or rejected node as materialized only when it
+  has no `` `Materialize`` record (a node with one is virtual or footprint-scoped by default, and
+  keeping or losing its `` `Inline`` record keeps it so) and every other record of it is kept.
   Structural probe for "inlined": `count_get` of the node, never `count_scopes` — the simplifier
   collapses a single-assignment scope into its expression. Pinned row by row, with executed parity
   against the materialized and (where the cap alone stands in the way) the inlined reading, by

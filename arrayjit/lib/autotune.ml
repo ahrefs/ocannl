@@ -2833,11 +2833,18 @@ let model_default ?name ?report ctx comp bindings =
               let mat =
                 List.filter_map path ~f:(fun (_level, ((fc : LL.flip_candidate), commitment)) ->
                     (* Certainly materialized below this node: a committed Materialize flip, or a
-                       kept default-materialized candidate whose every non-materialize record
-                       ([`Inline], and [`Footprint] since gh-ocannl-616 — one node may carry both)
-                       is kept on the path. The other commitments (and every open level) contribute
+                       kept DEFAULT-MATERIALIZED candidate — one with no [`Materialize] record,
+                       since a node carrying one is virtual or footprint-scoped by default
+                       (gh-ocannl-616) and keeping its [`Inline] record keeps it so — whose every
+                       non-materialize record ([`Inline], [`Footprint]; one node may carry both) is
+                       kept on the path. The other commitments (and every open level) contribute
                        zero. *)
                     let tn = fc.LL.fc_tn in
+                    let default_materialized =
+                      not
+                        (List.exists cands ~f:(fun (o : LL.flip_candidate) ->
+                             Ir.Tnode.equal o.LL.fc_tn tn && Poly.equal o.LL.fc_flip `Materialize))
+                    in
                     let kept flip =
                       List.exists path ~f:(fun (_, ((o : LL.flip_candidate), c)) ->
                           Ir.Tnode.equal o.LL.fc_tn tn && Poly.equal o.LL.fc_flip flip
@@ -2847,7 +2854,8 @@ let model_default ?name ?report ctx comp bindings =
                     | `Flip, `Materialize -> Some tn
                     | `Keep, ((`Inline | `Footprint) as flip) ->
                         if
-                          List.for_all cands ~f:(fun (o : LL.flip_candidate) ->
+                          default_materialized
+                          && List.for_all cands ~f:(fun (o : LL.flip_candidate) ->
                               (not (Ir.Tnode.equal o.LL.fc_tn tn))
                               || Poly.equal o.LL.fc_flip `Materialize
                               || Poly.equal o.LL.fc_flip flip || kept o.LL.fc_flip)
@@ -2908,8 +2916,8 @@ let model_default ?name ?report ctx comp bindings =
                 {
                   !choice with
                   mc_label =
-                    Printf.sprintf "placements[mat:%s inl:%s] %s" (names mat) (names inl)
-                      !choice.mc_label;
+                    Printf.sprintf "placements[mat:%s inl:%s fp:%s] %s" (names mat) (names inl)
+                      (names fp) !choice.mc_label;
                 };
               result
           | exception ((Utils.User_error _ | Invalid_argument _) as exn) ->

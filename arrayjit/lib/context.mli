@@ -511,5 +511,7 @@ val decide_footprint : t -> Ir.Tnode.t list -> t
     regardless. Per read site, not a placement: a read the virtualizer cannot serve that way (a
     guarded read, a read in a shared loop or inside another candidate's template) is inlined
     instead, legality rejections still materialize, and the node stays [Virtual] in the lineage with
-    its stored computation. Honored only under [virtualize_footprint_materialization]; same
-    hermeticity and same pre-compile-sibling rule as {!decide_inline}. *)
+    its stored computation. Exclusive with {!decide_inline} per node — each withdraws the other's
+    preference, so the later request wins. Honored only under
+    [virtualize_footprint_materialization]; same hermeticity and same pre-compile-sibling rule as
+    {!decide_inline}. *)

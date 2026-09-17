@@ -374,6 +374,140 @@ let case_key_off () =
   let got = execute ~name:"fp_off" opt ~seed:[ (o, blank n) ] ~read:[ o ] in
   p "key-off: executed values are the diagonal" (same got [ diagonal ])
 
+(* A reduction producer reading a materialized operand: [a[i, j] = Σ_{k < kk} (x[i] + 1 + 10 i + j +
+   100 k)]. *)
+let big_reduction_over x a =
+  let i = sym () and j = sym () and k = sym () in
+  seq (zero a)
+    (loop i
+       (loop j
+          (loop_n k kk
+             (set a
+                [| iter i; iter j |]
+                (add
+                   (get a [| iter i; iter j |])
+                   (add (get x [| iter i |]) (add (tag i j) (mul (c 100.) (embed k)))))))))
+
+let reduced_plus b i j = reduced i j +. Float.of_int (kk * b)
+
+(* The flat index of the first top-level statement writing [tn] in the optimized code. *)
+let stmt_writing (o : LL.optimized) tn =
+  List.findi (LL.flat_lines [ o.LL.llc ]) ~f:(fun _ st ->
+      count_stmt ~in_scopes:true st ~f:(function
+        | LL.Set { tn = t; _ } -> Tn.equal t tn
+        | _ -> false)
+      > 0)
+  |> Option.map ~f:fst
+
+(* === An intervening write to a template input between the producer and the reader: the prologue
+   runs at the producer's position, so the scratch snapshots the input exactly as the materialized
+   producer would have read it, not as the reader finds it. === *)
+let case_intervening_write () =
+  let a = mk "aw" and x = mk ~dims:[| n |] "xw" and o = mk ~dims:[| n |] "ow" in
+  materialize o;
+  materialize x;
+  let t = sym () and i' = sym () in
+  let rewrite = loop t (set x [| iter t |] (mul (c 2.) (get x [| iter t |]))) in
+  let consumer = loop i' (set o [| iter i' |] (get a [| iter i'; iter i' |])) in
+  let llc = seq (big_reduction_over x a) (seq rewrite consumer) in
+  let opt = optimize ~name:"fp_intervening" llc in
+  p "intervening: the producer stays virtual" (known_virtual opt a);
+  p "intervening: one 1-D scratch" (List.equal (List.equal Int.equal) (scratch_dims opt) [ [ n ] ]);
+  p "intervening: the prologue runs at the producer's position, ahead of the rewrite"
+    (match scratches opt with
+    | [ d ] -> (
+        match (stmt_writing opt d, stmt_writing opt x) with
+        | Some pro, Some rw -> pro < rw
+        | _ -> false)
+    | _ -> false);
+  let xs = Array.init n ~f:(fun i -> Float.of_int (1 + i)) in
+  let expected = Array.init n ~f:(fun i -> reduced_plus (1 + i) i i) in
+  let doubled = Array.map xs ~f:(fun v -> 2. *. v) in
+  let seed = [ (x, xs); (o, blank n) ] and read = [ o; x ] in
+  let fp = execute ~name:"fp_intervening" opt ~seed ~read in
+  let mat =
+    execute ~name:"fp_intervening_mat"
+      (optimize ~materialized:[ a ] ~name:"fp_intervening" llc)
+      ~seed ~read
+  in
+  p "intervening: the scratch holds the reduction over the input as it was at the producer"
+    (same fp [ expected; doubled ]);
+  p "intervening: footprint and materialized arms agree" (same fp mat)
+
+(* === A reader placed between the producer's zero-initialization and its accumulating nest reads
+   the zeros; the prologue would run after the nest, so the site is ineligible and the cap
+   materializes. === *)
+let case_reader_between_setters () =
+  let a = mk "ab" and o = mk ~dims:[| n |] "ob" in
+  materialize o;
+  let i = sym () and j = sym () and k = sym () and i' = sym () in
+  let fill =
+    loop i
+      (loop j
+         (loop_n k kk
+            (set a
+               [| iter i; iter j |]
+               (add (get a [| iter i; iter j |]) (add (tag i j) (mul (c 100.) (embed k)))))))
+  in
+  let consumer = loop i' (set o [| iter i' |] (get a [| iter i'; iter i' |])) in
+  let llc = seq (zero a) (seq consumer fill) in
+  let opt = optimize ~name:"fp_between" llc in
+  p "between-setters: the reduction cap materializes the producer"
+    (is_cap opt a Tn.Inline_reduction_cap);
+  p_empty "between-setters: no scratch" ~over:(Hashtbl.keys opt.LL.traced_store) (scratches opt);
+  let seed = [ (o, blank n) ] and read = [ o ] in
+  let got = execute ~name:"fp_between" opt ~seed ~read in
+  p "between-setters: executed values are the zero-init the reader finds"
+    (same got [ Array.create ~len:n 0. ])
+
+(* === The gh-573 corner with a recurrence: the inherited template reads the very node the reader
+   writes, so a prologue ahead of the reader's statement would not read what the inlined read reads;
+   both the automatic trigger and the explicit preference decline to inlining. === *)
+let case_inherited_recurrence () =
+  let a = mk "ar" and o = mk ~dims:[| n |] "or" in
+  materialize o;
+  let ctx = LL.empty_optimize_ctx () in
+  let producer = optimize_in ctx ~name:"fp_rec_producer" (big_reduction_over o a) in
+  p "recurrence: the producer routine leaves the node virtual" (known_virtual producer a);
+  Hash_set.add ctx.LL.footprint_preferences a;
+  let i' = sym () in
+  let consumer =
+    optimize_in ctx ~name:"fp_rec_consumer"
+      (loop i' (set o [| iter i' |] (add (get a [| iter i'; iter i' |]) (c 1.))))
+  in
+  p_empty "recurrence: the reader writes a template leaf, so no scratch"
+    ~over:(Hashtbl.keys consumer.LL.traced_store)
+    (scratches consumer);
+  p "recurrence: the read is inlined" (count_get consumer a = 0);
+  let os = Array.init n ~f:(fun i -> Float.of_int (3 + (2 * i))) in
+  let expected = Array.init n ~f:(fun i -> reduced_plus (3 + (2 * i)) i i +. 1.) in
+  let got = execute ~name:"fp_rec_consumer" consumer ~seed:[ (o, os) ] ~read:[ o ] in
+  p "recurrence: executed values read the pre-write cell, as inlining does" (same got [ expected ])
+
+(* === An inherited template whose operand the consumer routine never mentions: the consumer's
+   traced store learns of it while the footprint decision is made, which must not disturb the
+   decision pass; the operand is then an input of the consumer. === *)
+let case_inherited_operand () =
+  let a = mk "aio" and x = mk ~dims:[| n |] "xio" and o = mk ~dims:[| n |] "oio" in
+  materialize o;
+  materialize x;
+  let ctx = LL.empty_optimize_ctx () in
+  let producer = optimize_in ctx ~name:"fp_operand_producer" (big_reduction_over x a) in
+  p "inherited-operand: the producer routine leaves the node virtual" (known_virtual producer a);
+  let i' = sym () in
+  let consumer =
+    optimize_in ctx ~name:"fp_operand_consumer"
+      (loop i' (set o [| iter i' |] (get a [| iter i'; iter i' |])))
+  in
+  p "inherited-operand: the consumer footprint-scopes the inherited node"
+    (List.equal (List.equal Int.equal) (scratch_dims consumer) [ [ n ] ] && count_get consumer a = 0);
+  let xs = Array.init n ~f:(fun i -> Float.of_int (4 + i)) in
+  let expected = Array.init n ~f:(fun i -> reduced_plus (4 + i) i i) in
+  let got =
+    execute ~name:"fp_operand_consumer" consumer ~seed:[ (x, xs); (o, blank n) ] ~read:[ o ]
+  in
+  p "inherited-operand: executed values are the diagonal over the operand" (same got [ expected ])
+
 let () =
   case_diagonal_reduction ();
   case_visit_cap ();
@@ -386,4 +520,8 @@ let () =
   case_candidate_consumer ();
   case_shared_loop ();
   case_key_off ();
+  case_intervening_write ();
+  case_reader_between_setters ();
+  case_inherited_recurrence ();
+  case_inherited_operand ();
   Stdio.printf "%!"

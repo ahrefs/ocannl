@@ -851,8 +851,9 @@ type optimize_ctx = {
           Like {!field-inline_preferences} a request, not a placement: it exempts the node from the
           heuristic caps and lands it on the footprint form where every read is footprintable
           ([footprint_eligibility_query]); a read the virtualizer cannot serve that way falls back
-          to inlining, and legality rejections still materialize. A node in both preference sets
-          takes this one — the explicit middle ground. Honored only under
+          to inlining, and legality rejections still materialize. Exclusive with
+          {!field-inline_preferences} per node — {!prefer_inline} / {!prefer_footprint} withdraw the
+          other, so the later request wins. Honored only under
           [virtualize_footprint_materialization]. *)
 }
 [@@deriving sexp_of]
@@ -899,6 +900,21 @@ let decide_materialized ?(provenance = Tn.Site "31:decide-materialized") (optim_
       | None | Some ((Tnode.Never_virtual | Tnode.On_device), _) ->
           Tnode.Placements.update optim_ctx.placements tn Tnode.On_device provenance
       | Some ((Tnode.Virtual | Tnode.Local | Tnode.Effectively_constant), _) -> ())
+
+(** Records the [Inline] preference (gh-555) for [tns], withdrawing any [Footprint] preference they
+    carried: the two are the same node's mutually exclusive readings, so the later request wins — a
+    search trying a node's sibling flips one after the other must not accumulate them
+    (gh-ocannl-616). *)
+let prefer_inline (optim_ctx : optimize_ctx) tns =
+  List.iter tns ~f:(fun tn ->
+      Hash_set.remove optim_ctx.footprint_preferences tn;
+      Hash_set.add optim_ctx.inline_preferences tn)
+
+(** The [Footprint] counterpart of {!prefer_inline}. *)
+let prefer_footprint (optim_ctx : optimize_ctx) tns =
+  List.iter tns ~f:(fun tn ->
+      Hash_set.remove optim_ctx.inline_preferences tn;
+      Hash_set.add optim_ctx.footprint_preferences tn)
 
 type traced_store = (Tn.t, traced_array) Base.Hashtbl.t [@@deriving sexp_of]
 
@@ -2433,6 +2449,8 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
      which may not. *)
   let prologues = ref [] in
   let current_writers = ref (Set.empty (module Tnode)) in
+  let current_stmt = ref 0 in
+  let last_writer = Hashtbl.create (module Tnode) in
   let statics =
     Set.of_list (module Indexing.Symbol)
     @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
@@ -2453,85 +2471,98 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
     (* The scratch axes: the enclosing loops the read mentions, outermost first (the reader's own
        traversal order, so the scratch is read row-major). *)
     let loops = List.filter (List.rev enclosing) ~f:(fun (s, _) -> Set.mem mentioned s) in
-    if
-      Set.length mentioned <> List.length loops
-      || List.exists loops ~f:(fun (_, (from_, _)) -> from_ <> 0)
-    then `Unsupported
-    else
-      let fresh = List.map loops ~f:(fun (s, (_, to_)) -> (s, Indexing.get_symbol (), to_)) in
-      let env =
-        Map.of_alist_exn (module Indexing.Symbol) (List.map fresh ~f:(fun (s, f, _) -> (s, f)))
-      in
-      let substitute (idx : Indexing.axis_index) : Indexing.axis_index =
-        match idx with
-        | Indexing.Iterator s -> (
-            match Map.find env s with Some f -> Indexing.Iterator f | None -> idx)
-        | Indexing.Affine { symbols; offset } ->
-            Indexing.affine
-              ~symbols:
-                (List.map symbols ~f:(fun (c, s) -> (c, Option.value (Map.find env s) ~default:s)))
-              ~offset
-        | Indexing.Fixed_idx _ | Indexing.Sub_axis | Indexing.Concat _ -> idx
-      in
-      let call_args = Array.map indices ~f:substitute in
-      let id = get_scope tn in
-      match
-        inline_computation ~id ~inherited_merge_tainted ~inherited_tns optim_ctx traced
-          static_indices call_args
-      with
-      | None -> `Rejected
-      | Some body ->
-          if Hash_set.mem inherited_tns tn then record_spliced_reads body;
-          let dims =
-            match fresh with
-            | [] -> [| 1 |]
-            | _ -> Array.of_list_map fresh ~f:(fun (_, _, to_) -> to_ + 1)
-          in
-          let scratch =
-            Tn.create ~namespace:footprint_namespace
-              (Tn.Specified (Lazy.force tn.Tn.storage_prec))
-              ~id:(fresh_footprint_id ()) ~label:("footprint" :: tn.Tn.label)
-              ~unpadded_dims:(lazy dims)
-              ~padding:(lazy None)
-              ()
-          in
-          (* Routine-private and unobservable: [Never_virtual] here, and backend finalization
-             resolves it to [Local] (or [On_device] above the stack threshold, and across a fission
-             boundary). The traced entry is minted now, ahead of [reconcile_traced_store], which
-             would otherwise read the scratch's write-then-read as a fresh node's read-before-write
-             and demand its contents from a prior context. *)
-          Tn.Placements.update plc scratch Never_virtual (Site "153:footprint-scratch");
-          let st = get_node traced_store scratch in
-          st.has_assignment <- true;
-          st.read_by_other <- true;
-          st.is_accessing <- true;
-          st.is_complex <- true;
-          let write_idcs =
-            match fresh with
-            | [] -> [| Indexing.Fixed_idx 0 |]
-            | _ -> Array.of_list_map fresh ~f:(fun (_, f, _) -> Indexing.Iterator f)
-          in
-          let read_idcs =
-            match loops with
-            | [] -> [| Indexing.Fixed_idx 0 |]
-            | _ -> Array.of_list_map loops ~f:(fun (s, _) -> Indexing.Iterator s)
-          in
-          let stmt =
-            Set
-              {
-                tn = scratch;
-                idcs = write_idcs;
-                llsc =
-                  Local_scope { id; body; orig_indices = call_args; mint = Inlined_computation };
-                debug = "";
-              }
-          in
-          let nest =
-            List.fold_right fresh ~init:stmt ~f:(fun (_, f, to_) body ->
-                For_loop { index = f; from_ = 0; to_; body; axis = Serial })
-          in
-          prologues := nest :: !prologues;
-          `Footprinted (Get (scratch, read_idcs))
+    (* Where the prologue runs: right after the top-level statement carrying a LOCAL producer's last
+       write — the position its materialized buffer would have been complete at, so the scratch
+       snapshots exactly what that buffer would have held, whatever later statements do to the
+       template's inputs — and, for a node with no local write (an inherited template), ahead of the
+       reader's statement, the recompute-at-read reading inlining gives it. *)
+    let placement =
+      match Hashtbl.find last_writer tn with
+      | Some p when p < !current_stmt -> Some (`After p)
+      | Some _ -> None
+      | None -> Some (`Before !current_stmt)
+    in
+    match placement with
+    | None -> `Unsupported
+    | Some _
+      when Set.length mentioned <> List.length loops
+           || List.exists loops ~f:(fun (_, (from_, _)) -> from_ <> 0) ->
+        `Unsupported
+    | Some placement -> (
+        let fresh = List.map loops ~f:(fun (s, (_, to_)) -> (s, Indexing.get_symbol (), to_)) in
+        let env =
+          Map.of_alist_exn (module Indexing.Symbol) (List.map fresh ~f:(fun (s, f, _) -> (s, f)))
+        in
+        let substitute (idx : Indexing.axis_index) : Indexing.axis_index =
+          match idx with
+          | Indexing.Iterator s -> (
+              match Map.find env s with Some f -> Indexing.Iterator f | None -> idx)
+          | Indexing.Affine { symbols; offset } ->
+              Indexing.affine
+                ~symbols:
+                  (List.map symbols ~f:(fun (c, s) -> (c, Option.value (Map.find env s) ~default:s)))
+                ~offset
+          | Indexing.Fixed_idx _ | Indexing.Sub_axis | Indexing.Concat _ -> idx
+        in
+        let call_args = Array.map indices ~f:substitute in
+        let id = get_scope tn in
+        match
+          inline_computation ~id ~inherited_merge_tainted ~inherited_tns optim_ctx traced
+            static_indices call_args
+        with
+        | None -> `Rejected
+        | Some body ->
+            if Hash_set.mem inherited_tns tn then record_spliced_reads body;
+            let dims =
+              match fresh with
+              | [] -> [| 1 |]
+              | _ -> Array.of_list_map fresh ~f:(fun (_, _, to_) -> to_ + 1)
+            in
+            let scratch =
+              Tn.create ~namespace:footprint_namespace
+                (Tn.Specified (Lazy.force tn.Tn.storage_prec))
+                ~id:(fresh_footprint_id ()) ~label:("footprint" :: tn.Tn.label)
+                ~unpadded_dims:(lazy dims)
+                ~padding:(lazy None)
+                ()
+            in
+            (* Routine-private and unobservable: [Never_virtual] here, and backend finalization
+               resolves it to [Local] (or [On_device] above the stack threshold, and across a
+               fission boundary). The traced entry is minted now, ahead of [reconcile_traced_store],
+               which would otherwise read the scratch's write-then-read as a fresh node's
+               read-before-write and demand its contents from a prior context. *)
+            Tn.Placements.update plc scratch Never_virtual (Site "153:footprint-scratch");
+            let st = get_node traced_store scratch in
+            st.has_assignment <- true;
+            st.read_by_other <- true;
+            st.is_accessing <- true;
+            st.is_complex <- true;
+            let write_idcs =
+              match fresh with
+              | [] -> [| Indexing.Fixed_idx 0 |]
+              | _ -> Array.of_list_map fresh ~f:(fun (_, f, _) -> Indexing.Iterator f)
+            in
+            let read_idcs =
+              match loops with
+              | [] -> [| Indexing.Fixed_idx 0 |]
+              | _ -> Array.of_list_map loops ~f:(fun (s, _) -> Indexing.Iterator s)
+            in
+            let stmt =
+              Set
+                {
+                  tn = scratch;
+                  idcs = write_idcs;
+                  llsc =
+                    Local_scope { id; body; orig_indices = call_args; mint = Inlined_computation };
+                  debug = "";
+                }
+            in
+            let nest =
+              List.fold_right fresh ~init:stmt ~f:(fun (_, f, to_) body ->
+                  For_loop { index = f; from_ = 0; to_; body; axis = Serial })
+            in
+            prologues := (placement, nest) :: !prologues;
+            `Footprinted (Get (scratch, read_idcs)))
   in
   (* A read of a footprint-scoped node. Outside a position that may host the footprint form
      ([footprint_ok]), or at a site the prologue builder cannot shape, the decision retracts: to the
@@ -2874,21 +2905,32 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
     | Binop (op, (llv1, prec1), (llv2, prec2)) -> Binop (op, (loop llv1, prec1), (loop llv2, prec2))
     | Unop (op, (llsc, prec)) -> Unop (op, (loop llsc, prec))
   in
-  (* Top-level statement by statement, so a footprint prologue minted inside one lands just ahead of
-     it; the [Seq] spine is rebuilt flat, which every later pass reads through [flat_lines]
-     anyway. *)
-  let result =
-    List.concat_map (flat_lines [ llc ]) ~f:(fun stmt ->
+  (* Top-level statement by statement: a footprint prologue is spliced right after the statement of
+     its producer's last write, or ahead of the reader's when the producer is inherited; the [Seq]
+     spine is rebuilt flat, which every later pass reads through [flat_lines] anyway. *)
+  let stmts = Array.of_list (flat_lines [ llc ]) in
+  Array.iteri stmts ~f:(fun i stmt ->
+      Set.iter
+        (statement_writers (Set.empty (module Tnode)) stmt)
+        ~f:(fun tn -> Hashtbl.set last_writer ~key:tn ~data:i));
+  let processed =
+    Array.mapi stmts ~f:(fun i stmt ->
+        current_stmt := i;
         current_writers := statement_writers (Set.empty (module Tnode)) stmt;
-        let stmt =
-          loop_proc
-            ~process_for:(Set.empty (module Tnode))
-            ~owned:(Set.empty (module Tnode))
-            ~in_storage_pass:false ~guarded:false ~in_scan:false ~enclosing:[] stmt
-        in
-        let minted = List.rev !prologues in
-        prologues := [];
-        minted @ [ stmt ])
+        loop_proc
+          ~process_for:(Set.empty (module Tnode))
+          ~owned:(Set.empty (module Tnode))
+          ~in_storage_pass:false ~guarded:false ~in_scan:false ~enclosing:[] stmt)
+  in
+  let before = Array.map stmts ~f:(fun _ -> []) and after = Array.map stmts ~f:(fun _ -> []) in
+  (* Minted in program order, consed: reversed per slot below. *)
+  List.iter !prologues ~f:(fun (placement, nest) ->
+      match placement with
+      | `Before j -> before.(j) <- nest :: before.(j)
+      | `After p -> after.(p) <- nest :: after.(p));
+  let result =
+    Array.to_list processed
+    |> List.concat_mapi ~f:(fun i stmt -> List.rev before.(i) @ [ stmt ] @ List.rev after.(i))
     |> unflat_lines
   in
   (result, spliced_reads)
@@ -6903,7 +6945,12 @@ let drop_dead_loop_accesses (accs : Tn.t Affine.access list) : Tn.t Affine.acces
     prologue is hoisted ahead of that statement, so a write inside it — a shared-loop sibling —
     could be one the template depends on. A read inside the node's own setter statement is a
     read-modify-write self-read, part of the template rather than a read site. *)
-type footprint_eligibility = Footprint_cells of int | Not_footprintable of string
+type footprint_eligibility =
+  | Footprint_cells of { cells : int; readers : Set.M(Tn).t }
+      (** [cells]: the scratch cells over the read sites; [readers]: the nodes the readers'
+          statements write — what a template must not read, for a form whose prologue runs ahead of
+          the reader rather than at the producer. *)
+  | Not_footprintable of string
 [@@deriving sexp_of]
 
 let footprint_eligibility_query (static_indices : Indexing.static_symbol list)
@@ -6928,11 +6975,19 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list)
   in
   fun tn ->
     let own_writes = Hashtbl.find writes_by_tn tn |> Option.value ~default:[] in
+    (* The prologue of a LOCAL producer runs right after the producer's last top-level statement —
+       the position the materialized producer would have run at, so the scratch snapshots exactly
+       what its buffer would have held — which a reader placed earlier could not see. *)
+    let own_last =
+      List.fold own_writes ~init:(-1) ~f:(fun acc w -> max acc (Affine.stmt_head w.Affine.a_path))
+    in
     let site (a : _ Affine.access) =
       if List.exists own_writes ~f:(fun w -> Affine.same_statement w.Affine.a_path a.a_path) then
-        Ok 0
+        Ok (0, Set.empty (module Tn))
       else if a.a_dynamic then Error "dynamically indexed read"
       else if a.a_guarded then Error "guarded read"
+      else if (not (List.is_empty own_writes)) && Affine.stmt_head a.a_path <= own_last then
+        Error "reader precedes the producer's last write"
       else
         let writers =
           Hashtbl.find writers_by_stmt (Affine.stmt_head a.a_path)
@@ -6949,7 +7004,8 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list)
                 |> List.filter ~f:(fun s -> not (Set.mem statics_set s))
                 |> Set.of_list (module Indexing.Symbol)
               in
-              Set.fold_result syms ~init:1 ~f:(fun cells s ->
+              Result.map ~f:(fun cells -> (cells, writers))
+              @@ Set.fold_result syms ~init:1 ~f:(fun cells s ->
                   match List.Assoc.find a.a_loops s ~equal:Indexing.equal_symbol with
                   | Some (0, hi) -> Ok (cells * (hi + 1))
                   | Some _ -> Error "enclosing loop is not zero-based"
@@ -6959,20 +7015,15 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list)
     | None -> Not_footprintable "no read of the node"
     | Some sites -> (
         match
-          List.fold_result sites ~init:0 ~f:(fun acc a -> Result.map (site a) ~f:(( + ) acc))
+          List.fold_result sites
+            ~init:(0, Set.empty (module Tn))
+            ~f:(fun (cells, readers) a ->
+              Result.map (site a) ~f:(fun (c, w) -> (cells + c, Set.union readers w)))
         with
-        | Ok 0 -> Not_footprintable "only read-modify-write self-reads"
-        | Ok cells -> Footprint_cells cells
+        | Ok (0, _) -> Not_footprintable "only read-modify-write self-reads"
+        | Ok (cells, readers) -> Footprint_cells { cells; readers }
         | Error reason -> Not_footprintable reason)
 
-(* The placement decision procedure over the traced facts and affine metrics — the tail of the
-   retired [visit_llc], factored out (gh-554; the analysis/decision split of gh-555 step 1). Writes
-   decisions into the lineage's placements table; the metrics are forced only when a decision
-   actually consults them. The heuristic caps ([max_visits], [max_inline_reduction],
-   [max_inline_fanin]) are priors of this default policy, not legality: a node in
-   [optim_ctx.inline_preferences] (gh-555) is exempt from both, like one-hot selector producers
-   always were, while the legality rejections ([check_and_store_virtual] / [inline_computation]) and
-   the observability pessimizations (read-only, read-before-write) apply regardless. *)
 (* gh-ocannl-616, the gh-573 corner: the facts the caps consult about a LOCAL producer, read off a
    stored template instead — a node an earlier routine of the lineage committed [Virtual] has no
    setter in this routine, so [trace_node_facts] recorded none. The reduction extent is the same
@@ -7001,6 +7052,51 @@ let template_facts traced_store ~self (at : Indexing.axis_index array option) (b
   loop ~ranges:(Map.empty (module Indexing.Symbol)) body;
   (!extent, !complex)
 
+(* gh-ocannl-616: the materialized nodes a stored template reads once instantiated — its own reads,
+   through the templates of the virtual nodes it reads (spliced at instantiation). What a consumer
+   routine's footprint prologue, which runs ahead of the reader's statement, must not find written
+   by that statement. *)
+let template_leaves (optim_ctx : optimize_ctx) (tn : Tn.t) : Set.M(Tnode).t =
+  let plc = optim_ctx.placements in
+  let reads ~self body =
+    let open Access_fold in
+    let policy =
+      {
+        discarded_operands = Skip;
+        gated_operands = Visit;
+        dead_loops = Skip;
+        local_scopes = Visit;
+        guards = Ignore;
+        scan_implicit = Skip;
+      }
+    in
+    let hooks =
+      {
+        (hooks ()) with
+        scalar =
+          (fun _ acc sc ->
+            match sc with
+            | Get (p, _) | Get_dynamic { tn = p; _ } ->
+                Continue (if Tn.equal p self then acc else Set.add acc p)
+            | _ -> Continue acc);
+      }
+    in
+    fold ~policy ~hooks ~init:(Set.empty (module Tnode)) body
+  in
+  let visited = Hash_set.create (module Tnode) in
+  let rec go acc tn =
+    if Hash_set.mem visited tn then acc
+    else (
+      Hash_set.add visited tn;
+      match Hashtbl.find optim_ctx.computations tn with
+      | None -> Set.add acc tn
+      | Some comps ->
+          List.fold comps ~init:acc ~f:(fun acc (_, body) ->
+              Set.fold (reads ~self:tn body) ~init:acc ~f:(fun acc p ->
+                  if Tn.Placements.known_virtual plc p then go acc p else Set.add acc p)))
+  in
+  go (Set.empty (module Tnode)) tn
+
 let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads_covered
     ~read_multiplicity ~footprint ~(footprint_scoped : (Tn.t, Tn.provenance option) Hashtbl.t) =
   let plc = optim_ctx.placements in
@@ -7012,9 +7108,17 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
   let footprint_cells tn =
     if footprint_on then
       match (Lazy.force footprint) tn with
-      | Footprint_cells c -> Some c
+      | Footprint_cells { cells; _ } -> Some cells
       | Not_footprintable _ -> None
     else None
+  in
+  (* An inherited node's prologue runs ahead of the reader's statement (there is no producer
+     position to run at), so the reader's own write must not feed the template. *)
+  let inherited_readers_clear tn =
+    match (Lazy.force footprint) tn with
+    | Footprint_cells { readers; _ } ->
+        Set.is_empty (Set.inter readers (template_leaves optim_ctx tn))
+    | Not_footprintable _ -> false
   in
   let footprint_profitable tn =
     match footprint_cells tn with Some c -> c < Tn.num_elems tn | None -> false
@@ -7060,7 +7164,9 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
         Hash_set.mem optim_ctx.footprint_preferences tn
         && Option.is_some (footprint_cells tn)
         && (Option.is_none (Tn.Placements.get plc tn)
-           || (Tn.Placements.known_virtual plc tn && Hashtbl.mem optim_ctx.computations tn))
+           || Tn.Placements.known_virtual plc tn
+              && Hashtbl.mem optim_ctx.computations tn
+              && inherited_readers_clear tn)
       in
       if footprint_preferred then Hashtbl.set footprint_scoped ~key:tn ~data:None;
       let cap_exempt = cap_exempt traced || footprint_preferred in
@@ -7124,15 +7230,18 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
      inlining if the virtualizer cannot serve a site — an inherited node has no materialization to
      retract to. The reduction and visit thresholds only: the fan-in guard below refuses local
      producers alone, and its accumulation for an inherited node is not consulted here. *)
+  (* Over a snapshot: [template_facts] registers the template's operands in the traced store
+     through [is_complex_comp] ([get_node]), and the operand of an inherited template need not be
+     mentioned by this routine at all. *)
   if footprint_on then
-    Hashtbl.iter traced_store ~f:(fun traced ->
+    List.iter (Hashtbl.data traced_store) ~f:(fun traced ->
         let tn = traced.tn in
         if
           (not traced.has_assignment) && traced.read_by_other
           && (not (cap_exempt traced))
           && Tn.Placements.known_virtual plc tn
           && (not (Hashtbl.mem footprint_scoped tn))
-          && footprint_profitable tn
+          && footprint_profitable tn && inherited_readers_clear tn
         then
           match Hashtbl.find optim_ctx.computations tn with
           | None -> ()
@@ -7777,7 +7886,7 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
               && not (Hash_set.mem footprint_retracted tn)
             then
               match (Lazy.force an.an_footprint) tn with
-              | Footprint_cells c when c < Tn.num_elems tn -> Some c
+              | Footprint_cells { cells; _ } when cells < Tn.num_elems tn -> Some cells
               | Footprint_cells _ | Not_footprintable _ -> None
             else None
           in

@@ -1225,6 +1225,17 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
            completion the chain can still reach; the other two outcomes leave it open (inline
            commitments never tighten the floor). *)
         let certain_mat = ref [] in
+        (* A node's alternatives are mutually exclusive readings, so once one of its flips is
+           accepted its sibling record is skipped: applied on top of the accepted one it would only
+           re-measure the accepted reading (gh-ocannl-616). Nodes with no [`Materialize] record are
+           the default-materialized ones — the only ones a rejected [`Inline] / [`Footprint] flip
+           leaves certainly materialized. *)
+        let accepted_nodes = ref [] in
+        let default_materialized tn =
+          not
+            (List.exists candidates ~f:(fun (o : LL.flip_candidate) ->
+                 Tn.equal o.LL.fc_tn tn && Poly.equal o.LL.fc_flip `Materialize))
+        in
         let measured = ref 0 and pruned = ref 0 in
         let rec walk = function
           | [] -> ()
@@ -1234,6 +1245,10 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
              A/B winner is already in hand — so the refinement just stops. *)
           | _ when lineage_poisoned () ->
               logf "flip refinement stopped: the shared lineage is poisoned"
+          | fc :: rest when List.mem !accepted_nodes fc.LL.fc_tn ~equal:Tn.equal ->
+              logf "flip %s skipped: a sibling flip of the node was accepted"
+                (Tn.debug_name fc.LL.fc_tn);
+              walk rest
           | fc :: rest -> (
               let _, chain_ms, base_ctx, base_timing = !chain in
               let arm =
@@ -1272,16 +1287,20 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                   record r;
                   Int.incr measured;
                   let accepted = Float.(ms < chain_ms) in
-                  if accepted then chain := (r, ms, ctx', timing');
+                  if accepted then (
+                    chain := (r, ms, ctx', timing');
+                    accepted_nodes := fc.LL.fc_tn :: !accepted_nodes);
                   (match (fc.LL.fc_flip, accepted) with
                   | `Materialize, true -> certain_mat := fc.LL.fc_tn :: !certain_mat
                   | (`Inline | `Footprint), false
-                    when not
-                           (List.exists rest ~f:(fun (o : LL.flip_candidate) ->
-                                Tn.equal o.LL.fc_tn fc.LL.fc_tn)) ->
+                    when default_materialized fc.LL.fc_tn
+                         && not
+                              (List.exists rest ~f:(fun (o : LL.flip_candidate) ->
+                                   Tn.equal o.LL.fc_tn fc.LL.fc_tn)) ->
                       (* A cap-materialized node carries a record per open direction
                          (gh-ocannl-616); it is certainly materialized only once its last one is
-                         rejected. *)
+                         rejected — and a footprint-scoped node, which also carries an [`Inline]
+                         record, never is by a rejection: it keeps its footprint reading. *)
                       certain_mat := fc.LL.fc_tn :: !certain_mat
                   | `Materialize, false | (`Inline | `Footprint), _ -> ());
                   walk rest)

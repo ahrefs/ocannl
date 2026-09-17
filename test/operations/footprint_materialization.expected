@@ -55,3 +55,18 @@ key-off: the reduction cap materializes the producer: true
 key-off: no scratch: true
 key-off: no footprint flip: true
 key-off: executed values are the diagonal: true
+intervening: the producer stays virtual: true
+intervening: one 1-D scratch: true
+intervening: the prologue runs at the producer's position, ahead of the rewrite: true
+intervening: the scratch holds the reduction over the input as it was at the producer: true
+intervening: footprint and materialized arms agree: true
+between-setters: the reduction cap materializes the producer: true
+between-setters: no scratch: true
+between-setters: executed values are the zero-init the reader finds: true
+recurrence: the producer routine leaves the node virtual: true
+recurrence: the reader writes a template leaf, so no scratch: true
+recurrence: the read is inlined: true
+recurrence: executed values read the pre-write cell, as inlining does: true
+inherited-operand: the producer routine leaves the node virtual: true
+inherited-operand: the consumer footprint-scopes the inherited node: true
+inherited-operand: executed values are the diagonal over the operand: true

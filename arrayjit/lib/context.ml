@@ -954,8 +954,8 @@ let lowered_for_decisions ?name ?(materialized = []) ?(inline = []) ?(footprint 
   (* The same decision recording as [decide_materialized] / [decide_inline] / [decide_footprint]
      below, applied to the hermetic fork rather than a child context. *)
   Ir.Low_level.decide_materialized optim_ctx materialized;
-  List.iter inline ~f:(Hash_set.add optim_ctx.Ir.Low_level.inline_preferences);
-  List.iter footprint ~f:(Hash_set.add optim_ctx.Ir.Low_level.footprint_preferences);
+  Ir.Low_level.prefer_inline optim_ctx inline;
+  Ir.Low_level.prefer_footprint optim_ctx footprint;
   let _name, (lowered : Ir.Low_level.optimized) =
     Backends.lower_assignments optim_ctx ?name bindings comp.Asgns.asgns
   in
@@ -995,7 +995,7 @@ let decide_inline ctx tns =
                only steers placements not yet decided. Callers wanting the exemption to take effect
                fork a pre-compile sibling, as [Train.tune_placements] does. *)
             let optimize_ctx = Ir.Low_level.copy_optimize_ctx bctx.BI.optimize_ctx in
-            List.iter tns ~f:(Hash_set.add optimize_ctx.Ir.Low_level.inline_preferences);
+            Ir.Low_level.prefer_inline optimize_ctx tns;
             (Backend.make_child ~optimize_ctx bctx, ()));
       }
   in
@@ -1010,7 +1010,7 @@ let decide_footprint ctx tns =
             (* Fork like [decide_inline]; a preference for the same reasons — the footprint form is
                served per read site by the virtualizer, which may still decline one. *)
             let optimize_ctx = Ir.Low_level.copy_optimize_ctx bctx.BI.optimize_ctx in
-            List.iter tns ~f:(Hash_set.add optimize_ctx.Ir.Low_level.footprint_preferences);
+            Ir.Low_level.prefer_footprint optimize_ctx tns;
             (Backend.make_child ~optimize_ctx bctx, ()));
       }
   in

@@ -838,8 +838,9 @@ type optimize_ctx = {
           A node recorded here is exempt from the heuristic caps like an inline preference, and its
           reads are served from footprint-scoped scratch where every one of them is footprintable; a
           read the virtualizer cannot serve that way falls back to inlining, and the legality
-          rejections still apply. A node in both preference sets takes this one. Honored only under
-          [virtualize_footprint_materialization]. *)
+          rejections still apply. Exclusive with {!field-inline_preferences} per node: record either
+          through {!prefer_inline} / {!prefer_footprint}, which withdraw the other, so the later
+          request wins. Honored only under [virtualize_footprint_materialization]. *)
 }
 [@@deriving sexp_of]
 
@@ -866,6 +867,7 @@ val cap_provenance_setting : Tnode.provenance -> string option
     try to keep the node virtual instead of materializing it. *)
 
 val decide_materialized : ?provenance:Tnode.provenance -> optimize_ctx -> Tnode.t list -> unit
+
 (** Records an [On_device] decision for each node this lineage has not already resolved otherwise —
     the "materialize this node" move of the placement lattice. Nodes already resolved to [Virtual] /
     [Local] / [Effectively_constant] keep their resolution: decisions are final within a lineage.
@@ -875,6 +877,15 @@ val decide_materialized : ?provenance:Tnode.provenance -> optimize_ctx -> Tnode.
     directly: the analyze-only entry points, and hand-built [optimize] calls in tests — for which no
     context-level form can work, since the [?prelowered] seam replaces the context's lineage state
     with the optimized record's own [optimize_ctx]. *)
+
+val prefer_inline : optimize_ctx -> Tnode.t list -> unit
+(** Records the [Inline] preference (gh-555) for the nodes, withdrawing any [Footprint] preference
+    they carried: the two are one node's mutually exclusive readings, so the later request wins — a
+    search trying a node's sibling flips one after the other must not accumulate them
+    (gh-ocannl-616). *)
+
+val prefer_footprint : optimize_ctx -> Tnode.t list -> unit
+(** The [Footprint] counterpart of {!prefer_inline}. *)
 
 (** Granularity of the XOR remap applied to a swizzled node's minor axis (gh-ocannl-481 item 3, D1).
     Both flavors are per-row bijections of the minor axis, so the IR-level semantics are identical;
