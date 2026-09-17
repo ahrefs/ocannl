@@ -1291,6 +1291,43 @@ def provenance_check(results):
     return violations
 
 
+# gh-ocannl-1006: the report's memory column. A cell reports the peak over its TIMED STEPS, which
+# is what a footprint-for-time trade (gh-ocannl-616) is read against -- not a figure read at process
+# exit, which for a tuned cell is the SEARCH's high water (one candidate buffer per arm) rather than
+# the workload's.
+MIB = 1048576
+
+
+def peak_memory_counters(rows):
+    """The distinct counters these rows' memory column was read from, in first-seen order.
+
+    Named in the report rather than left to the framework and backend columns, because the
+    available counters are not one quantity and which one a cell got does not follow from either:
+    an allocator's own high-water mark is exact over the window, a current gauge sampled at step
+    boundaries is a lower bound on the same window, and a driver-level figure counts pages the
+    allocator reserved and never gave back. A reader who cannot see which one a row carries would
+    rank them against each other as though they were one column.
+    """
+    seen = []
+    for r in rows:
+        source = r.get("peak_memory_source")
+        if r.get("peak_memory_bytes") is not None and source and source not in seen:
+            seen.append(source)
+    return seen
+
+
+def peak_memory_mib(result):
+    """The memory column's cell: MiB, or an em dash where nothing was measured.
+
+    A dash, never a zero: a cell whose framework exposes no device counter on this backend -- a
+    pytorch `cpu` row, say -- has not measured a workload with no footprint, and there is no
+    host-RSS substitute to put there (RSS is a different quantity, and a column mixing the two
+    would be read as if it were one number).
+    """
+    bytes_ = result.get("peak_memory_bytes")
+    return "\u2014" if bytes_ is None else f"{bytes_ / MIB:,.1f}"
+
+
 def failure_line(failure):
     """One `(label, note)` runner failure, as the run log and the report name it."""
     label, note = failure
@@ -1546,6 +1583,25 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None, amb
                 "came from: `(cached)` for one that replayed the schedule cache, `(no search)` "
                 "for one that searched nothing at all.\n"
             )
+        # gh-ocannl-1006: the column appears once any row in the section measured a footprint;
+        # rows whose framework offers no device counter print a dash beside them.
+        with_peak_memory = any(r.get("peak_memory_bytes") is not None for r in rows)
+        if with_peak_memory:
+            counters = peak_memory_counters(rows)
+            lines.append(
+                "`peak MiB` is the peak device footprint over the cell's TIMED STEPS "
+                "(gh-ocannl-1006) -- bracketed there rather than read at process exit, so a tuned "
+                "cell's schedule search, which allocates a candidate buffer per arm, is not in it. "
+                "`\u2014` is a cell whose framework exposes no device counter on this backend (a "
+                "pytorch `cpu` row, say): not a zero, and no host-RSS figure is substituted for "
+                "it. The counters are not one quantity, so each row's is named: "
+                + "; ".join(f"`{c}`" for c in counters)
+                + ". A high-water counter is exact over the window; one sampled at step boundaries "
+                "is a lower bound on it, blind to an allocation made and given back within a step. "
+                "Requested bytes off an allocator (OCANNL's seam, "
+                "`torch.cuda.max_memory_allocated`) are the same quantity as each other and are "
+                "NOT the device-wide figure a driver reports.\n"
+            )
         # gh-ocannl-626: only cells that tuned something have an emission census to report.
         with_tensorization = any(r.get("tensorization") for r in rows)
         if with_tensorization:
@@ -1566,6 +1622,9 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None, amb
             rule += "---|"
         header += " step p50 ms | p10 | p90 | queued ms | compile s |"
         rule += "---|---|---|---|---|"
+        if with_peak_memory:
+            header += " peak MiB |"
+            rule += "---|"
         if with_provenance:
             header += " pass |"
             rule += "---|"
@@ -1605,6 +1664,7 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None, amb
                 )
             compile_s = num(r["compile_s"], ".2f")
             compile_s += COMPILE_S_NOTE.get(r.get("search_pass"), "")
+            peak_memory = f" {peak_memory_mib(r)} |" if with_peak_memory else ""
             provenance = ""
             if with_provenance:
                 provenance = " %s |" % PROVENANCE_MARK.get(r.get("provenance"), "—")
@@ -1622,7 +1682,8 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None, amb
                 f"| {r['framework']} | {r['backend']} | {rendered_variant(r)} "
                 f"| {r.get('precision', 'f32')} {regime}"
                 f"| {num(s['p50'], '.3f')} | {num(s['p10'], '.3f')} | {num(s['p90'], '.3f')} "
-                f"| {num(r['queued_step_ms'], '.3f')} | {compile_s} |{provenance} {parity} |{tokens}"
+                f"| {num(r['queued_step_ms'], '.3f')} | {compile_s} |{peak_memory}"
+                f"{provenance} {parity} |{tokens}"
             )
     if unavailable:
         # Stated where the matrix is read: a cell missing because the workload cannot express it

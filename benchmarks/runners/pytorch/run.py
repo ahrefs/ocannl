@@ -21,8 +21,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from bench_common import (
     emit,
+    peak_memory_fields,
     percentiles,
     read_st_metadata,
+    torch_peak_memory,
     torch_searched,
 )
 
@@ -313,6 +315,12 @@ def main():
         step(k)
         k += 1
     sync()
+    # gh-ocannl-1006: the memory column's bracket, opened after the warmup so the peak is the timed
+    # steps' and not the graph build's. Every `probe.sample()` below sits AFTER the step's elapsed
+    # time is taken, so a gauge read costs the reported number nothing.
+    peak_memory = torch_peak_memory(torch, args.device)
+    if peak_memory:
+        peak_memory.start()
     synced = []
     for _ in range(timed_steps):
         t0 = time.perf_counter()
@@ -320,12 +328,16 @@ def main():
         k += 1
         sync()
         synced.append((time.perf_counter() - t0) * 1e3)
+        if peak_memory:
+            peak_memory.sample()
     t0 = time.perf_counter()
     for _ in range(timed_steps):
         step(k)
         k += 1
     sync()
     queued = (time.perf_counter() - t0) / timed_steps * 1e3
+    if peak_memory:
+        peak_memory.sample()
     retimed = None
     if args.retime:
         sync()
@@ -360,6 +372,7 @@ def main():
         # would let the stamp mask a runner that ran the other arm.
         "runner_regime": runner_regime,
         "regime_settings": regime_settings,
+        **peak_memory_fields(peak_memory),
     }
     if args.compile_mode:
         result["compile_mode"] = args.compile_mode

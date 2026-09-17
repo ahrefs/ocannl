@@ -161,3 +161,112 @@ def torch_searched(torch, compiled):
     if codegen:
         return True
     return False if replayed else None
+
+
+# --- Peak device memory (gh-ocannl-1006) --------------------------------------------------
+#
+# The report's memory column is what a footprint-for-time trade (gh-ocannl-616) is read against,
+# so a cell reports the peak over its TIMED STEPS and not over the process: a tuned cell's search
+# allocates a candidate buffer per arm, and a counter read at exit reports the search's high water
+# rather than the workload's.
+#
+# The counters the three frameworks expose are not one quantity, and the difference does not
+# follow the framework column, so each cell NAMES the counter it read. Two kinds:
+#
+#   high-water -- the allocator maintains the maximum itself (`torch.cuda.max_memory_allocated`,
+#     OCANNL's own allocator seam). Exact over the window, and the two are the same quantity
+#     (requested bytes off an allocator), so those rows compare honestly with each other.
+#   sampled -- the framework offers only a CURRENT gauge (`torch.mps.driver_allocated_memory`,
+#     tinygrad's `GlobalCounters.mem_used`), so the runner takes the maximum over the step
+#     boundaries. That is a lower bound on the window: an allocation made and given back inside one
+#     step is invisible to it.
+#
+# A framework with neither gets None, which reaches the report as a dash. There is no host-RSS
+# substitute: RSS is not the device footprint and a column mixing the two would be read as if it
+# were one number.
+
+
+class PeakMemoryProbe:
+    """One framework's peak-device-memory counter over a bracketed window.
+
+    `start()` opens the window, `sample()` is called at every step boundary (a no-op for a
+    high-water counter, which needs no help), and `read()` closes it with the peak in bytes.
+    """
+
+    def __init__(self, source, read, reset=None, sampled=False):
+        self.source = source
+        self._read = read
+        self._reset = reset
+        self._sampled = sampled
+        self._max = 0
+
+    def start(self):
+        self._max = 0
+        if self._reset is not None:
+            self._reset()
+        # The gauge's reading at the window's start is part of the window: the workload's weights
+        # are already resident, and a peak that began at zero would report only what the timed
+        # steps went on to allocate on top of them.
+        self.sample()
+
+    def sample(self):
+        if self._sampled:
+            self._max = max(self._max, self._read())
+
+    def read(self):
+        return self._max if self._sampled else self._read()
+
+
+def torch_peak_memory(torch, device):
+    """The peak-device-memory probe for a pytorch cell, or None where torch has no counter.
+
+    CPU is the None case on purpose: torch allocates host memory through the system allocator and
+    exposes no per-process figure for it, and `psutil`-style RSS is a different quantity.
+    """
+    if device == "cuda":
+        # The same quantity as OCANNL's: bytes requested off the caching allocator, maximum over
+        # the window. Not `max_memory_reserved`, which is the pool torch grew and would flatter a
+        # workload whose footprint shrank.
+        return PeakMemoryProbe(
+            source="torch.cuda.max_memory_allocated (requested bytes, high-water)",
+            read=torch.cuda.max_memory_allocated,
+            reset=torch.cuda.reset_peak_memory_stats,
+        )
+    if device == "mps":
+        read = getattr(getattr(torch, "mps", None), "driver_allocated_memory", None)
+        if read is None:
+            return None
+        return PeakMemoryProbe(
+            source="torch.mps.driver_allocated_memory (driver bytes, sampled at step boundaries)",
+            read=read,
+            sampled=True,
+        )
+    return None
+
+
+def tinygrad_peak_memory():
+    """The peak-device-memory probe for a tinygrad cell, or None if this tinygrad has no counter."""
+    try:
+        from tinygrad.helpers import GlobalCounters
+    except Exception:
+        return None
+    if not hasattr(GlobalCounters, "mem_used"):
+        return None
+    return PeakMemoryProbe(
+        source="tinygrad GlobalCounters.mem_used (requested bytes, sampled at step boundaries)",
+        read=lambda: int(GlobalCounters.mem_used),
+        sampled=True,
+    )
+
+
+def peak_memory_fields(probe):
+    """The two result-line keys for `probe`, both None where there was no counter to read.
+
+    Together, never one without the other: a byte count whose counter is not named would be
+    compared with a different quantity in the next row, and a named counter with no bytes says
+    nothing. A cell that measured none reports null for both and the report prints a dash -- never
+    a zero, which would read as a workload with no footprint.
+    """
+    if probe is None:
+        return {"peak_memory_bytes": None, "peak_memory_source": None}
+    return {"peak_memory_bytes": probe.read(), "peak_memory_source": probe.source}

@@ -538,6 +538,32 @@ than the driver (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` at module load), run it wi
   the sweep dispatches `OCANNL_BACKEND` itself, and `OCANNL_AUTOTUNE_LOG` /
   `OCANNL_AUTOTUNE_CACHE_DIR` are documented ways to run one, so a filter would have to guess —
   and the keys worth catching are the ones nobody has enumerated yet.
+- **The peak-memory column** (gh-ocannl-1006, the report side of gh-ocannl-616). `peak MiB` is the
+  peak device footprint over a cell's **timed steps**, and the column appears in a workload's
+  table once any row in it measured one. Three things make it easy to misread, and the report
+  states each of them where the numbers are:
+  - *When.* The counter is bracketed around the timed steps, not read at process exit. A tuned
+    cell's schedule search allocates a candidate buffer per arm, so an exit reading reports the
+    search's high water rather than the workload's. OCANNL brackets with
+    `Ir.Alloc_census.reset_peak` in `measure_and_emit`; the Python runners open their probe's
+    window after the warmup sync.
+  - *What.* The counters are not one quantity, so each row **names** the one it read
+    (`peak_memory_source` beside `peak_memory_bytes`). A *high-water* counter — OCANNL's shared
+    allocator seam (`Ir.Alloc_census.peak_pool_bytes`) and `torch.cuda.max_memory_allocated` — is
+    the allocator's own maximum over the window, in requested bytes, and those two are the same
+    quantity and compare honestly. A *sampled* gauge — `torch.mps.driver_allocated_memory`,
+    tinygrad's `GlobalCounters.mem_used` — is a current reading, so the runner takes the maximum
+    over the step boundaries, which is a lower bound on the window: an allocation made and given
+    back inside one step is invisible to it. A high-water counter is what OCANNL needed on its own
+    side too: `Context.get_used_memory` is a current gauge, and on `metal` and `cc` the bytes come
+    back from a GC finalizer, so the same run would report different numbers depending on when a
+    collection happened to run.
+  - *No value.* A cell whose framework exposes no device counter on its backend — a pytorch `cpu`
+    row — prints `—`, never a zero, and nothing substitutes a host-RSS figure for it: RSS is a
+    different quantity, and a column mixing the two would be read as if it were one number. `cc`
+    rows do carry a number, because the shared allocator seam counts a `cc` pool exactly as it
+    counts a CUDA one; what it covers is that seam's coverage, so a device's reserved merge-buffer
+    slab, the loaded code modules and the host-side `Ndarray` arrays are outside it.
 - Losses are recorded per step *before* that step's SGD update (forward runs first in every
   framework's step). The first step doubles as the compile probe in the Python runners; for
   OCANNL, `compile_s` wraps `Context.compile` (or `Autotune.tune`).

@@ -662,6 +662,179 @@ class TensorizationTest(unittest.TestCase):
         self.assertIn("tensorized", table)
 
 
+class PeakMemoryTest(unittest.TestCase):
+    """gh-ocannl-1006: the report's peak-device-memory column, and the probes behind it.
+
+    The column exists so that a footprint-for-time trade (gh-ocannl-616) is visible as something
+    other than pure cost. Two things make it misleadable, and both are pinned here: a cell whose
+    framework has no device counter must read as "not measured" and never as "no footprint", and a
+    row must say WHICH counter it carries, since an allocator's high-water mark, a gauge sampled at
+    step boundaries and a driver-level figure are three different quantities.
+    """
+
+    SEAM_SOURCE = "OCANNL allocator seam high-water (requested bytes, all backends)"
+    SAMPLED_SOURCE = "torch.mps.driver_allocated_memory (driver bytes, sampled at step boundaries)"
+
+    def cell(self, framework, backend, peak=None, source=None, p50=1.0):
+        r = cell(framework, backend, "default", [2.3, 2.2, 2.1], p50=p50)
+        r["peak_memory_bytes"] = peak
+        r["peak_memory_source"] = source
+        return r
+
+    def rendered(self, rows):
+        orchestrate.parity_check(rows)
+        out = Path(tempfile.mkdtemp())
+        orchestrate.report(rows, out)
+        return (out / "report.md").read_text()
+
+    def test_the_column_appears_once_a_row_measured_a_footprint(self):
+        text = self.rendered(
+            [self.cell("ocannl", "metal", 3 * orchestrate.MIB, self.SEAM_SOURCE)]
+        )
+
+        self.assertIn(" peak MiB |", text)
+        self.assertIn("| 3.0 |", text)
+
+    def test_a_section_where_nothing_measured_one_carries_no_column(self):
+        # The same rule every other conditional column follows: an empty column is a column of
+        # dashes claiming a measurement was possible and skipped.
+        text = self.rendered([self.cell("pytorch", "cpu")])
+
+        self.assertNotIn(" peak MiB |", text)
+        self.assertNotIn("gh-ocannl-1006", text)
+
+    def test_a_cell_with_no_counter_renders_a_dash_beside_one_that_has_it(self):
+        # The case the column is most easily misread in: a pytorch/cpu row next to a measured one.
+        # A zero there would say the workload has no footprint, which is a claim nobody made.
+        text = self.rendered(
+            [
+                self.cell("ocannl", "cc", 5 * orchestrate.MIB, self.SEAM_SOURCE, p50=1.0),
+                self.cell("pytorch", "cpu", p50=2.0),
+            ]
+        )
+
+        self.assertIn(" peak MiB |", text)
+        self.assertIn("| 5.0 |", text)
+        self.assertEqual(orchestrate.peak_memory_mib({"peak_memory_bytes": None}), "\u2014")
+        self.assertIn("\u2014", text)
+        self.assertNotIn("| 0.0 |", text)
+
+    def test_a_measured_zero_is_not_a_missing_measurement(self):
+        # `is not None`, not truthiness: a counter that legitimately read zero has measured the
+        # cell, and rendering it as a dash would lose that the cell was measured at all.
+        self.assertEqual(orchestrate.peak_memory_mib({"peak_memory_bytes": 0}), "0.0")
+        text = self.rendered([self.cell("ocannl", "cc", 0, self.SEAM_SOURCE)])
+
+        self.assertIn(" peak MiB |", text)
+        self.assertIn("| 0.0 |", text)
+
+    def test_the_legend_names_every_counter_the_section_carries(self):
+        rows = [
+            self.cell("ocannl", "metal", 3 * orchestrate.MIB, self.SEAM_SOURCE, p50=1.0),
+            self.cell("pytorch", "mps", 7 * orchestrate.MIB, self.SAMPLED_SOURCE, p50=2.0),
+            self.cell("pytorch", "cpu", p50=3.0),
+        ]
+
+        self.assertEqual(
+            orchestrate.peak_memory_counters(rows), [self.SEAM_SOURCE, self.SAMPLED_SOURCE]
+        )
+        text = self.rendered(rows)
+        self.assertIn(self.SEAM_SOURCE, text)
+        self.assertIn(self.SAMPLED_SOURCE, text)
+        # And what the reader has to do with the difference, said where the numbers are read.
+        self.assertIn("lower bound", text)
+
+    def test_an_unmeasured_row_contributes_no_counter_name(self):
+        # A source string on a row with no bytes is a counter that reported nothing; naming it in
+        # the legend would offer the reader a column entry that does not exist.
+        rows = [self.cell("pytorch", "mps", None, self.SAMPLED_SOURCE)]
+
+        self.assertEqual(orchestrate.peak_memory_counters(rows), [])
+
+    def test_the_result_line_carries_the_bytes_and_the_counter_together(self):
+        probe = bench_common.PeakMemoryProbe(source="fake counter", read=lambda: 4096)
+
+        self.assertEqual(
+            bench_common.peak_memory_fields(probe),
+            {"peak_memory_bytes": 4096, "peak_memory_source": "fake counter"},
+        )
+        # Both None, never one without the other: bytes whose counter is unnamed would be compared
+        # with a different quantity in the next row.
+        self.assertEqual(
+            bench_common.peak_memory_fields(None),
+            {"peak_memory_bytes": None, "peak_memory_source": None},
+        )
+
+    def test_a_high_water_counter_is_read_not_sampled(self):
+        # The allocator keeps the maximum itself, so the value at the end of the window is the
+        # window's peak even though the gauge has since fallen.
+        readings = iter([100, 900, 900])
+        resets = []
+        probe = bench_common.PeakMemoryProbe(
+            source="fake high-water",
+            read=lambda: next(readings),
+            reset=lambda: resets.append(1),
+        )
+        probe.start()
+        probe.sample()
+
+        self.assertEqual(resets, [1])
+        self.assertEqual(probe.read(), 100)
+
+    def test_a_sampled_gauge_keeps_the_maximum_over_the_window(self):
+        # Including the reading taken when the window opened: the workload's weights are already
+        # resident, and a peak starting from zero would report only what the steps added to them.
+        readings = iter([500, 1500, 700])
+        probe = bench_common.PeakMemoryProbe(
+            source="fake gauge", read=lambda: next(readings), sampled=True
+        )
+        probe.start()
+        probe.sample()
+        probe.sample()
+
+        self.assertEqual(probe.read(), 1500)
+
+    def test_a_sampled_window_starting_after_a_bigger_one_does_not_inherit_it(self):
+        # `start()` drops the previous window's samples, which is what makes the column the TIMED
+        # STEPS' footprint rather than the process's.
+        probe = bench_common.PeakMemoryProbe(
+            source="fake gauge", read=iter([9000, 200, 300]).__next__, sampled=True
+        )
+        probe.start()
+        probe.start()
+        probe.sample()
+
+        self.assertEqual(probe.read(), 300)
+
+    def test_torch_offers_no_counter_on_cpu_and_a_high_water_one_on_cuda(self):
+        # cpu is the None case on purpose: torch allocates host memory through the system
+        # allocator, and an RSS figure is not the device footprint this column reports.
+        torch = types.SimpleNamespace(
+            cuda=types.SimpleNamespace(
+                max_memory_allocated=lambda: 2048,
+                reset_peak_memory_stats=lambda: None,
+            ),
+            mps=types.SimpleNamespace(driver_allocated_memory=lambda: 4096),
+        )
+
+        self.assertIsNone(bench_common.torch_peak_memory(torch, "cpu"))
+        cuda = bench_common.torch_peak_memory(torch, "cuda")
+        cuda.start()
+        self.assertEqual(cuda.read(), 2048)
+        # Requested bytes off the caching allocator -- the same quantity as OCANNL's seam, which is
+        # what makes those two rows comparable. Not `max_memory_reserved`.
+        self.assertIn("max_memory_allocated", cuda.source)
+        mps = bench_common.torch_peak_memory(torch, "mps")
+        mps.start()
+        self.assertEqual(mps.read(), 4096)
+        self.assertIn("sampled", mps.source)
+
+    def test_a_torch_without_the_mps_counter_reports_none_rather_than_guessing(self):
+        torch = types.SimpleNamespace(cuda=None, mps=types.SimpleNamespace())
+
+        self.assertIsNone(bench_common.torch_peak_memory(torch, "mps"))
+
+
 class RunnerProvenanceProbeTest(unittest.TestCase):
     """gh-ocannl-644: what the Python runners report, and what they refuse to claim."""
 
