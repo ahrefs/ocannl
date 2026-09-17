@@ -572,16 +572,23 @@ let local_placement ctx (tn : Tn.t) : Tn.provenance option =
 
 let refuse_local ~fn ctx (tn : Tn.t) prov =
   (* gh-ocannl-609: when the decision began as a heuristic cap, materializing is not the only remedy
-     -- raising the cap keeps the node virtual and pays recompute instead of memory. The provenance
-     is what distinguishes the two situations, so the message spells out the option the leading tag
-     admits rather than advising materialization unconditionally. *)
+     -- raising the cap can leave the node virtual and pay recompute instead of memory. The
+     provenance is what distinguishes that situation, so the message names the setting rather than
+     advising materialization unconditionally.
+
+     The advice is deliberately hedged. [decide_placements] records only the FIRST cap that fires
+     (each is guarded on the placement still being undecided), and the legality rejections of
+     [check_and_store_virtual] / [inline_computation] are asked afterwards -- so raising the named
+     setting can merely expose the next cap or a rejection the caps preempted. What the tag supports
+     is "this cap is why the decision was taken", not "this cap is the only thing in the way". *)
   let alternative =
     match Ir.Low_level.cap_provenance_setting (Tn.leading_provenance prov) with
     | None -> ""
     | Some setting ->
         Printf.sprintf
-          " The placement began as a heuristic cap, so raising %s (trading recompute for memory) \
-           keeps the node virtual and observable instead."
+          " That decision was a heuristic cap, not a legality or observability verdict, so raising \
+           %s may instead leave the node virtual (paying recompute rather than memory) -- though \
+           another cap or an inlining rejection can still force materialization."
           setting
   in
   raise
