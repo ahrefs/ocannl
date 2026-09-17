@@ -571,6 +571,19 @@ let local_placement ctx (tn : Tn.t) : Tn.provenance option =
   match Tn.Placements.get (placements ctx) tn with Some (Tn.Local, prov) -> Some prov | _ -> None
 
 let refuse_local ~fn ctx (tn : Tn.t) prov =
+  (* gh-ocannl-609: when the decision began as a heuristic cap, materializing is not the only remedy
+     -- raising the cap keeps the node virtual and pays recompute instead of memory. The provenance
+     is what distinguishes the two situations, so the message spells out the option the leading tag
+     admits rather than advising materialization unconditionally. *)
+  let alternative =
+    match Ir.Low_level.cap_provenance_setting (Tn.leading_provenance prov) with
+    | None -> ""
+    | Some setting ->
+        Printf.sprintf
+          " The placement began as a heuristic cap, so raising %s (trading recompute for memory) \
+           keeps the node virtual and observable instead."
+          setting
+  in
   raise
   @@ Utils.User_error
        (Printf.sprintf
@@ -578,8 +591,8 @@ let refuse_local ~fn ctx (tn : Tn.t) prov =
            routine-scoped scratch with no context buffer, so host access to it cannot observe (or \
            reach) what the routines compute. Request materialization -- e.g. \
            Train.set_materialized, Context.decide_materialized, or Tnode.set_observable -- before \
-           the first routine using the node is compiled. Backend: %s"
-          fn (Tn.debug_name tn) prov (backend_name ctx))
+           the first routine using the node is compiled.%s Backend: %s"
+          fn (Tn.debug_name tn) prov alternative (backend_name ctx))
 
 (* For-print proxies (gh-ocannl-333 AC 5): when a tensor's node is not materialized in a context,
    [Train.printf] recompiles a copy ([%cd "for_print" =: t]) into a fresh node and registers it here

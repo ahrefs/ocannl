@@ -202,7 +202,9 @@ files.
   their reasons. The tags other code matches on have names in `Low_level`
   (`prov_visit_cap` / `prov_inline_reduction_cap` / `prov_inline_fanin_cap`, `is_cap_provenance`,
   `prov_read_before_write`, `prov_scope_local`, `prov_surviving_read`); one-site tags stay literals
-  at their site.
+  at their site. `Low_level.cap_provenance_setting` maps a cap tag to the config key that would undo
+  it, which is how the `Local` host-access refusal can offer "raise the cap" instead of only
+  "materialize the node" — the distinction the integer could not express.
 - **A dynamic-gather table (`Get_dynamic`) materializes at the read, and a table declared `Virtual`
   is refused** (gh-ocannl-734, `test/operations/gather_table_placement.ml`): the gathered row is
   only known at runtime, so no computation can be replayed at the read site — `virtual_llc`'s

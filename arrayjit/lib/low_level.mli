@@ -844,6 +844,10 @@ val is_cap_provenance : Tnode.provenance -> bool
 (** Whether the tag is one of the three heuristic caps of {!decide_placements}: a flippable policy
     decision rather than a legality or observability verdict. *)
 
+val cap_provenance_setting : Tnode.provenance -> string option
+(** The configuration key whose cap forced the decision, when a cap did — the setting to raise to
+    keep the node virtual instead of materializing it. *)
+
 val prov_read_before_write : Tnode.provenance
 val prov_scope_local : Tnode.provenance
 val prov_surviving_read : Tnode.provenance

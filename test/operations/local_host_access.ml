@@ -62,6 +62,12 @@ let refused_as_local f =
     false
   with Utils.User_error msg -> String.is_substring msg ~substring:"placed Local"
 
+let refusal_message f =
+  try
+    ignore (f ());
+    None
+  with Utils.User_error msg -> Some msg
+
 let () =
   (* --- The refusal --- *)
   let ctx, h = build ~materialize_h:false in
@@ -81,6 +87,18 @@ let () =
     (refused_as_local (fun () -> Context.get_value ctx hv [| 0 |]));
   p "set_value on a Local node is refused"
     (refused_as_local (fun () -> Context.set_value ctx hv [| 0 |] 0.));
+
+  (* gh-ocannl-609: WHY the node is Local is the only thing that distinguishes the two remedies.
+     Here the recompute-cost guard forced it, so raising [virtualize_max_inline_reduction] keeps it
+     virtual (and observable) — advice the message cannot give from the placement alone. Both legs
+     read the same message: the tag it carries, and the option that tag admits. *)
+  let msg =
+    Option.value_exn ~here:[%here] (refusal_message (fun () -> Context.get_values ctx hv))
+  in
+  p "the refusal names the decision that placed the node Local"
+    (String.is_substring msg ~substring:"39:inline-reduction-cap");
+  p "the refusal offers raising that cap as the alternative to materializing"
+    (String.is_substring msg ~substring:"virtualize_max_inline_reduction");
 
   (* --- Positive control: materialized, the same program reads back what the kernel computed ---
      This is the leg that makes the refusal a placement check rather than a blanket one, and it

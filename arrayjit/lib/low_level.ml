@@ -29,6 +29,16 @@ let is_cap_provenance (p : Tn.provenance) =
     [ prov_visit_cap; prov_inline_reduction_cap; prov_inline_fanin_cap ]
     p ~equal:String.equal
 
+(** The configuration key whose cap forced this decision, when a cap did. Raising it is the
+    alternative remedy to materializing the node: it keeps the node virtual and pays recompute
+    instead of memory, which a diagnostic advising materialization cannot otherwise mention
+    (gh-ocannl-609). *)
+let cap_provenance_setting (p : Tn.provenance) =
+  if String.equal p prov_visit_cap then Some "virtualize_max_visits"
+  else if String.equal p prov_inline_reduction_cap then Some "virtualize_max_inline_reduction"
+  else if String.equal p prov_inline_fanin_cap then Some "virtualize_max_inline_fanin"
+  else None
+
 (** An uncovered read (read before write within the routine): the node is an input, so it owns a
     device buffer whose prior contents are preserved. Minted from two sites -- the lenient verdict
     of {!decide_placements} and the strict re-classification in [reconcile_traced_store]. *)
