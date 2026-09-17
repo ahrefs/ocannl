@@ -1238,7 +1238,10 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
               let _, chain_ms, base_ctx, base_timing = !chain in
               let arm =
                 Printf.sprintf "flip %s %s (cost %d%s)"
-                  (match fc.LL.fc_flip with `Inline -> "inline" | `Materialize -> "materialize")
+                  (match fc.LL.fc_flip with
+                  | `Inline -> "inline"
+                  | `Materialize -> "materialize"
+                  | `Footprint -> "footprint")
                   (Tn.debug_name fc.LL.fc_tn) fc.LL.fc_recompute_cost
                   (if Set.mem surface.Autotune.ps_enablement fc.LL.fc_tn then ", enablement" else "")
               in
@@ -1246,7 +1249,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                 match fc.LL.fc_flip with
                 | `Materialize when bound_pruning ->
                     surface.Autotune.ps_floor_ms ~materialized:(fc.LL.fc_tn :: !certain_mat)
-                | `Materialize | `Inline -> None
+                | `Materialize | `Inline | `Footprint -> None
               in
               match floor with
               | Some fl when Float.(fl >= chain_ms) ->
@@ -1261,6 +1264,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                     match fc.LL.fc_flip with
                     | `Materialize -> Context.decide_materialized c [ fc.LL.fc_tn ]
                     | `Inline -> Context.decide_inline c [ fc.LL.fc_tn ]
+                    | `Footprint -> Context.decide_footprint c [ fc.LL.fc_tn ]
                   in
                   let ctx' = apply base_ctx in
                   let timing' = Option.map base_timing ~f:apply in
@@ -1270,9 +1274,16 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                   let accepted = Float.(ms < chain_ms) in
                   if accepted then chain := (r, ms, ctx', timing');
                   (match (fc.LL.fc_flip, accepted) with
-                  | `Materialize, true | `Inline, false ->
+                  | `Materialize, true -> certain_mat := fc.LL.fc_tn :: !certain_mat
+                  | (`Inline | `Footprint), false
+                    when not
+                           (List.exists rest ~f:(fun (o : LL.flip_candidate) ->
+                                Tn.equal o.LL.fc_tn fc.LL.fc_tn)) ->
+                      (* A cap-materialized node carries a record per open direction
+                         (gh-ocannl-616); it is certainly materialized only once its last one is
+                         rejected. *)
                       certain_mat := fc.LL.fc_tn :: !certain_mat
-                  | `Materialize, false | `Inline, true -> ());
+                  | `Materialize, false | (`Inline | `Footprint), _ -> ());
                   walk rest)
         in
         walk candidates;

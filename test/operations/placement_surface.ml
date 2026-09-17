@@ -76,7 +76,7 @@ let () =
   let candidates = base.LL.flip_candidates in
   let to_materialize =
     List.filter_map candidates ~f:(fun fc ->
-        match fc.LL.fc_flip with `Materialize -> Some fc.LL.fc_tn | `Inline -> None)
+        match fc.LL.fc_flip with `Materialize -> Some fc.LL.fc_tn | `Inline | `Footprint -> None)
   in
   let allmat =
     Context.lowered_for_decisions ~materialized:to_materialize ctx comp Ir.Indexing.Empty
@@ -95,7 +95,10 @@ let () =
     let ranked = Autotune.rank_flip_candidates ~ordering ~enablement ~disablement candidates in
     List.iter ranked ~f:(fun fc ->
         Stdio.printf "  %-11s %-12s cost %-5d%s\n"
-          (match fc.LL.fc_flip with `Materialize -> "materialize" | `Inline -> "inline")
+          (match fc.LL.fc_flip with
+          | `Materialize -> "materialize"
+          | `Inline -> "inline"
+          | `Footprint -> "footprint")
           (Tn.debug_name fc.LL.fc_tn) fc.LL.fc_recompute_cost
           (if Set.mem enablement fc.LL.fc_tn then "  [enablement]" else ""));
     ranked
@@ -109,11 +112,13 @@ let () =
     (match by_cost with fc :: _ -> not (is_en fc) | [] -> false);
   p "enablement ranking puts the family-unlocking materialize flip first"
     (match by_enablement with
-    | fc :: _ -> ( is_en fc && match fc.LL.fc_flip with `Materialize -> true | `Inline -> false)
+    | fc :: _ -> (
+        is_en fc && match fc.LL.fc_flip with `Materialize -> true | `Inline | `Footprint -> false)
     | [] -> false);
   p "enablement ranking puts the family-breaking inline flip last"
     (match List.last by_enablement with
-    | Some fc -> ( is_en fc && match fc.LL.fc_flip with `Inline -> true | `Materialize -> false)
+    | Some fc -> (
+        is_en fc && match fc.LL.fc_flip with `Inline -> true | `Materialize | `Footprint -> false)
     | None -> false);
   (* gh-ocannl-579, the profitability term: the prior above prices EXPRESSIBILITY only, so on a
      device where the family it unlocks has been MEASURED to lose, promoting its flips is pure

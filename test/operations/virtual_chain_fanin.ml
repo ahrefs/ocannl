@@ -118,7 +118,10 @@ let phase1 () =
   (match find_flip o c.xs.(7) with
   | Some (flip, cost) ->
       Stdio.printf "chain: x8's flip: %s, recompute cost %d\n"
-        (match flip with `Inline -> "inline" | `Materialize -> "materialize")
+        (match flip with
+        | `Inline -> "inline"
+        | `Materialize -> "materialize"
+        | `Footprint -> "footprint")
         cost
   | None -> Stdio.printf "chain: x8 is not a flip candidate\n");
   p "chain: x8 is an Inline flip charged its modeled recompute (the chain prefix's 8 adds)"

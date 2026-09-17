@@ -1,0 +1,5 @@
+einsum: the product stays virtual: true
+einsum: no buffer read of the product survives: true
+einsum: exactly one scratch, of the diagonal's extent: true
+einsum: executed values are the diagonal of the product: true
+einsum: footprint and materialized readings agree: true

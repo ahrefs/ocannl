@@ -176,6 +176,7 @@ val lowered_for_decisions :
   ?name:string ->
   ?materialized:Ir.Tnode.t list ->
   ?inline:Ir.Tnode.t list ->
+  ?footprint:Ir.Tnode.t list ->
   t ->
   Ir.Assignments.comp ->
   Ir.Indexing.unit_bindings ->
@@ -496,3 +497,19 @@ val decide_inline : t -> Ir.Tnode.t list -> t
     {!decide_materialized} this spans the per-node inlining decision vector: [Inline] here,
     [Materialize] there, the default heuristics elsewhere. Hermetic like {!decide_materialized}: the
     argument context and its other descendants are unaffected. *)
+
+val decide_footprint : t -> Ir.Tnode.t list -> t
+(** A child context whose compilation lineage additionally prefers the given nodes footprint-scoped
+    (gh-ocannl-616), the middle of the placement lattice between {!decide_inline} and
+    {!decide_materialized}: subsequent compiles exempt them from the heuristic caps like an inline
+    preference, and serve their reads from routine-private scratch shaped like each reader's
+    iteration box, filled ahead of the reader by a prologue instantiating the node's stored
+    computation over that box — an [n]-sized scratch and [n] instantiations for a diagonal reader of
+    an [n×n] node, against [n×n] of either for a full materialization or for recompute at [n]
+    repeated read sites. The default policy lands a node there by itself when a cap would
+    materialize it and the footprint form is strictly smaller; the preference asks for it
+    regardless. Per read site, not a placement: a read the virtualizer cannot serve that way (a
+    guarded read, a read in a shared loop or inside another candidate's template) is inlined
+    instead, legality rejections still materialize, and the node stays [Virtual] in the lineage with
+    its stored computation. Honored only under [virtualize_footprint_materialization]; same
+    hermeticity and same pre-compile-sibling rule as {!decide_inline}. *)

@@ -703,9 +703,21 @@ type virtualize_settings = {
   mutable inline_scalar_constexprs : bool;
   mutable inline_simple_computations : bool;
   mutable inline_complex_computations : bool;
+  mutable footprint_materialization : bool;
+      (** gh-ocannl-616 ([virtualize_footprint_materialization]): whether a node one of the caps
+          above would materialize whole may instead be footprint-scoped when every read of it is an
+          affine sub-image read — a fresh routine-private scratch shaped like the reader's iteration
+          box, filled ahead of the reader by a prologue instantiating the node's stored template
+          over that box — and the total scratch cell count is below the node's element count. Also
+          gates the [Footprint] third of the decision vector ([Context.decide_footprint]) and the
+          consumer-side form for a node an earlier routine committed [Virtual]. *)
 }
 
 val virtualize_settings : virtualize_settings
+
+val footprint_namespace : string
+(** gh-ocannl-616: the namespace of the scratch nodes footprint-scoped materialization mints — how a
+    test tells them from the program's own nodes in an [optimized] record's traced store. *)
 
 type traced_array = {
   tn : Tnode.t;
@@ -821,6 +833,13 @@ type optimize_ctx = {
           pessimizations still apply. The [Materialize] half of the vector is a pre-seeded
           [On_device] decision in [placements] (see [Context.decide_materialized] /
           [Context.decide_inline]). *)
+  footprint_preferences : Hash_set.M(Tnode).t;
+      (** gh-ocannl-616: the [Footprint] third of the decision vector ([Context.decide_footprint]).
+          A node recorded here is exempt from the heuristic caps like an inline preference, and its
+          reads are served from footprint-scoped scratch where every one of them is footprintable; a
+          read the virtualizer cannot serve that way falls back to inlining, and the legality
+          rejections still apply. A node in both preference sets takes this one. Honored only under
+          [virtualize_footprint_materialization]. *)
 }
 [@@deriving sexp_of]
 
@@ -876,28 +895,32 @@ type swizzle_kind =
 
 type flip_candidate = {
   fc_tn : Tnode.t;
-  fc_flip : [ `Materialize | `Inline ];
+  fc_flip : [ `Materialize | `Inline | `Footprint ];
   fc_recompute_cost : int;
   fc_modeled : bool;
 }
 [@@deriving sexp_of]
 (** gh-555: one searchable inlining decision dimension of a compile — a node whose placement the
     default policy decided, together with the flip a search can try and the recompute cost of the
-    virtual placement: the modeled op count of one inlined computation ({!recompute_pricer},
-    gh-ocannl-637) times the per-cell read multiplicity when [fc_modeled], otherwise the traced
-    proxy (reduction extent × per-cell read multiplicity × transitive inline fan-in), the fallback
-    where the model's count is not exact. [`Materialize] flips a node the policy left virtual (via
-    [Context.decide_materialized]); [`Inline] flips a node materialized by the heuristic caps (never
-    by legality or observability), via [Context.decide_inline]. An [`Inline] flip's legality is
-    settled only when the virtualizer replays: a rejected flip reproduces the materialized
-    placement. *)
+    recompute reading the flip involves: the modeled op count of one instantiation
+    ({!recompute_pricer}, gh-ocannl-637) when [fc_modeled], otherwise the traced proxy (reduction
+    extent × transitive inline fan-in), times the number of instantiations that reading performs —
+    the per-cell read multiplicity for an inlined reading, the scratch cell count for a
+    footprint-scoped one (gh-ocannl-616). [`Materialize] flips a node the policy left virtual,
+    inlined or footprint-scoped (via [Context.decide_materialized]); [`Inline] flips a node
+    materialized by the heuristic caps (never by legality or observability) or one the policy
+    footprint-scoped, via [Context.decide_inline]; [`Footprint] flips a cap-materialized node whose
+    reads are all footprintable onto a footprint strictly smaller than the node, via
+    [Context.decide_footprint]. A node therefore carries up to two records, one per open direction:
+    consumers deduplicate by (node, flip). An [`Inline] or [`Footprint] flip's legality is settled
+    only when the virtualizer replays: a rejected flip reproduces the materialized placement. *)
 
 val recompute_pricer :
   (optimize_ctx ->
   static_indices:Indexing.static_symbol list ->
   t ->
   Tnode.t ->
-  [ `Materialize | `Inline ] ->
+  [ `Materialize | `Inline | `Footprint ] ->
   int option)
   ref
 (** gh-ocannl-637: the seam through which the cost model prices {!flip_candidate}s — given the

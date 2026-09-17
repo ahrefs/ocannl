@@ -936,6 +936,19 @@
 # the cap.
 #virtualize_max_inline_fanin=8
 
+# Footprint-scoped materialization (gh-ocannl-616): the cheaper landing spot of the three caps
+# above. When a cap would materialize a tensor node whole, but every read of it in the routine
+# is an affine sub-image read -- a diagonal `a[i, i]`, a slice, a cell read under loops its
+# index does not mention -- and the readers' iteration boxes together hold fewer cells than the
+# node, the node stays virtual and each reader gets a routine-private scratch shaped like its
+# own iteration box, filled just ahead of the reader by a prologue instantiating the node's
+# stored computation over that box. An `n`-sized scratch and `n` instantiations for a diagonal
+# reader of an `n x n` node, against `n x n` of either for the full buffer or for recompute at
+# repeated read sites. Also gates `Context.decide_footprint` and the consumer-side form for a
+# node an earlier routine of the lineage left virtual. `false` restores the caps' full
+# materialization.
+#virtualize_footprint_materialization=true
+
 # If `true`, tensor nodes will by default not be hosted.
 #enable_device_only=true
 

@@ -53,7 +53,7 @@ let () =
   let surface = Autotune.placement_surface (Context.auto ()) comp Ir.Indexing.Empty in
   let mat_flips, inline_flips_on_surface =
     List.partition_tf surface.Autotune.ps_candidates ~f:(fun fc ->
-        match fc.LL.fc_flip with `Materialize -> true | `Inline -> false)
+        match fc.LL.fc_flip with `Materialize -> true | `Inline | `Footprint -> false)
   in
   p "the surface reports at least one materialize flip" (List.length mat_flips >= 1);
   (* Budget above the whole surface: every candidate is either measured or fathomed. *)

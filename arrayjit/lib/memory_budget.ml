@@ -123,7 +123,11 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
       let all =
         List.fold surface ~init:[] ~f:(fun acc fc ->
             match fc.LL.fc_flip with
-            | `Materialize -> acc
+            (* A [`Footprint] flip (gh-ocannl-616) also relieves footprint — a sub-image scratch in
+               place of the full buffer — but its relief is not scored here yet: the planner's
+               scorer decides candidates inline, and a footprint-scoped decision would need its own
+               scoring leg. Left to a follow-up. *)
+            | `Materialize | `Footprint -> acc
             | `Inline ->
                 if List.exists acc ~f:(fun c -> Tn.equal c.LL.fc_tn fc.LL.fc_tn) then acc
                 else fc :: acc)

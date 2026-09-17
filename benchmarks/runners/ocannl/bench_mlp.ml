@@ -254,7 +254,8 @@ let () =
                 Stdlib.Printf.eprintf "flip candidate %d: %s %s uid=%d prec=%s cost=%d\n%!" i
                   (match fc.Ir.Low_level.fc_flip with
                   | `Inline -> "inline"
-                  | `Materialize -> "materialize")
+                  | `Materialize -> "materialize"
+                  | `Footprint -> "footprint")
                   (Ir.Tnode.debug_name fc.Ir.Low_level.fc_tn)
                   fc.Ir.Low_level.fc_tn.Ir.Tnode.uid
                   (Ir.Ops.prec_string

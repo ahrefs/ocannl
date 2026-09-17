@@ -1,0 +1,57 @@
+diagonal: the producer stays virtual: true
+diagonal: no buffer read of the producer survives: true
+diagonal: exactly one scratch, 1-D of the reader's extent: true
+diagonal: the scratch is written by the prologue and read by the consumer: true
+diagonal: the prologue instantiates the reduction (a loop of the reduction extent survives): true
+diagonal: both lattice neighbours are offered as flips: true
+diagonal: the footprint form is not offered where it is already chosen: true
+diagonal: the inlined arm really inlines (no scratch): true
+diagonal: executed values are the diagonal of the reduction: true
+diagonal: footprint and materialized arms agree: true
+diagonal: footprint and inlined arms agree: true
+visit-cap: the producer stays virtual: true
+visit-cap: one 1-D scratch over the reader's outer loop: true
+visit-cap: executed values are the diagonal broadcast plus the column: true
+visit-cap: footprint and materialized arms agree: true
+full: the reduction cap materializes the producer: true
+full: no scratch: true
+full: the inline flip is offered, the footprint flip is not (as many cells as the node): true
+full: executed values are the reduction: true
+full-preferred: the producer stays virtual: true
+full-preferred: one 2-D scratch over the reader's box: true
+full-preferred: footprint and materialized arms agree: true
+guarded: the reduction cap materializes the producer: true
+guarded: no scratch: true
+guarded: the footprint flip is not offered: true
+guarded: executed values respect the guard: true
+preference: the default inlines the producer (no buffer read): true
+preference: the default mints no scratch: true
+preference: the preference lands the producer on the footprint form: true
+preference: executed values are the diagonal: true
+preference: footprint and inlined arms agree: true
+inherited: the producer routine commits the node virtual with an empty schedule: true
+inherited: the consumer footprint-scopes the inherited node: true
+inherited: executed values are the diagonal of the inherited reduction: true
+inherited-guarded: the read declines to inlining (no buffer read): true
+inherited-guarded: no scratch: true
+inherited-guarded: executed values respect the guard: true
+single-cell: the producer stays virtual: true
+single-cell: one single-cell scratch: true
+single-cell: executed values are the corner cell plus the column: true
+single-cell: footprint and materialized arms agree: true
+two-readers: the producer stays virtual: true
+two-readers: one scratch per reader: true
+two-readers: executed values are the diagonal and the column: true
+two-readers: footprint and materialized arms agree: true
+candidate-consumer: the decision retracts to the reduction cap: true
+candidate-consumer: no scratch: true
+candidate-consumer: the intermediate consumer inlines: true
+candidate-consumer: the retracted node is not offered the footprint flip: true
+candidate-consumer: executed values are the diagonal: true
+shared-loop: the reduction cap materializes the producer: true
+shared-loop: no scratch: true
+shared-loop: executed values are the diagonal and the copy: true
+key-off: the reduction cap materializes the producer: true
+key-off: no scratch: true
+key-off: no footprint flip: true
+key-off: executed values are the diagonal: true

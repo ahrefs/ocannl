@@ -42,7 +42,10 @@ let () =
    Stdio.printf "decision surface:\n";
    List.iter surface.Autotune.ps_candidates ~f:(fun fc ->
        Stdio.printf "  %-11s %-8s cost %d\n"
-         (match fc.LL.fc_flip with `Materialize -> "materialize" | `Inline -> "inline")
+         (match fc.LL.fc_flip with
+         | `Materialize -> "materialize"
+         | `Inline -> "inline"
+         | `Footprint -> "footprint")
          (Ir.Tnode.debug_name fc.LL.fc_tn) fc.LL.fc_recompute_cost));
   (* Reference values from a plain compile. *)
   let ctx_ref, routine_ref = Context.compile (Context.auto ()) comp Ir.Indexing.Empty in
