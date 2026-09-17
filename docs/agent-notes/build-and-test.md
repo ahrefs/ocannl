@@ -1949,14 +1949,23 @@ that they earn a lookup rather than always-loaded space.
   call each, under the same worktree lock and the unit's own cap, appended to the unit's log.
   rog-nv's CUDA shows the class is not minix-only, and that a status is not a diagnosis: the
   2026-09-13 forced unit lost exactly one stanza, `tensor_puzzles`, at its first `Context.auto`
-  with `CUDA_ERROR_OUT_OF_MEMORY`, while the journal recorded the unit's only
-  `vmbus_sendpacket failed: fffffff5` burst (three failed `dxgkio_create_allocation`s in its
-  first minute, after two `TimeSync` host resumes overnight) — the only such lines across the
-  box's journal from 2026-09-01 on. VRAM was not the limit: under WSL2 the card oversubscribes into host memory (a
+  with `CUDA_ERROR_OUT_OF_MEMORY`, while the journal recorded a
+  `vmbus_sendpacket failed: fffffff5` burst (three failed `dxgkio_create_allocation`s in the
+  unit's first minute, after two `TimeSync` host resumes overnight). VRAM was not the limit: under WSL2 the card oversubscribes into host memory (a
   probe held 28.9 GB of a 12 GB RTX 5070 Ti and the test still passed beside it), 48 concurrent
-  copies of the test peaked at 8.1 GB with no refusal, and alone it passes adding 155 MiB. One
-  lost stanza in a full-width unit is no evidence for a `unit_jobs` cap there; the serial rerun
-  covers it.
+  copies of the test peaked at 8.1 GB with no refusal, and alone it passes adding 155 MiB.
+- **A burst is common; a burst that lands on the first driver call is what costs a stanza.** A
+  per-boot census of rog-nv's journal on 2026-09-17 found three bursts since 2026-09-01, not one:
+  10 refusals on 09-11 08:16:23–38, 3 on 09-13 09:59:23–26, 1 on 09-17 07:09:01 — all three in the
+  first ~90 seconds of a `cuda` unit, and only the middle one cost anything. So the bursts are
+  recurrent and usually harmless: a lost message is fatal when it lands on
+  `cu_device_primary_ctx_retain` or `cu_init`, the calls a process makes before it holds anything
+  to fall back on, and is absorbed almost anywhere else. Read an earlier claim that a burst was the
+  box's only one as an artifact of `journalctl -k`, which answers for the current boot alone; the
+  census wants `journalctl -b <n>` per boot. Nor is a full-width unit evidence for a `unit_jobs`
+  cap on `rog-nv:cuda`: the 09-11 burst of 10 lost no stanza, and a forced full-scope unit at full
+  width on 2026-09-17 (`--slow --force --only cuda`, 3321 s, ref `fa5116209`) passed with zero
+  refusals in its own window. The serial rerun covers the case a cap would not.
 
 | name (`Fatal error: exception <name>:`) | call site | statuses seen |
 | --- | --- | --- |
@@ -1964,7 +1973,7 @@ that they earn a lookup rather than always-loaded space.
 | `hip_module_load_data_ex` | `Hip.Module.load_data_ex`, backend `link` | minix, 2026-09-05: `HIP_ERROR_NO_BINARY_FOR_GPU` (34) |
 | `hip_stream_create_with_priority` | `Hip.Stream.create`, backend `get_device` | minix, 2026-09-05: `HIP_ERROR_OUT_OF_MEMORY` (4) |
 | `cu_init` | `Cu.init` | analogue by construction — rog-nv reaches its GPU through the same dxg bridge; not yet observed |
-| `cu_device_primary_ctx_retain` | `Cu.Context.get_primary`, backend `get_device` | rog-nv, 2026-09-13: `CUDA_ERROR_OUT_OF_MEMORY` (1) |
+| `cu_device_primary_ctx_retain` | `Cu.Context.get_primary`, backend `get_device` | rog-nv, 2026-09-13: `CUDA_ERROR_OUT_OF_MEMORY` (1) — the only one of the box's three bursts to reach a stanza |
 | `cu_module_load_data_ex` | `Cu.Module.load_data_ex` | analogue, not yet observed |
 | `cu_stream_create_with_priority` | `Cu.Stream.create` | analogue, not yet observed |
 
