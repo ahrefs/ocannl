@@ -43,10 +43,7 @@
    emits (staged compilation, barriers, cooperative tiles, dynamic scatters). These will never
    become inlineable, so a row would pin nothing that could move. - 14, 140, 145, 146 belong to the
    vector-store (packed-uniform) consumption path, exercised through the uniform tests rather than
-   by hand. - 148 ([Scan_loop]) is store-time like the arms above and fires on ordinary code, by
-   either of two routes: the setter sits inside a scan (outside the captured subtree, so the caller
-   passes [~in_scan]) or the walk meets one inside it. It is unrowed here because
-   [test/operations/scan_loop.ml] already runs both with executed legs, not because it cannot fire.
+   by hand.
 
    19 was in that list and is not: gh-ocannl-483 put the algebraic rewrite tier AHEAD of
    [Low_level.optimize], and [Online_softmax.hoist] declares its cached probability cell as a
@@ -374,6 +371,32 @@ let row_hoisted_local () =
     ~expected:(Array.init n ~f:(fun i -> 1. +. Float.of_int i))
     ~verdict:(Rejected (Store, Ir.Tnode.Site "19:declare-local"))
 
+(* 148, the remaining store-time constructor arm that fires on ordinary code. This row exists for
+   the PHASE: [scan_loop.ml] pins the provenance and the executed values of this shape already, but
+   it asserts the tag directly and so says nothing about which pass minted it. Here the setter sits
+   INSIDE the scan, so the arm is the caller's [~in_scan] report rather than the walk's own
+   [Scan_loop] arm -- the enclosing route of the same pair [row_guarded_enclosing] shows for 142.
+   The candidate's cells are prefix sums, which is what makes the differential arm worth running: a
+   recurrence is exactly what replaying one instance at a read site cannot reproduce. *)
+let row_scan_recurrence () =
+  let a = mk "scan_a" and x = mk "scan_x" and out = mk "scan_out" in
+  let st = mk ~dims:[| 1 |] "scan_st" in
+  virtualize st;
+  materialize a;
+  materialize out;
+  let s = sym () and t = sym () in
+  let cr = carry ~init:(c 0.) st in
+  let llc =
+    seq
+      (scan ~upto:(n - 1) s ~carried:[ cr ]
+         (seq (set_next cr (add (prev cr) (get a [| iter s |]))) (set x [| iter s |] (next cr))))
+      (loop_n t n (set out [| iter t |] (get x [| iter t |])))
+  in
+  row ~label:"scan_recurrence" ~llc ~cand:x ~out
+    ~seed:[ (a, [| 1.; 2.; 3.; 4. |]) ]
+    ~expected:[| 1.; 3.; 6.; 10. |]
+    ~verdict:(Rejected (Store, Ir.Tnode.Site "148:scan-recurrence"))
+
 let () =
   row_visit_cap ();
   row_guarded_enclosing ();
@@ -388,4 +411,5 @@ let () =
   row_fixed_component ();
   row_block_components ();
   row_hoisted_local ();
+  row_scan_recurrence ();
   Stdio.printf "%!"

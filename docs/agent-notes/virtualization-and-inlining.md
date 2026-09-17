@@ -183,33 +183,34 @@ files.
   `test/operations/virtual_rejection_boundary.ml`): `decide_placements` applies the heuristic caps
   (`Visit_cap` / uncovered read, `Inline_reduction_cap`, `Inline_fanin_cap`) BEFORE any legality
   question, so a shape capped there may be perfectly inlineable; `check_and_store_virtual` rejects
-  at store time (codes 4, 5, 7, 9, 10, 11, 12, 51, 52, 142, 147, plus 8, 19, 141, 143, 144 and
-  148, which refuse a `Low_level.t` CONSTRUCTOR met in the captured nest rather than a shape);
+  at store time (codes 4, 5, 7, 8, 9, 10, 11, 12, 19, 51, 52, 141, 142, 143, 144, 147, 148);
   `inline_computation` rejects at consumption time (13, 14, 140, 145, 146), which is why two setters
   with different index maps as separate statements store fine as components and only fail once a
   read site cannot be served; and `cleanup_virtual_llc` commits a surviving read as
   `Surviving_read`, which is the absence of a rejection rather than one.
-  Four of those six constructor arms are defensive, and it is the PIPELINE ORDER that makes them
-  so: nothing emits `Staged_compilation` (8) today, and the passes minting barriers (141),
-  cooperative tiles (143) and dynamic scatters (144 — `rewrite_one_hot_reductions`) all run after
-  `virtual_llc`. The other two fire on ordinary code. 148 (`Scan_loop`, gh-ocannl-696) has two
-  routes, both landing at store time: the candidate's setter sits inside a scan, which is outside
-  the captured subtree and so is passed down as `~in_scan` and reported before the walk starts; or
-  the walk meets a scan anywhere INSIDE the captured nest. One verdict covers all three shapes —
-  candidate written in the scan, fed from it through a scope local, or merely a sibling of it —
-  and `test/operations/scan_loop.ml` runs two of them with executed legs.
-  **19 is not defensive any more**, and what the arm refuses is the CONSTRUCTOR, not
-  any particular pass's shape: a `Declare_local` anywhere in the captured nest. `Assignments.lower`
-  runs the algebraic rewrite tier — `Rewrites.apply`, gh-ocannl-483 — BEFORE `Low_level.optimize`,
-  and its member `online_softmax` declares its cached probability cell that way
-  (`Online_softmax.hoist`, the consumer-side read hoist), so with that key on the arm fires for
-  real. Two qualifications worth carrying: `online_softmax` is enabled by the `approximate`
-  profile only — `performance` deliberately leaves the algebraic-rewrite gates alone as a numerics
-  axis, and `reproducible` pins them off — and the rewrite's OTHER `Declare_local`, inside
-  `emit_normalizer`'s scan body, never reaches this arm, since an enclosing `Scan_loop` is refused
-  as 148 first. The running max/sum are `Scan_loop.carried` values, not locals. Claims that
-  `hoist_cross_statement_cse` is the only producer of `Declare_local` predate that tier;
-  `row_hoisted_local` in the boundary test pins the arm on a plain hoisted local.
+  Two properties of the store-time set are worth knowing before you chase one, and BOTH are read
+  off pipeline order rather than off the arm. First, some of those arms cannot fire: nothing emits
+  `Staged_compilation` (8) today, and the passes minting barriers (141), cooperative tiles (143) and
+  dynamic scatters (144 — `rewrite_one_hot_reductions`) all run after `virtual_llc`. Do not group
+  arms by what they match on to predict this — `Scan_loop` (148) and `If` (142) are refused by
+  constructor exactly as those are, and both fire on ordinary code.
+  Second, **19 is live, and a note or comment telling you otherwise is stale.**
+  `Assignments.lower` runs the algebraic rewrite tier — `Rewrites.apply`, gh-ocannl-483 — BEFORE
+  `Low_level.optimize`, and its member `online_softmax` declares its cached probability cell as a
+  `Declare_local` (`Online_softmax.hoist`, the consumer-side read hoist), so with that key on the
+  arm fires for real; `row_hoisted_local` in the boundary test pins it on a plain hoisted local,
+  since what the arm refuses is any `Declare_local` in the captured nest and not that rewrite's
+  shape. Two qualifications: `online_softmax` is enabled by the `approximate` profile only —
+  `performance` deliberately leaves the algebraic-rewrite gates alone as a numerics axis, and
+  `reproducible` pins them off — and the rewrite's OTHER `Declare_local`, inside `emit_normalizer`'s
+  scan body, never reaches 19, because an enclosing `Scan_loop` is refused as 148 first. (The
+  running max/sum are `Scan_loop.carried` values, not locals.) Claims that
+  `hoist_cross_statement_cse` is the only producer of `Declare_local` predate that tier.
+  Both 142 and 148 arrive by two routes, and the pair is the general shape: the offending
+  construct ENCLOSES the candidate's nest, so it is outside the captured subtree and only the
+  caller can report it (`~guarded` / `~in_scan`, decided before the walk starts), or it sits
+  INSIDE and the walk's own arm finds it. Same verdict either way — for 148 that one verdict also
+  covers a scan the candidate merely reads from or sits beside (gh-ocannl-696).
   Do not infer the boundary from the `Non_virtual` comments at the raise sites: several describe
   reachability that has since changed, and 52 is enforced earlier still (`trace_node_facts` raises
   `invalid_arg` on a `Concat` index, so the virtualizer's arm never sees one). The tags themselves,
