@@ -627,6 +627,72 @@ let case_rejection_after_footprint () =
     (same got [ column; Array.create ~len:n 0. ]);
   p "rejection: footprint and materialized arms agree" (same got mat)
 
+(* === A LOCAL written between two accumulating components: the same hazard as a tensor written
+   there, invisible to the access relations — ineligible, the cap materializes. === *)
+let case_local_written_between_setters () =
+  let a = mk "al" and o = mk ~dims:[| n |] "ol" and lt = mk ~dims:[| 1 |] "lt" in
+  materialize o;
+  virtualize lt;
+  let l = LL.get_scope lt in
+  let accumulate () =
+    let i = sym () and j = sym () and k = sym () in
+    loop i
+      (loop j
+         (loop_n k kk
+            (set a
+               [| iter i; iter j |]
+               (add
+                  (get a [| iter i; iter j |])
+                  (add (LL.Get_local l) (add (tag i j) (mul (c 100.) (embed k))))))))
+  in
+  let i' = sym () in
+  let consumer = loop i' (set o [| iter i' |] (get a [| iter i'; iter i' |])) in
+  let llc =
+    seq
+      (LL.Declare_local { id = l; needs_init = false })
+      (seq (zero a)
+         (seq
+            (LL.Set_local (l, c 1.))
+            (seq (accumulate ()) (seq (LL.Set_local (l, c 2.)) (seq (accumulate ()) consumer)))))
+  in
+  let opt = optimize ~name:"fp_local_between" llc in
+  p "local-between: the reduction cap materializes the producer"
+    (is_cap opt a Tn.Inline_reduction_cap);
+  p_empty "local-between: no scratch" ~over:(Hashtbl.keys opt.LL.traced_store) (scratches opt);
+  let expected = Array.init n ~f:(fun i -> reduced_plus 1 i i +. reduced_plus 2 i i) in
+  let seed = [ (o, blank n) ] and read = [ o ] in
+  let got = execute ~name:"fp_local_between" opt ~seed ~read in
+  let mat =
+    execute ~name:"fp_local_between_mat"
+      (optimize ~materialized:[ a ] ~name:"fp_local_between" llc)
+      ~seed ~read
+  in
+  p "local-between: executed values fold the local's first value, then its second"
+    (same got [ expected ]);
+  p "local-between: capped and materialized arms agree" (same got mat)
+
+(* === An explicit preference on a node the footprint form cannot serve (a guarded reader): the
+   preference still exempts the node from the caps, and the read falls through to inlining. === *)
+let case_preference_ineligible () =
+  let a = mk "api" and o = mk ~dims:[| n |] "opi" in
+  materialize o;
+  let i = sym () in
+  let consumer =
+    loop i (if_idx (lt (embed i) (ic (n - 1))) (set o [| iter i |] (get a [| iter i; iter i |])))
+  in
+  let llc = seq (big_reduction a) consumer in
+  let ctx = LL.empty_optimize_ctx () in
+  Hash_set.add ctx.LL.footprint_preferences a;
+  let opt = optimize_in ctx ~name:"fp_pref_ineligible" llc in
+  p "preference-ineligible: the node stays virtual and its read is inlined"
+    (known_virtual opt a && count_get opt a = 0);
+  p_empty "preference-ineligible: no scratch"
+    ~over:(Hashtbl.keys opt.LL.traced_store)
+    (scratches opt);
+  let expected = Array.init n ~f:(fun i -> if i < n - 1 then reduced i i else sentinel) in
+  let got = execute ~name:"fp_pref_ineligible" opt ~seed:[ (o, blank n) ] ~read:[ o ] in
+  p "preference-ineligible: executed values respect the guard" (same got [ expected ])
+
 let () =
   case_diagonal_reduction ();
   case_visit_cap ();
@@ -646,4 +712,6 @@ let () =
   case_producer_statement_writes_input ();
   case_input_written_between_setters ();
   case_rejection_after_footprint ();
+  case_local_written_between_setters ();
+  case_preference_ineligible ();
   Stdio.printf "%!"

@@ -6953,9 +6953,29 @@ type footprint_eligibility =
   | Not_footprintable of string
 [@@deriving sexp_of]
 
-let footprint_eligibility_query (static_indices : Indexing.static_symbol list)
+let footprint_eligibility_query (static_indices : Indexing.static_symbol list) (llc : t)
     (accs : Tn.t Affine.access list) : Tn.t -> footprint_eligibility =
   let statics_set = statics_set_of static_indices in
+  (* The top-level statements (indexed as the access paths index them) carrying any effect the
+     access relations do not represent — local writes above all: a [Set_local] between two of a
+     producer's components is a snapshot hazard exactly like a tensor write there. *)
+  let effectful =
+    let rec go (c : t) =
+      match c with
+      | Noop | Comment _ -> false
+      | Seq (a, b) -> go a || go b
+      | For_loop { body; _ } | If { body; _ } -> go body
+      | Zero_out _ | Set _ | Set_from_vec _ | Set_dynamic _ | Set_local _ | Declare_local _
+      | Scan_loop _ | Tile_mma _ | Staged_compilation _ | Workgroup_barrier ->
+          true
+    in
+    match llc with
+    | Seq _ ->
+        List.foldi (flat_lines [ llc ])
+          ~init:(Set.empty (module Int))
+          ~f:(fun k acc stmt -> if go stmt then Set.add acc k else acc)
+    | _ -> if go llc then Set.singleton (module Int) (-1) else Set.empty (module Int)
+  in
   let reads_by_tn = Hashtbl.create (module Tn) in
   let writes_by_tn = Hashtbl.create (module Tn) in
   let writers_by_stmt = Hashtbl.create (module Int) in
@@ -6981,19 +7001,22 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list)
     let own_last =
       List.fold own_writes ~init:(-1) ~f:(fun acc w -> max acc (Affine.stmt_head w.Affine.a_path))
     in
-    (* Between the producer's first and last top-level write statements, inclusive, nothing but the
-       producer may be written: the prologue replays every stored component after the last write, so
-       a template input mutated in that span — a shared loop's sibling write after the producer, a
-       statement between two accumulating components — would reach components the materialized
-       execution ran before the mutation. *)
+    (* Between the producer's first and last top-level write statements, inclusive, every statement
+       either writes exactly the producer or has no effect at all: the prologue replays every stored
+       component after the last write, so anything mutated in that span — a shared loop's sibling
+       write after the producer, a tensor or a LOCAL written between two accumulating components —
+       would reach components the materialized execution ran before the mutation. *)
     let own_first =
       List.fold own_writes ~init:Int.max_value ~f:(fun acc w ->
           min acc (Affine.stmt_head w.Affine.a_path))
     in
     let producer_span_clean =
       List.is_empty own_writes
-      || Hashtbl.for_alli writers_by_stmt ~f:(fun ~key:s ~data:ws ->
-          s < own_first || s > own_last || Set.equal ws (Set.singleton (module Tn) tn))
+      || Set.for_all effectful ~f:(fun s ->
+          s < own_first || s > own_last
+          || Set.equal
+               (Hashtbl.find writers_by_stmt s |> Option.value ~default:(Set.empty (module Tn)))
+               (Set.singleton (module Tn) tn))
     in
     let site (a : _ Affine.access) =
       if List.exists own_writes ~f:(fun w -> Affine.same_statement w.Affine.a_path a.a_path) then
@@ -7175,16 +7198,21 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
           | `Unknown _ -> false)
       in
       (* gh-ocannl-616: the explicit request for the footprint form, ahead of the caps — an
-         undecided local producer, or an inherited virtual node with a stored template. *)
+         undecided local producer, or an inherited virtual node with a stored template. The request
+         exempts the node from the caps whether or not the form can serve its reads: where it cannot
+         ([footprint_cells] declines, or an inherited template reads a reader's target), the node
+         falls through to ordinary inlining, as [Context.decide_footprint] promises. *)
       let footprint_preferred =
-        Hash_set.mem optim_ctx.footprint_preferences tn
-        && Option.is_some (footprint_cells tn)
+        footprint_on
+        && Hash_set.mem optim_ctx.footprint_preferences tn
         && (Option.is_none (Tn.Placements.get plc tn)
-           || Tn.Placements.known_virtual plc tn
-              && Hashtbl.mem optim_ctx.computations tn
-              && inherited_readers_clear tn)
+           || (Tn.Placements.known_virtual plc tn && Hashtbl.mem optim_ctx.computations tn))
       in
-      if footprint_preferred then Hashtbl.set footprint_scoped ~key:tn ~data:None;
+      if
+        footprint_preferred
+        && Option.is_some (footprint_cells tn)
+        && (traced.has_assignment || inherited_readers_clear tn)
+      then Hashtbl.set footprint_scoped ~key:tn ~data:None;
       let cap_exempt = cap_exempt traced || footprint_preferred in
       if
         virtualize_settings.inline_scalar_constexprs && traced.is_scalar_constexpr
@@ -7459,7 +7487,7 @@ let%diagn2_sexp analyze_proc (static_indices : Indexing.static_symbol list) (llc
     an_traced_store = traced_store;
     an_reverse_node_map = reverse_node_map;
     an_merge_node = !merge_node_ref;
-    an_footprint = lazy (footprint_eligibility_query static_indices (Lazy.force accs));
+    an_footprint = lazy (footprint_eligibility_query static_indices llc (Lazy.force accs));
     an_reads_covered = lazy (reads_covered_query static_indices (Lazy.force accs));
     an_read_multiplicity = lazy (read_multiplicity_query static_indices (Lazy.force accs));
   }

@@ -80,3 +80,10 @@ rejection: the mismatched read commits the producer materialized: true
 rejection: the stranded prologue is a gather of the buffer (three buffer reads, no scope): true
 rejection: executed values are the column and the untouched zeros: true
 rejection: footprint and materialized arms agree: true
+local-between: the reduction cap materializes the producer: true
+local-between: no scratch: true
+local-between: executed values fold the local's first value, then its second: true
+local-between: capped and materialized arms agree: true
+preference-ineligible: the node stays virtual and its read is inlined: true
+preference-ineligible: no scratch: true
+preference-ineligible: executed values respect the guard: true
