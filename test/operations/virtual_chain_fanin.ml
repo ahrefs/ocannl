@@ -11,11 +11,13 @@
    Phase 1 pins the decision structurally on a hand-built [Ir.Low_level.t] chain through the
    [Ll_test] harness: with the default cap 8, a 10-link add chain materializes exactly the link
    whose fan-in first reaches 9 (x8), the links before and after stay virtual, and the
-   materialization is reported as an [`Inline] flip whose recompute cost carries the fan-in (extent
-   1 × multiplicity 1 × fan-in 9 — so the memory-budget planner does not rank the node among the
-   cheapest to re-inline). Disabling the cap reproduces the old behavior (whole chain virtual). Both
-   readings execute and must agree cell for cell with the OCaml reference (gh-ocannl-589: placement
-   decisions need an executed leg, not just structural pins).
+   materialization is reported as an [`Inline] flip whose recompute cost is the cost model's account
+   of re-inlining it (gh-ocannl-637: the 8 adds of the chain prefix its setter nest carries, per
+   cell — so the memory-budget planner does not rank the node among the cheapest to re-inline;
+   before the model, the traced proxy charged extent 1 × multiplicity 1 × fan-in 9). Disabling the
+   cap reproduces the old behavior (whole chain virtual). Both readings execute and must agree cell
+   for cell with the OCaml reference (gh-ocannl-589: placement decisions need an executed leg, not
+   just structural pins).
 
    Phase 1b pins that reads inside a [Local_scope] body in a setter's right-hand side count toward
    that setter's fan-in (review round 1): a producer computed through a scope body loading 9
@@ -113,8 +115,14 @@ let phase1 () =
     (known_virtual o c.xs.(8) && known_virtual o c.xs.(9));
   p "chain: x8 written once, read as a buffer downstream"
     (count_set o c.xs.(7) = 1 && count_get o c.xs.(7) >= 1);
-  p "chain: x8 is an Inline flip charged its fan-in (cost 9)"
-    (match find_flip o c.xs.(7) with Some (`Inline, 9) -> true | _ -> false);
+  (match find_flip o c.xs.(7) with
+  | Some (flip, cost) ->
+      Stdio.printf "chain: x8's flip: %s, recompute cost %d\n"
+        (match flip with `Inline -> "inline" | `Materialize -> "materialize")
+        cost
+  | None -> Stdio.printf "chain: x8 is not a flip candidate\n");
+  p "chain: x8 is an Inline flip charged its modeled recompute (the chain prefix's 8 adds)"
+    (match find_flip o c.xs.(7) with Some (`Inline, 8) -> true | _ -> false);
   (* Executed parity: the guard is a placement decision, so both readings of the same program must
      produce the same cells. Discriminating producer values: vary with the link and the cell, off
      the zero-init and the sentinel. *)

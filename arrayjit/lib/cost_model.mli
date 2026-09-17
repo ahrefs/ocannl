@@ -145,6 +145,55 @@ val roofline_seconds :
     raising either constant never increases the bound. A lower bound only up to the model's
     upper-bound byte/op counts — rank with it, do not predict. *)
 
+(** {2 The cost of one inlined computation (gh-ocannl-637 Part 2)}
+
+    The cost model's account of what a virtual node costs to recompute at ONE read site — the flops
+    and bytes of one instantiation of its computation, with the exactness the extraction tracks. The
+    reader's multiplicity stays outside, as in the virtualizer's traced proxy
+    ([inline_reduction_extent × read multiplicity × inline_fanin]); these queries replace the extent
+    × fan-in factor with the modeled arithmetic, and {!Low_level.recompute_pricer} feeds them to the
+    flip-candidate ordering (gh-ocannl-555), the memory-budget planner and, through
+    [fc_recompute_cost], footprint-scoped materialization (gh-ocannl-616). Priced per Part 1: a
+    hoisted scope body under a [Where] counts as what executes. *)
+
+type recompute = {
+  rc_flops : int;  (** Operations of one instantiation. *)
+  rc_bytes : int;
+      (** Bytes one instantiation reads from nodes other than the computed one — its own cells are a
+          scope local once inlined. Distinct cells within the instantiation's own body; an expanded
+          producer's traffic ({!recompute_cost}) multiplies by the enclosing trip count. *)
+  rc_approx : bool;  (** Either count is an upper bound rather than exact ({!analyze}'s flags). *)
+  rc_opaque : bool;  (** Opaque code: the counts may under-estimate. *)
+}
+[@@deriving sexp_of]
+
+val template_cost : self:Tnode.t -> ?at:Indexing.axis_index array -> Low_level.t -> recompute
+(** One stored template body ([optimize_ctx.computations]' [(at, body)] entry) as one instantiation:
+    sibling setters (a shared-loop template) are dropped as instantiation drops them, and the loops
+    binding a symbol of [at] — the ones the ordinary point read substitutes away — collapse to a
+    single iteration, so a reduction loop is the only trip count left. What the query cannot see is
+    the substitution a reader applies: a consumer instantiating over a sub-image that collapses a
+    further loop (gh-ocannl-616) applies that correction itself. Reads of other virtual nodes count
+    as reads here; {!recompute_cost} expands them. *)
+
+val recompute_cost : Low_level.optimize_ctx -> Tnode.t -> recompute option
+(** The transitive cost of one inlined computation of the node, summed over its stored templates
+    (every component of a multi-setter node replays at a read site, guarded — and its body hoists,
+    so all execute): each template's {!template_cost}, plus, for every read of a producer with a
+    stored template that is not committed non-virtual in the lineage, that producer's own recompute
+    per enclosing iteration (its read cells then are not traffic). [None] when the node has no
+    stored computation — a materialized node prices through {!producer_cost}. Memoized per lineage:
+    partially apply to the context once per compile. Cycles (a node reached through its own
+    producers) are cut at the node, priced once. *)
+
+val producer_cost : self:Tnode.t -> Low_level.t -> recompute option
+(** The per-cell cost of a materialized producer in optimized code — the twin of {!recompute_cost}
+    for a node a heuristic cap materialized, whose computation was never stored: {!analyze} over the
+    code pruned to the node's own setters (the loops enclosing them survive, everything else is
+    dropped), divided (rounding up) by the distinct cells it writes. Its virtual producers are
+    already inlined there, so the count is transitive by construction. [None] when the code sets the
+    node nowhere. *)
+
 module Calibration : sig
   (** The calibration TSV schema (config [autotune_calibration_file], gh-ocannl-491 task 4) and the
       envelope fitter over it (gh-ocannl-514 phase 0): one row per timed candidate, the model's

@@ -3940,6 +3940,21 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+;  The cost model's account of one inlined computation (gh-ocannl-637 Part 2): template_cost /
+; recompute_cost / producer_cost against the kernel-level counts, the modeled flip-candidate
+; pricing, and the proxy-vs-model ordering witness.
+
+(test
+ (name cost_model_template)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules cost_model_template)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; Bound pruning against the measured incumbent (gh-ocannl-514 phase 4b). Run by a rule so the
 ; backend, the gate and the tiny envelope are pinned on the command line — the floor then
 ; dwarfs any measured time, pruning every sketch deterministically on any machine.
@@ -4589,7 +4604,7 @@
     %{dep:model_default_placements.exe}
     "--ocannl_backend=cc"
     "--ocannl_model_default_schedule=true"
-    "--ocannl_model_default_placements=3"
+    "--ocannl_model_default_placements=4"
     "--ocannl_model_peak_flops=1e9"
     "--ocannl_model_peak_memory_bandwidth=1e12"))))
 

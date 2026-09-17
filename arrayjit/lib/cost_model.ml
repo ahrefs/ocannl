@@ -552,6 +552,184 @@ let roofline_seconds ?peak_flops ?peak_memory_bandwidth ~flops ~bytes () : float
   in
   match legs with [] -> None | l -> Some (List.reduce_exn l ~f:Float.max)
 
+(* {2 The cost of one inlined computation — gh-ocannl-637 Part 2}
+
+   What a virtual node costs to recompute at one read site, priced by the extraction above rather
+   than by the virtualizer's traced proxy (reduction extent × fan-in). Two sources, one per flip
+   direction of {!Low_level.flip_candidate}: a node the policy left virtual has its stored templates
+   ([optimize_ctx.computations]), a node a heuristic cap materialized has its setter nest in the
+   final code. Both reduce to [analyze] over a rewritten statement — the query walks no IR of its
+   own. *)
+
+type recompute = { rc_flops : int; rc_bytes : int; rc_approx : bool; rc_opaque : bool }
+[@@deriving sexp_of]
+
+(* A stored template's loops binding a symbol of its index vector are the ones the ordinary point
+   read substitutes away ([Low_level.inline_computation] binds them to the call-site indices and
+   drops the loop); a reduction loop stays. Collapsing a bound loop to a single iteration keeps the
+   symbol bound, so [affine_accesses] still interprets every map, and gives the per-instantiation
+   trip count. *)
+let collapse_bound_loops ~(at : Idx.axis_index array) (code : Low_level.t) : Low_level.t =
+  let bound s = Array.exists at ~f:(Idx.axis_index_mentions_symbol s) in
+  let rec go (c : Low_level.t) : Low_level.t =
+    match c with
+    | Low_level.For_loop ({ index; from_; body; _ } as f) when bound index ->
+        For_loop { f with to_ = from_; body = go body }
+    | For_loop ({ body; _ } as f) -> For_loop { f with body = go body }
+    | Scan_loop ({ body; _ } as sc) -> Scan_loop { sc with body = go body }
+    | Seq (a, b) -> Seq (go a, go b)
+    | If ({ body; _ } as i) -> If { i with body = go body }
+    | c -> c
+  in
+  go code
+
+(* Keep only [self]'s own setters: a shared-loop template carries sibling setters that instantiation
+   filters out, and a routine's code carries everything else. A subtree without a setter of [self]
+   becomes [Noop], so the loops that survive are exactly the ones enclosing [self]'s work. *)
+let prune_to_setters ~(self : Tn.t) (code : Low_level.t) : Low_level.t =
+  let rec go (c : Low_level.t) : Low_level.t =
+    match c with
+    | Low_level.Seq (a, b) -> (
+        match (go a, go b) with Noop, c | c, Noop -> c | a, b -> Seq (a, b))
+    | For_loop ({ body; _ } as f) -> (
+        match go body with Noop -> Noop | body -> For_loop { f with body })
+    | Scan_loop ({ body; _ } as sc) -> (
+        match go body with Noop -> Noop | body -> Scan_loop { sc with body })
+    | If ({ body; _ } as i) -> ( match go body with Noop -> Noop | body -> If { i with body })
+    | (Set { tn; _ } | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } | Zero_out tn) as c ->
+        if Tn.equal tn self then c else Noop
+    | Tile_mma { d = d_tn, _; _ } as c -> if Tn.equal d_tn self then c else Noop
+    | Set_local _ | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ ->
+        Noop
+  in
+  go code
+
+(* [analyze] over a rewritten statement, read as one computation of [self]: [self]'s own traffic is
+   not traffic (inlined, the node is a scope local), so only the other nodes' reads count as bytes;
+   the op count and its exactness are the extraction's own. *)
+let cost_of_self ~(self : Tn.t) (s : summary) : recompute =
+  let others = List.filter s.per_node ~f:(fun (tn, _) -> not (Tn.equal tn self)) in
+  {
+    rc_flops = s.flops;
+    rc_bytes = List.sum (module Int) others ~f:(fun (_, fp) -> fp.fp_read_bytes);
+    rc_approx = s.flops_approx || List.exists others ~f:(fun (_, fp) -> fp.fp_approx);
+    rc_opaque = s.opaque;
+  }
+
+let instantiation ~self ?at body =
+  let body = prune_to_setters ~self body in
+  match at with None -> body | Some at -> collapse_bound_loops ~at body
+
+let template_cost ~(self : Tn.t) ?at (body : Low_level.t) : recompute =
+  cost_of_self ~self (analyze (instantiation ~self ?at body))
+
+let add_recompute a b =
+  {
+    rc_flops = a.rc_flops + b.rc_flops;
+    rc_bytes = a.rc_bytes + b.rc_bytes;
+    rc_approx = a.rc_approx || b.rc_approx;
+    rc_opaque = a.rc_opaque || b.rc_opaque;
+  }
+
+let zero_recompute = { rc_flops = 0; rc_bytes = 0; rc_approx = false; rc_opaque = false }
+
+let recompute_cost (ctx : Low_level.optimize_ctx) : Tn.t -> recompute option =
+  let memo = Hashtbl.create (module Tn) in
+  let rec cost ~visiting (tn : Tn.t) : recompute option =
+    match Hashtbl.find memo tn with
+    | Some r -> r
+    | None ->
+        let r =
+          match Hashtbl.find ctx.Low_level.computations tn with
+          | None -> None
+          | Some comps ->
+              let visiting = Set.add visiting tn in
+              Some
+                (List.fold comps ~init:zero_recompute ~f:(fun acc (at, body) ->
+                     let body = instantiation ~self:tn ?at body in
+                     let s = analyze body in
+                     let own = cost_of_self ~self:tn s in
+                     (* Reads of producers that will themselves inline at instantiation add their
+                        own recompute per enclosing iteration; their read cells are then not
+                        traffic. A producer without a stored template is a leaf whatever its
+                        placement — its read already counted as bytes. *)
+                     let accs = Low_level.affine_accesses body in
+                     let expanded, expanded_nodes =
+                       List.fold accs
+                         ~init:(zero_recompute, Set.empty (module Tn))
+                         ~f:(fun (exp, nodes) a ->
+                           let p = a.Affine.a_tn in
+                           if a.a_write || Tn.equal p tn then (exp, nodes)
+                           else if
+                             Tn.Placements.known_non_virtual ctx.placements p || Set.mem visiting p
+                           then (exp, nodes)
+                           else
+                             match cost ~visiting p with
+                             | None -> (exp, nodes)
+                             | Some r ->
+                                 let scale =
+                                   List.fold a.a_loops ~init:1 ~f:(fun acc (_, (lo, hi)) ->
+                                       acc * max 0 (hi - lo + 1))
+                                 in
+                                 ( add_recompute exp
+                                     {
+                                       rc_flops = scale * r.rc_flops;
+                                       rc_bytes = scale * r.rc_bytes;
+                                       rc_approx = r.rc_approx || a.a_guarded;
+                                       rc_opaque = r.rc_opaque;
+                                     },
+                                   Set.add nodes p ))
+                     in
+                     (* An expanded producer's cells are not traffic, whatever the number of sites
+                        reading it: its footprint leaves the leaf bytes once. *)
+                     let leaf_bytes =
+                       List.sum
+                         (module Int)
+                         s.per_node
+                         ~f:(fun (p, fp) ->
+                           if Set.mem expanded_nodes p then fp.fp_read_bytes else 0)
+                     in
+                     let own = { own with rc_bytes = own.rc_bytes - leaf_bytes } in
+                     add_recompute acc (add_recompute own expanded)))
+        in
+        Hashtbl.set memo ~key:tn ~data:r;
+        r
+  in
+  fun tn -> cost ~visiting:(Set.empty (module Tn)) tn
+
+let producer_cost ~(self : Tn.t) (code : Low_level.t) : recompute option =
+  match prune_to_setters ~self code with
+  | Low_level.Noop -> None
+  | pruned ->
+      let s = analyze pruned in
+      let width = Ops.prec_in_bytes (Lazy.force self.Tn.storage_prec) in
+      let cells =
+        List.Assoc.find s.per_node self ~equal:Tn.equal
+        |> Option.value_map ~default:0 ~f:(fun fp -> fp.fp_write_bytes / max 1 width)
+      in
+      let cells = if cells = 0 then Tn.num_elems self else cells in
+      let cells = max 1 cells in
+      let others = List.filter s.per_node ~f:(fun (tn, _) -> not (Tn.equal tn self)) in
+      let ceil_div n = (n + cells - 1) / cells in
+      Some
+        {
+          rc_flops = ceil_div s.flops;
+          rc_bytes = ceil_div (List.sum (module Int) others ~f:(fun (_, fp) -> fp.fp_read_bytes));
+          rc_approx = s.flops_approx || List.exists others ~f:(fun (_, fp) -> fp.fp_approx);
+          rc_opaque = s.opaque;
+        }
+
+let modeled_recompute_flops (ctx : Low_level.optimize_ctx) (llc : Low_level.t) :
+    Tn.t -> [ `Materialize | `Inline ] -> int option =
+  let by_template = recompute_cost ctx in
+  fun tn flip ->
+    let r =
+      match flip with `Materialize -> by_template tn | `Inline -> producer_cost ~self:tn llc
+    in
+    match r with Some r when (not r.rc_approx) && not r.rc_opaque -> Some r.rc_flops | _ -> None
+
+let () = Low_level.recompute_pricer := modeled_recompute_flops
+
 module Calibration = struct
   (* The calibration TSV schema and the envelope fitter over it (gh-ocannl-514 phase 0). This module
      is the schema's single owner: rows are emitted through [to_line] (Autotune) and read back

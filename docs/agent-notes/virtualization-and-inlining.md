@@ -231,6 +231,29 @@ files.
   assertion copied into each read arm: forgetting a future arm fails at the pass boundary, before
   cleanup can make the result depend on whether it walks the undecided node's setter (`Virtual
   151/152`) or reader (`Never_virtual 17`) first.
+- **A flip candidate's `fc_recompute_cost` is the cost model's count, not the traced proxy**
+  (gh-ocannl-637 Part 2): `Low_level.specialize_proc` prices each candidate through
+  `Low_level.recompute_pricer`, a seam `Cost_model` registers at initialization (it sits above
+  `Low_level`, so a hook is the only way the virtualizer can reach it — a program linking no cost
+  model prices everything with the proxy). A `Materialize` flip (a policy-virtual node) prices its
+  stored templates: `Cost_model.recompute_cost` sums `template_cost` over
+  `optimize_ctx.computations`, collapsing the loops binding the template's index symbols (the ones a
+  point read substitutes away) and expanding reads of producers that still have templates — but the
+  stored template usually already carries earlier-inlined producers as nested `Local_scope`s, which
+  `analyze` counts directly. An `Inline` flip (a node a heuristic cap materialized) has NO stored
+  template — `virtual_llc` never stores a `known_non_virtual` node's computation — so it prices
+  through `Cost_model.producer_cost`: the optimized code pruned to the node's own setter nest, per
+  distinct written cell. Both give the ops of ONE instantiation; `specialize_proc` multiplies by the
+  per-cell read multiplicity, exactly as the proxy did, and falls back to the proxy (reduction
+  extent × multiplicity × transitive fan-in, `fc_modeled = false`) when the model's count is only a
+  bound (a guarded body, a `Where` arm with inline work, opaque code). Magnitudes changed by an
+  order of magnitude on reduction-shaped candidates (a scalar reduction's `Inline` flip is the whole
+  nest per read: `placement_surface`'s `n11` went 16384 -> 1048576, `n12` 16 -> 144), so a test that
+  stages a "decoy" or a budget cut on cost ORDER must build the order from modeled costs, not from
+  fan-in counts — `placement_surface` widened its broadcast decoy's multiplicity, and
+  `model_default_placements` widened its budget to the whole surface, for that reason. The
+  ordering witness where proxy and model disagree (a three-operand sum vs a four-deep unary chain)
+  is `test/operations/cost_model_template.ml`.
 - Big-reduction producers are forced `Never_virtual` by `virtualize_max_inline_reduction`
   (default 16) — remember it when a structural expectation assumes inlining.
 - Wide-fanin producers are forced `Never_virtual 41` by `virtualize_max_inline_fanin` (default 8,

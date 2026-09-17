@@ -820,7 +820,8 @@ type traced_array = {
       (** The transitive inline fan-in the guard computed for this node under the current
           placements: the number of distinct materialized nodes the node's fully-inlined computation
           would load (at least 1). Decision-dependent (written by [decide_placements] on the
-          candidate's private store copy); multiplies into [fc_recompute_cost] so the search and the
+          candidate's private store copy); multiplies into the proxy [fc_recompute_cost] — the
+          fallback where the cost model's count is not exact (gh-ocannl-637) — so the search and the
           memory-budget planner see the true cost of re-inlining a node the fanin cap materialized.
       *)
 }
@@ -914,6 +915,7 @@ type flip_candidate = {
   fc_tn : Tnode.t;
   fc_flip : [ `Materialize | `Inline ];
   fc_recompute_cost : int;
+  fc_modeled : bool;
 }
 [@@deriving sexp_of]
 (** gh-555: one searchable inlining decision dimension of a compile — a node whose placement the
@@ -7300,6 +7302,16 @@ let hosted_constant_inits_to_link_time (plc : Tn.Placements.t) (traced_store : t
             traced.read_only <- true);
     llc
 
+(* gh-ocannl-637: the modeled per-instantiation op count of a flip candidate's recompute — the cost
+   model's account of one inlined computation ([Cost_model.recompute_cost] over the stored templates
+   for a [`Materialize] flip, [Cost_model.producer_cost] over the setter nest for an [`Inline] one),
+   [None] where the count is not exact. [Cost_model] sits above this module, so it registers the
+   pricer at initialization; until then (or in a program linking no cost model) the traced proxy
+   prices every candidate. *)
+let recompute_pricer :
+    (optimize_ctx -> t -> Tnode.t -> [ `Materialize | `Inline ] -> int option) ref =
+  ref (fun _ctx _llc _tn _flip -> None)
+
 let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : optimized =
   let static_indices = an.an_static_indices in
   let llc = an.an_llc in
@@ -7335,6 +7347,7 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
      ([default_to_most_local]) has not yet rewritten the cap provenances. *)
   let flip_candidates =
     let plc = input_ctx.placements in
+    let price = !recompute_pricer input_ctx llc in
     Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:traced acc ->
         let one_hot = traced.prefers_virtual_one_hot && not traced.has_non_one_hot_setter in
         if
@@ -7365,12 +7378,16 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
           | None -> acc
           | Some fc_flip ->
               let mult = max 1 ((Lazy.force an.an_read_multiplicity) tn) in
-              {
-                fc_tn = tn;
-                fc_flip;
-                fc_recompute_cost = traced.inline_reduction_extent * mult * traced.inline_fanin;
-              }
-              :: acc)
+              (* gh-ocannl-637: the modeled op count of one recompute, times the per-cell read
+                 multiplicity; the traced proxy (reduction extent × multiplicity × transitive
+                 fan-in) where the model's count is not exact. *)
+              let modeled = price tn fc_flip in
+              let fc_recompute_cost =
+                match modeled with
+                | Some flops -> flops * mult
+                | None -> traced.inline_reduction_extent * mult * traced.inline_fanin
+              in
+              { fc_tn = tn; fc_flip; fc_recompute_cost; fc_modeled = Option.is_some modeled } :: acc)
     |> List.sort ~compare:(fun a b ->
         match Int.compare b.fc_recompute_cost a.fc_recompute_cost with
         | 0 -> Tn.compare a.fc_tn b.fc_tn
