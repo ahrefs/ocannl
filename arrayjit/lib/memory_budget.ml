@@ -217,42 +217,59 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
       let names l =
         String.concat ~sep:", " (List.map l ~f:(fun ((tn, _), _) -> Tn.debug_name tn))
       in
-      List.iter ranked ~f:(fun (fc, solo) ->
-          let tn = fc.LL.fc_tn and cost = fc.LL.fc_recompute_cost in
-          let dec = (tn, direction_of fc) in
-          let taken = List.exists !accepted ~f:(fun (t, _) -> Tn.equal t tn) in
-          if taken then
-            logf "skip %s (%s): the node's other direction is accepted" (Tn.debug_name tn)
-              (direction_name (snd dec))
-          else if not (met !cur) then begin
-            (* A HELD sibling direction of this node is not final: the two are one node's exclusive
-               readings, so the candidate is scored without it, and if the candidate does not pay
-               either, whichever of the two has the larger solo relief stays held. *)
-            let held_sibling, held =
-              List.partition_tf !speculative ~f:(fun ((t, _), _) -> Tn.equal t tn)
+      (* One node, one group (gh-ocannl-616 review round 6): a node offering both directions has
+         them scored against the same incumbent — each alone and jointly with the held group — and
+         the direction with the larger marginal relief (the cheaper recompute on a tie) is the one
+         committed or held; the other is dropped. Visiting them one at a time would commit the first
+         that pays and never see the sibling relieve more. *)
+      let decided = Hash_set.create (module Tn) in
+      let evaluate dec ~held =
+        let cand_alone = dec :: !accepted in
+        let fp_alone = score cand_alone in
+        let cand_joint, fp_joint =
+          if List.is_empty held then (cand_alone, fp_alone)
+          else
+            let c = (dec :: List.map held ~f:fst) @ !accepted in
+            (c, score c)
+        in
+        let verdict =
+          match compare_int fp_joint.LL.fp_total fp_alone.LL.fp_total with
+          | c when c < 0 -> `Load_bearing
+          | 0 -> `Neutral
+          | _ -> `Harmful
+        in
+        let cand = match verdict with `Load_bearing -> cand_joint | _ -> cand_alone in
+        let fp = match verdict with `Load_bearing -> fp_joint | _ -> fp_alone in
+        (cand, fp, verdict, !cur.LL.fp_total - fp.LL.fp_total)
+      in
+      List.iter ranked ~f:(fun (fc, _) ->
+          let tn = fc.LL.fc_tn in
+          if Hash_set.mem decided tn || met !cur then ()
+          else begin
+            Hash_set.add decided tn;
+            let held = !speculative in
+            let group =
+              List.filter ranked ~f:(fun ((o : LL.flip_candidate), _) -> Tn.equal o.LL.fc_tn tn)
             in
-            let cand_alone = dec :: !accepted in
-            let fp_alone = score cand_alone in
-            let cand_joint, fp_joint =
-              if List.is_empty held then (cand_alone, fp_alone)
-              else
-                let c = (dec :: List.map held ~f:fst) @ !accepted in
-                (c, score c)
+            let outcomes =
+              List.map group ~f:(fun (g, solo) ->
+                  let dec = (tn, direction_of g) in
+                  (dec, g.LL.fc_recompute_cost, solo, evaluate dec ~held))
             in
-            let verdict =
-              match compare_int fp_joint.LL.fp_total fp_alone.LL.fp_total with
-              | c when c < 0 -> `Load_bearing
-              | 0 -> `Neutral
-              | _ -> `Harmful
+            let best =
+              List.max_elt outcomes
+                ~compare:(fun (_, ca, _, (_, _, _, ma)) (_, cb, _, (_, _, _, mb)) ->
+                  match Int.compare ma mb with 0 -> Int.compare cb ca | c -> c)
+              |> Option.value_exn
             in
-            let cand = match verdict with `Load_bearing -> cand_joint | _ -> cand_alone in
-            let fp = match verdict with `Load_bearing -> fp_joint | _ -> fp_alone in
-            let marginal = !cur.LL.fp_total - fp.LL.fp_total in
+            let dec, cost, solo, (cand, fp, verdict, marginal) = best in
+            let dir = direction_name (snd dec) in
+            let sibling_note =
+              if List.length group > 1 then " (over the node's other direction)" else ""
+            in
             if marginal > 0 then (
-              logf "accept %s (%s): %d bytes (solo %d), cost %d%s, footprint now %d"
-                (Tn.debug_name tn)
-                (direction_name (snd dec))
-                marginal solo cost
+              logf "accept %s (%s)%s: %d bytes (solo %d), cost %d%s, footprint now %d"
+                (Tn.debug_name tn) dir sibling_note marginal solo cost
                 (match (verdict, held) with
                 | _, [] -> ""
                 | `Load_bearing, _ -> Printf.sprintf " jointly with %s" (names held)
@@ -274,25 +291,17 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
               (speculative := match verdict with `Neutral -> held | _ -> []);
               cur := fp)
             else
-              let solo_of ((t, d), _) =
-                List.find_map scored ~f:(fun ((fc' : LL.flip_candidate), s) ->
-                    Option.some_if (Tn.equal fc'.LL.fc_tn t && Poly.equal (direction_of fc') d) s)
-                |> Option.value ~default:0
+              (* Neither direction pays yet: hold the one with the larger solo relief. *)
+              let dec, cost, solo, _ =
+                List.max_elt outcomes ~compare:(fun (_, _, sa, _) (_, _, sb, _) ->
+                    Int.compare sa sb)
+                |> Option.value_exn
               in
-              match held_sibling with
-              | [ sib ] when solo_of sib >= solo ->
-                  logf "hold %s (%s): no marginal relief yet (solo %d); its held %s direction stays"
-                    (Tn.debug_name tn)
-                    (direction_name (snd dec))
-                    solo
-                    (direction_name (snd (fst sib)));
-                  speculative := sib :: held
-              | _ ->
-                  logf "hold %s (%s): no marginal relief yet (solo was %d); speculative"
-                    (Tn.debug_name tn)
-                    (direction_name (snd dec))
-                    solo;
-                  speculative := (dec, cost) :: held
+              logf "hold %s (%s)%s: no marginal relief yet (solo was %d); speculative"
+                (Tn.debug_name tn)
+                (direction_name (snd dec))
+                sibling_note solo;
+              speculative := (dec, cost) :: held
           end);
       (match !speculative with
       | [] -> ()
