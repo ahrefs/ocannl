@@ -1682,7 +1682,15 @@ that they earn a lookup rather than always-loaded space.
   15 — an extracted tree of small files is exactly what NTFS charges for. CI's Windows cold switch
   hides it because that step is dominated by building the compiler: it stayed in its historical
   615-902s band (770s and 710s on the 2.6.0 dispatch). A cold switch is a bill paid once per bump,
-  not a regression to chase.
+  not a regression to chase. Nor does the win show up warm: the Windows setup-ocaml step went
+  77s/111s under 2.5.2 to 89s/87s under 2.6.0, and the pin and resolve steps moved by seconds in
+  both directions. Do not expect opam upgrades to move CI's Windows wall-clock at all — that job
+  is priced by its cache restore, its dune build and, when cold, by building the compiler. Two of
+  those are where to look first, and one of them is currently broken: the Windows `_opam` restore
+  dies in `tar` on the cygwin CA symlinks, wasting ~9min per job on an extraction that then
+  reports the key as missed, while the suite stays green on the half-extracted tree
+  (gh-ocannl-1014, filed 2026-09-17; it also makes `Install opam dependencies (Windows)` return in
+  3s, which is NOT evidence of a warm switch).
   Our own `_opam` key deliberately does NOT carry the opam version: a switch built by 2.5.2
   restores and runs green under 2.6.0 (the 2026-09-17 master runs hit that cache), so keying on it
   would buy nothing and cost a ~180-package rebuild per platform at every bump.
