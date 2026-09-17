@@ -192,12 +192,18 @@ files.
   Four of those five constructor arms are defensive, and it is the PIPELINE ORDER that makes them
   so: nothing emits `Staged_compilation` (8) today, and the passes minting barriers (141),
   cooperative tiles (143) and dynamic scatters (144 — `rewrite_one_hot_reductions`) all run after
-  `virtual_llc`. **19 is not defensive any more.** `Assignments.lower` runs the algebraic rewrite
-  tier — `Rewrites.apply`, gh-ocannl-483 — BEFORE `Low_level.optimize`, and its member
-  `online_softmax` emits `Declare_local` for the running max/sum accumulators, so with that key on
-  (the `performance` and `approximate` profiles turn it on) a candidate captured around one is
-  refused at store time for real. Claims that `hoist_cross_statement_cse` is the only producer of
-  `Declare_local` predate that tier.
+  `virtual_llc`. **19 is not defensive any more**, and what the arm refuses is the CONSTRUCTOR, not
+  any particular pass's shape: a `Declare_local` anywhere in the captured nest. `Assignments.lower`
+  runs the algebraic rewrite tier — `Rewrites.apply`, gh-ocannl-483 — BEFORE `Low_level.optimize`,
+  and its member `online_softmax` declares its cached probability cell that way
+  (`Online_softmax.hoist`, the consumer-side read hoist), so with that key on the arm fires for
+  real. Two qualifications worth carrying: `online_softmax` is enabled by the `approximate`
+  profile only — `performance` deliberately leaves the algebraic-rewrite gates alone as a numerics
+  axis, and `reproducible` pins them off — and the rewrite's OTHER `Declare_local`, inside
+  `emit_normalizer`'s scan body, never reaches this arm, since an enclosing `Scan_loop` is refused
+  as 148 first. The running max/sum are `Scan_loop.carried` values, not locals. Claims that
+  `hoist_cross_statement_cse` is the only producer of `Declare_local` predate that tier;
+  `row_hoisted_local` in the boundary test pins the arm on a plain hoisted local.
   Do not infer the boundary from the `Non_virtual` comments at the raise sites: several describe
   reachability that has since changed, and 52 is enforced earlier still (`trace_node_facts` raises
   `invalid_arg` on a `Concat` index, so the virtualizer's arm never sees one). The tags themselves,

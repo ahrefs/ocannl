@@ -41,12 +41,15 @@
    fire: every call site is a setter arm, or a candidate drawn from the assignment-index map, which
    is where its setters put it. - 8, 141, 143, 144 guard constructors no pre-virtualization pass
    emits (staged compilation, barriers, cooperative tiles, dynamic scatters). These will never
-   become inlineable, so a row would pin nothing that could move. - 19 (a [Declare_local] in the
-   captured nest) guarded the same way until gh-ocannl-483 put the algebraic rewrite tier AHEAD of
-   [Low_level.optimize]: [Online_softmax.hoist] emits one, so the arm is reachable whenever
-   [online_softmax] is on. Building that shape by hand needs the rewrite's whole normalizer pattern,
-   so it stays unrowed here rather than unreachable. - 14, 140, 145, 146 belong to the vector-store
-   (packed-uniform) consumption path, exercised through the uniform tests rather than by hand. *)
+   become inlineable, so a row would pin nothing that could move. - 14, 140, 145, 146 belong to the
+   vector-store (packed-uniform) consumption path, exercised through the uniform tests rather than
+   by hand.
+
+   19 was in that list and is not: gh-ocannl-483 put the algebraic rewrite tier AHEAD of
+   [Low_level.optimize], and [Online_softmax.hoist] declares its cached probability cell as a
+   [Declare_local], so the arm fires on the ordinary path with [online_softmax] on. It is rowed
+   below ([row_hoisted_local]) — what the walk refuses is the CONSTRUCTOR, so a plain hoisted local
+   reaches it without reconstructing the rewrite. *)
 
 open Base
 open Ll_test
@@ -340,6 +343,34 @@ let row_block_components () =
   row ~label:"block_components" ~llc ~cand:x ~out ~seed:[] ~expected:[| 1.; 2.; 20.; 21. |]
     ~verdict:Accepted
 
+(* gh-ocannl-483 made this arm live: the algebraic rewrite tier runs on the raw lowered code BEFORE
+   [Low_level.optimize], and [Online_softmax.hoist] declares its cached probability cell as a
+   [Declare_local] beside the statement that consumes it. What the walk refuses is the CONSTRUCTOR,
+   not the rewrite, so the boundary is reachable with a plain hoisted local: declare a scope, write
+   it, and read it from the candidate's setter in the same captured body. (The rewrite's other
+   [Declare_local], inside [emit_normalizer]'s scan body, never reaches this arm -- an enclosing
+   [Scan_loop] is refused as 148 first.) The local is pure scalar plumbing, so the materialized arm
+   computes the same values: the row pins that inlining is refused AND that the refusal costs
+   nothing. *)
+let row_hoisted_local () =
+  let p_st = mk ~dims:[| 1 |] "hl_p" and x = mk "hl_x" and out = mk "hl_out" in
+  virtualize p_st;
+  materialize out;
+  let p = LL.get_scope p_st in
+  let s = sym () and t = sym () in
+  let llc =
+    seq (zero x)
+      (seq
+         (loop_n s n
+            (seq
+               (LL.Declare_local { id = p; needs_init = false })
+               (seq (LL.Set_local (p, tick s)) (set x [| iter s |] (LL.Get_local p)))))
+         (loop_n t n (set out [| iter t |] (get x [| iter t |]))))
+  in
+  row ~label:"hoisted_local" ~llc ~cand:x ~out ~seed:[]
+    ~expected:(Array.init n ~f:(fun i -> 1. +. Float.of_int i))
+    ~verdict:(Rejected (Store, Ir.Tnode.Site "19:declare-local"))
+
 let () =
   row_visit_cap ();
   row_guarded_enclosing ();
@@ -353,4 +384,5 @@ let () =
   row_noninjective ();
   row_fixed_component ();
   row_block_components ();
+  row_hoisted_local ();
   Stdio.printf "%!"

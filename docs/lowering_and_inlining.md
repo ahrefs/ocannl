@@ -63,9 +63,10 @@ Notable constructors:
   statements. Fresh lowering from `Assignments.to_low_level` never emits it. Within the
   optimization pipeline it is produced **only** by `hoist_cross_statement_cse` (the last phase),
   but the algebraic rewrite tier that runs BEFORE the pipeline (`Rewrites.apply` in
-  `Assignments.lower`, gh-ocannl-483) also emits it: `Online_softmax.hoist` declares the running
-  max/sum accumulators this way. `needs_init` records whether the hoisted local needs a zero
-  initializer before its first use.
+  `Assignments.lower`, gh-ocannl-483) also emits it: `Online_softmax.hoist` declares its cached
+  probability cell this way, and `emit_normalizer` its per-row scratch inside the scan body. (The
+  online-softmax running max/sum are `Scan_loop.carried` values, not `Declare_local`s.)
+  `needs_init` records whether the hoisted local needs a zero initializer before its first use.
 - **`Get_dynamic`**: a guarded dynamic gather (reads `tn`'s row at a runtime-computed `dyn_value`
   along `dyn_axis`). It is produced **only** by `rewrite_one_hot_reductions` (gh-343), after
   virtualization; earlier passes handle it defensively.
@@ -347,11 +348,16 @@ compose, is under Memory Mode Management below. The exit codes:
 still holds *within* the pipeline: `hoist_cross_statement_cse` is the only phase here that produces
 `Declare_local` and it runs last, whereas computations are stored during `virtual_llc` (well before
 hoisting). What changed is what runs before the pipeline — `Assignments.lower` applies the
-algebraic rewrite tier (`Rewrites.apply`, gh-ocannl-483) to the raw lowered code, and its
-`online_softmax` member emits `Declare_local`, so with that key on (the `performance` and
-`approximate` profiles enable it) a candidate whose captured nest contains one is genuinely refused
-here. The arm additionally guards the not-currently-exercised case of a hoisted program being fed
-back through virtualization.
+algebraic rewrite tier (`Rewrites.apply`, gh-ocannl-483) to the raw lowered code, and
+`Online_softmax.hoist` declares its cached probability cell as a `Declare_local` beside the
+statement that consumes it, so with `online_softmax` on (the `approximate` profile; `performance`
+leaves the algebraic-rewrite gates at their defaults) a candidate whose captured nest contains one
+is genuinely refused here. The same pass's other `Declare_local`, inside `emit_normalizer`'s scan
+body, does not reach this arm — an enclosing `Scan_loop` is refused as `Non_virtual 148` first.
+What the arm refuses is the constructor rather than that pass's shape, so any hoisted local in a
+captured nest does it; `row_hoisted_local` in `test/operations/virtual_rejection_boundary.ml` pins
+it on one. The arm additionally guards the not-currently-exercised case of a hoisted program being
+fed back through virtualization.
 
 ### 3. Inlining Phase (`inline_computation`)
 
@@ -621,6 +627,7 @@ behavior is **retained**, not changed:
   cannot encounter them on the fresh-lowering path, but the arms guard against re-entry of an
   already-optimized program. (The audit's verdict stands; half its premise no longer does.
   gh-ocannl-483 added a rewrite tier ahead of the pipeline whose `online_softmax` member emits
-  `Declare_local`, so the `Non_virtual 19` arm is now reachable on the ordinary path with that key
-  on — retained for a second reason. `Get_dynamic` is unaffected: `rewrite_one_hot_reductions` is
-  still a pipeline phase, after `virtual_llc`.)
+  `Declare_local`, so the `Non_virtual 19` arm is reachable on the ordinary path with that key on
+  — retained for a second reason, and covered by `row_hoisted_local` in
+  `test/operations/virtual_rejection_boundary.ml`. `Get_dynamic` is unaffected:
+  `rewrite_one_hot_reductions` is still a pipeline phase, after `virtual_llc`.)

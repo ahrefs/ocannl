@@ -1554,9 +1554,13 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_
        nothing reaches it -- [hoist_cross_statement_cse] is the only pass here that mints
        [Declare_local] and it runs last, whereas capture happens during [virtual_llc] -- but the
        algebraic rewrite tier runs BEFORE [Low_level.optimize] ([Assignments.lower] calls
-       [Rewrites.apply]) and [Online_softmax.hoist] emits [Declare_local] for its running max/sum
-       accumulators, so with [online_softmax] on a candidate captured around one is refused here. It
-       also still guards a hoisted program re-entering virtualization. *)
+       [Rewrites.apply]), and [Online_softmax.hoist] declares its cached probability cell this way
+       beside the statement consuming it, so with [online_softmax] on (the [approximate] profile) a
+       candidate captured around one is refused here. The same pass's other [Declare_local], in
+       [emit_normalizer]'s scan body, does not reach this arm: an enclosing [Scan_loop] is refused
+       as 148 first. What is refused is the constructor, not that pass -- any hoisted local in the
+       captured nest does it ([row_hoisted_local] in test/operations/virtual_rejection_boundary.ml).
+       It also still guards a hoisted program re-entering virtualization. *)
     | Declare_local _ -> raise @@ Non_virtual "19:declare-local"
     | Comment _ -> ()
     | Staged_compilation _ -> raise @@ Non_virtual "8:staged-compilation"
