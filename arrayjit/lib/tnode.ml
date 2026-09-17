@@ -735,17 +735,22 @@ module Placements = struct
     | Some ((Virtual | Local | On_device), _) -> ()
 
   (** The forcing family -- {!is_virtual_force}, {!is_materialized_force} and {!is_in_context_force}
-      -- answers a placement question and, where the table does not already answer it, resolves the
-      node on the spot.
+      -- answers a placement question and, where the placement is still open, resolves the node on
+      the spot.
 
       The [provenance] argument is recorded only on that resolving path -- a node still undecided
       ([None]) or still at a non-final intent ([Never_virtual], [Effectively_constant]), which the
       two materialization queries settle through {!default_to_most_local} and {!is_virtual_force}
       settles with the same guard inlined. (Which of those open states each query resolves differs:
-      [is_materialized_force] asserts rather than default an undecided node.) A call on a node
-      already decided [Virtual], [Local] or [On_device] answers from the table and records nothing.
-      So a query site's tag is the reason the node got defaulted {e at that query}, not a claim that
-      the query is load-bearing: most call sites never mint their literal.
+      [is_materialized_force] asserts rather than default an undecided node.) A node already at a
+      final placement -- [Virtual], [Local] or [On_device] -- is answered and nothing is recorded.
+      Note that {!get} answers from the {e effective} state, so that final placement is either this
+      lineage's table decision or the tnode's declared {!field-memory_mode_intent}: a node minted
+      [On_device] at construction, or [Virtual] by [Train.set_virtual], silences every later query
+      without ever acquiring a table entry. ([Local] is the exception that is always a decision --
+      it is never declared intent.) So a query site's tag is the reason the node got defaulted
+      {e at that query}, not a claim that the query is load-bearing: most call sites never mint
+      their literal.
 
       The goldens bear this out. [c_syntax.ml] alone carries twelve query sites, each with its own
       tag; a repository-wide search of the committed [.expected] files finds fourteen distinct tags
