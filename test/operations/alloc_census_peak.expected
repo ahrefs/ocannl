@@ -1,0 +1,18 @@
+the bracket starts with the mark on the bytes already live, not on zero: true
+the workload ran and produced its output: true
+running the workload raises the mark by at least the bytes it computes into: true
+the mark is never below what is live under it: true
+releasing the context gives the bytes back, so the live gauge falls: true
+and the mark stays where the workload put it: true
+so a reading taken after the window would understate it by the bytes just freed: true
+a rebase puts the mark back on the live bytes: true
+so the window that follows does not inherit the earlier peak: true
+the mark takes in every pool live at once, not the largest one: true
+a free lowers the live bytes: true
+and leaves the mark untouched: true
+growing a pool in place adds its growth, not its whole new size: true
+the mark rises only where the growth passes the earlier high water: true
+a bigger total does raise the mark: true
+the fabricated pools are all given back: true
+a rebase after them lands on the live bytes, not on the high water: true
+the incrementally kept total agrees with the fold over the table: true

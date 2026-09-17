@@ -24,6 +24,19 @@ files.
   assume a class leaks just because another one does. `Ir.Alloc_census` (config `autotune_log`
   prints it per candidate) separates the four classes: working pools, constant pools, contexts,
   modules.
+- **A footprint number wanted over a window is a counter, not a reading** (gh-ocannl-1006). Every
+  backend's `Context.get_used_memory` is a CURRENT gauge, and the backends disagree in kind:
+  CUDA/HIP sum an explicit pool table (deterministic), while `metal`'s `allocated_memory` and `cc`'s
+  Ctypes total are decremented from a GC finalizer, so the same run reports different numbers
+  depending on when a collection happened to run. So do not sample one of them at the end of a
+  window and call it a peak. `Ir.Alloc_census.peak_pool_bytes` is the high-water mark beside them —
+  raised at the shared allocator seam, never lowered by a free, rebased by `reset_peak` where a
+  caller brackets a window — and it is backend-uniform, which is what makes a `cc` row and a CUDA
+  row the same quantity (requested bytes) and comparable with `torch.cuda.max_memory_allocated`. It
+  inherits the census's coverage exactly: a device's reserved merge-buffer slab, loaded code modules
+  and host-side `Ndarray` arrays are all outside it, and it is process-global rather than per
+  device. A window a tuner ran in front of needs the rebase, not a filter: an unbracketed reading
+  reports the search's high water (one candidate buffer per arm), which is not the workload's.
 - A CAS-guarded cleanup must not commit the flag before the cleanup succeeds. `Backends.finalize`'s
   `ctx.finalized` means "the pools were freed", not "a free was attempted": `Backend.await` inside it
   can raise (a device still reporting an asynchronous error, a dead worker domain), and committing

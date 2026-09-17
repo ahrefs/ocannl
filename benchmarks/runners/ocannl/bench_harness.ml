@@ -699,6 +699,20 @@ let time_segments ?promote_locals ?(repeats = 20) ~backend ~limits ~static_indic
     protocol actually reads is what lets {!run_self_test} drive the whole of it on a model
     fabricated in memory, with no file on disk and no Python. *)
 
+(** What an OCANNL cell's result line calls its memory counter (gh-ocannl-1006): the short tag the
+    report prints on the row, and the long description its legend expands that tag into.
+
+    Named on the wire rather than left to the [framework] column because the counters the report
+    puts side by side are not one quantity: this one and [torch.cuda.max_memory_allocated] are both
+    an allocator's high-water mark in requested bytes, while a current gauge sampled at step
+    boundaries is a lower bound on the same window. What it covers is {!Ir.Alloc_census}'s coverage
+    -- the pools recorded at the shared allocator seam -- which excludes a device's reserved
+    merge-buffer slab, the loaded code modules and the host-side arrays. The tag says [all backends]
+    because that coverage is backend-independent: a [cc] pool is counted exactly as a CUDA one. *)
+let peak_memory_counter = "ocannl-seam"
+
+let peak_memory_source = "OCANNL allocator seam high-water (requested bytes, all backends)"
+
 type protocol = {
   workload : string;  (** The result line's [workload] field: the fixture's [name] metadata. *)
   parity_steps : int;  (** Steps whose losses are reported one by one, as the parity checksum. *)
@@ -762,6 +776,12 @@ let measure_and_emit ~protocol ~backend ~variant ?(precision = "f32") ~compile_s
     run_step ()
   done;
   sync ();
+  (* The memory column's bracket (gh-ocannl-1006). Here, not at process exit: a tuned cell's search
+     allocates a candidate buffer per arm, so a counter read at the end reports the SEARCH's high
+     water rather than the workload's. Rebasing after the warmup makes the reading the workload's
+     steady-state footprint -- everything still held at this point, plus anything the timed steps go
+     on to allocate -- which is the quantity a footprint-scoped materialization trades time for. *)
+  Ir.Alloc_census.reset_peak ();
   let synced =
     Array.init timed_steps ~f:(fun _ ->
         let c0 = Mtime_clock.counter () in
@@ -775,6 +795,12 @@ let measure_and_emit ~protocol ~backend ~variant ?(precision = "f32") ~compile_s
   done;
   sync ();
   let queued_ms = elapsed_ms c0 /. Float.of_int timed_steps in
+  let peak_memory =
+    Some
+      ( (Ir.Alloc_census.snapshot ()).Ir.Alloc_census.peak_pool_bytes,
+        peak_memory_counter,
+        peak_memory_source )
+  in
   Array.sort synced ~compare:Float.compare;
   let line =
     Bench_json.result_line ~backend ~variant ~precision
@@ -787,7 +813,8 @@ let measure_and_emit ~protocol ~backend ~variant ?(precision = "f32") ~compile_s
       ~workload ~compile_s
       ~searched:(Option.value_map tune ~default:false ~f:searched)
       ?tokens_per_step ?tune:(Option.bind tune ~f:tune_json) ~p10:(percentile synced 10.)
-      ~p50:(percentile synced 50.) ~p90:(percentile synced 90.) ~queued_ms ~timed_steps ~losses ()
+      ~p50:(percentile synced 50.) ~p90:(percentile synced 90.) ~queued_ms ~timed_steps ~peak_memory
+      ~losses ()
   in
   Stdio.Out_channel.output_string out (line ^ "\n");
   Stdio.Out_channel.flush out;

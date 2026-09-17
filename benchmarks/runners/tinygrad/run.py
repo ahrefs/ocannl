@@ -61,8 +61,10 @@ sys.path.insert(0, _RUNNERS)
 from bench_common import (
     emit,
     instrument_tinygrad_beam,
+    peak_memory_fields,
     percentiles,
     read_st_metadata,
+    tinygrad_peak_memory,
     tinygrad_searched,
 )
 
@@ -306,6 +308,13 @@ def main():
             step(k)
             k += 1
         sync()
+        # gh-ocannl-1006: the memory column's bracket, opened after the warmup so the peak is the
+        # timed steps' and not the JIT capture's. tinygrad exposes a current gauge only, so every
+        # `sample()` below is taken AFTER the step's elapsed time, costing the reported number
+        # nothing, and the result is a lower bound on the window (see `PeakMemoryProbe`).
+        peak_memory = tinygrad_peak_memory()
+        if peak_memory:
+            peak_memory.start()
         synced = []
         for _ in range(timed_steps):
             t0 = time.perf_counter()
@@ -313,12 +322,20 @@ def main():
             k += 1
             sync()
             synced.append((time.perf_counter() - t0) * 1e3)
+            if peak_memory:
+                peak_memory.sample()
         t0 = time.perf_counter()
         for _ in range(timed_steps):
             step(k)
             k += 1
         sync()
         queued = (time.perf_counter() - t0) / timed_steps * 1e3
+        if peak_memory:
+            peak_memory.sample()
+        # Closed before the optional retime block, so the column reports the steps `step_ms` and
+        # `queued_step_ms` report on -- see the pytorch runner for why the placement matters per
+        # counter kind (review round 1).
+        peak_memory_result = peak_memory_fields(peak_memory)
         retimed = None
         if args.retime:
             sync()
@@ -345,6 +362,7 @@ def main():
         "timed_steps": timed_steps,
         "losses": losses,
         "version": pkg_version("tinygrad"),
+        **peak_memory_result,
     }
     if retimed:
         result["retime_step_ms"] = percentiles(retimed)

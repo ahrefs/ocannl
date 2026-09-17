@@ -10,6 +10,8 @@ step_ms carries all three percentiles: true
 every reported percentile is a positive time: true
 the percentiles are emitted in order p10 <= p50 <= p90: true
 queued_step_ms is a positive time: true
+peak_memory_bytes is a positive byte count on every backend: true
+and it names the counter it was read from, in both spellings: true
 timed_steps is the count the protocol asked for: true
 losses carries one parity checksum per parity step: true
 every parity checksum is a finite number: true

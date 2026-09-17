@@ -79,6 +79,19 @@ let () =
         | _ -> false);
       Verdict.p "queued_step_ms is a positive time"
         (Option.value_map (number j "queued_step_ms") ~default:false ~f:(fun t -> Float.(t > 0.)));
+      (* gh-ocannl-1006: the memory column's bracket, which lives in [measure_and_emit] beside the
+         timing loops and is reachable from nowhere else. A bracket placed after the read, or a
+         backend the shared allocator seam does not reach, emits a zero here -- which the report
+         would print as a workload with no footprint rather than as a cell that measured none. The
+         bound is the model's own bytes: the self-test trains a real MLP, so its parameters,
+         activations and gradients are on the device whatever the backend. *)
+      Verdict.p "peak_memory_bytes is a positive byte count on every backend"
+        (match field j "peak_memory_bytes" with Some (`Int b) -> b > 0 | _ -> false);
+      (* Both spellings: the short tag the report prints ON the row, so a row states its own
+         counter, and the long description its legend expands that tag into (review round 1). *)
+      Verdict.p_all "and it names the counter it was read from, in both spellings"
+        [ "peak_memory_counter"; "peak_memory_source" ] ~f:(fun k ->
+          Option.value_map (string_field j k) ~default:false ~f:(Fn.non String.is_empty));
       Verdict.p "timed_steps is the count the protocol asked for"
         (match field j "timed_steps" with
         | Some (`Int n) -> n = protocol.H.timed_steps

@@ -134,9 +134,23 @@ let regime_knobs_object knobs =
     cell's regime as [--ocannl_profile=...] and checks the row against what the runner reports, so a
     regime a row claims is the one the process actually ran under (gh-ocannl-719); [regime_knobs]
     (see {!regime_knobs_object}) is the same fact per setting, which is what catches an ambient
-    numerics flag that no profile name shows. *)
+    numerics flag that no profile name shows.
+
+    [peak_memory] is the cell's peak device footprint over the timed steps, as
+    [(bytes, counter, source)] -- or [None] for a cell that measured none, which reaches the report
+    as a dash rather than a zero (gh-ocannl-1006). The counter is NAMED on the wire rather than left
+    to be inferred from the framework and backend columns, because the available counters are not
+    all the same quantity: an OCANNL row and a [torch.cuda.max_memory_allocated] row are both
+    requested bytes off an allocator's high-water mark and compare honestly, whereas a current gauge
+    sampled at step boundaries ([torch.mps], tinygrad) is a lower bound on the same window. A reader
+    who cannot see which one a row carries would compare them as though they were one column.
+
+    Two spellings of it, because a report needs the name in two places at two lengths (review round
+    1): [counter] is the short tag that goes ON each table row, so a row states its own counter
+    rather than leaving the reader to a section-wide list that says only which counters occur
+    somewhere; [source] is the long description the legend expands that tag into. *)
 let result_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload ~compile_s ~searched
-    ?tokens_per_step ?tune ~p10 ~p50 ~p90 ~queued_ms ~timed_steps ~losses () =
+    ?tokens_per_step ?tune ~p10 ~p50 ~p90 ~queued_ms ~timed_steps ~peak_memory ~losses () =
   let tokens_field =
     match tokens_per_step with Some t -> Printf.sprintf {|"tokens_per_step":%d,|} t | None -> ""
   in
@@ -144,9 +158,18 @@ let result_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload ~c
   let profile_field =
     match profile with Some p -> Printf.sprintf {|"%s"|} (string p) | None -> "null"
   in
+  let peak_bytes_field, peak_counter_field, peak_source_field =
+    match peak_memory with
+    | None -> ("null", "null", "null")
+    | Some (bytes, counter, source) ->
+        ( Int.to_string bytes,
+          Printf.sprintf {|"%s"|} (string counter),
+          Printf.sprintf {|"%s"|} (string source) )
+  in
   Printf.sprintf
-    {|{"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"regime_knobs":%s,"workload":"%s","compile_s":%s,"searched":%b,%s%s"step_ms":{"p10":%s,"p50":%s,"p90":%s},"queued_step_ms":%s,"timed_steps":%d,"losses":[%s]}|}
+    {|{"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"regime_knobs":%s,"workload":"%s","compile_s":%s,"searched":%b,%s%s"step_ms":{"p10":%s,"p50":%s,"p90":%s},"queued_step_ms":%s,"timed_steps":%d,"peak_memory_bytes":%s,"peak_memory_counter":%s,"peak_memory_source":%s,"losses":[%s]}|}
     (string backend) (string variant) (string precision) profile_field
     (regime_knobs_object regime_knobs)
     (string workload) (fixed compile_s) searched tokens_field tune_field (num p10) (num p50)
-    (num p90) (num queued_ms) timed_steps (nums ~prec:9 losses)
+    (num p90) (num queued_ms) timed_steps peak_bytes_field peak_counter_field peak_source_field
+    (nums ~prec:9 losses)
