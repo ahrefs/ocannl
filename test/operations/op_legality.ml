@@ -28,8 +28,8 @@ let for_over ?(extent = 8) sym body =
 let hand_built ~stmts ~tns_on_device ~tns_local =
   let optimize_ctx = LL.empty_optimize_ctx () in
   let plc = optimize_ctx.LL.placements in
-  List.iter tns_on_device ~f:(fun tn -> Tn.Placements.update plc tn Tn.On_device 49);
-  List.iter tns_local ~f:(fun tn -> Tn.Placements.update plc tn Tn.Local 49);
+  List.iter tns_on_device ~f:(fun tn -> Tn.Placements.update plc tn Tn.On_device "49:test-setup");
+  List.iter tns_local ~f:(fun tn -> Tn.Placements.update plc tn Tn.Local "49:test-setup");
   let traced_store = Hashtbl.create (module Tn) in
   let llc = LL.unflat_lines stmts in
   List.iter (tns_on_device @ tns_local) ~f:(fun tn ->

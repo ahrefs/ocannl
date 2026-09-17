@@ -222,7 +222,7 @@ let () =
      gh-ocannl-681, which is what turned the omission into an error rather than a quiet collapse. *)
   let scope_node label =
     let tn = fresh_tn label [| 4 |] in
-    Tn.update_memory_mode tn Tn.Virtual 99;
+    Tn.update_memory_mode tn Tn.Virtual "99:test-setup";
     LL.get_scope tn
   in
   let la = scope_node "LA" and lb = scope_node "LB" in
@@ -301,7 +301,7 @@ let () =
      codegen — a write inside a scope body is out of contract (gh-ocannl-584) and
      [Low_level.validate_scope_bodies] rejects it there, which is why the probe stops at the
      analysis and decision levels the query actually has to survive. *)
-  let materialize tn = Tn.update_memory_mode tn Tn.On_device 99 in
+  let materialize tn = Tn.update_memory_mode tn Tn.On_device "99:test-setup" in
   materialize x;
   materialize y2;
   let opt = LL.specialize_proc (LL.empty_optimize_ctx ()) (LL.analyze_proc [] sibling) in

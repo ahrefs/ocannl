@@ -10,6 +10,36 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 (* export OCANNL_LOG_LEVEL_LOW_LEVEL=9 to enable debugging into the log_files/ directory. *)
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_LOW_LEVEL"]
 
+(** {2 Placement provenances this module records}
+
+    Only the tags some code reads back need a name here (gh-ocannl-609); the one-site ones are
+    spelled at their site, where the surrounding comment is the explanation. See
+    {!Ir.Tnode.provenance} for the spelling convention. *)
+
+(** The heuristic caps of {!decide_placements}: policy decisions, so the decision-vector search may
+    flip them back to inlining ([`Inline]) -- unlike a legality rejection or an observability
+    pessimization, which it must not. *)
+let prov_visit_cap = "1:visit-cap"
+
+let prov_inline_reduction_cap = "39:inline-reduction-cap"
+let prov_inline_fanin_cap = "41:inline-fanin-cap"
+
+let is_cap_provenance (p : Tn.provenance) =
+  List.mem
+    [ prov_visit_cap; prov_inline_reduction_cap; prov_inline_fanin_cap ]
+    p ~equal:String.equal
+
+(** An uncovered read (read before write within the routine): the node is an input, so it owns a
+    device buffer whose prior contents are preserved. Minted from two sites -- the lenient verdict
+    of {!decide_placements} and the strict re-classification in [reconcile_traced_store]. *)
+let prov_read_before_write = "36:read-before-write"
+
+(** Cleanup's commitment points: a scope local the inliner minted, and a read that survived inlining
+    and therefore needs a materialized target. *)
+let prov_scope_local = "16:scope-local"
+
+let prov_surviving_read = "17:surviving-read"
+
 module Scope_id = struct
   type t = { tn : Tn.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
 
@@ -844,7 +874,7 @@ let copy_optimize_ctx { computations; placements; alias_candidates; inline_prefe
     [optimize_ctx] directly: the analyze-only entry points, and hand-built {!optimize} calls in
     tests — for which no context-level form can work, since the [?prelowered] seam replaces the
     context's lineage state with the optimized record's own [optimize_ctx]. *)
-let decide_materialized ?(provenance = 31) (optim_ctx : optimize_ctx) tns =
+let decide_materialized ?(provenance = "31:decide-materialized") (optim_ctx : optimize_ctx) tns =
   List.iter tns ~f:(fun tn ->
       match Tnode.Placements.get optim_ctx.placements tn with
       | None | Some ((Tnode.Never_virtual | Tnode.On_device), _) ->
@@ -1398,7 +1428,7 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
 
 let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_scan ~enclosing
     traced static_indices top_llc =
-  let exception Non_virtual of int in
+  let exception Non_virtual of Tn.provenance in
   let static_indices =
     Set.of_list (module Indexing.Symbol)
     @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
@@ -1410,7 +1440,8 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_
     (match !at_idcs with
     | None -> at_idcs := Some indices
     | Some at ->
-        if not @@ [%equal: Indexing.axis_index array] at indices then raise @@ Non_virtual 4);
+        if not @@ [%equal: Indexing.axis_index array] at indices then
+          raise @@ Non_virtual "4:lhs-idcs-differ");
     (* gh-133 Stage A: repeated non-static symbols (diagonal [i;i] / partially-diagonal [i;j;i]) and
        covered single-symbol affine positions are supported. gh-133 Stage B: multi-symbol affine
        positions ([stride*oh+kh], [K*i+k], triangular [(s1, s1+s2)]) are also supported, but only
@@ -1436,11 +1467,12 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_
               List.fold nonstatic ~init:acc ~f:Set.add
           | Indexing.Concat _syms ->
               (* Concat indices should be eliminated before virtualization *)
-              raise @@ Non_virtual 52)
+              raise @@ Non_virtual "52:concat-index")
     in
     let injective = lazy (Indexing.affine_injective ~symbol_range indices) in
     (* A multi-symbol affine position is sound to drop only if the LHS map is injective. *)
-    if !has_multi_affine && not (Lazy.force injective) then raise @@ Non_virtual 51;
+    if !has_multi_affine && not (Lazy.force injective) then
+      raise @@ Non_virtual "51:affine-not-injective";
     (* Non-static symbols appearing in a bare [Iterator] position. [inline_computation]'s pass 1
        binds only such positions from the call args; pass 2 grounds any affine occurrence via
        [subst]. *)
@@ -1458,7 +1490,7 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_
        re-validates per call site, so over-accepting here only risks a later [Non_virtual 13] fall
        back to materialization. *)
     if (not (Lazy.force injective)) && not (Set.is_subset syms ~of_:iter_syms) then
-      raise @@ Non_virtual 5
+      raise @@ Non_virtual "5:index-not-groundable"
   in
   (* A sibling tensor's access is fine as long as its indices are bound within the candidate's
      computation; only an escaping (unbound) non-static symbol disqualifies (see #134). gh-133 Stage
@@ -1502,19 +1534,19 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_
            cannot keep it without re-minting its carried locals per replay. One verdict for the
            three, decided where the computation is captured. *)
         ignore (index, from_, to_, carried, body);
-        raise @@ Non_virtual 148
+        raise @@ Non_virtual "148:scan-recurrence"
     | Zero_out tn -> if Tn.equal tn top_tn then has_setter := true
     | Set { tn; idcs; llsc; debug = _ } ->
         if Tn.equal tn top_tn then (
           check_idcs loop_ranges idcs;
           has_setter := true)
-        else check_sibling_escaping ~env_dom ~code:7 idcs;
+        else check_sibling_escaping ~env_dom ~code:"7:sibling-escaping-write-index" idcs;
         loop_scalar ~env_dom ~loop_ranges llsc
     | Set_from_vec { tn; idcs; length = _; vec_unop = _; arg = arg, _; debug = _ } ->
         if Tn.equal tn top_tn then (
           check_idcs loop_ranges idcs;
           has_setter := true)
-        else check_sibling_escaping ~env_dom ~code:7 idcs;
+        else check_sibling_escaping ~env_dom ~code:"7:sibling-escaping-write-index" idcs;
         loop_scalar ~env_dom ~loop_ranges arg
     | Set_local (_, llsc) -> loop_scalar ~env_dom ~loop_ranges llsc
     (* #296: defensive/unreachable on the fresh-lowering path. [Declare_local] is produced only by
@@ -1522,30 +1554,30 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_
        captures computations during [virtual_llc] (before hoisting), so a stored computation never
        contains one. The arm guards the not-currently-exercised case of a hoisted program
        re-entering virtualization. *)
-    | Declare_local _ -> raise @@ Non_virtual 19
+    | Declare_local _ -> raise @@ Non_virtual "19:declare-local"
     | Comment _ -> ()
-    | Staged_compilation _ -> raise @@ Non_virtual 8
+    | Staged_compilation _ -> raise @@ Non_virtual "8:staged-compilation"
     (* A barrier is an opaque effect: a computation containing one cannot be inlined/recomputed.
        Defensive: schedule transforms run after virtualization, so this should be unreachable. *)
-    | Workgroup_barrier -> raise @@ Non_virtual 141
+    | Workgroup_barrier -> raise @@ Non_virtual "141:workgroup-barrier"
     (* Cooperative statements are barrier-strength opaque effects; defensive like the barrier. *)
-    | Tile_mma _ -> raise @@ Non_virtual 143
+    | Tile_mma _ -> raise @@ Non_virtual "143:tile-mma"
     (* gh-466: a dynamically-indexed write is never a definite write of a virtual candidate.
        Defensive: [rewrite_one_hot_reductions] runs after virtualization. *)
-    | Set_dynamic _ -> raise @@ Non_virtual 144
+    | Set_dynamic _ -> raise @@ Non_virtual "144:dynamic-write"
     (* Conservative in v1: a guarded computation is not inlined (a conditional write is not a
        definite write, so recomputing it at the read site could read an unset scope). This arm sees
        guards INTERIOR to the captured subtree; a guard ENCLOSING it is reported by the caller via
        [~guarded] (gh-651). Reachable pre-virtualization: [Assignments.to_low_level] emits interval
        guards for clamped-window pooling (gh-504) and extent guards for symbolic extents (gh-490),
        besides the launch-extent guards introduced at backend-compile time. *)
-    | If _ -> raise @@ Non_virtual 142
+    | If _ -> raise @@ Non_virtual "142:guarded-computation"
   and loop_scalar ~env_dom ~loop_ranges llsc =
     match llsc with
     | Constant _ | Constant_bits _ -> ()
     | Get (tn, idcs) ->
         if Tn.equal tn top_tn then check_idcs loop_ranges idcs
-        else check_sibling_escaping ~env_dom ~code:9 idcs
+        else check_sibling_escaping ~env_dom ~code:"9:sibling-escaping-read-index" idcs
     | Get_dynamic { dyn_value = v, _; _ } ->
         (* gh-343: defensive -- [Get_dynamic] is produced after virtualization analysis. *)
         loop_scalar ~env_dom ~loop_ranges v
@@ -1553,14 +1585,14 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_
     | Get_local _ -> ()
     | Get_merge_buffer (tn, idcs) ->
         if Tn.equal tn top_tn then check_idcs loop_ranges idcs
-        else check_sibling_escaping ~env_dom ~code:9 idcs
+        else check_sibling_escaping ~env_dom ~code:"9:sibling-escaping-read-index" idcs
     | Embed_index (Fixed_idx _ | Sub_axis) -> ()
     | Embed_index (Iterator s) ->
         if not @@ Set.mem env_dom s then (
           if not (Set.mem static_indices s) then
             [%log2
               "Inlining candidate has an escaping variable", (s : Indexing.symbol), (top_llc : t)];
-          raise @@ Non_virtual 10)
+          raise @@ Non_virtual "10:escaping-index-symbol")
     | Embed_index (Affine { symbols; _ }) ->
         List.iter symbols ~f:(fun (_, s) ->
             if not @@ Set.mem env_dom s then (
@@ -1569,7 +1601,7 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_
                   "Inlining candidate has an escaping variable",
                   (s : Indexing.symbol),
                   (top_llc : t)];
-              raise @@ Non_virtual 10))
+              raise @@ Non_virtual "10:escaping-index-symbol"))
     | Embed_index (Concat syms) ->
         List.iter syms ~f:(fun s ->
             if not @@ Set.mem env_dom s then (
@@ -1578,7 +1610,7 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_
                   "Inlining candidate has an escaping variable",
                   (s : Indexing.symbol),
                   (top_llc : t)];
-              raise @@ Non_virtual 10))
+              raise @@ Non_virtual "10:escaping-index-symbol"))
     | Ternop (_, (llv1, _), (llv2, _), (llv3, _)) ->
         loop_scalar ~env_dom ~loop_ranges llv1;
         loop_scalar ~env_dom ~loop_ranges llv2;
@@ -1589,18 +1621,19 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_
     | Unop (_, (llsc, _)) -> loop_scalar ~env_dom ~loop_ranges llsc
   in
   try
-    if Tn.Placements.known_non_virtual optim_ctx.placements traced.tn then raise @@ Non_virtual 11;
+    if Tn.Placements.known_non_virtual optim_ctx.placements traced.tn then
+      raise @@ Non_virtual "11:already-non-virtual";
     (* gh-651: the candidate's whole nest sits inside an enclosing [If], which is NOT part of
        [top_llc] — the walk below would never see it, and the stored computation would replay
        unguarded at every read site. Same verdict as the interior-guard arm, decided here because
        only the caller knows the context the subtree was captured from. *)
-    if guarded then raise @@ Non_virtual 142;
+    if guarded then raise @@ Non_virtual "142:guarded-computation";
     (* gh-ocannl-696: the candidate's setter sits inside a [Scan_loop], which is outside [top_llc]
        like an enclosing guard, so only the caller can report it. Same verdict as a scan met inside
        the nest by the walk above. *)
-    if in_scan then raise @@ Non_virtual 148;
+    if in_scan then raise @@ Non_virtual "148:scan-recurrence";
     loop_proc ~env_dom:static_indices ~loop_ranges:(Map.empty (module Indexing.Symbol)) top_llc;
-    if not !has_setter then raise @@ Non_virtual 12;
+    if not !has_setter then raise @@ Non_virtual "12:no-setter";
     (* gh-651 (loop half): an enclosing [For_loop] whose symbol the candidate's index map does not
        mention replays the whole captured nest into the SAME cells — it is a reduction/repetition
        loop, and it is outside [top_llc], so inlining would replay the setter once instead of
@@ -1613,7 +1646,7 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_
         if
           width > 1
           && not (Option.exists !at_idcs ~f:(Array.exists ~f:(axis_index_mentions_symbol s)))
-        then raise @@ Non_virtual 147);
+        then raise @@ Non_virtual "147:enclosing-repetition-loop");
     let current_computations =
       Hashtbl.find optim_ctx.computations traced.tn |> Option.value ~default:[]
     in
@@ -1661,7 +1694,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
     (optim_ctx : optimize_ctx) (traced : traced_array)
     (static_indices : Indexing.static_symbol list) (call_args : Indexing.axis_index array) :
     t option =
-  let exception Non_virtual of int in
+  let exception Non_virtual of Tn.provenance in
   let static_indices =
     Set.of_list (module Indexing.Symbol)
     @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
@@ -1716,13 +1749,13 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
     (match Tn.get_padding traced.tn with
     | None -> ()
     | Some (pads, _) when Array.for_all pads ~f:(fun p -> p.Ops.left = 0 && p.Ops.right = 0) -> ()
-    | Some _ -> raise @@ Non_virtual 145);
+    | Some _ -> raise @@ Non_virtual "145:lane-extract-layout");
     let prec = Lazy.force traced.tn.Tn.storage_prec in
     let lanes = Ops.vec_unop_lanes prec in
     let dims = Lazy.force traced.tn.Tn.dims in
     (* Flat row-major offset of an index vector over [dims], as affine terms plus a constant. *)
     let flat_of arr =
-      if Array.length arr <> Array.length dims then raise @@ Non_virtual 145;
+      if Array.length arr <> Array.length dims then raise @@ Non_virtual "145:lane-extract-layout";
       let terms = ref [] and offset = ref 0 and stride = ref 1 in
       for i = Array.length arr - 1 downto 0 do
         (match arr.(i) with
@@ -1732,7 +1765,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
         | Indexing.Affine { symbols; offset = o } ->
             offset := !offset + (o * !stride);
             List.iter symbols ~f:(fun (c, s) -> terms := (c * !stride, s) :: !terms)
-        | Indexing.Concat _ -> raise @@ Non_virtual 145);
+        | Indexing.Concat _ -> raise @@ Non_virtual "145:lane-extract-layout");
         stride := !stride * dims.(i)
       done;
       (Indexing.coalesce_affine_terms !terms, !offset)
@@ -1743,7 +1776,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
       match flat_of idcs with
       | [], 0 -> None
       | [ (c, s) ], 0 when c = lanes -> Some s
-      | _ -> raise @@ Non_virtual 145
+      | _ -> raise @@ Non_virtual "145:lane-extract-layout"
     in
     let flat_idx =
       match flat_of call_args with
@@ -1767,14 +1800,16 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
              serve: it must stay materialized. Bail out (keeping the uniform result materialized, as
              before gh-509 task 4) if the counter's placement is already committed the other way. *)
           (match Tn.Placements.get optim_ctx.placements ctr with
-          | Some ((Virtual | Effectively_constant), _) -> raise @@ Non_virtual 146
+          | Some ((Virtual | Effectively_constant), _) ->
+              raise @@ Non_virtual "146:lane-extract-counter"
           | _ -> ());
           let ctr_read =
             match ctr_sym with
             | None ->
                 (* Single-block target: the counter read is at static indices; keep the plain [Get]
                    (cleanup commits the surviving read to [Never_virtual]). *)
-                if Array.exists ctr_idcs ~f:mentions_nonstatic then raise @@ Non_virtual 146;
+                if Array.exists ctr_idcs ~f:mentions_nonstatic then
+                  raise @@ Non_virtual "146:lane-extract-counter";
                 Get (ctr, ctr_idcs)
             | Some c ->
                 let dyn_positions =
@@ -1787,7 +1822,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
                 let dyn_axis =
                   match Array.to_list dyn_positions with
                   | [ i ] when i >= 0 -> i
-                  | _ -> raise @@ Non_virtual 146
+                  | _ -> raise @@ Non_virtual "146:lane-extract-counter"
                 in
                 let idcs' =
                   Array.mapi ctr_idcs ~f:(fun i idx ->
@@ -1796,12 +1831,12 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
                 let block_sc = Binop (Ops.Div, (flat_sc, iprec), (lanes_sc, iprec)) in
                 Get_dynamic { tn = ctr; idcs = idcs'; dyn_axis; dyn_value = (block_sc, iprec) }
           in
-          Tn.Placements.update optim_ctx.placements ctr Never_virtual 146;
+          Tn.Placements.update optim_ctx.placements ctr Never_virtual "146:lane-extract-counter";
           ctr_read
       | _ ->
           (* Argument is not a plain counter read (e.g. the counter chain was materialized away or
              the computation is exotic); keep the vector store materialized. *)
-          raise @@ Non_virtual 140
+          raise @@ Non_virtual "140:vector-setter-unsupported"
     in
     let lane_sc =
       match ctr_sym with
@@ -2036,7 +2071,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
             let lhs' = subst env lhs_ind in
             if Indexing.equal_axis_index lhs' rhs_ind then guards
             else if depends_on_symbol lhs_ind then (lhs_ind, rhs_ind) :: guards
-            else raise @@ Non_virtual 13)
+            else raise @@ Non_virtual "13:call-site-index-mismatch")
     in
     let guards = List.rev guards in
     let range_guards = List.rev !range_guards in
@@ -2068,7 +2103,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
              consumption-time backstop with the same verdict, never a silent drop: the filter cannot
              keep a scan without re-minting its carried locals per replay, and dropping one that
              feeds the value through a scope local would return the pre-scan value. *)
-          raise @@ Non_virtual 148
+          raise @@ Non_virtual "148:scan-recurrence"
       | Zero_out tn when Tn.equal tn traced.tn -> Some (Set_local (id, Constant 0.0))
       | Set { tn; idcs; llsc; debug = _ } when Tn.equal tn traced.tn ->
           assert ([%equal: Indexing.axis_index array option] (Some idcs) def_args);
@@ -2139,7 +2174,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
           assert ([%equal: Indexing.axis_index array option] (Some idcs) def_args);
           (* Unreachable since gh-509 task 4: computations containing a [Set_from_vec] setter of
              this node are diverted to [lane_extract_body] before the generic path. *)
-          raise @@ Non_virtual 140
+          raise @@ Non_virtual "140:vector-setter-unsupported"
       | Zero_out _ -> None
       | Set _ -> None
       | Set_from_vec _ -> None
@@ -2198,7 +2233,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
     | Some def -> Some (lane_extract_body def)
     | None ->
         let body = List.rev_filter_map ~f:loop_proc computations in
-        if List.is_empty body then raise @@ Non_virtual 14
+        if List.is_empty body then raise @@ Non_virtual "14:empty-inlined-body"
         else
           (* Prepend a single init local when any component computation has guards but the producer
              has no [Zero_out] to supply the initial value. For multi-computation nodes
@@ -2221,7 +2256,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
            [%string
              "the deferred computation of %{Tn.debug_name traced.tn}, stored by an earlier routine \
               of this compilation lineage, could not be inlined at a read site of this routine \
-              (rejection %{i#Int}: unsupported indexing or vector form for inlining): no routine \
+              (rejection %{i}: unsupported indexing or vector form for inlining): no routine \
               writes the node's buffer, so the read cannot fall back to a materialized access. \
               Mark %{Tn.debug_name traced.tn} as materialized (e.g. via Train.set_materialized) in \
               the routine that computes it."]);
@@ -2258,8 +2293,8 @@ let rec proc_contains_set_from_vec tn = function
     gather index is only known at runtime, so recomputation cannot serve the read, while a [Virtual]
     node owns no buffer to load from. Both [Get_dynamic] arms of the virtualization pipeline report
     it with this message instead of letting [Tn.Placements.update] answer with a bare provenance
-    collision ("update 152 -> 17 for ... is already virtual"), which named neither the node's two
-    readings nor anything the author could act on.
+    collision ("update 152:cleanup-dropped-set -> 17:surviving-read for ... is already virtual"),
+    which named neither the node's two readings nor anything the author could act on.
 
     The situation is out of contract for the ordinary pipeline — [Assignments] lowering builds no
     [Get_dynamic], and the one the pipeline does produce comes from [rewrite_one_hot_reductions],
@@ -2605,7 +2640,7 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
             (Utils.User_error
                (virtualized_gather_table_rejection tn
                   ~decided_by:"declared virtual, or committed virtual before this read"));
-        Tn.Placements.update plc tn Never_virtual 17;
+        Tn.Placements.update plc tn Never_virtual prov_surviving_read;
         Get_dynamic { tn; idcs; dyn_axis; dyn_value = (loop v, prec) }
     | Local_scope opts ->
         Local_scope
@@ -2846,7 +2881,7 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
         let carried =
           List.map carried ~f:(fun c ->
               assert (not @@ Tn.Placements.known_non_virtual plc c.prev.tn);
-              Tn.Placements.update plc c.prev.tn Virtual 16;
+              Tn.Placements.update plc c.prev.tn Virtual prov_scope_local;
               { c with init = loop_scalar ~balanced ~env_dom c.init })
         in
         let env_dom = Set.add env_dom index in
@@ -2858,7 +2893,7 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
              during tracing/virtualization, so it has no materialized reader left -- its only uses
              were inlined into [Local_scope] bodies. We therefore commit it to [Virtual] and drop
              this now-dead initializer. Provenance 151 = dropped from the [Zero_out] cleanup arm. *)
-          Tn.Placements.update plc tn Virtual 151;
+          Tn.Placements.update plc tn Virtual "151:cleanup-dropped-zero-out";
           None)
         else Some llc
     | Set { tn; idcs; llsc; debug } ->
@@ -2866,7 +2901,7 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
           (* #296: same default-to-[Virtual] policy as the [Zero_out] arm above -- an undecided
              tnode has no materialized reader left after inlining, so commit it [Virtual] and drop
              the store. Provenance 152 = dropped from the [Set]/[Set_from_vec] cleanup arms. *)
-          Tn.Placements.update plc tn Virtual 152;
+          Tn.Placements.update plc tn Virtual "152:cleanup-dropped-set";
           None)
         else (
           assert (
@@ -2878,7 +2913,7 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
              scalar-inlined was already forced [Never_virtual] (via [Non_virtual 140] in
              [inline_computation]), so reaching here means the node stayed virtual-eligible and its
              vector store is dead -- drop it. Provenance 152. *)
-          Tn.Placements.update plc tn Virtual 152;
+          Tn.Placements.update plc tn Virtual "152:cleanup-dropped-set";
           None)
         else (
           assert (
@@ -2895,7 +2930,7 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
                }))
     | Set_local (id, llsc) ->
         assert (not @@ Tn.Placements.known_non_virtual plc id.tn);
-        Tn.Placements.update plc id.tn Virtual 16;
+        Tn.Placements.update plc id.tn Virtual prov_scope_local;
         Some (Set_local (id, loop_scalar ~balanced ~env_dom llsc))
     | Declare_local _ -> Some llc
     | Comment _ -> Some llc
@@ -2906,7 +2941,7 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
     (* gh-466: defensive — [Set_dynamic] is produced after cleanup; a scatter target is always
        materialized. Keep, recursing like the [Set] arm. *)
     | Set_dynamic { tn; idcs; dyn_axis; dyn_value = v, prec; llsc; debug } ->
-        Tn.Placements.update plc tn Never_virtual 17;
+        Tn.Placements.update plc tn Never_virtual prov_surviving_read;
         Some
           (Set_dynamic
              {
@@ -2933,7 +2968,7 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
            surviving reads to [Never_virtual] (a node read here but only written under a virtualized
            setter is decided right now), so this update is the commitment point, not a redundant
            re-assertion. Mirrors the [Get_dynamic] arm just below. Provenance 17. *)
-        Tn.Placements.update plc a Never_virtual 17;
+        Tn.Placements.update plc a Never_virtual prov_surviving_read;
         assert (
           Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
         llsc
@@ -2948,7 +2983,7 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
             (Utils.User_error
                (virtualized_gather_table_rejection tn
                   ~decided_by:"its setter was inlined into the read sites and dropped as dead"));
-        Tn.Placements.update plc tn Never_virtual 17;
+        Tn.Placements.update plc tn Never_virtual prov_surviving_read;
         Get_dynamic { tn; idcs; dyn_axis; dyn_value = (loop v, prec) }
     | Local_scope { id; body; orig_indices; mint } ->
         assert (
@@ -2965,11 +3000,11 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
           Get (id.tn, orig_indices))
         else
           let body = Option.value_exn ~here:[%here] @@ loop_proc ~balanced ~env_dom body in
-          Tn.Placements.update plc id.tn Virtual 18;
+          Tn.Placements.update plc id.tn Virtual "18:inlined-scope";
           Local_scope { id; orig_indices; body; mint }
     | Get_local id ->
         assert (not @@ Tn.Placements.known_non_virtual plc id.tn);
-        Tn.Placements.update plc id.tn Virtual 16;
+        Tn.Placements.update plc id.tn Virtual prov_scope_local;
         llsc
     | Get_merge_buffer (_, _) -> llsc
     | Embed_index (Fixed_idx _ | Sub_axis) -> llsc
@@ -4734,7 +4769,10 @@ let validate_parallel plc (llc : t) : unit =
     let describe_pair (kind, slot) = hardware_kind_label kind ^ " slot " ^ Int.to_string slot in
     let check_covered_write ~covered tn =
       let missing = List.filter active ~f:(fun p -> not (List.mem covered p ~equal:pair_equal)) in
-      if (not (List.is_empty missing)) && Tn.Placements.is_materialized_force plc tn 160 then
+      if
+        (not (List.is_empty missing))
+        && Tn.Placements.is_materialized_force plc tn "160:parallel-validation"
+      then
         invalid_arg
           ("Low_level.validate_parallel: write to materialized node " ^ Tn.debug_name tn
          ^ " is not nested under annotated loops covering all active hardware dimensions (missing: "
@@ -4772,7 +4810,10 @@ let validate_parallel plc (llc : t) : unit =
           check_writes ~covered ~enclosing b
       | If { body; _ } -> check_writes ~covered ~enclosing body
       | Zero_out tn ->
-          if (not (List.is_empty active)) && Tn.Placements.is_materialized_force plc tn 160 then
+          if
+            (not (List.is_empty active))
+            && Tn.Placements.is_materialized_force plc tn "160:parallel-validation"
+          then
             invalid_arg
               ("Low_level.validate_parallel: Zero_out of materialized node " ^ Tn.debug_name tn
              ^ " in a multi-threaded kernel: whole-node zeroing is not distributed across hardware \
@@ -4996,7 +5037,7 @@ let input_and_output_nodes optimized =
   ( Hashtbl.fold optimized.traced_store
       ~init:(Set.empty (module Tn), Set.empty (module Tn))
       ~f:(fun ~key ~data (inputs, outputs) ->
-        let materialized = Tn.Placements.is_materialized_force plc key 50 in
+        let materialized = Tn.Placements.is_materialized_force plc key "50:routine-interface" in
         let inputs =
           if
             materialized
@@ -6659,7 +6700,7 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
       if
         virtualize_settings.inline_scalar_constexprs && traced.is_scalar_constexpr
         && not (Tn.Placements.known_non_virtual plc tn)
-      then Tn.Placements.update plc tn Virtual 40;
+      then Tn.Placements.update plc tn Virtual "40:scalar-constexpr";
       (* Recompute-cost guard: inlining a computation replays its reduction loops (loops enclosing a
          setter without appearing in its indices) at every read site, and the cost multiplies
          through chains of virtual consumers -- reads of the consumers replay the producer's
@@ -6672,7 +6713,7 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
         && traced.read_by_other
         && Option.is_none (Tn.Placements.get plc tn)
         && not cap_exempt
-      then Tn.Placements.update plc tn Never_virtual 39;
+      then Tn.Placements.update plc tn Never_virtual prov_inline_reduction_cap;
       let skip_simple =
         virtualize_settings.inline_simple_computations && (not traced.is_complex)
         && not (Tn.Placements.known_non_virtual plc tn)
@@ -6684,14 +6725,15 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
         && Option.is_none (Tn.Placements.get plc tn)
         && ((Lazy.force read_multiplicity) tn > max_visits || not (Lazy.force covered))
         && not cap_exempt
-      then Tn.Placements.update plc tn Never_virtual 1;
+      then Tn.Placements.update plc tn Never_virtual prov_visit_cap;
       if (not traced.zeroed_out) && not traced.has_assignment then (
         (* The tensor node is read-only/recurrent for this computation, but maybe computed or
            specified as virtual by another routine (in this compilation lineage). However, if the
            placement is unspecified, we assume this will be the first computation involving the
            tensor node. *)
         traced.read_only <- true;
-        if Tn.Placements.mode_is_unspecified plc tn then Tn.Placements.update plc tn On_device 37
+        if Tn.Placements.mode_is_unspecified plc tn then
+          Tn.Placements.update plc tn On_device "37:read-only-input"
         else if Tn.Placements.known_not_materialized plc tn then (
           if Tn.Placements.known_non_virtual plc tn then
             raise
@@ -6700,13 +6742,14 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
                    "Mark %{Tn.debug_name tn} as materialized (e.g. via Train.set_materialized) \
                     before the first routine using it gets compiled; another routine re-uses that \
                     computation. Debug: %{Tn.Placements.debug plc tn}"]))
-        else if Tn.Placements.known_non_virtual plc tn then Tn.Placements.update plc tn On_device 35);
+        else if Tn.Placements.known_non_virtual plc tn then
+          Tn.Placements.update plc tn On_device "35:read-only-shared");
       (* We allow sharing virtual nodes across routines. A node with an uncovered read (read before
          write within this routine — the tracer's [Recurrent]) must own a device buffer whose prior
          contents are preserved: it is an input of the routine. *)
       if (not (Tn.Placements.known_virtual plc tn)) && not (Lazy.force covered) then (
         traced.read_before_write <- true;
-        Tn.Placements.update plc tn On_device 36));
+        Tn.Placements.update plc tn On_device prov_read_before_write));
   (* Transitive inline-fanin guard (gh-573): the per-node caps above cannot see chains. A running
      sum such as a transformer's residual stream has per-cell read multiplicity within the visit cap
      (its consumers' copy-position reads are read-modify-write-exempt) and no reduction loops, yet
@@ -6844,7 +6887,7 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
                   && traced.has_assignment && traced.read_by_other
                   && Option.is_none (Tn.Placements.get plc tn)
                   && not (cap_exempt traced)
-                then Tn.Placements.update plc tn Never_virtual 41;
+                then Tn.Placements.update plc tn Never_virtual prov_inline_fanin_cap;
                 s
           in
           Hashtbl.set memo ~key:tn ~data:s;
@@ -7116,10 +7159,10 @@ let reconcile_traced_store (plc : Tn.Placements.t) (traced_store : traced_store)
                       persist between routines. Mark %{Tn.debug_name tn} as materialized (e.g. via \
                       Train.set_materialized) before the first routine using it gets compiled."]);
             (match Tn.Placements.raw_entry plc tn with
-            | Some (Never_virtual, (1 | 39 | 41)) -> Hash_set.add cap_inline_flips tn
+            | Some (Never_virtual, p) when is_cap_provenance p -> Hash_set.add cap_inline_flips tn
             | _ -> ());
             traced.read_before_write <- true;
-            Tn.Placements.update plc tn On_device 36);
+            Tn.Placements.update plc tn On_device prov_read_before_write);
   (* A node mentioned ONLY in dead code still needs a registry entry (its identifier renders, so a
      parameter must declare it and the prune must not drop it) but no interface flags: it neither
      reads nor writes at runtime, and advertising either would create phantom dependencies for
@@ -7298,12 +7341,14 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
             match Tn.Placements.raw_entry plc tn with
             | Some (Virtual, _) when not (Tn.known_virtual tn || Tn.known_constant tn) ->
                 Some `Materialize
-            | Some (Never_virtual, (1 | 39 | 41)) -> Some `Inline
+            | Some (Never_virtual, p) when is_cap_provenance p -> Some `Inline
             (* A cap-selected node the reconcile-stage interface classification promoted [On_device
                36] (gh-618 round 4): the promotion is the interface consequence of the cap's own
                materialization, not a legality/intent decision, so the [`Inline] flip stays
                searchable — a virtual reading has no interface to classify. *)
-            | Some (On_device, 36) when Hash_set.mem cap_inline_flips tn -> Some `Inline
+            | Some (On_device, p)
+              when String.equal p prov_read_before_write && Hash_set.mem cap_inline_flips tn ->
+                Some `Inline
             | _ -> None
           in
           match flip with

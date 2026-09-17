@@ -764,7 +764,7 @@ let%track7_sexp number ?(label = []) ?axis_basis ?(grad_spec = Prohibit_grad) c 
     | None -> t ~output_axes:[ (Row.bcast_if_1, 1) ] ()
     | Some axis_basis -> t ~output_axes:[ (axis_basis, 1) ] ()
   in
-  Tn.update_memory_mode t.value Effectively_constant 24;
+  Tn.update_memory_mode t.value Effectively_constant "24:literal-constant";
   (* FIXME: make this always pick a matching precision. *)
   Ir.Ops.(
     if exceeds_fp16_cutoff c then Tn.update_infer_prec ~only_if:is_up_to_fp16 t.value (lazy single));
@@ -780,7 +780,7 @@ let%track7_sexp bits ?(label = []) ?axis_basis ?(grad_spec = Prohibit_grad) i : 
     | None -> t ~output_axes:[ (Row.bcast_if_1, 1) ] ()
     | Some axis_basis -> t ~output_axes:[ (axis_basis, 1) ] ()
   in
-  Tn.update_memory_mode t.value Effectively_constant 24;
+  Tn.update_memory_mode t.value Effectively_constant "24:literal-constant";
   t
 
 let constant_fill ~debug values =
@@ -844,7 +844,7 @@ let ndarray ?(grad_spec = Prohibit_grad) values ?(label = []) ?top_down_prec ?ba
     term ?init_data ?fetch_op ~grad_spec ?batch_dims ?batch_axes ~label ?top_down_prec ?input_dims
       ?output_dims ?input_axes ?output_axes ?deduced ()
   in
-  Tn.update_memory_mode t.value Effectively_constant 24;
+  Tn.update_memory_mode t.value Effectively_constant "24:literal-constant";
   (* The ndarray-backed path mints the node [On_device] (provenance 49), so the update above cannot
      stick as [Effectively_constant] there; the explicit marker carries the constancy (consumed by
      hoisted operand packing, gh-ocannl-470). *)
@@ -936,7 +936,7 @@ let%debug7_sexp param ?(require_grad = true) ~t (name : string) ?(more_label = [
   let v = t.value in
   (* Parameters live on device and are materialized; CPU access (init, inspection) is on-demand via
      the context (gh-ocannl-333). *)
-  Tn.update_memory_mode v On_device 241;
+  Tn.update_memory_mode v On_device "241:param-value";
   (* Never_virtual audit resolution (context-scoped memory modes): parameter gradients carry
      observation intent, not a materialization requirement -- users print and inspect them, and the
      optimizer step's read is an ordinary cross-routine use the lineage can serve (a fused

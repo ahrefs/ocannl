@@ -2576,7 +2576,8 @@ module C_syntax (B : C_syntax_config) = struct
     let open PPrint in
     if
       !(ctx.volatile_accumulation_reads)
-      && Tn.Placements.is_materialized_force ctx.current_placements tn 820
+      && Tn.Placements.is_materialized_force ctx.current_placements tn
+           "820:volatile-accumulation-read"
     then begin
       (record_volatile_read ctx) ();
       let typ =
@@ -3180,7 +3181,8 @@ module C_syntax (B : C_syntax_config) = struct
      tags are spelled to match and which adds only [`Fragment]. *)
   let thread_storage ctx tn : Low_level.thread_storage =
     if Set.mem !(ctx.current_workgroup_shared) tn then `Shared
-    else if Tn.Placements.is_materialized_force ctx.current_placements tn 959 then `Device
+    else if Tn.Placements.is_materialized_force ctx.current_placements tn "959:thread-storage-class"
+    then `Device
     else `Thread
 
   (* Keep the virtual query first: both force predicates may settle an undecided placement, and a
@@ -3188,8 +3190,8 @@ module C_syntax (B : C_syntax_config) = struct
      materialized buffer as [`Thread]. *)
   let is_local ctx tn =
     let plc = ctx.current_placements in
-    (not (Tn.Placements.is_virtual_force plc tn 431))
-    && not (Tn.Placements.is_materialized_force plc tn 432)
+    (not (Tn.Placements.is_virtual_force plc tn "431:is-local-virtual-query"))
+    && not (Tn.Placements.is_materialized_force plc tn "432:is-local-materialized-query")
 
   let refuse_unseparated_thread_write ctx ~site ~(deferred : Indexing.symbol list) =
     let thread s = List.Assoc.find !(ctx.current_thread_axes) s ~equal:Indexing.equal_symbol in
@@ -3745,7 +3747,7 @@ module C_syntax (B : C_syntax_config) = struct
     | Some node ->
         let plc = ctx.current_placements in
         node.Low_level.zero_initialized_by_code
-        && (not (Tn.Placements.is_virtual_force plc tn 337))
+        && (not (Tn.Placements.is_virtual_force plc tn "337:zero-out-loop-redundant"))
         && Poly.equal ((thread_storage ctx) tn) `Thread
     | None -> false
 
@@ -4326,7 +4328,8 @@ module C_syntax (B : C_syntax_config) = struct
               not (Array.exists idcs ~f:(Indexing.axis_index_mentions_symbol s)))
           (* Only kernel-parameter-derived device pointers: routine-local scratch is declared as a
              plain local array (not address-castable, and compiler-visible anyway). *)
-          && Tn.Placements.is_materialized_force ctx.current_placements tn 433
+          && Tn.Placements.is_materialized_force ctx.current_placements tn
+               "433:rmw-volatile-pointer"
           &&
           let rec reads_tn (llsc : Low_level.scalar_t) =
             match llsc with
@@ -4367,7 +4370,8 @@ module C_syntax (B : C_syntax_config) = struct
             match (B.async_copy, llsc) with
             | Some ac, Low_level.Get (src, src_idcs)
               when Ops.equal_prec (Lazy.force src.Tn.storage_prec) store_prec
-                   && Tn.Placements.is_materialized_force ctx.current_placements src 487 ->
+                   && Tn.Placements.is_materialized_force ctx.current_placements src
+                        "487:async-copy-source" ->
                 let offset_doc =
                   (pp_pipelined_rotation ctx) ~is_write:true tn ^^ (pp_tn_offset ctx) tn (idcs, dims)
                 in
@@ -7036,9 +7040,12 @@ module C_syntax (B : C_syntax_config) = struct
       @@ Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:_ acc ->
           let backend_info, is_param =
             let plc = placements in
-            if Tn.Placements.is_virtual_force plc tn 334 then ("Virt", false)
-            else if Tn.Placements.is_in_context_force placements tn 46 then ("Ctx", true)
-            else if Tn.Placements.is_materialized_force plc tn 335 then ("Global", true)
+            if Tn.Placements.is_virtual_force plc tn "334:kernel-param-virtual-query" then
+              ("Virt", false)
+            else if Tn.Placements.is_in_context_force placements tn "46:kernel-param-in-context"
+            then ("Ctx", true)
+            else if Tn.Placements.is_materialized_force plc tn "335:kernel-param-global" then
+              ("Global", true)
             else if Tn.Placements.known_not_materialized plc tn then ("Local", false)
             else assert false
           in
@@ -7336,8 +7343,9 @@ module C_syntax (B : C_syntax_config) = struct
              let plc = ctx.current_placements in
              if
                (not
-                  (Tn.Placements.is_virtual_force plc tn 333
-                  || Tn.Placements.is_materialized_force plc tn 336))
+                  (Tn.Placements.is_virtual_force plc tn "333:local-decl-virtual-query"
+                  || Tn.Placements.is_materialized_force plc tn "336:local-decl-materialized-query"
+                  ))
                (* Privatized to a pool-parallel [Grid] loop: declared per chunk inside that loop's
                   body instead (see [parallel_grid_loop]). *)
                && (not (Set.mem grid_privatized tn))

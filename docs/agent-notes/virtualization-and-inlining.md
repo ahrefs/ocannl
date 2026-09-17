@@ -192,6 +192,17 @@ files.
   Do not infer the boundary from the `Non_virtual` comments at the raise sites: several describe
   reachability that has since changed, and 52 is enforced earlier still (`trace_node_facts` raises
   `invalid_arg` on a `Concat` index, so the virtualizer's arm never sees one).
+- **A placement provenance is a STRING tag, not an integer** (gh-ocannl-609): spelled
+  `"<code>:<kebab-reason>"` (`Tnode.provenance`), where the code is the integer it used to be, so
+  older issues and comments citing `Non_virtual 13` or "provenance 39" still resolve. They compose
+  by concatenation when a decision is refined — `default_to_most_local` records
+  `"39:inline-reduction-cap -> 432:is-local-materialized-query"` where the retired arithmetic wrote
+  `39432` — and `Tnode.leading_provenance` reads the first tag back (what `Ll_test.rejection_code`
+  returns). Codes are NOT unique: `176`/`178` each name two different schedule sites, told apart by
+  their reasons. The tags other code matches on have names in `Low_level`
+  (`prov_visit_cap` / `prov_inline_reduction_cap` / `prov_inline_fanin_cap`, `is_cap_provenance`,
+  `prov_read_before_write`, `prov_scope_local`, `prov_surviving_read`); one-site tags stay literals
+  at their site.
 - **A dynamic-gather table (`Get_dynamic`) materializes at the read, and a table declared `Virtual`
   is refused** (gh-ocannl-734, `test/operations/gather_table_placement.ml`): the gathered row is
   only known at runtime, so no computation can be replayed at the read site — `virtual_llc`'s

@@ -145,7 +145,7 @@ let node dims label =
       ~padding:(lazy None)
       ()
   in
-  Tn.update_memory_mode n Tn.On_device 99;
+  Tn.update_memory_mode n Tn.On_device "99:test-setup";
   n
 
 let execute_case ?make_projection ?(reverse = false) name ~n ~m ~dims ~indices ~address ~elide =

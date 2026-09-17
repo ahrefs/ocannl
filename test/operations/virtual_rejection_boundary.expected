@@ -1,34 +1,34 @@
-visit_cap: rejected by a heuristic cap as Non_virtual 1: true
+visit_cap: rejected by a heuristic cap as Non_virtual 1:visit-cap: true
 visit_cap: executed values are the reference: true
 visit_cap: the two placements agree: true
-guard_enclosing: rejected at store time as Non_virtual 142: true
+guard_enclosing: rejected at store time as Non_virtual 142:guarded-computation: true
 guard_enclosing: executed values are the reference: true
 guard_enclosing: the two placements agree: true
-guard_interior: rejected at store time as Non_virtual 142: true
+guard_interior: rejected at store time as Non_virtual 142:guarded-computation: true
 guard_interior: executed values are the reference: true
 guard_interior: the two placements agree: true
-repetition_above_capture: rejected at store time as Non_virtual 147: true
+repetition_above_capture: rejected at store time as Non_virtual 147:enclosing-repetition-loop: true
 repetition_above_capture: executed values are the reference: true
 repetition_above_capture: the two placements agree: true
-reduction_symbol_free: rejected at store time as Non_virtual 147: true
+reduction_symbol_free: rejected at store time as Non_virtual 147:enclosing-repetition-loop: true
 reduction_symbol_free: executed values are the reference: true
 reduction_symbol_free: the two placements agree: true
-two_setters_one_subtree: rejected at store time as Non_virtual 4: true
+two_setters_one_subtree: rejected at store time as Non_virtual 4:lhs-idcs-differ: true
 two_setters_one_subtree: executed values are the reference: true
 two_setters_one_subtree: the two placements agree: true
-escaping_sibling_read: rejected at store time as Non_virtual 9: true
+escaping_sibling_read: rejected at store time as Non_virtual 9:sibling-escaping-read-index: true
 escaping_sibling_read: executed values are the reference: true
 escaping_sibling_read: the two placements agree: true
-escaping_sibling_setter: rejected at store time as Non_virtual 7: true
+escaping_sibling_setter: rejected at store time as Non_virtual 7:sibling-escaping-write-index: true
 escaping_sibling_setter: executed values are the reference: true
 escaping_sibling_setter: the two placements agree: true
-escaping_embed_index: rejected at store time as Non_virtual 10: true
+escaping_embed_index: rejected at store time as Non_virtual 10:escaping-index-symbol: true
 escaping_embed_index: executed values are the reference: true
 escaping_embed_index: the two placements agree: true
-noninjective_multiaffine: rejected at store time as Non_virtual 51: true
+noninjective_multiaffine: rejected at store time as Non_virtual 51:affine-not-injective: true
 noninjective_multiaffine: executed values are the reference: true
 noninjective_multiaffine: the two placements agree: true
-fixed_component_symbolic_read: rejected at consumption time as Non_virtual 13: true
+fixed_component_symbolic_read: rejected at consumption time as Non_virtual 13:call-site-index-mismatch: true
 fixed_component_symbolic_read: executed values are the reference: true
 fixed_component_symbolic_read: the two placements agree: true
 block_components: inlined: true

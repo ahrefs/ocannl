@@ -567,14 +567,14 @@ let placements ctx =
    The check reads the effective placement, so it fires only where a decision (or a declared [Local]
    intent) exists: a node no routine of this lineage has mentioned is undecided and keeps the
    ordinary behavior, including the "not present in context" refusal. *)
-let local_placement ctx (tn : Tn.t) : int option =
+let local_placement ctx (tn : Tn.t) : Tn.provenance option =
   match Tn.Placements.get (placements ctx) tn with Some (Tn.Local, prov) -> Some prov | _ -> None
 
 let refuse_local ~fn ctx (tn : Tn.t) prov =
   raise
   @@ Utils.User_error
        (Printf.sprintf
-          "Context.%s: node %s is placed Local in this context's lineage (provenance %d): \
+          "Context.%s: node %s is placed Local in this context's lineage (provenance %s): \
            routine-scoped scratch with no context buffer, so host access to it cannot observe (or \
            reach) what the routines compute. Request materialization -- e.g. \
            Train.set_materialized, Context.decide_materialized, or Tnode.set_observable -- before \

@@ -138,7 +138,7 @@ let plan_alias_spans ~(name : string) ~(limits : hardware_limits) ~(lowered : Lo
             match Hashtbl.find lowered.Low_level.traced_store tn with
             | None -> false
             | Some node ->
-                Tn.Placements.is_in_context_force plc tn 45
+                Tn.Placements.is_in_context_force plc tn "45:export-span"
                 && (not node.Low_level.read_only)
                 && (not node.Low_level.read_before_write)
                 && (node.Low_level.zeroed_out || node.Low_level.has_assignment)
@@ -210,7 +210,7 @@ let partition_layout_groups ~(plc : Tn.Placements.t) ?(skip = fun (_ : Tn.t) -> 
     (Tn.t * Low_level.traced_array) list * (Tn.t * Low_level.traced_array) list =
   let working = ref [] and constants = ref [] in
   Hashtbl.iteri store ~f:(fun ~key ~data:node ->
-      if Tn.Placements.is_in_context_force plc key 43 && not (skip key) then
+      if Tn.Placements.is_in_context_force plc key "43:layout-group" && not (skip key) then
         if node.Low_level.read_only || Tn.Placements.known_constant plc key then
           constants := (key, node) :: !constants
         else working := (key, node) :: !working);
@@ -621,7 +621,7 @@ let%debug3_sexp verify_prior_context ~(plc : Tn.Placements.t) ~ctx_arrays ~from_
     =
   Set.iter from_prior_context ~f:(fun tn ->
       if
-        Tn.Placements.is_in_context_force plc tn 42
+        Tn.Placements.is_in_context_force plc tn "42:prior-context-check"
         && (not (Option.is_some @@ Map.find ctx_arrays tn))
         (* Nodes with registered host initialization data (ndarray-backed literals, loaded tensors)
            self-initialize in this context at link time from [Host_inits] (gh-ocannl-333), so they

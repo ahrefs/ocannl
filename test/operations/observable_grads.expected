@@ -1,11 +1,11 @@
 === 1. Fused fwd+bwd+sgd (one routine) ===
-fused grad placement: Virt/151; in context: false; observable intent: true
+fused grad placement: Virt/151:cleanup-dropped-zero-out; in context: false; observable intent: true
 param after one fused step (expect p - 0.1*xin = 1.6 2.5): 1.60 2.50
 === 2. Split grad_update / sgd_update (raw Context.compile) ===
-split(raw) grad after grad_update placement: Virt/151; in context: false; observable intent: true
-split(raw) grad after sgd placement: Virt/151; in context: false; observable intent: true
+split(raw) grad after grad_update placement: Virt/151:cleanup-dropped-zero-out; in context: false; observable intent: true
+split(raw) grad after sgd placement: Virt/151:cleanup-dropped-zero-out; in context: false; observable intent: true
 param after one split step (expect q - 0.1*yin = 1.6 2.5): 1.60 2.50
 === 3. Split via Train.to_routine (output-guessing materializes) ===
-split(to_routine) grad placement: On-dev/28; in context: true; observable intent: true
+split(to_routine) grad placement: On-dev/28:set-materialized; in context: true; observable intent: true
 grad values (= zin): 4.00 5.00
 param after one split step (expect r - 0.1*zin = 1.6 2.5): 1.60 2.50

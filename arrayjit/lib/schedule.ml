@@ -1557,8 +1557,9 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
     (* A host-initialized constant: [Effectively_constant] intent, materialized in this lineage —
        [allocate_delta] routes it (read-only, host-init-backed) into the per-device constant pool,
        and [Host_inits.mem] keeps it out of the routine's required inputs. *)
-    Tn.update_memory_mode tile Effectively_constant 176;
-    Tn.Placements.update opt.Low_level.optimize_ctx.placements tile Tn.On_device 176;
+    Tn.update_memory_mode tile Effectively_constant "176:stage-packed-tile";
+    Tn.Placements.update opt.Low_level.optimize_ctx.placements tile Tn.On_device
+      "176:stage-packed-tile";
     let traced = get_node opt.traced_store tile in
     traced.read_only <- true;
     (* The packing program: odometer enumeration of every tile and outer symbol, evaluated through
@@ -1691,7 +1692,7 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
         ~padding:(lazy None)
         ()
     in
-    Tn.Placements.update opt.Low_level.optimize_ctx.placements tile Tn.Local 175;
+    Tn.Placements.update opt.Low_level.optimize_ctx.placements tile Tn.Local "175:stage-shared-tile";
     ignore (get_node opt.traced_store tile : traced_array);
     (* The load nest. *)
     let fresh = List.map iterated ~f:(fun s -> (s, Indexing.get_symbol ())) in
@@ -2373,7 +2374,8 @@ let apply_privatize ~target ~over (opt : Low_level.optimized) : Low_level.optimi
           ~padding:(lazy None)
           ()
       in
-      Tn.Placements.update opt.Low_level.optimize_ctx.placements tile Tn.Local 176;
+      Tn.Placements.update opt.Low_level.optimize_ctx.placements tile Tn.Local
+        "176:tensorize-acc-tile";
       ignore (get_node opt.traced_store tile : traced_array);
       let tile_read_idcs =
         if scalar_acc then [| Indexing.Fixed_idx 0 |]
@@ -2570,7 +2572,8 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
         ~padding:(lazy None)
         ()
     in
-    Tn.Placements.update opt.Low_level.optimize_ctx.placements partials Tn.On_device 184;
+    Tn.Placements.update opt.Low_level.optimize_ctx.placements partials Tn.On_device
+      "184:split-reduce-partials";
     partials
   in
   (* The fixed-order balanced combine tree: a pure function of the schedule ([num_blocks]), so a
@@ -3054,7 +3057,7 @@ let contract_tensorized_accumulator ~lane ~(masks : pad_mask list) (opt : Low_le
             ~padding:(lazy None)
             ()
         in
-        Tn.Placements.update opt.optimize_ctx.placements fragment Tn.Local 178;
+        Tn.Placements.update opt.optimize_ctx.placements fragment Tn.Local "178:mma-fragment";
         ignore (get_node opt.traced_store fragment : traced_array);
         let fragment_idcs = [| Indexing.Iterator i; Indexing.Iterator j |] in
         let fragment_base = [| Indexing.Fixed_idx 0; Indexing.Fixed_idx 0 |] in
@@ -3756,7 +3759,8 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
     match Tn.Placements.get opt.optimize_ctx.placements target with
     | Some (Tn.On_device, _) -> opt
     | _ ->
-        Tn.Placements.update opt.optimize_ctx.placements target Tn.Local 486;
+        Tn.Placements.update opt.optimize_ctx.placements target Tn.Local
+          "486:epilogue-workgroup-shared";
         { opt with workgroup_shared = Set.add opt.workgroup_shared target }
 
 let fuse_epilogue_witness ~target (opt : Low_level.optimized) : string option =
@@ -5650,7 +5654,7 @@ let crosses_segments segs_with_replicas tn =
    remove a crossing, and a promotion without a surviving crossing must be restored (it would
    otherwise leak an observable placement change out of an all-serial routine). *)
 let promote_crossing plc (segs_with_replicas : (segment * funit list) list) :
-    (Tn.t * (Tn.memory_mode * int) option) list =
+    (Tn.t * (Tn.memory_mode * Tn.provenance) option) list =
   let footprints = seg_footprints segs_with_replicas in
   let written =
     List.fold footprints ~init:(Set.empty (module Tn)) ~f:(fun acc (_, w) -> Set.union acc w)
@@ -5662,7 +5666,7 @@ let promote_crossing plc (segs_with_replicas : (segment * funit list) list) :
         && List.count touched ~f:(fun t -> Set.mem t tn) >= 2
       then (
         let prior = Tn.Placements.raw_entry plc tn in
-        Tn.Placements.promote_local_to_device plc tn 177;
+        Tn.Placements.promote_local_to_device plc tn "177:fission-multi-segment";
         (tn, prior) :: undo)
       else undo)
 
@@ -5821,7 +5825,7 @@ let seg_llc replicas seg =
    computed under the stricter materialized view remain valid for a [Local] node, cf.
    {!Tn.Placements.raw_entry}). *)
 let promote_statement_crossing_locals plc (stmts : Low_level.t list) :
-    (Tn.t * (Tn.memory_mode * int) option) list =
+    (Tn.t * (Tn.memory_mode * Tn.provenance) option) list =
   let summaries = List.map stmts ~f:(summarize_stmt plc) in
   let footprints = List.map stmts ~f:(fun s -> fst (code_footprint s)) in
   let crossing tn i = List.existsi footprints ~f:(fun j fp -> j <> i && Set.mem fp tn) in
@@ -5837,7 +5841,7 @@ let promote_statement_crossing_locals plc (stmts : Low_level.t list) :
             in
             if eligible && crossing tn i then (
               let prior = Tn.Placements.raw_entry plc tn in
-              Tn.Placements.promote_local_to_device plc tn 178;
+              Tn.Placements.promote_local_to_device plc tn "178:fission-live-range-crossing";
               (tn, prior) :: undo)
             else undo))
 

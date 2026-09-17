@@ -831,7 +831,24 @@ val copy_optimize_ctx : optimize_ctx -> optimize_ctx
     copies. Backend [compile] forks the incoming context's [optimize_ctx] through this, so sibling
     candidate compiles from one frontier are hermetic. *)
 
-val decide_materialized : ?provenance:int -> optimize_ctx -> Tnode.t list -> unit
+(** {2 Named placement provenances}
+
+    The tags this module records that other code reads back (gh-ocannl-609); the one-site tags are
+    spelled at their site. See {!Ir.Tnode.provenance} for the convention. *)
+
+val prov_visit_cap : Tnode.provenance
+val prov_inline_reduction_cap : Tnode.provenance
+val prov_inline_fanin_cap : Tnode.provenance
+
+val is_cap_provenance : Tnode.provenance -> bool
+(** Whether the tag is one of the three heuristic caps of {!decide_placements}: a flippable policy
+    decision rather than a legality or observability verdict. *)
+
+val prov_read_before_write : Tnode.provenance
+val prov_scope_local : Tnode.provenance
+val prov_surviving_read : Tnode.provenance
+
+val decide_materialized : ?provenance:Tnode.provenance -> optimize_ctx -> Tnode.t list -> unit
 (** Records an [On_device] decision for each node this lineage has not already resolved otherwise —
     the "materialize this node" move of the placement lattice. Nodes already resolved to [Virtual] /
     [Local] / [Effectively_constant] keep their resolution: decisions are final within a lineage.

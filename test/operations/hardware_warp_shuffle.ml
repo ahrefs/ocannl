@@ -741,7 +741,7 @@ let () =
       ~padding:(lazy None)
       ()
   in
-  Tn.update_memory_mode side Tn.Local 992;
+  Tn.update_memory_mode side Tn.Local "992:test-setup";
   let with_side opt =
     ignore (LL.get_node opt.LL.traced_store side : LL.traced_array);
     opt
@@ -836,7 +836,7 @@ let () =
       ~padding:(lazy None)
       ()
   in
-  Tn.update_memory_mode scratch Tn.Local 993;
+  Tn.update_memory_mode scratch Tn.Local "993:test-setup";
   let lx = TDSL.ndarray gv ~label:[ "race_lx" ] ~output_dims:[ n ] () in
   let%op ls = lx ++ "i=>0" in
   let local_transform opt =
@@ -884,7 +884,7 @@ let () =
       ~padding:(lazy None)
       ()
   in
-  Tn.update_memory_mode tile Tn.Local 994;
+  Tn.update_memory_mode tile Tn.Local "994:test-setup";
   let hx = TDSL.ndarray gv ~label:[ "race_hx" ] ~output_dims:[ n ] () in
   let%op hs = hx ++ "i=>0" in
   let staged_transform (opt : LL.optimized) =

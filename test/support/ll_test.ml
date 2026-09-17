@@ -185,7 +185,7 @@ let drift ~dims = cycle ~dims ~modulus:13 ~offset:20. ~stride:0.015625
     right for every nest whose indices are all loop indices. *)
 let optimize_in ?(materialized = []) ?(static_indices = []) (ctx : LL.optimize_ctx) ~name llc :
     LL.optimized =
-  LL.decide_materialized ~provenance:589 ctx materialized;
+  LL.decide_materialized ~provenance:"589:ll-test-materialize" ctx materialized;
   LL.optimize ctx ~unoptim_ll_source:None ~ll_source:None ~name static_indices llc
 
 (** [optimize ~name llc] is {!optimize_in} in a fresh lineage. *)
@@ -224,20 +224,16 @@ let known_local (o : LL.optimized) tn =
   | Some (Local, _) -> true
   | _ -> false
 
-(** The [Non_virtual] code the virtualizer recorded for [tn], as the leading factor of its
+(** The [Non_virtual] tag the virtualizer recorded for [tn], as the LEADING component of its
     placement's provenance.
 
-    Provenances COMPOSE: {!Ir.Tnode.Placements.default_to_most_local} folds the prior provenance in
-    as [1000 * prior + its own] when it resolves a [Never_virtual] decision into a concrete
-    placement, so the rejection code is not the whole number. Stripping the trailing factors is
-    sound only while every code is below 1000, which they are — {!Ir.Low_level}'s two [Non_virtual]
-    exceptions use disjoint two- and three-digit codes, which is also what lets a reader tell the
-    store-time verdicts from the consumption-time ones. [None] means no decision was recorded (the
-    node is still undecided, which after a full {!optimize} means it was never a candidate). *)
+    Provenances COMPOSE: {!Ir.Tnode.Placements.default_to_most_local} appends its own tag when it
+    resolves a [Never_virtual] decision into a concrete placement, so the rejection tag is not the
+    whole string. [None] means no decision was recorded (the node is still undecided, which after a
+    full {!optimize} means it was never a candidate). *)
 let rejection_code (o : LL.optimized) tn =
   Option.map (Tn.Placements.get o.LL.optimize_ctx.placements tn) ~f:(fun (_, prov) ->
-      let rec strip p = if p >= 1000 then strip (p / 1000) else p in
-      strip prov)
+      Tn.leading_provenance prov)
 
 (** {1 The executed leg} *)
 
