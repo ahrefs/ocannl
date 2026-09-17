@@ -693,6 +693,79 @@ let case_preference_ineligible () =
   let got = execute ~name:"fp_pref_ineligible" opt ~seed:[ (o, blank n) ] ~read:[ o ] in
   p "preference-ineligible: executed values respect the guard" (same got [ expected ])
 
+(* === A dead loop "writing" the producer after its real write, with a template input rewritten in
+   between: a dead loop is no writer, so the prologue follows the real producer and snapshots the
+   input as it was there. === *)
+let case_dead_loop_writer () =
+  let a = mk "ad" and x = mk ~dims:[| n |] "xd" and o = mk ~dims:[| n |] "od" in
+  materialize o;
+  materialize x;
+  let t = sym () and dz = sym () and i' = sym () in
+  let rewrite = loop t (set x [| iter t |] (mul (c 2.) (get x [| iter t |]))) in
+  let dead = Ll_builders.loop ~from_:1 ~upto:0 dz (set a [| fixed 0; fixed 0 |] (c 7.)) in
+  let consumer = loop i' (set o [| iter i' |] (get a [| iter i'; iter i' |])) in
+  let llc = seq (big_reduction_over x a) (seq rewrite (seq dead consumer)) in
+  let opt = optimize ~name:"fp_dead_writer" llc in
+  p "dead-writer: the producer stays virtual, footprint-scoped"
+    (known_virtual opt a && List.equal (List.equal Int.equal) (scratch_dims opt) [ [ n ] ]);
+  p "dead-writer: the prologue precedes the rewrite"
+    (match scratches opt with
+    | [ d ] -> (
+        match (stmt_writing opt d, stmt_writing opt x) with
+        | Some pro, Some rw -> pro < rw
+        | _ -> false)
+    | _ -> false);
+  let xs = Array.init n ~f:(fun i -> Float.of_int (1 + i)) in
+  let expected = Array.init n ~f:(fun i -> reduced_plus (1 + i) i i) in
+  let doubled = Array.map xs ~f:(fun v -> 2. *. v) in
+  let seed = [ (x, xs); (o, blank n) ] and read = [ o; x ] in
+  let fp = execute ~name:"fp_dead_writer" opt ~seed ~read in
+  let mat =
+    execute ~name:"fp_dead_writer_mat"
+      (optimize ~materialized:[ a ] ~name:"fp_dead_writer" llc)
+      ~seed ~read
+  in
+  p "dead-writer: the scratch holds the reduction over the input as it was at the producer"
+    (same fp [ expected; doubled ]);
+  p "dead-writer: footprint and materialized arms agree" (same fp mat)
+
+(* === A local mutated inside the producer's own statement, read by the producer: the template would
+   replay it from the local's state at the prologue rather than from the value each iteration saw —
+   ineligible, the cap materializes. === *)
+let case_local_in_producer_statement () =
+  let a = mk "als" and o = mk ~dims:[| n |] "ols" and lt = mk ~dims:[| 1 |] "lts" in
+  materialize o;
+  virtualize lt;
+  let l = LL.get_scope lt in
+  let i = sym () and j = sym () and k = sym () and i' = sym () in
+  let producer =
+    seq (zero a)
+      (loop i
+         (seq
+            (LL.Set_local (l, add (LL.Get_local l) (c 1.)))
+            (loop j
+               (loop_n k kk
+                  (set a
+                     [| iter i; iter j |]
+                     (add
+                        (get a [| iter i; iter j |])
+                        (add (LL.Get_local l) (add (tag i j) (mul (c 100.) (embed k))))))))))
+  in
+  let consumer = loop i' (set o [| iter i' |] (get a [| iter i'; iter i' |])) in
+  let llc =
+    seq
+      (LL.Declare_local { id = l; needs_init = false })
+      (seq (LL.Set_local (l, c 0.)) (seq producer consumer))
+  in
+  let opt = optimize ~name:"fp_local_in_producer" llc in
+  p "local-in-producer: the reduction cap materializes the producer"
+    (is_cap opt a Tn.Inline_reduction_cap);
+  p_empty "local-in-producer: no scratch" ~over:(Hashtbl.keys opt.LL.traced_store) (scratches opt);
+  let expected = Array.init n ~f:(fun i -> reduced_plus (i + 1) i i) in
+  let got = execute ~name:"fp_local_in_producer" opt ~seed:[ (o, blank n) ] ~read:[ o ] in
+  p "local-in-producer: executed values see the local as each iteration left it"
+    (same got [ expected ])
+
 let () =
   case_diagonal_reduction ();
   case_visit_cap ();
@@ -714,4 +787,6 @@ let () =
   case_rejection_after_footprint ();
   case_local_written_between_setters ();
   case_preference_ineligible ();
+  case_dead_loop_writer ();
+  case_local_in_producer_statement ();
   Stdio.printf "%!"

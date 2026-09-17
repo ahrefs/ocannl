@@ -87,3 +87,10 @@ local-between: capped and materialized arms agree: true
 preference-ineligible: the node stays virtual and its read is inlined: true
 preference-ineligible: no scratch: true
 preference-ineligible: executed values respect the guard: true
+dead-writer: the producer stays virtual, footprint-scoped: true
+dead-writer: the prologue precedes the rewrite: true
+dead-writer: the scratch holds the reduction over the input as it was at the producer: true
+dead-writer: footprint and materialized arms agree: true
+local-in-producer: the reduction cap materializes the producer: true
+local-in-producer: no scratch: true
+local-in-producer: executed values see the local as each iteration left it: true

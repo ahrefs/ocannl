@@ -2590,6 +2590,9 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
   let rec statement_writers acc (llc : t) =
     match llc with
     | Seq (a, b) -> statement_writers (statement_writers acc a) b
+    (* A dead loop writes nothing — the access relations the eligibility query read agree, and the
+       prologue's position must not follow a writer that never runs. *)
+    | For_loop { from_; to_; _ } when to_ < from_ -> acc
     | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> statement_writers acc body
     | Zero_out tn | Set { tn; _ } | Set_from_vec { tn; _ } | Set_dynamic { tn; _ } -> Set.add acc tn
     | Tile_mma { d = tn, _; _ } -> Set.add acc tn
@@ -6959,22 +6962,34 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list) (
   (* The top-level statements (indexed as the access paths index them) carrying any effect the
      access relations do not represent — local writes above all: a [Set_local] between two of a
      producer's components is a snapshot hazard exactly like a tensor write there. *)
-  let effectful =
+  let effectful, local_effects =
+    (* A dead loop has no effect, as the access relations already say ([drop_dead_loop_accesses]); a
+       local write is an effect the relations do not carry, and one inside the producer's own
+       statement is a hazard too — the template replays it from the local's state at the prologue,
+       not from the value the materialized producer saw at each iteration. *)
     let rec go (c : t) =
       match c with
-      | Noop | Comment _ -> false
-      | Seq (a, b) -> go a || go b
+      | Noop | Comment _ -> (false, false)
+      | Seq (a, b) ->
+          let ea, la = go a and eb, lb = go b in
+          (ea || eb, la || lb)
+      | For_loop { from_; to_; _ } when to_ < from_ -> (false, false)
       | For_loop { body; _ } | If { body; _ } -> go body
-      | Zero_out _ | Set _ | Set_from_vec _ | Set_dynamic _ | Set_local _ | Declare_local _
-      | Scan_loop _ | Tile_mma _ | Staged_compilation _ | Workgroup_barrier ->
-          true
+      | Set_local _ | Declare_local _ | Scan_loop _ -> (true, true)
+      | Zero_out _ | Set _ | Set_from_vec _ | Set_dynamic _ | Tile_mma _ | Staged_compilation _
+      | Workgroup_barrier ->
+          (true, false)
     in
-    match llc with
-    | Seq _ ->
-        List.foldi (flat_lines [ llc ])
-          ~init:(Set.empty (module Int))
-          ~f:(fun k acc stmt -> if go stmt then Set.add acc k else acc)
-    | _ -> if go llc then Set.singleton (module Int) (-1) else Set.empty (module Int)
+    let stmts =
+      match llc with
+      | Seq _ -> List.mapi (flat_lines [ llc ]) ~f:(fun k st -> (k, st))
+      | _ -> [ (-1, llc) ]
+    in
+    List.fold stmts
+      ~init:(Set.empty (module Int), Set.empty (module Int))
+      ~f:(fun (eff, loc) (k, stmt) ->
+        let e, l = go stmt in
+        ((if e then Set.add eff k else eff), if l then Set.add loc k else loc))
   in
   let reads_by_tn = Hashtbl.create (module Tn) in
   let writes_by_tn = Hashtbl.create (module Tn) in
@@ -7014,9 +7029,10 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list) (
       List.is_empty own_writes
       || Set.for_all effectful ~f:(fun s ->
           s < own_first || s > own_last
-          || Set.equal
-               (Hashtbl.find writers_by_stmt s |> Option.value ~default:(Set.empty (module Tn)))
-               (Set.singleton (module Tn) tn))
+          || (not (Set.mem local_effects s))
+             && Set.equal
+                  (Hashtbl.find writers_by_stmt s |> Option.value ~default:(Set.empty (module Tn)))
+                  (Set.singleton (module Tn) tn))
     in
     let site (a : _ Affine.access) =
       if List.exists own_writes ~f:(fun w -> Affine.same_statement w.Affine.a_path a.a_path) then
