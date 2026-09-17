@@ -546,9 +546,17 @@ than the driver (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` at module load), run it wi
     cell's schedule search allocates a candidate buffer per arm, so an exit reading reports the
     search's high water rather than the workload's. OCANNL brackets with
     `Ir.Alloc_census.reset_peak` in `measure_and_emit`; the Python runners open their probe's
-    window after the warmup sync.
-  - *What.* The counters are not one quantity, so each row **names** the one it read
-    (`peak_memory_source` beside `peak_memory_bytes`). A *high-water* counter — OCANNL's shared
+    window after the warmup sync and **close** it (`peak_memory_fields` reads the probe) before the
+    optional `--retime` block, so the window is the steps `step_ms` and `queued_step_ms` report on
+    whatever the counter's kind — read later, a high-water counter would take the retimed block in
+    and a sampled one, which takes no samples there, would not.
+  - *What.* The counters are not one quantity, so each row **names** the one it read, on the row
+    itself: the cell reads `123.7 ocannl-seam`, and the section's legend expands that tag. Three
+    keys carry it — `peak_memory_bytes`, `peak_memory_counter` (the short tag) and
+    `peak_memory_source` (the long description) — because a list of which counters occur somewhere
+    in a section cannot say which produced any individual number, and two numbers an order of
+    magnitude apart for reasons of counter kind are exactly what the column must not let a reader
+    rank. A *high-water* counter — OCANNL's shared
     allocator seam (`Ir.Alloc_census.peak_pool_bytes`) and `torch.cuda.max_memory_allocated` — is
     the allocator's own maximum over the window, in requested bytes, and those two are the same
     quantity and compare honestly. A *sampled* gauge — `torch.mps.driver_allocated_memory`,

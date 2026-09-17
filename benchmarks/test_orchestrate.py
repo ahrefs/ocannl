@@ -672,12 +672,15 @@ class PeakMemoryTest(unittest.TestCase):
     step boundaries and a driver-level figure are three different quantities.
     """
 
+    SEAM_TAG = "ocannl-seam"
     SEAM_SOURCE = "OCANNL allocator seam high-water (requested bytes, all backends)"
+    SAMPLED_TAG = "mps-driver"
     SAMPLED_SOURCE = "torch.mps.driver_allocated_memory (driver bytes, sampled at step boundaries)"
 
-    def cell(self, framework, backend, peak=None, source=None, p50=1.0):
+    def cell(self, framework, backend, peak=None, tag=None, source=None, p50=1.0):
         r = cell(framework, backend, "default", [2.3, 2.2, 2.1], p50=p50)
         r["peak_memory_bytes"] = peak
+        r["peak_memory_counter"] = tag
         r["peak_memory_source"] = source
         return r
 
@@ -689,11 +692,11 @@ class PeakMemoryTest(unittest.TestCase):
 
     def test_the_column_appears_once_a_row_measured_a_footprint(self):
         text = self.rendered(
-            [self.cell("ocannl", "metal", 3 * orchestrate.MIB, self.SEAM_SOURCE)]
+            [self.cell("ocannl", "metal", 3 * orchestrate.MIB, self.SEAM_TAG, self.SEAM_SOURCE)]
         )
 
         self.assertIn(" peak MiB |", text)
-        self.assertIn("| 3.0 |", text)
+        self.assertIn("| 3.0 ocannl-seam |", text)
 
     def test_a_section_where_nothing_measured_one_carries_no_column(self):
         # The same rule every other conditional column follows: an empty column is a column of
@@ -708,13 +711,15 @@ class PeakMemoryTest(unittest.TestCase):
         # A zero there would say the workload has no footprint, which is a claim nobody made.
         text = self.rendered(
             [
-                self.cell("ocannl", "cc", 5 * orchestrate.MIB, self.SEAM_SOURCE, p50=1.0),
+                self.cell(
+                    "ocannl", "cc", 5 * orchestrate.MIB, self.SEAM_TAG, self.SEAM_SOURCE, p50=1.0
+                ),
                 self.cell("pytorch", "cpu", p50=2.0),
             ]
         )
 
         self.assertIn(" peak MiB |", text)
-        self.assertIn("| 5.0 |", text)
+        self.assertIn("| 5.0 ocannl-seam |", text)
         self.assertEqual(orchestrate.peak_memory_mib({"peak_memory_bytes": None}), "\u2014")
         self.assertIn("\u2014", text)
         self.assertNotIn("| 0.0 |", text)
@@ -723,20 +728,26 @@ class PeakMemoryTest(unittest.TestCase):
         # `is not None`, not truthiness: a counter that legitimately read zero has measured the
         # cell, and rendering it as a dash would lose that the cell was measured at all.
         self.assertEqual(orchestrate.peak_memory_mib({"peak_memory_bytes": 0}), "0.0")
-        text = self.rendered([self.cell("ocannl", "cc", 0, self.SEAM_SOURCE)])
+        text = self.rendered([self.cell("ocannl", "cc", 0, self.SEAM_TAG, self.SEAM_SOURCE)])
 
         self.assertIn(" peak MiB |", text)
-        self.assertIn("| 0.0 |", text)
+        self.assertIn("| 0.0 ocannl-seam |", text)
 
     def test_the_legend_names_every_counter_the_section_carries(self):
         rows = [
-            self.cell("ocannl", "metal", 3 * orchestrate.MIB, self.SEAM_SOURCE, p50=1.0),
-            self.cell("pytorch", "mps", 7 * orchestrate.MIB, self.SAMPLED_SOURCE, p50=2.0),
+            self.cell(
+                "ocannl", "metal", 3 * orchestrate.MIB, self.SEAM_TAG, self.SEAM_SOURCE, p50=1.0
+            ),
+            self.cell(
+                "pytorch", "mps", 7 * orchestrate.MIB, self.SAMPLED_TAG, self.SAMPLED_SOURCE,
+                p50=2.0,
+            ),
             self.cell("pytorch", "cpu", p50=3.0),
         ]
 
         self.assertEqual(
-            orchestrate.peak_memory_counters(rows), [self.SEAM_SOURCE, self.SAMPLED_SOURCE]
+            orchestrate.peak_memory_counters(rows),
+            [(self.SEAM_TAG, self.SEAM_SOURCE), (self.SAMPLED_TAG, self.SAMPLED_SOURCE)],
         )
         text = self.rendered(rows)
         self.assertIn(self.SEAM_SOURCE, text)
@@ -744,26 +755,77 @@ class PeakMemoryTest(unittest.TestCase):
         # And what the reader has to do with the difference, said where the numbers are read.
         self.assertIn("lower bound", text)
 
+    def test_each_row_names_its_own_counter_not_just_the_section(self):
+        # The finding of review round 1: with two counters in one section, a list of which
+        # counters occur SOMEWHERE leaves every individual number unattributed -- and these two
+        # numbers differ by an order of magnitude for reasons of counter kind, not footprint.
+        rows = [
+            self.cell(
+                "ocannl", "metal", 3 * orchestrate.MIB, self.SEAM_TAG, self.SEAM_SOURCE, p50=1.0
+            ),
+            self.cell(
+                "pytorch", "mps", 70 * orchestrate.MIB, self.SAMPLED_TAG, self.SAMPLED_SOURCE,
+                p50=2.0,
+            ),
+        ]
+        text = self.rendered(rows)
+
+        self.assertIn("| 3.0 ocannl-seam |", text)
+        self.assertIn("| 70.0 mps-driver |", text)
+
+    def test_a_row_whose_runner_named_no_counter_still_shows_its_bytes(self):
+        # An artifact predating the tag: the bytes stand, without a tag it does not have. The
+        # alternative -- dropping the row's number -- would lose a measurement over a missing label.
+        self.assertEqual(
+            orchestrate.peak_memory_mib({"peak_memory_bytes": 3 * orchestrate.MIB}), "3.0"
+        )
+
     def test_an_unmeasured_row_contributes_no_counter_name(self):
         # A source string on a row with no bytes is a counter that reported nothing; naming it in
         # the legend would offer the reader a column entry that does not exist.
-        rows = [self.cell("pytorch", "mps", None, self.SAMPLED_SOURCE)]
+        rows = [self.cell("pytorch", "mps", None, self.SAMPLED_TAG, self.SAMPLED_SOURCE)]
 
         self.assertEqual(orchestrate.peak_memory_counters(rows), [])
 
     def test_the_result_line_carries_the_bytes_and_the_counter_together(self):
-        probe = bench_common.PeakMemoryProbe(source="fake counter", read=lambda: 4096)
+        probe = bench_common.PeakMemoryProbe(
+            tag="fake", source="fake counter", read=lambda: 4096
+        )
 
         self.assertEqual(
             bench_common.peak_memory_fields(probe),
-            {"peak_memory_bytes": 4096, "peak_memory_source": "fake counter"},
+            {
+                "peak_memory_bytes": 4096,
+                "peak_memory_counter": "fake",
+                "peak_memory_source": "fake counter",
+            },
         )
-        # Both None, never one without the other: bytes whose counter is unnamed would be compared
+        # All None, never some without the others: bytes whose counter is unnamed would be compared
         # with a different quantity in the next row.
         self.assertEqual(
             bench_common.peak_memory_fields(None),
-            {"peak_memory_bytes": None, "peak_memory_source": None},
+            {
+                "peak_memory_bytes": None,
+                "peak_memory_counter": None,
+                "peak_memory_source": None,
+            },
         )
+
+    def test_reading_the_fields_closes_the_window_where_it_is_called(self):
+        # Review round 1: `--retime` times a second block after the reported one. A high-water
+        # counter keeps accumulating through it while a sampled probe, taking no samples there,
+        # does not -- so a window closed at result-assembly time would mean different steps
+        # depending on the counter's kind. `peak_memory_fields` reads, so calling it before the
+        # retime block is what makes the window the reported steps' for both kinds.
+        readings = iter([100, 900])
+        probe = bench_common.PeakMemoryProbe(
+            tag="fake-hw", source="fake high-water", read=lambda: next(readings)
+        )
+        probe.start()
+
+        self.assertEqual(bench_common.peak_memory_fields(probe)["peak_memory_bytes"], 100)
+        # A later read would have seen the retimed block's higher mark.
+        self.assertEqual(probe.read(), 900)
 
     def test_a_high_water_counter_is_read_not_sampled(self):
         # The allocator keeps the maximum itself, so the value at the end of the window is the
@@ -771,6 +833,7 @@ class PeakMemoryTest(unittest.TestCase):
         readings = iter([100, 900, 900])
         resets = []
         probe = bench_common.PeakMemoryProbe(
+            tag="fake-hw",
             source="fake high-water",
             read=lambda: next(readings),
             reset=lambda: resets.append(1),
@@ -786,7 +849,7 @@ class PeakMemoryTest(unittest.TestCase):
         # resident, and a peak starting from zero would report only what the steps added to them.
         readings = iter([500, 1500, 700])
         probe = bench_common.PeakMemoryProbe(
-            source="fake gauge", read=lambda: next(readings), sampled=True
+            tag="fake-gauge", source="fake gauge", read=lambda: next(readings), sampled=True
         )
         probe.start()
         probe.sample()
@@ -798,7 +861,8 @@ class PeakMemoryTest(unittest.TestCase):
         # `start()` drops the previous window's samples, which is what makes the column the TIMED
         # STEPS' footprint rather than the process's.
         probe = bench_common.PeakMemoryProbe(
-            source="fake gauge", read=iter([9000, 200, 300]).__next__, sampled=True
+            tag="fake-gauge", source="fake gauge", read=iter([9000, 200, 300]).__next__,
+            sampled=True,
         )
         probe.start()
         probe.start()
@@ -824,6 +888,7 @@ class PeakMemoryTest(unittest.TestCase):
         # Requested bytes off the caching allocator -- the same quantity as OCANNL's seam, which is
         # what makes those two rows comparable. Not `max_memory_reserved`.
         self.assertIn("max_memory_allocated", cuda.source)
+        self.assertEqual(cuda.tag, "cuda-hw")
         mps = bench_common.torch_peak_memory(torch, "mps")
         mps.start()
         self.assertEqual(mps.read(), 4096)

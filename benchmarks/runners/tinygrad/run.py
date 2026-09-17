@@ -332,6 +332,10 @@ def main():
         queued = (time.perf_counter() - t0) / timed_steps * 1e3
         if peak_memory:
             peak_memory.sample()
+        # Closed before the optional retime block, so the column reports the steps `step_ms` and
+        # `queued_step_ms` report on -- see the pytorch runner for why the placement matters per
+        # counter kind (review round 1).
+        peak_memory_result = peak_memory_fields(peak_memory)
         retimed = None
         if args.retime:
             sync()
@@ -358,7 +362,7 @@ def main():
         "timed_steps": timed_steps,
         "losses": losses,
         "version": pkg_version("tinygrad"),
-        **peak_memory_fields(peak_memory),
+        **peak_memory_result,
     }
     if retimed:
         result["retime_step_ms"] = percentiles(retimed)

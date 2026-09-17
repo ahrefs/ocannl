@@ -699,14 +699,18 @@ let time_segments ?promote_locals ?(repeats = 20) ~backend ~limits ~static_indic
     protocol actually reads is what lets {!run_self_test} drive the whole of it on a model
     fabricated in memory, with no file on disk and no Python. *)
 
-(** The name the result line's [peak_memory_source] carries for an OCANNL cell (gh-ocannl-1006).
+(** What an OCANNL cell's result line calls its memory counter (gh-ocannl-1006): the short tag the
+    report prints on the row, and the long description its legend expands that tag into.
 
     Named on the wire rather than left to the [framework] column because the counters the report
     puts side by side are not one quantity: this one and [torch.cuda.max_memory_allocated] are both
     an allocator's high-water mark in requested bytes, while a current gauge sampled at step
     boundaries is a lower bound on the same window. What it covers is {!Ir.Alloc_census}'s coverage
     -- the pools recorded at the shared allocator seam -- which excludes a device's reserved
-    merge-buffer slab, the loaded code modules and the host-side arrays. *)
+    merge-buffer slab, the loaded code modules and the host-side arrays. The tag says [all backends]
+    because that coverage is backend-independent: a [cc] pool is counted exactly as a CUDA one. *)
+let peak_memory_counter = "ocannl-seam"
+
 let peak_memory_source = "OCANNL allocator seam high-water (requested bytes, all backends)"
 
 type protocol = {
@@ -792,7 +796,10 @@ let measure_and_emit ~protocol ~backend ~variant ?(precision = "f32") ~compile_s
   sync ();
   let queued_ms = elapsed_ms c0 /. Float.of_int timed_steps in
   let peak_memory =
-    Some ((Ir.Alloc_census.snapshot ()).Ir.Alloc_census.peak_pool_bytes, peak_memory_source)
+    Some
+      ( (Ir.Alloc_census.snapshot ()).Ir.Alloc_census.peak_pool_bytes,
+        peak_memory_counter,
+        peak_memory_source )
   in
   Array.sort synced ~compare:Float.compare;
   let line =

@@ -93,7 +93,7 @@ let ordinary =
     ~timed_steps:20
       (* A fabricated counter name, deliberately not the harness's own spelling: what this test pins
          is that the wire format carries the pair, not what any one runner calls its counter. *)
-    ~peak_memory:(Some (2097152, "fabricated \"high-water\" counter (requested bytes)"))
+    ~peak_memory:(Some (2097152, "fab-hw", "fabricated \"high-water\" counter (requested bytes)"))
     ~losses:[| 2.5; 1.75; 1.25 |] ()
 
 (* Everything a diverged, half-measured, tuned cell reports at once. *)
@@ -187,10 +187,14 @@ let () =
      workload with no footprint, which is the one wrong answer this pair exists to exclude. *)
   p "a cell that measured no footprint reports null bytes and null counter, not zero"
     (Yojson.Safe.equal (member "peak_memory_bytes" j) `Null
+    && Yojson.Safe.equal (member "peak_memory_counter" j) `Null
     && Yojson.Safe.equal (member "peak_memory_source" j) `Null);
   p "a measured footprint carries its byte count and names the counter it came from"
     (let o = Yojson.Safe.from_string ordinary in
      Yojson.Safe.equal (member "peak_memory_bytes" o) (`Int 2097152)
+     (* Both spellings: the short tag the report prints ON the row, so a row states its own counter,
+        and the long one its legend expands that tag into (review round 1). *)
+     && Yojson.Safe.equal (member "peak_memory_counter" o) (`String "fab-hw")
      &&
      match member "peak_memory_source" o with
      | `String s -> String.equal s "fabricated 'high-water' counter (requested bytes)"

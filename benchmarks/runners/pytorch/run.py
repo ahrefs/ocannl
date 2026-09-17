@@ -338,6 +338,11 @@ def main():
     queued = (time.perf_counter() - t0) / timed_steps * 1e3
     if peak_memory:
         peak_memory.sample()
+    # The window closes HERE, before the optional retime block, so the column reports the same
+    # steps `step_ms` and `queued_step_ms` do. Read after retiming instead, a high-water counter
+    # would take in the retimed block while a sampled one -- which takes no samples there -- would
+    # not, so the window's meaning would depend on the counter's kind (review round 1).
+    peak_memory_result = peak_memory_fields(peak_memory)
     retimed = None
     if args.retime:
         sync()
@@ -372,7 +377,7 @@ def main():
         # would let the stamp mask a runner that ran the other arm.
         "runner_regime": runner_regime,
         "regime_settings": regime_settings,
-        **peak_memory_fields(peak_memory),
+        **peak_memory_result,
     }
     if args.compile_mode:
         result["compile_mode"] = args.compile_mode

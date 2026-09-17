@@ -15,3 +15,4 @@ the mark rises only where the growth passes the earlier high water: true
 a bigger total does raise the mark: true
 the fabricated pools are all given back: true
 a rebase after them lands on the live bytes, not on the high water: true
+the incrementally kept total agrees with the fold over the table: true

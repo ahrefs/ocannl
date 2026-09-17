@@ -191,9 +191,15 @@ class PeakMemoryProbe:
 
     `start()` opens the window, `sample()` is called at every step boundary (a no-op for a
     high-water counter, which needs no help), and `read()` closes it with the peak in bytes.
+
+    `tag` is the short name the report prints ON each row, and `source` the long one its legend
+    expands the tag into. Both, because one row of a table has to say which counter produced it --
+    a section-wide list of the counters present cannot, and that is the whole safeguard against
+    ranking an allocator high-water mark against a driver-level gauge.
     """
 
-    def __init__(self, source, read, reset=None, sampled=False):
+    def __init__(self, tag, source, read, reset=None, sampled=False):
+        self.tag = tag
         self.source = source
         self._read = read
         self._reset = reset
@@ -228,6 +234,7 @@ def torch_peak_memory(torch, device):
         # the window. Not `max_memory_reserved`, which is the pool torch grew and would flatter a
         # workload whose footprint shrank.
         return PeakMemoryProbe(
+            tag="cuda-hw",
             source="torch.cuda.max_memory_allocated (requested bytes, high-water)",
             read=torch.cuda.max_memory_allocated,
             reset=torch.cuda.reset_peak_memory_stats,
@@ -237,6 +244,7 @@ def torch_peak_memory(torch, device):
         if read is None:
             return None
         return PeakMemoryProbe(
+            tag="mps-driver",
             source="torch.mps.driver_allocated_memory (driver bytes, sampled at step boundaries)",
             read=read,
             sampled=True,
@@ -253,6 +261,7 @@ def tinygrad_peak_memory():
     if not hasattr(GlobalCounters, "mem_used"):
         return None
     return PeakMemoryProbe(
+        tag="tg-mem-used",
         source="tinygrad GlobalCounters.mem_used (requested bytes, sampled at step boundaries)",
         read=lambda: int(GlobalCounters.mem_used),
         sampled=True,
@@ -260,13 +269,27 @@ def tinygrad_peak_memory():
 
 
 def peak_memory_fields(probe):
-    """The two result-line keys for `probe`, both None where there was no counter to read.
+    """The result-line keys for `probe`, all None where there was no counter to read.
 
-    Together, never one without the other: a byte count whose counter is not named would be
-    compared with a different quantity in the next row, and a named counter with no bytes says
-    nothing. A cell that measured none reports null for both and the report prints a dash -- never
-    a zero, which would read as a workload with no footprint.
+    CLOSES the window: it calls `probe.read()`, so it belongs at the end of the steps the column
+    reports on and not at result-assembly time. Under `--retime` those differ, and differ per
+    counter kind -- a high-water counter keeps accumulating through the retimed block while a
+    sampled one, taking no samples there, does not -- so a window closed late would mean one thing
+    on cuda and another on mps (gh-ocannl-1006 review round 1).
+
+    The three travel together, never one without the others: a byte count whose counter is not
+    named would be compared with a different quantity in the next row, and a named counter with no
+    bytes says nothing. A cell that measured none reports null for all three and the report prints
+    a dash -- never a zero, which would read as a workload with no footprint.
     """
     if probe is None:
-        return {"peak_memory_bytes": None, "peak_memory_source": None}
-    return {"peak_memory_bytes": probe.read(), "peak_memory_source": probe.source}
+        return {
+            "peak_memory_bytes": None,
+            "peak_memory_counter": None,
+            "peak_memory_source": None,
+        }
+    return {
+        "peak_memory_bytes": probe.read(),
+        "peak_memory_counter": probe.tag,
+        "peak_memory_source": probe.source,
+    }

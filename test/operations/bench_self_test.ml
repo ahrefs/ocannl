@@ -87,10 +87,11 @@ let () =
          activations and gradients are on the device whatever the backend. *)
       Verdict.p "peak_memory_bytes is a positive byte count on every backend"
         (match field j "peak_memory_bytes" with Some (`Int b) -> b > 0 | _ -> false);
-      Verdict.p "and it names the counter it was read from"
-        (Option.value_map
-           (string_field j "peak_memory_source")
-           ~default:false ~f:(Fn.non String.is_empty));
+      (* Both spellings: the short tag the report prints ON the row, so a row states its own
+         counter, and the long description its legend expands that tag into (review round 1). *)
+      Verdict.p_all "and it names the counter it was read from, in both spellings"
+        [ "peak_memory_counter"; "peak_memory_source" ] ~f:(fun k ->
+          Option.value_map (string_field j k) ~default:false ~f:(Fn.non String.is_empty));
       Verdict.p "timed_steps is the count the protocol asked for"
         (match field j "timed_steps" with
         | Some (`Int n) -> n = protocol.H.timed_steps

@@ -16,7 +16,16 @@
    a device id no backend has, which is what pins the ARITHMETIC exactly: a re-recorded pool
    replaces its own bytes rather than adding to them, a free never lowers the mark, and a rebase
    lands on the live bytes and not on zero. The claims are all backend-uniform (byte counts are
-   compared with each other, never against a fixed number), so the golden is portable. *)
+   compared with each other, never against a fixed number), so the golden is portable.
+
+   The "a rebase lands on the live bytes" claims carry a second load, which is why they appear on
+   both halves and after a sequence that includes an in-place growth and a free. The census keeps
+   the live byte total INCREMENTALLY — folding the table on each allocation would make allocation
+   quadratic in the live pools, and would serialize the [Multidev] worker domains behind a growing
+   scan — while [snapshot] still FOLDS the table for its working/constant split. [reset_peak] copies
+   the incremental total and [live_pool_bytes] sums the fold, so asserting the two equal is the
+   drift check between them: it is what lets the fast path be maintained separately from the table
+   without the two silently disagreeing. *)
 
 open Base
 open Ocannl
@@ -71,7 +80,9 @@ let () =
     (live after < peak after);
 
   (* And the bracket itself: the next window starts from what is live now, which is what stops a
-     cell's memory column from inheriting the high water of the search that preceded it. *)
+     cell's memory column from inheriting the high water of the search that preceded it. Also the
+     drift check over a REAL allocation sequence — a compile, a run and a release — between the
+     incrementally maintained total the rebase copies and the fold [live_pool_bytes] sums. *)
   AC.reset_peak ();
   let rebased = AC.snapshot () in
   p "a rebase puts the mark back on the live bytes" (peak rebased = live rebased);
@@ -120,4 +131,10 @@ let () =
   AC.reset_peak ();
   let rebased = AC.snapshot () in
   p "a rebase after them lands on the live bytes, not on the high water"
-    (peak rebased = live rebased && peak rebased < peak higher)
+    (peak rebased = live rebased && peak rebased < peak higher);
+
+  (* The drift check, over the whole sequence above: a record, an in-place growth, and two frees.
+     The growth is the mutation it exists for — the incremental total has to subtract the entry it
+     replaces, and adding the whole new size instead leaves the total 1000 high here, where the fold
+     is right and the equality fails. *)
+  p "the incrementally kept total agrees with the fold over the table" (peak rebased = live rebased)
