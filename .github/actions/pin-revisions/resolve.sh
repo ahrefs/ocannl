@@ -133,6 +133,16 @@ paste -d' ' "$work_dir/labels" "$work_dir/hashes" | sed 's/^/  /'
 echo "solution-digest=$solution_digest" >>"$GITHUB_OUTPUT"
 
 # `--cli=2.1` fixes the table format this parser consumes across opam upgrades.
+# Deliberately NOT advanced along with opam: the declared version is a FLOOR on
+# the binary (`--cli=2.6` exits 2 on an opam 2.5.0), so raising it drops every
+# contributor and runner below that version, while the pin's whole job is to
+# freeze a parser's input against the layout changes a newer CLI opts into.
+# Nothing here wants a flag introduced after 2.1, and opam's storage
+# improvements are in the repository backend rather than gated by the CLI
+# version, so the freeze costs no speed. opam 2.6.0 accepts 2.0 through 2.5 and
+# deprecates none of them (2.6 is not a CLI version at all). Move it only to
+# reach a later flag, to the lowest version carrying it, re-checking the three
+# parse sites above and the fixtures in tools/test-pin-revisions.sh.
 # Local project pins are reported as git+file:// URLs; omit them because the
 # source checkout already selects their revision and a dependency cache must
 # not miss on every project commit. Every remote git pin, whether explicit or

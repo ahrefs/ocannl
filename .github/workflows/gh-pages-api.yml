@@ -44,9 +44,9 @@ jobs:
           ocaml-compiler: ${{ env.OCAML_COMPILER }}
 
       # Archives from opam.ocaml.org's checksum-keyed cache before upstream, as
-      # ci.yml does and explains: the git opam-repository declares no mirror,
-      # and an on-demand GitLab archive can stop matching its pinned checksum
-      # (gh-ocannl-889).
+      # ci.yml does and explains: an on-demand GitLab archive can stop matching
+      # its pinned checksum (gh-ocannl-889), and the mirror that covers it is a
+      # setup-ocaml repository default rather than a guarantee of ours.
       - name: Route archive fetches through the opam.ocaml.org cache
         run: opam option 'archive-mirrors="https://opam.ocaml.org/cache"'
 

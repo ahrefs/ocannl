@@ -247,20 +247,26 @@ jobs:
         ocaml-compiler: ${{ matrix.ocaml-compiler }}
         allow-prerelease-opam: false
     # Fetch package archives from opam.ocaml.org's cache before their upstream
-    # URLs. setup-ocaml points opam at the GIT opam-repository, whose `repo` file
-    # declares no `archive-mirrors` (the HTTP mirror's does), so a bare switch
-    # here downloads every archive from wherever its package's `url` says --
-    # and GitLab generates tag archives on demand with no byte-stability
+    # URLs. GitLab generates tag archives on demand with no byte-stability
     # promise, so an opam-repository checksum can stop matching what
     # gitlab.inria.fr serves until someone re-pins it (menhir, gh-ocannl-889;
-    # exit 40 on every leg that had to fetch). The cache is keyed by checksum,
-    # holds every archive opam-repository's CI has verified, and is what the
-    # default HTTP repository consults first; a package absent from it still
-    # falls through to upstream. The set form (not `+=`) keeps a restored opam
-    # root from accumulating duplicates. `shell: bash` because the value is
-    # opam syntax and must reach opam with its double quotes intact, which
-    # PowerShell's native-command quoting does not guarantee; either bash on the
-    # Windows image serves for one opam invocation.
+    # exit 40 on every leg that had to fetch). The cache is keyed by checksum
+    # and holds every archive opam-repository's CI has verified; a package
+    # absent from it still falls through to upstream.
+    #
+    # This used to compensate for a setup-ocaml default: it pointed opam at the
+    # GIT opam-repository, whose `repo` file declares no `archive-mirrors`,
+    # while the HTTP repository's does. setup-ocaml v3.9.0 (2026-09-17, its
+    # opam 2.6 release) changed that default to the HTTP repository, so the
+    # mirror now arrives with the repository and this line is redundant with
+    # today's default. It stays because the guard is one opam call and the
+    # default it guards against is not ours: a repository choice that has now
+    # moved once would otherwise take the checksum protection with it silently,
+    # and gh-ocannl-889 is what that costs. The set form (not `+=`) keeps a
+    # restored opam root from accumulating duplicates. `shell: bash` because
+    # the value is opam syntax and must reach opam with its double quotes
+    # intact, which PowerShell's native-command quoting does not guarantee;
+    # either bash on the Windows image serves for one opam invocation.
     - name: Route archive fetches through the opam.ocaml.org cache
       shell: bash
       run: opam option 'archive-mirrors="https://opam.ocaml.org/cache"'

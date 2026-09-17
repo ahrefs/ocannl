@@ -1664,6 +1664,53 @@ that they earn a lookup rather than always-loaded space.
   serialized lock chain (what remains of it) against an otherwise idle runner after every file
   target finished, and the quotes are for PowerShell on the Windows leg, which splats unquoted
   `@` tokens to nothing.
+- **Nothing in this repository pins the opam version.** `ocaml/setup-ocaml@v3` is a moving tag,
+  and the action resolves the latest STABLE opam release under its own upper bound at run time, so
+  a release reaches CI as soon as that bound admits it and no commit here marks the change: opam
+  2.6.0 arrived on its release day, 2026-09-17, in the first run after setup-ocaml v3.9.0 raised
+  the bound from `<2.6.0` to `<2.7.0`. Which version a run actually used is in the `Installing
+  opam` group of its setup-ocaml step — read it before blaming a change of ours for a CI-wide
+  shift in timing or behaviour. Two consequences to expect at every bump. setup-ocaml's OWN cache
+  key carries the opam version AND the repository URLs, so the first run after one rebuilds the
+  root and bare switch: for 2.6.0 (which also moved setup-ocaml's default repository from the git
+  opam-repository to HTTP `opam.ocaml.org`) the step went from ~70s to 278-347s once on
+  ubuntu/macOS, then settled at 45-50s — below the old warm number, the HTTP repository's
+  `index.tar.gz` being what opam 2.6 reads in memory instead of extracting. That is worth much
+  more on Windows than the CI numbers show: measured on a native-Windows fleet box with scratch
+  roots and the same HTTP repository, `opam init --bare` went 135.6s -> 12.6s and `opam update`
+  102.8s -> 1.2s between 2.5.2 and 2.6.0, and the root went from 46 MB in 19,123 files to 25 MB in
+  15 — an extracted tree of small files is exactly what NTFS charges for. CI's Windows cold switch
+  hides it because that step is dominated by building the compiler: it stayed in its historical
+  615-902s band (770s and 710s on the 2.6.0 dispatch). A cold switch is a bill paid once per bump,
+  not a regression to chase. Nor does the win show up warm: the Windows setup-ocaml step went
+  77s/111s under 2.5.2 to 89s/87s under 2.6.0, and the pin and resolve steps moved by seconds in
+  both directions. Do not expect opam upgrades to move CI's Windows wall-clock at all — that job
+  is priced by its cache restore, its dune build and, when cold, by building the compiler. Two of
+  those are where to look first. The restore is the big one and it is not free even when it works:
+  restoring the 893 MB Windows entry costs ~530s on every job, which is what it buys off the 6-10
+  min dependency install. It also has a transition-time failure mode worth recognising rather than
+  re-diagnosing (gh-ocannl-1014): on the first Windows run after an opam or setup-ocaml change,
+  setup-ocaml materialises a fresh internal cygwin, our cache then tries to overlay symlinks onto
+  those now-regular CA files, `tar` exits 2, and the ~9min extraction ends with the key reported
+  as MISSED — while the job still passes on the half-extracted tree, with `Install opam
+  dependencies (Windows)` returning in 3s, which is NOT evidence of a warm switch. The next
+  ordinary run restores the same entry, same key, same bytes, cleanly.
+  Our own `_opam` key deliberately does NOT carry the opam version: a switch built by 2.5.2
+  restores and runs green under 2.6.0 (the 2026-09-17 master runs hit that cache), so keying on it
+  would buy nothing and cost a ~180-package rebuild per platform at every bump.
+- Where this repository PARSES opam's output, it freezes the format with `--cli=2.1` rather than
+  tracking opam — `.github/actions/pin-revisions/resolve.sh` does it for both `opam show --raw
+  --sort` and `opam pin list`. Re-verified against a real opam 2.6.0 (2026-09-17): the definition
+  blocks still open with `opam-version:` at column 0 and the pin table still carries its
+  `git+<url>#<ref>` column, and the whole action ran to matching digests. Do not advance that
+  pin with opam: a declared CLI version is a floor on the binary (`--cli=2.6` exits 2 on an opam
+  2.5.0), it buys no speed (the storage work is in the repository backend, and `opam list -A`
+  times the same either way), and it would opt the parser into the layout changes it exists to
+  sit out — opam 2.6.0 accepts 2.0 through 2.5, deprecating none, and 2.6 is not a CLI version. opam 2.6's one
+  script-visible break, safe mode no longer forcing debug level 0, does not reach it either:
+  opam's debug output goes to stderr and the script reads stdout. Upgrading a DEV machine is the
+  part that is not free — opam 2.6 migrates the root from the 2.2 layout irreversibly, and an
+  older opam binary cannot read a migrated root afterwards.
 - Both `ci.yml` and `gh-pages-api.yml` cache the built local dependency switch `_opam`, where the
   ~180 compiled packages live; setup-ocaml separately caches opam's root and bare compiler switch.
   Their entries stay separate because the CI matrix and the fixed docs runner have different key
@@ -1708,9 +1755,13 @@ that they earn a lookup rather than always-loaded space.
   older switch. And both install non-Windows depexts unconditionally after restore, because those
   are system packages absent from `_opam` (gh-ocannl-809).
 - Every workflow that installs dependencies sets opam's global `archive-mirrors` to
-  `https://opam.ocaml.org/cache` right after setup-ocaml, before any pin or install. setup-ocaml
-  points opam at the GIT opam-repository, whose `repo` file declares no mirror (the HTTP one at
-  opam.ocaml.org does), so a bare CI switch downloads every archive from its package's upstream
+  `https://opam.ocaml.org/cache` right after setup-ocaml, before any pin or install. It was
+  written against a setup-ocaml default that has since moved: through v3.8.0 the action pointed
+  opam at the GIT opam-repository, whose `repo` file declares no mirror, while the HTTP repository
+  at opam.ocaml.org declares one; v3.9.0 (2026-09-17) made the HTTP repository the default, so the
+  mirror now arrives with the repository and the line is redundant with today's default. It stays
+  as an explicit guard — one opam call, and the protection is then ours rather than a default's.
+  Without a mirror a bare CI switch downloads every archive from its package's upstream
   `url` — and GitLab builds tag archives on demand with no byte-stability promise, so a pinned
   checksum can stop matching what `gitlab.inria.fr` serves until opam-repository re-pins it
   (menhir 20260209, gh-ocannl-889: `Bad checksum`, exit 40, on every leg that had to fetch, while
