@@ -199,6 +199,21 @@ The codebase is organized to separate user-facing recipes from framework interna
 
 NOTE TO POTENTIAL CONTRIBUTORS: while I ~~am~~ might be slowly starting to work with PRs in separate branches rather than just a stream of commits on the main branch, design migrations will be broken into small PRs to avoid main (master) branch staleness; and many changes will still be commits on the main branch. We allow for failing tests on the main branch, although going forward this would hopefully be happening less. Tagged i.e. released versions of the code are guaranteed to work as well as the given stage of the project permitted, the policy is that all tests must pass for releases with the backend `cc` and must have the behavior expected of a backend with all other backends. We try to minimize discrepancy across backends but prefer more stringent tests even if some backends only pass them "in spirit" rather than with exact expectations of the `cc` backend.
 
+**API stability**: none is promised. OCANNL moves fast, and exported surface that is dead,
+superseded, or in the way is removed outright in whatever release finds it — version-number depth
+tracks release *scope*, not semver (see [Milestones](#milestones)), so a third-component release
+retires API too; `CHANGES.md`'s 1.0.2 `### Changed` section is the going rate. There are no
+deprecation cycles and no `[@@deprecated]` shims. Removal is the default, not a rule: source-level
+surface is deliberately retained where keeping it costs nothing or serves something other than
+caller convenience — the backward-compatibility module re-exports in `lib/ocannl.ml`,
+`Parallel.handle.sync_params_to_host` (kept after gh-ocannl-333 removed the copying it used to do),
+`Operation.centered_uniform1_param_init` and its default (kept to reproduce pre-0.9 random
+streams). What is kept as a matter of course is a compatibility alias for a *string a user types* —
+a backend name, a configuration key — because a renamed key in a stale `ocannl_config` draws a
+warning and then falls back to the default, silently changing what the run does, where a renamed
+OCaml name fails at your compiler with the old name in the message. If you need stability, pin a
+released version.
+
 **Developing on macOS**: the `cc` backend links each compiled kernel as a fresh shared
 library and `dlopen`s it, and macOS scans every freshly created binary the first time it is
 mapped for execution (Gatekeeper/XProtect). On a default setup this dominates test and
