@@ -154,7 +154,15 @@ val roofline_seconds :
     × fan-in factor with the modeled arithmetic, and {!Low_level.recompute_pricer} feeds them to the
     flip-candidate ordering (gh-ocannl-555), the memory-budget planner and, through
     [fc_recompute_cost], footprint-scoped materialization (gh-ocannl-616). Priced per Part 1: a
-    hoisted scope body under a [Where] counts as what executes. *)
+    hoisted scope body under a [Where] counts as what executes.
+
+    The exactness contract: a count is exact for ONE instantiation of the computation as it stands
+    under a generic point read, after the passes the emitted code receives. What a particular reader
+    does on top of that — folding arithmetic once a constant stands for an index, collapsing a loop
+    over a sub-image, or sharing one instantiation between sibling statements through
+    [hoist_cross_statement_cse] — only LOWERS what executes, so a modeled count times a read
+    multiplicity is an upper bound in the same sense the traced proxy's is; the reader's side of the
+    account stays outside these queries, as the issue scoped it. *)
 
 type recompute = {
   rc_flops : int;  (** Operations of one instantiation. *)
@@ -167,25 +175,36 @@ type recompute = {
 }
 [@@deriving sexp_of]
 
-val template_cost : self:Tnode.t -> ?at:Indexing.axis_index array -> Low_level.t -> recompute
+val template_cost :
+  ?static_indices:Indexing.static_symbol list ->
+  self:Tnode.t ->
+  ?at:Indexing.axis_index array ->
+  Low_level.t ->
+  recompute
 (** One stored template body ([optimize_ctx.computations]' [(at, body)] entry) as one instantiation:
     sibling setters (a shared-loop template) are dropped as instantiation drops them, the loops
     binding a bare iterator position of [at] — the ones the ordinary point read substitutes away —
     collapse to a single iteration, so a reduction loop is the only trip count left, and the passes
-    the emitted code receives after virtualization run over the result — the simplifier and the
-    scalar CSE, which a stored template predates: a single-assignment scope under a [Where] arm
-    collapses into the arm's expression (conditional, hence a bound), two alpha-equivalent scope
-    bodies execute once. What the query cannot see is the substitution a reader applies, and where
-    it changes the count the result is only a bound ([rc_approx]): a symbol occurring inside an
-    affine position of [at], or repeated across bare positions (a diagonal producer's consistency
-    guards), may be bound or left free with its loop range-guarded or guarded, depending on the
-    reader's index; a packed-uniform producer ([Set_from_vec]) inlines as the lane-extract form
-    rather than its vector store; and a scope local read without its definition in the priced code
-    stands for hoisted work the price cannot see. A consumer instantiating over a sub-image that
-    collapses a further loop (gh-ocannl-616) applies that correction itself. Reads of other virtual
-    nodes count as reads here; {!recompute_cost} expands them. *)
+    the emitted code receives after virtualization run over the result, in their order and under the
+    routine's [static_indices] interval environment — the simplifier, the one-hot reduction rewrite
+    and the scalar CSE, which a stored template predates: a single-assignment scope under a [Where]
+    arm collapses into the arm's expression (conditional, hence a bound), a dense one-hot reduction
+    becomes a dynamic gather, two alpha-equivalent scope bodies execute once. What the query cannot
+    see is the substitution a reader applies, and where it changes the count the result is only a
+    bound ([rc_approx]): a symbol occurring inside an affine position of [at], or repeated across
+    bare positions (a diagonal producer's consistency guards), may be bound or left free with its
+    loop range-guarded or guarded, depending on the reader's index; a packed-uniform producer
+    ([Set_from_vec]) inlines as the lane-extract form rather than its vector store; and a scope
+    local read without its definition in the priced code stands for hoisted work the price cannot
+    see. A consumer instantiating over a sub-image that collapses a further loop (gh-ocannl-616)
+    applies that correction itself. Reads of other virtual nodes count as reads here;
+    {!recompute_cost} expands them. *)
 
-val recompute_cost : Low_level.optimize_ctx -> Tnode.t -> recompute option
+val recompute_cost :
+  ?static_indices:Indexing.static_symbol list ->
+  Low_level.optimize_ctx ->
+  Tnode.t ->
+  recompute option
 (** The transitive cost of one inlined computation of the node, summed over its stored templates
     (every component of a multi-setter node replays at a read site, guarded — and its body hoists,
     so all execute): each template's {!template_cost}, plus, for every read of a producer with a
@@ -198,13 +217,15 @@ val recompute_cost : Low_level.optimize_ctx -> Tnode.t -> recompute option
 val producer_cost : self:Tnode.t -> Low_level.t -> recompute option
 (** The per-cell cost of a materialized producer in optimized code — the twin of {!recompute_cost}
     for a node a heuristic cap materialized, whose computation was never stored: per setter
-    statement of the node, {!analyze} over the code pruned to that setter (the loops enclosing it
-    survive, everything else is dropped) divided (rounding up) by the distinct cells it writes,
-    summed over the setters — re-inlining a multi-setter node replays every component at a read
+    statement of the node, one instantiation — the code pruned to that setter with the loops its
+    index vector mentions collapsed to one iteration, so an operand read at a fixed position counts
+    for every cell's computation (an aggregate footprint averaged over the written cells would lose
+    it) — summed over the setters: re-inlining a multi-setter node replays every component at a read
     site, guards selecting the value while the hoisted bodies all execute. Its virtual producers are
-    already inlined there, so the count is transitive by construction; a packed-uniform setter, or a
-    scope local whose hoisted definition the pruning left behind, makes it a bound, as in
-    {!template_cost}. [None] when the code sets the node nowhere. *)
+    already inlined there, so the count is transitive by construction. A bound rather than exact
+    when the write is not injective over the collapsed loops, for a packed-uniform setter, or when
+    the pruning left a scope local's hoisted definition behind, as in {!template_cost}. [None] when
+    the code sets the node nowhere. *)
 
 module Calibration : sig
   (** The calibration TSV schema (config [autotune_calibration_file], gh-ocannl-491 task 4) and the

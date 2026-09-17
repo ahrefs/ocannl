@@ -572,6 +572,19 @@ type recompute = { rc_flops : int; rc_bytes : int; rc_approx : bool; rc_opaque :
    on the reader's index, which the query cannot see, so such a template prices with its loops
    intact and only as a bound. Collapsing a bound loop to a single iteration keeps the symbol bound,
    so [affine_accesses] still interprets every map, and gives the per-instantiation trip count. *)
+let collapse_loops ~(bound : Idx.symbol -> bool) (code : Low_level.t) : Low_level.t =
+  let rec go (c : Low_level.t) : Low_level.t =
+    match c with
+    | Low_level.For_loop ({ index; from_; body; _ } as f) when bound index ->
+        For_loop { f with to_ = from_; body = go body }
+    | For_loop ({ body; _ } as f) -> For_loop { f with body = go body }
+    | Scan_loop ({ body; _ } as sc) -> Scan_loop { sc with body = go body }
+    | Seq (a, b) -> Seq (go a, go b)
+    | If ({ body; _ } as i) -> If { i with body = go body }
+    | c -> c
+  in
+  go code
+
 let collapse_bound_loops ~(at : Idx.axis_index array) (code : Low_level.t) : Low_level.t * bool =
   let bound s =
     Array.exists at ~f:(function Idx.Iterator s' -> Idx.equal_symbol s s' | _ -> false)
@@ -589,17 +602,7 @@ let collapse_bound_loops ~(at : Idx.axis_index array) (code : Low_level.t) : Low
       | Idx.Iterator s -> repeated s
       | Idx.Fixed_idx _ -> false)
   in
-  let rec go (c : Low_level.t) : Low_level.t =
-    match c with
-    | Low_level.For_loop ({ index; from_; body; _ } as f) when bound index ->
-        For_loop { f with to_ = from_; body = go body }
-    | For_loop ({ body; _ } as f) -> For_loop { f with body = go body }
-    | Scan_loop ({ body; _ } as sc) -> Scan_loop { sc with body = go body }
-    | Seq (a, b) -> Seq (go a, go b)
-    | If ({ body; _ } as i) -> If { i with body = go body }
-    | c -> c
-  in
-  (go code, substitution_dependent)
+  (collapse_loops ~bound code, substitution_dependent)
 
 (* Keep only [self]'s own setters — or, with [~nth], only its [nth] setter statement in program
    order: a shared-loop template carries sibling setters that instantiation filters out, and a
@@ -714,16 +717,23 @@ let reads_undefined_local (code : Low_level.t) =
    arm collapses into the arm's expression, where it IS conditional; identities vanish) and the
    scalar CSE ([eliminate_common_subexpressions]: two alpha-equivalent scope bodies, a consumer
    computing [x + x] of a virtual [x], execute once) — a stored template predates both. *)
-let instantiation ~self ?at body =
+let instantiation ~static_indices ~self ?at body =
   let body, _ = prune_to_setters ~self body in
   let body, dependent =
     match at with None -> (body, false) | Some at -> collapse_bound_loops ~at body
   in
-  let body = Low_level.eliminate_common_subexpressions (Low_level.simplify_llc [] body) in
+  (* The post-virtualization pipeline of [specialize_proc], in its order: simplify under the
+     routine's interval environment, the one-hot reduction rewrite (a dense one-hot reduction
+     inlines as an O(1) dynamic gather), then the scalar CSE. *)
+  let body =
+    Low_level.eliminate_common_subexpressions
+      (Low_level.rewrite_one_hot_reductions ~static_indices
+         (Low_level.simplify_llc static_indices body))
+  in
   (body, dependent || has_set_from_vec body || reads_undefined_local body)
 
-let template_cost ~(self : Tn.t) ?at (body : Low_level.t) : recompute =
-  let body, bound_only = instantiation ~self ?at body in
+let template_cost ?(static_indices = []) ~(self : Tn.t) ?at (body : Low_level.t) : recompute =
+  let body, bound_only = instantiation ~static_indices ~self ?at body in
   let r = cost_of_self ~self (analyze body) in
   { r with rc_approx = r.rc_approx || bound_only }
 
@@ -737,7 +747,8 @@ let add_recompute a b =
 
 let zero_recompute = { rc_flops = 0; rc_bytes = 0; rc_approx = false; rc_opaque = false }
 
-let recompute_cost (ctx : Low_level.optimize_ctx) : Tn.t -> recompute option =
+let recompute_cost ?(static_indices = []) (ctx : Low_level.optimize_ctx) : Tn.t -> recompute option
+    =
   let memo = Hashtbl.create (module Tn) in
   let rec cost ~visiting (tn : Tn.t) : recompute option =
     match Hashtbl.find memo tn with
@@ -750,7 +761,7 @@ let recompute_cost (ctx : Low_level.optimize_ctx) : Tn.t -> recompute option =
               let visiting = Set.add visiting tn in
               Some
                 (List.fold comps ~init:zero_recompute ~f:(fun acc (at, body) ->
-                     let body, bound_only = instantiation ~self:tn ?at body in
+                     let body, bound_only = instantiation ~static_indices ~self:tn ?at body in
                      let s = analyze body in
                      let own = cost_of_self ~self:tn s in
                      let own = { own with rc_approx = own.rc_approx || bound_only } in
@@ -802,27 +813,41 @@ let recompute_cost (ctx : Low_level.optimize_ctx) : Tn.t -> recompute option =
   in
   fun tn -> cost ~visiting:(Set.empty (module Tn)) tn
 
-(* One setter statement of [self], priced per cell it writes. *)
+(* One setter statement of [self], priced as one instantiation: the loops its index vector mentions
+   — the ones that enumerate the cells it writes — collapse to a single iteration, and what remains
+   (reduction loops, the operands' reads at ONE cell) is one cell's work, read directly rather than
+   averaged over the cells the nest writes (an operand read at a fixed position is read by every
+   cell's computation, which an aggregate footprint divided by the cell count loses). Exact only
+   when the write is injective (one cell per iteration of the collapsed loops,
+   [Affine.fiber_cardinality] = 1); a whole-node write ([Zero_out]) is free. *)
 let setter_cost ~(self : Tn.t) (pruned : Low_level.t) : recompute =
-  let s = analyze pruned in
-  let width = Ops.prec_in_bytes (Lazy.force self.Tn.storage_prec) in
-  let cells =
-    List.Assoc.find s.per_node self ~equal:Tn.equal
-    |> Option.value_map ~default:0 ~f:(fun fp -> fp.fp_write_bytes / max 1 width)
+  let write =
+    List.find (Low_level.affine_accesses pruned) ~f:(fun a ->
+        a.Affine.a_write && Tn.equal a.a_tn self)
   in
-  let cells = if cells = 0 then Tn.num_elems self else cells in
-  let cells = max 1 cells in
-  let others = List.filter s.per_node ~f:(fun (tn, _) -> not (Tn.equal tn self)) in
-  let ceil_div n = (n + cells - 1) / cells in
-  {
-    rc_flops = ceil_div s.flops;
-    rc_bytes = ceil_div (List.sum (module Int) others ~f:(fun (_, fp) -> fp.fp_read_bytes));
-    rc_approx =
-      s.flops_approx
-      || List.exists others ~f:(fun (_, fp) -> fp.fp_approx)
-      || has_set_from_vec pruned || reads_undefined_local pruned;
-    rc_opaque = s.opaque;
-  }
+  match write with
+  | None | Some { Affine.a_whole = true; _ } -> zero_recompute
+  | Some w ->
+      let bound s = Array.exists w.a_map ~f:(Idx.axis_index_mentions_symbol s) in
+      let one = collapse_loops ~bound pruned in
+      (* Injective over the loops the map mentions — the ones that enumerate cells; a loop the map
+         does not mention is a reduction replayed inside one instantiation, and its repeated write
+         of the same cell is that instantiation's accumulation, not a second cell. *)
+      let injective =
+        (not w.a_dynamic) && (not w.a_vec_last)
+        &&
+        let domain =
+          List.filter_map w.a_loops ~f:(fun (s, (lo, hi)) ->
+              Option.some_if (bound s) (s, hi - lo + 1))
+        in
+        match Affine.fiber_cardinality ~domain w.a_map with `Exact 1 -> true | _ -> false
+      in
+      let r = cost_of_self ~self (analyze one) in
+      {
+        r with
+        rc_approx =
+          r.rc_approx || (not injective) || has_set_from_vec pruned || reads_undefined_local pruned;
+      }
 
 (* Re-inlining a node with several setters (a block/concat node, one range-guarded component per
    setter) replays EVERY component at each read site — the guards select the value, the hoisted
@@ -837,9 +862,9 @@ let producer_cost ~(self : Tn.t) (code : Low_level.t) : recompute option =
              let pruned, _ = prune_to_setters ~nth:k ~self code in
              add_recompute acc (setter_cost ~self pruned)))
 
-let modeled_recompute_flops (ctx : Low_level.optimize_ctx) (llc : Low_level.t) :
+let modeled_recompute_flops (ctx : Low_level.optimize_ctx) ~static_indices (llc : Low_level.t) :
     Tn.t -> [ `Materialize | `Inline ] -> int option =
-  let by_template = recompute_cost ctx in
+  let by_template = recompute_cost ~static_indices ctx in
   fun tn flip ->
     let r =
       match flip with `Materialize -> by_template tn | `Inline -> producer_cost ~self:tn llc

@@ -11,9 +11,10 @@
    opposite orders — a three-operand sum (fan-in 3, two ops) against a four-deep unary chain (fan-in
    1, four ops). - [producer_cost] on the setter nest of a node the fan-in cap materialized (the
    [`Inline] flip), where no template was stored: the chain prefix's adds per cell, and the sum over
-   the setters of a multi-component node. - The bounds (review round 1): an affine index position
-   whose binding depends on the reader, a packed-uniform producer, and the scalar CSE a stored
-   template has yet to receive. *)
+   the setters of a multi-component node. - The bounds (review rounds 1-3): an affine or repeated
+   index position whose binding depends on the reader, a packed-uniform producer, a scope local
+   without its hoisted definition, the simplifier and CSE a stored template has yet to receive, a
+   broadcast operand read by every cell. *)
 
 open Base
 open Ocannl.Operation.DSL_modules
@@ -328,4 +329,17 @@ let () =
       (loop_n i1 2 (set b [| iter i1 |] (add (LL.Get_local hid) (get q [| iter i1 |]))))
   in
   p "a setter reading a hoisted local it does not define prices as a bound"
-    (match CM.producer_cost ~self:b hoisted with Some r -> r.CM.rc_approx | None -> false)
+    (match CM.producer_cost ~self:b hoisted with Some r -> r.CM.rc_approx | None -> false);
+  (* Review round 3: an operand read at a fixed position is read by every cell's computation — B[i]
+     = P[0] + Q[0] costs one add and both operands' cells per read, which an aggregate footprint
+     averaged over the written cells would report as a fraction. *)
+  let broadcast =
+    loop_n i1 4 (set b [| iter i1 |] (add (get pp [| fixed 0 |]) (get q [| fixed 0 |])))
+  in
+  (match CM.producer_cost ~self:b broadcast with
+  | None -> Stdio.printf "  none\n"
+  | Some r -> show "broadcast operands, per read" r);
+  p "broadcast operands: one add and both cells per read, exact"
+    (match CM.producer_cost ~self:b broadcast with
+    | Some r -> r.CM.rc_flops = 1 && r.CM.rc_bytes = 8 && not r.CM.rc_approx
+    | None -> false)

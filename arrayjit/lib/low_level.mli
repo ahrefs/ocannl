@@ -900,13 +900,24 @@ type flip_candidate = {
     placement. *)
 
 val recompute_pricer :
-  (optimize_ctx -> t -> Tnode.t -> [ `Materialize | `Inline ] -> int option) ref
+  (optimize_ctx ->
+  static_indices:Indexing.static_symbol list ->
+  t ->
+  Tnode.t ->
+  [ `Materialize | `Inline ] ->
+  int option)
+  ref
 (** gh-ocannl-637: the seam through which the cost model prices {!flip_candidate}s — given the
-    lineage and the optimized code, the exact per-instantiation op count of a candidate's recompute
-    ([None] when the model's count is only a bound, or the node has no priceable computation).
-    [Cost_model] registers it at module initialization; the default prices nothing, so every
-    candidate carries the traced proxy. A pricer must be pure: [specialize_proc] consults it once
-    per candidate of a compile. *)
+    lineage, the routine's static indices (the interval environment the emitted code was simplified
+    under) and the optimized code, the exact per-instantiation op count of a candidate's recompute
+    ([None] when the model's count is only a bound, or the node has no priceable computation). Exact
+    for ONE instantiation as the stored computation stands under a generic point read: what a
+    particular reader folds away (a constant substituted for an index, a sub-image collapsing a
+    loop) or shares (sibling readers whose instantiations [hoist_cross_statement_cse] merges) only
+    lowers what executes, so the product with the per-cell read multiplicity is a bound in the same
+    sense the traced proxy's is. [Cost_model] registers it at module initialization; the default
+    prices nothing, so every candidate carries the traced proxy. A pricer must be pure:
+    [specialize_proc] consults it once per candidate of a compile. *)
 
 type pipelined_tile = { pt_depth : int; pt_rotor : Indexing.symbol } [@@deriving sexp_of]
 (** gh-487: a software-pipelined (double-buffered) staged tile — codegen allocates [pt_depth]

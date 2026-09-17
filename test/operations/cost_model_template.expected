@@ -43,3 +43,5 @@ producer: a node the code never sets has no producer cost: true
   two-component producer, per read             flops=2 bytes=8 exact
 two-component producer: components sum (2 ops, 8 bytes per read): true
 a setter reading a hoisted local it does not define prices as a bound: true
+  broadcast operands, per read                 flops=1 bytes=8 exact
+broadcast operands: one add and both cells per read, exact: true

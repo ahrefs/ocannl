@@ -7309,8 +7309,14 @@ let hosted_constant_inits_to_link_time (plc : Tn.Placements.t) (traced_store : t
    pricer at initialization; until then (or in a program linking no cost model) the traced proxy
    prices every candidate. *)
 let recompute_pricer :
-    (optimize_ctx -> t -> Tnode.t -> [ `Materialize | `Inline ] -> int option) ref =
-  ref (fun _ctx _llc _tn _flip -> None)
+    (optimize_ctx ->
+    static_indices:Indexing.static_symbol list ->
+    t ->
+    Tnode.t ->
+    [ `Materialize | `Inline ] ->
+    int option)
+    ref =
+  ref (fun _ctx ~static_indices:_ _llc _tn _flip -> None)
 
 let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : optimized =
   let static_indices = an.an_static_indices in
@@ -7347,7 +7353,7 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
      ([default_to_most_local]) has not yet rewritten the cap provenances. *)
   let flip_candidates =
     let plc = input_ctx.placements in
-    let price = !recompute_pricer input_ctx llc in
+    let price = !recompute_pricer input_ctx ~static_indices llc in
     Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:traced acc ->
         let one_hot = traced.prefers_virtual_one_hot && not traced.has_non_one_hot_setter in
         if
