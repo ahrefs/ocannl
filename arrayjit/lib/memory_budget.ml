@@ -220,14 +220,17 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
       List.iter ranked ~f:(fun (fc, solo) ->
           let tn = fc.LL.fc_tn and cost = fc.LL.fc_recompute_cost in
           let dec = (tn, direction_of fc) in
-          let taken =
-            List.exists (List.map !speculative ~f:fst @ !accepted) ~f:(fun (t, _) -> Tn.equal t tn)
-          in
+          let taken = List.exists !accepted ~f:(fun (t, _) -> Tn.equal t tn) in
           if taken then
-            logf "skip %s (%s): the node's other direction is accepted or held" (Tn.debug_name tn)
+            logf "skip %s (%s): the node's other direction is accepted" (Tn.debug_name tn)
               (direction_name (snd dec))
           else if not (met !cur) then begin
-            let held = !speculative in
+            (* A HELD sibling direction of this node is not final: the two are one node's exclusive
+               readings, so the candidate is scored without it, and if the candidate does not pay
+               either, whichever of the two has the larger solo relief stays held. *)
+            let held_sibling, held =
+              List.partition_tf !speculative ~f:(fun ((t, _), _) -> Tn.equal t tn)
+            in
             let cand_alone = dec :: !accepted in
             let fp_alone = score cand_alone in
             let cand_joint, fp_joint =
@@ -270,10 +273,26 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
                  dropping it would discard a flip that may still be half of a later pair. *)
               (speculative := match verdict with `Neutral -> held | _ -> []);
               cur := fp)
-            else (
-              logf "hold %s: no marginal relief yet (solo was %d); speculative" (Tn.debug_name tn)
-                solo;
-              speculative := (dec, cost) :: !speculative)
+            else
+              let solo_of ((t, d), _) =
+                List.find_map scored ~f:(fun ((fc' : LL.flip_candidate), s) ->
+                    Option.some_if (Tn.equal fc'.LL.fc_tn t && Poly.equal (direction_of fc') d) s)
+                |> Option.value ~default:0
+              in
+              match held_sibling with
+              | [ sib ] when solo_of sib >= solo ->
+                  logf "hold %s (%s): no marginal relief yet (solo %d); its held %s direction stays"
+                    (Tn.debug_name tn)
+                    (direction_name (snd dec))
+                    solo
+                    (direction_name (snd (fst sib)));
+                  speculative := sib :: held
+              | _ ->
+                  logf "hold %s (%s): no marginal relief yet (solo was %d); speculative"
+                    (Tn.debug_name tn)
+                    (direction_name (snd dec))
+                    solo;
+                  speculative := (dec, cost) :: held
           end);
       (match !speculative with
       | [] -> ()

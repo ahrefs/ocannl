@@ -304,9 +304,12 @@ files.
   (review round 1 found the reader-side placement diverging from the cap's reading there) — and
   ahead of the reader's statement for an inherited template, the recompute-at-read reading
   inlining gives it, which is why an inherited template reading the reader's own target declines
-  (`template_leaves`), why a reader placed before the producer's last write is ineligible, and
-  why the producer's last statement must write nothing else (a shared loop rewriting an input
-  after the producer would precede the prologue; round 2).
+  (`template_leaves`), why a reader placed before the producer's last write is ineligible, and why nothing but the producer may be written between its first and last write statements (a
+  shared loop rewriting an input after the producer, a rewrite between two accumulating
+  components: the prologue replays every component after the last write; rounds 2-3). A
+  consumption-time rejection after a scratch was minted is harmless: cleanup's scope-target
+  retraction turns the stranded prologue into an n-cell gather of the buffer
+  (`case_rejection_after_footprint`).
   Four more things that are easy to get wrong: (a) the decision is per ROUTINE, not a placement — a
   consumer routine footprint-scopes a node an earlier routine left `Virtual` on the template's own
   reduction extent (`template_facts`, over a SNAPSHOT of the traced store: reading the template

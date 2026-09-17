@@ -2779,6 +2779,13 @@ let model_default ?name ?report ctx comp bindings =
         match
           let surface = placement_surface ?name ctx comp bindings in
           let cands = List.take surface.ps_candidates placement_budget in
+          (* The cut keeps a node's records together (gh-ocannl-616): a sibling of a taken record
+             joins it, so a level always decides the whole node. *)
+          let cands =
+            List.filter surface.ps_candidates ~f:(fun (o : LL.flip_candidate) ->
+                List.exists cands ~f:(fun (c : LL.flip_candidate) ->
+                    Ir.Tnode.equal c.LL.fc_tn o.LL.fc_tn))
+          in
           if List.is_empty cands then None
           else
             let flip_name (fc : LL.flip_candidate) =
@@ -2854,8 +2861,10 @@ let model_default ?name ?report ctx comp bindings =
                        level) contribute zero. *)
                     let tn = fc.LL.fc_tn in
                     let default_materialized =
+                      (* Read off the WHOLE surface, not the cut: the baseline placement is a
+                         property of the node, and a cut could drop its [`Materialize] record. *)
                       not
-                        (List.exists cands ~f:(fun (o : LL.flip_candidate) ->
+                        (List.exists surface.ps_candidates ~f:(fun (o : LL.flip_candidate) ->
                              Ir.Tnode.equal o.LL.fc_tn tn && Poly.equal o.LL.fc_flip `Materialize))
                     in
                     match (commitment, fc.LL.fc_flip) with

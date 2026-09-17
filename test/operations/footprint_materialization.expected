@@ -73,3 +73,10 @@ inherited-operand: executed values are the diagonal over the operand: true
 shared-producer: the reduction cap materializes the producer: true
 shared-producer: no scratch: true
 shared-producer: executed values read the input as the producer did: true
+between-components: the reduction cap materializes the producer: true
+between-components: no scratch: true
+between-components: executed values fold the old input, then the new: true
+rejection: the mismatched read commits the producer materialized: true
+rejection: the stranded prologue is a gather of the buffer (three buffer reads, no scope): true
+rejection: executed values are the column and the untouched zeros: true
+rejection: footprint and materialized arms agree: true

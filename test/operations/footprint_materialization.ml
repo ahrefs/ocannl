@@ -542,6 +542,91 @@ let case_producer_statement_writes_input () =
   p "shared-producer: executed values read the input as the producer did"
     (same got [ expected; doubled ])
 
+(* === A template input rewritten between two accumulating components of the producer: the
+   materialized execution folds the old input into the first component and the new one into the
+   second, which a prologue replaying both after the last write cannot reproduce — ineligible, the
+   cap materializes. === *)
+let case_input_written_between_setters () =
+  let a = mk "ab2" and x = mk ~dims:[| n |] "xb2" and o = mk ~dims:[| n |] "ob2" in
+  materialize o;
+  materialize x;
+  let accumulate () =
+    let i = sym () and j = sym () and k = sym () in
+    loop i
+      (loop j
+         (loop_n k kk
+            (set a
+               [| iter i; iter j |]
+               (add
+                  (get a [| iter i; iter j |])
+                  (add (get x [| iter i |]) (add (tag i j) (mul (c 100.) (embed k))))))))
+  in
+  let t = sym () and i' = sym () in
+  let rewrite = loop t (set x [| iter t |] (mul (c 2.) (get x [| iter t |]))) in
+  let consumer = loop i' (set o [| iter i' |] (get a [| iter i'; iter i' |])) in
+  let llc = seq (zero a) (seq (accumulate ()) (seq rewrite (seq (accumulate ()) consumer))) in
+  let opt = optimize ~name:"fp_between_components" llc in
+  p "between-components: the reduction cap materializes the producer"
+    (is_cap opt a Tn.Inline_reduction_cap);
+  p_empty "between-components: no scratch" ~over:(Hashtbl.keys opt.LL.traced_store) (scratches opt);
+  let xs = Array.init n ~f:(fun i -> Float.of_int (1 + i)) in
+  let expected =
+    Array.init n ~f:(fun i -> reduced_plus (1 + i) i i +. reduced_plus (2 * (1 + i)) i i)
+  in
+  let doubled = Array.map xs ~f:(fun v -> 2. *. v) in
+  let got =
+    execute ~name:"fp_between_components" opt ~seed:[ (x, xs); (o, blank n) ] ~read:[ o; x ]
+  in
+  p "between-components: executed values fold the old input, then the new"
+    (same got [ expected; doubled ])
+
+(* === A consumption-time rejection AFTER a scratch was minted: a fixed-index producer read once at
+   the matching column (footprinted) and once at another (rejected, [Non_virtual 13]). The node
+   materializes; the stranded prologue is a scope over a now-materialized node, which cleanup's
+   scope-target retraction (gh-ocannl-681) rewrites into a read of the buffer — an [n]-cell gather,
+   not a recomputation — so the outcome is the materialized placement plus that copy. === *)
+let case_rejection_after_footprint () =
+  let a = mk "arj" and o1 = mk ~dims:[| n |] "orj1" and o2 = mk ~dims:[| n |] "orj2" in
+  materialize o1;
+  materialize o2;
+  let i = sym () and k = sym () and i1 = sym () and i2 = sym () in
+  let producer =
+    seq (zero a)
+      (loop i
+         (loop_n k kk
+            (set a
+               [| iter i; fixed 0 |]
+               (add (get a [| iter i; fixed 0 |]) (add (tick i) (mul (c 100.) (embed k)))))))
+  in
+  let llc =
+    seq producer
+      (seq
+         (loop i1 (set o1 [| iter i1 |] (get a [| iter i1; fixed 0 |])))
+         (loop i2 (set o2 [| iter i2 |] (get a [| iter i2; fixed 1 |]))))
+  in
+  let opt = optimize ~name:"fp_rejection" llc in
+  p "rejection: the mismatched read commits the producer materialized"
+    (known_non_virtual opt a && not (known_virtual opt a));
+  (* Three buffer reads of the producer: its own accumulating self-read, the gather, the rejected
+     read; and no scope anywhere — the prologue's was retracted. *)
+  p "rejection: the stranded prologue is a gather of the buffer (three buffer reads, no scope)"
+    (List.equal (List.equal Int.equal) (scratch_dims opt) [ [ n ] ]
+    && count_get opt a = 3
+    && count_scopes opt.LL.llc = 0);
+  let column =
+    Array.init n ~f:(fun i -> Float.of_int ((kk * (1 + i)) + (100 * (kk * (kk - 1) / 2))))
+  in
+  let seed = [ (o1, blank n); (o2, blank n) ] and read = [ o1; o2 ] in
+  let got = execute ~name:"fp_rejection" opt ~seed ~read in
+  let mat =
+    execute ~name:"fp_rejection_mat"
+      (optimize ~materialized:[ a ] ~name:"fp_rejection" llc)
+      ~seed ~read
+  in
+  p "rejection: executed values are the column and the untouched zeros"
+    (same got [ column; Array.create ~len:n 0. ]);
+  p "rejection: footprint and materialized arms agree" (same got mat)
+
 let () =
   case_diagonal_reduction ();
   case_visit_cap ();
@@ -559,4 +644,6 @@ let () =
   case_inherited_recurrence ();
   case_inherited_operand ();
   case_producer_statement_writes_input ();
+  case_input_written_between_setters ();
+  case_rejection_after_footprint ();
   Stdio.printf "%!"
