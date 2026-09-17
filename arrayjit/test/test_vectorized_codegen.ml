@@ -44,7 +44,7 @@ let make_on_device id label =
       ~padding:(lazy None)
       ()
   in
-  Tn.update_memory_mode tn Tn.On_device "998:test-setup";
+  Tn.update_memory_mode tn Tn.On_device (Site "998:test-setup");
   tn
 
 let vec_loop ~axis tn =
@@ -95,7 +95,7 @@ let () =
         ~padding:(lazy None)
         ()
     in
-    Tn.update_memory_mode tn Tn.Local "997:test-setup";
+    Tn.update_memory_mode tn Tn.Local (Site "997:test-setup");
     tn
   in
   let out3 = make_on_device 4 "out3" in
@@ -194,7 +194,7 @@ let () =
         ~padding:(lazy None)
         ()
     in
-    Tn.update_memory_mode tn Tn.On_device "996:test-setup";
+    Tn.update_memory_mode tn Tn.On_device (Site "996:test-setup");
     tn
   in
   let da = make_sized 14 "da" [| 72 |] in

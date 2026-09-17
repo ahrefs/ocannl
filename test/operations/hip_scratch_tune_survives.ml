@@ -69,7 +69,7 @@ let () =
   Train.set_materialized src.Tensor.value;
   let%op mid = src *. 2.0 in
   (* The whole point of the fixture: an intermediate the routine keeps in its own frame. *)
-  Tn.update_memory_mode mid.Tensor.value Tn.Local "991:test-setup";
+  Tn.update_memory_mode mid.Tensor.value Tn.Local (Site "991:test-setup");
   (* Read column-major while [mid] was written row-major, so the array survives to the frame. *)
   let%op col_sums = mid ++ "ij => j" in
   Train.set_materialized col_sums.Tensor.value;

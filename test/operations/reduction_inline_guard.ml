@@ -98,7 +98,7 @@ let run ~kdim =
   let a = mk ~dims:[| n; kdim |] "a" in
   let prod = mk ~dims:[| n |] "prod" in
   let out = mk ~dims:[| n |] "out" in
-  Tn.update_memory_mode out Tn.On_device "99:test-setup";
+  Tn.update_memory_mode out Tn.On_device (Site "99:test-setup");
   let reduce = reduce_asgn ~dst:prod ~src:a (reduce_proj i k ~n ~kdim) in
   let copy = copy_asgn ~dst:out ~src:prod (copy_proj t ~n) in
   let asgns = Asgns.Block_comment ("reduction_inline_guard", Asgns.Seq (reduce, copy)) in

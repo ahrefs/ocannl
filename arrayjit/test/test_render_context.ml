@@ -13,7 +13,7 @@ let output = node "reentrant_output"
 let source = node "reentrant_source"
 
 let () =
-  Tn.update_memory_mode scratch Tn.Local "769:test-setup";
+  Tn.update_memory_mode scratch Tn.Local (Site "769:test-setup");
   B.materialize output;
   B.materialize source
 

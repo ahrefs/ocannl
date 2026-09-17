@@ -47,7 +47,7 @@ let group_reduce ~(v : Tn.t) ~(s : Tn.t) (opt : LL.optimized) : LL.optimized =
       ~padding:(lazy None)
       ()
   in
-  Tn.update_memory_mode partial Tn.Local "991:test-setup";
+  Tn.update_memory_mode partial Tn.Local (Site "991:test-setup");
   (* Register the tile in the traced store so [compile_proc]'s local-declaration pass sees it. *)
   ignore (LL.get_node opt.traced_store partial : LL.traced_array);
   let it = L.iter in

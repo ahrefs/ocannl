@@ -28,7 +28,7 @@ let () =
         ~padding:(lazy None)
         ()
     in
-    Tn.update_memory_mode tn Tn.Local "999:test-setup";
+    Tn.update_memory_mode tn Tn.Local (Site "999:test-setup");
     tn
   in
   let tn_a = make_local 1 "acc_a" in

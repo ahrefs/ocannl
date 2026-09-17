@@ -10,45 +10,33 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 (* export OCANNL_LOG_LEVEL_LOW_LEVEL=9 to enable debugging into the log_files/ directory. *)
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_LOW_LEVEL"]
 
-(** {2 Placement provenances this module records}
+(** {2 The placement provenances this module reads back}
 
-    Only the tags some code reads back need a name here (gh-ocannl-609); the one-site ones are
-    spelled at their site, where the surrounding comment is the explanation. See
-    {!Ir.Tnode.provenance} for the spelling convention. *)
+    Every tag some code interrogates is a {!Ir.Tnode.provenance} CONSTRUCTOR, so the interrogation
+    is an exhaustive match: adding a cap breaks the two functions below until its policy is stated.
+    The one-site tags this module also mints stay [Site] literals at their raise sites, where the
+    surrounding comment is the explanation. *)
 
-(** The heuristic caps of {!decide_placements}: policy decisions, so the decision-vector search may
-    flip them back to inlining ([`Inline]) -- unlike a legality rejection or an observability
-    pessimization, which it must not. *)
-let prov_visit_cap = "1:visit-cap"
-
-let prov_inline_reduction_cap = "39:inline-reduction-cap"
-let prov_inline_fanin_cap = "41:inline-fanin-cap"
-
-let is_cap_provenance (p : Tn.provenance) =
-  List.mem
-    [ prov_visit_cap; prov_inline_reduction_cap; prov_inline_fanin_cap ]
-    p ~equal:String.equal
+(** Whether the tag is one of {!decide_placements}' three heuristic caps: a policy prior, which the
+    decision-vector search may flip back to inlining ([`Inline]) -- unlike a legality rejection or
+    an observability pessimization, which it must not. *)
+let is_cap_provenance : Tn.provenance -> bool = function
+  | Visit_cap | Inline_reduction_cap | Inline_fanin_cap -> true
+  | Read_before_write | Scope_local | Surviving_read | Site _ | Refined _ -> false
 
 (** The configuration key whose cap forced this decision, when a cap did. Raising it is the
-    alternative remedy to materializing the node: it keeps the node virtual and pays recompute
+    alternative remedy to materializing the node: it can leave the node virtual and pay recompute
     instead of memory, which a diagnostic advising materialization cannot otherwise mention
-    (gh-ocannl-609). *)
-let cap_provenance_setting (p : Tn.provenance) =
-  if String.equal p prov_visit_cap then Some "virtualize_max_visits"
-  else if String.equal p prov_inline_reduction_cap then Some "virtualize_max_inline_reduction"
-  else if String.equal p prov_inline_fanin_cap then Some "virtualize_max_inline_fanin"
-  else None
+    (gh-ocannl-609).
 
-(** An uncovered read (read before write within the routine): the node is an input, so it owns a
-    device buffer whose prior contents are preserved. Minted from two sites -- the lenient verdict
-    of {!decide_placements} and the strict re-classification in [reconcile_traced_store]. *)
-let prov_read_before_write = "36:read-before-write"
-
-(** Cleanup's commitment points: a scope local the inliner minted, and a read that survived inlining
-    and therefore needs a materialized target. *)
-let prov_scope_local = "16:scope-local"
-
-let prov_surviving_read = "17:surviving-read"
+    Total rather than defaulting through a wildcard: a cap with no settable key would be a
+    contradiction -- a policy prior nobody can change is not a prior -- so a new cap has to say its
+    key here. *)
+let cap_provenance_setting : Tn.provenance -> string option = function
+  | Visit_cap -> Some "virtualize_max_visits"
+  | Inline_reduction_cap -> Some "virtualize_max_inline_reduction"
+  | Inline_fanin_cap -> Some "virtualize_max_inline_fanin"
+  | Read_before_write | Scope_local | Surviving_read | Site _ | Refined _ -> None
 
 module Scope_id = struct
   type t = { tn : Tn.t; scope_id : int } [@@deriving sexp_of, equal, hash, compare]
@@ -884,7 +872,8 @@ let copy_optimize_ctx { computations; placements; alias_candidates; inline_prefe
     [optimize_ctx] directly: the analyze-only entry points, and hand-built {!optimize} calls in
     tests — for which no context-level form can work, since the [?prelowered] seam replaces the
     context's lineage state with the optimized record's own [optimize_ctx]. *)
-let decide_materialized ?(provenance = "31:decide-materialized") (optim_ctx : optimize_ctx) tns =
+let decide_materialized ?(provenance = Tn.Site "31:decide-materialized") (optim_ctx : optimize_ctx)
+    tns =
   List.iter tns ~f:(fun tn ->
       match Tnode.Placements.get optim_ctx.placements tn with
       | None | Some ((Tnode.Never_virtual | Tnode.On_device), _) ->
@@ -1438,7 +1427,7 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
 
 let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_scan ~enclosing
     traced static_indices top_llc =
-  let exception Non_virtual of Tn.provenance in
+  let exception Non_virtual of string in
   let static_indices =
     Set.of_list (module Indexing.Symbol)
     @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
@@ -1662,7 +1651,7 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_
     in
     Hashtbl.set optim_ctx.computations ~key:traced.tn
       ~data:((!at_idcs, top_llc) :: current_computations)
-  with Non_virtual i -> Tn.Placements.update optim_ctx.placements traced.tn Never_virtual i
+  with Non_virtual i -> Tn.Placements.update optim_ctx.placements traced.tn Never_virtual (Site i)
 
 (* Whether the computation stored for [self] would replay a merge-buffer read when inlined: a
    shared-loop stored body carries SIBLING setters that [inline_computation] filters out, so only
@@ -1704,7 +1693,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
     (optim_ctx : optimize_ctx) (traced : traced_array)
     (static_indices : Indexing.static_symbol list) (call_args : Indexing.axis_index array) :
     t option =
-  let exception Non_virtual of Tn.provenance in
+  let exception Non_virtual of string in
   let static_indices =
     Set.of_list (module Indexing.Symbol)
     @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
@@ -1841,7 +1830,8 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
                 let block_sc = Binop (Ops.Div, (flat_sc, iprec), (lanes_sc, iprec)) in
                 Get_dynamic { tn = ctr; idcs = idcs'; dyn_axis; dyn_value = (block_sc, iprec) }
           in
-          Tn.Placements.update optim_ctx.placements ctr Never_virtual "146:lane-extract-counter";
+          Tn.Placements.update optim_ctx.placements ctr Never_virtual
+            (Site "146:lane-extract-counter");
           ctr_read
       | _ ->
           (* Argument is not a plain counter read (e.g. the counter chain was materialized away or
@@ -2270,7 +2260,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
               writes the node's buffer, so the read cannot fall back to a materialized access. \
               Mark %{Tn.debug_name traced.tn} as materialized (e.g. via Train.set_materialized) in \
               the routine that computes it."]);
-    Tn.Placements.update optim_ctx.placements traced.tn Never_virtual i;
+    Tn.Placements.update optim_ctx.placements traced.tn Never_virtual (Site i);
     None
 
 let optimize_integer_pow = ref true
@@ -2650,7 +2640,7 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
             (Utils.User_error
                (virtualized_gather_table_rejection tn
                   ~decided_by:"declared virtual, or committed virtual before this read"));
-        Tn.Placements.update plc tn Never_virtual prov_surviving_read;
+        Tn.Placements.update plc tn Never_virtual Surviving_read;
         Get_dynamic { tn; idcs; dyn_axis; dyn_value = (loop v, prec) }
     | Local_scope opts ->
         Local_scope
@@ -2891,7 +2881,7 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
         let carried =
           List.map carried ~f:(fun c ->
               assert (not @@ Tn.Placements.known_non_virtual plc c.prev.tn);
-              Tn.Placements.update plc c.prev.tn Virtual prov_scope_local;
+              Tn.Placements.update plc c.prev.tn Virtual Scope_local;
               { c with init = loop_scalar ~balanced ~env_dom c.init })
         in
         let env_dom = Set.add env_dom index in
@@ -2903,7 +2893,7 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
              during tracing/virtualization, so it has no materialized reader left -- its only uses
              were inlined into [Local_scope] bodies. We therefore commit it to [Virtual] and drop
              this now-dead initializer. Provenance 151 = dropped from the [Zero_out] cleanup arm. *)
-          Tn.Placements.update plc tn Virtual "151:cleanup-dropped-zero-out";
+          Tn.Placements.update plc tn Virtual (Site "151:cleanup-dropped-zero-out");
           None)
         else Some llc
     | Set { tn; idcs; llsc; debug } ->
@@ -2911,7 +2901,7 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
           (* #296: same default-to-[Virtual] policy as the [Zero_out] arm above -- an undecided
              tnode has no materialized reader left after inlining, so commit it [Virtual] and drop
              the store. Provenance 152 = dropped from the [Set]/[Set_from_vec] cleanup arms. *)
-          Tn.Placements.update plc tn Virtual "152:cleanup-dropped-set";
+          Tn.Placements.update plc tn Virtual (Site "152:cleanup-dropped-set");
           None)
         else (
           assert (
@@ -2923,7 +2913,7 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
              scalar-inlined was already forced [Never_virtual] (via [Non_virtual 140] in
              [inline_computation]), so reaching here means the node stayed virtual-eligible and its
              vector store is dead -- drop it. Provenance 152. *)
-          Tn.Placements.update plc tn Virtual "152:cleanup-dropped-set";
+          Tn.Placements.update plc tn Virtual (Site "152:cleanup-dropped-set");
           None)
         else (
           assert (
@@ -2940,7 +2930,7 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
                }))
     | Set_local (id, llsc) ->
         assert (not @@ Tn.Placements.known_non_virtual plc id.tn);
-        Tn.Placements.update plc id.tn Virtual prov_scope_local;
+        Tn.Placements.update plc id.tn Virtual Scope_local;
         Some (Set_local (id, loop_scalar ~balanced ~env_dom llsc))
     | Declare_local _ -> Some llc
     | Comment _ -> Some llc
@@ -2951,7 +2941,7 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
     (* gh-466: defensive — [Set_dynamic] is produced after cleanup; a scatter target is always
        materialized. Keep, recursing like the [Set] arm. *)
     | Set_dynamic { tn; idcs; dyn_axis; dyn_value = v, prec; llsc; debug } ->
-        Tn.Placements.update plc tn Never_virtual prov_surviving_read;
+        Tn.Placements.update plc tn Never_virtual Surviving_read;
         Some
           (Set_dynamic
              {
@@ -2978,7 +2968,7 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
            surviving reads to [Never_virtual] (a node read here but only written under a virtualized
            setter is decided right now), so this update is the commitment point, not a redundant
            re-assertion. Mirrors the [Get_dynamic] arm just below. Provenance 17. *)
-        Tn.Placements.update plc a Never_virtual prov_surviving_read;
+        Tn.Placements.update plc a Never_virtual Surviving_read;
         assert (
           Array.for_all indices ~f:(function Indexing.Iterator s -> Set.mem env_dom s | _ -> true));
         llsc
@@ -2993,7 +2983,7 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
             (Utils.User_error
                (virtualized_gather_table_rejection tn
                   ~decided_by:"its setter was inlined into the read sites and dropped as dead"));
-        Tn.Placements.update plc tn Never_virtual prov_surviving_read;
+        Tn.Placements.update plc tn Never_virtual Surviving_read;
         Get_dynamic { tn; idcs; dyn_axis; dyn_value = (loop v, prec) }
     | Local_scope { id; body; orig_indices; mint } ->
         assert (
@@ -3010,11 +3000,11 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
           Get (id.tn, orig_indices))
         else
           let body = Option.value_exn ~here:[%here] @@ loop_proc ~balanced ~env_dom body in
-          Tn.Placements.update plc id.tn Virtual "18:inlined-scope";
+          Tn.Placements.update plc id.tn Virtual (Site "18:inlined-scope");
           Local_scope { id; orig_indices; body; mint }
     | Get_local id ->
         assert (not @@ Tn.Placements.known_non_virtual plc id.tn);
-        Tn.Placements.update plc id.tn Virtual prov_scope_local;
+        Tn.Placements.update plc id.tn Virtual Scope_local;
         llsc
     | Get_merge_buffer (_, _) -> llsc
     | Embed_index (Fixed_idx _ | Sub_axis) -> llsc
@@ -4781,7 +4771,7 @@ let validate_parallel plc (llc : t) : unit =
       let missing = List.filter active ~f:(fun p -> not (List.mem covered p ~equal:pair_equal)) in
       if
         (not (List.is_empty missing))
-        && Tn.Placements.is_materialized_force plc tn "160:parallel-validation"
+        && Tn.Placements.is_materialized_force plc tn (Site "160:parallel-validation")
       then
         invalid_arg
           ("Low_level.validate_parallel: write to materialized node " ^ Tn.debug_name tn
@@ -4822,7 +4812,7 @@ let validate_parallel plc (llc : t) : unit =
       | Zero_out tn ->
           if
             (not (List.is_empty active))
-            && Tn.Placements.is_materialized_force plc tn "160:parallel-validation"
+            && Tn.Placements.is_materialized_force plc tn (Site "160:parallel-validation")
           then
             invalid_arg
               ("Low_level.validate_parallel: Zero_out of materialized node " ^ Tn.debug_name tn
@@ -5047,7 +5037,9 @@ let input_and_output_nodes optimized =
   ( Hashtbl.fold optimized.traced_store
       ~init:(Set.empty (module Tn), Set.empty (module Tn))
       ~f:(fun ~key ~data (inputs, outputs) ->
-        let materialized = Tn.Placements.is_materialized_force plc key "50:routine-interface" in
+        let materialized =
+          Tn.Placements.is_materialized_force plc key (Site "50:routine-interface")
+        in
         let inputs =
           if
             materialized
@@ -6710,7 +6702,7 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
       if
         virtualize_settings.inline_scalar_constexprs && traced.is_scalar_constexpr
         && not (Tn.Placements.known_non_virtual plc tn)
-      then Tn.Placements.update plc tn Virtual "40:scalar-constexpr";
+      then Tn.Placements.update plc tn Virtual (Site "40:scalar-constexpr");
       (* Recompute-cost guard: inlining a computation replays its reduction loops (loops enclosing a
          setter without appearing in its indices) at every read site, and the cost multiplies
          through chains of virtual consumers -- reads of the consumers replay the producer's
@@ -6723,7 +6715,7 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
         && traced.read_by_other
         && Option.is_none (Tn.Placements.get plc tn)
         && not cap_exempt
-      then Tn.Placements.update plc tn Never_virtual prov_inline_reduction_cap;
+      then Tn.Placements.update plc tn Never_virtual Inline_reduction_cap;
       let skip_simple =
         virtualize_settings.inline_simple_computations && (not traced.is_complex)
         && not (Tn.Placements.known_non_virtual plc tn)
@@ -6735,7 +6727,7 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
         && Option.is_none (Tn.Placements.get plc tn)
         && ((Lazy.force read_multiplicity) tn > max_visits || not (Lazy.force covered))
         && not cap_exempt
-      then Tn.Placements.update plc tn Never_virtual prov_visit_cap;
+      then Tn.Placements.update plc tn Never_virtual Visit_cap;
       if (not traced.zeroed_out) && not traced.has_assignment then (
         (* The tensor node is read-only/recurrent for this computation, but maybe computed or
            specified as virtual by another routine (in this compilation lineage). However, if the
@@ -6743,7 +6735,7 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
            tensor node. *)
         traced.read_only <- true;
         if Tn.Placements.mode_is_unspecified plc tn then
-          Tn.Placements.update plc tn On_device "37:read-only-input"
+          Tn.Placements.update plc tn On_device (Site "37:read-only-input")
         else if Tn.Placements.known_not_materialized plc tn then (
           if Tn.Placements.known_non_virtual plc tn then
             raise
@@ -6753,13 +6745,13 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
                     before the first routine using it gets compiled; another routine re-uses that \
                     computation. Debug: %{Tn.Placements.debug plc tn}"]))
         else if Tn.Placements.known_non_virtual plc tn then
-          Tn.Placements.update plc tn On_device "35:read-only-shared");
+          Tn.Placements.update plc tn On_device (Site "35:read-only-shared"));
       (* We allow sharing virtual nodes across routines. A node with an uncovered read (read before
          write within this routine — the tracer's [Recurrent]) must own a device buffer whose prior
          contents are preserved: it is an input of the routine. *)
       if (not (Tn.Placements.known_virtual plc tn)) && not (Lazy.force covered) then (
         traced.read_before_write <- true;
-        Tn.Placements.update plc tn On_device prov_read_before_write));
+        Tn.Placements.update plc tn On_device Read_before_write));
   (* Transitive inline-fanin guard (gh-573): the per-node caps above cannot see chains. A running
      sum such as a transformer's residual stream has per-cell read multiplicity within the visit cap
      (its consumers' copy-position reads are read-modify-write-exempt) and no reduction loops, yet
@@ -6897,7 +6889,7 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
                   && traced.has_assignment && traced.read_by_other
                   && Option.is_none (Tn.Placements.get plc tn)
                   && not (cap_exempt traced)
-                then Tn.Placements.update plc tn Never_virtual prov_inline_fanin_cap;
+                then Tn.Placements.update plc tn Never_virtual Inline_fanin_cap;
                 s
           in
           Hashtbl.set memo ~key:tn ~data:s;
@@ -7172,7 +7164,7 @@ let reconcile_traced_store (plc : Tn.Placements.t) (traced_store : traced_store)
             | Some (Never_virtual, p) when is_cap_provenance p -> Hash_set.add cap_inline_flips tn
             | _ -> ());
             traced.read_before_write <- true;
-            Tn.Placements.update plc tn On_device prov_read_before_write);
+            Tn.Placements.update plc tn On_device Read_before_write);
   (* A node mentioned ONLY in dead code still needs a registry entry (its identifier renders, so a
      parameter must declare it and the prune must not drop it) but no interface flags: it neither
      reads nor writes at runtime, and advertising either would create phantom dependencies for
@@ -7356,8 +7348,7 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
                36] (gh-618 round 4): the promotion is the interface consequence of the cap's own
                materialization, not a legality/intent decision, so the [`Inline] flip stays
                searchable — a virtual reading has no interface to classify. *)
-            | Some (On_device, p)
-              when String.equal p prov_read_before_write && Hash_set.mem cap_inline_flips tn ->
+            | Some (On_device, Read_before_write) when Hash_set.mem cap_inline_flips tn ->
                 Some `Inline
             | _ -> None
           in

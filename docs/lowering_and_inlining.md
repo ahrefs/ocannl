@@ -307,9 +307,11 @@ falls back to materialization via `Non_virtual 13` if a particular site cannot b
 
 When validation fails, `check_and_store_virtual` (or `inline_computation`) raises `Non_virtual i`,
 and the handler commits the tensor to `Never_virtual i` (the provenance `i` records *why*). Since
-gh-ocannl-609 a provenance is a string spelled `"<code>:<reason>"` (see `Tnode.provenance`), so the
-tag is self-describing wherever it is printed; the code is the integer the provenance used to be,
-kept so older references still resolve:
+gh-ocannl-609 a provenance is a tag spelled `"<code>:<reason>"` (see `Tnode.provenance`), so it is
+self-describing wherever it is printed; the code is the integer the provenance used to be, kept so
+older references still resolve. A tag no code reads back — every one in this table — is a
+`Site "..."`; the handful that other code interrogates are constructors instead, so the
+interrogation is an exhaustive match:
 
 - `4:lhs-idcs-differ` — Inconsistent index patterns between accesses.
 - `5:index-not-groundable` — Symbol coverage/groundability failure (a non-static symbol is neither
@@ -496,15 +498,23 @@ The optimization process works closely with OCANNL's memory mode system:
   calls; CPU access is on-demand via context-mediated device-to-host transfers (no host copy on
   the node, after gh-ocannl-333).
 
-The optimizer uses provenance tracking (the `Tnode.provenance` string in memory mode updates) to
-explain memory mode decisions and to debug conflicts between them. A tag is spelled
-`"<code>:<reason>"`, and tags COMPOSE when a decision refines an earlier one: resolving a
-`Never_virtual` request into a concrete placement records
-`"39:inline-reduction-cap -> 432:is-local-materialized-query"` — the policy that forced
-materialization, then the query that defaulted it. The cleanup-phase provenances
-(`151:cleanup-dropped-zero-out` / `152:cleanup-dropped-set` for default-to-Virtual,
-`17:surviving-read` for finalize-to-Never_virtual, `16:scope-local` / `18:inlined-scope` for local
-scopes) are the most commonly observed in practice.
+The optimizer uses provenance tracking (the `Tnode.provenance` in memory mode updates) to explain
+memory mode decisions and to debug conflicts between them. The type has two kinds of tag, and the
+split is a layering decision: a decision that only ever gets *recorded* is a `Site "<code>:<reason>"`
+carrying its own explanation — some sixty of those are minted across nine modules, and a constructor
+apiece would make `Tnode`, which sits at the bottom of the dependency graph, enumerate the vocabulary
+of every module above it — while a tag some other code *reads back* is a constructor
+(`Visit_cap`, `Inline_reduction_cap`, `Inline_fanin_cap`, `Read_before_write`, `Scope_local`,
+`Surviving_read`), so the reading is an exhaustive match rather than a comparison that can silently
+stop matching. `Low_level.is_cap_provenance` and `cap_provenance_setting` are the two such readers.
+
+Tags COMPOSE when a decision refines an earlier one: resolving a `Never_virtual` request into a
+concrete placement records `Refined (Inline_reduction_cap, Site "432:is-local-materialized-query")`,
+rendered `39:inline-reduction-cap -> 432:is-local-materialized-query` — the policy that forced
+materialization, then the query that defaulted it. `Tnode.leading_provenance` walks back to the
+first. The cleanup-phase provenances (`151:cleanup-dropped-zero-out` / `152:cleanup-dropped-set` for
+default-to-Virtual, `Surviving_read` for finalize-to-Never_virtual, `Scope_local` /
+`18:inlined-scope` for local scopes) are the most commonly observed in practice.
 
 ### Recompute-at-read: the semantics of Virtual (gh-617)
 

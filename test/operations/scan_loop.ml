@@ -257,7 +257,7 @@ let () =
       ~read:[ y ]
   in
   p "the scan output was refused as a virtualization candidate with provenance 148"
-    (Option.equal String.equal (rejection_code o mid) (Some "148:scan-recurrence"));
+    (Option.equal Tn.equal_provenance (rejection_code o mid) (Some (Tn.Site "148:scan-recurrence")));
   p "the scan output is decided non-virtual, so the consumer reads its buffer"
     (Tn.Placements.known_non_virtual o.LL.optimize_ctx.placements mid);
   p "the consumer's read of the trajectory survives as a buffer read, not an inlined scope"
@@ -312,7 +312,7 @@ let () =
       ~read:[ y ]
   in
   p "the candidate computed through a scan was refused with provenance 148"
-    (Option.equal String.equal (rejection_code o x) (Some "148:scan-recurrence"));
+    (Option.equal Tn.equal_provenance (rejection_code o x) (Some (Tn.Site "148:scan-recurrence")));
   p "the scan survives as the candidate's materialized producer" (count_stmt ~f:is_scan o.LL.llc = 1);
   p_all2 "the consumer reads each row's total from the buffer" (List.hd_exn got)
     (Array.init rows ~f:(fun r ->

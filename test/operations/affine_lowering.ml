@@ -153,8 +153,8 @@ let run_scatter_then_copy ~materialize_dst =
   let src = mk ~dims:[| 3; 2 |] "src" in
   let dst = mk ~dims:[| 6 |] "dst" in
   let out = mk ~dims:[| 6 |] "out" in
-  Tn.update_memory_mode out Tn.On_device "99:test-setup";
-  if materialize_dst then Tn.update_memory_mode dst Tn.On_device "99:test-setup";
+  Tn.update_memory_mode out Tn.On_device (Site "99:test-setup");
+  if materialize_dst then Tn.update_memory_mode dst Tn.On_device (Site "99:test-setup");
   let scatter = scatter_asgn ~dst ~src (scatter_proj oh wh ~n1:3 ~n2:2 ~c1:2 ~c2:1 ~lhs_dim:6) in
   let copy = copy_asgn ~dst:out ~src:dst (copy_proj t ~n:6) in
   let asgns = Asgns.Seq (scatter, copy) in
@@ -200,8 +200,8 @@ let run_triangular ~materialize_dst =
   let src = mk ~dims:[| 3; 2 |] "tsrc" in
   let dst = mk ~dims:[| 3; 4 |] "tdst" in
   let out = mk ~dims:[| 3; 4 |] "tout" in
-  Tn.update_memory_mode out Tn.On_device "99:test-setup";
-  if materialize_dst then Tn.update_memory_mode dst Tn.On_device "99:test-setup";
+  Tn.update_memory_mode out Tn.On_device (Site "99:test-setup");
+  if materialize_dst then Tn.update_memory_mode dst Tn.On_device (Site "99:test-setup");
   let scatter = scatter_asgn ~dst ~src (tri_scatter_proj s1 s2) in
   let copy = copy_asgn ~dst:out ~src:dst (tri_copy_proj a b) in
   let asgns = Asgns.Seq (scatter, copy) in

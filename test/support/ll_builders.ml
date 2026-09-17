@@ -28,7 +28,7 @@ let node_factory ?(prec = single) ~first_id ~dims () =
     bytes to another node. Both are declared intent, settled before optimization, so neither
     perturbs a structural pin — see {!virtualize} for what "declared intent" reaches. *)
 let materialize tn =
-  Tn.update_memory_mode tn Tn.On_device "99:test-setup";
+  Tn.update_memory_mode tn Tn.On_device (Site "99:test-setup");
   Tn.set_observable tn
 
 (** Declares [tn] virtual — the standing of the scope-local scalars a virtualizer-emitted
@@ -40,7 +40,7 @@ let materialize tn =
     a node the lineage has not decided — which is the whole reason a test can hand [optimize] a node
     that is ALREADY virtual (or already materialized) before the analyses run, and the reason the
     passes read it back as such. *)
-let virtualize tn = Tn.update_memory_mode tn Tn.Virtual "99:test-setup"
+let virtualize tn = Tn.update_memory_mode tn Tn.Virtual (Site "99:test-setup")
 
 (** {1 Index and statement builders} *)
 

@@ -229,7 +229,7 @@ let copy_proj t ~n : Idx.projections =
   }
 
 let exec ~name ~n (llc, dst, src) ~src_vals =
-  Tn.update_memory_mode dst Tn.On_device "99:test-setup";
+  Tn.update_memory_mode dst Tn.On_device (Site "99:test-setup");
   let carrier =
     Asgns.Accum_op
       {

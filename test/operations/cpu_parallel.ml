@@ -188,7 +188,7 @@ let () =
         ()
     in
     Ir.Tnode.Placements.update opt.LL.optimize_ctx.LL.placements scratch Ir.Tnode.Local
-      "999:test-setup";
+      (Site "999:test-setup");
     ignore (LL.get_node opt.LL.traced_store scratch : LL.traced_array);
     let i = Ir.Indexing.get_symbol () and x = Ir.Indexing.get_symbol () in
     let body =

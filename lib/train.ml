@@ -45,7 +45,7 @@ let run ctx routine = ignore (Context.run ctx routine)
    old hosted-array-based save/restore helpers were removed with the hosted memory mode
    (gh-ocannl-333). *)
 
-let set_materialized (a : Tn.t) = Tn.update_memory_mode a On_device "28:set-materialized"
+let set_materialized (a : Tn.t) = Tn.update_memory_mode a On_device (Site "28:set-materialized")
 
 (** Sets the tensor's value as materialized (device-resident, inspectable on demand via the
     context), and returns the tensor's forward code with a label-derived comment. *)
@@ -610,7 +610,7 @@ module Outlier_detector = struct
         z
 end
 
-let set_virtual (a : Tn.t) = Tn.update_memory_mode a Virtual "29:set-virtual"
+let set_virtual (a : Tn.t) = Tn.update_memory_mode a Virtual (Site "29:set-virtual")
 
 (** Materializes every non-literal embedded tensor node of [t] (so its value is inspectable on
     demand via the context). Replaces the old [every_non_literal_on_host] now that there is no

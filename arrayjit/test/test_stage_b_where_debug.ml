@@ -38,7 +38,7 @@ let mk ~id ~label ~dims =
       ~padding:(lazy None)
       ()
   in
-  Tn.update_memory_mode tn Tn.On_device "999:test-setup";
+  Tn.update_memory_mode tn Tn.On_device (Site "999:test-setup");
   tn
 
 (* Run a hand-built [Low_level.t] through the real backend codegen and return the generated C. Pure
