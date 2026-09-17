@@ -6,7 +6,8 @@
    virtualization arms. Hand-built IR reaches it through [Ll_test], a supported input class for the
    analysis probes -- and used to die inside cleanup with
 
-   Tnode.update_memory_mode: update 152 -> 17 for <table> is already virtual
+   Tnode.update_memory_mode: update 152:cleanup-dropped-set -> 17:surviving-read for <table> is
+   already virtual
 
    because [virtual_llc]'s [Get_dynamic] arm asserted, in a comment, that a local table materializes
    without ever deciding it. The table stayed a virtualization candidate, cleanup's [Set] arm

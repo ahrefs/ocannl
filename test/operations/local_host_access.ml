@@ -56,11 +56,39 @@ let build ~materialize_h =
   let ctx = Train.forward_once (Context.cpu ()) y in
   (ctx, h)
 
+(* The cap leg's program (gh-ocannl-609 review round 1): the SAME contraction, read once, so the
+   recompute-cost guard is the only thing standing between it and inlining -- [y = h *. h] above
+   reads [h] twice and would trip the visit cap the moment the reduction cap stops firing, which is
+   exactly the "another cap can still force materialization" the refusal now hedges about. *)
+let build_single_read () =
+  let x = TDSL.ndarray x_values ~label:[ "lha1_x" ] ~output_dims:[ inner ] () in
+  let a =
+    TDSL.ndarray a_values ~label:[ "lha1_a" ] ~input_dims:[ inner ] ~output_dims:[ rows ] ()
+  in
+  let%op h = a * x in
+  let%op y = h *. 2 in
+  let ctx = Train.forward_once (Context.cpu ()) y in
+  (ctx, h)
+
+(* [virtualize_settings] is a process-wide mutable record (the established way to exercise a cap --
+   see [virtual_chain_fanin]); restore it however the body exits. *)
+let with_max_inline_reduction cap f =
+  let s = Ir.Low_level.virtualize_settings in
+  let saved = s.Ir.Low_level.max_inline_reduction in
+  s.Ir.Low_level.max_inline_reduction <- cap;
+  Exn.protect ~f ~finally:(fun () -> s.Ir.Low_level.max_inline_reduction <- saved)
+
 let refused_as_local f =
   try
     ignore (f ());
     false
   with Utils.User_error msg -> String.is_substring msg ~substring:"placed Local"
+
+let refusal_message f =
+  try
+    ignore (f ());
+    None
+  with Utils.User_error msg -> Some msg
 
 let () =
   (* --- The refusal --- *)
@@ -81,6 +109,33 @@ let () =
     (refused_as_local (fun () -> Context.get_value ctx hv [| 0 |]));
   p "set_value on a Local node is refused"
     (refused_as_local (fun () -> Context.set_value ctx hv [| 0 |] 0.));
+
+  (* gh-ocannl-609: WHY the node is Local is the only thing that distinguishes the two remedies.
+     Here the recompute-cost guard forced it, so raising [virtualize_max_inline_reduction] keeps it
+     virtual (and observable) — advice the message cannot give from the placement alone. Both legs
+     read the same message: the tag it carries, and the option that tag admits. *)
+  let msg =
+    Option.value_exn ~here:[%here] (refusal_message (fun () -> Context.get_values ctx hv))
+  in
+  p "the refusal names the decision that placed the node Local"
+    (String.is_substring msg ~substring:"39:inline-reduction-cap");
+  p "the refusal offers raising that cap as the alternative to materializing"
+    (String.is_substring msg ~substring:"virtualize_max_inline_reduction");
+
+  (* And the advice is tested, not merely spelled: the same contraction read once is placed Local at
+     the default cap and stays VIRTUAL with the cap raised above its extent (32). Both arms are the
+     same program, so the only thing that moved is the setting the message names. *)
+  let capped_ctx, capped_h = with_max_inline_reduction 16 build_single_read in
+  p "the cap leg is placed Local at the default cap"
+    (match Ir.Tnode.Placements.get (Context.placements capped_ctx) capped_h.Tensor.value with
+    | Some (Ir.Tnode.Local, prov) ->
+        String.equal (Ir.Tnode.leading_provenance prov) "39:inline-reduction-cap"
+    | _ -> false);
+  let raised_ctx, raised_h = with_max_inline_reduction 64 build_single_read in
+  p "raising the setting the refusal names leaves that node virtual"
+    (match Ir.Tnode.Placements.get (Context.placements raised_ctx) raised_h.Tensor.value with
+    | Some (Ir.Tnode.Virtual, _) -> true
+    | _ -> false);
 
   (* --- Positive control: materialized, the same program reads back what the kernel computed ---
      This is the leg that makes the refusal a placement check rather than a blanket one, and it

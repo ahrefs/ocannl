@@ -3,6 +3,10 @@ get_values on a Local node is refused: true
 set_values on a Local node is refused: true
 get_value on a Local node is refused: true
 set_value on a Local node is refused: true
+the refusal names the decision that placed the node Local: true
+the refusal offers raising that cap as the alternative to materializing: true
+the cap leg is placed Local at the default cap: true
+raising the setting the refusal names leaves that node virtual: true
 materialized: the same node is On_device: true
 materialized: get_values returns the computed contraction: true
 materialized: set_values/get_values round-trip: true

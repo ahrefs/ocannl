@@ -303,27 +303,42 @@ If all checks pass, the computation (with its defining indices) is stored in the
 for later inlining. Over-acceptance here is safe: `inline_computation` re-validates per call site and
 falls back to materialization via `Non_virtual 13` if a particular site cannot be grounded.
 
-#### Non_virtual Exit Codes
+#### Non_virtual Exit Tags
 
 When validation fails, `check_and_store_virtual` (or `inline_computation`) raises `Non_virtual i`,
-and the handler commits the tensor to `Never_virtual i` (the provenance `i` records *why*):
+and the handler commits the tensor to `Never_virtual i` (the provenance `i` records *why*). Since
+gh-ocannl-609 a provenance is a string spelled `"<code>:<reason>"` (see `Tnode.provenance`), so the
+tag is self-describing wherever it is printed; the code is the integer the provenance used to be,
+kept so older references still resolve:
 
-- **4** — Inconsistent index patterns between accesses.
-- **5** — Symbol coverage/groundability failure (a non-static symbol is neither bound from a bare
-  iterator position nor pinned by an injective affine map).
+- `4:lhs-idcs-differ` — Inconsistent index patterns between accesses.
+- `5:index-not-groundable` — Symbol coverage/groundability failure (a non-static symbol is neither
+  bound from a bare iterator position nor pinned by an injective affine map).
 - **6** — Retired (was: non-traced loop encountered; the `trace_it` flag is gone).
-- **7** — Escaping variable in a sibling `Set`/`Set_from_vec` index.
-- **8** — `Staged_compilation` node encountered.
-- **9** — Escaping variable in a sibling `Get`/`Get_merge_buffer` index.
-- **10** — Escaping variable in `Embed_index`.
-- **11** — Tensor already marked non-virtual.
-- **12** — No setter found.
-- **13** — Index mismatch at a particular inlining site (per-site fallback to materialization).
-- **14** — Empty computation list at inline time.
-- **19** — `Declare_local` encountered during virtualization (defensive; see dead-code note).
-- **51** — Multi-symbol affine position in a non-injective LHS map (gh-133 soundness guard).
-- **52** — `Concat` index reached virtualization (should have been eliminated during lowering).
-- **140** — A `Set_from_vec` (vector op) cannot be inlined as a scalar computation.
+- `7:sibling-escaping-write-index` — Escaping variable in a sibling `Set`/`Set_from_vec` index.
+- `8:staged-compilation` — `Staged_compilation` node encountered.
+- `9:sibling-escaping-read-index` — Escaping variable in a sibling `Get`/`Get_merge_buffer` index.
+- `10:escaping-index-symbol` — Escaping variable in `Embed_index`.
+- `11:already-non-virtual` — Tensor already marked non-virtual.
+- `12:no-setter` — No setter found.
+- `13:call-site-index-mismatch` — Index mismatch at a particular inlining site (per-site fallback to
+  materialization).
+- `14:empty-inlined-body` — Empty computation list at inline time.
+- `19:declare-local` — `Declare_local` encountered during virtualization (defensive; see dead-code
+  note).
+- `51:affine-not-injective` — Multi-symbol affine position in a non-injective LHS map (gh-133
+  soundness guard).
+- `52:concat-index` — `Concat` index reached virtualization (should have been eliminated during
+  lowering).
+- `140:vector-setter-unsupported` — A `Set_from_vec` (vector op) cannot be inlined as a scalar
+  computation.
+- `141:workgroup-barrier`, `143:tile-mma`, `144:dynamic-write` — opaque effects no
+  pre-virtualization pass emits (defensive).
+- `142:guarded-computation` — A guard encloses the captured subtree, or sits interior to it.
+- `145:lane-extract-layout`, `146:lane-extract-counter` — the vector-store lane-extract path.
+- `147:enclosing-repetition-loop` — An enclosing loop the captured subtree does not mention in its
+  index map.
+- `148:scan-recurrence` — A `Scan_loop` encloses, or is contained in, the captured computation.
 
 `Non_virtual 19` is a defensive arm. `Declare_local` is produced only by the final
 `hoist_cross_statement_cse` pass, whereas computations are stored during `virtual_llc` (well before
@@ -470,7 +485,7 @@ The optimization process works closely with OCANNL's memory mode system:
   can recompute the value. Observability is inductive: it requires the nodes the computation reads
   to be observable themselves, so a **Virtual** node that (transitively) depends on a **Local**
   node inherits its unobservability.
-- **Never_virtual**: an unresolved request that the tensor must be stored (the provenance int
+- **Never_virtual**: an unresolved request that the tensor must be stored (the provenance tag
   indicates why); resolves to **Local** or **On_device** depending on `stack_threshold_in_bytes`.
 - **Local**: routine-scoped scratch, stored to whatever degree the optimizer decides on (e.g. a
   stack array in the generated function); not materialized (no context buffer), not persisted
@@ -481,9 +496,15 @@ The optimization process works closely with OCANNL's memory mode system:
   calls; CPU access is on-demand via context-mediated device-to-host transfers (no host copy on
   the node, after gh-ocannl-333).
 
-The optimizer uses provenance tracking (the `int` in memory mode updates) to debug conflicts in
-memory mode decisions. The cleanup-phase provenances (151/152 for default-to-Virtual, 17 for
-finalize-to-Never_virtual, 16/18 for local scopes) are the most commonly observed in practice.
+The optimizer uses provenance tracking (the `Tnode.provenance` string in memory mode updates) to
+explain memory mode decisions and to debug conflicts between them. A tag is spelled
+`"<code>:<reason>"`, and tags COMPOSE when a decision refines an earlier one: resolving a
+`Never_virtual` request into a concrete placement records
+`"39:inline-reduction-cap -> 432:is-local-materialized-query"` — the policy that forced
+materialization, then the query that defaulted it. The cleanup-phase provenances
+(`151:cleanup-dropped-zero-out` / `152:cleanup-dropped-set` for default-to-Virtual,
+`17:surviving-read` for finalize-to-Never_virtual, `16:scope-local` / `18:inlined-scope` for local
+scopes) are the most commonly observed in practice.
 
 ### Recompute-at-read: the semantics of Virtual (gh-617)
 

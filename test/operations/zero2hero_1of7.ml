@@ -18,26 +18,26 @@ let%expect_test "Graph drawing recompile" =
   Train.printf_tree ~with_grad:true ~depth:9 ctx f_nd;
   [%expect
     {|
-                                      #15 +_f_nd
-                                       6.00e+1
-                                      #16 grad_+_f_nd unknown
-                                      <not-in-context>
-                                #13 - unknown                                  │#2 5 Const/24
-                                <not-in-context>                               │<not-in-context>
-                                #14 grad_- unknown                             │
-                                <not-in-context>                               │
-                    #11 *. unknown                     │  #4 *. unknown        │
-                    <not-in-context>                   │  <not-in-context>     │
-                    #12 grad_*. unknown                │  #5 grad_*. unknown   │
-                    <not-in-context>                   │  <not-in-context>     │
-    #10 3 Const/24  │       #7 **. unknown             │#3 4 Const/24   │[#0 x]│
-    <not-in-context>│       <not-in-context>           │<not-in-context>│      │
-                    │       #8 grad_**. unknown        │                │      │
-                    │       <not-in-context>           │                │      │
-                    │#0 x non-emb     │#6 2 Const/24   │                │      │
-                    │ 5.00            │<not-in-context>│                │      │
-                    │#1 grad_x unknown│                │                │      │
-                    │<not-in-context> │                │                │      │
+                                                                   #15 +_f_nd
+                                                                    6.00e+1
+                                                                   #16 grad_+_f_nd unknown
+                                                                   <not-in-context>
+                                                      #13 - unknown                                                       │#2 5 Const/24:literal-constant
+                                                      <not-in-context>                                                    │<not-in-context>
+                                                      #14 grad_- unknown                                                  │
+                                                      <not-in-context>                                                    │
+                                  #11 *. unknown                                    │         #4 *. unknown               │
+                                  <not-in-context>                                  │         <not-in-context>            │
+                                  #12 grad_*. unknown                               │         #5 grad_*. unknown          │
+                                  <not-in-context>                                  │         <not-in-context>            │
+    #10 3 Const/24:literal-constant│              #7 **. unknown                    │#3 4 Const/24:literal-constant│[#0 x]│
+    <not-in-context>               │              <not-in-context>                  │<not-in-context>              │      │
+                                   │              #8 grad_**. unknown               │                              │      │
+                                   │              <not-in-context>                  │                              │      │
+                                   │#0 x non-emb     │#6 2 Const/24:literal-constant│                              │      │
+                                   │ 5.00            │<not-in-context>              │                              │      │
+                                   │#1 grad_x unknown│                              │                              │      │
+                                   │<not-in-context> │                              │                              │      │
     |}];
   let%op f = (3 *. ({ x = [ 5 ] } **. 2)) - (4 *. x) + 5 in
   Train.every_non_literal_materialized f;
@@ -48,26 +48,26 @@ let%expect_test "Graph drawing recompile" =
   Train.printf_tree ~with_grad:true ~depth:9 ctx f;
   [%expect
     {|
-                                          #32 +_f
-                                           6.00e+1
-                                          #33 grad_+_f
-                                           1.00
-                                   #30 -                                    │#19 5 Const/24
-                                    5.50e+1                                 │<not-in-context>
-                                   #31 grad_-                               │
-                                    1.00                                    │
-                      #28 *.                       │      #21 *.            │
-                       7.50e+1                     │       2.00e+1          │
-                      #29 grad_*.                  │      #22 grad_*.       │
-                       1.00                        │       -1.00            │
-    #27 3 Const/24  │         #24 **.              │#20 4 Const/24  │[#17 x]│
-    <not-in-context>│          2.50e+1             │<not-in-context>│       │
-                    │         #25 grad_**.         │                │       │
-                    │          3.00                │                │       │
-                    │#17 x non-emb│#23 2 Const/24  │                │       │
-                    │ 5.00        │<not-in-context>│                │       │
-                    │#18 grad_x   │                │                │       │
-                    │ 2.60e+1     │                │                │       │
+                                                                        #32 +_f
+                                                                         6.00e+1
+                                                                        #33 grad_+_f
+                                                                         1.00
+                                                         #30 -                                                           │#19 5 Const/24:literal-constant
+                                                          5.50e+1                                                        │<not-in-context>
+                                                         #31 grad_-                                                      │
+                                                          1.00                                                           │
+                                     #28 *.                                      │              #21 *.                   │
+                                      7.50e+1                                    │               2.00e+1                 │
+                                     #29 grad_*.                                 │              #22 grad_*.              │
+                                      1.00                                       │               -1.00                   │
+    #27 3 Const/24:literal-constant│                #24 **.                      │#20 4 Const/24:literal-constant│[#17 x]│
+    <not-in-context>               │                 2.50e+1                     │<not-in-context>               │       │
+                                   │                #25 grad_**.                 │                               │       │
+                                   │                 3.00                        │                               │       │
+                                   │#17 x non-emb│#23 2 Const/24:literal-constant│                               │       │
+                                   │ 5.00        │<not-in-context>               │                               │       │
+                                   │#18 grad_x   │                               │                               │       │
+                                   │ 2.60e+1     │                               │                               │       │
     |}];
   let xs = Array.init 10 ~f:Float.(fun i -> of_int i - 5.) in
   let ys =
@@ -149,16 +149,16 @@ let%expect_test "Graph drawing fetch" =
   Train.printf_tree ~with_grad:false ~depth:9 ctx f5;
   [%expect
     {|
-                                             #9 +_f_5
-                                              6.00e+1
-                                    #8 -                                      │#1 5 Const/24
-                                     5.50e+1                                  │<not-in-context>
-                   #7 *.                    │            #3 *.                │
-                    7.50e+1                 │             2.00e+1             │
-    #6 3 Const/24   │       #5 **.          │#2 4 Const/24   │#0 5 Const/24   │
-    <not-in-context>│        2.50e+1        │<not-in-context>│<not-in-context>│
-                    │[#0 5]│#4 2 Const/24   │                │                │
-                    │      │<not-in-context>│                │                │
+                                                                                #9 +_f_5
+                                                                                 6.00e+1
+                                                                #8 -                                                                  │#1 5 Const/24:literal-constant
+                                                                 5.50e+1                                                              │<not-in-context>
+                                 #7 *.                                  │                          #3 *.                              │
+                                  7.50e+1                               │                           2.00e+1                           │
+    #6 3 Const/24:literal-constant│              #5 **.                 │#2 4 Const/24:literal-constant│#0 5 Const/24:literal-constant│
+    <not-in-context>              │               2.50e+1               │<not-in-context>              │<not-in-context>              │
+                                  │[#0 5]│#4 2 Const/24:literal-constant│                              │                              │
+                                  │      │<not-in-context>              │                              │                              │
     |}];
   let size = 100 in
   let xs = Array.init size ~f:Float.(fun i -> (of_int i / 10.) - 5.) in

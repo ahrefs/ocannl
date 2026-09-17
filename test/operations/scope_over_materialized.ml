@@ -256,7 +256,9 @@ let () =
      undecided -- so [v] was a live virtualization candidate for the whole of the consumer
      statement, and became materialized only at the appended one. *)
   p "appending the guarded setter commits the already-inlined node Never_virtual"
-    (Option.equal Int.equal (Ll_test.rejection_code retracted v) (Some 142));
+    (Option.equal String.equal
+       (Ll_test.rejection_code retracted v)
+       (Some "142:guarded-computation"));
   p "the pass retracts the scope it minted rather than refusing its own program"
     (Ll_test.count_scopes retracted.LL.llc = 0 && Ll_test.count_get retracted v > 0);
   (* Executed parity against the materialized reading of the same program: [v] declared materialized
@@ -360,7 +362,9 @@ let () =
       (Ll_test.seq producer (Ll_test.seq matching_read iterator_read))
   in
   p "a later unservable read commits the already-inlined node Never_virtual"
-    (Option.equal Int.equal (Ll_test.rejection_code retracted w) (Some 13));
+    (Option.equal String.equal
+       (Ll_test.rejection_code retracted w)
+       (Some "13:call-site-index-mismatch"));
   p "consumption-time refusal retracts the minted scope too, rather than refusing the program"
     (Ll_test.count_scopes retracted.LL.llc = 0 && Ll_test.count_get retracted w > 0);
   let reference =

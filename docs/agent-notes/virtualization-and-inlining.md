@@ -181,17 +181,32 @@ files.
 - **Where a virtualization candidate is refused is readable off its placement PROVENANCE, and four
   phases write into the same table** (gh-ocannl-658, pinned row by row in
   `test/operations/virtual_rejection_boundary.ml`): `decide_placements` applies the heuristic caps
-  (1 visit cap / uncovered read, 39 reduction extent, 41 fan-in) BEFORE any legality question, so a
-  shape capped there may be perfectly inlineable; `check_and_store_virtual` rejects at store time
-  (4, 5, 7, 9, 10, 11, 12, 51, 52, 142, 147 and the defensive-constructor codes);
-  `inline_computation` rejects at consumption time (13, 14, 140, 145, 146), which is why two setters
-  with different index maps as separate statements store fine as components and only fail once a
-  read site cannot be served; and `cleanup_virtual_llc` commits a surviving read as 17, which is the
-  absence of a rejection rather than one. Provenances compose — `default_to_most_local` folds a
-  prior one in as `1000 * prior + its own` — so read the leading factor (`Ll_test.rejection_code`).
+  (`1:visit-cap` / uncovered read, `39:inline-reduction-cap`, `41:inline-fanin-cap`) BEFORE any
+  legality question, so a shape capped there may be perfectly inlineable; `check_and_store_virtual`
+  rejects at store time (codes 4, 5, 7, 9, 10, 11, 12, 51, 52, 142, 147 and the
+  defensive-constructor ones); `inline_computation` rejects at consumption time (13, 14, 140, 145,
+  146), which is why two setters with different index maps as separate statements store fine as
+  components and only fail once a read site cannot be served; and `cleanup_virtual_llc` commits a
+  surviving read as `17:surviving-read`, which is the absence of a rejection rather than one.
+  Provenances compose by concatenation — `default_to_most_local` appends its own tag after the prior
+  one — so read the leading tag (`Tnode.leading_provenance`, which is what `Ll_test.rejection_code`
+  returns); see the STRING-tag entry below for the spelling.
   Do not infer the boundary from the `Non_virtual` comments at the raise sites: several describe
   reachability that has since changed, and 52 is enforced earlier still (`trace_node_facts` raises
   `invalid_arg` on a `Concat` index, so the virtualizer's arm never sees one).
+- **A placement provenance is a STRING tag, not an integer** (gh-ocannl-609): spelled
+  `"<code>:<kebab-reason>"` (`Tnode.provenance`), where the code is the integer it used to be, so
+  older issues and comments citing `Non_virtual 13` or "provenance 39" still resolve. They compose
+  by concatenation when a decision is refined — `default_to_most_local` records
+  `"39:inline-reduction-cap -> 432:is-local-materialized-query"` where the retired arithmetic wrote
+  `39432` — and `Tnode.leading_provenance` reads the first tag back (what `Ll_test.rejection_code`
+  returns). Codes are NOT unique: `176`/`178` each name two different schedule sites, told apart by
+  their reasons. The tags other code matches on have names in `Low_level`
+  (`prov_visit_cap` / `prov_inline_reduction_cap` / `prov_inline_fanin_cap`, `is_cap_provenance`,
+  `prov_read_before_write`, `prov_scope_local`, `prov_surviving_read`); one-site tags stay literals
+  at their site. `Low_level.cap_provenance_setting` maps a cap tag to the config key that would undo
+  it, which is how the `Local` host-access refusal can offer "raise the cap" instead of only
+  "materialize the node" — the distinction the integer could not express.
 - **A dynamic-gather table (`Get_dynamic`) materializes at the read, and a table declared `Virtual`
   is refused** (gh-ocannl-734, `test/operations/gather_table_placement.ml`): the gathered row is
   only known at runtime, so no computation can be replayed at the read site — `virtual_llc`'s

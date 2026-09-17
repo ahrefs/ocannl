@@ -37,6 +37,27 @@ type memory_mode =
           context-mediated device-to-host transfers; no host copy is stored on the node. *)
 [@@deriving sexp, compare, equal]
 
+type provenance = string
+(** Why a memory mode was requested or decided: a short self-describing tag (gh-ocannl-609), spelled
+    ["<code>:<kebab-case-reason>"] -- the numeric code is the integer this used to be, kept so that
+    issues, comments and goldens citing e.g. [Non_virtual 13] or "provenance 39" still resolve,
+    while the reason makes a diagnostic readable without grepping the source for the literal. Codes
+    are not unique: two sites that were the same integer stay the same integer and are told apart by
+    their reasons.
+
+    Tags compose left to right when a decision refines an earlier one
+    ({!Placements.default_to_most_local}):
+    ["39:inline-reduction-cap -> 432:is-local-materialized-query"] is the recompute-cost cap's
+    decision, defaulted to a concrete placement at a codegen query -- what the old
+    [1000 * prior + own] arithmetic encoded as the undecodable [39432]. *)
+
+(** The first tag of a composed provenance: the decision the later tags refined. The composition it
+    undoes is {!Placements.default_to_most_local}'s, the only one there is. *)
+let leading_provenance (prov : provenance) =
+  match String.substr_index prov ~pattern:" -> " with
+  | None -> prov
+  | Some i -> String.sub prov ~pos:0 ~len:i
+
 type delayed_prec = Default of Ops.prec | Inferred of Ops.prec Lazy.t | Specified of Ops.prec
 [@@deriving sexp, equal]
 
@@ -117,10 +138,11 @@ type t = {
       (** Participates in the computation of {!field-storage_prec}. *)
   mutable bounds : bounds_state;
       (** Scalar value bounds summary; see {!bounds_state} for the lifecycle. *)
-  mutable memory_mode_intent : (memory_mode * int) option;
+  mutable memory_mode_intent : (memory_mode * string) option;
       (** The tnode's {e declared intent} -- requests made at graph-construction time (parameter and
           constant marking, [Train.set_materialized], op-support [Never_virtual]), paired with a
-          provenance identifier. Since the context-scoped memory-modes split
+          {!provenance} tag (spelled [string] here only so the record's [sexp_of] derivation stays
+          on the primitive). Since the context-scoped memory-modes split
           (docs/proposals/context-scoped-memory-modes.md) this is monotone, side-effect free to
           read, and never written by the compilation pipeline: placement {e decisions} are
           per-compilation-lineage, recorded in {!module-Placements} tables riding
@@ -137,10 +159,10 @@ type t = {
       (** Declared value-constancy: the node's values are fixed at construction and always equal its
           registered host-init data (an ndarray-backed literal). Set by [Tensor.ndarray] (and
           eligible loaders), never cleared. This carries the constancy that [Effectively_constant]
-          intent cannot: ndarray-backed nodes are minted [On_device] (provenance 49), so the
-          memory-mode lattice has no room left for the constant marking. Consumed by
-          [Schedule.Stage]'s hoisted packing (gh-ocannl-470) to justify materializing a repacked
-          copy once per device. *)
+          intent cannot: ndarray-backed nodes are minted [On_device] (provenance
+          ["49:ndarray-backed"]), so the memory-mode lattice has no room left for the constant
+          marking. Consumed by [Schedule.Stage]'s hoisted packing (gh-ocannl-470) to justify
+          materializing a repacked copy once per device. *)
   mutable alias_of : ((t * Indexing.static_symbol) option[@sexp.opaque]);
       (** When [Some (parent, batch_idx)], this node is a zero-copy slice-alias *view* of [parent]:
           it owns no buffer of its own, and every read/write of it is redirected (during lowering)
@@ -240,7 +262,7 @@ let debug_memory_mode = function
         | Never_virtual -> "Non-virt"
         | Local -> "Local"
         | On_device -> "On-dev")
-      ^ "/" ^ Int.to_string prov
+      ^ "/" ^ prov
 
 let log_debug_info ~from_log_level tn =
   [%debug_sexp
@@ -337,8 +359,8 @@ let transition_memory_mode ~debug_name:name current mode provenance =
       raise
       @@ Utils.User_error
            [%string
-             "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} for %{name}: \
-              cannot be virtual"]
+             "Tnode.update_memory_mode: update %{prov2} -> %{provenance} for %{name}: cannot be \
+              virtual"]
   | Some ((Virtual, _) as cur), Effectively_constant -> cur
   | Some (Never_virtual, _), Effectively_constant | Some (Effectively_constant, _), Never_virtual ->
       (* A constant that must be persisted is just a materialized (device-resident) node now; there
@@ -352,14 +374,13 @@ let transition_memory_mode ~debug_name:name current mode provenance =
       raise
       @@ Utils.User_error
            [%string
-             "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} for %{name} is \
-              already virtual"]
+             "Tnode.update_memory_mode: update %{prov2} -> %{provenance} for %{name} is already \
+              virtual"]
   | Some ((_, _) as cur), Never_virtual -> cur
   | Some (_, prov2), _ ->
       invalid_arg
         [%string
-          "Tnode.update_memory_mode: update %{prov2#Int} -> %{provenance#Int} inconsistent for \
-           %{name}"]
+          "Tnode.update_memory_mode: update %{prov2} -> %{provenance} inconsistent for %{name}"]
 
 let update_memory_mode tn mode provenance =
   tn.memory_mode_intent <-
@@ -600,10 +621,10 @@ module Placements = struct
     let hash = hash
   end
 
-  type nonrec t = { table : (tn, memory_mode * int) Hashtbl.t }
+  type nonrec t = { table : (tn, memory_mode * provenance) Hashtbl.t }
 
   let sexp_of_t p =
-    [%sexp_of: (string * (memory_mode * int)) list]
+    [%sexp_of: (string * (memory_mode * string)) list]
       (List.map (Hashtbl.to_alist p.table) ~f:(fun (tn, d) -> (debug_name tn, d)))
 
   let create () = { table = Hashtbl.create (module Key) }
@@ -663,7 +684,11 @@ module Placements = struct
         their registered host-init data. *)
   let default_to_most_local p tn provenance =
     let provenance =
-      match get p tn with Some (_, prov) -> (1000 * prov) + provenance | None -> provenance
+      (* The tags compose left to right, prior decision first -- what {!leading_provenance} reads
+         back, and what the retired [1000 * prior + own] arithmetic encoded. *)
+      match get p tn with
+      | Some (_, prior) -> prior ^ " -> " ^ provenance
+      | None -> provenance
     in
     match get p tn with
     | None when is_observable tn -> Hashtbl.set p.table ~key:tn ~data:(On_device, provenance)
@@ -937,7 +962,7 @@ let create_from_padded ?namespace ~id ~label ~ndarray ~padding () =
       namespace;
       uid = fresh_uid ();
       label;
-      memory_mode_intent = Some (On_device, 49);
+      memory_mode_intent = Some (On_device, "49:ndarray-backed");
       observable = false;
       host_constant = false;
       alias_of = None;
@@ -1020,7 +1045,7 @@ let create_with_reshape ~id ~label ~base_ndarray ~unpadded_dims ~padding ~from_p
       namespace;
       uid = fresh_uid ();
       label;
-      memory_mode_intent = Some (On_device, 49);
+      memory_mode_intent = Some (On_device, "49:ndarray-backed");
       observable = false;
       host_constant = false;
       alias_of = None;

@@ -45,7 +45,7 @@ let steps = node ~dims:[| m |] "spin_steps"
 
 let () =
   List.iter [ counter; ones; steps ] ~f:Ll_test.materialize;
-  Tn.update_memory_mode acc Tn.Local 99
+  Tn.update_memory_mode acc Tn.Local "99:test-setup"
 
 let f0 = Idx.Fixed_idx 0
 let get tn idcs : LL.scalar_t = LL.Get (tn, idcs)

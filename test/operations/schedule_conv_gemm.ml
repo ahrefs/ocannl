@@ -989,9 +989,9 @@ let () =
     let%op pr =
       x +* "...| 1*oh<+kh, 1*ow<+kw, ..ic..; |kh, kw, ..ic.. -> ..oc.. => ...| oh, ow, ..oc.." kern
     in
-    Ir.Tnode.update_memory_mode pr.Tensor.value Ir.Tnode.On_device 99;
+    Ir.Tnode.update_memory_mode pr.Tensor.value Ir.Tnode.On_device "99:test-setup";
     let%op y2 = relu pr in
-    Ir.Tnode.update_memory_mode y2.Tensor.value Ir.Tnode.On_device 99;
+    Ir.Tnode.update_memory_mode y2.Tensor.value Ir.Tnode.On_device "99:test-setup";
     let%op y3 = y2 *. 0.5 in
     (x, kern, y3)
   in
@@ -1084,9 +1084,9 @@ let () =
     (* Keep the intermediates materialized, like real convnet activations: a routine-[Local] conv
        output would classify its [Zero_out] as an in-kernel statement and the whole graph would
        (correctly) stay one serial kernel, never exercising the aligned-merged segment. *)
-    Ir.Tnode.update_memory_mode pr.Tensor.value Ir.Tnode.On_device 99;
+    Ir.Tnode.update_memory_mode pr.Tensor.value Ir.Tnode.On_device "99:test-setup";
     let%op y2 = relu pr in
-    Ir.Tnode.update_memory_mode y2.Tensor.value Ir.Tnode.On_device 99;
+    Ir.Tnode.update_memory_mode y2.Tensor.value Ir.Tnode.On_device "99:test-setup";
     let%op y3 = y2 *. 0.5 in
     (x, kern, y3)
   in

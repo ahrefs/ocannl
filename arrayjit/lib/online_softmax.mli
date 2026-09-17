@@ -54,4 +54,4 @@ val reset : unit -> unit
 val rewrite : Low_level.t -> Low_level.t
 (** The pass over raw lowered code (no gate: the tier consults {!enabled}). Every normalizer pattern
     in the routine is rewritten; a routine without one is returned as is. The minted scope-local
-    nodes carry memory-mode provenance 483. *)
+    nodes carry memory-mode provenance ["483:online-softmax-state"]. *)
