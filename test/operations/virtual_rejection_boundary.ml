@@ -39,11 +39,14 @@
    the one it keeps, so the provenance a test would read is the earlier decision's. That is the
    [~materialized] arm every row below already runs. - 12 (no setter in the captured subtree) cannot
    fire: every call site is a setter arm, or a candidate drawn from the assignment-index map, which
-   is where its setters put it. - 8, 19, 141, 143, 144 guard constructors no pre-virtualization pass
-   emits (staged compilation, hoisted locals, barriers, cooperative tiles, dynamic scatters). These
-   will never become inlineable, so a row would pin nothing that could move. - 14, 140, 145, 146
-   belong to the vector-store (packed-uniform) consumption path, exercised through the uniform tests
-   rather than by hand. *)
+   is where its setters put it. - 8, 141, 143, 144 guard constructors no pre-virtualization pass
+   emits (staged compilation, barriers, cooperative tiles, dynamic scatters). These will never
+   become inlineable, so a row would pin nothing that could move. - 19 (a [Declare_local] in the
+   captured nest) guarded the same way until gh-ocannl-483 put the algebraic rewrite tier AHEAD of
+   [Low_level.optimize]: [Online_softmax.hoist] emits one, so the arm is reachable whenever
+   [online_softmax] is on. Building that shape by hand needs the rewrite's whole normalizer pattern,
+   so it stays unrowed here rather than unreachable. - 14, 140, 145, 146 belong to the vector-store
+   (packed-uniform) consumption path, exercised through the uniform tests rather than by hand. *)
 
 open Base
 open Ll_test

@@ -1550,11 +1550,13 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx) ~guarded ~in_
         else check_sibling_escaping ~env_dom ~code:"7:sibling-escaping-write-index" idcs;
         loop_scalar ~env_dom ~loop_ranges arg
     | Set_local (_, llsc) -> loop_scalar ~env_dom ~loop_ranges llsc
-    (* #296: defensive/unreachable on the fresh-lowering path. [Declare_local] is produced only by
-       [hoist_cross_statement_cse], which runs last in [optimize_proc]; [check_and_store_virtual]
-       captures computations during [virtual_llc] (before hoisting), so a stored computation never
-       contains one. The arm guards the not-currently-exercised case of a hoisted program
-       re-entering virtualization. *)
+    (* #296, revised for gh-ocannl-483: this arm is LIVE, not defensive. Within [optimize_proc]
+       nothing reaches it -- [hoist_cross_statement_cse] is the only pass here that mints
+       [Declare_local] and it runs last, whereas capture happens during [virtual_llc] -- but the
+       algebraic rewrite tier runs BEFORE [Low_level.optimize] ([Assignments.lower] calls
+       [Rewrites.apply]) and [Online_softmax.hoist] emits [Declare_local] for its running max/sum
+       accumulators, so with [online_softmax] on a candidate captured around one is refused here. It
+       also still guards a hoisted program re-entering virtualization. *)
     | Declare_local _ -> raise @@ Non_virtual "19:declare-local"
     | Comment _ -> ()
     | Staged_compilation _ -> raise @@ Non_virtual "8:staged-compilation"

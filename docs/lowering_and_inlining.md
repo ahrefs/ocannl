@@ -60,9 +60,12 @@ Notable constructors:
   a virtual tensor's computation `body` together with the `orig_indices` at which it is accessed; its
   result is read back via `Get_local`. `Set_local` writes the scope's accumulator.
 - **`Declare_local { id; needs_init }`**: declares a local accumulator hoisted out of individual
-  statements. It is produced **only** by `hoist_cross_statement_cse` (the last pipeline phase);
-  fresh lowering from `Assignments.to_low_level` never emits it. `needs_init` records whether the
-  hoisted local needs a zero initializer before its first use.
+  statements. Fresh lowering from `Assignments.to_low_level` never emits it. Within the
+  optimization pipeline it is produced **only** by `hoist_cross_statement_cse` (the last phase),
+  but the algebraic rewrite tier that runs BEFORE the pipeline (`Rewrites.apply` in
+  `Assignments.lower`, gh-ocannl-483) also emits it: `Online_softmax.hoist` declares the running
+  max/sum accumulators this way. `needs_init` records whether the hoisted local needs a zero
+  initializer before its first use.
 - **`Get_dynamic`**: a guarded dynamic gather (reads `tn`'s row at a runtime-computed `dyn_value`
   along `dyn_axis`). It is produced **only** by `rewrite_one_hot_reductions` (gh-343), after
   virtualization; earlier passes handle it defensively.
@@ -294,7 +297,8 @@ This function validates that the computation can be safely inlined, via these ch
    indices), or `Non_virtual 10` (in `Embed_index`).
 
 5. **No vector stores / staged code / hoisted locals**: a `Staged_compilation` node fails with
-   `Non_virtual 8`; a `Declare_local` fails with `Non_virtual 19` (defensive — see below).
+   `Non_virtual 8`; a `Declare_local` fails with `Non_virtual 19` — reachable whenever
+   `online_softmax` is on, see below.
 
 6. **Has Setter**: the computation must actually write to the tensor (`Non_virtual 12`); and the
    tensor must not be already non-virtual (`Non_virtual 11`).
@@ -323,8 +327,8 @@ compose, is under Memory Mode Management below. The exit codes:
 - `13:call-site-index-mismatch` — Index mismatch at a particular inlining site (per-site fallback to
   materialization).
 - `14:empty-inlined-body` — Empty computation list at inline time.
-- `19:declare-local` — `Declare_local` encountered during virtualization (defensive; see dead-code
-  note).
+- `19:declare-local` — `Declare_local` encountered during virtualization (see the note below: no
+  longer defensive).
 - `51:affine-not-injective` — Multi-symbol affine position in a non-injective LHS map (gh-133
   soundness guard).
 - `52:concat-index` — `Concat` index reached virtualization (should have been eliminated during
@@ -339,10 +343,15 @@ compose, is under Memory Mode Management below. The exit codes:
   index map.
 - `148:scan-recurrence` — A `Scan_loop` encloses, or is contained in, the captured computation.
 
-`Non_virtual 19` is a defensive arm. `Declare_local` is produced only by the final
-`hoist_cross_statement_cse` pass, whereas computations are stored during `virtual_llc` (well before
-hoisting), so a stored computation never contains a `Declare_local`. The arm only guards the
-not-currently-exercised case of a hoisted program being fed back through virtualization.
+`Non_virtual 19` was a defensive arm and is one no longer. The reasoning that made it defensive
+still holds *within* the pipeline: `hoist_cross_statement_cse` is the only phase here that produces
+`Declare_local` and it runs last, whereas computations are stored during `virtual_llc` (well before
+hoisting). What changed is what runs before the pipeline — `Assignments.lower` applies the
+algebraic rewrite tier (`Rewrites.apply`, gh-ocannl-483) to the raw lowered code, and its
+`online_softmax` member emits `Declare_local`, so with that key on (the `performance` and
+`approximate` profiles enable it) a candidate whose captured nest contains one is genuinely refused
+here. The arm additionally guards the not-currently-exercised case of a hoisted program being fed
+back through virtualization.
 
 ### 3. Inlining Phase (`inline_computation`)
 
@@ -610,4 +619,8 @@ behavior is **retained**, not changed:
   pre-rewrite passes are **retained**: `Declare_local`/`Get_dynamic` are produced by the *last*
   pipeline phases (`hoist_cross_statement_cse` / `rewrite_one_hot_reductions`), so earlier passes
   cannot encounter them on the fresh-lowering path, but the arms guard against re-entry of an
-  already-optimized program.
+  already-optimized program. (The audit's verdict stands; half its premise no longer does.
+  gh-ocannl-483 added a rewrite tier ahead of the pipeline whose `online_softmax` member emits
+  `Declare_local`, so the `Non_virtual 19` arm is now reachable on the ordinary path with that key
+  on — retained for a second reason. `Get_dynamic` is unaffected: `rewrite_one_hot_reductions` is
+  still a pipeline phase, after `virtual_llc`.)
