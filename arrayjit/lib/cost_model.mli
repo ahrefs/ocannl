@@ -171,15 +171,19 @@ val template_cost : self:Tnode.t -> ?at:Indexing.axis_index array -> Low_level.t
 (** One stored template body ([optimize_ctx.computations]' [(at, body)] entry) as one instantiation:
     sibling setters (a shared-loop template) are dropped as instantiation drops them, the loops
     binding a bare iterator position of [at] — the ones the ordinary point read substitutes away —
-    collapse to a single iteration, so a reduction loop is the only trip count left, and the scalar
-    CSE the emitted code receives runs over the result (a stored template predates it, so two
-    alpha-equivalent scope bodies execute once). What the query cannot see is the substitution a
-    reader applies, and where it changes the count the result is only a bound ([rc_approx]): a
-    symbol occurring inside an affine position of [at] may be bound or left free with its loop
-    range-guarded, depending on the reader's index, and a packed-uniform producer ([Set_from_vec])
-    inlines as the lane-extract form rather than its vector store. A consumer instantiating over a
-    sub-image that collapses a further loop (gh-ocannl-616) applies that correction itself. Reads of
-    other virtual nodes count as reads here; {!recompute_cost} expands them. *)
+    collapse to a single iteration, so a reduction loop is the only trip count left, and the passes
+    the emitted code receives after virtualization run over the result — the simplifier and the
+    scalar CSE, which a stored template predates: a single-assignment scope under a [Where] arm
+    collapses into the arm's expression (conditional, hence a bound), two alpha-equivalent scope
+    bodies execute once. What the query cannot see is the substitution a reader applies, and where
+    it changes the count the result is only a bound ([rc_approx]): a symbol occurring inside an
+    affine position of [at], or repeated across bare positions (a diagonal producer's consistency
+    guards), may be bound or left free with its loop range-guarded or guarded, depending on the
+    reader's index; a packed-uniform producer ([Set_from_vec]) inlines as the lane-extract form
+    rather than its vector store; and a scope local read without its definition in the priced code
+    stands for hoisted work the price cannot see. A consumer instantiating over a sub-image that
+    collapses a further loop (gh-ocannl-616) applies that correction itself. Reads of other virtual
+    nodes count as reads here; {!recompute_cost} expands them. *)
 
 val recompute_cost : Low_level.optimize_ctx -> Tnode.t -> recompute option
 (** The transitive cost of one inlined computation of the node, summed over its stored templates
@@ -198,8 +202,9 @@ val producer_cost : self:Tnode.t -> Low_level.t -> recompute option
     survive, everything else is dropped) divided (rounding up) by the distinct cells it writes,
     summed over the setters — re-inlining a multi-setter node replays every component at a read
     site, guards selecting the value while the hoisted bodies all execute. Its virtual producers are
-    already inlined there, so the count is transitive by construction; a packed-uniform setter makes
-    it a bound, as in {!template_cost}. [None] when the code sets the node nowhere. *)
+    already inlined there, so the count is transitive by construction; a packed-uniform setter, or a
+    scope local whose hoisted definition the pruning left behind, makes it a bound, as in
+    {!template_cost}. [None] when the code sets the node nowhere. *)
 
 module Calibration : sig
   (** The calibration TSV schema (config [autotune_calibration_file], gh-ocannl-491 task 4) and the

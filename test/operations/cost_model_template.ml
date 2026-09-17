@@ -54,30 +54,46 @@ let () =
   (* Without [~at] nothing collapses: the whole nest is the instantiation. *)
   let whole = CM.template_cost ~self:s reduction in
   p "reduction: no index vector, no collapse" (whole.CM.rc_flops = kernel.CM.flops);
-  (* Where body with a hoisted scope arm: W[i] = where(K[i], { lv := A4[i] * 2 }, 0). Exact by Part
-     1 — 2 ops per instantiation, A4's cell read. *)
+  (* Where body with a hoisted scope arm: W[i] = where(K[i], { lv := 0; for k: lv += A[i][k] }, 0).
+     Exact by Part 1 — the reduction body stays hoisted through the simplifier: select + 5 adds per
+     instantiation, A's row read. *)
   let w = mk "W" and kk = mk "K" and a4 = mk "A4" and lv = mk ~dims:[||] "lv" in
   virtualize lv;
-  let id = LL.get_scope lv in
+  let scope_with ?(id = LL.get_scope lv) body =
+    LL.Local_scope { id; body; orig_indices = [| iter i |]; mint = LL.Inlined_computation }
+  in
+  let row_sum id =
+    seq
+      (LL.Set_local (id, c 0.))
+      (loop_n k 5 (LL.Set_local (id, add (LL.Get_local id) (get a [| iter i; iter k |]))))
+  in
+  let reduction_scope () =
+    let id = LL.get_scope lv in
+    scope_with ~id (row_sum id)
+  in
   let where_body =
+    loop_n i 4 (set w [| iter i |] (where_ (get kk [| iter i |]) (reduction_scope ()) (c 0.)))
+  in
+  let where_one = CM.template_cost ~self:w ~at:[| iter i |] where_body in
+  show "where body, hoisted reduction arm" where_one;
+  p "where: exact, 6 ops and 24 bytes per instantiation"
+    ((not where_one.CM.rc_approx) && where_one.CM.rc_flops = 6 && where_one.CM.rc_bytes = 24);
+  (* Review round 2: a single-assignment scope under the arm is what the simplifier collapses into
+     the arm's expression, where it IS conditional — the template prices as the emitted code does, a
+     bound. *)
+  let where_collapsed =
+    let id = LL.get_scope lv in
     loop_n i 4
       (set w
          [| iter i |]
          (where_
             (get kk [| iter i |])
-            (LL.Local_scope
-               {
-                 id;
-                 body = LL.Set_local (id, mul (get a4 [| iter i |]) (c 2.));
-                 orig_indices = [| iter i |];
-                 mint = LL.Inlined_computation;
-               })
+            (scope_with ~id (LL.Set_local (id, mul (get a4 [| iter i |]) (c 2.))))
             (c 0.)))
   in
-  let where_one = CM.template_cost ~self:w ~at:[| iter i |] where_body in
-  show "where body, hoisted arm" where_one;
-  p "where: exact, 2 ops and 8 bytes per instantiation"
-    ((not where_one.CM.rc_approx) && where_one.CM.rc_flops = 2 && where_one.CM.rc_bytes = 8);
+  let collapsed = CM.template_cost ~self:w ~at:[| iter i |] where_collapsed in
+  show "where body, arm the simplifier inlines (bound)" collapsed;
+  p "where: a collapsible arm prices as the simplified, conditional form" collapsed.CM.rc_approx;
   (* A shared-loop template carries a sibling setter that instantiation filters out: for i: (S[i] =
      A[i][0] * 3; T[i] = A[i][1] + A[i][2] + A[i][3]) priced for S is one multiply. *)
   let t = mk "T" in
@@ -134,23 +150,20 @@ let () =
   p "packed-uniform producer prices as a bound" vec.CM.rc_approx;
   (* Review round 1: a stored template predates the scalar CSE the emitted code receives, so a
      consumer of [x + x] with a virtual [x] carries two alpha-equivalent scope bodies that execute
-     once: Y[i] = { lv := A4[i] * 2 } + { lv' := A4[i] * 2 } prices one multiply and one add. *)
+     once: Y[i] = { lv := sum_k A[i][k] } + { lv' := sum_k A[i][k] } prices one row sum and one add
+     (6 ops), with A's row read once — exact. *)
   let y = mk "Y" in
-  let scope_of id =
-    LL.Local_scope
-      {
-        id;
-        body = LL.Set_local (id, mul (get a4 [| iter i |]) (c 2.));
-        orig_indices = [| iter i |];
-        mint = LL.Inlined_computation;
-      }
-  in
-  let twice =
-    loop_n i 4 (set y [| iter i |] (add (scope_of (LL.get_scope lv)) (scope_of (LL.get_scope lv))))
-  in
+  let twice = loop_n i 4 (set y [| iter i |] (add (reduction_scope ()) (reduction_scope ()))) in
   let cse = CM.template_cost ~self:y ~at:[| iter i |] twice in
   show "two alpha-equivalent scopes (CSE'd)" cse;
-  p "alpha-equivalent scope bodies price once" ((not cse.CM.rc_approx) && cse.CM.rc_flops = 2)
+  p "alpha-equivalent scope bodies price once" ((not cse.CM.rc_approx) && cse.CM.rc_flops = 6);
+  (* Review round 2: a bare symbol repeated across positions (a diagonal producer) binds once and
+     guards the other occurrences against the reader's arguments — substitution-dependent. *)
+  let d = mk ~dims:[| 4; 4 |] "D" and j = sym () in
+  let diag = loop_n j 4 (set d [| iter j; iter j |] (mul (get a4 [| iter j |]) (c 2.))) in
+  let diag_cost = CM.template_cost ~self:d ~at:[| iter j; iter j |] diag in
+  show "diagonal producer (bound)" diag_cost;
+  p "a repeated bare symbol prices as a bound" diag_cost.CM.rc_approx
 
 (* A chain through a real optimization: x1 = x0 + w1 (virtual), x2 = sin(x1) (virtual), out = x2 *
    x2. [recompute_cost] of x2 expands x1's template: 1 + 1 ops, x0 and w1 read. *)
@@ -300,4 +313,19 @@ let () =
   p "two-component producer: components sum (2 ops, 8 bytes per read)"
     (match CM.producer_cost ~self:b two_setters with
     | Some r -> r.CM.rc_flops = 2 && r.CM.rc_bytes = 8 && not r.CM.rc_approx
-    | None -> false)
+    | None -> false);
+  (* Review round 2: cross-statement hoisting can leave a setter reading a scope local whose
+     definition sits in a preceding statement the pruning drops; the shared body is work a
+     re-inlining executes, so such a setter prices as a bound. *)
+  let hv = mk ~dims:[||] "hv" in
+  virtualize hv;
+  let hid = LL.get_scope hv in
+  let hoisted =
+    seq
+      (seq
+         (LL.Declare_local { id = hid; needs_init = false })
+         (LL.Set_local (hid, mul (get pp [| fixed 0 |]) (c 2.))))
+      (loop_n i1 2 (set b [| iter i1 |] (add (LL.Get_local hid) (get q [| iter i1 |]))))
+  in
+  p "a setter reading a hoisted local it does not define prices as a bound"
+    (match CM.producer_cost ~self:b hoisted with Some r -> r.CM.rc_approx | None -> false)

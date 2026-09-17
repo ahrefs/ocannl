@@ -576,11 +576,18 @@ let collapse_bound_loops ~(at : Idx.axis_index array) (code : Low_level.t) : Low
   let bound s =
     Array.exists at ~f:(function Idx.Iterator s' -> Idx.equal_symbol s s' | _ -> false)
   in
+  (* A bare symbol repeated across positions ([t[i; i]], a diagonal producer) binds at its first
+     occurrence and turns the later ones into call-site consistency guards, whose work depends on
+     the reader's arguments: substitution-dependent like an affine position. *)
+  let repeated s =
+    Array.count at ~f:(function Idx.Iterator s' -> Idx.equal_symbol s s' | _ -> false) > 1
+  in
   let substitution_dependent =
     Array.exists at ~f:(function
       | Idx.Affine { symbols; _ } -> not (List.is_empty symbols)
       | Idx.Concat _ | Idx.Sub_axis -> true
-      | Idx.Iterator _ | Idx.Fixed_idx _ -> false)
+      | Idx.Iterator s -> repeated s
+      | Idx.Fixed_idx _ -> false)
   in
   let rec go (c : Low_level.t) : Low_level.t =
     match c with
@@ -651,17 +658,69 @@ let cost_of_self ~(self : Tn.t) (s : summary) : recompute =
     rc_opaque = s.opaque;
   }
 
+(* Whether the code reads a scope local it does not define: pruning a routine to one node's setters
+   can separate a [Get_local] from the [Declare_local]/[Set_local] the cross-statement hoisting pass
+   ([hoist_cross_statement_cse]) gave it, and the shared body it stands for is work a re-inlining
+   executes — so such a price is only a bound. *)
+let reads_undefined_local (code : Low_level.t) =
+  let defined = Hash_set.create (module Low_level.Scope_id) in
+  let used = Hash_set.create (module Low_level.Scope_id) in
+  let rec sc (s : Low_level.scalar_t) =
+    match s with
+    | Low_level.Get_local id -> Hash_set.add used id
+    | Local_scope { id; body; _ } ->
+        Hash_set.add defined id;
+        go body
+    | Get_dynamic { dyn_value = v, _; _ } -> sc v
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        sc a;
+        sc b;
+        sc c
+    | Binop (_, (a, _), (b, _)) ->
+        sc a;
+        sc b
+    | Unop (_, (a, _)) -> sc a
+    | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
+  and go (c : Low_level.t) =
+    match c with
+    | Low_level.Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Zero_out _ -> ()
+    | Declare_local { id; _ } -> Hash_set.add defined id
+    | Set_local (id, v) ->
+        Hash_set.add defined id;
+        sc v
+    | Seq (a, b) ->
+        go a;
+        go b
+    | For_loop { body; _ } | If { body; _ } -> go body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun cr ->
+            Hash_set.add defined cr.Low_level.prev;
+            Hash_set.add defined cr.next;
+            sc cr.init);
+        go body
+    | Set { llsc; _ } -> sc llsc
+    | Set_dynamic { dyn_value = v, _; llsc; _ } ->
+        sc v;
+        sc llsc
+    | Set_from_vec { arg = a, _; _ } -> sc a
+    | Tile_mma { fallback; _ } -> go fallback
+  in
+  go code;
+  Hash_set.exists used ~f:(fun id -> not (Hash_set.mem defined id))
+
 (* The code one point read of the template executes, and whether that is only a bound: the
-   sibling-free body with the bound loops collapsed, then the scalar CSE the emitted code also
-   receives — a stored template predates [eliminate_common_subexpressions], so two alpha-equivalent
-   scope bodies in it (a consumer computing [x + x] of a virtual [x]) execute once in the final
-   code. *)
+   sibling-free body with the bound loops collapsed, then the passes the emitted code also receives
+   after virtualization — the simplifier ([simplify_llc]: a single-assignment scope under a [Where]
+   arm collapses into the arm's expression, where it IS conditional; identities vanish) and the
+   scalar CSE ([eliminate_common_subexpressions]: two alpha-equivalent scope bodies, a consumer
+   computing [x + x] of a virtual [x], execute once) — a stored template predates both. *)
 let instantiation ~self ?at body =
   let body, _ = prune_to_setters ~self body in
   let body, dependent =
     match at with None -> (body, false) | Some at -> collapse_bound_loops ~at body
   in
-  (Low_level.eliminate_common_subexpressions body, dependent || has_set_from_vec body)
+  let body = Low_level.eliminate_common_subexpressions (Low_level.simplify_llc [] body) in
+  (body, dependent || has_set_from_vec body || reads_undefined_local body)
 
 let template_cost ~(self : Tn.t) ?at (body : Low_level.t) : recompute =
   let body, bound_only = instantiation ~self ?at body in
@@ -761,7 +820,7 @@ let setter_cost ~(self : Tn.t) (pruned : Low_level.t) : recompute =
     rc_approx =
       s.flops_approx
       || List.exists others ~f:(fun (_, fp) -> fp.fp_approx)
-      || has_set_from_vec pruned;
+      || has_set_from_vec pruned || reads_undefined_local pruned;
     rc_opaque = s.opaque;
   }
 
