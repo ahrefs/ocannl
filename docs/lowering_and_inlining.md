@@ -500,11 +500,12 @@ memory mode decisions and to debug conflicts between them. Since gh-ocannl-609 t
 of tag, and the split is a layering decision: a decision that only ever gets *recorded* is a
 `Site "<code>:<reason>"` carrying its own explanation (the code is the integer the provenance used to
 be, kept so older references still resolve) — some sixty of those are minted across nine modules, and
-a constructor apiece would make `Tnode`, which sits at the bottom of the dependency graph, enumerate
-the vocabulary of every module above it — while a tag some other code *reads back* is a constructor
-(`Visit_cap`, `Inline_reduction_cap`, `Inline_fanin_cap`, `Read_before_write`, `Scope_local`,
-`Surviving_read`), so the reading is an exhaustive match rather than a comparison that can silently
-stop matching. `Low_level.is_cap_provenance` and `cap_provenance_setting` are the two such readers.
+a `provenance` constructor apiece would make `Tnode`, which sits at the bottom of the dependency
+graph, enumerate the vocabulary of every module above it — while a tag some other code *reads back*
+is a `provenance` constructor (`Visit_cap`, `Inline_reduction_cap`, `Inline_fanin_cap`,
+`Read_before_write`, `Scope_local`, `Surviving_read`), so the reading is an exhaustive match rather
+than a comparison that can silently stop matching. `Low_level.is_cap_provenance` and
+`cap_provenance_setting` are the two such readers.
 
 Tags COMPOSE when a decision refines an earlier one: resolving a `Never_virtual` request into a
 concrete placement records `Refined (Inline_reduction_cap, Site "432:is-local-materialized-query")`,

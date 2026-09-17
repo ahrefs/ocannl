@@ -183,11 +183,12 @@ files.
   `test/operations/virtual_rejection_boundary.ml`): `decide_placements` applies the heuristic caps
   (`Visit_cap` / uncovered read, `Inline_reduction_cap`, `Inline_fanin_cap`) BEFORE any legality
   question, so a shape capped there may be perfectly inlineable; `check_and_store_virtual` rejects
-  at store time (codes 4, 5, 7, 9, 10, 11, 12, 51, 52, 142, 147 and the defensive-constructor
-  ones); `inline_computation` rejects at consumption time (13, 14, 140, 145, 146), which is why two
-  setters with different index maps as separate statements store fine as components and only fail
-  once a read site cannot be served; and `cleanup_virtual_llc` commits a surviving read as
-  `Surviving_read`, which is the absence of a rejection rather than one.
+  at store time (codes 4, 5, 7, 9, 10, 11, 12, 51, 52, 142, 147 and the defensive arms 8, 19, 141,
+  143, 144 — the `Low_level.t` constructors no pre-virtualization pass emits); `inline_computation`
+  rejects at consumption time (13, 14, 140, 145, 146), which is why two setters with different index
+  maps as separate statements store fine as components and only fail once a read site cannot be
+  served; and `cleanup_virtual_llc` commits a surviving read as `Surviving_read`, which is the
+  absence of a rejection rather than one.
   Do not infer the boundary from the `Non_virtual` comments at the raise sites: several describe
   reachability that has since changed, and 52 is enforced earlier still (`trace_node_facts` raises
   `invalid_arg` on a `Concat` index, so the virtualizer's arm never sees one). The tags themselves,
@@ -196,12 +197,12 @@ files.
   (gh-ocannl-609): `Tnode.provenance` splits two ways. A decision nothing interrogates is a
   `Site "<code>:<kebab-reason>"` explaining itself — some sixty of those, minted across nine modules
   from the C renderer's storage queries to the scheduler's tile placements. A tag some other code
-  reads back is a CONSTRUCTOR: `Visit_cap`, `Inline_reduction_cap`, `Inline_fanin_cap`,
-  `Read_before_write`, `Scope_local`, `Surviving_read`. The split is a layering decision, not a
-  style one — the type lives in `tnode.ml` (that is where `Placements` is), so a constructor per
-  site would make the bottom module enumerate the vocabulary of every module above it, which is why
-  the field was an unstructured `int` for years in the first place. The rule for a new tag: `Site`
-  unless something matches on it.
+  reads back is a `provenance` CONSTRUCTOR: `Visit_cap`, `Inline_reduction_cap`,
+  `Inline_fanin_cap`, `Read_before_write`, `Scope_local`, `Surviving_read`. The split is a layering
+  decision, not a style one — the type lives in `tnode.ml` (that is where `Placements` is), so a
+  constructor per site would make the bottom module enumerate the vocabulary of every module above
+  it, which is why the field was an unstructured `int` for years in the first place. The rule for a
+  new tag: `Site` unless something matches on it.
   - The code is the integer the provenance used to be, so older issues and comments citing
     `Non_virtual 13` or "provenance 39" still resolve. Codes are NOT unique: `176`/`178` each name
     two different schedule sites, told apart by their reasons.
