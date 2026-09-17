@@ -1433,19 +1433,6 @@ let init_params ?(reinit_all = false) ctx bindings t =
   let ctx, routine = Context.compile ctx comp bindings in
   Context.run ctx routine
 
-type example_train_result = {
-  inputs : Tensor.t;
-  outputs : Tensor.t;
-  model_result : Tensor.t;  (** Do not use [model_result] for deriving gradients. *)
-  infer_callback : float array -> float array;
-      (** Computes the output for the given input via the [model_result] tensor. Note:
-          [infer_callback] is inefficient as it is not batched. *)
-  rev_batch_losses : float list;
-  rev_epoch_losses : float list;
-  learning_rates : float list;
-  used_memory : int;
-}
-
 (** [run_once] is a wrapper around {!init_params} that additionally runs code of [f t] and returns
     the context. If [skip_init] is true (false by default), no initialization is performmed. If
     [reinit_all] is true (false by default), all parameters are reinitialized, otherwise only the

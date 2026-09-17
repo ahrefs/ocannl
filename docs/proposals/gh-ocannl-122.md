@@ -6,10 +6,9 @@ ROADMAP: v1.0 completeness
 ## Current state
 
 Training examples print metrics ad hoc; `moons_demo` additionally retains
-lists for terminal plots. OCANNL already exposes `Context.get_used_memory` and
-uses `ppx_minidebug` for computation debugging, but it has no run-level
-metrics format or guidance for external trackers. `Train.example_train_result`
-is an unused historical record, not an experiment-tracking abstraction.
+lists for terminal plots. OCANNL already exposes `Context.get_used_memory`, the
+`Ir.Alloc_census` counters, and `ppx_minidebug` for computation debugging, but
+it has no run-level metrics format or guidance for external trackers.
 
 ## Goal
 
@@ -23,8 +22,17 @@ without turning the core library into a tracking service.
    and analyze or import the result with the user's tool of choice.
 2. Add one deterministic example or tiny utility that writes such records and
    still feeds the same values to `PrintBox_utils.plot`.
-3. Explain how to include device memory via `Context.get_used_memory`, and
-   distinguish metrics from `ppx_minidebug` traces.
+3. Explain how to include a memory metric, and say which question each one
+   answers. `Ir.Alloc_census.peak_pool_bytes`, bracketed by `reset_peak`, is a
+   high-water mark over the pools recorded at the shared allocator seam:
+   process-global and summed across devices, excluding the reserved merge-buffer
+   slab, the loaded code modules and host `Ndarray` arrays. So it is an
+   allocator pool footprint, reproducible across runs and comparable between
+   them -- not a device-memory total and not a per-device figure
+   (gh-ocannl-1006). Actual device occupancy stays with the backend's
+   `Context.get_used_memory`, recorded with the caveat that it is a current
+   gauge which on `metal` and `cc` decrements from a GC finalizer, so when it is
+   read matters. Distinguish both from `ppx_minidebug` traces.
 4. Mention external systems as consumers of the portable data, not as
    supported integrations.
 

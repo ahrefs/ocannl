@@ -22,8 +22,8 @@ The missing piece is not another tensor file format:
   migration layer.
 
 The old proposal's global `Train.checkpoint_save path` hid these constraints
-and prescribed epoch/loss-list fields from the unused
-`example_train_result`. Checkpoint state must be explicit instead.
+and prescribed a fixed set of epoch/loss-list fields. Checkpoint state must be
+explicit instead.
 
 ## Direction
 
