@@ -566,11 +566,22 @@ type recompute = { rc_flops : int; rc_bytes : int; rc_approx : bool; rc_opaque :
 
 (* A stored template's loops binding a symbol of its index vector are the ones the ordinary point
    read substitutes away ([Low_level.inline_computation] binds them to the call-site indices and
-   drops the loop); a reduction loop stays. Collapsing a bound loop to a single iteration keeps the
-   symbol bound, so [affine_accesses] still interprets every map, and gives the per-instantiation
-   trip count. *)
-let collapse_bound_loops ~(at : Idx.axis_index array) (code : Low_level.t) : Low_level.t =
-  let bound s = Array.exists at ~f:(Idx.axis_index_mentions_symbol s) in
+   drops the loop); a reduction loop stays. Only a BARE iterator position binds unconditionally (the
+   inliner's first pass); a symbol occurring inside an affine position may be bound by the
+   structural match or left free by unit solving — with its loop kept and range-guarded — depending
+   on the reader's index, which the query cannot see, so such a template prices with its loops
+   intact and only as a bound. Collapsing a bound loop to a single iteration keeps the symbol bound,
+   so [affine_accesses] still interprets every map, and gives the per-instantiation trip count. *)
+let collapse_bound_loops ~(at : Idx.axis_index array) (code : Low_level.t) : Low_level.t * bool =
+  let bound s =
+    Array.exists at ~f:(function Idx.Iterator s' -> Idx.equal_symbol s s' | _ -> false)
+  in
+  let substitution_dependent =
+    Array.exists at ~f:(function
+      | Idx.Affine { symbols; _ } -> not (List.is_empty symbols)
+      | Idx.Concat _ | Idx.Sub_axis -> true
+      | Idx.Iterator _ | Idx.Fixed_idx _ -> false)
+  in
   let rec go (c : Low_level.t) : Low_level.t =
     match c with
     | Low_level.For_loop ({ index; from_; body; _ } as f) when bound index ->
@@ -581,28 +592,52 @@ let collapse_bound_loops ~(at : Idx.axis_index array) (code : Low_level.t) : Low
     | If ({ body; _ } as i) -> If { i with body = go body }
     | c -> c
   in
-  go code
+  (go code, substitution_dependent)
 
-(* Keep only [self]'s own setters: a shared-loop template carries sibling setters that instantiation
-   filters out, and a routine's code carries everything else. A subtree without a setter of [self]
-   becomes [Noop], so the loops that survive are exactly the ones enclosing [self]'s work. *)
-let prune_to_setters ~(self : Tn.t) (code : Low_level.t) : Low_level.t =
+(* Keep only [self]'s own setters — or, with [~nth], only its [nth] setter statement in program
+   order: a shared-loop template carries sibling setters that instantiation filters out, and a
+   routine's code carries everything else. A subtree without a kept setter becomes [Noop], so the
+   loops that survive are exactly the ones enclosing the kept work. Returns the pruned code and how
+   many setters of [self] the code carries. *)
+let prune_to_setters ?nth ~(self : Tn.t) (code : Low_level.t) : Low_level.t * int =
+  let seen = ref 0 in
+  let keep () =
+    let k = !seen in
+    Int.incr seen;
+    match nth with None -> true | Some n -> n = k
+  in
   let rec go (c : Low_level.t) : Low_level.t =
     match c with
     | Low_level.Seq (a, b) -> (
-        match (go a, go b) with Noop, c | c, Noop -> c | a, b -> Seq (a, b))
+        (* Left to right, so [nth] counts in program order. *)
+        let a = go a in
+        match (a, go b) with Noop, c | c, Noop -> c | a, b -> Seq (a, b))
     | For_loop ({ body; _ } as f) -> (
         match go body with Noop -> Noop | body -> For_loop { f with body })
     | Scan_loop ({ body; _ } as sc) -> (
         match go body with Noop -> Noop | body -> Scan_loop { sc with body })
     | If ({ body; _ } as i) -> ( match go body with Noop -> Noop | body -> If { i with body })
     | (Set { tn; _ } | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } | Zero_out tn) as c ->
-        if Tn.equal tn self then c else Noop
-    | Tile_mma { d = d_tn, _; _ } as c -> if Tn.equal d_tn self then c else Noop
+        if Tn.equal tn self && keep () then c else Noop
+    | Tile_mma { d = d_tn, _; _ } as c -> if Tn.equal d_tn self && keep () then c else Noop
     | Set_local _ | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ ->
         Noop
   in
-  go code
+  let pruned = go code in
+  (pruned, !seen)
+
+(* A packed-uniform producer ([Set_from_vec]) inlines as the lane-extract scalar form, not as its
+   vector store (gh-ocannl-509 task 4), so neither its template nor its setter nest is the code a
+   read executes: such a node prices only as a bound. *)
+let rec has_set_from_vec (c : Low_level.t) =
+  match c with
+  | Low_level.Set_from_vec _ -> true
+  | Seq (a, b) -> has_set_from_vec a || has_set_from_vec b
+  | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> has_set_from_vec body
+  | Tile_mma { fallback; _ } -> has_set_from_vec fallback
+  | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Zero_out _
+  | Set _ | Set_dynamic _ | Set_local _ ->
+      false
 
 (* [analyze] over a rewritten statement, read as one computation of [self]: [self]'s own traffic is
    not traffic (inlined, the node is a scope local), so only the other nodes' reads count as bytes;
@@ -616,12 +651,22 @@ let cost_of_self ~(self : Tn.t) (s : summary) : recompute =
     rc_opaque = s.opaque;
   }
 
+(* The code one point read of the template executes, and whether that is only a bound: the
+   sibling-free body with the bound loops collapsed, then the scalar CSE the emitted code also
+   receives — a stored template predates [eliminate_common_subexpressions], so two alpha-equivalent
+   scope bodies in it (a consumer computing [x + x] of a virtual [x]) execute once in the final
+   code. *)
 let instantiation ~self ?at body =
-  let body = prune_to_setters ~self body in
-  match at with None -> body | Some at -> collapse_bound_loops ~at body
+  let body, _ = prune_to_setters ~self body in
+  let body, dependent =
+    match at with None -> (body, false) | Some at -> collapse_bound_loops ~at body
+  in
+  (Low_level.eliminate_common_subexpressions body, dependent || has_set_from_vec body)
 
 let template_cost ~(self : Tn.t) ?at (body : Low_level.t) : recompute =
-  cost_of_self ~self (analyze (instantiation ~self ?at body))
+  let body, bound_only = instantiation ~self ?at body in
+  let r = cost_of_self ~self (analyze body) in
+  { r with rc_approx = r.rc_approx || bound_only }
 
 let add_recompute a b =
   {
@@ -646,9 +691,10 @@ let recompute_cost (ctx : Low_level.optimize_ctx) : Tn.t -> recompute option =
               let visiting = Set.add visiting tn in
               Some
                 (List.fold comps ~init:zero_recompute ~f:(fun acc (at, body) ->
-                     let body = instantiation ~self:tn ?at body in
+                     let body, bound_only = instantiation ~self:tn ?at body in
                      let s = analyze body in
                      let own = cost_of_self ~self:tn s in
+                     let own = { own with rc_approx = own.rc_approx || bound_only } in
                      (* Reads of producers that will themselves inline at instantiation add their
                         own recompute per enclosing iteration; their read cells are then not
                         traffic. A producer without a stored template is a leaf whatever its
@@ -697,27 +743,40 @@ let recompute_cost (ctx : Low_level.optimize_ctx) : Tn.t -> recompute option =
   in
   fun tn -> cost ~visiting:(Set.empty (module Tn)) tn
 
+(* One setter statement of [self], priced per cell it writes. *)
+let setter_cost ~(self : Tn.t) (pruned : Low_level.t) : recompute =
+  let s = analyze pruned in
+  let width = Ops.prec_in_bytes (Lazy.force self.Tn.storage_prec) in
+  let cells =
+    List.Assoc.find s.per_node self ~equal:Tn.equal
+    |> Option.value_map ~default:0 ~f:(fun fp -> fp.fp_write_bytes / max 1 width)
+  in
+  let cells = if cells = 0 then Tn.num_elems self else cells in
+  let cells = max 1 cells in
+  let others = List.filter s.per_node ~f:(fun (tn, _) -> not (Tn.equal tn self)) in
+  let ceil_div n = (n + cells - 1) / cells in
+  {
+    rc_flops = ceil_div s.flops;
+    rc_bytes = ceil_div (List.sum (module Int) others ~f:(fun (_, fp) -> fp.fp_read_bytes));
+    rc_approx =
+      s.flops_approx
+      || List.exists others ~f:(fun (_, fp) -> fp.fp_approx)
+      || has_set_from_vec pruned;
+    rc_opaque = s.opaque;
+  }
+
+(* Re-inlining a node with several setters (a block/concat node, one range-guarded component per
+   setter) replays EVERY component at each read site — the guards select the value, the hoisted
+   component bodies all execute — so the per-read cost is the SUM of the per-cell costs of the
+   setters, not the node's total work averaged over the cells it writes. *)
 let producer_cost ~(self : Tn.t) (code : Low_level.t) : recompute option =
   match prune_to_setters ~self code with
-  | Low_level.Noop -> None
-  | pruned ->
-      let s = analyze pruned in
-      let width = Ops.prec_in_bytes (Lazy.force self.Tn.storage_prec) in
-      let cells =
-        List.Assoc.find s.per_node self ~equal:Tn.equal
-        |> Option.value_map ~default:0 ~f:(fun fp -> fp.fp_write_bytes / max 1 width)
-      in
-      let cells = if cells = 0 then Tn.num_elems self else cells in
-      let cells = max 1 cells in
-      let others = List.filter s.per_node ~f:(fun (tn, _) -> not (Tn.equal tn self)) in
-      let ceil_div n = (n + cells - 1) / cells in
+  | Low_level.Noop, _ -> None
+  | _, n ->
       Some
-        {
-          rc_flops = ceil_div s.flops;
-          rc_bytes = ceil_div (List.sum (module Int) others ~f:(fun (_, fp) -> fp.fp_read_bytes));
-          rc_approx = s.flops_approx || List.exists others ~f:(fun (_, fp) -> fp.fp_approx);
-          rc_opaque = s.opaque;
-        }
+        (List.fold (List.init n ~f:Fn.id) ~init:zero_recompute ~f:(fun acc k ->
+             let pruned, _ = prune_to_setters ~nth:k ~self code in
+             add_recompute acc (setter_cost ~self pruned)))
 
 let modeled_recompute_flops (ctx : Low_level.optimize_ctx) (llc : Low_level.t) :
     Tn.t -> [ `Materialize | `Inline ] -> int option =

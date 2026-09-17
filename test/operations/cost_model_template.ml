@@ -10,7 +10,10 @@
    ([fc_modeled]). - The ordering witness: two virtual nodes the proxy and the model rank in
    opposite orders — a three-operand sum (fan-in 3, two ops) against a four-deep unary chain (fan-in
    1, four ops). - [producer_cost] on the setter nest of a node the fan-in cap materialized (the
-   [`Inline] flip), where no template was stored: the chain prefix's adds per cell. *)
+   [`Inline] flip), where no template was stored: the chain prefix's adds per cell, and the sum over
+   the setters of a multi-component node. - The bounds (review round 1): an affine index position
+   whose binding depends on the reader, a packed-uniform producer, and the scalar CSE a stored
+   template has yet to receive. *)
 
 open Base
 open Ocannl.Operation.DSL_modules
@@ -91,7 +94,63 @@ let () =
   let s_only = CM.template_cost ~self:s ~at:[| iter i |] shared in
   show "shared-loop body priced for S (sibling dropped)" s_only;
   p "shared loop: the sibling's ops and reads do not price"
-    (s_only.CM.rc_flops = 1 && s_only.CM.rc_bytes = 4)
+    (s_only.CM.rc_flops = 1 && s_only.CM.rc_bytes = 4);
+  (* Review round 1: an affine index position binds its symbols only according to the reader's index
+     (structural match binds both, unit solving binds one and keeps the other's loop,
+     range-guarded), which the query cannot see — so for oh(2) x wh(2): T2[2*oh + wh] = A[oh][wh] *
+     2 neither loop collapses and the price is a bound, where the bare-iterator vector [oh; wh]
+     collapses both exactly. *)
+  let t2 = mk "T2" and oh = sym () and wh = sym () in
+  let affine_body =
+    loop_n oh 2
+      (loop_n wh 2
+         (set t2 [| aff [ (2, oh); (1, wh) ] 0 |] (mul (get a [| iter oh; iter wh |]) (c 2.))))
+  in
+  let affine_at = CM.template_cost ~self:t2 ~at:[| aff [ (2, oh); (1, wh) ] 0 |] affine_body in
+  let bare_at = CM.template_cost ~self:t2 ~at:[| iter oh; iter wh |] affine_body in
+  show "affine index position (loops kept, bound)" affine_at;
+  show "bare iterator positions (collapsed, exact)" bare_at;
+  p "affine position: the loops stay and the count is a bound"
+    (affine_at.CM.rc_approx && affine_at.CM.rc_flops = 4);
+  p "bare positions: both loops collapse, exact"
+    ((not bare_at.CM.rc_approx) && bare_at.CM.rc_flops = 1);
+  (* Review round 1: a packed-uniform producer inlines as the lane-extract form, not its vector
+     store, so its template prices only as a bound. *)
+  let v = mk "V" and u = mk "U" in
+  let vec_body =
+    loop_n i 1
+      (LL.Set_from_vec
+         {
+           tn = v;
+           idcs = [| aff [ (4, i) ] 0 |];
+           length = 4;
+           vec_unop = Ops.Uint4x32_to_prec_uniform;
+           arg = (get u [| iter i |], single);
+           debug = "";
+         })
+  in
+  let vec = CM.template_cost ~self:v ~at:[| aff [ (4, i) ] 0 |] vec_body in
+  show "packed-uniform producer (bound)" vec;
+  p "packed-uniform producer prices as a bound" vec.CM.rc_approx;
+  (* Review round 1: a stored template predates the scalar CSE the emitted code receives, so a
+     consumer of [x + x] with a virtual [x] carries two alpha-equivalent scope bodies that execute
+     once: Y[i] = { lv := A4[i] * 2 } + { lv' := A4[i] * 2 } prices one multiply and one add. *)
+  let y = mk "Y" in
+  let scope_of id =
+    LL.Local_scope
+      {
+        id;
+        body = LL.Set_local (id, mul (get a4 [| iter i |]) (c 2.));
+        orig_indices = [| iter i |];
+        mint = LL.Inlined_computation;
+      }
+  in
+  let twice =
+    loop_n i 4 (set y [| iter i |] (add (scope_of (LL.get_scope lv)) (scope_of (LL.get_scope lv))))
+  in
+  let cse = CM.template_cost ~self:y ~at:[| iter i |] twice in
+  show "two alpha-equivalent scopes (CSE'd)" cse;
+  p "alpha-equivalent scope bodies price once" ((not cse.CM.rc_approx) && cse.CM.rc_flops = 2)
 
 (* A chain through a real optimization: x1 = x0 + w1 (virtual), x2 = sin(x1) (virtual), out = x2 *
    x2. [recompute_cost] of x2 expands x1's template: 1 + 1 ops, x0 and w1 read. *)
@@ -224,4 +283,21 @@ let () =
     | Some r -> r.CM.rc_flops = 3 && r.CM.rc_bytes = 16 && not r.CM.rc_approx
     | None -> false);
   p "producer: a node the code never sets has no producer cost"
-    (Option.is_none (CM.producer_cost ~self:x1 o.LL.llc))
+    (Option.is_none (CM.producer_cost ~self:x1 o.LL.llc));
+  (* Review round 1: a node with several setters (block/concat components) replays every component
+     at a read site, so the per-read cost sums the setters' per-cell costs rather than averaging the
+     node's work over its cells: B[i] = P[i] * 2 for i < 2 and B[2 + i] = Q[i] * 3 price two ops per
+     read, not one. *)
+  let b = mk "B" and pp = mk "P" and q = mk "Q" and i1 = sym () and i2 = sym () in
+  let two_setters =
+    seq
+      (loop_n i1 2 (set b [| iter i1 |] (mul (get pp [| iter i1 |]) (c 2.))))
+      (loop_n i2 2 (set b [| aff [ (1, i2) ] 2 |] (mul (get q [| iter i2 |]) (c 3.))))
+  in
+  (match CM.producer_cost ~self:b two_setters with
+  | None -> Stdio.printf "  none\n"
+  | Some r -> show "two-component producer, per read" r);
+  p "two-component producer: components sum (2 ops, 8 bytes per read)"
+    (match CM.producer_cost ~self:b two_setters with
+    | Some r -> r.CM.rc_flops = 2 && r.CM.rc_bytes = 8 && not r.CM.rc_approx
+    | None -> false)

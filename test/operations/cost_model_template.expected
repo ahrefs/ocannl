@@ -7,6 +7,14 @@ reduction: no index vector, no collapse: true
 where: exact, 2 ops and 8 bytes per instantiation: true
   shared-loop body priced for S (sibling dropped) flops=1 bytes=4 exact
 shared loop: the sibling's ops and reads do not price: true
+  affine index position (loops kept, bound)    flops=4 bytes=16 approx
+  bare iterator positions (collapsed, exact)   flops=1 bytes=4 exact
+affine position: the loops stay and the count is a bound: true
+bare positions: both loops collapse, exact: true
+  packed-uniform producer (bound)              flops=4 bytes=4 approx
+packed-uniform producer prices as a bound: true
+  two alpha-equivalent scopes (CSE'd)          flops=2 bytes=4 exact
+alpha-equivalent scope bodies price once: true
 == recompute_cost through optimize ==
 chain: both links virtual: true
   x1 = x0 + w1                                 flops=1 bytes=8 exact
@@ -28,3 +36,5 @@ producer: x1 and x2 inlined into x3's setter: true
   x3's setter nest, per cell                   flops=3 bytes=16 exact
 producer: three adds and four leaf cells per written cell: true
 producer: a node the code never sets has no producer cost: true
+  two-component producer, per read             flops=2 bytes=8 exact
+two-component producer: components sum (2 ops, 8 bytes per read): true
