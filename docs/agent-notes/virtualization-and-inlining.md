@@ -181,16 +181,16 @@ files.
 - **Where a virtualization candidate is refused is readable off its placement PROVENANCE, and four
   phases write into the same table** (gh-ocannl-658, pinned row by row in
   `test/operations/virtual_rejection_boundary.ml`): `decide_placements` applies the heuristic caps
-  (`1:visit-cap` / uncovered read, `39:inline-reduction-cap`, `41:inline-fanin-cap`) BEFORE any
-  legality question, so a shape capped there may be perfectly inlineable; `check_and_store_virtual`
-  rejects at store time (codes 4, 5, 7, 9, 10, 11, 12, 51, 52, 142, 147 and the
+  (`Visit_cap` / uncovered read, `Inline_reduction_cap`, `Inline_fanin_cap`) BEFORE any legality
+  question, so a shape capped there may be perfectly inlineable; `check_and_store_virtual` rejects
+  at store time (`Site` codes 4, 5, 7, 9, 10, 11, 12, 51, 52, 142, 147 and the
   defensive-constructor ones); `inline_computation` rejects at consumption time (13, 14, 140, 145,
   146), which is why two setters with different index maps as separate statements store fine as
   components and only fail once a read site cannot be served; and `cleanup_virtual_llc` commits a
-  surviving read as `17:surviving-read`, which is the absence of a rejection rather than one.
-  Provenances compose by concatenation — `default_to_most_local` appends its own tag after the prior
-  one — so read the leading tag (`Tnode.leading_provenance`, which is what `Ll_test.rejection_code`
-  returns); see the STRING-tag entry below for the spelling.
+  surviving read as `Surviving_read`, which is the absence of a rejection rather than one.
+  Provenances compose as `Refined (prior, refinement)`, so read the leading tag
+  (`Tnode.leading_provenance`, which is what `Ll_test.rejection_code` returns); the TAG entry below
+  says which decisions are constructors and which are `Site` literals.
   Do not infer the boundary from the `Non_virtual` comments at the raise sites: several describe
   reachability that has since changed, and 52 is enforced earlier still (`trace_node_facts` raises
   `invalid_arg` on a `Concat` index, so the virtualizer's arm never sees one).
