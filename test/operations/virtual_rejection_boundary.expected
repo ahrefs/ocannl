@@ -34,3 +34,9 @@ fixed_component_symbolic_read: the two placements agree: true
 block_components: inlined: true
 block_components: executed values are the reference: true
 block_components: the two placements agree: true
+hoisted_local: rejected at store time as Non_virtual 19:declare-local: true
+hoisted_local: executed values are the reference: true
+hoisted_local: the two placements agree: true
+scan_recurrence: rejected at store time as Non_virtual 148:scan-recurrence: true
+scan_recurrence: executed values are the reference: true
+scan_recurrence: the two placements agree: true

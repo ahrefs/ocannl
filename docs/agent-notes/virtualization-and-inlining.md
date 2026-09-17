@@ -183,11 +183,34 @@ files.
   `test/operations/virtual_rejection_boundary.ml`): `decide_placements` applies the heuristic caps
   (`Visit_cap` / uncovered read, `Inline_reduction_cap`, `Inline_fanin_cap`) BEFORE any legality
   question, so a shape capped there may be perfectly inlineable; `check_and_store_virtual` rejects
-  at store time (codes 4, 5, 7, 9, 10, 11, 12, 51, 52, 142, 147 and the defensive-constructor
-  ones); `inline_computation` rejects at consumption time (13, 14, 140, 145, 146), which is why two
-  setters with different index maps as separate statements store fine as components and only fail
-  once a read site cannot be served; and `cleanup_virtual_llc` commits a surviving read as
+  at store time (codes 4, 5, 7, 8, 9, 10, 11, 12, 19, 51, 52, 141, 142, 143, 144, 147, 148);
+  `inline_computation` rejects at consumption time (13, 14, 140, 145, 146), which is why two setters
+  with different index maps as separate statements store fine as components and only fail once a
+  read site cannot be served; and `cleanup_virtual_llc` commits a surviving read as
   `Surviving_read`, which is the absence of a rejection rather than one.
+  Two properties of the store-time set are worth knowing before you chase one, and BOTH are read
+  off pipeline order rather than off the arm. First, some of those arms cannot fire: nothing emits
+  `Staged_compilation` (8) today, and the passes minting barriers (141), cooperative tiles (143) and
+  dynamic scatters (144 — `rewrite_one_hot_reductions`) all run after `virtual_llc`. Do not group
+  arms by what they match on to predict this — `Scan_loop` (148) and `If` (142) are refused by
+  constructor exactly as those are, and both fire on ordinary code.
+  Second, **19 is live, and a note or comment telling you otherwise is stale.**
+  `Assignments.lower` runs the algebraic rewrite tier — `Rewrites.apply`, gh-ocannl-483 — BEFORE
+  `Low_level.optimize`, and its member `online_softmax` declares its cached probability cell as a
+  `Declare_local` (`Online_softmax.hoist`, the consumer-side read hoist), so with that key on the
+  arm fires for real; `row_hoisted_local` in the boundary test pins it on a plain hoisted local,
+  since what the arm refuses is any `Declare_local` in the captured nest and not that rewrite's
+  shape. Two qualifications: `online_softmax` is enabled by the `approximate` profile only —
+  `performance` deliberately leaves the algebraic-rewrite gates alone as a numerics axis, and
+  `reproducible` pins them off — and the rewrite's OTHER `Declare_local`, inside `emit_normalizer`'s
+  scan body, never reaches 19, because an enclosing `Scan_loop` is refused as 148 first. (The
+  running max/sum are `Scan_loop.carried` values, not locals.) Claims that
+  `hoist_cross_statement_cse` is the only producer of `Declare_local` predate that tier.
+  Both 142 and 148 arrive by two routes, and the pair is the general shape: the offending
+  construct ENCLOSES the candidate's nest, so it is outside the captured subtree and only the
+  caller can report it (`~guarded` / `~in_scan`, decided before the walk starts), or it sits
+  INSIDE and the walk's own arm finds it. Same verdict either way — for 148 that one verdict also
+  covers a scan the candidate merely reads from or sits beside (gh-ocannl-696).
   Do not infer the boundary from the `Non_virtual` comments at the raise sites: several describe
   reachability that has since changed, and 52 is enforced earlier still (`trace_node_facts` raises
   `invalid_arg` on a `Concat` index, so the virtualizer's arm never sees one). The tags themselves,
@@ -196,12 +219,12 @@ files.
   (gh-ocannl-609): `Tnode.provenance` splits two ways. A decision nothing interrogates is a
   `Site "<code>:<kebab-reason>"` explaining itself — some sixty of those, minted across nine modules
   from the C renderer's storage queries to the scheduler's tile placements. A tag some other code
-  reads back is a CONSTRUCTOR: `Visit_cap`, `Inline_reduction_cap`, `Inline_fanin_cap`,
-  `Read_before_write`, `Scope_local`, `Surviving_read`. The split is a layering decision, not a
-  style one — the type lives in `tnode.ml` (that is where `Placements` is), so a constructor per
-  site would make the bottom module enumerate the vocabulary of every module above it, which is why
-  the field was an unstructured `int` for years in the first place. The rule for a new tag: `Site`
-  unless something matches on it.
+  reads back is a `provenance` CONSTRUCTOR: `Visit_cap`, `Inline_reduction_cap`,
+  `Inline_fanin_cap`, `Read_before_write`, `Scope_local`, `Surviving_read`. The split is a layering
+  decision, not a style one — the type lives in `tnode.ml` (that is where `Placements` is), so a
+  constructor per site would make the bottom module enumerate the vocabulary of every module above
+  it, which is why the field was an unstructured `int` for years in the first place. The rule for a
+  new tag: `Site` unless something matches on it.
   - The code is the integer the provenance used to be, so older issues and comments citing
     `Non_virtual 13` or "provenance 39" still resolve. Codes are NOT unique: `176`/`178` each name
     two different schedule sites, told apart by their reasons.
