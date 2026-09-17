@@ -1675,8 +1675,14 @@ that they earn a lookup rather than always-loaded space.
   root and bare switch: for 2.6.0 (which also moved setup-ocaml's default repository from the git
   opam-repository to HTTP `opam.ocaml.org`) the step went from ~70s to 278-347s once on
   ubuntu/macOS, then settled at 45-50s — below the old warm number, the HTTP repository's
-  `index.tar.gz` being what opam 2.6 reads in memory instead of extracting. The Windows leg's cold
-  switch is far more than that, and it is a bill paid once per bump, not a regression to chase.
+  `index.tar.gz` being what opam 2.6 reads in memory instead of extracting. That is worth much
+  more on Windows than the CI numbers show: measured on a native-Windows fleet box with scratch
+  roots and the same HTTP repository, `opam init --bare` went 135.6s -> 12.6s and `opam update`
+  102.8s -> 1.2s between 2.5.2 and 2.6.0, and the root went from 46 MB in 19,123 files to 25 MB in
+  15 — an extracted tree of small files is exactly what NTFS charges for. CI's Windows cold switch
+  hides it because that step is dominated by building the compiler: it stayed in its historical
+  615-902s band (770s and 710s on the 2.6.0 dispatch). A cold switch is a bill paid once per bump,
+  not a regression to chase.
   Our own `_opam` key deliberately does NOT carry the opam version: a switch built by 2.5.2
   restores and runs green under 2.6.0 (the 2026-09-17 master runs hit that cache), so keying on it
   would buy nothing and cost a ~180-package rebuild per platform at every bump.
