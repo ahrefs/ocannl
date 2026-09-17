@@ -734,6 +734,34 @@ module Placements = struct
         Hashtbl.set p.table ~key:tn ~data:(mode, provenance)
     | Some ((Virtual | Local | On_device), _) -> ()
 
+  (** The forcing family -- {!is_virtual_force}, {!is_materialized_force} and {!is_in_context_force}
+      -- answers a placement question and, where the placement is still open, resolves the node on
+      the spot.
+
+      A [provenance] is recorded exactly where the query WRITES the table, and each query writes on
+      its own set of open states:
+
+      - {!is_virtual_force} records on [None] and [Effectively_constant]. [Never_virtual] reaches
+        its catch-all [false] arm instead, and the tag is discarded.
+      - {!is_materialized_force} records on [Never_virtual] and [Effectively_constant]. [None] is an
+        assertion failure, not a defaulting point.
+      - {!is_in_context_force} records on [None], [Never_virtual] and [Effectively_constant] --
+        unless the node is a slice alias, which answers [false] ahead of the match and records
+        nothing whatever its state.
+
+      The settled placements -- [Virtual], [Local], [On_device] -- answer and record nothing, in
+      every query. And {!get} answers from the {e effective} state, so a settled placement is either
+      this lineage's table decision or the tnode's declared {!field-memory_mode_intent}: a node
+      minted [On_device] at construction, set [Virtual] by [Train.set_virtual], or declared [Local]
+      outright, silences every later query without ever acquiring a table entry.
+
+      So a query site's tag is the reason the node got defaulted {e at that query}, not a claim that
+      the query is load-bearing: most call sites never mint their literal.
+
+      The goldens bear this out. [c_syntax.ml] alone carries twelve query sites, each with its own
+      tag; a repository-wide search of the committed [.expected] files finds fourteen distinct tags
+      in printed placements, every one minted at graph construction ([tensor.ml], [train.ml]) or by
+      the virtualizer in [low_level.ml] -- not one from a codegen query. *)
   let is_virtual_force p tn provenance =
     match get p tn with
     | Some (Virtual, _) -> true
