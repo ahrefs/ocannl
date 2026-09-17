@@ -1954,18 +1954,22 @@ that they earn a lookup rather than always-loaded space.
   unit's first minute, after two `TimeSync` host resumes overnight). VRAM was not the limit: under WSL2 the card oversubscribes into host memory (a
   probe held 28.9 GB of a 12 GB RTX 5070 Ti and the test still passed beside it), 48 concurrent
   copies of the test peaked at 8.1 GB with no refusal, and alone it passes adding 155 MiB.
-- **A burst is common; a burst that lands on the first driver call is what costs a stanza.** A
-  per-boot census of rog-nv's journal on 2026-09-17 found three bursts since 2026-09-01, not one:
-  10 refusals on 09-11 08:16:23–38, 3 on 09-13 09:59:23–26, 1 on 09-17 07:09:01 — all three in the
-  first ~90 seconds of a `cuda` unit, and only the middle one cost anything. So the bursts are
-  recurrent and usually harmless: a lost message is fatal when it lands on
-  `cu_device_primary_ctx_retain` or `cu_init`, the calls a process makes before it holds anything
-  to fall back on, and is absorbed almost anywhere else. Read an earlier claim that a burst was the
-  box's only one as an artifact of `journalctl -k`, which answers for the current boot alone; the
-  census wants `journalctl -b <n>` per boot. Nor is a full-width unit evidence for a `unit_jobs`
-  cap on `rog-nv:cuda`: the 09-11 burst of 10 lost no stanza, and a forced full-scope unit at full
-  width on 2026-09-17 (`--slow --force --only cuda`, 3321 s, ref `fa5116209`) passed with zero
-  refusals in its own window. The serial rerun covers the case a cap would not.
+- **A burst is common, and which ones cost a stanza is a thing to observe, not to infer from the
+  call site.** A per-boot census of rog-nv's journal on 2026-09-17 found three bursts since
+  2026-09-01, not one: 10 refusals on 09-11 08:16:23–38, 3 on 09-13 09:59:23–26, 1 on 09-17
+  07:09:01 — all three in the first ~90 seconds of a `cuda` unit, and only the 09-13 one cost
+  anything. What the other two lost is not recorded: a message the bridge drops need not have been
+  carrying a driver call this suite made, and nothing here observed where those landed. So do not
+  read their harmlessness as a rule about which calls are survivable. Every call site in the table
+  below is a bare call — `Cu.Module.load_data_ex` and `Cu.Stream.create` as much as
+  `Cu.Context.get_primary` — with no retry or fallback around any of them in `cuda_backend.ml`, and
+  the HIP column records module-load and stream-creation refusals that did abort stanzas. Read an
+  earlier claim that a burst was the box's only one as an artifact of `journalctl -k`, which answers
+  for the current boot alone; the census wants `journalctl -b <n>` per boot. Nor is a full-width
+  unit evidence for a `unit_jobs` cap on `rog-nv:cuda`: the 09-11 burst of 10 lost no stanza, and a
+  forced full-scope unit at full width on 2026-09-17 (`--slow --force --only cuda`, 3321 s, ref
+  `fa5116209`) passed with zero refusals in its own window. The serial rerun covers the case a cap
+  would not.
 
 | name (`Fatal error: exception <name>:`) | call site | statuses seen |
 | --- | --- | --- |
