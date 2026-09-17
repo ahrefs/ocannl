@@ -734,6 +734,23 @@ module Placements = struct
         Hashtbl.set p.table ~key:tn ~data:(mode, provenance)
     | Some ((Virtual | Local | On_device), _) -> ()
 
+  (** The forcing family -- {!is_virtual_force}, {!is_materialized_force} and {!is_in_context_force}
+      -- answers a placement question and, where the table does not already answer it, resolves the
+      node on the spot.
+
+      The [provenance] argument is recorded only on that resolving path -- a node still undecided
+      ([None]) or still at a non-final intent ([Never_virtual], [Effectively_constant]), which the
+      two materialization queries settle through {!default_to_most_local} and {!is_virtual_force}
+      settles with the same guard inlined. (Which of those open states each query resolves differs:
+      [is_materialized_force] asserts rather than default an undecided node.) A call on a node
+      already decided [Virtual], [Local] or [On_device] answers from the table and records nothing.
+      So a query site's tag is the reason the node got defaulted {e at that query}, not a claim that
+      the query is load-bearing: most call sites never mint their literal.
+
+      The goldens bear this out. [c_syntax.ml] alone carries twelve query sites, each with its own
+      tag; a repository-wide search of the committed [.expected] files finds fourteen distinct tags
+      in printed placements, every one minted at graph construction ([tensor.ml], [train.ml]) or by
+      the virtualizer in [low_level.ml] -- not one from a codegen query. *)
   let is_virtual_force p tn provenance =
     match get p tn with
     | Some (Virtual, _) -> true
