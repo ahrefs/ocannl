@@ -183,16 +183,22 @@ files.
   `test/operations/virtual_rejection_boundary.ml`): `decide_placements` applies the heuristic caps
   (`Visit_cap` / uncovered read, `Inline_reduction_cap`, `Inline_fanin_cap`) BEFORE any legality
   question, so a shape capped there may be perfectly inlineable; `check_and_store_virtual` rejects
-  at store time (codes 4, 5, 7, 9, 10, 11, 12, 51, 52, 142, 147, plus 8, 19, 141, 143 and 144,
-  which refuse a `Low_level.t` CONSTRUCTOR met in the captured nest rather than a shape);
+  at store time (codes 4, 5, 7, 9, 10, 11, 12, 51, 52, 142, 147, plus 8, 19, 141, 143, 144 and
+  148, which refuse a `Low_level.t` CONSTRUCTOR met in the captured nest rather than a shape);
   `inline_computation` rejects at consumption time (13, 14, 140, 145, 146), which is why two setters
   with different index maps as separate statements store fine as components and only fail once a
   read site cannot be served; and `cleanup_virtual_llc` commits a surviving read as
   `Surviving_read`, which is the absence of a rejection rather than one.
-  Four of those five constructor arms are defensive, and it is the PIPELINE ORDER that makes them
+  Four of those six constructor arms are defensive, and it is the PIPELINE ORDER that makes them
   so: nothing emits `Staged_compilation` (8) today, and the passes minting barriers (141),
   cooperative tiles (143) and dynamic scatters (144 — `rewrite_one_hot_reductions`) all run after
-  `virtual_llc`. **19 is not defensive any more**, and what the arm refuses is the CONSTRUCTOR, not
+  `virtual_llc`. The other two fire on ordinary code. 148 (`Scan_loop`, gh-ocannl-696) has two
+  routes, both landing at store time: the candidate's setter sits inside a scan, which is outside
+  the captured subtree and so is passed down as `~in_scan` and reported before the walk starts; or
+  the walk meets a scan anywhere INSIDE the captured nest. One verdict covers all three shapes —
+  candidate written in the scan, fed from it through a scope local, or merely a sibling of it —
+  and `test/operations/scan_loop.ml` runs two of them with executed legs.
+  **19 is not defensive any more**, and what the arm refuses is the CONSTRUCTOR, not
   any particular pass's shape: a `Declare_local` anywhere in the captured nest. `Assignments.lower`
   runs the algebraic rewrite tier — `Rewrites.apply`, gh-ocannl-483 — BEFORE `Low_level.optimize`,
   and its member `online_softmax` declares its cached probability cell that way

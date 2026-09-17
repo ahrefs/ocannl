@@ -43,7 +43,10 @@
    emits (staged compilation, barriers, cooperative tiles, dynamic scatters). These will never
    become inlineable, so a row would pin nothing that could move. - 14, 140, 145, 146 belong to the
    vector-store (packed-uniform) consumption path, exercised through the uniform tests rather than
-   by hand.
+   by hand. - 148 ([Scan_loop]) is store-time like the arms above and fires on ordinary code, by
+   either of two routes: the setter sits inside a scan (outside the captured subtree, so the caller
+   passes [~in_scan]) or the walk meets one inside it. It is unrowed here because
+   [test/operations/scan_loop.ml] already runs both with executed legs, not because it cannot fire.
 
    19 was in that list and is not: gh-ocannl-483 put the algebraic rewrite tier AHEAD of
    [Low_level.optimize], and [Online_softmax.hoist] declares its cached probability cell as a
@@ -85,7 +88,7 @@ let phase_of_code tag =
         | "8:staged-compilation" | "9:sibling-escaping-read-index" | "10:escaping-index-symbol"
         | "11:already-non-virtual" | "12:no-setter" | "19:declare-local" | "51:affine-not-injective"
         | "52:concat-index" | "141:workgroup-barrier" | "142:guarded-computation" | "143:tile-mma"
-        | "144:dynamic-write" | "147:enclosing-repetition-loop" ) ->
+        | "144:dynamic-write" | "147:enclosing-repetition-loop" | "148:scan-recurrence" ) ->
         Some Store
     | Ir.Tnode.Site
         ( "13:call-site-index-mismatch" | "14:empty-inlined-body" | "140:vector-setter-unsupported"

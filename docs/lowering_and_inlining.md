@@ -460,8 +460,10 @@ Two CSE passes run after the one-hot rewrite (#351 and follow-ups):
   sibling statements and hoists it to a common ancestor scope, inserting a `Declare_local` (plus its
   body) before the first user and replacing each occurrence with a read of that local. A hoisted
   local is marked `needs_init` when it is read before being set in some path
-  (`reads_scope_before_set`), so a zero initializer is emitted. This is the **only** producer of
-  `Declare_local`.
+  (`reads_scope_before_set`), so a zero initializer is emitted. Within this pipeline it is the
+  **only** producer of `Declare_local` — but not in the program `optimize` receives: the algebraic
+  rewrite tier ahead of the pipeline emits them too (see the `Declare_local` bullet above, and
+  `Non_virtual 19` below).
 
 Both passes compare scalar expressions up to alpha-equivalence via `cse_equal_scalar`: two
 expressions that differ only in their local-scope ids (or dynamic-gather scope ids) are treated as
@@ -621,13 +623,14 @@ behavior is **retained**, not changed:
   than converting it to an `assert`: a `Get` can reach cleanup before its target's mode is finalized,
   because cleanup is itself the phase that commits surviving reads. Converting to an assert is not
   guaranteed safe, so the conservative `update` is retained.
-- The defensive `Declare_local` arm (`Non_virtual 19`) and the defensive `Get_dynamic` arms in
-  pre-rewrite passes are **retained**: `Declare_local`/`Get_dynamic` are produced by the *last*
-  pipeline phases (`hoist_cross_statement_cse` / `rewrite_one_hot_reductions`), so earlier passes
-  cannot encounter them on the fresh-lowering path, but the arms guard against re-entry of an
-  already-optimized program. (The audit's verdict stands; half its premise no longer does.
-  gh-ocannl-483 added a rewrite tier ahead of the pipeline whose `online_softmax` member emits
-  `Declare_local`, so the `Non_virtual 19` arm is reachable on the ordinary path with that key on
-  — retained for a second reason, and covered by `row_hoisted_local` in
-  `test/operations/virtual_rejection_boundary.ml`. `Get_dynamic` is unaffected:
-  `rewrite_one_hot_reductions` is still a pipeline phase, after `virtual_llc`.)
+- The `Declare_local` arm (`Non_virtual 19`) and the `Get_dynamic` arms in pre-rewrite passes are
+  **retained**. The audit reached that verdict because both constructors were produced by the
+  *last* pipeline phases (`hoist_cross_statement_cse` / `rewrite_one_hot_reductions`), so earlier
+  passes could not encounter them on the fresh-lowering path and the arms were purely guards
+  against re-entry of an already-optimized program. **That premise now holds only for
+  `Get_dynamic`** — `rewrite_one_hot_reductions` is still a pipeline phase after `virtual_llc`.
+  For `Declare_local` it lapsed with gh-ocannl-483, which added a rewrite tier AHEAD of the
+  pipeline whose `online_softmax` member emits one, so `Non_virtual 19` is reachable on the
+  ordinary path with that key on; it is pinned by `row_hoisted_local` in
+  `test/operations/virtual_rejection_boundary.ml`. The verdict is unchanged, for a stronger reason
+  than the audit had.
