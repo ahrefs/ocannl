@@ -57,6 +57,7 @@ let hand_built ~stmts ~tns_on_device ~tns_local =
     zero_fringe = Set.empty (module Tn);
     flip_candidates = [];
     spliced_rbw = Base.Set.empty (module Tn);
+    source = llc;
   }
 
 let hardware_syms (sched : Sched.schedule) : Idx.symbol list =

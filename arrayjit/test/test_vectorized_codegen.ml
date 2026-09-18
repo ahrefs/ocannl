@@ -35,6 +35,7 @@ let make_optimized llc tns : LL.optimized =
     zero_fringe = Base.Set.empty (module Tn);
     flip_candidates = [];
     spliced_rbw = Base.Set.empty (module Tn);
+    source = llc;
   }
 
 let make_on_device id label =

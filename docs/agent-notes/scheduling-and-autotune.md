@@ -813,6 +813,27 @@ files.
   old stamp and the next opener retries; power-loss durability is the filesystem's, not an fsync
   guarantee. Pre-gh-835 binaries do not take the lock and must not share a live cache directory
   during an upgrade.
+- **`Train.tune_placements` persists its decision beside the schedule entries** (gh-ocannl-786,
+  `Schedule_cache.store_placements` / `lookup_placements`, same directory, lock, regime stamp and
+  key components). Placement stays outside the schedule value — a schedule is keyed by the
+  placement-aware digest, so folding placements in would be circular — hence a second store. Its
+  key is the DECISION PROBLEM's identity, `Schedule_cache.canonicalize_source`: the raw lowered code
+  (`Low_level.optimized.source`, where a node the policy inlines away is still a statement, so
+  every flip candidate has a structural position) plus, per node, the placement the lineage brings
+  (`Context.placements` of the caller's context — prior decisions, or the intent the lookup falls
+  back to) and its inline/footprint preferences; the decision itself is what the entry records, so
+  it is outside the key. The entry holds `Default` / `Materialize_all` / `Refined flips` and an
+  `outcome_digest` — the placement-aware digest of the lowering the decision produces, recomputed
+  through `Context.lowered_for_decisions` at store time and at replay: an entry whose decision no
+  longer reproduces its program (a cap moved, a lineage inherits differently, a flip names a node
+  the problem lacks) is re-tuned and overwritten, never applied. A hit runs ONE search from the
+  replayed context (normally a schedule-cache replay), so `?report` sees one report there and the
+  positional two-arm contract holds only on cold runs — attribute by `on_ship`, which the harness's
+  `tune_json` now uses to name a lone report. Recorded only from clean evidence (every observed
+  search completed, uncontended, the shipped one timed something), never under `tune_ship_arm`,
+  which also never consults it. `test/operations/placement_store.ml` pins all of this; the
+  directory is `Autotune.resolve_cache_dir`'s, so `autotune_search=false` with an unchosen
+  directory disables both stores together.
 - **A `Scan_loop` is opaque to the schedule ops in both directions and transparent to the
   annotator** (gh-ocannl-696, `test/operations/scan_loop.ml` leg 7): `find_loops_env` and
   `rewrite_loop` do not enter it, so an op naming the scan's own index or a loop nested in its body

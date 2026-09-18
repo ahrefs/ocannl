@@ -1004,6 +1004,15 @@ type optimized = {
           every pure input. [Backends]' prior-context demand keys on this set: a reconcile-flipped
           node's entry value must already live in the linked context, while raw-classified inputs
           keep the assignments layer's curated exclusions. *)
+  source : t;
+      (** The raw lowered code this specialization was decided over (gh-ocannl-786): the routine as
+          [Assignments.lower] handed it to [optimize] — rewrites applied, no placement decided,
+          every node still present as the statements that set and read it. Schedule transforms
+          inherit it unchanged (they transform the decided program, not the decision problem).
+          Together with the lineage's prior decisions it is the identity of the placement DECISION
+          PROBLEM, which [Schedule_cache.canonicalize_source] renders: a decision recorded against
+          that identity addresses its nodes by their first occurrence here, where a node the
+          decision inlined is still visible — in [llc] it is not. *)
 }
 [@@deriving sexp_of]
 

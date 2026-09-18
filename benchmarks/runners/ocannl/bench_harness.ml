@@ -337,8 +337,13 @@ let tune_json t =
   match List.rev t.arm_reports with
   | [] -> None
   | reports ->
+      (* Arms are named by arrival order on a cold run, which reports both. A placement-store replay
+         (gh-ocannl-786) reports exactly one search -- the shipped placement's -- so a lone report
+         is named by what [on_ship] said shipped rather than as an arm A it may not be. *)
       let named =
-        List.mapi reports ~f:(fun i r -> (Printf.sprintf "%c" (Char.of_int_exn (65 + i)), r))
+        match (reports, t.shipped) with
+        | [ r ], Some what -> [ (what, r) ]
+        | _ -> List.mapi reports ~f:(fun i r -> (Printf.sprintf "%c" (Char.of_int_exn (65 + i)), r))
       in
       let shipped =
         match t.shipped with

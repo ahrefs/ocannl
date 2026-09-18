@@ -1017,6 +1017,9 @@ type optimized = {
           reconciliation (a spliced read preceding, or not definitely covered by, the routine's own
           writes) — as opposed to the raw analysis' uncovered-read classification, which also flags
           every pure input. [Backends]' prior-context demand keys on this set. *)
+  source : t;
+      (** The raw lowered code this specialization was decided over (gh-ocannl-786); see the
+          interface. *)
 }
 [@@deriving sexp_of]
 
@@ -8069,6 +8072,7 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
     zero_fringe = Set.empty (module Tnode);
     flip_candidates;
     spliced_rbw;
+    source = an.an_llc;
   }
 
 (* gh-560: the identity of a routine's analysis inputs — a canonical rendering of the raw lowered

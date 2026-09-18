@@ -89,7 +89,18 @@ let tn_of_ref c i =
    consumer's extras — the [base_syms]/[tn_refs] resolution maps and the codegen-companion sections.
    Opposite choices to [Low_level.analysis_digest]'s, which keys by identity; see
    [LL.Canonical_render]. *)
-let canonicalize ?(static_indices = []) ?(with_placements = true) (opt : LL.optimized) : canonical =
+(* The placement class of a node as the digest renders it. *)
+let placement_class plc tn =
+  match Tn.Placements.get plc tn with
+  | None -> ";u"
+  | Some (m, _) -> ";" ^ Sexp.to_string (Tn.sexp_of_memory_mode m)
+
+(* The one canonical walk behind both identities this module exports — {!canonicalize} for the
+   decided program a schedule applies to, {!canonicalize_source} for the decision problem a
+   placement decision answers (gh-ocannl-786). [node_tag] renders what a first-occurrence tensor
+   node carries beside its dims and precision; [companions] renders the consumer's sections after
+   the code, given the node emitter so they share the numbering. *)
+let canonical_of ~static_indices ~node_tag ~companions (llc : LL.t) : canonical =
   let buf = Buffer.create 4096 in
   let add = Buffer.add_string buf in
   let complete = ref true in
@@ -104,7 +115,6 @@ let canonicalize ?(static_indices = []) ?(with_placements = true) (opt : LL.opti
   in
   let tn_refs = Hashtbl.create (module Tn) in
   let rev_tns = ref [] in
-  let plc = opt.LL.optimize_ctx.LL.placements in
   let emit_tn tn =
     match Hashtbl.find tn_refs tn with
     | Some i -> add ("t" ^ Int.to_string i)
@@ -118,31 +128,11 @@ let canonicalize ?(static_indices = []) ?(with_placements = true) (opt : LL.opti
            non-hoisted winner cached for a same-shape non-constant program must not mask a constant
            program's hoisted candidates — so such programs must not share cache keys. *)
         let hc = if Schedule.hoistable_constant tn then ";const" else "" in
-        (* The effective placement class enters the digest too (Codex P1 on PR #140): the optimized
-           code can be identical while placements differ — [Local] scratch vs an [On_device] buffer
-           — and the generated backend code then differs in kind and performance, so such programs
-           must not share cache keys. In particular the placement-A/B arms of
-           [Train.tune_placements] would otherwise cache-hit each other's entries whenever their
-           code diverges only in placements, skipping the second arm's measurement. Placements of
-           nodes reaching the optimized code are settled by the end of the pipeline; render an
-           undecided node defensively rather than assert. *)
-        let pc =
-          (* [with_placements = false] gives the structural identity: placement classes can render
-             differently across compilation lineages on byte-identical code (decided in one,
-             undecided in the other), so per-segment schedule matching in fissioned replays keys on
-             structure only, while disk-cache keys and post-schedule dedup keep the placement-aware
-             form. *)
-          if not with_placements then ""
-          else
-            match Tn.Placements.get plc tn with
-            | None -> ";u"
-            | Some (m, _) -> ";" ^ Sexp.to_string (Tn.sexp_of_memory_mode m)
-        in
         add
           (Printf.sprintf "t%d=[%s;%s%s%s]" i
              (String.concat_array ~sep:"," (Array.map dims ~f:Int.to_string))
              (Sexp.to_string (Ops.sexp_of_prec (Lazy.force tn.Tn.storage_prec)))
-             hc pc)
+             hc (node_tag tn))
   in
   LL.Canonical_render.emit ~buf
     {
@@ -162,8 +152,27 @@ let canonicalize ?(static_indices = []) ?(with_placements = true) (opt : LL.opti
       mma = LL.Canonical_render.Structural_mma;
       initial_tokens;
     }
-    opt.LL.llc;
-  (* Codegen-relevant companions of the code. *)
+    llc;
+  companions ~add ~emit_tn;
+  let base_syms =
+    Hashtbl.fold first_bind
+      ~init:(Map.empty (module Idx.Symbol))
+      ~f:(fun ~key ~data acc ->
+        if Hash_set.mem dup_binders key then acc else Map.set acc ~key ~data)
+  in
+  {
+    digest = Stdlib.Digest.to_hex (Stdlib.Digest.string (Buffer.contents buf));
+    complete = !complete;
+    base_syms;
+    tn_refs =
+      Hashtbl.fold tn_refs
+        ~init:(Map.empty (module Tn))
+        ~f:(fun ~key ~data acc -> Map.set acc ~key ~data);
+    ref_tns = Array.of_list_rev !rev_tns;
+  }
+
+(* Codegen-relevant companions of the decided code, sharing the code walk's node numbering. *)
+let companions (opt : LL.optimized) ~add ~emit_tn =
   add "shared:[";
   Set.iter opt.LL.workgroup_shared ~f:(fun tn ->
       emit_tn tn;
@@ -198,23 +207,49 @@ let canonicalize ?(static_indices = []) ?(with_placements = true) (opt : LL.opti
   end;
   add "];merge:";
   (match opt.LL.merge_node with None -> add "-" | Some tn -> emit_tn tn);
-  add ";";
-  let base_syms =
-    Hashtbl.fold first_bind
-      ~init:(Map.empty (module Idx.Symbol))
-      ~f:(fun ~key ~data acc ->
-        if Hash_set.mem dup_binders key then acc else Map.set acc ~key ~data)
-  in
-  {
-    digest = Stdlib.Digest.to_hex (Stdlib.Digest.string (Buffer.contents buf));
-    complete = !complete;
-    base_syms;
-    tn_refs =
-      Hashtbl.fold tn_refs
-        ~init:(Map.empty (module Tn))
-        ~f:(fun ~key ~data acc -> Map.set acc ~key ~data);
-    ref_tns = Array.of_list_rev !rev_tns;
-  }
+  add ";"
+
+let canonicalize ?(static_indices = []) ?(with_placements = true) (opt : LL.optimized) : canonical =
+  let plc = opt.LL.optimize_ctx.LL.placements in
+  (* The effective placement class enters the digest too (Codex P1 on PR #140): the optimized code
+     can be identical while placements differ — [Local] scratch vs an [On_device] buffer — and the
+     generated backend code then differs in kind and performance, so such programs must not share
+     cache keys. In particular the placement-A/B arms of [Train.tune_placements] would otherwise
+     cache-hit each other's entries whenever their code diverges only in placements, skipping the
+     second arm's measurement. Placements of nodes reaching the optimized code are settled by the
+     end of the pipeline; render an undecided node defensively rather than assert.
+
+     [with_placements = false] gives the structural identity: placement classes can render
+     differently across compilation lineages on byte-identical code (decided in one, undecided in
+     the other), so per-segment schedule matching in fissioned replays keys on structure only, while
+     disk-cache keys and post-schedule dedup keep the placement-aware form. *)
+  let node_tag tn = if with_placements then placement_class plc tn else "" in
+  canonical_of ~static_indices ~node_tag ~companions:(companions opt) opt.LL.llc
+
+(* The decision problem's identity (gh-ocannl-786): the raw program, and per node what the lineage
+   brings to the decision — its effective placement (a prior decision, or the declared intent the
+   lookup falls back to) and the inline / footprint preferences the lineage recorded. Nothing this
+   specialization decided enters: [lineage] is the placements table of the CONTEXT the lowering was
+   decided from ({!Context.placements}), not [opt]'s post-decision table, and the preferences are
+   inputs the optimizer reads and never writes. *)
+(* What one lineage brings to a node's placement decision: its effective placement, whether that
+   placement is a heuristic cap's (flippable back by [Context.decide_inline] -- the same mode imposed
+   by legality or intent is not, so two lineages agreeing on the mode can still pose different
+   refinement surfaces), and the inline / footprint preferences the lineage recorded. *)
+let lineage_tag (plc : Tn.Placements.t) (octx : LL.optimize_ctx) tn =
+  (match Tn.Placements.get plc tn with
+    | None -> ";u"
+    | Some (m, p) ->
+        ";"
+        ^ Sexp.to_string (Tn.sexp_of_memory_mode m)
+        ^ if LL.is_cap_provenance p then "/cap" else "")
+  ^ (if Hash_set.mem octx.LL.inline_preferences tn then ";i" else "")
+  ^ if Hash_set.mem octx.LL.footprint_preferences tn then ";f" else ""
+
+let canonicalize_source ?(static_indices = []) ?(node_tag = fun _ -> "")
+    ~(lineage : Tn.Placements.t) (opt : LL.optimized) : canonical =
+  let node_tag tn = lineage_tag lineage opt.LL.optimize_ctx tn ^ node_tag tn in
+  canonical_of ~static_indices ~node_tag ~companions:(fun ~add:_ ~emit_tn:_ -> ()) opt.LL.source
 
 (** {2 Registries} *)
 
@@ -702,7 +737,10 @@ let with_cache_open ~dir f =
               if open_current_regime dir then Some (f ()) else None)
         with Unix.Unix_error _ | Stdlib.Sys_error _ -> None))
 
-let store ~dir ~key entry =
+(* One entry I/O protocol for both kinds of entry the directory holds: the schedule entries and the
+   placement decisions (gh-ocannl-786) share the lock, the regime stamp and the atomic commit, and
+   differ only in payload and version check. *)
+let store_sexp ~dir ~key sexp =
   ensure_dir dir;
   ignore
     (with_cache_open ~dir (fun () ->
@@ -716,8 +754,7 @@ let store ~dir ~key entry =
             intention. The injection point sits in the staged-but-uncommitted window, which is what
             makes that guarantee testable. *)
          try
-           Utils.Atomic_file.write_all ~path:file
-             ~data:(Sexp.to_string_hum (sexp_of_entry entry))
+           Utils.Atomic_file.write_all ~path:file ~data:(Sexp.to_string_hum sexp)
              ~before_commit:(fun () -> Resource_fault_injection.hit Schedule_cache_before_commit)
              ()
          with Stdlib.Sys_error _ ->
@@ -727,7 +764,13 @@ let store ~dir ~key entry =
               removed the staging file; an earlier complete entry is still in place. *)
            ()))
 
-let lookup ~dir ~key =
+(* The failures a cache read never absorbs: they are about the process, not the entry, and a miss
+   that hides one turns Ctrl-C during a lookup into the start of a search it was meant to stop. *)
+let process_level = function
+  | Out_of_memory | Stdlib.Sys.Break | Stack_overflow -> true
+  | _ -> false
+
+let lookup_sexp ~dir ~key ~of_sexp ~current =
   Option.join
     (with_cache_open ~dir (fun () ->
          Utils.Atomic_file.cleanup_stale_once dir;
@@ -736,6 +779,47 @@ let lookup ~dir ~key =
          else
            try
              Resource_fault_injection.hit Schedule_cache_before_replay;
-             let entry = entry_of_sexp (Sexplib.Sexp.load_sexp file) in
-             if entry.version = entry_version then Some entry else None
-           with _ -> None))
+             let entry = of_sexp (Sexplib.Sexp.load_sexp file) in
+             if current entry then Some entry else None
+           with exn when not (process_level exn) -> None))
+
+let store ~dir ~key entry = store_sexp ~dir ~key (sexp_of_entry entry)
+
+let lookup ~dir ~key =
+  lookup_sexp ~dir ~key ~of_sexp:entry_of_sexp ~current:(fun e -> e.version = entry_version)
+
+(** {2 The placement-decision store} *)
+
+type placement_flip = { node : int; flip : [ `Materialize | `Inline | `Footprint ] }
+[@@deriving sexp, compare, equal]
+
+type placement_decision = Default | Materialize_all | Refined of placement_flip list
+[@@deriving sexp, compare, equal]
+
+type placement_entry = {
+  version : int;
+  backend : string;
+  numerics : string;
+  codegen : string;
+  objective : string;
+  problem_digest : string;
+  decision : placement_decision;
+  outcome_digest : string;
+  shipped_ms : float;
+  arm_a_ms : float;
+  arm_b_ms : float;
+}
+[@@deriving sexp]
+
+let placement_entry_version = 1
+
+let placement_key ?objective ~limits canonical ~backend =
+  "placements-" ^ cache_key ?objective ~limits canonical ~backend
+
+let store_placements ~dir ~key entry = store_sexp ~dir ~key (sexp_of_placement_entry entry)
+
+let lookup_placements ~dir ~key =
+  lookup_sexp ~dir ~key ~of_sexp:placement_entry_of_sexp ~current:(fun e ->
+      e.version = placement_entry_version)
+
+let shipped_label = function Default -> "A" | Materialize_all -> "B" | Refined _ -> "flip"

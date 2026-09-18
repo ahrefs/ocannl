@@ -86,10 +86,11 @@ hierarchically — placement A/B and flip refinement outside, schedule search wi
 candidate — because their invalidation costs differ by orders of magnitude: a placement
 flip changes the digest and replays specialization, a schedule candidate transforms its
 output over shared analysis. The gh-514 decision-vector reformulation would eventually
-make both coordinate kinds of one searched vector; until then, one asymmetry remains
-open: schedule winners persist in the cache while placement decisions are re-derived
-every process — a placement-decision store keyed by the structural (placement-free)
-digest is planned (gh-786).
+make both coordinate kinds of one searched vector; until then the two persist as two
+stores in one directory: schedule winners keyed by the placement-aware digest of the
+decided code, placement decisions keyed by the structural identity of the decision
+problem — the raw program plus what the lineage already decided, the decision itself
+outside the key (gh-786, `Schedule_cache.canonicalize_source`).
 
 A corollary worth stating: **there is no layout problem**. Einsum projections are the
 sole loop-nest generator — there is no reshape, no NCHW-vs-NHWC propagation pass, no

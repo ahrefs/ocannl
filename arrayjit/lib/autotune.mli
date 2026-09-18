@@ -1331,6 +1331,18 @@ val on_candidate_timed : (string -> timed_so_far:int -> unit) ref
     in preflights such a precondition fires, on a loaded device, on an arm whose report says it
     timed nothing. Default a no-op; no configuration selects it. *)
 
+val search_setting : unit -> bool
+(** Config [autotune_search] (default [true]): what {!tune} searches under when its caller passes no
+    [?search]. *)
+
+val resolve_cache_dir : ?cache_dir:string -> search:bool -> unit -> string
+(** The schedule cache directory a tuning call uses, or [""] for none: [cache_dir] when given, else
+    config [autotune_cache_dir] — except that with the search off only a CHOSEN directory (passed,
+    or set at some config source) counts, the built-in default being treated as no cache
+    (gh-ocannl-559). {!tune} resolves its directory through this, and so does
+    [Train.tune_placements] for the placement-decision store it keeps in the same directory
+    (gh-ocannl-786), so the two open the same directory under the same rule. *)
+
 val tune :
   ?name:string ->
   (* Names the computation, exactly as {!Context.compile}'s [name] names its single routine

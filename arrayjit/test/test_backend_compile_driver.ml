@@ -34,6 +34,7 @@ let optimized llc =
     zero_fringe = Set.empty (module Tn);
     flip_candidates = [];
     spliced_rbw = Set.empty (module Tn);
+    source = llc;
   }
 
 let headers =
