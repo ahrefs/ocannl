@@ -4134,7 +4134,7 @@
   (env_var OCANNL_FP16_ARITHMETIC)
   (env_var OCANNL_BACKEND))
  (modules sketch_family_tree)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

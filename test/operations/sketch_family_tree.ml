@@ -267,15 +267,23 @@ let tree_verdicts name ~is_gpu ~is_cpu ~limits opt =
 
 let () =
   let nn = 64 in
-  (* A non-hoistable, B hoistable (host-init-backed constant): the exactly-one-hoistable case, so
+  (* Operand cells come from [Ll_test.cycle] throughout this file: that a cell varies with every
+     index is not argued at each site but ENFORCED — the helper raises when the modulus divides a
+     row-major stride, i.e. when an axis cancels and every row of the operand becomes identical
+     (gh-ocannl-640, ahrefs/ocannl#1018).
+
+     A non-hoistable, B hoistable (host-init-backed constant): the exactly-one-hoistable case, so
      the hoisted, hoisted-grid AND mixed grid-outermost ([sk_pack_rest]) packing shapes all
      enumerate. *)
   let av =
     NTDSL.init ~l:"av" ~prec:Ir.Ops.single ~o:[ nn; nn ]
-      ~f:(fun idcs -> (Float.of_int (((idcs.(0) * nn) + idcs.(1)) % 13) -. 6.) *. 0.25)
+      ~f:(Ll_test.cycle ~dims:[| nn; nn |] ~modulus:13 ~offset:(-6.) ~stride:0.25)
       ()
   in
-  let bvv = Array.init (nn * nn) ~f:(fun x -> (Float.of_int (x % 17) -. 8.) *. 0.125) in
+  let bvv =
+    Array.init (nn * nn)
+      ~f:(Ll_test.cycle_flat ~dims:[| nn; nn |] ~modulus:17 ~offset:(-8.) ~stride:0.125)
+  in
   let bv = TDSL.ndarray bvv ~label:[ "bv" ] ~output_dims:[ nn; nn ] () in
   let%op mm = av +* "ik;kj=>ij" bv in
   let opt = with_lowering ~name:"sft_mm" mm in
@@ -294,12 +302,15 @@ let () =
      into stack scratch outside that composition. CPU Grid shapes at bm=64 lack row blocks. *)
   let wa =
     NTDSL.init ~l:"wa" ~prec:Ir.Ops.single ~o:[ 20; 20 ]
-      ~f:(fun idcs -> Float.of_int (((idcs.(0) * 20) + idcs.(1)) % 7) *. 0.5)
+      ~f:(Ll_test.cycle ~dims:[| 20; 20 |] ~modulus:7 ~offset:0. ~stride:0.5)
       ()
   in
+  (* This site is where the guard bites: [wb]'s former modulus 5 divides the 20-wide row stride, so
+     the helper rejects it. 9 is coprime to 20 and keeps the cells in the same [-2, 2], at
+     half-integer steps. *)
   let wb =
     NTDSL.init ~l:"wb" ~prec:Ir.Ops.single ~o:[ 20; 20 ]
-      ~f:(fun idcs -> Float.of_int (((idcs.(0) * 20) + idcs.(1)) % 5) -. 2.)
+      ~f:(Ll_test.cycle ~dims:[| 20; 20 |] ~modulus:9 ~offset:(-4.) ~stride:0.5)
       ()
   in
   let%op awk = wa +* "ik;kj=>ij" wb in
@@ -312,16 +323,18 @@ let () =
      with the packed seeds minting f32 panels ([sk_pack_prec], the packprec column); with the policy
      off the branch is refuted; with native-fp16 limits plus the [fp16_arithmetic] policy the seeds
      are pure-f16 (no packprec — panels stay half, at twice the lanes). The synthetic GPU capability
-     still advertises only the f32 format triple, so the GPU leg stays a witness for "not
-     proposed". *)
+     still advertises only the f32 format triple, so the GPU leg stays a witness for "not proposed".
+
+     Half storage, so the cells are chosen f16-exact: multiples of 1/2 in [0, 3] and the integers in
+     [-2, 2]. *)
   let ha =
     NTDSL.init ~l:"ha" ~prec:Ir.Ops.half ~o:[ nn; nn ]
-      ~f:(fun idcs -> Float.of_int (((idcs.(0) * nn) + idcs.(1)) % 7) *. 0.5)
+      ~f:(Ll_test.cycle ~dims:[| nn; nn |] ~modulus:7 ~offset:0. ~stride:0.5)
       ()
   in
   let hb =
     NTDSL.init ~l:"hb" ~prec:Ir.Ops.half ~o:[ nn; nn ]
-      ~f:(fun idcs -> Float.of_int (((idcs.(0) * nn) + idcs.(1)) % 5) -. 2.)
+      ~f:(Ll_test.cycle ~dims:[| nn; nn |] ~modulus:5 ~offset:(-2.) ~stride:1.)
       ()
   in
   let%op hmm = ha +* "ik;kj=>ij" hb in
@@ -494,7 +507,7 @@ let () =
      place, which the register tiling statically declines; packing shapes normalize the layout. *)
   let tb =
     NTDSL.init ~l:"tb" ~prec:Ir.Ops.single ~o:[ nn; nn ]
-      ~f:(fun idcs -> Float.of_int (((idcs.(0) * nn) + idcs.(1)) % 11) *. 0.25)
+      ~f:(Ll_test.cycle ~dims:[| nn; nn |] ~modulus:11 ~offset:0. ~stride:0.25)
       ()
   in
   let%op tmm = av +* "ik;jk=>ij" tb in
@@ -537,15 +550,12 @@ let () =
   let bb = 2 and ss = 64 and jj = 64 and hh = 4 and ee = 12 in
   let ov =
     NTDSL.init ~l:"ov" ~prec:Ir.Ops.single ~o:[ jj ] ~i:[ hh; ee ]
-      ~f:(fun idcs ->
-        (Float.of_int (((((idcs.(0) * hh) + idcs.(1)) * ee) + idcs.(2)) % 11) -. 5.) *. 0.5)
+      ~f:(Ll_test.cycle ~dims:[| jj; hh; ee |] ~modulus:11 ~offset:(-5.) ~stride:0.5)
       ()
   in
   let oa =
     NTDSL.init ~l:"oa" ~prec:Ir.Ops.single ~b:[ bb; ss ] ~o:[ hh; ee ]
-      ~f:(fun idcs ->
-        Float.of_int (((((idcs.(0) * ss) + idcs.(1)) * hh * ee) + (idcs.(2) * ee) + idcs.(3)) % 13)
-        *. 0.25)
+      ~f:(Ll_test.cycle ~dims:[| bb; ss; hh; ee |] ~modulus:13 ~offset:0. ~stride:0.25)
       ()
   in
   let%op oproj = ov * oa in
@@ -652,7 +662,7 @@ let () =
      (a driver may lift the policy) rather than refutes. *)
   let wn =
     NTDSL.init ~l:"wn" ~prec:Ir.Ops.single ~o:[ 64; 512 ]
-      ~f:(fun idcs -> Float.of_int (((idcs.(0) * 512) + idcs.(1)) % 9) *. 0.25)
+      ~f:(Ll_test.cycle ~dims:[| 64; 512 |] ~modulus:9 ~offset:0. ~stride:0.25)
       ()
   in
   let%op wmm = av +* "ik;kj=>ij" wn in
