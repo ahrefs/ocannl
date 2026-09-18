@@ -1378,16 +1378,22 @@ exec 6>&- 5>&-
 # the five backends that routine is the only gate for got zero coverage (run 20260918T050903Z,
 # ludics-lite#224). So: both hold locks genuinely HELD, and the lanes must still run to the point
 # of probing their boxes -- `skip (unreachable)`, never `skip (box ... reserved by ...)`.
-hold_leak=$tmp/ambient-hold-locks
-mkdir -p "$hold_leak"
-printf 'wake-lab --hold (pid 1, since 20260918T050814Z)\n' >"$hold_leak/rog.hold.lock"
-printf 'wake-lab --hold (pid 1, since 20260918T050814Z)\n' >"$hold_leak/minix.hold.lock"
-exec 6>>"$hold_leak/rog.hold.lock"
-exec 5>>"$hold_leak/minix.hold.lock"
+# The fixture goes in the lock directory `run_sweep_args` PINS, not one of its own: that helper
+# builds the nested sweep's environment in full, so a `WAKE_LAB_LOCK_DIR=` prefix here would be
+# discarded and the sweep would never see these files -- the case would then pass for the ordinary
+# unreachable-box reason and pin nothing.
+hold_locks=$tmp/lab-locks
+mkdir -p "$hold_locks"
+printf 'wake-lab --hold (pid 1, since 20260918T050814Z)\n' >"$hold_locks/rog.hold.lock"
+printf 'wake-lab --hold (pid 1, since 20260918T050814Z)\n' >"$hold_locks/minix.hold.lock"
+exec 6>>"$hold_locks/rog.hold.lock"
+exec 5>>"$hold_locks/minix.hold.lock"
 perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 1)' <&6
 perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 1)' <&5
-hold_lock_ok=$(WAKE_LAB_LOCK_DIR=$hold_leak \
-  SWEEP_TEST_WAIT_PREFIX=$tmp/hold-lanes SWEEP_TEST_SSH_MODE=release \
+# Earlier cases in this file already reserved these boxes in this directory, so their lane locks
+# are lying about. Remove them, or their mere presence afterwards would be evidence of nothing.
+rm -f "$hold_locks/rog.lock" "$hold_locks/minix.lock"
+hold_lock_ok=$(SWEEP_TEST_WAIT_PREFIX=$tmp/hold-lanes SWEEP_TEST_SSH_MODE=release \
   run_sweep_args --only cc --only metal --only cuda --only hip --only multidev_cc \
   --target hold-lock-probe)
 grep -q '^  rog-nv/cuda: skip (unreachable)$' <<<"$hold_lock_ok"
@@ -1398,8 +1404,8 @@ absent 'reserved by' <<<"$hold_lock_ok"
 # some other directory: the lane lock file is there, beside the hold lock nobody asked it about.
 # One statement each: under errexit a failing LEFT side of an `&&` list is exempt, so the pair
 # written as one AND-list would pass silently in exactly the case it exists to catch.
-[ -e "$hold_leak/rog.lock" ]
-[ -e "$hold_leak/minix.lock" ]
+[ -e "$hold_locks/rog.lock" ]
+[ -e "$hold_locks/minix.lock" ]
 exec 6>&- 5>&-
 
 # The rows are those of a serial run in everything but their order: one per
