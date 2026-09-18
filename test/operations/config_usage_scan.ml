@@ -608,7 +608,7 @@ let non_config_environment_mentions =
     ("arrayjit/lib/c_syntax.ml", "vec_narrow_bfloat16", 1);
     ("arrayjit/lib/c_syntax.ml", "vec_widen_half", 1);
     ("arrayjit/lib/c_syntax.ml", "vec_narrow_half", 1);
-    ("arrayjit/lib/c_syntax.ml", "half_fma", 3);
+    ("arrayjit/lib/c_syntax.ml", "half_fma", 2);
     ("arrayjit/lib/c_syntax.ml", "has_elementwise_fma", 1);
     ("arrayjit/lib/cc_backend.ml", "half_fma", 1);
     ("arrayjit/lib/context.mli", "vec_widen_bfloat16", 1);

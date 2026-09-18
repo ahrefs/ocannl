@@ -322,7 +322,8 @@ files.
   pinning the softmax at f32 and materializing the masked scores — is gone, so do not
   reintroduce a pin for a constant the library now keeps representable.
 - Before comparing two vector renderings, check that neither is measuring its SCALAR PEEL
-  (gh-ocannl-575). `try_register_tile` covers `n - (n mod bw)` columns and peels the rest to scalar
+  (gh-ocannl-575; the peel is gone since gh-ocannl-620 — the remainder is a vector tile now — but the
+  reading trap stands). `try_register_tile` covered `n - (n mod bw)` columns and peeled the rest to scalar
   code, and a peeled column costs roughly a whole vector slot — so at a width that does not divide
   the extent, the peel can be most of the runtime. This bit the pure-fp16 vs f32-compute comparison
   exactly backwards: doubling the lane count doubles `bw` too, and at n = 512 the wider tile peeled

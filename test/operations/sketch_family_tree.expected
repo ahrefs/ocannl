@@ -1,27 +1,38 @@
-== cpu simd32: 23 seeds ==
+== cpu simd32: 34 seeds ==
  0  gpu:false mma:false simd:0  bm:16  bn:16  bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
  1  gpu:false mma:false simd:0  bm:8   bn:8   bk:8   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
  2  gpu:false mma:false simd:0  bm:16  bn:16  bk:16  tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
  3  gpu:false mma:false simd:0  bm:8   bn:8   bk:8   tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
  4  gpu:false mma:true simd:0  bm:0   bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
- 5  gpu:false mma:true simd:0  bm:16  bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
- 6  gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
- 7  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
- 8  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
- 9  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn3 lanes8
-10  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
-11  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn3 lanes8
-12  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
-13  gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
-14  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
-15  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
-16  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn3 lanes8
-17  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
-18  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn3 lanes8
-19  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
-20  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:true packrest:false epi:false swz:- depth:1
-21  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:true packrest:true epi:false swz:- depth:1
-22  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1
+ 5  gpu:false mma:true simd:0  bm:0   bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+ 6  gpu:false mma:true simd:0  bm:16  bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+ 7  gpu:false mma:true simd:0  bm:16  bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+ 8  gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+ 9  gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+10  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+11  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+12  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+13  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+14  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+15  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+16  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+17  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+18  gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
+19  gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+20  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
+21  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+22  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
+23  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+24  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
+25  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+26  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
+27  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+28  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:true packrest:false epi:false swz:- depth:1
+29  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:true packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+30  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:true packrest:true epi:false swz:- depth:1
+31  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:true packrest:true epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+32  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1
+33  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
 == gpu plain: 10 seeds ==
  0  gpu:true mma:false simd:0  bm:64  bn:64  bk:8   tm:4 tn:4 hoist:false grid:false packrest:false epi:false swz:- depth:1
  1  gpu:true mma:false simd:0  bm:32  bn:32  bk:8   tm:4 tn:4 hoist:false grid:false packrest:false epi:false swz:- depth:1
@@ -50,7 +61,7 @@
 13  gpu:true mma:true simd:32 bm:32  bn:32  bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
 14  gpu:true mma:true simd:32 bm:32  bn:32  bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:b128 depth:1
 15  gpu:true mma:true simd:32 bm:32  bn:32  bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:2
-== cpu simd32 tree: 17 choice nodes, depth 6 ==
+== cpu simd32 tree: 28 choice nodes, depth 6 ==
 fusion = unfused
   pipeline = blocktile
     packing = in-kernel
@@ -66,59 +77,89 @@ fusion = unfused
   pipeline = tensorized
     tensorized-form = whole-triple
       row-block = bm0
-        * gpu:false mma:true simd:0  bm:0   bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+        register-tile = auto
+          * gpu:false mma:true simd:0  bm:0   bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+        register-tile = rm4 rn2 lanes8
+          * gpu:false mma:true simd:0  bm:0   bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
       row-block = bm64  [refuted: bm=64 gives 1 row block(s); a Grid split needs at least 2]
       row-block = bm16
-        * gpu:false mma:true simd:0  bm:16  bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+        register-tile = auto
+          * gpu:false mma:true simd:0  bm:16  bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+        register-tile = rm4 rn2 lanes8
+          * gpu:false mma:true simd:0  bm:16  bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
     tensorized-form = packed
       packing-shape = serial
         geometry = bm64 bn0 bk64
-          * gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+          register-tile = auto
+            * gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
         geometry = bm64 bn0 bk256
-          * gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+          register-tile = auto
+            * gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
         geometry = bm128 bn128 bk128
           register-tile = auto
             * gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
-          register-tile = rm4 rn3 lanes8
-            * gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn3 lanes8
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
         geometry = bm64 bn128 bk256
           register-tile = auto
             * gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
-          register-tile = rm4 rn3 lanes8
-            * gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn3 lanes8
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
         geometry = bm16 bn0 bk16
-          * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+          register-tile = auto
+            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
       packing-shape = hoisted
         geometry = bm64 bn0 bk64
-          * gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
+          register-tile = auto
+            * gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
         geometry = bm64 bn0 bk256
-          * gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
+          register-tile = auto
+            * gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
         geometry = bm128 bn128 bk128
           register-tile = auto
             * gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
-          register-tile = rm4 rn3 lanes8
-            * gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn3 lanes8
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
         geometry = bm64 bn128 bk256
           register-tile = auto
             * gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
-          register-tile = rm4 rn3 lanes8
-            * gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn3 lanes8
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
         geometry = bm16 bn0 bk16
-          * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
+          register-tile = auto
+            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
       packing-shape = hoisted-grid
         geometry = bm64 bn0 bk64  [refuted: bm=64 gives 1 row block(s); a Grid split needs at least 2]
         geometry = bm64 bn0 bk256  [refuted: extents do not divide the blocks: the non-hoistable operand is read in place and cannot absorb the zero-fringe pad]
         geometry = bm128 bn128 bk128  [refuted: extents do not divide the blocks: the non-hoistable operand is read in place and cannot absorb the zero-fringe pad]
         geometry = bm64 bn128 bk256  [refuted: extents do not divide the blocks: the non-hoistable operand is read in place and cannot absorb the zero-fringe pad]
         geometry = bm16 bn0 bk16
-          * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:true packrest:false epi:false swz:- depth:1
+          register-tile = auto
+            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:true packrest:false epi:false swz:- depth:1
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:true packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
       packing-shape = hoisted-grid-pack-rest
         geometry = bm64 bn0 bk64  [refuted: bm=64 gives 1 row block(s); a Grid split needs at least 2]
         geometry = bm64 bn0 bk256  [refuted: bm=64 gives 1 row block(s); a Grid split needs at least 2]
         geometry = bm128 bn128 bk128  [refuted: bm=128 gives 1 row block(s); a Grid split needs at least 2]
         geometry = bm64 bn128 bk256  [refuted: bm=64 gives 1 row block(s); a Grid split needs at least 2]
         geometry = bm16 bn0 bk16
-          * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:true packrest:true epi:false swz:- depth:1
+          register-tile = auto
+            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:true packrest:true epi:false swz:- depth:1
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:true grid:true packrest:true epi:false swz:- depth:1 tile:rm4 rn2 lanes8
       packing-shape = grid-pack-rest  [excluded: a hoistable operand exists: the hoisted shapes cover the one-dispatch role without per-chunk re-packing]
       packing-shape = grid
         geometry = bm64 bn0 bk64  [refuted: bm=64 gives 1 row block(s); a Grid split needs at least 2]
@@ -126,9 +167,12 @@ fusion = unfused
         geometry = bm128 bn128 bk128  [refuted: bm=128 gives 1 row block(s); a Grid split needs at least 2]
         geometry = bm64 bn128 bk256  [refuted: bm=64 gives 1 row block(s); a Grid split needs at least 2]
         geometry = bm16 bn0 bk16
-          * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1
+          register-tile = auto
+            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
 fusion = fused  [refuted: Schedule.Fuse_epilogue: no statement follows the reduction over mm]
-last leaf's decision path: fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm16 bn0 bk16
+last leaf's decision path: fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm16 bn0 bk16 > register-tile=rm4 rn2 lanes8
 tree leaves = flat enumeration: true
 == gpu staged+depth tree: 9 choice nodes, depth 4 ==
 fusion = unfused
@@ -206,21 +250,28 @@ tree leaves = flat enumeration: true
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm128 bn128 bk128: bm=128 gives 1 row block(s); a Grid split needs at least 2
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm64 bn128 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
   fusion=fused: Schedule.Fuse_epilogue: no statement follows the reduction over awk
-== half-prec cpu seeds: 13 seeds ==
+== half-prec cpu seeds: 20 seeds ==
  0  gpu:false mma:false simd:0  bm:16  bn:16  bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
  1  gpu:false mma:false simd:0  bm:8   bn:8   bk:8   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
  2  gpu:false mma:true simd:0  bm:0   bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
- 3  gpu:false mma:true simd:0  bm:16  bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
- 4  gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
- 5  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
- 6  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
- 7  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn3 lanes8
- 8  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
- 9  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn3 lanes8
-10  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
-11  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1 packprec:single
-12  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 packprec:single
-== half-prec cpu: 13 seeds ==
+ 3  gpu:false mma:true simd:0  bm:0   bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+ 4  gpu:false mma:true simd:0  bm:16  bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+ 5  gpu:false mma:true simd:0  bm:16  bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+ 6  gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
+ 7  gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
+ 8  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
+ 9  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
+10  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
+11  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
+12  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
+13  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
+14  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
+15  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
+16  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1 packprec:single
+17  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
+18  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 packprec:single
+19  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
+== half-prec cpu: 20 seeds ==
 tree leaves = flat enumeration: true
 -- refuted --
   fusion=unfused > pipeline=blocktile > packing=hoisted: hoisted packing needs a host-init-backed constant operand; neither operand is one
@@ -248,7 +299,7 @@ tree leaves = flat enumeration: true
   fusion=unfused > pipeline=blocktile > packing=hoisted: hoisted packing needs a host-init-backed constant operand; neither operand is one
   fusion=unfused > pipeline=tensorized: register tiling requires uniform vector-capable compute precisions (f32/f64, or fp16 where arithmetic is native)
   fusion=fused: Schedule.Fuse_epilogue: no statement follows the reduction over hmm
-== half-prec cpu seeds, native fp16: 18 seeds ==
+== half-prec cpu seeds, native fp16: 20 seeds ==
  0  gpu:false mma:false simd:0  bm:16  bn:16  bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
  1  gpu:false mma:false simd:0  bm:8   bn:8   bk:8   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
  2  gpu:false mma:true simd:0  bm:0   bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
@@ -260,27 +311,36 @@ tree leaves = flat enumeration: true
  8  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
  9  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn3 lanes16
 10  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
-11  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
-12  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
-13  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn3 lanes16
-14  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1
-15  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1 tile:rm4 rn3 lanes16
-16  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1
-17  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 tile:rm4 rn3 lanes16
-== half-prec cpu seeds, fp16 policy on promoted target: 13 seeds ==
+11  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes16
+12  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+13  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes16
+14  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+15  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn3 lanes16
+16  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1
+17  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1 tile:rm4 rn3 lanes16
+18  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1
+19  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 tile:rm4 rn3 lanes16
+== half-prec cpu seeds, fp16 policy on promoted target: 20 seeds ==
  0  gpu:false mma:false simd:0  bm:16  bn:16  bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
  1  gpu:false mma:false simd:0  bm:8   bn:8   bk:8   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
  2  gpu:false mma:true simd:0  bm:0   bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
- 3  gpu:false mma:true simd:0  bm:16  bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
- 4  gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
- 5  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
- 6  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
- 7  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn3 lanes8
- 8  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
- 9  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn3 lanes8
-10  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
-11  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1 packprec:single
-12  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 packprec:single
+ 3  gpu:false mma:true simd:0  bm:0   bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+ 4  gpu:false mma:true simd:0  bm:16  bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+ 5  gpu:false mma:true simd:0  bm:16  bn:0   bk:0   tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+ 6  gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
+ 7  gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
+ 8  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
+ 9  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
+10  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
+11  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
+12  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
+13  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
+14  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single
+15  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
+16  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1 packprec:single
+17  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
+18  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 packprec:single
+19  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 packprec:single tile:rm4 rn2 lanes8
 == half-prec gpu, f16 tiles, default policy: 10 seeds ==
  0  gpu:true mma:false simd:0  bm:64  bn:64  bk:8   tm:4 tn:4 hoist:false grid:false packrest:false epi:false swz:- depth:1
  1  gpu:true mma:false simd:0  bm:32  bn:32  bk:8   tm:4 tn:4 hoist:false grid:false packrest:false epi:false swz:- depth:1
@@ -323,7 +383,7 @@ tree leaves = flat enumeration: true
 the wide-f16 policy withholds uniform-f16 mma seeds exactly in unsupported emission scopes: true
 placement eligibility omits a wide-f16 site with no applicable MMA scope: true
 the wide-f16 policy under narrow_compute_f32 off omits the CPU register-tiled candidates (accumulator residency diverges from compute): true
-== transposed-B cpu: 11 seeds ==
+== transposed-B cpu: 16 seeds ==
 tree leaves = flat enumeration: true
 -- refuted --
   fusion=unfused > pipeline=blocktile > packing=hoisted: hoisted packing needs a host-init-backed constant operand; neither operand is one
@@ -346,7 +406,7 @@ tree leaves = flat enumeration: true
   fusion=unfused > pipeline=blocktile: GPU matmul companion coverage (gh-521): the cross-nest race analysis bails on this routine, so the 2 companion nest(s) (cred; cred) cannot be given aligned geometry
   fusion=unfused > pipeline=tensorized: GPU matmul companion coverage (gh-521): the cross-nest race analysis bails on this routine, so the 2 companion nest(s) (cred; cred) cannot be given aligned geometry
   fusion=fused: Schedule.Fuse_epilogue: the tail is not the sole consumer: a later statement mentions n11
-== companion-reduction cpu: 23 seeds ==
+== companion-reduction cpu: 34 seeds ==
 tree leaves = flat enumeration: true
 -- refuted --
   fusion=unfused > pipeline=tensorized > tensorized-form=whole-triple > row-block=bm64: bm=64 gives 1 row block(s); a Grid split needs at least 2
@@ -366,16 +426,21 @@ tree leaves = flat enumeration: true
 -- excluded --
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid-pack-rest: a hoistable operand exists: the hoisted shapes cover the one-dispatch role without per-chunk re-packing
 lifted-lattice search over the refuted family: 2 expanded, 0 scored, 3 refuted
-== out-projection cpu: 9 seeds ==
+== out-projection cpu: 14 seeds ==
  0  gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
- 1  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
- 2  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
- 3  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn3 lanes8
- 4  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
- 5  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn3 lanes8
- 6  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
- 7  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1
- 8  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1
+ 1  gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+ 2  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+ 3  gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+ 4  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+ 5  gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+ 6  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+ 7  gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+ 8  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+ 9  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+10  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1
+11  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1 tile:rm4 rn2 lanes8
+12  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1
+13  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
 == out-projection gpu staged+depth: 22 seeds ==
  0  gpu:true mma:false simd:0  bm:64  bn:64  bk:8   tm:4 tn:4 hoist:false grid:false packrest:false epi:false swz:- depth:1
  1  gpu:true mma:false simd:0  bm:32  bn:32  bk:8   tm:4 tn:4 hoist:false grid:false packrest:false epi:false swz:- depth:1
@@ -399,7 +464,7 @@ lifted-lattice search over the refuted family: 2 expanded, 0 scored, 3 refuted
 19  gpu:true mma:true simd:32 bm:32  bn:32  bk:32  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:b128 depth:1
 20  gpu:true mma:true simd:32 bm:32  bn:32  bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
 21  gpu:true mma:true simd:32 bm:32  bn:32  bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:b128 depth:1
-== out-projection cpu tree: 11 choice nodes, depth 6 ==
+== out-projection cpu tree: 16 choice nodes, depth 6 ==
 fusion = unfused
   pipeline = blocktile
     packing = in-kernel
@@ -411,21 +476,30 @@ fusion = unfused
     tensorized-form = packed
       packing-shape = serial
         geometry = bm64 bn0 bk64
-          * gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+          register-tile = auto
+            * gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:64  bn:0   bk:64  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
         geometry = bm64 bn0 bk256
-          * gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+          register-tile = auto
+            * gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:64  bn:0   bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
         geometry = bm128 bn128 bk128
           register-tile = auto
             * gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
-          register-tile = rm4 rn3 lanes8
-            * gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn3 lanes8
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:128 bn:128 bk:128 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
         geometry = bm64 bn128 bk256
           register-tile = auto
             * gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
-          register-tile = rm4 rn3 lanes8
-            * gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn3 lanes8
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:64  bn:128 bk:256 tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
         geometry = bm16 bn0 bk16
-          * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+          register-tile = auto
+            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
       packing-shape = hoisted  [refuted: no host-init-backed constant operand to pack at link time]
       packing-shape = hoisted-grid  [refuted: no host-init-backed constant operand to pack at link time]
       packing-shape = hoisted-grid-pack-rest  [refuted: no host-init-backed constant operand to pack at link time]
@@ -435,16 +509,22 @@ fusion = unfused
         geometry = bm128 bn128 bk128  [refuted: bm=128 gives 1 row block(s); a Grid split needs at least 2]
         geometry = bm64 bn128 bk256  [refuted: bm=64 gives 1 row block(s); a Grid split needs at least 2]
         geometry = bm16 bn0 bk16
-          * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1
+          register-tile = auto
+            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:true epi:false swz:- depth:1 tile:rm4 rn2 lanes8
       packing-shape = grid
         geometry = bm64 bn0 bk64  [refuted: bm=64 gives 1 row block(s); a Grid split needs at least 2]
         geometry = bm64 bn0 bk256  [refuted: bm=64 gives 1 row block(s); a Grid split needs at least 2]
         geometry = bm128 bn128 bk128  [refuted: bm=128 gives 1 row block(s); a Grid split needs at least 2]
         geometry = bm64 bn128 bk256  [refuted: bm=64 gives 1 row block(s); a Grid split needs at least 2]
         geometry = bm16 bn0 bk16
-          * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1
+          register-tile = auto
+            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1
+          register-tile = rm4 rn2 lanes8
+            * gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:true packrest:false epi:false swz:- depth:1 tile:rm4 rn2 lanes8
 fusion = fused  [refuted: Schedule.Fuse_epilogue: no statement follows the reduction over oproj]
-last leaf's decision path: fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm16 bn0 bk16
+last leaf's decision path: fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm16 bn0 bk16 > register-tile=rm4 rn2 lanes8
 tree leaves = flat enumeration: true
 == out-projection gpu staged+depth tree: 14 choice nodes, depth 5 ==
 fusion = unfused
@@ -560,7 +640,7 @@ tree leaves = flat enumeration: true
 every fused leaf follows every unfused leaf: true
 the fused flavor twins the unfused leaves geometry for geometry: true
 refuted: 0 unfused, 0 fused; excluded: 1 unfused, 1 fused
-== fusable tail cpu: 46 seeds (23 unfused + 23 fused), 33 choice nodes, depth 6 ==
+== fusable tail cpu: 68 seeds (34 unfused + 34 fused), 55 choice nodes, depth 6 ==
 fusion = unfused
 fusion = fused
 tree leaves = flat enumeration: true
@@ -634,15 +714,15 @@ gpu staged lattice: every leaf path commits its pipeline's shape level: true
     bk 56..64      -> 43008 bytes
     bk=64          -> 49152 bytes
 lifted search at incumbent 6000: 34 expanded, 13 scored, 26 fathomed, 1 refuted, 0 excluded
-== cpu simd32: certain-traffic increments over 23 leaf paths ==
+== cpu simd32: certain-traffic increments over 34 leaf paths ==
   levels on the leaf paths: fusion, geometry, packing, packing-shape, pipeline, register-tile, row-block, tensorized-form
-  priced above the schedule-invariant floor: 7; max increment 196608 bytes
+  priced above the schedule-invariant floor: 10; max increment 196608 bytes
 cpu simd32: every leaf's increment is the traffic its own parameters imply: true
 cpu simd32: the increment is monotone along every path's prefixes: true
 cpu simd32: the staging commitments price above the floor: true
 cpu simd32: every leaf path commits its pipeline's shape level: true
   staged geometry            32768 bytes
-    fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=serial > geometry=bm64 bn0 bk64
+    fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=serial > geometry=bm64 bn0 bk64 > register-tile=auto
   unpriced geometry          0 bytes
     fusion=unfused > pipeline=blocktile > packing=in-kernel > geometry=b16
   lattice leaf               (none in this tree)

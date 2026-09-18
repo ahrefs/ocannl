@@ -27,6 +27,7 @@ open Ocannl.Operation.DSL_modules
 module Tn = Ir.Tnode
 module LL = Ir.Low_level
 module Sched = Ir.Schedule
+module RT = Ir.Register_tile
 module Asgns = Ir.Assignments
 module Numerics = Ir.Numerics
 
@@ -891,12 +892,26 @@ let () =
        let%op t = mtaf +* "ik;jk=>ij" mtbf in
        t));
 
-  (* --- Edge extents (gh-ocannl-469): a 7x19 output of a 7x13 by 13x19 matmul, tensorized over the
-     whole triple. The register tiling covers the full 4x(RN*lanes) blocks and peels the partial row
-     block and column strip into scalar loops; per-element chains stay serial-ordered and fused, so
-     cc parity with the serial twin is BITWISE. Pinned on the C backends only: the GPU intrinsic
-     paths decline non-multiple-of-tile extents by contract (already covered by the half case's
-     fallback pin). --- *)
+  (* The renderer's own geometry for an [m x n] f32 site on this machine's vector file, and how it
+     covers the site — what an unrequested [Tile_mma]'s header states (gh-ocannl-620): the
+     relationship, not a restated number. *)
+  let default_coverage ~m ~n =
+    let limits = Context.hardware_limits (Context.auto ()) in
+    let vector_bytes = limits.Ir.Backend_intf.simd_vector_bytes in
+    RT.coverage ~m ~n (Option.value_exn (RT.default ~vector_bytes ~elt_bytes:4 ~m ~n))
+  in
+  let full_blocks ~m ~n (cov : RT.coverage) =
+    Printf.sprintf "full blocks %dx%d of %dx%d" cov.m_full cov.n_full m n
+  in
+
+  (* --- Edge extents (gh-ocannl-469, gh-ocannl-620): a 7x19 output of a 7x13 by 13x19 matmul,
+     tensorized over the whole triple. The register tiling covers the full 4x(RN*lanes) blocks and
+     renders the leftover rows and columns as narrower register tiles — the column tail's last
+     vector PARTIAL (19 is 3 mod every width the fleet renders), the row band three rows — never as
+     scalar loops; per-element chains stay serial-ordered and fused, so cc parity with the serial
+     twin is BITWISE. Pinned on the C backends only: the GPU intrinsic paths decline
+     non-multiple-of-tile extents by contract (already covered by the half case's fallback pin).
+     --- *)
   if not on_gpu then (
     let mi = 7 and mk = 13 and mj = 19 in
     let eav =
@@ -952,20 +967,26 @@ let () =
       ~f:Float.equal;
     let src = Generated.read "mm_edge_mma" in
     let has s = String.is_substring src ~substring:s in
-    p "edge-extent register tiling with peeled edges"
-      (has "Tile_mma register tiling" && has "full blocks 4x"))
+    let cov = default_coverage ~m:mi ~n:mj in
+    p "edge-extent register tiling covers the edges with vector tiles, not scalar code"
+      (has
+         (Printf.sprintf "%s; column tail %d in %d vector; row tail %d)"
+            (full_blocks ~m:mi ~n:mj cov) (mj - cov.n_full) (List.length cov.tail_widths)
+            (mi - cov.m_full))
+      && List.length cov.tail_widths = 1
+      && not (has "tmma_acc__")))
   else (
     skipped "edge-extent tensorized matmul matches the serial twin bitwise";
-    skipped "edge-extent register tiling with peeled edges");
+    skipped "edge-extent register tiling covers the edges with vector tiles, not scalar code");
 
-  (* --- Extent-adapted tile width (gh-ocannl-575): an 8x40 output. The C-tile width [rn * lanes] is
-     chosen against the actual column extent rather than pinned at the register-pressure cap, so a
-     width that divides 40 wins over the widest one: 5 vectors at NEON's 4 f32 lanes, 1 at AVX2's 8,
-     either way covering all 40 columns instead of peeling 16 of them into the scalar loop (the cap
-     would take 24 on both). The peel is what the measurement on native-fp16 hardware showed to be
-     the dominant cost -- 3.6x on a pure-fp16 n = 512 GEBP -- so the pin is [n_full = n]. Bitwise
-     against the serial twin either way: the peeled columns' chains are the same fused serial-k
-     chains, just rendered scalar. --- *)
+  (* --- Extent-adapted geometry (gh-ocannl-575, gh-ocannl-620): an 8x40 output. The C-tile width
+     [rn * lanes] is ranked against the actual column extent over the ladder of widths the file
+     renders, not pinned at the register-pressure cap. Under gh-575 that ranking priced the columns
+     the width did not cover as a scalar peel (the dominant cost on native-fp16 hardware -- 3.6x on
+     a pure-fp16 n = 512 GEBP), so the pin was [n_full = n]; since gh-ocannl-620 the leftover is a
+     narrower register tile, the ranking is about operand reuse alone, and the pin is the
+     relationship: the emitted coverage is [Register_tile.coverage] of the model's choice for this
+     site, with no scalar column anywhere. Bitwise against the serial twin either way. --- *)
   if not on_gpu then (
     let wi = 8 and wk = 8 and wj = 40 in
     (* Both operands must vary with BOTH their axes or the oracle stops discriminating: a modulus
@@ -1024,11 +1045,13 @@ let () =
       got_width_serial ~f:Float.equal;
     let src = Generated.read "mm_width_mma" in
     let has s = String.is_substring src ~substring:s in
-    p "extent-adapted tile width covers the column extent"
-      (has "Tile_mma register tiling" && has "full blocks 8x40 of 8x40"))
+    p "extent-adapted geometry covers the column extent with vector tiles"
+      (has "Tile_mma register tiling"
+      && has (full_blocks ~m:wi ~n:wj (default_coverage ~m:wi ~n:wj))
+      && not (has "tmma_acc__")))
   else (
     skipped "extent-adapted tensorized matmul matches the serial twin bitwise";
-    skipped "extent-adapted tile width covers the column extent");
+    skipped "extent-adapted geometry covers the column extent with vector tiles");
 
   (* --- Single rounding of the accumulator update (gh-ocannl-614). Every other f32 leg here feeds
      exactly-representable products, so it cannot tell a fused update from a multiply and an add:

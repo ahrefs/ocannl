@@ -42,9 +42,9 @@ f8_tb tensorized structure as expected: true
 f8_tb Metal fallback fences device memory on both sides: true
 f8_tb Metal fence check rejects a threadgroup-only bracket: true
 edge-extent tensorized matmul matches the serial twin bitwise: true
-edge-extent register tiling with peeled edges: true
+edge-extent register tiling covers the edges with vector tiles, not scalar code: true
 extent-adapted tensorized matmul matches the serial twin bitwise: true
-extent-adapted tile width covers the column extent: true
+extent-adapted geometry covers the column extent with vector tiles: true
 full-mantissa products are inexact in f32: true
 full-mantissa tensorized matmul matches the serial twin bitwise: true
 register tiling offers a whole-vector fused accumulator update: true

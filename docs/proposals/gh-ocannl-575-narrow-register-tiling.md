@@ -71,6 +71,12 @@ lanes); the policy on a merely-promoted target stays f32-compute.
 
 ### Tile width follows the extent, not the register cap
 
+> **Superseded in part by gh-ocannl-620.** The scalar peel this section prices no longer exists:
+> the columns the width does not cover render as a narrower register tile (whole vectors plus one
+> partial vector), so `Register_tile.default` ranks by operand reuse alone and the fitted peel
+> weight is gone. The measurements below stand as the record of why the peel had to go; the model
+> they fit is retired.
+
 The C-tile is `rm` rows of `rn` vectors, and `rn` is chosen against the *actual* column extent rather
 than pinned at the register-pressure cap. The columns `bw = rn * lanes` does not cover are peeled to
 the scalar fallback, and a peeled column costs roughly a whole vector slot — so a cap that leaves a

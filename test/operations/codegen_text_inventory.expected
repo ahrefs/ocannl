@@ -279,8 +279,6 @@ test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name]
     "col_major"
     "float fragment_"
     "fma"
-    "full blocks 4x"
-    "full blocks 8x40 of 8x40"
     "matrix_a, 16, 16, 8"
     "mma.sync.aligned.m16n8k16"
     "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32"
@@ -312,7 +310,9 @@ test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name]
     "threadgroup_barrier(mem_flags::mem_threadgroup);"
     "tile_mma 16x32x24 (wmma-tf32)"
     "tile_mma fragment update"
+    "tmma_acc__"
     "ulong2(0), true)"
+    sprintf "%s; column tail %d in %d vector; row tail %d)"
 test/operations/schedule_ops.ml [renders generated text in memory]
     "#pragma"
     "<= 3"
@@ -422,7 +422,10 @@ test/operations/tile_mma_declines.ml
     "dispatch_apply"
     "tile_"
 test/operations/tile_mma_geometry.ml [also pins text this scan cannot name]
+    "; column tail 3 in 1 vector; row tail 2)"
     "geometry from the schedule"
+    "tmma_acc__"
+    "tmma_c_0_0__ = {0};"
 test/operations/tile_mma_narrow.ml [also pins text this scan cannot name]
     "HALF_T tile_"
     "OCANNL_VEC_NARROW_BFLOAT16"
