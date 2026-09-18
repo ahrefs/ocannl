@@ -290,18 +290,15 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
                  dropping it would discard a flip that may still be half of a later pair. *)
               (speculative := match verdict with `Neutral -> held | _ -> []);
               cur := fp)
-            else
-              (* Neither direction pays yet: hold the one with the larger solo relief. *)
-              let dec, cost, solo, _ =
-                List.max_elt outcomes ~compare:(fun (_, _, sa, _) (_, _, sb, _) ->
-                    Int.compare sa sb)
-                |> Option.value_exn
-              in
+            else (
+              (* Neither direction pays yet: hold the one [best] chose — the best CURRENT marginal,
+                 the cheaper recompute on a tie. The solo relief was measured against the original
+                 baseline, which earlier accepted flips can have made stale. *)
               logf "hold %s (%s)%s: no marginal relief yet (solo was %d); speculative"
                 (Tn.debug_name tn)
                 (direction_name (snd dec))
                 sibling_note solo;
-              speculative := (dec, cost) :: held
+              speculative := (dec, cost) :: held)
           end);
       (match !speculative with
       | [] -> ()
