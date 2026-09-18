@@ -77,6 +77,22 @@ AGGREGATE_SKIPS=$SWEEP_TOOLS/aggregate-skips.sh
 # directory, a filename and a one-line description -- this sweep takes its own flock and never
 # calls wake-lab.sh, so a checkout on a box that has no ~/bin/wake-lab.sh still reserves correctly.
 # `wake-lab.sh lock-path <box>` answers the same path for anyone who would rather ask than derive.
+#
+# There are TWO lock files per box on the wake-lab side, and this is the one a lane takes:
+#
+#   <box>.lock        the LANE lock -- "no other lane runs on this box". Ours.
+#   <box>.hold.lock   the HOLD lock -- "this box's VM must not be destroyed". wake-lab's `--hold`
+#                     takes it and its Windows-side holder carries it until `unhold`.
+#
+# A destroyer (`restart-wsl`, `sleep`, `hibernate`, `down`) takes both and is refused if either is
+# held, so a lane holding only the lane lock is still fully protected. Do NOT extend this file to
+# take or honour the hold lock as well: a hold says "keep this VM alive", never "nobody else may
+# work here", and the day the two claims shared one file the sweep deadlocked against its own
+# caller. The cross-machine sweep routine holds both GPU boxes with `--hold` before launching this
+# script in the same session, and on 2026-09-18 every remote lane waited out LAB_LOCK_WAIT against
+# that routine's own holder and skipped: three of the five backends the routine gates got zero
+# coverage (run 20260918T050903Z, ludics-lite#224). A holder line of `wake-lab --hold ...` in a
+# `skip (box ... reserved by ...)` means that regression is back.
 LAB_LOCK_DIR=${WAKE_LAB_LOCK_DIR:-$HOME/.local/state/wake-lab}
 # How long a lane waits for a box someone else is using. Sized against what the holder is most
 # likely doing: a `--restart-wsl` is a shutdown plus a cold VM start plus the tailscaled wait

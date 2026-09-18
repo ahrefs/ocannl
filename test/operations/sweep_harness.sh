@@ -11,6 +11,10 @@ set -euo pipefail
 # Most assertions below are deliberately quiet shell predicates. If one fails
 # under errexit, name the exact site before cleanup removes its evidence; the
 # expected-error controls temporarily disable errexit and therefore stay quiet.
+# One predicate per statement, never `[ A ] && [ B ]`: errexit exempts a failing
+# LEFT operand of an `&&` list, so the pair passes silently in exactly the case
+# the first half exists to catch -- and an assertion that cannot fail is worse
+# than none, because the case around it reads as covered.
 on_error() {
   local rc=$1 line=$2 command=$3 name
   case $- in
@@ -31,7 +35,7 @@ on_error() {
     capped capped_target remote_opt_in serial_red serial_clean serial_two_inline \
     serial_many_inline serial_control lanes lane_stop_seed lane_stopped \
     aggregator_missing stamp_advance dxg_clean dxg_red dxg_collection dxg_unavailable \
-    dxg_many dxg_bounds dxg_no_trigger \
+    dxg_many dxg_bounds dxg_no_trigger hold_lock_ok \
     after_cancel; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
@@ -452,7 +456,8 @@ absent 'REGRESSION OR FIX DID NOT TAKE' <<<"$state_moved"
 
 unit_state=$(grep -l "$(printf '^last_verdict\tfail$')" \
   "$state"/unit-state/*state-probe*.state | head -1)
-[ -n "$unit_state" ] && [ -f "$unit_state" ]
+[ -n "$unit_state" ]
+[ -f "$unit_state" ]
 grep -q '^last_verdict.fail$' "$unit_state"
 grep -q "^golden.$fix_sha.test/unit.cc_expected.ml$" "$unit_state"
 
@@ -851,7 +856,8 @@ grep -q 'm4-max/metal: fail' "$tmp/metal.out"
 # collection happens strictly after `record`; this pins the column it protects.
 [ "$(awk -F '\t' '$3 == "metal" { print $5 }' "$state/history.tsv" | tail -1)" = fail ]
 metal_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
-[ -n "$metal_log" ] && [ -f "$metal_log" ]
+[ -n "$metal_log" ]
+[ -f "$metal_log" ]
 grep -q '^=== rtc-context (metal) ===$' "$metal_log"
 grep -q '^=== end rtc-context ===$' "$metal_log"
 grep -q 'rtc option policy from arrayjit/test/runtest-test_metal_compile_options' "$metal_log"
@@ -1368,6 +1374,46 @@ grep -q '^  minix/multidev_cc: skip (unreachable)$' <<<"$lab_hostile"
 absent 'reserved by' <<<"$lab_hostile"
 exec 6>&- 5>&-
 
+# The OTHER lock file wake-lab keeps per box, and the lane must ignore it. `<box>.hold.lock` says
+# "this box's VM must not be destroyed" -- what `wake-lab.sh --hold` takes and its Windows-side
+# holder carries -- and it is deliberately not the lane's business: a hold keeps a VM alive FOR a
+# lane, so a lane that waited on it would be waiting on its own caller. That is not hypothetical.
+# Until 2026-09-18 both claims shared `<box>.lock`, and the cross-machine sweep routine -- which
+# holds rog and minix with `--hold` and then runs this script in the same session -- reserved the
+# boxes against its own sweep: every remote lane waited out LAB_LOCK_WAIT and skipped, and three of
+# the five backends that routine is the only gate for got zero coverage (run 20260918T050903Z,
+# ludics-lite#224). So: both hold locks genuinely HELD, and the lanes must still run to the point
+# of probing their boxes -- `skip (unreachable)`, never `skip (box ... reserved by ...)`.
+# The fixture goes in the lock directory `run_sweep_args` PINS, not one of its own: that helper
+# builds the nested sweep's environment in full, so a `WAKE_LAB_LOCK_DIR=` prefix here would be
+# discarded and the sweep would never see these files -- the case would then pass for the ordinary
+# unreachable-box reason and pin nothing.
+hold_locks=$tmp/lab-locks
+mkdir -p "$hold_locks"
+printf 'wake-lab --hold (pid 1, since 20260918T050814Z)\n' >"$hold_locks/rog.hold.lock"
+printf 'wake-lab --hold (pid 1, since 20260918T050814Z)\n' >"$hold_locks/minix.hold.lock"
+exec 6>>"$hold_locks/rog.hold.lock"
+exec 5>>"$hold_locks/minix.hold.lock"
+perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 1)' <&6
+perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 1)' <&5
+# Earlier cases in this file already reserved these boxes in this directory, so their lane locks
+# are lying about. Remove them, or their mere presence afterwards would be evidence of nothing.
+rm -f "$hold_locks/rog.lock" "$hold_locks/minix.lock"
+hold_lock_ok=$(SWEEP_TEST_WAIT_PREFIX=$tmp/hold-lanes SWEEP_TEST_SSH_MODE=release \
+  run_sweep_args --only cc --only metal --only cuda --only hip --only multidev_cc \
+  --target hold-lock-probe)
+grep -q '^  rog-nv/cuda: skip (unreachable)$' <<<"$hold_lock_ok"
+grep -q '^  minix/hip: skip (unreachable)$' <<<"$hold_lock_ok"
+grep -q '^  minix/multidev_cc: skip (unreachable)$' <<<"$hold_lock_ok"
+absent 'reserved by' <<<"$hold_lock_ok"
+# ...and the lane really did take its OWN lock while the hold lock was held, rather than reaching
+# some other directory: the lane lock file is there, beside the hold lock nobody asked it about.
+# One statement each: under errexit a failing LEFT side of an `&&` list is exempt, so the pair
+# written as one AND-list would pass silently in exactly the case it exists to catch.
+[ -e "$hold_locks/rog.lock" ]
+[ -e "$hold_locks/minix.lock" ]
+exec 6>&- 5>&-
+
 # The rows are those of a serial run in everything but their order: one per
 # unit, each under its own machine.
 [ "$(awk -F '\t' '$7 == "lane-probe" { print $2 "/" $3 ":" $5 }' "$state/history.tsv" | sort)" = \
@@ -1680,7 +1726,12 @@ cancel_sweep() { # pid|group
     sleep 0.05
     waited=$((waited + 1))
   done
-  [ -e "$prefix.ready" ] && [ -e "$prefix.ssh-running" ]
+  # One per statement, per the rule at the top: this is the assertion that the loop above ended
+  # because both files appeared rather than because it ran out of ticks, and as an `&&` list a
+  # missing `.ready` -- the left operand -- was exempt from errexit, so a sweep that never got
+  # ready was cancelled anyway and whatever the cancel then observed was read as the real thing.
+  [ -e "$prefix.ready" ]
+  [ -e "$prefix.ssh-running" ]
   case $how in
     pid) kill -TERM "$pid" ;;
     group) kill -TERM -- "-$pid" ;;
