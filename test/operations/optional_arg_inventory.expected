@@ -141,6 +141,7 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/train.ml:loss_accumulator ?label -- implemented
   lib/train.ml:params_for ?params -- implemented
   lib/train.ml:placement_problem ?name -- implemented
+  lib/train.ml:placement_problem ?timing_ctx -- implemented
   lib/train.ml:printf ?here -- implemented
   lib/train.ml:printf ?style -- implemented
   lib/train.ml:printf ?with_code -- implemented
