@@ -551,7 +551,8 @@ In our toy example every extent is below `gpu_schedule_min_parallel`/
 whole step ships as one kernel even on Metal. On real models this stage is where the
 matmul-tiling, staging, tensorization, and split-reduction transforms apply, either as
 autotuner-searched compositions (`Autotune.tune`, with winners persisted in a schedule cache
-keyed by a structural digest of the optimized code) or — for `Train`'s convenience wrappers,
+keyed by a structural digest of the optimized code, and `Train.tune_placements`' placement
+decisions persisted beside them, keyed by the raw program's — gh-786) or — for `Train`'s convenience wrappers,
 when `model_default_schedule=true` (off by default; plain `Context.compile` never does
 this) — as a model-ranked pick among the default-schedule flavors with zero timing runs.
 Transform *application* is strict: an invalid composition (a missing loop symbol, a

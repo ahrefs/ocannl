@@ -457,7 +457,15 @@
 # crowned elsewhere. Which key belongs to which component is recorded key by key in
 # `Utils.config_key_classification` and checked by `test/operations/digest_completeness`.
 # Relative paths resolve against the working directory.
-# An empty value disables the cache (every `Autotune.tune` call searches afresh).
+# The same directory holds `Train.tune_placements`' placement-decision store (gh-ocannl-786):
+# which arm shipped and which inline flips the refinement accepted, keyed by the decision
+# problem's structural identity (the raw program plus what the lineage already decided) under the
+# same key components, so a later process replays the decision -- one search from the recorded
+# placement, normally itself a cache replay -- instead of re-deriving it from both arms and a flip
+# chain. A recorded decision is ignored and re-tuned when it no longer reproduces the program it
+# was measured on; tune_ship_arm neither consults nor writes it.
+# An empty value disables both (every `Autotune.tune` call searches afresh, every
+# `Train.tune_placements` call decides afresh).
 #autotune_cache_dir=autotune_cache
 
 # Candidate-volume cap on `Autotune.tune`'s split-reduce seed family (gh-ocannl-484 task 3): the
