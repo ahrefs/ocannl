@@ -1726,7 +1726,12 @@ cancel_sweep() { # pid|group
     sleep 0.05
     waited=$((waited + 1))
   done
-  [ -e "$prefix.ready" ] && [ -e "$prefix.ssh-running" ]
+  # One per statement, per the rule at the top: this is the assertion that the loop above ended
+  # because both files appeared rather than because it ran out of ticks, and as an `&&` list a
+  # missing `.ready` -- the left operand -- was exempt from errexit, so a sweep that never got
+  # ready was cancelled anyway and whatever the cancel then observed was read as the real thing.
+  [ -e "$prefix.ready" ]
+  [ -e "$prefix.ssh-running" ]
   case $how in
     pid) kill -TERM "$pid" ;;
     group) kill -TERM -- "-$pid" ;;
