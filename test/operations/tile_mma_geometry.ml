@@ -302,13 +302,15 @@ let () =
       List.hd_exn
         (RT.simd_lane_ladder ~vector_bytes:limits.Ir.Backend_intf.simd_vector_bytes ~elt_bytes)
     in
-    (* Exact in bf16 and half: multiples of 1/2 in [-1.5, 1.5], products multiples of 1/4, five-term
-       sums at most 11.25 — six significand bits. Both operands vary with both axes — every
-       coefficient is nonzero modulo 7, so no axis cancels (a row coefficient of 7 once made every A
-       row identical, and a row-band pass reading the wrong A row would still have matched the
-       serial twin) — so a mis-indexed read shows. *)
-    let av idcs = (Float.of_int (((idcs.(0) * 2) + (idcs.(1) * 3)) % 7) *. 0.5) -. 1.5 in
-    let bv idcs = (Float.of_int (((idcs.(0) * 5) + (idcs.(1) * 11)) % 7) *. 0.5) -. 1.5 in
+    (* Exact in bf16 and half: cells are the multiples of 1/2 in [-1.5, 1.5], so products are
+       multiples of 1/4 and the five-term sums at most 11.25 — six significand bits. That both
+       operands vary with both axes is not argued here but ENFORCED: [Ll_test.cycle] raises when the
+       modulus divides a row-major stride, i.e. when an axis cancels, and 7 is coprime to both row
+       strides (A's k = 5, B's n = 19). The hand-rolled fixture this replaces cancelled along A's
+       rows once, and a row-band pass reading the wrong A row would still have matched the serial
+       twin. *)
+    let av = Ll_test.cycle ~dims:[| m; k |] ~modulus:7 ~offset:(-3.) ~stride:0.5 in
+    let bv = Ll_test.cycle ~dims:[| k; nt |] ~modulus:7 ~offset:(-3.) ~stride:0.5 in
     let leg ~tag ~prec ~tile ~fill =
       let a = NTDSL.init ~l:("tmt_a_" ^ tag) ~prec ~i:[ k ] ~o:[ m ] ~f:av () in
       let b = NTDSL.init ~l:("tmt_b_" ^ tag) ~prec ~i:[ nt ] ~o:[ k ] ~f:bv () in

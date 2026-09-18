@@ -88,9 +88,6 @@ let exemptions =
     ( "test/operations/tile_mma_declines.ml",
       Scan.Migration { records = 0; traversals = 1 },
       "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/tile_mma_geometry.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "existing migration debt; adopt ll_test when touched" );
     ( "test/support/ll_builders.ml",
       Scan.Permanent,
       "canonical pure IR builders shared by both packages" );
