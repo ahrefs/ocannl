@@ -503,15 +503,16 @@ val decide_footprint : t -> Ir.Tnode.t list -> t
     (gh-ocannl-616), the middle of the placement lattice between {!decide_inline} and
     {!decide_materialized}: subsequent compiles exempt them from the heuristic caps like an inline
     preference, and serve their reads from routine-private scratch shaped like each reader's
-    iteration box, filled ahead of the reader by a prologue instantiating the node's stored
-    computation over that box — an [n]-sized scratch and [n] instantiations for a diagonal reader of
-    an [n×n] node, against [n×n] of either for a full materialization or for recompute at [n]
-    repeated read sites. The default policy lands a node there by itself when a cap would
-    materialize it and the footprint form is strictly smaller; the preference asks for it
-    regardless. Per read site, not a placement: a read the virtualizer cannot serve that way (a
-    guarded read, a read in a shared loop or inside another candidate's template) is inlined
-    instead, legality rejections still materialize, and the node stays [Virtual] in the lineage with
-    its stored computation. Exclusive with {!decide_inline} per node — each withdraws the other's
-    preference, so the later request wins. Honored only under
+    iteration box, filled by a prologue instantiating the node's stored computation over that box
+    right after the producer's last write — the snapshot its materialized buffer would have held;
+    ahead of the reader for a node an earlier routine left virtual — an [n]-sized scratch and [n]
+    instantiations for a diagonal reader of an [n×n] node, against [n×n] of either for a full
+    materialization or for recompute at [n] repeated read sites. The default policy lands a node
+    there by itself when a cap would materialize it and the footprint form is strictly smaller; the
+    preference asks for it regardless. Per read site, not a placement: a read the virtualizer cannot
+    serve that way (a guarded read, a read in a shared loop or inside another candidate's template)
+    is inlined instead, legality rejections still materialize, and the node stays [Virtual] in the
+    lineage with its stored computation. Exclusive with {!decide_inline} per node — each withdraws
+    the other's preference, so the later request wins. Honored only under
     [virtualize_footprint_materialization]; same hermeticity and same pre-compile-sibling rule as
     {!decide_inline}. *)

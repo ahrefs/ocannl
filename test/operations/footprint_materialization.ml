@@ -6,7 +6,7 @@
    buffer plus a full pass to fill it. This test pins the cheaper one. For a node every read of
    which is an affine sub-image read — the motivating diagonal reader [o[i] = a[i, i]] of an [n×n]
    reduction — the node stays virtual, and the reader gets a fresh routine-private scratch shaped
-   like ITS iteration box ([n] cells), filled just ahead of the reader's statement by a prologue
+   like ITS iteration box ([n] cells), filled right after the producer's last write by a prologue
    instantiating the stored template over that box: [n] reduction instances instead of [n×n]
    (materialized) or [n × multiplicity] (recomputed).
 
@@ -766,6 +766,33 @@ let case_local_in_producer_statement () =
   p "local-in-producer: executed values see the local as each iteration left it"
     (same got [ expected ])
 
+(* === A read under a scalar gate — the true arm of a [Where] whose condition keeps the shifted
+   index in range: not an [If] guard, so the access relations do not mark it, but the prologue would
+   instantiate the template unconditionally over the whole box and read the input out of range at
+   the last row. Ineligible; the cap materializes and the gate short-circuits. === *)
+let case_gated_read () =
+  let a = mk "agt" and x = mk ~dims:[| n |] "xgt" and o = mk ~dims:[| n |] "ogt" in
+  materialize o;
+  materialize x;
+  let i = sym () in
+  let shifted = aff [ (1, i) ] 1 in
+  let consumer =
+    loop i
+      (set o
+         [| iter i |]
+         (where_ (lt (embed i) (ic (n - 1))) (get a [| shifted; shifted |]) (c 0.)))
+  in
+  let llc = seq (big_reduction_over x a) consumer in
+  let opt = optimize ~name:"fp_gated" llc in
+  p "gated-read: the reduction cap materializes the producer" (is_cap opt a Tn.Inline_reduction_cap);
+  p_empty "gated-read: no scratch" ~over:(Hashtbl.keys opt.LL.traced_store) (scratches opt);
+  let xs = Array.init n ~f:(fun i -> Float.of_int (1 + i)) in
+  let expected =
+    Array.init n ~f:(fun i -> if i < n - 1 then reduced_plus (2 + i) (i + 1) (i + 1) else 0.)
+  in
+  let got = execute ~name:"fp_gated" opt ~seed:[ (x, xs); (o, blank n) ] ~read:[ o ] in
+  p "gated-read: executed values are the shifted diagonal under the gate" (same got [ expected ])
+
 let () =
   case_diagonal_reduction ();
   case_visit_cap ();
@@ -789,4 +816,5 @@ let () =
   case_preference_ineligible ();
   case_dead_loop_writer ();
   case_local_in_producer_statement ();
+  case_gated_read ();
   Stdio.printf "%!"

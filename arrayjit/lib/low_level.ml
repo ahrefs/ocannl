@@ -2443,10 +2443,10 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
   (* gh-ocannl-616: footprint-scoped materialization of a read. The prologues minted while a
      top-level statement is walked are spliced ahead of it by the driver at the bottom; the
      scratch's box is the reader's box, so the prologue must run once, outside every loop of the
-     reader, where every input of the template is already written — hence ahead of the reader's
-     whole top-level statement, and [current_writers] (that statement's written nodes) is what lets
-     the setter arms tell a single-writer nest, which may host a footprint read, from a shared loop,
-     which may not. *)
+     reader — right after the producer's last top-level write for a local producer, ahead of the
+     reader's statement for an inherited template — and [current_writers] (that statement's written
+     nodes) is what lets the setter arms tell a single-writer nest, which may host a footprint read,
+     from a shared loop, which may not. *)
   let prologues = ref [] in
   let current_writers = ref (Set.empty (module Tnode)) in
   let current_stmt = ref 0 in
@@ -6932,8 +6932,9 @@ let drop_dead_loop_accesses (accs : Tn.t Affine.access list) : Tn.t Affine.acces
 
 (** gh-ocannl-616: whether every read of a node in this routine can be served from footprint-scoped
     scratch — a fresh routine-private node shaped like the READER's iteration box (one axis per
-    enclosing loop the read's index vector mentions), filled ahead of the reader's statement by a
-    prologue instantiating the node's stored template at the read's indices over that box, with the
+    enclosing loop the read's index vector mentions), filled by a prologue instantiating the node's
+    stored template at the read's indices over that box — right after the producer's last top-level
+    write for a local producer, ahead of the reader's statement for an inherited template — with the
     read rewritten to the scratch cell. The payload of [Footprint_cells] is the total scratch cell
     count over the read sites — equally the number of template instantiations the prologues perform
     — which the policy weighs against the node's element count: the footprint form is strictly
@@ -7008,6 +7009,34 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list) (
     | Indexing.Sub_axis -> Error "sub-axis index position"
     | Indexing.Concat _ -> Error "concatenated index position"
   in
+  (* The nodes read under a SCALAR gate — a [Where] arm, a gated binary operand — which the access
+     relations do not mark ([a_guarded] is the [If] statement): the read short-circuits, while the
+     prologue instantiates the template unconditionally over the whole box, where the gate may be
+     exactly what kept an instance in range. *)
+  let gated_readers =
+    let open Access_fold in
+    let policy =
+      {
+        discarded_operands = Skip;
+        gated_operands = Visit;
+        dead_loops = Skip;
+        local_scopes = Visit;
+        guards = Ignore;
+        scan_implicit = Skip;
+      }
+    in
+    let hooks =
+      {
+        (hooks ()) with
+        scalar =
+          (fun ctx acc sc ->
+            match sc with
+            | (Get (p, _) | Get_dynamic { tn = p; _ }) when ctx.gated -> Continue (Set.add acc p)
+            | _ -> Continue acc);
+      }
+    in
+    fold ~policy ~hooks ~init:(Set.empty (module Tn)) llc
+  in
   fun tn ->
     let own_writes = Hashtbl.find writes_by_tn tn |> Option.value ~default:[] in
     (* The prologue of a LOCAL producer runs right after the producer's last top-level statement —
@@ -7039,6 +7068,7 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list) (
         Ok (0, Set.empty (module Tn))
       else if a.a_dynamic then Error "dynamically indexed read"
       else if a.a_guarded then Error "guarded read"
+      else if Set.mem gated_readers tn then Error "read under a scalar gate"
       else if (not (List.is_empty own_writes)) && Affine.stmt_head a.a_path <= own_last then
         Error "reader precedes the producer's last write"
       else if not producer_span_clean then

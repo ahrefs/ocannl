@@ -2,7 +2,7 @@
    with a reduction extent above [virtualize_max_inline_reduction], read only through the diagonal
    extraction [a ++ "ii => i"]. The reduction cap used to materialize the whole [n×n] product; the
    footprint form leaves it virtual and computes the [n] diagonal cells into an [n]-sized scratch
-   ahead of the reader.
+   right after the product's own nest.
 
    Unlike the hand-built rows, this goes through the whole default pipeline of the ambient backend —
    [Assignments] lowering, the schedule annotator (on a GPU the scratch crosses the statement

@@ -707,10 +707,11 @@ type virtualize_settings = {
       (** gh-ocannl-616 ([virtualize_footprint_materialization]): whether a node one of the caps
           above would materialize whole may instead be footprint-scoped when every read of it is an
           affine sub-image read — a fresh routine-private scratch shaped like the reader's iteration
-          box, filled ahead of the reader by a prologue instantiating the node's stored template
-          over that box — and the total scratch cell count is below the node's element count. Also
-          gates the [Footprint] third of the decision vector ([Context.decide_footprint]) and the
-          consumer-side form for a node an earlier routine committed [Virtual]. *)
+          box, filled by a prologue instantiating the node's stored template over that box, right
+          after the producer's last write (ahead of the reader for an inherited template) — and the
+          total scratch cell count is below the node's element count. Also gates the [Footprint]
+          third of the decision vector ([Context.decide_footprint]) and the consumer-side form for a
+          node an earlier routine committed [Virtual]. *)
 }
 
 val virtualize_settings : virtualize_settings

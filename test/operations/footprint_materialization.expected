@@ -94,3 +94,6 @@ dead-writer: footprint and materialized arms agree: true
 local-in-producer: the reduction cap materializes the producer: true
 local-in-producer: no scratch: true
 local-in-producer: executed values see the local as each iteration left it: true
+gated-read: the reduction cap materializes the producer: true
+gated-read: no scratch: true
+gated-read: executed values are the shifted diagonal under the gate: true
