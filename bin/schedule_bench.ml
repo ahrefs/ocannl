@@ -860,4 +860,10 @@ let () =
       !disagreements;
   if !failures > 0 then
     p "%d variant(s) failed at m=%d n=%d k=%d — see the FAILED lines above.\n" !failures m n k;
-  if !failures > 0 || !disagreements > 0 then Stdlib.exit 1
+  (* The requested geometry's own verdict, on the same footing as a wrong result: a degenerate
+     extent skips every scheduled variant, so nothing carried the geometry and no timing here
+     measured it. Read off the renderer's census rather than enumerated from the skip gates, so a
+     variant added later is covered without listing it. *)
+  let unmeasured = Bench_tile.unmeasured tile ~statements:all.Ir.C_syntax.statements in
+  Option.iter unmeasured ~f:(p "%s");
+  if !failures > 0 || !disagreements > 0 || Option.is_some unmeasured then Stdlib.exit 1

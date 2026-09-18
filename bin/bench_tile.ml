@@ -80,7 +80,28 @@ let of_args args ~machine =
            rendering %s describes"
           vector_bytes elt_bytes
           (Option.value_map t ~default:"a geometry" ~f:RT.to_string)
-    | ladder -> ladder
+    | ladder -> (vector_bytes, ladder)
+  in
+  (* Bounds BEFORE any product is formed. [Register_tile.check] rejects these values already, but
+     only after computing [rn * lanes] and [rm * rn + rm + rn] in machine ints: at [rn = 2^61] the
+     width wraps to zero, the budget check reads a negative live count, both pass, and [coverage]
+     then evaluates [n mod 0]. The bounds are the machine's own, not a second copy of the rules —
+     every one of them is IMPLIED by a rule [check] enforces, so nothing it would accept is refused
+     here. [live_registers] is [rm * rn + rm + rn], which exceeds each of [rm] and [rn] on its own,
+     so a field over the register budget can never fit it; and [lanes] must be a width the file
+     renders, none of which exceeds the widest. Values below these bounds are left to the renderer,
+     so an ordinary mistake (a [lanes] the ladder does not contain) still reaches the decline
+     diagnostic rather than being second-guessed here. *)
+  let bounded { RT.rm; rn; lanes } ~vector_bytes ~ladder =
+    let budget = RT.budget ~vector_bytes in
+    let widest = List.hd_exn ladder in
+    let over name v cap rule =
+      if v > cap then
+        Bench_args.bad args "%s=%d exceeds %s (%d), which no geometry can pass" name v rule cap
+    in
+    over "rm" rm budget "the live-register budget of this vector file";
+    over "rn" rn budget "the live-register budget of this vector file";
+    over "lanes" lanes widest "the widest vector this file renders at this element size"
   in
   match (Bench_args.flag_value args ~flag:"tile", Bench_args.flag_value args ~flag:"rn") with
   | None, None -> None
@@ -89,14 +110,17 @@ let of_args args ~machine =
         "--tile= and --rn= are two spellings of one request (--rn= derives rm and lanes); pass one"
   | Some spec, None ->
       let t = parse_triple args spec in
-      ignore (honoured_here (Some t) : int list);
+      let vector_bytes, ladder = honoured_here (Some t) in
+      bounded t ~vector_bytes ~ladder;
       Some t
   | None, Some rn ->
       let rn = parse_rn args rn in
       (* The widest width the file renders is what the renderer's own model ranks first, so a
          derived request lands where [Register_tile.default] would have started. *)
-      let widest = List.hd_exn (honoured_here None) in
-      Some { RT.rm = RT.rm_cap; rn; lanes = widest }
+      let vector_bytes, ladder = honoured_here None in
+      let t = { RT.rm = RT.rm_cap; rn; lanes = List.hd_exn ladder } in
+      bounded t ~vector_bytes ~ladder;
+      Some t
 
 (** [refuse_unreached args tile ~why] refuses a geometry that this run will not put in front of the
     renderer at all, naming it and why. {!of_args} answers the question the MACHINE decides — is
@@ -110,6 +134,31 @@ let refuse_unreached args tile ~why =
   Option.iter tile ~f:(fun t ->
       Bench_args.bad args "the requested geometry %s reaches no schedule in this run: %s"
         (RT.to_string t) why)
+
+(** [unmeasured tile ~statements] is the failure line for a run that requested a geometry and
+    rendered no [Tile_mma] at all, or [None] when there is nothing to report.
+
+    This is the a-posteriori half of the same claim {!refuse_unreached} makes a priori, and it is
+    the one that needs no enumeration of eligibility paths: it asks the RENDERER how many [Tile_mma]
+    statements the run actually produced (the merged [C_syntax.mma_census] both benches already
+    collect), so every way a tile-bearing schedule can fail to run is covered by construction — an n
+    the packed variants cannot block, a degenerate extent that skips every scheduled variant, and a
+    variant added later whose eligibility nobody remembered to list here. The two halves are
+    complementary and neither subsumes the other: a GPU branch DOES render a [Tile_mma] (through the
+    hardware's intrinsics), so the census count would not catch it, and a skipped variant is
+    knowable only after the run. Together with the scalar-fallback warning the benches already print
+    — a geometry rendered and declined — they cover the three ways a timing can be recorded under a
+    geometry that did not produce it. *)
+let unmeasured tile ~statements =
+  match tile with
+  | Some t when statements < 1 ->
+      Some
+        (Printf.sprintf
+           "NOT MEASURED: the requested geometry %s reached no Tile_mma in this run — every \
+            variant that would carry it was skipped (see the lines above for why), so no timing \
+            here measured it.\n"
+           (RT.to_string t))
+  | _ -> None
 
 (** How the header line says what was requested — the geometry, or that the renderer's own model
     chose. Printed unconditionally, beside the blocking: a run whose geometry is invisible is one

@@ -43,14 +43,14 @@ let () =
 
 let () =
   let before = !forcings in
-  let t = Bench_tile.of_args (args [ "--tile=4,3,8" ]) ~machine in
+  let t = Bench_tile.of_args (args [ "--tile=4,3,4" ]) ~machine in
   p "--tile= is taken verbatim, in rm,rn,lanes order"
-    (Option.equal RT.equal t (Some { RT.rm = 4; rn = 3; lanes = 8 }));
+    (Option.equal RT.equal t (Some { RT.rm = 4; rn = 3; lanes = 4 }));
   (* --tile= derives nothing, and still asks: a backend whose file renders no multi-lane vector has
      no register-tiled rendering for the geometry to describe (below). *)
   p "a verbatim geometry consults the machine too, once" (!forcings = before + 1);
   p "the header names the requested geometry and says it was requested"
-    (String.equal (Bench_tile.describe t) "rm4 rn3 lanes8 (requested)")
+    (String.equal (Bench_tile.describe t) "rm4 rn3 lanes4 (requested)")
 
 let () =
   let before = !forcings in
@@ -79,11 +79,11 @@ let () =
      at the site, where the decline reaches the census and the run's warning. Rejecting it here
      would need a second copy of those rules, and would refuse geometries some other site
      affords. *)
-  let t = Bench_tile.of_args (args [ "--tile=4,12,8" ]) ~machine in
+  let t = Bench_tile.of_args (args [ "--tile=4,12,4" ]) ~machine in
   p "a geometry no 512-column site can honour is still handed to the renderer, not pre-rejected"
-    (Option.equal RT.equal t (Some { RT.rm = 4; rn = 12; lanes = 8 })
+    (Option.equal RT.equal t (Some { RT.rm = 4; rn = 12; lanes = 4 })
     && Result.is_error
-         (RT.check ~vector_bytes:16 ~elt_bytes:4 ~m:64 ~n:512 { RT.rm = 4; rn = 12; lanes = 8 }))
+         (RT.check ~vector_bytes:16 ~elt_bytes:4 ~m:64 ~n:512 { RT.rm = 4; rn = 12; lanes = 4 }))
 
 (* A backend reporting no SIMD vector file -- every GPU backend does, [simd_vector_bytes = 0]. Its
    [Tile_mma] renders through the hardware's own intrinsics, which the census reports as a SUCCESS,
@@ -93,7 +93,7 @@ let no_vector_file () = (0, 4)
 
 let () =
   p_all "neither spelling is taken on a backend with no register-tiled rendering to describe"
-    [ [ "--tile=4,3,8" ]; [ "--rn=3" ] ] ~f:(fun argv ->
+    [ [ "--tile=4,3,4" ]; [ "--rn=3" ] ] ~f:(fun argv ->
       match refused (fun () -> Bench_tile.of_args (args argv) ~machine:no_vector_file) with
       | Some msg ->
           String.is_substring msg ~substring:"means nothing on this backend"
@@ -106,11 +106,11 @@ let () =
     (match
        refused (fun () ->
            Bench_tile.refuse_unreached (args [])
-             (Some { RT.rm = 4; rn = 3; lanes = 8 })
+             (Some { RT.rm = 4; rn = 3; lanes = 4 })
              ~why:"backend metal runs the shared/staged GPU schedules")
      with
     | Some msg ->
-        String.is_substring msg ~substring:"rm4 rn3 lanes8 reaches no schedule"
+        String.is_substring msg ~substring:"rm4 rn3 lanes4 reaches no schedule"
         && String.is_substring msg ~substring:"shared/staged GPU schedules"
     | None -> false);
   p "and a run that requested nothing has nothing to refuse"
@@ -120,15 +120,15 @@ let () =
   (* Two spellings of one request is a contradiction, not a precedence question: ranking them would
      run a geometry the commandline does not unambiguously name. *)
   p "--tile= together with --rn= is refused, naming both"
-    (match refused (fun () -> Bench_tile.of_args (args [ "--rn=4"; "--tile=4,6,8" ]) ~machine) with
+    (match refused (fun () -> Bench_tile.of_args (args [ "--rn=4"; "--tile=4,6,4" ]) ~machine) with
     | Some msg -> String.is_substring msg ~substring:"--tile= and --rn= are two spellings"
     | None -> false);
   let cases =
     [
       ([ "--tile=4,6" ], "three comma-separated counts, got 2");
-      ([ "--tile=4,6,8,2" ], "three comma-separated counts, got 4");
-      ([ "--tile=4,0,8" ], "rn must be positive, got 0");
-      ([ "--tile=4,x,8" ], "rn must be an integer, got \"x\"");
+      ([ "--tile=4,6,4,2" ], "three comma-separated counts, got 4");
+      ([ "--tile=4,0,4" ], "rn must be positive, got 0");
+      ([ "--tile=4,x,4" ], "rn must be an integer, got \"x\"");
       ([ "--rn=0" ], "--rn= must be positive, got 0");
       ([ "--rn=wide" ], "--rn= must be an integer, got \"wide\"");
     ]
@@ -140,9 +140,64 @@ let () =
       | None -> false)
 
 let () =
+  (* Bounds that keep the geometry arithmetic in range. Each is IMPLIED by a rule
+     [Register_tile.check] enforces, so the claim is that nothing check would accept is refused here
+     — stated against [check] itself, over the values the bound admits. *)
+  let budget = RT.budget ~vector_bytes:16 in
+  let widest = List.hd_exn (RT.simd_lane_ladder ~vector_bytes:16 ~elt_bytes:4) in
+  p_all
+    "a count that would wrap the width or the live-register arithmetic is refused, naming the rule"
+    [
+      ([ Printf.sprintf "--tile=%d,2,4" (budget + 1) ], "rm");
+      ([ Printf.sprintf "--tile=4,%d,4" (budget + 1) ], "rn");
+      ([ Printf.sprintf "--tile=4,2,%d" (widest + 1) ], "lanes");
+      ([ "--tile=1,2305843009213693952,4" ], "rn");
+      ([ Printf.sprintf "--rn=%d" (budget + 1) ], "rn");
+    ]
+    ~f:(fun (argv, field) ->
+      match refused (fun () -> Bench_tile.of_args (args argv) ~machine) with
+      | Some msg ->
+          String.is_substring msg ~substring:(field ^ "=")
+          && String.is_substring msg ~substring:"which no geometry can pass"
+      | None -> false);
+  (* The bounds cut only values check already refuses: at the bound itself, and one step over it,
+     check's own verdict is what the parser's is. *)
+  p_all "the parser never refuses an rm that Register_tile.check would take"
+    [ 1; 2; 4; budget - 1; budget; budget + 1 ]
+    ~f:(fun v ->
+      let by_check =
+        Result.is_error
+          (RT.check ~vector_bytes:16 ~elt_bytes:4 ~m:64 ~n:512 { RT.rm = v; rn = 2; lanes = 4 })
+      in
+      let by_parser =
+        Option.is_some
+          (refused (fun () ->
+               Bench_tile.of_args (args [ Printf.sprintf "--tile=%d,2,4" v ]) ~machine))
+      in
+      (* One direction is the claim: the parser never refuses what check would take. *)
+      (not by_parser) || by_check)
+
+let () =
+  (* The post-condition: a run that requested a geometry and rendered no Tile_mma measured nothing
+     under it, whatever skipped the variants. Read off the renderer's own statement count, so the
+     claim needs no list of eligibility paths. *)
+  p "a requested geometry that reached no Tile_mma is reported as not measured"
+    (match Bench_tile.unmeasured (Some { RT.rm = 4; rn = 3; lanes = 4 }) ~statements:0 with
+    | Some msg ->
+        String.is_substring msg ~substring:"NOT MEASURED"
+        && String.is_substring msg ~substring:"rm4 rn3 lanes4"
+    | None -> false);
+  p "a requested geometry that reached one is not"
+    (Option.is_none (Bench_tile.unmeasured (Some { RT.rm = 4; rn = 3; lanes = 4 }) ~statements:1));
+  (* Nothing to report however many statements ran, zero included: the verdict is about a CLAIM the
+     header made, and an unflagged run makes none. *)
+  p_all "a run that requested nothing never reports it, at any statement count" [ 0; 1; 7 ]
+    ~f:(fun statements -> Option.is_none (Bench_tile.unmeasured None ~statements))
+
+let () =
   (* Spaces around the counts survive a shell that quoted them. *)
   p "whitespace inside the triple is stripped rather than failing to parse"
     (Option.equal RT.equal
-       (Bench_tile.of_args (args [ "--tile= 4 , 3 , 8 " ]) ~machine)
-       (Some { RT.rm = 4; rn = 3; lanes = 8 }));
+       (Bench_tile.of_args (args [ "--tile= 4 , 3 , 4 " ]) ~machine)
+       (Some { RT.rm = 4; rn = 3; lanes = 4 }));
   printf "machine consulted %d time(s) over the whole run\n" !forcings

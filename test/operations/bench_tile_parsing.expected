@@ -15,5 +15,10 @@ a geometry that reaches no schedule in this run is refused, naming it and why: t
 and a run that requested nothing has nothing to refuse: true
 --tile= together with --rn= is refused, naming both: true
 a malformed geometry is refused by name, where it is read: true
+a count that would wrap the width or the live-register arithmetic is refused, naming the rule: true
+the parser never refuses an rm that Register_tile.check would take: true
+a requested geometry that reached no Tile_mma is reported as not measured: true
+a requested geometry that reached one is not: true
+a run that requested nothing never reports it, at any statement count: true
 whitespace inside the triple is stripped rather than failing to parse: true
-machine consulted 4 time(s) over the whole run
+machine consulted 15 time(s) over the whole run

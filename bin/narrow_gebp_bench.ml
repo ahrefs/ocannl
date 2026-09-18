@@ -344,7 +344,11 @@ let () =
         \      comparable with each other, and an f32 run is the cross-variant oracle.\n"
         (Ir.Ops.prec_string cprec) (Ir.Ops.prec_string prec) n;
   let t_naive, _, v_naive = bench ~variant:"naive" ~schedule:None ~against:None () in
-  match unschedulable with
+  (* How many [Tile_mma] statements the run actually rendered, which is what says whether a
+     requested geometry was measured by anything (the verdict below). The naive variant carries
+     none, so an unschedulable n leaves it at zero. *)
+  let statements = ref 0 in
+  (match unschedulable with
   | _ :: _ ->
       p "skipping the packed variants — this n is not schedulable with this blocking:\n";
       List.iter unschedulable ~f:(fun reason -> p "  %s\n" reason);
@@ -373,6 +377,7 @@ let () =
          [Mma_intrinsics], so it would false-warn the moment an arm runs on a GPU. That predicate
          now lives once, in [C_syntax] (gh-ocannl-626), so the two benches cannot disagree. *)
       let all = Ir.C_syntax.merge_mma_summaries [ r_pack; r_par ] in
+      statements := all.Ir.C_syntax.statements;
       let declined = all.Ir.C_syntax.scalar_fallbacks in
       if declined > 0 then
         p
@@ -400,10 +405,17 @@ let () =
            legitimate at this extent and storage precision. The packed variants are still\n\
            required to agree with each other, and were checked.\n"
           !expected_differences;
-      if !disagreements > 0 then (
+      if !disagreements > 0 then
         p
           "WRONG RESULT: %d required comparison(s) failed — the DIFFERS lines above name the\n\
            first cell and both values. At these operands the compared legs round identically, so\n\
            this is not rounding.\n"
-          !disagreements;
-        Stdlib.exit 1)
+          !disagreements);
+  (* The requested geometry's own verdict, after every variant has been reported and whichever arm
+     ran: a run that recorded a timing under a geometry nothing rendered is the same hazard as one
+     that recorded a wrong result, and it exits the same way. Measured at the renderer rather than
+     enumerated from the eligibility paths, so an n this blocking cannot schedule and any later
+     variant are both covered without listing either. *)
+  let unmeasured = Bench_tile.unmeasured tile ~statements:!statements in
+  Option.iter unmeasured ~f:(p "%s");
+  if !disagreements > 0 || Option.is_some unmeasured then Stdlib.exit 1

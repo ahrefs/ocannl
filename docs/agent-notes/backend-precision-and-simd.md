@@ -802,7 +802,14 @@ files.
   rather than two geometries, and cannot be re-run from a PR body. The requested geometry prints on
   the header line, and one the renderer declines reaches the census bracket as
   `Mma_scalar_fallback` plus a warning naming it — it is never approximated, so the "read the
-  bracket, not the variant name" rule above answers the flag too. Measured on an M4 Max (NEON,
+  bracket, not the variant name" rule above answers the flag too. **Three ways a timing can be
+  recorded under a geometry that did not produce it, and the three guards**: the backend has no
+  register-tiled rendering at all (`simd_vector_bytes = 0`, every GPU backend) or the run's variants
+  do not carry `?tile` (`schedule_bench`'s shared branch) — both refused before the header prints;
+  the geometry reached the renderer and was declined — the census bracket plus the fallback warning;
+  and every tile-bearing variant was SKIPPED (an unschedulable `n`, a degenerate extent) — a
+  `NOT MEASURED` verdict and exit 1, read off the merged census's statement count rather than
+  enumerated from the skip gates, so a variant added later is covered without listing it. Measured on an M4 Max (NEON,
   `vector_bytes` 16), f16 `--ocannl_fp16_arithmetic=true` n = 512: the tail-bearing `--rn=6`
   (width 48 over 512, a 4-column tail) runs 1.15–1.29 ms against 1.40–1.53 ms for the tail-free
   `--rn=4`, i.e. ~20% — the gh-ocannl-620 reuse-only ranking is right here by well more than the
