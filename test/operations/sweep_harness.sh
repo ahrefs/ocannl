@@ -31,7 +31,7 @@ on_error() {
     capped capped_target remote_opt_in serial_red serial_clean serial_two_inline \
     serial_many_inline serial_control lanes lane_stop_seed lane_stopped \
     aggregator_missing stamp_advance dxg_clean dxg_red dxg_collection dxg_unavailable \
-    dxg_many dxg_bounds dxg_no_trigger \
+    dxg_many dxg_bounds dxg_no_trigger hold_lock_ok \
     after_cancel; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
@@ -1366,6 +1366,40 @@ grep -q '^  rog-nv/cuda: skip (unreachable)$' <<<"$lab_hostile"
 grep -q '^  minix/hip: skip (unreachable)$' <<<"$lab_hostile"
 grep -q '^  minix/multidev_cc: skip (unreachable)$' <<<"$lab_hostile"
 absent 'reserved by' <<<"$lab_hostile"
+exec 6>&- 5>&-
+
+# The OTHER lock file wake-lab keeps per box, and the lane must ignore it. `<box>.hold.lock` says
+# "this box's VM must not be destroyed" -- what `wake-lab.sh --hold` takes and its Windows-side
+# holder carries -- and it is deliberately not the lane's business: a hold keeps a VM alive FOR a
+# lane, so a lane that waited on it would be waiting on its own caller. That is not hypothetical.
+# Until 2026-09-18 both claims shared `<box>.lock`, and the cross-machine sweep routine -- which
+# holds rog and minix with `--hold` and then runs this script in the same session -- reserved the
+# boxes against its own sweep: every remote lane waited out LAB_LOCK_WAIT and skipped, and three of
+# the five backends that routine is the only gate for got zero coverage (run 20260918T050903Z,
+# ludics-lite#224). So: both hold locks genuinely HELD, and the lanes must still run to the point
+# of probing their boxes -- `skip (unreachable)`, never `skip (box ... reserved by ...)`.
+hold_leak=$tmp/ambient-hold-locks
+mkdir -p "$hold_leak"
+printf 'wake-lab --hold (pid 1, since 20260918T050814Z)\n' >"$hold_leak/rog.hold.lock"
+printf 'wake-lab --hold (pid 1, since 20260918T050814Z)\n' >"$hold_leak/minix.hold.lock"
+exec 6>>"$hold_leak/rog.hold.lock"
+exec 5>>"$hold_leak/minix.hold.lock"
+perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 1)' <&6
+perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 1)' <&5
+hold_lock_ok=$(WAKE_LAB_LOCK_DIR=$hold_leak \
+  SWEEP_TEST_WAIT_PREFIX=$tmp/hold-lanes SWEEP_TEST_SSH_MODE=release \
+  run_sweep_args --only cc --only metal --only cuda --only hip --only multidev_cc \
+  --target hold-lock-probe)
+grep -q '^  rog-nv/cuda: skip (unreachable)$' <<<"$hold_lock_ok"
+grep -q '^  minix/hip: skip (unreachable)$' <<<"$hold_lock_ok"
+grep -q '^  minix/multidev_cc: skip (unreachable)$' <<<"$hold_lock_ok"
+absent 'reserved by' <<<"$hold_lock_ok"
+# ...and the lane really did take its OWN lock while the hold lock was held, rather than reaching
+# some other directory: the lane lock file is there, beside the hold lock nobody asked it about.
+# One statement each: under errexit a failing LEFT side of an `&&` list is exempt, so the pair
+# written as one AND-list would pass silently in exactly the case it exists to catch.
+[ -e "$hold_leak/rog.lock" ]
+[ -e "$hold_leak/minix.lock" ]
 exec 6>&- 5>&-
 
 # The rows are those of a serial run in everything but their order: one per
