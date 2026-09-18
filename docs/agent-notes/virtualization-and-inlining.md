@@ -310,8 +310,11 @@ files.
   position: the prologue replays every component after the last write; rounds 2-5). A read under a SCALAR gate (a `Where` arm, a gated operand) is not an `If` guard and the access
   relations do not mark it — the query's own `Access_fold` pass does, and such a node is ineligible
   (round 7: the gate may be what keeps an instance in range, and the prologue is unconditional).
-  An explicit preference exempts its node from the caps even where the form cannot serve the
-  reads; the node then inlines. A
+  A reader statement that writes a local is ineligible too (an inherited prologue, ahead of the
+  statement, would see the local as it was; round 10). An explicit preference exempts its node from
+  the caps even where the form cannot serve the reads; the node then inlines. Flip pricing is per
+  read CELL in both readings (`per_cell`: the sites' fiber cardinalities, 1 per injective site),
+  and an inherited footprint-scoped node offers its `` `Inline`` flip only. A
   consumption-time rejection after a scratch was minted is harmless: cleanup's scope-target
   retraction turns the stranded prologue into an n-cell gather of the buffer
   (`case_rejection_after_footprint`).

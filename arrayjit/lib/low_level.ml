@@ -6950,10 +6950,14 @@ let drop_dead_loop_accesses (accs : Tn.t Affine.access list) : Tn.t Affine.acces
     could be one the template depends on. A read inside the node's own setter statement is a
     read-modify-write self-read, part of the template rather than a read site. *)
 type footprint_eligibility =
-  | Footprint_cells of { cells : int; readers : Set.M(Tn).t }
-      (** [cells]: the scratch cells over the read sites; [readers]: the nodes the readers'
-          statements write — what a template must not read, for a form whose prologue runs ahead of
-          the reader rather than at the producer. *)
+  | Footprint_cells of { cells : int; per_cell : int; readers : Set.M(Tn).t }
+      (** [cells]: the scratch cells over the read sites — the instantiations the prologues perform,
+          what the policy weighs against the node's element count; [per_cell]: those instantiations
+          per distinct read cell, the sum over the sites of their read map's fiber cardinality (1
+          for an injective site) — the same per-cell basis the inlined reading's multiplicity is on,
+          so the two readings price alike; [readers]: the nodes the readers' statements write — what
+          a template must not read, for a form whose prologue runs ahead of the reader rather than
+          at the producer. *)
   | Not_footprintable of string
 [@@deriving sexp_of]
 
@@ -7065,10 +7069,15 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list) (
     in
     let site (a : _ Affine.access) =
       if List.exists own_writes ~f:(fun w -> Affine.same_statement w.Affine.a_path a.a_path) then
-        Ok (0, Set.empty (module Tn))
+        Ok (0, 0, Set.empty (module Tn))
       else if a.a_dynamic then Error "dynamically indexed read"
       else if a.a_guarded then Error "guarded read"
       else if Set.mem gated_readers tn then Error "read under a scalar gate"
+      else if Set.mem local_effects (Affine.stmt_head a.a_path) then
+        (* An inherited template's prologue runs ahead of the reader's statement: a local that
+           statement writes before the read would be seen by the prologue as it was, by the inlined
+           read as updated. *)
+        Error "reader statement writes a local"
       else if (not (List.is_empty own_writes)) && Affine.stmt_head a.a_path <= own_last then
         Error "reader precedes the producer's last write"
       else if not producer_span_clean then
@@ -7089,7 +7098,14 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list) (
                 |> List.filter ~f:(fun s -> not (Set.mem statics_set s))
                 |> Set.of_list (module Indexing.Symbol)
               in
-              Result.map ~f:(fun cells -> (cells, writers))
+              let fiber =
+                let domain =
+                  List.filter_map a.a_loops ~f:(fun (s, (lo, hi)) ->
+                      Option.some_if (Set.mem syms s) (s, hi - lo + 1))
+                in
+                match Affine.fiber_cardinality ~domain a.a_map with `Exact f | `At_least f -> f
+              in
+              Result.map ~f:(fun cells -> (cells, fiber, writers))
               @@ Set.fold_result syms ~init:1 ~f:(fun cells s ->
                   match List.Assoc.find a.a_loops s ~equal:Indexing.equal_symbol with
                   | Some (0, hi) -> Ok (cells * (hi + 1))
@@ -7101,12 +7117,13 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list) (
     | Some sites -> (
         match
           List.fold_result sites
-            ~init:(0, Set.empty (module Tn))
-            ~f:(fun (cells, readers) a ->
-              Result.map (site a) ~f:(fun (c, w) -> (cells + c, Set.union readers w)))
+            ~init:(0, 0, Set.empty (module Tn))
+            ~f:(fun (cells, per_cell, readers) a ->
+              Result.map (site a) ~f:(fun (c, f, w) ->
+                  (cells + c, per_cell + f, Set.union readers w)))
         with
-        | Ok (0, _) -> Not_footprintable "only read-modify-write self-reads"
-        | Ok (cells, readers) -> Footprint_cells { cells; readers }
+        | Ok (0, _, _) -> Not_footprintable "only read-modify-write self-reads"
+        | Ok (cells, per_cell, readers) -> Footprint_cells { cells; per_cell; readers }
         | Error reason -> Not_footprintable reason)
 
 (* gh-ocannl-616, the gh-573 corner: the facts the caps consult about a LOCAL producer, read off a
@@ -7958,9 +7975,14 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
     let price = !recompute_pricer input_ctx ~static_indices llc in
     Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:traced acc ->
         let one_hot = traced.prefers_virtual_one_hot && not traced.has_non_one_hot_setter in
+        (* gh-ocannl-616: a node an earlier routine left virtual and this specialization
+           footprint-scoped has no assignment here, yet its footprint reading is a decision the
+           search may undo ([Context.decide_inline] restores ordinary inlining); its [`Materialize]
+           direction is not open (no routine writes the buffer). *)
+        let footprinted = Hashtbl.mem footprint_scoped tn in
         if
-          (not traced.has_assignment) || one_hot || traced.is_scalar_constexpr
-          || not traced.read_by_other
+          ((not traced.has_assignment) && not footprinted)
+          || one_hot || traced.is_scalar_constexpr || not traced.read_by_other
         then acc
         else
           (* gh-ocannl-616: the footprint form's standing for the node — chosen by this
@@ -7968,15 +7990,15 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
              scratch strictly smaller than the node, the payload the scratch cell count; a footprint
              as large as the node is a materialization under another name, and offering it would
              only crowd the surface's top-N budgets). A node whose footprint reading was retracted
-             at a read site is not offered the flip again. *)
-          let footprinted = Hashtbl.mem footprint_scoped tn in
-          let cells =
+             at a read site is not offered the flip again. The payload is the footprint reading's
+             per-cell instantiation count, the basis the inlined reading's multiplicity is on. *)
+          let per_cell =
             if
               virtualize_settings.footprint_materialization
               && not (Hash_set.mem footprint_retracted tn)
             then
               match (Lazy.force an.an_footprint) tn with
-              | Footprint_cells { cells; _ } when cells < Tn.num_elems tn -> Some cells
+              | Footprint_cells { cells; per_cell; _ } when cells < Tn.num_elems tn -> Some per_cell
               | Footprint_cells _ | Not_footprintable _ -> None
             else None
           in
@@ -7992,7 +8014,7 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
                    lattice are open. *)
                 if footprinted then [ `Materialize; `Inline ] else [ `Materialize ]
             | Some (Never_virtual, p) when is_cap_provenance p ->
-                if Option.is_some cells then [ `Inline; `Footprint ] else [ `Inline ]
+                if Option.is_some per_cell then [ `Inline; `Footprint ] else [ `Inline ]
             (* A cap-selected node the reconcile-stage interface classification promoted [On_device
                36] (gh-618 round 4): the promotion is the interface consequence of the cap's own
                materialization, not a legality/intent decision, so the [`Inline] flip stays
@@ -8001,17 +8023,20 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
                 [ `Inline ]
             | _ -> []
           in
+          let flips =
+            if traced.has_assignment then flips else List.filter flips ~f:(Poly.equal `Inline)
+          in
           List.fold flips ~init:acc ~f:(fun acc fc_flip ->
               let mult = max 1 ((Lazy.force an.an_read_multiplicity) tn) in
-              (* The instantiations the flip's recompute reading performs: the per-cell read
-                 multiplicity for an inlined reading, the scratch cell count for a footprint-scoped
-                 one (gh-ocannl-616: the substitution a footprint applies collapses the reader's
-                 loops into the prologue's box, and only the instantiating side knows that
-                 count). *)
+              (* The instantiations the flip's recompute reading performs, per read cell: the read
+                 multiplicity for an inlined reading, the sites' fiber cardinalities for a
+                 footprint-scoped one (gh-ocannl-616: one instantiation per scratch cell, so per
+                 distinct read cell the fiber of the site's map — 1 for an injective site — and only
+                 the instantiating side knows that count). *)
               let instantiations =
                 match fc_flip with
-                | `Footprint -> Option.value cells ~default:mult
-                | `Materialize when footprinted -> Option.value cells ~default:mult
+                | `Footprint -> Option.value per_cell ~default:mult
+                | `Materialize when footprinted -> Option.value per_cell ~default:mult
                 | `Materialize | `Inline -> mult
               in
               (* gh-ocannl-637: the modeled op count of one recompute, times the instantiations; the

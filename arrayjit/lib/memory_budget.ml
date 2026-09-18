@@ -157,7 +157,13 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
             | 0 -> Tn.compare a.LL.fc_tn b.LL.fc_tn
             | c -> c)
       in
-      let considered = List.take all max_candidates in
+      (* The cut keeps a node's directions together (gh-ocannl-616): a sibling of a taken record
+         joins it, so the group comparison below always sees both. *)
+      let considered =
+        let taken = List.take all max_candidates in
+        List.filter all ~f:(fun (o : LL.flip_candidate) ->
+            List.exists taken ~f:(fun (c : LL.flip_candidate) -> Tn.equal c.LL.fc_tn o.LL.fc_tn))
+      in
       let bp_dropped = List.length all - List.length considered in
       if bp_dropped > 0 then
         logf "%d of %d inline candidates dropped by max_candidates=%d (cheapest recompute kept)"

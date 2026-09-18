@@ -5,12 +5,14 @@ diagonal: the scratch is written by the prologue and read by the consumer: true
 diagonal: the prologue instantiates the reduction (a loop of the reduction extent survives): true
 diagonal: both lattice neighbours are offered as flips: true
 diagonal: the footprint form is not offered where it is already chosen: true
+diagonal: both flips are priced alike (one instantiation per read cell): true
 diagonal: the inlined arm really inlines (no scratch): true
 diagonal: executed values are the diagonal of the reduction: true
 diagonal: footprint and materialized arms agree: true
 diagonal: footprint and inlined arms agree: true
 visit-cap: the producer stays virtual: true
 visit-cap: one 1-D scratch over the reader's outer loop: true
+visit-cap: the inline flip costs n times the materialize flip: true
 visit-cap: executed values are the diagonal broadcast plus the column: true
 visit-cap: footprint and materialized arms agree: true
 full: the reduction cap materializes the producer: true
@@ -31,6 +33,7 @@ preference: executed values are the diagonal: true
 preference: footprint and inlined arms agree: true
 inherited: the producer routine commits the node virtual with an empty schedule: true
 inherited: the consumer footprint-scopes the inherited node: true
+inherited: the decision is searchable as an inline flip, and only that: true
 inherited: executed values are the diagonal of the inherited reduction: true
 inherited-guarded: the read declines to inlining (no buffer read): true
 inherited-guarded: no scratch: true
@@ -97,3 +100,7 @@ local-in-producer: executed values see the local as each iteration left it: true
 gated-read: the reduction cap materializes the producer: true
 gated-read: no scratch: true
 gated-read: executed values are the shifted diagonal under the gate: true
+inherited-local: the producer routine leaves the node virtual: true
+inherited-local: the reader writes a local, so no scratch: true
+inherited-local: the read is inlined: true
+inherited-local: executed values see the local as the reader updated it: true

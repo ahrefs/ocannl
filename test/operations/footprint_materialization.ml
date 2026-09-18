@@ -55,6 +55,10 @@ let flips_of (o : LL.optimized) tn =
 
 let offers o tn flip = List.mem (flips_of o tn) flip ~equal:Poly.equal
 
+let costs_of (o : LL.optimized) tn =
+  List.filter_map o.LL.flip_candidates ~f:(fun fc ->
+      Option.some_if (Tn.equal fc.LL.fc_tn tn) fc.LL.fc_recompute_cost)
+
 let with_setting ~set ~restore f =
   set ();
   Exn.protect ~f ~finally:restore
@@ -107,6 +111,12 @@ let case_diagonal_reduction () =
     (offers opt a `Materialize && offers opt a `Inline);
   p "diagonal: the footprint form is not offered where it is already chosen"
     (not (offers opt a `Footprint));
+  (* One instantiation per read cell in both readings: the footprint reading prices like the inlined
+     one. *)
+  p "diagonal: both flips are priced alike (one instantiation per read cell)"
+    (match List.sort ~compare:Int.compare (costs_of opt a) with
+    | [ x; y ] -> x = y && x > 0
+    | _ -> false);
   let seed = [ (o, blank n) ] and read = [ o ] in
   let fp = execute ~name:"fp_diag" opt ~seed ~read in
   let mat =
@@ -139,6 +149,11 @@ let case_visit_cap () =
   p "visit-cap: the producer stays virtual" (known_virtual opt a);
   p "visit-cap: one 1-D scratch over the reader's outer loop"
     (List.equal (List.equal Int.equal) (scratch_dims opt) [ [ n ] ]);
+  (* The inlined reading instantiates [n] times per diagonal cell, the footprint reading once. *)
+  p "visit-cap: the inline flip costs n times the materialize flip"
+    (match List.sort ~compare:Int.compare (costs_of opt a) with
+    | [ fp; inl ] -> inl = n * fp && fp > 0
+    | _ -> false);
   let xs = Array.init n ~f:(fun i -> Float.of_int (5 + (3 * i))) in
   let expected =
     Array.init (n * n) ~f:(fun c ->
@@ -249,6 +264,8 @@ let case_inherited () =
   in
   p "inherited: the consumer footprint-scopes the inherited node"
     (List.equal (List.equal Int.equal) (scratch_dims consumer) [ [ n ] ] && count_get consumer a = 0);
+  p "inherited: the decision is searchable as an inline flip, and only that"
+    (List.equal Poly.equal (flips_of consumer a) [ `Inline ]);
   let got = execute ~name:"fp_inh_consumer" consumer ~seed:[ (o, blank n) ] ~read:[ o ] in
   p "inherited: executed values are the diagonal of the inherited reduction" (same got [ diagonal ]);
   let i = sym () in
@@ -793,6 +810,54 @@ let case_gated_read () =
   let got = execute ~name:"fp_gated" opt ~seed:[ (x, xs); (o, blank n) ] ~read:[ o ] in
   p "gated-read: executed values are the shifted diagonal under the gate" (same got [ expected ])
 
+(* === An inherited template reading a local that the reader's own statement updates before the
+   read: an inherited prologue runs ahead of the statement and would see the local as it was, where
+   the inlined read sees it updated — the site is ineligible, the read inlines. === *)
+let case_inherited_reader_writes_local () =
+  let a = mk "airl" and o = mk ~dims:[| n |] "oirl" and lt = mk ~dims:[| 1 |] "ltrl" in
+  materialize o;
+  virtualize lt;
+  let l = LL.get_scope lt in
+  let ctx = LL.empty_optimize_ctx () in
+  let i = sym () and j = sym () and k = sym () in
+  let producer =
+    seq
+      (LL.Declare_local { id = l; needs_init = false })
+      (seq
+         (LL.Set_local (l, c 0.))
+         (seq (zero a)
+            (loop i
+               (loop j
+                  (loop_n k kk
+                     (set a
+                        [| iter i; iter j |]
+                        (add
+                           (get a [| iter i; iter j |])
+                           (add (LL.Get_local l) (add (tag i j) (mul (c 100.) (embed k)))))))))))
+  in
+  let producer = optimize_in ctx ~name:"fp_irl_producer" producer in
+  p "inherited-local: the producer routine leaves the node virtual" (known_virtual producer a);
+  let i' = sym () in
+  let consumer =
+    seq
+      (LL.Declare_local { id = l; needs_init = false })
+      (seq
+         (LL.Set_local (l, c 0.))
+         (loop i'
+            (seq
+               (LL.Set_local (l, add (LL.Get_local l) (c 1.)))
+               (set o [| iter i' |] (get a [| iter i'; iter i' |])))))
+  in
+  let consumer = optimize_in ctx ~name:"fp_irl_consumer" consumer in
+  p_empty "inherited-local: the reader writes a local, so no scratch"
+    ~over:(Hashtbl.keys consumer.LL.traced_store)
+    (scratches consumer);
+  p "inherited-local: the read is inlined" (count_get consumer a = 0);
+  let expected = Array.init n ~f:(fun i -> reduced_plus (i + 1) i i) in
+  let got = execute ~name:"fp_irl_consumer" consumer ~seed:[ (o, blank n) ] ~read:[ o ] in
+  p "inherited-local: executed values see the local as the reader updated it"
+    (same got [ expected ])
+
 let () =
   case_diagonal_reduction ();
   case_visit_cap ();
@@ -817,4 +882,5 @@ let () =
   case_dead_loop_writer ();
   case_local_in_producer_statement ();
   case_gated_read ();
+  case_inherited_reader_writes_local ();
   Stdio.printf "%!"
