@@ -46,7 +46,9 @@ let () =
   let t = Bench_tile.of_args (args [ "--tile=4,3,8" ]) ~machine in
   p "--tile= is taken verbatim, in rm,rn,lanes order"
     (Option.equal RT.equal t (Some { RT.rm = 4; rn = 3; lanes = 8 }));
-  p "a verbatim geometry needs nothing from the machine either" (!forcings = before);
+  (* --tile= derives nothing, and still asks: a backend whose file renders no multi-lane vector has
+     no register-tiled rendering for the geometry to describe (below). *)
+  p "a verbatim geometry consults the machine too, once" (!forcings = before + 1);
   p "the header names the requested geometry and says it was requested"
     (String.equal (Bench_tile.describe t) "rm4 rn3 lanes8 (requested)")
 
@@ -82,6 +84,37 @@ let () =
     (Option.equal RT.equal t (Some { RT.rm = 4; rn = 12; lanes = 8 })
     && Result.is_error
          (RT.check ~vector_bytes:16 ~elt_bytes:4 ~m:64 ~n:512 { RT.rm = 4; rn = 12; lanes = 8 }))
+
+(* A backend reporting no SIMD vector file -- every GPU backend does, [simd_vector_bytes = 0]. Its
+   [Tile_mma] renders through the hardware's own intrinsics, which the census reports as a SUCCESS,
+   so a geometry taken here would print under "(requested)" with nothing having honoured it: the
+   "timed is not tensorized" hazard one level above the bracket. *)
+let no_vector_file () = (0, 4)
+
+let () =
+  p_all "neither spelling is taken on a backend with no register-tiled rendering to describe"
+    [ [ "--tile=4,3,8" ]; [ "--rn=3" ] ] ~f:(fun argv ->
+      match refused (fun () -> Bench_tile.of_args (args argv) ~machine:no_vector_file) with
+      | Some msg ->
+          String.is_substring msg ~substring:"means nothing on this backend"
+          && String.is_substring msg ~substring:"0-byte vector file"
+      | None -> false);
+  (* The tool's own half of the same claim: a geometry the machine could honour, in a run whose
+     schedules do not carry it (schedule_bench's GPU branch), is refused rather than printed as
+     requested. *)
+  p "a geometry that reaches no schedule in this run is refused, naming it and why"
+    (match
+       refused (fun () ->
+           Bench_tile.refuse_unreached (args [])
+             (Some { RT.rm = 4; rn = 3; lanes = 8 })
+             ~why:"backend metal runs the shared/staged GPU schedules")
+     with
+    | Some msg ->
+        String.is_substring msg ~substring:"rm4 rn3 lanes8 reaches no schedule"
+        && String.is_substring msg ~substring:"shared/staged GPU schedules"
+    | None -> false);
+  p "and a run that requested nothing has nothing to refuse"
+    (Option.is_none (refused (fun () -> Bench_tile.refuse_unreached (args []) None ~why:"unused")))
 
 let () =
   (* Two spellings of one request is a contradiction, not a precedence question: ranking them would

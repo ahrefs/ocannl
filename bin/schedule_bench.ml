@@ -728,10 +728,6 @@ let () =
         List.iter reasons ~f:(fun reason -> p "             %s\n" reason);
         Float.nan
   in
-  p
-    "matmul m=%d n=%d k=%d, %d repeats (naive: %d), register tile %s, backend from \
-     config/OCANNL_BACKEND\n"
-    m n k repeats naive_repeats (Bench_tile.describe tile);
   let backend = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc") in
   (* HIP belongs here too: the backend renders workgroup-shared placement exactly as CUDA and Metal
      do, so the shared/staged/tensorized variants — including the gh-ocannl-487 [mma_pd1]/[mma_pd2]
@@ -742,6 +738,22 @@ let () =
     || String.is_substring backend ~substring:"cuda"
     || String.is_substring backend ~substring:"hip"
   in
+  (* Which branch runs decides whether a requested geometry reaches anything: only the C-branch
+     variants carry [?tile], so on the shared branch the request would sit in the header under
+     "(requested)" while every schedule that ran ignored it. Refused before the header prints, so
+     the line never makes that claim. *)
+  if has_shared then
+    Bench_tile.refuse_unreached args tile
+      ~why:
+        (Printf.sprintf
+           "backend %s runs the shared/staged GPU schedules, whose Tile_mma renders through the \
+            hardware's own intrinsics; the register-tiled variants a geometry applies to are the \
+            C-backend ones"
+           backend);
+  p
+    "matmul m=%d n=%d k=%d, %d repeats (naive: %d), register tile %s, backend from \
+     config/OCANNL_BACKEND\n"
+    m n k repeats naive_repeats (Bench_tile.describe tile);
   let t_naive =
     if naive_repeats > 0 then attempt ~repeats:naive_repeats ~variant:"naive" ~schedule:None ()
     else Float.nan

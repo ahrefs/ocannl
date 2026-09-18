@@ -2,7 +2,7 @@ no flag requests no geometry, so the renderer picks exactly as it did before the
 and the machine is not consulted to decide that: true
 the header says so rather than leaving the geometry unstated: true
 --tile= is taken verbatim, in rm,rn,lanes order: true
-a verbatim geometry needs nothing from the machine either: true
+a verbatim geometry consults the machine too, once: true
 the header names the requested geometry and says it was requested: true
 --rn= consults the machine exactly once: true
 --rn= keeps the column count it was given, and derives the rest: true
@@ -10,7 +10,10 @@ the rows are the renderer's cap, not a constant restated here: true
 the width is the widest the file renders at this element size, the head of the ladder: true
 on a site with the rows and columns to spare, the derived geometry is one check accepts: true
 a geometry no 512-column site can honour is still handed to the renderer, not pre-rejected: true
+neither spelling is taken on a backend with no register-tiled rendering to describe: true
+a geometry that reaches no schedule in this run is refused, naming it and why: true
+and a run that requested nothing has nothing to refuse: true
 --tile= together with --rn= is refused, naming both: true
 a malformed geometry is refused by name, where it is read: true
 whitespace inside the triple is stripped rather than failing to parse: true
-machine consulted 1 time(s) over the whole run
+machine consulted 4 time(s) over the whole run

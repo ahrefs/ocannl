@@ -45,40 +45,71 @@ let parse_triple args spec =
       Bench_args.bad args "--tile= takes rm,rn,lanes: three comma-separated counts, got %d in %S"
         (List.length parts) spec
 
+(** [--rn=N]: the column count alone. *)
+let parse_rn args rn =
+  match Option.try_with (fun () -> Int.of_string (String.strip rn)) with
+  | Some v when v >= 1 -> v
+  | Some v -> Bench_args.bad args "--rn= must be positive, got %d" v
+  | None -> Bench_args.bad args "--rn= must be an integer, got %S" rn
+
 (** [of_args args ~machine] is the requested geometry, or [None] when no flag asked for one — in
     which case the renderer picks, exactly as before the flag existed.
 
-    [machine] is a thunk, and is forced only by [--rn=]: the other two paths need nothing from the
-    backend, and a bench that would otherwise not have created a context by this point should not
-    acquire one to answer a question nobody asked. It returns the machine's vector width in bytes
+    [machine] is a thunk, forced once by EITHER spelling and not at all without a flag: a bench that
+    would otherwise not have created a context by this point should not acquire one to answer a
+    question nobody asked. It returns the machine's vector width in bytes
     ([Context.hardware_limits]'s [simd_vector_bytes]) and the COMPUTE precision's element width —
     compute, not storage, because that is what the renderer's [elt_bytes] is: a narrow-storage GEBP
-    holds its C-tile at the compute precision. *)
+    holds its C-tile at the compute precision.
+
+    [--tile=] needs it for the same reason [--rn=] does, even though it derives nothing: a backend
+    whose file renders no multi-lane vector has no register-tiled rendering for a geometry to
+    describe, and its [Tile_mma] goes to the hardware's own intrinsics (or declines) whatever the
+    schedule carries. Taking the request there would print a geometry under "(requested)" that
+    nothing honoured — the "timed is not tensorized" hazard, one level up from the census bracket,
+    which reports the intrinsic rendering as a success. GPU backends report [simd_vector_bytes = 0]
+    and are exactly this case. *)
 let of_args args ~machine =
+  let honoured_here t =
+    let vector_bytes, elt_bytes = machine () in
+    match RT.simd_lane_ladder ~vector_bytes ~elt_bytes with
+    | [] ->
+        Bench_args.bad args
+          "a register-tile geometry means nothing on this backend: a %d-byte vector file renders \
+           no multi-lane vector at %d-byte elements, so its Tile_mma is not the register-tiled \
+           rendering %s describes"
+          vector_bytes elt_bytes
+          (Option.value_map t ~default:"a geometry" ~f:RT.to_string)
+    | ladder -> ladder
+  in
   match (Bench_args.flag_value args ~flag:"tile", Bench_args.flag_value args ~flag:"rn") with
   | None, None -> None
   | Some _, Some _ ->
       Bench_args.bad args
         "--tile= and --rn= are two spellings of one request (--rn= derives rm and lanes); pass one"
-  | Some spec, None -> Some (parse_triple args spec)
-  | None, Some rn -> (
-      let rn =
-        match Option.try_with (fun () -> Int.of_string (String.strip rn)) with
-        | Some v when v >= 1 -> v
-        | Some v -> Bench_args.bad args "--rn= must be positive, got %d" v
-        | None -> Bench_args.bad args "--rn= must be an integer, got %S" rn
-      in
-      let vector_bytes, elt_bytes = machine () in
-      match RT.simd_lane_ladder ~vector_bytes ~elt_bytes with
-      (* No ladder at all is a fact about the machine (or a GPU backend reporting no SIMD file), not
-         a mis-typed flag: say which numbers produced it, since --rn= cannot be answered without one
-         and --tile= still can. *)
-      | [] ->
-          Bench_args.bad args
-            "--rn= cannot derive a vector width: a %d-byte vector file renders no multi-lane \
-             vector at %d-byte elements; pass --tile=rm,rn,lanes instead"
-            vector_bytes elt_bytes
-      | widest :: _ -> Some { RT.rm = RT.rm_cap; rn; lanes = widest })
+  | Some spec, None ->
+      let t = parse_triple args spec in
+      ignore (honoured_here (Some t) : int list);
+      Some t
+  | None, Some rn ->
+      let rn = parse_rn args rn in
+      (* The widest width the file renders is what the renderer's own model ranks first, so a
+         derived request lands where [Register_tile.default] would have started. *)
+      let widest = List.hd_exn (honoured_here None) in
+      Some { RT.rm = RT.rm_cap; rn; lanes = widest }
+
+(** [refuse_unreached args tile ~why] refuses a geometry that this run will not put in front of the
+    renderer at all, naming it and why. {!of_args} answers the question the MACHINE decides — is
+    there a register-tiled rendering here — and this one the question a TOOL decides:
+    [schedule_bench] on a GPU backend runs only its shared/staged variants, none of which carry
+    [?tile], so a request would reach no schedule while the header still said "(requested)". A
+    refusal rather than a quieter header: the flag exists to measure a named geometry, and a run
+    that measures something else under its name is the failure the census bracket already guards one
+    level down. *)
+let refuse_unreached args tile ~why =
+  Option.iter tile ~f:(fun t ->
+      Bench_args.bad args "the requested geometry %s reaches no schedule in this run: %s"
+        (RT.to_string t) why)
 
 (** How the header line says what was requested — the geometry, or that the renderer's own model
     chose. Printed unconditionally, beside the blocking: a run whose geometry is invisible is one
