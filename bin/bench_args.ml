@@ -87,6 +87,15 @@ let flag t ~name = List.mem t.options ("--" ^ name) ~equal:String.equal
     {!create}: the escape holds for this tool's slots, and the library has read them anyway. *)
 let shadowing_config t = t.shadowing
 
+(** [flag_value t ~flag] is the value of a [--flag=value] option, unparsed, or [None] when the tool
+    was not given one -- for an argument that is not a single integer, such as the register-tile
+    geometry [--tile=rm,rn,lanes] ([Bench_tile]). FIRST spelling wins, as in {!int}'s [?flag] and in
+    the library's own scan ([Utils.read_cmdline_var]): one commandline should not have two
+    precedence rules. *)
+let flag_value t ~flag =
+  let prefix = "--" ^ flag ^ "=" in
+  List.find_map t.options ~f:(String.chop_prefix ~prefix)
+
 (** [string t i ~default] is positional [i], or [default] when it was not given. *)
 let string t i ~default = Option.value (List.nth t.positional i) ~default
 
@@ -114,12 +123,8 @@ let parse t ~name ~least ~where s =
 let int ?(least = 1) ?flag t i ~name ~default =
   let by_flag =
     Option.bind flag ~f:(fun flag ->
-        let prefix = "--" ^ flag ^ "=" in
-        let where = Printf.sprintf " (from %s)" prefix in
-        (* FIRST wins, which is what [Utils.read_cmdline_var] does with a repeated setting
-           ([Array.find_map] over argv): one commandline should not have two precedence rules. *)
-        List.find_map t.options ~f:(fun s ->
-            Option.map (String.chop_prefix s ~prefix) ~f:(parse t ~name ~least ~where)))
+        let where = Printf.sprintf " (from --%s=)" flag in
+        Option.map (flag_value t ~flag) ~f:(parse t ~name ~least ~where))
   in
   match by_flag with
   | Some v -> v

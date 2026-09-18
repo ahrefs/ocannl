@@ -59,6 +59,19 @@
  (modules bench_checksum)
  (libraries base))
 
+; The register-tile geometry request the two C-backend GEBP benches share (gh-ocannl-620
+; follow-up): `--tile=rm,rn,lanes` / `--rn=N` parsed once, so `narrow_gebp_bench` and
+; `schedule_bench` cannot disagree about the spelling or about what `--rn=` derives. Its own
+; library for the same reason the three above are -- dune allows a module in only one stanza -- and
+; separate from `bench_args` because that one deliberately depends on no backend, while the
+; geometry and its ladder are `arrayjit.ir` types.
+
+(library
+ (name bench_tile)
+ (package neural_nets_lib)
+ (modules bench_tile)
+ (libraries base arrayjit.ir bench_args))
+
 (executable
  (package neural_nets_lib)
  (public_name compilation_speed_benchmark)
@@ -74,7 +87,15 @@
  (public_name schedule_bench)
  (name schedule_bench)
  (modules schedule_bench)
- (libraries ocannl base stdio time_now bench_args bench_checksum bench_out)
+ (libraries
+  ocannl
+  base
+  stdio
+  time_now
+  bench_args
+  bench_checksum
+  bench_out
+  bench_tile)
  (preprocess
   (pps ppx_here ppx_ocannl))
  (modes exe))
@@ -144,7 +165,15 @@
  (public_name narrow_gebp_bench)
  (name narrow_gebp_bench)
  (modules narrow_gebp_bench)
- (libraries ocannl base stdio time_now bench_args bench_checksum bench_out)
+ (libraries
+  ocannl
+  base
+  stdio
+  time_now
+  bench_args
+  bench_checksum
+  bench_out
+  bench_tile)
  (preprocess
   (pps ppx_here ppx_ocannl))
  (modes exe))

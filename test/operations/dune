@@ -4682,6 +4682,21 @@
  (modules bench_args_parsing)
  (libraries base stdio bench_args arrayjit.verdict))
 
+; gh-ocannl-620 follow-up: which register-tile geometry a given commandline hands to
+; `Sched.tensorize` (`Bench_tile`, shared by bin/narrow_gebp_bench and bin/schedule_bench). The
+; failure it prevents is a bench that times one geometry under another one's header line, so the
+; derivation claims are equalities with `Register_tile`'s own cap and ladder rather than with the
+; numbers those produce on the machine running the test. Pure parsing: the machine is a fixture
+; thunk, nothing is compiled, and no backend is linked.
+
+(test
+ ; ocannl-backend: none -- parses fixture argvs against a fixture machine; links no backend.
+ (name bench_tile_parsing)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules bench_tile_parsing)
+ (libraries base stdio arrayjit.ir bench_args bench_tile arrayjit.verdict))
+
 ; gh-ocannl-711: what the whole-output checksum the bin/ matmul benches share has to discriminate --
 ; a row permutation at the extents where the pre-fix flat-offset weight was blind, and operand rows
 ; that stay distinct where the pre-fix flat-offset residue collapsed. Every claim is paired with the

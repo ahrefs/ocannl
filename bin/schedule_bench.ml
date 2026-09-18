@@ -20,6 +20,12 @@
    panel under the per-chunk privatization cap, config cc_grid_private_bytes_cap, or it silently
    declines to serial: check with --ocannl_schedule_log_declines=true).
 
+   The C-backend register-tiled variants (tensorize, packmma, packmma_par and the three
+   grid-outermost flavors) take the renderer's own C-tile geometry unless [--tile=rm,rn,lanes] or
+   [--rn=N] asks for one ([Bench_tile], shared with [narrow_gebp_bench]); a geometry the renderer
+   cannot honour is declined rather than approximated, and reads as [Mma_scalar_fallback] in the
+   census bracket.
+
    Usage: dune exec bin/schedule_bench.exe -- [n] [repeats] [m] [k] [naive_repeats] (defaults 256,
    20, n, n, repeats; the output is m x n, the reduction depth k — deep-K gradient-GEMM geometries
    are m,n << k). [naive_repeats] defaults to [repeats], which makes the naive leg the whole wall
@@ -121,6 +127,21 @@ let () =
   let mma_bm, mma_bn, mma_bk, mma_w = (32, 32, 32, 32) in
   let cpu_bm, cpu_bn, cpu_bk = (64, 64, 16) in
   let gebp_bm, gebp_bk = (64, 64) in
+  (* The C-tile geometry the register-tiled variants request of the renderer (gh-ocannl-620), absent
+     by default so that a run without the flag schedules what it always did. [machine] is a thunk
+     and is forced only by [--rn=], which is the one spelling that needs the vector file's width:
+     the operands here are minted at the default value precision, and the renderer ranks widths
+     against the compute precision that one resolves to. *)
+  let tile =
+    Bench_tile.of_args args ~machine:(fun () ->
+        let limits = Context.hardware_limits (Context.auto ()) in
+        let prec =
+          Numerics.cpu_compute_prec
+            ~native_fp16_arithmetic:limits.Ir.Backend_intf.native_fp16_arithmetic
+            !Tensor.default_value_prec
+        in
+        (limits.Ir.Backend_intf.simd_vector_bytes, Ir.Ops.prec_in_bytes prec))
+  in
   (* Every scheduled variant addresses the i/j/k nest, so an extent of 1 makes ALL of them
      unschedulable — [tensorize] and the unblocked ones included: the extent-1 loop is simplified
      away before the transform runs, leaving [accum_syms] no 3-deep nest to find. That is a
@@ -407,7 +428,7 @@ let () =
     let ez, zsyms = Sched.expand_zero ~tn:mc in
     let zj = match zsyms with [ _; zj ] -> zj | _ -> assert false in
     let rz = Sched.Retype { axis = zj; ty = LL.Workgroup } in
-    let tz, _lane = Sched.tensorize ~i ~j ~k ~simd_width:n () in
+    let tz, _lane = Sched.tensorize ?tile ~i ~j ~k ~simd_width:n () in
     [ ez; rz; tz ]
   in
 
@@ -436,7 +457,7 @@ let () =
           tile_prec = None;
         }
     in
-    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 () in
+    let tz, _lane = Sched.tensorize ?tile ~i:i_i ~j ~k:k_i ~simd_width:1 () in
     [ sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ] @ sink i_o [ k_o ]
     @ [ stage mb.Tensor.value [ k_i; j ]; stage ma.Tensor.value [ i_i; k_i ]; tz ]
   in
@@ -469,7 +490,7 @@ let () =
           tile_prec = None;
         }
     in
-    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 () in
+    let tz, _lane = Sched.tensorize ?tile ~i:i_i ~j ~k:k_i ~simd_width:1 () in
     [ ez; sp_zi; sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ] @ sink i_o [ k_o ]
     @ [ stage mb.Tensor.value [ k_i; j ]; stage ma.Tensor.value [ i_i; k_i ]; tz ]
   in
@@ -509,7 +530,7 @@ let () =
       | `Chunk -> [ stage ~hoisted:false mb.Tensor.value [ k_i; j ] ]
     in
     let stage_a = if pack_a then [ stage ~hoisted:false ma.Tensor.value [ i_i; k_i ] ] else [] in
-    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 () in
+    let tz, _lane = Sched.tensorize ?tile ~i:i_i ~j ~k:k_i ~simd_width:1 () in
     [ ez; sp_zi; sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ] @ stage_b @ stage_a @ [ tz ]
   in
 
@@ -707,8 +728,6 @@ let () =
         List.iter reasons ~f:(fun reason -> p "             %s\n" reason);
         Float.nan
   in
-  p "matmul m=%d n=%d k=%d, %d repeats (naive: %d), backend from config/OCANNL_BACKEND\n" m n k
-    repeats naive_repeats;
   let backend = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc") in
   (* HIP belongs here too: the backend renders workgroup-shared placement exactly as CUDA and Metal
      do, so the shared/staged/tensorized variants — including the gh-ocannl-487 [mma_pd1]/[mma_pd2]
@@ -719,6 +738,22 @@ let () =
     || String.is_substring backend ~substring:"cuda"
     || String.is_substring backend ~substring:"hip"
   in
+  (* Which branch runs decides whether a requested geometry reaches anything: only the C-branch
+     variants carry [?tile], so on the shared branch the request would sit in the header under
+     "(requested)" while every schedule that ran ignored it. Refused before the header prints, so
+     the line never makes that claim. *)
+  if has_shared then
+    Bench_tile.refuse_unreached args tile
+      ~why:
+        (Printf.sprintf
+           "backend %s runs the shared/staged GPU schedules, whose Tile_mma renders through the \
+            hardware's own intrinsics; the register-tiled variants a geometry applies to are the \
+            C-backend ones"
+           backend);
+  p
+    "matmul m=%d n=%d k=%d, %d repeats (naive: %d), register tile %s, backend from \
+     config/OCANNL_BACKEND\n"
+    m n k repeats naive_repeats (Bench_tile.describe tile);
   let t_naive =
     if naive_repeats > 0 then attempt ~repeats:naive_repeats ~variant:"naive" ~schedule:None ()
     else Float.nan
@@ -825,4 +860,10 @@ let () =
       !disagreements;
   if !failures > 0 then
     p "%d variant(s) failed at m=%d n=%d k=%d — see the FAILED lines above.\n" !failures m n k;
-  if !failures > 0 || !disagreements > 0 then Stdlib.exit 1
+  (* The requested geometry's own verdict, on the same footing as a wrong result: a degenerate
+     extent skips every scheduled variant, so nothing carried the geometry and no timing here
+     measured it. Read off the renderer's census rather than enumerated from the skip gates, so a
+     variant added later is covered without listing it. *)
+  let unmeasured = Bench_tile.unmeasured tile ~statements:all.Ir.C_syntax.statements in
+  Option.iter unmeasured ~f:(p "%s");
+  if !failures > 0 || !disagreements > 0 || Option.is_some unmeasured then Stdlib.exit 1
