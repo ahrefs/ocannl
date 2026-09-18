@@ -303,9 +303,11 @@ let () =
         (RT.simd_lane_ladder ~vector_bytes:limits.Ir.Backend_intf.simd_vector_bytes ~elt_bytes)
     in
     (* Exact in bf16 and half: multiples of 1/2 in [-1.5, 1.5], products multiples of 1/4, five-term
-       sums at most 11.25 — six significand bits. Both operands vary with both axes, so a
-       mis-indexed read shows. *)
-    let av idcs = (Float.of_int (((idcs.(0) * 7) + (idcs.(1) * 3)) % 7) *. 0.5) -. 1.5 in
+       sums at most 11.25 — six significand bits. Both operands vary with both axes — every
+       coefficient is nonzero modulo 7, so no axis cancels (a row coefficient of 7 once made every A
+       row identical, and a row-band pass reading the wrong A row would still have matched the
+       serial twin) — so a mis-indexed read shows. *)
+    let av idcs = (Float.of_int (((idcs.(0) * 2) + (idcs.(1) * 3)) % 7) *. 0.5) -. 1.5 in
     let bv idcs = (Float.of_int (((idcs.(0) * 5) + (idcs.(1) * 11)) % 7) *. 0.5) -. 1.5 in
     let leg ~tag ~prec ~tile ~fill =
       let a = NTDSL.init ~l:("tmt_a_" ^ tag) ~prec ~i:[ k ] ~o:[ m ] ~f:av () in
