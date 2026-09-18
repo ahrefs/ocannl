@@ -116,6 +116,16 @@ val canonicalize :
     binder/tensor-node numbering is identical either way. [static_indices] must be the same list the
     code was lowered with ({!Indexing.bound_symbols} of the compile's bindings). *)
 
+val lineage_tag : Tnode.Placements.t -> Low_level.optimize_ctx -> Tnode.t -> string
+(** What one compilation lineage brings to a node's placement decision, as {!canonicalize_source}
+    renders it for its own [lineage]: the node's effective placement (a prior decision, or the
+    declared intent {!Tnode.Placements.get} falls back to), whether that placement is a heuristic
+    cap's — flippable back by [Context.decide_inline], where the same mode imposed by legality or
+    intent is not, so two lineages agreeing on the mode can still pose different refinement surfaces
+    — and the inline / footprint preferences recorded in the lineage's [optimize_ctx]. Exposed so a
+    caller can tag a further lineage that shapes its decision through [node_tag]:
+    [Train.tune_placements] tags the timing context's, whose lineage the arms are measured in. *)
+
 val canonicalize_source :
   ?static_indices:Indexing.static_symbol list ->
   ?node_tag:(Tnode.t -> string) ->
@@ -125,9 +135,8 @@ val canonicalize_source :
 (** The identity of the placement {e decision problem} the lowering answered (gh-ocannl-786): the
     same walk as {!canonicalize}, over the raw program the specialization was decided over
     ({!Ir.Low_level.optimized.source}) rather than the decided code, with each node tagged by what
-    the lineage brought to the decision — its effective placement in [lineage] (the decisions a
-    prior compile of the lineage made, or the declared intent {!Tnode.Placements.get} falls back to)
-    and whether the lineage prefers it inline or footprint-scoped. [lineage] is the placements of
+    the lineage brought to the decision ({!lineage_tag}: effective placement, cap flippability, and
+    the inline / footprint preferences of [opt]'s [optimize_ctx]). [lineage] is the placements of
     the CONTEXT the lowering was decided from ({!Context.placements}) — [opt]'s own table holds this
     specialization's decisions too, which are exactly what a decision recorded against this identity
     is. Every node the raw code sets or reads is numbered, so a decision can address a node the
@@ -323,6 +332,9 @@ val store : dir:string -> key:string -> entry -> unit
 
 val lookup : dir:string -> key:string -> entry option
 (** [None] on missing file, unparsable content, version/digest mismatch, or a refused cache-open.
+    Process-level failures ([Out_of_memory], [Sys.Break], [Stack_overflow]) propagate rather than
+    reading as a miss (gh-ocannl-786): an interrupt during a lookup must not start the search the
+    lookup was about to spare.
 
     Together with {!store} this participates in the same permanent record lock and regime-stamp
     protocol described there, and sweeps the cache directory's crash-stale staging files

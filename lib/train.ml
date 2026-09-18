@@ -661,14 +661,25 @@ let embedded_nodes loss =
 (** The identity of the placement decision problem {!tune_placements} answers for [comp] from [ctx]
     (gh-ocannl-786): {!Ir.Schedule_cache.canonicalize_source} over the routine's raw lowering — the
     program, what the lineage already decided about each of its nodes — plus, per node, whether it
-    is in [loss]'s embedded set, the set arm B materializes: the same computation tuned against two
-    losses poses two problems, since their materialize-all arms differ. What the placement-decision
-    store keys on; exposed so a test can reason about the key. *)
-let placement_problem ?name ctx loss comp bindings =
+    is in [loss]'s embedded set, the set arm B materializes (the same computation tuned against two
+    losses poses two problems, since their materialize-all arms differ), and, with a [timing_ctx],
+    what THAT lineage brings to the node ({!Ir.Schedule_cache.lineage_tag}): the arms are measured
+    in the timing lineage and only the winner is compiled from [ctx], so a timing context inheriting
+    other decisions or preferences measures other programs. What the placement-decision store keys
+    on; exposed so a test can reason about the key. *)
+let placement_problem ?name ?timing_ctx ctx loss comp bindings =
   let embedded = Set.of_list (module Tn) (embedded_nodes loss) in
+  let timing =
+    Option.map timing_ctx ~f:(fun tctx ->
+        ( Context.placements tctx,
+          (Context.lowered_for_decisions ?name tctx comp bindings).Ir.Low_level.optimize_ctx ))
+  in
   Ir.Schedule_cache.canonicalize_source
     ~static_indices:(Ir.Indexing.bound_symbols bindings)
-    ~node_tag:(fun tn -> if Set.mem embedded tn then ";e" else "")
+    ~node_tag:(fun tn ->
+      (if Set.mem embedded tn then ";e" else "")
+      ^ Option.value_map timing ~default:"" ~f:(fun (plc, octx) ->
+          ";t" ^ Ir.Schedule_cache.lineage_tag plc octx tn))
     ~lineage:(Context.placements ctx)
     (Context.lowered_for_decisions ?name ctx comp bindings)
 
@@ -793,13 +804,16 @@ let placement_problem ?name ctx loss comp bindings =
     schedule-cache replay -- instead of enumerating candidates and searching both arms and every
     flip. On that path [report] observes exactly one report, the shipped placement's, so the
     positional two-arm contract above holds for cold runs and [on_ship] remains the identity of the
-    artifact either way; [flip_report] observes nothing. An entry is recorded only from clean
-    evidence (every observed search completed, none with contention-refused windows, the shipped one
-    having timed something), never under a forced [ship_arm] -- which also never consults the store:
-    the override keeps precedence over a recorded decision exactly as over a measured one -- and is
-    ignored, and overwritten by the cold run that follows, when its decision no longer reproduces
-    the program it was measured on. The directory is resolved as {!Autotune.tune} resolves it
-    ({!Autotune.resolve_cache_dir}), [cache_dir = ""] disabling both stores. *)
+    artifact either way; [flip_report] observes nothing. A replayed search that fails without
+    poisoning the lineage is a losing arm one level up: it is not reported, the recorded decision is
+    treated as stale, and the two arms are searched and reported in position. An entry is recorded
+    only from clean evidence (every observed search completed, none with contention-refused windows,
+    the shipped one having timed something), never under a forced [ship_arm] -- which also never
+    consults the store: the override keeps precedence over a recorded decision exactly as over a
+    measured one -- and is ignored, and overwritten by the cold run that follows, when its decision
+    no longer reproduces the program it was measured on. The directory is resolved as
+    {!Autotune.tune} resolves it ({!Autotune.resolve_cache_dir}), [cache_dir = ""] disabling both
+    stores. *)
 let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?report ?flip_report
     ?inline_flips ?ship_arm ?on_ship ctx loss comp bindings =
   (* Arm attribution on the same stderr trace as Autotune's config [autotune_log] — winner-arm
@@ -1041,7 +1055,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
     if forced || String.is_empty cache_dir then None
     else
       match
-        let problem = placement_problem ?name ctx loss comp bindings in
+        let problem = placement_problem ?name ?timing_ctx ctx loss comp bindings in
         if SC.complete problem then
           let limits = Context.hardware_limits ctx in
           let backend = Context.backend_name ctx in
@@ -1140,7 +1154,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
   let replay =
     match store with
     | None -> None
-    | Some (problem, key, limits, _) -> (
+    | Some (problem, key, limits, backend) -> (
         match SC.lookup_placements ~dir:cache_dir ~key with
         | None ->
             logf "placement store: no decision recorded for this problem";
@@ -1148,10 +1162,14 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
         | Some e
           when not
                  (String.equal e.SC.problem_digest (SC.digest problem)
+                 && String.equal e.SC.backend backend
                  && String.equal e.SC.numerics (SC.numerics_tag ())
-                 && String.equal e.SC.codegen (SC.codegen_tag ~limits ())) ->
+                 && String.equal e.SC.codegen (SC.codegen_tag ~limits ())
+                 && String.equal e.SC.objective (SC.objective_tag ())) ->
             (* Belt-and-braces like the schedule cache's: the key carries every one of these, so
-               only a hand-moved file fails here. *)
+               only a hand-moved file fails here -- and every one is checked, since a decision
+               crowned under isolated timing accepted under a queued filename would skip exactly the
+               comparison the objective component keeps apart (gh-ocannl-755). *)
             logf "placement store: the entry's self-description does not match its key; ignored";
             None
         | Some e -> (
@@ -1210,8 +1228,16 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                      logf "release after a failing on_ship callback failed: %s" (Exn.to_string exn2));
                   Stdlib.Printexc.raise_with_backtrace exn backtrace));
             (* gh-ocannl-786: recorded once the artifact has actually shipped -- after the callback,
-               whose failure means nothing shipped. *)
-            commit ();
+               whose failure means nothing shipped -- and protected like it: a process-level failure
+               while the outcome digest is recomputed or the entry written would otherwise leave the
+               one retained routine unreachable. *)
+            (try commit ()
+             with exn ->
+               let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+               (try Context.release (fst compiled)
+                with exn2 when not (must_propagate exn2) ->
+                  logf "release after a failing placement recording failed: %s" (Exn.to_string exn2));
+               Stdlib.Printexc.raise_with_backtrace exn backtrace);
             compiled
         | Some poisoned ->
             logf "the winner cannot ship: a later arm poisoned the caller's lineage";
@@ -1554,25 +1580,42 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
       (* The recorded decision, applied as the search applied it, then the one search the decision
          produces -- normally a schedule-cache replay too, and a search when the schedule entry is
          cold (contention kept it so, or the directory was swept). Exactly one report reaches
-         [report]: the shipped placement's. *)
+         [report]: the shipped placement's -- delivered once the search has succeeded, so a replay
+         that fails and falls back to the arms below never occupies an arm slot (the arms then
+         report in position, as on a cold run, and a positional consumer names them right). *)
       let what = SC.shipped_label e.SC.decision in
       logf "placement store: replaying decision %s (recorded at %.4f ms; A %.4f ms vs B %.4f ms)"
         what e.SC.shipped_ms e.SC.arm_a_ms e.SC.arm_b_ms;
+      let deferred = ref None in
       let r, _ms, _report =
-        tune (what ^ " (replayed placement)") (apply decisions ctx)
+        tune
+          ~to_report:(Some (fun r -> deferred := Some r))
+          (what ^ " (replayed placement)") (apply decisions ctx)
           (Option.map timing_ctx ~f:(apply decisions))
       in
       record r;
       propagate_if_poisoned what r;
       match r with
-      | Ok _ -> ship ~what ~commit:(fun () -> ()) r
+      | Ok _ ->
+          (* The caller's callback, with the caller's exception: it propagates, and nothing ships
+             (gh-ocannl-550), so the results collected so far are released first. *)
+          (match (report, !deferred) with
+          | Some f, Some rep -> (
+              try f rep
+              with exn ->
+                let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+                release_unshipped ();
+                Stdlib.Printexc.raise_with_backtrace exn backtrace)
+          | _ -> ());
+          ship ~what ~commit:(fun () -> ()) r
       | Error (exn, _) ->
           (* A replayed search that fails without poisoning the lineage is the cold path's losing
              arm, one level up (gh-ocannl-550): a cached materialize-all decision can meet a
              recoverable device OOM under today's memory pressure while the default arm would still
              compile, and the cold path ships that sibling. So the recorded decision is treated as
              stale and the arms are searched; the failed replay's report is no evidence about the
-             decision they reach, so it is dropped from what a recording rests on. *)
+             decision they reach, so it is dropped from what a recording rests on, and it was never
+             delivered to [report] (it ships nothing, and the arms take the two slots). *)
           logf
             "placement store: the replayed decision %s failed (%s); treating it as stale and \
              searching the arms"

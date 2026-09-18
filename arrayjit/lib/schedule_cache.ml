@@ -232,15 +232,23 @@ let canonicalize ?(static_indices = []) ?(with_placements = true) (opt : LL.opti
    specialization decided enters: [lineage] is the placements table of the CONTEXT the lowering was
    decided from ({!Context.placements}), not [opt]'s post-decision table, and the preferences are
    inputs the optimizer reads and never writes. *)
+(* What one lineage brings to a node's placement decision: its effective placement, whether that
+   placement is a heuristic cap's (flippable back by [Context.decide_inline] -- the same mode imposed
+   by legality or intent is not, so two lineages agreeing on the mode can still pose different
+   refinement surfaces), and the inline / footprint preferences the lineage recorded. *)
+let lineage_tag (plc : Tn.Placements.t) (octx : LL.optimize_ctx) tn =
+  (match Tn.Placements.get plc tn with
+    | None -> ";u"
+    | Some (m, p) ->
+        ";"
+        ^ Sexp.to_string (Tn.sexp_of_memory_mode m)
+        ^ if LL.is_cap_provenance p then "/cap" else "")
+  ^ (if Hash_set.mem octx.LL.inline_preferences tn then ";i" else "")
+  ^ if Hash_set.mem octx.LL.footprint_preferences tn then ";f" else ""
+
 let canonicalize_source ?(static_indices = []) ?(node_tag = fun _ -> "")
     ~(lineage : Tn.Placements.t) (opt : LL.optimized) : canonical =
-  let octx = opt.LL.optimize_ctx in
-  let node_tag tn =
-    placement_class lineage tn
-    ^ (if Hash_set.mem octx.LL.inline_preferences tn then ";i" else "")
-    ^ (if Hash_set.mem octx.LL.footprint_preferences tn then ";f" else "")
-    ^ node_tag tn
-  in
+  let node_tag tn = lineage_tag lineage opt.LL.optimize_ctx tn ^ node_tag tn in
   canonical_of ~static_indices ~node_tag ~companions:(fun ~add:_ ~emit_tn:_ -> ()) opt.LL.source
 
 (** {2 Registries} *)
@@ -756,6 +764,12 @@ let store_sexp ~dir ~key sexp =
               removed the staging file; an earlier complete entry is still in place. *)
            ()))
 
+(* The failures a cache read never absorbs: they are about the process, not the entry, and a miss
+   that hides one turns Ctrl-C during a lookup into the start of a search it was meant to stop. *)
+let process_level = function
+  | Out_of_memory | Stdlib.Sys.Break | Stack_overflow -> true
+  | _ -> false
+
 let lookup_sexp ~dir ~key ~of_sexp ~current =
   Option.join
     (with_cache_open ~dir (fun () ->
@@ -767,7 +781,7 @@ let lookup_sexp ~dir ~key ~of_sexp ~current =
              Resource_fault_injection.hit Schedule_cache_before_replay;
              let entry = of_sexp (Sexplib.Sexp.load_sexp file) in
              if current entry then Some entry else None
-           with _ -> None))
+           with exn when not (process_level exn) -> None))
 
 let store ~dir ~key entry = store_sexp ~dir ~key (sexp_of_entry entry)
 

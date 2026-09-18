@@ -91,6 +91,13 @@ let () =
      another problem: its materialize-all arm materializes different nodes. *)
   p "the same computation tuned against a different loss poses a different problem"
     (not (String.equal d (problem_digest (Context.auto ()) mc comp)));
+  (* The arms are measured in the timing lineage, so what it inherits is part of the problem. *)
+  let timing_ctx = Context.decide_materialized (Context.auto ()) [ mc.Tensor.value ] in
+  p "a timing context that inherits a decision poses a different problem"
+    (not
+       (String.equal d
+          (SC.digest
+             (Train.placement_problem ~timing_ctx (Context.auto ()) t2 comp Ir.Indexing.Empty))));
   (* --- The runs. --- *)
   let run ?ship_arm () =
     let arms = ref [] and flips = ref [] and shipped = ref None in
@@ -147,10 +154,10 @@ let () =
   (* --- Run 2b: a replayed search that fails without poisoning the lineage is a losing arm, not a
      failed tune: the recorded decision is treated as stale and the arms are searched. The failure
      is injected at the first candidate attempt of the process from here on -- the replayed search's
-     base compile when there is an entry to replay, otherwise arm A's -- so with an entry the call
-     observes the failed replay and then both arms; without one, arm A dies and arm B ships, which
-     the cold path already handles (autotune_arm_containment.ml). --- *)
-  let stored2 = List.length (placement_keys ()) = 1 in
+     base compile when there is an entry to replay, otherwise arm A's -- so with an entry the failed
+     replay is not reported and both arms are, in position; without one, arm A dies in its slot and
+     arm B ships, which the cold path already handles (autotune_arm_containment.ml). Either way the
+     caller sees the two arms. --- *)
   let attempts = ref 0 in
   (Autotune.on_candidate_attempt :=
      fun _ ->
@@ -160,8 +167,8 @@ let () =
     Exn.protect ~f:run ~finally:(fun () -> Autotune.on_candidate_attempt := fun _ -> ())
   in
   p_all2 "after a failed replay, the routine computes the right values" got2b expected ~f:approx;
-  p "a failed replay falls back to searching both arms: three reports, or two with no entry"
-    (List.length arms2b = if stored2 then 3 else 2);
+  p "a failed replay is not reported; the arms it falls back to report in position"
+    (List.length arms2b = 2);
   (* --- Run 3: a forced arm neither consults nor records the store. Whichever run recorded the
      entry -- run 1, or run 2 re-tuning after a contended run 1 -- is what must survive; a run the
      load kept from recording anything waives the entry-level claims. --- *)
