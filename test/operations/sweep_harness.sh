@@ -11,6 +11,10 @@ set -euo pipefail
 # Most assertions below are deliberately quiet shell predicates. If one fails
 # under errexit, name the exact site before cleanup removes its evidence; the
 # expected-error controls temporarily disable errexit and therefore stay quiet.
+# One predicate per statement, never `[ A ] && [ B ]`: errexit exempts a failing
+# LEFT operand of an `&&` list, so the pair passes silently in exactly the case
+# the first half exists to catch -- and an assertion that cannot fail is worse
+# than none, because the case around it reads as covered.
 on_error() {
   local rc=$1 line=$2 command=$3 name
   case $- in
@@ -452,7 +456,8 @@ absent 'REGRESSION OR FIX DID NOT TAKE' <<<"$state_moved"
 
 unit_state=$(grep -l "$(printf '^last_verdict\tfail$')" \
   "$state"/unit-state/*state-probe*.state | head -1)
-[ -n "$unit_state" ] && [ -f "$unit_state" ]
+[ -n "$unit_state" ]
+[ -f "$unit_state" ]
 grep -q '^last_verdict.fail$' "$unit_state"
 grep -q "^golden.$fix_sha.test/unit.cc_expected.ml$" "$unit_state"
 
@@ -851,7 +856,8 @@ grep -q 'm4-max/metal: fail' "$tmp/metal.out"
 # collection happens strictly after `record`; this pins the column it protects.
 [ "$(awk -F '\t' '$3 == "metal" { print $5 }' "$state/history.tsv" | tail -1)" = fail ]
 metal_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
-[ -n "$metal_log" ] && [ -f "$metal_log" ]
+[ -n "$metal_log" ]
+[ -f "$metal_log" ]
 grep -q '^=== rtc-context (metal) ===$' "$metal_log"
 grep -q '^=== end rtc-context ===$' "$metal_log"
 grep -q 'rtc option policy from arrayjit/test/runtest-test_metal_compile_options' "$metal_log"
