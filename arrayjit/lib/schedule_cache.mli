@@ -116,6 +116,23 @@ val canonicalize :
     binder/tensor-node numbering is identical either way. [static_indices] must be the same list the
     code was lowered with ({!Indexing.bound_symbols} of the compile's bindings). *)
 
+val canonicalize_source :
+  ?static_indices:Indexing.static_symbol list ->
+  lineage:Tnode.Placements.t ->
+  Low_level.optimized ->
+  canonical
+(** The identity of the placement {e decision problem} the lowering answered (gh-ocannl-786): the
+    same walk as {!canonicalize}, over the raw program the specialization was decided over
+    ({!Ir.Low_level.optimized.source}) rather than the decided code, with each node tagged by what
+    the lineage brought to the decision — its effective placement in [lineage] (the decisions a
+    prior compile of the lineage made, or the declared intent {!Tnode.Placements.get} falls back to)
+    and whether the lineage prefers it inline or footprint-scoped. [lineage] is the placements of
+    the CONTEXT the lowering was decided from ({!Context.placements}) — [opt]'s own table holds this
+    specialization's decisions too, which are exactly what a decision recorded against this identity
+    is. Every node the raw code sets or reads is numbered, so a decision can address a node the
+    default policy inlines away from the decided code; {!tn_of_ref} resolves the number back. Used
+    as the key of the placement-decision store. *)
+
 val digest : canonical -> string
 (** Hex digest of the canonical rendering. Equal digests mean structurally identical code, hence
     interchangeable canonical numberings. *)
@@ -311,3 +328,64 @@ val lookup : dir:string -> key:string -> entry option
     the record lock on process death; the lock file is never unlinked, avoiding an inode-replacement
     race. A binary predating this protocol does not participate and must not share a live directory
     during an upgrade. *)
+
+(** {2 The placement-decision store}
+
+    The durable record of what {!Train.tune_placements} decided (gh-ocannl-786), beside the schedule
+    entries in the same directory: same lock, same regime stamp, same atomic commit, and the same
+    key components — the decision was made by timing kernels under the numerics, codegen, pool and
+    objective regime the schedule entries key on. The key's digest is {!canonicalize_source}'s: the
+    decision problem, with the decision itself deliberately outside it. Placement stays outside the
+    schedule value (a schedule is keyed by the placement-aware digest, so folding placements into it
+    would be circular); this store is the other half of the persistence the schedule cache gives
+    schedules. *)
+
+type placement_flip = { node : int; flip : [ `Materialize | `Inline | `Footprint ] }
+[@@deriving sexp, compare, equal]
+(** One accepted flip of the greedy inline refinement: the node by its {!canonicalize_source} index,
+    and the direction ({!Context.decide_materialized} / {!Context.decide_inline} /
+    {!Context.decide_footprint}). *)
+
+(** What shipped: arm A as the default policy decided it, arm B with every embedded node of the loss
+    materialized (re-derived from the loss at replay, so the nodes need no structural address), or
+    arm A refined by the accepted flips in chain order. *)
+type placement_decision = Default | Materialize_all | Refined of placement_flip list
+[@@deriving sexp, compare, equal]
+
+type placement_entry = {
+  version : int;
+  backend : string;
+  numerics : string;  (** {!numerics_tag} at store time: self-description, like {!entry}'s. *)
+  codegen : string;  (** {!codegen_tag} at store time. *)
+  objective : string;  (** The timing objective the arms were compared under. *)
+  problem_digest : string;  (** The key's digest, for a hand-moved file. *)
+  decision : placement_decision;
+  outcome_digest : string;
+      (** {!digest} of {!canonicalize} (placement-aware, the schedule cache's own digest) over the
+          lowering the decision produces — the replay guard: an entry whose decision no longer
+          reproduces the program it was measured on (a lineage that inherits differently, a
+          virtualization cap that moved, a flip naming a node the fresh lowering treats otherwise)
+          is stale and re-tuned rather than applied. *)
+  shipped_ms : float;  (** The shipped search's [best_ms], for diagnostics. *)
+  arm_a_ms : float;  (** Arm A's [best_ms]; [infinity] for a failed arm. *)
+  arm_b_ms : float;  (** Arm B's. *)
+}
+[@@deriving sexp]
+
+val placement_entry_version : int
+(** Bumped when {!placement_entry} or {!canonicalize_source}'s rendering changes; stale entries are
+    ignored by {!lookup_placements}. *)
+
+val placement_key :
+  ?objective:string -> limits:Backend_intf.hardware_limits -> canonical -> backend:string -> string
+(** {!cache_key} over a {!canonicalize_source} identity, in the placement store's own filename
+    space. *)
+
+val store_placements : dir:string -> key:string -> placement_entry -> unit
+(** {!store}'s protocol, for a placement entry. *)
+
+val lookup_placements : dir:string -> key:string -> placement_entry option
+(** {!lookup}'s protocol, for a placement entry. *)
+
+val shipped_label : placement_decision -> string
+(** The [on_ship] label of a decision: ["A"], ["B"] or ["flip"]. *)

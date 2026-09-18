@@ -222,6 +222,7 @@ let () =
       zero_fringe = Set.empty (module Ir.Tnode);
       flip_candidates = [];
       spliced_rbw = Base.Set.empty (module Ir.Tnode);
+      source = llc;
     }
   in
   let guarded_accum ~cond_of =

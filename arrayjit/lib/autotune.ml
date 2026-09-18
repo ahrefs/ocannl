@@ -2972,6 +2972,30 @@ let model_default ?name ?report ctx comp bindings =
    reported anything injectable, the case the positional-arm-slot handling in
    [Train.tune_placements] exists for. *)
 let on_candidate_attempt : (string -> unit) ref = ref (fun _label -> ())
+let search_setting () = Utils.get_global_flag ~arg_name:"autotune_search" ~default:true
+
+(* The schedule cache directory a tuning call uses, or [""] for none. Whether the directory was
+   CHOSEN, as opposed to being the built-in default -- passed by the caller, or set at some config
+   source (a profile payload included) -- is only relevant with the search off, where it is the
+   difference between replaying a cache someone committed and replaying whatever an earlier local
+   search happened to leave in ./autotune_cache (gh-ocannl-559; Codex P2 on PR #291): the latter
+   would make two reproducible runs differ on local state, which is the leak that turning the search
+   off exists to close. Shared with [Train.tune_placements], whose placement-decision store lives in
+   the same directory (gh-ocannl-786) and must open or not open it by the same rule. *)
+let resolve_cache_dir ?cache_dir ~search () =
+  let cache_dir_chosen =
+    Option.is_some cache_dir
+    ||
+    match snd (Utils.get_global_arg_with_source ~arg_name:"autotune_cache_dir" ~default:"") with
+    | Utils.From_default -> false
+    | _ -> true
+  in
+  let cache_dir =
+    Option.value cache_dir
+      ~default:(Utils.get_global_arg ~arg_name:"autotune_cache_dir" ~default:"autotune_cache")
+  in
+  (* A search-less [tune] replays only a cache someone asked for. *)
+  if search || cache_dir_chosen then cache_dir else ""
 
 let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir
     ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?report ctx comp bindings =
@@ -2980,9 +3004,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
      schedule -- but never times candidates, whose crowning is the largest cross-machine determinism
      leak. A miss compiles the untuned default pipeline, exactly like the nothing-was-timed fallback
      below. *)
-  let search =
-    Option.value search ~default:(Utils.get_global_flag ~arg_name:"autotune_search" ~default:true)
-  in
+  let search = Option.value_or_thunk search ~default:search_setting in
   let beam_width =
     max 1
       (Option.value beam_width
@@ -3025,25 +3047,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
            @@ Utils.get_global_arg ~arg_name:"autotune_split_reduce_max_sites" ~default:"8"))
   in
   let seed_block_sizes = Option.value seed_block_sizes ~default:[ 64; 128; 256; 512 ] in
-  (* Whether the cache directory was CHOSEN, as opposed to being the built-in default: passed by the
-     caller, or set at some config source (a profile payload included). Only relevant with the
-     search off, where it is the difference between replaying a cache someone committed and
-     replaying whatever an earlier local search happened to leave in ./autotune_cache
-     (gh-ocannl-559; Codex P2 on PR #291) -- the latter would make two reproducible runs differ on
-     local state, which is the leak that turning the search off exists to close. *)
-  let cache_dir_chosen =
-    Option.is_some cache_dir
-    ||
-    match snd (Utils.get_global_arg_with_source ~arg_name:"autotune_cache_dir" ~default:"") with
-    | Utils.From_default -> false
-    | _ -> true
-  in
-  let cache_dir =
-    Option.value cache_dir
-      ~default:(Utils.get_global_arg ~arg_name:"autotune_cache_dir" ~default:"autotune_cache")
-  in
-  (* A search-less [tune] replays only a cache someone asked for. *)
-  let cache_dir = if search || cache_dir_chosen then cache_dir else "" in
+  let cache_dir = resolve_cache_dir ?cache_dir ~search () in
   let keep_fraction =
     Option.value keep_fraction
       ~default:
