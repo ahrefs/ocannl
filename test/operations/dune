@@ -3701,7 +3701,14 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules tile_mma_geometry)
- (libraries base ocannl arrayjit.autotune stdio arrayjit.verdict test_utils)
+ (libraries
+  base
+  ocannl
+  arrayjit.autotune
+  stdio
+  arrayjit.verdict
+  test_utils
+  ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

@@ -27,5 +27,4 @@ test/operations/test_one_hot_embedding_backward.ml -- records<=0 traversals<=4: 
 test/operations/test_one_hot_embedding_lookup.ml -- records<=0 traversals<=6: existing migration debt; adopt ll_test when touched
 test/operations/test_slice_alias.ml -- records<=0 traversals<=2: existing migration debt; adopt ll_test when touched
 test/operations/tile_mma_declines.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
-test/operations/tile_mma_geometry.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
 test/support/ll_builders.ml -- permanent: canonical pure IR builders shared by both packages
