@@ -2391,13 +2391,25 @@ let placement_surface ?name ?ordering ?(evidence = []) ctx comp bindings =
     Set.of_list (module Ir.Tnode) (List.map ps_candidates ~f:(fun fc -> fc.LL.fc_tn))
   in
   let peak_flops, peak_memory_bandwidth = envelope ~limits in
+  (* gh-ocannl-616: a node an earlier routine left virtual and this consumer footprint-scoped offers
+     an [`Inline] record only, so no materialize-all specialization removes its scratch — [allmat]
+     keeps the prologue and the scratch's traffic, which the inline completion would not have. The
+     floor is then not a lower bound over that node's completions, and no floor is better than a
+     wrong one: the bound is withheld for a surface carrying such a node. *)
+  let inherited_footprint =
+    List.exists candidates ~f:(fun (fc : LL.flip_candidate) ->
+        Poly.equal fc.LL.fc_flip `Inline
+        && Ir.Tnode.Placements.known_virtual base.LL.optimize_ctx.LL.placements fc.LL.fc_tn)
+  in
   let ps_floor_ms ~materialized =
-    let mat = Set.of_list (module Ir.Tnode) materialized in
-    let open_placement tn = Set.mem candidate_set tn && not (Set.mem mat tn) in
-    let f = CM.completion_floor ~open_placement allmat.LL.llc in
-    CM.roofline_seconds ?peak_flops ?peak_memory_bandwidth ~flops:f.CM.fr_flops ~bytes:f.CM.fr_bytes
-      ()
-    |> Option.map ~f:(fun s -> s *. 1e3)
+    if inherited_footprint then None
+    else
+      let mat = Set.of_list (module Ir.Tnode) materialized in
+      let open_placement tn = Set.mem candidate_set tn && not (Set.mem mat tn) in
+      let f = CM.completion_floor ~open_placement allmat.LL.llc in
+      CM.roofline_seconds ?peak_flops ?peak_memory_bandwidth ~flops:f.CM.fr_flops
+        ~bytes:f.CM.fr_bytes ()
+      |> Option.map ~f:(fun s -> s *. 1e3)
   in
   {
     ps_candidates;

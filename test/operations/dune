@@ -1500,7 +1500,10 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_VIRTUALIZE_MAX_INLINE_REDUCTION)
+  (env_var OCANNL_VIRTUALIZE_MAX_VISITS)
+  (env_var OCANNL_VIRTUALIZE_FOOTPRINT_MATERIALIZATION))
  (modules footprint_materialization)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -1514,7 +1517,9 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_VIRTUALIZE_MAX_INLINE_REDUCTION)
+  (env_var OCANNL_VIRTUALIZE_FOOTPRINT_MATERIALIZATION))
  (modules footprint_diagonal_einsum)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
