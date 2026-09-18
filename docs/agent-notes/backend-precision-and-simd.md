@@ -795,6 +795,18 @@ files.
   `--bm=`/`--bk=`), defaulting to 64/256. The packed variants need `n mod bm = 0` and `n mod bk = 0`
   — an n meeting neither still runs the unblocked naive variant, so an arbitrary extent (the sort a
   register-tiling review actually asks about) can be measured against something.
+- **Two register-tile geometries are timed from ONE build**, in either bench, with
+  `--tile=rm,rn,lanes` or `--rn=N` (`bin/bench_tile.ml`; `--rn=` derives `Register_tile.rm_cap` rows
+  and the widest width the machine's file renders at the COMPUTE precision). Before that flag a
+  before/after meant editing `Register_tile.default` and rebuilding, which compares two models
+  rather than two geometries, and cannot be re-run from a PR body. The requested geometry prints on
+  the header line, and one the renderer declines reaches the census bracket as
+  `Mma_scalar_fallback` plus a warning naming it — it is never approximated, so the "read the
+  bracket, not the variant name" rule above answers the flag too. Measured on an M4 Max (NEON,
+  `vector_bytes` 16), f16 `--ocannl_fp16_arithmetic=true` n = 512: the tail-bearing `--rn=6`
+  (width 48 over 512, a 4-column tail) runs 1.15–1.29 ms against 1.40–1.53 ms for the tail-free
+  `--rn=4`, i.e. ~20% — the gh-ocannl-620 reuse-only ranking is right here by well more than the
+  bench's timing noise, and `--rn=6` is what `Register_tile.default` picks.
 - **Negative zero is what breaks a "bitwise equal to the scalar twin" claim** (gh-ocannl-615). Two
   spellings normalized it, both fixed but both easy to reintroduce: a scalar-to-vector splat written
   `((vtyp){0} + x)` returns `+0.0` for `x = -0.0` (IEEE `(+0.0) + (-0.0) = +0.0`), so use

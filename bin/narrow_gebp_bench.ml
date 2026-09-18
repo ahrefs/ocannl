@@ -10,10 +10,17 @@
    ([cc_fp16_arithmetic] probes it), the policy is ignored and the run stays f32-compute.
 
    Usage: OCANNL_BACKEND=cc dune exec bin/narrow_gebp_bench.exe -- [f32|bf16|f16] [n] [repeats] [bm]
-   [bk] (defaults f32, 512, 20, 64, 256; [bm]/[bk] also as [--bm=]/[--bk=] flags). The packed
-   variants schedule [Sched.split]s of factor [bm] over the i axis and [bk] over the k axis, so they
-   need [n mod bm = 0] and [n mod bk = 0] (and an n big enough to leave a loop nest at all); an
-   unschedulable n runs the unblocked naive variant alone, so an arbitrary extent still has
+   [bk] (defaults f32, 512, 20, 64, 256; [bm]/[bk] also as [--bm=]/[--bk=] flags). The C-tile
+   geometry of the register-tiled micro-kernel is the renderer's own choice unless a flag asks for
+   one — [--tile=] takes the whole [rm,rn,lanes] triple, [--rn=] the column count alone and derives
+   the rest the way the renderer's model would ([Bench_tile]). That is what lets ONE build time two
+   geometries against each other, which is what the gh-ocannl-620 open question needs: the tail-free
+   [rn] against the wider tail-bearing one, where the ranking model and the tuner can disagree. A
+   geometry the renderer cannot honour is declined rather than approximated, so it reads as
+   [Mma_scalar_fallback] in the census bracket below and in the warning at the end of the run. The
+   packed variants schedule [Sched.split]s of factor [bm] over the i axis and [bk] over the k axis,
+   so they need [n mod bm = 0] and [n mod bk = 0] (and an n big enough to leave a loop nest at all);
+   an unschedulable n runs the unblocked naive variant alone, so an arbitrary extent still has
    something to compare against. Each line carries a position-weighted checksum of the whole output,
    which is what makes a mishandled edge region visible — the register-tiled micro-kernel peels row
    and column edges whenever its block shape does not cover the extent, and a single interior cell
@@ -80,6 +87,24 @@ let () =
   let repeats = Bench_args.int args 2 ~name:"repeats" ~default:20 in
   let bm = Bench_args.int args 3 ~flag:"bm" ~name:"bm" ~default:64 in
   let bk = Bench_args.int args 4 ~flag:"bk" ~name:"bk" ~default:256 in
+  (* Resolved here rather than beside the header print because the register-tile request below
+     derives from it: what the renderer ranks widths against is the COMPUTE precision's element
+     width, which on a narrow-storage run is not the storage precision's. *)
+  let ctx0 = Context.auto () in
+  let limits = Context.hardware_limits ctx0 in
+  let cprec =
+    Numerics.cpu_compute_prec ~native_fp16_arithmetic:limits.Ir.Backend_intf.native_fp16_arithmetic
+      prec
+  in
+  let tile_prec = if Ir.Ops.equal_prec cprec prec then None else Some cprec in
+  (* The C-tile geometry the packed variants request of the renderer (gh-ocannl-620): absent by
+     default, so a run without the flag schedules exactly what it scheduled before it existed. A
+     requested geometry the renderer cannot honour is DECLINED there, not here — it reaches the
+     census bracket as the scalar fallback, and the warning at the bottom of the run names it. *)
+  let tile =
+    Bench_tile.of_args args ~machine:(fun () ->
+        (limits.Ir.Backend_intf.simd_vector_bytes, Ir.Ops.prec_in_bytes cprec))
+  in
   (* What the packed variants require of n, in one place: an i/j/k nest to address (extent-1 loops
      are simplified away before the transform runs, leaving nothing to schedule), and extents
      divisible by the [Sched.split] factors. The naive variant has no blocking at all, so it runs
@@ -126,7 +151,7 @@ let () =
         Float.of_int ((Bench_checksum.mix ~salt:0x3C6E idcs.(0) idcs.(1) % 5) - 2) *. 0.5)
       ()
   in
-  let packed_schedule ~grid ~tile_prec ~mc (opt : LL.optimized) : Sched.schedule =
+  let packed_schedule ~grid ~tile_prec ~tile ~mc (opt : LL.optimized) : Sched.schedule =
     let paths = nest_paths opt.LL.llc in
     let i, j, k =
       (* The i/j/k nest is what the packed schedule addresses. Extent-1 loops are simplified away
@@ -167,7 +192,7 @@ let () =
         let sp_zi, _, _ = Sched.split ~axis:zi ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
         [ ez; sp_zi ]
     in
-    let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 () in
+    let tz, _lane = Sched.tensorize ?tile ~i:i_i ~j ~k:k_i ~simd_width:1 () in
     zops @ [ sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ]
     @ (if grid then [] else sink i_o [ k_o ])
     @ [ stage mb.Tensor.value [ k_i; j ]; stage ma.Tensor.value [ i_i; k_i ] ]
@@ -288,15 +313,10 @@ let () =
       (Ir.C_syntax.mma_summary_string mma);
     (secs, mma, values)
   in
-  let ctx0 = Context.auto () in
-  let limits = Context.hardware_limits ctx0 in
-  let cprec =
-    Numerics.cpu_compute_prec ~native_fp16_arithmetic:limits.Ir.Backend_intf.native_fp16_arithmetic
-      prec
-  in
-  let tile_prec = if Ir.Ops.equal_prec cprec prec then None else Some cprec in
-  p "GEBP n=%d, %d repeats, blocking bm=%d bk=%d, storage %s, compute %s, packed panels %s\n" n
-    repeats bm bk (Ir.Ops.prec_string prec) (Ir.Ops.prec_string cprec)
+  p
+    "GEBP n=%d, %d repeats, blocking bm=%d bk=%d, register tile %s, storage %s, compute %s, packed \
+     panels %s\n"
+    n repeats bm bk (Bench_tile.describe tile) (Ir.Ops.prec_string prec) (Ir.Ops.prec_string cprec)
     (Option.value_map tile_prec ~default:"(storage)" ~f:Ir.Ops.prec_string);
   (* Say it at runtime rather than only in a comment: since gh-ocannl-639 every variant accumulates
      at compute precision (naive narrows once per cell, packed once per k block). Whether the
@@ -332,7 +352,7 @@ let () =
   | [] ->
       let t_pack, r_pack, v_pack =
         bench ~variant:"packmma"
-          ~schedule:(Some (packed_schedule ~grid:false ~tile_prec))
+          ~schedule:(Some (packed_schedule ~grid:false ~tile_prec ~tile))
           ~against:(Some ("naive", v_naive, naive_comparable))
           ()
       in
@@ -342,7 +362,7 @@ let () =
          DIFFERS output as block-boundary rounding. *)
       let t_par, r_par, _ =
         bench ~variant:"packmma_par"
-          ~schedule:(Some (packed_schedule ~grid:true ~tile_prec))
+          ~schedule:(Some (packed_schedule ~grid:true ~tile_prec ~tile))
           ~against:(Some ("packmma", v_pack, true))
           ()
       in
@@ -358,8 +378,14 @@ let () =
         p
           "WARNING: %d of %d Tile_mma statements rendered the scalar fallback (see the census\n\
            above) — these are NOT register-tiled timings. Re-run with\n\
-           --ocannl_schedule_log_declines=true for the per-rule reason.\n"
-          declined all.Ir.C_syntax.statements;
+           --ocannl_schedule_log_declines=true for the per-rule reason.%s\n"
+          declined all.Ir.C_syntax.statements
+          (* A requested geometry is the likeliest cause when one was requested, and the message
+             that names it is the difference between re-running with the flag corrected and
+             believing the machine cannot register-tile at all. *)
+          (Option.value_map tile ~default:"" ~f:(fun t ->
+               Printf.sprintf "\nThe requested geometry was %s: this site declined it."
+                 (Ir.Register_tile.to_string t)));
       (* A variant that computed something ELSE, which the checksum can miss and this cannot. Where
          the comparison was REQUIRED — every extent for the two packed variants against each other,
          and the naive comparison wherever the note above calls the legs comparable — every leg's

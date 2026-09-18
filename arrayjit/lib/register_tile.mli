@@ -48,6 +48,12 @@ val budget : vector_bytes:int -> int
 val rn_cap : vector_bytes:int -> int
 (** The default model's [rn] ceiling: 3 on 32-byte vector files, 6 otherwise. *)
 
+val rm_cap : int
+(** The [rm] ceiling — tinyBLAS's four accumulator rows, which {!default} takes wherever the row
+    extent affords them. Exposed so that a geometry request naming only [rn] (bin/narrow_gebp_bench
+    and bin/schedule_bench's [--rn=]) derives the rows the renderer would have chosen rather than
+    restating the constant. *)
+
 type coverage = { m_full : int; n_full : int; tail_widths : int list }
 (** How a geometry covers an [m x n] site (gh-ocannl-620): [m_full] rows by [n_full] columns of full
     [rm x (rn * lanes)] passes; the [n - n_full] leftover columns as a column tail of [tail_widths]
