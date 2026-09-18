@@ -887,11 +887,19 @@ let producer_cost ~(self : Tn.t) (code : Low_level.t) : recompute option =
       Some { r with rc_approx = r.rc_approx || components > 1 }
 
 let modeled_recompute_flops (ctx : Low_level.optimize_ctx) ~static_indices (llc : Low_level.t) :
-    Tn.t -> [ `Materialize | `Inline ] -> int option =
+    Tn.t -> [ `Materialize | `Inline | `Footprint ] -> int option =
   let by_template = recompute_cost ~static_indices ctx in
   fun tn flip ->
+    (* One instantiation, whichever form of recompute the flip involves: the stored template where
+       the node is virtual in the lineage, the setter nest where it is materialized in the final
+       code. A [`Footprint] flip (gh-ocannl-616) is offered on a cap-materialized node, so its
+       template is not stored; an [`Inline] flip of a footprint-scoped node is the reverse case,
+       hence the fallbacks. *)
     let r =
-      match flip with `Materialize -> by_template tn | `Inline -> producer_cost ~self:tn llc
+      match flip with
+      | `Materialize -> by_template tn
+      | `Inline | `Footprint -> (
+          match producer_cost ~self:tn llc with Some r -> Some r | None -> by_template tn)
     in
     match r with Some r when (not r.rc_approx) && not r.rc_opaque -> Some r.rc_flops | _ -> None
 

@@ -1491,6 +1491,40 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-616: footprint-scoped materialization, the caps' cheaper landing spot — hand-built rows
+; through the Ll_test harness, each with executed parity against the materialized (and, where the
+; cap alone stands in the way, the inlined) reading of the same program.
+
+(test
+ (name footprint_materialization)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_VIRTUALIZE_MAX_INLINE_REDUCTION)
+  (env_var OCANNL_VIRTUALIZE_MAX_VISITS)
+  (env_var OCANNL_VIRTUALIZE_FOOTPRINT_MATERIALIZATION))
+ (modules footprint_materialization)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-616, end to end: a matrix product read only through `++ "ii => i"`, through the ambient
+; backend's whole default pipeline (the two-launch form on a GPU).
+
+(test
+ (name footprint_diagonal_einsum)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_VIRTUALIZE_MAX_INLINE_REDUCTION)
+  (env_var OCANNL_VIRTUALIZE_FOOTPRINT_MATERIALIZATION))
+ (modules footprint_diagonal_einsum)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; Builds its contexts with an explicit [Context.cpu ()], so OCANNL_BACKEND is not a dependency.
 
 (test

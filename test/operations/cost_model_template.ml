@@ -198,7 +198,10 @@ let () =
   Stdio.printf "  flip candidates:\n";
   List.iter o.LL.flip_candidates ~f:(fun fc ->
       Stdio.printf "    %-11s %-4s cost %d %s\n"
-        (match fc.LL.fc_flip with `Materialize -> "materialize" | `Inline -> "inline")
+        (match fc.LL.fc_flip with
+        | `Materialize -> "materialize"
+        | `Inline -> "inline"
+        | `Footprint -> "footprint")
         (Tn.debug_name fc.LL.fc_tn) fc.LL.fc_recompute_cost
         (if fc.LL.fc_modeled then "(modeled)" else "(proxy)"));
   let find tn =

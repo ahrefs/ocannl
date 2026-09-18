@@ -287,6 +287,67 @@ files.
   `model_default_placements` widened its budget to the whole surface, for that reason. The
   ordering witness where proxy and model disagree (a three-operand sum vs a four-deep unary chain)
   is `test/operations/cost_model_template.ml`.
+- **The three caps have a cheaper landing spot than `Never_virtual`: footprint-scoped
+  materialization** (gh-ocannl-616, `virtualize_footprint_materialization`, default on). When a cap
+  would materialize a node whole but every read of it is an affine sub-image read — a diagonal
+  `a[i, i]`, a slice, a cell read under loops its index does not mention — and the readers'
+  iteration boxes together hold fewer cells than the node (`footprint_eligibility_query`, the
+  profitability rule: both forms pay the same per-instantiation cost, so only the instantiation
+  counts compare), `decide_placements` leaves the node undecided and records it in the
+  specialization-local `footprint_scoped` table instead; `virtual_llc` then serves each read from a
+  fresh scratch node in the `footprint` namespace (`Low_level.footprint_namespace`, how a test tells
+  them apart) shaped like the READER's box, filled by a prologue that is the ordinary
+  `inline_computation` instantiation at the read's indices under fresh loops. WHERE the prologue
+  runs is the semantics: right after the top-level statement of a local producer's last write —
+  the position its materialized buffer would have been complete at, so the scratch snapshots
+  exactly what that buffer would have held even when a later statement rewrites a template input
+  (review round 1 found the reader-side placement diverging from the cap's reading there) — and
+  ahead of the reader's statement for an inherited template, the recompute-at-read reading
+  inlining gives it, which is why an inherited template reading the reader's own target declines
+  (`template_leaves`), why a reader placed before the producer's last write is ineligible, and why nothing but the producer may be written between its first and last write statements (a shared loop rewriting an input after the producer, a tensor OR A LOCAL rewritten between two
+  accumulating components — the query reads the raw code for effects the access relations do not carry, a local write inside
+  the producer's own statement included, and a dead loop is no writer for it or for the prologue's
+  position: the prologue replays every component after the last write; rounds 2-5). A read under a SCALAR gate (a `Where` arm, a gated operand) is not an `If` guard and the access
+  relations do not mark it — the query's own `Access_fold` pass does, and such a node is ineligible
+  (round 7: the gate may be what keeps an instance in range, and the prologue is unconditional).
+  A reader statement that writes a local is ineligible too (an inherited prologue, ahead of the
+  statement, would see the local as it was; round 10). An explicit preference exempts its node from
+  the caps even where the form cannot serve the reads; the node then inlines. Flip pricing is per
+  read CELL in both readings (`per_cell`: the sites' fiber cardinalities, 1 per injective site),
+  and an inherited footprint-scoped node offers its `` `Inline`` flip only. A
+  consumption-time rejection after a scratch was minted is harmless: cleanup's scope-target
+  retraction turns the stranded prologue into an n-cell gather of the buffer
+  (`case_rejection_after_footprint`).
+  Four more things that are easy to get wrong: (a) the decision is per ROUTINE, not a placement — a
+  consumer routine footprint-scopes a node an earlier routine left `Virtual` on the template's own
+  reduction extent (`template_facts`, over a SNAPSHOT of the traced store: reading the template
+  registers operands the routine never mentions), the gh-573 corner, and the node stays
+  `Virtual 152` in the lineage; (b) a read may be footprinted only in a MATERIALIZED
+  consumer's setter, in a single-writer top-level statement, unguarded, outside a scan and outside
+  a storage pass — anywhere else the read would land in a stored template (replayed by a later
+  routine where the scratch does not exist), so the decision RETRACTS at that read: to the cap's
+  own materialization for a local producer (recorded in `footprint_retracted`, so the decision
+  surface stops offering the `` `Footprint`` flip), to plain inlining for an inherited node or an
+  explicit `Context.decide_footprint` preference (exclusive with `decide_inline` per node —
+  `prefer_inline` / `prefer_footprint` withdraw each other, so a search trying a node's sibling
+  flips does not accumulate them); (c) the scratch's traced entry and its
+  `Never_virtual 153` placement are minted in the virtualizer, ahead of `reconcile_traced_store`,
+  which would otherwise read the scratch's write-then-read as a fresh node's read-before-write and
+  demand it from a prior context; (d) a footprint-scoped node carries TWO flip records
+  (`` `Materialize`` and `` `Inline``), a cap-materialized one whose footprint would be strictly
+  smaller `` `Inline`` and `` `Footprint`` — every consumer of `flip_candidates`
+  treats a node's records as ONE group of mutually exclusive readings: `tune_placements` measures
+  them against the same incumbent and commits the best, `model_default`'s placement tree gives the
+  node one multiway level, the memory planner scores each direction and lets the first that pays
+  take the node, and the certainty bounds count a node as materialized only when it has no
+  `` `Materialize`` record (a node with one is virtual or footprint-scoped by default) and every
+  record of it was kept or rejected.
+  Structural probe for "inlined": `count_get` of the node, never `count_scopes` — the simplifier
+  collapses a single-assignment scope into its expression. Pinned row by row, with executed parity
+  against the materialized and (where the cap alone stands in the way) the inlined reading, by
+  `test/operations/footprint_materialization.ml`; end to end through the default GPU schedule (the
+  scratch crosses the prologue/reader statement boundary, so fission lifts it `On_device`, the
+  two-launch form the issue ships first) by `test/operations/footprint_diagonal_einsum.ml`.
 - Big-reduction producers are forced `Never_virtual` by `virtualize_max_inline_reduction`
   (default 16) — remember it when a structural expectation assumes inlining.
 - Wide-fanin producers are forced `Never_virtual 41` by `virtualize_max_inline_fanin` (default 8,

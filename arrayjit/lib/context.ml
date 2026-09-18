@@ -947,13 +947,15 @@ let release ctx =
    hermetic sibling: the argument context, its ledger and frontier are unaffected. With the analysis
    cache (gh-560), a context that already compiled this routine (e.g. the tuner's arms) pays only
    the [specialize_proc] replay here. *)
-let lowered_for_decisions ?name ?(materialized = []) ?(inline = []) ctx comp bindings =
+let lowered_for_decisions ?name ?(materialized = []) ?(inline = []) ?(footprint = []) ctx comp
+    bindings =
   let optim_ctx = Backends.query ctx.wrapped { q = (fun _ c -> c.BI.optimize_ctx) } in
   let optim_ctx = Ir.Low_level.copy_optimize_ctx optim_ctx in
-  (* The same decision recording as [decide_materialized] / [decide_inline] below, applied to the
-     hermetic fork rather than a child context. *)
+  (* The same decision recording as [decide_materialized] / [decide_inline] / [decide_footprint]
+     below, applied to the hermetic fork rather than a child context. *)
   Ir.Low_level.decide_materialized optim_ctx materialized;
-  List.iter inline ~f:(Hash_set.add optim_ctx.Ir.Low_level.inline_preferences);
+  Ir.Low_level.prefer_inline optim_ctx inline;
+  Ir.Low_level.prefer_footprint optim_ctx footprint;
   let _name, (lowered : Ir.Low_level.optimized) =
     Backends.lower_assignments optim_ctx ?name bindings comp.Asgns.asgns
   in
@@ -993,7 +995,22 @@ let decide_inline ctx tns =
                only steers placements not yet decided. Callers wanting the exemption to take effect
                fork a pre-compile sibling, as [Train.tune_placements] does. *)
             let optimize_ctx = Ir.Low_level.copy_optimize_ctx bctx.BI.optimize_ctx in
-            List.iter tns ~f:(Hash_set.add optimize_ctx.Ir.Low_level.inline_preferences);
+            Ir.Low_level.prefer_inline optimize_ctx tns;
+            (Backend.make_child ~optimize_ctx bctx, ()));
+      }
+  in
+  derive ctx wrapped
+
+let decide_footprint ctx tns =
+  let wrapped, () =
+    Backends.with_backend ctx.wrapped
+      {
+        f =
+          (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) bctx ->
+            (* Fork like [decide_inline]; a preference for the same reasons — the footprint form is
+               served per read site by the virtualizer, which may still decline one. *)
+            let optimize_ctx = Ir.Low_level.copy_optimize_ctx bctx.BI.optimize_ctx in
+            Ir.Low_level.prefer_footprint optimize_ctx tns;
             (Backend.make_child ~optimize_ctx bctx, ()));
       }
   in

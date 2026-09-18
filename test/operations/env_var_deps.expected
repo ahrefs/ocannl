@@ -45,6 +45,8 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   suppress_welcome_message
   tf32_matmuls
   tune_inline_flips
+  virtualize_footprint_materialization
+  virtualize_max_inline_reduction
   virtualize_max_visits
 
 Per-module tracing gates, and the library whose preprocessor_deps declares each:

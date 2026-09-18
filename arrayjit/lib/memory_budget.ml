@@ -57,14 +57,30 @@ let log_memory_budget () = Utils.get_global_flag ~default:false ~arg_name:"log_m
    the footprint the resulting placement vector implies, plus the decision surface it reports.
    {!Context.lowered_for_decisions} forks the lineage state, so nothing here reaches [ctx] -- and
    the gh-560 analysis cache makes every call after the first one a specialization replay. *)
-let analyze_footprint ?name ~(inline : Tn.t list) ctx comp bindings :
+let analyze_footprint ?name ~(inline : Tn.t list) ~(footprint : Tn.t list) ctx comp bindings :
     LL.footprint * LL.flip_candidate list =
-  let lowered = Context.lowered_for_decisions ?name ~inline ctx comp bindings in
+  let lowered = Context.lowered_for_decisions ?name ~inline ~footprint ctx comp bindings in
   ( Backends.score_footprint ~backend_name:(Context.backend_name ctx)
       ~limits:(Context.hardware_limits ctx) ~static_indices:(Idx.bound_symbols bindings) lowered,
     lowered.LL.flip_candidates )
 
-let footprint ?name ctx comp bindings = fst (analyze_footprint ?name ~inline:[] ctx comp bindings)
+let footprint ?name ctx comp bindings =
+  fst (analyze_footprint ?name ~inline:[] ~footprint:[] ctx comp bindings)
+
+(* A decision is a node with its direction (gh-ocannl-616): [`Inline] recomputes at use,
+   [`Footprint] confines the node to a sub-image scratch filled at the producer; both relieve
+   footprint, differently — an inlined reading keeps the template's leaves live up to the late
+   consumer, a footprint-scoped one only the scratch. *)
+type direction = [ `Inline | `Footprint ]
+
+let direction_of (fc : LL.flip_candidate) : direction =
+  match fc.LL.fc_flip with `Footprint -> `Footprint | `Inline | `Materialize -> `Inline
+
+let direction_name (d : direction) = match d with `Inline -> "inline" | `Footprint -> "footprint"
+
+let split (decs : (Tn.t * direction) list) =
+  let pick d = List.filter_map decs ~f:(fun (tn, d') -> Option.some_if (Poly.equal d d') tn) in
+  (pick `Inline, pick `Footprint)
 
 let fit ?name ?max_candidates ~budget ctx comp bindings =
   (* [Minimize] promises every flip that still relieves footprint, so it must not silently stop at a
@@ -91,8 +107,11 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
         (fun s -> if log_memory_budget () then Stdio.eprintf "memory budget: %s\n%!" s)
         fmt
     in
-    let score inline = fst (analyze_footprint ?name ~inline ctx comp bindings) in
-    let bp_baseline, surface = analyze_footprint ?name ~inline:[] ctx comp bindings in
+    let score (decs : (Tn.t * direction) list) =
+      let inline, footprint = split decs in
+      fst (analyze_footprint ?name ~inline ~footprint ctx comp bindings)
+    in
+    let bp_baseline, surface = analyze_footprint ?name ~inline:[] ~footprint:[] ctx comp bindings in
     (* The acceptance-stopping predicate: [Minimize] is never satisfied, so it keeps taking flips
        that still help. [within] is the reported outcome, where a target-less [Minimize] trivially
        holds -- there is no budget for it to miss. *)
@@ -116,23 +135,35 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
       logf "baseline %d bytes is already within budget; no flips" bp_baseline.LL.fp_total;
       (ctx, done_ ()))
     else
-      (* Only the [`Inline] direction: demoting a materialized intermediate to recompute-at-use is
-         what relieves footprint. Ranked CHEAPEST-recompute-first for the pre-filter (the surface's
-         own order is most-expensive-first, which the [Materialize]-direction search wants), so a
+      (* The [`Inline] and [`Footprint] directions (gh-ocannl-616): demoting a materialized
+         intermediate to recompute-at-use relieves footprint, and so does confining it to a
+         sub-image scratch; a node carrying both records is scored in each direction, and the first
+         that pays takes the node (its other direction is then skipped). Ranked
+         CHEAPEST-recompute-first for the pre-filter (the surface's own order is
+         most-expensive-first, which the [Materialize]-direction search wants), so a
          [max_candidates] cut keeps the flips a budget would most want to pay for. *)
       let all =
         List.fold surface ~init:[] ~f:(fun acc fc ->
             match fc.LL.fc_flip with
             | `Materialize -> acc
-            | `Inline ->
-                if List.exists acc ~f:(fun c -> Tn.equal c.LL.fc_tn fc.LL.fc_tn) then acc
+            | `Inline | `Footprint ->
+                if
+                  List.exists acc ~f:(fun c ->
+                      Tn.equal c.LL.fc_tn fc.LL.fc_tn && Poly.equal c.LL.fc_flip fc.LL.fc_flip)
+                then acc
                 else fc :: acc)
         |> List.sort ~compare:(fun a b ->
             match Int.compare a.LL.fc_recompute_cost b.LL.fc_recompute_cost with
             | 0 -> Tn.compare a.LL.fc_tn b.LL.fc_tn
             | c -> c)
       in
-      let considered = List.take all max_candidates in
+      (* The cut keeps a node's directions together (gh-ocannl-616): a sibling of a taken record
+         joins it, so the group comparison below always sees both. *)
+      let considered =
+        let taken = List.take all max_candidates in
+        List.filter all ~f:(fun (o : LL.flip_candidate) ->
+            List.exists taken ~f:(fun (c : LL.flip_candidate) -> Tn.equal c.LL.fc_tn o.LL.fc_tn))
+      in
       let bp_dropped = List.length all - List.length considered in
       if bp_dropped > 0 then
         logf "%d of %d inline candidates dropped by max_candidates=%d (cheapest recompute kept)"
@@ -146,9 +177,11 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
          picks those up jointly. *)
       let scored =
         List.map considered ~f:(fun fc ->
-            let fp = score [ fc.LL.fc_tn ] in
+            let fp = score [ (fc.LL.fc_tn, direction_of fc) ] in
             let relief = bp_baseline.LL.fp_total - fp.LL.fp_total in
-            logf "candidate %s: recompute cost %d, solo relief %d bytes" (Tn.debug_name fc.LL.fc_tn)
+            logf "candidate %s (%s): recompute cost %d, solo relief %d bytes"
+              (Tn.debug_name fc.LL.fc_tn)
+              (direction_name (direction_of fc))
               fc.LL.fc_recompute_cost relief;
             (fc, relief))
       in
@@ -187,31 +220,62 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
       let accepted = ref [] and flips = ref [] and cur = ref bp_baseline in
       (* Held (node, recompute cost) pairs, most recently held first. *)
       let speculative = ref [] in
-      let names l = String.concat ~sep:", " (List.map l ~f:(fun (tn, _) -> Tn.debug_name tn)) in
-      List.iter ranked ~f:(fun (fc, solo) ->
-          if not (met !cur) then begin
-            let tn = fc.LL.fc_tn and cost = fc.LL.fc_recompute_cost in
+      let names l =
+        String.concat ~sep:", " (List.map l ~f:(fun ((tn, _), _) -> Tn.debug_name tn))
+      in
+      (* One node, one group (gh-ocannl-616 review round 6): a node offering both directions has
+         them scored against the same incumbent — each alone and jointly with the held group — and
+         the direction with the larger marginal relief (the cheaper recompute on a tie) is the one
+         committed or held; the other is dropped. Visiting them one at a time would commit the first
+         that pays and never see the sibling relieve more. *)
+      let decided = Hash_set.create (module Tn) in
+      let evaluate dec ~held =
+        let cand_alone = dec :: !accepted in
+        let fp_alone = score cand_alone in
+        let cand_joint, fp_joint =
+          if List.is_empty held then (cand_alone, fp_alone)
+          else
+            let c = (dec :: List.map held ~f:fst) @ !accepted in
+            (c, score c)
+        in
+        let verdict =
+          match compare_int fp_joint.LL.fp_total fp_alone.LL.fp_total with
+          | c when c < 0 -> `Load_bearing
+          | 0 -> `Neutral
+          | _ -> `Harmful
+        in
+        let cand = match verdict with `Load_bearing -> cand_joint | _ -> cand_alone in
+        let fp = match verdict with `Load_bearing -> fp_joint | _ -> fp_alone in
+        (cand, fp, verdict, !cur.LL.fp_total - fp.LL.fp_total)
+      in
+      List.iter ranked ~f:(fun (fc, _) ->
+          let tn = fc.LL.fc_tn in
+          if Hash_set.mem decided tn || met !cur then ()
+          else begin
+            Hash_set.add decided tn;
             let held = !speculative in
-            let cand_alone = tn :: !accepted in
-            let fp_alone = score cand_alone in
-            let cand_joint, fp_joint =
-              if List.is_empty held then (cand_alone, fp_alone)
-              else
-                let c = (tn :: List.map held ~f:fst) @ !accepted in
-                (c, score c)
+            let group =
+              List.filter ranked ~f:(fun ((o : LL.flip_candidate), _) -> Tn.equal o.LL.fc_tn tn)
             in
-            let verdict =
-              match compare_int fp_joint.LL.fp_total fp_alone.LL.fp_total with
-              | c when c < 0 -> `Load_bearing
-              | 0 -> `Neutral
-              | _ -> `Harmful
+            let outcomes =
+              List.map group ~f:(fun (g, solo) ->
+                  let dec = (tn, direction_of g) in
+                  (dec, g.LL.fc_recompute_cost, solo, evaluate dec ~held))
             in
-            let cand = match verdict with `Load_bearing -> cand_joint | _ -> cand_alone in
-            let fp = match verdict with `Load_bearing -> fp_joint | _ -> fp_alone in
-            let marginal = !cur.LL.fp_total - fp.LL.fp_total in
+            let best =
+              List.max_elt outcomes
+                ~compare:(fun (_, ca, _, (_, _, _, ma)) (_, cb, _, (_, _, _, mb)) ->
+                  match Int.compare ma mb with 0 -> Int.compare cb ca | c -> c)
+              |> Option.value_exn
+            in
+            let dec, cost, solo, (cand, fp, verdict, marginal) = best in
+            let dir = direction_name (snd dec) in
+            let sibling_note =
+              if List.length group > 1 then " (over the node's other direction)" else ""
+            in
             if marginal > 0 then (
-              logf "accept %s: %d bytes (solo %d), cost %d%s, footprint now %d" (Tn.debug_name tn)
-                marginal solo cost
+              logf "accept %s (%s)%s: %d bytes (solo %d), cost %d%s, footprint now %d"
+                (Tn.debug_name tn) dir sibling_note marginal solo cost
                 (match (verdict, held) with
                 | _, [] -> ""
                 | `Load_bearing, _ -> Printf.sprintf " jointly with %s" (names held)
@@ -224,7 +288,7 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
                 (tn, marginal, cost)
                 ::
                 (match verdict with
-                | `Load_bearing -> List.map held ~f:(fun (h, c) -> (h, 0, c))
+                | `Load_bearing -> List.map held ~f:(fun ((h, _), c) -> (h, 0, c))
                 | `Neutral | `Harmful -> [])
                 @ !flips;
               accepted := cand;
@@ -233,9 +297,14 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
               (speculative := match verdict with `Neutral -> held | _ -> []);
               cur := fp)
             else (
-              logf "hold %s: no marginal relief yet (solo was %d); speculative" (Tn.debug_name tn)
-                solo;
-              speculative := (tn, cost) :: !speculative)
+              (* Neither direction pays yet: hold the one [best] chose — the best CURRENT marginal,
+                 the cheaper recompute on a tie. The solo relief was measured against the original
+                 baseline, which earlier accepted flips can have made stale. *)
+              logf "hold %s (%s)%s: no marginal relief yet (solo was %d); speculative"
+                (Tn.debug_name tn)
+                (direction_name (snd dec))
+                sibling_note solo;
+              speculative := (dec, cost) :: held)
           end);
       (match !speculative with
       | [] -> ()
@@ -251,7 +320,9 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
           logf "budget %d bytes: %d -> %d bytes with %d flip(s), %s" b bp_baseline.LL.fp_total
             bp_final.LL.fp_total (List.length !flips)
             (if bp_within_budget then "within budget" else "STILL OVER BUDGET"));
-      let ctx = if List.is_empty !accepted then ctx else Context.decide_inline ctx !accepted in
+      let inline, footprint = split !accepted in
+      let ctx = if List.is_empty inline then ctx else Context.decide_inline ctx inline in
+      let ctx = if List.is_empty footprint then ctx else Context.decide_footprint ctx footprint in
       ( ctx,
         {
           bp_baseline;

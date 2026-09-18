@@ -131,7 +131,10 @@ let phase2 () =
   p "decision_surface shares the analysis too" (Poly.equal (h3, m3) (`Hits 1, `Misses 0));
   let render fc =
     ( fc.LL.fc_tn.Tn.id,
-      (match fc.LL.fc_flip with `Inline -> "inline" | `Materialize -> "materialize"),
+      (match fc.LL.fc_flip with
+      | `Inline -> "inline"
+      | `Materialize -> "materialize"
+      | `Footprint -> "footprint"),
       fc.LL.fc_recompute_cost )
   in
   p "decision_surface matches the capture compile's flip candidates"

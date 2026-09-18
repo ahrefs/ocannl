@@ -119,6 +119,7 @@ let known_config_keys =
       "virtualize_max_visits";
       "virtualize_max_inline_reduction";
       "virtualize_max_inline_fanin";
+      "virtualize_footprint_materialization";
       "enable_device_only";
       "inline_scalar_constexprs";
       "inline_simple_computations";
@@ -223,6 +224,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "virtualize_max_visits";
         "virtualize_max_inline_reduction";
         "virtualize_max_inline_fanin";
+        "virtualize_footprint_materialization";
         "enable_device_only";
         "inline_scalar_constexprs";
         "inline_simple_computations";
