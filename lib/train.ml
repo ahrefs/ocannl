@@ -651,6 +651,27 @@ let placement_arm_name = function
   | Force_arm_a -> "A (default placements)"
   | Force_arm_b -> "B (materialize-all)"
 
+(** The embedded nodes of [loss]: what {!tune_placements}' materialize-all arm decides
+    {!Context.decide_materialized} on. *)
+let embedded_nodes loss =
+  let embedded = ref [] in
+  Tensor.iter_embedded ~f:(fun tn -> embedded := tn :: !embedded) loss;
+  !embedded
+
+(** The identity of the placement decision problem {!tune_placements} answers for [comp] from [ctx]
+    (gh-ocannl-786): {!Ir.Schedule_cache.canonicalize_source} over the routine's raw lowering — the
+    program, what the lineage already decided about each of its nodes — plus, per node, whether it
+    is in [loss]'s embedded set, the set arm B materializes: the same computation tuned against two
+    losses poses two problems, since their materialize-all arms differ. What the placement-decision
+    store keys on; exposed so a test can reason about the key. *)
+let placement_problem ?name ctx loss comp bindings =
+  let embedded = Set.of_list (module Tn) (embedded_nodes loss) in
+  Ir.Schedule_cache.canonicalize_source
+    ~static_indices:(Ir.Indexing.bound_symbols bindings)
+    ~node_tag:(fun tn -> if Set.mem embedded tn then ";e" else "")
+    ~lineage:(Context.placements ctx)
+    (Context.lowered_for_decisions ?name ctx comp bindings)
+
 (** Placement A/B autotuning: {!Autotune.tune} on [comp] under the graph's current (default)
     placements — virtual intermediates plus the compiler's promotions — and again with every
     embedded node of [loss] materialized, keeping the measured winner (the arms' [best_ms] are
@@ -994,12 +1015,11 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
         release_unshipped ();
         Stdlib.Printexc.raise_with_backtrace exn backtrace
   in
-  let embedded = ref [] in
-  Tensor.iter_embedded ~f:(fun tn -> embedded := tn :: !embedded) loss;
+  let embedded = embedded_nodes loss in
   (* [decide_materialized] skips the nodes constrained away from materialization (constants,
      declared-virtual), mirroring [every_non_literal_materialized]'s guards at the decision
      level. *)
-  let materialize c = Context.decide_materialized c !embedded in
+  let materialize c = Context.decide_materialized c embedded in
   (* gh-ocannl-786: the placement-decision store. The schedule cache persists each arm's and each
      flip's crowned schedule with its timings, so on a warm cache the arms and the chain replay
      their measurements -- but the DECISION (which arm shipped, which flips the chain accepted) was
@@ -1021,10 +1041,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
     if forced || String.is_empty cache_dir then None
     else
       match
-        let base = Context.lowered_for_decisions ?name ctx comp bindings in
-        let problem =
-          SC.canonicalize_source ~static_indices ~lineage:(Context.placements ctx) base
-        in
+        let problem = placement_problem ?name ctx loss comp bindings in
         if SC.complete problem then
           let limits = Context.hardware_limits ctx in
           let backend = Context.backend_name ctx in
@@ -1041,7 +1058,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      yields; and the lowering it produces, whose placement-aware digest is the entry's guard. *)
   let decisions_of problem = function
     | SC.Default -> ([], [], [])
-    | SC.Materialize_all -> (!embedded, [], [])
+    | SC.Materialize_all -> (embedded, [], [])
     | SC.Refined flips ->
         List.fold_right flips ~init:([], [], []) ~f:(fun { SC.node; flip } (mat, inl, fp) ->
             let tn = SC.tn_of_ref problem node in
@@ -1077,20 +1094,25 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
   in
   (* Recorded only when the evidence is the kind the schedule cache itself keeps (gh-ocannl-855's
      rule, one level up): every search this call observed completed with no contention-refused
-     window, and the shipped one timed something. A decision reached because an arm failed, or over
-     refused windows, is this process's to make and not the next one's to inherit. *)
+     window and MEASURED something -- a competitor that timed nothing (a search that lost every
+     candidate, or [autotune_search=false] over a schedule cache holding only the other arm) was
+     never compared, and recording the winner over it would let a later search-enabled process skip
+     the unmeasured competitor for good. A decision reached because an arm failed, or over refused
+     windows, is likewise this process's to make and not the next one's to inherit. *)
   let persist ~decision ~shipped_ms ~a_ms ~b_ms =
     match store with
     | None -> ()
     | Some (problem, key, limits, backend) -> (
         let unclean =
           List.exists !observed ~f:(fun r ->
-              r.Autotune.timings_contended > 0 || Option.is_some (Autotune.terminal_failure r))
+              r.Autotune.timings_contended > 0
+              || Option.is_some (Autotune.terminal_failure r)
+              || not (Float.is_finite r.Autotune.best_ms))
         in
         if unclean || not (Float.is_finite shipped_ms) then
           logf
-            "placement store: decision %s not recorded (a search failed, timed nothing, or had \
-             contention-refused windows)"
+            "placement store: decision %s not recorded (a compared search failed, timed nothing, \
+             or had contention-refused windows)"
             (SC.shipped_label decision)
         else
           match outcome_digest (decisions_of problem decision) with
@@ -1201,8 +1223,334 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
         release_unshipped ();
         Stdlib.Printexc.raise_with_backtrace exn backtrace
   in
+  let cold () =
+    let a, a_ms, a_report = tune "A (default placements)" ctx timing_ctx in
+    record a;
+    propagate_if_poisoned "A" a;
+    let b, b_ms, b_report =
+      tune_or_release "B (materialize-all)" (materialize ctx) (Option.map timing_ctx ~f:materialize)
+    in
+    record b;
+    (* Both arms gone: there is no winner to ship, and the first failure is the one that has not
+       been cascaded from — a device the other arm's failure exhausted or a lineage it poisoned
+       would otherwise be reported as the cause. *)
+    (match (a, b) with
+    | Error (a_exn, a_backtrace), Error (b_exn, b_backtrace) ->
+        (* gh-ocannl-638: which failure to propagate is the selector's question too. With an arm
+           forced, the caller asked for THAT artifact and its failure is the answer — handing back
+           the other arm's exception would report a search the caller did not select, and contradict
+           the documented promise that a forced arm's failure propagates rather than being replaced.
+           With no arm forced the first failure still wins, for the original reason: it is the one
+           that has not been cascaded from (a device the other arm exhausted, or a lineage it
+           poisoned, would otherwise be reported as the cause). *)
+        let exn, backtrace =
+          match ship_arm with
+          | Measured_winner | Force_arm_a -> (a_exn, a_backtrace)
+          | Force_arm_b -> (b_exn, b_backtrace)
+        in
+        logf "both arms failed, nothing to ship (A: %s; B: %s); propagating %s"
+          (Exn.to_string a_exn) (Exn.to_string b_exn)
+          (match ship_arm with
+          | Measured_winner -> "arm A's, the failure that has not been cascaded from"
+          | Force_arm_a -> "arm A's, the forced arm"
+          | Force_arm_b -> "arm B's, the forced arm");
+        Stdlib.Printexc.raise_with_backtrace exn backtrace
+    | _ -> ());
+    let measured_a_wins =
+      match (a, b) with
+      (* A failed arm never wins, whatever the other arm's time is — including [infinity], which a
+         completed search that timed nothing legitimately reports. *)
+      | Ok _, Error _ -> true
+      | Error _, Ok _ -> false
+      | Ok _, Ok _ | Error _, Error _ -> Float.( <= ) a_ms b_ms
+    in
+    (* gh-ocannl-638: the measured comparison is still computed and still logged under a forced arm
+       — it is the number the measurement reports — but it no longer decides. *)
+    let a_wins =
+      match ship_arm with
+      | Measured_winner -> measured_a_wins
+      | Force_arm_a -> true
+      | Force_arm_b -> false
+    in
+    let arm_ms r ms = match r with Error _ -> "FAILED" | Ok _ -> Printf.sprintf "%.4f ms" ms in
+    logf "winner: arm %s (A %s vs B %s)"
+      (if measured_a_wins then "A" else "B")
+      (arm_ms a a_ms) (arm_ms b b_ms);
+    if forced then (
+      Stdio.eprintf
+        "Train.tune_placements: shipping arm %s by tune_ship_arm; the measured winner is arm %s (A \
+         %s vs B %s)%s.\n\
+         %!"
+        (if a_wins then "A" else "B")
+        (if measured_a_wins then "A" else "B")
+        (arm_ms a a_ms) (arm_ms b b_ms)
+        (if Bool.equal a_wins measured_a_wins then ", so the override changed nothing"
+         else ", so the override changed what ships");
+      (* A forced arm has no fallback: shipping the other one would return an artifact the caller
+         did not ask for, under a setting whose whole purpose is that the returned routine IS the
+         profiled one. Said here because the propagation below is otherwise indistinguishable from
+         an ordinary both-arms-failed run. *)
+      match if a_wins then a else b with
+      | Ok _ -> ()
+      | Error (exn, _) ->
+          Stdio.eprintf
+            "Train.tune_placements: the arm tune_ship_arm selected failed, so its failure \
+             propagates rather than the other arm shipping in its place: %s\n\
+             %!"
+            (Exn.to_string exn));
+    (* gh-ocannl-546: a tensorized winner of the arm that is then discarded reaches no artifact and
+       no end-to-end number, so the placement A/B is where it has to be said. Stated as the margin
+       it lost by, not as a bare flag: on a small routine the arms can be separated by less than the
+       candidate-level timing spread. *)
+    let shipped, dropped = if a_wins then (a_report, b_report) else (b_report, a_report) in
+    Option.iter dropped ~f:(fun d ->
+        if d.Autotune.best_tensorized then
+          logf
+            "NOTE arm %s crowned a tensorized candidate (%s at %.4f ms%s) and did NOT ship: arm %s \
+             %s at %.4f ms%s"
+            (if a_wins then "B" else "A")
+            d.Autotune.best_label d.Autotune.best_ms
+            (* A failed arm's crown is mid-search: it lost the A/B by failing, not by its time. *)
+            (if Option.is_some (Autotune.terminal_failure d) then ", before that arm failed" else "")
+            (if a_wins then "A" else "B")
+            (* Under a forced arm the shipped one need not have won anything (gh-ocannl-638). *)
+            (if forced then "ships by tune_ship_arm" else "wins the placement A/B")
+            (if a_wins then a_ms else b_ms)
+            (Option.value_map shipped ~default:"" ~f:(fun s ->
+                 if s.Autotune.best_tensorized then " (which is tensorized too)"
+                 else if Float.is_inf s.Autotune.mma_best_ms then
+                   " (no tensorized candidate was timed in the shipping arm)"
+                 else
+                   Printf.sprintf " (its own best tensorized candidate: %.4f ms)"
+                     s.Autotune.mma_best_ms)));
+    let winner, winner_ms = if a_wins then (a, a_ms) else (b, b_ms) in
+    let inline_flips =
+      match inline_flips with
+      | Some n -> n
+      | None -> Int.of_string (Utils.get_global_arg ~arg_name:"tune_inline_flips" ~default:"0")
+    in
+    (* gh-ocannl-638: the chain walks from arm A toward arm B one node at a time, so a refined
+       result is neither arm — which is exactly what a forced arm asks not to ship. Skipped rather
+       than rejected: the combination arises from configuration (a config file's flip budget plus a
+       commandline arm), so it is a request to resolve, not a caller error to fail. *)
+    let inline_flips =
+      if forced && inline_flips > 0 then (
+        Stdio.eprintf
+          "Train.tune_placements: tune_ship_arm forces an arm, so the %d-flip inline refinement is \
+           skipped -- a refined placement vector is neither arm.\n\
+           %!"
+          inline_flips;
+        0)
+      else inline_flips
+    in
+    let winner_arm = if a_wins then "A" else "B" in
+    let winner_decision = if a_wins then SC.Default else SC.Materialize_all in
+    let commit_winner () = persist ~decision:winner_decision ~shipped_ms:winner_ms ~a_ms ~b_ms in
+    if inline_flips <= 0 then ship ~what:winner_arm ~commit:commit_winner winner
+    else
+      let (* gh-555: greedy per-node refinement over the inlining decision vector. The vector lives
+             on the default-policy arm (arm B's placements are caller-seeded wholesale, so its
+             compile reports no policy decisions to flip), so the chain refines from arm A's context
+             — a Materialize chain walks from A toward B one node at a time — and the refined result
+             ships only if it beats the A/B winner. The decision surface is read analyze-only
+             (gh-560; the arms' compiles already populated the analysis cache, so this costs
+             specialization replays).
+
+             gh-514, the placement-space search over this chain: the surface arrives ranked
+             enablement-first ({!Autotune.placement_surface} — the gh-558 ordering lesson: a flip's
+             value includes which sketch families become expressible under it, so family-unlocking
+             Materialize flips outrank cost), and under config [autotune_bound_pruning] a
+             [`Materialize] flip whose partial-vector roofline floor
+             ({!Ir.Cost_model.completion_floor}, monotone in the chain's accumulated commitments)
+             already meets the chain's best measured time is fathomed without spending budget — the
+             admissible direction, exactly phase 4b's rule one level up. The budget counts {e
+             measured} flips, so a fathomed candidate lets the next one in. *)
+        module
+        LL =
+        Ir.Low_level
+      in
+      let
+          (* gh-514 follow-up gh-ocannl-579: the enablement prior prices which sketch families a
+             flip makes EXPRESSIBLE, and nothing about whether they pay. The arms just searched
+             settle that, for free: arm B is the all-materialized specialization the prior derives
+             its enablement set from, so its report's best tensorized time against its best time
+             says what the promoted flips' family is worth on this device, on this computation, in
+             this session. Under [tune_flip_ordering=profitable] (the default) a family measured to
+             lose here voids the prior and the surface ranks by cost — on gh-514's metal/f16 cell
+             the promotion displaced the winning cheap inline flip out of a budget-5 chain. Both
+             arms' reports are handed over, including a failing arm's: its timings are measurements
+             of the family even though its [best_ms] is not shippable. The surface derives the
+             verdict, and only when the ordering in force consults one. *)
+          evidence =
+        List.filter_opt [ a_report; b_report ]
+      in
+      let surface =
+        (* Outside the tuner's failure containment; a lowering failure (the A/B searches above can
+           still have crowned a winner) must skip the refinement, not fail the tune. *)
+        match Autotune.placement_surface ?name ~evidence ctx comp bindings with
+        | s -> Some s
+        (* This containment is for a lowering that declined, and for nothing else. A malformed
+           [tune_flip_profit_margin] raises {!Utils.User_error} from inside it (gh-ocannl-579): the
+           configuration asked for a refinement it also made impossible, and swallowing that would
+           silently skip the refinement and ship the A/B winner as though the setting had been
+           honored. The two process-level classes are not this containment's either, for the same
+           reasons they are not the arms'. *)
+        | exception exn when match exn with Utils.User_error _ -> true | _ -> must_propagate exn ->
+            let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+            Stdlib.Printexc.raise_with_backtrace exn backtrace
+        | exception exn ->
+            logf "flip refinement skipped: the decision-surface lowering failed: %s"
+              (Exn.to_string exn);
+            None
+      in
+      match surface with
+      | None -> ship ~what:winner_arm ~commit:commit_winner winner
+      | Some surface ->
+          let bound_pruning =
+            Utils.get_global_flag ~default:false ~arg_name:"autotune_bound_pruning"
+          in
+          let candidates = surface.Autotune.ps_candidates in
+          logf "flip refinement: %d candidate(s), %d enablement-promoted, ranked by %s, budget %d%s"
+            (List.length candidates)
+            (Set.length surface.Autotune.ps_enablement)
+            (let name =
+               match surface.Autotune.ps_ordering with
+               | `Cost -> "cost"
+               | `Enablement -> "enablement"
+             in
+             match surface.Autotune.ps_profit with
+             | Some profit -> name ^ " (" ^ Autotune.family_profit_summary profit ^ ")"
+             | None -> name ^ " (configured unconditionally, so no profitability evidence was read)")
+            inline_flips
+            (if bound_pruning then ", bound pruning on" else "");
+          let chain = ref (a, a_ms, ctx, timing_ctx) in
+          (* The accepted flips in chain order, the placement vector a refined result ships under
+             and what the placement store records for it (gh-ocannl-786). *)
+          let accepted = ref [] in
+          (* The chain's accumulated placement commitments, for the floor: an accepted
+             [`Materialize] flip and a rejected [`Inline] flip both leave the node certainly
+             materialized in every completion the chain can still reach; the other two outcomes
+             leave it open (inline commitments never tighten the floor). *)
+          let certain_mat = ref [] in
+          (* A node's records are its mutually exclusive readings (gh-ocannl-616), so they are
+             measured as ONE group, each from the chain's own context against the same incumbent,
+             and the best of them is committed when it beats the incumbent — applied one after
+             another, the second would be measured on top of the first's acceptance. Nodes with no
+             [`Materialize] record are the default-materialized ones — the only ones a group whose
+             every alternative lost leaves certainly materialized. *)
+          let default_materialized tn =
+            not
+              (List.exists candidates ~f:(fun (o : LL.flip_candidate) ->
+                   Tn.equal o.LL.fc_tn tn && Poly.equal o.LL.fc_flip `Materialize))
+          in
+          let measured = ref 0 and pruned = ref 0 in
+          let rec walk = function
+            | [] -> ()
+            | _ when !measured >= inline_flips -> ()
+            (* Same lineage, same rule as the A/B above: a poisoned one refuses every timing run, so
+               a further search can only fail. Unlike the arms, there is nothing to propagate here —
+               the A/B winner is already in hand — so the refinement just stops. *)
+            | _ when lineage_poisoned () ->
+                logf "flip refinement stopped: the shared lineage is poisoned"
+            | fc :: rest ->
+                let tn = fc.LL.fc_tn in
+                let siblings, rest =
+                  List.partition_tf rest ~f:(fun (o : LL.flip_candidate) -> Tn.equal o.LL.fc_tn tn)
+                in
+                let group = fc :: siblings in
+                let _, chain_ms, base_ctx, base_timing = !chain in
+                (* A group started is a group finished: the budget is checked between groups, not
+                   between a node's alternatives, or the comparison against the same incumbent that
+                   the group exists for would be cut short by an exhausted budget. *)
+                let try_alternative (fc : LL.flip_candidate) =
+                  let arm =
+                    Printf.sprintf "flip %s %s (cost %d%s)"
+                      (match fc.LL.fc_flip with
+                      | `Inline -> "inline"
+                      | `Materialize -> "materialize"
+                      | `Footprint -> "footprint")
+                      (Tn.debug_name tn) fc.LL.fc_recompute_cost
+                      (if Set.mem surface.Autotune.ps_enablement tn then ", enablement" else "")
+                  in
+                  let floor =
+                    match fc.LL.fc_flip with
+                    | `Materialize when bound_pruning ->
+                        surface.Autotune.ps_floor_ms ~materialized:(tn :: !certain_mat)
+                    | `Materialize | `Inline | `Footprint -> None
+                  in
+                  match floor with
+                  | Some fl when Float.(fl >= chain_ms) ->
+                      (* Fathomed: the floor lower-bounds every completion with this node
+                         materialized, so no nested search from here can beat the incumbent. The
+                         node's placement stays open — nothing to commit. *)
+                      Int.incr pruned;
+                      logf "%s bound-pruned: floor %.4f ms >= incumbent %.4f ms" arm fl chain_ms;
+                      None
+                  | _ ->
+                      let apply c =
+                        match fc.LL.fc_flip with
+                        | `Materialize -> Context.decide_materialized c [ tn ]
+                        | `Inline -> Context.decide_inline c [ tn ]
+                        | `Footprint -> Context.decide_footprint c [ tn ]
+                      in
+                      let ctx' = apply base_ctx in
+                      let timing' = Option.map base_timing ~f:apply in
+                      let r, ms, _rep = tune_or_release ~to_report:flip_report arm ctx' timing' in
+                      record r;
+                      Int.incr measured;
+                      Some (fc, r, ms, ctx', timing')
+                in
+                let results = List.filter_map group ~f:try_alternative in
+                let best =
+                  List.min_elt results ~compare:(fun (_, _, a, _, _) (_, _, b, _, _) ->
+                      Float.compare a b)
+                in
+                (match best with
+                | Some (bfc, r, ms, ctx', timing') when Float.(ms < chain_ms) -> (
+                    chain := (r, ms, ctx', timing');
+                    accepted := (tn, bfc.LL.fc_flip) :: !accepted;
+                    if List.length group > 1 then
+                      logf "flip group %s: %s wins at %.4f ms" (Tn.debug_name tn)
+                        (match bfc.LL.fc_flip with
+                        | `Inline -> "inline"
+                        | `Materialize -> "materialize"
+                        | `Footprint -> "footprint")
+                        ms;
+                    match bfc.LL.fc_flip with
+                    | `Materialize -> certain_mat := tn :: !certain_mat
+                    | `Inline | `Footprint -> ())
+                | _ ->
+                    (* Every alternative measured and rejected: a default-materialized node stays
+                       materialized in every completion the chain can still reach; a virtual or
+                       footprint-scoped one keeps its reading and stays open. A pruned alternative
+                       leaves the node open too. *)
+                    if default_materialized tn && List.length results = List.length group then
+                      certain_mat := tn :: !certain_mat);
+                walk rest
+          in
+          walk candidates;
+          if !pruned > 0 then
+            logf "flip refinement: %d flip(s) bound-pruned, %d measured" !pruned !measured;
+          let chain_result, chain_ms, _, _ = !chain in
+          if Float.(chain_ms < winner_ms) then (
+            logf "flip refinement ships: %.4f ms (the placement A/B winner was %.4f ms)" chain_ms
+              winner_ms;
+            let commit () =
+              match refined_decision (List.rev !accepted) with
+              | Some decision -> persist ~decision ~shipped_ms:chain_ms ~a_ms ~b_ms
+              | None ->
+                  logf
+                    "placement store: the refined vector names a node outside the decision \
+                     problem, so it is not recorded"
+            in
+            ship ~what:"flip" ~commit chain_result)
+          else (
+            logf "flip refinement did not improve on the A/B winner (%.4f ms vs %.4f ms)" chain_ms
+              winner_ms;
+            ship ~what:winner_arm ~commit:commit_winner winner)
+  in
   match replay with
-  | Some (e, decisions) ->
+  | Some (e, decisions) -> (
       (* The recorded decision, applied as the search applied it, then the one search the decision
          produces -- normally a schedule-cache replay too, and a search when the schedule entry is
          cold (contention kept it so, or the directory was swept). Exactly one report reaches
@@ -1216,338 +1564,22 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
       in
       record r;
       propagate_if_poisoned what r;
-      ship ~what ~commit:(fun () -> ()) r
-  | None -> (
-      let a, a_ms, a_report = tune "A (default placements)" ctx timing_ctx in
-      record a;
-      propagate_if_poisoned "A" a;
-      let b, b_ms, b_report =
-        tune_or_release "B (materialize-all)" (materialize ctx)
-          (Option.map timing_ctx ~f:materialize)
-      in
-      record b;
-      (* Both arms gone: there is no winner to ship, and the first failure is the one that has not
-         been cascaded from — a device the other arm's failure exhausted or a lineage it poisoned
-         would otherwise be reported as the cause. *)
-      (match (a, b) with
-      | Error (a_exn, a_backtrace), Error (b_exn, b_backtrace) ->
-          (* gh-ocannl-638: which failure to propagate is the selector's question too. With an arm
-             forced, the caller asked for THAT artifact and its failure is the answer — handing back
-             the other arm's exception would report a search the caller did not select, and
-             contradict the documented promise that a forced arm's failure propagates rather than
-             being replaced. With no arm forced the first failure still wins, for the original
-             reason: it is the one that has not been cascaded from (a device the other arm
-             exhausted, or a lineage it poisoned, would otherwise be reported as the cause). *)
-          let exn, backtrace =
-            match ship_arm with
-            | Measured_winner | Force_arm_a -> (a_exn, a_backtrace)
-            | Force_arm_b -> (b_exn, b_backtrace)
-          in
-          logf "both arms failed, nothing to ship (A: %s; B: %s); propagating %s"
-            (Exn.to_string a_exn) (Exn.to_string b_exn)
-            (match ship_arm with
-            | Measured_winner -> "arm A's, the failure that has not been cascaded from"
-            | Force_arm_a -> "arm A's, the forced arm"
-            | Force_arm_b -> "arm B's, the forced arm");
-          Stdlib.Printexc.raise_with_backtrace exn backtrace
-      | _ -> ());
-      let measured_a_wins =
-        match (a, b) with
-        (* A failed arm never wins, whatever the other arm's time is — including [infinity], which a
-           completed search that timed nothing legitimately reports. *)
-        | Ok _, Error _ -> true
-        | Error _, Ok _ -> false
-        | Ok _, Ok _ | Error _, Error _ -> Float.( <= ) a_ms b_ms
-      in
-      (* gh-ocannl-638: the measured comparison is still computed and still logged under a forced
-         arm — it is the number the measurement reports — but it no longer decides. *)
-      let a_wins =
-        match ship_arm with
-        | Measured_winner -> measured_a_wins
-        | Force_arm_a -> true
-        | Force_arm_b -> false
-      in
-      let arm_ms r ms = match r with Error _ -> "FAILED" | Ok _ -> Printf.sprintf "%.4f ms" ms in
-      logf "winner: arm %s (A %s vs B %s)"
-        (if measured_a_wins then "A" else "B")
-        (arm_ms a a_ms) (arm_ms b b_ms);
-      if forced then (
-        Stdio.eprintf
-          "Train.tune_placements: shipping arm %s by tune_ship_arm; the measured winner is arm %s \
-           (A %s vs B %s)%s.\n\
-           %!"
-          (if a_wins then "A" else "B")
-          (if measured_a_wins then "A" else "B")
-          (arm_ms a a_ms) (arm_ms b b_ms)
-          (if Bool.equal a_wins measured_a_wins then ", so the override changed nothing"
-           else ", so the override changed what ships");
-        (* A forced arm has no fallback: shipping the other one would return an artifact the caller
-           did not ask for, under a setting whose whole purpose is that the returned routine IS the
-           profiled one. Said here because the propagation below is otherwise indistinguishable from
-           an ordinary both-arms-failed run. *)
-        match if a_wins then a else b with
-        | Ok _ -> ()
-        | Error (exn, _) ->
-            Stdio.eprintf
-              "Train.tune_placements: the arm tune_ship_arm selected failed, so its failure \
-               propagates rather than the other arm shipping in its place: %s\n\
-               %!"
-              (Exn.to_string exn));
-      (* gh-ocannl-546: a tensorized winner of the arm that is then discarded reaches no artifact
-         and no end-to-end number, so the placement A/B is where it has to be said. Stated as the
-         margin it lost by, not as a bare flag: on a small routine the arms can be separated by less
-         than the candidate-level timing spread. *)
-      let shipped, dropped = if a_wins then (a_report, b_report) else (b_report, a_report) in
-      Option.iter dropped ~f:(fun d ->
-          if d.Autotune.best_tensorized then
-            logf
-              "NOTE arm %s crowned a tensorized candidate (%s at %.4f ms%s) and did NOT ship: arm \
-               %s %s at %.4f ms%s"
-              (if a_wins then "B" else "A")
-              d.Autotune.best_label d.Autotune.best_ms
-              (* A failed arm's crown is mid-search: it lost the A/B by failing, not by its time. *)
-              (if Option.is_some (Autotune.terminal_failure d) then ", before that arm failed"
-               else "")
-              (if a_wins then "A" else "B")
-              (* Under a forced arm the shipped one need not have won anything (gh-ocannl-638). *)
-              (if forced then "ships by tune_ship_arm" else "wins the placement A/B")
-              (if a_wins then a_ms else b_ms)
-              (Option.value_map shipped ~default:"" ~f:(fun s ->
-                   if s.Autotune.best_tensorized then " (which is tensorized too)"
-                   else if Float.is_inf s.Autotune.mma_best_ms then
-                     " (no tensorized candidate was timed in the shipping arm)"
-                   else
-                     Printf.sprintf " (its own best tensorized candidate: %.4f ms)"
-                       s.Autotune.mma_best_ms)));
-      let winner, winner_ms = if a_wins then (a, a_ms) else (b, b_ms) in
-      let inline_flips =
-        match inline_flips with
-        | Some n -> n
-        | None -> Int.of_string (Utils.get_global_arg ~arg_name:"tune_inline_flips" ~default:"0")
-      in
-      (* gh-ocannl-638: the chain walks from arm A toward arm B one node at a time, so a refined
-         result is neither arm — which is exactly what a forced arm asks not to ship. Skipped rather
-         than rejected: the combination arises from configuration (a config file's flip budget plus
-         a commandline arm), so it is a request to resolve, not a caller error to fail. *)
-      let inline_flips =
-        if forced && inline_flips > 0 then (
-          Stdio.eprintf
-            "Train.tune_placements: tune_ship_arm forces an arm, so the %d-flip inline refinement \
-             is skipped -- a refined placement vector is neither arm.\n\
-             %!"
-            inline_flips;
-          0)
-        else inline_flips
-      in
-      let winner_arm = if a_wins then "A" else "B" in
-      let winner_decision = if a_wins then SC.Default else SC.Materialize_all in
-      let commit_winner () = persist ~decision:winner_decision ~shipped_ms:winner_ms ~a_ms ~b_ms in
-      if inline_flips <= 0 then ship ~what:winner_arm ~commit:commit_winner winner
-      else
-        let (* gh-555: greedy per-node refinement over the inlining decision vector. The vector
-               lives on the default-policy arm (arm B's placements are caller-seeded wholesale, so
-               its compile reports no policy decisions to flip), so the chain refines from arm A's
-               context — a Materialize chain walks from A toward B one node at a time — and the
-               refined result ships only if it beats the A/B winner. The decision surface is read
-               analyze-only (gh-560; the arms' compiles already populated the analysis cache, so
-               this costs specialization replays).
-
-               gh-514, the placement-space search over this chain: the surface arrives ranked
-               enablement-first ({!Autotune.placement_surface} — the gh-558 ordering lesson: a
-               flip's value includes which sketch families become expressible under it, so
-               family-unlocking Materialize flips outrank cost), and under config
-               [autotune_bound_pruning] a [`Materialize] flip whose partial-vector roofline floor
-               ({!Ir.Cost_model.completion_floor}, monotone in the chain's accumulated commitments)
-               already meets the chain's best measured time is fathomed without spending budget —
-               the admissible direction, exactly phase 4b's rule one level up. The budget counts {e
-               measured} flips, so a fathomed candidate lets the next one in. *)
-          module
-          LL =
-          Ir.Low_level
-        in
-        let
-            (* gh-514 follow-up gh-ocannl-579: the enablement prior prices which sketch families a
-               flip makes EXPRESSIBLE, and nothing about whether they pay. The arms just searched
-               settle that, for free: arm B is the all-materialized specialization the prior derives
-               its enablement set from, so its report's best tensorized time against its best time
-               says what the promoted flips' family is worth on this device, on this computation, in
-               this session. Under [tune_flip_ordering=profitable] (the default) a family measured
-               to lose here voids the prior and the surface ranks by cost — on gh-514's metal/f16
-               cell the promotion displaced the winning cheap inline flip out of a budget-5 chain.
-               Both arms' reports are handed over, including a failing arm's: its timings are
-               measurements of the family even though its [best_ms] is not shippable. The surface
-               derives the verdict, and only when the ordering in force consults one. *)
-            evidence =
-          List.filter_opt [ a_report; b_report ]
-        in
-        let surface =
-          (* Outside the tuner's failure containment; a lowering failure (the A/B searches above can
-             still have crowned a winner) must skip the refinement, not fail the tune. *)
-          match Autotune.placement_surface ?name ~evidence ctx comp bindings with
-          | s -> Some s
-          (* This containment is for a lowering that declined, and for nothing else. A malformed
-             [tune_flip_profit_margin] raises {!Utils.User_error} from inside it (gh-ocannl-579):
-             the configuration asked for a refinement it also made impossible, and swallowing that
-             would silently skip the refinement and ship the A/B winner as though the setting had
-             been honored. The two process-level classes are not this containment's either, for the
-             same reasons they are not the arms'. *)
-          | exception exn when match exn with Utils.User_error _ -> true | _ -> must_propagate exn
-            ->
-              let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-              Stdlib.Printexc.raise_with_backtrace exn backtrace
-          | exception exn ->
-              logf "flip refinement skipped: the decision-surface lowering failed: %s"
-                (Exn.to_string exn);
-              None
-        in
-        match surface with
-        | None -> ship ~what:winner_arm ~commit:commit_winner winner
-        | Some surface ->
-            let bound_pruning =
-              Utils.get_global_flag ~default:false ~arg_name:"autotune_bound_pruning"
-            in
-            let candidates = surface.Autotune.ps_candidates in
-            logf
-              "flip refinement: %d candidate(s), %d enablement-promoted, ranked by %s, budget %d%s"
-              (List.length candidates)
-              (Set.length surface.Autotune.ps_enablement)
-              (let name =
-                 match surface.Autotune.ps_ordering with
-                 | `Cost -> "cost"
-                 | `Enablement -> "enablement"
-               in
-               match surface.Autotune.ps_profit with
-               | Some profit -> name ^ " (" ^ Autotune.family_profit_summary profit ^ ")"
-               | None ->
-                   name ^ " (configured unconditionally, so no profitability evidence was read)")
-              inline_flips
-              (if bound_pruning then ", bound pruning on" else "");
-            let chain = ref (a, a_ms, ctx, timing_ctx) in
-            (* The accepted flips in chain order, the placement vector a refined result ships under
-               and what the placement store records for it (gh-ocannl-786). *)
-            let accepted = ref [] in
-            (* The chain's accumulated placement commitments, for the floor: an accepted
-               [`Materialize] flip and a rejected [`Inline] flip both leave the node certainly
-               materialized in every completion the chain can still reach; the other two outcomes
-               leave it open (inline commitments never tighten the floor). *)
-            let certain_mat = ref [] in
-            (* A node's records are its mutually exclusive readings (gh-ocannl-616), so they are
-               measured as ONE group, each from the chain's own context against the same incumbent,
-               and the best of them is committed when it beats the incumbent — applied one after
-               another, the second would be measured on top of the first's acceptance. Nodes with no
-               [`Materialize] record are the default-materialized ones — the only ones a group whose
-               every alternative lost leaves certainly materialized. *)
-            let default_materialized tn =
-              not
-                (List.exists candidates ~f:(fun (o : LL.flip_candidate) ->
-                     Tn.equal o.LL.fc_tn tn && Poly.equal o.LL.fc_flip `Materialize))
-            in
-            let measured = ref 0 and pruned = ref 0 in
-            let rec walk = function
-              | [] -> ()
-              | _ when !measured >= inline_flips -> ()
-              (* Same lineage, same rule as the A/B above: a poisoned one refuses every timing run,
-                 so a further search can only fail. Unlike the arms, there is nothing to propagate
-                 here — the A/B winner is already in hand — so the refinement just stops. *)
-              | _ when lineage_poisoned () ->
-                  logf "flip refinement stopped: the shared lineage is poisoned"
-              | fc :: rest ->
-                  let tn = fc.LL.fc_tn in
-                  let siblings, rest =
-                    List.partition_tf rest ~f:(fun (o : LL.flip_candidate) ->
-                        Tn.equal o.LL.fc_tn tn)
-                  in
-                  let group = fc :: siblings in
-                  let _, chain_ms, base_ctx, base_timing = !chain in
-                  (* A group started is a group finished: the budget is checked between groups, not
-                     between a node's alternatives, or the comparison against the same incumbent
-                     that the group exists for would be cut short by an exhausted budget. *)
-                  let try_alternative (fc : LL.flip_candidate) =
-                    let arm =
-                      Printf.sprintf "flip %s %s (cost %d%s)"
-                        (match fc.LL.fc_flip with
-                        | `Inline -> "inline"
-                        | `Materialize -> "materialize"
-                        | `Footprint -> "footprint")
-                        (Tn.debug_name tn) fc.LL.fc_recompute_cost
-                        (if Set.mem surface.Autotune.ps_enablement tn then ", enablement" else "")
-                    in
-                    let floor =
-                      match fc.LL.fc_flip with
-                      | `Materialize when bound_pruning ->
-                          surface.Autotune.ps_floor_ms ~materialized:(tn :: !certain_mat)
-                      | `Materialize | `Inline | `Footprint -> None
-                    in
-                    match floor with
-                    | Some fl when Float.(fl >= chain_ms) ->
-                        (* Fathomed: the floor lower-bounds every completion with this node
-                           materialized, so no nested search from here can beat the incumbent. The
-                           node's placement stays open — nothing to commit. *)
-                        Int.incr pruned;
-                        logf "%s bound-pruned: floor %.4f ms >= incumbent %.4f ms" arm fl chain_ms;
-                        None
-                    | _ ->
-                        let apply c =
-                          match fc.LL.fc_flip with
-                          | `Materialize -> Context.decide_materialized c [ tn ]
-                          | `Inline -> Context.decide_inline c [ tn ]
-                          | `Footprint -> Context.decide_footprint c [ tn ]
-                        in
-                        let ctx' = apply base_ctx in
-                        let timing' = Option.map base_timing ~f:apply in
-                        let r, ms, _rep = tune_or_release ~to_report:flip_report arm ctx' timing' in
-                        record r;
-                        Int.incr measured;
-                        Some (fc, r, ms, ctx', timing')
-                  in
-                  let results = List.filter_map group ~f:try_alternative in
-                  let best =
-                    List.min_elt results ~compare:(fun (_, _, a, _, _) (_, _, b, _, _) ->
-                        Float.compare a b)
-                  in
-                  (match best with
-                  | Some (bfc, r, ms, ctx', timing') when Float.(ms < chain_ms) -> (
-                      chain := (r, ms, ctx', timing');
-                      accepted := (tn, bfc.LL.fc_flip) :: !accepted;
-                      if List.length group > 1 then
-                        logf "flip group %s: %s wins at %.4f ms" (Tn.debug_name tn)
-                          (match bfc.LL.fc_flip with
-                          | `Inline -> "inline"
-                          | `Materialize -> "materialize"
-                          | `Footprint -> "footprint")
-                          ms;
-                      match bfc.LL.fc_flip with
-                      | `Materialize -> certain_mat := tn :: !certain_mat
-                      | `Inline | `Footprint -> ())
-                  | _ ->
-                      (* Every alternative measured and rejected: a default-materialized node stays
-                         materialized in every completion the chain can still reach; a virtual or
-                         footprint-scoped one keeps its reading and stays open. A pruned alternative
-                         leaves the node open too. *)
-                      if default_materialized tn && List.length results = List.length group then
-                        certain_mat := tn :: !certain_mat);
-                  walk rest
-            in
-            walk candidates;
-            if !pruned > 0 then
-              logf "flip refinement: %d flip(s) bound-pruned, %d measured" !pruned !measured;
-            let chain_result, chain_ms, _, _ = !chain in
-            if Float.(chain_ms < winner_ms) then (
-              logf "flip refinement ships: %.4f ms (the placement A/B winner was %.4f ms)" chain_ms
-                winner_ms;
-              let commit () =
-                match refined_decision (List.rev !accepted) with
-                | Some decision -> persist ~decision ~shipped_ms:chain_ms ~a_ms ~b_ms
-                | None ->
-                    logf
-                      "placement store: the refined vector names a node outside the decision \
-                       problem, so it is not recorded"
-              in
-              ship ~what:"flip" ~commit chain_result)
-            else (
-              logf "flip refinement did not improve on the A/B winner (%.4f ms vs %.4f ms)" chain_ms
-                winner_ms;
-              ship ~what:winner_arm ~commit:commit_winner winner))
+      match r with
+      | Ok _ -> ship ~what ~commit:(fun () -> ()) r
+      | Error (exn, _) ->
+          (* A replayed search that fails without poisoning the lineage is the cold path's losing
+             arm, one level up (gh-ocannl-550): a cached materialize-all decision can meet a
+             recoverable device OOM under today's memory pressure while the default arm would still
+             compile, and the cold path ships that sibling. So the recorded decision is treated as
+             stale and the arms are searched; the failed replay's report is no evidence about the
+             decision they reach, so it is dropped from what a recording rests on. *)
+          logf
+            "placement store: the replayed decision %s failed (%s); treating it as stale and \
+             searching the arms"
+            what (Exn.to_string exn);
+          observed := [];
+          cold ())
+  | None -> cold ()
 
 module Lazy = Utils.Lazy
 

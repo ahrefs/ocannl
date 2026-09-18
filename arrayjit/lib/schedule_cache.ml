@@ -232,13 +232,14 @@ let canonicalize ?(static_indices = []) ?(with_placements = true) (opt : LL.opti
    specialization decided enters: [lineage] is the placements table of the CONTEXT the lowering was
    decided from ({!Context.placements}), not [opt]'s post-decision table, and the preferences are
    inputs the optimizer reads and never writes. *)
-let canonicalize_source ?(static_indices = []) ~(lineage : Tn.Placements.t) (opt : LL.optimized) :
-    canonical =
+let canonicalize_source ?(static_indices = []) ?(node_tag = fun _ -> "")
+    ~(lineage : Tn.Placements.t) (opt : LL.optimized) : canonical =
   let octx = opt.LL.optimize_ctx in
   let node_tag tn =
     placement_class lineage tn
     ^ (if Hash_set.mem octx.LL.inline_preferences tn then ";i" else "")
-    ^ if Hash_set.mem octx.LL.footprint_preferences tn then ";f" else ""
+    ^ (if Hash_set.mem octx.LL.footprint_preferences tn then ";f" else "")
+    ^ node_tag tn
   in
   canonical_of ~static_indices ~node_tag ~companions:(fun ~add:_ ~emit_tn:_ -> ()) opt.LL.source
 

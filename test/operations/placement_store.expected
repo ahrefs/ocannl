@@ -1,6 +1,7 @@
 the problem digest is structural: a same-shape graph over other tensors has the same digest: true
 the problem digest is the same for a fresh lineage: true
 a lineage that inherits a decision poses a different problem: true
+the same computation tuned against a different loss poses a different problem: true
 the cold run reports both arms in position: true
 the cold run's routine computes the right values: true
 the cold run records exactly one decision, whenever its evidence was clean: true
@@ -11,6 +12,8 @@ the warm run replays the decision exactly when the cold run recorded one: one se
 a replay ships the recorded label: true
 a replay ships the recorded placement of the intermediate: true
 a replay's one search is a schedule-cache replay: true
+after a failed replay, the routine computes the right values: true
+a failed replay falls back to searching both arms: three reports, or two with no entry: true
 the forced run's routine computes the right values: true
 a forced arm searches both arms whatever the store holds: true
 a forced arm ships the forced arm: true

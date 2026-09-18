@@ -52,6 +52,16 @@ let clean_cache dir =
     Array.iter (Stdlib.Sys.readdir dir) ~f:(fun f ->
         Stdlib.Sys.remove (Stdlib.Filename.concat dir f))
 
+(* The placement-decision entries alone (gh-ocannl-786), leaving the schedule entries in place: a
+   clean run records its placement decision, and a later call over the same problem replays it with
+   ONE search instead of the two arms -- while the scenarios below are about the two-arm cold path
+   with the schedule cache warm. *)
+let clean_placements dir =
+  if Stdlib.Sys.file_exists dir && Stdlib.Sys.is_directory dir then
+    Array.iter (Stdlib.Sys.readdir dir) ~f:(fun f ->
+        if String.is_prefix f ~prefix:"placements-" then
+          Stdlib.Sys.remove (Stdlib.Filename.concat dir f))
+
 (* The injection is global state on library refs, so they are restored unconditionally: a leaked
    raiser would fail every later autotune call in this process.
 
@@ -225,7 +235,9 @@ let () =
      [?report] is positional, so consumers name arms by arrival order; the failed arm must still
      occupy its slot rather than let the surviving arm's report be attributed to it. The report is
      the tuner's own (it reports on every path), so it carries a structured phase rather than a
-     guess. --- *)
+     guess. Run 2 recorded its placement decision, which this cold-path scenario must not replay (a
+     replay is one search, so the injection would never see a second arm). --- *)
+  clean_placements cache_dir;
   let arms_reported = ref 0 in
   let reports = ref [] in
   let report r =

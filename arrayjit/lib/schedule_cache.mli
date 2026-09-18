@@ -118,6 +118,7 @@ val canonicalize :
 
 val canonicalize_source :
   ?static_indices:Indexing.static_symbol list ->
+  ?node_tag:(Tnode.t -> string) ->
   lineage:Tnode.Placements.t ->
   Low_level.optimized ->
   canonical
@@ -130,8 +131,11 @@ val canonicalize_source :
     the CONTEXT the lowering was decided from ({!Context.placements}) — [opt]'s own table holds this
     specialization's decisions too, which are exactly what a decision recorded against this identity
     is. Every node the raw code sets or reads is numbered, so a decision can address a node the
-    default policy inlines away from the decided code; {!tn_of_ref} resolves the number back. Used
-    as the key of the placement-decision store. *)
+    default policy inlines away from the decided code; {!tn_of_ref} resolves the number back.
+    [node_tag] adds what the caller's own decision space distinguishes per node — for
+    [Train.tune_placements], whether the node is in the loss's embedded set arm B materializes,
+    since two calls over one computation with different losses pose different problems. Used as the
+    key of the placement-decision store. *)
 
 val digest : canonical -> string
 (** Hex digest of the canonical rendering. Equal digests mean structurally identical code, hence

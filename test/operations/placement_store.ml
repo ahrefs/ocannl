@@ -64,10 +64,8 @@ let graph ~label =
   let%op t2 = relu mc in
   (mc, t2, Train.forward t2)
 
-let problem_digest ctx comp =
-  SC.digest
-    (SC.canonicalize_source ~lineage:(Context.placements ctx)
-       (Context.lowered_for_decisions ctx comp Ir.Indexing.Empty))
+let problem_digest ctx loss comp =
+  SC.digest (Train.placement_problem ctx loss comp Ir.Indexing.Empty)
 
 let () =
   clean_cache cache_dir;
@@ -77,18 +75,22 @@ let () =
   let ctx_ref = Context.run ctx_ref routine_ref in
   let expected = Context.get_values ctx_ref t2.Tensor.value in
   (* --- The identity. --- *)
-  let mc', _, comp' = graph ~label:"ps2" in
-  let d = problem_digest (Context.auto ()) comp in
+  let mc', t2', comp' = graph ~label:"ps2" in
+  let d = problem_digest (Context.auto ()) t2 comp in
   p "the problem digest is structural: a same-shape graph over other tensors has the same digest"
-    (String.equal d (problem_digest (Context.auto ()) comp'));
+    (String.equal d (problem_digest (Context.auto ()) t2' comp'));
   p "the problem digest is the same for a fresh lineage"
-    (String.equal d (problem_digest (Context.auto ()) comp));
+    (String.equal d (problem_digest (Context.auto ()) t2 comp));
   p "a lineage that inherits a decision poses a different problem"
     (not
        (String.equal d
           (problem_digest
              (Context.decide_materialized (Context.auto ()) [ mc'.Tensor.value ])
-             comp')));
+             t2' comp')));
+  (* Arm B is defined by the loss's embedded set, so the same computation against another loss is
+     another problem: its materialize-all arm materializes different nodes. *)
+  p "the same computation tuned against a different loss poses a different problem"
+    (not (String.equal d (problem_digest (Context.auto ()) mc comp)));
   (* --- The runs. --- *)
   let run ?ship_arm () =
     let arms = ref [] and flips = ref [] and shipped = ref None in
@@ -142,6 +144,24 @@ let () =
      cold run's shipped search having stored nothing, which under a clean run 1 it did not. *)
   p "a replay's one search is a schedule-cache replay"
     ((not stored1) || (not clean1) || match arms2 with [ r ] -> replayed r | _ -> false);
+  (* --- Run 2b: a replayed search that fails without poisoning the lineage is a losing arm, not a
+     failed tune: the recorded decision is treated as stale and the arms are searched. The failure
+     is injected at the first candidate attempt of the process from here on -- the replayed search's
+     base compile when there is an entry to replay, otherwise arm A's -- so with an entry the call
+     observes the failed replay and then both arms; without one, arm A dies and arm B ships, which
+     the cold path already handles (autotune_arm_containment.ml). --- *)
+  let stored2 = List.length (placement_keys ()) = 1 in
+  let attempts = ref 0 in
+  (Autotune.on_candidate_attempt :=
+     fun _ ->
+       Int.incr attempts;
+       if !attempts = 1 then failwith "ps: injected replay failure");
+  let arms2b, _, _, _, got2b =
+    Exn.protect ~f:run ~finally:(fun () -> Autotune.on_candidate_attempt := fun _ -> ())
+  in
+  p_all2 "after a failed replay, the routine computes the right values" got2b expected ~f:approx;
+  p "a failed replay falls back to searching both arms: three reports, or two with no entry"
+    (List.length arms2b = if stored2 then 3 else 2);
   (* --- Run 3: a forced arm neither consults nor records the store. Whichever run recorded the
      entry -- run 1, or run 2 re-tuning after a contended run 1 -- is what must survive; a run the
      load kept from recording anything waives the entry-level claims. --- *)
