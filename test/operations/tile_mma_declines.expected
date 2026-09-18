@@ -5,11 +5,11 @@ census: the declined schedule's routine is labeled scalar-fallback, not tensoriz
 per-chunk B~ re-pack matches the serial twin bitwise: true
 per-chunk B~ re-pack under the cap pool-parallelizes: true
 per-chunk B~ re-pack over the cap declines to serial: true
-seeds: standard, both hoistable: total=22 whole=2 packed=16 hoist=10 grid=2 packrest=0
-seeds: transposed B, hoistable: total=20 whole=0 packed=16 hoist=10 grid=2 packrest=0
-seeds: computed A x hoistable B: total=23 whole=2 packed=17 hoist=11 grid=3 packrest=1
-seeds: hoistable A x computed transposed B: total=20 whole=0 packed=16 hoist=10 grid=2 packrest=1
-seeds: no hoistable operand: total=13 whole=2 packed=9 hoist=0 grid=2 packrest=1
+seeds: standard, both hoistable: total=32 whole=4 packed=24 hoist=14 grid=4 packrest=0
+seeds: transposed B, hoistable: total=28 whole=0 packed=24 hoist=14 grid=4 packrest=0
+seeds: computed A x hoistable B: total=34 whole=4 packed=26 hoist=16 grid=6 packrest=2
+seeds: hoistable A x computed transposed B: total=28 whole=0 packed=24 hoist=14 grid=4 packrest=2
+seeds: no hoistable operand: total=20 whole=4 packed=14 hoist=0 grid=4 packrest=2
 seeds: narrow columns (nj < lanes): total=8 whole=0 packed=8 hoist=4 grid=0 packrest=0
 seeds: f16 operands, f16 accumulator (advertised): mma seeds=5
 seeds: bf16 operands, f32 accumulator (advertised): mma seeds=5

@@ -22,6 +22,11 @@
    values still match; the unrequested rendering carries exactly the geometry
    [Register_tile.default] computes for the site (the relationship, not a restated number).
 
+   - The tails (gh-ocannl-620), on the C backends: a site the geometry divides in neither dimension
+   renders its leftover columns and rows as narrower register tiles — the last column vector PARTIAL
+   — with no scalar code, bitwise against the serial twin, at f32 and through the narrow-storage
+   bridges at partial width.
+
    - The seeding, on the pre-schedule lowering under synthetic limits: the whole-triple seeds carry
    exactly [Register_tile.alternatives] of the site's extents beside one auto seed, and one seeded
    alternative, instantiated through [Autotune.sketch_schedule], renders that geometry.
@@ -97,12 +102,27 @@ let () =
   p_all "every alternative passes the fit rules" shapes ~f:(fun shape ->
       let vector_bytes, elt_bytes, m, n = shape in
       List.for_all (RT.alternatives ~vector_bytes ~elt_bytes ~m ~n) ~f:(fun t -> accepted t shape));
-  p_all "every alternative is peel-free, or the register-budget cap peeling at most one vector"
+  p_all
+    "every alternative is the largest tail-free width, or the register-budget cap with a tail of \
+     at most one vector"
     shapes ~f:(fun (vector_bytes, elt_bytes, m, n) ->
       List.for_all (RT.alternatives ~vector_bytes ~elt_bytes ~m ~n) ~f:(fun t ->
           (* The cap: the largest [rn] the budget admits beside [rm] rows, or the column extent. *)
           let cap = min ((RT.budget ~vector_bytes - t.rm) / (t.rm + 1)) (n / t.lanes) in
-          n % RT.width t = 0 || (t.rn = cap && n % RT.width t <= t.lanes)));
+          let tail_free rn = n % (rn * t.lanes) = 0 in
+          (tail_free t.rn && not (List.exists (List.range (t.rn + 1) (cap + 1)) ~f:tail_free))
+          || (t.rn = cap && n % RT.width t <= t.lanes)));
+  let dividing = RT.coverage ~m:64 ~n:64 { rm = 4; rn = 2; lanes = 8 } in
+  p "the coverage of a dividing geometry is all full blocks"
+    (dividing.m_full = 64 && dividing.n_full = 64);
+  p_empty "the coverage of a dividing geometry has no column tail" ~over:[ dividing ]
+    dividing.tail_widths;
+  p "the coverage of a non-dividing geometry ends in a partial vector and a row band"
+    (let cov = RT.coverage ~m:7 ~n:19 { rm = 4; rn = 1; lanes = 8 } in
+     cov.m_full = 4 && cov.n_full = 16 && List.equal Int.equal cov.tail_widths [ 3 ]);
+  p "a column tail of whole vectors is whole"
+    (let cov = RT.coverage ~m:64 ~n:512 { rm = 4; rn = 6; lanes = 8 } in
+     cov.n_full = 480 && List.equal Int.equal cov.tail_widths [ 8; 8; 8; 8 ]);
   p "a column extent below one vector has no default and no alternatives"
     (Option.is_none (RT.default ~vector_bytes:32 ~elt_bytes:4 ~m:64 ~n:7)
     && List.is_empty (RT.alternatives ~vector_bytes:32 ~elt_bytes:4 ~m:64 ~n:7));
@@ -118,7 +138,7 @@ type leg = Serial | Tensorized of RT.t option
 (* Whole-triple tensorization over the standard layout (the shape tile_mma_declines pins as
    register-tiled), the zeroing's column loop as the lane axis; [Tensorized None] leaves the
    geometry to the renderer. *)
-let whole_triple ~tile ~(out : Tn.t) (opt : LL.optimized) : Sched.schedule =
+let whole_triple ~tile ~simd_width ~(out : Tn.t) (opt : LL.optimized) : Sched.schedule =
   let ez, zsyms = Sched.expand_zero ~tn:out in
   let zj = match zsyms with [ _; zj ] -> zj | _ -> assert false in
   let rec path (llc : LL.t) =
@@ -143,15 +163,17 @@ let whole_triple ~tile ~(out : Tn.t) (opt : LL.optimized) : Sched.schedule =
     | [ i; j; k ] -> (i, j, k)
     | _ -> assert false
   in
-  let tz, _lane = Sched.tensorize ?tile ~i ~j ~k ~simd_width:n () in
+  let tz, _lane = Sched.tensorize ?tile ~i ~j ~k ~simd_width () in
   [ ez; Sched.Retype { axis = zj; ty = LL.Workgroup }; tz ]
 
-let compile_run ~name ~leg (out : Tensor.t) =
+(* [simd_width] is the zeroing's column extent (the coverage rule), [n] unless the site says
+   otherwise. *)
+let compile_run ?(simd_width = n) ~name ~leg (out : Tensor.t) =
   let comp = named name (Train.forward out) in
   let transform (opt : LL.optimized) =
     match leg with
     | Serial -> opt
-    | Tensorized tile -> Sched.apply (whole_triple ~tile ~out:out.Tensor.value opt) opt
+    | Tensorized tile -> Sched.apply (whole_triple ~tile ~simd_width ~out:out.Tensor.value opt) opt
   in
   let ctx = Context.auto () in
   let ctx, routine =
@@ -248,6 +270,80 @@ let () =
       (register_tiled census_d && String.is_substring src_d ~substring:(header dflt));
     p "the unrequested header does not claim a schedule provenance"
       (not (String.is_substring src_d ~substring:provenance))
+  end
+
+(* === The tails (gh-ocannl-620) === *)
+(* Until gh-ocannl-620 the columns [rn * lanes] did not cover, and the rows [rm] did not, were
+   peeled to scalar code — a scalar column costing about a vector slot per k step, which made the
+   width a divisibility question (gh-ocannl-575) and cost 3.6x at n = 512 on a 48-wide fp16 tile.
+   Now both edges are narrower register tiles: the row band at [m mod rm] rows, the column tail as
+   whole vectors plus one PARTIAL vector whose lanes past its width read as zero and are not
+   stored. A 6 x 19 site divides neither way at every width the fleet renders (19 is 3 mod 4, 8 and
+   16; 6 is 2 mod 4): the header names the tails, no scalar accumulator is emitted, the partial
+   column is a zeroed register filled at exactly its width — a three-element copy at f32, the
+   narrow bridges called at width 3 for bf16 (widened to f32) and half — and the values match the
+   serial twin bitwise. *)
+let () =
+  let m, nt, k = (6, 19, 5) in
+  let names tag =
+    [
+      tag ^ ": a site the tile divides in neither dimension renders register-tiled";
+      tag ^ ": the header names the one-vector column tail and the two-row band";
+      tag ^ ": no scalar accumulator is emitted";
+      tag ^ ": the partial column is a zeroed register filled at exactly its width";
+      tag ^ ": the tails match the serial twin bitwise";
+    ]
+  in
+  if not on_cpu then
+    List.iter [ "f32"; "bf16"; "half" ] ~f:(fun tag -> List.iter (names tag) ~f:skipped)
+  else begin
+    let limits = Context.hardware_limits (Context.auto ()) in
+    let lanes =
+      List.hd_exn
+        (RT.simd_lane_ladder ~vector_bytes:limits.Ir.Backend_intf.simd_vector_bytes ~elt_bytes)
+    in
+    (* Exact in bf16 and half: multiples of 1/2 in [-1.5, 1.5], products multiples of 1/4, five-term
+       sums at most 11.25 — six significand bits. Both operands vary with both axes — every
+       coefficient is nonzero modulo 7, so no axis cancels (a row coefficient of 7 once made every A
+       row identical, and a row-band pass reading the wrong A row would still have matched the
+       serial twin) — so a mis-indexed read shows. *)
+    let av idcs = (Float.of_int (((idcs.(0) * 2) + (idcs.(1) * 3)) % 7) *. 0.5) -. 1.5 in
+    let bv idcs = (Float.of_int (((idcs.(0) * 5) + (idcs.(1) * 11)) % 7) *. 0.5) -. 1.5 in
+    let leg ~tag ~prec ~tile ~fill =
+      let a = NTDSL.init ~l:("tmt_a_" ^ tag) ~prec ~i:[ k ] ~o:[ m ] ~f:av () in
+      let b = NTDSL.init ~l:("tmt_b_" ^ tag) ~prec ~i:[ nt ] ~o:[ k ] ~f:bv () in
+      let%op serial = a * b in
+      Tn.update_prec serial.Tensor.value prec;
+      let want, _ =
+        compile_run ~simd_width:nt ~name:("tmt_" ^ tag ^ "_serial") ~leg:Serial serial
+      in
+      let want = nonzero ("tmt_" ^ tag ^ "_serial") want in
+      let%op tiled = a * b in
+      Tn.update_prec tiled.Tensor.value prec;
+      let got, census =
+        compile_run ~simd_width:nt ~name:("tmt_" ^ tag) ~leg:(Tensorized tile) tiled
+      in
+      let src = Generated.read ("tmt_" ^ tag) in
+      let has s = String.is_substring src ~substring:s in
+      match names tag with
+      | [ n_tiled; n_header; n_scalar; n_partial; n_parity ] ->
+          p n_tiled (register_tiled census);
+          p n_header (has "; column tail 3 in 1 vector; row tail 2)");
+          p n_scalar (not (has "tmma_acc__"));
+          p n_partial (has "tmma_c_0_0__ = {0};" && has fill);
+          p_all2 n_parity got want ~f:Float.equal
+      | _ -> assert false
+    in
+    (* A 16-column width at the file's widest f32 lanes: [4x1] of 16, [4x2] of 8, [4x4] of 4 —
+       within every budget, and 19 - 16 = 3 leftover columns. *)
+    leg ~tag:"f32" ~prec:Ir.Ops.single
+      ~tile:(Some { RT.rm = 4; rn = 16 / lanes; lanes })
+      ~fill:(Printf.sprintf ", %d);" (3 * elt_bytes));
+    (* The narrow legs leave the geometry to the renderer (the lane count follows the COMPUTE
+       precision, f32 for bf16 and — under the default policy — for half too); the bridge macro's
+       lane argument is the valid width. *)
+    leg ~tag:"bf16" ~prec:Ir.Ops.bfloat16 ~tile:None ~fill:"u32, 3, tmma_c_0_0__";
+    leg ~tag:"half" ~prec:Ir.Ops.half ~tile:None ~fill:"h, 3, tmma_c_0_0__"
   end
 
 (* === The seeding === *)

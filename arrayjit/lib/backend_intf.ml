@@ -393,8 +393,8 @@ let simd_reduce_lanes_for ~vector_bytes ~elt_bytes ~extent =
 (** The lane count an explicit-SIMD rendering should use for a loop of [extent] iterations over
     [elt_bytes]-wide elements on a [vector_bytes]-wide register file: the width of
     {!simd_lane_ladder} that minimizes loop trips, [None] where even the narrowest exceeds the
-    extent. (The register-tiled micro-kernel searches the ladder itself: its peel is a scalar column
-    loop rather than a remainder of the same body, and it has a fitted cost model for that.)
+    extent. (The register-tiled micro-kernel searches the ladder itself: its remainder is a narrower
+    register tile with less operand reuse, and {!Register_tile.default} prices that.)
 
     A single width would make a wider machine emit {e less} vector code than a narrower one — the
     renderings decline outright below one full vector, so widening the auto [cc_vector_bytes] from

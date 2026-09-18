@@ -1763,10 +1763,10 @@ let gpu_mma_sketch_schedule ~(opt : LL.optimized) (site : matmul_site)
 
 (* Whole-triple tensorized CPU matmul (gh-ocannl-469; bin/schedule_bench.ml's [tensorize] variant):
    one [Tile_mma] statement the C backends render tinyBLAS-style — the C-tile in an RM×RN grid of
-   vector registers held across the k-loop, edges peeled. The zeroing's column loop becomes the
-   Workgroup axis with the lane width matching its extent (coverage rule; the lane loop renders
-   serially on the C backends). With [sk_bm > 0] the row loops split into pool-parallel Grid blocks;
-   [sk_bm = 0] keeps the single-statement form. *)
+   vector registers held across the k-loop, edges as narrower tiles. The zeroing's column loop
+   becomes the Workgroup axis with the lane width matching its extent (coverage rule; the lane loop
+   renders serially on the C backends). With [sk_bm > 0] the row loops split into pool-parallel Grid
+   blocks; [sk_bm = 0] keeps the single-statement form. *)
 let cpu_mma_sketch_schedule (site : matmul_site) { sk_bm = bm; sk_tile = tile; _ } : Sched.schedule
     =
   let zops =
@@ -1986,7 +1986,7 @@ let conv_split_row_current (site : conv_site) ~row_o ~row_i : Idx.symbol list =
    With [sk_bm > 0] (gh-ocannl-500) the GEMM row is split into panels of [sk_bm] rows before the
    reorder — cache-blocked GEBP-style panels, the conv analog of [cpu_mma_sketch_schedule]'s
    row-block split — and the in-panel [row_i × oc] micro-kernel is tensorized (the register tiling
-   peels its own sub-tile edges). [sk_bm] must divide [c_nrow] so the split stays guard-free (a
+   covers its own sub-tile edges). [sk_bm] must divide [c_nrow] so the split stays guard-free (a
    remainder guard would break the reorder's perfect nesting). The panel loop's parallelism source
    depends on the segment: on a conv-alone segment the panel loop is [Grid]-typed directly (one pool
    chunk per row-block); on an aligned-merged segment (conv + materialized companions, e.g. lenet's

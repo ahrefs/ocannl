@@ -1237,7 +1237,7 @@ files.
   (`Backend_intf.simd_lane_ladder`, halving to a floor of `min vector_bytes 32`): the loop
   renderings minimize trips (`extent / lanes` vector steps plus `extent mod lanes` scalar
   iterations — one instruction per body op either way, so no fitted constant is needed), and the
-  register tiling folds the ladder into the peel-cost search it already ran over `rn`. The
+  register tiling folds the ladder into the reuse ranking it runs over `rn`. The
   register-pressure cap stays keyed on the MACHINE's width: stepping down does not shrink the
   register file, which is why n = 40 still comes out ahead on the wider machine (118.0 GFLOP/s at
   a 4x5 tile of 8-lane vectors against the 32-byte machine's 103.3 at 4x1). The floor is not
@@ -1245,6 +1245,23 @@ files.
   render serially today, and a vector accumulation reassociates, so that is a numerics change
   rather than a scheduling one. Autotune's seeding pre-filter calls the same function, or it would
   withhold candidates the renderer would in fact tile.
+- **The register tile's edges are register tiles, never scalar code** (gh-ocannl-620). Until then
+  `try_register_tile` peeled the columns `rn * lanes` did not cover, and the rows `rm` did not, to
+  scalar `fmaf` loops: a scalar column cost about a vector slot per k step, so a 48-wide fp16 tile
+  at n = 512 ran 3.6x slower than a 32-wide one, and the width became a divisibility question with
+  a fitted peel weight (gh-575). Now `Register_tile.coverage` decomposes the site — the full
+  passes, a column tail of whole vectors plus one PARTIAL vector, a row band of `m mod rm` rows —
+  and the emitter renders each piece as the same C-tile pass at a smaller grid (four pass bodies at
+  most). A partial vector is declared `= {0}` and crosses the memory boundary at exactly its width
+  (`vec_bridge ~width`: a byte-counted memcpy, or the narrow bridge macros with `LANES` = the valid
+  lanes — they zero-init their temporary and copy `LANES * 2` bytes, which is what makes them
+  partial-safe), so nothing past the extent is read or written, and every element's k-chain is the
+  same fused serial chain: parity with the scalar fallback stays bitwise, narrow storage included
+  (`tile_mma_geometry`'s 6x19 legs at f32, bf16 and half pin the header, the zeroed register, the
+  width-3 fill and the absence of `tmma_acc__`). Measured on the M4 Max GEBP at n = 512: pure-f16
+  121.5 -> 148.9 GFLOP/s (the model now takes rn = 6 with a four-vector tail over the peel-free
+  rn = 4), f16 n = 1024 203 -> 235; f32 stayed within run-to-run noise, which spans 79..104 GFLOP/s
+  across identical 10-repeat runs — never read one such number as a regression.
 - Computing fp16 in fp16 on a *promoted* target is a ~18x loss against f32-compute-over-fp16
   (measured, same bench) — the reason `fp16_arithmetic` is ignored off-native and pure-f16 seeds
   gate on `hardware_limits.native_fp16_arithmetic`. The decisive pure-f16-vs-f32-GEBP measurement

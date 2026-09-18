@@ -2713,9 +2713,9 @@ module C_syntax (B : C_syntax_config) = struct
   (* Broadcast the scalar VARIABLE [src] across every lane of [vtyp], as an initializer holding
      [lanes] copies of it. The vector extensions splat a scalar operand of a binary operator but
      have no cast or intrinsic form that does it, and the two arithmetic spellings that look like
-     they would both change bits the scalar twin keeps — while a remainder loop, a peeled edge and
-     the serial fallback all consume the element itself, so the rendering's BITWISE-equality promise
-     covers every input, not merely the well-behaved ones:
+     they would both change bits the scalar twin keeps — while a remainder loop and the serial
+     fallback consume the element itself, so the rendering's BITWISE-equality promise covers every
+     input, not merely the well-behaved ones:
 
      - [((vtyp){0} + x)] normalizes a negative-zero [x] to [+0.0], since IEEE-754 has [(+0.0) +
      (-0.0) = +0.0] (gh-ocannl-615); - [(x - (vtyp){0})], its replacement, is the identity on both
@@ -2793,33 +2793,44 @@ module C_syntax (B : C_syntax_config) = struct
     let open PPrint in
     let base mem = string "&" ^^ mem in
     let call fn args = string (fn ^ "(") ^^ separate (string ", ") args ^^ string ");" in
-    let per_lane_load ~dst ~mem =
+    (* [~width] is the number of VALID lanes, [lanes] for a whole vector. A PARTIAL vector -- the
+       register tiling's last column group, gh-ocannl-620 -- is declared zeroed, so its lanes past
+       [width] hold 0 rather than whatever the register held, and only [width] elements cross the
+       memory boundary in either direction: nothing past the extent is read or written. At full
+       width every spelling below is the pre-gh-620 one, byte for byte. *)
+    let declare ~width dst =
+      string (if width < lanes then vtyp ^ " " ^ dst ^ " = {0};" else vtyp ^ " " ^ dst ^ ";")
+    in
+    let per_lane_load ~width ~dst ~mem =
       let pre, post = B.convert_precision ~from:store_prec ~to_:prec in
       string
         (Printf.sprintf "for (int ocannl_l__ = 0; ocannl_l__ < %d; ++ocannl_l__) %s[ocannl_l__] = "
-           lanes dst)
+           width dst)
       ^^ string pre
       ^^ parens (base mem)
       ^^ string "[ocannl_l__]" ^^ string post ^^ semi
     in
-    let per_lane_store ~src ~mem =
+    let per_lane_store ~width ~src ~mem =
       let pre, post = B.convert_precision ~from:prec ~to_:store_prec in
-      string (Printf.sprintf "for (int ocannl_l__ = 0; ocannl_l__ < %d; ++ocannl_l__) " lanes)
+      string (Printf.sprintf "for (int ocannl_l__ = 0; ocannl_l__ < %d; ++ocannl_l__) " width)
       ^^ parens (base mem)
       ^^ string "[ocannl_l__] = " ^^ string pre
       ^^ string (Printf.sprintf "%s[ocannl_l__]" src)
       ^^ string post ^^ semi
     in
     if Ops.equal_prec store_prec prec then
-      ( (fun ~dst ~mem ->
-          string (vtyp ^ " " ^ dst ^ ";")
-          ^^ hardline
+      let bytes ~width v =
+        if width < lanes then Int.to_string (width * Ops.prec_in_bytes prec)
+        else "sizeof(" ^ v ^ ")"
+      in
+      ( (fun ~width ~dst ~mem ->
+          declare ~width dst ^^ hardline
           ^^ string ("__builtin_memcpy(&" ^ dst ^ ", &")
           ^^ mem
-          ^^ string (", sizeof(" ^ dst ^ "));")),
-        fun ~src ~mem ->
+          ^^ string (", " ^ bytes ~width dst ^ ");")),
+        fun ~width ~src ~mem ->
           string "__builtin_memcpy(&" ^^ mem
-          ^^ string (Printf.sprintf ", &%s, sizeof(%s));" src src) )
+          ^^ string (Printf.sprintf ", &%s, %s);" src (bytes ~width src)) )
     else
       match store_prec with
       | Ops.Bfloat16_prec _ ->
@@ -2827,12 +2838,12 @@ module C_syntax (B : C_syntax_config) = struct
           let u32 = Printf.sprintf "ocannl_vec%du32" lanes in
           need_typedef u16 (vec_typedef_doc ~ctyp:"unsigned short" ~name:u16 ~bytes:(lanes * 2));
           need_typedef u32 (vec_typedef_doc ~ctyp:"uint32_t" ~name:u32 ~bytes:(lanes * 4));
-          let args = [ string u16; string u32; OCaml.int lanes ] in
-          ( (fun ~dst ~mem ->
-              string (vtyp ^ " " ^ dst ^ ";")
-              ^^ hardline
-              ^^ call "OCANNL_VEC_WIDEN_BFLOAT16" (args @ [ string dst; base mem ])),
-            fun ~src ~mem -> call "OCANNL_VEC_NARROW_BFLOAT16" (args @ [ base mem; string src ]) )
+          let args ~width = [ string u16; string u32; OCaml.int width ] in
+          ( (fun ~width ~dst ~mem ->
+              declare ~width dst ^^ hardline
+              ^^ call "OCANNL_VEC_WIDEN_BFLOAT16" (args ~width @ [ string dst; base mem ])),
+            fun ~width ~src ~mem ->
+              call "OCANNL_VEC_NARROW_BFLOAT16" (args ~width @ [ base mem; string src ]) )
       | Ops.Half_prec _ ->
           let h = Printf.sprintf "ocannl_vec%dh" lanes in
           (* [_Float16] exists only where the C preprocessor says so, and this typedef is the one
@@ -2841,19 +2852,19 @@ module C_syntax (B : C_syntax_config) = struct
             (string "#if HAS_NATIVE_FLOAT16" ^^ hardline
             ^^ vec_typedef_doc ~ctyp:"_Float16" ~name:h ~bytes:(lanes * 2)
             ^^ hardline ^^ string "#endif");
-          ( (fun ~dst ~mem ->
-              string (vtyp ^ " " ^ dst ^ ";")
-              ^^ hardline
+          ( (fun ~width ~dst ~mem ->
+              declare ~width dst ^^ hardline
               ^^ call "OCANNL_VEC_WIDEN_HALF"
-                   [ string vtyp; string h; OCaml.int lanes; string dst; base mem ]),
-            fun ~src ~mem ->
-              call "OCANNL_VEC_NARROW_HALF" [ string h; OCaml.int lanes; base mem; string src ] )
+                   [ string vtyp; string h; OCaml.int width; string dst; base mem ]),
+            fun ~width ~src ~mem ->
+              call "OCANNL_VEC_NARROW_HALF" [ string h; OCaml.int width; base mem; string src ] )
       | _ ->
           (* fp8 and any other narrow format: the arithmetic still vectorizes, only the conversion
              is per lane -- through the scalar path's own conversion, so parity is by
              construction. *)
-          ( (fun ~dst ~mem -> string (vtyp ^ " " ^ dst ^ ";") ^^ hardline ^^ per_lane_load ~dst ~mem),
-            fun ~src ~mem -> per_lane_store ~src ~mem )
+          ( (fun ~width ~dst ~mem ->
+              declare ~width dst ^^ hardline ^^ per_lane_load ~width ~dst ~mem),
+            fun ~width ~src ~mem -> per_lane_store ~width ~src ~mem )
 
   (* The names of a [rows]×[cols] grid of vector accumulator registers. *)
   let vec_acc_grid ~prefix ~rows ~cols : string array array =
@@ -3015,22 +3026,22 @@ module C_syntax (B : C_syntax_config) = struct
      one vector operation too, and allocates perfectly, but it is only MAYBE contracted into an FMA
      — under [cc_backend_fp_contract=off] it measurably is not (a mul and an add, two roundings,
      verified against these builtins), and then each accumulator UPDATE in the vector body would
-     round twice where the scalar peel and the serial fallback round once. Be precise about which
-     promise that breaks: it is not whole-result bit equality, which never held for a reduction
-     anyway. Vector accumulation reassociates -- [vec_acc_grid_fold] folds the register grid into
-     one accumulator and [vec_acc_lane_fold] then chains that vector's lanes into a scalar, so the
-     lanes accumulate independently and are combined at the end, a different summation order from
-     the serial fallback's (which is why the [reproducible] profile pins [cc_vector_bytes=0]). What
-     the three paths do promise each other is the rounding of each individual UPDATE: an FMA rounds
-     once, and all three spell that same single-rounded operation, so they differ by summation order
-     alone and not by the semantics of each step. Every builtin here is fused by definition, so that
-     per-update promise holds under every flag; each was checked to render exactly one fused
-     instruction at [-ffp-contract=off], computing [a * b + dst]. The masked forms are spelled the
-     way gcc's own [<immintrin.h>] spells them: with an all-ones mask and [_MM_FROUND_CUR_DIRECTION]
-     (= 4, i.e. obey MXCSR rather than an embedded rounding mode) these calls are character for
-     character what [_mm512_fmadd_ps], [_mm512_fmadd_pd], [_mm_fmadd_ph], [_mm256_fmadd_ph] and
-     [_mm512_fmadd_ph] expand to, so their semantics are the ISA's rather than something inferred
-     here.
+     round twice where the serial remainder and the serial fallback round once. Be precise about
+     which promise that breaks: it is not whole-result bit equality, which never held for a
+     reduction anyway. Vector accumulation reassociates -- [vec_acc_grid_fold] folds the register
+     grid into one accumulator and [vec_acc_lane_fold] then chains that vector's lanes into a
+     scalar, so the lanes accumulate independently and are combined at the end, a different
+     summation order from the serial fallback's (which is why the [reproducible] profile pins
+     [cc_vector_bytes=0]). What the three paths do promise each other is the rounding of each
+     individual UPDATE: an FMA rounds once, and all three spell that same single-rounded operation,
+     so they differ by summation order alone and not by the semantics of each step. Every builtin
+     here is fused by definition, so that per-update promise holds under every flag; each was
+     checked to render exactly one fused instruction at [-ffp-contract=off], computing [a * b +
+     dst]. The masked forms are spelled the way gcc's own [<immintrin.h>] spells them: with an
+     all-ones mask and [_MM_FROUND_CUR_DIRECTION] (= 4, i.e. obey MXCSR rather than an embedded
+     rounding mode) these calls are character for character what [_mm512_fmadd_ps],
+     [_mm512_fmadd_pd], [_mm_fmadd_ph], [_mm256_fmadd_ph] and [_mm512_fmadd_ph] expand to, so their
+     semantics are the ISA's rather than something inferred here.
 
      The AVX-512, AVX512-FP16 and aarch64 rows could not be RUN on the machine they were added from
      (an Arrow Lake-HX part, where AVX-512 is fused off entirely; QEMU's TCG implements neither
@@ -4862,24 +4873,29 @@ module C_syntax (B : C_syntax_config) = struct
            — is the schedule's to carry ([Tile_mma.tile], gh-ocannl-619) and otherwise the
            renderer's [Register_tile.default]: RM = 4; RN up to 3 vector columns on AVX2-class
            16-register files ([vector_bytes = 32]), 6 on NEON/AVX-512-class 32-register files —
-           RM×RN + RM + RN live registers, tinyBLAS's budget. Edge tiles are peeled into scalar
-           loops, not masked.
+           RM×RN + RM + RN live registers, tinyBLAS's budget. The rows and columns the full passes
+           do not cover are narrower register tiles of the same form (gh-ocannl-620,
+           [Register_tile.coverage]): a band of [m mod RM] rows, and a column tail of the leftover
+           columns as whole vectors plus one PARTIAL vector — zeros past its width on load, only its
+           width stored — so no edge is ever scalar code. (A scalar column cost about a vector slot
+           per k step, which made the width a divisibility question and cost 3.6x at n = 512 on a
+           48-wide fp16 tile before this.)
 
            Like the [Vectorized] renderings, the register geometry is keyed off the *compute*
            precision (gh-ocannl-517/575): narrow-storage operands cross the memory boundary through
-           [vec_bridge] (vectors) and [convert_precision] (the A splats and the scalar peel), and
-           the C-tile accumulates at [comp_prec] across the whole k-loop, narrowing once at the
-           store — the same once-per-cell narrowing as [try_vectorize_reduce]'s epilogue. Where
-           storage and compute precisions coincide (including pure-fp16 on native-arithmetic
-           targets, where [comp_prec] leaves [Half_prec] alone) the bridges are the identity
-           memcpys, and for each output element the k-chain runs in serial order with the same fused
-           rounding, so the rendering is BITWISE equal to the scalar fallback. A narrow-storage
-           rendering instead rounds strictly less often than the fallback's per-k-step narrowing
-           (better, never bitwise on inexact values — the gh-ocannl-545 accumulator precedent), so
-           parity tests pick narrow-exact inputs. The plain-add (non-FMA) fallback form is declined
-           — its [a * b + c] arithmetic is only maybe-contracted, so a vector twin could not promise
-           the equality. Emitted under the same lane-0 guard as the fallback ([`Vec_extensions]
-           backends render the lane loop serially; GPU backends never take this path). *)
+           [vec_bridge] (vectors) and [convert_precision] (the A splats), and the C-tile accumulates
+           at [comp_prec] across the whole k-loop, narrowing once at the store — the same
+           once-per-cell narrowing as [try_vectorize_reduce]'s epilogue. Where storage and compute
+           precisions coincide (including pure-fp16 on native-arithmetic targets, where [comp_prec]
+           leaves [Half_prec] alone) the bridges are the identity memcpys, and for each output
+           element the k-chain runs in serial order with the same fused rounding, so the rendering
+           is BITWISE equal to the scalar fallback. A narrow-storage rendering instead rounds
+           strictly less often than the fallback's per-k-step narrowing (better, never bitwise on
+           inexact values — the gh-ocannl-545 accumulator precedent), so parity tests pick
+           narrow-exact inputs. The plain-add (non-FMA) fallback form is declined — its [a * b + c]
+           arithmetic is only maybe-contracted, so a vector twin could not promise the equality.
+           Emitted under the same lane-0 guard as the fallback ([`Vec_extensions] backends render
+           the lane loop serially; GPU backends never take this path). *)
         let try_register_tile () : PPrint.document option =
           (* [cond] names a rule violation: decline (with the per-rule diagnostic, gh-ocannl-479)
              when it holds. *)
@@ -4977,18 +4993,13 @@ module C_syntax (B : C_syntax_config) = struct
              that carries one ([tile]) is honoured exactly or declined — never silently replaced, so
              a candidate the tuner times under a geometry label ran that geometry or the scalar
              fallback (the census says which). Without one, the renderer's own ranking model picks,
-             {!Register_tile.default}: chosen against the ACTUAL [n], not fixed at the
-             register-pressure cap (gh-ocannl-575) — the columns [bw = rn * lanes] does not cover
-             are peeled to the scalar fallback, and a scalar column is roughly a whole vector slot's
-             worth of work, so a cap that leaves a fat remainder loses far more than the extra
-             A-reuse it buys (on NEON at n = 512 the pure-fp16 [bw = 48] peels 32 of 512 columns and
-             runs 3.6x slower than the peel-free [bw = 32]). The same model ranks the lane count
-             over the ladder of widths the file renders, stepping down exactly when the narrower
-             vector's smaller peel outweighs its extra issues (n = 40: 16 lanes peel 8 where 8 lanes
-             divide); the register-pressure cap stays keyed on the MACHINE's width, since stepping
-             down does not shrink the register file. The model, its fitted constant and the fit
-             rules a request must pass live in [Register_tile], where the sketch seeding consults
-             the same functions to propose the alternatives it times. *)
+             {!Register_tile.default}: ranked against the ACTUAL [n] over the ladder of widths the
+             file renders (gh-ocannl-575, gh-ocannl-621), by operand reuse alone now that the
+             columns [bw = rn * lanes] does not cover are a narrower vector tile rather than scalar
+             code (gh-ocannl-620); the register-pressure cap stays keyed on the MACHINE's width,
+             since stepping down does not shrink the register file. The model and the fit rules a
+             request must pass live in [Register_tile], where the sketch seeding consults the same
+             functions to propose the alternatives it times. *)
           let elt_bytes = Ops.prec_in_bytes prec in
           let vector_bytes = B.vector_bytes in
           let* { Register_tile.rm; rn; lanes } =
@@ -5013,38 +5024,25 @@ module C_syntax (B : C_syntax_config) = struct
                       (describe ());
                     None)
           in
+          let { Register_tile.m_full; n_full; tail_widths } =
+            Register_tile.coverage ~m ~n { Register_tile.rm; rn; lanes }
+          in
           let bw = rn * lanes in
-          let m_full = m - (m % rm) in
-          let n_full = n - (n % bw) in
+          let m_tail = m - m_full and n_tail = n - n_full in
           let vtyp, typedef_doc = vec_ext_typ ~prec ~lanes in
           let ctyp = B.typ_of_prec prec in
           let it = B.loop_index_type in
-          (* The fused scalar step at the compute precision. fp16 must go through the same
-             [#if]-selected macro as [vec_acc_fma]'s per-lane arm and the scalar rendering, or the
-             peel and the vector body would round differently (gh-ocannl-516). *)
-          let fma_fn =
-            match prec with
-            | Ops.Double_prec _ -> "fma"
-            | Ops.Half_prec _ -> "OCANNL_HALF_FMA"
-            | _ -> "fmaf"
-          in
           let _, (d_ptr, ldd, _, _) = operand ldd d in
           let _, (a_ptr, lda, _, _) = operand lda a in
           let _, (b_ptr, ldb, _, _) = operand ldb b in
-          (* The A element at (row expression, k expression), honoring [ta]'s storage order. *)
-          let a_at ~row ~l =
-            if ta then Printf.sprintf "tmma_a__[%s * %d + %s]" l lda row
-            else Printf.sprintf "tmma_a__[%s * %d + %s]" row lda l
+          (* The A element at (row expression, k expression), honoring [ta]'s storage order, through
+             the scalar memory-boundary conversion (empty when storage = compute): the same
+             [convert_precision] spelling the scalar fallback renders. *)
+          let a_elt ~row ~l =
+            let pre, post = B.convert_precision ~from:a_store_prec ~to_:prec in
+            if ta then Printf.sprintf "%stmma_a__[%s * %d + %s]%s" pre l lda row post
+            else Printf.sprintf "%stmma_a__[%s * %d + %s]%s" pre row lda l post
           in
-          (* Scalar memory-boundary conversions (empty when storage = compute): the same
-             [convert_precision] spellings the scalar fallback renders through, so the peel's
-             arithmetic matches it by construction. *)
-          let scal ~from ~to_ expr =
-            let pre, post = B.convert_precision ~from ~to_ in
-            pre ^ expr ^ post
-          in
-          let a_elt ~row ~l = scal ~from:a_store_prec ~to_:prec (a_at ~row ~l) in
-          let b_elt idx = scal ~from:b_store_prec ~to_:prec (Printf.sprintf "tmma_b__[%s]" idx) in
           (* Vector memory-boundary bridges: identity memcpys when storage = compute, the
              gh-ocannl-517 widen/narrow conversions otherwise. *)
           let extra_typedefs = Hashtbl.create (module String) in
@@ -5057,93 +5055,73 @@ module C_syntax (B : C_syntax_config) = struct
             vec_bridge ~store_prec:b_store_prec ~prec ~lanes ~vtyp ~need_typedef ~fresh
           in
           let stmts = separate hardline in
-          (* Scalar peel of rows [i_lo, i_hi) × cols [j_lo, j_hi): same fmaf chain per element. *)
-          let scalar_peel ~i_lo ~i_hi ~j_lo ~j_hi =
-            if i_lo >= i_hi || j_lo >= j_hi then []
-            else
-              [
-                string
-                  (Printf.sprintf
-                     "for (%stmma_i__ = %d; tmma_i__ < %d; ++tmma_i__) { for (%stmma_j__ = %d; \
-                      tmma_j__ < %d; ++tmma_j__) {"
-                     it i_lo i_hi it j_lo j_hi)
-                ^^ nest 2
-                     (hardline
-                     ^^ string
-                          (Printf.sprintf "%s tmma_acc__ = %s;" ctyp
-                             (scal ~from:d_store_prec ~to_:prec
-                                (Printf.sprintf "tmma_d__[tmma_i__ * %d + tmma_j__]" ldd)))
-                     ^^ hardline
-                     ^^ string
-                          (Printf.sprintf
-                             "for (%stmma_l__ = 0; tmma_l__ < %d; ++tmma_l__) tmma_acc__ = %s(%s, \
-                              %s, tmma_acc__);"
-                             it k fma_fn
-                             (a_elt ~row:"tmma_i__" ~l:"tmma_l__")
-                             (b_elt (Printf.sprintf "tmma_l__ * %d + tmma_j__" ldb)))
-                     ^^ hardline
-                     ^^ string
-                          (Printf.sprintf "tmma_d__[tmma_i__ * %d + tmma_j__] = %s;" ldd
-                             (scal ~from:prec ~to_:d_store_prec "tmma_acc__")))
-                ^^ hardline ^^ string "} }";
-              ]
+          (* The column groups of one tile pass: (offset from the pass's first column, valid lanes).
+             A full pass is [rn] whole vectors; the column tail (gh-ocannl-620) is the leftover
+             columns as whole vectors and, last, a PARTIAL one whose lanes past its width read as
+             zero and are not stored -- nothing past the extent is touched, and each column's
+             k-chain is the same fused serial chain either way. *)
+          let full_cols = List.init rn ~f:(fun c -> (c * lanes, lanes)) in
+          let tail_cols = List.mapi tail_widths ~f:(fun c width -> (c * lanes, width)) in
+          (* One C-tile pass: [rows] rows from the row expression [i], the column groups [cols] from
+             the column expression [j] -- the accumulator grid loaded from [d] at entry, the fused
+             k-loop, the stores at exit. The row band and the column tail are this same emitter at a
+             smaller grid, so every edge is a register tile too, never scalar code. *)
+          let pass ~rows ~i ~cols ~j =
+            let grid = vec_acc_grid ~prefix:"tmma_c" ~rows ~cols:(List.length cols) in
+            let d_mem r off =
+              string (Printf.sprintf "tmma_d__[(%s + %d) * %d + %s + %d]" i r ldd j off)
+            in
+            let per_cell f =
+              List.concat (List.init rows ~f:(fun r -> List.mapi cols ~f:(fun c col -> f r c col)))
+            in
+            let k_body =
+              List.mapi cols ~f:(fun c (off, width) ->
+                  b_load ~width ~dst:(Printf.sprintf "tmma_b_%d__" c)
+                    ~mem:(string (Printf.sprintf "tmma_b__[tmma_l__ * %d + %s + %d]" ldb j off)))
+              @ List.concat
+                  (List.init rows ~f:(fun r ->
+                       (string
+                          (Printf.sprintf "%s tmma_as_%d__ = %s;" ctyp r
+                             (a_elt ~row:(Printf.sprintf "(%s + %d)" i r) ~l:"tmma_l__"))
+                       ^^ hardline
+                       ^^ string (Printf.sprintf "%s tmma_a_%d__ = " vtyp r)
+                       ^^ vec_splat ~vtyp ~lanes (Printf.sprintf "tmma_as_%d__" r)
+                       ^^ semi)
+                       :: List.mapi cols ~f:(fun c _ ->
+                           vec_acc_fma ~prec ~lanes
+                             ~dst:grid.(r).(c)
+                             ~a:(Printf.sprintf "tmma_a_%d__" r) ~b:(Printf.sprintf "tmma_b_%d__" c))))
+            in
+            stmts
+              (per_cell (fun r c (off, width) -> d_load ~width ~dst:grid.(r).(c) ~mem:(d_mem r off)))
+            ^^ hardline
+            ^^ string (Printf.sprintf "for (%stmma_l__ = 0; tmma_l__ < %d; ++tmma_l__) {" it k)
+            ^^ nest 2 (hardline ^^ stmts k_body)
+            ^^ hardline ^^ string "}" ^^ hardline
+            ^^ stmts
+                 (per_cell (fun r c (off, width) ->
+                      d_store ~width ~src:grid.(r).(c) ~mem:(d_mem r off)))
           in
-          let grid = vec_acc_grid ~prefix:"tmma_c" ~rows:rm ~cols:rn in
-          let d_mem r c =
-            string
-              (Printf.sprintf "tmma_d__[(tmma_i__ + %d) * %d + tmma_j__ + %d]" r ldd (c * lanes))
+          let block doc = lbrace ^^ nest 2 (hardline ^^ doc) ^^ hardline ^^ rbrace in
+          (* A band of [rows] rows: the full-width passes, then the column tail from [n_full]. *)
+          let band ~rows ~i =
+            (string
+               (Printf.sprintf "for (%stmma_j__ = 0; tmma_j__ + %d <= %d; tmma_j__ += %d) " it bw n
+                  bw)
+            ^^ block (pass ~rows ~i ~cols:full_cols ~j:"tmma_j__"))
+            ::
+            (if n_tail = 0 then []
+             else [ block (pass ~rows ~i ~cols:tail_cols ~j:(Int.to_string n_full)) ])
           in
-          let full_blocks =
-            if m_full = 0 || n_full = 0 then []
-            else
-              let k_body =
-                List.init rn ~f:(fun c ->
-                    b_load ~dst:(Printf.sprintf "tmma_b_%d__" c)
-                      ~mem:
-                        (string
-                           (Printf.sprintf "tmma_b__[tmma_l__ * %d + tmma_j__ + %d]" ldb (c * lanes))))
-                @ List.concat
-                    (List.init rm ~f:(fun r ->
-                         (string
-                            (Printf.sprintf "%s tmma_as_%d__ = %s;" ctyp r
-                               (a_elt ~row:(Printf.sprintf "(tmma_i__ + %d)" r) ~l:"tmma_l__"))
-                         ^^ hardline
-                         ^^ string (Printf.sprintf "%s tmma_a_%d__ = " vtyp r)
-                         ^^ vec_splat ~vtyp ~lanes (Printf.sprintf "tmma_as_%d__" r)
-                         ^^ semi)
-                         :: List.init rn ~f:(fun c ->
-                             vec_acc_fma ~prec ~lanes
-                               ~dst:grid.(r).(c)
-                               ~a:(Printf.sprintf "tmma_a_%d__" r)
-                               ~b:(Printf.sprintf "tmma_b_%d__" c))))
-              in
-              let per_cell f =
-                List.concat (List.init rm ~f:(fun r -> List.init rn ~f:(fun c -> f r c)))
-              in
-              [
-                string
-                  (Printf.sprintf "for (%stmma_i__ = 0; tmma_i__ + %d <= %d; tmma_i__ += %d) {" it
-                     rm m rm)
-                ^^ nest 2
-                     (hardline
-                     ^^ string
-                          (Printf.sprintf
-                             "for (%stmma_j__ = 0; tmma_j__ + %d <= %d; tmma_j__ += %d) {" it bw n
-                             bw)
-                     ^^ nest 2
-                          (hardline
-                          ^^ stmts (per_cell (fun r c -> d_load ~dst:grid.(r).(c) ~mem:(d_mem r c)))
-                          ^^ hardline
-                          ^^ string
-                               (Printf.sprintf "for (%stmma_l__ = 0; tmma_l__ < %d; ++tmma_l__) {"
-                                  it k)
-                          ^^ nest 2 (hardline ^^ stmts k_body)
-                          ^^ hardline ^^ string "}" ^^ hardline
-                          ^^ stmts
-                               (per_cell (fun r c -> d_store ~src:grid.(r).(c) ~mem:(d_mem r c))))
-                     ^^ hardline ^^ string "}")
-                ^^ hardline ^^ string "}";
-              ]
+          (* The full-height bands, then the row band from [m_full]. *)
+          let bands =
+            (string
+               (Printf.sprintf "for (%stmma_i__ = 0; tmma_i__ + %d <= %d; tmma_i__ += %d) " it rm m
+                  rm)
+            ^^ block (stmts (band ~rows:rm ~i:"tmma_i__")))
+            ::
+            (if m_tail = 0 then []
+             else [ block (stmts (band ~rows:m_tail ~i:(Int.to_string m_full))) ])
           in
           let body =
             (typedef_doc :: registered_typedefs extra_typedefs)
@@ -5157,9 +5135,7 @@ module C_syntax (B : C_syntax_config) = struct
                 string (Printf.sprintf "const %s *tmma_b__ = " (B.typ_of_prec b_store_prec))
                 ^^ b_ptr ^^ semi;
               ]
-            @ full_blocks
-            @ scalar_peel ~i_lo:0 ~i_hi:m_full ~j_lo:n_full ~j_hi:n
-            @ scalar_peel ~i_lo:m_full ~i_hi:m ~j_lo:0 ~j_hi:n
+            @ bands
           in
           let narrow_note =
             let note role sp =
@@ -5178,12 +5154,23 @@ module C_syntax (B : C_syntax_config) = struct
                the renderer's default); absent for the default so pre-gh-619 goldens stand. *)
             if Option.is_some tile then "; geometry from the schedule" else ""
           in
+          (* How the edges are covered, for the artifact readers and the tests that pin the absence
+             of scalar code; absent when the full passes cover the site, so the pre-gh-620 headers
+             stand. *)
+          let tail_note =
+            let vectors = List.length tail_widths in
+            (if n_tail = 0 then ""
+             else
+               Printf.sprintf "; column tail %d in %d vector%s" n_tail vectors
+                 (if vectors = 1 then "" else "s"))
+            ^ if m_tail = 0 then "" else Printf.sprintf "; row tail %d" m_tail
+          in
           Some
             (string
                (Printf.sprintf
                   "{ /* Tile_mma register tiling: %dx%d C-tile of %d-lane %s held across the \
-                   k-loop (full blocks %dx%d of %dx%d)%s%s. */"
-                  rm rn lanes ctyp m_full n_full m n narrow_note geometry_note)
+                   k-loop (full blocks %dx%d of %dx%d%s)%s%s. */"
+                  rm rn lanes ctyp m_full n_full m n tail_note narrow_note geometry_note)
             ^^ nest 2 (hardline ^^ stmts body)
             ^^ hardline ^^ string "}")
         in
@@ -5693,7 +5680,7 @@ module C_syntax (B : C_syntax_config) = struct
       let offset = pp_array_offset (idcs, Lazy.force tn.Tn.dims) in
       let store_prec = Lazy.force tn.Tn.storage_prec in
       let load, _store = vec_bridge ~store_prec ~prec ~lanes ~vtyp ~need_typedef ~fresh in
-      emit (load ~dst:name ~mem:(string (get_ident tn) ^^ brackets offset));
+      emit (load ~width:lanes ~dst:name ~mem:(string (get_ident tn) ^^ brackets offset));
       string name
     in
     let rec vec_expr (llsc : Low_level.scalar_t) (p : Ops.prec) : PPrint.document =
@@ -5823,7 +5810,7 @@ module C_syntax (B : C_syntax_config) = struct
                 let store_prec = Lazy.force tn.Tn.storage_prec in
                 let _load, store = vec_bridge ~store_prec ~prec ~lanes ~vtyp ~need_typedef ~fresh in
                 emit
-                  (store ~src:vname
+                  (store ~width:lanes ~src:vname
                      ~mem:
                        (string (get_ident tn)
                        ^^ brackets (pp_array_offset (idcs, Lazy.force tn.Tn.dims)))));

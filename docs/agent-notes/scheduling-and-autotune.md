@@ -362,16 +362,22 @@ files.
   ladder that `n` fills, `rm <= m`, `rn * lanes <= n`, `rm*rn + rm + rn` within the 19/34-register
   budget) — never substitutes, so a candidate timed under a geometry label ran that geometry or
   ran scalar, and the census says which. `None` is the renderer's ranking model,
-  `Register_tile.default` (the gh-575 fit: constant peel weight 10, keyed on the actual `n`), which
-  the seeding consults through the same module: every CPU tensorized leaf gets a `register-tile`
-  level of `auto` plus `Register_tile.alternatives` (peel-free `rn >= 2` at the widest fitting
-  width, plus the budget cap when it peels at most one vector per row), only where at least one
-  exists — a rule that seeded the cap everywhere doubled the CPU tensorized seed count. The emitted header appends
+  `Register_tile.default` — since gh-ocannl-620 a reuse-only ranking in vector-issue slots over
+  `Register_tile.coverage` (the full passes plus the column tail as a narrower tile), with no
+  fitted constant; the gh-575 peel weight of 10 went with the scalar peel — which the seeding
+  consults through the same module: every CPU tensorized leaf gets a `register-tile` level of
+  `auto` plus `Register_tile.alternatives` (the LARGEST tail-free `rn >= 2` at the widest fitting
+  width — the smaller tail-free widths are dominated on the model's own terms — plus the budget
+  cap when its column tail is at most one vector), only where at least one exists. The default is
+  usually the cap now, so on a non-dividing site the twin is the notch below it: one question per
+  leaf (gh-614's register pressure), where the pre-620 rule asked none on a site whose cap peeled
+  fat (`tile_mma_declines` 22 -> 32 seeds, `sketch_family_tree`'s AVX2 tree 23 -> 34). The emitted header appends
   `; geometry from the schedule` on a request and nothing on a default, so pre-619 codegen goldens
   stand. Sweep a width by seeding it or by handing `?tile` to `Sched.tensorize` — never by
   patching the renderer again. The cache saves the field as `[@sexp.option]`, so pre-619 entries
   parse. Not done: `rm` alternatives (seeding varies the width only), the conv family (not
-  tree-factored), and a `Cost_model`-derived peel weight.
+  tree-factored); gh-ocannl-947's `Cost_model`-derived peel weight has no peel left to price —
+  what remains of it is whether a partial vector's masked copies deserve a term.
 - "Crowned" is not "shipped", and neither is reproducible on a small routine. `Train.tune_placements`
   runs two searches and keeps one artifact, so a family can win the arm that is then discarded whole
   — read `report.best_label` / `best_tensorized` / `best_tensorization` / `mma_best_ms` per arm (the A/B calls `?report`

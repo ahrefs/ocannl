@@ -32,16 +32,28 @@ let default_rm ~m = min rm_cap m
 
 (* The largest [rn] the budget admits beside [rm] rows: [rm * rn + rm + rn <= budget]. *)
 let rn_budget_cap ~vector_bytes ~rm = (budget ~vector_bytes - rm) / (rm + 1)
-let peel_cost = 10.
 
-(* Per unit of m*k: one vector FMA per lane-column of the full blocks, the B row loads (1/rm of them
-   per FMA), the A splats (1/rn), and [peel_cost] lane-slots per peeled column. See the {!default}
-   doc in the interface for the fits behind the constant. *)
+type coverage = { m_full : int; n_full : int; tail_widths : int list }
+
+let coverage ~m ~n t =
+  let m_full = m - (m % t.rm) and n_full = n - (n % width t) in
+  let n_tail = n - n_full in
+  let tail_widths =
+    List.init ((n_tail + t.lanes - 1) / t.lanes) ~f:(fun c -> min t.lanes (n_tail - (c * t.lanes)))
+  in
+  { m_full; n_full; tail_widths }
+
+(* Per unit of m*k, in vector-issue slots: one fused FMA per vector column, plus the B row loads
+   (1/rm of one per FMA) and the A splats (1/rn). The columns the width does not cover are a
+   narrower tile of [tail_widths] vector columns (gh-ocannl-620) -- whole issues at less A-reuse,
+   the last of them possibly partial -- never scalar code, so there is no fitted constant to
+   carry. *)
 let cost ~n ~rm ~lanes ~rn =
-  let bw = rn * lanes in
-  let n_full = n - (n % bw) in
-  (Float.of_int (n_full / lanes) *. (1. +. (1. /. Float.of_int rm) +. (1. /. Float.of_int rn)))
-  +. (Float.of_int (n - n_full) *. peel_cost)
+  let per_column rn = 1. +. (1. /. Float.of_int rm) +. (1. /. Float.of_int rn) in
+  let { n_full; tail_widths; _ } = coverage ~m:rm ~n { rm; rn; lanes } in
+  let rn_tail = List.length tail_widths in
+  (Float.of_int (n_full / lanes) *. per_column rn)
+  +. if rn_tail = 0 then 0. else Float.of_int rn_tail *. per_column rn_tail
 
 let default ~vector_bytes ~elt_bytes ~m ~n =
   if m < 1 || n < 1 then None
@@ -52,15 +64,20 @@ let default ~vector_bytes ~elt_bytes ~m ~n =
           let cap = min (rn_cap ~vector_bytes) (n / lanes) in
           List.range 1 (cap + 1) |> List.map ~f:(fun rn -> { rm; rn; lanes }))
     in
+    let tail t = List.length (coverage ~m ~n t).tail_widths in
     List.min_elt candidates ~compare:(fun t1 t2 ->
-        (* Ties (an exactly-dividing width repeated at a multiple, or at two lane counts) go to the
-           wider vector and then the larger tile: more work per issue, more A-reuse. *)
+        (* Ties go to the wider vector (more work per issue), then to the tail-free tile (one tile
+           body rather than two), then to the larger tile (more A-reuse). *)
         match
           Float.compare
             (cost ~n ~rm ~lanes:t1.lanes ~rn:t1.rn)
             (cost ~n ~rm ~lanes:t2.lanes ~rn:t2.rn)
         with
-        | 0 -> ( match Int.compare t2.lanes t1.lanes with 0 -> Int.compare t2.rn t1.rn | c -> c)
+        | 0 -> (
+            match Int.compare t2.lanes t1.lanes with
+            | 0 -> (
+                match Int.compare (tail t1) (tail t2) with 0 -> Int.compare t2.rn t1.rn | c -> c)
+            | c -> c)
         | c -> c)
 
 let check ~vector_bytes ~elt_bytes ~m ~n t =
@@ -93,17 +110,26 @@ let alternatives ~vector_bytes ~elt_bytes ~m ~n =
   | Some dflt, lanes :: _ ->
       let rm = default_rm ~m in
       let cap = min (rn_budget_cap ~vector_bytes ~rm) (n / lanes) in
-      let peel_free = List.range 2 (cap + 1) |> List.filter ~f:(fun rn -> n % (rn * lanes) = 0) in
-      (* The budget cap joins only when its peel is at most one vector per row: a fatter remainder
-         is a choice the model's peel weight (about a vector slot per column) already makes with
-         confidence, and seeding it on every leaf doubled the CPU tensorized seed count for
-         candidates the tuner rejects. gh-614's n = 512 AVX2 site (rn = 3 peeling 8 of 512) stays
-         in. *)
-      let rns =
-        if cap >= 2 && (not (List.mem peel_free cap ~equal:Int.equal)) && n % (cap * lanes) <= lanes
-        then peel_free @ [ cap ]
-        else peel_free
+      (* Among tail-free widths the model's ranking is exact -- equal issue counts, strictly more
+         A-reuse at the larger [rn] -- so only the largest is worth a timing; the smaller ones are
+         dominated on its own terms. What it cannot see is how a tail-bearing default's second tile
+         really costs, which is what that one twin measures. *)
+      let tail_free =
+        List.range 2 (cap + 1) |> List.filter ~f:(fun rn -> n % (rn * lanes) = 0) |> List.last
       in
+      (* The budget cap joins only when its column tail is at most one vector: a fatter tail is a
+         narrower second tile whose lower A-reuse the model already prices, and seeding the cap on
+         every leaf doubled the CPU tensorized seed count for candidates the tuner rejects. gh-614's
+         n = 512 AVX2 site (rn = 3, a one-vector tail) stays in. *)
+      let budget_cap =
+        if
+          cap >= 2
+          && (not (Option.equal Int.equal tail_free (Some cap)))
+          && n % (cap * lanes) <= lanes
+        then Some cap
+        else None
+      in
+      let rns = List.filter_opt [ tail_free; budget_cap ] in
       List.map rns ~f:(fun rn -> { rm; rn; lanes })
       |> List.filter ~f:(fun t -> not (equal t dflt))
       |> List.filter ~f:(fun t -> Result.is_ok (check ~vector_bytes ~elt_bytes ~m ~n t))

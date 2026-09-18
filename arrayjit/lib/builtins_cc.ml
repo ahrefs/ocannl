@@ -580,10 +580,12 @@ uint16_t single_to_bfloat16(float f)
       [] );
     ( "OCANNL_VEC_WIDEN_BFLOAT16",
       {|
-/* bfloat16 is the top 16 bits of a float: zero-extend and shift. */
+/* bfloat16 is the top 16 bits of a float: zero-extend and shift. LANES is the number of VALID
+   lanes -- the vector types' width, or fewer for a partial vector (gh-ocannl-620), whose lanes past
+   LANES read as zero and are never written back: only LANES elements cross the memory boundary. */
 #if OCANNL_HAS_CONVERTVECTOR
   #define OCANNL_VEC_WIDEN_BFLOAT16(U16V, U32V, LANES, dst, src) do { \
-    U16V ocannl_nb__; __builtin_memcpy(&ocannl_nb__, (src), sizeof(ocannl_nb__)); \
+    U16V ocannl_nb__ = {0}; __builtin_memcpy(&ocannl_nb__, (src), (LANES) * 2); \
     U32V ocannl_nw__ = __builtin_convertvector(ocannl_nb__, U32V) << 16; \
     __builtin_memcpy(&(dst), &ocannl_nw__, sizeof(dst)); \
   } while (0)
@@ -604,7 +606,7 @@ uint16_t single_to_bfloat16(float f)
     U32V ocannl_nb__; __builtin_memcpy(&ocannl_nb__, &(src), sizeof(ocannl_nb__)); \
     U32V ocannl_nr__ = ocannl_nb__ + 0x7FFFu + ((ocannl_nb__ >> 16) & 1u); \
     U16V ocannl_nn__ = __builtin_convertvector(ocannl_nr__ >> 16, U16V); \
-    __builtin_memcpy((dst), &ocannl_nn__, sizeof(ocannl_nn__)); \
+    __builtin_memcpy((dst), &ocannl_nn__, (LANES) * 2); \
   } while (0)
 #else
   #define OCANNL_VEC_NARROW_BFLOAT16(U16V, U32V, LANES, dst, src) do { \
@@ -664,9 +666,10 @@ uint16_t single_to_bfloat16(float f)
       [ "HALF_T"; "HAS_NATIVE_FLOAT16"; "HALF_TO_FLOAT"; "FLOAT_TO_HALF" ] );
     ( "OCANNL_VEC_WIDEN_HALF",
       {|
+/* LANES: the valid lanes, as for the bfloat16 bridges above. */
 #if HAS_NATIVE_FLOAT16 && OCANNL_HAS_CONVERTVECTOR
   #define OCANNL_VEC_WIDEN_HALF(FV, HV, LANES, dst, src) do { \
-    HV ocannl_nh__; __builtin_memcpy(&ocannl_nh__, (src), sizeof(ocannl_nh__)); \
+    HV ocannl_nh__ = {0}; __builtin_memcpy(&ocannl_nh__, (src), (LANES) * 2); \
     (dst) = __builtin_convertvector(ocannl_nh__, FV); \
   } while (0)
 #else
@@ -683,7 +686,7 @@ uint16_t single_to_bfloat16(float f)
 #if HAS_NATIVE_FLOAT16 && OCANNL_HAS_CONVERTVECTOR
   #define OCANNL_VEC_NARROW_HALF(HV, LANES, dst, src) do { \
     HV ocannl_nh__ = __builtin_convertvector((src), HV); \
-    __builtin_memcpy((dst), &ocannl_nh__, sizeof(ocannl_nh__)); \
+    __builtin_memcpy((dst), &ocannl_nh__, (LANES) * 2); \
   } while (0)
 #else
   #define OCANNL_VEC_NARROW_HALF(HV, LANES, dst, src) do { \

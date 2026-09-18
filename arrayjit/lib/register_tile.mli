@@ -2,9 +2,10 @@
 
     The C backends render a whole-K [Tile_mma] tinyBLAS-style: an [rm x rn] grid of [lanes]-wide
     vector registers holds the accumulator across the entire k-loop — per k step, [rn] B-row vector
-    loads, [rm] A-element splats and [rm * rn] fused FMAs — and the columns the width [rn * lanes]
-    does not cover are peeled to scalar code. Until gh-ocannl-619 that geometry was picked inside
-    the renderer alone; it is now a value a schedule can carry ({!Schedule.optop.Tensorize}'s
+    loads, [rm] A-element splats and [rm * rn] fused FMAs — and the rows and columns the full
+    [rm x (rn * lanes)] passes do not cover are narrower register tiles of the same form
+    (gh-ocannl-620; {!coverage}), never scalar code. Until gh-ocannl-619 that geometry was picked
+    inside the renderer alone; it is now a value a schedule can carry ({!Schedule.optop.Tensorize}'s
     [tile]), the renderer honours or declines ([C_syntax.try_register_tile]), and the sketch seeding
     proposes alternatives of ({!alternatives}), so the tuner picks by timing. This module is a leaf
     — below [Low_level], which stores the geometry on its [Tile_mma] statement — so the ranking
@@ -47,20 +48,28 @@ val budget : vector_bytes:int -> int
 val rn_cap : vector_bytes:int -> int
 (** The default model's [rn] ceiling: 3 on 32-byte vector files, 6 otherwise. *)
 
+type coverage = { m_full : int; n_full : int; tail_widths : int list }
+(** How a geometry covers an [m x n] site (gh-ocannl-620): [m_full] rows by [n_full] columns of full
+    [rm x (rn * lanes)] passes; the [n - n_full] leftover columns as a column tail of [tail_widths]
+    vector columns of [lanes] lanes each — every entry is [lanes] except a last, PARTIAL one whose
+    entry is its valid lane count; and the [m - m_full] leftover rows as a band of that many rows
+    over the same columns. The renderer emits exactly this decomposition (a partial column loads
+    zeros past its width and stores only its width), so nothing is peeled to scalar code and every
+    element's k-chain is the same fused serial chain. *)
+
+val coverage : m:int -> n:int -> t -> coverage
+
 val default : vector_bytes:int -> elt_bytes:int -> m:int -> n:int -> t option
 (** The renderer's own choice for an [m x n] site when the schedule carries no geometry:
     [rm = min 4 m], and [(lanes, rn)] ranked over the widths the file renders (the ladder, narrowed
-    to those [n] can fill) and [rn <= rn_cap] by a ranking model — per unit of m*k, one vector FMA
-    per lane-column of the full blocks plus the B loads (1/rm per FMA) and the A splats (1/rn), and
-    a constant 10 lane-slots per peeled column. The peel weight does NOT scale with the lane count
-    (the peel is the same scalar loop at either width) and the fits agree: ~8 from an 8-lane sweep,
-    ~10 from a 4-lane one, ~20 from an n = 2048 pair (gh-ocannl-575). The model only has to RANK: it
-    reproduces the measured order at n = 512 within a few percent across rn = 2..6, and where
-    several widths divide [n] it lands on the largest affordable one. Erring low on the peel weight
-    is what costs choices — weighting a peeled column at [lanes] rather than the fit picked the
-    peeling rn = 6 over a peel-free rn = 4 at n = 2048, which measures 1.15x slower (Codex P2 on
-    staging PR #357). Ties go to the wider vector, then the larger tile. [None] when even the
-    narrowest width exceeds [n] (or [m], [n] < 1). *)
+    to those [n] can fill) and [rn <= rn_cap] by a ranking model in vector-issue slots per unit of
+    m*k: one fused FMA per vector column plus the B loads (1/rm per FMA) and the A splats (1/rn) —
+    for the full passes at [rn], and for the column tail at its own, smaller column count (the tail
+    is a narrower tile, gh-ocannl-620; a partial last vector is a whole issue). No fitted constant:
+    until gh-ocannl-620 the tail was a scalar peel priced at a measured 10 lane-slots per column
+    (gh-ocannl-575), which made the width a divisibility question — now it is a reuse question, and
+    the model only has to RANK. Ties go to the wider vector, then to the tail-free tile, then to the
+    larger tile. [None] when even the narrowest width exceeds [n] (or [m], [n] < 1). *)
 
 val check : vector_bytes:int -> elt_bytes:int -> m:int -> n:int -> t -> (unit, string) Result.t
 (** Whether the renderer can honour [t] on an [m x n] site: [lanes] is a width the file renders and
@@ -69,10 +78,12 @@ val check : vector_bytes:int -> elt_bytes:int -> m:int -> n:int -> t -> (unit, s
 
 val alternatives : vector_bytes:int -> elt_bytes:int -> m:int -> n:int -> t list
 (** The geometries the sketch seeding proposes beside the renderer's {!default}, for the tuner to
-    time: at the widest width [n] fills and the default's [rm], every peel-free [rn >= 2] (the width
-    divides [n] exactly — a scalar column costs about a vector slot, so these are the candidates the
-    model's peel weight decides between) plus the register-budget cap when its peel is at most one
-    vector per row (the most A-reuse the file affords — the register-pressure corner gh-ocannl-614
-    found the model cannot see — but not on sites where it would peel a fat remainder the model
-    already prices with confidence), minus the default itself and anything {!check} would decline.
-    Deliberately small: one alternative per site on the common shapes, none at all on many. *)
+    time: at the widest width [n] fills and the default's [rm], the largest tail-free [rn >= 2] (the
+    width divides [n] exactly, so the site is one tile body: what a tail-bearing default's second,
+    lower-reuse tile is traded against — the smaller tail-free widths are dominated on the model's
+    own terms, equal issues at less reuse, so they are not seeded) plus the register-budget cap when
+    its column tail is at most one vector (the most A-reuse the file affords — the register-pressure
+    corner gh-ocannl-614 found the model cannot see — but not on sites where the tail is a fat
+    second tile the model already prices), minus the default itself and anything {!check} would
+    decline. Deliberately small: at most two alternatives per site, one on the common shapes, none
+    where the width divides the extent. *)
