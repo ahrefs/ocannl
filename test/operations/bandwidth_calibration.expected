@@ -1,7 +1,10 @@
 kernels tuned: stream_copy stream_scale stream_add stream_triad
 rows appended: true
 every row names its routine: true
-a kernel contributed rows exactly when its search timed a candidate: true
+each kernel row count equals its admitted timing count: true
+count control: two rows for two timings are accepted: true
+count control: losing one of two rows is rejected: true
+count control: adding a spurious third row is rejected: true
 omission control: a timed kernel with no row is rejected: true
 a kernel with no rows was refused its timings, not silently lost: true
 bytes-exact rows present: true
