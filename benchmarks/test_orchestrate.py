@@ -1012,10 +1012,121 @@ class FixtureDigestTest(unittest.TestCase):
         self.dir = Path(self.tmp.name)
         self.addCleanup(self.tmp.cleanup)
 
-    def fixture(self, name, content=b"weights"):
-        path = self.dir / name
-        path.write_bytes(content)
+    @staticmethod
+    def write_fixture(path, content=b"weights", metadata=None, tensors=None):
+        """Write a tiny safetensors fixture for digest tests.
+
+        This is test construction, not a second production writer: the records deliberately keep
+        insertion order so tests can vary the non-canonical serialization independently of the
+        content identity.
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        metadata = {"name": path.stem, **(metadata or {})}
+        tensors = tensors or [("weights", "U8", [len(content)], content)]
+        header = {"__metadata__": metadata}
+        payload = bytearray()
+        for tensor_name, dtype, shape, tensor_content in tensors:
+            start = len(payload)
+            payload.extend(tensor_content)
+            header[tensor_name] = {
+                "dtype": dtype,
+                "shape": shape,
+                "data_offsets": [start, len(payload)],
+            }
+        encoded = json.dumps(header, separators=(",", ":")).encode()
+        padding = (-len(encoded)) % 8
+        encoded += b" " * padding
+        path.write_bytes(len(encoded).to_bytes(8, "little") + encoded + payload)
         return path
+
+    def fixture(self, name, content=b"weights", **kwargs):
+        return self.write_fixture(self.dir / name, content, **kwargs)
+
+    def test_digest_canonicalizes_metadata_and_tensor_serialization_order(self):
+        a = self.fixture(
+            "a.safetensors",
+            metadata={"name": "same", "zeta": "last", "alpha": "first"},
+            tensors=[("z", "U8", [2], b"zz"), ("a", "U8", [2], b"aa")],
+        )
+        b = self.fixture(
+            "b.safetensors",
+            metadata={"name": "same", "alpha": "first", "zeta": "last"},
+            tensors=[("a", "U8", [2], b"aa"), ("z", "U8", [2], b"zz")],
+        )
+
+        self.assertNotEqual(a.read_bytes(), b.read_bytes(), "control: serialization really differs")
+        self.assertEqual(fixture_digest.sha256_file(a), fixture_digest.sha256_file(b))
+
+    def test_digest_changes_for_every_piece_of_runner_visible_content(self):
+        baseline = self.fixture(
+            "baseline.safetensors",
+            metadata={"name": "same", "seed": "7"},
+            tensors=[("weights", "U8", [2], b"ab")],
+        )
+        expected = fixture_digest.sha256_file(baseline)
+        variants = {
+            "metadata": dict(metadata={"name": "same", "seed": "8"}),
+            "tensor name": dict(
+                metadata={"name": "same", "seed": "7"},
+                tensors=[("bias", "U8", [2], b"ab")],
+            ),
+            "dtype": dict(
+                metadata={"name": "same", "seed": "7"},
+                tensors=[("weights", "I8", [2], b"ab")],
+            ),
+            "shape": dict(
+                metadata={"name": "same", "seed": "7"},
+                tensors=[("weights", "U8", [1, 2], b"ab")],
+            ),
+            "payload": dict(
+                metadata={"name": "same", "seed": "7"},
+                tensors=[("weights", "U8", [2], b"ac")],
+            ),
+        }
+
+        for index, (fact, kwargs) in enumerate(variants.items()):
+            with self.subTest(fact=fact):
+                changed = self.fixture(f"changed-{index}.safetensors", **kwargs)
+                self.assertNotEqual(fixture_digest.sha256_file(changed), expected)
+
+    def test_a_legacy_row_stays_raw_until_original_content_is_recorded(self):
+        original = self.fixture(
+            "original.safetensors",
+            metadata={"name": "same", "zeta": "last", "alpha": "first"},
+            tensors=[("z", "U8", [2], b"zz"), ("a", "U8", [2], b"aa")],
+        )
+        regenerated = self.fixture(
+            "regenerated/original.safetensors",
+            metadata={"name": "same", "alpha": "first", "zeta": "last"},
+            tensors=[("a", "U8", [2], b"aa"), ("z", "U8", [2], b"zz")],
+        )
+        self.assertEqual(fixture_digest.sha256_file(original), fixture_digest.sha256_file(regenerated))
+        self.assertNotEqual(original.read_bytes(), regenerated.read_bytes())
+        digests = self.dir / fixture_digest.DIGEST_FILE
+        digests.write_text(
+            fixture_digest.header(["m4-max"])
+            + f"{fixture_digest._raw_sha256_file(original)}  {original.stat().st_size}  "
+            "original.safetensors  m4-max\n"
+        )
+
+        entries = fixture_digest.read_digests(digests)
+        self.assertEqual(fixture_digest.status(original, entries)[0], "MATCH")
+        self.assertEqual(fixture_digest.status(regenerated, entries)[0], "MISMATCH")
+        fixture_digest.record(digests, [original], "m4-max")
+        migrated = fixture_digest.read_digests(digests)
+        self.assertEqual(migrated[original.name][0].kind, "content-v1")
+        self.assertEqual(fixture_digest.status(regenerated, migrated)[0], "MATCH")
+
+    def test_malformed_or_truncated_fixtures_are_refused(self):
+        malformed = self.dir / "malformed.safetensors"
+        malformed.write_bytes((8).to_bytes(8, "little") + b"not json")
+        complete = self.fixture("truncated.safetensors", b"payload")
+        complete.write_bytes(complete.read_bytes()[:-1])
+
+        for path in (malformed, complete):
+            with self.subTest(path=path.name), self.assertRaises(ValueError):
+                fixture_digest.sha256_file(path)
 
     #: The origin `gen_fixtures.main` records under when none is given, pinned so the
     #: generator tests do not depend on what this box happens to be called.
@@ -1086,7 +1197,7 @@ class FixtureDigestTest(unittest.TestCase):
         fixture_digest.record(digests, [fx], "rog-nv")
         (was,) = fixture_digest.read_digests(digests)[fx.name]
 
-        fx.write_bytes(b"generated at spec revision B")
+        self.write_fixture(fx, b"generated at spec revision B")
         changes = fixture_digest.record(digests, [fx], "rog-nv")
 
         self.assertEqual(len(changes), 1)
@@ -1113,13 +1224,13 @@ class FixtureDigestTest(unittest.TestCase):
         digests = self.dir / fixture_digest.DIGEST_FILE
         fixture_digest.record(digests, [fx], "minix")
 
-        fx.write_bytes(b"rog-nv bytes")
+        self.write_fixture(fx, b"rog-nv bytes")
         fixture_digest.record(digests, [fx], "rog-nv")
 
         entries = fixture_digest.read_digests(digests)
         self.assertEqual([e.origin for e in entries[fx.name]], ["minix", "rog-nv"])
         self.assertEqual(fixture_digest.status(fx, entries)[3], "rog-nv")
-        fx.write_bytes(b"minix bytes")
+        self.write_fixture(fx, b"minix bytes")
         self.assertEqual(fixture_digest.status(fx, entries)[3], "minix")
 
     def test_one_box_regenerating_does_not_unpin_the_other(self):
@@ -1132,12 +1243,12 @@ class FixtureDigestTest(unittest.TestCase):
         fixture_digest.record(digests, [fx], "minix")
         minix_entries = fixture_digest.read_digests(digests)
 
-        fx.write_bytes(b"rog-nv regenerates its own copy")
+        self.write_fixture(fx, b"rog-nv regenerates its own copy")
         fixture_digest.record(digests, [fx], "rog-nv")
 
         entries = fixture_digest.read_digests(digests)
         self.assertEqual(entries[fx.name][0], minix_entries[fx.name][0])
-        fx.write_bytes(b"minix bytes")
+        self.write_fixture(fx, b"minix bytes")
         self.assertEqual(fixture_digest.status(fx, entries)[0], "MATCH")
 
     def test_agreeing_boxes_are_reported_as_agreeing(self):
@@ -1160,7 +1271,7 @@ class FixtureDigestTest(unittest.TestCase):
         fixture_digest.record(digests, [fx], "rog-nv")
         entries = fixture_digest.read_digests(digests)
 
-        fx.write_bytes(b"the bytes someone regenerated later")
+        self.write_fixture(fx, b"the bytes someone regenerated later")
 
         verdict, _, _, origins = fixture_digest.status(fx, entries)
         self.assertEqual((verdict, origins), ("MISMATCH", None))
@@ -1171,11 +1282,11 @@ class FixtureDigestTest(unittest.TestCase):
         fx = self.fixture("mlp_wide.safetensors", b"minix bytes")
         digests = self.dir / fixture_digest.DIGEST_FILE
         fixture_digest.record(digests, [fx], "minix")
-        fx.write_bytes(b"rog-nv bytes")
+        self.write_fixture(fx, b"rog-nv bytes")
         fixture_digest.record(digests, [fx], "rog-nv")
         entries = fixture_digest.read_digests(digests)
 
-        fx.write_bytes(b"a third box nobody recorded")
+        self.write_fixture(fx, b"a third box nobody recorded")
 
         self.assertEqual(fixture_digest.status(fx, entries)[0], "MISMATCH")
 
@@ -1418,7 +1529,7 @@ class FixtureDigestTest(unittest.TestCase):
         fx = self.fixture("mlp_small.safetensors", b"minix bytes")
         digests = self.dir / fixture_digest.DIGEST_FILE
         fixture_digest.record(digests, [fx], "minix")
-        fx.write_bytes(b"rog-nv regenerates")
+        self.write_fixture(fx, b"rog-nv regenerates")
         fixture_digest.record(digests, [fx], "rog-nv")
 
         self.assertEqual(fixture_digest.divergent_origins(digests, [fx.name], "rog-nv"), ["minix"])
@@ -1512,7 +1623,7 @@ class FixtureDigestTest(unittest.TestCase):
         differ = self.fixture("mlp_wide.safetensors", b"minix bytes")
         digests = self.dir / fixture_digest.DIGEST_FILE
         fixture_digest.record(digests, [agree, differ], "minix")
-        differ.write_bytes(b"rog-nv bytes")
+        self.write_fixture(differ, b"rog-nv bytes")
         fixture_digest.record(digests, [agree, differ], "rog-nv")
 
         self.assertEqual(fixture_digest.divergent_origins(digests, [agree.name], "rog-nv"), [])
@@ -1563,7 +1674,9 @@ class FixtureDigestTest(unittest.TestCase):
         fixture_digest.record(digests, [fx], "minix", legacy_origin="minix")
 
         entries = fixture_digest.read_digests(digests)
-        self.assertEqual(entries[other], [fixture_digest.Entry("deadbeef", 17, "minix")])
+        self.assertEqual(
+            entries[other], [fixture_digest.Entry("deadbeef", 17, "minix", "raw-v1")]
+        )
 
     def test_a_migration_does_not_split_one_box_across_two_origin_names(self):
         # The migration writes two facts -- whose the old rows were, and whose the bytes on disk
@@ -1688,7 +1801,7 @@ class FixtureDigestTest(unittest.TestCase):
         fx = self.fixture("lenet.safetensors")
         digests = self.dir / fixture_digest.DIGEST_FILE
         fixture_digest.record(digests, [fx], "rog-nv")
-        fx.write_bytes(b"regenerated")
+        self.write_fixture(fx, b"regenerated")
 
         ids = self.check([fx], digests_path=digests, allow_unpinned=True)
 
@@ -1749,7 +1862,7 @@ class FixtureDigestTest(unittest.TestCase):
 
         with contextlib.redirect_stdout(io.StringIO()) as good:
             passed = fixture_digest._main(["--check", str(fx), "--digests", str(digests)])
-        fx.write_bytes(b"perturbed bytes")
+        self.write_fixture(fx, b"perturbed bytes")
         with contextlib.redirect_stdout(io.StringIO()) as bad:
             failed = fixture_digest._main(["--check", str(fx), "--digests", str(digests)])
 
@@ -1842,7 +1955,7 @@ class FixtureDigestTest(unittest.TestCase):
         def build(spec_path, out_dir):
             built.append(spec_path)
             path = out_dir / "lenet.safetensors"
-            path.write_bytes(b"regenerated")
+            self.write_fixture(path, b"regenerated")
             return path
 
         with unittest.mock.patch.object(gen_fixtures, "build", build):

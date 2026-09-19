@@ -241,9 +241,18 @@ def main(argv=None, here=None):
     # (gh-ocannl-759).
     changes = fixture_digest.record(digests, written, origin)
     print(f"recorded {len(written)} digest(s) in {digests} as origin {origin!r}")
+    by_name = {fixture.name: fixture for fixture in written}
     for name, org, was, now in changes:
+        replacement = fixture_digest.replacement_kind(by_name[name], was)
         if was is None:
             print(f"  new: {name} sha256 {now.sha256} [{org}]")
+        elif replacement == "same-file-migration":
+            print(f"  MIGRATED for {org}: {name} raw-v1 -> content-v1 (same file bytes)")
+            print(f"    now  sha256 {now.sha256} ({now.size} bytes)")
+        elif replacement == "new-content-baseline":
+            print(f"  NEW CONTENT BASELINE for {org}: {name}")
+            print(f"    historical raw-v1   sha256 {was.sha256} ({was.size} bytes)")
+            print(f"    baseline content-v1 sha256 {now.sha256} ({now.size} bytes)")
         else:
             # Loudly, and not only in a git diff: numbers measured on the old bytes are not
             # comparable with numbers measured on the new ones, whatever the report calls the
@@ -251,9 +260,15 @@ def main(argv=None, here=None):
             print(f"  CHANGED for {org}: {name}")
             print(f"    was  sha256 {was.sha256} ({was.size} bytes)")
             print(f"    now  sha256 {now.sha256} ({now.size} bytes)")
-    if any(was is not None for _, _, was, _ in changes):
+    replacements = {
+        fixture_digest.replacement_kind(by_name[name], was) for name, _, was, _ in changes
+    }
+    if "content-change" in replacements:
         print("  a changed fixture is a changed workload: reports measured on the previous "
               "digest are not comparable with reports measured on this one.")
+    if "new-content-baseline" in replacements:
+        print("  the new content baseline is reproducible going forward, but does not prove "
+              "continuity with the historical raw digest; old reports retain that digest.")
     others = fixture_digest.divergent_origins(digests, [fx.name for fx in written], origin)
     if others:
         # The trap gh-ocannl-759 was filed about: their entries survive (so their fixtures still

@@ -1,15 +1,21 @@
-# Fixture digests: the bytes each published measurement is on (gh-ocannl-645, gh-ocannl-759).
+# Fixture digests: the content each published measurement is on (gh-ocannl-645, gh-ocannl-759).
 #
 # The fixtures themselves are gitignored, so this file is the only checked-in statement of
 # what one contains. gen_fixtures.py rewrites the entries it regenerates; orchestrate.py
 # refuses to measure a fixture that matches none of them (--no-fixture-digest-check opts out),
 # and stamps every result row and report section with the digest -- and the origin -- it ran on.
 #
-# A changed digest here is a changed workload: numbers measured before it are not comparable
-# with numbers measured after it, whatever the report calls the workload. Fixture bytes depend
-# on the workload spec, on gen_fixtures.py, and on the numpy version that drew the random
-# streams (numpy does not promise Generator stream stability across releases), so a mismatch
-# names a real difference even when the spec is untouched.
+# A changed digest here is changed workload content: numbers measured before it are not
+# comparable with numbers measured after it, whatever the report calls the workload. The digest
+# canonicalizes metadata key order and tensor serialization order, then covers every metadata
+# value and every tensor's name, dtype, shape, and payload. It therefore ignores safetensors'
+# nondeterministic metadata-map order while detecting every runner-visible change. Fixture
+# content depends on the workload spec, on gen_fixtures.py, and on the numpy version that drew
+# the random streams (numpy does not promise Generator stream stability across releases).
+# Rows recorded before gh-ocannl-1007 omit <digest-kind> and mean raw-v1. They remain verifiable
+# against the original file while each box migrates them with --record; every new row is
+# content-v1. A raw-v1 row cannot certify a regenerated serialization, even when its content is
+# equal, which is why the residual rows stay explicit instead of being relabelled without bytes.
 #
 # The measurement-boxes header field declares every box that publishes benchmark measurements.
 # It is independent of the entry rows: that is how a missing entry can mean "this measuring box
@@ -25,19 +31,19 @@
 #
 # measurement-boxes: m4-max minix rog-nv
 #
-# <sha256>  <bytes>  <name>  <origin>
-c27e59b4163397290685aa1736bf7176f56de5ec5019da89db5ad29f80d855c2  26190952  cifar_conv.safetensors  minix
-d008d1cff9885ffaa01eca91b95b9a0cadc2175f9b79a9e4ed8c06dc1dd7b74a  26190952  cifar_conv.safetensors  rog-nv
-023d0f51049e6eccd65ec92d0f05ab03aeeb024aad50e6f7f15044ad0029153b  32789600  cifar_stride.safetensors  minix
-b9540f5a6a084a81b764b84108e6c319837448f6064f0f9359e15f7a7e4ea734  32789600  cifar_stride.safetensors  rog-nv
-41c53309c21f4fe4bd3ccef17043cd817a9a9002208c2cf2d39d8e12cde98c28  13871384  gpt2_mini.safetensors  m4-max
-10839bd1dee72a62c54f6589a727e53cfe174f6d676dfba201ede80f6269defb  13871360  gpt2_mini.safetensors  minix
-043c1ea8b42817fca8b713ac0eadae6e8b7b7326cb5ff7ea0fd527487ca2009e  13871360  gpt2_mini.safetensors  rog-nv
-f37a58392a970f12af7162c1d53f282be9c4d7a0de4958bfde08bdf37c49f8d1  14756128  gpt2_mini_s1024.safetensors  m4-max
-4cc9fe298b6f0a29798803eb06bf9fd91b195a88021d8ba37a63a9fc98cb0e1c  14231832  gpt2_mini_s512.safetensors  m4-max
-f4c736b569d98ff271f4240cf580b620a1e75ff041dc2d99b2cc1b75a95c1189  4483288  lenet.safetensors  minix
-5a38f19751d03b412be66d70b2462968c1e43c9bd0b0fb7167592d95bbbc3c93  4483288  lenet.safetensors  rog-nv
-2c48b1d78c6820f639d431b3f57902bcdb79e09f909e0f83415d851cc20ec0c1  51384  mlp_small.safetensors  minix
-f09de9504262eb184672c9f58da821c47e0ee9f6311bd69207700c33298c44ca  51384  mlp_small.safetensors  rog-nv
-4309ccbb2cf62ad678aa99c797ceed0a70f5370572015b601910e05c3f72a3eb  9650952  mlp_wide.safetensors  minix
-56b3d2ce63ac668bc150264f40850cfb49ad477ea8a42b82d2f033841ed15742  9650952  mlp_wide.safetensors  rog-nv
+# <sha256>  <bytes>  <name>  <origin>  <digest-kind>
+c27e59b4163397290685aa1736bf7176f56de5ec5019da89db5ad29f80d855c2  26190952  cifar_conv.safetensors  minix  raw-v1
+d008d1cff9885ffaa01eca91b95b9a0cadc2175f9b79a9e4ed8c06dc1dd7b74a  26190952  cifar_conv.safetensors  rog-nv  raw-v1
+023d0f51049e6eccd65ec92d0f05ab03aeeb024aad50e6f7f15044ad0029153b  32789600  cifar_stride.safetensors  minix  raw-v1
+b9540f5a6a084a81b764b84108e6c319837448f6064f0f9359e15f7a7e4ea734  32789600  cifar_stride.safetensors  rog-nv  raw-v1
+c322a00b72df143612eafafedf7c468e9c05f3e4bc1e7eb6d77ada651ef98de8  13871384  gpt2_mini.safetensors  m4-max  content-v1
+10839bd1dee72a62c54f6589a727e53cfe174f6d676dfba201ede80f6269defb  13871360  gpt2_mini.safetensors  minix  raw-v1
+043c1ea8b42817fca8b713ac0eadae6e8b7b7326cb5ff7ea0fd527487ca2009e  13871360  gpt2_mini.safetensors  rog-nv  raw-v1
+57073d6f98aa7d310ab9bfbba6636c394afd8800cf1816fcd5109b52f1c363db  14756128  gpt2_mini_s1024.safetensors  m4-max  content-v1
+dfbb26d9d3907f7d9cec3169715ca582982619b27d2455d40647593ac0b61172  14231832  gpt2_mini_s512.safetensors  m4-max  content-v1
+f4c736b569d98ff271f4240cf580b620a1e75ff041dc2d99b2cc1b75a95c1189  4483288  lenet.safetensors  minix  raw-v1
+5a38f19751d03b412be66d70b2462968c1e43c9bd0b0fb7167592d95bbbc3c93  4483288  lenet.safetensors  rog-nv  raw-v1
+2c48b1d78c6820f639d431b3f57902bcdb79e09f909e0f83415d851cc20ec0c1  51384  mlp_small.safetensors  minix  raw-v1
+f09de9504262eb184672c9f58da821c47e0ee9f6311bd69207700c33298c44ca  51384  mlp_small.safetensors  rog-nv  raw-v1
+4309ccbb2cf62ad678aa99c797ceed0a70f5370572015b601910e05c3f72a3eb  9650952  mlp_wide.safetensors  minix  raw-v1
+56b3d2ce63ac668bc150264f40850cfb49ad477ea8a42b82d2f033841ed15742  9650952  mlp_wide.safetensors  rog-nv  raw-v1

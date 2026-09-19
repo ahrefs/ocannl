@@ -2,18 +2,20 @@
 """The recorded identity of a benchmark fixture (gh-ocannl-645, gh-ocannl-759).
 
 `benchmarks/fixtures/` is gitignored (the fixtures are large, regenerable artifacts), so no
-checkout establishes a fixture's bytes. Without a recorded digest nothing in the repository says
-which bytes a published report was measured on, and nothing can catch a fixture regenerated at a
+checkout establishes a fixture's content. Without a recorded digest nothing in the repository says
+which content a published report was measured on, and nothing can catch a fixture regenerated at a
 different spec revision, or by a different numpy: the difference applies *uniformly* to every cell,
 so the cross-cell parity gate (which compares cells with each other, not with the workload the
 report names) certifies it exactly as it certifies the intended workload. Cross-session comparisons
 (`report-gh569-hip.md`'s 46.65 ms denominator against `report-gh612-hip.md`'s 32.33 ms) are only
-meaningful if both ran the same bytes, and that is the whole point of such a measurement.
+meaningful if both ran the same content, and that is the whole point of such a measurement.
 
 So `gen_fixtures.py` records `fixtures/DIGESTS.txt` (checked in, unlike the fixtures themselves) as
 it generates, `orchestrate.py` refuses to measure a fixture that does not match it, and every
-result row and report states the digest its numbers are on. A deliberate regeneration rewrites the
-file, which shows up as a reviewable diff rather than as silence.
+result row and report states the digest its numbers are on. The digest is over canonical content,
+not the safetensors serialization: metadata is sorted and tensors are hashed in name order because
+safetensors may emit its metadata map in a different order on every process. A deliberate content
+change rewrites the file, which shows up as a reviewable diff rather than as silence.
 
 **A fixture is recorded per origin** (gh-ocannl-759). The measuring boxes generate their own
 fixtures from their own venvs, and numpy promises no `Generator` stream stability across releases,
@@ -41,8 +43,10 @@ ones whose fixtures predate any venv you could reconstruct.
 
 import argparse
 import hashlib
+import json
 import platform
 import re
+import struct
 import sys
 from collections import namedtuple
 from pathlib import Path
@@ -50,22 +54,30 @@ from pathlib import Path
 DIGEST_FILE = "DIGESTS.txt"
 MEASUREMENT_BOXES_FIELD = "# measurement-boxes:"
 
-#: One recorded identity: `sha256` and `size` are the bytes, `origin` is the box that has them.
-Entry = namedtuple("Entry", "sha256 size origin")
+#: One recorded identity: `sha256` is interpreted by `kind`, `size` is the physical file size,
+#: and `origin` is the box that has the fixture. Parsed four-field rows are explicitly tagged as
+#: the pre-gh-ocannl-1007 raw-file digest; the default keeps source callers concise.
+Entry = namedtuple("Entry", "sha256 size origin kind", defaults=["content-v1"])
 
 HEADER = """\
-# Fixture digests: the bytes each published measurement is on (gh-ocannl-645, gh-ocannl-759).
+# Fixture digests: the content each published measurement is on (gh-ocannl-645, gh-ocannl-759).
 #
 # The fixtures themselves are gitignored, so this file is the only checked-in statement of
 # what one contains. gen_fixtures.py rewrites the entries it regenerates; orchestrate.py
 # refuses to measure a fixture that matches none of them (--no-fixture-digest-check opts out),
 # and stamps every result row and report section with the digest -- and the origin -- it ran on.
 #
-# A changed digest here is a changed workload: numbers measured before it are not comparable
-# with numbers measured after it, whatever the report calls the workload. Fixture bytes depend
-# on the workload spec, on gen_fixtures.py, and on the numpy version that drew the random
-# streams (numpy does not promise Generator stream stability across releases), so a mismatch
-# names a real difference even when the spec is untouched.
+# A changed digest here is changed workload content: numbers measured before it are not
+# comparable with numbers measured after it, whatever the report calls the workload. The digest
+# canonicalizes metadata key order and tensor serialization order, then covers every metadata
+# value and every tensor's name, dtype, shape, and payload. It therefore ignores safetensors'
+# nondeterministic metadata-map order while detecting every runner-visible change. Fixture
+# content depends on the workload spec, on gen_fixtures.py, and on the numpy version that drew
+# the random streams (numpy does not promise Generator stream stability across releases).
+# Rows recorded before gh-ocannl-1007 omit <digest-kind> and mean raw-v1. They remain verifiable
+# against the original file while each box migrates them with --record; every new row is
+# content-v1. A raw-v1 row cannot certify a regenerated serialization, even when its content is
+# equal, which is why the residual rows stay explicit instead of being relabelled without bytes.
 #
 # The measurement-boxes header field declares every box that publishes benchmark measurements.
 # It is independent of the entry rows: that is how a missing entry can mean "this measuring box
@@ -79,24 +91,177 @@ HEADER = """\
 # regeneration is a cross-box event and has to be coordinated across every origin listed here,
 # or the boxes silently diverge again (see benchmarks/README.md).
 #
-# <sha256>  <bytes>  <name>  <origin>
+# <sha256>  <bytes>  <name>  <origin>  <digest-kind>
 """
 
 
 def header(measurement_boxes):
     """The explanatory header plus its one machine-readable measurement-box declaration."""
     boxes = sorted(check_measurement_boxes(measurement_boxes))
-    marker = "# <sha256>  <bytes>  <name>  <origin>\n"
+    marker = "# <sha256>  <bytes>  <name>  <origin>  <digest-kind>\n"
     declaration = f"{MEASUREMENT_BOXES_FIELD} {' '.join(boxes)}\n#\n"
     return HEADER.replace(marker, declaration + marker)
 
 
+def _unique_object(pairs):
+    """A JSON object whose keys are unambiguous.
+
+    Python's ordinary JSON decoder keeps the last copy of a repeated key.  That would let two
+    different headers acquire one canonical identity even though a safetensors implementation is
+    free to reject the duplicate or choose the other value.
+    """
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key {key!r}")
+        result[key] = value
+    return result
+
+
+def _frame(digest, label, value):
+    """Hash one labelled, length-delimited byte string."""
+    label = label.encode("ascii")
+    digest.update(struct.pack("<Q", len(label)))
+    digest.update(label)
+    digest.update(struct.pack("<Q", len(value)))
+    digest.update(value)
+
+
 def sha256_file(path):
+    """The canonical content digest of one safetensors fixture.
+
+    Safetensors serializes ``__metadata__`` through a Rust ``HashMap``, whose per-process key
+    order makes the raw file digest unstable.  The workload identity is instead a framed stream:
+    sorted metadata, followed by tensors in name order, with each tensor's dtype, shape and exact
+    payload.  Header whitespace, metadata insertion order, tensor serialization order and payload
+    offsets therefore do not change it; every fact a runner consumes does.
+
+    This reader intentionally stays stdlib-only.  ``fixture_digest.py --check`` is the recovery
+    tool on boxes whose benchmark virtual environment may no longer exist.
+    """
+    path = Path(path)
+    try:
+        with path.open("rb") as fixture:
+            raw_length = fixture.read(8)
+            if len(raw_length) != 8:
+                raise ValueError("missing the 8-byte header length")
+            header_length = struct.unpack("<Q", raw_length)[0]
+            file_size = path.stat().st_size
+            if header_length > file_size - 8:
+                raise ValueError(
+                    f"header length {header_length} exceeds the {file_size - 8} bytes after it"
+                )
+            raw_header = fixture.read(header_length)
+            try:
+                header = json.loads(raw_header, object_pairs_hook=_unique_object)
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+                raise ValueError(f"invalid JSON header: {error}") from None
+            if not isinstance(header, dict):
+                raise ValueError("JSON header is not an object")
+
+            metadata = header.pop("__metadata__", {})
+            if not isinstance(metadata, dict) or any(
+                not isinstance(key, str) or not isinstance(value, str)
+                for key, value in metadata.items()
+            ):
+                raise ValueError("__metadata__ is not a string-to-string object")
+
+            payload_start = 8 + header_length
+            payload_size = file_size - payload_start
+            tensors = {}
+            ranges = []
+            for name, descriptor in header.items():
+                if not isinstance(name, str) or not isinstance(descriptor, dict):
+                    raise ValueError(f"tensor {name!r} does not have an object descriptor")
+                if set(descriptor) != {"dtype", "shape", "data_offsets"}:
+                    raise ValueError(
+                        f"tensor {name!r} descriptor must contain exactly dtype, shape, and "
+                        "data_offsets"
+                    )
+                dtype, shape, offsets = (
+                    descriptor["dtype"],
+                    descriptor["shape"],
+                    descriptor["data_offsets"],
+                )
+                if not isinstance(dtype, str):
+                    raise ValueError(f"tensor {name!r} dtype is not a string")
+                if not isinstance(shape, list) or any(
+                    isinstance(dim, bool) or not isinstance(dim, int) or dim < 0 for dim in shape
+                ):
+                    raise ValueError(f"tensor {name!r} shape is not a list of non-negative integers")
+                if (
+                    not isinstance(offsets, list)
+                    or len(offsets) != 2
+                    or any(isinstance(offset, bool) or not isinstance(offset, int) for offset in offsets)
+                ):
+                    raise ValueError(f"tensor {name!r} data_offsets is not a pair of integers")
+                start, end = offsets
+                if start < 0 or end < start or end > payload_size:
+                    raise ValueError(
+                        f"tensor {name!r} has invalid data_offsets {offsets!r} for a "
+                        f"{payload_size}-byte payload"
+                    )
+                tensors[name] = (dtype, shape, start, end)
+                ranges.append((start, end, name))
+
+            cursor = 0
+            for start, end, name in sorted(ranges):
+                if start != cursor:
+                    relation = "overlaps" if start < cursor else "leaves a gap before"
+                    raise ValueError(f"tensor {name!r} {relation} payload byte {cursor}")
+                cursor = end
+            if cursor != payload_size:
+                raise ValueError(
+                    f"tensor payloads end at byte {cursor}, leaving {payload_size - cursor} trailing bytes"
+                )
+
+            digest = hashlib.sha256()
+            _frame(digest, "format", b"ocannl-safetensors-content-v1")
+            canonical_metadata = json.dumps(
+                metadata, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+            ).encode("utf-8")
+            _frame(digest, "metadata", canonical_metadata)
+            for name in sorted(tensors):
+                dtype, shape, start, end = tensors[name]
+                _frame(digest, "tensor-name", name.encode("utf-8"))
+                _frame(digest, "tensor-dtype", dtype.encode("ascii"))
+                _frame(
+                    digest,
+                    "tensor-shape",
+                    json.dumps(shape, separators=(",", ":")).encode("ascii"),
+                )
+                fixture.seek(payload_start + start)
+                remaining = end - start
+                digest.update(struct.pack("<Q", remaining))
+                while remaining:
+                    chunk = fixture.read(min(1 << 20, remaining))
+                    if not chunk:
+                        raise ValueError(f"tensor {name!r} payload ends early")
+                    digest.update(chunk)
+                    remaining -= len(chunk)
+            return digest.hexdigest()
+    except OSError as error:
+        raise ValueError(f"cannot read fixture: {error}") from None
+
+
+def _raw_sha256_file(path):
+    """The pre-gh-ocannl-1007 identity, used only while an origin awaits migration."""
     digest = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
+    with open(path, "rb") as fixture:
+        for chunk in iter(lambda: fixture.read(1 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def replacement_kind(path, was):
+    """Classify replacement of one recorded row by the file now on disk."""
+    if was is None:
+        return "new"
+    if was.kind == "content-v1":
+        return "content-change"
+    if (was.sha256, was.size) == (_raw_sha256_file(path), Path(path).stat().st_size):
+        return "same-file-migration"
+    return "new-content-baseline"
 
 
 def this_origin():
@@ -246,7 +411,7 @@ def _read_document(path, legacy_origin=None):
 
     declared_boxes = None
 
-    def add(lineno, sha, size, name, origin):
+    def add(lineno, sha, size, name, origin, kind):
         """The ONE insertion point, so every parse path pays the duplicate check.
 
         A four-field entry and an adopted legacy line can land on the same (name, origin), and
@@ -268,7 +433,7 @@ def _read_document(path, legacy_origin=None):
                 f"{path}:{lineno}: {name} is recorded twice for origin {origin!r}; one box has "
                 "one set of bytes per fixture, so this file cannot say which"
             )
-        by_origin[origin] = Entry(sha, int(size), origin)
+        by_origin[origin] = Entry(sha, int(size), origin, kind)
 
     for lineno, line in enumerate(path.read_text().splitlines(), start=1):
         line = line.strip()
@@ -296,7 +461,7 @@ def _read_document(path, legacy_origin=None):
             # --adopt-legacy, which is what makes this refusal a migration rather than a wall.
             if legacy_origin is not None:
                 sha, size, name = fields
-                add(lineno, sha, size, name, legacy_origin)
+                add(lineno, sha, size, name, legacy_origin, "raw-v1")
                 continue
             raise ValueError(
                 f"{path}:{lineno}: {line!r} is the old unattributed format; attribute it with "
@@ -304,11 +469,16 @@ def _read_document(path, legacy_origin=None):
                 "lines under that box and leaves their bytes untouched) so the entry says whose "
                 "bytes it is (gh-ocannl-759)"
             )
-        if len(fields) != 4:
+        if len(fields) not in (4, 5):
             raise ValueError(
-                f"{path}:{lineno}: expected '<sha256>  <bytes>  <name>  <origin>', got {line!r}"
+                f"{path}:{lineno}: expected '<sha256>  <bytes>  <name>  <origin>  "
+                f"<digest-kind>', got {line!r}"
             )
-        add(lineno, *fields)
+        sha, size, name, origin, *kind = fields
+        kind = kind[0] if kind else "raw-v1"
+        if kind not in ("raw-v1", "content-v1"):
+            raise ValueError(f"{path}:{lineno}: unknown digest kind {kind!r}")
+        add(lineno, sha, size, name, origin, kind)
     entries = {
         name: [by_origin[o] for o in sorted(by_origin)] for name, by_origin in entries.items()
     }
@@ -349,7 +519,7 @@ def write_digests(path, entries, measurement_boxes=None):
             e.origin for recorded in entries.values() for e in recorded
         }
     body = "".join(
-        f"{e.sha256}  {e.size}  {name}  {e.origin}\n"
+        f"{e.sha256}  {e.size}  {name}  {e.origin}  {e.kind}\n"
         for name in sorted(entries)
         for e in sorted(entries[name], key=lambda e: e.origin)
     )
@@ -406,7 +576,7 @@ def record(path, fixtures, origin=None, legacy_origin=None):
     changes = []
     for fixture in fixtures:
         fixture = Path(fixture)
-        now = Entry(sha256_file(fixture), fixture.stat().st_size, origin)
+        now = Entry(sha256_file(fixture), fixture.stat().st_size, origin, "content-v1")
         others = [e for e in entries.get(fixture.name, []) if e.origin != origin]
         was = next((e for e in entries.get(fixture.name, []) if e.origin == origin), None)
         if was != now:
@@ -432,7 +602,15 @@ def status(fixture, entries):
     recorded = entries.get(fixture.name)
     if not recorded:
         return "UNRECORDED", sha, size, None
-    matching = [e.origin for e in recorded if (e.sha256, e.size) == (sha, size)]
+    raw_sha = None
+    matching = []
+    for entry in recorded:
+        candidate = sha
+        if entry.kind == "raw-v1":
+            raw_sha = raw_sha or _raw_sha256_file(fixture)
+            candidate = raw_sha
+        if (entry.sha256, entry.size) == (candidate, size):
+            matching.append(entry.origin)
     if not matching:
         return "MISMATCH", sha, size, None
     # More than one origin here is the boxes agreeing, which is worth seeing as plainly as their
@@ -468,7 +646,8 @@ def divergent_origins(path, names, origin):
             if box != origin
             and (
                 box not in by_origin
-                or (by_origin[box].sha256, by_origin[box].size) != (mine.sha256, mine.size)
+                or (by_origin[box].sha256, by_origin[box].size, by_origin[box].kind)
+                != (mine.sha256, mine.size, mine.kind)
             )
         }
     return sorted(divergent)
@@ -578,18 +757,36 @@ def _main(argv=None):
     changes = record(digests, fixtures, origin, legacy_origin=args.adopt_legacy)
     print(f"recorded {len(fixtures)} fixture(s) in {digests} as origin {origin!r}")
     for name, org, was, now in changes:
+        fixture = next(fixture for fixture in fixtures if Path(fixture).name == name)
+        replacement = replacement_kind(fixture, was)
         if was is None:
             print(f"  new: {name} sha256 {now.sha256} ({now.size} bytes) [{org}]")
+        elif replacement == "same-file-migration":
+            print(f"  MIGRATED for {org}: {name} raw-v1 -> content-v1 (same file bytes)")
+            print(f"    now  sha256 {now.sha256} ({now.size} bytes)")
+        elif replacement == "new-content-baseline":
+            print(f"  NEW CONTENT BASELINE for {org}: {name}")
+            print(f"    historical raw-v1   sha256 {was.sha256} ({was.size} bytes)")
+            print(f"    baseline content-v1 sha256 {now.sha256} ({now.size} bytes)")
         else:
             print(f"  CHANGED for {org}: {name}")
             print(f"    was  sha256 {was.sha256} ({was.size} bytes)")
             print(f"    now  sha256 {now.sha256} ({now.size} bytes)")
     if not changes:
         print("  no change: every fixture already matched its recorded entry for this origin")
-    if any(was is not None for _, _, was, _ in changes):
+    replacements = {
+        replacement_kind(next(f for f in fixtures if Path(f).name == name), was)
+        for name, _, was, _ in changes
+    }
+    if "content-change" in replacements:
         print(
             "  a changed fixture is a changed workload: reports measured on the previous digest "
             "are not comparable with reports measured on this one."
+        )
+    if "new-content-baseline" in replacements:
+        print(
+            "  the new content baseline is reproducible going forward, but does not prove "
+            "continuity with the historical raw digest; old reports retain that digest."
         )
     return 0
 

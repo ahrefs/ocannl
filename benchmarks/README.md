@@ -80,18 +80,21 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   axes then input axes; channels-last images — layouts documented per model in the
   generator), dataset, and all hyperparameters in the safetensors `__metadata__` map, so
   fixtures are self-describing and runners need only the fixture path.
-- `fixtures/DIGESTS.txt` + `fixture_digest.py` — **which bytes a published number is on, and
+- `fixtures/DIGESTS.txt` + `fixture_digest.py` — **which content a published number is on, and
   whose** (gh-ocannl-645, gh-ocannl-759). The fixtures are gitignored regenerable artifacts, so
   this file is the only checked-in statement of what one contains. Its header's
   `# measurement-boxes: <origin>...` field declares the complete set of boxes that publish
   measurements (gh-ocannl-850), independently of the entry rows; that is what lets regeneration
   and reports identify a declared box whose entry is missing instead of mistaking the silence for
   a box that never measures there. `gen_fixtures.py` records
-  `<sha256>  <bytes>  <name>  <origin>` as it generates (announcing a *changed* or missing digest loudly,
+  `<sha256>  <bytes>  <name>  <origin>  <digest-kind>` as it generates (announcing a *changed* or missing digest loudly,
   and leaving a reviewable git diff), `orchestrate.py` refuses to measure a fixture whose bytes
   match no recorded entry (`--no-fixture-digest-check` opts out, for a deliberate regeneration
   you are about to re-record), and every result row and report section states the digest *and
-  the origin* it ran on. Fixture bytes depend on the spec, on the generator, *and* on the numpy
+  the origin* it ran on. The SHA-256 is over a canonical stream: sorted metadata followed by
+  tensors in name order, including every tensor's name, dtype, shape, and payload. Safetensors'
+  process-random metadata serialization therefore does not change it, while any content consumed
+  by a runner does. Fixture content depends on the spec, on the generator, *and* on the numpy
   version that drew the random streams — numpy promises no `Generator` stream stability across
   releases — so a mismatch is real information even when `workloads/` is untouched. A fixture
   regenerated at a different spec revision is otherwise invisible: it is consumed **uniformly**
@@ -100,6 +103,10 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   Origins are portable IDs: they start with an ASCII letter or digit and contain only ASCII
   letters, digits, dots, underscores, and hyphens. The same IDs key cross-box sweep log paths, so
   path separators and platform-specific filename punctuation are refused before a file is written.
+  Rows without `<digest-kind>` predate gh-ocannl-1007 and are read as `raw-v1`: they still verify
+  the original file bytes, and `--record` migrates only the named box's available files to
+  `content-v1`. They are kept visibly legacy until their original files are available; relabelling
+  an old raw digest as canonical would invent evidence the digest cannot contain.
   The current declaration names `m4-max` (the Apple M4 Max/macOS measurement host), `minix`, and
   `rog-nv`. The Metal reports before gh-ocannl-483 predate per-origin recording, so `m4-max` has
   rows only for the fixtures that report is on (`gpt2_mini` and the long-context legs); for the
