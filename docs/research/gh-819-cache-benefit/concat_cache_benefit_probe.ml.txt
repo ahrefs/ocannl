@@ -1,0 +1,100 @@
+(* Temporary historical probe for gh-ocannl-819. The same bytes are compiled at the commits
+   immediately before and after gh-ocannl-765's per-segment-symbol change. *)
+
+open Base
+open Ocannl
+open Ocannl.Operation.DSL_modules
+module Asgns = Ir.Assignments
+module LL = Ir.Low_level
+module SC = Ir.Schedule_cache
+
+let named name (comp : Asgns.comp) : Asgns.comp =
+  { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
+
+(* A feature-concatenation block rather than an isolated concat primitive: three differently sized
+   inputs are joined, transformed, joined with two derived feature maps, transformed again, and
+   joined one last time. Every join lowers sibling segment loops; downstream pointwise consumers
+   keep the whole block in one compiled routine. *)
+let model () =
+  Tensor.unsafe_reinitialize ();
+  Utils.settings.fixed_state_for_init <- Some 819;
+  let values n salt =
+    Array.init n ~f:(fun i -> (Float.of_int ((i * (salt + 3)) % 29) -. 14.) /. 16.)
+  in
+  let a = TDSL.ndarray (values 64 1) ~label:[ "ccp_a" ] ~output_dims:[ 64 ] () in
+  let b = TDSL.ndarray (values 40 2) ~label:[ "ccp_b" ] ~output_dims:[ 40 ] () in
+  let c = TDSL.ndarray (values 24 3) ~label:[ "ccp_c" ] ~output_dims:[ 24 ] () in
+  let%op joined = (a, b, c) ++^ "a; b; c => a^b^c" in
+  let%op h1 = sin joined in
+  let%op h2 = relu (joined + h1) in
+  let%op expanded = (joined, h1, h2) ++^ "a; b; c => a^b^c" in
+  let%op h3 = sin expanded in
+  let%op output = (h1, expanded, h3) ++^ "a; b; c => a^b^c" in
+  Train.set_materialized output.value;
+  (named "concat_cache_benefit" (Train.forward output), output.value)
+
+let stats_delta (h0, m0) (h1, m1) = (h1 - h0, m1 - m0)
+
+let print_stats label (hits, misses) =
+  Stdio.printf "%s analysis_hits=%d analysis_misses=%d\n%!" label hits misses
+
+let optimized comp =
+  let llc = Asgns.to_low_level comp.Asgns.asgns in
+  Ll_test.optimize ~name:"concat_cache_benefit" llc
+
+let inspect comp =
+  LL.clear_analysis_cache ();
+  let s0 = LL.analysis_cache_stats () in
+  let opt1 = optimized comp in
+  let s1 = LL.analysis_cache_stats () in
+  let opt2 = optimized comp in
+  let s2 = LL.analysis_cache_stats () in
+  let canon1 = SC.canonicalize opt1 and canon2 = SC.canonicalize opt2 in
+  Stdio.printf "canonical_complete first=%b second=%b digest_equal=%b\n%!" (SC.complete canon1)
+    (SC.complete canon2) (String.equal (SC.digest canon1) (SC.digest canon2));
+  print_stats "analysis_first" (stats_delta s0 s1);
+  print_stats "analysis_second" (stats_delta s1 s2)
+
+let outcome (r : Autotune.report) =
+  match r.Autotune.outcome with
+  | Autotune.Searched -> "searched"
+  | Autotune.Search_died _ -> "search-died"
+  | Autotune.Cache_replay -> "cache-replay"
+  | Autotune.Search_disabled -> "search-disabled"
+  | Autotune.Pre_search_failure _ -> "pre-search-failure"
+
+let tune_once ~cache_dir comp output =
+  let report = ref None in
+  let ctx = Context.auto () in
+  let ctx, routine =
+    Autotune.tune ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir
+      ~report:(fun r -> report := Some r)
+      ctx comp Ir.Indexing.Empty
+  in
+  let ctx = Context.run ctx routine in
+  let values = Context.get_values ctx output in
+  let report = Option.value_exn ~here:[%here] !report in
+  (report, Array.length values, Array.for_all values ~f:Float.is_finite)
+
+let measure ~cache_dir comp output =
+  if Stdlib.Sys.file_exists cache_dir then
+    failwith ("measurement cache path already exists: " ^ cache_dir);
+  LL.clear_analysis_cache ();
+  let s0 = LL.analysis_cache_stats () in
+  let r1, n1, finite1 = tune_once ~cache_dir comp output in
+  let s1 = LL.analysis_cache_stats () in
+  let r2, n2, finite2 = tune_once ~cache_dir comp output in
+  let s2 = LL.analysis_cache_stats () in
+  Stdio.printf "schedule_first outcome=%s candidates_timed=%d output_len=%d finite=%b\n%!"
+    (outcome r1) r1.Autotune.candidates_timed n1 finite1;
+  Stdio.printf "schedule_second outcome=%s candidates_timed=%d output_len=%d finite=%b\n%!"
+    (outcome r2) r2.Autotune.candidates_timed n2 finite2;
+  print_stats "tune_first" (stats_delta s0 s1);
+  print_stats "tune_second" (stats_delta s1 s2)
+
+let () =
+  let comp, output = model () in
+  match Array.to_list Stdlib.Sys.argv with
+  | [ _; "inspect" ] -> inspect comp
+  | [ _; "measure"; cache_dir ] -> measure ~cache_dir comp output
+  | _ -> failwith "usage: concat_cache_benefit_probe (inspect | measure CACHE_DIR)"
