@@ -81,7 +81,7 @@ let rec has_opaque (stmt : LL.t) =
   | LL.Scan_loop { carried; body; _ } ->
       List.exists carried ~f:(fun (c : LL.carried) -> scalar_has_opaque c.init) || has_opaque body
   | LL.If { cond = c, _; body } -> scalar_has_opaque c || has_opaque body
-  | LL.Tile_mma { fallback; _ } -> has_opaque fallback
+  | LL.Tile_mma _ -> true
   | LL.Set { llsc; _ } | LL.Set_local (_, llsc) -> scalar_has_opaque llsc
   | LL.Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar_has_opaque v || scalar_has_opaque llsc
   | LL.Set_from_vec { arg = a, _; _ } -> scalar_has_opaque a
@@ -540,7 +540,7 @@ let hoist r ~ls (n : nest) : LL.t option =
   let sound =
     (not (List.is_empty inner))
     && plain_loops wi && plain_loops vi
-    && List.for_all inner ~f:(fun lp -> mentions lp.index n.idcs)
+    && List.for_all inner ~f:(fun lp -> lp.from_ <= lp.to_ && mentions lp.index n.idcs)
   in
   let* () = Option.some_if sound () in
   let p_st = scalar_node ~label:"probability" ~like:w (Lazy.force w.Tn.storage_prec) in

@@ -42,6 +42,7 @@ a read of the normalizer between its zeroing and the max is declined: true
 a read of the normalizer between the max and the sum is declined: true
 the zeroing ahead of the max with nothing reading the normalizer in between is accepted: true
 staged code inside the span the rewrite reorders is declined: true
+a Tile_mma inside the span is opaque even when its scalar fallback is empty: true
 staged code outside that span is no objection: true
 staged code reachable only through a guard's condition inside the span is declined too: true
 a scope body inside the span is beyond the write census and declines the rewrite: true
@@ -56,6 +57,7 @@ a fully masked row leaves the composed normalizer NaN: true
 and the rewritten normalizer stores that NaN too, though its carried state stayed zero: true
 the value reduction is hoisted through a ten-nest elementwise chain from the probabilities: true
 a reduction whose target cell is [t + j] is not hoisted: distinct pairs share a cell: true
+a dead moved loop is not hoisted: the original nest never reads the probability: true
 an integer normalizer node is declined: its own reduction truncated after every step: true
 an auxiliary subtraction and exponential ahead of the normalizer's own do not hide it: true
 a max node narrower than the scores is declined: the composed max rounds where the state does not: true
