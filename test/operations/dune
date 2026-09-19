@@ -3206,6 +3206,15 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name gpu_small_leading_axis)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules gpu_small_leading_axis)
+ (libraries base ocannl arrayjit.verdict ll_test))
+
+(test
  (name schedule_ops)
  (package neural_nets_lib)
  (deps
@@ -3371,6 +3380,8 @@
   (alias slow-env_spelling_gate)
   autotune_fission_sketch.expected
   ocannl_config
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_BACKEND))
  ; Keep execution off @default as well as @runtest; @check still compiles the source.
  (action

@@ -4670,11 +4670,14 @@ let path_loops (nest : Low_level.t) : Low_level.t list =
    [max_chain] caps the per-nest chain length. The default 2 is the presets' shape — each annotated
    nest carries exactly one Grid and one Workgroup loop. A sketch pipeline supplying its own
    geometry per chain position (gh-ocannl-521 companion coverage, via {!aligned_chains}) is not
-   bound by that shape and passes its site's arity: a batched matmul's chain is batch loops plus row
-   plus column (gh-ocannl-569 — capping at 2 made every rank-3+ site's companion coverage decline,
-   serializing the axis whose spreading the hardware wanted most). The alignment rule is
-   arity-independent; a longer chain only asks the same per-position question more times. *)
-let analyze_parallel_chains ?(max_chain = 2) (opt : Low_level.optimized) : Low_level.t list list =
+   bound by that shape and passes its site's arity. [select_chain] chooses a suffix before the cap
+   and every ownership check; the GPU preset uses it to look past small leading axes. A batched
+   matmul's chain is batch loops plus row plus column (gh-ocannl-569 — capping at 2 made every
+   rank-3+ site's companion coverage decline, serializing the axis whose spreading the hardware
+   wanted most). The alignment rule is arity-independent; a longer chain only asks the same
+   per-position question more times. *)
+let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) (opt : Low_level.optimized) :
+    Low_level.t list list =
   let open Low_level in
   let plc = opt.optimize_ctx.placements in
   let nests, bare = split_nests plc opt.llc in
@@ -4699,6 +4702,7 @@ let analyze_parallel_chains ?(max_chain = 2) (opt : Low_level.optimized) : Low_l
           List.filter (path_loops n.n_loops) ~f:(function
             | For_loop fc -> fc.from_ = 0 && qualifies fc.index
             | _ -> false)
+          |> select_chain
           |> fun l -> List.take l max_chain
         in
         if List.is_empty chain && not (List.is_empty mat_writes) then raise Bail;
@@ -5144,6 +5148,28 @@ let clamp_block_size ~(limits : Backend_intf.hardware_limits) block_size =
   clamp limits.max_threads_per_workgroup block_size
   |> clamp (Option.map limits.max_workgroup_dims ~f:(fun (x, _, _) -> x))
 
+(* A short leading batch axis can strand an otherwise large GPU kernel on a handful of threadgroups.
+   Look farther down the parallel path when a suffix supplies at least as many groups and more
+   active lanes. Keep the Grid/Workgroup shape: the skipped loops remain serial. This selection MUST
+   precede the ownership analysis, which proves the selected symbols rather than a larger tuple
+   containing them. The same choice applies to expanded whole-node zeros. *)
+let gpu_parallel_suffix ~block_size ~min_parallel ~extent chain =
+  let score = function a :: b :: _ -> extent a * min block_size (extent b) | _ -> 0 in
+  match chain with
+  | first :: _ :: _ when extent first < min_parallel ->
+      let rec choose best = function
+        | _ :: _ :: _ as rest ->
+            let best =
+              if extent (List.hd_exn rest) >= extent (List.hd_exn best) && score rest > score best
+              then rest
+              else best
+            in
+            choose best (List.tl_exn rest)
+        | _ -> best
+      in
+      choose chain chain
+  | _ -> chain
+
 let default_gpu ?block_size ?min_parallel ?(limits = Backend_intf.no_hardware_limits)
     (opt : Low_level.optimized) : schedule =
   let open Low_level in
@@ -5166,7 +5192,47 @@ let default_gpu ?block_size ?min_parallel ?(limits = Backend_intf.no_hardware_li
         (Int.of_string @@ Utils.get_global_arg ~arg_name:"gpu_schedule_min_parallel" ~default:"64")
   in
   try
-    let chains = analyze_parallel_chains opt in
+    let selection_changed = ref false in
+    let select_chain chain =
+      let selected =
+        gpu_parallel_suffix ~block_size ~min_parallel
+          ~extent:(function For_loop fc -> fc.to_ + 1 | _ -> assert false)
+          chain
+      in
+      (* The selector returns the original list or one of its tails. Preserve that fact so ordinary
+         rank-two/large-leading nests do not pay for the same affine proof twice. *)
+      if not (phys_equal selected chain) then selection_changed := true;
+      selected
+    in
+    let original = lazy (analyze_parallel_chains opt) in
+    let selected =
+      try analyze_parallel_chains ~select_chain opt
+      with Bail -> if !selection_changed then Lazy.force original else raise Bail
+    in
+    (* Alignment can remove the axis which made a suffix attractive. Compare the proved geometry,
+       not the proposal: retaining a short singleton can otherwise turn a parallel original into a
+       serial kernel, or reduce its group count even above the threshold. *)
+    let geometry = function
+      | [ For_loop fc ] ->
+          let n = fc.to_ + 1 in
+          ((n + block_size - 1) / block_size, min block_size n)
+      | For_loop fc0 :: For_loop fc1 :: _ -> (fc0.to_ + 1, min block_size (fc1.to_ + 1))
+      | _ -> (0, 0)
+    in
+    let chains =
+      if not !selection_changed then selected
+      else
+        try
+          let original = Lazy.force original in
+          if
+            (max_parallel_size selected < min_parallel && max_parallel_size original >= min_parallel)
+            || List.exists2_exn selected original ~f:(fun selected original ->
+                let sg, sb = geometry selected and og, ob = geometry original in
+                sg < og || sg * sb < og * ob)
+          then original
+          else selected
+        with Bail -> selected
+    in
     crosscheck_scratch_containment opt chains;
     if max_parallel_size chains < min_parallel then []
     else
@@ -5784,17 +5850,19 @@ let zero_expansion ?block_size ?min_parallel ~(limits : Backend_intf.hardware_li
         let op, syms = expand_zero ~tn in
         let ds = dims tn in
         let annots =
-          match syms with
+          let selected =
+            gpu_parallel_suffix ~block_size ~min_parallel ~extent:snd
+              (List.zip_exn syms (Array.to_list ds))
+          in
+          match selected with
           | [] -> assert false
-          | [ s0 ] ->
-              let n0 = ds.(0) in
+          | [ (s0, n0) ] ->
               let sp, _, _ =
                 split ~axis:s0 ~factor:(min block_size n0) ~outer:Low_level.Grid
                   ~inner:Low_level.Workgroup
               in
               [ sp ]
-          | s0 :: s1 :: _ ->
-              let n1 = ds.(1) in
+          | (s0, _) :: (s1, n1) :: _ ->
               if n1 <= block_size then
                 [
                   Retype { axis = s0; ty = Low_level.Grid };
@@ -5973,7 +6041,8 @@ let default_schedule_fingerprint ~backend_name =
       let mp =
         String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_min_parallel" ~default:"64")
       in
-      [%string "gpu:fission=%{fission#Bool}:block_size=%{bs}:min_parallel=%{mp}"]
+      [%string
+        "gpu:policy=small-leading-v1:fission=%{fission#Bool}:block_size=%{bs}:min_parallel=%{mp}"]
     else
       let mp =
         String.strip (Utils.get_global_arg ~arg_name:"cpu_schedule_min_parallel" ~default:"16384")

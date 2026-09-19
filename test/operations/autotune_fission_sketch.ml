@@ -274,8 +274,23 @@ let () =
   let key2 = SC.cache_key ~limits:blimits base_canon ~backend:(Context.backend_name bctx) in
   (match SC.lookup ~dir:cache_dir2 ~key:key2 with
   | Some entry ->
+      (* gh-ocannl-995: the old GPU fingerprint carried only config, so a changed default policy
+         must invalidate its timing too. Keep the real legacy spelling as the control. *)
+      let stale_fingerprint =
+        if Sched.backend_is_gpu (Context.backend_name bctx) then
+          let bs =
+            String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_block_size" ~default:"256")
+          in
+          let mp =
+            String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_min_parallel" ~default:"64")
+          in
+          Printf.sprintf "gpu:fission=%b:block_size=%s:min_parallel=%s"
+            (Sched.default_pipeline_fissions ())
+            bs mp
+        else "a-different-config"
+      in
       SC.store ~dir:cache_dir2 ~key:key2
-        { entry with SC.default_fingerprint = Some "a-different-config" };
+        { entry with SC.default_fingerprint = Some stale_fingerprint };
       let r3 = ref None in
       let c3 = Context.auto () in
       let c3, rt3 =
