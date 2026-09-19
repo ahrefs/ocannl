@@ -1,0 +1,27 @@
+; Temporary gh-ocannl-819 historical A/B instrumentation. Kept byte-identical at the adjacent
+; pre/post commits and removed after its evidence is captured.
+(executable
+ (name concat_cache_benefit_probe)
+ (modules concat_cache_benefit_probe)
+ (libraries base ocannl stdio ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ (alias probe-concat-cache-inspect)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  concat_cache_benefit_probe.exe)
+ (action
+  (run %{dep:concat_cache_benefit_probe.exe} inspect)))
+
+(rule
+ (alias probe-concat-cache-measure)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  concat_cache_benefit_probe.exe)
+ (action
+  (run %{dep:concat_cache_benefit_probe.exe} measure concat_cache_probe_cache)))
+
