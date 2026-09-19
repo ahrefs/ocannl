@@ -3380,6 +3380,8 @@
   (alias slow-env_spelling_gate)
   autotune_fission_sketch.expected
   ocannl_config
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_BACKEND))
  ; Keep execution off @default as well as @runtest; @check still compiles the source.
  (action

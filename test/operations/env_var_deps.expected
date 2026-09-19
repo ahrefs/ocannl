@@ -35,6 +35,8 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   debug_log_from_routines
   default_prec
   fp16_arithmetic
+  gpu_schedule_block_size
+  gpu_schedule_min_parallel
   log_config_sourcing
   log_level
   memory_budget

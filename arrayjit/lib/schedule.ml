@@ -5197,8 +5197,31 @@ let default_gpu ?block_size ?min_parallel ?(limits = Backend_intf.no_hardware_li
         | For_loop fc -> fc.to_ + 1
         | _ -> assert false)
     in
+    let original = lazy (analyze_parallel_chains opt) in
+    let selected =
+      try analyze_parallel_chains ~select_chain opt with Bail -> Lazy.force original
+    in
+    (* Alignment can remove the axis which made a suffix attractive. Compare the proved geometry,
+       not the proposal: retaining a short singleton can otherwise turn a parallel original into a
+       serial kernel, or reduce its group count even above the threshold. *)
+    let geometry = function
+      | [ For_loop fc ] ->
+          let n = fc.to_ + 1 in
+          ((n + block_size - 1) / block_size, min block_size n)
+      | For_loop fc0 :: For_loop fc1 :: _ -> (fc0.to_ + 1, min block_size (fc1.to_ + 1))
+      | _ -> (0, 0)
+    in
     let chains =
-      try analyze_parallel_chains ~select_chain opt with Bail -> analyze_parallel_chains opt
+      try
+        let original = Lazy.force original in
+        if
+          (max_parallel_size selected < min_parallel && max_parallel_size original >= min_parallel)
+          || List.exists2_exn selected original ~f:(fun selected original ->
+              let sg, sb = geometry selected and og, ob = geometry original in
+              sg < og || sg * sb < og * ob)
+        then original
+        else selected
+      with Bail -> selected
     in
     crosscheck_scratch_containment opt chains;
     if max_parallel_size chains < min_parallel then []
@@ -6008,7 +6031,8 @@ let default_schedule_fingerprint ~backend_name =
       let mp =
         String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_min_parallel" ~default:"64")
       in
-      [%string "gpu:fission=%{fission#Bool}:block_size=%{bs}:min_parallel=%{mp}"]
+      [%string
+        "gpu:policy=small-leading-v1:fission=%{fission#Bool}:block_size=%{bs}:min_parallel=%{mp}"]
     else
       let mp =
         String.strip (Utils.get_global_arg ~arg_name:"cpu_schedule_min_parallel" ~default:"16384")

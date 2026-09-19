@@ -6,5 +6,9 @@ gsa_batch_head: selected launch geometry: true
 gsa_batch_head: every coordinate survives dependent nests: true
 gsa_unequal_order: selected launch geometry: true
 gsa_unequal_order: every coordinate survives dependent nests: true
+gsa_trimmed_suffix: original geometry survives suffix disagreement: true
+gsa_trimmed_suffix: dependent row reads remain correct: true
+gsa_failed_suffix: original geometry survives suffix disagreement: true
+gsa_failed_suffix: dependent row reads remain correct: true
 expanded zeros use the same suffix geometry: true
 expanded zeros clear every coordinate: true

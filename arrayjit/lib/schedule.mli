@@ -607,23 +607,24 @@ val default_gpu :
     components, no [Zero_out] of materialized nodes, no barriers or opaque statements; reduction
     loops stay serial). When the leading parallel extent is below [min_parallel], a later pair with
     no fewer grid groups and a larger grid-times-clamped-workgroup product is preferred. Skipped
-    leading loops remain serial. This choice precedes the race analysis; if it fails, the original
-    outermost pair is analyzed instead. Expanded whole-node zeros use the same choice. Cross-nest
-    producer/consumer (or WAW/WAR) pairs over a written node are allowed only when {e aligned}: the
-    linked nests' chains are trimmed to a common equal-extent prefix — identical annotation
-    geometry, so each hardware thread covers the same index slice in every linked nest — and per
-    axis position the paired accesses either both use plain [Iterator]s of same-chain-position
-    parallel symbols or neither mentions one; otherwise the analysis bails. For non-materialized
-    (per-thread copy) scratch the edge additionally requires value thread-invariance at the chosen
-    trim: a chain symbol feeding a scratch write's value without pinning the written cell would
-    leave each consumer thread's copy holding its own chunk's last value where the serial reference
-    holds the last chunk's, so the trim search serializes that loop (gh-494; direct syntactic
-    dependence only). Returns the empty schedule when any check fails or when the largest
-    parallelizable nest has fewer than [min_parallel] iterations (default from config
-    [gpu_schedule_min_parallel] = 64: a kernel launches either way, so any real parallelism beats
-    the serial 1x1 fallback — a single GPU thread is 1-2 orders of magnitude slower than a CPU core;
-    the remaining small threshold keeps sub-simdgroup-scale programs fully serial so their segments
-    coalesce and placements stay unchanged). *)
+    leading loops remain serial. This choice precedes the race analysis; if it fails, or alignment
+    loses groups, active lanes, or the launch threshold, the original outermost pair is used
+    instead. Expanded whole-node zeros use the same choice. Cross-nest producer/consumer (or
+    WAW/WAR) pairs over a written node are allowed only when {e aligned}: the linked nests' chains
+    are trimmed to a common equal-extent prefix — identical annotation geometry, so each hardware
+    thread covers the same index slice in every linked nest — and per axis position the paired
+    accesses either both use plain [Iterator]s of same-chain-position parallel symbols or neither
+    mentions one; otherwise the analysis bails. For non-materialized (per-thread copy) scratch the
+    edge additionally requires value thread-invariance at the chosen trim: a chain symbol feeding a
+    scratch write's value without pinning the written cell would leave each consumer thread's copy
+    holding its own chunk's last value where the serial reference holds the last chunk's, so the
+    trim search serializes that loop (gh-494; direct syntactic dependence only). Returns the empty
+    schedule when any check fails or when the largest parallelizable nest has fewer than
+    [min_parallel] iterations (default from config [gpu_schedule_min_parallel] = 64: a kernel
+    launches either way, so any real parallelism beats the serial 1x1 fallback — a single GPU thread
+    is 1-2 orders of magnitude slower than a CPU core; the remaining small threshold keeps
+    sub-simdgroup-scale programs fully serial so their segments coalesce and placements stay
+    unchanged). *)
 
 val default_cpu : ?min_parallel:int -> Low_level.optimized -> schedule
 (** The default CPU annotator preset: the same conservative analysis as {!default_gpu}, but each
@@ -665,14 +666,14 @@ val default_pipeline_fissions : unit -> bool
     applies the whole-routine {!maybe_default_schedule} instead. *)
 
 val default_schedule_fingerprint : backend_name:string -> string
-(** A stable summary of the configuration that shapes the untuned default pipeline on this backend:
-    the {!automatic_schedule_active} gate (["inactive"] when it is off — the untuned default is then
-    the unscheduled serial form), the [schedule_fission] gate, and the preset thresholds
-    ([gpu_schedule_block_size] / [gpu_schedule_min_parallel] / [cpu_schedule_min_parallel]).
-    Diagnostics recorded against one default pipeline (e.g. the autotuner's [default_ms],
-    gh-ocannl-552) compare fingerprints to detect that a config change redefined the default (Codex
-    P2 on PR #279). Does not cover per-device hardware limits — cache consumers already key per
-    backend. *)
+(** A stable summary of the policy and configuration that shape the untuned default pipeline on this
+    backend: the {!automatic_schedule_active} gate (["inactive"] when it is off — the untuned
+    default is then the unscheduled serial form), the [schedule_fission] gate, and the preset
+    thresholds ([gpu_schedule_block_size] / [gpu_schedule_min_parallel] /
+    [cpu_schedule_min_parallel]). Diagnostics recorded against one default pipeline (e.g. the
+    autotuner's [default_ms], gh-ocannl-552) compare fingerprints to detect that a config change
+    redefined the default (Codex P2 on PR #279). Does not cover per-device hardware limits — cache
+    consumers already key per backend. *)
 
 val maybe_default_schedule :
   backend_name:string ->
