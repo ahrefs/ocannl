@@ -4670,10 +4670,12 @@ let path_loops (nest : Low_level.t) : Low_level.t list =
    [max_chain] caps the per-nest chain length. The default 2 is the presets' shape — each annotated
    nest carries exactly one Grid and one Workgroup loop. A sketch pipeline supplying its own
    geometry per chain position (gh-ocannl-521 companion coverage, via {!aligned_chains}) is not
-   bound by that shape and passes its site's arity: a batched matmul's chain is batch loops plus row
-   plus column (gh-ocannl-569 — capping at 2 made every rank-3+ site's companion coverage decline,
-   serializing the axis whose spreading the hardware wanted most). The alignment rule is
-   arity-independent; a longer chain only asks the same per-position question more times. *)
+   bound by that shape and passes its site's arity. [select_chain] chooses a suffix before the cap
+   and every ownership check; the GPU preset uses it to look past small leading axes. A batched
+   matmul's chain is batch loops plus row plus column (gh-ocannl-569 — capping at 2 made every
+   rank-3+ site's companion coverage decline, serializing the axis whose spreading the hardware
+   wanted most). The alignment rule is arity-independent; a longer chain only asks the same
+   per-position question more times. *)
 let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) (opt : Low_level.optimized) :
     Low_level.t list list =
   let open Low_level in

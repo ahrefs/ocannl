@@ -52,6 +52,8 @@ let run ~name ~dims ~transpose ~grid ~block =
   p_all2 (name ^ ": every coordinate survives dependent nests") got expected ~f:Float.equal
 
 let () =
+  Stdlib.Printf.eprintf "gpu_small_leading_axis backend: %s\n%!"
+    (Context.backend_name (Context.auto ()));
   run ~name:"gsa_batch2" ~dims:[| 2; 128; 32 |] ~transpose:false ~grid:128 ~block:32;
   run ~name:"gsa_batch8" ~dims:[| 8; 128; 32 |] ~transpose:false ~grid:128 ~block:32;
   run ~name:"gsa_batch_head" ~dims:[| 2; 8; 128; 32 |] ~transpose:false ~grid:128 ~block:32;

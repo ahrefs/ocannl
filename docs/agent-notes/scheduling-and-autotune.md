@@ -5,6 +5,13 @@ Schedule legality and coverage, sketch families, and how to read what a search a
 Part of the agent notes; the [index](../agent-notes.md) carries the scope discipline and the other
 files.
 
+- Small leading GPU axes can starve the default schedule even when later axes have ample work
+  (gh-ocannl-995). `gpu_parallel_suffix` chooses a better-populated pair before
+  `analyze_parallel_chains` proves ownership, with the original selection as a conservative
+  fallback; `zero_expansion` shares the policy. Never select a subset after proving a larger
+  thread-coordinate tuple. Metal GPT measurements and the explicit CUDA/HIP residual are in
+  `benchmarks/report-gh995-metal.md`; `gpu_small_leading_axis` executes dependent-nest and
+  zero-initialization oracles.
 - A GPU schedule must cover EVERY materialized-writing nest of the routine, not only the one the
   pipeline builds. Launch dimensions are kernel-global, so `Low_level.validate_parallel` rejects any
   companion write (a bias/relu tail; the elementwise statements an aligned-merged fission segment

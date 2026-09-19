@@ -605,21 +605,25 @@ val default_gpu :
     coverage property [Low_level.validate_parallel] enforces, used generatively — and the kernel
     passes a conservative race analysis (all accesses to written nodes agree on parallel-index
     components, no [Zero_out] of materialized nodes, no barriers or opaque statements; reduction
-    loops stay serial). Cross-nest producer/consumer (or WAW/WAR) pairs over a written node are
-    allowed only when {e aligned}: the linked nests' chains are trimmed to a common equal-extent
-    prefix — identical annotation geometry, so each hardware thread covers the same index slice in
-    every linked nest — and per axis position the paired accesses either both use plain [Iterator]s
-    of same-chain-position parallel symbols or neither mentions one; otherwise the analysis bails.
-    For non-materialized (per-thread copy) scratch the edge additionally requires value
-    thread-invariance at the chosen trim: a chain symbol feeding a scratch write's value without
-    pinning the written cell would leave each consumer thread's copy holding its own chunk's last
-    value where the serial reference holds the last chunk's, so the trim search serializes that loop
-    (gh-494; direct syntactic dependence only). Returns the empty schedule when any check fails or
-    when the largest parallelizable nest has fewer than [min_parallel] iterations (default from
-    config [gpu_schedule_min_parallel] = 64: a kernel launches either way, so any real parallelism
-    beats the serial 1x1 fallback — a single GPU thread is 1-2 orders of magnitude slower than a CPU
-    core; the remaining small threshold keeps sub-simdgroup-scale programs fully serial so their
-    segments coalesce and placements stay unchanged). *)
+    loops stay serial). When the leading parallel extent is below [min_parallel], a later pair with
+    no fewer grid groups and a larger grid-times-clamped-workgroup product is preferred. Skipped
+    leading loops remain serial. This choice precedes the race analysis; if it fails, the original
+    outermost pair is analyzed instead. Expanded whole-node zeros use the same choice. Cross-nest
+    producer/consumer (or WAW/WAR) pairs over a written node are allowed only when {e aligned}: the
+    linked nests' chains are trimmed to a common equal-extent prefix — identical annotation
+    geometry, so each hardware thread covers the same index slice in every linked nest — and per
+    axis position the paired accesses either both use plain [Iterator]s of same-chain-position
+    parallel symbols or neither mentions one; otherwise the analysis bails. For non-materialized
+    (per-thread copy) scratch the edge additionally requires value thread-invariance at the chosen
+    trim: a chain symbol feeding a scratch write's value without pinning the written cell would
+    leave each consumer thread's copy holding its own chunk's last value where the serial reference
+    holds the last chunk's, so the trim search serializes that loop (gh-494; direct syntactic
+    dependence only). Returns the empty schedule when any check fails or when the largest
+    parallelizable nest has fewer than [min_parallel] iterations (default from config
+    [gpu_schedule_min_parallel] = 64: a kernel launches either way, so any real parallelism beats
+    the serial 1x1 fallback — a single GPU thread is 1-2 orders of magnitude slower than a CPU core;
+    the remaining small threshold keeps sub-simdgroup-scale programs fully serial so their segments
+    coalesce and placements stay unchanged). *)
 
 val default_cpu : ?min_parallel:int -> Low_level.optimized -> schedule
 (** The default CPU annotator preset: the same conservative analysis as {!default_gpu}, but each
