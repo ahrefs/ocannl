@@ -3263,7 +3263,6 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
     in
     release_baseline_hook := release_baseline;
     let base_digest = SC.digest canon in
-    let use_cache = (not (String.is_empty cache_dir)) && SC.complete canon in
     let codegen_tag = SC.codegen_tag ~limits () in
     let objective = timing_string timing in
     let key =
@@ -3271,6 +3270,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
         ~timing_identity:(Context.timing_identity search_ctx)
         ~objective ~limits canon ~backend
     in
+    let use_cache = (not (String.is_empty cache_dir)) && SC.complete canon && Option.is_some key in
     if Option.is_none key then
       logf "persistent timed cache disabled for %s: complete device/toolchain identity unavailable"
         backend;
