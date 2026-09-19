@@ -133,7 +133,7 @@ type mma_capability = {
     of truth); this record carries what schedule construction needs. *)
 
 type timing_identity = { device_signature : string; toolchain_signature : string }
-[@@deriving sexp, equal]
+[@@deriving sexp_of, equal]
 (** Identity of the concrete device and compilation environment that produced timing evidence.
     Separate from conservative construction limits. Do not use ordinals or process-local IDs as the
     device signature; include model/throughput properties or a stable physical identity. *)

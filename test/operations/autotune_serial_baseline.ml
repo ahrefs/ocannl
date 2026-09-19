@@ -218,8 +218,12 @@ let () =
   let got = Context.get_values ctx mc.Tensor.value in
   let r = Option.value_exn ~here:[%here] !report in
   accounting "poisoned-cache search" r;
-  p "a serial cache entry is rejected on GPU backends and honoured on CPU ones"
-    (Bool.equal (replayed r) (not is_gpu));
+  if Option.is_some (Context.timing_identity ctx) then
+    p "a serial cache entry is rejected on GPU backends and honoured on CPU ones"
+      (Bool.equal (replayed r) (not is_gpu))
+  else (
+    Stdio.eprintf "complete timing identity unavailable: persistent replay disabled\n";
+    skipped ~backend "a serial cache entry is rejected on GPU backends and honoured on CPU ones");
   (* A replay times nothing and refuses nothing, so on GPU either counter is evidence of the
      re-search; a refused window is still a window the replay would not have opened. *)
   p "rejecting it re-searches rather than returning the serial routine"

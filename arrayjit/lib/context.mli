@@ -292,7 +292,13 @@ val static_properties : t -> Sexp.t
 
 val timing_identity : t -> Ir.Backend_intf.timing_identity option
 (** Persistent timing identity of this context's concrete device and toolchain; unavailable identity
-    disables timed schedule and placement cache I/O. Construction limits are unchanged. *)
+    disables timed schedule and placement cache I/O. Construction limits are unchanged.
+
+    CPU identifies the model, host and compiler target; HIP queries model/throughput properties and
+    driver/runtime/HIPRTC versions; Metal uses physical registry identity and the macOS build. CUDA
+    currently returns [None]: cudajit 0.8.0 does not expose driver version discovery, so CUDA
+    persistence is disabled rather than sharing unknown toolchains. Execution and runtime tuning
+    remain available. Ordinary discovery failures also return [None]. *)
 
 val hardware_limits : t -> Ir.Backend_intf.hardware_limits
 (** The backend's conservative per-workgroup device limits (all-[None] on backends that do not bind

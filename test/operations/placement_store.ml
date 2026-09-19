@@ -132,8 +132,13 @@ let () =
     "run 1 (not part of the golden): shipped %s, %d arm and %d flip reports, clean %b, stored %b\n\
      %!"
     shipped1 (List.length arms1) (List.length flips1) clean1 stored1;
-  p "the cold run records exactly one decision, whenever its evidence was clean"
-    ((not cache_available) || (not clean1) || stored1);
+  if cache_available then
+    p "the cold run records exactly one decision, whenever its evidence was clean"
+      ((not clean1) || stored1)
+  else (
+    Stdio.eprintf "complete timing identity unavailable: placement persistence disabled\n";
+    skipped ~backend:(Context.backend_name ctx_ref)
+      "the cold run records exactly one decision, whenever its evidence was clean");
   p_all "a decision is never recorded over refused windows or a failed search" observed1
     ~f:(fun r -> (not stored1) || (completed r && uncontended r));
   p "the recorded decision is the shipped one"

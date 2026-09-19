@@ -853,3 +853,11 @@ files.
   queries the scan index is an ordinary loop symbol: `loop_bounds`, interval analysis, and
   `affine_accesses`, where the inits sit at path `Stmt 0` and the body at `Stmt 1` so program order
   is preserved.
+
+- Timed cache evidence uses `Context.timing_identity` separately from conservative construction
+  limits (gh-ocannl-594): schedule AND placement keys require the concrete device/toolchain identity.
+  `None` bypasses shared cache I/O before directories, locks, reads, writes or regime migration.
+  CPU queries model/host/compiler; HIP queries static model/throughput and runtime/compiler versions;
+  Metal uses physical registry identity plus macOS build. CUDA persistence is disabled until cudajit
+  exposes driver identity; execution/tuning remain available. `schedule_cache_device` pins separation,
+  bypass and real-backend stability/replay.

@@ -178,6 +178,7 @@
   (alias runtest-env_spelling_gate)
   (alias runtest-resource_fault_injection)
   (alias runtest-schedule_cache_regime_race)
+  (alias runtest-schedule_cache_device)
   (alias runtest-alloc_census_peak)
   (alias runtest-autotune_candidate_release)
   (alias runtest-autotune_callback_release)))
@@ -3258,6 +3259,17 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ (name schedule_cache_device)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules schedule_cache_device)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_sexp_conv ppx_ocannl)))
 
 (test
  ; ocannl-backend: none -- pure filesystem exercise of Schedule_cache; no context or compile.
