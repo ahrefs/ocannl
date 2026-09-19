@@ -14,9 +14,9 @@
    timing window whose samples are mostly host stalls is refused ([Autotune.admitted_timing_ms]),
    and a refused candidate emits no row; on a busy machine a whole kernel's candidates can be
    refused, and then that kernel has no rows at all. So the golden pins the RELATIONSHIP -- a kernel
-   contributed rows exactly when its search timed a candidate, and a kernel with no rows shows
-   refused timings as the evidence -- rather than an ordered list of the four names, which on the
-   GPU backends made the golden a function of the load the sweep happened to be under. *)
+   has exactly as many rows as admitted timings, and a kernel with no rows shows refused timings as
+   the evidence -- rather than an ordered list of the four names, which on the GPU backends made the
+   golden a function of the load the sweep happened to be under. *)
 
 open Base
 open Ocannl
@@ -24,9 +24,10 @@ open Ocannl.Operation.DSL_modules
 module Cal = Ir.Cost_model.Calibration
 
 let contributed rows name = List.exists rows ~f:(fun row -> String.equal row.Cal.routine name)
+let row_count rows name = List.count rows ~f:(fun row -> String.equal row.Cal.routine name)
 
-let row_presence_matches_timing rows (name, report) =
-  Bool.equal (contributed rows name) (report.Autotune.candidates_timed > 0)
+let row_count_matches_timing rows (name, report) =
+  row_count rows name = report.Autotune.candidates_timed
 
 (* Exercise the exact gh-ocannl-886 defect class against the same predicate as the live claim: start
    from a kernel that really timed and emitted, hide every one of its rows, and require the
@@ -40,7 +41,24 @@ let omission_control_rejected rows reports =
       let rows_without_kernel =
         List.filter rows ~f:(fun row -> not (String.equal row.Cal.routine name))
       in
-      not (row_presence_matches_timing rows_without_kernel report))
+      not (row_count_matches_timing rows_without_kernel report))
+
+(* A deterministic two-timing fixture keeps partial loss distinct from whole-kernel omission even
+   when host contention leaves the live run with only one admitted timing per routine. Seed it with
+   a real parsed row and report, then vary only multiplicity through the live predicate. *)
+let count_controls rows reports =
+  let fixture =
+    List.find_map reports ~f:(fun (name, report) ->
+        List.find rows ~f:(fun row -> String.equal row.Cal.routine name)
+        |> Option.map ~f:(fun row -> (row, (name, { report with Autotune.candidates_timed = 2 }))))
+  in
+  Verdict.p "count control: two rows for two timings are accepted"
+    (Option.exists fixture ~f:(fun (row, report) -> row_count_matches_timing [ row; row ] report));
+  Verdict.p "count control: losing one of two rows is rejected"
+    (Option.exists fixture ~f:(fun (row, report) -> not (row_count_matches_timing [ row ] report)));
+  Verdict.p "count control: adding a spurious third row is rejected"
+    (Option.exists fixture ~f:(fun (row, report) ->
+         not (row_count_matches_timing [ row; row; row ] report)))
 
 let () =
   let file =
@@ -68,21 +86,20 @@ let () =
   List.iter reports ~f:(fun (name, rep) ->
       Stdio.eprintf
         "%s (not part of the golden): %d candidate(s) timed, %d timing(s) refused, %d candidate(s) \
-         failed, %s\n"
+         failed, %d row(s)\n"
         name rep.Autotune.candidates_timed rep.Autotune.timings_contended
-        rep.Autotune.candidates_failed
-        (if contributed rows name then "contributed rows" else "NO ROWS"));
-  (* The pass emits one row per admitted candidate timing and nothing anywhere else. Stated as the
-     biconditional it is: a kernel whose rows went missing while its search did time something is
-     the emission defect this test exists to catch, and a kernel with rows it never timed for would
-     mean the [routine] column named the wrong computation. Neither is what a contended host
-     produces -- that moves both sides at once. *)
-  Verdict.p_all "a kernel contributed rows exactly when its search timed a candidate" reports
-    ~f:(row_presence_matches_timing rows);
+        rep.Autotune.candidates_failed (row_count rows name));
+  (* [Calibrate.stream] forces search with no cache replay. The baseline initializes [n_timed]
+     exactly when its admitted timing is emitted; each admitted candidate increments it once and
+     emits once. The TSV aggregates all segments into ONE row, not one row per segment. Refused
+     timings do neither. Exact multiplicity catches partial omission and duplicate emission too. *)
+  Verdict.p_all "each kernel row count equals its admitted timing count" reports
+    ~f:(row_count_matches_timing rows);
+  count_controls rows reports;
   Verdict.p "omission control: a timed kernel with no row is rejected"
     (omission_control_rejected rows reports);
-  (* The biconditional alone would also accept a kernel whose every candidate failed compile or
-     dispatch ([candidates_failed]): nothing timed, nothing contributed, both sides false. That is
+  (* The count equality alone would also accept a kernel whose every candidate failed compile or
+     dispatch ([candidates_failed]): nothing timed, nothing contributed, both counts zero. That is
      the loss of coverage the ordered list used to catch, and it is not what load does -- a refused
      timing window increments [timings_contended]. So a kernel may go row-less only on that
      evidence. Cache replay would zero both counters, but [Calibrate.stream] passes [~cache_dir:""],
