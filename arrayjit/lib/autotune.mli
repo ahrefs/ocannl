@@ -1432,3 +1432,9 @@ val tune :
     candidates, against working pools held within 2-6. Bounding it needs an eviction rule inside the
     shared constant cache, which is gh-ocannl-565's subject; pinned as far as it can be by
     [test/operations/autotune_candidate_release]. *)
+
+val on_candidate_callback :
+  ([ `Timed | `Calibration ] -> candidate_ms:float -> incumbent_ms:float -> unit) ref
+(** Default-no-op fault-injection seam immediately before each post-admission callback. The times
+    are real admitted measurements; a strictly larger [candidate_ms] selects a nonwinning candidate
+    while an already measured incumbent exists. *)

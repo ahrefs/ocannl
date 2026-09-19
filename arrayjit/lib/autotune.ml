@@ -511,6 +511,13 @@ let on_candidate_preflight : (string -> unit) ref = ref (fun _routine_name -> ()
 let on_candidate_timed : (string -> timed_so_far:int -> unit) ref =
   ref (fun _routine_name ~timed_so_far:_ -> ())
 
+(* Fault-injection seam at the two post-admission callback boundaries (gh-ocannl-975). The measured
+   candidate and incumbent times let a cleanup probe select an actual nonwinner, rather than
+   guessing from attempt order. Default no-op; no configuration selects it. *)
+let on_candidate_callback :
+    ([ `Timed | `Calibration ] -> candidate_ms:float -> incumbent_ms:float -> unit) ref =
+  ref (fun _ ~candidate_ms:_ ~incumbent_ms:_ -> ())
+
 (* Observation seam for the timing tests (gh-ocannl-851), reporting the batch depth each
    [time_routine] call settles on -- after calibration, before the timed loop; [Isolated] reports 1.
    The negative control for a twice-divided queued reading needs the depth the call ACTUALLY used:
@@ -3598,6 +3605,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                 [ base_opt ])
             else if baseline_dispatched then release_baseline ()
             else (
+              (* An undispatched baseline never enters the beam, so the exit sweep cannot own it. *)
+              release_baseline ();
               (* No calibration row: the model column is only meaningful next to a measurement. *)
               logf
                 "baseline: NOT DISPATCHED, binds no hardware dimension on %s -- the whole routine \
@@ -3703,6 +3712,9 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
            [beam] nor [best_so_far] (gh-ocannl-550, round-three review). Reset at the top of each
            round. *)
         let round = ref [] in
+        (* Own the just-compiled candidate until admission transfers it to beam/round. In
+           particular, a nonwinner is not in [best_so_far] when either callback raises. *)
+        let pending = ref None in
         (* Set by the exit sweep: past it there is no reader left for any candidate the search
            compiled, so retention stops applying. A flag rather than clearing [best_so_far], which
            the reports still read for the winner's label after the sweep has freed its buffers. *)
@@ -3720,17 +3732,19 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                  (List.exists !beam ~f:(fun (c', _) -> phys_equal c c')
                  || List.exists !round ~f:(fun (c', _) -> phys_equal c c')
                  || Option.exists (fst !best_so_far) ~f:(phys_equal c))
-          then
+          then (
+            if Option.exists !pending ~f:(phys_equal c) then pending := None;
             (* Best-effort: a failure to free must not replace the candidate's own outcome, and this
                runs on failure paths too, where the device may already be refusing work.
                Process-fatal conditions still propagate. *)
-            release_quietly ~what:("candidate " ^ dshort c.digest_after) c.cctx
+            release_quietly ~what:("candidate " ^ dshort c.digest_after) c.cctx)
         in
         let admit entry =
           let kept, evicted =
             List.split_n (List.sort (entry :: !beam) ~compare:by_time) beam_width
           in
           beam := kept;
+          pending := None;
           List.iter evicted ~f:(fun (c, _) -> release_candidate c)
         in
         (* The exit sweep. Once the search has produced its report, the beam survivors and the
@@ -3743,10 +3757,13 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
         let release_all_candidates ~keep () =
           search_over := true;
           let live =
-            List.map !beam ~f:fst @ List.map !round ~f:fst @ Option.to_list (fst !best_so_far)
+            List.map !beam ~f:fst @ List.map !round ~f:fst
+            @ Option.to_list (fst !best_so_far)
+            @ Option.to_list !pending
           in
           beam := [];
           round := [];
+          pending := None;
           List.iter live ~f:(fun c ->
               if not (List.exists keep ~f:(phys_equal c)) then release_candidate c)
         in
@@ -3899,6 +3916,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                   None
               | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
               | Ok c ->
+                  pending := Some c;
                   (* Recorded whether or not this compile goes on to be timed: on dedup the code was
                      (or will not be) timed under the same digest, and the [default_ms] lookup
                      follows the digest, not the seed (gh-ocannl-552). Guarded: the seed is the
@@ -4031,9 +4049,18 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                            whose winner tensorizes. *)
                         if saved_is_tensorized (flat_schedule c.form) && Float.(ms < !mma_best_ms)
                         then mma_best_ms := ms;
-                        if Float.(ms < snd !best_so_far) then best_so_far := (Some c, ms);
+                        if Float.(ms < snd !best_so_far) then (
+                          let previous = fst !best_so_far in
+                          best_so_far := (Some c, ms);
+                          (* A timing tie can evict the old best from the beam while the best
+                             reference retains it. Replacing that last owner must release it. *)
+                          Option.iter previous ~f:release_candidate);
+                        !on_candidate_callback `Timed ~candidate_ms:ms
+                          ~incumbent_ms:(snd !best_so_far);
                         !on_candidate_timed c.routine.Context.name ~timed_so_far:!n_timed;
                         logf "%s: %.4f ms (digest %s)" (spec_label spec) ms (dshort c.digest_after);
+                        !on_candidate_callback `Calibration ~candidate_ms:ms
+                          ~incumbent_ms:(snd !best_so_far);
                         emit_calibration ~backend ~device ~limits ~routine:(Lazy.force routine_name)
                           ~label:(spec_label spec) ~digest:c.digest_after ~timing_result c.all_opts;
                         (* The rendering census next to the timing (gh-ocannl-479): a candidate
@@ -4442,6 +4469,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                 List.split_n (List.sort (entry :: !round) ~compare:by_time) beam_width
               in
               round := kept;
+              pending := None;
               List.iter evicted ~f:(fun (c, _) -> release_candidate c)
             in
             List.iter cands ~f:(fun spec -> Option.iter (try_spec spec) ~f:round_admit);

@@ -179,7 +179,8 @@
   (alias runtest-resource_fault_injection)
   (alias runtest-schedule_cache_regime_race)
   (alias runtest-alloc_census_peak)
-  (alias runtest-autotune_candidate_release)))
+  (alias runtest-autotune_candidate_release)
+  (alias runtest-autotune_callback_release)))
 
 ; This directory's golden-diff rules, aggregated back onto `runtest` (gh-ocannl-726). Each of them
 ; attaches to its own `runtest-<name>` alias and to NOTHING else, so that `dune build
@@ -5530,3 +5531,14 @@
   (env_var OCANNL_BACKEND))
  (modules affine_surjectivity)
  (libraries base ocannl stdio ll_test arrayjit.verdict))
+
+(test
+ (name autotune_callback_release)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules autotune_callback_release)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
