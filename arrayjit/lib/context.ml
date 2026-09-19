@@ -509,6 +509,14 @@ let hardware_limits ctx =
   let (module Backend) = backend_module ctx in
   Backend.hardware_limits ()
 
+let timing_identity ctx =
+  Backends.query ctx.wrapped
+    {
+      q =
+        (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
+          Backend.timing_identity c.BI.device);
+    }
+
 let codegen_capabilities ctx =
   let (module Backend) = backend_module ctx in
   Backend.codegen_capabilities ()

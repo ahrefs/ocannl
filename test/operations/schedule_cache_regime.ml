@@ -57,16 +57,16 @@ let () =
   List.iter old_keys ~f:(fun key -> write_entry old_cache_dir key (entry key));
   write_stamp old_cache_dir (SC.cache_regime_version - 1);
   p "an old stamped generation opens as a cache miss"
-    (Option.is_none (SC.lookup ~dir:old_cache_dir ~key:"old-a"));
+    (Option.is_none (SC.lookup ~dir:old_cache_dir ~key:(Some "old-a")));
   Verdict.p_none ~min:2 "every old-regime entry is swept" old_keys ~f:(fun key ->
       Stdlib.Sys.file_exists (entry_file old_cache_dir key));
   p "the completed sweep atomically advances the regime stamp"
     (String.equal
        (String.strip (read (stamp_file old_cache_dir)))
        (Int.to_string SC.cache_regime_version));
-  SC.store ~dir:old_cache_dir ~key:"current" (entry "current");
+  SC.store ~dir:old_cache_dir ~key:(Some "current") (entry "current");
   p "a current entry remains readable across later cache opens"
-    (match SC.lookup ~dir:old_cache_dir ~key:"current" with
+    (match SC.lookup ~dir:old_cache_dir ~key:(Some "current") with
     | Some value -> String.equal value.SC.backend "current"
     | None -> false);
 
@@ -76,7 +76,7 @@ let () =
   make_dir legacy_cache_dir;
   write_entry legacy_cache_dir "legacy" (entry "legacy");
   p "an unstamped legacy generation is swept and stamped current"
-    (Option.is_none (SC.lookup ~dir:legacy_cache_dir ~key:"legacy")
+    (Option.is_none (SC.lookup ~dir:legacy_cache_dir ~key:(Some "legacy"))
     && (not (Stdlib.Sys.file_exists (entry_file legacy_cache_dir "legacy")))
     && String.equal
          (String.strip (read (stamp_file legacy_cache_dir)))
@@ -90,8 +90,8 @@ let () =
   let future_version = SC.cache_regime_version + 1 in
   write_stamp future_cache_dir future_version;
   p "a future regime refuses an otherwise readable entry"
-    (Option.is_none (SC.lookup ~dir:future_cache_dir ~key:"kept"));
-  SC.store ~dir:future_cache_dir ~key:"refused-write" (entry "older-writer");
+    (Option.is_none (SC.lookup ~dir:future_cache_dir ~key:(Some "kept")));
+  SC.store ~dir:future_cache_dir ~key:(Some "refused-write") (entry "older-writer");
   p "a refused future-regime open changes no entries"
     (String.equal kept_before (read (entry_file future_cache_dir "kept"))
     && not (Stdlib.Sys.file_exists (entry_file future_cache_dir "refused-write")));

@@ -17,6 +17,14 @@ open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
 module SC = Ir.Schedule_cache
+
+let timing_identity =
+  Some
+    {
+      Ir.Backend_intf.device_signature = "synthetic-device";
+      toolchain_signature = "synthetic-compiler";
+    }
+
 open Verdict.Claims
 
 (* Config values resolve per lookup, so a config-file entry poked in is what later reads see —
@@ -54,7 +62,9 @@ let canonical_of ?(materialized_constant = false) ctx =
 (* The key is a function of the canonical form and the current configuration, so a knob that cannot
    touch the code is answered without recompiling. *)
 let key_of ctx canon =
-  SC.cache_key ~limits:(Context.hardware_limits ctx) canon ~backend:(Context.backend_name ctx)
+  Option.value_exn
+    (SC.cache_key ~timing_identity ~limits:(Context.hardware_limits ctx) canon
+       ~backend:(Context.backend_name ctx))
 
 let identity_of ?materialized_constant ctx =
   let canon = canonical_of ?materialized_constant ctx in

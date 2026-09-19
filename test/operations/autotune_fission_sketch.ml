@@ -178,7 +178,9 @@ let () =
   in
   let blimits = Context.hardware_limits bctx in
   SC.store ~dir:cache_dir
-    ~key:(SC.cache_key ~limits:blimits base_canon ~backend:(Context.backend_name bctx))
+    ~key:
+      (SC.cache_key ~timing_identity:(Context.timing_identity bctx) ~limits:blimits base_canon
+         ~backend:(Context.backend_name bctx))
     {
       SC.version = SC.entry_version;
       backend = Context.backend_name bctx;
@@ -205,13 +207,19 @@ let () =
   in
   let hctx = Context.run hctx hroutine in
   let got_hit = Context.get_values hctx e.Tensor.value in
+  let cache_claim label value =
+    if Option.is_some (Context.timing_identity bctx) then p label value
+    else (
+      Stdio.eprintf "timed-cache reuse unavailable: complete device/toolchain identity missing\n";
+      skipped ~backend:(Context.backend_name bctx) label)
+  in
   (match !hit_report with
   | Some r ->
-      p "hand-crafted fissioned entry hits the cache" (replayed r);
-      p "cache-hit replay is fissioned" r.Autotune.fissioned
+      cache_claim "hand-crafted fissioned entry hits the cache" (replayed r);
+      cache_claim "cache-hit replay is fissioned" r.Autotune.fissioned
   | None ->
-      p "hand-crafted fissioned entry hits the cache" false;
-      p "cache-hit replay is fissioned" false);
+      cache_claim "hand-crafted fissioned entry hits the cache" false;
+      cache_claim "cache-hit replay is fissioned" false);
   p_all2 "fissioned cache-hit replay computes correctly" got_hit expected_e ~f:approx;
 
   (* --- tune end-to-end on the fissionable chain (fresh cache dir: search, then hit) --- *)
@@ -235,7 +243,8 @@ let () =
   accounting "chain search" r1;
   accounting "chain second call" r2;
   p_all2 "tuned fissionable chain values correct" got_t1 expected_e ~f:approx;
-  let chain_first_cacheable = r1.Autotune.timings_contended = 0 in
+  let cache_available = Option.is_some (Context.timing_identity bctx) in
+  let chain_first_cacheable = cache_available && r1.Autotune.timings_contended = 0 in
   (* The load's own evidence, for the claims below that a refused search cannot satisfy — scoped to
      the report whose absence it explains, and within it to the candidate whose refusal explains it
      (Codex P2 on PR #608, twice). A refusal in one call says nothing about what the other could
@@ -251,7 +260,7 @@ let () =
   p "chain tune replays exactly after a contention-free search"
     (completed r1 && Bool.equal (replayed r2) chain_first_cacheable);
   let chain_cache_committed =
-    chain_first_cacheable || (completed r2 && r2.Autotune.timings_contended = 0)
+    cache_available && (chain_first_cacheable || (completed r2 && r2.Autotune.timings_contended = 0))
   in
   (* gh-ocannl-552: the untuned-default reference is measured by the search — the config-thresholds
      fissioned seed is the first candidate that binds a hardware dimension on GPU, and on CPU it is
@@ -271,7 +280,10 @@ let () =
      thresholds, so a config change can redefine the default pipeline without missing the cache.
      Simulated by rewriting the stored entry's fingerprint: the entry still hits — the winner replay
      is config-independent — but the config-relative default reference is dropped. *)
-  let key2 = SC.cache_key ~limits:blimits base_canon ~backend:(Context.backend_name bctx) in
+  let key2 =
+    SC.cache_key ~timing_identity:(Context.timing_identity bctx) ~limits:blimits base_canon
+      ~backend:(Context.backend_name bctx)
+  in
   (match SC.lookup ~dir:cache_dir2 ~key:key2 with
   | Some entry ->
       (* gh-ocannl-995: the old GPU fingerprint carried only config, so a changed default policy
@@ -424,7 +436,8 @@ let () =
     (mr1.Autotune.fiss_mma_candidates < mr1.Autotune.mma_candidates);
   p_all2 "tuned matmul matches the serial twin" got_mm1 got_serial ~f:approx;
   p "matmul tune replays exactly after a contention-free search"
-    (completed mr1 && Bool.equal (replayed mr2) (mr1.Autotune.timings_contended = 0));
+    (completed mr1
+    && Bool.equal (replayed mr2) (cache_available && mr1.Autotune.timings_contended = 0));
   p_all2 "matmul cache-hit values match the serial twin" got_mm2 got_serial ~f:approx;
   (* As in the split-reduce controls, Empty bindings and fatal CPU launch/sync failures make each
      observed family preflight a completed window at admission or normal return. Count all promised

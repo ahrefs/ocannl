@@ -290,6 +290,10 @@ val static_properties : t -> Sexp.t
     backend: see {!Ir.Backend_intf.parse_static_properties}, which states the contract and is the
     single reader of it (gh-ocannl-710). *)
 
+val timing_identity : t -> Ir.Backend_intf.timing_identity option
+(** Persistent timing identity of this context's concrete device and toolchain; unavailable identity
+    disables timed schedule and placement cache I/O. Construction limits are unchanged. *)
+
 val hardware_limits : t -> Ir.Backend_intf.hardware_limits
 (** The backend's conservative per-workgroup device limits (all-[None] on backends that do not bind
     hardware axes). Chiefly for schedule transforms and the autotuner. *)

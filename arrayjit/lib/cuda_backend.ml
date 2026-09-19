@@ -1731,6 +1731,11 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
      minimum across devices, so code compiled once is valid wherever it links. *)
   (* Memoized behind [lazy]: driver init and device enumeration must not run at backend-module
      initialization ([num_devices] forces [ensure_initialized]). *)
+  (* cudajit 0.8.0 does not expose the driver's version. Until that binding is available,
+     do not persist CUDA timing evidence: package versions or an "unknown" tag cannot identify
+     the driver's PTX JIT. Runtime tuning and conservative construction are unaffected. *)
+  let timing_identity _ = None
+
   let hardware_limits =
     let limits =
       lazy

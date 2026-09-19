@@ -1059,7 +1059,12 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
         if SC.complete problem then
           let limits = Context.hardware_limits ctx in
           let backend = Context.backend_name ctx in
-          Some (problem, SC.placement_key ~limits problem ~backend, limits, backend)
+          Some
+            ( problem,
+              SC.placement_key ~timing_identity:(Context.timing_identity ctx) ~limits problem
+                ~backend,
+              limits,
+              backend )
         else None
       with
       | store -> store

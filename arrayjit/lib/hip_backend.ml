@@ -1377,6 +1377,29 @@ end = struct
      minimum across devices, so code compiled once is valid wherever it links. *)
   (* Memoized behind [lazy]: driver init and device enumeration must not run at backend-module
      initialization ([num_devices] forces [ensure_initialized]). *)
+  let timing_identity (device : device) =
+    try
+      let attributes = H.Device.get_attributes device.dev.dev in
+      let compiler_major, compiler_minor = Hiprtc.version () in
+      Some
+        {
+          Backend_intf.device_signature =
+            Sexp.to_string
+              ([%sexp_of: string * string * int * int * int * int * int]
+                 ( attributes.name,
+                   attributes.gcn_arch_name,
+                   attributes.multiprocessor_count,
+                   attributes.clock_rate,
+                   attributes.memory_clock_rate,
+                   attributes.memory_bus_width,
+                   attributes.total_global_mem ));
+          toolchain_signature =
+            Sexp.to_string
+              ([%sexp_of: int * int * int * int]
+                 (H.driver_get_version (), H.runtime_get_version (), compiler_major, compiler_minor));
+        }
+    with H.Hip_error _ | Hiprtc.Hiprtc_error _ -> None
+
   let hardware_limits =
     let limits =
       lazy

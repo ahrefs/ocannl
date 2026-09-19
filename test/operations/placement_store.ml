@@ -45,7 +45,7 @@ let placement_keys () =
         if String.is_prefix f ~prefix:"placements-" then String.chop_suffix f ~suffix:".sexp"
         else None)
 
-let read_entry key = Option.value_exn (SC.lookup_placements ~dir:cache_dir ~key)
+let read_entry key = Option.value_exn (SC.lookup_placements ~dir:cache_dir ~key:(Some key))
 
 let completed (r : Autotune.report) =
   match r.Autotune.outcome with Autotune.Searched | Autotune.Cache_replay -> true | _ -> false
@@ -119,6 +119,7 @@ let () =
   let arms1, flips1, shipped1, materialized1, got1 = run () in
   p "the cold run reports both arms in position" (List.length arms1 = 2);
   p_all2 "the cold run's routine computes the right values" got1 expected ~f:approx;
+  let cache_available = Option.is_some (Context.timing_identity ctx_ref) in
   let observed1 = arms1 @ flips1 in
   let clean1 =
     List.for_all observed1 ~f:(fun r ->
@@ -132,7 +133,7 @@ let () =
      %!"
     shipped1 (List.length arms1) (List.length flips1) clean1 stored1;
   p "the cold run records exactly one decision, whenever its evidence was clean"
-    ((not clean1) || stored1);
+    ((not cache_available) || (not clean1) || stored1);
   p_all "a decision is never recorded over refused windows or a failed search" observed1
     ~f:(fun r -> (not stored1) || (completed r && uncontended r));
   p "the recorded decision is the shipped one"
@@ -201,7 +202,8 @@ let () =
     ]
   in
   List.iter stale ~f:(fun (how, corrupt, overwritten) ->
-      Option.iter recorded ~f:(fun (key, e) -> SC.store_placements ~dir:cache_dir ~key (corrupt e));
+      Option.iter recorded ~f:(fun (key, e) ->
+          SC.store_placements ~dir:cache_dir ~key:(Some key) (corrupt e));
       let arms, _, _, _, got = run () in
       p_all2
         (Printf.sprintf "after an entry that %s, the routine computes the right values" how)
@@ -218,5 +220,5 @@ let () =
         ((not clean)
         || Option.value_map recorded ~default:true ~f:(fun (key, e) ->
             Option.value_map
-              (SC.lookup_placements ~dir:cache_dir ~key)
+              (SC.lookup_placements ~dir:cache_dir ~key:(Some key))
               ~default:false ~f:(overwritten e))))

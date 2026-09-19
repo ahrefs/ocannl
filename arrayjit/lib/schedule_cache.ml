@@ -623,38 +623,48 @@ let objective_tag () =
    {!cache_key} (each name dispatches to an arm below, and an unknown name raises), so the
    enumeration cannot go stale against the implementation — which is what makes it usable as the
    thing the digest-completeness registry classifies config keys against (gh-ocannl-572). *)
-let key_components = [ "digest"; "backend"; "numerics"; "codegen"; "pool"; "timing" ]
+let key_components = [ "digest"; "backend"; "numerics"; "codegen"; "pool"; "device"; "timing" ]
 
-let cache_key ?objective ~(limits : Backend_intf.hardware_limits) canonical ~backend =
-  let objective = match objective with Some o -> sanitize o | None -> objective_tag () in
-  (* gh-ocannl-892 changes what CUDA/HIP [queued] measures: the old depth-200 winner was ranked on a
-     1--2.5 ms contention window, while generation 2 restores the ~10 ms premise. Keep the public
-     setting and entry self-description as [queued], but version its filename identity on exactly
-     the backends whose policy changed so an old winner cannot bypass the new measurement. *)
-  let objective =
-    match (String.lowercase backend, objective) with
-    | ("cuda" | "hip"), "queued" -> "queued-v2"
-    | _ -> objective
-  in
-  let component = function
-    | "digest" -> canonical.digest
-    | "backend" -> sanitize backend
-    | "numerics" -> "n" ^ numerics_tag ()
-    | "codegen" -> "c" ^ codegen_tag ~limits ()
-    (* The worker-pool signature (gh-ocannl-530): CPU crowns do not transfer across pools, so a pool
-       change re-tunes instead of replaying. [None] (GPU backends) contributes nothing. *)
-    | "pool" -> ( match limits.worker_pool_tag with None -> "" | Some tag -> "p" ^ sanitize tag)
-    (* The autotuner's timing objective (gh-ocannl-755). Isolated timing -- one launch plus one host
-       sync -- and queued timing crown DIFFERENT candidates, measured, so an entry crowned under one
-       is not the answer to a search asking the other, and its stored times are readings of a
-       different quantity. Unlike the pool component this never contributes nothing: a key that
-       omitted the objective on some path would let the two regimes share a file. *)
-    | "timing" -> "t" ^ objective
-    | other -> invalid_arg ("Schedule_cache.cache_key: unhandled key component " ^ other)
-  in
-  String.concat ~sep:"-"
-    (List.filter_map key_components ~f:(fun name ->
-         match component name with "" -> None | part -> Some part))
+let cache_key ?objective ~timing_identity ~(limits : Backend_intf.hardware_limits) canonical
+    ~backend =
+  Option.map timing_identity ~f:(fun identity ->
+      let objective = match objective with Some o -> sanitize o | None -> objective_tag () in
+      (* gh-ocannl-892 changes what CUDA/HIP [queued] measures: the old depth-200 winner was ranked
+         on a 1--2.5 ms contention window, while generation 2 restores the ~10 ms premise. Keep the
+         public setting and entry self-description as [queued], but version its filename identity on
+         exactly the backends whose policy changed so an old winner cannot bypass the new
+         measurement. *)
+      let objective =
+        match (String.lowercase backend, objective) with
+        | ("cuda" | "hip"), "queued" -> "queued-v2"
+        | _ -> objective
+      in
+      let component = function
+        | "digest" -> canonical.digest
+        | "backend" -> sanitize backend
+        | "numerics" -> "n" ^ numerics_tag ()
+        | "codegen" -> "c" ^ codegen_tag ~limits ()
+        (* The worker-pool signature (gh-ocannl-530): CPU crowns do not transfer across pools, so a
+           pool change re-tunes instead of replaying. [None] (GPU backends) contributes nothing. *)
+        | "pool" -> (
+            match limits.worker_pool_tag with None -> "" | Some tag -> "p" ^ sanitize tag)
+        (* The autotuner's timing objective (gh-ocannl-755). Isolated timing -- one launch plus one
+           host sync -- and queued timing crown DIFFERENT candidates, measured, so an entry crowned
+           under one is not the answer to a search asking the other, and its stored times are
+           readings of a different quantity. Unlike the pool component this never contributes
+           nothing: a key that omitted the objective on some path would let the two regimes share a
+           file. *)
+        | "device" ->
+            "d"
+            ^ Stdlib.Digest.to_hex
+                (Stdlib.Digest.string
+                   (Sexp.to_string (Backend_intf.sexp_of_timing_identity identity)))
+        | "timing" -> "t" ^ objective
+        | other -> invalid_arg ("Schedule_cache.cache_key: unhandled key component " ^ other)
+      in
+      String.concat ~sep:"-"
+        (List.filter_map key_components ~f:(fun name ->
+             match component name with "" -> None | part -> Some part)))
 
 let ensure_dir = Utils.Atomic_file.ensure_dir
 let cache_file ~dir ~key = Stdlib.Filename.concat dir (sanitize key ^ ".sexp")
@@ -664,7 +674,7 @@ let cache_file ~dir ~key = Stdlib.Filename.concat dir (sanitize key ^ ".sexp")
    the same [key_components] schema. Bump this once when that schema changes. Cache-open then
    discards the superseded generation wholesale, with no migration arm for each historical schema
    (gh-ocannl-835). *)
-let cache_regime_version = 1
+let cache_regime_version = 2
 let regime_stamp_filename = ".ocannl-schedule-cache-regime"
 let regime_lock_filename = ".ocannl-schedule-cache.lock"
 let regime_stamp_file dir = Stdlib.Filename.concat dir regime_stamp_filename
@@ -741,28 +751,31 @@ let with_cache_open ~dir f =
    placement decisions (gh-ocannl-786) share the lock, the regime stamp and the atomic commit, and
    differ only in payload and version check. *)
 let store_sexp ~dir ~key sexp =
-  ensure_dir dir;
-  ignore
-    (with_cache_open ~dir (fun () ->
-         (* A writer killed between staging and commit leaves its staging file behind; nothing else
-            in the process would ever remove it, and a cache directory is long-lived. Sweep once per
-            process, from the writers rather than on a timer. *)
-         Utils.Atomic_file.cleanup_stale_once dir;
-         let file = cache_file ~dir ~key in
-         (* Uniqueness, failure cleanup and the Windows-safe commit all live in [Atomic_file]: the
-            committed entry is either the old complete file or the new complete file, never an
-            intention. The injection point sits in the staged-but-uncommitted window, which is what
-            makes that guarantee testable. *)
-         try
-           Utils.Atomic_file.write_all ~path:file ~data:(Sexp.to_string_hum sexp)
-             ~before_commit:(fun () -> Resource_fault_injection.hit Schedule_cache_before_commit)
-             ()
-         with Stdlib.Sys_error _ ->
-           (* The cache is an optimization, so a filesystem refusal — a directory that turned
-              unwritable, a Windows peer still holding this entry open past the bounded commit retry
-              — means the tuning result is not saved, not that the run fails. [publish] has already
-              removed the staging file; an earlier complete entry is still in place. *)
-           ()))
+  Option.iter key ~f:(fun key ->
+      ensure_dir dir;
+      ignore
+        (with_cache_open ~dir (fun () ->
+             (* A writer killed between staging and commit leaves its staging file behind; nothing
+                else in the process would ever remove it, and a cache directory is long-lived. Sweep
+                once per process, from the writers rather than on a timer. *)
+             Utils.Atomic_file.cleanup_stale_once dir;
+             let file = cache_file ~dir ~key in
+             (* Uniqueness, failure cleanup and the Windows-safe commit all live in [Atomic_file]:
+                the committed entry is either the old complete file or the new complete file, never
+                an intention. The injection point sits in the staged-but-uncommitted window, which
+                is what makes that guarantee testable. *)
+             try
+               Utils.Atomic_file.write_all ~path:file ~data:(Sexp.to_string_hum sexp)
+                 ~before_commit:(fun () ->
+                   Resource_fault_injection.hit Schedule_cache_before_commit)
+                 ()
+             with Stdlib.Sys_error _ ->
+               (* The cache is an optimization, so a filesystem refusal — a directory that turned
+                  unwritable, a Windows peer still holding this entry open past the bounded commit
+                  retry — means the tuning result is not saved, not that the run fails. [publish]
+                  has already removed the staging file; an earlier complete entry is still in
+                  place. *)
+               ())))
 
 (* The failures a cache read never absorbs: they are about the process, not the entry, and a miss
    that hides one turns Ctrl-C during a lookup into the start of a search it was meant to stop. *)
@@ -771,17 +784,18 @@ let process_level = function
   | _ -> false
 
 let lookup_sexp ~dir ~key ~of_sexp ~current =
-  Option.join
-    (with_cache_open ~dir (fun () ->
-         Utils.Atomic_file.cleanup_stale_once dir;
-         let file = cache_file ~dir ~key in
-         if not (Stdlib.Sys.file_exists file) then None
-         else
-           try
-             Resource_fault_injection.hit Schedule_cache_before_replay;
-             let entry = of_sexp (Sexplib.Sexp.load_sexp file) in
-             if current entry then Some entry else None
-           with exn when not (process_level exn) -> None))
+  Option.bind key ~f:(fun key ->
+      Option.join
+        (with_cache_open ~dir (fun () ->
+             Utils.Atomic_file.cleanup_stale_once dir;
+             let file = cache_file ~dir ~key in
+             if not (Stdlib.Sys.file_exists file) then None
+             else
+               try
+                 Resource_fault_injection.hit Schedule_cache_before_replay;
+                 let entry = of_sexp (Sexplib.Sexp.load_sexp file) in
+                 if current entry then Some entry else None
+               with exn when not (process_level exn) -> None)))
 
 let store ~dir ~key entry = store_sexp ~dir ~key (sexp_of_entry entry)
 
@@ -813,8 +827,9 @@ type placement_entry = {
 
 let placement_entry_version = 1
 
-let placement_key ?objective ~limits canonical ~backend =
-  "placements-" ^ cache_key ?objective ~limits canonical ~backend
+let placement_key ?objective ~timing_identity ~limits canonical ~backend =
+  Option.map (cache_key ?objective ~timing_identity ~limits canonical ~backend) ~f:(fun key ->
+      "placements-" ^ key)
 
 let store_placements ~dir ~key entry = store_sexp ~dir ~key (sexp_of_placement_entry entry)
 

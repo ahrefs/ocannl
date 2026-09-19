@@ -266,7 +266,8 @@ let () =
   p "decline census sums to candidates_failed"
     (r1.Autotune.candidates_failed
     = List.sum (module Int) r1.Autotune.declines ~f:(fun d -> d.Autotune.count));
-  let first_cacheable = r1.Autotune.timings_contended = 0 in
+  let cache_available = Option.is_some (Context.timing_identity ctx) in
+  let first_cacheable = cache_available && r1.Autotune.timings_contended = 0 in
   p "second tune call replays exactly when the first search had no contention refusals"
     (Bool.equal (replayed r2) first_cacheable);
   p "a replayed second report has no declines"
@@ -401,7 +402,9 @@ let () =
     ~f:approx;
   p_all2 "search off without a cache returns correct untuned matmul values" got_mm3 mm_expected
     ~f:approx;
-  let cache_committed = first_cacheable || (completed r2 && r2.Autotune.timings_contended = 0) in
+  let cache_committed =
+    cache_available && (first_cacheable || (completed r2 && r2.Autotune.timings_contended = 0))
+  in
   let r4, got4, got_mm4 = tune_no_search ~cache_dir () in
   p "search off replays exactly when a complete search committed a cache entry"
     (Bool.equal (replayed r4) cache_committed && r4.Autotune.candidates_timed = 0);
@@ -455,7 +458,8 @@ let () =
   let default_search_report = Option.value_exn ~here:[%here] !default_search_report in
   let r5, _, _ = tune_no_search ~cache_dir:default_cache_dir () in
   p "search off replays the chosen default cache exactly after a complete search"
-    (Bool.equal (replayed r5) (default_search_report.Autotune.timings_contended = 0));
+    (Bool.equal (replayed r5)
+       (cache_available && default_search_report.Autotune.timings_contended = 0));
   let r6 = ref None in
   let ctx = Context.auto () in
   let ctx, routine =

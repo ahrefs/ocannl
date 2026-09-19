@@ -247,7 +247,9 @@ let () =
     ((not (List.is_empty !prelude_saved)) && List.length !segments_assoc >= 2);
   let slimits = Context.hardware_limits sctx in
   SC.store ~dir:cache_dir
-    ~key:(SC.cache_key ~limits:slimits base_canon ~backend:backend_name)
+    ~key:
+      (SC.cache_key ~timing_identity:(Context.timing_identity sctx) ~limits:slimits base_canon
+         ~backend:backend_name)
     {
       SC.version = SC.entry_version;
       backend = backend_name;
@@ -274,13 +276,19 @@ let () =
   in
   let hctx = Context.run hctx hroutine in
   let got = Context.get_values hctx y1.Tensor.value in
+  let cache_claim label value =
+    if Option.is_some (Context.timing_identity sctx) then p label value
+    else (
+      Stdio.eprintf "timed-cache reuse unavailable: complete device/toolchain identity missing\n";
+      skipped ~backend:(Context.backend_name sctx) label)
+  in
   (match !hit_report with
   | Some r ->
-      p "split-reduce entry hits the cache" (replayed r);
-      p "split-reduce cache-hit replay is fissioned" r.Autotune.fissioned
+      cache_claim "split-reduce entry hits the cache" (replayed r);
+      cache_claim "split-reduce cache-hit replay is fissioned" r.Autotune.fissioned
   | None ->
-      p "split-reduce entry hits the cache" false;
-      p "split-reduce cache-hit replay is fissioned" false);
+      cache_claim "split-reduce entry hits the cache" false;
+      cache_claim "split-reduce cache-hit replay is fissioned" false);
   p_all2 "split-reduce cache-hit replay computes correctly" got want ~f:approx
 
 (* === Leg 5: multi-site — per-site singles plus the recombined composite. === *)

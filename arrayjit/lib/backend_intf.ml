@@ -132,6 +132,12 @@ type mma_capability = {
     are supported is decided per call by the backend's [mma_syntax] hook (the emission is the source
     of truth); this record carries what schedule construction needs. *)
 
+type timing_identity = { device_signature : string; toolchain_signature : string }
+[@@deriving sexp, equal]
+(** Identity of the concrete device and compilation environment that produced timing evidence.
+    Separate from conservative construction limits. Do not use ordinals or process-local IDs as the
+    device signature; include model/throughput properties or a stable physical identity. *)
+
 type hardware_limits = {
   max_threads_per_workgroup : int option;
       (** Upper bound on the number of threads in one workgroup (CUDA thread block / Metal
@@ -650,6 +656,11 @@ module type Backend_device_common = sig
       A function so that computing it (device enumeration) does not run at backend-module
       initialization: singleton backends instantiate eagerly at program startup, where touching a
       driver could fail runs that never use the backend. *)
+
+  val timing_identity : device -> timing_identity option
+  (** Complete persistent timing identity for this device. [None] disables persistent schedule AND
+      placement reuse and storage: an unavailable toolchain is not a shared "unknown" key. Query
+      lazily, never during backend initialization. *)
 
   val hardware_limits : unit -> hardware_limits
   (** Conservative per-workgroup device limits: on multi-device backends the minimum across the

@@ -278,18 +278,25 @@ val objective_tag : unit -> string
 
 val key_components : string list
 (** The named components a {!cache_key} is built from, in order: ["digest"], ["backend"],
-    ["numerics"], ["codegen"], ["pool"], ["timing"]. The list drives {!cache_key} rather than
-    describing it, so it is a complete and current enumeration of the cache's identity — which is
-    what the digest-completeness registry classifies configuration keys against (gh-ocannl-572,
+    ["numerics"], ["codegen"], ["pool"], ["device"], ["timing"]. The list drives {!cache_key} rather
+    than describing it, so it is a complete and current enumeration of the cache's identity — which
+    is what the digest-completeness registry classifies configuration keys against (gh-ocannl-572,
     [test/operations/digest_completeness]). *)
 
 val cache_key :
-  ?objective:string -> limits:Backend_intf.hardware_limits -> canonical -> backend:string -> string
-(** Filename-safe cache key: the digest, the backend name, {!numerics_tag} of the current numerics
-    policy, {!codegen_tag} of the codegen configuration (including [limits.codegen_tag], the
-    compiling backend's own contribution), the worker-pool signature ([limits.worker_pool_tag],
-    gh-ocannl-530: CPU crowns do not transfer across pools), and the autotuner's timing objective
-    ([objective], defaulting to {!objective_tag}).
+  ?objective:string ->
+  timing_identity:Backend_intf.timing_identity option ->
+  limits:Backend_intf.hardware_limits ->
+  canonical ->
+  backend:string ->
+  string option
+(** [None] if the concrete timing identity is unavailable; all cache I/O with [None] is a no-op,
+    including directory creation, locking and regime changes. Otherwise a filename-safe cache key:
+    the digest, the backend name, {!numerics_tag} of the current numerics policy, {!codegen_tag} of
+    the codegen configuration (including [limits.codegen_tag], the compiling backend's own
+    contribution), the worker-pool signature ([limits.worker_pool_tag], gh-ocannl-530: CPU crowns do
+    not transfer across pools), and the autotuner's timing objective ([objective], defaulting to
+    {!objective_tag}).
 
     The objective is a key component because the two objectives crown DIFFERENT candidates
     (gh-ocannl-755, measured): an entry crowned under isolated timing is not the answer to a search
@@ -301,8 +308,8 @@ val cache_key :
     ({!Autotune.tune}'s [?timing]); everyone else wants the default. The backend-supplied components
     arrive as the whole [limits] record rather than one optional argument each, so a component added
     there reaches every call site instead of defaulting to absent at the ones that were not updated
-    (gh-ocannl-572). Callers time kernels on a concrete device, so include anything else that
-    distinguishes performance environments in [backend] (e.g. a device id) if needed. *)
+    (gh-ocannl-572). The mandatory [timing_identity] separately identifies the concrete device and
+    compilation toolchain that produced timing evidence; it does not change construction limits. *)
 
 val cache_regime_version : int
 (** Version of the filename-key regime recorded once per cache directory (gh-ocannl-835). Bump it
@@ -319,7 +326,7 @@ val regime_lock_filename : string
     cache format for synthetic cache-directory tests; callers must never unlink a live cache's lock
     file. *)
 
-val store : dir:string -> key:string -> entry -> unit
+val store : dir:string -> key:string option -> entry -> unit
 (** Writes the entry to [dir]/[key].sexp, creating [dir] (and parents) if missing. Publication goes
     through {!Utils.Atomic_file}, so concurrent writers tolerate each other (last write wins) and a
     failed write or commit removes its own staging artifact and leaves an earlier complete entry
@@ -330,7 +337,7 @@ val store : dir:string -> key:string -> entry -> unit
     deleting the new entry. A filesystem refusal is not propagated: the cache is an optimization,
     and an entry that could not be written is a future miss rather than a failed run. *)
 
-val lookup : dir:string -> key:string -> entry option
+val lookup : dir:string -> key:string option -> entry option
 (** [None] on missing file, unparsable content, version/digest mismatch, or a refused cache-open.
     Process-level failures ([Out_of_memory], [Sys.Break], [Stack_overflow]) propagate rather than
     reading as a miss (gh-ocannl-786): an interrupt during a lookup must not start the search the
@@ -393,14 +400,19 @@ val placement_entry_version : int
     ignored by {!lookup_placements}. *)
 
 val placement_key :
-  ?objective:string -> limits:Backend_intf.hardware_limits -> canonical -> backend:string -> string
+  ?objective:string ->
+  timing_identity:Backend_intf.timing_identity option ->
+  limits:Backend_intf.hardware_limits ->
+  canonical ->
+  backend:string ->
+  string option
 (** {!cache_key} over a {!canonicalize_source} identity, in the placement store's own filename
     space. *)
 
-val store_placements : dir:string -> key:string -> placement_entry -> unit
+val store_placements : dir:string -> key:string option -> placement_entry -> unit
 (** {!store}'s protocol, for a placement entry. *)
 
-val lookup_placements : dir:string -> key:string -> placement_entry option
+val lookup_placements : dir:string -> key:string option -> placement_entry option
 (** {!lookup}'s protocol, for a placement entry. *)
 
 val shipped_label : placement_decision -> string

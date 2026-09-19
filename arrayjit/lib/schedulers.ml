@@ -265,6 +265,7 @@ module Multidev (Backend : For_add_scheduler) :
               ("threads", [%sexp_of: int] 1);
             ]))
 
+  let timing_identity _ = Cc_backend.timing_identity ()
   let hardware_limits () = cpu_mma_limits ()
   let get_global_debug_info () = Sexp.message "global_debug" []
   let get_debug_info (device : device) = sexp_of_runner device.runner
@@ -326,6 +327,7 @@ module Sync (Backend : For_add_scheduler) = struct
           ];
       ]
 
+  let timing_identity _ = Cc_backend.timing_identity ()
   let hardware_limits () = cpu_mma_limits ()
 
   (* let global_run_no = ref 0 *)

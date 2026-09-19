@@ -82,7 +82,7 @@ let transition_child () =
           reached := true;
           touch "stamp-ready";
           if not (await_marker "transition-release") then child_exit 2))
-      ~f:(fun () -> SC.lookup ~dir:cache_dir ~key:old_key)
+      ~f:(fun () -> SC.lookup ~dir:cache_dir ~key:(Some old_key))
   in
   if !reached && Option.is_none opened then (
     touch "transition-done";
@@ -104,7 +104,7 @@ let writer_child () =
         reached_commit := true;
         touch "entry-commit";
         if not (await_marker "writer-release") then child_exit 2))
-    ~f:(fun () -> SC.store ~dir:cache_dir ~key:writer_key (entry "writer"));
+    ~f:(fun () -> SC.store ~dir:cache_dir ~key:(Some writer_key) (entry "writer"));
   if !reached_lock && !reached_commit then (
     touch "writer-done";
     child_exit 0)
@@ -206,6 +206,6 @@ let () =
       p "both cache-opening processes exit successfully"
         (exited_zero transition && exited_zero concurrent);
       p "the writer's subsequent entry survives the completed transition"
-        (match SC.lookup ~dir:cache_dir ~key:writer_key with
+        (match SC.lookup ~dir:cache_dir ~key:(Some writer_key) with
         | Some value -> String.equal value.SC.backend "writer"
         | None -> false))

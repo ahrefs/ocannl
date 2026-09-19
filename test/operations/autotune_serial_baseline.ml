@@ -188,7 +188,7 @@ let () =
   let canon = Option.value_exn ~here:[%here] !canon in
   let limits = Context.hardware_limits ctx in
   SC.store ~dir:cache_dir
-    ~key:(SC.cache_key ~limits canon ~backend)
+    ~key:(SC.cache_key ~timing_identity:(Context.timing_identity ctx) ~limits canon ~backend)
     {
       SC.version = SC.entry_version;
       backend;

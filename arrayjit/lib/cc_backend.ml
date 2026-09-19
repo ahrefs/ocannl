@@ -728,6 +728,38 @@ let target_fingerprint =
          Option.value fingerprint ~default:"no-target-fingerprint")
        ())
 
+let cpu_model =
+  lazy
+    (try
+       if Stdlib.Sys.file_exists "/proc/cpuinfo" then
+         Stdio.In_channel.read_lines "/proc/cpuinfo"
+         |> List.filter ~f:(fun line ->
+             String.is_prefix line ~prefix:"model name" || String.is_prefix line ~prefix:"Hardware")
+         |> List.dedup_and_sort ~compare:String.compare
+         |> String.concat ~sep:";"
+       else if String.equal Stdlib.Sys.os_type "Win32" then
+         Option.value (Stdlib.Sys.getenv_opt "PROCESSOR_IDENTIFIER") ~default:""
+       else
+         let ch =
+           Unix.open_process_args_in "/usr/sbin/sysctl"
+             [| "sysctl"; "-n"; "machdep.cpu.brand_string" |]
+         in
+         let value = Stdio.In_channel.input_all ch |> String.strip in
+         match Unix.close_process_in ch with Unix.WEXITED 0 -> value | _ -> ""
+     with Unix.Unix_error _ | Stdlib.Sys_error _ -> "")
+
+let timing_identity () =
+  let toolchain_signature = Lazy.force target_fingerprint in
+  let model = Lazy.force cpu_model in
+  if String.equal toolchain_signature "no-target-fingerprint" || String.is_empty model then None
+  else
+    Some
+      {
+        Ir.Backend_intf.device_signature =
+          Sexp.to_string ([%sexp_of: string * string] (Unix.gethostname (), model));
+        toolchain_signature;
+      }
+
 let codegen_tag () =
   let parts =
     [

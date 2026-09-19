@@ -23,6 +23,14 @@ open Ocannl
 open Ocannl.Operation.DSL_modules
 module Sched = Ir.Schedule
 module SC = Ir.Schedule_cache
+
+let timing_identity =
+  Some
+    {
+      Ir.Backend_intf.device_signature = "synthetic-device";
+      toolchain_signature = "synthetic-compiler";
+    }
+
 module Numerics = Ir.Numerics
 module Asgns = Ir.Assignments
 open Verdict.Claims
@@ -79,6 +87,7 @@ let () =
   let tune_comp = named "scn_matmul" (Train.forward mc) in
   let ctx = Context.auto () in
   let backend = Context.backend_name ctx in
+  let cache_available = Option.is_some (Context.timing_identity ctx) in
 
   (* --- The key is a function of the policy --- *)
   let base = Numerics.get () in
@@ -93,7 +102,8 @@ let () =
   let canon = Option.value_exn ~here:[%here] !canon in
   let key_of policy =
     Numerics.set_policy policy;
-    SC.cache_key ~limits:(Context.hardware_limits ctx) canon ~backend
+    Option.value_exn
+      (SC.cache_key ~timing_identity ~limits:(Context.hardware_limits ctx) canon ~backend)
   in
   let policy_a = { base with Numerics.tf32_matmuls = false } in
   let policy_b = { base with Numerics.tf32_matmuls = true } in
@@ -129,11 +139,12 @@ let () =
      having been written. *)
   let stored_a = entry_count () = 1 in
   p "the search stores exactly when it timed a complete candidate set"
-    (Bool.equal stored_a (r.Autotune.candidates_timed > 0 && r.Autotune.timings_contended = 0));
+    (Bool.equal stored_a
+       (cache_available && r.Autotune.candidates_timed > 0 && r.Autotune.timings_contended = 0));
   let r_a2, got = tune () in
   p "the entry replays under the policy that wrote it" (Bool.equal (replayed r_a2) stored_a);
   p_all2 "the replayed routine computes correct values" got mm_expected ~f:approx;
-  let stored_a_after_retry = stored_a || r_a2.Autotune.timings_contended = 0 in
+  let stored_a_after_retry = cache_available && (stored_a || r_a2.Autotune.timings_contended = 0) in
 
   (* --- Regime B: the same code, the same directory, the other policy --- *)
   Numerics.set_policy policy_b;
