@@ -1,0 +1,10 @@
+gsa_batch2: selected launch geometry: true
+gsa_batch2: every coordinate survives dependent nests: true
+gsa_batch8: selected launch geometry: true
+gsa_batch8: every coordinate survives dependent nests: true
+gsa_batch_head: selected launch geometry: true
+gsa_batch_head: every coordinate survives dependent nests: true
+gsa_unequal_order: selected launch geometry: true
+gsa_unequal_order: every coordinate survives dependent nests: true
+expanded zeros use the same suffix geometry: true
+expanded zeros clear every coordinate: true

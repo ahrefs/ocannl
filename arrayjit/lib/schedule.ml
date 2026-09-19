@@ -4674,7 +4674,8 @@ let path_loops (nest : Low_level.t) : Low_level.t list =
    plus column (gh-ocannl-569 — capping at 2 made every rank-3+ site's companion coverage decline,
    serializing the axis whose spreading the hardware wanted most). The alignment rule is
    arity-independent; a longer chain only asks the same per-position question more times. *)
-let analyze_parallel_chains ?(max_chain = 2) (opt : Low_level.optimized) : Low_level.t list list =
+let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) (opt : Low_level.optimized) :
+    Low_level.t list list =
   let open Low_level in
   let plc = opt.optimize_ctx.placements in
   let nests, bare = split_nests plc opt.llc in
@@ -4699,6 +4700,7 @@ let analyze_parallel_chains ?(max_chain = 2) (opt : Low_level.optimized) : Low_l
           List.filter (path_loops n.n_loops) ~f:(function
             | For_loop fc -> fc.from_ = 0 && qualifies fc.index
             | _ -> false)
+          |> select_chain
           |> fun l -> List.take l max_chain
         in
         if List.is_empty chain && not (List.is_empty mat_writes) then raise Bail;
@@ -5144,6 +5146,28 @@ let clamp_block_size ~(limits : Backend_intf.hardware_limits) block_size =
   clamp limits.max_threads_per_workgroup block_size
   |> clamp (Option.map limits.max_workgroup_dims ~f:(fun (x, _, _) -> x))
 
+(* A short leading batch axis can strand an otherwise large GPU kernel on a handful of threadgroups.
+   Look farther down the parallel path when a suffix supplies at least as many groups and more
+   active lanes. Keep the Grid/Workgroup shape: the skipped loops remain serial. This selection MUST
+   precede the ownership analysis, which proves the selected symbols rather than a larger tuple
+   containing them. The same choice applies to expanded whole-node zeros. *)
+let gpu_parallel_suffix ~block_size ~min_parallel ~extent chain =
+  let score = function a :: b :: _ -> extent a * min block_size (extent b) | _ -> 0 in
+  match chain with
+  | first :: _ :: _ when extent first < min_parallel ->
+      let rec choose best = function
+        | _ :: _ :: _ as rest ->
+            let best =
+              if extent (List.hd_exn rest) >= extent (List.hd_exn best) && score rest > score best
+              then rest
+              else best
+            in
+            choose best (List.tl_exn rest)
+        | _ -> best
+      in
+      choose chain chain
+  | _ -> chain
+
 let default_gpu ?block_size ?min_parallel ?(limits = Backend_intf.no_hardware_limits)
     (opt : Low_level.optimized) : schedule =
   let open Low_level in
@@ -5166,7 +5190,14 @@ let default_gpu ?block_size ?min_parallel ?(limits = Backend_intf.no_hardware_li
         (Int.of_string @@ Utils.get_global_arg ~arg_name:"gpu_schedule_min_parallel" ~default:"64")
   in
   try
-    let chains = analyze_parallel_chains opt in
+    let select_chain =
+      gpu_parallel_suffix ~block_size ~min_parallel ~extent:(function
+        | For_loop fc -> fc.to_ + 1
+        | _ -> assert false)
+    in
+    let chains =
+      try analyze_parallel_chains ~select_chain opt with Bail -> analyze_parallel_chains opt
+    in
     crosscheck_scratch_containment opt chains;
     if max_parallel_size chains < min_parallel then []
     else
@@ -5784,17 +5815,19 @@ let zero_expansion ?block_size ?min_parallel ~(limits : Backend_intf.hardware_li
         let op, syms = expand_zero ~tn in
         let ds = dims tn in
         let annots =
-          match syms with
+          let selected =
+            gpu_parallel_suffix ~block_size ~min_parallel ~extent:snd
+              (List.zip_exn syms (Array.to_list ds))
+          in
+          match selected with
           | [] -> assert false
-          | [ s0 ] ->
-              let n0 = ds.(0) in
+          | [ (s0, n0) ] ->
               let sp, _, _ =
                 split ~axis:s0 ~factor:(min block_size n0) ~outer:Low_level.Grid
                   ~inner:Low_level.Workgroup
               in
               [ sp ]
-          | s0 :: s1 :: _ ->
-              let n1 = ds.(1) in
+          | (s0, _) :: (s1, n1) :: _ ->
               if n1 <= block_size then
                 [
                   Retype { axis = s0; ty = Low_level.Grid };
