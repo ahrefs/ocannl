@@ -5192,14 +5192,22 @@ let default_gpu ?block_size ?min_parallel ?(limits = Backend_intf.no_hardware_li
         (Int.of_string @@ Utils.get_global_arg ~arg_name:"gpu_schedule_min_parallel" ~default:"64")
   in
   try
-    let select_chain =
-      gpu_parallel_suffix ~block_size ~min_parallel ~extent:(function
-        | For_loop fc -> fc.to_ + 1
-        | _ -> assert false)
+    let selection_changed = ref false in
+    let select_chain chain =
+      let selected =
+        gpu_parallel_suffix ~block_size ~min_parallel
+          ~extent:(function For_loop fc -> fc.to_ + 1 | _ -> assert false)
+          chain
+      in
+      (* The selector returns the original list or one of its tails. Preserve that fact so ordinary
+         rank-two/large-leading nests do not pay for the same affine proof twice. *)
+      if not (phys_equal selected chain) then selection_changed := true;
+      selected
     in
     let original = lazy (analyze_parallel_chains opt) in
     let selected =
-      try analyze_parallel_chains ~select_chain opt with Bail -> Lazy.force original
+      try analyze_parallel_chains ~select_chain opt
+      with Bail -> if !selection_changed then Lazy.force original else raise Bail
     in
     (* Alignment can remove the axis which made a suffix attractive. Compare the proved geometry,
        not the proposal: retaining a short singleton can otherwise turn a parallel original into a
@@ -5212,16 +5220,18 @@ let default_gpu ?block_size ?min_parallel ?(limits = Backend_intf.no_hardware_li
       | _ -> (0, 0)
     in
     let chains =
-      try
-        let original = Lazy.force original in
-        if
-          (max_parallel_size selected < min_parallel && max_parallel_size original >= min_parallel)
-          || List.exists2_exn selected original ~f:(fun selected original ->
-              let sg, sb = geometry selected and og, ob = geometry original in
-              sg < og || sg * sb < og * ob)
-        then original
-        else selected
-      with Bail -> selected
+      if not !selection_changed then selected
+      else
+        try
+          let original = Lazy.force original in
+          if
+            (max_parallel_size selected < min_parallel && max_parallel_size original >= min_parallel)
+            || List.exists2_exn selected original ~f:(fun selected original ->
+                let sg, sb = geometry selected and og, ob = geometry original in
+                sg < og || sg * sb < og * ob)
+          then original
+          else selected
+        with Bail -> selected
     in
     crosscheck_scratch_containment opt chains;
     if max_parallel_size chains < min_parallel then []
