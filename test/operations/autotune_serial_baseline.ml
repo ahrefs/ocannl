@@ -223,7 +223,8 @@ let () =
       (Bool.equal (replayed r) (not is_gpu))
   else (
     Stdio.eprintf "complete timing identity unavailable: persistent replay disabled\n";
-    skipped ~backend "a serial cache entry is rejected on GPU backends and honoured on CPU ones");
+    skipped ~aggregation:`Environment ~backend
+      "a serial cache entry is rejected on GPU backends and honoured on CPU ones");
   (* A replay times nothing and refuses nothing, so on GPU either counter is evidence of the
      re-search; a refused window is still a window the replay would not have opened. *)
   p "rejecting it re-searches rather than returning the serial routine"

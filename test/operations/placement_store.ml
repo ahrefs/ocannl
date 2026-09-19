@@ -137,7 +137,7 @@ let () =
       ((not clean1) || stored1)
   else (
     Stdio.eprintf "complete timing identity unavailable: placement persistence disabled\n";
-    skipped ~backend:(Context.backend_name ctx_ref)
+    skipped ~aggregation:`Environment ~backend:(Context.backend_name ctx_ref)
       "the cold run records exactly one decision, whenever its evidence was clean");
   p_all "a decision is never recorded over refused windows or a failed search" observed1
     ~f:(fun r -> (not stored1) || (completed r && uncontended r));

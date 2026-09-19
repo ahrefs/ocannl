@@ -165,7 +165,7 @@ let () =
     if Option.is_some (Context.timing_identity ctx) then p label value
     else (
       Stdio.eprintf "complete timing identity unavailable: persistent replay disabled\n";
-      skipped ~backend label)
+      skipped ~aggregation:`Environment ~backend label)
   in
   cache_claim "scratch/tune: the second run replays exactly after contention-free timing"
     (Bool.equal (replayed hit) (populate.Autotune.timings_contended = 0));

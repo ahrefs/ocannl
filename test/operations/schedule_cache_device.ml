@@ -58,7 +58,9 @@ let () =
         (not
            (String.is_empty identity.device_signature
            || String.is_empty identity.toolchain_signature))
-  | None -> skipped ~backend "the available identity contains both device and toolchain facts");
+  | None ->
+      skipped ~aggregation:`Environment ~backend
+        "the available identity contains both device and toolchain facts");
   let canon = ref None in
   let _, _ =
     Context.compile
@@ -180,7 +182,8 @@ let () =
     (Option.equal BI.equal_timing_identity identity (Context.timing_identity ctx));
   if Option.is_none identity then (
     Stdio.eprintf "complete device/toolchain identity unavailable: persistent replay disabled\n";
-    skipped ~backend "a complete cold search replays on the same concrete device")
+    skipped ~aggregation:`Environment ~backend
+      "a complete cold search replays on the same concrete device")
   else if first_report.Autotune.timings_contended > 0 then
     skipped ~aggregation:`Environment ~backend
       "a complete cold search replays on the same concrete device"

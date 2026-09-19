@@ -280,7 +280,7 @@ let () =
     if Option.is_some (Context.timing_identity sctx) then p label value
     else (
       Stdio.eprintf "timed-cache reuse unavailable: complete device/toolchain identity missing\n";
-      skipped ~backend:(Context.backend_name sctx) label)
+      skipped ~aggregation:`Environment ~backend:(Context.backend_name sctx) label)
   in
   (match !hit_report with
   | Some r ->
