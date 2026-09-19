@@ -1,0 +1,115 @@
+(* gh-ocannl-975: both post-admission callback boundaries must release a losing candidate. Select
+   using actual admitted times, not attempt order; working pools count retained backend allocations
+   separately from the intentionally persistent constant cache. *)
+open Base
+open Ocannl
+open Ocannl.Operation.DSL_modules
+open Verdict.Claims
+
+exception Callback_failure
+
+let () =
+  let n = 16 in
+  let a =
+    TDSL.ndarray
+      (Array.init (n * n) ~f:(fun i -> Float.of_int (i % 7)))
+      ~input_dims:[ n ] ~output_dims:[ n ] ()
+  in
+  let b =
+    TDSL.ndarray
+      (Array.init (n * n) ~f:(fun i -> Float.of_int (i % 5)))
+      ~input_dims:[ n ] ~output_dims:[ n ] ()
+  in
+  let%op product = a * b in
+  let comp = Train.forward product in
+  let parent = Context.auto () in
+  Stdio.eprintf "callback cleanup backend: %s\n%!" (Context.backend_name parent);
+  let ref_ctx, ref_routine = Context.compile parent comp Ir.Indexing.Empty in
+  let ref_ctx = Context.run ref_ctx ref_routine in
+  let expected = Context.get_values ref_ctx product.Tensor.value in
+  Context.release ref_ctx;
+  let run ~scratch site =
+    let before = Ir.Alloc_census.snapshot () in
+    let injected = ref false and report = ref None in
+    let old = !Autotune.on_candidate_callback and old_timed = !Autotune.on_candidate_timed in
+    let result =
+      Exn.protect
+        ~finally:(fun () ->
+          Autotune.on_candidate_callback := old;
+          Autotune.on_candidate_timed := old_timed)
+        ~f:(fun () ->
+          (Autotune.on_candidate_callback :=
+             fun boundary ~candidate_ms ~incumbent_ms ->
+               if
+                 Option.exists site ~f:(fun s -> Poly.equal s boundary)
+                 && Float.(candidate_ms > incumbent_ms)
+               then (
+                 Stdio.eprintf "nonwinner callback: candidate %.9g ms > incumbent %.9g ms\n%!"
+                   candidate_ms incumbent_ms;
+                 let inject () =
+                   injected := true;
+                   raise Callback_failure
+                 in
+                 match boundary with
+                 | `Timed -> Autotune.on_candidate_timed := fun _ ~timed_so_far:_ -> inject ()
+                 | `Calibration -> inject ()));
+          try
+            let ctx, routine =
+              Autotune.tune ~search:true ~beam_width:1 ~rounds:0 ~repeats:1
+                ?timing_ctx:(if scratch then Some parent else None)
+                ~timing:Autotune.Isolated ~cache_dir:""
+                ~report:(fun r -> report := Some r)
+                parent comp Ir.Indexing.Empty
+            in
+            let ctx = Context.run ctx routine in
+            let got = Context.get_values ctx product.Tensor.value in
+            p_all2 "ordinary completion computes the reference" got expected ~f:(fun x y ->
+                Float.(abs (x - y) < 1e-4));
+            Context.release ctx;
+            `Returned
+          with Callback_failure -> `Injected)
+    in
+    let after = Ir.Alloc_census.snapshot () in
+    let name =
+      match site with
+      | None -> "ordinary"
+      | Some `Timed -> "timed"
+      | Some `Calibration -> "calibration"
+    in
+    let name = (if scratch then "scratch " else "direct ") ^ name in
+    Stdio.eprintf "%s before: %s\n%s after: %s\n%!" name
+      (Ir.Alloc_census.to_string before)
+      name (Ir.Alloc_census.to_string after);
+    Stdio.eprintf
+      "%s deltas: working pools=%d bytes=%d; contexts created=%d released=%d; constants=%d\n%!" name
+      (after.live_working_pools - before.live_working_pools)
+      (after.live_working_bytes - before.live_working_bytes)
+      (after.contexts_created - before.contexts_created)
+      (after.contexts_released - before.contexts_released)
+      (after.live_constant_pools - before.live_constant_pools);
+    (match site with
+    | None -> p "ordinary search completed" (Poly.equal result `Returned)
+    | Some _ ->
+        p (name ^ ": injected at a strictly slower admitted candidate") !injected;
+        p (name ^ ": callback exception propagates") (Poly.equal result `Injected);
+        p
+          (name ^ ": partial report retains a measured incumbent")
+          (Option.exists !report ~f:(fun r ->
+               match r.Autotune.outcome with
+               | Autotune.Search_died _ -> r.candidates_timed >= 2 && Float.is_finite r.best_ms
+               | _ -> false)));
+    p
+      (name ^ ": working pools return to their starting count")
+      (after.live_working_pools = before.live_working_pools);
+    p
+      (name ^ ": working bytes return to their starting count")
+      (after.live_working_bytes = before.live_working_bytes);
+    p
+      (name ^ ": every created context was explicitly released")
+      (after.contexts_created - before.contexts_created
+      = after.contexts_released - before.contexts_released)
+  in
+  List.iter [ false; true ] ~f:(fun scratch ->
+      run ~scratch None;
+      run ~scratch (Some `Timed);
+      run ~scratch (Some `Calibration))

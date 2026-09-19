@@ -162,3 +162,11 @@ files.
   most-expensive-first because the `Materialize` chain of `Train.tune_placements` wants that end. A
   pre-filter cut that forgets to reverse keeps exactly the flips a budget would least want to pay
   for.
+
+- Post-admission callbacks can fail before a nonwinning candidate enters the beam or round
+  (`Autotune.tune`, gh-ocannl-975). The pending owner covers compile-to-admission, and the exit
+  sweep includes it; an undispatched baseline is released eagerly. Replacing the best also releases
+  its previous owner if a tie had evicted it from the beam. The regression
+  `test/operations/autotune_callback_release.ml` selects a strictly slower admitted candidate at
+  both callback boundaries and compares exact working-pool and context census deltas against
+  ordinary completion, separately from the persistent constant cache.
