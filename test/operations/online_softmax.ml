@@ -335,7 +335,30 @@ let () =
                              [| B.get w [| B.iter t |]; B.get vals [| B.iter t; B.iter j |] |];
                          |])));
             ]
+      | `PV_dead ->
+          let t = B.sym () and j = B.sym () in
+          let w = List.last_exn ws in
+          LL.unflat_lines
+            [
+              B.zero out;
+              B.loop_n t n
+                (B.loop ~upto:(-1) j
+                   (B.set out
+                      [| B.iter j |]
+                      (op (Ir.Ops.Binop Ir.Ops.Add)
+                         [|
+                           B.get out [| B.iter j |];
+                           op (Ir.Ops.Binop Ir.Ops.Mul)
+                             [| B.get w [| B.iter t |]; B.get vals [| B.iter t; B.iter j |] |];
+                         |])));
+            ]
       | `Opaque -> LL.Staged_compilation (fun () -> PPrint.empty)
+      | `Tile ->
+          B.tile_mma ~m:1 ~n:1 ~k:1
+            ~d:(y, [| B.fixed 0 |])
+            ~a:(x, [| B.fixed 0 |])
+            ~b:(x, [| B.fixed 0 |])
+            LL.Noop
       | `Scope_write ->
           (* A scope whose body writes a tensor: impure by the optimizer's contract, but the tier
              runs ahead of that check and the write census does not enter scope bodies. *)
@@ -390,6 +413,8 @@ let () =
     (scans_of (rewritten [ `C_init; `A_init; `A; `N; `E; `C ]) = 1);
   p "staged code inside the span the rewrite reorders is declined"
     (declined [ `A_init; `A; `Opaque; `N; `E; `C_init; `C ]);
+  p "a Tile_mma inside the span is opaque even when its scalar fallback is empty"
+    (declined [ `A_init; `A; `Tile; `N; `E; `C_init; `C ]);
   p "staged code outside that span is no objection"
     (scans_of (rewritten [ `Opaque; `A_init; `A; `N; `E; `C_init; `C ]) = 1);
   p "staged code reachable only through a guard's condition inside the span is declined too"
@@ -457,6 +482,8 @@ let () =
     (locals (rewritten (composed @ [ `D; `Chain; `PV ])) = 2);
   p "a reduction whose target cell is [t + j] is not hoisted: distinct pairs share a cell"
     (locals (rewritten (composed @ [ `D; `Chain; `PV_affine ])) = 1);
+  p "a dead moved loop is not hoisted: the original nest never reads the probability"
+    (locals (rewritten (composed @ [ `D; `Chain; `PV_dead ])) = 1);
   p "an integer normalizer node is declined: its own reduction truncated after every step"
     (declined ~l_prec:Ir.Ops.int32 composed);
   p "an auxiliary subtraction and exponential ahead of the normalizer's own do not hide it"
