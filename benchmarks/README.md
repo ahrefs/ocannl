@@ -97,6 +97,8 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   by a runner does. Fixture content depends on the spec, on the generator, *and* on the numpy
   version that drew the random streams — numpy promises no `Generator` stream stability across
   releases — so a mismatch is real information even when `workloads/` is untouched. A fixture
+  row keeps physical `<bytes>` for diagnostics, but `content-v1` identity is the canonical digest
+  alone; valid header padding and layout can change file size without changing content. A fixture
   regenerated at a different spec revision is otherwise invisible: it is consumed **uniformly**
   by every cell, and the cross-cell parity gate compares cells with each other, not with the
   workload the report names, so it certifies exactly as it certifies the intended one.

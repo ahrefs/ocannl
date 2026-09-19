@@ -1013,7 +1013,7 @@ class FixtureDigestTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
 
     @staticmethod
-    def write_fixture(path, content=b"weights", metadata=None, tensors=None):
+    def write_fixture(path, content=b"weights", metadata=None, tensors=None, extra_padding=0):
         """Write a tiny safetensors fixture for digest tests.
 
         This is test construction, not a second production writer: the records deliberately keep
@@ -1035,7 +1035,7 @@ class FixtureDigestTest(unittest.TestCase):
                 "data_offsets": [start, len(payload)],
             }
         encoded = json.dumps(header, separators=(",", ":")).encode()
-        padding = (-len(encoded)) % 8
+        padding = (-len(encoded)) % 8 + extra_padding
         encoded += b" " * padding
         path.write_bytes(len(encoded).to_bytes(8, "little") + encoded + payload)
         return path
@@ -1057,6 +1057,19 @@ class FixtureDigestTest(unittest.TestCase):
 
         self.assertNotEqual(a.read_bytes(), b.read_bytes(), "control: serialization really differs")
         self.assertEqual(fixture_digest.sha256_file(a), fixture_digest.sha256_file(b))
+
+    def test_content_identity_ignores_physical_header_size(self):
+        fixture = self.fixture("padded.safetensors", b"same content")
+        digests = self.dir / fixture_digest.DIGEST_FILE
+        fixture_digest.record(digests, [fixture], "m4-max")
+        recorded = fixture_digest.read_digests(digests)
+        size = fixture.stat().st_size
+
+        self.write_fixture(fixture, b"same content", extra_padding=16)
+
+        self.assertNotEqual(fixture.stat().st_size, size, "control: physical size changed")
+        self.assertEqual(fixture_digest.status(fixture, recorded)[0], "MATCH")
+        self.assertEqual(fixture_digest.record(digests, [fixture], "m4-max"), [])
 
     def test_digest_changes_for_every_piece_of_runner_visible_content(self):
         baseline = self.fixture(
@@ -1124,7 +1137,12 @@ class FixtureDigestTest(unittest.TestCase):
         complete = self.fixture("truncated.safetensors", b"payload")
         complete.write_bytes(complete.read_bytes()[:-1])
 
-        for path in (malformed, complete):
+        wrong_width = self.fixture(
+            "wrong-width.safetensors",
+            tensors=[("weights", "F64", [1], b"x")],
+        )
+
+        for path in (malformed, complete, wrong_width):
             with self.subTest(path=path.name), self.assertRaises(ValueError):
                 fixture_digest.sha256_file(path)
 

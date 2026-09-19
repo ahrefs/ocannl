@@ -12,6 +12,7 @@
 # nondeterministic metadata-map order while detecting every runner-visible change. Fixture
 # content depends on the workload spec, on gen_fixtures.py, and on the numpy version that drew
 # the random streams (numpy does not promise Generator stream stability across releases).
+# <bytes> is the physical size retained for diagnostics; content-v1 identity is the digest alone.
 # Rows recorded before gh-ocannl-1007 omit <digest-kind> and mean raw-v1. They remain verifiable
 # against the original file while each box migrates them with --record; every new row is
 # content-v1. A raw-v1 row cannot certify a regenerated serialization, even when its content is

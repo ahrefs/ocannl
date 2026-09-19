@@ -53,6 +53,23 @@ from pathlib import Path
 
 DIGEST_FILE = "DIGESTS.txt"
 MEASUREMENT_BOXES_FIELD = "# measurement-boxes:"
+DTYPE_SIZES = {
+    "F64": 8,
+    "I64": 8,
+    "U64": 8,
+    "F32": 4,
+    "I32": 4,
+    "U32": 4,
+    "F16": 2,
+    "BF16": 2,
+    "I16": 2,
+    "U16": 2,
+    "I8": 1,
+    "U8": 1,
+    "BOOL": 1,
+    "F8_E4M3": 1,
+    "F8_E5M2": 1,
+}
 
 #: One recorded identity: `sha256` is interpreted by `kind`, `size` is the physical file size,
 #: and `origin` is the box that has the fixture. Parsed four-field rows are explicitly tagged as
@@ -74,6 +91,7 @@ HEADER = """\
 # nondeterministic metadata-map order while detecting every runner-visible change. Fixture
 # content depends on the workload spec, on gen_fixtures.py, and on the numpy version that drew
 # the random streams (numpy does not promise Generator stream stability across releases).
+# <bytes> is the physical size retained for diagnostics; content-v1 identity is the digest alone.
 # Rows recorded before gh-ocannl-1007 omit <digest-kind> and mean raw-v1. They remain verifiable
 # against the original file while each box migrates them with --record; every new row is
 # content-v1. A raw-v1 row cannot certify a regenerated serialization, even when its content is
@@ -185,6 +203,8 @@ def sha256_file(path):
                 )
                 if not isinstance(dtype, str):
                     raise ValueError(f"tensor {name!r} dtype is not a string")
+                if dtype not in DTYPE_SIZES:
+                    raise ValueError(f"tensor {name!r} has unknown dtype {dtype!r}")
                 if not isinstance(shape, list) or any(
                     isinstance(dim, bool) or not isinstance(dim, int) or dim < 0 for dim in shape
                 ):
@@ -200,6 +220,15 @@ def sha256_file(path):
                     raise ValueError(
                         f"tensor {name!r} has invalid data_offsets {offsets!r} for a "
                         f"{payload_size}-byte payload"
+                    )
+                elements = 1
+                for dimension in shape:
+                    elements *= dimension
+                expected_bytes = elements * DTYPE_SIZES[dtype]
+                if end - start != expected_bytes:
+                    raise ValueError(
+                        f"tensor {name!r} has {end - start} bytes but dtype {dtype} and shape "
+                        f"{shape!r} require {expected_bytes}"
                     )
                 tensors[name] = (dtype, shape, start, end)
                 ranges.append((start, end, name))
@@ -262,6 +291,13 @@ def replacement_kind(path, was):
     if (was.sha256, was.size) == (_raw_sha256_file(path), Path(path).stat().st_size):
         return "same-file-migration"
     return "new-content-baseline"
+
+
+def same_identity(left, right):
+    """Whether two entries identify the same workload under their recorded algorithms."""
+    if left.kind != right.kind or left.sha256 != right.sha256:
+        return False
+    return left.kind == "content-v1" or left.size == right.size
 
 
 def this_origin():
@@ -579,7 +615,11 @@ def record(path, fixtures, origin=None, legacy_origin=None):
         now = Entry(sha256_file(fixture), fixture.stat().st_size, origin, "content-v1")
         others = [e for e in entries.get(fixture.name, []) if e.origin != origin]
         was = next((e for e in entries.get(fixture.name, []) if e.origin == origin), None)
-        if was != now:
+        if was is not None and same_identity(was, now):
+            # Keep the recorded physical size stable. It is diagnostic for content-v1, not part
+            # of the identity, and a different valid header padding must not rewrite DIGESTS.
+            now = was
+        elif was != now:
             changes.append((fixture.name, origin, was, now))
         entries[fixture.name] = others + [now]
     boxes = set(declared_boxes or ())
@@ -609,7 +649,7 @@ def status(fixture, entries):
         if entry.kind == "raw-v1":
             raw_sha = raw_sha or _raw_sha256_file(fixture)
             candidate = raw_sha
-        if (entry.sha256, entry.size) == (candidate, size):
+        if entry.sha256 == candidate and (entry.kind == "content-v1" or entry.size == size):
             matching.append(entry.origin)
     if not matching:
         return "MISMATCH", sha, size, None
@@ -646,8 +686,7 @@ def divergent_origins(path, names, origin):
             if box != origin
             and (
                 box not in by_origin
-                or (by_origin[box].sha256, by_origin[box].size, by_origin[box].kind)
-                != (mine.sha256, mine.size, mine.kind)
+                or not same_identity(by_origin[box], mine)
             )
         }
     return sorted(divergent)
