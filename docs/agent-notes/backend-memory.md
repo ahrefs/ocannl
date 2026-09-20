@@ -167,6 +167,11 @@ files.
   (`Autotune.tune`, gh-ocannl-975). The pending owner covers compile-to-admission, and the exit
   sweep includes it; an undispatched baseline is released eagerly. Replacing the best also releases
   its previous owner if a tie had evicted it from the beam. The regression
-  `test/operations/autotune_callback_release.ml` selects a strictly slower admitted candidate at
-  both callback boundaries and compares exact working-pool and context census deltas against
-  ordinary completion, separately from the persistent constant cache.
+  `test/operations/autotune_callback_release.ml` injects at both callback boundaries and compares
+  exact working-pool and context census deltas against ordinary completion, separately from the
+  persistent constant cache. It prefers a strictly slower admitted candidate (the nonwinner whose
+  release the fix owns), but whether one arrives is a property of the machine's timings — a short
+  search whose samples fall monotonically admits only winners (rog-nv/cuda, sweep 2026-09-20) — so
+  a leg that completes uninjected is retried injecting at the second admitted candidate, which
+  exists whenever the partial report can retain a measured incumbent. A fault-injection
+  precondition on measured wall-clock is not a stable gate; give it a deterministic fallback.

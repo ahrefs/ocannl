@@ -3,13 +3,13 @@ ordinary search completed: true
 direct ordinary: working pools return to their starting count: true
 direct ordinary: working bytes return to their starting count: true
 direct ordinary: every created context was explicitly released: true
-direct timed: injected at a strictly slower admitted candidate: true
+direct timed: injected at an admitted candidate: true
 direct timed: callback exception propagates: true
 direct timed: partial report retains a measured incumbent: true
 direct timed: working pools return to their starting count: true
 direct timed: working bytes return to their starting count: true
 direct timed: every created context was explicitly released: true
-direct calibration: injected at a strictly slower admitted candidate: true
+direct calibration: injected at an admitted candidate: true
 direct calibration: callback exception propagates: true
 direct calibration: partial report retains a measured incumbent: true
 direct calibration: working pools return to their starting count: true
@@ -20,13 +20,13 @@ ordinary search completed: true
 scratch ordinary: working pools return to their starting count: true
 scratch ordinary: working bytes return to their starting count: true
 scratch ordinary: every created context was explicitly released: true
-scratch timed: injected at a strictly slower admitted candidate: true
+scratch timed: injected at an admitted candidate: true
 scratch timed: callback exception propagates: true
 scratch timed: partial report retains a measured incumbent: true
 scratch timed: working pools return to their starting count: true
 scratch timed: working bytes return to their starting count: true
 scratch timed: every created context was explicitly released: true
-scratch calibration: injected at a strictly slower admitted candidate: true
+scratch calibration: injected at an admitted candidate: true
 scratch calibration: callback exception propagates: true
 scratch calibration: partial report retains a measured incumbent: true
 scratch calibration: working pools return to their starting count: true
