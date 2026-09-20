@@ -857,8 +857,10 @@ files.
 - Timed cache evidence uses `Context.timing_identity` separately from conservative construction
   limits (gh-ocannl-594): schedule AND placement keys require the concrete device/toolchain identity.
   `None` bypasses shared cache I/O before directories, locks, reads, writes or regime migration.
-  CPU queries model/host/compiler; Metal uses physical registry identity plus macOS build. CUDA and
-  HIP persistence are disabled until complete driver identity is available: cudajit lacks a driver
-  query, while ROCm hipDriverGetVersion returns HIP_VERSION, not the installed AMD driver. Execution
-  and tuning remain available. `schedule_cache_device` pins separation,
+  CPU persistence currently requires macOS's bundled dispatch/serial runtime: the host hardware
+  UUID, model, compiler target/executable and OS build identify it. OpenMP and unverified non-macOS
+  CPU runtimes disable persistence. Metal uses host UUID, device registry identity and macOS build.
+  CUDA and HIP persistence are also disabled until complete driver identity is available: cudajit
+  lacks a driver query, while ROCm hipDriverGetVersion returns HIP_VERSION, not the installed AMD
+  driver. Execution and tuning remain available everywhere. `schedule_cache_device` pins separation,
   bypass and real-backend stability/replay.

@@ -34,8 +34,10 @@ val pool_tag : unit -> string
     transfer to another (gh-ocannl-530), so the tag enters the autotune disk-cache key. *)
 
 val timing_identity : unit -> Ir.Backend_intf.timing_identity option
-(** Queried CPU model, host partition and compiler target fingerprint. Unavailable probes disable
-    persistent timing reuse; pool and codegen policy remain separately keyed by the limits. *)
+(** On macOS dispatch/serial: host UUID, CPU model, compiler target/executable and OS build. OpenMP,
+    non-macOS environments and unavailable probes disable persistent timing reuse. Pool and codegen
+    policy remain separately keyed. Executable provenance follows the probe cache's path/size/mtime
+    contract; opaque wrappers do not expose their internal toolchains. *)
 
 val codegen_tag : unit -> string
 (** A short digest of this backend's resolved codegen configuration: the compiler command and its

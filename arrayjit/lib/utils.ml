@@ -2226,3 +2226,56 @@ let log_debug_routine_file ~log_file_name ~stream_name =
 let gcd a b =
   let rec loop a b = if b = 0 then a else loop b (a % b) in
   loop (abs a) (abs b)
+
+let macos_platform_uuid registry =
+  String.split_lines registry
+  |> List.find_map ~f:(fun line ->
+      match String.lsplit2 line ~on:'=' with
+      | Some (name, value) when String.is_suffix (String.strip name) ~suffix:"\"IOPlatformUUID\"" ->
+          Option.bind
+            (String.chop_prefix (String.strip value) ~prefix:"\"")
+            ~f:(fun value ->
+              Option.bind (String.chop_suffix value ~suffix:"\"") ~f:(fun uuid ->
+                  let uuid = String.lowercase uuid in
+                  let parts = String.split uuid ~on:'-' in
+                  if
+                    Poly.equal (List.map parts ~f:String.length) [ 8; 4; 4; 4; 12 ]
+                    && List.for_all parts
+                         ~f:
+                           (String.for_all ~f:(fun c ->
+                                Char.is_digit c || Char.(c >= 'a' && c <= 'f')))
+                    && String.exists uuid ~f:(fun c -> not (Char.equal c '0' || Char.equal c '-'))
+                  then Some (Stdlib.Digest.to_hex (Stdlib.Digest.string uuid))
+                  else None))
+      | _ -> None)
+
+(* A cache directory can be shared across hosts. I/O Registry entry IDs and hostnames alone are not
+   globally discriminating; pair the platform UUID with the build that supplies macOS's bundled
+   compiler/driver and dispatch runtime. Other platforms need their own verified runtime provenance
+   before they can return a complete timing identity. *)
+let macos_timing_environment =
+  lazy
+    (let query path args =
+       let ch = Unix.open_process_args_in path args in
+       let status = ref None in
+       let output =
+         Exn.protect
+           ~f:(fun () -> Stdio.In_channel.input_all ch)
+           ~finally:(fun () -> status := Some (Unix.close_process_in ch))
+       in
+       match !status with
+       | Some (Unix.WEXITED 0) when not (String.is_empty (String.strip output)) -> Some output
+       | _ -> None
+     in
+     try
+       if not (Stdlib.Sys.file_exists "/usr/bin/sw_vers") then None
+       else
+         Option.bind
+           (query "/usr/bin/sw_vers" [| "sw_vers"; "-buildVersion" |])
+           ~f:(fun build ->
+             Option.bind
+               (query "/usr/sbin/ioreg" [| "ioreg"; "-rd1"; "-c"; "IOPlatformExpertDevice" |])
+               ~f:(fun registry ->
+                 Option.map (macos_platform_uuid registry) ~f:(fun host ->
+                     (host, String.strip build))))
+     with Unix.Unix_error _ | Stdlib.Sys_error _ -> None)

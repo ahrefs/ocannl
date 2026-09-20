@@ -36,6 +36,19 @@ let schedule_entry canon backend =
   }
 
 let () =
+  let registry uuid = "  \"IOPlatformUUID\" = \"" ^ uuid ^ "\"\n" in
+  let host_a = "01234567-89AB-CDEF-0123-456789ABCDEF" in
+  let host_b = "11234567-89AB-CDEF-0123-456789ABCDEF" in
+  let host = Utils.macos_platform_uuid in
+  p "hardware UUID discovery normalizes case"
+    (Option.equal String.equal (host (registry host_a)) (host (registry (String.lowercase host_a))));
+  p "distinct hardware UUIDs separate otherwise identical hosts"
+    (match (host (registry host_a), host (registry host_b)) with
+    | Some a, Some b -> not (String.equal a b)
+    | _ -> false);
+  p_none "missing, malformed and placeholder UUIDs decline identity"
+    [ ""; registry ""; registry "not-a-uuid"; registry "00000000-0000-0000-0000-000000000000" ]
+    ~f:(fun text -> Option.is_some (host text));
   clean cache_dir;
   clean absent_cache_dir;
   let x = TDSL.ndarray [| 1.; 2.; 3.; 4. |] ~label:[ "device_identity_x" ] ~output_dims:[ 4 ] () in

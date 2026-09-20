@@ -1,3 +1,6 @@
+hardware UUID discovery normalizes case: true
+distinct hardware UUIDs separate otherwise identical hosts: true
+missing, malformed and placeholder UUIDs decline identity: true
 identity queries preserve conservative construction limits: true
 a concrete context's identity is stable: true
 the available identity contains both device and toolchain facts: true

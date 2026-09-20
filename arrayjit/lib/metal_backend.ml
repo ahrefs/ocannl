@@ -326,27 +326,17 @@ module Impl = struct
      restrict it further under register pressure. *)
   (* Memoized behind [lazy] like [metal_devices] itself: device enumeration must not run at
      backend-module initialization (see the [metal_devices] comment). *)
-  (* Metal's runtime compiler and driver ship with macOS. Use its build, not merely the
-     MSL language version. Registry identity separates physical GPU bins whose exposed model
-     names/capabilities coincide; no unqueried throughput constants are substituted. *)
-  let os_build =
-    lazy
-      (try
-         let ch = Unix.open_process_args_in "/usr/bin/sw_vers" [| "sw_vers"; "-buildVersion" |] in
-         let value = Stdio.In_channel.input_all ch |> String.strip in
-         match Unix.close_process_in ch with
-         | Unix.WEXITED 0 when not (String.is_empty value) -> Some value
-         | _ -> None
-       with Unix.Unix_error _ | Stdlib.Sys_error _ -> None)
-
+  (* The OS build identifies Metal's bundled compiler/driver. A host UUID disambiguates the
+     device's registry ID across machines sharing the same cache directory. *)
   let timing_identity (device : device) =
-    Option.map (Lazy.force os_build) ~f:(fun toolchain_signature ->
+    Option.map (Lazy.force Utils.macos_timing_environment) ~f:(fun (host, toolchain_signature) ->
         let attributes = Me.Device.get_attributes device.dev in
         {
           Backend_intf.device_signature =
             Sexp.to_string
               (Sexp.List
                  [
+                   Sexp.Atom host;
                    Sexp.Atom attributes.name;
                    Sexp.Atom (Unsigned.ULLong.to_string attributes.registry_id);
                    Sexp.List
