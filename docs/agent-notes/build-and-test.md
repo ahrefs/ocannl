@@ -1179,12 +1179,19 @@ that they earn a lookup rather than always-loaded space.
   warning-as-error from a temporary edit) leaves the previous `.exe.output` untouched, and the
   stale file reads as a green probe; that turned a negative control into a false positive during
   gh-ocannl-554.
-- **To genuinely re-execute an unchanged `.expected` test, change the content of
-  `test/config/ocannl_config`**: append a comment line (`# rerun 1`, then `# rerun 2`, …), run `dune
-  build @<dir>/runtest-<name>`, and `git checkout test/config/ocannl_config` when done (it is
-  tracked). The file is copied into every test directory and is a declared dep of every test stanza,
-  so each distinct content is a new digest for the `.exe.output` rule and the executable runs again,
-  with no recompilation. This is what sampling a timing-dependent test several times needs (the
+- **To genuinely re-execute an unchanged `.expected` test, change the content of the
+  `ocannl_config` its stanza depends on**: append a comment line (`# rerun 1`, then `# rerun 2`,
+  …), run `dune build @<dir>/runtest-<name>`, and delete the appended line when done (the file is
+  tracked; `git checkout` it only when it carries no other local edits, since AGENTS.md also sends
+  one-off configuration changes to that file). For the directories that `copy_files` it in
+  (`test/operations`, `test/einsum`, `test/ppx`, `test/training`, `test/gpt2`) that file is
+  `test/config/ocannl_config`; `arrayjit/test`, `test/operations/profiles` and
+  `test/operations/startup_streams` depend on their own tracked `ocannl_config`, and an edit to the
+  shared one leaves their rules untouched. Each distinct content is a new digest for the
+  `<name>.exe.output` rule, so the executable runs again
+  with no recompilation; any content other than the current one does, since dune memoizes only a
+  rule's latest result and its shared cache skips user rules by default. This is what sampling a
+  timing-dependent test several times needs (the
   `autotune_callback_release` skip decision, landing gh-ocannl-staging#764), and every other reflex
   fails silently in the green direction, verified on dune 3.24.2: `dune build --force
   @<dir>/runtest-<name>` re-runs only the alias's diff action, while the content-keyed
