@@ -104,7 +104,8 @@ let () =
     fail
       (Printf.sprintf "classified keys that are not in Utils.known_config_keys: %s"
          (listing unknown));
-  (* 2. Claimed components exist, and every component other than the digest is claimed. *)
+  (* 2. Claimed components exist. The lowered digest and concrete device/toolchain identity are
+     facts, not config keys; every other component must be claimed by configuration. *)
   let components = Set.of_list (module String) SC.key_components in
   let claimed =
     List.filter_map Utils.config_key_classification ~f:(function
@@ -117,7 +118,7 @@ let () =
     fail
       (Printf.sprintf "classifications claim cache-key components that do not exist: %s"
          (listing missing_components));
-  let unclaimed = Set.diff (Set.remove components "digest") claimed in
+  let unclaimed = Set.diff (Set.remove (Set.remove components "digest") "device") claimed in
   if not (Set.is_empty unclaimed) then
     fail
       (Printf.sprintf

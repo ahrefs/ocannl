@@ -1059,7 +1059,10 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
         if SC.complete problem then
           let limits = Context.hardware_limits ctx in
           let backend = Context.backend_name ctx in
-          Some (problem, SC.placement_key ~limits problem ~backend, limits, backend)
+          Option.map
+            (SC.placement_key ~timing_identity:(Context.timing_identity ctx) ~limits problem
+               ~backend)
+            ~f:(fun key -> (problem, key, limits, backend))
         else None
       with
       | store -> store
@@ -1131,7 +1134,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
         else
           match outcome_digest (decisions_of problem decision) with
           | outcome_digest ->
-              SC.store_placements ~dir:cache_dir ~key
+              SC.store_placements ~dir:cache_dir ~key:(Some key)
                 {
                   SC.version = SC.placement_entry_version;
                   backend;
@@ -1155,7 +1158,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
     match store with
     | None -> None
     | Some (problem, key, limits, backend) -> (
-        match SC.lookup_placements ~dir:cache_dir ~key with
+        match SC.lookup_placements ~dir:cache_dir ~key:(Some key) with
         | None ->
             logf "placement store: no decision recorded for this problem";
             None

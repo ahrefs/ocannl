@@ -1731,6 +1731,42 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
      minimum across devices, so code compiled once is valid wherever it links. *)
   (* Memoized behind [lazy]: driver init and device enumeration must not run at backend-module
      initialization ([num_devices] forces [ensure_initialized]). *)
+  (* Concrete static capabilities separate mixed devices without changing the conservative
+     construction limits. Driver/runtime/header provenance remains a documented separate concern. *)
+  let timing_identity (device : device) =
+    try
+      let attributes = Cu.Device.get_attributes device.dev.dev in
+      Some
+        {
+          Backend_intf.device_signature =
+            Sexp.to_string
+              (Sexp.message "device_capabilities"
+                 [
+                   ("name", Sexp.Atom attributes.name);
+                   ( "compute_capability",
+                     [%sexp_of: int * int]
+                       (attributes.compute_capability_major, attributes.compute_capability_minor) );
+                   ("multiprocessor_count", [%sexp_of: int] attributes.multiprocessor_count);
+                   ("clock_rate", [%sexp_of: int] attributes.clock_rate);
+                   ("memory_clock_rate", [%sexp_of: int] attributes.memory_clock_rate);
+                   ("global_memory_bus_width", [%sexp_of: int] attributes.global_memory_bus_width);
+                   ("l2_cache_size", [%sexp_of: int] attributes.l2_cache_size);
+                   ("max_threads_per_block", [%sexp_of: int] attributes.max_threads_per_block);
+                   ( "max_threads_per_multiprocessor",
+                     [%sexp_of: int] attributes.max_threads_per_multiprocessor );
+                   ( "max_shared_memory_per_block",
+                     [%sexp_of: int] attributes.max_shared_memory_per_block );
+                   ( "max_shared_memory_per_multiprocessor",
+                     [%sexp_of: int] attributes.max_shared_memory_per_multiprocessor );
+                   ("max_registers_per_block", [%sexp_of: int] attributes.max_registers_per_block);
+                   ( "max_registers_per_multiprocessor",
+                     [%sexp_of: int] attributes.max_registers_per_multiprocessor );
+                   ("warp_size", [%sexp_of: int] attributes.warp_size);
+                 ]);
+          toolchain_signature = None (* Driver/compiler provenance is tracked in gh-ocannl-1026. *);
+        }
+    with Cu.Cuda_error _ -> None
+
   let hardware_limits =
     let limits =
       lazy

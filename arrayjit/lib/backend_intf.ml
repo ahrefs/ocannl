@@ -132,6 +132,13 @@ type mma_capability = {
     are supported is decided per call by the backend's [mma_syntax] hook (the emission is the source
     of truth); this record carries what schedule construction needs. *)
 
+type timing_identity = { device_signature : string; toolchain_signature : string option }
+[@@deriving sexp_of, equal]
+(** Concrete device capabilities and optional observed toolchain metadata for timing evidence.
+    Separate from conservative construction limits. Include model/throughput properties or stable
+    physical identity, not just an ordinal. Toolchain metadata is intentionally partial: its absence
+    does not disable caching or claim that all driver/runtime/compiler inputs are represented. *)
+
 type hardware_limits = {
   max_threads_per_workgroup : int option;
       (** Upper bound on the number of threads in one workgroup (CUDA thread block / Metal
@@ -650,6 +657,11 @@ module type Backend_device_common = sig
       A function so that computing it (device enumeration) does not run at backend-module
       initialization: singleton backends instantiate eagerly at program startup, where touching a
       driver could fail runs that never use the backend. *)
+
+  val timing_identity : device -> timing_identity option
+  (** Concrete device identity, with best available toolchain metadata. Outer [None] means device
+      discovery is unavailable and disables persistent schedule AND placement I/O. Missing toolchain
+      metadata alone does not disable persistence. Query lazily, never at initialization. *)
 
   val hardware_limits : unit -> hardware_limits
   (** Conservative per-workgroup device limits: on multi-device backends the minimum across the

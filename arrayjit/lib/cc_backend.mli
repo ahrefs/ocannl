@@ -33,6 +33,12 @@ val pool_tag : unit -> string
     for [Schedulers.cpu_mma_limits]'s [worker_pool_tag]: schedules crowned on one pool do not
     transfer to another (gh-ocannl-530), so the tag enters the autotune disk-cache key. *)
 
+val timing_identity : unit -> Ir.Backend_intf.timing_identity option
+(** CPU model and host partition, plus observed compiler target/executable metadata and macOS
+    hardware UUID/OS build when available. OpenMP and non-macOS persistence remain supported.
+    Executable provenance retains the probe cache's path/size/mtime contract; opaque wrappers and
+    separately updated runtime libraries are not completely fingerprinted. *)
+
 val codegen_tag : unit -> string
 (** A short digest of this backend's resolved codegen configuration: the compiler command and its
     flags, the vector width, the fp16-arithmetic support, the parallel-grid syntax and chunking, and

@@ -161,11 +161,17 @@ let () =
            | _ -> false))
       ~f:(fun d -> d.Autotune.count)
   in
-  p "scratch/tune: the second run replays exactly after contention-free timing"
+  let cache_claim label value =
+    if Option.is_some (Context.timing_identity ctx) then p label value
+    else (
+      Stdio.eprintf "concrete device identity unavailable: persistent replay disabled\n";
+      skipped ~aggregation:`Environment ~backend label)
+  in
+  cache_claim "scratch/tune: the second run replays exactly after contention-free timing"
     (Bool.equal (replayed hit) (populate.Autotune.timings_contended = 0));
   p "scratch/tune: a cache hit still reports the declined baseline"
     (Bool.equal hit.Autotune.baseline_declined r.Autotune.baseline_declined);
-  p "scratch/tune: the cache-hit census accounts for that decline, and only it"
+  cache_claim "scratch/tune: the cache-hit census accounts for that decline, and only it"
     ((not hit.Autotune.baseline_declined)
     || (hit_scratch_count = 1 && hit.Autotune.candidates_failed = 1));
   p "scratch/tune: the cache-hit replay computes the right value"

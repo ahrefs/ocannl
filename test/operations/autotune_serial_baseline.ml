@@ -188,7 +188,7 @@ let () =
   let canon = Option.value_exn ~here:[%here] !canon in
   let limits = Context.hardware_limits ctx in
   SC.store ~dir:cache_dir
-    ~key:(SC.cache_key ~limits canon ~backend)
+    ~key:(SC.cache_key ~timing_identity:(Context.timing_identity ctx) ~limits canon ~backend)
     {
       SC.version = SC.entry_version;
       backend;
@@ -218,15 +218,23 @@ let () =
   let got = Context.get_values ctx mc.Tensor.value in
   let r = Option.value_exn ~here:[%here] !report in
   accounting "poisoned-cache search" r;
-  p "a serial cache entry is rejected on GPU backends and honoured on CPU ones"
-    (Bool.equal (replayed r) (not is_gpu));
+  let cache_available = Option.is_some (Context.timing_identity ctx) in
+  if cache_available then
+    p "a serial cache entry is rejected on GPU backends and honoured on CPU ones"
+      (Bool.equal (replayed r) (not is_gpu))
+  else (
+    Stdio.eprintf "concrete device identity unavailable: persistent replay disabled\n";
+    skipped ~aggregation:`Environment ~backend
+      "a serial cache entry is rejected on GPU backends and honoured on CPU ones");
   (* A replay times nothing and refuses nothing, so on GPU either counter is evidence of the
      re-search; a refused window is still a window the replay would not have opened. *)
   p "rejecting it re-searches rather than returning the serial routine"
-    (if is_gpu then r.Autotune.candidates_timed >= 1 || r.Autotune.timings_contended > 0
+    (if is_gpu || not cache_available then
+       r.Autotune.candidates_timed >= 1 || r.Autotune.timings_contended > 0
      else r.Autotune.candidates_timed = 0 && r.Autotune.timings_contended = 0);
   p "a pre-gh-552 entry reports no default measurement; a re-search measures one or is refused"
-    (if is_gpu then Option.is_some r.Autotune.default_ms || r.Autotune.default_refused
+    (if is_gpu || not cache_available then
+       Option.is_some r.Autotune.default_ms || r.Autotune.default_refused
      else Option.is_none r.Autotune.default_ms);
   p_all2 "the routine from the poisoned-cache path computes correct values" got mm_expected
     ~f:approx

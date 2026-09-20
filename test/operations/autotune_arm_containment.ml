@@ -220,13 +220,16 @@ let () =
       (Context.auto ()) t2 comp Ir.Indexing.Empty
   in
   let arm_a2 = List.nth_exn (List.rev !reports) 0 in
-  let arm_a1_cacheable = arm_a.Autotune.timings_contended = 0 in
+  let cache_available = Option.is_some (Context.timing_identity ctx_t) in
+  let arm_a1_cacheable = cache_available && arm_a.Autotune.timings_contended = 0 in
   p "arm A replays exactly when its first search had no contention refusals"
     (Bool.equal (replayed arm_a2) arm_a1_cacheable);
   p "a replay is the very schedule run 1 crowned"
     ((not (replayed arm_a2))
     || SC.equal_saved_schedule arm_a.Autotune.best_schedule arm_a2.Autotune.best_schedule);
-  let arm_a_cached = arm_a1_cacheable || arm_a2.Autotune.timings_contended = 0 in
+  let arm_a_cached =
+    cache_available && (arm_a1_cacheable || arm_a2.Autotune.timings_contended = 0)
+  in
   let ctx_2 = Context.run ctx_2 routine_2 in
   let got_2 = Context.get_values ctx_2 t2.Tensor.value in
   p_all2 "the cached winner replays to the right values" got_2 expected ~f:approx;

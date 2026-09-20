@@ -83,6 +83,7 @@ struct
           ];
       ]
 
+  let timing_identity _ = None
   let hardware_limits () = Backend_intf.no_hardware_limits
   let codegen_capabilities () = Backend_intf.no_codegen_capabilities
   let classify_failure _phase _exn = None

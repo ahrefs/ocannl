@@ -2226,3 +2226,52 @@ let log_debug_routine_file ~log_file_name ~stream_name =
 let gcd a b =
   let rec loop a b = if b = 0 then a else loop b (a % b) in
   loop (abs a) (abs b)
+
+let macos_platform_uuid registry =
+  String.split_lines registry
+  |> List.find_map ~f:(fun line ->
+      match String.lsplit2 line ~on:'=' with
+      | Some (name, value) when String.is_suffix (String.strip name) ~suffix:"\"IOPlatformUUID\"" ->
+          Option.bind
+            (String.chop_prefix (String.strip value) ~prefix:"\"")
+            ~f:(fun value ->
+              Option.bind (String.chop_suffix value ~suffix:"\"") ~f:(fun uuid ->
+                  let uuid = String.lowercase uuid in
+                  let parts = String.split uuid ~on:'-' in
+                  if
+                    Poly.equal (List.map parts ~f:String.length) [ 8; 4; 4; 4; 12 ]
+                    && List.for_all parts
+                         ~f:
+                           (String.for_all ~f:(fun c ->
+                                Char.is_digit c || Char.(c >= 'a' && c <= 'f')))
+                    && String.exists uuid ~f:(fun c -> not (Char.equal c '0' || Char.equal c '-'))
+                  then Some (Stdlib.Digest.to_hex (Stdlib.Digest.string uuid))
+                  else None))
+      | _ -> None)
+
+(* Registry IDs are machine-scoped. macOS hardware UUID separates hosts with identical device names;
+   the OS build adds observed metadata for the bundled Metal/dispatch runtime. *)
+let macos_timing_environment =
+  lazy
+    (let query path args =
+       try
+         let ch = Unix.open_process_args_in path args in
+         let status = ref None in
+         let output =
+           Exn.protect
+             ~f:(fun () -> Stdio.In_channel.input_all ch)
+             ~finally:(fun () -> status := Some (Unix.close_process_in ch))
+         in
+         match !status with
+         | Some (Unix.WEXITED 0) when not (String.is_empty (String.strip output)) ->
+             Some (String.strip output)
+         | _ -> None
+       with Unix.Unix_error _ | Stdlib.Sys_error _ -> None
+     in
+     if not (Stdlib.Sys.file_exists "/usr/sbin/ioreg") then None
+     else
+       Option.bind
+         (query "/usr/sbin/ioreg" [| "ioreg"; "-rd1"; "-c"; "IOPlatformExpertDevice" |])
+         ~f:(fun registry ->
+           Option.map (macos_platform_uuid registry) ~f:(fun host ->
+               (host, query "/usr/bin/sw_vers" [| "sw_vers"; "-buildVersion" |]))))

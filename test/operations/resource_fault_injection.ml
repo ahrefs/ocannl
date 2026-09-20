@@ -64,7 +64,7 @@ let cache_entry backend best_ms : SC.entry =
 let resource_cache_dir = "autotune_cache_resource_fault_injection"
 
 let cache_backend key =
-  Option.map (SC.lookup ~dir:resource_cache_dir ~key) ~f:(fun e -> e.SC.backend)
+  Option.map (SC.lookup ~dir:resource_cache_dir ~key:(Some key)) ~f:(fun e -> e.SC.backend)
 
 let clean_dir dir =
   if Stdlib.Sys.file_exists dir && Stdlib.Sys.is_directory dir then
@@ -283,12 +283,12 @@ let () =
      miss. *)
   let cache_key = "gh571-cache" in
   clean_dir resource_cache_dir;
-  SC.store ~dir:resource_cache_dir ~key:cache_key (cache_entry "old" 2.);
+  SC.store ~dir:resource_cache_dir ~key:(Some cache_key) (cache_entry "old" 2.);
   p "cache-store control commits a readable entry"
     (Option.equal String.equal (cache_backend cache_key) (Some "old"));
   let raised, hits =
     injected FI.Schedule_cache_before_commit (fun () ->
-        SC.store ~dir:resource_cache_dir ~key:cache_key (cache_entry "new" 1.))
+        SC.store ~dir:resource_cache_dir ~key:(Some cache_key) (cache_entry "new" 1.))
   in
   (* Quantified over the directory's entries, which the committed entry keeps non-empty. The staging
      naming scheme belongs to the helper that creates these files, so ask it rather than spelling an
@@ -299,7 +299,7 @@ let () =
   let old_preserved = Option.equal String.equal (cache_backend cache_key) (Some "old") in
   p_all "failed cache commit preserves the old entry and removes its staging file" entries
     ~f:(fun entry -> old_preserved && not (Utils.Atomic_file.is_staging_file entry));
-  SC.store ~dir:resource_cache_dir ~key:cache_key (cache_entry "new" 1.);
+  SC.store ~dir:resource_cache_dir ~key:(Some cache_key) (cache_entry "new" 1.);
   p "cache-store retry commits the replacement"
     (Option.equal String.equal (cache_backend cache_key) (Some "new"));
   let replay, replay_hits =
@@ -310,7 +310,7 @@ let () =
           if FI.equal_point point FI.Schedule_cache_before_replay then (
             Int.incr hits;
             failwith "gh571 injected replay failure"))
-        ~f:(fun () -> SC.lookup ~dir:resource_cache_dir ~key:cache_key)
+        ~f:(fun () -> SC.lookup ~dir:resource_cache_dir ~key:(Some cache_key))
     in
     (result, !hits)
   in
@@ -321,4 +321,4 @@ let () =
     (Stdlib.Filename.concat resource_cache_dir (cache_key ^ ".sexp"))
     ~data:"not a schedule cache entry";
   p "corrupt cache replay is an honest miss"
-    (Option.is_none (SC.lookup ~dir:resource_cache_dir ~key:cache_key))
+    (Option.is_none (SC.lookup ~dir:resource_cache_dir ~key:(Some cache_key)))

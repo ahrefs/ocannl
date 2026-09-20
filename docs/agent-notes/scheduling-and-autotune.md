@@ -853,3 +853,13 @@ files.
   queries the scan index is an ordinary loop symbol: `loop_bounds`, interval analysis, and
   `affine_accesses`, where the inits sit at path `Stmt 0` and the body at `Stmt 1` so program order
   is preserved.
+
+- Timed cache evidence uses `Context.timing_identity` separately from conservative construction
+  limits (gh-ocannl-594): schedule AND placement keys include concrete device capabilities. CUDA/HIP
+  key model, architecture, compute resources and static memory/clock properties, not device ordinal
+  or backend-wide minima. CPU retains model/host/compiler metadata; macOS CPU/Metal additionally
+  query hardware UUID and OS build, and Metal retains device registry identity. Toolchain metadata
+  is optional and explicitly partial: CUDA driver, selected OpenMP libraries and HIP/rocWMMA headers
+  remain preexisting provenance gaps (gh-ocannl-1026), not reasons to disable supported caches. Outer `None` means
+  concrete device discovery failed and bypasses all shared cache I/O. Execution/tuning remain
+  available. `schedule_cache_device` pins device/metadata separation, bypass, and real-backend replay.

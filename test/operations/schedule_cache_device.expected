@@ -1,0 +1,25 @@
+hardware UUID discovery normalizes case: true
+distinct hardware UUIDs separate otherwise identical hosts: true
+missing, malformed and placeholder UUIDs decline identity: true
+identity queries preserve conservative construction limits: true
+a concrete context's identity is stable: true
+the available identity contains concrete device facts: true
+device, driver and compiler changes independently separate schedule keys: true
+device, driver and compiler changes independently separate placement keys: true
+unavailable identity produces no key for either store: true
+concrete identities reach both stores' lock boundary: true
+concrete identity round-trips a schedule entry: true
+concrete identity round-trips a placement entry: true
+absent toolchain metadata preserves schedule persistence: true
+absent toolchain metadata preserves placement persistence: true
+unavailable identity never reads a schedule, even from a populated store: true
+unavailable identity never reads a placement, even from a populated store: true
+unavailable identity never reaches the cache lock: true
+unavailable identity creates no directory or lock: true
+unavailable identity neither writes entries nor advances or sweeps a stale regime: true
+the cold routine computes the reference: true
+the second routine computes the reference: true
+runtime replay requires a concrete device identity: true
+unavailable identity leaves the runtime store absent: true
+the identity is stable across allocation, execution and replay: true
+a complete cold search replays on the same concrete device: true

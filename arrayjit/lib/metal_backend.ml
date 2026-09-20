@@ -326,6 +326,26 @@ module Impl = struct
      restrict it further under register pressure. *)
   (* Memoized behind [lazy] like [metal_devices] itself: device enumeration must not run at
      backend-module initialization (see the [metal_devices] comment). *)
+  (* The OS build identifies Metal's bundled compiler/driver. A host UUID disambiguates the
+     device's registry ID across machines sharing the same cache directory. *)
+  let timing_identity (device : device) =
+    Option.map (Lazy.force Utils.macos_timing_environment) ~f:(fun (host, toolchain_signature) ->
+        let attributes = Me.Device.get_attributes device.dev in
+        {
+          Backend_intf.device_signature =
+            Sexp.to_string
+              (Sexp.List
+                 [
+                   Sexp.Atom host;
+                   Sexp.Atom attributes.name;
+                   Sexp.Atom (Unsigned.ULLong.to_string attributes.registry_id);
+                   Sexp.List
+                     (List.map attributes.supported_gpu_families ~f:Me.Device.GPUFamily.sexp_of_t);
+                   [%sexp_of: bool] attributes.has_unified_memory;
+                 ]);
+          toolchain_signature;
+        })
+
   let hardware_limits =
     let limits =
       lazy
