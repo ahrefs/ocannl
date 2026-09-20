@@ -2249,33 +2249,29 @@ let macos_platform_uuid registry =
                   else None))
       | _ -> None)
 
-(* A cache directory can be shared across hosts. I/O Registry entry IDs and hostnames alone are not
-   globally discriminating; pair the platform UUID with the build that supplies macOS's bundled
-   compiler/driver and dispatch runtime. Other platforms need their own verified runtime provenance
-   before they can return a complete timing identity. *)
+(* Registry IDs are machine-scoped. macOS hardware UUID separates hosts with identical device names;
+   the OS build adds observed metadata for the bundled Metal/dispatch runtime. *)
 let macos_timing_environment =
   lazy
     (let query path args =
-       let ch = Unix.open_process_args_in path args in
-       let status = ref None in
-       let output =
-         Exn.protect
-           ~f:(fun () -> Stdio.In_channel.input_all ch)
-           ~finally:(fun () -> status := Some (Unix.close_process_in ch))
-       in
-       match !status with
-       | Some (Unix.WEXITED 0) when not (String.is_empty (String.strip output)) -> Some output
-       | _ -> None
+       try
+         let ch = Unix.open_process_args_in path args in
+         let status = ref None in
+         let output =
+           Exn.protect
+             ~f:(fun () -> Stdio.In_channel.input_all ch)
+             ~finally:(fun () -> status := Some (Unix.close_process_in ch))
+         in
+         match !status with
+         | Some (Unix.WEXITED 0) when not (String.is_empty (String.strip output)) ->
+             Some (String.strip output)
+         | _ -> None
+       with Unix.Unix_error _ | Stdlib.Sys_error _ -> None
      in
-     try
-       if not (Stdlib.Sys.file_exists "/usr/bin/sw_vers") then None
-       else
-         Option.bind
-           (query "/usr/bin/sw_vers" [| "sw_vers"; "-buildVersion" |])
-           ~f:(fun build ->
-             Option.bind
-               (query "/usr/sbin/ioreg" [| "ioreg"; "-rd1"; "-c"; "IOPlatformExpertDevice" |])
-               ~f:(fun registry ->
-                 Option.map (macos_platform_uuid registry) ~f:(fun host ->
-                     (host, String.strip build))))
-     with Unix.Unix_error _ | Stdlib.Sys_error _ -> None)
+     if not (Stdlib.Sys.file_exists "/usr/sbin/ioreg") then None
+     else
+       Option.bind
+         (query "/usr/sbin/ioreg" [| "ioreg"; "-rd1"; "-c"; "IOPlatformExpertDevice" |])
+         ~f:(fun registry ->
+           Option.map (macos_platform_uuid registry) ~f:(fun host ->
+               (host, query "/usr/bin/sw_vers" [| "sw_vers"; "-buildVersion" |]))))

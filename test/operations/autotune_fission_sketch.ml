@@ -210,7 +210,7 @@ let () =
   let cache_claim label value =
     if Option.is_some (Context.timing_identity bctx) then p label value
     else (
-      Stdio.eprintf "timed-cache reuse unavailable: complete device/toolchain identity missing\n";
+      Stdio.eprintf "timed-cache reuse unavailable: concrete device identity missing\n";
       skipped ~aggregation:`Environment ~backend:(Context.backend_name bctx) label)
   in
   (match !hit_report with

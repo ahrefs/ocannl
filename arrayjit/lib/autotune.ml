@@ -3272,8 +3272,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
     in
     let use_cache = (not (String.is_empty cache_dir)) && SC.complete canon && Option.is_some key in
     if Option.is_none key then
-      logf "persistent timed cache disabled for %s: complete device/toolchain identity unavailable"
-        backend;
+      logf "persistent timed cache disabled for %s: concrete device identity unavailable" backend;
     let compile_spec =
       compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
         ~provenance:Outcome.Candidate search_ctx comp bindings

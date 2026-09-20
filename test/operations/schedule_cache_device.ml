@@ -67,13 +67,11 @@ let () =
     (Option.equal BI.equal_timing_identity identity (Context.timing_identity ctx));
   (match identity with
   | Some identity ->
-      p "the available identity contains both device and toolchain facts"
-        (not
-           (String.is_empty identity.device_signature
-           || String.is_empty identity.toolchain_signature))
+      p "the available identity contains concrete device facts"
+        (not (String.is_empty identity.device_signature))
   | None ->
       skipped ~aggregation:`Environment ~backend
-        "the available identity contains both device and toolchain facts");
+        "the available identity contains concrete device facts");
   let canon = ref None in
   let _, _ =
     Context.compile
@@ -84,14 +82,17 @@ let () =
   in
   let canon = Option.value_exn !canon in
   let fixture =
-    { BI.device_signature = "model-A:sm80:memory320"; toolchain_signature = "driver-A:compiler-A" }
+    {
+      BI.device_signature = "model-A:sm80:memory320";
+      toolchain_signature = Some "driver-A:compiler-A";
+    }
   in
   let identities =
     [
       fixture;
       { fixture with device_signature = "model-B:sm40:memory160" };
-      { fixture with toolchain_signature = "driver-B:compiler-A" };
-      { fixture with toolchain_signature = "driver-A:compiler-B" };
+      { fixture with toolchain_signature = Some "driver-B:compiler-A" };
+      { fixture with toolchain_signature = Some "driver-A:compiler-B" };
     ]
   in
   let key timing_identity = SC.cache_key ~timing_identity ~limits canon ~backend in
@@ -128,13 +129,21 @@ let () =
   probe (fun () ->
       SC.store ~dir:cache_dir ~key:valid_key entry;
       SC.store_placements ~dir:cache_dir ~key:valid_placement placement);
-  p "complete identities reach both stores' lock boundary" (!lock_hits = 2);
-  p "complete identity round-trips a schedule entry"
+  p "concrete identities reach both stores' lock boundary" (!lock_hits = 2);
+  p "concrete identity round-trips a schedule entry"
     (Option.value_map (SC.lookup ~dir:cache_dir ~key:valid_key) ~default:false ~f:(fun e ->
          String.equal e.source_digest entry.source_digest));
-  p "complete identity round-trips a placement entry"
+  p "concrete identity round-trips a placement entry"
     (Option.value_map (SC.lookup_placements ~dir:cache_dir ~key:valid_placement) ~default:false
        ~f:(fun e -> SC.equal_placement_decision e.decision placement.decision));
+  let device_only = Some { fixture with toolchain_signature = None } in
+  let device_key = key device_only and device_placement_key = placement_key device_only in
+  SC.store ~dir:cache_dir ~key:device_key entry;
+  SC.store_placements ~dir:cache_dir ~key:device_placement_key placement;
+  p "absent toolchain metadata preserves schedule persistence"
+    (Option.is_some (SC.lookup ~dir:cache_dir ~key:device_key));
+  p "absent toolchain metadata preserves placement persistence"
+    (Option.is_some (SC.lookup_placements ~dir:cache_dir ~key:device_placement_key));
   let stamp = Stdlib.Filename.concat cache_dir SC.regime_stamp_filename in
   Stdio.Out_channel.write_all stamp ~data:"0\n";
   let snapshot () =
@@ -188,13 +197,13 @@ let () =
   let replayed =
     match second_report.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false
   in
-  p "runtime replay requires a complete identity" ((not replayed) || Option.is_some identity);
+  p "runtime replay requires a concrete device identity" ((not replayed) || Option.is_some identity);
   p "unavailable identity leaves the runtime store absent"
     (Option.is_some identity || not (Stdlib.Sys.file_exists cache_dir));
   p "the identity is stable across allocation, execution and replay"
     (Option.equal BI.equal_timing_identity identity (Context.timing_identity ctx));
   if Option.is_none identity then (
-    Stdio.eprintf "complete device/toolchain identity unavailable: persistent replay disabled\n";
+    Stdio.eprintf "concrete device identity unavailable: persistent replay disabled\n";
     skipped ~aggregation:`Environment ~backend
       "a complete cold search replays on the same concrete device")
   else if first_report.Autotune.timings_contended > 0 then

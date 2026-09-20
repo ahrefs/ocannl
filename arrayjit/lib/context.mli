@@ -291,16 +291,14 @@ val static_properties : t -> Sexp.t
     single reader of it (gh-ocannl-710). *)
 
 val timing_identity : t -> Ir.Backend_intf.timing_identity option
-(** Persistent timing identity of this context's concrete device and toolchain; unavailable identity
-    disables timed schedule and placement cache I/O. Construction limits are unchanged.
-
-    CPU persistence is available on macOS with the bundled dispatch/serial runtime, identifying the
-    host hardware UUID, model, compiler target/executable and OS build. OpenMP and unverified
-    non-macOS CPU runtimes return [None]. Metal identifies the host UUID, device registry identity
-    and macOS build. CUDA and HIP return [None]: cudajit 0.8.0 lacks driver discovery, and hipjit
-    0.2.0's HIP driver-version query returns the HIP runtime build, not the installed AMD driver.
-    Missing or failed discovery disables persistence; execution and runtime tuning remain available.
-*)
+(** Concrete per-device capabilities for persistent timing evidence, separately from conservative
+    construction limits. CUDA/HIP include model, architecture, compute resources and static memory/
+    clock capabilities. CPU includes its model/host and existing compiler fingerprint; Metal adds
+    host hardware UUID and device registry identity. Observed toolchain metadata (CPU compiler,
+    macOS build, HIP runtime/HIPRTC) is optional and intentionally incomplete: CUDA driver versions,
+    selected OpenMP libraries and HIP headers remain provenance gaps. This API does not promise a
+    globally complete performance-environment fingerprint. Outer [None] means device discovery
+    failed and disables both cache stores; absent toolchain metadata alone preserves persistence. *)
 
 val hardware_limits : t -> Ir.Backend_intf.hardware_limits
 (** The backend's conservative per-workgroup device limits (all-[None] on backends that do not bind

@@ -1377,11 +1377,47 @@ end = struct
      minimum across devices, so code compiled once is valid wherever it links. *)
   (* Memoized behind [lazy]: driver init and device enumeration must not run at backend-module
      initialization ([num_devices] forces [ensure_initialized]). *)
-  (* ROCm's hipDriverGetVersion returns the HIP_VERSION runtime build constant, not the
-     installed AMD driver identity (clr/hipamd/src/hip_context.cpp). hipjit 0.2.0 therefore
-     cannot identify driver-only changes. Preserve tuning/execution but disable persistent
-     timing reuse until complete driver/toolchain discovery is available. *)
-  let timing_identity (_device : device) = None
+  (* Concrete static capabilities separate mixed devices without changing the conservative
+     construction limits. Driver/runtime/header provenance remains a documented separate concern. *)
+  let timing_identity (device : device) =
+    try
+      let attributes = H.Device.get_attributes device.dev.dev in
+      Some
+        {
+          Backend_intf.device_signature =
+            Sexp.to_string
+              (Sexp.message "device_capabilities"
+                 [
+                   ("name", Sexp.Atom attributes.name);
+                   ("gcn_arch_name", Sexp.Atom attributes.gcn_arch_name);
+                   ("multiprocessor_count", [%sexp_of: int] attributes.multiprocessor_count);
+                   ("clock_rate", [%sexp_of: int] attributes.clock_rate);
+                   ("memory_clock_rate", [%sexp_of: int] attributes.memory_clock_rate);
+                   ("memory_bus_width", [%sexp_of: int] attributes.memory_bus_width);
+                   ("total_global_mem", [%sexp_of: int] attributes.total_global_mem);
+                   ("l2_cache_size", [%sexp_of: int] attributes.l2_cache_size);
+                   ("max_threads_per_block", [%sexp_of: int] attributes.max_threads_per_block);
+                   ( "max_threads_per_multiprocessor",
+                     [%sexp_of: int] attributes.max_threads_per_multiprocessor );
+                   ("shared_mem_per_block", [%sexp_of: int] attributes.shared_mem_per_block);
+                   ( "shared_mem_per_multiprocessor",
+                     [%sexp_of: int] attributes.shared_mem_per_multiprocessor );
+                   ("regs_per_block", [%sexp_of: int] attributes.regs_per_block);
+                   ("warp_size", [%sexp_of: int] attributes.warp_size);
+                 ]);
+          toolchain_signature =
+            (try
+               let major, minor = Hiprtc.version () in
+               Some
+                 (Sexp.to_string
+                    (Sexp.message "hip_runtime_hiprtc"
+                       [
+                         ("runtime", [%sexp_of: int] (H.runtime_get_version ()));
+                         ("hiprtc", [%sexp_of: int * int] (major, minor));
+                       ]))
+             with H.Hip_error _ | Hiprtc.Hiprtc_error _ -> None);
+        }
+    with H.Hip_error _ -> None
 
   let hardware_limits =
     let limits =

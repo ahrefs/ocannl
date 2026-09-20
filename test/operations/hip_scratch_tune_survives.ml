@@ -164,7 +164,7 @@ let () =
   let cache_claim label value =
     if Option.is_some (Context.timing_identity ctx) then p label value
     else (
-      Stdio.eprintf "complete timing identity unavailable: persistent replay disabled\n";
+      Stdio.eprintf "concrete device identity unavailable: persistent replay disabled\n";
       skipped ~aggregation:`Environment ~backend label)
   in
   cache_claim "scratch/tune: the second run replays exactly after contention-free timing"

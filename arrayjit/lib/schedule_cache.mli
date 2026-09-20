@@ -308,8 +308,9 @@ val cache_key :
     ({!Autotune.tune}'s [?timing]); everyone else wants the default. The backend-supplied components
     arrive as the whole [limits] record rather than one optional argument each, so a component added
     there reaches every call site instead of defaulting to absent at the ones that were not updated
-    (gh-ocannl-572). The mandatory [timing_identity] separately identifies the concrete device and
-    compilation toolchain that produced timing evidence; it does not change construction limits. *)
+    (gh-ocannl-572). The mandatory [timing_identity] separately identifies concrete device
+    capabilities and optional observed toolchain metadata; it does not change construction limits or
+    promise complete runtime/driver provenance. *)
 
 val cache_regime_version : int
 (** Version of the filename-key regime recorded once per cache directory (gh-ocannl-835). Bump it

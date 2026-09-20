@@ -749,32 +749,35 @@ let cpu_model =
      with Unix.Unix_error _ | Stdlib.Sys_error _ -> "")
 
 let timing_identity () =
-  (* OpenMP can load a separately upgraded libgomp/libomp; compiler identity and the OS release do
-     not identify that selected runtime. Only macOS's bundled dispatch/serial runtime is currently
-     verified. Decline persistence everywhere else rather than guess a library path. *)
-  match parallel_grid_syntax_setting () with
-  | `Openmp -> None
-  | `Dispatch | `None -> (
-      try
-        Option.bind (Lazy.force Utils.macos_timing_environment) ~f:(fun (host, os_build) ->
-            let target = Lazy.force target_fingerprint in
-            let executable = compiler_executable_identity (compiler_command ()) in
-            let model = Lazy.force cpu_model in
-            if
-              String.equal target "no-target-fingerprint"
-              || String.is_prefix executable ~prefix:"unresolved:"
-              || String.is_empty model
-            then None
-            else
-              Some
-                {
-                  Ir.Backend_intf.device_signature =
-                    Sexp.to_string ([%sexp_of: string * string] (host, model));
-                  toolchain_signature =
-                    Sexp.to_string
-                      ([%sexp_of: string * string * string] (target, executable, os_build));
-                })
-      with Unix.Unix_error _ | Stdlib.Sys_error _ -> None)
+  try
+    let model = Lazy.force cpu_model in
+    if String.is_empty model then None
+    else
+      let host, os_build =
+        match Lazy.force Utils.macos_timing_environment with
+        | Some environment -> environment
+        | None -> (Unix.gethostname (), None)
+      in
+      let target = Lazy.force target_fingerprint in
+      let target = if String.equal target "no-target-fingerprint" then None else Some target in
+      let executable = compiler_executable_identity (compiler_command ()) in
+      let executable =
+        if String.is_prefix executable ~prefix:"unresolved:" then None else Some executable
+      in
+      Some
+        {
+          Ir.Backend_intf.device_signature =
+            Sexp.to_string ([%sexp_of: string * string] (host, model));
+          toolchain_signature =
+            (if Option.is_none target && Option.is_none executable && Option.is_none os_build then
+               None
+             else
+               Some
+                 (Sexp.to_string
+                    ([%sexp_of: string option * string option * string option]
+                       (target, executable, os_build))));
+        }
+  with Unix.Unix_error _ | Stdlib.Sys_error _ -> None
 
 let codegen_tag () =
   let parts =

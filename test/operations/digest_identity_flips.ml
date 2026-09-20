@@ -22,7 +22,7 @@ let timing_identity =
   Some
     {
       Ir.Backend_intf.device_signature = "synthetic-device";
-      toolchain_signature = "synthetic-compiler";
+      toolchain_signature = Some "synthetic-compiler";
     }
 
 open Verdict.Claims
