@@ -9,7 +9,7 @@
    the pending-owner release this test exists for: a winner already sits in [best_so_far], which the
    exit sweep released before the fix. So a leg whose search completes uninjected is re-rolled a few
    times -- each attempt is a full search with fresh timings -- and only when every roll is monotone
-   are the three injection claims reported as an environment skip, with the census claims still
+   are the three injection claims reported as a backend-scoped skip, with the census claims still
    asserted over all attempts. *)
 open Base
 open Ocannl
@@ -119,15 +119,17 @@ let () =
     (match site with
     | None -> p "ordinary search completed" (Poly.equal result `Returned)
     | Some _ when not injected ->
-        (* [max_rolls] full searches, none with a nonwinner: this host's timings gave the leg
-           nothing to inject at. Not a cleanup failure, and not coverage either. *)
+        (* [max_rolls] full searches, none with a nonwinner: this backend's timings gave the leg
+           nothing to inject at. Not a cleanup failure, and not coverage either. Backend-scoped on
+           purpose: another backend on the same box finding a nonwinner says nothing about whether
+           THIS backend's release paths ran. *)
         Stdio.eprintf "%s: %d searches admitted no strictly slower candidate\n%!" name rolls;
         List.iter
           [
             "injected at a strictly slower admitted candidate";
             "callback exception propagates";
             "partial report retains a measured incumbent";
-          ] ~f:(fun claim -> skipped ~aggregation:`Environment ~backend (name ^ ": " ^ claim))
+          ] ~f:(fun claim -> skipped ~backend (name ^ ": " ^ claim))
     | Some _ ->
         Stdio.eprintf "%s: injected on roll %d\n%!" name rolls;
         p (name ^ ": injected at a strictly slower admitted candidate") injected;
