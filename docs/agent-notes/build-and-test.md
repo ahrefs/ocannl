@@ -1179,24 +1179,27 @@ that they earn a lookup rather than always-loaded space.
   warning-as-error from a temporary edit) leaves the previous `.exe.output` untouched, and the
   stale file reads as a green probe; that turned a negative control into a false positive during
   gh-ocannl-554.
-- **To genuinely re-execute an unchanged `.expected` test, change the content of the
-  `ocannl_config` its stanza depends on**: append a comment line (`# rerun 1`, then `# rerun 2`,
-  …), run `dune build @<dir>/runtest-<name>`, and delete the appended line when done (the file is
-  tracked; `git checkout` it only when it carries no other local edits, since AGENTS.md also sends
-  one-off configuration changes to that file). For the directories that `copy_files` it in
-  (`test/operations`, `test/einsum`, `test/ppx`, `test/training`, `test/gpt2`) that file is
-  `test/config/ocannl_config`; `arrayjit/test`, `test/operations/profiles` and
-  `test/operations/startup_streams` depend on their own tracked `ocannl_config`, and an edit to the
-  shared one leaves their rules untouched. Each distinct content is a new digest for the
-  `<name>.exe.output` rule, so the executable runs again
-  with no recompilation; any content other than the current one does, since dune memoizes only a
-  rule's latest result and its shared cache skips user rules by default. This is what sampling a
-  timing-dependent test several times needs (the
+- **To genuinely re-execute an unchanged `.expected` test N times, use the harness's repeat
+  mode**: `tools/test-run.sh repeat N build @<dir>/runtest-<name>` runs every iteration in its own
+  freshly cleaned, cache-disabled build directory, keeps each stdout/stderr and exit status, and
+  diffs the pairs (about 45 s per iteration for a 35 s test on an M4 Max, the rebuild included).
+  For a single extra run there is a lighter move: change the content of the `ocannl_config` the
+  stanza depends on — append a comment line, `dune build @<dir>/runtest-<name>`, delete the line
+  when done (the file is tracked; `git checkout` it only when it carries no other local edits,
+  since AGENTS.md also sends one-off configuration changes there). The rule's memo holds the
+  content of the last BUILD, not of the file, so the appended value must be one that build never
+  saw: deleting `# rerun 1` without building and appending `# rerun 1` again is served stale
+  (verified), while a timestamp, or a counter that never restarts, is not. For the directories
+  that `copy_files` it in (`test/operations`, `test/einsum`, `test/ppx`, `test/training`,
+  `test/gpt2`) that file is `test/config/ocannl_config`; `arrayjit/test`,
+  `test/operations/profiles` and `test/operations/startup_streams` depend on their own tracked
+  `ocannl_config`, and an edit to the shared one leaves their rules untouched. Each new content is
+  a new digest for the `<name>.exe.output` rule, so the executable runs again with no
+  recompilation. This is what sampling a timing-dependent test needs (the
   `autotune_callback_release` skip decision, landing gh-ocannl-staging#764), and every other reflex
   fails silently in the green direction, verified on dune 3.24.2: `dune build --force
   @<dir>/runtest-<name>` re-runs only the alias's diff action, while the content-keyed
-  `<name>.exe.output` rule that runs
-  the executable is served from the memo; a comment appended to the test's `.ml` rebuilds it, but
+  `<name>.exe.output` rule that runs the executable is served from the memo; a comment appended to the test's `.ml` rebuilds it, but
   the compiled objects are byte-identical, so early cutoff serves the same `.exe.output` again;
   appending to the copied `test/operations/ocannl_config` instead fails with "Multiple rules
   generated" (it is a `copy_files` target, `test/operations/dune` line 2) and leaves an untracked
