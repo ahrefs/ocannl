@@ -1167,7 +1167,8 @@ that they earn a lookup rather than always-loaded space.
   database and never stats a rule's targets, so a hand-deleted one is recorded as built forever;
   that also rules out the two other reflexes, since touching a source changes no CONTENT digest and
   deleting `_build/.digest-db` does not restore the memo either. Every golden-diff rule now has an
-  alias to force (`dune build --force @<dir>/runtest-<name>`, see below); for a target with no alias
+  alias to force (`dune build --force @<dir>/runtest-<name>`, see below), though for a `(test)`
+  stanza that only re-runs the diff, not the executable (next bullet); for a target with no alias
   at all the recovery is `dune build --sandbox=copy <that target>`: sandboxing changes
   how the rule executes, which invalidates the memo and re-runs it. `dune clean` works too and buys
   a full rebuild, which on macOS means every fresh executable queueing behind XProtect again. Worth
@@ -1178,6 +1179,27 @@ that they earn a lookup rather than always-loaded space.
   warning-as-error from a temporary edit) leaves the previous `.exe.output` untouched, and the
   stale file reads as a green probe; that turned a negative control into a false positive during
   gh-ocannl-554.
+- **To genuinely re-execute an unchanged `.expected` test, change the content of
+  `test/config/ocannl_config`**: append a comment line (`# rerun 1`, then `# rerun 2`, …), run `dune
+  build @<dir>/runtest-<name>`, and `git checkout test/config/ocannl_config` when done (it is
+  tracked). The file is copied into every test directory and is a declared dep of every test stanza,
+  so each distinct content is a new digest for the `.exe.output` rule and the executable runs again,
+  with no recompilation. This is what sampling a timing-dependent test several times needs (the
+  `autotune_callback_release` skip decision, landing gh-ocannl-staging#764), and every other reflex
+  fails silently in the green direction, verified on dune 3.24.2: `dune build --force
+  @<dir>/runtest-<name>` re-runs only the alias's diff action, while the content-keyed
+  `<name>.exe.output` rule that runs
+  the executable is served from the memo; a comment appended to the test's `.ml` rebuilds it, but
+  the compiled objects are byte-identical, so early cutoff serves the same `.exe.output` again;
+  appending to the copied `test/operations/ocannl_config` instead fails with "Multiple rules
+  generated" (it is a `copy_files` target, `test/operations/dune` line 2) and leaves an untracked
+  file to `rm`. `dune build --sandbox=copy @<dir>/runtest-<name>` does re-execute, but once per
+  toggle of the sandbox mode, and each toggle re-runs every rule the alias reaches (over a minute
+  for one 35 s test). Deleting `_build/default/<dir>/<name>.exe.output`, with or without
+  `--cache=disabled`, is worse than useless: the rule stays recorded as built (previous bullet), the
+  test's `diff?` then sees no output and every later build of the alias fails with "File
+  `<name>.expected` should be deleted" until some real dep changes — the config append is also the
+  recovery.
 - **Before changing code generation, read the inventory**: `dune build
   @test/operations/runtest-codegen_text_inventory` prints, as its golden, every file in the tree
   that pins the TEXT of emitted code (gh-ocannl-712). Two populations, and no single search finds
