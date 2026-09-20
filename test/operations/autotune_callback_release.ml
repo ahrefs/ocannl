@@ -5,9 +5,11 @@
    Whether any admitted candidate measures strictly slower than the incumbent is a property of the
    machine's timings: a short search whose samples happen to fall monotonically (warm-up, a fast
    GPU) admits only winners, and the injection never fires (rog-nv/cuda, sweep 2026-09-20). The
-   preferred selector therefore has a deterministic fallback -- the second admitted candidate at the
-   boundary, which exists whenever the partial report can retain a measured incumbent -- so the leg
-   always injects; which selector fired is reported on stderr. *)
+   preferred selector therefore has a deterministic fallback -- the first candidate admitted after
+   some other measurement, which exists whenever the partial report can retain a measured incumbent
+   -- so the leg always injects; which selector fired is reported on stderr. Admissions are counted
+   through [on_candidate_timed], the tuner's own counter, because the timed serial baseline grows
+   [candidates_timed] without ever reaching [on_candidate_callback]. *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -36,7 +38,7 @@ let () =
   let expected = Context.get_values ref_ctx product.Tensor.value in
   Context.release ref_ctx;
   let attempt ~scratch ~select site =
-    let injected = ref None and report = ref None and arrivals = ref 0 in
+    let injected = ref None and report = ref None and timed_seen = ref 0 in
     let old = !Autotune.on_candidate_callback and old_timed = !Autotune.on_candidate_timed in
     let result =
       Exn.protect
@@ -44,13 +46,18 @@ let () =
           Autotune.on_candidate_callback := old;
           Autotune.on_candidate_timed := old_timed)
         ~f:(fun () ->
+          (Autotune.on_candidate_timed := fun _ ~timed_so_far -> timed_seen := timed_so_far);
           (Autotune.on_candidate_callback :=
              fun boundary ~candidate_ms ~incumbent_ms ->
-               if Option.exists site ~f:(fun s -> Poly.equal s boundary) then (
-                 Int.incr arrivals;
+               if Option.exists site ~f:(fun s -> Poly.equal s boundary) then
                  let nonwinner = Float.(candidate_ms > incumbent_ms) in
+                 (* Admissions measured before this candidate: the [`Timed] boundary precedes this
+                    candidate's own [on_candidate_timed], the [`Calibration] boundary follows it. *)
+                 let preceding =
+                   match boundary with `Timed -> !timed_seen | `Calibration -> !timed_seen - 1
+                 in
                  let selected =
-                   match select with `Nonwinner -> nonwinner | `Second_admitted -> !arrivals = 2
+                   match select with `Nonwinner -> nonwinner | `Over_incumbent -> preceding >= 1
                  in
                  if selected then (
                    Stdio.eprintf "%s callback: candidate %.9g ms vs incumbent %.9g ms\n%!"
@@ -62,7 +69,7 @@ let () =
                    in
                    match boundary with
                    | `Timed -> Autotune.on_candidate_timed := fun _ ~timed_so_far:_ -> inject ()
-                   | `Calibration -> inject ())));
+                   | `Calibration -> inject ()));
           try
             let ctx, routine =
               Autotune.tune ~search:true ~beam_width:1 ~rounds:0 ~repeats:1
@@ -98,13 +105,13 @@ let () =
       | `Returned, _, _ when Option.is_some site ->
           (* Every admitted candidate was a new best, so the preferred selector had nothing to pick.
              The control run completed and released everything it made, which the census below still
-             covers; inject where a candidate is guaranteed to arrive. *)
+             covers; inject at the first candidate admitted over an existing measurement. *)
           Stdio.eprintf
-            "%s: no strictly slower candidate was admitted; injecting at the second admitted \
-             candidate instead\n\
+            "%s: no strictly slower candidate was admitted; injecting at the first candidate \
+             admitted over a measured incumbent instead\n\
              %!"
             name;
-          attempt ~scratch ~select:`Second_admitted site
+          attempt ~scratch ~select:`Over_incumbent site
       | outcome -> outcome
     in
     let after = Ir.Alloc_census.snapshot () in

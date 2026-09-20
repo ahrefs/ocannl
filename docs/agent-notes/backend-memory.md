@@ -172,6 +172,9 @@ files.
   persistent constant cache. It prefers a strictly slower admitted candidate (the nonwinner whose
   release the fix owns), but whether one arrives is a property of the machine's timings — a short
   search whose samples fall monotonically admits only winners (rog-nv/cuda, sweep 2026-09-20) — so
-  a leg that completes uninjected is retried injecting at the second admitted candidate, which
-  exists whenever the partial report can retain a measured incumbent. A fault-injection
+  a leg that completes uninjected is retried injecting at the first candidate admitted over an
+  earlier measurement, which exists whenever the partial report can retain a measured incumbent.
+  Count those admissions through `Autotune.on_candidate_timed`, the tuner's own counter: the timed
+  serial baseline grows `candidates_timed` without ever reaching `on_candidate_callback`, so
+  "second callback arrival" undercounts on CPU backends. A fault-injection
   precondition on measured wall-clock is not a stable gate; give it a deterministic fallback.
