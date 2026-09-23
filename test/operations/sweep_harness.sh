@@ -44,7 +44,8 @@ on_error() {
     native_of_dxg dxg_of_native native_collection native_unit_linux native_unit_wsl \
     native_unit_cpu native_abort_run native_other_abort hold_lock_ok \
     tuf_asleep tuf_no_wake_lab tuf_up tuf_unreachable tuf_inhibited tuf_sleep_fails \
-    tuf_unguarded tuf_unguarded_wsl tuf_self_refusal tuf_cancelled guard_held guard_refused \
+    tuf_unguarded tuf_unguarded_prep tuf_unguarded_wsl tuf_self_refusal tuf_cancelled \
+    guard_held guard_refused \
     guard_absent \
     after_cancel; do
     [ -n "${!name:-}" ] || continue
@@ -82,7 +83,8 @@ unset SWEEP_TEST_CALLS SWEEP_TEST_WAIT_PREFIX SWEEP_TEST_OPAM_RC \
   SWEEP_TEST_SSH_MODE SWEEP_TEST_OWN_GROUP SWEEP_TEST_WAIT_TICKS \
   SWEEP_TEST_HOSTS SWEEP_TEST_DEST_ROG SWEEP_TEST_DEST_MINIX \
   SWEEP_TEST_KERNEL_LINES SWEEP_TEST_BOOT_ID SWEEP_TEST_DEST_TUF SWEEP_TEST_WAKE_LAB \
-  SWEEP_TEST_WAKE_LAB_CALLS SWEEP_TEST_TUF_STATUS SWEEP_TEST_TUF_SLEEP SWEEP_TEST_HOLD_DENIED
+  SWEEP_TEST_WAKE_LAB_CALLS SWEEP_TEST_TUF_STATUS SWEEP_TEST_TUF_SLEEP SWEEP_TEST_HOLD_DENIED \
+  SWEEP_TEST_PREP_OK
 
 sweep=$1
 aggregate=$2
@@ -229,14 +231,20 @@ printf '%s\n' "$*" >>"$SWEEP_TEST_SSH_CALLS"
 case ${SWEEP_TEST_SSH_MODE:-} in
   window)
     # A far side whose supervisor could not take the sleep guard (no polkit grant) says so on the
-    # unit's stderr before the unit runs; the fixture says it for the leg it then refuses.
+    # unit's stderr before the unit runs: for every guarded leg (`1`), or for the preparation alone
+    # (`prep`, a transient refusal). SWEEP_TEST_PREP_OK lets the preparation succeed, so the unit
+    # goes on to its suite (which this fake then refuses: a `fail`) and replaces the log.
     case $* in
       *"-- --hold '"*)
-        [ -n "${SWEEP_TEST_HOLD_DENIED:-}" ] &&
-          echo 'sweep-hold: WARNING: running WITHOUT a sleep guard, so nothing at the OS level stops a suspend under this run -- fixture-inhibit refused: Access denied' >&2
+        case ${SWEEP_TEST_HOLD_DENIED:-}:$* in
+          1:* | prep:*" prep' "*)
+            echo 'sweep-hold: WARNING: running WITHOUT a sleep guard, so nothing at the OS level stops a suspend under this run -- fixture-inhibit refused: Access denied' >&2
+            ;;
+        esac
         ;;
     esac
     case $* in
+      *"worktree prune"*) [ -n "${SWEEP_TEST_PREP_OK:-}" ] && exit 0 ;;
       *window-bounds*)
         now=$(date +%s)
         printf 'window-bounds %s %s\n' "$((now - 5))" "$((now + 1))"
@@ -308,8 +316,20 @@ case $1 in
       exit 1
     fi
     echo "$2: sleep"
+    # `hang-once`: the FIRST request sits in its confirm-down until killed (a cancellation lands
+    # there), and any later one completes.
+    if [ "${SWEEP_TEST_TUF_SLEEP:-ok}" = hang-once ] && [ ! -e "$SWEEP_TEST_WAIT_PREFIX.slept-once" ]; then
+      : >"$SWEEP_TEST_WAIT_PREFIX.slept-once"
+      echo 'confirming...'
+      waited=0
+      while [ "$waited" -lt "$SWEEP_TEST_WAIT_TICKS" ]; do
+        sleep 0.05
+        waited=$((waited + 1))
+      done
+      exit 1
+    fi
     case ${SWEEP_TEST_TUF_SLEEP:-ok} in
-      ok) echo 'confirming...'; echo "$2=DOWN (07:00:00)" ;;
+      ok | hang-once) echo 'confirming...'; echo "$2=DOWN (07:00:00)" ;;
       inhibited)
         echo '  Operation inhibited by "fleet-worker" (PID 4242 "python3", user lukstafi), reason is "a correctness slot".'
         echo "  sleep REFUSED on $2 by a block inhibitor (a run there holds it; see status)"
@@ -400,6 +420,7 @@ run_sweep_args() {
     "SWEEP_TEST_TUF_STATUS=${SWEEP_TEST_TUF_STATUS:-down}" \
     "SWEEP_TEST_TUF_SLEEP=${SWEEP_TEST_TUF_SLEEP:-ok}" \
     "SWEEP_TEST_HOLD_DENIED=${SWEEP_TEST_HOLD_DENIED:-}" \
+    "SWEEP_TEST_PREP_OK=${SWEEP_TEST_PREP_OK:-}" \
     "PATH=$fake_bin:$PATH" \
     "SWEEP_TEST_CALLS=$calls" \
     "SWEEP_TEST_WAIT_PREFIX=${SWEEP_TEST_WAIT_PREFIX:-}" \
@@ -2330,6 +2351,17 @@ grep -qF '  tuf/hip: ran WITHOUT a sleep guard -- fixture-inhibit refused: Acces
   <<<"$tuf_unguarded"
 grep -qF '  minix/hip: ran WITHOUT a sleep guard -- fixture-inhibit refused: Access denied' \
   <<<"$tuf_unguarded"
+# Once per unit, however many of its legs were refused: a box without the grant refuses them all.
+[ "$(grep -c '^  tuf/hip: ran WITHOUT a sleep guard' <<<"$tuf_unguarded")" -eq 1 ]
+# A refusal to the PREPARATION alone is read before the suite's log replaces the preparation's.
+tuf_unguarded_prep=$(SWEEP_TEST_TUF_STATUS=up SWEEP_TEST_HOLD_DENIED=prep SWEEP_TEST_PREP_OK=1 \
+  SWEEP_TEST_SSH_MODE=window run_sweep_args --only hip --target tuf-up-probe)
+grep -q '^  tuf/hip: fail ' <<<"$tuf_unguarded_prep"
+grep -qF '  tuf/hip: ran WITHOUT a sleep guard -- fixture-inhibit refused: Access denied' \
+  <<<"$tuf_unguarded_prep"
+tuf_unguarded_prep_log=$(awk -F '\t' '$1 == "unit" && $2 == "tuf" { print $6 }' \
+  "$(sed -n 's/^run:  *//p' <<<"$tuf_unguarded_prep")")
+absent '^sweep-hold: WARNING' "$tuf_unguarded_prep_log"
 tuf_unguarded_wsl=$(SWEEP_TEST_HOLD_DENIED=1 SWEEP_TEST_SSH_MODE=window \
   SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh run_sweep_args --only hip --target tuf-up-probe)
 absent 'sleep guard' <<<"$tuf_unguarded_wsl"
@@ -2382,6 +2414,43 @@ until grep -q '^tuf=DOWN' "$tuf_cancel_sleep_log" 2>/dev/null; do
   waited=$((waited + 1))
 done
 grep -q '^tuf=DOWN' "$tuf_cancel_sleep_log"
+
+
+# ...and one cancelled DURING the lane's own foreground sleep request (the fake's first request
+# sits in its confirm-down) is not counted as slept: the EXIT path issues the detached request.
+tuf_cancel_prefix=$tmp/tuf-cancel-sleep
+wait_prefix=$tuf_cancel_prefix
+: >"$wake_lab_calls"
+SWEEP_TEST_OWN_GROUP=1 SWEEP_TEST_WAIT_PREFIX=$tuf_cancel_prefix SWEEP_TEST_SSH_MODE=window \
+  SWEEP_TEST_TUF_STATUS=up SWEEP_TEST_TUF_SLEEP=hang-once run_sweep_args --only hip \
+  --target tuf-cancel-probe >"$tuf_cancel_prefix.out" 2>"$tuf_cancel_prefix.err" &
+tuf_cancel_pid=$!
+holder_pid=$tuf_cancel_pid
+waited=0
+until [ -e "$tuf_cancel_prefix.slept-once" ]; do
+  [ "$waited" -lt "$wait_ticks" ] || break
+  sleep 0.05
+  waited=$((waited + 1))
+done
+[ -e "$tuf_cancel_prefix.slept-once" ]
+kill -TERM -- "-$tuf_cancel_pid"
+set +e
+wait "$tuf_cancel_pid"
+tuf_cancel_rc=$?
+set -e
+holder_pid=
+wait_prefix=
+[ "$tuf_cancel_rc" -eq 143 ]
+tuf_cancel_stamp=$(sed -n 's/^sweep \([0-9TZ]*\) .*/\1/p' "$tuf_cancel_prefix.out")
+tuf_cancel_sleep_log=$state/logs/$tuf_cancel_stamp-tuf-sleep.log
+waited=0
+until grep -q '^tuf=DOWN' "$tuf_cancel_sleep_log" 2>/dev/null; do
+  [ "$waited" -lt "$wait_ticks" ] || break
+  sleep 0.05
+  waited=$((waited + 1))
+done
+grep -q '^tuf=DOWN' "$tuf_cancel_sleep_log"
+[ "$(cat "$wake_lab_calls")" = "$(printf 'status tuf\nsleep tuf\nsleep tuf')" ]
 
 # The guard itself: the far-side supervisor's `--hold`, run here against fake inhibitors. The
 # program is the sweep's own, extracted as tools/test-test-run.sh extracts unit_jobs (the sweep

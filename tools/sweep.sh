@@ -2166,11 +2166,17 @@ fi
 # A native unit that ran without its sleep guard says so on its summary line, where the scheduled
 # routine reads the run: the supervisor's warning is in the log, and a missing polkit grant that
 # only a log records is one nobody installs (see capped_perl for why the unit ran anyway).
+# Called after EVERY log-writing phase that ran guarded legs, since a later one may replace the log
+# (the suite's `>"$log"` truncates the preparation's); once per unit, so a box refusing every leg
+# (a missing polkit grant) says so once rather than per leg.
 say_unguarded() { # log label
   local line
+  [ "$UNGUARDED_SAID" = 0 ] || return 0
   line=$(grep -m 1 '^sweep-hold: WARNING: ' "$1" 2>/dev/null) || return 0
+  UNGUARDED_SAID=1
   say "  $2: ran WITHOUT a sleep guard -- ${line#* -- }"
 }
+UNGUARDED_SAID=0
 
 # One unit, start to finish: preparation, the capped suite, the recorded row, and
 # the post-unit phases (RTC context, serial rerun, fingerprint, unit state), all
@@ -2183,6 +2189,7 @@ run_unit() { # machine backend host
   local remote_prep remote rc elapsed outcome unreachable=skip unguarded
   WRITTEN_FINGERPRINT=
   CURRENT_UNIT=$machine/$backend
+  UNGUARDED_SAID=0
   # A gated box that answered its status check and then not the unit (its Wi-Fi dropped, it went
   # back to sleep) is still outside this run's control: `gate`, as it would have been a minute
   # earlier, not the `skip` that asks why the caller's wake did not take.
@@ -2294,6 +2301,9 @@ run_unit() { # machine backend host
       update_unit_state "$machine" "$backend" error "$WRITTEN_FINGERPRINT"
       return 0
     fi
+    # The suite's log replaces the preparation's, so a guard the preparation alone was refused is
+    # read now or never.
+    say_unguarded "$log" "$machine/$backend"
     # The cap is applied on the FAR side: killing the local ssh would leave the
     # remote dune running. ONE cap around the whole unit -- the same perl
     # supervisor capped() uses locally, see remote_capped -- because a
@@ -2611,9 +2621,11 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
   # wake-lab's sleep takes the box's lane lock like every destroyer, and would otherwise be refused
   # by the very lane asking for it.
   if [ -n "$lane_host" ] && [ "$LANE_REACHED" = 1 ] && lab_box_gated "$lab_box"; then
-    LANE_SLEPT=1
     exec 8>&-
     sleep_gated_box "$lab_box"
+    # Only once the request has RETURNED: a cancellation that interrupts it (relay reaps its
+    # supervisor) must leave the EXIT path to issue the detached request instead.
+    LANE_SLEPT=1
     flush_lane_output || die "cannot publish the $lab_box sleep summary to stdout"
   fi
   # The lane's completion marker, published as its last act: the run record
