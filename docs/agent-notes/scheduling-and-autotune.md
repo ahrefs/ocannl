@@ -863,3 +863,28 @@ files.
   remain preexisting provenance gaps (gh-ocannl-1026), not reasons to disable supported caches. Outer `None` means
   concrete device discovery failed and bypasses all shared cache I/O. Execution/tuning remain
   available. `schedule_cache_device` pins device/metadata separation, bypass, and real-backend replay.
+
+- **HIP's tensor-core capability is gated on the HOST, not only on the device** (gh-ocannl-1032):
+  `mma_supported` is `all_rdna_wave32 && rocwmma_include_dir`, and both `hardware_limits.mma` and
+  `mma_syntax` consult it, so a gfx11/gfx12 wave32 box whose filesystem has no rocWMMA headers
+  advertises no MMA, seeds no tensorized candidate and renders the lane-0 scalar fallback — and is
+  right to. The WSL ROCm SDK bundled rocWMMA and native Ubuntu 26.04 does not, which is how
+  `schedule_mma_matmul` came to print 11 bare `false`s on a native AMD box with nothing naming the
+  cause; the native stack's codegen was never the difference, and with a full header tree on
+  `ROCWMMA_PATH` that same ROCm 7.1.0 / gfx1151 box passes the suite unchanged. Two rules follow. A
+  test arm expecting a rocWMMA emission DERIVES it from the advertised capability and asserts the
+  fallback rendering otherwise, as the tf32 gate and the CUDA `Fp16_wide` arm already do; only a
+  claim whose subject is the fragment scope itself skips, and as an ORDINARY backend skip rather
+  than `` `Environment ``, however host-shaped the reason looks on this fleet. That is the second
+  rule, and it is about the conjunction: `hardware_limits` reports only the AND, so from a test
+  neither half is visible, and on a CDNA gfx9 wave64 part the leg is withdrawn by the DEVICE --
+  coverage that hardware can never have, not a host condition a sweep should aggregate away.
+  Separating them would mean restating the device predicate the backend owns, to buy a label;
+  `Backend` is the conservative reading (Verdict already lets an `` `Environment `` mark elsewhere
+  carry same-key `Backend` skips), and the host half belongs in the human diagnostic, which for the
+  same reason names BOTH halves and qualifies the rocWMMA remedy by device eligibility rather than
+  prescribing it to a gfx9 box no header tree can help. And the probe requires
+  `rocwmma/internal/types.hpp` beside `rocwmma/rocwmma.hpp`: Ubuntu's librocwmma-dev 7.1.0 installs
+  the umbrella headers without `rocwmma/internal/`, so a one-file probe accepts a tree on which
+  every tensorized kernel then fails inside hiprtc — the capability decline exists precisely to
+  keep that unreachable.

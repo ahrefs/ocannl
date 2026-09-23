@@ -289,6 +289,7 @@ test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name]
     "narrow storage bridged: d:half a:half b:half"
     "nvcuda::wmma"
     "precision::tf32"
+    "rocwmma"
     "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>"
     "rocwmma::mma_sync"
     "simdgroup"

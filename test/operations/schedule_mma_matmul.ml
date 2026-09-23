@@ -55,11 +55,38 @@ let skipped = Verdict.skipped ~backend:backend_name
    literal MSL simdgroup, CUDA WMMA/PTX, and HIP rocWMMA forms or the hardware-specific numerical
    tolerances documented at their sites. Rendering outcomes themselves use the MMA census. *)
 let on_metal = String.is_substring backend_name ~substring:"metal"
+let on_hip = String.is_substring backend_name ~substring:"hip"
 let on_gpu = Sched.backend_is_gpu backend_name
 
 module Generated = Test_utils.Generated
 
 let () = Generated.init ~backend_name
+
+(* gh-ocannl-1032: HIP's tensor-core path needs TWO things — an RDNA3/RDNA3.5+ wave32 device AND a
+   discoverable rocWMMA header tree — and [Hip_backend] gates both [hardware_limits.mma] and
+   [mma_syntax] on their conjunction, so a host missing the headers deliberately renders the scalar
+   fallback on hardware that could otherwise tensorize. The HIP arms below used to assume the
+   intrinsic outright, which was true of every ROCm SDK the fleet had run (WSL bundled rocWMMA) and
+   false the day a box booted native Ubuntu, where rocWMMA is a separate package: 11 claims read
+   [false] with nothing naming the missing headers. So derive the expectation from the ADVERTISED
+   capability, exactly as the tf32 gate and the CUDA [Fp16_wide] arm already do — the fallback
+   rendering is then a claim of its own rather than an unexplained red. *)
+let hip_mma = lazy (Option.is_some (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.mma)
+
+(* Named once so a degraded run explains itself on the channel the golden does not see. *)
+let () =
+  if on_hip && not (Lazy.force hip_mma) then
+    Stdio.eprintf
+      "NOTE (gh-ocannl-1032): HIP advertises no tile-MMA capability on this host, so the \
+       tensor-core arms below assert the scalar-fallback rendering instead of rocWMMA. The \
+       capability is a CONJUNCTION and this says which one failed only as far as it can: it needs \
+       an RDNA3/RDNA3.5+ (gfx11/gfx12) wave32 device -- EVERY device of the process -- AND a \
+       complete rocWMMA header tree. On a CDNA gfx9 wave64 part, or a mixed fleet, no header tree \
+       enables these arms and the fallback is the end of it. Where the devices ARE eligible \
+       (rocminfo, or the gcn_arch_name/warp_size keys of the backend's static-properties dump), \
+       the missing half is the headers: point ROCWMMA_PATH at a COMPLETE tree -- Ubuntu's \
+       librocwmma-dev ships rocwmma/rocwmma.hpp without rocwmma/internal/ and does not count.\n\
+       %!"
 
 (* The fp8 Metal legs necessarily use the lane-0 fallback, between distributed device zeroing and
    the result readback. Pin BOTH brackets: bitwise parity alone passed with the old threadgroup-only
@@ -140,7 +167,7 @@ let staged_half_resident ?(converted_d = false) src =
       ~frag_store:
         (if converted_d then "simdgroup_store(__mma_dstage" else "simdgroup_store(__mma_fragment_")
       ~barrier:"threadgroup_barrier(mem_flags::mem_threadgroup);"
-  else if String.is_substring backend_name ~substring:"hip" then
+  else if on_hip then
     residency_holds src
       ~frag_load:
         (if converted_d then ".x[__ei] = (float)__mma_dstage"
@@ -451,12 +478,18 @@ let () =
    let has s = String.is_substring src ~substring:s in
    let ok =
      if on_metal then has "simdgroup_half8x8" && (not (has "__mma_dstage")) && not (has "== 0)")
-     else if String.is_substring backend_name ~substring:"hip" then
-       (* HIP: the rocWMMA f16 intrinsic (verified on gfx1151), no lane-0 fallback guard. Under the
-          DEFAULT policy the accumulator fragment is itself f16, so no [d]-boundary conversion is
-          emitted — the complement of the [Fp16_wide] leg below, which is what keeps the two arms
-          from being told apart only by a claim that would pass on either (gh-ocannl-789). *)
-       has "rocwmma::mma_sync" && (not (has "__mma_dstage")) && not (has "== 0)")
+     else if on_hip then
+       if Lazy.force hip_mma then
+         (* HIP: the rocWMMA f16 intrinsic (verified on gfx1151), no lane-0 fallback guard. Under
+            the DEFAULT policy the accumulator fragment is itself f16, so no [d]-boundary conversion
+            is emitted — the complement of the [Fp16_wide] leg below, which is what keeps the two
+            arms from being told apart only by a claim that would pass on either (gh-ocannl-789). *)
+         has "rocwmma::mma_sync" && (not (has "__mma_dstage")) && not (has "== 0)")
+       else
+         (* No advertised tile-MMA (gh-ocannl-1032): the deliberate decline is the lane-0 scalar
+            fallback, and NOTHING rocWMMA — an emission that named the intrinsic here would not
+            compile, since the headers are what is missing. *)
+         has "== 0)" && not (has "rocwmma")
      else if on_gpu then
        (* CUDA: the wmma f16 intrinsic, or the lane-0 fallback on older devices. *)
        has "nvcuda::wmma" || has "== 0)"
@@ -570,17 +603,23 @@ let () =
        intrinsics && has "simdgroup_float8x8" && has "simdgroup_half8x8" && has "__mma_dstage"
        && has "thread_elements()[0]" && has "thread_elements()[1]"
        && not (has "== 0)")
-     else if String.is_substring backend_name ~substring:"hip" then
-       (* HIP: the rocWMMA uniform-f16 arm swapped to an f32 accumulator fragment over the same f16
-          STORAGE destination, converting elementwise at the [d] boundary (gh-ocannl-789). Both
-          halves are pinned, because either alone would also match the f16-accumulate arm this
-          replaces: that one declares [accumulator, 16, 16, 16, rocwmma::float16_t] throughout and
-          has no staging fragment, so the [float] accumulator declaration AND [__mma_dstage] are
-          what say the accumulation is wide. The default-policy leg above asserts the complement. *)
-       intrinsics
-       && has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>"
-       && has "__mma_dstage"
-       && not (has "== 0)")
+     else if on_hip then
+       if Lazy.force hip_mma then
+         (* HIP: the rocWMMA uniform-f16 arm swapped to an f32 accumulator fragment over the same
+            f16 STORAGE destination, converting elementwise at the [d] boundary (gh-ocannl-789).
+            Both halves are pinned, because either alone would also match the f16-accumulate arm
+            this replaces: that one declares [accumulator, 16, 16, 16, rocwmma::float16_t]
+            throughout and has no staging fragment, so the [float] accumulator declaration AND
+            [__mma_dstage] are what say the accumulation is wide. The default-policy leg above
+            asserts the complement. *)
+         intrinsics
+         && has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>"
+         && has "__mma_dstage"
+         && not (has "== 0)")
+       else
+         (* No advertised tile-MMA (gh-ocannl-1032): the recorded scalar fallback, the same shape
+            the CUDA arm below requires of a device under its own floor. *)
+         fallback && (not (has "rocwmma")) && has "== 0)"
      else if on_gpu then
        (* CUDA: the f32-accumulate inline-PTX arm where the device advertises it (sm_80+); below
           that floor the capability advertises no wide scope and the deliberate rendering is the
@@ -724,7 +763,12 @@ let () =
        preserves what it is for: a wrong stride or a mis-mapped fragment moves values by O(1), not
        by 1e-2. *)
     let eq =
-      if not (String.is_substring backend_name ~substring:"hip") then Float.equal
+      (* The exception is the TENSOR UNIT's, so it applies only where the tensor unit runs: with no
+         advertised tile-MMA (gh-ocannl-1032) HIP renders the same scalar fallback as everyone
+         else's decline, and parity is bitwise again. Widening the tolerance there would let a
+         genuine fallback defect of up to 5e-2 through on the host that has no intrinsic to blame it
+         on. *)
+      if (not on_hip) || not (Lazy.force hip_mma) then Float.equal
       else if Ir.Ops.equal_prec acc_prec Ir.Ops.bfloat16 then fun a b ->
         Float.(abs (a - b) <= 0.05 * max 1. (abs b))
       else fun a b -> Float.(abs (a - b) <= 1e-5 * max 1. (abs b))
@@ -743,8 +787,9 @@ let () =
       if on_metal then
         (* [simdgroup_matrix] is uniform-precision only: this mixed combination declines. *)
         has "== 0)"
-      else if String.is_substring backend_name ~substring:"hip" then
-        has "rocwmma::mma_sync" && not (has "== 0)")
+      else if on_hip then
+        if Lazy.force hip_mma then has "rocwmma::mma_sync" && not (has "== 0)")
+        else has "== 0)" && not (has "rocwmma")
       else if on_gpu then
         (* CUDA: the wmma bf16 fragment path. Both bf16 renderings need sm_80, the same floor the
            tf32 legs above already pin strictly. *)
@@ -761,8 +806,9 @@ let () =
   let uniform_check src =
     let has s = String.is_substring src ~substring:s in
     if on_metal then has "simdgroup_bfloat8x8" && not (has "== 0)")
-    else if String.is_substring backend_name ~substring:"hip" then
-      has "rocwmma::mma_sync" && not (has "== 0)")
+    else if on_hip then
+      if Lazy.force hip_mma then has "rocwmma::mma_sync" && not (has "== 0)")
+      else has "== 0)" && not (has "rocwmma")
     else if on_gpu then
       (* CUDA: the inline-PTX bf16 path (sm_80+). *)
       has "mma.sync.aligned.m16n8k16"
@@ -1310,7 +1356,9 @@ let () =
        from the f16 serial twin by rounding. The uniform-f16 leg below stays bitwise on every
        backend. *)
     let h32_eq =
-      if String.is_substring backend_name ~substring:"hip" then approx else Float.equal
+      (* The RDNA3 rounding exception belongs to the tensor unit; without an advertised tile-MMA
+         (gh-ocannl-1032) HIP takes the same exact scalar fallback Metal does. *)
+      if on_hip && Lazy.force hip_mma then approx else Float.equal
     in
     p_all2 "staged+tensorized half matmul matches the serial twin" got_h_staged got_h_serial
       ~f:h32_eq;
@@ -1323,7 +1371,7 @@ let () =
        gfx1151, so its pin is strict; CUDA also accepts the pre-sm_70 lane-0 fallback. *)
     let ok =
       if on_metal then has "== 0)"
-      else if String.is_substring backend_name ~substring:"hip" then staged_half_resident src
+      else if on_hip then if Lazy.force hip_mma then staged_half_resident src else has "== 0)"
       else staged_half_resident src || has "== 0)"
     in
     p "staged+tensorized half fragment residency" ok)
@@ -1362,7 +1410,7 @@ let () =
        fragment stays resident across [k_o] on each. HIP strict (verified on gfx1151); Metal/CUDA
        also accept the pre-Apple7 / pre-sm_70 lane-0 fallback. *)
     let ok =
-      if String.is_substring backend_name ~substring:"hip" then staged_half_resident src
+      if on_hip then if Lazy.force hip_mma then staged_half_resident src else has "== 0)"
       else staged_half_resident src || has "== 0)"
     in
     p "staged+tensorized uniform-f16 fragment residency" ok)
@@ -1385,7 +1433,7 @@ let () =
     "staged+tensorized Fp16_wide matmul equals the once-narrowed wide reference bitwise"
   in
   let claim_fw_struct = "staged+tensorized Fp16_wide fragment residency converts d once" in
-  if on_metal || String.is_substring backend_name ~substring:"hip" then (
+  if on_metal || (on_hip && Lazy.force hip_mma) then (
     let kw = 144 in
     let fwsa =
       NTDSL.init ~l:"fwsa" ~prec:Ir.Ops.half ~i:[ kw ] ~o:[ n ]
@@ -1427,6 +1475,20 @@ let () =
           else has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>" && has ".x[__ei]")
       && has "__mma_dstage"))
   else (
+    (* gh-ocannl-1032: on HIP this leg's whole subject is the converted [d] boundary in the FRAGMENT
+       scope, which exists only where a tensor unit does. With no advertised tile-MMA the
+       composition declines to the scalar fallback, which has no accumulator fragment to convert —
+       there is no weaker claim here to keep, only an honest skip.
+
+       The ORDINARY backend skip, not `Environment`, even though the reason on this fleet's boxes is
+       the host's rocWMMA provisioning. [mma_supported] is a conjunction — an RDNA3+/wave32 device
+       AND the headers — and [hardware_limits] reports only its result, so from here the two are
+       indistinguishable: on a CDNA gfx9 wave64 box the leg is withdrawn by the DEVICE, which is
+       backend coverage this hardware can never have rather than a host condition a sweep should
+       aggregate away. Telling them apart would mean restating the device predicate the backend
+       owns, and the only thing it would buy is a label. `Backend` is the conservative reading of
+       the two (Verdict's contract already lets an `Environment` mark elsewhere carry same-key
+       `Backend` skips), and the host half is reported anyway, by name, in the note above. *)
     skipped claim_fw_value;
     skipped claim_fw_struct);
 
