@@ -170,8 +170,8 @@ tools/ci-compiler-test.sh parses: true
 tools/ci-durations.sh parses: true
 tools/ci-times.sh parses: true
 tools/dune-quiet.sh parses: true
-tools/dxg-window.sh parses: true
 tools/fmt-check.sh parses: true
+tools/kernel-window.sh parses: true
 tools/mutation-run.sh parses: true
 tools/opam-env.sh parses: true
 tools/promote.sh parses: true

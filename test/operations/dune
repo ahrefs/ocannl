@@ -5333,8 +5333,8 @@
   ../../tools/sweep.sh
   ; the shared width table sweep.sh sources (gh-ocannl-983)
   ../../tools/box-jobs.sh
-  ; the dxg window filter sweep.sh sources and this harness drives (gh-ocannl-979)
-  ../../tools/dxg-window.sh
+  ; the kernel-window filters sweep.sh sources and this harness drives (gh-ocannl-979, gh-ocannl-1034)
+  ../../tools/kernel-window.sh
   sweep_harness.sh
   ../../scripts/harness-support.sh
   (env_var ProgramFiles)

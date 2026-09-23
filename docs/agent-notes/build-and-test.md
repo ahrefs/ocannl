@@ -1919,8 +1919,9 @@ that they earn a lookup rather than always-loaded space.
 - **The per-run record `~/.ocannl-sweep/logs/<stamp>-run.tsv` is what a consumer reads; the stdout
   summary is for humans** (gh-ocannl-977). Its absence is itself a verdict: a run that refused at
   startup swept nothing and writes no record, which is what distinguishes that exit 2 from a
-  lane-stopped one. Tab-separated kind-tagged rows follow a `schema` line — **3** since the dxg
-  count gained its fourth value (`vm-replaced`); **2** added the dxg fields to the `unit` row, and a
+  lane-stopped one. Tab-separated kind-tagged rows follow a `schema` line — **4** since the `unit`
+  row gained the window's kind (gh-ocannl-1034); **3** gave the count its fourth value
+  (`vm-replaced`); **2** added the dxg fields to the `unit` row, and a
   consumer picks its parser from that number (the per-unit *state*
   files under `unit-state/` carry an unrelated schema 1 of their own) — and the sweep prints the
   record's path as a `run:` line on every exit that writes one, cancellation included — that line is
@@ -1941,9 +1942,13 @@ that they earn a lookup rather than always-loaded space.
     how the process exited: the record is published before those post-lane steps so a failure
     there leaves a record that explains itself, and each such failure rewrites the kind first.
   - `unit`: machine, backend, outcome or `no-row`, lane-stopped flag, log path or `-`, then the
-    unit's dxg window start and end and its `vmbus_sendpacket failed` count (gh-ocannl-979). That
+    unit's kernel window start and end, its refusal count (gh-ocannl-979), and the window's KIND —
+    `dxg` (a `-wsl` unit; the count is `vmbus_sendpacket failed` bursts), `native` (a `-linux`
+    unit; the count is refused GPU queues and Xid events), or `-` (gh-ocannl-1034). The count's
+    meaning is the kind's, which is why the kind is a field and why the schema is 4. That
     count has **four** permitted values, and a consumer must not validate it as numeric: `-` for a
-    unit with no window (a local one, or one that never ran), a number for a window that was read,
+    unit with no window (a local one, a CPU one, one whose transport has no window kind, or one that
+    never ran), a number for a window that was read,
     `unavailable` where the collection itself failed, and `vm-replaced` where the guest was
     destroyed and recreated mid-window. They mean different things — "nobody read the box" is not
     "the bridge was fine", and only the number is a positive finding about the bridge. `vm-replaced`
@@ -2048,7 +2053,10 @@ that they earn a lookup rather than always-loaded space.
   (8 total queues)` and `DQM create queue type 1 failed. ret -12`. `-j 8`, `-j 4` and `-j 2` logged
   no GPU kernel line at all, and `-j 8` cost 2% of the wall time (946 s against 921 s). That
   signature is what to look for in `journalctl _TRANSPORT=kernel` when a native hip unit fails
-  wider than its cap. rog-nv's native cuda unit ran green at 24, 8, 4 and 2 with no NVRM/Xid line.
+  wider than its cap — and the sweep looks for it itself: a `-linux` unit's kernel window is the
+  native kind, and a refusal in it (or the ROCr assertion in its log) buys the unit its serial rerun
+  (gh-ocannl-1034, below). `dmesg` is restricted on both native boxes (`kernel.dmesg_restrict=1`);
+  the user reads the kernel journal through the `adm` group. rog-nv's native cuda unit ran green at 24, 8, 4 and 2 with no NVRM/Xid line.
   The sweep's cap is `BOX_JOBS_SDMA_CAP` in `tools/box-jobs.sh`, one unit's width with the box to
   itself.
 - **A manual or worker batch on a native GPU boot is capped per correctness slot, and
@@ -2108,20 +2116,34 @@ that they earn a lookup rather than always-loaded space.
 
 - **A name is no longer the only trigger: the kernel's own evidence in the unit's window is the
   other** (gh-ocannl-979). A remote `cuda` or `hip` unit records its UTC window and, at the end,
-  appends the kernel's dxg lines from it to its log and fingerprint; any `vmbus_sendpacket failed`
-  in that window makes the unit environment-red exactly as a listed name does, and the serial
-  rerun's `still red` / `all clean` stays the judge. That matters because a list of names can only
+  appends the kernel's lines from it to its log and fingerprint; a counted refusal in that window
+  makes the unit environment-red exactly as a listed name does, and the serial
+  rerun's `still red` / `all clean` stays the judge. **Which lines count is the unit's transport's**
+  (gh-ocannl-1034): the destination the sweep reached the box through names its boot
+  (`box_jobs_dest_transport`), so a `-wsl` unit reads the **dxg** window below and a `-linux` one
+  the **native** window — the GPU drivers' own lines (`amdgpu`, `kfd`, `NVRM:`), counting KFD's
+  `DQM create queue type <n> failed` (one per refused queue; `No more SDMA queue to allocate` is its
+  reason and counts only where no DQM line was logged) and `NVRM: Xid` events, with pids normalised
+  out of the signatures. Other driver lines — rog-nv's `NVRM: VM: invalid mmap context` burst from a
+  driver upgrade's last minutes — are shown, not counted. The two sets are kept apart, never
+  unioned, and a destination of neither kind collects no window and records `-`: before the split a
+  native boot collected the dxg window, whose quiet-window fall-through lands on the restricted
+  `dmesg`, so every native GPU unit recorded `unavailable` while its SDMA refusals went unread. The
+  native query therefore judges the journal on the CURRENT boot's kernel entries (`-b -n 1`) rather
+  than the window's, and then answers for the window whatever it holds. The userspace half of an
+  SDMA refusal, ROCr's `GpuAgent::ReleaseQueueMainScratch` assertion, is keyed in the unit's log by
+  `ENVIRONMENT_ASSERTIONS` in `tools/sweep.sh`, as glibc prints a failed assert. That matters because a list of names can only
   ever grow AFTER a miss — rog-nv's `cu_device_primary_ctx_retain` cost a remote session to
   attribute — and because some failures have no name to list at all: the 2026-09-15 minix runs
   produced `Command got signal SEGV`, which can never become a table row. A unit's collected evidence lives in a SIDECAR beside its log
-  (`<stamp>-<machine>-<backend>.dxg-window`), and the trigger, the fingerprint and the record read
+  (`<stamp>-<machine>-<backend>.kernel-window`), and the trigger, the fingerprint and the record read
   only that: a log holds whatever the unit's tests printed, and this repository's own sweep harness
   dumps dxg fixtures on failure while running as a test action inside a sweep unit, so a local `cc`
   unit's log really can contain a complete synthetic burst block. Provenance is the file. The
   window's two bounds are both instants of the REMOTE's clock — the start read by the reachability
   probe when the unit began there, the end read at collection — because the log's timestamps are in
-  that clock and no other, and these VMs resynchronise after host resumes. The filter lives in
-  `tools/dxg-window.sh`, sourced by the sweep and driven directly by the harness, and its two
+  that clock and no other, and these VMs resynchronise after host resumes. The filters live in
+  `tools/kernel-window.sh`, sourced by the sweep and driven directly by the harness; the dxg one's two
   judgements come from that day's evidence on both boxes: `dxgkio_query_adapter_info` and
   `dxgkio_is_feature_enabled` failures are dropped **regardless of errno** (every VM boot logs
   them, at -22, -2, -11 and -1, and nvidia-smi emits the first constantly), while the burst is
