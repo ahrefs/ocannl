@@ -40,7 +40,9 @@ on_error() {
     dest_inherited_kind_of serial_red serial_clean serial_two_inline \
     serial_many_inline serial_control lanes lane_stop_seed lane_stopped \
     aggregator_missing stamp_advance dxg_clean dxg_red dxg_collection dxg_unavailable \
-    dxg_many dxg_bounds dxg_no_trigger hold_lock_ok \
+    dxg_many dxg_bounds dxg_no_trigger native_quiet_block native_red_a native_red_b \
+    native_of_dxg dxg_of_native native_collection native_unit_linux native_unit_wsl \
+    native_unit_cpu native_abort_run native_other_abort hold_lock_ok \
     after_cancel; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
@@ -75,7 +77,8 @@ unset SWEEP_TEST_CALLS SWEEP_TEST_WAIT_PREFIX SWEEP_TEST_OPAM_RC \
   SWEEP_TEST_OPAM_OUT_METAL SWEEP_TEST_LOCAL_BOX SWEEP_TEST_JOBS \
   SWEEP_TEST_OPAM_SERIAL_RED SWEEP_TEST_OPAM_OUT_SERIAL SWEEP_TEST_SSH_CALLS \
   SWEEP_TEST_SSH_MODE SWEEP_TEST_OWN_GROUP SWEEP_TEST_WAIT_TICKS \
-  SWEEP_TEST_HOSTS SWEEP_TEST_DEST_ROG SWEEP_TEST_DEST_MINIX
+  SWEEP_TEST_HOSTS SWEEP_TEST_DEST_ROG SWEEP_TEST_DEST_MINIX \
+  SWEEP_TEST_KERNEL_LINES SWEEP_TEST_BOOT_ID
 
 sweep=$1
 aggregate=$2
@@ -211,10 +214,27 @@ chmod +x "$fake_bin/opam"
 # -- can never do; `hang` answers the reachability probe and then keeps its
 # connection busy until killed, so a cancellation control has a remote lane
 # in flight. Both stay bounded, and both still end as an unreachable box.
+# A third, `window`, answers a remote unit's reachability probe, its guest-identity probe and its
+# kernel-window collection -- the last with SWEEP_TEST_KERNEL_LINES as the box's kernel log for the
+# window -- and refuses everything else, so the unit ends at its preparation as `error`, which is a
+# path that collects the window (gh-ocannl-1034). What the window QUERY was is left in the call log.
 cat >"$fake_bin/ssh" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SWEEP_TEST_SSH_CALLS"
 case ${SWEEP_TEST_SSH_MODE:-} in
+  window)
+    case $* in
+      *window-bounds*)
+        now=$(date +%s)
+        printf 'window-bounds %s %s\n' "$((now - 5))" "$((now + 1))"
+        printf 'window-boot %s\n' "$SWEEP_TEST_BOOT_ID"
+        [ -n "${SWEEP_TEST_KERNEL_LINES:-}" ] && printf '%s\n' "$SWEEP_TEST_KERNEL_LINES"
+        exit 0
+        ;;
+      *'"$HOME"'*) printf '%s\n%s\n%s\n' "$HOME" "$(date +%s)" "$SWEEP_TEST_BOOT_ID"; exit 0 ;;
+      *boot_id*) printf '%s\n' "$SWEEP_TEST_BOOT_ID"; exit 0 ;;
+    esac
+    ;;
   release)
     waited=0
     while [ ! -e "$SWEEP_TEST_WAIT_PREFIX.ready" ]; do
@@ -330,6 +350,8 @@ run_sweep_args() {
     "SWEEP_TEST_OPAM_OUT_SERIAL=${SWEEP_TEST_OPAM_OUT_SERIAL:-}" \
     "SWEEP_TEST_SSH_CALLS=$ssh_calls" \
     "SWEEP_TEST_SSH_MODE=${SWEEP_TEST_SSH_MODE:-}" \
+    "SWEEP_TEST_KERNEL_LINES=${SWEEP_TEST_KERNEL_LINES:-}" \
+    "SWEEP_TEST_BOOT_ID=${SWEEP_TEST_BOOT_ID:-fixture-boot}" \
     "SWEEP_TEST_WAIT_TICKS=$wait_ticks" \
     "OCANNL_TOOL_SWEEP_LOCAL_BOX=${SWEEP_TEST_LOCAL_BOX-m4-max}" \
     "OCANNL_TOOL_SWEEP_JOBS=${SWEEP_TEST_JOBS:-}" \
@@ -1354,12 +1376,14 @@ grep -q '^serial rerun: unmapped: \[File "test/compile_error.ml", line 1\] \[Fil
   "$many_inline_log"
 absent '^serial rerun: directory fallback' "$many_inline_log"
 
-# The dxg window filter (gh-ocannl-979), driven directly: tools/dxg-window.sh is
-# sourced by the sweep and by this harness for exactly that reason. The input is
+# The dxg window filter (gh-ocannl-979), driven directly: tools/kernel-window.sh is
+# sourced by the sweep and by this harness for exactly that reason (after
+# tools/box-jobs.sh, whose transport names pick a unit's window kind). The input is
 # the 2026-09-15 evidence as the two boxes recorded it -- minix's benign boot
 # lines at four different errnos, and one real lost message, which the bridge
 # reports as a TRIPLE.
-. "$(cd "$(dirname "$sweep")" && pwd)/dxg-window.sh"
+. "$(cd "$(dirname "$sweep")" && pwd)/box-jobs.sh"
+. "$(cd "$(dirname "$sweep")" && pwd)/kernel-window.sh"
 dxg_benign='Sep 15 09:00:01 box kernel: misc dxg: dxgk: dxgkio_is_feature_enabled: Ioctl failed: -22
 Sep 15 09:00:01 box kernel: misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -22
 Sep 15 09:00:01 box kernel: misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -2
@@ -1401,17 +1425,17 @@ absent 'dxgkio_query_adapter_info' <<<"$dxg_red"
   sed -n 's/^=== dxg window: \([0-9]*\) .*/\1/p')" = 0 ]
 
 # And the count the rest of the sweep reads back out of a unit's log is the one
-# the filter wrote: the block goes into a log, `dxg_bursts` takes it out.
+# the filter wrote: the block goes into a log, `window_count` takes it out.
 # Evidence is read from the collector's SIDECAR beside a unit's log, never from
 # the log: a log holds whatever the unit's tests printed.
-printf '%s\n' "$dxg_red" >"$(dxg_sidecar "$tmp/dxg-probe.log")"
-[ "$(dxg_bursts "$tmp/dxg-probe.log")" = 1 ]
-[ -z "$(dxg_bursts "$tmp/absent.log")" ]
+printf '%s\n' "$dxg_red" >"$(window_sidecar "$tmp/dxg-probe.log")"
+[ "$(window_count "$tmp/dxg-probe.log")" = 1 ]
+[ -z "$(window_count "$tmp/absent.log")" ]
 # A block sitting in the LOG is not evidence -- that is the whole point of the
 # sidecar -- so it neither counts nor makes the unit red.
 printf '%s\n' "$dxg_red" >"$tmp/log-only.log"
-[ -z "$(dxg_bursts "$tmp/log-only.log")" ]
-if dxg_window_red "$tmp/log-only.log"; then
+[ -z "$(window_count "$tmp/log-only.log")" ]
+if window_red "$tmp/log-only.log"; then
   printf 'sweep_harness: a dxg block in a unit log was read as evidence\n' >&2
   exit 1
 fi
@@ -1436,43 +1460,43 @@ grep -q 'vmbus_sendpacket failed: fffffff5' <<<"$dxg_replaced_red"
 
 # A replaced guest is environment-red: the machine the unit ran on is gone, so whatever the unit
 # reported is not a judgement about the code, which is what the serial rerun exists to establish.
-printf '%s\n' "$dxg_replaced" >"$(dxg_sidecar "$tmp/dxg-replaced.log")"
-[ "$(dxg_bursts "$tmp/dxg-replaced.log")" = vm-replaced ]
-dxg_window_red "$tmp/dxg-replaced.log"
+printf '%s\n' "$dxg_replaced" >"$(window_sidecar "$tmp/dxg-replaced.log")"
+[ "$(window_count "$tmp/dxg-replaced.log")" = vm-replaced ]
+window_red "$tmp/dxg-replaced.log"
 # ...and it is a stable fingerprint line, so a unit red for it twice does not read as `fingerprint
 # moved` while a unit that starts or stops losing its guest does.
-dxg_fingerprint_lines "$tmp/dxg-replaced.log" | grep -q '^dxg window: guest replaced mid-window$'
+window_fingerprint_lines "$tmp/dxg-replaced.log" | grep -q '^dxg window: guest replaced mid-window$'
 
 # A failed collection over a guest KNOWN to have been replaced keeps the replacement verdict. The
 # two coincide often -- a VM that has just been destroyed and recreated is exactly the one whose
 # journal query fails -- so letting `unavailable` win would drop the stronger evidence in the case
 # it was collected for.
-dxg_lost=$(dxg_window_unavailable 20260915T090000Z 20260915T091000Z "kernel log unreadable" replaced)
+dxg_lost=$(window_unavailable dxg 20260915T090000Z 20260915T091000Z "kernel log unreadable" replaced)
 grep -q '^=== dxg window: vm-replaced vmbus_sendpacket failures ===$' <<<"$dxg_lost"
 grep -q 'the guest was REPLACED during this window' <<<"$dxg_lost"
 # ...while a failed collection that establishes nothing about the guest still says so.
-dxg_lost_plain=$(dxg_window_unavailable 20260915T090000Z 20260915T091000Z "kernel log unreadable")
-grep -q "^=== dxg window: $DXG_UNAVAILABLE vmbus_sendpacket failures ===\$" <<<"$dxg_lost_plain"
+dxg_lost_plain=$(window_unavailable dxg 20260915T090000Z 20260915T091000Z "kernel log unreadable")
+grep -q "^=== dxg window: $WINDOW_UNAVAILABLE vmbus_sendpacket failures ===\$" <<<"$dxg_lost_plain"
 absent 'REPLACED' <<<"$dxg_lost_plain"
 # ...and so does one whose guest was known to have SURVIVED: `unavailable` is the right verdict
 # there, and only `replaced` may override it.
-dxg_lost_same=$(dxg_window_unavailable A B "kernel log unreadable" same)
-grep -q "^=== dxg window: $DXG_UNAVAILABLE vmbus_sendpacket failures ===\$" <<<"$dxg_lost_same"
+dxg_lost_same=$(window_unavailable dxg A B "kernel log unreadable" same)
+grep -q "^=== dxg window: $WINDOW_UNAVAILABLE vmbus_sendpacket failures ===\$" <<<"$dxg_lost_same"
 # The stronger verdict survives the round trip through the sidecar, so the record and the rerun
 # trigger read it rather than the collection failure.
-printf '%s\n' "$dxg_lost" >"$(dxg_sidecar "$tmp/dxg-lost.log")"
-[ "$(dxg_bursts "$tmp/dxg-lost.log")" = vm-replaced ]
-dxg_window_red "$tmp/dxg-lost.log"
+printf '%s\n' "$dxg_lost" >"$(window_sidecar "$tmp/dxg-lost.log")"
+[ "$(window_count "$tmp/dxg-lost.log")" = vm-replaced ]
+window_red "$tmp/dxg-lost.log"
 
 # The replaced-guest predicate the `error` path reads, which is a different question from
 # "does this unit earn a rerun": an error never reached dune, so serial_rerun has no stanza to run.
-dxg_guest_replaced "$tmp/dxg-replaced.log"
-printf '%s\n' "$dxg_red" >"$(dxg_sidecar "$tmp/dxg-burst-only.log")"
-if dxg_guest_replaced "$tmp/dxg-burst-only.log"; then
+window_guest_replaced "$tmp/dxg-replaced.log"
+printf '%s\n' "$dxg_red" >"$(window_sidecar "$tmp/dxg-burst-only.log")"
+if window_guest_replaced "$tmp/dxg-burst-only.log"; then
   printf 'sweep_harness: a plain burst was read as a replaced guest\n' >&2
   exit 1
 fi
-if dxg_guest_replaced "$tmp/absent.log"; then
+if window_guest_replaced "$tmp/absent.log"; then
   printf 'sweep_harness: a unit with no window was read as a replaced guest\n' >&2
   exit 1
 fi
@@ -1495,8 +1519,8 @@ absent 'REPLACED' <<<"$dxg_legacy"
 
 # The remote reports the guest it is running as, on the same round trip as the bounds -- there is
 # no second ssh to lose, and nothing else in the answer can tell one VM from its replacement.
-dxg_window_cmd 1757980800 | grep -q 'dxg-window-boot'
-dxg_window_cmd 1757980800 | grep -q '/proc/sys/kernel/random/boot_id'
+window_cmd dxg 1757980800 | grep -q 'window-boot'
+window_cmd dxg 1757980800 | grep -q '/proc/sys/kernel/random/boot_id'
 
 # Negative control: a red whose failures are the tests' own gets no second run.
 serial_control=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$state_failure \
@@ -1609,7 +1633,7 @@ exec 6>&- 5>&-
 # a consumer can age a backend's staleness against the box that owns it now.
 lanes_record=$(sed -n 's/^run:  *//p' <<<"$lanes")
 [ -f "$lanes_record" ]
-[ "$(head -1 "$lanes_record")" = "$(printf 'schema\t3')" ]
+[ "$(head -1 "$lanes_record")" = "$(printf 'schema\t4')" ]
 [ "$(awk -F '\t' '$1 == "run" { print $8 }' "$lanes_record")" = complete ]
 [ "$(awk -F '\t' '$1 == "run" { print $5 "\t" $6 }' "$lanes_record")" = \
   "$(printf 'lane-probe\t0')" ]
@@ -1712,7 +1736,7 @@ rm -f "$state"/logs/*-seed.log
 # reported zero dxg lines for rog-nv's 2026-09-13 window, which holds 255 and that
 # unit's burst. Pinned on the emitted command because no fixture has a journal:
 # this is the trap, not the spelling.
-dxg_collection=$(dxg_window_cmd 1757894400)
+dxg_collection=$(window_cmd dxg 1757894400)
 absent 'journalctl -k' <<<"$dxg_collection"
 # The journal is selected only if it produces an ENTRY. A host with journalctl and
 # no readable kernel journal exits 0 AND prints `-- No entries --` on stdout, so
@@ -1722,9 +1746,9 @@ grep -q 'grep -qv "\^--"' <<<"$dxg_collection"
 # Both ends bounded, on both branches: an event after the unit finished must not be
 # attributed to it, and `dmesg -T` alone returns the whole current-boot ring, so an
 # EARLIER unit's burst would buy this one a rerun it did not earn.
-grep -q 'journalctl -q _TRANSPORT=kernel --since @\$dxg_start --until @\$dxg_end' \
+grep -q 'journalctl -q _TRANSPORT=kernel --since @\$window_start --until @\$window_end' \
   <<<"$dxg_collection"
-grep -q 'dmesg -T --since @\$dxg_start --until @\$dxg_end' <<<"$dxg_collection"
+grep -q 'dmesg -T --since @\$window_start --until @\$window_end' <<<"$dxg_collection"
 # BOTH bounds belong to the clock that timestamps the log: the start is the
 # instant the reachability probe read on that box when the unit began there, and
 # the end is that box's clock at collection time. The controller and a WSL VM do
@@ -1755,7 +1779,7 @@ EOF
 chmod +x "$fake_bin/journalctl" "$fake_bin/dmesg"
 dxg_now=$(date +%s)
 dxg_bounds=$(PATH=$fake_bin:$PATH eval "$dxg_collection" 2>/dev/null |
-  sed -n 's/^dxg-window-bounds \([0-9]*\) \([0-9]*\)$/\1 \2/p;/^dxg-window-bounds /q') || true
+  sed -n 's/^window-bounds \([0-9]*\) \([0-9]*\)$/\1 \2/p;/^window-bounds /q') || true
 [ -n "$dxg_bounds" ]
 # The start is the instant passed in, untouched -- not recomputed from anything.
 [ "${dxg_bounds%% *}" = 1757894400 ]
@@ -1778,22 +1802,22 @@ grep -q '^dxg signature: misc dxg: dxgk: dxgkio_late_signature: Ioctl failed: -7
 [ "$(grep -c '^dxg signature: ' <<<"$dxg_many")" -eq 4 ]
 grep -q '^=== dxg window: 60 vmbus_sendpacket failures ===$' <<<"$dxg_many"
 # And that late signature moves the fingerprint, which is the point of keeping it.
-printf '%s\n' "$dxg_many" >"$(dxg_sidecar "$tmp/dxg-many.log")"
+printf '%s\n' "$dxg_many" >"$(window_sidecar "$tmp/dxg-many.log")"
 printf '%s\n' "$({ i=0; while [ "$i" -lt 60 ]; do printf '%s\n' "$dxg_burst"; i=$((i + 1)); done; } |
-  dxg_window_summary 20260915T090000Z 20260915T091000Z)" >"$(dxg_sidecar "$tmp/dxg-many-plain.log")"
-[ "$(dxg_fingerprint_lines "$tmp/dxg-many.log")" != \
-  "$(dxg_fingerprint_lines "$tmp/dxg-many-plain.log")" ]
+  dxg_window_summary 20260915T090000Z 20260915T091000Z)" >"$(window_sidecar "$tmp/dxg-many-plain.log")"
+[ "$(window_fingerprint_lines "$tmp/dxg-many.log")" != \
+  "$(window_fingerprint_lines "$tmp/dxg-many-plain.log")" ]
 
 
 # A collection that did not happen is not a clean window. `unavailable` is
 # distinguishable from `0` everywhere it travels -- the block, the burst reader,
 # and the run record -- because "nobody read the box" and "the bridge was fine"
 # mean opposite things, and the second would lose the rerun.
-dxg_unavailable=$(dxg_window_unavailable 20260915T090000Z 20260915T091000Z 'ssh exit 255')
+dxg_unavailable=$(window_unavailable dxg 20260915T090000Z 20260915T091000Z 'ssh exit 255')
 grep -q '^collection failed: ssh exit 255$' <<<"$dxg_unavailable"
 grep -q '^=== dxg window: unavailable vmbus_sendpacket failures ===$' <<<"$dxg_unavailable"
-printf '%s\n' "$dxg_unavailable" >"$(dxg_sidecar "$tmp/dxg-unavailable.log")"
-[ "$(dxg_bursts "$tmp/dxg-unavailable.log")" = unavailable ]
+printf '%s\n' "$dxg_unavailable" >"$(window_sidecar "$tmp/dxg-unavailable.log")"
+[ "$(window_count "$tmp/dxg-unavailable.log")" = unavailable ]
 
 # What the FINGERPRINT gets is the block's stable half. A fingerprint is compared
 # bytewise against the previous failure's, and a standing environment red repeats:
@@ -1801,28 +1825,28 @@ printf '%s\n' "$dxg_unavailable" >"$(dxg_sidecar "$tmp/dxg-unavailable.log")"
 # equally broken runs (161 and 123 on minix within one hour), so the verbatim
 # block would report `fingerprint moved` every time and cost the suppression that
 # keeps sweep output actionable.
-printf '%s\n' "$dxg_red" >"$(dxg_sidecar "$tmp/dxg-red-a.log")"
+printf '%s\n' "$dxg_red" >"$(window_sidecar "$tmp/dxg-red-a.log")"
 printf '%s\n' "$(printf '%s\n%s\n%s\n' "$dxg_benign" "$dxg_burst" "$dxg_burst" |
-  dxg_window_summary 20260915T230000Z 20260915T234500Z)" >"$(dxg_sidecar "$tmp/dxg-red-b.log")"
-[ "$(dxg_bursts "$tmp/dxg-red-a.log")" = 1 ]
-[ "$(dxg_bursts "$tmp/dxg-red-b.log")" = 2 ]
+  dxg_window_summary 20260915T230000Z 20260915T234500Z)" >"$(window_sidecar "$tmp/dxg-red-b.log")"
+[ "$(window_count "$tmp/dxg-red-a.log")" = 1 ]
+[ "$(window_count "$tmp/dxg-red-b.log")" = 2 ]
 # Different windows, different counts, same signatures: the fingerprint halves
 # must be identical, or a standing red is reported as moving every run.
-[ "$(dxg_fingerprint_lines "$tmp/dxg-red-a.log")" = \
-  "$(dxg_fingerprint_lines "$tmp/dxg-red-b.log")" ]
-grep -q '^dxg window: burst present$' <<<"$(dxg_fingerprint_lines "$tmp/dxg-red-a.log")"
-absent '20260915T090000Z' <<<"$(dxg_fingerprint_lines "$tmp/dxg-red-a.log")"
+[ "$(window_fingerprint_lines "$tmp/dxg-red-a.log")" = \
+  "$(window_fingerprint_lines "$tmp/dxg-red-b.log")" ]
+grep -q '^dxg window: burst present$' <<<"$(window_fingerprint_lines "$tmp/dxg-red-a.log")"
+absent '20260915T090000Z' <<<"$(window_fingerprint_lines "$tmp/dxg-red-a.log")"
 # But a bridge that stops failing, or fails in a NEW way, still moves it.
-printf '%s\n' "$dxg_clean" >"$(dxg_sidecar "$tmp/dxg-clean.log")"
-[ "$(dxg_fingerprint_lines "$tmp/dxg-clean.log")" != \
-  "$(dxg_fingerprint_lines "$tmp/dxg-red-a.log")" ]
-grep -q '^dxg window: no burst$' <<<"$(dxg_fingerprint_lines "$tmp/dxg-clean.log")"
+printf '%s\n' "$dxg_clean" >"$(window_sidecar "$tmp/dxg-clean.log")"
+[ "$(window_fingerprint_lines "$tmp/dxg-clean.log")" != \
+  "$(window_fingerprint_lines "$tmp/dxg-red-a.log")" ]
+grep -q '^dxg window: no burst$' <<<"$(window_fingerprint_lines "$tmp/dxg-clean.log")"
 grep -q '^dxg window: collection unavailable$' \
-  <<<"$(dxg_fingerprint_lines "$tmp/dxg-unavailable.log")"
+  <<<"$(window_fingerprint_lines "$tmp/dxg-unavailable.log")"
 printf '%s\n' "$(printf '%s\nSep 15 09:05:02 box kernel: misc dxg: dxgk: dxgkio_destroy_allocation: Ioctl failed: -9\n' \
-  "$dxg_burst" | dxg_window_summary 20260915T090000Z 20260915T091000Z)" >"$(dxg_sidecar "$tmp/dxg-new-sig.log")"
-[ "$(dxg_fingerprint_lines "$tmp/dxg-new-sig.log")" != \
-  "$(dxg_fingerprint_lines "$tmp/dxg-red-a.log")" ]
+  "$dxg_burst" | dxg_window_summary 20260915T090000Z 20260915T091000Z)" >"$(window_sidecar "$tmp/dxg-new-sig.log")"
+[ "$(window_fingerprint_lines "$tmp/dxg-new-sig.log")" != \
+  "$(window_fingerprint_lines "$tmp/dxg-red-a.log")" ]
 
 # The kernel-evidence trigger (gh-ocannl-979), at the seam that decides it and in
 # the one end-to-end direction a fixture can reach. A POSITIVE count only: a clean
@@ -1830,9 +1854,9 @@ printf '%s\n' "$(printf '%s\nSep 15 09:05:02 box kernel: misc dxg: dxgk: dxgkio_
 # either direction, and absent evidence -- a local unit, or one that never ran --
 # is not red. Without the negative legs the trigger would be "any unit that
 # collected a window", which is not a trigger at all.
-dxg_window_red "$tmp/dxg-probe.log"
+window_red "$tmp/dxg-probe.log"
 for quiet in dxg-clean dxg-unavailable absent; do
-  if dxg_window_red "$tmp/$quiet.log"; then
+  if window_red "$tmp/$quiet.log"; then
     printf 'sweep_harness: %s was read as environment-red\n' "$quiet" >&2
     exit 1
   fi
@@ -1855,39 +1879,281 @@ absent 'serial rerun' <<<"$dxg_no_trigger"
 absent 'environment-red' <<<"$dxg_no_trigger"
 dxg_no_trigger_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
 grep -q '^=== dxg window: 1 vmbus_sendpacket failures ===$' "$dxg_no_trigger_log"
-[ -z "$(dxg_bursts "$dxg_no_trigger_log")" ]
-[ ! -e "$(dxg_sidecar "$dxg_no_trigger_log")" ]
+[ -z "$(window_count "$dxg_no_trigger_log")" ]
+[ ! -e "$(window_sidecar "$dxg_no_trigger_log")" ]
 absent '^dxg window: ' "${dxg_no_trigger_log%.log}.fingerprint"
 absent '^dxg signature: ' "${dxg_no_trigger_log%.log}.fingerprint"
 dxg_no_trigger_record=$(sed -n 's/^run:  *//p' <<<"$dxg_no_trigger")
-[ "$(awk -F '\t' '$1 == "unit" && $3 == "cc" { print $7 "\t" $8 "\t" $9 }' \
-  "$dxg_no_trigger_record")" = "$(printf -- '-\t-\t-')" ]
+[ "$(awk -F '\t' '$1 == "unit" && $3 == "cc" { print $7 "\t" $8 "\t" $9 "\t" $10 }' \
+  "$dxg_no_trigger_record")" = "$(printf -- '-\t-\t-\t-')" ]
 
 # What a collected window DOES put in the record and the fingerprint, driven
 # through the same readers the sweep uses, with the sidecar a collection writes.
 dxg_trigger_log=$tmp/collected-unit.log
 printf 'fixture unit log\n' >"$dxg_trigger_log"
-printf '%s\n' "$dxg_window_block" >"$(dxg_sidecar "$dxg_trigger_log")"
-dxg_window_red "$dxg_trigger_log"
-[ "$(dxg_bursts "$dxg_trigger_log")" = 1 ]
-[ "$(dxg_window_bounds "$dxg_trigger_log")" = '20260915T090000Z 20260915T091000Z' ]
-grep -q '^dxg window: burst present$' <<<"$(dxg_fingerprint_lines "$dxg_trigger_log")"
+printf '%s\n' "$dxg_window_block" >"$(window_sidecar "$dxg_trigger_log")"
+window_red "$dxg_trigger_log"
+[ "$(window_count "$dxg_trigger_log")" = 1 ]
+[ "$(window_bounds "$dxg_trigger_log")" = '20260915T090000Z 20260915T091000Z' ]
+grep -q '^dxg window: burst present$' <<<"$(window_fingerprint_lines "$dxg_trigger_log")"
 # A failed collection reaches the record as `unavailable` -- never as `-`, which
 # is the unit nobody tried to read -- keeping the window it knows.
-[ "$(dxg_window_bounds "$tmp/dxg-unavailable.log")" = '20260915T090000Z 20260915T091000Z' ]
-[ "$(dxg_bursts "$tmp/dxg-unavailable.log")" = unavailable ]
+[ "$(window_bounds "$tmp/dxg-unavailable.log")" = '20260915T090000Z 20260915T091000Z' ]
+[ "$(window_count "$tmp/dxg-unavailable.log")" = unavailable ]
 # And where it failed before the box could report any bounds -- an unreachable
 # probe, a box whose `date` said nothing -- the bounds are `-` and the count is
 # still `unavailable`, which is what distinguishes it in the record from a unit
 # that has no window because none was ever collected.
-dxg_window_unavailable - - 'no clock reading from rog-nv' \
-  >"$(dxg_sidecar "$tmp/dxg-noclock.log")"
-[ "$(dxg_window_bounds "$tmp/dxg-noclock.log")" = '- -' ]
-[ "$(dxg_bursts "$tmp/dxg-noclock.log")" = unavailable ]
-if dxg_window_red "$tmp/dxg-noclock.log"; then
+window_unavailable dxg - - 'no clock reading from rog-nv' \
+  >"$(window_sidecar "$tmp/dxg-noclock.log")"
+[ "$(window_bounds "$tmp/dxg-noclock.log")" = '- -' ]
+[ "$(window_count "$tmp/dxg-noclock.log")" = unavailable ]
+if window_red "$tmp/dxg-noclock.log"; then
   printf 'sweep_harness: a collection with no bounds was read as environment-red\n' >&2
   exit 1
 fi
+
+# ---- The native window (gh-ocannl-1034). A native boot has no bridge: its refusals are the GPU
+# drivers' own, and the unit's TRANSPORT picks which window it reads -- the seam first. The kinds are
+# the transports box_jobs_dest_transport names, so a destination is classified by its suffix alone,
+# including a box the sweep's table does not have yet.
+[ "$(window_kind_of rog-nv-wsl)" = dxg ]
+[ "$(window_kind_of minix-amd-wsl)" = dxg ]
+[ "$(window_kind_of rog-nv-linux)" = native ]
+[ "$(window_kind_of minix-amd-linux)" = native ]
+[ "$(window_kind_of tuf-amd-linux)" = native ]
+# ...and one that names neither boot has NO window, which is `-` in the record, not `unavailable`.
+[ -z "$(window_kind_of gpu-box)" ]
+[ -z "$(window_kind_of '')" ]
+
+# Real kernel lines, read from the native boots' journals (`journalctl _TRANSPORT=kernel`,
+# 2026-09-23): minix's SDMA refusal pair from gh-ocannl-1029's ladder, and a quiet window's worth of
+# what else a native kernel logs -- the nvme queue census and the amdgpu ring setup at every resume,
+# a workqueue warning, rog-nv's NIC announcing its `XID 641` at boot, and the NVRM lines rog-nv
+# logged in a driver upgrade's last minutes. The Xid event is the NVIDIA driver's documented form;
+# no sweep box has logged one.
+native_sdma='Sep 23 11:12:35 minix-amd-linux kernel: amdgpu 0000:c5:00.0: No more SDMA queue to allocate (8 total queues)'
+native_dqm='Sep 23 11:12:35 minix-amd-linux kernel: amdgpu: process pid 85562 DQM create queue type 1 failed. ret -12'
+native_xid='Sep 23 14:02:11 rog-nv-linux kernel: NVRM: Xid (PCI:0000:02:00): 79, pid=41234, name=tensor_puzzles.exe, GPU has fallen off the bus.'
+native_quiet='Sep 23 10:54:54 minix-amd-linux kernel: nvme nvme0: 16/0/0 default/read/poll queues
+Sep 23 10:54:54 minix-amd-linux kernel: amdgpu 0000:c5:00.0: ring sdma0 uses VM inv eng 12 on hub 0
+Sep 23 21:23:55 minix-amd-linux kernel: workqueue: inode_switch_wbs_work_fn hogged CPU for >10000us 4 times, consider switching to WQ_UNBOUND
+Sep 22 22:48:59 rog-nv-linux kernel: r8169 0000:82:00.0 eth0: RTL8125B, 48:21:0b:7c:5a:14, XID 641, IRQ 188
+Sep 22 17:28:01 rog-nv-linux kernel: NVRM: VM: invalid mmap context'
+
+# A quiet native window is a CLEAN one: zero, a positive finding -- not `unavailable`, which is what
+# every native GPU unit recorded while it collected the dxg window. The drivers' own lines are kept
+# and shown, the rest of the kernel log is not, and the words that merely LOOK like a refusal -- a
+# ring named `sdma0`, a NIC's `XID` -- count for nothing.
+native_quiet_block=$(printf '%s\n' "$native_quiet" |
+  native_window_summary 20260923T111000Z 20260923T113000Z)
+grep -q '^=== native window 20260923T111000Z..20260923T113000Z (utc) ===$' <<<"$native_quiet_block"
+grep -q '^=== native window: 0 GPU queue refusals ===$' <<<"$native_quiet_block"
+grep -q '^native signature: amdgpu 0000:c5:00.0: ring sdma0 uses VM inv eng 12 on hub 0$' \
+  <<<"$native_quiet_block"
+grep -q '^native signature: NVRM: VM: invalid mmap context$' <<<"$native_quiet_block"
+absent 'nvme0' <<<"$native_quiet_block"
+absent 'XID 641' <<<"$native_quiet_block"
+absent 'workqueue' <<<"$native_quiet_block"
+printf '%s\n' "$native_quiet_block" >"$(window_sidecar "$tmp/native-quiet.log")"
+[ "$(window_count "$tmp/native-quiet.log")" = 0 ]
+[ "$(window_kind "$tmp/native-quiet.log")" = native ]
+grep -q '^native window: no refusal$' <<<"$(window_fingerprint_lines "$tmp/native-quiet.log")"
+if window_red "$tmp/native-quiet.log"; then
+  printf 'sweep_harness: a native window with no refusal was read as environment-red\n' >&2
+  exit 1
+fi
+
+# Each refusal signature makes the unit environment-red. The SDMA pair is ONE refused queue -- the
+# reason line, then KFD's refusal -- and counts once; either line alone still counts, so a driver
+# that logs only one of them keeps the rerun. An Xid is one event.
+native_count() { # kernel lines on stdin -> the count a native window records for them
+  native_window_summary A B | sed -n 's/^=== native window: \([0-9]*\) .*/\1/p'
+}
+[ "$(printf '%s\n%s\n%s\n' "$native_quiet" "$native_sdma" "$native_dqm" | native_count)" = 1 ]
+[ "$(printf '%s\n' "$native_dqm" | native_count)" = 1 ]
+[ "$(printf '%s\n' "$native_sdma" | native_count)" = 1 ]
+[ "$(printf '%s\n%s\n%s\n%s\n' "$native_sdma" "$native_dqm" "$native_sdma" "$native_dqm" |
+  native_count)" = 2 ]
+[ "$(printf '%s\n%s\n' "$native_quiet" "$native_xid" | native_count)" = 1 ]
+[ "$(printf '%s\n%s\n%s\n' "$native_sdma" "$native_dqm" "$native_xid" | native_count)" = 2 ]
+[ "$(printf '' | native_count)" = 0 ]
+for native_case in sdma dqm xid; do
+  native_line=native_$native_case
+  printf '%s\n' "$(printf '%s\n%s\n' "$native_quiet" "${!native_line}" |
+    native_window_summary 20260923T111000Z 20260923T113000Z)" \
+    >"$(window_sidecar "$tmp/native-$native_case.log")"
+  window_red "$tmp/native-$native_case.log"
+  grep -q '^native window: refusal present$' \
+    <<<"$(window_fingerprint_lines "$tmp/native-$native_case.log")"
+done
+
+# The fingerprint's half is stable across two equally refused runs: the window, the timestamps, the
+# count and the PIDS all differ, and a pid in a signature would report `fingerprint moved` on every
+# repeat of a standing SDMA red.
+native_red_a=$(printf '%s\n%s\n' "$native_sdma" "$native_dqm" |
+  native_window_summary 20260923T111000Z 20260923T113000Z)
+native_red_b=$(printf '%s\n%s\n%s\n%s\n' "${native_sdma/11:12:35/15:40:02}" \
+  "${native_dqm/85562/90210}" "$native_sdma" "${native_dqm/85562/90377}" |
+  native_window_summary 20260923T153000Z 20260923T160000Z)
+printf '%s\n' "$native_red_a" >"$(window_sidecar "$tmp/native-red-a.log")"
+printf '%s\n' "$native_red_b" >"$(window_sidecar "$tmp/native-red-b.log")"
+[ "$(window_count "$tmp/native-red-a.log")" = 1 ]
+[ "$(window_count "$tmp/native-red-b.log")" = 2 ]
+[ "$(window_fingerprint_lines "$tmp/native-red-a.log")" = \
+  "$(window_fingerprint_lines "$tmp/native-red-b.log")" ]
+grep -q '^native signature: amdgpu: process pid N DQM create queue type 1 failed. ret -12$' \
+  <<<"$native_red_a"
+absent '^native signature: .*85562' <<<"$native_red_a"
+grep -q '^native signature: NVRM: Xid (PCI:0000:02:00): 79, pid=N, name=tensor_puzzles.exe, GPU has fallen off the bus.$' \
+  <<<"$(printf '%s\n' "$native_xid" | native_window_summary A B)"
+# `dmesg -T` stamps a line differently from the journal, and the signature is the same either way.
+grep -q '^native signature: amdgpu: process pid N DQM create queue type 1 failed. ret -12$' \
+  <<<"$(printf '[Wed Sep 23 11:12:35 2026] amdgpu: process pid 85562 DQM create queue type 1 failed. ret -12\n' |
+    native_window_summary A B)"
+# ...while a clean window and a refused one still differ.
+[ "$(window_fingerprint_lines "$tmp/native-quiet.log")" != \
+  "$(window_fingerprint_lines "$tmp/native-red-a.log")" ]
+
+# The two signature sets are separate: a native window does not count a dxg burst -- nor keep it,
+# since a bridge line cannot come from a native boot -- and a dxg window does not count an SDMA
+# refusal.
+native_of_dxg=$(printf '%s\n%s\n' "$dxg_benign" "$dxg_burst" | native_window_summary A B)
+grep -q '^=== native window: 0 GPU queue refusals ===$' <<<"$native_of_dxg"
+absent 'misc dxg' <<<"$native_of_dxg"
+dxg_of_native=$(printf '%s\n%s\n%s\n' "$native_sdma" "$native_dqm" "$native_xid" |
+  dxg_window_summary A B)
+grep -q '^=== dxg window: 0 vmbus_sendpacket failures ===$' <<<"$dxg_of_native"
+absent 'amdgpu' <<<"$dxg_of_native"
+
+# A native collection that failed, and a native box that rebooted mid-unit, keep the verdicts the
+# dxg kind has: `unavailable` establishes nothing, and `vm-replaced` -- the kernel's boot id, not the
+# bridge's -- is environment-red.
+window_unavailable native 20260923T111000Z 20260923T113000Z 'ssh exit 255' \
+  >"$(window_sidecar "$tmp/native-unavailable.log")"
+[ "$(window_count "$tmp/native-unavailable.log")" = unavailable ]
+[ "$(window_kind "$tmp/native-unavailable.log")" = native ]
+grep -q '^native window: collection unavailable$' \
+  <<<"$(window_fingerprint_lines "$tmp/native-unavailable.log")"
+if window_red "$tmp/native-unavailable.log"; then
+  printf 'sweep_harness: an unavailable native window was read as environment-red\n' >&2
+  exit 1
+fi
+printf '%s\n' "$native_quiet" | native_window_summary A B replaced \
+  >"$(window_sidecar "$tmp/native-replaced.log")"
+window_red "$tmp/native-replaced.log"
+window_guest_replaced "$tmp/native-replaced.log"
+
+# The no-window case: a unit with no sidecar has no kind, no bounds and no count, and the record
+# writes `-` for all four. `unavailable` would claim a collection was tried.
+printf 'fixture unit log\n' >"$tmp/no-window.log"
+[ -z "$(window_kind "$tmp/no-window.log")" ]
+[ -z "$(window_count "$tmp/no-window.log")" ]
+[ -z "$(window_bounds "$tmp/no-window.log")" ]
+[ -z "$(window_fingerprint_lines "$tmp/no-window.log")" ]
+
+# The native QUERY. A native box restricts dmesg, so the dxg probe's fall-through for a window with
+# no kernel entry -- the normal native window -- lands on a dmesg that refuses, and the collection
+# fails: that is how every native GPU unit came to record `unavailable`. The native query judges the
+# journal on the CURRENT BOOT instead, and then answers for the window whatever it holds. Run here
+# against fakes shaped like a native box: a journal with this boot's kernel lines and none in the
+# window, and a dmesg that refuses.
+native_collection=$(window_cmd native 1758625800)
+absent 'journalctl -k' <<<"$native_collection"
+grep -q 'journalctl -q _TRANSPORT=kernel -b -n 1 --no-pager' <<<"$native_collection"
+grep -q 'journalctl -q _TRANSPORT=kernel --since @\$window_start --until @\$window_end' \
+  <<<"$native_collection"
+grep -q 'dmesg -T --since @\$window_start --until @\$window_end' <<<"$native_collection"
+native_box=$tmp/native-box-bin
+mkdir -p "$native_box"
+cat >"$native_box/journalctl" <<'EOF'
+#!/bin/sh
+case " $* " in
+  *" -b "*) echo 'Sep 23 10:54:54 minix-amd-linux kernel: Linux version 6.17.0' ;;
+esac
+exit 0
+EOF
+cat >"$native_box/dmesg" <<'EOF'
+#!/bin/sh
+echo 'dmesg: read kernel buffer failed: Operation not permitted' >&2
+exit 1
+EOF
+chmod +x "$native_box/journalctl" "$native_box/dmesg"
+native_rc=0
+PATH=$native_box:$PATH eval "$native_collection" >/dev/null 2>&1 || native_rc=$?
+[ "$native_rc" -eq 0 ]
+# ...where the dxg query, on the same box, fails -- the regression this replaces.
+dxg_on_native_rc=0
+PATH=$native_box:$PATH eval "$(window_cmd dxg 1758625800)" >/dev/null 2>&1 || dxg_on_native_rc=$?
+[ "$dxg_on_native_rc" -ne 0 ]
+# And a native box whose journal has no readable kernel log still falls back to dmesg, and a dmesg
+# that refuses there fails the collection -- `unavailable`, never a clean zero.
+cat >"$native_box/journalctl" <<'EOF'
+#!/bin/sh
+echo '-- No entries --'
+exit 0
+EOF
+native_rc=0
+PATH=$native_box:$PATH eval "$native_collection" >/dev/null 2>&1 || native_rc=$?
+[ "$native_rc" -ne 0 ]
+
+# End to end, through the sweep's own dispatch: a remote unit reached through a `-linux` alias
+# collects the NATIVE window and records its kind, one reached through `-wsl` the dxg window, and a
+# remote CPU unit none. The fake box answers the probes and the window query and refuses the
+# preparation, so each unit ends as `error` -- a path that collects its window. Both kinds are fed
+# the SAME kernel log, holding one refusal of each kind: each counts only its own.
+native_kernel=$(printf '%s\n%s\n%s\n%s\n%s\n' "$native_quiet" "$dxg_benign" "$dxg_burst" \
+  "$native_sdma" "$native_dqm")
+: >"$ssh_calls"
+native_unit_linux=$(SWEEP_TEST_SSH_MODE=window SWEEP_TEST_KERNEL_LINES=$native_kernel \
+  run_sweep_args --only hip --target native-window-probe)
+grep -q '^destinations: minix=minix-amd-linux$' <<<"$native_unit_linux"
+grep -q '^  minix/hip: error (cannot pin minix-amd-linux' <<<"$native_unit_linux"
+native_unit_record=$(sed -n 's/^run:  *//p' <<<"$native_unit_linux")
+[ "$(awk -F '\t' '$1 == "unit" && $3 == "hip" { print $9 "\t" $10 }' "$native_unit_record")" = \
+  "$(printf '1\tnative')" ]
+native_unit_log=$(awk -F '\t' '$1 == "unit" && $3 == "hip" { print $6 }' "$native_unit_record")
+[ "$(window_kind "$native_unit_log")" = native ]
+grep -q '^native signature: amdgpu: process pid N DQM create queue type 1 failed. ret -12$' \
+  "$(window_sidecar "$native_unit_log")"
+absent 'misc dxg' "$(window_sidecar "$native_unit_log")"
+grep -q '^native window: refusal present$' "${native_unit_log%.log}.fingerprint"
+grep -q -- '-b -n 1' "$ssh_calls"
+: >"$ssh_calls"
+native_unit_wsl=$(SWEEP_TEST_SSH_MODE=window SWEEP_TEST_KERNEL_LINES=$native_kernel \
+  SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh run_sweep_args --only hip --target native-window-probe)
+grep -q '^destinations: minix=minix-amd-wsl$' <<<"$native_unit_wsl"
+native_wsl_record=$(sed -n 's/^run:  *//p' <<<"$native_unit_wsl")
+[ "$(awk -F '\t' '$1 == "unit" && $3 == "hip" { print $9 "\t" $10 }' "$native_wsl_record")" = \
+  "$(printf '1\tdxg')" ]
+native_wsl_log=$(awk -F '\t' '$1 == "unit" && $3 == "hip" { print $6 }' "$native_wsl_record")
+absent 'amdgpu' "$(window_sidecar "$native_wsl_log")"
+absent -- '-b -n 1' "$ssh_calls"
+# The remote CPU unit on the same native box: no window, so `-` in all four fields, and no window
+# query sent at all.
+: >"$ssh_calls"
+native_unit_cpu=$(SWEEP_TEST_SSH_MODE=window SWEEP_TEST_KERNEL_LINES=$native_kernel \
+  run_sweep_args --only multidev_cc --target native-window-probe)
+grep -q '^  minix/multidev_cc: error ' <<<"$native_unit_cpu"
+native_cpu_record=$(sed -n 's/^run:  *//p' <<<"$native_unit_cpu")
+[ "$(awk -F '\t' '$1 == "unit" && $3 == "multidev_cc" { print $7 "\t" $8 "\t" $9 "\t" $10 }' \
+  "$native_cpu_record")" = "$(printf -- '-\t-\t-\t-')" ]
+absent 'window-bounds' "$ssh_calls"
+
+# The ROCr abort a refused SDMA queue ends in lands in the unit's LOG, and makes the unit
+# environment-red there too -- the half that survives a window that could not be read. Driven
+# through a local unit's log with a failing fake, since this arm reads the log; the
+# `Fatal error: exception` arm is covered by the serial-rerun cases above.
+native_abort='schedule_conv_gemm.exe: ./runtime/hsa-runtime/core/runtime/amd_gpu_agent.cpp:2003: virtual void rocr::AMD::GpuAgent::ReleaseQueueMainScratch(rocr::AMD::ScratchInfo&): Assertion `scratch.main_queue_base'"'"' failed.'
+native_abort_run=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT="$state_failure
+$native_abort" run_sweep_backend cc --target state-probe)
+grep -q 'm4-max/cc: fail ' <<<"$native_abort_run"
+grep -q 'serial rerun' <<<"$native_abort_run"
+# ...but an unrelated assertion in the same runtime is a test's own failure, not the environment's.
+native_other_abort=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT="$state_failure
+${native_abort/ReleaseQueueMainScratch/AcquireQueueScratch}" run_sweep_backend cc --target state-probe)
+grep -q 'm4-max/cc: fail ' <<<"$native_other_abort"
+absent 'serial rerun' <<<"$native_other_abort"
 
 # Cancelling a sweep stops EVERY lane: here the local lane's unit is held in its
 # test leg and the rog-nv lane's in its preparation ssh, both under supervisors.
