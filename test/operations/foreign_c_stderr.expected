@@ -1,0 +1,6 @@
+arm: detach_c_stderr=on
+a foreign C library's stderr escapes a capture of fd 2: true
+OCaml's own stderr follows fd 2 either way: true
+arm: detach_c_stderr=off
+without the setting, a foreign C library's stderr is captured with fd 2: true
+OCaml's own stderr follows fd 2 either way: true

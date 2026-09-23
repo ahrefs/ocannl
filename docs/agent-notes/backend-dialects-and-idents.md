@@ -298,3 +298,22 @@ configuration.
   Qualified markers match across whitespace/comments, while longer identifiers and quoted literals
   cannot activate a header. Direct CUDA/HIP compiler seams prepare headers idempotently too, so
   the HIP compile-failure probe still exercises the production options and exception constructor.
+- Every `hipEventRecord` costs one `Signal 0x... time stamps may be invalid.` on the C runtime's
+  stderr wherever ROCr was built with assertions on — the Ubuntu 26.04 `libhsa-runtime64`
+  7.1.0+dfsg-0ubuntu9 is (it imports `__assert_fail`, so ROCr's `debug_print` is live), and the
+  whole native-Linux fleet shares that build. ROCclr's `hip::EventMarker` sets
+  `profilingInfo_.enabled_ = true` for every event marker however the event was created, so
+  `hipEventDisableTiming` does NOT avoid it: ROCr then reads back dispatch timestamps the hardware
+  never wrote for a barrier packet and reports the zero pair. Nothing in `hip_backend.ml` or
+  `Delimited_event` can avoid it and no runtime switch reaches it — `GPU_FORCE_QUEUE_PROFILING=0`
+  and `AMD_DIRECT_DISPATCH=0` change nothing, `=1` makes it worse — which is why the answer lives
+  at the stream seam instead (`Utils.c_stderr_detached`, gh-ocannl-1031). A 30-line pure-HIP
+  program reproduces it in one line per recorded event, with none when no event is recorded; reach
+  for that shape before suspecting OCANNL's event discipline.
+- `Warning: Resource leak detected by SharedSignalPool, 77 Signals leaked.` on a hip run exit is
+  the per-device HIP stream never being destroyed, not leaked events: the same pure-HIP probe
+  reports exactly 77 whatever the iteration count when it skips `hipStreamDestroy`, and a count
+  equal to the number of undestroyed events when it skips `hipEventDestroy` instead. OCANNL shows
+  the fixed 77, so its `Delimited_event` release discipline holds and the gap is process-exit
+  teardown (there is no `at_exit` anywhere in the library; `Gc.finalise finalize_device` does not
+  run at exit, and it would not destroy the stream if it did).
