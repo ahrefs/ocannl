@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       windows_only:
-        description: "Fallback only: Windows main/training when fleet hosts cannot verify"
+        description: "Windows main/training only, for a change that needs Windows signal"
         type: boolean
         default: false
       expected_sha:
@@ -44,7 +44,7 @@ on:
 # must not be cancellable by a routine master push: the scheduled sweep carries
 # that period's only Windows and OCaml-floor coverage (the same reasoning as
 # `fail-fast: false` below -- cancellation destroys information), and a
-# workflow_dispatch run was launched deliberately for a rerun or Windows fallback. Scheduled runs cannot overlap each
+# workflow_dispatch run was launched deliberately for a rerun or a Windows-only check. Scheduled runs cannot overlap each
 # other in practice (74min worst case against a 3-day cadence), so grouping
 # them is harmless.
 concurrency:
@@ -68,14 +68,13 @@ jobs:
         # catching portability breaks that are rare and, when they do happen,
         # are about line endings, float formatting and the mingw toolchain
         # rather than about the change under review. It runs instead on the
-        # independent schedule above. Development Windows checks use rog-nv-win
-        # or minix-amd-win first, including portability and golden changes.
-        # Manual dispatch defaults to Linux/macOS. Select windows_only explicitly
-        # as a fallback when neither fleet host can provide the needed check;
-        # do not routinely add it to PR verification.
+        # independent schedule above. Manual dispatch defaults to Linux/macOS;
+        # select windows_only explicitly when a change needs Windows signal
+        # (AGENTS.md, Windows verification placement), never as a routine PR
+        # gate.
         #
         # Scheduled runs carry ubuntu and macOS too, distinguishing
-        # "Windows drifted" from "master is broken". Fallback dispatch runs only
+        # "Windows drifted" from "master is broken". Windows-only dispatch runs only
         # Windows main/training and requires the intended full commit SHA.
         # Guard the option by event name so it cannot narrow scheduled coverage.
         #
@@ -98,7 +97,7 @@ jobs:
         suite:
           - main
         # Two kinds of include entry. The `train` shards: macOS on every run,
-        # Windows only on the scheduled or explicit fallback matrix beside its main job.
+        # Windows only on the scheduled or explicit Windows-only matrix beside its main job.
         # macOS ONLY per-PR, deliberately: the tier is a serialized chain
         # (measured ~4.7min on an M4 Max, ~10min on a 24-thread Linux box with
         # the compile cached), so a ubuntu shard would run ~15-20min and
