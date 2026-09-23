@@ -78,10 +78,14 @@ let () =
   if on_hip && not (Lazy.force hip_mma) then
     Stdio.eprintf
       "NOTE (gh-ocannl-1032): HIP advertises no tile-MMA capability on this host, so the \
-       tensor-core arms below assert the scalar-fallback rendering instead of rocWMMA. Both an \
-       RDNA3+/wave32 device and a COMPLETE rocWMMA header tree are required; Ubuntu's \
-       librocwmma-dev ships rocwmma/rocwmma.hpp without rocwmma/internal/ and does not count. \
-       Point ROCWMMA_PATH at a full tree to exercise them.\n\
+       tensor-core arms below assert the scalar-fallback rendering instead of rocWMMA. The \
+       capability is a CONJUNCTION and this says which one failed only as far as it can: it needs \
+       an RDNA3/RDNA3.5+ (gfx11/gfx12) wave32 device -- EVERY device of the process -- AND a \
+       complete rocWMMA header tree. On a CDNA gfx9 wave64 part, or a mixed fleet, no header tree \
+       enables these arms and the fallback is the end of it. Where the devices ARE eligible \
+       (rocminfo, or the gcn_arch_name/warp_size keys of the backend's static-properties dump), \
+       the missing half is the headers: point ROCWMMA_PATH at a COMPLETE tree -- Ubuntu's \
+       librocwmma-dev ships rocwmma/rocwmma.hpp without rocwmma/internal/ and does not count.\n\
        %!"
 
 (* The fp8 Metal legs necessarily use the lane-0 fallback, between distributed device zeroing and
