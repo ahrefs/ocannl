@@ -32,7 +32,9 @@ on_error() {
     repeated_backend_pass mixed_scope_fail mixed_scope_cleared historical_matrix \
     local_identity_error unsafe_identity_error only_typo_error matrix_error state_first state_same \
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
-    capped capped_target remote_opt_in serial_red serial_clean serial_two_inline \
+    capped capped_target remote_opt_in dest_wsl dest_linux dest_missing dest_local_only \
+    dest_bogus dest_no_kind_of dest_half dest_override dest_override_wins dest_wrong_box \
+    dest_option serial_red serial_clean serial_two_inline \
     serial_many_inline serial_control lanes lane_stop_seed lane_stopped \
     aggregator_missing stamp_advance dxg_clean dxg_red dxg_collection dxg_unavailable \
     dxg_many dxg_bounds dxg_no_trigger hold_lock_ok \
@@ -69,7 +71,8 @@ unset SWEEP_TEST_CALLS SWEEP_TEST_WAIT_PREFIX SWEEP_TEST_OPAM_RC \
   SWEEP_TEST_OPAM_OUT SWEEP_TEST_OPAM_OUT_CC SWEEP_TEST_OPAM_OUT_MULTIDEV_CC \
   SWEEP_TEST_OPAM_OUT_METAL SWEEP_TEST_LOCAL_BOX SWEEP_TEST_JOBS \
   SWEEP_TEST_OPAM_SERIAL_RED SWEEP_TEST_OPAM_OUT_SERIAL SWEEP_TEST_SSH_CALLS \
-  SWEEP_TEST_SSH_MODE SWEEP_TEST_OWN_GROUP SWEEP_TEST_WAIT_TICKS
+  SWEEP_TEST_SSH_MODE SWEEP_TEST_OWN_GROUP SWEEP_TEST_WAIT_TICKS \
+  SWEEP_TEST_HOSTS SWEEP_TEST_DEST_ROG SWEEP_TEST_DEST_MINIX
 
 sweep=$1
 aggregate=$2
@@ -241,6 +244,30 @@ exit 1
 EOF
 chmod +x "$fake_bin/ssh"
 
+# Stand-ins for the site's wake-lab host table (gh-ocannl-1030), which is site data outside the
+# repository: the sweep sources it and asks `kind_of <box>` which boot -- native Ubuntu (`linux`) or
+# the WSL guest (`wsl`) -- each GPU box's destination is. The nested sweep is pointed at one of
+# these through WAKE_LAB_HOSTS (run_sweep_args pins it), the native one by default because that is
+# the lab's boot today. Each defines the table's other functions too, so that only the property a
+# case names differs from a real table.
+write_hosts() { # path kind-of-body
+  cat >"$1" <<HOSTS
+mac_of() { case "\$1" in rog|minix) echo 00:00:00:00:00:00 ;; *) return 1 ;; esac; }
+eth_mac_of() { mac_of "\$1"; }
+ip_of() { case "\$1" in rog|minix) echo 192.0.2.1 ;; *) return 1 ;; esac; }
+echo 'a site table that prints while sourced'
+$2
+HOSTS
+}
+write_hosts "$tmp/hosts-linux.sh" 'kind_of() { case "$1" in rog|minix) echo linux ;; *) return 1 ;; esac; }'
+write_hosts "$tmp/hosts-wsl.sh" 'kind_of() { case "$1" in rog|minix) echo wsl ;; *) return 1 ;; esac; }'
+# A kind wake-lab itself refuses, as a box booted into Windows would read if someone wrote it down.
+write_hosts "$tmp/hosts-bogus.sh" 'kind_of() { case "$1" in rog|minix) echo win ;; *) return 1 ;; esac; }'
+# A table from before kind_of existed.
+write_hosts "$tmp/hosts-no-kind-of.sh" ''
+# One box known, the other not: the sweep must refuse the RUN, not sweep the half it can reach.
+write_hosts "$tmp/hosts-half.sh" 'kind_of() { case "$1" in rog) echo linux ;; *) return 1 ;; esac; }'
+
 # Exercise the exact previous schema: old evidence is retained, but marked
 # unknown rather than being upgraded retroactively to executed coverage.
 printf 'when\tmachine\tbackend\tref\toutcome\tseconds\ttarget\tslow\tlog\n' >"$state/history.tsv"
@@ -276,10 +303,18 @@ run_sweep_args() {
   # Quoted, unlike the assignment prefix this replaces: these are `env`'s
   # ARGUMENTS now, so the multi-line fixture logs would otherwise be split into
   # words and `env` would try to run one of them as the command.
+  #
+  # The site host table and the per-box destination overrides are pinned for the same reason as the
+  # lock directory (gh-ocannl-1030): an ambient WAKE_LAB_HOSTS or OCANNL_TOOL_SWEEP_DEST_* -- both
+  # supported knobs -- would otherwise decide which alias the fake remote lanes are asked for, and
+  # the destination cases below assert exactly that.
   local environment=(-u OCANNL_BACKEND -u OCANNL_TOOL_SWEEP_CAP -u OCANNL_TOOL_SWEEP_CONTEXT_CAP \
     -u OCANNL_TOOL_SWEEP_LOCAL_BOX -u OCANNL_TOOL_SWEEP_LAB_LOCK_WAIT \
     "HOME=$tmp/home" \
     "WAKE_LAB_LOCK_DIR=$tmp/lab-locks" \
+    "WAKE_LAB_HOSTS=${SWEEP_TEST_HOSTS:-$tmp/hosts-linux.sh}" \
+    "OCANNL_TOOL_SWEEP_DEST_ROG=${SWEEP_TEST_DEST_ROG:-}" \
+    "OCANNL_TOOL_SWEEP_DEST_MINIX=${SWEEP_TEST_DEST_MINIX:-}" \
     "PATH=$fake_bin:$PATH" \
     "SWEEP_TEST_CALLS=$calls" \
     "SWEEP_TEST_WAIT_PREFIX=${SWEEP_TEST_WAIT_PREFIX:-}" \
@@ -1059,8 +1094,132 @@ absent '@check' <<<"$(tail -2 "$calls" | sed -n '1p')"
 # of the remote units from nested sweeps.
 remote_opt_in=$(run_sweep_args --only cuda --target state-probe)
 grep -q 'rog-nv/cuda: skip (unreachable)' <<<"$remote_opt_in"
-grep -q 'rog-nv-wsl' "$ssh_calls"
-absent 'minix-amd-wsl' "$ssh_calls"
+grep -q 'rog-nv-linux' "$ssh_calls"
+absent 'minix-amd' "$ssh_calls"
+absent -- '-wsl' "$ssh_calls"
+
+# The GPU destinations follow the site's boot kind (gh-ocannl-1030). rog and minix are dual-boot,
+# only the booted system answers, and the sweep once hard-coded the `-wsl` aliases -- so from the
+# first native-Ubuntu boot every GPU unit and multidev_cc recorded `skip (unreachable)`, the same
+# row a sleeping box writes. Each case below starts from an empty recorder, and each asks the fake
+# ssh for exactly the aliases its table names and no other.
+#
+# WSL boot: both boxes through their WSL guests.
+: >"$ssh_calls"
+dest_wsl=$(SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh \
+  run_sweep_args --only cuda --only hip --only multidev_cc --target dest-wsl-probe)
+grep -q '^destinations: rog-nv=rog-nv-wsl minix=minix-amd-wsl$' <<<"$dest_wsl"
+grep -q '^  rog-nv/cuda: skip (unreachable)$' <<<"$dest_wsl"
+grep -q '^  minix/hip: skip (unreachable)$' <<<"$dest_wsl"
+grep -q '^  minix/multidev_cc: skip (unreachable)$' <<<"$dest_wsl"
+grep -q ' rog-nv-wsl ' "$ssh_calls"
+grep -q ' minix-amd-wsl ' "$ssh_calls"
+absent -- '-linux' "$ssh_calls"
+# Native boot (the default table): both boxes through native Ubuntu, and each lane still reserves
+# ITS box -- the lock is the box's, whichever system it booted, so a `-linux` alias must name the
+# same lock file the `-wsl` one did. The lane locks earlier cases left behind are removed first, so
+# the files' presence afterwards is this run's evidence.
+: >"$ssh_calls"
+rm -f "$tmp/lab-locks/rog.lock" "$tmp/lab-locks/minix.lock"
+dest_linux=$(run_sweep_args --only cuda --only hip --only multidev_cc --target dest-linux-probe)
+grep -q '^destinations: rog-nv=rog-nv-linux minix=minix-amd-linux$' <<<"$dest_linux"
+grep -q '^  rog-nv/cuda: skip (unreachable)$' <<<"$dest_linux"
+grep -q '^  minix/hip: skip (unreachable)$' <<<"$dest_linux"
+grep -q '^  minix/multidev_cc: skip (unreachable)$' <<<"$dest_linux"
+grep -q ' rog-nv-linux ' "$ssh_calls"
+grep -q ' minix-amd-linux ' "$ssh_calls"
+absent -- '-wsl' "$ssh_calls"
+[ -e "$tmp/lab-locks/rog.lock" ]
+[ -e "$tmp/lab-locks/minix.lock" ]
+grep -q '^ocannl sweep ' "$tmp/lab-locks/rog.lock"
+grep -q '^ocannl sweep ' "$tmp/lab-locks/minix.lock"
+# An unreadable kind refuses the RUN at startup -- exit 2, nothing contacted, no history row and
+# no run record -- rather than guessing an alias and filing the guess's failure as a sleeping box.
+# The refusal says which table, which box, and what to set instead.
+dest_refused() { # rc output target -- asserts the startup-refusal shape for that run
+  [ "$1" -eq 2 ]
+  [ ! -s "$ssh_calls" ]
+  absent "$3" "$state/history.tsv"
+  absent '^run: ' <<<"$2"
+  absent '^lanes:' <<<"$2"
+}
+: >"$ssh_calls"
+set +e
+dest_missing=$(SWEEP_TEST_HOSTS=$tmp/no-such-hosts.sh \
+  run_sweep_args --only cuda --target dest-missing-probe 2>&1)
+dest_missing_rc=$?
+set -e
+dest_refused "$dest_missing_rc" "$dest_missing" dest-missing-probe
+grep -qF "sweep: cannot read the site host table $tmp/no-such-hosts.sh for rog's boot kind (set WAKE_LAB_HOSTS, or name the destination with OCANNL_TOOL_SWEEP_DEST_ROG)" \
+  <<<"$dest_missing"
+grep -q '^sweep: no ssh destination for rog-nv/cuda; refusing to guess one$' <<<"$dest_missing"
+# ...and only a SELECTED remote unit needs one: a local-only run on a host with no site table (CI,
+# a developer's machine) runs as before. The opposing control for the refusal above.
+dest_local_only=$(SWEEP_TEST_HOSTS=$tmp/no-such-hosts.sh run_sweep_args --target dest-local-probe)
+grep -q '^  m4-max/cc: incremental-pass ' <<<"$dest_local_only"
+absent '^destinations:' <<<"$dest_local_only"
+[ ! -s "$ssh_calls" ]
+# A kind the sweep has no alias for.
+set +e
+dest_bogus=$(SWEEP_TEST_HOSTS=$tmp/hosts-bogus.sh \
+  run_sweep_args --only hip --target dest-bogus-probe 2>&1)
+dest_bogus_rc=$?
+set -e
+dest_refused "$dest_bogus_rc" "$dest_bogus" dest-bogus-probe
+grep -qF "sweep: the site host table $tmp/hosts-bogus.sh gives no usable boot kind for minix (kind_of minix: 'win'; expected linux or wsl)" \
+  <<<"$dest_bogus"
+grep -q '^sweep: no ssh destination for minix/hip; refusing to guess one$' <<<"$dest_bogus"
+# A table with no kind_of at all.
+set +e
+dest_no_kind_of=$(SWEEP_TEST_HOSTS=$tmp/hosts-no-kind-of.sh \
+  run_sweep_args --only cuda --target dest-no-kind-of-probe 2>&1)
+dest_no_kind_of_rc=$?
+set -e
+dest_refused "$dest_no_kind_of_rc" "$dest_no_kind_of" dest-no-kind-of-probe
+grep -qF "gives no usable boot kind for rog (kind_of rog: '<none>'; expected linux or wsl)" \
+  <<<"$dest_no_kind_of"
+# One box known and the other not: rog's lane must not have started, or the run would have swept
+# the half it could reach and reported the rest in a row that reads like a sleeping box.
+set +e
+dest_half=$(SWEEP_TEST_HOSTS=$tmp/hosts-half.sh \
+  run_sweep_args --only cuda --only hip --target dest-half-probe 2>&1)
+dest_half_rc=$?
+set -e
+dest_refused "$dest_half_rc" "$dest_half" dest-half-probe
+grep -q '^sweep: no ssh destination for minix/hip; refusing to guess one$' <<<"$dest_half"
+# The per-run override names a destination outright, and needs no table for that box...
+dest_override=$(SWEEP_TEST_HOSTS=$tmp/no-such-hosts.sh SWEEP_TEST_DEST_ROG=rog-nv-linux \
+  run_sweep_args --only cuda --target dest-override-probe)
+grep -q '^destinations: rog-nv=rog-nv-linux$' <<<"$dest_override"
+grep -q '^  rog-nv/cuda: skip (unreachable)$' <<<"$dest_override"
+grep -q ' rog-nv-linux ' "$ssh_calls"
+# ...and wins over one that says otherwise, for its box only.
+: >"$ssh_calls"
+dest_override_wins=$(SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh SWEEP_TEST_DEST_ROG=rog-nv-linux \
+  run_sweep_args --only cuda --only hip --target dest-override-wins-probe)
+grep -q '^destinations: rog-nv=rog-nv-linux minix=minix-amd-wsl$' <<<"$dest_override_wins"
+absent ' rog-nv-wsl ' "$ssh_calls"
+absent ' minix-amd-linux ' "$ssh_calls"
+# An override that would reserve ANOTHER box's lock is refused: the lane would leave its own box
+# open to a restart mid-unit.
+: >"$ssh_calls"
+set +e
+dest_wrong_box=$(SWEEP_TEST_DEST_ROG=minix-amd-linux \
+  run_sweep_args --only cuda --target dest-wrong-box-probe 2>&1)
+dest_wrong_box_rc=$?
+set -e
+dest_refused "$dest_wrong_box_rc" "$dest_wrong_box" dest-wrong-box-probe
+grep -qF "sweep: OCANNL_TOOL_SWEEP_DEST_ROG='minix-amd-linux' would reserve lab box 'minix', not 'rog'" \
+  <<<"$dest_wrong_box"
+# And one ssh would read as an option never reaches it.
+set +e
+dest_option=$(SWEEP_TEST_DEST_ROG=-oProxyCommand=true \
+  run_sweep_args --only cuda --target dest-option-probe 2>&1)
+dest_option_rc=$?
+set -e
+dest_refused "$dest_option_rc" "$dest_option" dest-option-probe
+grep -qF "sweep: OCANNL_TOOL_SWEEP_DEST_ROG='-oProxyCommand=true' is not an ssh destination" \
+  <<<"$dest_option"
 
 # An environment-red unit -- a red whose log carries a runtime-refusal signature
 # from sweep.sh's ENVIRONMENT_REFUSALS table -- reruns its failing stanzas one at

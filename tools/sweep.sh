@@ -11,9 +11,11 @@
 # The GPU boxes are often asleep or powered off, and an unreachable machine is
 # recorded as `skip` rather than an error. They are Wake-on-LAN armed, though,
 # so a skip means nobody woke them -- not that the coverage was unavailable.
-# Wake them before a run that is meant to cover cuda or hip, and kick WSL after
-# waking (it starts on demand or at login, never at boot, so the `-wsl` hosts
-# this sweep addresses lag the box being up). The caller is expected to notice
+# Wake them before a run that is meant to cover cuda or hip. Each GPU box is
+# addressed through the boot its site host table names (`kind_of`, see
+# lab_dest): `-linux` for native Ubuntu, `-wsl` for the WSL guest -- and on a WSL
+# boot, kick WSL after waking (it starts on demand or at login, never at boot,
+# so the `-wsl` host lags the box being up). The caller is expected to notice
 # when a backend has been skipped for too long.
 #
 # Deliberately does NOT exit non-zero on test failures: the point is to record
@@ -32,6 +34,9 @@
 #   tools/sweep.sh --target test/einsum  # narrower dune target, for smoke-testing
 #   tools/sweep.sh --ref origin/master   # what to test (default: origin/master)
 #   OCANNL_TOOL_SWEEP_LOCAL_BOX=m4-max tools/sweep.sh  # required stable local box ID
+#   OCANNL_TOOL_SWEEP_DEST_ROG=rog-nv-linux tools/sweep.sh --only cuda
+#                                      # name a GPU box's ssh destination (also _MINIX),
+#                                      # instead of reading its kind from WAKE_LAB_HOSTS
 
 set -uo pipefail
 
@@ -112,15 +117,90 @@ DXG_IDENTITY_CAP=30
 DXG_IDENTITY_WINDOW=90
 DXG_IDENTITY_PAUSE=10
 
-# The wake-lab box whose lock covers an ssh alias. The two real ones are named rather than derived,
-# so a renamed alias fails loudly here instead of silently reserving a box nobody checks; the
-# fallback is the alias's first component, which is the convention the aliases already follow.
+# The wake-lab box whose lock covers an ssh alias. The real ones -- both of each GPU box's boots,
+# its native Ubuntu and its WSL guest -- are named rather than derived, so a renamed alias fails
+# loudly here instead of silently reserving a box nobody checks; the fallback is the alias's first
+# component, which is the convention the aliases already follow. Both boots share ONE lock: the
+# box, not the OS it booted, is what a restart or a power verb takes away (gh-ocannl-1030).
 lab_box_of() { # ssh-alias
   case $1 in
-    rog-nv-wsl) printf 'rog' ;;
-    minix-amd-wsl) printf 'minix' ;;
+    rog-nv-linux | rog-nv-wsl) printf 'rog' ;;
+    minix-amd-linux | minix-amd-wsl) printf 'minix' ;;
     *) printf '%s' "${1%%-*}" ;;
   esac
+}
+
+# Which ssh destination reaches a GPU box TODAY (gh-ocannl-1030). rog and minix are dual-boot:
+# native Ubuntu answers at `<alias>-linux`, the WSL guest under Windows at `<alias>-wsl`, and only
+# the booted one answers. So the destination is not a constant of the unit table but a per-run
+# fact, and the owner of that fact is the site's wake-lab host table -- `kind_of <box>` prints
+# `linux` or `wsl` -- the same file, and the same function, the scheduled routine reads to decide
+# how to WAKE the box before it launches this script. Reading it here too is what keeps the two
+# from disagreeing: a sweep that hard-coded the `-wsl` spellings recorded `skip (unreachable)` for
+# every GPU unit from the first native boot on, and kept reporting as if nothing had changed.
+#
+# WAKE_LAB_HOSTS moves the table, exactly as it does for wake-lab.sh. A per-box override,
+# OCANNL_TOOL_SWEEP_DEST_ROG / OCANNL_TOOL_SWEEP_DEST_MINIX, names the destination outright for one
+# run (a harness, a manual run on a host with no site table); set, it wins and the table is not
+# read for that box; empty counts as unset.
+#
+# No kind means NO destination, and the sweep refuses to start (see the resolution after the unit
+# table): guessing one is the silent skip this exists to remove, since a wrong guess is
+# indistinguishable, in the history, from a box that was simply asleep.
+LAB_HOSTS=${WAKE_LAB_HOSTS:-$HOME/.config/wake-lab/hosts.sh}
+
+lab_dest_of() { # box kind -- the ssh alias for that boot of that box
+  case $1:$2 in
+    rog:linux) printf 'rog-nv-linux' ;;
+    rog:wsl) printf 'rog-nv-wsl' ;;
+    minix:linux) printf 'minix-amd-linux' ;;
+    minix:wsl) printf 'minix-amd-wsl' ;;
+    *) return 1 ;;
+  esac
+}
+
+# Prints the box's destination, or says on stderr why there is none and returns 1. The table is
+# sourced in a SUBSHELL: it is site shell code, and nothing it defines may reach this script's own
+# functions. Its stdout is discarded so that only kind_of's answer is read as the kind.
+lab_dest() { # box
+  local box=$1 var dest kind
+  var=OCANNL_TOOL_SWEEP_DEST_$(printf '%s' "$box" | tr '[:lower:]' '[:upper:]')
+  dest=${!var:-}
+  if [ -n "$dest" ]; then
+    # It reaches ssh as the destination argument, so nothing ssh could read as an option.
+    case $dest in
+      -* | *[!A-Za-z0-9._@-]*)
+        echo "sweep: $var='$dest' is not an ssh destination" >&2
+        return 1
+        ;;
+    esac
+    # The lane reserves the box lab_box_of names for its host; an override naming another box
+    # would reserve the wrong one and leave this one open to a restart mid-unit.
+    if [ "$(lab_box_of "${dest#*@}")" != "$box" ]; then
+      echo "sweep: $var='$dest' would reserve lab box '$(lab_box_of "${dest#*@}")', not '$box'" >&2
+      return 1
+    fi
+    printf '%s' "$dest"
+    return 0
+  fi
+  if [ ! -r "$LAB_HOSTS" ]; then
+    echo "sweep: cannot read the site host table $LAB_HOSTS for $box's boot kind" \
+      "(set WAKE_LAB_HOSTS, or name the destination with $var)" >&2
+    return 1
+  fi
+  kind=$(
+    set +u
+    # shellcheck source=/dev/null
+    . "$LAB_HOSTS" >/dev/null </dev/null || exit 1
+    declare -F kind_of >/dev/null || exit 1
+    kind_of "$box" </dev/null
+  ) || kind=
+  if ! dest=$(lab_dest_of "$box" "$kind"); then
+    echo "sweep: the site host table $LAB_HOSTS gives no usable boot kind for $box" \
+      "(kind_of $box: '${kind:-<none>}'; expected linux or wsl)" >&2
+    return 1
+  fi
+  printf '%s' "$dest"
 }
 
 # Reserve a box on fd 8, for as long as this shell lives. Called only in a LANE subshell, so the
@@ -209,8 +289,13 @@ esac
 # box identifiers are the stable names declared by benchmarks/fixtures/DIGESTS.txt;
 # that declaration is validated against this execution map below rather than
 # restated as the aggregation matrix.
-# The WSL sides of the GPU boxes, not the native-Windows ones: plain Linux
-# toolchain, and Windows portability is covered by the scheduled CI job.
+# The Linux sides of the GPU boxes, never the native-Windows ones: plain Linux
+# toolchain, and Windows portability is covered by the scheduled CI job. Which
+# Linux -- the native Ubuntu boot or the WSL guest -- is the box's boot kind
+# today, so a GPU unit's ssh-host is written `@<lab box>` here and replaced by
+# the destination lab_dest resolves, once the --only selection is known (see
+# below the table: an unselected unit is never resolved, so a local-only run
+# needs no site table).
 #
 # Table order is execution order within a box. Boxes run concurrently (see
 # run_lane), so the order ACROSS boxes decides nothing about timing.
@@ -238,9 +323,9 @@ esac
 UNITS=(
   "$LOCAL_BOX:cc:"
   "$LOCAL_BOX:metal:"
-  "rog-nv:cuda:rog-nv-wsl"
-  "minix:hip:minix-amd-wsl"
-  "minix:multidev_cc:minix-amd-wsl"
+  "rog-nv:cuda:@rog"
+  "minix:hip:@minix"
+  "minix:multidev_cc:@minix"
 )
 
 # Dune's job count for the TEST phase of a unit, empty for dune's default (one
@@ -368,6 +453,31 @@ if [ ${#ONLY[@]} -gt 0 ]; then
       die "unknown backend '$b'; known: $(printf '%s' "$known_backends" | tr '\n' ' ')"
   done
 fi
+
+wanted() {
+  [ ${#ONLY[@]} -eq 0 ] && return 0
+  local b
+  for b in "${ONLY[@]}"; do [ "$b" = "$1" ] && return 0; done
+  return 1
+}
+
+# Resolve each SELECTED remote unit's `@<lab box>` to today's ssh destination
+# (lab_dest above), before anything is built or reserved. A box whose kind
+# cannot be read refuses the whole run here, with the startup exit 2 and no run
+# record: the alternative is a lane that sshes to a guessed alias and files
+# `skip (unreachable)` -- the row a sleeping box also writes -- for coverage that
+# was never attempted. Unselected units keep their placeholder; nothing reaches
+# them. The resolved destinations are printed in the header, so the routine's
+# report can say which boot each GPU unit ran against.
+LAB_DESTS=
+for ((i = 0; i < ${#UNITS[@]}; i++)); do
+  IFS=: read -r machine backend host <<<"${UNITS[$i]}"
+  case $host in @*) ;; *) continue ;; esac
+  wanted "$backend" || continue
+  dest=$(lab_dest "${host#@}") || die "no ssh destination for $machine/$backend; refusing to guess one"
+  UNITS[$i]=$machine:$backend:$dest
+  case " $LAB_DESTS " in *" $machine=$dest "*) ;; *) LAB_DESTS="$LAB_DESTS $machine=$dest" ;; esac
+done
 
 # One sweep at a time. Every local unit reuses a single fixed worktree, so an
 # overlapping invocation -- a manual run started while the scheduled one is
@@ -616,13 +726,6 @@ if [ ${#known_boxes[@]} -gt 0 ]; then
       die "declared measurement box '$box' has no sweep unit"
   done
 fi
-
-wanted() {
-  [ ${#ONLY[@]} -eq 0 ] && return 0
-  local b
-  for b in "${ONLY[@]}"; do [ "$b" = "$1" ] && return 0; done
-  return 1
-}
 
 # The dune invocation, shared by the local and remote paths so the two cannot
 # drift. Unpiped inside the shell that runs it: piping dune to anything reports
@@ -1086,8 +1189,8 @@ sq() { printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")"; }
 #
 # 126 so the outcome mapping files a busy remote as `error`: nothing was judged.
 #
-# flock(1) rather than the perl the local side needs -- the remote boxes are WSL
-# Linux, where util-linux provides it. Orphaned remote processes inherit the
+# flock(1) rather than the perl the local side needs -- the remote boxes are
+# Ubuntu, native or WSL, where util-linux provides it. Orphaned remote processes inherit the
 # descriptor, so the lock outlives the ssh session that took it and clears when
 # the last of them exits: the same property the local lock relies on.
 remote_lock_cmd() {
@@ -1166,7 +1269,7 @@ capped_bg() { exec perl -e "$capped_perl" -- "$@"; }
 # The unit would then be filed as `timeout` -- coverage lost -- while still
 # holding the GPU and the remote worktree lock that the NEXT sweep's preparation
 # must take. perl(1) is a firmer assumption than GNU-vs-uutils semantics: the
-# sweep hosts are WSL Linux, where it is part of the base system, and
+# sweep hosts are Ubuntu (native or WSL), where it is part of the base system, and
 # tools/test-run.sh already requires it there.
 #
 # The supervisor exits 142 on expiry -- capped()'s code, which the outcome
@@ -2179,6 +2282,8 @@ done
 
 echo "sweep $stamp  ref=$REF ($run_sha)  slow=$SLOW  target=${TARGET:-<all>}  execution=$execution"
 echo "lanes:$lanes_summary"
+# Only when a remote unit is selected: which boot of each GPU box this run addresses.
+[ -z "$LAB_DESTS" ] || echo "destinations:$LAB_DESTS"
 echo
 
 # Registration is atomic with respect to the relay: a signal arriving between a

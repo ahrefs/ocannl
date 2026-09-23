@@ -1578,7 +1578,9 @@ that they earn a lookup rather than always-loaded space.
   over `cudajit`/`hipjit`, and `arrayjit.context` reaches its implementation through a dune `select`
   whose fallback arm is `<backend>_backend_impl.missing.ml`; with the vendor package absent both
   mechanisms succeed SILENTLY, so an exit status cannot distinguish "compiled" from "skipped".
-  Verify on the box carrying the toolchain — `rog-nv-wsl` for cudajit, `minix-amd-wsl` for hipjit —
+  Verify on the box carrying the toolchain — rog for cudajit, minix for hipjit, through whichever
+  boot is up (`rog-nv-linux`/`minix-amd-linux` on native Ubuntu, `rog-nv-wsl`/`minix-amd-wsl` on
+  WSL; the site's `kind_of` says which) —
   and check two things there rather than one: that
   `_build/default/arrayjit/lib/.<backend>_backend.objs/byte/<backend>_backend.cmi` exists, and that
   the `select` landed on the vendor arm, which
@@ -1885,8 +1887,16 @@ that they earn a lookup rather than always-loaded space.
   and renamed, so still atomic), which needs no symlink privilege on any platform. Reach for a
   pointer file, not a symlink, in anything that must work from Git Bash.
 - `tools/sweep.sh` is the coverage for every backend CI does not run: cc and metal locally
-  (the macOS host), cuda on `rog-nv-wsl`, hip and then multidev_cc on `minix-amd-wsl`, all pinned
+  (the macOS host), cuda on rog, hip and then multidev_cc on minix, all pinned
   to ONE resolved commit so a mid-sweep merge cannot leave the machines testing different trees.
+  The two GPU boxes are dual-boot, so a remote unit's ssh destination is resolved per run from the
+  site's wake-lab host table (`kind_of rog` → `linux` means `rog-nv-linux`, `wsl` means
+  `rog-nv-wsl`; `WAKE_LAB_HOSTS` moves the table, `OCANNL_TOOL_SWEEP_DEST_ROG`/`_MINIX` override
+  it for one run), and a box whose kind cannot be read refuses the run at startup rather than
+  guessing: the hard-coded `-wsl` aliases filed every GPU unit as `skip (unreachable)` — a sleeping
+  box's row — from the first native boot on (gh-ocannl-1030). Only a selected remote unit is
+  resolved, so a local-only run needs no table; the header's `destinations:` line names the boot
+  each GPU lane addressed.
   Each machine's units form a lane — sequential within the box, which shares one worktree, lock and
   device, concurrent with the other boxes' lanes (gh-ocannl-976) — so wall-clock is the longest lane
   (the local one, metal's suite), and the remote units start while the routine's freshly woken WSL
@@ -2202,9 +2212,10 @@ that they earn a lookup rather than always-loaded space.
   not the expected steady state either: both GPU boxes are cabled and Wake-on-LAN armed, and wake
   over Ethernet from sleep and from full shutdown alike, so a run that is meant to cover CUDA or HIP
   wakes them first rather than waiting for a day someone left them on. Waking one is not the same as
-  reaching it: the sweep addresses the `-wsl` aliases, and WSL starts on demand or at login, never
-  at boot, so a woken box answers on its Windows alias while `rog-nv-wsl`/`minix-amd-wsl` are still
-  refused. Kick it with `ssh <box>-win 'wsl.exe -d Ubuntu -e true'` and re-probe for a minute or two
+  reaching it: on a WSL boot the sweep addresses the `-wsl` aliases, and WSL starts on demand or at
+  login, never at boot, so a woken box answers on its Windows alias while `rog-nv-wsl`/`minix-amd-wsl`
+  are still refused (a native-Ubuntu boot answers at `-linux` once sshd is up, and none of the WSL
+  holder business below applies to it). Kick it with `ssh <box>-win 'wsl.exe -d Ubuntu -e true'` and re-probe for a minute or two
   while tailscaled registers. On a box woken from power-down (as opposed to resuming from
   sleep/hibernate with the owner's interactive WSL shell still open, in which case the VM survives
   the resume and none of this applies), a kicked VM can also terminate again within seconds to
