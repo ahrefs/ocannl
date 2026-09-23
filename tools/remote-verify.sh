@@ -26,12 +26,14 @@
 #                            0 disables it (default: 21600).
 #   -j, --jobs N             Dune concurrency, 1..4 (default: 4).
 #
-# Examples:
-#   tools/remote-verify.sh rog-nv-wsl codex/my-branch \
+# Examples (BOX is the booted system's ssh alias: rog-nv-linux / minix-amd-linux
+# on native Ubuntu, rog-nv-wsl / minix-amd-wsl on WSL -- the site's kind_of says
+# which):
+#   tools/remote-verify.sh rog-nv-linux codex/my-branch \
 #     --expect-lib cudajit --test @arrayjit/runtest-test_cuda_arch_flags \
 #     --run 'dune build tools/fp8_soak.exe -j 4 && \
 #       _build/default/tools/fp8_soak.exe --arm=cuda --sweep=f32'
-#   tools/remote-verify.sh minix-amd-wsl codex/my-branch \
+#   tools/remote-verify.sh minix-amd-linux codex/my-branch \
 #     --expect-lib hipjit \
 #     --record-golden @test/training/train-transformer_names
 #
