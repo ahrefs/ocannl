@@ -59,13 +59,14 @@ AGGREGATE_SKIPS=$SWEEP_TOOLS/aggregate-skips.sh
 }
 # shellcheck source=box-jobs.sh
 . "$SWEEP_TOOLS/box-jobs.sh"
-# The dxg window filter and its burst count, shared with the harness that pins it.
-[ -r "$SWEEP_TOOLS/dxg-window.sh" ] || {
-  echo "sweep: cannot read $SWEEP_TOOLS/dxg-window.sh" >&2
+# The kernel-window filters (dxg for a WSL boot, native for a native one) and their counts, shared
+# with the harness that pins them. After box-jobs.sh, whose transport names pick the kind.
+[ -r "$SWEEP_TOOLS/kernel-window.sh" ] || {
+  echo "sweep: cannot read $SWEEP_TOOLS/kernel-window.sh" >&2
   exit 2
 }
-# shellcheck source=dxg-window.sh
-. "$SWEEP_TOOLS/dxg-window.sh"
+# shellcheck source=kernel-window.sh
+. "$SWEEP_TOOLS/kernel-window.sh"
 
 # ---------------------------------------------------------------- the lab lock
 # The WSL boxes are shared, and `wsl.exe --shutdown` on one of them is HOST-GLOBAL: it destroys the
@@ -113,9 +114,9 @@ LAB_LOCK_WAIT=${OCANNL_TOOL_SWEEP_LAB_LOCK_WAIT:-300}
 #   PAUSE   between attempts. A guest that is still booting REFUSES connections rather than
 #           dropping them, and a refusal returns at once -- so without this the attempts all land
 #           inside the same millisecond and there is no retry window at all.
-DXG_IDENTITY_CAP=30
-DXG_IDENTITY_WINDOW=90
-DXG_IDENTITY_PAUSE=10
+GUEST_IDENTITY_CAP=30
+GUEST_IDENTITY_WINDOW=90
+GUEST_IDENTITY_PAUSE=10
 
 # The wake-lab box whose lock covers an ssh alias. The real ones -- both of each GPU box's boots,
 # its native Ubuntu and its WSL guest -- are named rather than derived, so a renamed alias fails
@@ -383,11 +384,26 @@ cu_device_primary_ctx_retain
 cu_module_load_data_ex
 cu_stream_create_with_priority'
 
-# Either the name list or the kernel's own evidence (dxg_window_red, which reads
-# the unit's collected-evidence sidecar and answers only to a positive count). The second arm is what lets a
+# The runtime ASSERTIONS that mean the same thing, for a refusal the runtime does not report as an
+# error at all but dies of. On a native boot, a HIP process whose SDMA queue KFD refused goes on
+# into ROCr's scratch teardown and aborts there -- the 2026-09-23 ladder lost `schedule_conv_gemm`
+# at dune's default width to exactly this, beside the kernel's `No more SDMA queue to allocate`
+# (gh-ocannl-1029), as one log line:
+#   schedule_conv_gemm.exe: ./runtime/hsa-runtime/core/runtime/amd_gpu_agent.cpp:2003: virtual void
+#   rocr::AMD::GpuAgent::ReleaseQueueMainScratch(rocr::AMD::ScratchInfo&): Assertion
+#   `scratch.main_queue_base' failed.
+# The kernel window counts the refusal itself; this is the half that lands in the unit's LOG, which
+# keeps the rerun when the window could not be read. Keyed as glibc prints a failed assert --
+# `<prog>: <file>:<line>: <function>: Assertion `<expr>' failed.` -- with the function as the
+# entry, so an unrelated assertion in the same runtime is not caught by it.
+ENVIRONMENT_ASSERTIONS='GpuAgent::ReleaseQueueMainScratch'
+
+# Either the name lists or the kernel's own evidence (window_red, which reads the unit's
+# collected-evidence sidecar and answers only to a positive count). The kernel arm is what lets a
 # call site nobody has seen yet -- or a failure with no exception name at all,
 # such as the SEGV the 2026-09-15 minix runs produced -- get its serial rerun on
-# the FIRST miss instead of after one (gh-ocannl-979). The rerun's `still red` /
+# the FIRST miss instead of after one (gh-ocannl-979), behind a WSL boot's bridge and on a native
+# boot's GPU drivers alike (gh-ocannl-1034). The rerun's `still red` /
 # `all clean` verdict remains the judge either way: this decides that the unit is
 # rerun, never that its failures were the environment's.
 environment_red() { # log
@@ -395,7 +411,11 @@ environment_red() { # log
   while IFS= read -r name; do
     [ -n "$name" ] && grep -q "^Fatal error: exception $name:" "$1" && return 0
   done <<<"$ENVIRONMENT_REFUSALS"
-  dxg_window_red "$1" && return 0
+  while IFS= read -r name; do
+    [ -n "$name" ] &&
+      grep -qE "^[^ ]+: [^ ]+:[0-9]+: .*${name}.*: Assertion .* failed\.$" "$1" && return 0
+  done <<<"$ENVIRONMENT_ASSERTIONS"
+  window_red "$1" && return 0
   return 1
 }
 
@@ -886,7 +906,7 @@ loaded_rtc_cmd() {
 # redirection would reach the terminal at once, unlabelled and ahead of the unit's
 # block, while the WARNING that names the unit waits for that block's flush. The
 # `2>/dev/null` goes BEFORE each redirection it covers, which is processed first.
-publish_dxg_sidecar() { # sidecar log writer args... -- stdin is the writer's
+publish_window_sidecar() { # sidecar log writer args... -- stdin is the writer's
   local sidecar=$1 log=$2
   shift 2
   "$@" 2>/dev/null >"$sidecar.stage.$$" && mv "$sidecar.stage.$$" "$sidecar" 2>/dev/null || {
@@ -903,20 +923,20 @@ publish_dxg_sidecar() { # sidecar log writer args... -- stdin is the writer's
 # the unavailable marker, since the staged write is what failed; if even that
 # cannot be written, the disk is gone and the only honest thing left is to say so
 # where a human reads the run.
-publish_dxg_unavailable_fallback() { # sidecar log reason label [boot-verdict]
-  dxg_window_unavailable - - "$3" "${5:-}" 2>/dev/null >"$2.dxg-fallback.$$" &&
-    mv "$2.dxg-fallback.$$" "$1" 2>/dev/null && {
-      cat "$1" 2>/dev/null >>"$2"
+publish_window_unavailable_fallback() { # kind sidecar log reason label [boot-verdict]
+  window_unavailable "$1" - - "$4" "${6:-}" 2>/dev/null >"$3.window-fallback.$$" &&
+    mv "$3.window-fallback.$$" "$2" 2>/dev/null && {
+      cat "$2" 2>/dev/null >>"$3"
       return 0
     }
-  rm -f "$2.dxg-fallback.$$"
-  say "  $4: WARNING -- could not record the dxg window ($3); its record fields say no window"
+  rm -f "$3.window-fallback.$$"
+  say "  $5: WARNING -- could not record the $1 window ($4); its record fields say no window"
   return 1
 }
 
 # Which guest is on the box now, or nothing if it could not be asked inside the window.
 #
-# Written to a file rather than captured in a command substitution, for the reason collect_dxg_window
+# Written to a file rather than captured in a command substitution, for the reason collect_kernel_window
 # gives about its own query: a substitution runs in a SUBSHELL, so the UNIT_PID that `run_capped`
 # publishes there is invisible to the lane -- a cancellation could then neither relay TERM to the
 # supervisor nor reap it, and it would hold the inherited locks until its own cap expired. The
@@ -927,28 +947,31 @@ publish_dxg_unavailable_fallback() { # sidecar log reason label [boot-verdict]
 # function that printed it would have to be called in a command substitution, which is the very
 # subshell this is avoiding. GUEST_ID carries it for a caller that wants one line instead.
 remote_guest_id() { # host scratch-path -- leaves the boot id in the file, and in $GUEST_ID
-  local host=$1 probe=$2 deadline=$(( SECONDS + DXG_IDENTITY_WINDOW ))
+  local host=$1 probe=$2 deadline=$(( SECONDS + GUEST_IDENTITY_WINDOW ))
   GUEST_ID=
   while :; do
-    run_capped "$DXG_IDENTITY_CAP" ssh -o BatchMode=yes -o ConnectTimeout=8 \
+    run_capped "$GUEST_IDENTITY_CAP" ssh -o BatchMode=yes -o ConnectTimeout=8 \
       "$host" 'cat /proc/sys/kernel/random/boot_id 2>/dev/null' >"$probe" 2>/dev/null
     read -r GUEST_ID < "$probe" 2>/dev/null || GUEST_ID=
     [ -n "$GUEST_ID" ] && return 0
     [ "$SECONDS" -ge "$deadline" ] && return 0
-    run_capped "$(( DXG_IDENTITY_PAUSE + 5 ))" sleep "$DXG_IDENTITY_PAUSE"
+    run_capped "$(( GUEST_IDENTITY_PAUSE + 5 ))" sleep "$GUEST_IDENTITY_PAUSE"
   done
 }
 
-collect_dxg_window() { # host log remote-start-epoch label start-boot-id
-  local host=$1 log=$2 remote_start=$3 label=$4 start_boot=${5:-}
+# The kind (window_kind_of: `dxg` or `native`) picks the query and the filter; everything else --
+# the bounds, the boot comparison, the publication and its fallbacks -- is the same for both.
+collect_kernel_window() { # kind host log remote-start-epoch label start-boot-id
+  local kind=$1 host=$2 log=$3 remote_start=$4 label=$5 start_boot=${6:-}
   local kernel rc bounds start_utc end_utc sidecar end_boot boot=unknown
-  sidecar=$(dxg_sidecar "$log")
+  sidecar=$(window_sidecar "$log")
   # No start instant from the box means no window to bound. Reported as a failed
   # collection, which is what it is, rather than guessed.
   if [ -z "$remote_start" ]; then
-    publish_dxg_sidecar "$sidecar" "$log" dxg_window_unavailable - - \
+    publish_window_sidecar "$sidecar" "$log" window_unavailable "$kind" - - \
       "no clock reading from $host" ||
-      publish_dxg_unavailable_fallback "$sidecar" "$log" "no clock reading from $host" "$label"
+      publish_window_unavailable_fallback "$kind" "$sidecar" "$log" \
+        "no clock reading from $host" "$label"
     return 0
   fi
   # Written to a file rather than captured in a command substitution, which runs
@@ -956,16 +979,16 @@ collect_dxg_window() { # host log remote-start-epoch label start-boot-id
   # lane, so a cancellation could neither relay TERM to this supervisor nor reap
   # it, and it would hold the inherited lock until its own cap expired. The
   # unit's own ssh calls document the same trap.
-  kernel=$log.dxg.$$
+  kernel=$log.window.$$
   run_capped "$(( CONTEXT_CAP + 60 ))" ssh -o BatchMode=yes -o ConnectTimeout=8 \
     -o ServerAliveInterval=30 -o ServerAliveCountMax=4 \
-    "$host" "$(remote_capped "$CONTEXT_CAP" "$(dxg_window_cmd "$remote_start")")" \
+    "$host" "$(remote_capped "$CONTEXT_CAP" "$(window_cmd "$kind" "$remote_start")")" \
     >"$kernel" 2>/dev/null
   rc=$?
   # The bounds the REMOTE used, in its own clock domain -- the only one the log's
   # timestamps are in. Reported rather than recomputed here, so the block and the
   # record row name the window that was actually queried.
-  bounds=$(sed -n 's/^dxg-window-bounds \([0-9][0-9]*\) \([0-9][0-9]*\)$/\1 \2/p' \
+  bounds=$(sed -n 's/^window-bounds \([0-9][0-9]*\) \([0-9][0-9]*\)$/\1 \2/p' \
     "$kernel" 2>/dev/null | head -1)
   # Which guest answered THIS collection, against the one the unit started on. The
   # comparison is three-valued on purpose: `replaced` is a finding, `same` is a
@@ -973,7 +996,7 @@ collect_dxg_window() { # host log remote-start-epoch label start-boot-id
   # report one is exactly as trustworthy as it was before this check existed, and
   # turning that into an alarm would retire a working window on every host whose
   # kernel does not publish the file.
-  end_boot=$(sed -n 's/^dxg-window-boot \(.*\)$/\1/p' "$kernel" 2>/dev/null | head -1)
+  end_boot=$(sed -n 's/^window-boot \(.*\)$/\1/p' "$kernel" 2>/dev/null | head -1)
   # A collection that failed leaves no boot id, and the guest most likely to refuse it is exactly
   # the one this exists to catch: a replacement drops the unit's connection the moment the old VM
   # dies, and the new one is often still starting when the collector arrives. So ask the cheap
@@ -1013,29 +1036,30 @@ collect_dxg_window() { # host log remote-start-epoch label start-boot-id
   # trigger exists to catch.
   # The block is written to the SIDECAR, which is the collector's own channel and
   # the only one the trigger, the fingerprint and the record read, and copied into
-  # the log for whoever reads that. See dxg_sidecar for why provenance cannot come
+  # the log for whoever reads that. See window_sidecar for why provenance cannot come
   # from the log itself.
   if [ "$rc" -ne 0 ]; then
     rm -f "$kernel"
-    publish_dxg_sidecar "$sidecar" "$log" dxg_window_unavailable "$start_utc" "$end_utc" \
+    publish_window_sidecar "$sidecar" "$log" window_unavailable "$kind" "$start_utc" "$end_utc" \
       "kernel log unreadable on $host (exit $rc)" "$boot" ||
-      publish_dxg_unavailable_fallback "$sidecar" "$log" \
+      publish_window_unavailable_fallback "$kind" "$sidecar" "$log" \
         "kernel log unreadable on $host (exit $rc)" "$label" "$boot"
   else
     # Filtered HERE rather than on the far side: the filter is the part with a
     # judgement in it, so it belongs where a fixture can feed it lines directly
     # instead of behind an ssh no test can reach. The publication's status is read
     # BEFORE the cleanup below, which would otherwise replace it with its own.
-    publish_dxg_sidecar "$sidecar" "$log" dxg_window_summary "$start_utc" "$end_utc" "$boot" <"$kernel"
+    publish_window_sidecar "$sidecar" "$log" window_summary "$kind" "$start_utc" "$end_utc" "$boot" \
+      <"$kernel"
     rc=$?
     rm -f "$kernel"
     [ "$rc" -eq 0 ] ||
-      publish_dxg_unavailable_fallback "$sidecar" "$log" \
+      publish_window_unavailable_fallback "$kind" "$sidecar" "$log" \
         "the collected window could not be published" "$label" "$boot"
   fi
 }
 
-# Collect a remote GPU unit's dxg window and say what it shows about the guest.
+# Collect a remote GPU unit's kernel window and say what it shows about the guest.
 #
 # Factored out because it has to happen on EVERY path that ends a remote unit, not only the one
 # that ran dune. A guest replaced during the up-to-600s remote PREPARATION ends the unit through
@@ -1046,33 +1070,35 @@ collect_dxg_window() { # host log remote-start-epoch label start-boot-id
 # Called BEFORE write_fingerprint on each path, so the fingerprint carries the window: a replaced
 # guest is part of what distinguishes this failure from the same failure on a healthy box.
 finish_remote_window() { # machine backend host log outcome remote-start-epoch start-boot-id
-  local machine=$1 backend=$2 host=$3 log=$4 outcome=$5 remote_start=$6 start_boot=$7
+  local machine=$1 backend=$2 host=$3 log=$4 outcome=$5 remote_start=$6 start_boot=$7 kind=
   REMOTE_GUEST_REPLACED=0
   # A local unit has no remote guest, and a unit that never ran (`skip`) has nothing to account for.
   [ -n "$host" ] || return 0
   case $outcome in skip) return 0 ;; esac
-  # The dxg WINDOW is GPU-only -- the bridge is what /dev/dxg is, so minix's multidev_cc (CPU, on a
-  # WSL box) would only ever collect another unit's noise -- but the GUEST is not. multidev_cc runs
-  # in the same replaceable VM as hip, so a replacement takes it down just the same, and before
-  # this it was recorded as a bare `error` with nothing saying the machine had gone. The two
-  # questions are separate and only one of them is about the bridge, so only one of them is gated
-  # on the backend.
+  # The kernel WINDOW is GPU-only -- its evidence is the device's (the bridge that /dev/dxg is, or
+  # a native boot's GPU drivers), so minix's multidev_cc (CPU) would only ever collect another
+  # unit's noise -- but the GUEST is not. multidev_cc runs in the same replaceable VM as hip, so a
+  # replacement takes it down just the same, and before this it was recorded as a bare `error` with
+  # nothing saying the machine had gone. The two questions are separate and only one of them is
+  # about the device, so only one of them is gated on the backend.
+  #
+  # WHICH window is the unit's transport's (window_kind_of, gh-ocannl-1034): the destination the
+  # sweep reached the box through names its boot, so a `-wsl` unit reads the bridge and a `-linux`
+  # one its GPU drivers. A transport with no kind collects nothing and records `-`: it is not a
+  # failed collection, and `unavailable` there would be noise on every GPU unit it ran.
   case $backend in
-    cuda | hip)
-      collect_dxg_window "$host" "$log" "$remote_start" "$machine/$backend" "$start_boot"
-      ;;
-    *)
-      # No sidecar for a non-GPU unit: the dxg channel is the bridge's, and writing one here would
-      # make a CPU unit environment-red through dxg_window_red and put a bridge verdict in its
-      # record row. The identity answer is reported below instead, which is the part an operator
-      # acts on.
-      if [ -n "$start_boot" ]; then
-        remote_guest_id "$host" "$log.boot.$$"
-        [ -n "$GUEST_ID" ] && [ "$GUEST_ID" != "$start_boot" ] && REMOTE_GUEST_REPLACED=1
-        rm -f "$log.boot.$$"
-      fi
-      ;;
+    cuda | hip) kind=$(window_kind_of "$host") ;;
   esac
+  if [ -n "$kind" ]; then
+    collect_kernel_window "$kind" "$host" "$log" "$remote_start" "$machine/$backend" "$start_boot"
+  elif [ -n "$start_boot" ]; then
+    # No sidecar for a unit with no window kind: writing one would make a CPU unit environment-red
+    # through window_red and put a device verdict in its record row. The identity answer is
+    # reported below instead, which is the part an operator acts on.
+    remote_guest_id "$host" "$log.boot.$$"
+    [ -n "$GUEST_ID" ] && [ "$GUEST_ID" != "$start_boot" ] && REMOTE_GUEST_REPLACED=1
+    rm -f "$log.boot.$$"
+  fi
   # A replaced guest on an outcome that cannot be rerun. `vm-replaced` makes a unit
   # environment-red, and on a `fail` that is the whole story: serial_rerun reads the window and the
   # unit gets its second run. On an `error` -- which is what a mid-unit replacement actually
@@ -1089,7 +1115,7 @@ finish_remote_window() { # machine backend host log outcome remote-start-epoch s
   # (gh-ocannl-792) -- a finding that lives only in a written file is one nobody reads.
   case $outcome in
     error | timeout)
-      { [ "$REMOTE_GUEST_REPLACED" = 1 ] || dxg_guest_replaced "$log"; } &&
+      { [ "$REMOTE_GUEST_REPLACED" = 1 ] || window_guest_replaced "$log"; } &&
         say "  $machine/$backend: the guest was REPLACED mid-unit -- this unit tested nothing, and its result is about the box, not the code; rerun it (reruns are incremental)"
       ;;
   esac
@@ -1389,10 +1415,14 @@ run_rows() { # -> machine, backend, outcome, log for each row of this run
 # owed at all: before that nothing has been swept and the absence is the signal.
 write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-run-failed
   local kind=$1 unit machine backend host outcome log stopped stage rows
-  local window window_start window_end bursts
+  local window window_start window_end bursts window_kind_field
   stage=$RUN_RECORD.stage.$$
   rows=$(run_rows) || return 1
   {
+    # Schema 4: the `unit` row gained a tenth field, the window's KIND (`dxg`, `native`, or `-`),
+    # when a native boot got a window of its own (gh-ocannl-1034). The count beside it now means
+    # lost bridge messages for one kind and refused GPU queues for the other, so a schema-3 reader
+    # -- to which every count is a `vmbus_sendpacket` count -- would mis-read a native one.
     # Schema 3: that count gained a fourth value, `vm-replaced` (a guest that
     # was destroyed and recreated mid-window). A schema-2 consumer's contract
     # permits only `-`, a number and `unavailable`, so a strict one would reject
@@ -1402,7 +1432,7 @@ write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-r
     # row without it would make a strict schema-1 reader reject a current record
     # and a dxg-aware reader mis-read a historical one. The unit-STATE files below
     # keep their own schema 1: different file, different contract.
-    printf 'schema\t3\n'
+    printf 'schema\t4\n'
     printf 'run\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$stamp" "$run_sha" "$REF" "${TARGET:-<all>}" "$SLOW" "$execution" "$kind"
     for unit in "${UNITS[@]}"; do
@@ -1428,17 +1458,19 @@ write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-r
         outcome=${outcome%%$'\t'*}
         [ -n "$log" ] || log=-
       fi
-      # The unit's dxg window and burst count (gh-ocannl-979), read from the log
-      # the row names -- the only artifact that holds them, and one this row
-      # already points at, so no third place can disagree. `-` for a unit with
-      # no window: a local one, or one that never ran.
+      # The unit's kernel window, its count (gh-ocannl-979) and the window's kind
+      # (gh-ocannl-1034), read from the log the row names -- the only artifact that
+      # holds them, and one this row already points at, so no third place can
+      # disagree. `-` for a unit with no window: a local one, one that never ran,
+      # or one whose transport has no window kind.
       # From the unit's collected-evidence sidecar, never from its log: a log
-      # holds whatever the unit's tests printed (see dxg_sidecar).
+      # holds whatever the unit's tests printed (see window_sidecar).
       window_start=-
       window_end=-
       bursts=-
+      window_kind_field=-
       if [ "$log" != - ]; then
-        window=$(dxg_window_bounds "$log")
+        window=$(window_bounds "$log")
         if [ -n "$window" ]; then
           window_start=${window%% *}
           window_end=${window##* }
@@ -1447,12 +1479,14 @@ write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-r
           # "not collected" and "collected and clean" mean opposite things. A
           # collection that failed before the box reported its bounds writes `-`
           # for both of those and `unavailable` here, which is still that state.
-          bursts=$(dxg_bursts "$log")
+          bursts=$(window_count "$log")
           [ -n "$bursts" ] || bursts=-
+          window_kind_field=$(window_kind "$log")
+          [ -n "$window_kind_field" ] || window_kind_field=-
         fi
       fi
-      printf 'unit\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$machine" "$backend" \
-        "$outcome" "$stopped" "$log" "$window_start" "$window_end" "$bursts"
+      printf 'unit\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$machine" "$backend" \
+        "$outcome" "$stopped" "$log" "$window_start" "$window_end" "$bursts" "$window_kind_field"
     done
     for unit in "${UNITS[@]}"; do
       IFS=: read -r machine backend host <<<"$unit"
@@ -1586,8 +1620,8 @@ fingerprint() {
   # vector then shows up as a diff beside the failure it explains, which is the
   # whole point (gh-ocannl-784).
   sed -n '/^=== rtc-context /,/^=== end rtc-context ===$/p' "$1" 2>/dev/null | head -40
-  # The dxg window's STABLE half (dxg_fingerprint_lines): which signatures the
-  # window held, and whether the bridge was losing messages at all. Not the block
+  # The kernel window's STABLE half (window_fingerprint_lines): which signatures the
+  # window held, and whether the device was being refused at all. Not the block
   # verbatim -- the window instants, the kernel timestamps and the exact count all
   # differ between two equally broken runs, and a fingerprint is compared bytewise
   # against the previous failure's, so the verbatim block would report `fingerprint
@@ -1596,12 +1630,12 @@ fingerprint() {
   # window and count are fields of the run record.
   # UNCAPPED, unlike everything above it, and deliberately: this list is already
   # deduplicated, so it is bounded by the number of distinct kernel message shapes
-  # the bridge can produce -- a handful, where the raw lines it summarises run to
+  # the bridge or the drivers can produce -- a handful, where the raw lines it summarises run to
   # hundreds. A cap here would drop exactly what the list exists for, a signature
   # never seen before, and would do it to the lexicographically last ones, which is
   # no one's idea of the least interesting. The verdict follows them for the reason
   # the serial rerun's line does: it is the one line that must survive.
-  dxg_fingerprint_lines "$1"
+  window_fingerprint_lines "$1"
   # The serial rerun's verdict (serial_rerun), after the sorted block and
   # outside its bound: which of the red stanzas stayed red on their own is the
   # first line a reader of an environment-red unit needs, and the one a
@@ -1967,7 +2001,7 @@ run_unit() { # machine backend host
     # long a cancellation can be delayed here, which is the reason that is
     # tolerable where a 900s preparation leg was not.
     # The probe reads the remote's CLOCK as well as its home, on the same round
-    # trip. The dxg window's start has to be an instant in the clock that
+    # trip. The kernel window's start has to be an instant in the clock that
     # timestamps that box's kernel log, and this is the moment the unit begins on
     # it; deriving it later by subtracting a locally measured duration assumes the
     # remote clock advanced continuously meanwhile, which is the assumption a WSL
@@ -2136,14 +2170,14 @@ run_unit() { # machine backend host
     printf '%s\n' "$log" >"$LANE_DIR/skip-run.$machine.$backend" ||
       die "cannot stage skip evidence for $machine/$backend"
   fi
-  # The kernel's own dxg evidence for THIS unit's window, before the rerun
+  # The kernel's own evidence for THIS unit's window, before the rerun
   # decision that reads it -- and before the RTC diagnostics below, which is not
   # mere ordering: `nvidia-smi` and `rocminfo` cross /dev/dxg themselves, so a
   # window whose end were taken after them could count the DIAGNOSTIC's lost
   # messages as the unit's and mark a plainly test-logic failure environment-red.
   # The end bound is the remote's clock at this point, so those fall outside it.
-  # Remote GPU units only: the bridge is what /dev/dxg is, so a local unit has no
-  # window and minix's multidev_cc -- CPU, on a WSL box -- would only ever collect
+  # Remote GPU units only, and of the kind their transport names (finish_remote_window):
+  # a local unit has no window and minix's multidev_cc -- CPU -- would only ever collect
   # another unit's noise. A unit that never ran (`skip`) has no window either.
   # The window's start is the remote's own clock at the unit's beginning, read by the
   # reachability probe; its end is that same clock at collection time. Both ends therefore come
