@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       windows_only:
-        description: "Windows main/training only, for a change that needs Windows signal"
+        description: "Fallback: Windows main/training only, when no box booted into Windows is available"
         type: boolean
         default: false
       expected_sha:
@@ -69,9 +69,8 @@ jobs:
         # are about line endings, float formatting and the mingw toolchain
         # rather than about the change under review. It runs instead on the
         # independent schedule above. Manual dispatch defaults to Linux/macOS;
-        # select windows_only explicitly when a change needs Windows signal
-        # (AGENTS.md, Windows verification placement), never as a routine PR
-        # gate.
+        # select windows_only explicitly as the fallback AGENTS.md's Windows
+        # verification placement names, never as a routine PR gate.
         #
         # Scheduled runs carry ubuntu and macOS too, distinguishing
         # "Windows drifted" from "master is broken". Windows-only dispatch runs only

@@ -1831,20 +1831,18 @@ that they earn a lookup rather than always-loaded space.
 - Windows CI runs independently on the twice-weekly schedule, together with an ubuntu job
   on the OCaml floor the opam files claim (`>= 5.3.0`, against 5.5 everywhere else).
   PR, push and ordinary `workflow_dispatch` runs use the Linux/macOS matrix.
-  When a change needs Windows signal that matters (it fixes a Windows failure, or changes
-  behavior only Windows exercises: line endings, float formatting in `.expected` goldens, the
-  mingw cc toolchain), dispatch `ci.yml` on the chosen branch with
+  When a change needs Windows signal, AGENTS.md's *Windows verification placement* says where it
+  comes from: a box the user boots into Windows first, this dispatch as the fallback. On a booted
+  Windows host, use native Git Bash in an isolated checkout of the intended commit, source
+  `tools/opam-env.sh`, and run the relevant aliases through `tools/test-run.sh`, keeping host,
+  SHA, command and exit sentinel as evidence; WSL does not establish native Windows coverage.
+  The fallback dispatches `ci.yml` on the chosen branch with
   `windows_only: true` and the full `expected_sha`; this opt-in runs only Windows main/training,
   without duplicating Linux/macOS, formatting or floor jobs. Each job rejects a missing or
   mismatched intended SHA before dependency setup. Verify the run's `head_sha` and both jobs'
   executed results before counting that evidence; an existing commit needs no new push.
   Do not wait for the independent scheduled sweep to merge a PR. Ordinary current-head PR checks
-  remain required. An issue whose core development centers on Windows is not iterated through
-  dispatches: stop and notify the user, since the fleet's Windows hosts (`rog-nv-win`,
-  `minix-amd-win`) boot Ubuntu and rebooting one is the user's to do. On a booted Windows host,
-  use native Git Bash in an isolated checkout of the intended commit, source `tools/opam-env.sh`,
-  and run the relevant aliases through `tools/test-run.sh`, keeping host, SHA, command and exit
-  sentinel as evidence; WSL does not establish native Windows coverage.
+  remain required.
   `test/operations/ci_matrix.sh` evaluates the actual matrix expressions,
   pins the opt-in default and trigger separation, and exercises the dispatch commit guard.
   Twice weekly rather than weekly because actions/cache evicts entries unread for 7 days, and an
