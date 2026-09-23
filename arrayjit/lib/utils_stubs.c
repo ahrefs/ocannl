@@ -12,6 +12,7 @@
 #include <string.h>
 
 #if !defined(_WIN32)
+#include <fcntl.h>
 #include <unistd.h>
 #endif
 
@@ -64,7 +65,21 @@ CAMLprim value ocannl_detach_c_stderr(value unit) {
     int fd;
     FILE *replacement;
     if (detached) return Val_true;
-    fd = dup(fileno(stderr));
+    /* Close-on-exec: this descriptor is the PARENT's stderr, and a child that inherited it would
+       hold the write end of the parent's stderr pipe open -- a log collector waiting for EOF then
+       waits for a descriptor nobody writes to, and a caller redirecting the child's streams has
+       lost the isolation it asked for. F_DUPFD_CLOEXEC sets it in the dup itself, leaving no
+       window where a concurrent fork/exec inherits it; where the constant is missing the two-step
+       fallback still closes the leak for every exec but a racing one. */
+#ifdef F_DUPFD_CLOEXEC
+    fd = fcntl(fileno(stderr), F_DUPFD_CLOEXEC, 3);
+#else
+    fd = -1;
+#endif
+    if (fd == -1) {
+      fd = dup(fileno(stderr));
+      if (fd != -1) (void)fcntl(fd, F_SETFD, FD_CLOEXEC);
+    }
     if (fd == -1) return Val_false;
     replacement = fdopen(fd, "w");
     if (replacement == NULL) {
