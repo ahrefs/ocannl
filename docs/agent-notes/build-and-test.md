@@ -1886,7 +1886,7 @@ that they earn a lookup rather than always-loaded space.
   and renamed, so still atomic), which needs no symlink privilege on any platform. Reach for a
   pointer file, not a symlink, in anything that must work from Git Bash.
 - `tools/sweep.sh` is the coverage for every backend CI does not run: cc and metal locally
-  (the macOS host), cuda on rog, hip and then multidev_cc on minix, all pinned
+  (the macOS host), cuda on rog, hip and then multidev_cc on minix, and hip again on tuf, all pinned
   to ONE resolved commit so a mid-sweep merge cannot leave the machines testing different trees.
   The two GPU boxes are dual-boot, so a remote unit's ssh destination is resolved per run from the
   site's wake-lab host table (`kind_of rog` → `linux` means `rog-nv-linux`, `wsl` means
@@ -1915,11 +1915,49 @@ that they earn a lookup rather than always-loaded space.
   `~/.ocannl-sweep/history.tsv` and never
   exits non-zero for test failures — its exit code is not a verdict, the history file is. A daily
   scheduled task drives it.
+- **hip runs twice, once on each side of the unified/discrete line** (gh-ocannl-1035): minix's
+  gfx1151 is an iGPU whose device memory IS host memory, so a missing or misplaced host↔device
+  transfer can read the right bytes there, and only tuf-amd-linux's discrete RX 7700S (gfx1102)
+  exposes it (ludics-lite#320). `--only hip` selects both units; each is its own row, keyed by
+  machine, and `known_backends` lists hip once. tuf is a single-boot Wi-Fi laptop the caller cannot
+  wake (its own `WakeSystem=true` timer does, from self-improve's Linux bootstrap, or a person), so
+  its lane is **gated** (`lab_box_gated`): it asks `wake-lab.sh status tuf` (`OCANNL_TOOL_SWEEP_WAKE_LAB`
+  moves the script) before reserving or dialling anything, and a box not at `linux=UP` — or one
+  that answered status and then not the unit — records outcome `gate`, not `skip`: nothing tested,
+  and nothing the caller was expected to repair. A lane that reached tuf ends with
+  `wake-lab.sh sleep tuf`, AFTER closing its own lane lock (wake-lab's power verbs take the box's
+  lane lock and would be refused by the lane asking); a refusal (an inhibitor, another session's
+  lock) is reported as `left awake, not a failure`. A lane that reached tuf and then stopped early
+  (cancelled, or its own `die`) asks from its EXIT trap instead, detached (`setsid`, so the group
+  TERM that cancelled the run does not take it) into `logs/<stamp>-tuf-sleep.log`; the relay stops
+  taking signals once the unit is reaped, since the top level's own relayed TERM would otherwise
+  end the lane inside that trap. A cancelled top level does not order its exit after its lanes',
+  so the lane's line saying so is best-effort and the log is the record. Its width is `BOX_JOBS_TUF_HIP_CAP` (2), a
+  conservative placeholder until lukstafi/ludics-lite#344 measures it. A single-boot box needs no
+  `kind_of`: `lab_dest` returns its one alias, so a site table that does not describe tuf refuses
+  nothing.
+- **A native lane's work legs hold a logind sleep inhibitor** (gh-ocannl-1035). Every far-side leg
+  that takes the worktree lock — preparation, the suite, the RTC context, the serial rerun — runs
+  under the perl supervisor's `--hold <why>` on a `-linux` destination (`sleep_guard_why`), so
+  another session's `wake-lab.sh sleep`, or a laptop's idle policy, is refused by the OS while a
+  unit runs; `systemd-inhibit --list` names it `ocannl-sweep` with `ocannl sweep <stamp>
+  <machine>/<backend> <leg>`. A `-wsl` leg takes none (a guest's inhibitor cannot hold its Windows
+  host; the Windows-side holder does). The guard is fleet-worker.sh's `execution hold` design — an
+  inhibitor HELPER beside the unit on a lifetime pipe the unit's tree inherits, never
+  `systemd-inhibit -- <unit>`, which closes fd 9 (the worktree lock), rewrites a signal death to
+  exit 1, and is what an ssh drop hangs up on — restated in the supervisor rather than called:
+  tuf's skills checkout was at a revision with no `execution hold` on 2026-09-23 (a box outside the
+  worker roster is never refreshed by the fleet's preflight), where calling it would have filed
+  every unit as a red suite. Fail-open and loud: a missing inhibitor or polkit grant writes
+  `sweep-hold: WARNING` into the log and the unit's summary line says `ran WITHOUT a sleep guard`.
+  The harness runs the extracted supervisor against fake inhibitors (held for exactly the unit's
+  lifetime, refused, absent, not asked). Residual: the seconds BETWEEN legs are unguarded.
 - **The per-run record `~/.ocannl-sweep/logs/<stamp>-run.tsv` is what a consumer reads; the stdout
   summary is for humans** (gh-ocannl-977). Its absence is itself a verdict: a run that refused at
   startup swept nothing and writes no record, which is what distinguishes that exit 2 from a
-  lane-stopped one. Tab-separated kind-tagged rows follow a `schema` line — **4** since the `unit`
-  row gained the window's kind (gh-ocannl-1034); **3** gave the count its fourth value
+  lane-stopped one. Tab-separated kind-tagged rows follow a `schema` line — **5** since the `unit`
+  row gained the memory model and its outcome the value `gate` (gh-ocannl-1035); **4** gave the
+  `unit` row the window's kind (gh-ocannl-1034); **3** gave the count its fourth value
   (`vm-replaced`); **2** added the dxg fields to the `unit` row, and a
   consumer picks its parser from that number (the per-unit *state*
   files under `unit-state/` carry an unrelated schema 1 of their own) — and the sweep prints the
@@ -1962,9 +2000,14 @@ that they earn a lookup rather than always-loaded space.
     per-unit channel: any second channel can disagree with the history in both directions, and no
     ordering of the two writes survives a signal landing between them, so the row is the evidence. A lane publishes a completion marker as its last act,
     so the flag covers a lane's own `die` and a relayed signal alike, and a stopped lane's earlier
-    units keep their real rows (minix records hip before it stops on multidev_cc).
+    units keep their real rows (minix records hip before it stops on multidev_cc). The eleventh
+    field is the MEMORY model the unit exercised (`unit_memory`): `discrete/gfx1102` (tuf/hip),
+    `unified/gfx1151` (minix/hip), `discrete/sm_120` (rog-nv/cuda), `unified/apple` (metal), `-` for
+    a CPU unit — declared, not probed, since KFD reports `local_mem_size 0` for both AMD GPUs on
+    these kernels. It is how a consumer tells the two hip rows' coverage apart without knowing the
+    fleet's hardware.
   - `backend`: backend, machine. One per unit of the execution table whether or not this run
-    selected it — staleness must be aged against the box that runs a backend TODAY, or a pre-move
+    selected it (so hip has two, minix and tuf) — staleness must be aged against the box that runs a backend TODAY, or a pre-move
     box's passes certify a path that has never run there.
 - `timeout(1)` is not a portable group-killing bound, and the failure is silent in both directions.
   macOS ships none at all, which is why the repo reaches for `perl -e 'alarm N; exec @ARGV'`; and

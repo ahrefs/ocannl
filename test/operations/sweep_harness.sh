@@ -43,6 +43,10 @@ on_error() {
     dxg_many dxg_bounds dxg_no_trigger native_quiet_block native_red_a native_red_b \
     native_of_dxg dxg_of_native native_collection native_unit_linux native_unit_wsl \
     native_unit_cpu native_abort_run native_other_abort hold_lock_ok \
+    tuf_asleep tuf_no_wake_lab tuf_up tuf_unreachable tuf_inhibited tuf_sleep_fails \
+    tuf_unguarded tuf_unguarded_prep tuf_unguarded_wsl tuf_self_refusal tuf_cancelled \
+    guard_held guard_refused guard_stalled \
+    guard_absent \
     after_cancel; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
@@ -78,7 +82,9 @@ unset SWEEP_TEST_CALLS SWEEP_TEST_WAIT_PREFIX SWEEP_TEST_OPAM_RC \
   SWEEP_TEST_OPAM_SERIAL_RED SWEEP_TEST_OPAM_OUT_SERIAL SWEEP_TEST_SSH_CALLS \
   SWEEP_TEST_SSH_MODE SWEEP_TEST_OWN_GROUP SWEEP_TEST_WAIT_TICKS \
   SWEEP_TEST_HOSTS SWEEP_TEST_DEST_ROG SWEEP_TEST_DEST_MINIX \
-  SWEEP_TEST_KERNEL_LINES SWEEP_TEST_BOOT_ID
+  SWEEP_TEST_KERNEL_LINES SWEEP_TEST_BOOT_ID SWEEP_TEST_DEST_TUF SWEEP_TEST_WAKE_LAB \
+  SWEEP_TEST_WAKE_LAB_CALLS SWEEP_TEST_TUF_STATUS SWEEP_TEST_TUF_SLEEP SWEEP_TEST_HOLD_DENIED \
+  SWEEP_TEST_PREP_OK
 
 sweep=$1
 aggregate=$2
@@ -105,6 +111,7 @@ state=$tmp/state
 fake_bin=$tmp/bin
 calls=$tmp/opam.calls
 ssh_calls=$tmp/ssh.calls
+wake_lab_calls=$tmp/wake-lab.calls
 # Every fixture wait in this file -- the fake opam's hold, the fake ssh's
 # release and hang, and the harness's own readiness checks -- is bounded by
 # this many 50ms ticks. Each wait ends as soon as its condition holds, so the
@@ -223,7 +230,21 @@ cat >"$fake_bin/ssh" <<'EOF'
 printf '%s\n' "$*" >>"$SWEEP_TEST_SSH_CALLS"
 case ${SWEEP_TEST_SSH_MODE:-} in
   window)
+    # A far side whose supervisor could not take the sleep guard (no polkit grant) says so on the
+    # unit's stderr before the unit runs: for every guarded leg (`1`), or for the preparation alone
+    # (`prep`, a transient refusal). SWEEP_TEST_PREP_OK lets the preparation succeed, so the unit
+    # goes on to its suite (which this fake then refuses: a `fail`) and replaces the log.
     case $* in
+      *"-- --hold '"*)
+        case ${SWEEP_TEST_HOLD_DENIED:-}:$* in
+          1:* | prep:*" prep' "*)
+            echo 'sweep-hold: WARNING: running WITHOUT a sleep guard, so nothing at the OS level stops a suspend under this run -- fixture-inhibit refused: Access denied' >&2
+            ;;
+        esac
+        ;;
+    esac
+    case $* in
+      *"worktree prune"*) [ -n "${SWEEP_TEST_PREP_OK:-}" ] && exit 0 ;;
       *window-bounds*)
         now=$(date +%s)
         printf 'window-bounds %s %s\n' "$((now - 5))" "$((now + 1))"
@@ -233,6 +254,19 @@ case ${SWEEP_TEST_SSH_MODE:-} in
         ;;
       *'"$HOME"'*) printf '%s\n%s\n%s\n' "$HOME" "$(date +%s)" "$SWEEP_TEST_BOOT_ID"; exit 0 ;;
       *boot_id*) printf '%s\n' "$SWEEP_TEST_BOOT_ID"; exit 0 ;;
+    esac
+    ;;
+  hang-probe)
+    # The reachability probe itself never answers, so a cancellation lands inside it.
+    case $* in
+      *'"$HOME"'*)
+        : >"$SWEEP_TEST_WAIT_PREFIX.probing"
+        waited=0
+        while [ "$waited" -lt "$SWEEP_TEST_WAIT_TICKS" ]; do
+          sleep 0.05
+          waited=$((waited + 1))
+        done
+        ;;
     esac
     ;;
   release)
@@ -266,6 +300,61 @@ esac
 exit 1
 EOF
 chmod +x "$fake_bin/ssh"
+
+# The lab's power script, as the sweep uses it for its one gated box (gh-ocannl-1035): `status tuf`,
+# answered as the real script prints a box that is asleep (the default) or up at its Linux, and
+# `sleep tuf`, which -- as the real one does before any power verb -- first takes the box's LANE lock
+# and is refused while another holder has it. So a lane that asked for its own box's sleep while
+# still holding its reservation is refused by itself here, exactly as it would be in the lab. The
+# sleep's other outcomes are the real script's lines: done, refused by a block inhibitor, failed.
+cat >"$fake_bin/wake-lab.sh" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$SWEEP_TEST_WAKE_LAB_CALLS"
+case $1 in
+  status)
+    echo 'box    router-active   reached OS and ssh endpoint'
+    case ${SWEEP_TEST_TUF_STATUS:-down} in
+      up) echo 'tuf    router-active=?  os=linux  linux=UP  sleep-blocks=0' ;;
+      *) echo 'tuf    router-active=?  os=--  linux=--' ;;
+    esac
+    echo
+    echo 'sleep-blocks counts a native Linux box logind block inhibitors on sleep (listed under it):'
+    ;;
+  sleep)
+    mkdir -p "$WAKE_LAB_LOCK_DIR"
+    if ! perl -e 'use Fcntl ":flock"; open(my $h, ">>", $ARGV[0]) or exit 1;
+        exit(flock($h, LOCK_EX | LOCK_NB) ? 0 : 1)' "$WAKE_LAB_LOCK_DIR/$2.lock"; then
+      echo "  sleep REFUSED on $2: $(head -1 "$WAKE_LAB_LOCK_DIR/$2.lock")"
+      echo "sleep REFUSED on: $2 (a lab lock is held; wait for the holder, or --force to take the box anyway)"
+      exit 1
+    fi
+    echo "$2: sleep"
+    # `hang-once`: the FIRST request sits in its confirm-down until killed (a cancellation lands
+    # there), and any later one completes.
+    if [ "${SWEEP_TEST_TUF_SLEEP:-ok}" = hang-once ] && [ ! -e "$SWEEP_TEST_WAIT_PREFIX.slept-once" ]; then
+      : >"$SWEEP_TEST_WAIT_PREFIX.slept-once"
+      echo 'confirming...'
+      waited=0
+      while [ "$waited" -lt "$SWEEP_TEST_WAIT_TICKS" ]; do
+        sleep 0.05
+        waited=$((waited + 1))
+      done
+      exit 1
+    fi
+    case ${SWEEP_TEST_TUF_SLEEP:-ok} in
+      ok | hang-once) echo 'confirming...'; echo "$2=DOWN (07:00:00)" ;;
+      inhibited)
+        echo '  Operation inhibited by "fleet-worker" (PID 4242 "python3", user lukstafi), reason is "a correctness slot".'
+        echo "  sleep REFUSED on $2 by a block inhibitor (a run there holds it; see status)"
+        exit 1
+        ;;
+      *) echo "  sleep FAILED on $2 (command exited 5)"; exit 1 ;;
+    esac
+    ;;
+  *) exit 2 ;;
+esac
+EOF
+chmod +x "$fake_bin/wake-lab.sh"
 
 # Stand-ins for the site's wake-lab host table (gh-ocannl-1030), which is site data outside the
 # repository: the sweep sources it and asks `kind_of <box>` which boot -- native Ubuntu (`linux`) or
@@ -338,6 +427,13 @@ run_sweep_args() {
     "WAKE_LAB_HOSTS=${SWEEP_TEST_HOSTS:-$tmp/hosts-linux.sh}" \
     "OCANNL_TOOL_SWEEP_DEST_ROG=${SWEEP_TEST_DEST_ROG:-}" \
     "OCANNL_TOOL_SWEEP_DEST_MINIX=${SWEEP_TEST_DEST_MINIX:-}" \
+    "OCANNL_TOOL_SWEEP_DEST_TUF=${SWEEP_TEST_DEST_TUF:-}" \
+    "OCANNL_TOOL_SWEEP_WAKE_LAB=${SWEEP_TEST_WAKE_LAB-$fake_bin/wake-lab.sh}" \
+    "SWEEP_TEST_WAKE_LAB_CALLS=$wake_lab_calls" \
+    "SWEEP_TEST_TUF_STATUS=${SWEEP_TEST_TUF_STATUS:-down}" \
+    "SWEEP_TEST_TUF_SLEEP=${SWEEP_TEST_TUF_SLEEP:-ok}" \
+    "SWEEP_TEST_HOLD_DENIED=${SWEEP_TEST_HOLD_DENIED:-}" \
+    "SWEEP_TEST_PREP_OK=${SWEEP_TEST_PREP_OK:-}" \
     "PATH=$fake_bin:$PATH" \
     "SWEEP_TEST_CALLS=$calls" \
     "SWEEP_TEST_WAIT_PREFIX=${SWEEP_TEST_WAIT_PREFIX:-}" \
@@ -1133,7 +1229,10 @@ absent -- '-wsl' "$ssh_calls"
 : >"$ssh_calls"
 dest_wsl=$(SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh \
   run_sweep_args --only cuda --only hip --only multidev_cc --target dest-wsl-probe)
-grep -q '^destinations: rog-nv=rog-nv-wsl minix=minix-amd-wsl$' <<<"$dest_wsl"
+grep -q '^destinations: rog-nv=rog-nv-wsl minix=minix-amd-wsl tuf=tuf-amd-linux$' <<<"$dest_wsl"
+# tuf is single-boot, so the WSL table leaves it where it is -- and asleep (the fake's default), it
+# is a gate that dials nothing, which is why no `-linux` alias reaches the recorder below.
+grep -q '^  tuf/hip: gate (tuf not up: router-active=? os=-- linux=--)$' <<<"$dest_wsl"
 grep -q '^  rog-nv/cuda: skip (unreachable)$' <<<"$dest_wsl"
 grep -q '^  minix/hip: skip (unreachable)$' <<<"$dest_wsl"
 grep -q '^  minix/multidev_cc: skip (unreachable)$' <<<"$dest_wsl"
@@ -1147,7 +1246,7 @@ absent -- '-linux' "$ssh_calls"
 : >"$ssh_calls"
 rm -f "$tmp/lab-locks/rog.lock" "$tmp/lab-locks/minix.lock"
 dest_linux=$(run_sweep_args --only cuda --only hip --only multidev_cc --target dest-linux-probe)
-grep -q '^destinations: rog-nv=rog-nv-linux minix=minix-amd-linux$' <<<"$dest_linux"
+grep -q '^destinations: rog-nv=rog-nv-linux minix=minix-amd-linux tuf=tuf-amd-linux$' <<<"$dest_linux"
 grep -q '^  rog-nv/cuda: skip (unreachable)$' <<<"$dest_linux"
 grep -q '^  minix/hip: skip (unreachable)$' <<<"$dest_linux"
 grep -q '^  minix/multidev_cc: skip (unreachable)$' <<<"$dest_linux"
@@ -1246,7 +1345,7 @@ grep -q ' rog-nv-linux ' "$ssh_calls"
 : >"$ssh_calls"
 dest_override_wins=$(SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh SWEEP_TEST_DEST_ROG=rog-nv-linux \
   run_sweep_args --only cuda --only hip --target dest-override-wins-probe)
-grep -q '^destinations: rog-nv=rog-nv-linux minix=minix-amd-wsl$' <<<"$dest_override_wins"
+grep -q '^destinations: rog-nv=rog-nv-linux minix=minix-amd-wsl tuf=tuf-amd-linux$' <<<"$dest_override_wins"
 absent ' rog-nv-wsl ' "$ssh_calls"
 absent ' minix-amd-linux ' "$ssh_calls"
 # An override must be one of ITS box's two canonical aliases, and anything else is refused: an
@@ -1541,7 +1640,7 @@ absent 'serial rerun' "${serial_control_log%.log}.fingerprint"
 lanes=$(SWEEP_TEST_WAIT_PREFIX=$tmp/lanes SWEEP_TEST_SSH_MODE=release \
   run_sweep_args --only cc --only metal --only cuda --only hip --only multidev_cc \
   --target lane-probe)
-grep -q '^lanes:  m4-max(cc,metal)  rog-nv(cuda)  minix(hip,multidev_cc)$' <<<"$lanes"
+grep -q '^lanes:  m4-max(cc,metal)  rog-nv(cuda)  minix(hip,multidev_cc)  tuf(hip)$' <<<"$lanes"
 grep -q '^  m4-max/cc: incremental-pass ' <<<"$lanes"
 grep -q '^  m4-max/metal: incremental-pass ' <<<"$lanes"
 grep -q '^  rog-nv/cuda: skip (unreachable)$' <<<"$lanes"
@@ -1625,7 +1724,7 @@ exec 6>&- 5>&-
 # unit, each under its own machine.
 [ "$(awk -F '\t' '$7 == "lane-probe" { print $2 "/" $3 ":" $5 }' "$state/history.tsv" | sort)" = \
   "$(printf '%s\n' m4-max/cc:incremental-pass m4-max/metal:incremental-pass \
-    minix/hip:skip minix/multidev_cc:skip rog-nv/cuda:skip | sort)" ]
+    minix/hip:skip minix/multidev_cc:skip rog-nv/cuda:skip tuf/hip:gate | sort)" ]
 
 # The run record (gh-ocannl-977). A complete run's record names the exit kind,
 # every selected unit's outcome with its lane's completion, and today's whole
@@ -1633,15 +1732,20 @@ exec 6>&- 5>&-
 # a consumer can age a backend's staleness against the box that owns it now.
 lanes_record=$(sed -n 's/^run:  *//p' <<<"$lanes")
 [ -f "$lanes_record" ]
-[ "$(head -1 "$lanes_record")" = "$(printf 'schema\t4')" ]
+[ "$(head -1 "$lanes_record")" = "$(printf 'schema\t5')" ]
 [ "$(awk -F '\t' '$1 == "run" { print $8 }' "$lanes_record")" = complete ]
 [ "$(awk -F '\t' '$1 == "run" { print $5 "\t" $6 }' "$lanes_record")" = \
   "$(printf 'lane-probe\t0')" ]
 [ "$(awk -F '\t' '$1 == "unit" { print $2 "/" $3 ":" $4 ":" $5 }' "$lanes_record" | sort)" = \
   "$(printf '%s\n' m4-max/cc:incremental-pass:0 m4-max/metal:incremental-pass:0 \
-    minix/hip:skip:0 minix/multidev_cc:skip:0 rog-nv/cuda:skip:0 | sort)" ]
+    minix/hip:skip:0 minix/multidev_cc:skip:0 rog-nv/cuda:skip:0 tuf/hip:gate:0 | sort)" ]
 [ "$(awk -F '\t' '$1 == "backend" { print $2 ":" $3 }' "$lanes_record")" = \
-  "$(printf '%s\n' cc:m4-max metal:m4-max cuda:rog-nv hip:minix multidev_cc:minix)" ]
+  "$(printf '%s\n' cc:m4-max metal:m4-max cuda:rog-nv hip:minix multidev_cc:minix hip:tuf)" ]
+# ...and the memory model each unit exercised: hip twice, once on each side of the unified/discrete
+# line, which is what the second hip unit is for.
+[ "$(awk -F '\t' '$1 == "unit" { print $2 "/" $3 ":" $11 }' "$lanes_record" | sort)" = \
+  "$(printf '%s\n' m4-max/cc:- m4-max/metal:unified/apple minix/hip:unified/gfx1151 \
+    minix/multidev_cc:- rog-nv/cuda:discrete/sm_120 tuf/hip:discrete/gfx1102 | sort)" ]
 # The log column points at the unit's own log, so a consumer needs no second
 # rule for reconstructing the path a row's diagnostics live in.
 [ -f "$(awk -F '\t' '$1 == "unit" && $3 == "cc" { print $6 }' "$lanes_record")" ]
@@ -2107,28 +2211,34 @@ native_kernel=$(printf '%s\n%s\n%s\n%s\n%s\n' "$native_quiet" "$dxg_benign" "$dx
 : >"$ssh_calls"
 native_unit_linux=$(SWEEP_TEST_SSH_MODE=window SWEEP_TEST_KERNEL_LINES=$native_kernel \
   run_sweep_args --only hip --target native-window-probe)
-grep -q '^destinations: minix=minix-amd-linux$' <<<"$native_unit_linux"
+grep -q '^destinations: minix=minix-amd-linux tuf=tuf-amd-linux$' <<<"$native_unit_linux"
 grep -q '^  minix/hip: error (cannot pin minix-amd-linux' <<<"$native_unit_linux"
 native_unit_record=$(sed -n 's/^run:  *//p' <<<"$native_unit_linux")
-[ "$(awk -F '\t' '$1 == "unit" && $3 == "hip" { print $9 "\t" $10 }' "$native_unit_record")" = \
+[ "$(awk -F '\t' '$1 == "unit" && $2 == "minix" && $3 == "hip" { print $9 "\t" $10 }' "$native_unit_record")" = \
   "$(printf '1\tnative')" ]
-native_unit_log=$(awk -F '\t' '$1 == "unit" && $3 == "hip" { print $6 }' "$native_unit_record")
+native_unit_log=$(awk -F '\t' '$1 == "unit" && $2 == "minix" && $3 == "hip" { print $6 }' "$native_unit_record")
 [ "$(window_kind "$native_unit_log")" = native ]
 grep -q '^native signature: amdgpu: process pid N DQM create queue type 1 failed. ret -12$' \
   "$(window_sidecar "$native_unit_log")"
 absent 'misc dxg' "$(window_sidecar "$native_unit_log")"
 grep -q '^native window: refusal present$' "${native_unit_log%.log}.fingerprint"
 grep -q -- '-b -n 1' "$ssh_calls"
+# A native boot's work legs carry the sleep guard (gh-ocannl-1035): the preparation this fixture
+# refuses went out as the supervisor's `--hold`, named for the run, the unit and the leg.
+grep -qE -- "-- --hold 'ocannl sweep [0-9]{8}T[0-9]{6}Z minix/hip prep' 600 sh -c " "$ssh_calls"
 : >"$ssh_calls"
 native_unit_wsl=$(SWEEP_TEST_SSH_MODE=window SWEEP_TEST_KERNEL_LINES=$native_kernel \
   SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh run_sweep_args --only hip --target native-window-probe)
-grep -q '^destinations: minix=minix-amd-wsl$' <<<"$native_unit_wsl"
+grep -q '^destinations: minix=minix-amd-wsl tuf=tuf-amd-linux$' <<<"$native_unit_wsl"
 native_wsl_record=$(sed -n 's/^run:  *//p' <<<"$native_unit_wsl")
-[ "$(awk -F '\t' '$1 == "unit" && $3 == "hip" { print $9 "\t" $10 }' "$native_wsl_record")" = \
+[ "$(awk -F '\t' '$1 == "unit" && $2 == "minix" && $3 == "hip" { print $9 "\t" $10 }' "$native_wsl_record")" = \
   "$(printf '1\tdxg')" ]
-native_wsl_log=$(awk -F '\t' '$1 == "unit" && $3 == "hip" { print $6 }' "$native_wsl_record")
+native_wsl_log=$(awk -F '\t' '$1 == "unit" && $2 == "minix" && $3 == "hip" { print $6 }' "$native_wsl_record")
 absent 'amdgpu' "$(window_sidecar "$native_wsl_log")"
 absent -- '-b -n 1' "$ssh_calls"
+# ...and a WSL boot's do not: a guest's inhibitor cannot stop its Windows host sleeping, and the
+# Windows-side holder is what keeps that lane alive. The opposing control for the native case.
+absent -- "-- --hold '" "$ssh_calls"
 # The remote CPU unit on the same native box: no window, so `-` in all four fields, and no window
 # query sent at all.
 : >"$ssh_calls"
@@ -2154,6 +2264,361 @@ native_other_abort=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT="$state_failure
 ${native_abort/ReleaseQueueMainScratch/AcquireQueueScratch}" run_sweep_backend cc --target state-probe)
 grep -q 'm4-max/cc: fail ' <<<"$native_other_abort"
 absent 'serial rerun' <<<"$native_other_abort"
+
+
+# ---- The gated tuf lane and the sleep guard (gh-ocannl-1035). tuf is the fleet's discrete-memory
+# hip box, a Wi-Fi laptop nothing the caller runs can wake: its lane runs only when `wake-lab.sh
+# status tuf` reaches its Linux, records `gate` -- never `skip`, never `error` -- when it does not,
+# and ends by asking wake-lab to sleep the box again. The fake wake-lab above answers both verbs.
+#
+# Asleep (the fake's default): a gate for its unit, with the status reading as the reason, and
+# nothing else -- no ssh to the box, no reservation, no sleep. minix's hip unit beside it is the
+# opposing control: an ungated box's unit is dialled as always.
+: >"$ssh_calls"
+: >"$wake_lab_calls"
+rm -f "$tmp/lab-locks/tuf.lock"
+tuf_asleep=$(SWEEP_TEST_SSH_MODE=window run_sweep_args --only hip --target tuf-asleep-probe)
+grep -q '^lanes:  minix(hip)  tuf(hip)$' <<<"$tuf_asleep"
+grep -q '^  tuf/hip: gate (tuf not up: router-active=? os=-- linux=--)$' <<<"$tuf_asleep"
+grep -q '^  minix/hip: error (cannot pin minix-amd-linux' <<<"$tuf_asleep"
+absent 'tuf-amd-linux' "$ssh_calls"
+grep -q 'minix-amd-linux' "$ssh_calls"
+[ "$(cat "$wake_lab_calls")" = 'status tuf' ]
+[ ! -e "$tmp/lab-locks/tuf.lock" ]
+tuf_asleep_record=$(sed -n 's/^run:  *//p' <<<"$tuf_asleep")
+[ "$(awk -F '\t' '$1 == "run" { print $8 }' "$tuf_asleep_record")" = complete ]
+[ "$(awk -F '\t' '$1 == "unit" && $2 == "tuf" { print $3 ":" $4 ":" $6 ":" $10 ":" $11 }' \
+  "$tuf_asleep_record")" = 'hip:gate:-:-:discrete/gfx1102' ]
+[ "$(awk -F '\t' '$2 == "tuf" && $7 == "tuf-asleep-probe" { print $5 ":" $6 }' "$state/history.tsv")" = \
+  'gate:0' ]
+# A host with no wake-lab.sh cannot ask, and says that instead of guessing the box is up.
+: >"$wake_lab_calls"
+tuf_no_wake_lab=$(SWEEP_TEST_WAKE_LAB=$tmp/no-such-wake-lab.sh run_sweep_args --only hip \
+  --target tuf-asleep-probe)
+grep -qF "  tuf/hip: gate (tuf not asked: no wake-lab.sh at $tmp/no-such-wake-lab.sh)" \
+  <<<"$tuf_no_wake_lab"
+[ ! -s "$wake_lab_calls" ]
+
+# Up: the unit is dialled at tuf's only alias, its window is the native kind by that alias alone,
+# its record carries the memory model, every work leg carries the guard -- and when the lane is
+# done the box is put back to sleep, which the fake grants only once the lane has let go of its
+# own reservation.
+: >"$ssh_calls"
+: >"$wake_lab_calls"
+tuf_up=$(SWEEP_TEST_TUF_STATUS=up SWEEP_TEST_SSH_MODE=window SWEEP_TEST_KERNEL_LINES=$native_quiet \
+  run_sweep_args --only hip --target tuf-up-probe)
+grep -q '^  tuf/hip: error (cannot pin tuf-amd-linux' <<<"$tuf_up"
+grep -q '^  tuf: put back to sleep (wake-lab.sh sleep tuf)$' <<<"$tuf_up"
+# The sleep comes after the lane's unit, never between units.
+[ "$(grep -n '^  tuf/hip: ' <<<"$tuf_up" | head -1 | cut -d: -f1)" -lt \
+  "$(grep -n '^  tuf: put back' <<<"$tuf_up" | cut -d: -f1)" ]
+[ "$(cat "$wake_lab_calls")" = "$(printf 'status tuf\nsleep tuf')" ]
+grep -q '^ocannl sweep ' "$tmp/lab-locks/tuf.lock"
+grep -qE -- "-- --hold 'ocannl sweep [0-9]{8}T[0-9]{6}Z tuf/hip prep' 600 sh -c " "$ssh_calls"
+tuf_up_record=$(sed -n 's/^run:  *//p' <<<"$tuf_up")
+[ "$(awk -F '\t' '$1 == "unit" && $2 == "tuf" { print $3 ":" $4 ":" $10 ":" $11 }' \
+  "$tuf_up_record")" = 'hip:error:native:discrete/gfx1102' ]
+# The fake's refusal is real, so the grant above means something: with the box's lane lock held,
+# as the lane held it until just before asking, the same call is refused.
+exec 6>>"$tmp/lab-locks/tuf.lock"
+perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 1)' <&6
+set +e
+tuf_self_refusal=$(SWEEP_TEST_WAKE_LAB_CALLS=$wake_lab_calls WAKE_LAB_LOCK_DIR=$tmp/lab-locks \
+  "$fake_bin/wake-lab.sh" sleep tuf)
+tuf_self_refusal_rc=$?
+set -e
+exec 6>&-
+[ "$tuf_self_refusal_rc" -eq 1 ]
+grep -q '^  sleep REFUSED on tuf: ' <<<"$tuf_self_refusal"
+
+# Up at the status check but not answering the unit (its Wi-Fi dropped, it slept again): still a
+# gate, not the `skip` that asks why a wake failed -- and no sleep, since nothing reached it.
+: >"$wake_lab_calls"
+tuf_unreachable=$(SWEEP_TEST_TUF_STATUS=up run_sweep_args --only hip --target tuf-up-probe)
+grep -q '^  tuf/hip: gate (unreachable)$' <<<"$tuf_unreachable"
+grep -q '^  minix/hip: skip (unreachable)$' <<<"$tuf_unreachable"
+absent '^  tuf: ' <<<"$tuf_unreachable"
+[ "$(cat "$wake_lab_calls")" = 'status tuf' ]
+
+# A sleep the box refuses -- a block inhibitor, another run there -- is the interlock working: the
+# box stays up, the holder is named, and the run is as complete as it was.
+tuf_inhibited=$(SWEEP_TEST_TUF_STATUS=up SWEEP_TEST_TUF_SLEEP=inhibited SWEEP_TEST_SSH_MODE=window \
+  run_sweep_args --only hip --target tuf-up-probe)
+grep -qF '  tuf: left awake, not a failure -- sleep REFUSED on tuf by a block inhibitor (a run there holds it; see status) (Operation inhibited by "fleet-worker" (PID 4242 "python3", user lukstafi), reason is "a correctness slot".)' \
+  <<<"$tuf_inhibited"
+[ "$(awk -F '\t' '$1 == "run" { print $8 }' "$(sed -n 's/^run:  *//p' <<<"$tuf_inhibited")")" = \
+  complete ]
+# ...and one that fails outright is a WARNING for the operator, still not a sweep failure.
+tuf_sleep_fails=$(SWEEP_TEST_TUF_STATUS=up SWEEP_TEST_TUF_SLEEP=fail SWEEP_TEST_SSH_MODE=window \
+  run_sweep_args --only hip --target tuf-up-probe)
+grep -qF '  tuf: WARNING -- wake-lab.sh sleep tuf exited 1: sleep FAILED on tuf (command exited 5)' \
+  <<<"$tuf_sleep_fails"
+[ "$(awk -F '\t' '$1 == "run" { print $8 }' "$(sed -n 's/^run:  *//p' <<<"$tuf_sleep_fails")")" = \
+  complete ]
+
+# A native unit whose far side could not take the guard (no polkit grant) ran anyway, and says so
+# on its summary line -- for each native unit, and for no WSL one, whose legs never ask.
+tuf_unguarded=$(SWEEP_TEST_TUF_STATUS=up SWEEP_TEST_HOLD_DENIED=1 SWEEP_TEST_SSH_MODE=window \
+  run_sweep_args --only hip --target tuf-up-probe)
+grep -qF '  tuf/hip: ran WITHOUT a sleep guard -- fixture-inhibit refused: Access denied' \
+  <<<"$tuf_unguarded"
+grep -qF '  minix/hip: ran WITHOUT a sleep guard -- fixture-inhibit refused: Access denied' \
+  <<<"$tuf_unguarded"
+# Once per unit, however many of its legs were refused: a box without the grant refuses them all.
+[ "$(grep -c '^  tuf/hip: ran WITHOUT a sleep guard' <<<"$tuf_unguarded")" -eq 1 ]
+# A refusal to the PREPARATION alone is read before the suite's log replaces the preparation's.
+tuf_unguarded_prep=$(SWEEP_TEST_TUF_STATUS=up SWEEP_TEST_HOLD_DENIED=prep SWEEP_TEST_PREP_OK=1 \
+  SWEEP_TEST_SSH_MODE=window run_sweep_args --only hip --target tuf-up-probe)
+grep -q '^  tuf/hip: fail ' <<<"$tuf_unguarded_prep"
+grep -qF '  tuf/hip: ran WITHOUT a sleep guard -- fixture-inhibit refused: Access denied' \
+  <<<"$tuf_unguarded_prep"
+tuf_unguarded_prep_log=$(awk -F '\t' '$1 == "unit" && $2 == "tuf" { print $6 }' \
+  "$(sed -n 's/^run:  *//p' <<<"$tuf_unguarded_prep")")
+absent '^sweep-hold: WARNING' "$tuf_unguarded_prep_log"
+tuf_unguarded_wsl=$(SWEEP_TEST_HOLD_DENIED=1 SWEEP_TEST_SSH_MODE=window \
+  SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh run_sweep_args --only hip --target tuf-up-probe)
+absent 'sleep guard' <<<"$tuf_unguarded_wsl"
+
+
+# A lane that reached tuf and was then CANCELLED still asks for tuf's sleep -- detached, so the
+# group TERM that cancelled the run does not take the request with it, and with the lane's box
+# reservation already released, so the fake's lock check grants it. Both lanes are held in their
+# preparation ssh (the `hang` fake) and the whole group is signalled, as a scheduler cancel does.
+tuf_cancel_prefix=$tmp/tuf-cancel
+wait_prefix=$tuf_cancel_prefix
+: >"$wake_lab_calls"
+SWEEP_TEST_OWN_GROUP=1 SWEEP_TEST_WAIT_PREFIX=$tuf_cancel_prefix SWEEP_TEST_SSH_MODE=hang \
+  SWEEP_TEST_TUF_STATUS=up run_sweep_args --only hip --target tuf-cancel-probe \
+  >"$tuf_cancel_prefix.out" 2>"$tuf_cancel_prefix.err" &
+tuf_cancel_pid=$!
+holder_pid=$tuf_cancel_pid
+waited=0
+until [ "$(wc -l <"$tuf_cancel_prefix.ssh-pids" 2>/dev/null || echo 0)" -ge 2 ]; do
+  [ "$waited" -lt "$wait_ticks" ] || break
+  sleep 0.05
+  waited=$((waited + 1))
+done
+[ "$(wc -l <"$tuf_cancel_prefix.ssh-pids")" -ge 2 ]
+kill -TERM -- "-$tuf_cancel_pid"
+set +e
+wait "$tuf_cancel_pid"
+tuf_cancel_rc=$?
+set -e
+holder_pid=
+wait_prefix=
+[ "$tuf_cancel_rc" -eq 143 ]
+waited=0
+until grep -q '^sleep tuf$' "$wake_lab_calls"; do
+  [ "$waited" -lt "$wait_ticks" ] || break
+  sleep 0.05
+  waited=$((waited + 1))
+done
+tuf_cancelled=$(cat "$tuf_cancel_prefix.out" "$tuf_cancel_prefix.err")
+[ "$(cat "$wake_lab_calls")" = "$(printf 'status tuf\nsleep tuf')" ]
+# The request's durable record is its own log beside the run's, named for the run's stamp; the
+# lane's summary line saying so is best-effort on this path (a cancelled top level does not wait to
+# publish it), so the log is what is asserted.
+tuf_cancel_stamp=$(sed -n 's/^sweep \([0-9TZ]*\) .*/\1/p' "$tuf_cancel_prefix.out")
+tuf_cancel_sleep_log=$state/logs/$tuf_cancel_stamp-tuf-sleep.log
+waited=0
+until grep -q '^tuf=DOWN' "$tuf_cancel_sleep_log" 2>/dev/null; do
+  [ "$waited" -lt "$wait_ticks" ] || break
+  sleep 0.05
+  waited=$((waited + 1))
+done
+grep -q '^tuf=DOWN' "$tuf_cancel_sleep_log"
+
+
+# ...and one cancelled DURING the lane's own foreground sleep request (the fake's first request
+# sits in its confirm-down) is not counted as slept: the EXIT path issues the detached request.
+tuf_cancel_prefix=$tmp/tuf-cancel-sleep
+wait_prefix=$tuf_cancel_prefix
+: >"$wake_lab_calls"
+SWEEP_TEST_OWN_GROUP=1 SWEEP_TEST_WAIT_PREFIX=$tuf_cancel_prefix SWEEP_TEST_SSH_MODE=window \
+  SWEEP_TEST_TUF_STATUS=up SWEEP_TEST_TUF_SLEEP=hang-once run_sweep_args --only hip \
+  --target tuf-cancel-probe >"$tuf_cancel_prefix.out" 2>"$tuf_cancel_prefix.err" &
+tuf_cancel_pid=$!
+holder_pid=$tuf_cancel_pid
+waited=0
+until [ -e "$tuf_cancel_prefix.slept-once" ]; do
+  [ "$waited" -lt "$wait_ticks" ] || break
+  sleep 0.05
+  waited=$((waited + 1))
+done
+[ -e "$tuf_cancel_prefix.slept-once" ]
+kill -TERM -- "-$tuf_cancel_pid"
+set +e
+wait "$tuf_cancel_pid"
+tuf_cancel_rc=$?
+set -e
+holder_pid=
+wait_prefix=
+[ "$tuf_cancel_rc" -eq 143 ]
+tuf_cancel_stamp=$(sed -n 's/^sweep \([0-9TZ]*\) .*/\1/p' "$tuf_cancel_prefix.out")
+tuf_cancel_sleep_log=$state/logs/$tuf_cancel_stamp-tuf-sleep.log
+waited=0
+until grep -q '^tuf=DOWN' "$tuf_cancel_sleep_log" 2>/dev/null; do
+  [ "$waited" -lt "$wait_ticks" ] || break
+  sleep 0.05
+  waited=$((waited + 1))
+done
+grep -q '^tuf=DOWN' "$tuf_cancel_sleep_log"
+[ "$(cat "$wake_lab_calls")" = "$(printf 'status tuf\nsleep tuf\nsleep tuf')" ]
+
+
+# ...and one cancelled while the lane is still DIALLING tuf -- inside its reachability probe --
+# owes the box its sleep just the same: the box was up at its status check, and a probe cut short
+# says nothing to the contrary.
+tuf_cancel_prefix=$tmp/tuf-cancel-probe
+wait_prefix=$tuf_cancel_prefix
+: >"$wake_lab_calls"
+: >"$ssh_calls"
+SWEEP_TEST_OWN_GROUP=1 SWEEP_TEST_WAIT_PREFIX=$tuf_cancel_prefix SWEEP_TEST_SSH_MODE=hang-probe \
+  SWEEP_TEST_TUF_STATUS=up run_sweep_args --only hip --target tuf-cancel-probe \
+  >"$tuf_cancel_prefix.out" 2>"$tuf_cancel_prefix.err" &
+tuf_cancel_pid=$!
+holder_pid=$tuf_cancel_pid
+waited=0
+until [ -e "$tuf_cancel_prefix.probing" ] && grep -q '^status tuf$' "$wake_lab_calls"; do
+  [ "$waited" -lt "$wait_ticks" ] || break
+  sleep 0.05
+  waited=$((waited + 1))
+done
+[ -e "$tuf_cancel_prefix.probing" ]
+# The tuf lane's own probe, not only minix's: its status check comes first, so wait for a probe
+# issued after it -- two lanes probing means both are inside the probe.
+waited=0
+until [ "$(grep -c 'kernel/random/boot_id' "$ssh_calls")" -ge 2 ]; do
+  [ "$waited" -lt "$wait_ticks" ] || break
+  sleep 0.05
+  waited=$((waited + 1))
+done
+[ "$(grep -c 'kernel/random/boot_id' "$ssh_calls")" -ge 2 ]
+kill -TERM -- "-$tuf_cancel_pid"
+set +e
+wait "$tuf_cancel_pid"
+tuf_cancel_rc=$?
+set -e
+holder_pid=
+wait_prefix=
+[ "$tuf_cancel_rc" -eq 143 ]
+tuf_cancel_stamp=$(sed -n 's/^sweep \([0-9TZ]*\) .*/\1/p' "$tuf_cancel_prefix.out")
+tuf_cancel_sleep_log=$state/logs/$tuf_cancel_stamp-tuf-sleep.log
+waited=0
+until grep -q '^tuf=DOWN' "$tuf_cancel_sleep_log" 2>/dev/null; do
+  [ "$waited" -lt "$wait_ticks" ] || break
+  sleep 0.05
+  waited=$((waited + 1))
+done
+grep -q '^tuf=DOWN' "$tuf_cancel_sleep_log"
+[ "$(cat "$wake_lab_calls")" = "$(printf 'status tuf\nsleep tuf')" ]
+
+# The guard itself: the far-side supervisor's `--hold`, run here against fake inhibitors. The
+# program is the sweep's own, extracted as tools/test-test-run.sh extracts unit_jobs (the sweep
+# cannot be sourced), and asserted to have matched.
+supervisor=$tmp/supervisor.pl
+sed -n "/^capped_perl='/,/^'\$/p" "$sweep" | sed '1s/^capped_perl=.//;$d' >"$supervisor"
+grep -q 'sub hold_sleep' "$supervisor"
+guard_bin=$tmp/guard-bin
+mkdir -p "$guard_bin" "$tmp/guard-empty"
+cat >"$guard_bin/systemd-inhibit" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >"$tmp/inhibit.args"
+echo "\$\$" >"$tmp/inhibit.pid"
+while [ "\$1" != -- ]; do shift; done
+shift
+exec "\$@"
+EOF
+chmod +x "$guard_bin/systemd-inhibit"
+# Held: the inhibitor is taken before the unit starts and is alive while it runs (the unit checks),
+# with the logind fields the lab reads; the unit's own exit status is the supervisor's; and the
+# inhibitor ends with the unit's tree, not after some timeout.
+set +e
+guard_held=$(PATH=$guard_bin:$PATH perl "$supervisor" --hold 'ocannl sweep S tuf/hip suite' 30 \
+  sh -c "kill -0 \$(cat '$tmp/inhibit.pid') && echo inhibitor-alive-during-unit; exit 7" 2>&1)
+guard_held_rc=$?
+set -e
+[ "$guard_held_rc" -eq 7 ]
+grep -q '^inhibitor-alive-during-unit$' <<<"$guard_held"
+grep -q '^sweep-hold: sleep:idle block inhibitor held for: ocannl sweep S tuf/hip suite$' <<<"$guard_held"
+[ "$(cat "$tmp/inhibit.args")" = \
+  '--what=sleep:idle --mode=block --who=ocannl-sweep --why=ocannl sweep S tuf/hip suite -- sh -c echo HELD; exec cat >/dev/null' ]
+guard_waited=0
+while kill -0 "$(cat "$tmp/inhibit.pid")" 2>/dev/null; do
+  [ "$guard_waited" -lt "$wait_ticks" ] || break
+  sleep 0.05
+  guard_waited=$((guard_waited + 1))
+done
+if kill -0 "$(cat "$tmp/inhibit.pid")" 2>/dev/null; then
+  printf 'sweep_harness: the sleep inhibitor outlived its unit\n' >&2
+  exit 1
+fi
+# Refused (the polkit grant missing): loud, and the unit still runs with its own status.
+cat >"$guard_bin/systemd-inhibit" <<'EOF'
+#!/bin/sh
+echo 'Failed to inhibit: Access denied' >&2
+exit 1
+EOF
+set +e
+guard_refused=$(PATH=$guard_bin:$PATH perl "$supervisor" --hold why 30 sh -c 'echo unit-ran; exit 3' 2>&1)
+guard_refused_rc=$?
+set -e
+[ "$guard_refused_rc" -eq 3 ]
+grep -q '^unit-ran$' <<<"$guard_refused"
+grep -q '^sweep-hold: WARNING: running WITHOUT a sleep guard, .* -- .*/systemd-inhibit refused: Failed to inhibit: Access denied$' \
+  <<<"$guard_refused"
+# No systemd-inhibit at all: the same, said differently. A PATH holding nothing, so a host that has
+# one (a Linux CI runner) cannot answer for the fixture.
+set +e
+guard_absent=$(PATH=$tmp/guard-empty "$(command -v perl)" "$supervisor" --hold why 30 \
+  /bin/sh -c 'echo unit-ran; exit 4' 2>&1)
+guard_absent_rc=$?
+set -e
+[ "$guard_absent_rc" -eq 4 ]
+grep -q '^sweep-hold: WARNING: running WITHOUT a sleep guard, .* -- no systemd-inhibit on PATH$' \
+  <<<"$guard_absent"
+# An inhibitor that never answers (logind or D-Bus wedged) is given up on after the wait, and KILLED
+# by the pid its double-forked helper reported: guarded legs must not accumulate stalled helpers.
+cat >"$guard_bin/systemd-inhibit" <<EOF
+#!/bin/sh
+echo "\$\$" >"$tmp/inhibit.pid"
+exec sleep 600
+EOF
+rm -f "$tmp/inhibit.pid"
+set +e
+guard_stalled=$(OCANNL_TOOL_SWEEP_HOLD_WAIT=1 PATH=$guard_bin:$PATH perl "$supervisor" --hold why 30   sh -c 'echo unit-ran; exit 6' 2>&1)
+guard_stalled_rc=$?
+set -e
+[ "$guard_stalled_rc" -eq 6 ]
+grep -q '^unit-ran$' <<<"$guard_stalled"
+grep -q '^sweep-hold: WARNING: running WITHOUT a sleep guard, .* -- .*/systemd-inhibit refused: no answer after 1s$'   <<<"$guard_stalled"
+[ -s "$tmp/inhibit.pid" ]
+guard_waited=0
+while kill -0 "$(cat "$tmp/inhibit.pid")" 2>/dev/null; do
+  [ "$guard_waited" -lt "$wait_ticks" ] || break
+  sleep 0.05
+  guard_waited=$((guard_waited + 1))
+done
+if kill -0 "$(cat "$tmp/inhibit.pid")" 2>/dev/null; then
+  printf 'sweep_harness: a stalled inhibitor helper outlived its give-up
+' >&2
+  exit 1
+fi
+# And without `--hold` -- every local unit, every WSL leg -- nothing is asked for at all, with an
+# inhibitor right there on PATH.
+rm -f "$tmp/inhibit.args"
+cat >"$guard_bin/systemd-inhibit" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >"$tmp/inhibit.args"
+exit 1
+EOF
+set +e
+guard_none=$(PATH=$guard_bin:$PATH perl "$supervisor" 30 sh -c 'exit 5' 2>&1)
+guard_none_rc=$?
+set -e
+[ "$guard_none_rc" -eq 5 ]
+[ -z "$guard_none" ]
+[ ! -e "$tmp/inhibit.args" ]
 
 # Cancelling a sweep stops EVERY lane: here the local lane's unit is held in its
 # test leg and the rog-nv lane's in its preparation ssh, both under supervisors.

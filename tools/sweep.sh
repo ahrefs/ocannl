@@ -18,6 +18,11 @@
 # so the `-wsl` host lags the box being up). The caller is expected to notice
 # when a backend has been skipped for too long.
 #
+# tuf, a Wi-Fi-only laptop, is the exception: nothing the caller runs can wake it
+# (its own RTC timer does, or a person), so its lane is GATED -- it runs only when
+# `wake-lab.sh status tuf` reaches its Linux, records `gate` rather than `skip`
+# when it does not, and ends by putting the box back to sleep (see run_lane).
+#
 # Deliberately does NOT exit non-zero on test failures: the point is to record
 # every unit's outcome, including the ones after a failing one. Only a usable
 # harness failure (no local repo, etc.) aborts.
@@ -27,8 +32,9 @@
 # boxes do not wait for each other.
 #
 # Usage:
-#   tools/sweep.sh                     # cc + metal locally; cuda on rog-nv, hip + multidev_cc on minix, if up
-#   tools/sweep.sh --slow              # also `dune build @slow`
+#   tools/sweep.sh                     # cc + metal locally; cuda on rog-nv, hip + multidev_cc on minix,
+#                                      # and hip again on tuf (discrete memory), if up
+#   tools/sweep.sh --slow             # also `dune build @slow`
 #   tools/sweep.sh --force             # cold rebuild and re-execute every test alias
 #   tools/sweep.sh --only metal        # one backend (repeatable)
 #   tools/sweep.sh --target test/einsum  # narrower dune target, for smoke-testing
@@ -37,6 +43,8 @@
 #   OCANNL_TOOL_SWEEP_DEST_ROG=rog-nv-linux tools/sweep.sh --only cuda
 #                                      # name a GPU box's ssh destination (also _MINIX),
 #                                      # instead of reading its kind from WAKE_LAB_HOSTS
+#   OCANNL_TOOL_SWEEP_WAKE_LAB=~/bin/wake-lab.sh  # the lab's power script (the default): asked
+#                                      # whether tuf is up before its lane, and to sleep it after
 
 set -uo pipefail
 
@@ -127,6 +135,7 @@ lab_box_of() { # ssh-alias
   case $1 in
     rog-nv-linux | rog-nv-wsl) printf 'rog' ;;
     minix-amd-linux | minix-amd-wsl) printf 'minix' ;;
+    tuf-amd-linux) printf 'tuf' ;;
     *) printf '%s' "${1%%-*}" ;;
   esac
 }
@@ -159,9 +168,29 @@ lab_dest_of() { # box kind -- the ssh alias for that boot of that box
     rog:wsl) printf 'rog-nv-wsl' ;;
     minix:linux) printf 'minix-amd-linux' ;;
     minix:wsl) printf 'minix-amd-wsl' ;;
+    # Single-boot: native Ubuntu only, so it has no `wsl` alias and no kind to read (lab_dest).
+    tuf:linux) printf 'tuf-amd-linux' ;;
     *) return 1 ;;
   esac
 }
+
+# The box the sweep cannot wake (gh-ocannl-1035). tuf is a Wi-Fi-only laptop: WoL cannot reach it,
+# so it is up because its own RTC timer woke it for the sweep (self-improve's Linux bootstrap
+# installs that timer) or because a person did. Two things follow, and both are keyed here rather
+# than spelled per call site:
+#   - its lane is GATED: it runs only when `wake-lab.sh status <box>` reaches the box's Linux, and
+#     a box that is asleep or unreachable records `gate` -- a condition outside this run, like a
+#     skip, but one the caller was never expected to fix, so it must not read as a failed wake;
+#   - its lane ENDS BY SLEEPING the box (`wake-lab.sh sleep <box>`), or a timer-woken laptop stays
+#     up all day. wake-lab's sleep is inhibitor-aware, so a box someone else is holding refuses,
+#     and that refusal is reported, never a failure of the sweep.
+lab_box_gated() { # box
+  case $1 in tuf) return 0 ;; *) return 1 ;; esac
+}
+
+# The lab's power script, for exactly those two acts. Nothing else in this file calls it: the lab
+# lock contract below is deliberately a directory, not a command.
+WAKE_LAB=${OCANNL_TOOL_SWEEP_WAKE_LAB:-$HOME/bin/wake-lab.sh}
 
 # Prints the box's destination, or says on stderr why there is none and returns 1. The table is
 # sourced in a SUBSHELL: it is site shell code, and nothing it defines may reach this script's own
@@ -183,9 +212,16 @@ lab_dest() { # box
         return 0
       fi
     done
+    kind_choice=$(lab_dest_of "$box" wsl) || kind_choice=
     echo "sweep: $var='$dest' is not one of $box's aliases" \
-      "($(lab_dest_of "$box" linux) or $(lab_dest_of "$box" wsl))" >&2
+      "($(lab_dest_of "$box" linux)${kind_choice:+ or $kind_choice})" >&2
     return 1
+  fi
+  # A single-boot box has one alias and so no boot kind to read: its destination is not a per-run
+  # fact, and refusing the run over a table that does not describe it would guess nothing away.
+  if ! lab_dest_of "$box" wsl >/dev/null; then
+    lab_dest_of "$box" linux
+    return
   fi
   if [ ! -r "$LAB_HOSTS" ]; then
     echo "sweep: cannot read the site host table $LAB_HOSTS for $box's boot kind" \
@@ -334,7 +370,31 @@ UNITS=(
   "rog-nv:cuda:@rog"
   "minix:hip:@minix"
   "minix:multidev_cc:@minix"
+  "tuf:hip:@tuf"
 )
+
+# hip twice, on purpose (gh-ocannl-1035): minix's gfx1151 is an iGPU whose "device" memory IS host
+# memory, so a missing or misplaced host<->device transfer can read the right bytes there anyway,
+# and minix's green says nothing about it. tuf's RX 7700S (gfx1102) is the fleet's one discrete AMD
+# GPU, where the same mistake reads stale or foreign memory (lukstafi/ludics-lite#320). Its lane is
+# GATED (lab_box_gated): a laptop woken by its own timer or by hand, never by the caller. `--only
+# hip` selects both units; each is its own row, keyed by machine as every row is.
+#
+# The memory model each GPU unit exercises, for the run record's `unit` row: which hip row covers
+# discrete memory is a fact a consumer otherwise has to know about the fleet's hardware. Declared,
+# not probed: it is the box's hardware, and the readings that would probe it cannot tell the two
+# apart on these kernels (KFD's topology reports `local_mem_size 0` for both AMD GPUs). The
+# architectures are what each box reported on 2026-09-23 (KFD `gfx_target_version` 110501 and
+# 110002, nvidia-smi `compute_cap` 12.0). `-` for a CPU unit, which has no device memory.
+unit_memory() { # machine backend
+  case $1:$2 in
+    tuf:hip) printf 'discrete/gfx1102' ;;
+    minix:hip) printf 'unified/gfx1151' ;;
+    rog-nv:cuda) printf 'discrete/sm_120' ;;
+    *:metal) printf 'unified/apple' ;;
+    *) printf '%s' - ;;
+  esac
+}
 
 # Dune's job count for the TEST phase of a unit, empty for dune's default (one
 # per core). The cap itself, which boxes it covers and why it is the number it
@@ -475,7 +535,9 @@ known_backend() {
   done
   return 1
 }
-known_backends=$(for u in "${UNITS[@]}"; do b=${u#*:}; printf '%s\n' "${b%%:*}"; done)
+# Each backend once, in first-appearance order: hip runs on two boxes (minix and tuf), and the
+# vocabulary is of backends -- the skip aggregation refuses a duplicate `--known`.
+known_backends=$(for u in "${UNITS[@]}"; do b=${u#*:}; printf '%s\n' "${b%%:*}"; done | awk '!seen[$0]++')
 if [ ${#ONLY[@]} -gt 0 ]; then
   for b in "${ONLY[@]}"; do
     known_backend "$b" ||
@@ -640,6 +702,11 @@ relay() {
   done
   for pid in $live; do kill -TERM "$pid" 2>/dev/null; done
   for pid in $live; do wait "$pid" 2>/dev/null; done
+  # A lane stops taking signals once its unit is reaped: the top level relays its own TERM to every
+  # lane as well, and a second relay arriving while the lane's EXIT trap runs ends the lane there --
+  # before lane_exit has asked for its gated box's sleep and published the line saying so (the
+  # harness's cancelled tuf lane lost both that way).
+  [ "$IN_LANE" = 1 ] && trap '' INT TERM
   # A cancelled run still ended, and the rows its lanes managed to write before
   # the signal are real; the record says which those were. Only the top level
   # writes it -- a lane runs this same relay for its own supervisor -- and only
@@ -1202,7 +1269,8 @@ collect_rtc_context() {
     # next sweep's preparation would reset the tree underneath.
     run_capped "$(( CONTEXT_CAP + 120 ))" ssh -o BatchMode=yes -o ConnectTimeout=8 \
       -o ServerAliveInterval=30 -o ServerAliveCountMax=4 \
-      "$host" "$(remote_capped "$CONTEXT_CAP" "$path_prefix $(remote_lock_cmd "$wt") $cmd")" \
+      "$host" "$(remote_capped "$CONTEXT_CAP" "$path_prefix $(remote_lock_cmd "$wt") $cmd" \
+        "$(sleep_guard_why "$host" rtc-context)")" \
       >>"$log" 2>&1
   else
     run_capped "$CONTEXT_CAP" /bin/sh -c "$cmd" >>"$log" 2>&1
@@ -1254,9 +1322,52 @@ remote_lock_cmd() {
 # temporaries and drop its _build lock cleanly. `kill 0, -$pid` counts what is
 # still in the group, and the leader is reaped on each pass so its zombie does
 # not read as a survivor and hold the grace open for the full interval.
+#
+# THE SLEEP GUARD (gh-ocannl-1035). With a leading `--hold <why>` the supervisor
+# first takes a logind BLOCK inhibitor on sleep:idle, and the child runs only
+# once it is held. On a native-Ubuntu box nothing else stops a suspend from
+# taking the box mid-unit -- another session's `wake-lab.sh sleep`, or the
+# laptop's own idle policy -- because the lab lock is advisory and binds only
+# tools that go through wake-lab.sh; with a block inhibitor held, systemd's
+# `--check-inhibitors=yes suspend` (wake-lab's path) and logind itself refuse.
+# The WSL lanes do not take it: a guest's inhibitor cannot stop its Windows host
+# from sleeping, and their Windows-side holder is what keeps them alive.
+#
+# It is the design of fleet-worker.sh's `execution hold` (ludics-lite#317),
+# restated here rather than called, and both halves of that are deliberate:
+#   - the inhibitor is held by a HELPER BESIDE the unit, never a wrapper around
+#     it. A wrapping `systemd-inhibit -- <unit>` closes every descriptor above 2
+#     in its child (the far-side worktree lock is fd 9), turns a signal death into
+#     exit 1 (the outcome mapping reads 142 as `timeout`), and is itself the
+#     process an ssh drop hangs up on -- so a dropped connection that kills it
+#     either takes the unit with it or, if the unit outlives it, leaves the unit
+#     running unguarded. The helper is `systemd-inhibit ... sh -c 'echo HELD; exec
+#     cat'` reading a LIFETIME PIPE whose write end this supervisor and the unit
+#     inherit, in its own session so no signal aimed at the unit's session reaches
+#     it: the inhibitor lives exactly as long as anything in the unit's process
+#     tree does, and the kernel ends it however the tree ends.
+#   - it is not `fleet-worker.sh execution hold`, because the sweep must not
+#     depend on a box's skills checkout being current: a box outside the fleet's
+#     worker roster is never refreshed by the fleet's preflight, and on
+#     2026-09-23 tuf's (the box this guard matters most on -- a laptop) was at a
+#     revision with no `execution hold` at all, where the call would have exited 2
+#     and filed every unit as a red suite. perl, which this supervisor already
+#     is, carries no such dependency.
+# Fail-open and loud, as `hold` is: no systemd-inhibit, or a refusal (the polkit
+# grant self-improve's Linux bootstrap installs is missing), prints a
+# `sweep-hold: WARNING` line into the unit's log -- the sweep repeats it on the
+# unit's summary line -- and runs the unit bare. A run refused over a setup step
+# would cost the coverage the guard exists to protect. No `--no-ask-password`:
+# systemd-inhibit gained it in v257 and Ubuntu 24.04's 255 rejects it; with pipes
+# for stdio there is no terminal to start a polkit agent on, so a denial is
+# immediate anyway.
 capped_perl='
   use POSIX ();
+  use Fcntl ();
+  my $why;
+  if (@ARGV && $ARGV[0] eq "--hold") { shift; $why = shift; }
   my $cap = shift;
+  my $life = defined $why ? hold_sleep($why) : undef;
   my $pid = fork();
   die "fork: $!" unless defined $pid;
   if (!$pid) { setpgrp(0, 0); exec @ARGV; exit 127 }
@@ -1281,6 +1392,71 @@ capped_perl='
   my $st = $?;
   alarm 0;
   exit($st & 127 ? 128 + ($st & 127) : $st >> 8);
+  sub unheld {
+    my ($reason) = @_;
+    print STDERR "sweep-hold: WARNING: running WITHOUT a sleep guard, so nothing at the OS level"
+      . " stops a suspend under this run -- $reason\n";
+    return undef;
+  }
+  sub hold_sleep {
+    my ($why) = @_;
+    my ($dir) = grep { length && -x "$_/systemd-inhibit" } split /:/, ($ENV{PATH} // "");
+    return unheld("no systemd-inhibit on PATH") unless defined $dir;
+    my $inhibitor = "$dir/systemd-inhibit";
+    pipe(my $life_r, my $life_w) or return unheld("pipe: $!");
+    pipe(my $ready_r, my $ready_w) or return unheld("pipe: $!");
+    my $middle = fork();
+    return unheld("fork: $!") unless defined $middle;
+    if (!$middle) {
+      POSIX::setsid();
+      my $helper = fork();
+      if (defined $helper && !$helper) {
+        POSIX::dup2(fileno($life_r), 0);
+        POSIX::dup2(fileno($ready_w), 1);
+        POSIX::dup2(fileno($ready_w), 2);
+        POSIX::close($_) for 3 .. 255;
+        exec {$inhibitor} $inhibitor, "--what=sleep:idle", "--mode=block", "--who=ocannl-sweep",
+          "--why=$why", "--", "sh", "-c", "echo HELD; exec cat >/dev/null";
+        POSIX::_exit(127);
+      }
+      # The helper is no child of this supervisor (the double fork), so its pid is reported up the
+      # readiness pipe: a helper that never answers is killed by pid, not left behind.
+      syswrite($ready_w, "PID $helper\n") if defined $helper;
+      POSIX::_exit(0);
+    }
+    waitpid($middle, 0);
+    close $life_r;
+    close $ready_w;
+    my $wait = ($ENV{OCANNL_TOOL_SWEEP_HOLD_WAIT} // "") =~ /^[1-9][0-9]*$/
+      ? $ENV{OCANNL_TOOL_SWEEP_HOLD_WAIT} : 30;
+    my ($text, $held, $deadline) = ("", 0, time + $wait);
+    while (!$held) {
+      my $left = $deadline - time;
+      last if $left <= 0;
+      my $rin = "";
+      vec($rin, fileno($ready_r), 1) = 1;
+      last unless select($rin, undef, undef, $left) > 0;
+      my $n = sysread($ready_r, my $chunk, 4096);
+      last unless $n;
+      $text .= $chunk;
+      $held = 1 if $text =~ /^HELD$/m;
+    }
+    close $ready_r;
+    if (!$held) {
+      close $life_w;
+      my ($helper) = $text =~ /^PID ([0-9]+)$/m;
+      kill "TERM", $helper if $helper;
+      $text =~ s/^PID [0-9]+\n?//mg;
+      $text =~ s/\s+/ /g;
+      $text =~ s/^ | $//g;
+      $text = "no answer after ${wait}s" if $text eq "";
+      return unheld("$inhibitor refused: " . substr($text, 0, 200));
+    }
+    my $flags = fcntl($life_w, Fcntl::F_GETFD(), 0);
+    fcntl($life_w, Fcntl::F_SETFD(), $flags & ~Fcntl::FD_CLOEXEC());
+    print STDERR "sweep-hold: sleep:idle block inhibitor held for: $why\n";
+    return $life_w;
+  }
 '
 # First argument is the budget in seconds, so the remote path can allow for
 # far-side cleanup and ssh teardown on top of its own cap.
@@ -1312,9 +1488,28 @@ capped_bg() { exec perl -e "$capped_perl" -- "$@"; }
 # identically. It also reaps on HUP, which is what the remote end gets when the
 # local ssh is killed by the outer run_capped, so a lost connection tears the
 # remote unit down instead of orphaning it.
-remote_capped() {
-  printf 'perl -e %s -- %s sh -c %s' "$(sq "$capped_perl")" "$1" "$(sq "$2")"
+#
+# A third argument is the sleep guard's `why` (see capped_perl): sleep_guard_why
+# gives one for a native-Ubuntu destination and nothing otherwise, so a call site
+# passes it unconditionally and the transport decides.
+remote_capped() { # cap command [sleep-guard-why]
+  if [ -n "${3:-}" ]; then
+    printf 'perl -e %s -- --hold %s %s sh -c %s' "$(sq "$capped_perl")" "$(sq "$3")" "$1" "$(sq "$2")"
+  else
+    printf 'perl -e %s -- %s sh -c %s' "$(sq "$capped_perl")" "$1" "$(sq "$2")"
+  fi
 }
+
+# The guard's `why` for one leg of the current unit, as `systemd-inhibit --list` and
+# `wake-lab.sh status` show it -- or nothing, where the destination is not a native boot.
+# Every far-side leg that takes the worktree lock takes the guard too (preparation, the
+# suite, the RTC context, the serial rerun): those are the legs doing work a suspend
+# would destroy. The probes and the kernel-window read are seconds of read-only ssh.
+sleep_guard_why() { # host leg
+  [ "$(box_jobs_dest_transport "$1")" = native ] || return 0
+  printf 'ocannl sweep %s %s %s' "$stamp" "$CURRENT_UNIT" "$2"
+}
+CURRENT_UNIT=
 
 # Put a reused worktree exactly on $full_sha, and PROVE it rather than assume it.
 # `checkout --detach` is not sufficient on its own: a tracked edit that does not
@@ -1432,7 +1627,11 @@ write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-r
     # row without it would make a strict schema-1 reader reject a current record
     # and a dxg-aware reader mis-read a historical one. The unit-STATE files below
     # keep their own schema 1: different file, different contract.
-    printf 'schema\t4\n'
+    # Schema 5: the `unit` row gained an eleventh field, the MEMORY MODEL the unit exercised
+    # (unit_memory: `discrete/gfx1102`, `unified/gfx1151`, ... or `-`), and its outcome a value, `gate`,
+    # when hip came to run on two boxes of different memory models (gh-ocannl-1035): a consumer
+    # keyed on backend alone would merge them, and a schema-4 reader's outcome set has no `gate`.
+    printf 'schema\t5\n'
     printf 'run\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$stamp" "$run_sha" "$REF" "${TARGET:-<all>}" "$SLOW" "$execution" "$kind"
     for unit in "${UNITS[@]}"; do
@@ -1485,8 +1684,9 @@ write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-r
           [ -n "$window_kind_field" ] || window_kind_field=-
         fi
       fi
-      printf 'unit\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$machine" "$backend" \
-        "$outcome" "$stopped" "$log" "$window_start" "$window_end" "$bursts" "$window_kind_field"
+      printf 'unit\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$machine" "$backend" \
+        "$outcome" "$stopped" "$log" "$window_start" "$window_end" "$bursts" "$window_kind_field" \
+        "$(unit_memory "$machine" "$backend")"
     done
     for unit in "${UNITS[@]}"; do
       IFS=: read -r machine backend host <<<"$unit"
@@ -1754,7 +1954,8 @@ serial_rerun() { # backend host wt log label [path_prefix]
     if [ -n "$host" ]; then
       run_capped "$(( CAP + 300 ))" ssh -o BatchMode=yes -o ConnectTimeout=8 \
         -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
-        "$host" "$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $cmd")" \
+        "$host" "$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $cmd" \
+          "$(sleep_guard_why "$host" serial-rerun)")" \
         >>"$log" 2>&1
     else
       run_capped "$CAP" /bin/sh -c "$cmd" >>"$log" 2>&1
@@ -1881,10 +2082,10 @@ update_unit_state() { # machine backend outcome [fingerprint] [log]
   local label state stage previous_verdict previous_failure_ref
   local previous_fp current_goldens golden_paths path commit old_commit short old_short
   label=$machine/$backend
-  # skip/error/timeout are recorded outcomes but not verdicts: they judged no
+  # skip/gate/error/timeout are recorded outcomes but not verdicts: they judged no
   # test result. Letting one replace a prior green would hide the next red's
   # regression transition merely because a machine slept or a run timed out.
-  case $outcome in skip | error | timeout) return 0 ;; esac
+  case $outcome in skip | gate | error | timeout) return 0 ;; esac
   state=$(unit_state_path "$machine" "$backend")
   stage=$state.stage.$$
   previous_fp=$state.previous-fingerprint.$$
@@ -1970,6 +2171,21 @@ else
   execution=incremental
 fi
 
+# A native unit that ran without its sleep guard says so on its summary line, where the scheduled
+# routine reads the run: the supervisor's warning is in the log, and a missing polkit grant that
+# only a log records is one nobody installs (see capped_perl for why the unit ran anyway).
+# Called after EVERY log-writing phase that ran guarded legs, since a later one may replace the log
+# (the suite's `>"$log"` truncates the preparation's); once per unit, so a box refusing every leg
+# (a missing polkit grant) says so once rather than per leg.
+say_unguarded() { # log label
+  local line
+  [ "$UNGUARDED_SAID" = 0 ] || return 0
+  line=$(grep -m 1 '^sweep-hold: WARNING: ' "$1" 2>/dev/null) || return 0
+  UNGUARDED_SAID=1
+  say "  $2: ran WITHOUT a sleep guard -- ${line#* -- }"
+}
+UNGUARDED_SAID=0
+
 # One unit, start to finish: preparation, the capped suite, the recorded row, and
 # the post-unit phases (RTC context, serial rerun, fingerprint, unit state), all
 # on the machine that owns the unit and inside its lane. The post-unit phases
@@ -1978,8 +2194,14 @@ fi
 run_unit() { # machine backend host
   local machine=$1 backend=$2 host=$3
   local log started remote_home remote_probe remote_started remote_boot wt path_prefix= remote_repo
-  local remote_prep remote rc elapsed outcome
+  local remote_prep remote rc elapsed outcome unreachable=skip unguarded
   WRITTEN_FINGERPRINT=
+  CURRENT_UNIT=$machine/$backend
+  UNGUARDED_SAID=0
+  # A gated box that answered its status check and then not the unit (its Wi-Fi dropped, it went
+  # back to sleep) is still outside this run's control: `gate`, as it would have been a minute
+  # earlier, not the `skip` that asks why the caller's wake did not take.
+  [ -n "$host" ] && lab_box_gated "$(lab_box_of "$host")" && unreachable=gate
 
   log=$LOGS/$stamp-$machine-$backend.log
   started=$(date +%s)
@@ -2006,14 +2228,18 @@ run_unit() { # machine backend host
     # it; deriving it later by subtracting a locally measured duration assumes the
     # remote clock advanced continuously meanwhile, which is the assumption a WSL
     # VM breaks when it resynchronises after a host resume.
+    # Armed BEFORE the probe, for a gated box: a cancellation landing while it connects must still
+    # leave the EXIT path owing the box its sleep (LANE_DIALLING, sleep_gated_box_after_early_exit).
+    LANE_DIALLING=1
     if ! remote_probe=$(capped 60 ssh -o BatchMode=yes -o ConnectTimeout=8 \
          -o ServerAliveInterval=30 -o ServerAliveCountMax=4 \
          "$host" 'printf "%s\n%s\n%s\n" "$HOME" "$(date +%s)" \
            "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)"' 2>/dev/null) ||
        [ -z "$remote_probe" ]; then
-      say "  $machine/$backend: skip (unreachable)"
-      record "$machine" "$backend" skip 0
-      update_unit_state "$machine" "$backend" skip
+      LANE_DIALLING=0
+      say "  $machine/$backend: $unreachable (unreachable)"
+      record "$machine" "$backend" "$unreachable" 0
+      update_unit_state "$machine" "$backend" "$unreachable"
       return 0
     fi
     remote_home=$(printf '%s\n' "$remote_probe" | sed -n 1p)
@@ -2024,10 +2250,12 @@ run_unit() { # machine backend host
     # -- and the window it then reports spans both boots. Read on the same round
     # trip as the clock, and compared against the same reading at collection time.
     remote_boot=$(printf '%s\n' "$remote_probe" | sed -n 3p)
+    LANE_REACHED=1
+    LANE_DIALLING=0
     [ -n "$remote_home" ] || {
-      say "  $machine/$backend: skip (unreachable)"
-      record "$machine" "$backend" skip 0
-      update_unit_state "$machine" "$backend" skip
+      say "  $machine/$backend: $unreachable (unreachable)"
+      record "$machine" "$backend" "$unreachable" 0
+      update_unit_state "$machine" "$backend" "$unreachable"
       return 0
     }
     # A box whose `date` said nothing leaves no window to bound; the collection
@@ -2072,9 +2300,11 @@ run_unit() { # machine backend host
     # legitimate work.
     if ! run_capped 900 ssh -o BatchMode=yes \
          -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
-         "$host" "$(remote_capped 600 "$path_prefix $(remote_lock_cmd "$wt") $remote_prep")" \
+         "$host" "$(remote_capped 600 "$path_prefix $(remote_lock_cmd "$wt") $remote_prep" \
+           "$(sleep_guard_why "$host" prep)")" \
          >"$log" 2>&1; then
       say "  $machine/$backend: error (cannot pin $host to $run_sha)"
+      say_unguarded "$log" "$machine/$backend"
       record "$machine" "$backend" error "$(( $(date +%s) - started ))" "$log"
       # The preparation can run for ten minutes, and a guest replaced inside it ends the unit
       # right here -- so this path collects the window exactly like the one below.
@@ -2084,12 +2314,16 @@ run_unit() { # machine backend host
       update_unit_state "$machine" "$backend" error "$WRITTEN_FINGERPRINT"
       return 0
     fi
+    # The suite's log replaces the preparation's, so a guard the preparation alone was refused is
+    # read now or never.
+    say_unguarded "$log" "$machine/$backend"
     # The cap is applied on the FAR side: killing the local ssh would leave the
     # remote dune running. ONE cap around the whole unit -- the same perl
     # supervisor capped() uses locally, see remote_capped -- because a
     # per-dune-call cap would let a --slow unit run for twice the budget the
     # script advertises.
-    remote="$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $(test_cmd "$backend" "$wt" "$(unit_jobs "$machine" "$backend" "$host")")")"
+    remote="$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $(test_cmd "$backend" "$wt" "$(unit_jobs "$machine" "$backend" "$host")")" \
+      "$(sleep_guard_why "$host" suite)")"
     # The far-side cap does not bound the LOCAL ssh: if the connection blackholes
     # after the command starts -- the box suspends, the WiFi drops -- the remote
     # cap may kill dune while this ssh sits waiting for a status that will
@@ -2204,6 +2438,9 @@ run_unit() { # machine backend host
     fail | timeout | error) write_fingerprint "$log" "$machine/$backend" ;;
   esac
   update_unit_state "$machine" "$backend" "$outcome" "${WRITTEN_FINGERPRINT:-}" "$log"
+  # After the LAST guarded leg (the RTC context and the serial rerun append to the log too), so a
+  # guard refused to any of them is reported, not only one refused to the suite.
+  say_unguarded "$log" "$machine/$backend"
   WRITTEN_FINGERPRINT=
 }
 
@@ -2229,7 +2466,88 @@ flush_lane_output() {
 # losing them. bash 3.2 runs a subshell's EXIT trap only on an explicit `exit`,
 # which is why run_lane ends with one.
 lane_exit() {
+  sleep_gated_box_after_early_exit
   flush_lane_output || cat "$LANE_OUT" >&2
+}
+
+# The early-exit half of the gated box's sleep (run_lane has the normal one). A lane that reached
+# its gated box and then stopped -- cancelled (relay reaps the unit's supervisor before it exits),
+# or dead of its own `die` -- would otherwise leave a timer-woken laptop up all day. Not run in the
+# lane's foreground: a cancellation must not wait out wake-lab's confirm-down, so the request is
+# DETACHED -- its own session, so the group TERM that cancelled the run does not take it too, and
+# without the run's locks, so it holds neither the worktree nor the box -- and BOUNDED, under the
+# same group-reaping supervisor and 600 s budget as the normal path's request, since nothing waits
+# for it. Owed from the moment the lane dials the box (LANE_DIALLING), not only once the probe has
+# answered: a cancellation can land inside the probe. The lane's box reservation
+# goes first, or the sleep would be refused by the lane that asked for it. Its output lands beside
+# the run's logs, since the lanes' coordination directory is removed when the run ends.
+sleep_gated_box_after_early_exit() {
+  local box=${LANE_GATED_BOX:-} out
+  [ -n "$box" ] && [ "${LANE_SLEPT:-0}" = 0 ] || return 0
+  [ "${LANE_REACHED:-0}" = 1 ] || [ "${LANE_DIALLING:-0}" = 1 ] || return 0
+  LANE_SLEPT=1
+  exec 8>&-
+  out=$LOGS/$stamp-$box-sleep.log
+  if [ -x "$WAKE_LAB" ]; then
+    (exec 9>&- </dev/null >"$out" 2>&1
+     exec perl -e 'use POSIX (); POSIX::setsid(); exec @ARGV or exit 127' -- \
+       perl -e "$capped_perl" -- 600 "$WAKE_LAB" sleep "$box") &
+    early_say "  $box: the lane stopped early, so its sleep was requested in the background (wake-lab.sh sleep $box; output in $out)"
+  else
+    early_say "  $box: WARNING -- the lane stopped early and $box stays awake: no wake-lab.sh at $WAKE_LAB"
+  fi
+}
+
+# `say` for a lane on its way out, which must not `die` over a buffer that is gone: a cancelled
+# top level does not order its exit after its lanes', and its EXIT trap removes the coordination
+# directory the buffer lives in. Best-effort, onto stderr when the buffer is gone; the durable
+# record of the early sleep is its own log beside the run's.
+early_say() {
+  printf '%s\n' "$*" 2>/dev/null >>"$LANE_OUT" || printf '%s\n' "$*" >&2
+}
+
+# Whether a gated box is up, by the lab's own reading of it: `wake-lab.sh status <box>` reaching the
+# box's native Linux (`linux=UP`). Anything else -- asleep, powered off, booted into another OS, a
+# status that could not be read, no wake-lab.sh on this host at all -- is a gate, with
+# LAB_GATE_REASON saying which. Through run_capped and a file, not a command substitution, so a
+# cancellation reaches it (see remote_guest_id).
+lab_box_up() { # box
+  local box=$1 out line
+  LAB_GATE_REASON=
+  if [ ! -x "$WAKE_LAB" ]; then
+    LAB_GATE_REASON="$box not asked: no wake-lab.sh at $WAKE_LAB"
+    return 1
+  fi
+  out=$LANE_DIR/status.$box
+  run_capped 120 "$WAKE_LAB" status "$box" >"$out" 2>&1
+  line=$(grep -m 1 "^$box[[:space:]]" "$out" 2>/dev/null | tr -s ' \t' '  ')
+  case " $line " in *" linux=UP "*) return 0 ;; esac
+  line=${line#"$box "}
+  LAB_GATE_REASON="$box not up: ${line:-wake-lab.sh status said nothing about it}"
+  return 1
+}
+
+# Put a gated box back to sleep, and say what happened. Never a failure of the sweep: the units'
+# rows are already written, and a box that stays awake costs power, not coverage. A refusal is the
+# interlock working -- a block inhibitor (another run on the box) or a lab lock (another session
+# here) -- and names its holder; anything else is a WARNING for the operator.
+sleep_gated_box() { # box
+  local box=$1 out rc line holder
+  out=$LANE_DIR/sleep.$box
+  run_capped 600 "$WAKE_LAB" sleep "$box" >"$out" 2>&1
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    say "  $box: put back to sleep (wake-lab.sh sleep $box)"
+    return 0
+  fi
+  line=$(grep -m 1 'REFUSED' "$out" 2>/dev/null | sed 's/^ *//')
+  if [ -n "$line" ]; then
+    holder=$(grep -m 1 'Operation inhibited by' "$out" 2>/dev/null | sed 's/^ *//')
+    say "  $box: left awake, not a failure -- $line${holder:+ ($holder)}"
+  else
+    say "  $box: WARNING -- wake-lab.sh sleep $box exited $rc: $(tail -1 "$out" 2>/dev/null | sed 's/^ *//')"
+  fi
+  return 0
 }
 
 # One machine's units, in table order, one at a time: the local units share one
@@ -2246,6 +2564,12 @@ lane_exit() {
 run_lane() { # machine -- only ever as a background job: it ends in `exit`
   local lane=$1 unit machine backend host lane_host= lab_box lab_lock_rc
   LANE_PIDS=
+  LANE_REACHED=0
+  LANE_DIALLING=0
+  # The gated box this lane holds, once it holds one; the EXIT trap puts it to sleep if the lane
+  # stops before the normal path does (sleep_gated_box_after_early_exit).
+  LANE_GATED_BOX=
+  LANE_SLEPT=0
   IN_LANE=1
   UNIT_PID=
   LANE_OUT=$LANE_DIR/output.$lane
@@ -2265,7 +2589,23 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
   done
   if [ -n "$lane_host" ]; then
     lab_box=$(lab_box_of "$lane_host")
+    # A gated box is asked whether it is up BEFORE anything reserves it or dials it: asleep is its
+    # ordinary state on a day nothing woke it, and every unit of the lane records `gate` saying so.
+    if lab_box_gated "$lab_box" && ! lab_box_up "$lab_box"; then
+      for unit in "${UNITS[@]}"; do
+        IFS=: read -r machine backend host <<<"$unit"
+        [ "$machine" = "$lane" ] || continue
+        wanted "$backend" || continue
+        say "  $machine/$backend: gate ($LAB_GATE_REASON)"
+        record "$machine" "$backend" gate 0
+        update_unit_state "$machine" "$backend" gate
+        flush_lane_output || die "cannot publish the $machine/$backend summary to stdout"
+      done
+      : >"$LANE_DIR/lane-done.$lane" || die "cannot mark the $lane lane finished"
+      exit 0
+    fi
     take_lab_lock "$lab_box"; lab_lock_rc=$?
+    [ "$lab_lock_rc" = 0 ] && lab_box_gated "$lab_box" && LANE_GATED_BOX=$lab_box
     # A harness that cannot lock at all fails the lane rather than reporting contention it did not
     # observe: `skip (box ... reserved by ...)` over a read-only state directory is a local fault
     # wearing the costume of a legitimate one.
@@ -2295,6 +2635,18 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
     run_unit "$machine" "$backend" "$host"
     flush_lane_output || die "cannot publish the $machine/$backend summary to stdout"
   done
+  # A gated box goes back to sleep once its lane is done with it -- only if a unit reached it,
+  # since one that never answered has nothing to put down. The lane's own reservation goes first:
+  # wake-lab's sleep takes the box's lane lock like every destroyer, and would otherwise be refused
+  # by the very lane asking for it.
+  if [ -n "$lane_host" ] && [ "$LANE_REACHED" = 1 ] && lab_box_gated "$lab_box"; then
+    exec 8>&-
+    sleep_gated_box "$lab_box"
+    # Only once the request has RETURNED: a cancellation that interrupts it (relay reaps its
+    # supervisor) must leave the EXIT path to issue the detached request instead.
+    LANE_SLEPT=1
+    flush_lane_output || die "cannot publish the $lab_box sleep summary to stdout"
+  fi
   # The lane's completion marker, published as its last act: the run record
   # reads its absence as a lane that stopped before finishing, so nothing may
   # come between this and the `exit` -- and a lane that dies or is signalled

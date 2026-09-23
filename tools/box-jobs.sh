@@ -44,6 +44,16 @@ BOX_JOBS_DXG_CAP=2
 # changes; the width is not what they are about.)
 BOX_JOBS_SDMA_CAP=8
 
+# tuf-amd-linux's hip unit (gh-ocannl-1035): the fleet's one DISCRETE-memory AMD
+# GPU (RX 7700S, gfx1102), the box whose host<->device transfers and placement
+# minix's unified gfx1151 can mask. Its KFD topology reports a larger SDMA pool
+# than minix's (2 engines x 6 queues against 1 x 6), but nothing has measured
+# what width its suite tolerates, so its sweep unit starts at the most
+# conservative width any GPU unit here has run clean at. NOT a measurement:
+# lukstafi/ludics-lite#344 (the tuf width/slot ladder) is the measurement that
+# replaces this number, the way gh-ocannl-1029's ladder replaced minix's.
+BOX_JOBS_TUF_HIP_CAP=2
+
 # The backends that hold the device, i.e. the ones the bridge carries. A CPU
 # backend on the same box runs at full width.
 box_jobs_gpu_backend() { # <backend>; 0 iff it holds a GPU
@@ -94,6 +104,8 @@ box_jobs_sweep_cap() { # <machine> <backend> [<ssh-destination>]; prints the cap
   case "${1:-}:${2:-}:$(box_jobs_dest_transport "${3:-}")" in
     minix:hip:native) printf '%s' "$BOX_JOBS_SDMA_CAP" ;;
     minix:hip:*) printf '%s' "$BOX_JOBS_DXG_CAP" ;;
+    # Single-boot native Linux, so there is no other transport to tell apart.
+    tuf:hip:*) printf '%s' "$BOX_JOBS_TUF_HIP_CAP" ;;
     *) ;;
   esac
 }

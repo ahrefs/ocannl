@@ -2234,13 +2234,14 @@ if [ -z "$dxg_detail" ]; then
   # The values themselves, from the shipping table, in one shell: the sweep's
   # hip unit over each of minix's boots (and with no destination, or one the
   # table does not know), rog's cuda unit over each of its boots, a CPU unit on
-  # a native boot, the override that must still win over both transports, the
-  # local probe, and the two constants.
+  # a native boot, tuf's hip unit at its conservative width (gh-ocannl-1035), the
+  # override that must still win over both transports, the local probe, and the
+  # two constants.
   sweep_cap=$(
     . "$JOBS_SRC"
     . "$TMP/unit-jobs.sh"
     . "$TMP/lab-dest-of.sh"
-    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s' \
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s' \
       "$(unit_jobs minix hip)" \
       "$(unit_jobs minix hip "$(lab_dest_of minix wsl)")" \
       "$(unit_jobs minix hip "$(lab_dest_of minix linux)")" \
@@ -2248,6 +2249,7 @@ if [ -z "$dxg_detail" ]; then
       "$(unit_jobs rog-nv cuda "$(lab_dest_of rog wsl)")" \
       "$(unit_jobs rog-nv cuda "$(lab_dest_of rog linux)")" \
       "$(unit_jobs minix multidev_cc "$(lab_dest_of minix linux)")" \
+      "$(unit_jobs tuf hip "$(lab_dest_of tuf linux)")" \
       "$(OCANNL_TOOL_SWEEP_JOBS=7 unit_jobs minix hip)" \
       "$(OCANNL_TOOL_SWEEP_JOBS=7 unit_jobs minix hip "$(lab_dest_of minix linux)")" \
       "$(unit_jobs m4-max metal)" \
@@ -2255,8 +2257,8 @@ if [ -z "$dxg_detail" ]; then
       "$BOX_JOBS_DXG_CAP/$BOX_JOBS_SDMA_CAP"
   )
   case $sweep_cap in
-    "2|2|8|2||||7|7||2|2/8") ;;
-    *) dxg_detail="shared table disagrees: $sweep_cap (want 2|2|8|2||||7|7||2|2/8)" ;;
+    "2|2|8|2||||2|7|7||2|2/8") ;;
+    *) dxg_detail="shared table disagrees: $sweep_cap (want 2|2|8|2||||2|7|7||2|2/8)" ;;
   esac
 fi
 if [ -z "$dxg_detail" ]; then
