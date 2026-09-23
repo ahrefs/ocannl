@@ -1988,10 +1988,12 @@ that they earn a lookup rather than always-loaded space.
   default 90 minutes).
   When the execution column was introduced, existing `pass` rows became `legacy-pass` with
   `execution=unknown`; old incremental evidence is retained, but cannot masquerade as a forced run.
-- **The hip unit runs its tests under `dune -j 2`, and a red minix/hip whose failures are all
-  `HIP_ERROR_INVALID_DEVICE` at `hip_init`, `HIP_ERROR_NO_BINARY_FOR_GPU` at module load, or
-  failed stream creation is the WSL2 dxg bridge overflowing, not the backend.** minix's GPU is
-  an iGPU reached through `/dev/dxg`: every allocation and module load is a synchronous message
+- **On a WSL boot, the hip unit runs its tests under `dune -j 2`, and a red minix/hip whose
+  failures are all `HIP_ERROR_INVALID_DEVICE` at `hip_init`, `HIP_ERROR_NO_BINARY_FOR_GPU` at
+  module load, or failed stream creation is the WSL2 dxg bridge overflowing, not the backend.**
+  This bullet is about WSL boots (`minix-amd-wsl`, `rog-nv-wsl`) only; a native boot has no
+  bridge, and its own limit is the next bullet. Under WSL, minix's GPU is an iGPU reached through
+  `/dev/dxg`: every allocation and module load is a synchronous message
   over a Hyper-V VM bus ring, and the ring fills when the suite's test executables hold the
   device at once (dune's default there is 32 jobs). The kernel says so —
   `dmesg | grep 'misc dxg'` shows `vmbus_sendpacket failed: fffffff5` (-EAGAIN) bursts exactly
@@ -2020,10 +2022,12 @@ that they earn a lookup rather than always-loaded space.
   `tools/test-run.sh` both read, so the sweep's width and a manual run's cannot drift
   (`OCANNL_TOOL_SWEEP_JOBS=<n>` still overrides the sweep's for one run). It is applied to the
   test phase only: `test_cmd` compiles under `@check` at full width first, since the cap bounds
-  GPU-holding processes, not the build. Only minix's hip unit is in that file's sweep table:
-  rog-nv's CUDA crosses the same bridge and a manual run there IS capped by the device probe, but
-  no measurement says what width its discrete GPU tolerates, so its daily unit is left at full
-  width until one does. The value is measured, not guessed: on the degraded bridge dune's default
+  GPU-holding processes, not the build. The sweep's table keys on the transport as well as the
+  box and backend, read from the unit's resolved ssh destination (`-wsl` is the dxg bridge,
+  `-linux` the native boot; gh-ocannl-1029). Across the bridge only minix's hip unit is capped:
+  rog-nv's CUDA crossed the same bridge and a manual run there IS capped by the device probe, but
+  no measurement said what width its discrete GPU tolerated under WSL, so its WSL unit stays at
+  full width. The value is measured, not guessed: on the degraded bridge dune's default
   lost 67 stanzas (356 kernel-side refusals), `-j 4` still lost 27 (120), and `-j 2` ran a forced
   full `@runtest @train` unit clean in 18.5 minutes (the sweep harness pins the call shape). A
   single GPU serialises the kernels anyway, so the capped test phase is not much slower. Recovery
@@ -2033,6 +2037,20 @@ that they earn a lookup rather than always-loaded space.
   lands on `hipInit` and on stream creation too, per VM-bus message, so it would have to sit at
   the binding's error check, and it cannot help a process whose `hip_init` was refused
   (gh-ocannl-927).
+- **On a native boot the limit is minix's copy-engine queues, not a bridge: the hip unit runs
+  at `-j 8`, and rog-nv's cuda unit is uncapped** (gh-ocannl-1029). The amdgpu driver has **8
+  SDMA queues for the whole device** (KFD topology: one SDMA engine), and every HIP process that
+  copies takes one, so what runs out is the number of GPU-holding processes on the box, however
+  they are split across dune calls or correctness slots. At dune's default width (32) the native
+  2026-09-23 ladder lost `schedule_conv_gemm` to a ROCr assertion
+  (`GpuAgent::ReleaseQueueMainScratch`), with the kernel logging `No more SDMA queue to allocate
+  (8 total queues)` and `DQM create queue type 1 failed. ret -12`. `-j 8`, `-j 4` and `-j 2` logged
+  no GPU kernel line at all, and `-j 8` cost 2% of the wall time (946 s against 921 s). That
+  signature is what to look for in `journalctl _TRANSPORT=kernel` when a native hip unit fails
+  wider than its cap. rog-nv's native cuda unit ran green at 24, 8, 4 and 2 with no NVRM/Xid line.
+  The cap is `BOX_JOBS_SDMA_CAP` in `tools/box-jobs.sh`. `tools/test-run.sh` does not inject it
+  into a manual run (its probe is the dxg device), so pass `-j 8` yourself for a full hip suite on
+  `minix-amd-linux`.
 - **Runtime-refusal signature table.** These are the exception names `tools/sweep.sh`'s
   `ENVIRONMENT_REFUSALS` treats as the environment refusing a run rather than a test judging it;
   dune prints an uncaught binding error as `Fatal error: exception <name>:` with the status on

@@ -2188,9 +2188,15 @@ grep -q 'box_jobs_sweep_cap' "$TMP/unit-jobs.sh" ||
 [ -n "$dxg_detail" ] || grep -q '^\. tools/box-jobs\.sh$' "$SRC" ||
   dxg_detail="test-run.sh does not source tools/box-jobs.sh"
 # The width depends on how the unit reached its box (gh-ocannl-1029): the two
-# lab boxes dual-boot, and only a WSL boot crosses the bridge. So every call
-# site must hand unit_jobs the unit's destination -- a call that dropped it
-# would silently give a native boot the WSL cap, or the reverse.
+# lab boxes dual-boot, and only a WSL boot crosses the bridge. Every call site
+# must hand unit_jobs the unit's RESOLVED destination -- the `@<box>`
+# placeholder is replaced in UNITS before any unit runs -- since a call that
+# dropped it would silently give a native boot the WSL cap. And the
+# destinations are not restated here: they come from sweep.sh's own
+# lab_dest_of, the table every resolved destination is a member of, so an
+# alias renamed there cannot leave box-jobs.sh classifying a name the sweep no
+# longer uses.
+sed -n '/^lab_dest_of() {/,/^}/p' "$SWEEP_SRC" >"$TMP/lab-dest-of.sh"
 if [ -z "$dxg_detail" ]; then
   unit_jobs_calls=$(grep -c 'unit_jobs "' "$SWEEP_SRC")
   unit_jobs_dest_calls=$(grep -c 'unit_jobs "$machine" "$backend" "$host"' "$SWEEP_SRC")
@@ -2198,23 +2204,28 @@ if [ -z "$dxg_detail" ]; then
     dxg_detail="sweep.sh calls unit_jobs $unit_jobs_calls times, $unit_jobs_dest_calls with the unit's destination"
   fi
 fi
+[ -n "$dxg_detail" ] || grep -q "minix:wsl" "$TMP/lab-dest-of.sh" ||
+  dxg_detail="lab_dest_of did not extract from sweep.sh: $(cat "$TMP/lab-dest-of.sh")"
 if [ -z "$dxg_detail" ]; then
   # The values themselves, from the shipping table, in one shell: the sweep's
-  # dxg unit (by destination, and with none), the native units, the local
-  # probe, and the override that must still win over both transports.
+  # hip unit over each of minix's boots (and with no destination, or one the
+  # table does not know), rog's cuda unit over each of its boots, a CPU unit on
+  # a native boot, the override that must still win over both transports, the
+  # local probe, and the two constants.
   sweep_cap=$(
     . "$JOBS_SRC"
     . "$TMP/unit-jobs.sh"
+    . "$TMP/lab-dest-of.sh"
     printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s' \
       "$(unit_jobs minix hip)" \
-      "$(unit_jobs minix hip minix-amd-wsl)" \
-      "$(unit_jobs minix hip minix-amd-linux)" \
+      "$(unit_jobs minix hip "$(lab_dest_of minix wsl)")" \
+      "$(unit_jobs minix hip "$(lab_dest_of minix linux)")" \
       "$(unit_jobs minix hip 10.0.0.7)" \
-      "$(unit_jobs rog-nv cuda rog-nv-wsl)" \
-      "$(unit_jobs rog-nv cuda rog-nv-linux)" \
-      "$(unit_jobs minix multidev_cc minix-amd-linux)" \
+      "$(unit_jobs rog-nv cuda "$(lab_dest_of rog wsl)")" \
+      "$(unit_jobs rog-nv cuda "$(lab_dest_of rog linux)")" \
+      "$(unit_jobs minix multidev_cc "$(lab_dest_of minix linux)")" \
       "$(OCANNL_TOOL_SWEEP_JOBS=7 unit_jobs minix hip)" \
-      "$(OCANNL_TOOL_SWEEP_JOBS=7 unit_jobs minix hip minix-amd-linux)" \
+      "$(OCANNL_TOOL_SWEEP_JOBS=7 unit_jobs minix hip "$(lab_dest_of minix linux)")" \
       "$(unit_jobs m4-max metal)" \
       "$(OCANNL_TOOL_DXG_DEVICE=$dxg_present box_jobs_local_cap cuda)" \
       "$BOX_JOBS_DXG_CAP/$BOX_JOBS_SDMA_CAP"
@@ -2223,6 +2234,19 @@ if [ -z "$dxg_detail" ]; then
     "2|2|8|2||||7|7||2|2/8") ;;
     *) dxg_detail="shared table disagrees: $sweep_cap (want 2|2|8|2||||7|7||2|2/8)" ;;
   esac
+fi
+if [ -z "$dxg_detail" ]; then
+  # Every alias the sweep can resolve to is one box-jobs.sh classifies, and
+  # classifies as the boot lab_dest_of says it is.
+  for box in rog minix; do
+    for kind in wsl linux; do
+      got=$(. "$JOBS_SRC"; . "$TMP/lab-dest-of.sh"; box_jobs_dest_transport "$(lab_dest_of "$box" "$kind")")
+      case $kind:$got in
+        wsl:dxg | linux:native) ;;
+        *) dxg_detail="$box's $kind alias classifies as '${got}'" ;;
+      esac
+    done
+  done
 fi
 if [ -z "$dxg_detail" ]; then
   report 0 "dxg: sweep.sh's unit_jobs and the injected cap come from one table"
