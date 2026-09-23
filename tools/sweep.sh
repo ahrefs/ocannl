@@ -167,17 +167,22 @@ lab_dest() { # box
   var=OCANNL_TOOL_SWEEP_DEST_$(printf '%s' "$box" | tr '[:lower:]' '[:upper:]')
   dest=${!var:-}
   if [ -n "$dest" ]; then
-    # It reaches ssh as the destination argument, so nothing ssh could read as an option.
+    # A bare host alias, and nothing else. It reaches ssh as the destination argument, so nothing
+    # ssh could read as an option; and no `user@`, because the lane derives its lock from this
+    # very string (lab_box_of in run_lane), and any `@` spelling makes the host ssh contacts and
+    # the box the lane reserves two different parses of one argument -- `alice@rog-nv-linux`
+    # would take `alice@rog.lock`, `a@rog-nv-linux@elsewhere` would reach `elsewhere` holding
+    # rog's. A user belongs in the alias's ~/.ssh/config entry, where the real aliases keep it.
     case $dest in
-      -* | *[!A-Za-z0-9._@-]*)
-        echo "sweep: $var='$dest' is not an ssh destination" >&2
+      "" | -* | *[!A-Za-z0-9._-]*)
+        echo "sweep: $var='$dest' is not a bare ssh host alias" >&2
         return 1
         ;;
     esac
     # The lane reserves the box lab_box_of names for its host; an override naming another box
     # would reserve the wrong one and leave this one open to a restart mid-unit.
-    if [ "$(lab_box_of "${dest#*@}")" != "$box" ]; then
-      echo "sweep: $var='$dest' would reserve lab box '$(lab_box_of "${dest#*@}")', not '$box'" >&2
+    if [ "$(lab_box_of "$dest")" != "$box" ]; then
+      echo "sweep: $var='$dest' would reserve lab box '$(lab_box_of "$dest")', not '$box'" >&2
       return 1
     fi
     printf '%s' "$dest"
@@ -188,8 +193,12 @@ lab_dest() { # box
       "(set WAKE_LAB_HOSTS, or name the destination with $var)" >&2
     return 1
   fi
+  # The kind_of consulted must be the TABLE's: bash imports an exported function from the
+  # environment before this script starts, and an inherited kind_of would otherwise answer for a
+  # table that defines none -- the refusal below exists for exactly that table.
   kind=$(
     set +u
+    unset -f kind_of
     # shellcheck source=/dev/null
     . "$LAB_HOSTS" >/dev/null </dev/null || exit 1
     declare -F kind_of >/dev/null || exit 1
@@ -2001,8 +2010,14 @@ run_unit() { # machine backend host
     # window is closed on both sides against its neighbours.
     [ -n "$remote_started" ] && remote_started=$(( remote_started + 1 ))
     wt="$remote_home/ocannl-staging-worktrees/sweep"
-    # rog needs the CUDA and WSL lib dirs on PATH; harmless elsewhere.
-    path_prefix="export PATH=/usr/local/cuda/bin:/usr/lib/wsl/lib:\$PATH;"
+    # rog's WSL guest needs the CUDA and WSL lib dirs on PATH; harmless elsewhere. A native-Ubuntu
+    # boot has no /usr/lib/wsl/lib, and its non-login ssh PATH already carries the toolchain
+    # (~/.bashrc sources the fleet env before its interactive guard), so it keeps only CUDA's bin,
+    # which is harmless where the toolchain already put it (gh-ocannl-1030).
+    case $host in
+      *-wsl) path_prefix="export PATH=/usr/local/cuda/bin:/usr/lib/wsl/lib:\$PATH;" ;;
+      *) path_prefix="export PATH=/usr/local/cuda/bin:\$PATH;" ;;
+    esac
     # Preparation is its own ssh round trip so that its failure -- a connection
     # dropped after the probe, a full disk, a wedged worktree -- is recorded as
     # `error`, matching the local path. Folded into the test command it would

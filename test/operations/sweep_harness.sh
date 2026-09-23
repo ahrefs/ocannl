@@ -34,7 +34,7 @@ on_error() {
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
     capped capped_target remote_opt_in dest_wsl dest_linux dest_missing dest_local_only \
     dest_bogus dest_no_kind_of dest_half dest_override dest_override_wins dest_wrong_box \
-    dest_option serial_red serial_clean serial_two_inline \
+    dest_option dest_inherited_kind_of dest_user_qualified serial_red serial_clean serial_two_inline \
     serial_many_inline serial_control lanes lane_stop_seed lane_stopped \
     aggregator_missing stamp_advance dxg_clean dxg_red dxg_collection dxg_unavailable \
     dxg_many dxg_bounds dxg_no_trigger hold_lock_ok \
@@ -1136,12 +1136,22 @@ grep -q '^ocannl sweep ' "$tmp/lab-locks/minix.lock"
 # An unreadable kind refuses the RUN at startup -- exit 2, nothing contacted, no history row and
 # no run record -- rather than guessing an alias and filing the guess's failure as a sleeping box.
 # The refusal says which table, which box, and what to set instead.
+# Every check says what it saw and RETURNS rather than failing in place: the ERR trap is not
+# inherited by functions, so a bare predicate failing in here would end the harness without naming
+# anything, while a nonzero return is caught at the call site, which the trap does name.
 dest_refused() { # rc output target -- asserts the startup-refusal shape for that run
-  [ "$1" -eq 2 ]
-  [ ! -s "$ssh_calls" ]
-  absent "$3" "$state/history.tsv"
-  absent '^run: ' <<<"$2"
-  absent '^lanes:' <<<"$2"
+  if [ "$1" -ne 2 ]; then
+    printf 'sweep_harness: %s exited %s, not the startup refusal 2:\n%s\n' "$3" "$1" "$2" >&2
+    return 1
+  fi
+  if [ -s "$ssh_calls" ]; then
+    printf 'sweep_harness: %s contacted ssh before refusing:\n' "$3" >&2
+    cat "$ssh_calls" >&2
+    return 1
+  fi
+  absent "$3" "$state/history.tsv" || return 1
+  absent '^run: ' <<<"$2" || return 1
+  absent '^lanes:' <<<"$2" || return 1
 }
 : >"$ssh_calls"
 set +e
@@ -1178,6 +1188,19 @@ set -e
 dest_refused "$dest_no_kind_of_rc" "$dest_no_kind_of" dest-no-kind-of-probe
 grep -qF "gives no usable boot kind for rog (kind_of rog: '<none>'; expected linux or wsl)" \
   <<<"$dest_no_kind_of"
+# ...even when the launcher exports a kind_of of its own: bash imports it into the sweep, and only
+# the TABLE's function may answer. `env` passes the exported function through to the nested sweep.
+kind_of() { echo linux; }
+export -f kind_of
+set +e
+dest_inherited_kind_of=$(SWEEP_TEST_HOSTS=$tmp/hosts-no-kind-of.sh \
+  run_sweep_args --only cuda --target dest-inherited-kind-of-probe 2>&1)
+dest_inherited_kind_of_rc=$?
+set -e
+unset -f kind_of
+dest_refused "$dest_inherited_kind_of_rc" "$dest_inherited_kind_of" dest-inherited-kind-of-probe
+grep -qF "gives no usable boot kind for rog (kind_of rog: '<none>'; expected linux or wsl)" \
+  <<<"$dest_inherited_kind_of"
 # One box known and the other not: rog's lane must not have started, or the run would have swept
 # the half it could reach and reported the rest in a row that reads like a sleeping box.
 set +e
@@ -1218,8 +1241,21 @@ dest_option=$(SWEEP_TEST_DEST_ROG=-oProxyCommand=true \
 dest_option_rc=$?
 set -e
 dest_refused "$dest_option_rc" "$dest_option" dest-option-probe
-grep -qF "sweep: OCANNL_TOOL_SWEEP_DEST_ROG='-oProxyCommand=true' is not an ssh destination" \
+grep -qF "sweep: OCANNL_TOOL_SWEEP_DEST_ROG='-oProxyCommand=true' is not a bare ssh host alias" \
   <<<"$dest_option"
+# Nor a user-qualified one: the lock is derived from the same string ssh parses, and every `@`
+# spelling makes those two readings disagree -- the user leaks into the lock name, or a second `@`
+# moves the host ssh reaches while the lock still names rog.
+for dest_user in alice@rog-nv-linux a@rog-nv-linux@elsewhere; do
+  set +e
+  dest_user_qualified=$(SWEEP_TEST_DEST_ROG=$dest_user \
+    run_sweep_args --only cuda --target dest-user-probe 2>&1)
+  dest_user_qualified_rc=$?
+  set -e
+  dest_refused "$dest_user_qualified_rc" "$dest_user_qualified" dest-user-probe
+  grep -qF "sweep: OCANNL_TOOL_SWEEP_DEST_ROG='$dest_user' is not a bare ssh host alias" \
+    <<<"$dest_user_qualified"
+done
 
 # An environment-red unit -- a red whose log carries a runtime-refusal signature
 # from sweep.sh's ENVIRONMENT_REFUSALS table -- reruns its failing stanzas one at
