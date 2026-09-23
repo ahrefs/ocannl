@@ -51,11 +51,6 @@ let approx_rel a b = Float.(abs (a - b) <= 1e-2 * max 1. (abs b))
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let skipped = Verdict.skipped ~backend:backend_name
 
-(* A discoverable rocWMMA header tree is a property of the HOST rather than of the selected backend
-   (gh-ocannl-1032), so a leg it withdraws aggregates across the fleet's boxes instead of reading as
-   coverage this backend can never have. *)
-let skipped_no_rocwmma = Verdict.skipped ~aggregation:`Environment ~backend:backend_name
-
 (* Intentional dialect identity: after the tf32 capability gate, the remaining name branches pin
    literal MSL simdgroup, CUDA WMMA/PTX, and HIP rocWMMA forms or the hardware-specific numerical
    tolerances documented at their sites. Rendering outcomes themselves use the MMA census. *)
@@ -1475,16 +1470,21 @@ let () =
             has "simdgroup_float8x8" && has "simdgroup_half8x8" && has "thread_elements()"
           else has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>" && has ".x[__ei]")
       && has "__mma_dstage"))
-  else if on_hip then (
-    (* gh-ocannl-1032: this leg's whole subject is the converted [d] boundary in the FRAGMENT scope,
-       which exists only where a tensor unit does. With no advertised tile-MMA the composition
-       declines to the scalar fallback, which has no accumulator fragment to convert — there is no
-       weaker claim here to keep, only an honest skip. It aggregates as `Environment` because what
-       withdrew the leg is the HOST's rocWMMA provisioning, not the selected backend: the same
-       binary on the same GPU verifies it once the headers are on the box. *)
-    skipped_no_rocwmma claim_fw_value;
-    skipped_no_rocwmma claim_fw_struct)
   else (
+    (* gh-ocannl-1032: on HIP this leg's whole subject is the converted [d] boundary in the FRAGMENT
+       scope, which exists only where a tensor unit does. With no advertised tile-MMA the
+       composition declines to the scalar fallback, which has no accumulator fragment to convert —
+       there is no weaker claim here to keep, only an honest skip.
+
+       The ORDINARY backend skip, not `Environment`, even though the reason on this fleet's boxes is
+       the host's rocWMMA provisioning. [mma_supported] is a conjunction — an RDNA3+/wave32 device
+       AND the headers — and [hardware_limits] reports only its result, so from here the two are
+       indistinguishable: on a CDNA gfx9 wave64 box the leg is withdrawn by the DEVICE, which is
+       backend coverage this hardware can never have rather than a host condition a sweep should
+       aggregate away. Telling them apart would mean restating the device predicate the backend
+       owns, and the only thing it would buy is a label. `Backend` is the conservative reading of
+       the two (Verdict's contract already lets an `Environment` mark elsewhere carry same-key
+       `Backend` skips), and the host half is reported anyway, by name, in the note above. *)
     skipped claim_fw_value;
     skipped claim_fw_struct);
 

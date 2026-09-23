@@ -3582,7 +3582,17 @@
   (env_var OCANNL_FP16_ARITHMETIC)
   ; gh-ocannl-1032: this test's HIP arms branch on the ADVERTISED tile-MMA capability, so the three
   ; variables Hip_backend's rocWMMA-header probe reads are inputs to its verdict -- undeclared, a
-  ; run that newly finds (or newly loses) the headers is served the previous run's result as a pass.
+  ; run that newly points at (or away from) a header tree is served the previous run's result as a
+  ; pass, which is how a verification run of this very fix came back green without re-executing.
+  ;
+  ; These three close the vector that has actually fired; they do NOT close the other one, a tree
+  ; appearing or disappearing at a path already being searched (an install under an unchanged
+  ; HIP_PATH). Nothing dune can depend on tracks that: a dep must live in the workspace, and
+  ; `(universe)` is not available here -- in this repository `(universe)` plus an alias IS the
+  ; ambient-gate marker (`env_var_deps.is_gate`), so putting it on a test makes that test the
+  ; directory's gate and forces it under `ocannl_training_test`. The residual is the rocWMMA-header
+  ; provenance gap gh-ocannl-1026 already records, and it belongs to every capability-probing test
+  ; rather than to this one; a shared probe rule is the fix, filed rather than special-cased here.
   (env_var ROCWMMA_PATH)
   (env_var LOCALAPPDATA)
   (env_var HIP_PATH)
