@@ -266,9 +266,18 @@ end = struct
               || String.is_prefix a.gcn_arch_name ~prefix:"gfx12")
               && a.warp_size = 32))
 
-  (* A directory directly containing [rocwmma/rocwmma.hpp], if any: [ROCWMMA_PATH] variants, a clone
+  (* A directory containing a COMPLETE rocWMMA header tree, if any: [ROCWMMA_PATH] variants, a clone
      under [%LOCALAPPDATA%/rocwmma], or the HIP include tree (rocWMMA installs there on Linux).
-     rocWMMA is header-only and is NOT in the ROCm Windows SDK, hence the extra search paths. *)
+     rocWMMA is header-only and is NOT in the ROCm Windows SDK, hence the extra search paths.
+
+     "Complete" is load-bearing, not pedantry (gh-ocannl-1032): Ubuntu 26.04's librocwmma-dev 7.1.0
+     installs the five umbrella headers into /usr/include/rocwmma WITHOUT the rocwmma/internal/
+     directory that rocwmma.hpp's very first include needs, and that is the tree an [apt install
+     rocwmma] leaves behind on the distro ROCm stack. Probing rocwmma.hpp alone accepts it, and then
+     every tensorized kernel fails at hiprtc with "'internal/accessors.hpp' file not found" --
+     turning a clean capability decline into a compile error on the one path that is supposed to be
+     unreachable when the headers are absent. So require an internal header too; [types.hpp] is one
+     rocwmma.hpp pulls in unconditionally. *)
   let rocwmma_include_dir =
     lazy
       (let candidates =
@@ -280,7 +289,9 @@ end = struct
            | None -> [])
          @ match Lazy.force hip_sdk_include_dir with Some d -> [ d ] | None -> []
        in
-       List.find candidates ~f:(fun p -> Stdlib.Sys.file_exists (p ^ "/rocwmma/rocwmma.hpp"))
+       List.find candidates ~f:(fun p ->
+           Stdlib.Sys.file_exists (p ^ "/rocwmma/rocwmma.hpp")
+           && Stdlib.Sys.file_exists (p ^ "/rocwmma/internal/types.hpp"))
        |> Option.map ~f:(String.map ~f:(fun c -> if Char.(c = '\\') then '/' else c)))
 
   let mma_supported () =

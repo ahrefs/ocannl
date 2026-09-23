@@ -863,3 +863,20 @@ files.
   remain preexisting provenance gaps (gh-ocannl-1026), not reasons to disable supported caches. Outer `None` means
   concrete device discovery failed and bypasses all shared cache I/O. Execution/tuning remain
   available. `schedule_cache_device` pins device/metadata separation, bypass, and real-backend replay.
+
+- **HIP's tensor-core capability is gated on the HOST, not only on the device** (gh-ocannl-1032):
+  `mma_supported` is `all_rdna_wave32 && rocwmma_include_dir`, and both `hardware_limits.mma` and
+  `mma_syntax` consult it, so a gfx11/gfx12 wave32 box whose filesystem has no rocWMMA headers
+  advertises no MMA, seeds no tensorized candidate and renders the lane-0 scalar fallback — and is
+  right to. The WSL ROCm SDK bundled rocWMMA and native Ubuntu 26.04 does not, which is how
+  `schedule_mma_matmul` came to print 11 bare `false`s on a native AMD box with nothing naming the
+  cause; the native stack's codegen was never the difference, and with a full header tree on
+  `ROCWMMA_PATH` that same ROCm 7.1.0 / gfx1151 box passes the suite unchanged. Two rules follow. A
+  test arm expecting a rocWMMA emission DERIVES it from the advertised capability and asserts the
+  fallback rendering otherwise, as the tf32 gate and the CUDA `Fp16_wide` arm already do; only a
+  claim whose subject is the fragment scope itself skips, and as `` `Environment ``, because the
+  same binary on the same GPU verifies it once the headers land. And the probe requires
+  `rocwmma/internal/types.hpp` beside `rocwmma/rocwmma.hpp`: Ubuntu's librocwmma-dev 7.1.0 installs
+  the umbrella headers without `rocwmma/internal/`, so a one-file probe accepts a tree on which
+  every tensorized kernel then fails inside hiprtc — the capability decline exists precisely to
+  keep that unreachable.
