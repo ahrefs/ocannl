@@ -680,6 +680,18 @@
 # sufficient information in the logs files.
 #never_capture_stdout=false
 
+# If true (the default), the C runtime's stderr is moved onto its own file descriptor,
+# duplicated from the process's real stderr at startup, so that what foreign C libraries print
+# — notably the ROCm stack's diagnostics — follows the real stderr instead of whatever later
+# takes over fd 2. It is what keeps an assertions-enabled ROCr build's per-event
+# `Signal 0x... time stamps may be invalid.` out of a ppx_expect golden, since ppx_expect
+# redirects both fd 1 and fd 2 into the file it diffs (gh-ocannl-1031). Nothing is filtered: the
+# lines still reach the real stderr. OCANNL's own diagnostics write to OCaml's stderr (fd 2) and
+# are unaffected either way. Set to false to have foreign C output follow fd 2 again — e.g. to
+# capture a driver's messages together with the program's. No effect where the C stderr stream
+# is not assignable (Windows).
+#detach_c_stderr=true
+
 # If `false`, debug logs from routines are re-logged via the ppx_minidebug framework.
 # If `true`, the logs are in stream-specific files. WARNING: files are appended to, not overwritten.
 #debug_log_to_stream_files=false

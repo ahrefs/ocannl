@@ -70,6 +70,7 @@ let known_config_keys =
       "clean_up_build_files_on_startup";
       "clean_up_log_files_on_startup";
       "never_capture_stdout";
+      "detach_c_stderr";
       (* ppx_minidebug *)
       "snapshot_every_sec";
       "time_tagged";
@@ -348,8 +349,11 @@ let config_key_classification : (config_key_class * string * string list) list =
        under one setting is a valid crown under the other (gh-ocannl-638)",
       [ "tune_ship_arm" ] );
     ( Execution_neutral,
-      "startup and configuration-sourcing chatter",
-      [ "suppress_welcome_message"; "log_config_sourcing"; "never_capture_stdout" ] );
+      "startup and configuration-sourcing chatter, and which descriptor foreign C-library chatter \
+       follows",
+      [
+        "suppress_welcome_message"; "log_config_sourcing"; "never_capture_stdout"; "detach_c_stderr";
+      ] );
     ( Execution_neutral,
       "debug artifacts and where they go: the files are written beside the run, the kernels are \
        what they would have been",
@@ -1673,6 +1677,25 @@ let () =
 let with_runtime_debug () = settings.output_debug_files_in_build_directory && settings.log_level > 1
 let debug_log_from_routines () = settings.debug_log_from_routines && settings.log_level > 1
 let never_capture_stdout () = get_global_flag ~default:false ~arg_name:"never_capture_stdout"
+
+external detach_c_stderr : unit -> bool = "ocannl_detach_c_stderr"
+(** Move the C runtime's [stderr] onto its own descriptor, duplicated from the process's real
+    stderr, so that foreign C libraries' diagnostics follow the real stderr rather than whatever
+    later takes over fd 2 (gh-ocannl-1031). Reports whether it took effect.
+
+    The chatter that forced it is ROCm's: Ubuntu 26.04 ships an assertions-enabled libhsa-runtime64
+    7.1.0, whose live [debug_print] costs one [Signal 0x... time stamps may be invalid.] per
+    [hipEventRecord] -- unavoidably, since ROCclr profiles every event marker regardless of
+    [hipEventDisableTiming] and no runtime switch reaches the print. That belongs on stderr and the
+    project already treats stderr as the chatter channel, but ppx_expect redirects fd 1 AND fd 2
+    into the file it diffs, so the chatter lands in a [%%expect] golden. Nothing is filtered here:
+    the lines still reach the real stderr and the run log, and OCaml's own [Stdlib.stderr] keeps
+    writing to fd 2, so the library's own diagnostics are unchanged. *)
+
+(* At module initialization, so the descriptor is duplicated from the real stderr before any test
+   harness or capture wrapper has had a chance to redirect fd 2. *)
+let c_stderr_detached =
+  get_global_flag ~default:true ~arg_name:"detach_c_stderr" && detach_c_stderr ()
 
 let enable_runtime_debug () =
   settings.output_debug_files_in_build_directory <- true;

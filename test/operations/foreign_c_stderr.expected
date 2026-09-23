@@ -1,0 +1,6 @@
+detach_c_stderr in effect: true
+a foreign C library's stderr escapes a capture of fd 2: true
+OCaml's own stderr follows fd 2 either way: true
+detach_c_stderr in effect: false
+without the setting, a foreign C library's stderr is captured with fd 2: true
+OCaml's own stderr follows fd 2 either way: true
