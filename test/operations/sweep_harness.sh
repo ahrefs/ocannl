@@ -5,7 +5,10 @@
 # history migration and the reused-worktree path that made cached GPU passes
 # ambiguous in the first place.
 
-set -euo pipefail
+# -E (errtrace) so the ERR trap below also fires inside helper functions,
+# command substitutions and subshells: without it a failing predicate inside a
+# helper such as `dest_refused` ends the harness without naming any line.
+set -Eeuo pipefail
 . "$(dirname "$0")/../../scripts/harness-support.sh"
 
 # Most assertions below are deliberately quiet shell predicates. If one fails
@@ -1136,9 +1139,10 @@ grep -q '^ocannl sweep ' "$tmp/lab-locks/minix.lock"
 # An unreadable kind refuses the RUN at startup -- exit 2, nothing contacted, no history row and
 # no run record -- rather than guessing an alias and filing the guess's failure as a sleeping box.
 # The refusal says which table, which box, and what to set instead.
-# Every check says what it saw and RETURNS rather than failing in place: the ERR trap is not
-# inherited by functions, so a bare predicate failing in here would end the harness without naming
-# anything, while a nonzero return is caught at the call site, which the trap does name.
+# Every check says what it saw and RETURNS rather than failing in place: errtrace would fire the
+# trap on a bare predicate in here, but it names the predicate (and, on macOS's bash 3.2, only the
+# function's first line), not which run it was checking; a nonzero return is caught at the call
+# site, which names the run.
 dest_refused() { # rc output target -- asserts the startup-refusal shape for that run
   if [ "$1" -ne 2 ]; then
     printf 'sweep_harness: %s exited %s, not the startup refusal 2:\n%s\n' "$3" "$1" "$2" >&2
