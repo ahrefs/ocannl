@@ -211,6 +211,7 @@
   (alias runtest-log_index_width_narrow)
   (alias runtest-log_index_width_wide)
   (alias runtest-config_var_spellings)
+  (alias runtest-foreign_c_stderr)
   (alias runtest-config_var_warnings)
   (alias runtest-config_var_fatal_spelling)
   (alias runtest-test_config_consistency)
@@ -1766,6 +1767,45 @@
 ; ignored carries ONE value in both spellings, so the control lines cannot report a collision.
 ; What is thereby not tested live is the case dimension itself; that is what `env_var_names`'
 ; printed list above covers, and `profiles/dune` exercises `OCANNL_PROFILE` end to end.
+
+; gh-ocannl-1031: which descriptor a foreign C library's stderr follows. The executable performs
+; ppx_expect's own capture (dup2 a temp file onto fd 2) and reports what it caught; the rule below
+; runs it under both values of the setting, so the golden carries the claim and its negative
+; control side by side. The setting is pinned on the COMMANDLINE in both arms, which no environment
+; variable outranks, so an ambient `OCANNL_DETACH_C_STDERR` cannot rewrite this golden.
+
+(executable
+ (name foreign_c_stderr)
+ (modules foreign_c_stderr)
+ (foreign_stubs
+  (language c)
+  (names foreign_c_stderr_stubs))
+ (libraries base arrayjit.utils stdio unix arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- the subject is a file descriptor of the C runtime; it links no backend
+ ; and compiles nothing for one.
+ (target foreign_c_stderr.actual)
+ (deps ocannl_config)
+ (action
+  ; stderr is NOT ignored here. It carries the three things the golden deliberately cannot: the
+  ; foreign line the detached arm lets through (landing on the real stderr is the whole claim), the
+  ; control's reading of whether an fd-2 capture reaches C on this host, and -- on a host where it
+  ; does not, or one whose C stderr is not assignable -- the `SKIPPED` line, which prints the same
+  ; stdout as an evaluated claim on purpose and would otherwise be invisible to `grep SKIPPED`.
+  (with-stdout-to
+   %{target}
+   (progn
+    (run %{dep:foreign_c_stderr.exe} --ocannl_detach_c_stderr=true)
+    (run %{dep:foreign_c_stderr.exe} --ocannl_detach_c_stderr=false)))))
+
+(rule
+ (alias runtest-foreign_c_stderr)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff foreign_c_stderr.expected foreign_c_stderr.actual)))
 
 (executable
  (name config_var_spellings)

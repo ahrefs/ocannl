@@ -11,6 +11,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 #if defined(_WIN32)
 #include <windows.h>
 #elif defined(__APPLE__)
@@ -28,6 +33,67 @@ CAMLprim value ocannl_flush_c_streams(value unit) {
   (void)unit;
   fflush(NULL);
   return Val_unit;
+}
+
+/* Give the C runtime's [stderr] its own file descriptor, duplicated from the process's real
+   stderr at startup, so that a later redirection of fd 2 does not capture what foreign C
+   libraries print (gh-ocannl-1031).
+
+   The motivating writer is the ROCm stack: Ubuntu 26.04 ships libhsa-runtime64 7.1.0 built with
+   assertions on, so ROCr's internal `debug_print` is live and every `hipEventRecord` costs one
+   `Signal 0x... time stamps may be invalid.` on stderr -- ROCclr's `hip::EventMarker` profiles
+   every event marker whatever `hipEventDisableTiming` says, and ROCr then reads back timestamps
+   the hardware never wrote for a barrier packet. Nothing OCANNL does avoids it and no runtime
+   switch turns it off.
+
+   That is only chatter, and the project's contract already puts chatter on stderr and keeps
+   stdout as the data channel -- but ppx_expect redirects BOTH fd 1 and fd 2 into the file it
+   diffs against the `%expect` block, so foreign chatter lands in a golden. Moving the C stream
+   to its own descriptor restores the contract for it: the chatter still reaches the real stderr
+   and the run log, nothing is dropped or rewritten anywhere, and OCaml's own [Stdlib.stderr]
+   (fd 2) is untouched, so the library's diagnostics keep behaving exactly as before.
+
+   Unbuffered like the stream it replaces: a fatal driver message that precedes an abort must
+   already be out when the process dies. The replaced FILE* is deliberately not closed -- that
+   would close fd 2. Only where [stderr] is a modifiable lvalue (glibc, Darwin); elsewhere the
+   stub reports that it did nothing. */
+CAMLprim value ocannl_detach_c_stderr(value unit) {
+  (void)unit;
+#if defined(__GLIBC__) || defined(__APPLE__)
+  {
+    static int detached = 0;
+    int fd;
+    FILE *replacement;
+    if (detached) return Val_true;
+    /* Close-on-exec: this descriptor is the PARENT's stderr, and a child that inherited it would
+       hold the write end of the parent's stderr pipe open -- a log collector waiting for EOF then
+       waits for a descriptor nobody writes to, and a caller redirecting the child's streams has
+       lost the isolation it asked for. F_DUPFD_CLOEXEC sets it in the dup itself, leaving no
+       window where a concurrent fork/exec inherits it; where the constant is missing the two-step
+       fallback still closes the leak for every exec but a racing one. */
+#ifdef F_DUPFD_CLOEXEC
+    fd = fcntl(fileno(stderr), F_DUPFD_CLOEXEC, 3);
+#else
+    fd = -1;
+#endif
+    if (fd == -1) {
+      fd = dup(fileno(stderr));
+      if (fd != -1) (void)fcntl(fd, F_SETFD, FD_CLOEXEC);
+    }
+    if (fd == -1) return Val_false;
+    replacement = fdopen(fd, "w");
+    if (replacement == NULL) {
+      close(fd);
+      return Val_false;
+    }
+    setvbuf(replacement, NULL, _IONBF, 0);
+    stderr = replacement;
+    detached = 1;
+    return Val_true;
+  }
+#else
+  return Val_false;
+#endif
 }
 
 /* --- CPU topology facts (gh-ocannl-530) ---
