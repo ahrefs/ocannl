@@ -45,7 +45,7 @@ on_error() {
     native_unit_cpu native_abort_run native_other_abort hold_lock_ok \
     tuf_asleep tuf_no_wake_lab tuf_up tuf_unreachable tuf_inhibited tuf_sleep_fails \
     tuf_unguarded tuf_unguarded_prep tuf_unguarded_wsl tuf_self_refusal tuf_cancelled \
-    guard_held guard_refused \
+    guard_held guard_refused guard_stalled \
     guard_absent \
     after_cancel; do
     [ -n "${!name:-}" ] || continue
@@ -254,6 +254,19 @@ case ${SWEEP_TEST_SSH_MODE:-} in
         ;;
       *'"$HOME"'*) printf '%s\n%s\n%s\n' "$HOME" "$(date +%s)" "$SWEEP_TEST_BOOT_ID"; exit 0 ;;
       *boot_id*) printf '%s\n' "$SWEEP_TEST_BOOT_ID"; exit 0 ;;
+    esac
+    ;;
+  hang-probe)
+    # The reachability probe itself never answers, so a cancellation lands inside it.
+    case $* in
+      *'"$HOME"'*)
+        : >"$SWEEP_TEST_WAIT_PREFIX.probing"
+        waited=0
+        while [ "$waited" -lt "$SWEEP_TEST_WAIT_TICKS" ]; do
+          sleep 0.05
+          waited=$((waited + 1))
+        done
+        ;;
     esac
     ;;
   release)
@@ -2452,6 +2465,54 @@ done
 grep -q '^tuf=DOWN' "$tuf_cancel_sleep_log"
 [ "$(cat "$wake_lab_calls")" = "$(printf 'status tuf\nsleep tuf\nsleep tuf')" ]
 
+
+# ...and one cancelled while the lane is still DIALLING tuf -- inside its reachability probe --
+# owes the box its sleep just the same: the box was up at its status check, and a probe cut short
+# says nothing to the contrary.
+tuf_cancel_prefix=$tmp/tuf-cancel-probe
+wait_prefix=$tuf_cancel_prefix
+: >"$wake_lab_calls"
+: >"$ssh_calls"
+SWEEP_TEST_OWN_GROUP=1 SWEEP_TEST_WAIT_PREFIX=$tuf_cancel_prefix SWEEP_TEST_SSH_MODE=hang-probe \
+  SWEEP_TEST_TUF_STATUS=up run_sweep_args --only hip --target tuf-cancel-probe \
+  >"$tuf_cancel_prefix.out" 2>"$tuf_cancel_prefix.err" &
+tuf_cancel_pid=$!
+holder_pid=$tuf_cancel_pid
+waited=0
+until [ -e "$tuf_cancel_prefix.probing" ] && grep -q '^status tuf$' "$wake_lab_calls"; do
+  [ "$waited" -lt "$wait_ticks" ] || break
+  sleep 0.05
+  waited=$((waited + 1))
+done
+[ -e "$tuf_cancel_prefix.probing" ]
+# The tuf lane's own probe, not only minix's: its status check comes first, so wait for a probe
+# issued after it -- two lanes probing means both are inside the probe.
+waited=0
+until [ "$(grep -c 'kernel/random/boot_id' "$ssh_calls")" -ge 2 ]; do
+  [ "$waited" -lt "$wait_ticks" ] || break
+  sleep 0.05
+  waited=$((waited + 1))
+done
+[ "$(grep -c 'kernel/random/boot_id' "$ssh_calls")" -ge 2 ]
+kill -TERM -- "-$tuf_cancel_pid"
+set +e
+wait "$tuf_cancel_pid"
+tuf_cancel_rc=$?
+set -e
+holder_pid=
+wait_prefix=
+[ "$tuf_cancel_rc" -eq 143 ]
+tuf_cancel_stamp=$(sed -n 's/^sweep \([0-9TZ]*\) .*/\1/p' "$tuf_cancel_prefix.out")
+tuf_cancel_sleep_log=$state/logs/$tuf_cancel_stamp-tuf-sleep.log
+waited=0
+until grep -q '^tuf=DOWN' "$tuf_cancel_sleep_log" 2>/dev/null; do
+  [ "$waited" -lt "$wait_ticks" ] || break
+  sleep 0.05
+  waited=$((waited + 1))
+done
+grep -q '^tuf=DOWN' "$tuf_cancel_sleep_log"
+[ "$(cat "$wake_lab_calls")" = "$(printf 'status tuf\nsleep tuf')" ]
+
 # The guard itself: the far-side supervisor's `--hold`, run here against fake inhibitors. The
 # program is the sweep's own, extracted as tools/test-test-run.sh extracts unit_jobs (the sweep
 # cannot be sourced), and asserted to have matched.
@@ -2516,6 +2577,33 @@ set -e
 [ "$guard_absent_rc" -eq 4 ]
 grep -q '^sweep-hold: WARNING: running WITHOUT a sleep guard, .* -- no systemd-inhibit on PATH$' \
   <<<"$guard_absent"
+# An inhibitor that never answers (logind or D-Bus wedged) is given up on after the wait, and KILLED
+# by the pid its double-forked helper reported: guarded legs must not accumulate stalled helpers.
+cat >"$guard_bin/systemd-inhibit" <<EOF
+#!/bin/sh
+echo "\$\$" >"$tmp/inhibit.pid"
+exec sleep 600
+EOF
+rm -f "$tmp/inhibit.pid"
+set +e
+guard_stalled=$(OCANNL_TOOL_SWEEP_HOLD_WAIT=1 PATH=$guard_bin:$PATH perl "$supervisor" --hold why 30   sh -c 'echo unit-ran; exit 6' 2>&1)
+guard_stalled_rc=$?
+set -e
+[ "$guard_stalled_rc" -eq 6 ]
+grep -q '^unit-ran$' <<<"$guard_stalled"
+grep -q '^sweep-hold: WARNING: running WITHOUT a sleep guard, .* -- .*/systemd-inhibit refused: no answer after 1s$'   <<<"$guard_stalled"
+[ -s "$tmp/inhibit.pid" ]
+guard_waited=0
+while kill -0 "$(cat "$tmp/inhibit.pid")" 2>/dev/null; do
+  [ "$guard_waited" -lt "$wait_ticks" ] || break
+  sleep 0.05
+  guard_waited=$((guard_waited + 1))
+done
+if kill -0 "$(cat "$tmp/inhibit.pid")" 2>/dev/null; then
+  printf 'sweep_harness: a stalled inhibitor helper outlived its give-up
+' >&2
+  exit 1
+fi
 # And without `--hold` -- every local unit, every WSL leg -- nothing is asked for at all, with an
 # inhibitor right there on PATH.
 rm -f "$tmp/inhibit.args"

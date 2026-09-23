@@ -1419,12 +1419,17 @@ capped_perl='
           "--why=$why", "--", "sh", "-c", "echo HELD; exec cat >/dev/null";
         POSIX::_exit(127);
       }
+      # The helper is no child of this supervisor (the double fork), so its pid is reported up the
+      # readiness pipe: a helper that never answers is killed by pid, not left behind.
+      syswrite($ready_w, "PID $helper\n") if defined $helper;
       POSIX::_exit(0);
     }
     waitpid($middle, 0);
     close $life_r;
     close $ready_w;
-    my ($text, $held, $deadline) = ("", 0, time + 30);
+    my $wait = ($ENV{OCANNL_TOOL_SWEEP_HOLD_WAIT} // "") =~ /^[1-9][0-9]*$/
+      ? $ENV{OCANNL_TOOL_SWEEP_HOLD_WAIT} : 30;
+    my ($text, $held, $deadline) = ("", 0, time + $wait);
     while (!$held) {
       my $left = $deadline - time;
       last if $left <= 0;
@@ -1439,9 +1444,12 @@ capped_perl='
     close $ready_r;
     if (!$held) {
       close $life_w;
+      my ($helper) = $text =~ /^PID ([0-9]+)$/m;
+      kill "TERM", $helper if $helper;
+      $text =~ s/^PID [0-9]+\n?//mg;
       $text =~ s/\s+/ /g;
       $text =~ s/^ | $//g;
-      $text = "no answer after 30s" if $text eq "";
+      $text = "no answer after ${wait}s" if $text eq "";
       return unheld("$inhibitor refused: " . substr($text, 0, 200));
     }
     my $flags = fcntl($life_w, Fcntl::F_GETFD(), 0);
@@ -2220,11 +2228,15 @@ run_unit() { # machine backend host
     # it; deriving it later by subtracting a locally measured duration assumes the
     # remote clock advanced continuously meanwhile, which is the assumption a WSL
     # VM breaks when it resynchronises after a host resume.
+    # Armed BEFORE the probe, for a gated box: a cancellation landing while it connects must still
+    # leave the EXIT path owing the box its sleep (LANE_DIALLING, sleep_gated_box_after_early_exit).
+    LANE_DIALLING=1
     if ! remote_probe=$(capped 60 ssh -o BatchMode=yes -o ConnectTimeout=8 \
          -o ServerAliveInterval=30 -o ServerAliveCountMax=4 \
          "$host" 'printf "%s\n%s\n%s\n" "$HOME" "$(date +%s)" \
            "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)"' 2>/dev/null) ||
        [ -z "$remote_probe" ]; then
+      LANE_DIALLING=0
       say "  $machine/$backend: $unreachable (unreachable)"
       record "$machine" "$backend" "$unreachable" 0
       update_unit_state "$machine" "$backend" "$unreachable"
@@ -2239,6 +2251,7 @@ run_unit() { # machine backend host
     # trip as the clock, and compared against the same reading at collection time.
     remote_boot=$(printf '%s\n' "$remote_probe" | sed -n 3p)
     LANE_REACHED=1
+    LANE_DIALLING=0
     [ -n "$remote_home" ] || {
       say "  $machine/$backend: $unreachable (unreachable)"
       record "$machine" "$backend" "$unreachable" 0
@@ -2462,18 +2475,23 @@ lane_exit() {
 # or dead of its own `die` -- would otherwise leave a timer-woken laptop up all day. Not run in the
 # lane's foreground: a cancellation must not wait out wake-lab's confirm-down, so the request is
 # DETACHED -- its own session, so the group TERM that cancelled the run does not take it too, and
-# without the run's locks, so it holds neither the worktree nor the box. The lane's box reservation
+# without the run's locks, so it holds neither the worktree nor the box -- and BOUNDED, under the
+# same group-reaping supervisor and 600 s budget as the normal path's request, since nothing waits
+# for it. Owed from the moment the lane dials the box (LANE_DIALLING), not only once the probe has
+# answered: a cancellation can land inside the probe. The lane's box reservation
 # goes first, or the sleep would be refused by the lane that asked for it. Its output lands beside
 # the run's logs, since the lanes' coordination directory is removed when the run ends.
 sleep_gated_box_after_early_exit() {
   local box=${LANE_GATED_BOX:-} out
-  [ -n "$box" ] && [ "${LANE_REACHED:-0}" = 1 ] && [ "${LANE_SLEPT:-0}" = 0 ] || return 0
+  [ -n "$box" ] && [ "${LANE_SLEPT:-0}" = 0 ] || return 0
+  [ "${LANE_REACHED:-0}" = 1 ] || [ "${LANE_DIALLING:-0}" = 1 ] || return 0
   LANE_SLEPT=1
   exec 8>&-
   out=$LOGS/$stamp-$box-sleep.log
   if [ -x "$WAKE_LAB" ]; then
     (exec 9>&- </dev/null >"$out" 2>&1
-     exec perl -e 'use POSIX (); POSIX::setsid(); exec @ARGV or exit 127' -- "$WAKE_LAB" sleep "$box") &
+     exec perl -e 'use POSIX (); POSIX::setsid(); exec @ARGV or exit 127' -- \
+       perl -e "$capped_perl" -- 600 "$WAKE_LAB" sleep "$box") &
     early_say "  $box: the lane stopped early, so its sleep was requested in the background (wake-lab.sh sleep $box; output in $out)"
   else
     early_say "  $box: WARNING -- the lane stopped early and $box stays awake: no wake-lab.sh at $WAKE_LAB"
@@ -2547,6 +2565,7 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
   local lane=$1 unit machine backend host lane_host= lab_box lab_lock_rc
   LANE_PIDS=
   LANE_REACHED=0
+  LANE_DIALLING=0
   # The gated box this lane holds, once it holds one; the EXIT trap puts it to sleep if the lane
   # stops before the normal path does (sleep_gated_box_after_early_exit).
   LANE_GATED_BOX=
