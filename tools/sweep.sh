@@ -142,7 +142,10 @@ lab_box_of() { # ssh-alias
 # WAKE_LAB_HOSTS moves the table, exactly as it does for wake-lab.sh. A per-box override,
 # OCANNL_TOOL_SWEEP_DEST_ROG / OCANNL_TOOL_SWEEP_DEST_MINIX, names the destination outright for one
 # run (a harness, a manual run on a host with no site table); set, it wins and the table is not
-# read for that box; empty counts as unset.
+# read for that box; empty counts as unset. It must be one of THAT box's two canonical aliases,
+# which makes it a boot-kind choice spelled as the destination: everything downstream keys on the
+# alias -- lab_box_of for the lane's lock, the `-wsl` suffix for the remote PATH -- and an arbitrary
+# alias would leave each of those guessing.
 #
 # No kind means NO destination, and the sweep refuses to start (see the resolution after the unit
 # table): guessing one is the silent skip this exists to remove, since a wrong guess is
@@ -167,26 +170,21 @@ lab_dest() { # box
   var=OCANNL_TOOL_SWEEP_DEST_$(printf '%s' "$box" | tr '[:lower:]' '[:upper:]')
   dest=${!var:-}
   if [ -n "$dest" ]; then
-    # A bare host alias, and nothing else. It reaches ssh as the destination argument, so nothing
-    # ssh could read as an option; and no `user@`, because the lane derives its lock from this
-    # very string (lab_box_of in run_lane), and any `@` spelling makes the host ssh contacts and
-    # the box the lane reserves two different parses of one argument -- `alice@rog-nv-linux`
-    # would take `alice@rog.lock`, `a@rog-nv-linux@elsewhere` would reach `elsewhere` holding
-    # rog's. A user belongs in the alias's ~/.ssh/config entry, where the real aliases keep it.
-    case $dest in
-      "" | -* | *[!A-Za-z0-9._-]*)
-        echo "sweep: $var='$dest' is not a bare ssh host alias" >&2
-        return 1
-        ;;
-    esac
-    # The lane reserves the box lab_box_of names for its host; an override naming another box
-    # would reserve the wrong one and leave this one open to a restart mid-unit.
-    if [ "$(lab_box_of "$dest")" != "$box" ]; then
-      echo "sweep: $var='$dest' would reserve lab box '$(lab_box_of "$dest")', not '$box'" >&2
-      return 1
-    fi
-    printf '%s' "$dest"
-    return 0
+    # Membership, not a shape check: that closes every way an override could mean something the
+    # rest of the script reads differently -- an alias of another box (the lane would reserve the
+    # wrong lock), a `user@` or a second `@` (the host ssh contacts and the lock lab_box_of derives
+    # become two parses of one string), an option-shaped word, a custom alias whose boot kind the
+    # `-wsl` PATH test cannot see. A user or a different address belongs in the alias's ssh config.
+    local kind_choice
+    for kind_choice in linux wsl; do
+      if [ "$dest" = "$(lab_dest_of "$box" "$kind_choice")" ]; then
+        printf '%s' "$dest"
+        return 0
+      fi
+    done
+    echo "sweep: $var='$dest' is not one of $box's aliases" \
+      "($(lab_dest_of "$box" linux) or $(lab_dest_of "$box" wsl))" >&2
+    return 1
   fi
   if [ ! -r "$LAB_HOSTS" ]; then
     echo "sweep: cannot read the site host table $LAB_HOSTS for $box's boot kind" \
@@ -2010,7 +2008,9 @@ run_unit() { # machine backend host
     # window is closed on both sides against its neighbours.
     [ -n "$remote_started" ] && remote_started=$(( remote_started + 1 ))
     wt="$remote_home/ocannl-staging-worktrees/sweep"
-    # rog's WSL guest needs the CUDA and WSL lib dirs on PATH; harmless elsewhere. A native-Ubuntu
+    # rog's WSL guest needs the CUDA and WSL lib dirs on PATH; harmless elsewhere. The suffix is a
+    # reliable reading of the boot kind because a remote host is always one of lab_dest_of's
+    # canonical aliases -- the override accepts nothing else (lab_dest). A native-Ubuntu
     # boot has no /usr/lib/wsl/lib, and its non-login ssh PATH already carries the toolchain
     # (~/.bashrc sources the fleet env before its interactive guard), so it keeps only CUDA's bin,
     # which is harmless where the toolchain already put it (gh-ocannl-1030).

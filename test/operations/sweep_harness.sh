@@ -33,8 +33,8 @@ on_error() {
     local_identity_error unsafe_identity_error only_typo_error matrix_error state_first state_same \
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
     capped capped_target remote_opt_in dest_wsl dest_linux dest_missing dest_local_only \
-    dest_bogus dest_no_kind_of dest_half dest_override dest_override_wins dest_wrong_box \
-    dest_option dest_inherited_kind_of dest_user_qualified serial_red serial_clean serial_two_inline \
+    dest_bogus dest_no_kind_of dest_half dest_override dest_override_wins dest_bad_override \
+    dest_inherited_kind_of serial_red serial_clean serial_two_inline \
     serial_many_inline serial_control lanes lane_stop_seed lane_stopped \
     aggregator_missing stamp_advance dxg_clean dxg_red dxg_collection dxg_unavailable \
     dxg_many dxg_bounds dxg_no_trigger hold_lock_ok \
@@ -1223,38 +1223,22 @@ dest_override_wins=$(SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh SWEEP_TEST_DEST_ROG=rog-
 grep -q '^destinations: rog-nv=rog-nv-linux minix=minix-amd-wsl$' <<<"$dest_override_wins"
 absent ' rog-nv-wsl ' "$ssh_calls"
 absent ' minix-amd-linux ' "$ssh_calls"
-# An override that would reserve ANOTHER box's lock is refused: the lane would leave its own box
-# open to a restart mid-unit.
-: >"$ssh_calls"
-set +e
-dest_wrong_box=$(SWEEP_TEST_DEST_ROG=minix-amd-linux \
-  run_sweep_args --only cuda --target dest-wrong-box-probe 2>&1)
-dest_wrong_box_rc=$?
-set -e
-dest_refused "$dest_wrong_box_rc" "$dest_wrong_box" dest-wrong-box-probe
-grep -qF "sweep: OCANNL_TOOL_SWEEP_DEST_ROG='minix-amd-linux' would reserve lab box 'minix', not 'rog'" \
-  <<<"$dest_wrong_box"
-# And one ssh would read as an option never reaches it.
-set +e
-dest_option=$(SWEEP_TEST_DEST_ROG=-oProxyCommand=true \
-  run_sweep_args --only cuda --target dest-option-probe 2>&1)
-dest_option_rc=$?
-set -e
-dest_refused "$dest_option_rc" "$dest_option" dest-option-probe
-grep -qF "sweep: OCANNL_TOOL_SWEEP_DEST_ROG='-oProxyCommand=true' is not a bare ssh host alias" \
-  <<<"$dest_option"
-# Nor a user-qualified one: the lock is derived from the same string ssh parses, and every `@`
-# spelling makes those two readings disagree -- the user leaks into the lock name, or a second `@`
-# moves the host ssh reaches while the lock still names rog.
-for dest_user in alice@rog-nv-linux a@rog-nv-linux@elsewhere; do
+# An override must be one of ITS box's two canonical aliases, and anything else is refused: an
+# alias of another box (the lane would reserve the wrong lock and leave this one open to a
+# restart mid-unit), an option-shaped word, a `user@` or a second `@` (the lock is derived from
+# the same string ssh parses, and every `@` spelling makes those readings disagree), and a custom
+# alias, whose boot kind the `-wsl` PATH test downstream could not see.
+for dest_bad in minix-amd-linux -oProxyCommand=true alice@rog-nv-linux \
+  a@rog-nv-linux@elsewhere rog-lab; do
+  : >"$ssh_calls"
   set +e
-  dest_user_qualified=$(SWEEP_TEST_DEST_ROG=$dest_user \
-    run_sweep_args --only cuda --target dest-user-probe 2>&1)
-  dest_user_qualified_rc=$?
+  dest_bad_override=$(SWEEP_TEST_DEST_ROG=$dest_bad \
+    run_sweep_args --only cuda --target dest-bad-override-probe 2>&1)
+  dest_bad_override_rc=$?
   set -e
-  dest_refused "$dest_user_qualified_rc" "$dest_user_qualified" dest-user-probe
-  grep -qF "sweep: OCANNL_TOOL_SWEEP_DEST_ROG='$dest_user' is not a bare ssh host alias" \
-    <<<"$dest_user_qualified"
+  dest_refused "$dest_bad_override_rc" "$dest_bad_override" dest-bad-override-probe
+  grep -qF "sweep: OCANNL_TOOL_SWEEP_DEST_ROG='$dest_bad' is not one of rog's aliases (rog-nv-linux or rog-nv-wsl)" \
+    <<<"$dest_bad_override"
 done
 
 # An environment-red unit -- a red whose log carries a runtime-refusal signature
