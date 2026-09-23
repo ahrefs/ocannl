@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # The single source of the dune width caps for a GPU suite: the one behind a
-# WSL2 `/dev/dxg` bridge, and the native one minix's copy-engine queues set --
-# sourced by tools/sweep.sh (whose `unit_jobs` decides a sweep unit's width)
-# and by tools/test-run.sh (which injects the bridge's into a manual run that
-# expressed no width at all). Sourced, never executed.
+# WSL2 `/dev/dxg` bridge, and the native ones minix's copy-engine queues and
+# rog-nv's measured correctness slots set -- sourced by tools/sweep.sh (whose
+# `unit_jobs` decides a sweep unit's width) and by tools/test-run.sh (which
+# injects the local one into a manual run that expressed no width at all).
+# Sourced, never executed.
 #
 # Why one file rather than a constant in each: the cap was sweep policy, written
 # into `unit_jobs` and a bullet of docs/agent-notes/build-and-test.md, and every
@@ -81,7 +82,10 @@ box_jobs_dest_transport() { # <ssh-destination>; prints dxg, native, or nothing
 # On a native boot, minix's hip unit takes the SDMA cap above instead of the
 # bridge's, and rog-nv's cuda unit stays uncapped: its native ladder ran the
 # forced full unit green at dune's default (24), 8, 4 and 2, with no NVRM/Xid
-# line in any window (gh-ocannl-1029).
+# line in any window (gh-ocannl-1029). These are one batch's widths, measured
+# with the box to itself. A manual or worker batch on a native boot may share
+# the box with the fleet's other correctness slot, so it takes the per-slot
+# widths of the local view below instead (gh-ocannl-1033).
 #
 # An unrecognised destination keeps the WSL measurement: running a native unit
 # at the bridge's width costs minutes, while running a dxg one at full width
@@ -105,12 +109,127 @@ box_jobs_dxg_host() { # 0 iff this box reaches its GPU through the bridge
   [ -e "$(box_jobs_dxg_device)" ]
 }
 
-# The local view, for a run on THIS box: the cap applies when the bridge is
-# present and the selected backend holds the device. The backend is read from
-# the ENVIRONMENT only -- see the caller (tools/test-run.sh) for why a config
-# file is not consulted.
-box_jobs_local_cap() { # <backend>; prints the cap, or nothing
-  box_jobs_dxg_host || return 0
+# A native boot has neither table entry to key on nor a bridge to find, so the
+# local view probes the two things that make a native GPU batch's width
+# matter, each overridable the way the dxg device is (tools/test-test-run.sh
+# fakes both, present and absent), and each falling back to the real path when
+# empty.
+#
+# First, the SDMA pool, from the KFD topology: one directory per node, each
+# with a `properties` file, a GPU node being one with SIMDs. The pool a node
+# hands to processes is `num_sdma_engines` x `num_sdma_queues_per_engine` as
+# topology reports them -- the queues KFD can allocate, which leaves out the
+# ones the driver reserves (so minix's gfx1151 reports 1 x 6 while the kernel's
+# refusal counts "8 total queues"). Read on the fleet's boxes, 2026-09-23:
+# minix-amd-linux (gfx1151 iGPU) reports 1 x 6, tuf-amd-linux (gfx1102
+# discrete) 2 x 6; rog-nv-linux has no KFD node at all.
+box_jobs_kfd_topology() {
+  printf '%s' "${OCANNL_TOOL_KFD_TOPOLOGY:-/sys/class/kfd/kfd/topology/nodes}"
+}
+
+box_jobs_sdma_pool() { # prints the smallest GPU node's allocatable SDMA queues, or nothing
+  local topo
+  topo=$(box_jobs_kfd_topology)
+  [ -d "$topo" ] || return 0
+  # One awk over every node: FNR resets per file, so each file's values are
+  # judged at its own end. A node that does not report both counts (an older
+  # kernel), or reports no SDMA engine at all, has no pool this can judge, so
+  # it is skipped rather than read as a pool of zero.
+  awk '
+    function judge() {
+      if (simd > 0 && eng > 0 && per > 0) {
+        pool = eng * per
+        if (best == "" || pool < best) best = pool
+      }
+    }
+    FNR == 1 { if (NR > 1) judge(); simd = 0; eng = ""; per = "" }
+    $1 == "simd_count" { simd = $2 + 0 }
+    $1 == "num_sdma_engines" { eng = $2 + 0 }
+    $1 == "num_sdma_queues_per_engine" { per = $2 + 0 }
+    END { if (NR > 0) judge(); if (best != "") printf "%d", best }
+  ' "$topo"/*/properties 2>/dev/null
+}
+
+# The pool the SDMA measurement was made on: minix's topology, 1 engine x 6.
+# A device whose pool is no larger is capped; a larger one (tuf's 12) is not,
+# because nothing has measured what width it tolerates, and halving a box's
+# width on an analogy is not a change this file makes (see the sweep table).
+BOX_JOBS_SDMA_MEASURED_POOL=6
+
+box_jobs_small_sdma_pool() { # 0 iff a GPU node's SDMA pool is no larger than the measured one
+  local pool
+  pool=$(box_jobs_sdma_pool)
+  [ -n "$pool" ] && [ "$pool" -le "$BOX_JOBS_SDMA_MEASURED_POOL" ]
+}
+
+# Second, a native NVIDIA driver: its control device exists on a native Linux
+# boot and on no other (a WSL boot reaches the GPU through /dev/dxg instead,
+# and Windows and macOS have no such node).
+box_jobs_nvidia_device() { printf '%s' "${OCANNL_TOOL_NVIDIA_DEVICE:-/dev/nvidiactl}"; }
+
+box_jobs_native_nvidia_host() { # 0 iff this is a native NVIDIA boot
+  [ -e "$(box_jobs_nvidia_device)" ]
+}
+
+# How many correctness batches the fleet runs at once on a native GPU box:
+# lukstafi/ludics-lite#316 gave rog-nv-linux and minix-amd-linux two
+# `execution slot` slots each, measured with two concurrent batches at the
+# widths below. Restated here rather than read from the fleet, because a run
+# launched outside `execution slot` -- by hand, or by a worker that skipped
+# the slot -- must get the same width, and the width must be the same number
+# the slot count was measured at.
+BOX_JOBS_NATIVE_GPU_SLOTS=2
+
+# The native hip width: the concurrent-HIP-process budget the SDMA pool was
+# measured to take (BOX_JOBS_SDMA_CAP, 8), split across the box's slots, so
+# that every slot running a hip batch at once stays within it. Two slots of 4
+# is what ludics-lite#316 measured on minix: two `-j 4` hip batches peaked at
+# exactly 8 GPU-holding processes, with no SDMA or DQM line in any kernel
+# window. The budget is those 8 GPU-holding processes rather than the pool's 6
+# queues: the slot rounds sampled 8 at once, twice, with a clean kernel window,
+# so not every GPU-holding process holds a queue at the same moment, and the
+# measured count is the one to stay within. A single batch alone could run at
+# 8; the cap cannot know whether it is alone, and 4 costs a full unit 12% of
+# its wall time (1065 s against 946 s, gh-ocannl-1029).
+BOX_JOBS_SDMA_SLOT_CAP=$((BOX_JOBS_SDMA_CAP / BOX_JOBS_NATIVE_GPU_SLOTS))
+
+# The native cuda width: what ludics-lite#316 measured rog-nv-linux's two
+# slots at. Two concurrent `-j 8` cuda batches (14 GPU-holding processes) were
+# green in every rung; three (21) hit one `CUDA_ERROR_OUT_OF_MEMORY` in
+# `fused_classifier` with an empty kernel window, which is why the count is
+# two. Dune's default width there is 24, and two 24-wide batches -- up to 48
+# GPU processes -- were never run. One batch alone was green at every width
+# (gh-ocannl-1029), and `-j 8` was its fastest.
+BOX_JOBS_NATIVE_CUDA_CAP=8
+
+# The local view, for a run on THIS box: which hazard, if any, a batch of the
+# selected backend meets here -- `dxg` (the bridge), `sdma` (a small copy-engine
+# pool, hip only) or `nvidia` (a native CUDA box's slots, cuda only). The
+# bridge comes first: a WSL boot keeps its own cap whatever else it reports.
+# The backend is read from the ENVIRONMENT only -- see the caller
+# (tools/test-run.sh) for why a config file is not consulted.
+box_jobs_local_hazard() { # <backend>; prints dxg, sdma, nvidia, or nothing
   box_jobs_gpu_backend "${1:-}" || return 0
-  printf '%s' "$BOX_JOBS_DXG_CAP"
+  if box_jobs_dxg_host; then
+    printf 'dxg'
+    return 0
+  fi
+  case $1 in
+    hip) box_jobs_small_sdma_pool && printf 'sdma' ;;
+    cuda) box_jobs_native_nvidia_host && printf 'nvidia' ;;
+  esac
+  return 0
+}
+
+box_jobs_hazard_cap() { # <hazard>; prints its cap, or nothing
+  case ${1:-} in
+    dxg) printf '%s' "$BOX_JOBS_DXG_CAP" ;;
+    sdma) printf '%s' "$BOX_JOBS_SDMA_SLOT_CAP" ;;
+    nvidia) printf '%s' "$BOX_JOBS_NATIVE_CUDA_CAP" ;;
+    *) ;;
+  esac
+}
+
+box_jobs_local_cap() { # <backend>; prints the cap, or nothing
+  box_jobs_hazard_cap "$(box_jobs_local_hazard "${1:-}")"
 }

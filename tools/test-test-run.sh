@@ -91,6 +91,22 @@
 #  40-47. run/start lifecycle: completion, signals, stop, competing launches,
 #      orphan/background groups, publication window, last and legacy locks,
 #      and byte-identical source-tree preservation.
+#  48-52 sit beside the dxg legs, after leg 34: the native caps
+#      (gh-ocannl-1033), against faked KFD topologies and a faked NVIDIA
+#      device.
+#  48. hip on a small SDMA pool (minix's recorded topology) is capped at the
+#      per-slot width, announced and recorded; cuda on a native NVIDIA boot is
+#      capped at its own.
+#  49. negative controls: a larger pool (tuf's recorded topology), no KFD
+#      topology, a GPU node that reports no pool, a CPU backend on either
+#      native hazard, and each backend on the other one's hazard -- no cap,
+#      no word.
+#  50. a width the caller named is honored on both native hazards, and a dxg
+#      boot that also reports a small pool keeps its dxg cap.
+#  51. with OCANNL_BACKEND unset on a native hazard, the run is not capped and
+#      the caller is told the backend's width.
+#  52. the native widths derive from one place: the hip cap is the measured
+#      SDMA budget over the slot count, and the numbers are the measured ones.
 
 set -u
 
@@ -1542,6 +1558,11 @@ if await_fixture_ready "$TMP/repeat-never-ready" 1; then
   echo "repeat fixture readiness accepted an absent marker" >&2
   exit 2
 fi
+# The three width-cap probes (the dxg device, the KFD topology, the NVIDIA
+# control device) point at paths that do not exist unless a leg sets them, so
+# a run of this suite on a WSL, minix or rog boot sees the Mac's answer: every
+# leg that is not about the cap would otherwise gain an announcement, and the
+# cap legs' negative controls would read the box instead of their fixture.
 fixture_probe() { # tag mode runs subcommand [argv...]
   local tag=$1 mode=$2 runs=$3
   shift 3
@@ -1558,6 +1579,9 @@ fixture_probe() { # tag mode runs subcommand [argv...]
   REPEAT_TEST_DIFF_WAIT_PREFIX= \
   REPEAT_TEST_REAL_DIFF="$(command -v diff)" \
   OCANNL_TOOL_TEST_RUNS=$runs \
+  OCANNL_TOOL_DXG_DEVICE="${OCANNL_TOOL_DXG_DEVICE:-$TMP/no-such-dxg}" \
+  OCANNL_TOOL_KFD_TOPOLOGY="${OCANNL_TOOL_KFD_TOPOLOGY:-$TMP/no-such-kfd}" \
+  OCANNL_TOOL_NVIDIA_DEVICE="${OCANNL_TOOL_NVIDIA_DEVICE:-$TMP/no-such-nvidia}" \
   PATH=$repeat_bin:$PATH \
     "$repeat_root/tools/test-run.sh" "$@" >"$TMP/$tag.out" 2>"$TMP/$tag.err"
   fixture_rc=$?
@@ -2252,6 +2276,199 @@ if [ -z "$dxg_detail" ]; then
   report 0 "dxg: sweep.sh's unit_jobs and the injected cap come from one table"
 else
   report 1 "dxg: sweep.sh's unit_jobs and the injected cap come from one table" "$dxg_detail"
+fi
+
+# ---------------------------------------------------------------------------
+# Legs 48-52: the native GPU width caps (gh-ocannl-1033)
+# ---------------------------------------------------------------------------
+# The fleet runs two correctness batches at once on each native GPU box
+# (lukstafi/ludics-lite#316), measured at a width per batch: -j 4 on minix,
+# whose device-wide SDMA pool two default-width hip batches can drain between
+# them (gh-ocannl-1029), and -j 8 on rog-nv. The widths used to hold only while
+# every worker remembered them; now `run`/`start` injects them the way it
+# injects the dxg cap. The pool comes from the KFD topology, faked here through
+# OCANNL_TOOL_KFD_TOPOLOGY as directories of `properties` files copied from
+# what the boxes report (only the keys the probe reads, plus a neighbour
+# either side, so a parser keyed on line position would miss); the NVIDIA boot
+# through OCANNL_TOOL_NVIDIA_DEVICE, the way the dxg legs fake the bridge.
+kfd_node() { # dir simd engines queues-per-engine
+  mkdir -p "$1"
+  printf 'cpu_cores_count 0\nsimd_count %s\nhive_id 0\nnum_sdma_engines %s\nnum_sdma_xgmi_engines 0\nnum_sdma_queues_per_engine %s\nnum_cp_queues 8\n' \
+    "$2" "$3" "$4" >"$1/properties"
+}
+kfd_cpu_node() { # dir
+  mkdir -p "$1"
+  printf 'cpu_cores_count 32\nsimd_count 0\nnum_sdma_engines 0\nnum_sdma_queues_per_engine 0\nnum_cp_queues 0\n' >"$1/properties"
+}
+kfd_small=$TMP/fake-kfd-minix   # gfx1151: 1 engine x 6, as minix-amd-linux reports it
+kfd_large=$TMP/fake-kfd-tuf     # gfx1102: 2 engines x 6, as tuf-amd-linux reports it
+kfd_nopool=$TMP/fake-kfd-nopool # a GPU node that reports no SDMA engine
+kfd_absent=$TMP/fake-kfd-absent
+kfd_cpu_node "$kfd_small/0"; kfd_node "$kfd_small/1" 80 1 6
+kfd_cpu_node "$kfd_large/0"; kfd_node "$kfd_large/1" 64 2 6
+kfd_cpu_node "$kfd_nopool/0"; kfd_node "$kfd_nopool/1" 80 0 6
+rm -rf "$kfd_absent"
+nv_present=$TMP/fake-nvidiactl
+nv_absent=$TMP/fake-nvidiactl-absent
+: >"$nv_present"
+rm -f "$nv_absent"
+if [ ! -f "$kfd_small/1/properties" ] || [ -e "$kfd_absent" ] ||
+   [ ! -e "$nv_present" ] || [ -e "$nv_absent" ]; then
+  echo "native-cap fixture paths are not what the legs assume" >&2
+  exit 2
+fi
+# The pool the fixtures must read as, from the shipping probe itself: a fixture
+# the parser misread would leave legs 48 and 49 agreeing with a wrong number.
+native_pools=$(
+  . "$JOBS_SRC"
+  for t in "$kfd_small" "$kfd_large" "$kfd_nopool" "$kfd_absent"; do
+    printf '%s,' "$(OCANNL_TOOL_KFD_TOPOLOGY=$t box_jobs_sdma_pool)"
+  done
+)
+if [ "$native_pools" != "6,12,,," ]; then
+  echo "the KFD fixtures read as pools '$native_pools', not 6,12,,, -- fix the fixture or the probe" >&2
+  exit 2
+fi
+native_probe() { # tag dxg kfd nvidia backend subcommand [argv...]
+  local tag=$1 dxg=$2 kfd=$3 nv=$4 backend=$5
+  shift 5
+  export OCANNL_TOOL_DXG_DEVICE=$dxg OCANNL_TOOL_KFD_TOPOLOGY=$kfd OCANNL_TOOL_NVIDIA_DEVICE=$nv
+  if [ -n "$backend" ]; then export OCANNL_BACKEND=$backend; else unset OCANNL_BACKEND; fi
+  argv_probe "$tag" "$@"
+  unset OCANNL_TOOL_DXG_DEVICE OCANNL_TOOL_KFD_TOPOLOGY OCANNL_TOOL_NVIDIA_DEVICE OCANNL_BACKEND
+}
+
+# Leg 48: the injection on each native hazard, in the four places the dxg leg
+# pins it -- argv, the recorded command, stderr (with its source and the note)
+# and the run's log -- plus what the announcement says the hazard was.
+native_detail=
+for probe in "sdma:$kfd_small:$nv_absent:hip:4:SDMA" \
+             "nvidia:$kfd_absent:$nv_present:cuda:8:native NVIDIA boot"; do
+  IFS=: read -r tag kfd nv backend want what <<<"$probe"
+  native_probe "native-$tag" "$dxg_absent" "$kfd" "$nv" "$backend" run build @cheap
+  [ "$argv_rc" = 0 ] || { native_detail="$tag: exit $argv_rc"; break; }
+  [ "$argv_calls" = "build -j $want @cheap" ] ||
+    { native_detail="$tag: calls: ${argv_calls:-<none>} (want build -j $want @cheap)"; break; }
+  case $argv_err in
+    *"capping dune at -j $want"*"$what"*"box-jobs.sh"*"agent-notes/build-and-test.md"*) ;;
+    *) native_detail="$tag: the announcement is not the native one: ${argv_err:-<nothing>}"; break ;;
+  esac
+  { [ -n "$argv_dir" ] && grep -q -- "capping dune at -j $want" "$argv_dir/log"; } ||
+    { native_detail="$tag: the run log does not carry the cap: ${argv_dir:-<no run>}"; break; }
+  { [ -n "$argv_dir" ] && grep -q -- "-j $want" "$argv_dir/cmd"; } ||
+    { native_detail="$tag: the recorded command does not carry the cap: $(cat "$argv_dir/cmd" 2>/dev/null)"; break; }
+done
+if [ -z "$native_detail" ]; then
+  report 0 "native: hip on a small SDMA pool and cuda on a native NVIDIA boot are capped, announced and recorded"
+else
+  report 1 "native: hip on a small SDMA pool and cuda on a native NVIDIA boot are capped, announced and recorded" "$native_detail"
+fi
+
+# Leg 49: the negative controls. Each denies one half of a condition leg 48
+# met, so a probe that capped every Linux GPU batch -- or keyed on the backend
+# alone -- fails here. Silence is part of the contract, as for the dxg legs.
+native_detail=
+for probe in "large-pool:$kfd_large:$nv_absent:hip" \
+             "no-kfd:$kfd_absent:$nv_absent:hip" \
+             "no-pool:$kfd_nopool:$nv_absent:hip" \
+             "cpu-on-sdma:$kfd_small:$nv_absent:cc" \
+             "cpu-on-nvidia:$kfd_absent:$nv_present:multidev_cc" \
+             "cuda-on-sdma:$kfd_small:$nv_absent:cuda" \
+             "hip-on-nvidia:$kfd_absent:$nv_present:hip" \
+             "cuda-off-nvidia:$kfd_absent:$nv_absent:cuda"; do
+  IFS=: read -r tag kfd nv backend <<<"$probe"
+  native_probe "native-$tag" "$dxg_absent" "$kfd" "$nv" "$backend" run build @cheap
+  if [ "$argv_rc" != 0 ] || [ "$argv_calls" != "build @cheap" ] ||
+     grep -qi 'cap\|sdma\|nvidia\|dxg' <<<"$argv_err"; then
+    native_detail="$tag: exit $argv_rc; calls: ${argv_calls:-<none>}; stderr: ${argv_err:-<none>}"; break
+  fi
+done
+if [ -z "$native_detail" ]; then
+  report 0 "native: no cap and no announcement off the measured hazards, or for the other backend"
+else
+  report 1 "native: no cap and no announcement off the measured hazards, or for the other backend" "$native_detail"
+fi
+
+# Leg 50: an explicit width still wins on a native hazard, and says so; and a
+# WSL boot keeps the bridge's cap even where its topology would read as a
+# small pool (the bridge is the tighter limit, and the one measured there).
+native_detail=
+for probe in "sdma:$kfd_small:$nv_absent:hip:small-SDMA-pool host" \
+             "nvidia:$kfd_absent:$nv_present:cuda:native NVIDIA host"; do
+  IFS=: read -r tag kfd nv backend what <<<"$probe"
+  native_probe "native-explicit-$tag" "$dxg_absent" "$kfd" "$nv" "$backend" run build -j 16 @cheap
+  if [ "$argv_rc" != 0 ] || [ "$argv_calls" != "build -j 16 @cheap" ]; then
+    native_detail="$tag: exit $argv_rc; calls: ${argv_calls:-<none>} (want build -j 16 @cheap)"; break
+  fi
+  case $argv_err in
+    *"$what"*"names its own dune width"*"NOT injected"*) ;;
+    *) native_detail="$tag: the honored width was not reported: ${argv_err:-<nothing>}"; break ;;
+  esac
+done
+if [ -z "$native_detail" ]; then
+  native_probe native-dxg-wins "$dxg_present" "$kfd_small" "$nv_present" hip run build @cheap
+  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build -j 2 @cheap" ] &&
+    grep -q 'WSL2' <<<"$argv_err"; } ||
+    native_detail="dxg with a small pool: exit $argv_rc; calls: ${argv_calls:-<none>}; stderr: ${argv_err:-<none>}"
+fi
+if [ -z "$native_detail" ]; then
+  report 0 "native: a named width is honored on each native hazard; a dxg boot keeps its own cap"
+else
+  report 1 "native: a named width is honored on each native hazard; a dxg boot keeps its own cap" "$native_detail"
+fi
+
+# Leg 51: an unreadable backend on a native hazard is reported with the width
+# for the backend that meets it, never guessed and never capped; and a caller
+# who named a width is told nothing.
+native_detail=
+for probe in "sdma:$kfd_small:$nv_absent:if it is hip, pass -j 4 yourself" \
+             "nvidia:$kfd_absent:$nv_present:if it is cuda, pass -j 8 yourself"; do
+  IFS=: read -r tag kfd nv want <<<"$probe"
+  native_probe "native-unset-$tag" "$dxg_absent" "$kfd" "$nv" "" run build @cheap
+  if [ "$argv_rc" != 0 ] || [ "$argv_calls" != "build @cheap" ]; then
+    native_detail="$tag: exit $argv_rc; calls: ${argv_calls:-<none>}"; break
+  fi
+  case $argv_err in
+    *"OCANNL_BACKEND is unset"*"$want"*) ;;
+    *) native_detail="$tag: no advisory naming the width: ${argv_err:-<nothing>}"; break ;;
+  esac
+  native_probe "native-unset-explicit-$tag" "$dxg_absent" "$kfd" "$nv" "" run build -j 16 @cheap
+  if [ "$argv_rc" != 0 ] || [ "$argv_calls" != "build -j 16 @cheap" ] ||
+     grep -qi 'cap\|sdma\|nvidia' <<<"$argv_err"; then
+    native_detail="$tag with a width named: exit $argv_rc; calls: ${argv_calls:-<none>}; stderr: ${argv_err:-<none>}"; break
+  fi
+done
+if [ -z "$native_detail" ]; then
+  native_probe native-unset-none "$dxg_absent" "$kfd_large" "$nv_absent" "" run build @cheap
+  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build @cheap" ] &&
+    ! grep -qi 'cap\|sdma\|nvidia' <<<"$argv_err"; } ||
+    native_detail="no hazard: exit $argv_rc; calls: ${argv_calls:-<none>}; stderr: ${argv_err:-<none>}"
+fi
+if [ -z "$native_detail" ]; then
+  report 0 "native: an unreadable backend is reported with its width, never guessed, and never capped"
+else
+  report 1 "native: an unreadable backend is reported with its width, never guessed, and never capped" "$native_detail"
+fi
+
+# Leg 52: one place for the numbers. The hip cap is not a literal of its own
+# but the measured SDMA budget (the sweep's native width) over the slot count,
+# so a change to either moves it; and the values are the measured ones, pinned
+# here so an edit to box-jobs.sh has to say what it measured.
+native_consts=$(
+  . "$JOBS_SRC"
+  printf '%s/%s/%s/%s/%s' "$BOX_JOBS_SDMA_CAP" "$BOX_JOBS_NATIVE_GPU_SLOTS" \
+    "$BOX_JOBS_SDMA_SLOT_CAP" "$BOX_JOBS_NATIVE_CUDA_CAP" "$BOX_JOBS_SDMA_MEASURED_POOL"
+)
+native_detail=
+[ "$native_consts" = "8/2/4/8/6" ] ||
+  native_detail="box-jobs.sh's native numbers are $native_consts (want 8/2/4/8/6)"
+[ -n "$native_detail" ] ||
+  grep -q '^BOX_JOBS_SDMA_SLOT_CAP=\$((BOX_JOBS_SDMA_CAP / BOX_JOBS_NATIVE_GPU_SLOTS))$' "$JOBS_SRC" ||
+  native_detail="BOX_JOBS_SDMA_SLOT_CAP is not derived from the SDMA budget and the slot count"
+if [ -z "$native_detail" ]; then
+  report 0 "native: the per-slot widths derive from box-jobs.sh's measured numbers"
+else
+  report 1 "native: the per-slot widths derive from box-jobs.sh's measured numbers" "$native_detail"
 fi
 
 # ---------------------------------------------------------------------------
