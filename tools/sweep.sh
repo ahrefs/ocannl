@@ -343,13 +343,15 @@ UNITS=(
 # Applied to the test phase only -- the compile phase stays uncapped, since
 # `test_cmd` runs `@check` first and the cap bounds GPU-holding processes, not
 # the build. Override for one run with OCANNL_TOOL_SWEEP_JOBS=<n>, which then
-# applies to every unit.
-unit_jobs() {
+# applies to every unit. The third argument is the unit's ssh destination
+# (empty for a local unit): the two lab boxes dual-boot, and the width a WSL
+# boot's bridge needs is not the one a native boot needs (gh-ocannl-1029).
+unit_jobs() { # machine backend [ssh-destination]
   if [ -n "${OCANNL_TOOL_SWEEP_JOBS:-}" ]; then
     printf '%s' "$OCANNL_TOOL_SWEEP_JOBS"
     return
   fi
-  box_jobs_sweep_cap "$1" "$2"
+  box_jobs_sweep_cap "$1" "$2" "${3:-}"
 }
 
 # The failure names that mean the ENVIRONMENT refused the run rather than a
@@ -2053,7 +2055,7 @@ run_unit() { # machine backend host
     # supervisor capped() uses locally, see remote_capped -- because a
     # per-dune-call cap would let a --slow unit run for twice the budget the
     # script advertises.
-    remote="$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $(test_cmd "$backend" "$wt" "$(unit_jobs "$machine" "$backend")")")"
+    remote="$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $(test_cmd "$backend" "$wt" "$(unit_jobs "$machine" "$backend" "$host")")")"
     # The far-side cap does not bound the LOCAL ssh: if the connection blackholes
     # after the command starts -- the box suspends, the WiFi drops -- the remote
     # cap may kill dune while this ssh sits waiting for a status that will
@@ -2093,7 +2095,7 @@ run_unit() { # machine backend host
       update_unit_state "$machine" "$backend" error "$WRITTEN_FINGERPRINT"
       return 0
     fi
-    run_capped "$CAP" /bin/sh -c "$(test_cmd "$backend" "$wt" "$(unit_jobs "$machine" "$backend")")" >"$log" 2>&1
+    run_capped "$CAP" /bin/sh -c "$(test_cmd "$backend" "$wt" "$(unit_jobs "$machine" "$backend" "$host")")" >"$log" 2>&1
     rc=$?
   fi
 

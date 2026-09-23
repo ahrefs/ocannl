@@ -71,7 +71,9 @@
 #      capped and the caller is told what to pass -- unless it named a width.
 #  33. hip caps too, and the width is spliced after dune's subcommand.
 #  34. tools/sweep.sh's `unit_jobs` and the injected cap read one table, with
-#      the sweep's own override still winning.
+#      the sweep's own override still winning; the sweep's width follows the
+#      unit's destination (a WSL boot's bridge cap, a native boot's own), and
+#      every unit_jobs call site passes that destination.
 #  35. an invocation dune's own parser refuses -- unknown option, unknown
 #      subcommand, malformed operand -- digests as INVOCATION REFUSED quoting
 #      dune's complaint: `run`/`wait` exit 2 over a RECORDED exit 1, `status`
@@ -2185,22 +2187,41 @@ grep -q 'box_jobs_sweep_cap' "$TMP/unit-jobs.sh" ||
   dxg_detail="sweep.sh does not source tools/box-jobs.sh"
 [ -n "$dxg_detail" ] || grep -q '^\. tools/box-jobs\.sh$' "$SRC" ||
   dxg_detail="test-run.sh does not source tools/box-jobs.sh"
+# The width depends on how the unit reached its box (gh-ocannl-1029): the two
+# lab boxes dual-boot, and only a WSL boot crosses the bridge. So every call
+# site must hand unit_jobs the unit's destination -- a call that dropped it
+# would silently give a native boot the WSL cap, or the reverse.
+if [ -z "$dxg_detail" ]; then
+  unit_jobs_calls=$(grep -c 'unit_jobs "' "$SWEEP_SRC")
+  unit_jobs_dest_calls=$(grep -c 'unit_jobs "$machine" "$backend" "$host"' "$SWEEP_SRC")
+  if [ "$unit_jobs_calls" -eq 0 ] || [ "$unit_jobs_calls" != "$unit_jobs_dest_calls" ]; then
+    dxg_detail="sweep.sh calls unit_jobs $unit_jobs_calls times, $unit_jobs_dest_calls with the unit's destination"
+  fi
+fi
 if [ -z "$dxg_detail" ]; then
   # The values themselves, from the shipping table, in one shell: the sweep's
-  # dxg unit, the local probe, and the override that must still win.
+  # dxg unit (by destination, and with none), the native units, the local
+  # probe, and the override that must still win over both transports.
   sweep_cap=$(
     . "$JOBS_SRC"
     . "$TMP/unit-jobs.sh"
-    printf '%s|%s|%s|%s|%s' \
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s' \
       "$(unit_jobs minix hip)" \
+      "$(unit_jobs minix hip minix-amd-wsl)" \
+      "$(unit_jobs minix hip minix-amd-linux)" \
+      "$(unit_jobs minix hip 10.0.0.7)" \
+      "$(unit_jobs rog-nv cuda rog-nv-wsl)" \
+      "$(unit_jobs rog-nv cuda rog-nv-linux)" \
+      "$(unit_jobs minix multidev_cc minix-amd-linux)" \
       "$(OCANNL_TOOL_SWEEP_JOBS=7 unit_jobs minix hip)" \
+      "$(OCANNL_TOOL_SWEEP_JOBS=7 unit_jobs minix hip minix-amd-linux)" \
       "$(unit_jobs m4-max metal)" \
       "$(OCANNL_TOOL_DXG_DEVICE=$dxg_present box_jobs_local_cap cuda)" \
-      "$BOX_JOBS_DXG_CAP"
+      "$BOX_JOBS_DXG_CAP/$BOX_JOBS_SDMA_CAP"
   )
   case $sweep_cap in
-    "2|7||2|2") ;;
-    *) dxg_detail="shared table disagrees: $sweep_cap (want 2|7||2|2)" ;;
+    "2|2|8|2||||7|7||2|2/8") ;;
+    *) dxg_detail="shared table disagrees: $sweep_cap (want 2|2|8|2||||7|7||2|2/8)" ;;
   esac
 fi
 if [ -z "$dxg_detail" ]; then
