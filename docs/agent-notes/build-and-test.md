@@ -2038,19 +2038,33 @@ that they earn a lookup rather than always-loaded space.
   the binding's error check, and it cannot help a process whose `hip_init` was refused
   (gh-ocannl-927).
 - **On a native boot the limit is minix's copy-engine queues, not a bridge: the hip unit runs
-  at `-j 8`, and rog-nv's cuda unit is uncapped** (gh-ocannl-1029). The amdgpu driver has **8
-  SDMA queues for the whole device** (KFD topology: one SDMA engine), and every HIP process that
-  copies takes one, so what runs out is the number of GPU-holding processes on the box, however
-  they are split across dune calls or correctness slots. At dune's default width (32) the native
-  2026-09-23 ladder lost `schedule_conv_gemm` to a ROCr assertion
+  at `-j 8`, and rog-nv's cuda unit is uncapped** (gh-ocannl-1029). The amdgpu driver's **SDMA
+  queue pool is device-wide, not per process** (KFD topology: one SDMA engine, 6 allocatable
+  queues; the kernel's refusal counts `8 total queues`, the driver's reserved ones included), and
+  every HIP process that copies takes one, so what runs out is the number of GPU-holding processes
+  on the box, however they are split across dune calls or correctness slots. At dune's default
+  width (32) the native 2026-09-23 ladder lost `schedule_conv_gemm` to a ROCr assertion
   (`GpuAgent::ReleaseQueueMainScratch`), with the kernel logging `No more SDMA queue to allocate
   (8 total queues)` and `DQM create queue type 1 failed. ret -12`. `-j 8`, `-j 4` and `-j 2` logged
   no GPU kernel line at all, and `-j 8` cost 2% of the wall time (946 s against 921 s). That
   signature is what to look for in `journalctl _TRANSPORT=kernel` when a native hip unit fails
   wider than its cap. rog-nv's native cuda unit ran green at 24, 8, 4 and 2 with no NVRM/Xid line.
-  The cap is `BOX_JOBS_SDMA_CAP` in `tools/box-jobs.sh`. `tools/test-run.sh` does not inject it
-  into a manual run (its probe is the dxg device), so pass `-j 8` yourself for a full hip suite on
-  `minix-amd-linux`.
+  The sweep's cap is `BOX_JOBS_SDMA_CAP` in `tools/box-jobs.sh`, one unit's width with the box to
+  itself.
+- **A manual or worker batch on a native GPU boot is capped per correctness slot, and
+  `tools/test-run.sh run`/`start` injects it** (gh-ocannl-1033): `-j 4` for `OCANNL_BACKEND=hip`
+  where the KFD topology (`/sys/class/kfd/kfd/topology/nodes/*/properties`) reports an SDMA pool
+  no larger than minix's 6, and `-j 8` for `OCANNL_BACKEND=cuda` where `/dev/nvidiactl` exists (a
+  native NVIDIA boot; a WSL boot keeps the dxg cap). The fleet runs two correctness batches at once
+  on each native GPU box (lukstafi/ludics-lite#316), measured at those widths: two `-j 4` hip
+  batches peaked at exactly 8 GPU-holding processes with a clean kernel window, and on rog three
+  concurrent `-j 8` cuda batches hit one `CUDA_ERROR_OUT_OF_MEMORY` where two did not. So the hip
+  width is `BOX_JOBS_SDMA_CAP / BOX_JOBS_NATIVE_GPU_SLOTS`, and the cuda one is
+  `BOX_JOBS_NATIVE_CUDA_CAP`. An explicit `-j` still wins, and only says the cap exists, and an
+  unset `OCANNL_BACKEND` is reported with the width to pass rather than guessed, as for dxg. A
+  larger pool (tuf-amd-linux's gfx1102 reports 2 engines x 6) is not capped: nothing measured it.
+  `tools/test-test-run.sh` fakes the topology (`OCANNL_TOOL_KFD_TOPOLOGY`) and the device
+  (`OCANNL_TOOL_NVIDIA_DEVICE`) as it fakes the bridge.
 - **Runtime-refusal signature table.** These are the exception names `tools/sweep.sh`'s
   `ENVIRONMENT_REFUSALS` treats as the environment refusing a run rather than a test judging it;
   dune prints an uncaught binding error as `Fatal error: exception <name>:` with the status on

@@ -58,8 +58,8 @@
 # build context, keeps its separate stdout/stderr and exit status, and compares
 # every pair. `--alone` adds `-j 1`,
 # so no sibling dune action overlaps the selected target. Unlike `run`/`start`,
-# `repeat` never injects the dxg `-j` cap (see dxg_cap below): an isolation tool
-# runs at the width it is given, so on a dxg box pass `--alone` or `-j` yourself. Its cap is per
+# `repeat` never injects the GPU `-j` cap (see width_cap below): an isolation tool
+# runs at the width it is given, so on a capped box pass `--alone` or `-j` yourself. Its cap is per
 # iteration; N must be at least 2. An stdout/status difference is red (exit 1
 # when dune itself stayed green); stderr-only drift is reported distinctly but
 # is not red. Any red dune iteration keeps a nonzero dune status.
@@ -158,13 +158,24 @@ reject_misplaced_options() {
   done
 }
 
-# The dxg width cap (gh-ocannl-983). A box that reaches its GPU through WSL2's
-# `/dev/dxg` bridge overflows the bridge's VM-bus ring when the suite's test
-# executables hold the device at once, and the runtime reports the lost messages
-# as device/binary/stream-creation refusals -- a red suite in exactly the
-# stanzas a real backend regression lands in. tools/sweep.sh has capped its unit
-# there since 2026-09-05; every other way in ran at dune's default width, and an
-# hour of box time plus a misleading bisect went into rediscovering the cap.
+# The GPU width cap (gh-ocannl-983, gh-ocannl-1033). A box that reaches its GPU
+# through WSL2's `/dev/dxg` bridge overflows the bridge's VM-bus ring when the
+# suite's test executables hold the device at once, and the runtime reports the
+# lost messages as device/binary/stream-creation refusals -- a red suite in
+# exactly the stanzas a real backend regression lands in. tools/sweep.sh has
+# capped its unit there since 2026-09-05; every other way in ran at dune's
+# default width, and an hour of box time plus a misleading bisect went into
+# rediscovering the cap.
+#
+# A native boot has limits of its own, and the fleet runs two correctness
+# batches at once on each native GPU box (lukstafi/ludics-lite#316), measured
+# at a width per batch: minix's small SDMA queue pool is device-wide, so two
+# hip batches at dune's default can drain it between them, and rog-nv's two
+# cuda slots were measured at -j 8, not at its 24 cores. A slot count that
+# holds only while every caller remembers the width is a hazard, not a limit,
+# so the native widths are injected the same way. tools/box-jobs.sh decides
+# which hazard, if any, this box and backend meet (box_jobs_local_hazard) and
+# owns every number.
 #
 # So a `run`/`start` that expressed NO width at all, on such a box, with a GPU
 # backend selected, gets the cap injected and is told so -- loudly, because the
@@ -178,9 +189,10 @@ reject_misplaced_options() {
 # flags and the profile precedence rules, i.e. reimplementing Utils' config
 # resolution in shell where a wrong answer would silently halve a legitimate
 # run's width, or inject nothing while claiming the box was checked. A launcher
-# that cannot read a value says so instead: where the bridge is present and
+# that cannot read a value says so instead: where a hazard is present and
 # OCANNL_BACKEND is unset, the run is not capped and the caller is told what to
-# pass if the suite is in fact a GPU one.
+# pass if the suite is in fact a GPU one. (The test directories' own configs
+# pin a CPU backend, so a GPU suite names OCANNL_BACKEND in practice.)
 explicit_jobs() { # dune argv; 0 iff it names a width before dune's own `--`
   for arg do
     case $arg in
@@ -195,49 +207,104 @@ explicit_jobs() { # dune argv; 0 iff it names a width before dune's own `--`
   return 1
 }
 
-dxg_cap=          # the width to inject, empty for none
-dxg_announce=     # what to say about it, on stderr and in the run's log
-plan_dxg_cap() { # dune argv
-  local backend=${OCANNL_BACKEND:-} cap
-  dxg_cap= dxg_announce=
-  box_jobs_dxg_host || return 0
+# What each hazard is, for the announcements: the condition that was found,
+# and why dune's default width is wrong under it.
+hazard_name() { # <hazard>; a noun phrase for the host, and the issue behind its cap
+  case $1 in
+    dxg) printf 'dxg host (gh-ocannl-983)' ;;
+    sdma) printf 'small-SDMA-pool host (gh-ocannl-1033)' ;;
+    nvidia) printf 'native NVIDIA host (gh-ocannl-1033)' ;;
+  esac
+}
+hazard_found() { # <hazard> <backend>
+  case $1 in
+    dxg) printf 'This box reaches its GPU through the WSL2
+  %s bridge and OCANNL_BACKEND=%s holds that device' "$(box_jobs_dxg_device)" "$2" ;;
+    sdma) printf 'This box'"'"'s GPU has a small SDMA (copy-engine)
+  queue pool, %s allocatable queues for the whole device per its KFD topology
+  (%s), and every OCANNL_BACKEND=%s process that copies takes one' \
+      "$(box_jobs_sdma_pool)" "$(box_jobs_kfd_topology)" "$2" ;;
+    nvidia) printf 'This is a native NVIDIA boot
+  (%s) and OCANNL_BACKEND=%s holds its GPU' "$(box_jobs_nvidia_device)" "$2" ;;
+  esac
+}
+hazard_why() { # <hazard>
+  case $1 in
+    dxg) printf 'At dune'"'"'s default
+  width the bridge'"'"'s VM-bus ring overflows, and the suite comes back red in the
+  same stanzas a real backend regression lands in (gh-ocannl-983). The cap lives
+  in tools/box-jobs.sh, shared with tools/sweep.sh; the refusal signature and the
+  recovery are the dxg bullet of docs/agent-notes/build-and-test.md.' ;;
+    sdma) printf 'Past %s such processes on
+  the whole box the pool can run out (kernel: `No more SDMA queue to allocate`),
+  and a stanza aborts in ROCr like a backend regression (gh-ocannl-1029); -j %s
+  keeps the fleet'"'"'s %s correctness slots on this box within %s between them
+  (gh-ocannl-1033). The cap lives in tools/box-jobs.sh; the signature is in the
+  native-boot bullets of docs/agent-notes/build-and-test.md.' \
+      "$BOX_JOBS_SDMA_CAP" "$BOX_JOBS_SDMA_SLOT_CAP" "$BOX_JOBS_NATIVE_GPU_SLOTS" "$BOX_JOBS_SDMA_CAP" ;;
+    nvidia) printf 'The fleet'"'"'s %s correctness slots
+  on this box were measured at -j %s each, and three such batches at once already
+  hit a CUDA_ERROR_OUT_OF_MEMORY (lukstafi/ludics-lite#316); two batches at
+  dune'"'"'s default width were never measured (gh-ocannl-1033). The cap lives in
+  tools/box-jobs.sh; the evidence is in the native-boot bullets of
+  docs/agent-notes/build-and-test.md.' "$BOX_JOBS_NATIVE_GPU_SLOTS" "$BOX_JOBS_NATIVE_CUDA_CAP" ;;
+  esac
+}
+
+width_cap=        # the width to inject, empty for none
+width_announce=   # what to say about it, on stderr and in the run's log
+plan_width_cap() { # dune argv
+  local backend=${OCANNL_BACKEND:-} cap hazard b advice=
+  width_cap= width_announce=
   if [ -z "$backend" ]; then
     explicit_jobs "$@" && return 0
-    dxg_announce="this box reaches its GPU through the WSL2 $(box_jobs_dxg_device) bridge, where a
+    # Unreadable, so said rather than guessed: one advisory per GPU backend
+    # that would meet a hazard here. On a dxg host both do, and it is one
+    # sentence about the bridge.
+    if box_jobs_dxg_host; then
+      width_announce="this box reaches its GPU through the WSL2 $(box_jobs_dxg_device) bridge, where a
   GPU suite must run at -j $BOX_JOBS_DXG_CAP (the cap is tools/box-jobs.sh; gh-ocannl-983).
   OCANNL_BACKEND is unset here, so this run's backend comes from ocannl_config
   or the stanza and cannot be read from a launcher: if it is cuda or hip, pass
   -j $BOX_JOBS_DXG_CAP yourself, or the suite can come back red like a backend regression."
+      return 0
+    fi
+    for b in cuda hip; do
+      hazard=$(box_jobs_local_hazard "$b")
+      [ -n "$hazard" ] || continue
+      advice="${advice:+$advice; }if it is $b, pass -j $(box_jobs_hazard_cap "$hazard") yourself"
+    done
+    [ -n "$advice" ] || return 0
+    width_announce="this box's GPU needs a capped width for a GPU suite (the caps are
+  tools/box-jobs.sh; gh-ocannl-1033). OCANNL_BACKEND is unset here, so this run's
+  backend comes from ocannl_config or the stanza and cannot be read from a
+  launcher: $advice, or the suite can come back red like a backend regression."
     return 0
   fi
-  cap=$(box_jobs_local_cap "$backend")
+  hazard=$(box_jobs_local_hazard "$backend")
+  cap=$(box_jobs_hazard_cap "$hazard")
   [ -n "$cap" ] || return 0
   if explicit_jobs "$@"; then
-    dxg_announce="dxg host with OCANNL_BACKEND=$backend: this command names its own dune width,
-  so the -j $cap cap (tools/box-jobs.sh, gh-ocannl-983) was NOT injected."
+    width_announce="$(hazard_name "$hazard") with OCANNL_BACKEND=$backend:
+  this command names its own dune width, so the -j $cap cap (tools/box-jobs.sh) was NOT injected."
     return 0
   fi
-  dxg_cap=$cap
-  dxg_announce="capping dune at -j $cap. This box reaches its GPU through the WSL2
-  $(box_jobs_dxg_device) bridge and OCANNL_BACKEND=$backend holds that device. At dune's default
-  width the bridge's VM-bus ring overflows, and the suite comes back red in the
-  same stanzas a real backend regression lands in (gh-ocannl-983). The cap lives
-  in tools/box-jobs.sh, shared with tools/sweep.sh; the refusal signature and the
-  recovery are the dxg bullet of docs/agent-notes/build-and-test.md. Pass an
+  width_cap=$cap
+  width_announce="capping dune at -j $cap. $(hazard_found "$hazard" "$backend"). $(hazard_why "$hazard") Pass an
   explicit -j to run at a width of your own."
 }
 
-dxg_said=         # stderr is said once, whichever call gets there first
-dxg_logged=
-say_dxg_plan() { # -> stderr, and into the run's log once there is one
-  [ -n "$dxg_announce" ] || return 0
-  if [ -z "$dxg_said" ]; then
-    printf 'test-run: %s\n' "$dxg_announce" >&2
-    dxg_said=1
+width_said=       # stderr is said once, whichever call gets there first
+width_logged=
+say_width_plan() { # -> stderr, and into the run's log once there is one
+  [ -n "$width_announce" ] || return 0
+  if [ -z "$width_said" ]; then
+    printf 'test-run: %s\n' "$width_announce" >&2
+    width_said=1
   fi
-  if [ -z "$dxg_logged" ] && [ -n "${run_dir:-}" ] && [ -f "$run_dir/log" ]; then
-    printf 'test-run: %s\n' "$dxg_announce" >>"$run_dir/log"
-    dxg_logged=1
+  if [ -z "$width_logged" ] && [ -n "${run_dir:-}" ] && [ -f "$run_dir/log" ]; then
+    printf 'test-run: %s\n' "$width_announce" >>"$run_dir/log"
+    width_logged=1
   fi
   return 0
 }
@@ -272,7 +339,7 @@ cd -P "$(dirname "$0")/.." || die "cannot cd to repo root"
 . scripts/process-group.sh
 
 # The per-box dune width cap, shared with tools/sweep.sh so the two cannot
-# drift. See dxg_cap below for what this script does with it.
+# drift. See width_cap below for what this script does with it.
 [ -r tools/box-jobs.sh ] || die "cannot read tools/box-jobs.sh"
 # shellcheck source=box-jobs.sh
 . tools/box-jobs.sh
@@ -1643,14 +1710,14 @@ case $sub in
     # of every later digest -- not a decision the log alone remembers. The
     # width goes immediately after dune's subcommand, where dune accepts it
     # whatever the target is, and always before dune's own `--`.
-    plan_dxg_cap "$@"
-    if [ -n "$dxg_cap" ]; then
-      dxg_sub=$1
+    plan_width_cap "$@"
+    if [ -n "$width_cap" ]; then
+      width_sub=$1
       shift
-      set -- "$dxg_sub" -j "$dxg_cap" "$@"
+      set -- "$width_sub" -j "$width_cap" "$@"
     fi
     # Stderr first: it must be readable even if the launch itself fails below.
-    say_dxg_plan
+    say_width_plan
     # Toolchain checks gate only launches: status/wait/stop/list remain usable
     # from a shell whose opam environment is no longer active.
     select_dune
@@ -1684,7 +1751,7 @@ case $sub in
     new_run "$@"
     # And into the run's own log, so the cap is in the artifact triage reads
     # rather than only in the launching terminal's scrollback.
-    say_dxg_plan
+    say_width_plan
     take_lock
     publish_run || { rm -rf "$run_dir"; die "cannot publish $run_dir"; }
     # The supervisor inherits lock fd 9 and owns the run from here: it records
