@@ -102,6 +102,16 @@ files.
   `log_config_sourcing` and `log_level` default to off/0 (gh-ocannl-595): a stream that carries
   eighty lines of routine trace cannot carry a warning, and the unknown-config-key warning is the
   one startup message that means the user made a mistake.
+- That contract holds for `.expected` goldens, which diff stdout only, but NOT for inline `%expect`
+  blocks: ppx_expect's capture dup2s its temp file onto fd 1 AND fd 2
+  (`ppx_expect_runtime_before_test`), so anything on stderr during a block is diffed. The library
+  therefore gives the C runtime's `stderr` its own descriptor at startup (`Utils.c_stderr_detached`,
+  the `detach_c_stderr` key, gh-ocannl-1031): a foreign C library's diagnostics follow the process's
+  real stderr instead of whatever later takes over fd 2, while OCaml's `Stdlib.stderr` keeps writing
+  to fd 2 so the library's own reporting is unchanged. It is not filtering — no line is dropped or
+  rewritten, the chatter still reaches the real stderr and the run log. The forcing case was ROCm's
+  per-event chatter (see the backends note); the general rule is that a golden should never be able
+  to acquire a line from a library the program never named.
 - Prefer the minimal targeted fix over speculative hardening: offer hardening separately as an
   option with its costs, don't fold it into the fix.
 - Git refuses to check out or update a branch that ANOTHER worktree has checked out. This is

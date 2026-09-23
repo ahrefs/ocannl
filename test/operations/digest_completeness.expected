@@ -98,7 +98,8 @@ search-shaping -- it makes the tuner try alternative inlining decisions; each al
 search-shaping -- it decides which of the two searched placement arms ships, overriding the measured comparison rather than changing either arm: each arm is a different program keyed on its own digest, each arm's crown is cached under that digest either way, and a schedule crowned under one setting is a valid crown under the other (gh-ocannl-638)
   tune_ship_arm
 
-execution-neutral -- startup and configuration-sourcing chatter
+execution-neutral -- startup and configuration-sourcing chatter, and which descriptor foreign C-library chatter follows
+  detach_c_stderr
   log_config_sourcing
   never_capture_stdout
   suppress_welcome_message
@@ -163,7 +164,7 @@ execution-neutral -- memoization of toolchain probes: it changes how long resolv
   cc_backend_probe_cache [read at codegen]
 
 every scanned root meets its source-count floor: true
-OK: 116 config keys classified against 7 cache-key components.
+OK: 117 config keys classified against 7 cache-key components.
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count

@@ -299,6 +299,11 @@ let exempt_zero_reference_exports =
     "Utils.log_config_sourcing_resolution";
     "Utils.suppress_welcome_message_resolution";
     "Utils.profile_selection";
+    (* Not pre-existing. The C stub behind [Utils.c_stderr_detached] (gh-ocannl-1031): the module
+       calls it once at its own initialization, and what the rest of the tree reads is the resulting
+       boolean, not the stub. Publishing the stub is still right -- a caller that has taken fd 2
+       over for its own reasons can redo the detachment -- but nothing in the tree needs to. *)
+    "Utils.detach_c_stderr";
     "Utils.default_indent";
     "Utils.doc_of_sexp";
     "Utils.enable_runtime_debug";

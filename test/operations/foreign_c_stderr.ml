@@ -54,7 +54,9 @@ let () =
   in
   let captured_foreign = String.is_substring captured ~substring:foreign_marker in
   let captured_ocaml = String.is_substring captured ~substring:ocaml_marker in
-  printf "detach_c_stderr in effect: %b\n" Utils.c_stderr_detached;
+  (* Descriptive, and deliberately not a `%b` claim: which arm ran is not a fact that can fail --
+     the rule below runs both, and each arm asserts what holds under it. *)
+  printf "arm: detach_c_stderr=%s\n" (if Utils.c_stderr_detached then "on" else "off");
   if Utils.c_stderr_detached then
     p "a foreign C library's stderr escapes a capture of fd 2" (not captured_foreign)
   else p "without the setting, a foreign C library's stderr is captured with fd 2" captured_foreign;
