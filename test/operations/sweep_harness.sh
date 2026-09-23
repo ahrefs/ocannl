@@ -44,7 +44,8 @@ on_error() {
     native_of_dxg dxg_of_native native_collection native_unit_linux native_unit_wsl \
     native_unit_cpu native_abort_run native_other_abort hold_lock_ok \
     tuf_asleep tuf_no_wake_lab tuf_up tuf_unreachable tuf_inhibited tuf_sleep_fails \
-    tuf_unguarded tuf_unguarded_wsl tuf_self_refusal guard_held guard_refused guard_absent \
+    tuf_unguarded tuf_unguarded_wsl tuf_self_refusal tuf_cancelled guard_held guard_refused \
+    guard_absent \
     after_cancel; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
@@ -2332,6 +2333,55 @@ grep -qF '  minix/hip: ran WITHOUT a sleep guard -- fixture-inhibit refused: Acc
 tuf_unguarded_wsl=$(SWEEP_TEST_HOLD_DENIED=1 SWEEP_TEST_SSH_MODE=window \
   SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh run_sweep_args --only hip --target tuf-up-probe)
 absent 'sleep guard' <<<"$tuf_unguarded_wsl"
+
+
+# A lane that reached tuf and was then CANCELLED still asks for tuf's sleep -- detached, so the
+# group TERM that cancelled the run does not take the request with it, and with the lane's box
+# reservation already released, so the fake's lock check grants it. Both lanes are held in their
+# preparation ssh (the `hang` fake) and the whole group is signalled, as a scheduler cancel does.
+tuf_cancel_prefix=$tmp/tuf-cancel
+wait_prefix=$tuf_cancel_prefix
+: >"$wake_lab_calls"
+SWEEP_TEST_OWN_GROUP=1 SWEEP_TEST_WAIT_PREFIX=$tuf_cancel_prefix SWEEP_TEST_SSH_MODE=hang \
+  SWEEP_TEST_TUF_STATUS=up run_sweep_args --only hip --target tuf-cancel-probe \
+  >"$tuf_cancel_prefix.out" 2>"$tuf_cancel_prefix.err" &
+tuf_cancel_pid=$!
+holder_pid=$tuf_cancel_pid
+waited=0
+until [ "$(wc -l <"$tuf_cancel_prefix.ssh-pids" 2>/dev/null || echo 0)" -ge 2 ]; do
+  [ "$waited" -lt "$wait_ticks" ] || break
+  sleep 0.05
+  waited=$((waited + 1))
+done
+[ "$(wc -l <"$tuf_cancel_prefix.ssh-pids")" -ge 2 ]
+kill -TERM -- "-$tuf_cancel_pid"
+set +e
+wait "$tuf_cancel_pid"
+tuf_cancel_rc=$?
+set -e
+holder_pid=
+wait_prefix=
+[ "$tuf_cancel_rc" -eq 143 ]
+waited=0
+until grep -q '^sleep tuf$' "$wake_lab_calls"; do
+  [ "$waited" -lt "$wait_ticks" ] || break
+  sleep 0.05
+  waited=$((waited + 1))
+done
+tuf_cancelled=$(cat "$tuf_cancel_prefix.out" "$tuf_cancel_prefix.err")
+[ "$(cat "$wake_lab_calls")" = "$(printf 'status tuf\nsleep tuf')" ]
+# The request's durable record is its own log beside the run's, named for the run's stamp; the
+# lane's summary line saying so is best-effort on this path (a cancelled top level does not wait to
+# publish it), so the log is what is asserted.
+tuf_cancel_stamp=$(sed -n 's/^sweep \([0-9TZ]*\) .*/\1/p' "$tuf_cancel_prefix.out")
+tuf_cancel_sleep_log=$state/logs/$tuf_cancel_stamp-tuf-sleep.log
+waited=0
+until grep -q '^tuf=DOWN' "$tuf_cancel_sleep_log" 2>/dev/null; do
+  [ "$waited" -lt "$wait_ticks" ] || break
+  sleep 0.05
+  waited=$((waited + 1))
+done
+grep -q '^tuf=DOWN' "$tuf_cancel_sleep_log"
 
 # The guard itself: the far-side supervisor's `--hold`, run here against fake inhibitors. The
 # program is the sweep's own, extracted as tools/test-test-run.sh extracts unit_jobs (the sweep

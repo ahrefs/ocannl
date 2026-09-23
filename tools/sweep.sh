@@ -702,6 +702,11 @@ relay() {
   done
   for pid in $live; do kill -TERM "$pid" 2>/dev/null; done
   for pid in $live; do wait "$pid" 2>/dev/null; done
+  # A lane stops taking signals once its unit is reaped: the top level relays its own TERM to every
+  # lane as well, and a second relay arriving while the lane's EXIT trap runs ends the lane there --
+  # before lane_exit has asked for its gated box's sleep and published the line saying so (the
+  # harness's cancelled tuf lane lost both that way).
+  [ "$IN_LANE" = 1 ] && trap '' INT TERM
   # A cancelled run still ended, and the rows its lanes managed to write before
   # the signal are real; the record says which those were. Only the top level
   # writes it -- a lane runs this same relay for its own supervisor -- and only
@@ -2368,7 +2373,6 @@ run_unit() { # machine backend host
     *) outcome=fail ;;
   esac
   say "  $machine/$backend: $outcome (${elapsed}s; execution=$execution)"
-  say_unguarded "$log" "$machine/$backend"
   record "$machine" "$backend" "$outcome" "$elapsed" "$log" "$execution"
   # The lane is a subshell, so the evidence cannot be appended to the top-level
   # SKIP_RUN_ arrays from here; it is left as a per-unit file that the top level
@@ -2411,6 +2415,9 @@ run_unit() { # machine backend host
     fail | timeout | error) write_fingerprint "$log" "$machine/$backend" ;;
   esac
   update_unit_state "$machine" "$backend" "$outcome" "${WRITTEN_FINGERPRINT:-}" "$log"
+  # After the LAST guarded leg (the RTC context and the serial rerun append to the log too), so a
+  # guard refused to any of them is reported, not only one refused to the suite.
+  say_unguarded "$log" "$machine/$backend"
   WRITTEN_FINGERPRINT=
 }
 
@@ -2436,7 +2443,39 @@ flush_lane_output() {
 # losing them. bash 3.2 runs a subshell's EXIT trap only on an explicit `exit`,
 # which is why run_lane ends with one.
 lane_exit() {
+  sleep_gated_box_after_early_exit
   flush_lane_output || cat "$LANE_OUT" >&2
+}
+
+# The early-exit half of the gated box's sleep (run_lane has the normal one). A lane that reached
+# its gated box and then stopped -- cancelled (relay reaps the unit's supervisor before it exits),
+# or dead of its own `die` -- would otherwise leave a timer-woken laptop up all day. Not run in the
+# lane's foreground: a cancellation must not wait out wake-lab's confirm-down, so the request is
+# DETACHED -- its own session, so the group TERM that cancelled the run does not take it too, and
+# without the run's locks, so it holds neither the worktree nor the box. The lane's box reservation
+# goes first, or the sleep would be refused by the lane that asked for it. Its output lands beside
+# the run's logs, since the lanes' coordination directory is removed when the run ends.
+sleep_gated_box_after_early_exit() {
+  local box=${LANE_GATED_BOX:-} out
+  [ -n "$box" ] && [ "${LANE_REACHED:-0}" = 1 ] && [ "${LANE_SLEPT:-0}" = 0 ] || return 0
+  LANE_SLEPT=1
+  exec 8>&-
+  out=$LOGS/$stamp-$box-sleep.log
+  if [ -x "$WAKE_LAB" ]; then
+    (exec 9>&- </dev/null >"$out" 2>&1
+     exec perl -e 'use POSIX (); POSIX::setsid(); exec @ARGV or exit 127' -- "$WAKE_LAB" sleep "$box") &
+    early_say "  $box: the lane stopped early, so its sleep was requested in the background (wake-lab.sh sleep $box; output in $out)"
+  else
+    early_say "  $box: WARNING -- the lane stopped early and $box stays awake: no wake-lab.sh at $WAKE_LAB"
+  fi
+}
+
+# `say` for a lane on its way out, which must not `die` over a buffer that is gone: a cancelled
+# top level does not order its exit after its lanes', and its EXIT trap removes the coordination
+# directory the buffer lives in. Best-effort, onto stderr when the buffer is gone; the durable
+# record of the early sleep is its own log beside the run's.
+early_say() {
+  printf '%s\n' "$*" 2>/dev/null >>"$LANE_OUT" || printf '%s\n' "$*" >&2
 }
 
 # Whether a gated box is up, by the lab's own reading of it: `wake-lab.sh status <box>` reaching the
@@ -2498,6 +2537,10 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
   local lane=$1 unit machine backend host lane_host= lab_box lab_lock_rc
   LANE_PIDS=
   LANE_REACHED=0
+  # The gated box this lane holds, once it holds one; the EXIT trap puts it to sleep if the lane
+  # stops before the normal path does (sleep_gated_box_after_early_exit).
+  LANE_GATED_BOX=
+  LANE_SLEPT=0
   IN_LANE=1
   UNIT_PID=
   LANE_OUT=$LANE_DIR/output.$lane
@@ -2533,6 +2576,7 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
       exit 0
     fi
     take_lab_lock "$lab_box"; lab_lock_rc=$?
+    [ "$lab_lock_rc" = 0 ] && lab_box_gated "$lab_box" && LANE_GATED_BOX=$lab_box
     # A harness that cannot lock at all fails the lane rather than reporting contention it did not
     # observe: `skip (box ... reserved by ...)` over a read-only state directory is a local fault
     # wearing the costume of a legitimate one.
@@ -2567,6 +2611,7 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
   # wake-lab's sleep takes the box's lane lock like every destroyer, and would otherwise be refused
   # by the very lane asking for it.
   if [ -n "$lane_host" ] && [ "$LANE_REACHED" = 1 ] && lab_box_gated "$lab_box"; then
+    LANE_SLEPT=1
     exec 8>&-
     sleep_gated_box "$lab_box"
     flush_lane_output || die "cannot publish the $lab_box sleep summary to stdout"

@@ -1928,7 +1928,12 @@ that they earn a lookup rather than always-loaded space.
   and nothing the caller was expected to repair. A lane that reached tuf ends with
   `wake-lab.sh sleep tuf`, AFTER closing its own lane lock (wake-lab's power verbs take the box's
   lane lock and would be refused by the lane asking); a refusal (an inhibitor, another session's
-  lock) is reported as `left awake, not a failure`. Its width is `BOX_JOBS_TUF_HIP_CAP` (2), a
+  lock) is reported as `left awake, not a failure`. A lane that reached tuf and then stopped early
+  (cancelled, or its own `die`) asks from its EXIT trap instead, detached (`setsid`, so the group
+  TERM that cancelled the run does not take it) into `logs/<stamp>-tuf-sleep.log`; the relay stops
+  taking signals once the unit is reaped, since the top level's own relayed TERM would otherwise
+  end the lane inside that trap. A cancelled top level does not order its exit after its lanes',
+  so the lane's line saying so is best-effort and the log is the record. Its width is `BOX_JOBS_TUF_HIP_CAP` (2), a
   conservative placeholder until lukstafi/ludics-lite#344 measures it. A single-boot box needs no
   `kind_of`: `lab_dest` returns its one alias, so a site table that does not describe tuf refuses
   nothing.
