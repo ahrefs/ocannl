@@ -167,11 +167,11 @@ reject_misplaced_options() {
 # default width, and an hour of box time plus a misleading bisect went into
 # rediscovering the cap.
 #
-# A native boot has limits of its own, and the fleet runs two correctness
-# batches at once on each native GPU box (lukstafi/ludics-lite#316), measured
-# at a width per batch: minix's small SDMA queue pool is device-wide, so two
-# hip batches at dune's default can drain it between them, and rog-nv's two
-# cuda slots were measured at -j 8, not at its 24 cores. A slot count that
+# A native boot has limits of its own, and the fleet runs several correctness
+# batches at once on each native GPU box (lukstafi/ludics-lite#316 and ludics-lite#344),
+# measured at a width per batch: minix's small SDMA queue pool is device-wide,
+# so hip batches at dune's default can drain it between them, and tuf's and
+# rog-nv's slots were measured at -j 8, not at their 16 and 24 cores. A slot count that
 # holds only while every caller remembers the width is a hazard, not a limit,
 # so the native widths are injected the same way. tools/box-jobs.sh decides
 # which hazard, if any, this box and backend meet (box_jobs_local_hazard) and
@@ -213,6 +213,7 @@ hazard_name() { # <hazard>; a noun phrase for the host, and the issue behind its
   case $1 in
     dxg) printf 'dxg host (gh-ocannl-983)' ;;
     sdma) printf 'small-SDMA-pool host (gh-ocannl-1033)' ;;
+    wide-sdma) printf 'native AMD GPU host (lukstafi/ludics-lite#344)' ;;
     nvidia) printf 'native NVIDIA host (gh-ocannl-1033)' ;;
   esac
 }
@@ -223,6 +224,9 @@ hazard_found() { # <hazard> <backend>
     sdma) printf 'This box'"'"'s GPU has a small SDMA (copy-engine)
   queue pool, %s allocatable queues for the whole device per its KFD topology
   (%s), and every OCANNL_BACKEND=%s process that copies takes one' \
+      "$(box_jobs_sdma_pool)" "$(box_jobs_kfd_topology)" "$2" ;;
+    wide-sdma) printf 'This box'"'"'s AMD GPU reports %s allocatable SDMA
+  queues per its KFD topology (%s), and OCANNL_BACKEND=%s holds it' \
       "$(box_jobs_sdma_pool)" "$(box_jobs_kfd_topology)" "$2" ;;
     nvidia) printf 'This is a native NVIDIA boot
   (%s) and OCANNL_BACKEND=%s holds its GPU' "$(box_jobs_nvidia_device)" "$2" ;;
@@ -235,19 +239,27 @@ hazard_why() { # <hazard>
   same stanzas a real backend regression lands in (gh-ocannl-983). The cap lives
   in tools/box-jobs.sh, shared with tools/sweep.sh; the refusal signature and the
   recovery are the dxg bullet of docs/agent-notes/build-and-test.md.' ;;
-    sdma) printf 'Past %s such processes on
-  the whole box the pool can run out (kernel: `No more SDMA queue to allocate`),
-  and a stanza aborts in ROCr like a backend regression (gh-ocannl-1029); -j %s
-  keeps the fleet'"'"'s %s correctness slots on this box within %s between them
-  (gh-ocannl-1033). The cap lives in tools/box-jobs.sh; the signature is in the
-  native-boot bullets of docs/agent-notes/build-and-test.md.' \
-      "$BOX_JOBS_SDMA_CAP" "$BOX_JOBS_SDMA_SLOT_CAP" "$BOX_JOBS_NATIVE_GPU_SLOTS" "$BOX_JOBS_SDMA_CAP" ;;
-    nvidia) printf 'The fleet'"'"'s %s correctness slots
-  on this box were measured at -j %s each, and three such batches at once already
-  hit a CUDA_ERROR_OUT_OF_MEMORY (lukstafi/ludics-lite#316); two batches at
-  dune'"'"'s default width were never measured (gh-ocannl-1033). The cap lives in
+    sdma) printf 'At dune'"'"'s default width
+  the pool can run out (kernel: `No more SDMA queue to allocate`), and a stanza
+  aborts in ROCr like a backend regression (gh-ocannl-1029); -j %s keeps the
+  fleet'"'"'s %s correctness slots on this box within the %s hip-width measured
+  clean between them (lukstafi/ludics-lite#344). The cap lives in
+  tools/box-jobs.sh; the signature is in the native-boot bullets of
+  docs/agent-notes/build-and-test.md.' \
+      "$BOX_JOBS_SDMA_SLOT_CAP" "$BOX_JOBS_SDMA_SLOTS" "$BOX_JOBS_SDMA_BUDGET" ;;
+    wide-sdma) printf 'The fleet'"'"'s %s correctness
+  slots on this box were measured at -j %s each, %s hip-width between them;
+  uncapped, a batch here runs at dune'"'"'s default width, and that many at once
+  were never measured (lukstafi/ludics-lite#344). The cap lives in
   tools/box-jobs.sh; the evidence is in the native-boot bullets of
-  docs/agent-notes/build-and-test.md.' "$BOX_JOBS_NATIVE_GPU_SLOTS" "$BOX_JOBS_NATIVE_CUDA_CAP" ;;
+  docs/agent-notes/build-and-test.md.' \
+      "$BOX_JOBS_WIDE_SDMA_SLOTS" "$BOX_JOBS_WIDE_SDMA_SLOT_CAP" "$BOX_JOBS_WIDE_SDMA_BUDGET" ;;
+    nvidia) printf 'The fleet'"'"'s %s correctness slots
+  on this box were measured at -j %s each, and three or four such batches at
+  once hit a CUDA_ERROR_OUT_OF_MEMORY (lukstafi/ludics-lite#316 and ludics-lite#344); two
+  batches at dune'"'"'s default width were never measured (gh-ocannl-1033). The
+  cap lives in tools/box-jobs.sh; the evidence is in the native-boot bullets of
+  docs/agent-notes/build-and-test.md.' "$BOX_JOBS_NATIVE_CUDA_SLOTS" "$BOX_JOBS_NATIVE_CUDA_CAP" ;;
   esac
 }
 
