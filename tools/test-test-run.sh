@@ -94,19 +94,18 @@
 #  48-52 sit beside the dxg legs, after leg 34: the native caps
 #      (gh-ocannl-1033), against faked KFD topologies and a faked NVIDIA
 #      device.
-#  48. hip on a small SDMA pool (minix's recorded topology) is capped at the
-#      per-slot width, announced and recorded; cuda on a native NVIDIA boot is
-#      capped at its own.
-#  49. negative controls: a larger pool (tuf's recorded topology), no KFD
-#      topology, a GPU node that reports no pool, a CPU backend on either
-#      native hazard, and each backend on the other one's hazard -- no cap,
-#      no word.
-#  50. a width the caller named is honored on both native hazards, and a dxg
+#  48. hip on a small SDMA pool (minix's recorded topology) and on a larger one
+#      (tuf's) is capped at that box's per-slot width, announced and recorded;
+#      cuda on a native NVIDIA boot is capped at its own.
+#  49. negative controls: no KFD topology, a GPU node that reports no pool, a
+#      CPU backend on each native hazard, and each backend on the other one's
+#      hazard -- no cap, no word.
+#  50. a width the caller named is honored on every native hazard, and a dxg
 #      boot that also reports a small pool keeps its dxg cap.
 #  51. with OCANNL_BACKEND unset on a native hazard, the run is not capped and
 #      the caller is told the backend's width.
-#  52. the native widths derive from one place: the hip cap is the measured
-#      SDMA budget over the slot count, and the numbers are the measured ones.
+#  52. the native widths derive from one place: each hip cap is its measured
+#      budget over its slot count, and the numbers are the measured ones.
 
 set -u
 
@@ -2234,7 +2233,7 @@ if [ -z "$dxg_detail" ]; then
   # The values themselves, from the shipping table, in one shell: the sweep's
   # hip unit over each of minix's boots (and with no destination, or one the
   # table does not know), rog's cuda unit over each of its boots, a CPU unit on
-  # a native boot, tuf's hip unit at its conservative width (gh-ocannl-1035), the
+  # a native boot, tuf's hip unit uncapped (measured, lukstafi/ludics-lite#344), the
   # override that must still win over both transports, the local probe, and the
   # two constants.
   sweep_cap=$(
@@ -2257,8 +2256,8 @@ if [ -z "$dxg_detail" ]; then
       "$BOX_JOBS_DXG_CAP/$BOX_JOBS_SDMA_CAP"
   )
   case $sweep_cap in
-    "2|2|8|2||||2|7|7||2|2/8") ;;
-    *) dxg_detail="shared table disagrees: $sweep_cap (want 2|2|8|2||||2|7|7||2|2/8)" ;;
+    "2|2|8|2|||||7|7||2|2/8") ;;
+    *) dxg_detail="shared table disagrees: $sweep_cap (want 2|2|8|2|||||7|7||2|2/8)" ;;
   esac
 fi
 if [ -z "$dxg_detail" ]; then
@@ -2283,10 +2282,10 @@ fi
 # ---------------------------------------------------------------------------
 # Legs 48-52: the native GPU width caps (gh-ocannl-1033)
 # ---------------------------------------------------------------------------
-# The fleet runs two correctness batches at once on each native GPU box
-# (lukstafi/ludics-lite#316), measured at a width per batch: -j 4 on minix,
-# whose device-wide SDMA pool two default-width hip batches can drain between
-# them (gh-ocannl-1029), and -j 8 on rog-nv. The widths used to hold only while
+# The fleet runs several correctness batches at once on each native GPU box
+# (lukstafi/ludics-lite#316 and ludics-lite#344), measured at a width per batch: -j 4 on
+# minix, whose device-wide SDMA pool default-width hip batches can drain
+# between them (gh-ocannl-1029), -j 8 on tuf and -j 8 on rog-nv. The widths used to hold only while
 # every worker remembered them; now `run`/`start` injects them the way it
 # injects the dxg cap. The pool comes from the KFD topology, faked here through
 # OCANNL_TOOL_KFD_TOPOLOGY as directories of `properties` files copied from
@@ -2345,6 +2344,7 @@ native_probe() { # tag dxg kfd nvidia backend subcommand [argv...]
 # and the run's log -- plus what the announcement says the hazard was.
 native_detail=
 for probe in "sdma:$kfd_small:$nv_absent:hip:4:SDMA" \
+             "wide-sdma:$kfd_large:$nv_absent:hip:8:AMD GPU reports 12 allocatable SDMA" \
              "nvidia:$kfd_absent:$nv_present:cuda:8:native NVIDIA boot"; do
   IFS=: read -r tag kfd nv backend want what <<<"$probe"
   native_probe "native-$tag" "$dxg_absent" "$kfd" "$nv" "$backend" run build @cheap
@@ -2361,16 +2361,17 @@ for probe in "sdma:$kfd_small:$nv_absent:hip:4:SDMA" \
     { native_detail="$tag: the recorded command does not carry the cap: $(cat "$argv_dir/cmd" 2>/dev/null)"; break; }
 done
 if [ -z "$native_detail" ]; then
-  report 0 "native: hip on a small SDMA pool and cuda on a native NVIDIA boot are capped, announced and recorded"
+  report 0 "native: hip on a small or a larger SDMA pool and cuda on a native NVIDIA boot are capped, announced and recorded"
 else
-  report 1 "native: hip on a small SDMA pool and cuda on a native NVIDIA boot are capped, announced and recorded" "$native_detail"
+  report 1 "native: hip on a small or a larger SDMA pool and cuda on a native NVIDIA boot are capped, announced and recorded" "$native_detail"
 fi
 
 # Leg 49: the negative controls. Each denies one half of a condition leg 48
 # met, so a probe that capped every Linux GPU batch -- or keyed on the backend
 # alone -- fails here. Silence is part of the contract, as for the dxg legs.
 native_detail=
-for probe in "large-pool:$kfd_large:$nv_absent:hip" \
+for probe in "cpu-on-wide-sdma:$kfd_large:$nv_absent:cc" \
+             "cuda-on-wide-sdma:$kfd_large:$nv_absent:cuda" \
              "no-kfd:$kfd_absent:$nv_absent:hip" \
              "no-pool:$kfd_nopool:$nv_absent:hip" \
              "cpu-on-sdma:$kfd_small:$nv_absent:cc" \
@@ -2396,6 +2397,7 @@ fi
 # small pool (the bridge is the tighter limit, and the one measured there).
 native_detail=
 for probe in "sdma:$kfd_small:$nv_absent:hip:small-SDMA-pool host" \
+             "wide-sdma:$kfd_large:$nv_absent:hip:native AMD GPU host" \
              "nvidia:$kfd_absent:$nv_present:cuda:native NVIDIA host"; do
   IFS=: read -r tag kfd nv backend what <<<"$probe"
   native_probe "native-explicit-$tag" "$dxg_absent" "$kfd" "$nv" "$backend" run build -j 16 @cheap
@@ -2424,6 +2426,7 @@ fi
 # who named a width is told nothing.
 native_detail=
 for probe in "sdma:$kfd_small:$nv_absent:if it is hip, pass -j 4 yourself" \
+             "wide-sdma:$kfd_large:$nv_absent:if it is hip, pass -j 8 yourself" \
              "nvidia:$kfd_absent:$nv_present:if it is cuda, pass -j 8 yourself"; do
   IFS=: read -r tag kfd nv want <<<"$probe"
   native_probe "native-unset-$tag" "$dxg_absent" "$kfd" "$nv" "" run build @cheap
@@ -2441,7 +2444,7 @@ for probe in "sdma:$kfd_small:$nv_absent:if it is hip, pass -j 4 yourself" \
   fi
 done
 if [ -z "$native_detail" ]; then
-  native_probe native-unset-none "$dxg_absent" "$kfd_large" "$nv_absent" "" run build @cheap
+  native_probe native-unset-none "$dxg_absent" "$kfd_absent" "$nv_absent" "" run build @cheap
   { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build @cheap" ] &&
     ! grep -qi 'cap\|sdma\|nvidia' <<<"$argv_err"; } ||
     native_detail="no hazard: exit $argv_rc; calls: ${argv_calls:-<none>}; stderr: ${argv_err:-<none>}"
@@ -2452,21 +2455,26 @@ else
   report 1 "native: an unreadable backend is reported with its width, never guessed, and never capped" "$native_detail"
 fi
 
-# Leg 52: one place for the numbers. The hip cap is not a literal of its own
-# but the measured SDMA budget (the sweep's native width) over the slot count,
-# so a change to either moves it; and the values are the measured ones, pinned
-# here so an edit to box-jobs.sh has to say what it measured.
+# Leg 52: one place for the numbers. A hip cap is not a literal of its own
+# but its measured budget over its box's slot count, so a change to either
+# moves it; and the values are the measured ones (lukstafi/ludics-lite#316,
+# #344), pinned here so an edit to box-jobs.sh has to say what it measured.
 native_consts=$(
   . "$JOBS_SRC"
-  printf '%s/%s/%s/%s/%s' "$BOX_JOBS_SDMA_CAP" "$BOX_JOBS_NATIVE_GPU_SLOTS" \
-    "$BOX_JOBS_SDMA_SLOT_CAP" "$BOX_JOBS_NATIVE_CUDA_CAP" "$BOX_JOBS_SDMA_MEASURED_POOL"
+  printf '%s/%s/%s/%s/%s/%s/%s/%s/%s/%s' "$BOX_JOBS_SDMA_CAP" \
+    "$BOX_JOBS_SDMA_BUDGET" "$BOX_JOBS_SDMA_SLOTS" "$BOX_JOBS_SDMA_SLOT_CAP" \
+    "$BOX_JOBS_WIDE_SDMA_BUDGET" "$BOX_JOBS_WIDE_SDMA_SLOTS" "$BOX_JOBS_WIDE_SDMA_SLOT_CAP" \
+    "$BOX_JOBS_NATIVE_CUDA_SLOTS" "$BOX_JOBS_NATIVE_CUDA_CAP" "$BOX_JOBS_SDMA_MEASURED_POOL"
 )
 native_detail=
-[ "$native_consts" = "8/2/4/8/6" ] ||
-  native_detail="box-jobs.sh's native numbers are $native_consts (want 8/2/4/8/6)"
+[ "$native_consts" = "8/16/4/4/24/3/8/2/8/6" ] ||
+  native_detail="box-jobs.sh's native numbers are $native_consts (want 8/16/4/4/24/3/8/2/8/6)"
 [ -n "$native_detail" ] ||
-  grep -q '^BOX_JOBS_SDMA_SLOT_CAP=\$((BOX_JOBS_SDMA_CAP / BOX_JOBS_NATIVE_GPU_SLOTS))$' "$JOBS_SRC" ||
+  grep -q '^BOX_JOBS_SDMA_SLOT_CAP=\$((BOX_JOBS_SDMA_BUDGET / BOX_JOBS_SDMA_SLOTS))$' "$JOBS_SRC" ||
   native_detail="BOX_JOBS_SDMA_SLOT_CAP is not derived from the SDMA budget and the slot count"
+[ -n "$native_detail" ] ||
+  grep -q '^BOX_JOBS_WIDE_SDMA_SLOT_CAP=\$((BOX_JOBS_WIDE_SDMA_BUDGET / BOX_JOBS_WIDE_SDMA_SLOTS))$' "$JOBS_SRC" ||
+  native_detail="BOX_JOBS_WIDE_SDMA_SLOT_CAP is not derived from the wide-pool budget and the slot count"
 if [ -z "$native_detail" ]; then
   report 0 "native: the per-slot widths derive from box-jobs.sh's measured numbers"
 else

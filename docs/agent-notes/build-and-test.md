@@ -1932,8 +1932,9 @@ that they earn a lookup rather than always-loaded space.
   TERM that cancelled the run does not take it) into `logs/<stamp>-tuf-sleep.log`; the relay stops
   taking signals once the unit is reaped, since the top level's own relayed TERM would otherwise
   end the lane inside that trap. A cancelled top level does not order its exit after its lanes',
-  so the lane's line saying so is best-effort and the log is the record. Its width is `BOX_JOBS_TUF_HIP_CAP` (2), a
-  conservative placeholder until lukstafi/ludics-lite#344 measures it. A single-boot box needs no
+  so the lane's line saying so is best-effort and the log is the record. Its unit is uncapped:
+  lukstafi/ludics-lite#344's ladder ran it green at dune's default (16) and at `-j 8`, 1046 s
+  against 1105 s, with no GPU kernel line (it had run at a placeholder `-j 2` until then). A single-boot box needs no
   `kind_of`: `lab_dest` returns its one alias, so a site table that does not describe tuf refuses
   nothing.
 - **A native lane's work legs hold a logind sleep inhibitor** (gh-ocannl-1035). Every far-side leg
@@ -2100,19 +2101,29 @@ that they earn a lookup rather than always-loaded space.
   (gh-ocannl-1034, below). `dmesg` is restricted on both native boxes (`kernel.dmesg_restrict=1`);
   the user reads the kernel journal through the `adm` group. rog-nv's native cuda unit ran green at 24, 8, 4 and 2 with no NVRM/Xid line.
   The sweep's cap is `BOX_JOBS_SDMA_CAP` in `tools/box-jobs.sh`, one unit's width with the box to
-  itself.
+  itself; lukstafi/ludics-lite#344 ran the unit green at `-j 16` too (1223 s, no faster). On
+  tuf-amd-linux (discrete gfx1102) a benign kernel line looks like trouble to a loose grep: the
+  idle dGPU runtime-suspends, and every resume re-prints its ring table (`ring sdma0 uses VM inv
+  eng 12 on hub 0`), so filter that line out before matching `sdma`.
 - **A manual or worker batch on a native GPU boot is capped per correctness slot, and
   `tools/test-run.sh run`/`start` injects it** (gh-ocannl-1033): `-j 4` for `OCANNL_BACKEND=hip`
   where the KFD topology (`/sys/class/kfd/kfd/topology/nodes/*/properties`) reports an SDMA pool
   no larger than minix's 6, and `-j 8` for `OCANNL_BACKEND=cuda` where `/dev/nvidiactl` exists (a
-  native NVIDIA boot; a WSL boot keeps the dxg cap). The fleet runs two correctness batches at once
-  on each native GPU box (lukstafi/ludics-lite#316), measured at those widths: two `-j 4` hip
-  batches peaked at exactly 8 GPU-holding processes with a clean kernel window, and on rog three
-  concurrent `-j 8` cuda batches hit one `CUDA_ERROR_OUT_OF_MEMORY` where two did not. So the hip
-  width is `BOX_JOBS_SDMA_CAP / BOX_JOBS_NATIVE_GPU_SLOTS`, and the cuda one is
-  `BOX_JOBS_NATIVE_CUDA_CAP`. An explicit `-j` still wins, and only says the cap exists, and an
-  unset `OCANNL_BACKEND` is reported with the width to pass rather than guessed, as for dxg. A
-  larger pool (tuf-amd-linux's gfx1102 reports 2 engines x 6) is not capped: nothing measured it.
+  native NVIDIA boot; a WSL boot keeps the dxg cap), and `-j 8` for hip where the pool is larger
+  (tuf-amd-linux's gfx1102 reports 2 engines x 6). Each is the width the box's correctness slots
+  were measured at, all of them at once (lukstafi/ludics-lite#316 and lukstafi/ludics-lite#344): minix runs four slots
+  (four `-j 4` hip batches, and two `-j 8` and one `-j 16` unit, were green; only dune's default
+  32 has drained the pool), tuf three (three `-j 8` hip batches green), rog two (three or more
+  concurrent cuda batches hit `CUDA_ERROR_OUT_OF_MEMORY` in `fused_classifier` in 2 of 6 rungs, at
+  10.0-10.2 GiB of 12 in use). So each hip width is a measured budget over the box's slot count
+  (`BOX_JOBS_SDMA_BUDGET / BOX_JOBS_SDMA_SLOTS`, `BOX_JOBS_WIDE_SDMA_BUDGET /
+  BOX_JOBS_WIDE_SDMA_SLOTS`), and the cuda one is `BOX_JOBS_NATIVE_CUDA_CAP`; the slot counts
+  must agree with the fleet's `FLEET_BOX_CORRECTNESS_SLOTS` default in lukstafi/ludics-lite. An
+  explicit `-j` still wins, and only says the cap exists, and an unset `OCANNL_BACKEND` is
+  reported with the width to pass rather than guessed, as for dxg. Measuring a slot count: the
+  dune shared cache restored nothing on these boxes (a `dune clean` + `--force` batch ran ~396
+  `ocamlopt` processes, per `_build/trace.csexp`, cache on or off), so such batches are
+  compile-inclusive; and without `dune clean`, `--force` does not re-run the tests at all.
   `tools/test-test-run.sh` fakes the topology (`OCANNL_TOOL_KFD_TOPOLOGY`) and the device
   (`OCANNL_TOOL_NVIDIA_DEVICE`) as it fakes the bridge.
 - **Runtime-refusal signature table.** These are the exception names `tools/sweep.sh`'s

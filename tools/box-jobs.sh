@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The single source of the dune width caps for a GPU suite: the one behind a
-# WSL2 `/dev/dxg` bridge, and the native ones minix's copy-engine queues and
-# rog-nv's measured correctness slots set -- sourced by tools/sweep.sh (whose
+# WSL2 `/dev/dxg` bridge, and the native ones the three native GPU boxes'
+# measured correctness slots set -- sourced by tools/sweep.sh (whose
 # `unit_jobs` decides a sweep unit's width) and by tools/test-run.sh (which
 # injects the local one into a manual run that expressed no width at all).
 # Sourced, never executed.
@@ -41,18 +41,17 @@ BOX_JOBS_DXG_CAP=2
 # line at all. The width that cannot oversubscribe the pool is its size, and it
 # costs nothing: the test phase ran 921 s at 32, 939 s at 8, 1059 s at 4 and
 # 1138 s at 2. (All four widths share seven red stanzas that no width
-# changes; the width is not what they are about.)
+# changes; the width is not what they are about.) This is the sweep's width:
+# lukstafi/ludics-lite#344 ran the same unit green at 16 as well (1223 s, no
+# kernel line, 2026-09-24), which is no faster, so the sweep keeps 8.
 BOX_JOBS_SDMA_CAP=8
 
-# tuf-amd-linux's hip unit (gh-ocannl-1035): the fleet's one DISCRETE-memory AMD
-# GPU (RX 7700S, gfx1102), the box whose host<->device transfers and placement
-# minix's unified gfx1151 can mask. Its KFD topology reports a larger SDMA pool
-# than minix's (2 engines x 6 queues against 1 x 6), but nothing has measured
-# what width its suite tolerates, so its sweep unit starts at the most
-# conservative width any GPU unit here has run clean at. NOT a measurement:
-# lukstafi/ludics-lite#344 (the tuf width/slot ladder) is the measurement that
-# replaces this number, the way gh-ocannl-1029's ladder replaced minix's.
-BOX_JOBS_TUF_HIP_CAP=2
+# tuf-amd-linux's hip unit (gh-ocannl-1035) is the fleet's one DISCRETE-memory
+# AMD GPU (RX 7700S, gfx1102, 8 GiB, 16 threads), and its sweep unit is
+# uncapped, as rog-nv's is: lukstafi/ludics-lite#344's ladder ran the forced
+# full hip unit green at dune's default (16) and at 8 -- test phase 1046 s and
+# 1105 s, no red stanza, no GPU kernel line, at most 6 of its 12 SDMA queues in
+# use (2026-09-24). It had started at a placeholder -j 2 until measured.
 
 # The backends that hold the device, i.e. the ones the bridge carries. A CPU
 # backend on the same box runs at full width.
@@ -92,10 +91,11 @@ box_jobs_dest_transport() { # <ssh-destination>; prints dxg, native, or nothing
 # On a native boot, minix's hip unit takes the SDMA cap above instead of the
 # bridge's, and rog-nv's cuda unit stays uncapped: its native ladder ran the
 # forced full unit green at dune's default (24), 8, 4 and 2, with no NVRM/Xid
-# line in any window (gh-ocannl-1029). These are one batch's widths, measured
-# with the box to itself. A manual or worker batch on a native boot may share
-# the box with the fleet's other correctness slot, so it takes the per-slot
-# widths of the local view below instead (gh-ocannl-1033).
+# line in any window (gh-ocannl-1029); so does tuf's hip unit (above). These
+# are one batch's widths, measured with the box to itself. A manual or worker
+# batch on a native boot may share the box with the fleet's other correctness
+# slots, so it takes the per-slot widths of the local view below instead
+# (gh-ocannl-1033).
 #
 # An unrecognised destination keeps the WSL measurement: running a native unit
 # at the bridge's width costs minutes, while running a dxg one at full width
@@ -104,8 +104,6 @@ box_jobs_sweep_cap() { # <machine> <backend> [<ssh-destination>]; prints the cap
   case "${1:-}:${2:-}:$(box_jobs_dest_transport "${3:-}")" in
     minix:hip:native) printf '%s' "$BOX_JOBS_SDMA_CAP" ;;
     minix:hip:*) printf '%s' "$BOX_JOBS_DXG_CAP" ;;
-    # Single-boot native Linux, so there is no other transport to tell apart.
-    tuf:hip:*) printf '%s' "$BOX_JOBS_TUF_HIP_CAP" ;;
     *) ;;
   esac
 }
@@ -163,15 +161,15 @@ box_jobs_sdma_pool() { # prints the smallest GPU node's allocatable SDMA queues,
 }
 
 # The pool the SDMA measurement was made on: minix's topology, 1 engine x 6.
-# A device whose pool is no larger is capped; a larger one (tuf's 12) is not,
-# because nothing has measured what width it tolerates, and halving a box's
-# width on an analogy is not a change this file makes (see the sweep table).
+# A device whose pool is no larger takes minix's per-slot width; a larger one
+# (tuf's 12) takes tuf's, the only larger pool anything has measured.
 BOX_JOBS_SDMA_MEASURED_POOL=6
 
-box_jobs_small_sdma_pool() { # 0 iff a GPU node's SDMA pool is no larger than the measured one
+box_jobs_sdma_pool_size() { # prints small, wide, or nothing (no KFD GPU with a pool)
   local pool
   pool=$(box_jobs_sdma_pool)
-  [ -n "$pool" ] && [ "$pool" -le "$BOX_JOBS_SDMA_MEASURED_POOL" ]
+  [ -n "$pool" ] || return 0
+  if [ "$pool" -le "$BOX_JOBS_SDMA_MEASURED_POOL" ]; then printf 'small'; else printf 'wide'; fi
 }
 
 # Second, a native NVIDIA driver: its control device exists on a native Linux
@@ -183,51 +181,76 @@ box_jobs_native_nvidia_host() { # 0 iff this is a native NVIDIA boot
   [ -e "$(box_jobs_nvidia_device)" ]
 }
 
-# How many correctness batches the fleet runs at once on a native GPU box:
-# lukstafi/ludics-lite#316 gave rog-nv-linux and minix-amd-linux two
-# `execution slot` slots each, measured with two concurrent batches at the
-# widths below. Restated here rather than read from the fleet, because a run
+# How many correctness batches the fleet runs at once on each native GPU box
+# (`execution slot` slots, lukstafi/ludics-lite's FLEET_BOX_CORRECTNESS_SLOTS),
+# and the width each batch takes so that all of them at once stay within what
+# was measured. Restated here rather than read from the fleet, because a run
 # launched outside `execution slot` -- by hand, or by a worker that skipped
 # the slot -- must get the same width, and the width must be the same number
-# the slot count was measured at.
-BOX_JOBS_NATIVE_GPU_SLOTS=2
+# the slot count was measured at. Every width below is a hip or cuda batch's;
+# a CPU batch is never capped. Measured by lukstafi/ludics-lite#316
+# (2026-09-23) and #344 (2026-09-24), each box under an exclusive reservation,
+# with 1-4 concurrent targeted batches of 26 backend-exercising stanzas; every
+# batch compiled the tree (dune's trace showed ~396 ocamlopt runs even in a
+# batch meant to restore them from the cache), so these are compile-inclusive.
+#
+# minix-amd-linux (unified-memory gfx1151, 32 cores): four slots of -j 4. The
+# pool of 6 allocatable SDMA queues is device-wide, and only dune's default
+# width (32) has exhausted it (gh-ocannl-1029). #344 ran 16 hip-width at once
+# three ways -- four `-j 4` batches (16 GPU-holding processes), two `-j 8`,
+# and one full unit at `-j 16` -- and 12 twice, all green with no kernel GPU
+# line; the SDMA queues in use peaked at 6 (four `-j 2` batches), still clean.
+# So the budget is 16 hip-width (#316 had stopped at the 8 it measured), and
+# four slots of 4 fill it: a four-batch rung took 87-108 s per batch against
+# 69 s alone, 2.6x the serial throughput.
+BOX_JOBS_SDMA_BUDGET=16
+BOX_JOBS_SDMA_SLOTS=4
+BOX_JOBS_SDMA_SLOT_CAP=$((BOX_JOBS_SDMA_BUDGET / BOX_JOBS_SDMA_SLOTS))
 
-# The native hip width: the concurrent-HIP-process budget the SDMA pool was
-# measured to take (BOX_JOBS_SDMA_CAP, 8), split across the box's slots, so
-# that every slot running a hip batch at once stays within it. Two slots of 4
-# is what ludics-lite#316 measured on minix: two `-j 4` hip batches peaked at
-# exactly 8 GPU-holding processes, with no SDMA or DQM line in any kernel
-# window. The budget is those 8 GPU-holding processes rather than the pool's 6
-# queues: the slot rounds sampled 8 at once, twice, with a clean kernel window,
-# so not every GPU-holding process holds a queue at the same moment, and the
-# measured count is the one to stay within. A single batch alone could run at
-# 8; the cap cannot know whether it is alone, and 4 costs a full unit 12% of
-# its wall time (1065 s against 946 s, gh-ocannl-1029).
-BOX_JOBS_SDMA_SLOT_CAP=$((BOX_JOBS_SDMA_CAP / BOX_JOBS_NATIVE_GPU_SLOTS))
+# tuf-amd-linux (discrete gfx1102, 8 GiB, 16 threads, a pool of 12): three
+# slots of -j 8. #344 ran three `-j 8` hip batches at once green (22
+# GPU-holding processes, 4.6 GB of VRAM, 132-143 s per batch against 97-106 s
+# alone), and four `-j 4`, with no kernel GPU line and at most 6 SDMA queues
+# in use in any rung. Uncapped, a tuf batch runs 16 wide, and three of those
+# (48) were never run, so the width is injected here as on minix.
+BOX_JOBS_WIDE_SDMA_BUDGET=24
+BOX_JOBS_WIDE_SDMA_SLOTS=3
+BOX_JOBS_WIDE_SDMA_SLOT_CAP=$((BOX_JOBS_WIDE_SDMA_BUDGET / BOX_JOBS_WIDE_SDMA_SLOTS))
 
-# The native cuda width: what ludics-lite#316 measured rog-nv-linux's two
-# slots at. Two concurrent `-j 8` cuda batches (14 GPU-holding processes) were
-# green in every rung; three (21) hit one `CUDA_ERROR_OUT_OF_MEMORY` in
-# `fused_classifier` with an empty kernel window, which is why the count is
-# two. Dune's default width there is 24, and two 24-wide batches -- up to 48
-# GPU processes -- were never run. One batch alone was green at every width
+# rog-nv-linux (RTX 5070 Ti Laptop, 12 GiB, 24 cores): two slots of -j 8. Two
+# concurrent `-j 8` cuda batches (14 GPU-holding processes) were green in every
+# rung, beside one or two cc batches too. Three or more concurrent cuda
+# batches failed 2 of 6 rungs, both times `fused_classifier` dying on
+# `cu_launch_kernel: CUDA_ERROR_OUT_OF_MEMORY` with an empty kernel window:
+# three `-j 8` in #316, four `-j 6` in #344, with device memory peaking at
+# 10.0-10.2 GiB. So the count is two cuda batches; what could raise it is a
+# count per GPU kind (cc batches cost the cuda ones nothing), which the fleet's
+# slots do not express. One batch alone was green at every width
 # (gh-ocannl-1029), and `-j 8` was its fastest.
+# shellcheck disable=SC2034  # read by tools/test-run.sh, which sources this file
+BOX_JOBS_NATIVE_CUDA_SLOTS=2
 BOX_JOBS_NATIVE_CUDA_CAP=8
 
 # The local view, for a run on THIS box: which hazard, if any, a batch of the
 # selected backend meets here -- `dxg` (the bridge), `sdma` (a small copy-engine
-# pool, hip only) or `nvidia` (a native CUDA box's slots, cuda only). The
+# pool: minix's slots, hip only), `wide-sdma` (a larger one: tuf's slots, hip
+# only) or `nvidia` (a native CUDA box's slots, cuda only). The
 # bridge comes first: a WSL boot keeps its own cap whatever else it reports.
 # The backend is read from the ENVIRONMENT only -- see the caller
 # (tools/test-run.sh) for why a config file is not consulted.
-box_jobs_local_hazard() { # <backend>; prints dxg, sdma, nvidia, or nothing
+box_jobs_local_hazard() { # <backend>; prints dxg, sdma, wide-sdma, nvidia, or nothing
   box_jobs_gpu_backend "${1:-}" || return 0
   if box_jobs_dxg_host; then
     printf 'dxg'
     return 0
   fi
   case $1 in
-    hip) box_jobs_small_sdma_pool && printf 'sdma' ;;
+    hip)
+      case $(box_jobs_sdma_pool_size) in
+        small) printf 'sdma' ;;
+        wide) printf 'wide-sdma' ;;
+      esac
+      ;;
     cuda) box_jobs_native_nvidia_host && printf 'nvidia' ;;
   esac
   return 0
@@ -237,6 +260,7 @@ box_jobs_hazard_cap() { # <hazard>; prints its cap, or nothing
   case ${1:-} in
     dxg) printf '%s' "$BOX_JOBS_DXG_CAP" ;;
     sdma) printf '%s' "$BOX_JOBS_SDMA_SLOT_CAP" ;;
+    wide-sdma) printf '%s' "$BOX_JOBS_WIDE_SDMA_SLOT_CAP" ;;
     nvidia) printf '%s' "$BOX_JOBS_NATIVE_CUDA_CAP" ;;
     *) ;;
   esac
