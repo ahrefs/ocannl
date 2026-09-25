@@ -2034,10 +2034,17 @@ class FixtureDigestTest(unittest.TestCase):
         gen_fixtures = self.gen_fixtures_module()
         _, recorded_before, digests_before = self.smoke_layout()
         # Spelled differently from `here / "fixtures"`, so the refusal compares the directories'
-        # identity: a `..` detour, a symlink, and -- where the filesystem folds case, as a
-        # default macOS volume does -- a case alias, which path resolution keeps as spelled.
-        aliases = [self.dir / "workloads" / ".." / "fixtures", self.dir / "fixtures-link"]
-        aliases[1].symlink_to(self.dir / "fixtures", target_is_directory=True)
+        # identity: a `..` detour, one through a directory that does not exist yet (so it becomes
+        # an alias only once DIR is created), a symlink, and -- where the filesystem folds case, as
+        # a default macOS volume does -- a case alias, which path resolution keeps as spelled.
+        aliases = [self.dir / "workloads" / ".." / "fixtures",
+                   self.dir / "fixtures" / "new" / ".."]
+        try:
+            (self.dir / "fixtures-link").symlink_to(self.dir / "fixtures",
+                                                    target_is_directory=True)
+            aliases.append(self.dir / "fixtures-link")
+        except OSError:
+            pass  # Windows without Developer Mode or SeCreateSymbolicLinkPrivilege
         if (self.dir / "FIXTURES").exists():
             aliases.append(self.dir / "FIXTURES")
         built = []
@@ -2137,6 +2144,33 @@ class FixtureDigestTest(unittest.TestCase):
 
         self.assertEqual({p.name: p.read_bytes() for p in out.iterdir()}, before,
                          "previous outputs intact and no staging directory left behind")
+
+    def test_two_specs_with_one_destination_are_refused_before_building(self):
+        # On both paths: the later spec would silently replace the earlier's fixture, and on the
+        # case-insensitive measuring hosts a case-only difference is the same file.
+        gen_fixtures = self.gen_fixtures_module()
+        _, recorded_before, digests_before = self.smoke_layout()
+        workloads = self.dir / "workloads"
+        (workloads / "a.json").write_text('{"name": "mlp"}')
+        (workloads / "b.json").write_text('{"name": "mlp"}')
+        (workloads / "c.json").write_text('{"name": "MLP"}')
+        built = []
+
+        for pair in (("a", "b"), ("a", "c")):
+            specs = [str(workloads / f"{x}.json") for x in pair]
+            for argv in (["--out-dir", str(self.dir / "smoke"), *specs],
+                         ["--origin", "rog-nv", *specs]):
+                with self.subTest(argv=argv):
+                    with unittest.mock.patch.object(gen_fixtures, "build",
+                                                    lambda s, d: built.append(s)), \
+                            self.assertRaises(ValueError):
+                        gen_fixtures.main(argv, here=self.dir)
+
+        self.assertEqual(built, [], "refused before any build")
+        self.assertEqual((self.dir / "fixtures" / "lenet.safetensors").read_bytes(),
+                         recorded_before)
+        self.assertEqual((self.dir / "fixtures" / fixture_digest.DIGEST_FILE).read_bytes(),
+                         digests_before)
 
     def test_fixture_path_takes_portable_names_only(self):
         # The check build() itself makes before writing, so a direct build() caller is covered

@@ -281,10 +281,12 @@ def main(argv=None, here=None):
         # recording overwrites the fixtures the published numbers are on and leaves the new bytes
         # matching no entry -- the loss the digest validation below exists to prevent. By
         # filesystem identity, not by path: a case alias on a case-insensitive filesystem, a
-        # symlink or a `..` detour all name the same directory under different spellings.
+        # symlink or a `..` detour all name the same directory under different spellings. And
+        # AFTER creating DIR, since creation can turn a spelling into an alias: `fixtures/new/..`
+        # names nothing until `new` exists, and fixtures/ itself from then on.
         fixtures = here / "fixtures"
-        if args.out_dir.exists() and fixtures.exists() and os.path.samefile(args.out_dir,
-                                                                            fixtures):
+        args.out_dir.mkdir(parents=True, exist_ok=True)
+        if fixtures.exists() and os.path.samefile(args.out_dir, fixtures):
             ap.error(f"--out-dir {args.out_dir} is the recorded fixtures directory; "
                      "regenerate there without --out-dir, so the digests are recorded")
         out_dir = args.out_dir
@@ -307,13 +309,22 @@ def main(argv=None, here=None):
     # fixture), and a name the digest format cannot carry would be refused by record() only AFTER
     # the previous bytes are overwritten. build() re-checks the first itself; checking every spec
     # here refuses before ANY is built. A spec this cannot parse is left for build() to refuse on
-    # its own terms -- that refusal also happens before that spec mutates anything.
+    # its own terms -- that refusal also happens before that spec mutates anything. Two specs with
+    # one destination are refused as well: the later would silently replace the earlier's
+    # fixture. Compared case-folded (names are ASCII, by fixture_path), because on the
+    # case-insensitive macOS and Windows measuring hosts `Lenet` and `lenet` are one file.
+    claimed = {}
     for spec_path in specs:
         try:
             name = json.loads(spec_path.read_text())["name"]
         except (json.JSONDecodeError, KeyError, TypeError):
             continue
         fixture_path(out_dir, name)
+        if name.lower() in claimed:
+            raise ValueError(f"{claimed[name.lower()]} and {spec_path} both generate "
+                             f"{name}.safetensors (names are compared ignoring case); the later "
+                             "would replace the earlier")
+        claimed[name.lower()] = spec_path
         if recording:
             fixture_digest.check_fixture_name(f"{name}.safetensors")
     if not recording:
