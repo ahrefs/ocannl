@@ -1220,9 +1220,14 @@ module Errexit_negation = struct
     in
     let rec drop_command_prefixes = function
       | word :: rest when assignment_prefix word -> drop_command_prefixes rest
+      | time :: option :: dashdash :: rest
+        when String.equal (literal_shell_word time) "time"
+             && String.equal (literal_shell_word option) "-p"
+             && String.equal (literal_shell_word dashdash) "--" ->
+          drop_command_prefixes rest
       | time :: option :: rest
         when String.equal (literal_shell_word time) "time"
-             && String.equal (literal_shell_word option) "-p" ->
+             && List.mem [ "-p"; "--" ] (literal_shell_word option) ~equal:String.equal ->
           drop_command_prefixes rest
       | word :: rest
         when List.mem
@@ -1256,21 +1261,29 @@ module Errexit_negation = struct
     | _ -> false
 
   (** The file's lines with every backslash-newline splice removed, as the shell removes them before
-      reading a word: [set \\] then [-e] on the next line is one [set -e]. *)
-  let spliced_lines text =
-    let rec join acc pending = function
-      | [] -> List.rev (match pending with Some line -> line :: acc | None -> acc)
+      reading a word: [set \\] then [-e] on the next line is one [set -e]. Each comes with the
+      number of the physical line it starts on. *)
+  let numbered_spliced_lines text =
+    let rec join acc pending number = function
+      | [] -> List.rev (match pending with Some spliced -> spliced :: acc | None -> acc)
       | line :: rest ->
-          let line = match pending with Some prefix -> prefix ^ line | None -> line in
+          let first, line =
+            match pending with
+            | Some (first, prefix) -> (first, prefix ^ line)
+            | None -> (number, line)
+          in
           let rec trailing index count =
             if index >= 0 && Char.equal line.[index] '\\' then trailing (index - 1) (count + 1)
             else count
           in
           if trailing (String.length line - 1) 0 % 2 = 1 then
-            join acc (Some (String.drop_suffix line 1)) rest
-          else join (line :: acc) None rest
+            join acc (Some (first, String.drop_suffix line 1)) (number + 1) rest
+          else join ((first, line) :: acc) None (number + 1) rest
     in
-    join [] None (String.split_lines text)
+    join [] None 1 (String.split_lines text)
+
+  (** {!numbered_spliced_lines} without the numbers: each spliced line's first physical line. *)
+  let spliced_lines text = List.map (numbered_spliced_lines text) ~f:snd
 
   let line_enables_errexit line =
     List.exists (command_fragments line) ~f:(fun (command, affects_parent) ->
@@ -1692,7 +1705,7 @@ module Errexit_and_list = struct
     | [ "case"; _; "in" ] when not brace -> `Group
     | [ name ] when named name -> `Function_body
     | [ _; "()" ] | [ "function"; _; "()" ] -> `Function_body
-    | [ "function"; name ] when brace || named name -> `Function_body
+    | [ "function"; _ ] -> `Function_body
     | _ -> `No
 
   type frame = {
@@ -2017,9 +2030,12 @@ module Errexit_and_list = struct
   let consumes next = match N.shell_words next with ("then" | "do") :: _ -> true | _ -> false
 
   let findings text =
-    let lines = Array.of_list (String.split_lines text) in
     if not (List.exists (N.spliced_lines text) ~f:N.line_enables_errexit) then []
     else
+      (* Read as the shell reads it, with backslash-newlines removed; a finding reports the physical
+         line its statement starts on. *)
+      let numbered = Array.of_list (N.numbered_spliced_lines text) in
+      let lines = Array.map numbered ~f:snd in
       let count = Array.length lines in
       (* The first command of the next non-blank, non-comment line: where a condition's [then]/[do]
          would stand. *)
@@ -2062,7 +2078,7 @@ module Errexit_and_list = struct
                         | [] -> next_statement (last + 1)))
                 || flagged rest
           in
-          go (last + 1) (if flagged statements then { line = first + 1 } :: acc else acc)
+          go (last + 1) (if flagged statements then { line = fst numbered.(first) } :: acc else acc)
       in
       go 0 []
 
@@ -2167,6 +2183,17 @@ module Errexit_and_list = struct
       ( "errexit set behind a variable-descriptor redirection",
         "{fd}>/dev/null set -e\n[ -e a ] && [ -e b ]\n",
         [ 2 ] );
+      ( "function-keyword subshell body without parens",
+        "set -e\nfunction f ( [ -e a ] && [ -e b ]; : )\n",
+        [ 2 ] );
+      ("errexit set by a timed command", "time -- set -e\n[ -e a ] && [ -e b ]\n", [ 2 ]);
+      ("errexit set by a portably timed command", "time -p -- set -e\n[ -e a ] && [ -e b ]\n", [ 2 ]);
+      ( "condition keyword split by a splice",
+        "set -e\nif\n  [ -e a ] && [ -e b ]\nth\\\nen :; fi\n",
+        [] );
+      ( "pair after a spliced line keeps its line number",
+        "set -e\necho a \\\n  b\n[ -e a ] && [ -e b ]\n",
+        [ 4 ] );
       ("timed test", "set -e\ntime [ -e a ] && [ -e b ]\n", [ 2 ]);
       ("timed test with an option terminator", "set -e\ntime -- [ -e a ] && [ -e b ]\n", [ 2 ]);
       ( "portably timed test with an option terminator",
