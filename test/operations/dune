@@ -4425,7 +4425,11 @@
    (progn
     (with-stdout-to
      autotune_arm_containment.actual
-     (run %{dep:autotune_arm_containment.exe}))
+     ; The scenarios share one warm schedule-cache directory and are about the two-arm path, so
+     ; the placement-decision store is bypassed (gh-ocannl-1020) rather than swept by hand.
+     (run
+      %{dep:autotune_arm_containment.exe}
+      --ocannl_tune_placement_store=false))
     (diff autotune_arm_containment.expected autotune_arm_containment.actual)))))
 
 ; Disabled on Metal: both tests have a double-precision case, and Metal has no f64 (Ops.fp8, the
