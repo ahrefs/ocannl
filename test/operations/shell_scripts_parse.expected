@@ -291,6 +291,8 @@ tools/ci-times.sh parses: true
 tools/dune-quiet.sh parses: true
 tools/fmt-check.sh parses: true
 tools/kernel-window.sh parses: true
+tools/machine-verify-far.sh parses: true
+tools/machine-verify.sh parses: true
 tools/mutation-run.sh parses: true
 tools/opam-env.sh parses: true
 tools/promote.sh parses: true
@@ -300,14 +302,14 @@ tools/test-ci-times.sh uses the shared harness contract: true
 tools/test-ci-times.sh parses: true
 tools/test-fmt-check.sh uses the shared harness contract: true
 tools/test-fmt-check.sh parses: true
+tools/test-machine-verify.sh uses the shared harness contract: true
+tools/test-machine-verify.sh parses: true
 tools/test-mutation-run.sh uses the shared harness contract: true
 tools/test-mutation-run.sh parses: true
 tools/test-pin-revisions.sh uses the shared harness contract: true
 tools/test-pin-revisions.sh parses: true
 tools/test-promote.sh uses the shared harness contract: true
 tools/test-promote.sh parses: true
-tools/test-remote-verify.sh uses the shared harness contract: true
-tools/test-remote-verify.sh parses: true
 tools/test-run.sh parses: true
 tools/test-test-run.sh uses the shared harness contract: true
 tools/test-test-run.sh parses: true
