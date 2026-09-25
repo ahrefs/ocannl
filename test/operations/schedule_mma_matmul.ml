@@ -524,8 +524,8 @@ let () =
      two apart. CUDA and HIP are skipped: their f16 -> f32 arms are the staged legs' subject below,
      and whether their tensor units return this exact sum has not been run (gfx11's WMMA is not
      exactly rounded even on exact data, per the bf16 legs' table). --- *)
-  let h32a idcs = 1. +. (Float.of_int (((idcs.(0) * 3) + idcs.(1)) % 8) /. 1024.) in
-  let h32b idcs = Float.of_int ((idcs.(0) + (2 * idcs.(1))) % 7) -. 3. in
+  let h32a = Ll_test.weighted ~weights:[| 3; 1 |] ~modulus:8 ~offset:1024. ~stride:0x1p-10 in
+  let h32b = Ll_test.weighted ~weights:[| 1; 2 |] ~modulus:7 ~offset:(-3.) ~stride:1. in
   let exact_h32 =
     Array.init (n * n) ~f:(fun t ->
         let i = t / n and j = t % n in
