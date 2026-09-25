@@ -100,3 +100,7 @@ let print_floats ?(prec = 6) ?(sep = " ") vs =
 let set_binary_stdout () = Out_channel.set_binary_mode stdout true
 
 module Ll_test_scan = Ll_test_scan
+
+module Operand_key_scan = Operand_key_scan
+(** Finding operand fixtures that mint values from a hand-rolled modulus of a multi-axis key instead
+    of going through [Ll_test.cycle]'s blind-axis guard (gh-ocannl-1018). *)

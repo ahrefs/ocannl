@@ -131,6 +131,8 @@
   (alias runtest-ocamlformat_ignore_scan)
   (alias runtest-ll_test_ratchet)
   (alias runtest-ll_test_scan_cases)
+  (alias runtest-operand_key_ratchet)
+  (alias runtest-operand_key_scan_cases)
   (alias runtest-workflow_job_timeouts)
   (alias runtest-shell_scripts_parse)
   (alias runtest-refusal_control_scan_cases)
@@ -248,6 +250,7 @@
   (alias runtest-config_usage_scan_refusal_control)
   (alias runtest-ocamlformat_ignore_scan)
   (alias runtest-ll_test_ratchet)
+  (alias runtest-operand_key_ratchet)
   (alias runtest-workflow_job_timeouts)
   (alias runtest-shell_scripts_parse)
   (alias runtest-optional_arg_inventory)
@@ -2272,6 +2275,9 @@
   ll_test_ratchet.ml
   ll_test_ratchet.expected
   ll_test_scan_cases.expected
+  operand_key_ratchet.ml
+  operand_key_ratchet.expected
+  operand_key_scan_cases.expected
   ocamlformat_ignore_scan.ml
   ocamlformat_ignore_scan.expected
   optional_arg_inventory.ml
@@ -2315,6 +2321,8 @@
    env_var_deps_control.expected,env_var_deps.expected
    ll_test_ratchet.ml
    ll_test_ratchet.expected,ll_test_scan_cases.expected
+   operand_key_ratchet.ml
+   operand_key_ratchet.expected,operand_key_scan_cases.expected
    ocamlformat_ignore_scan.ml
    ocamlformat_ignore_scan.expected
    optional_arg_inventory.ml
@@ -5731,6 +5739,50 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff ll_test_ratchet.expected ll_test_ratchet.actual)))
+
+; gh-ocannl-1018: operand fixtures minting values from a hand-rolled multi-axis key under a
+; modulus, which bypasses Ll_test.cycle's blind-axis guard. Same arrangement as ll_test_ratchet.
+
+(executable
+ (name operand_key_ratchet)
+ (modules operand_key_ratchet)
+ (libraries base stdio test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- parses test sources without running a backend.
+ (target operand_key_ratchet.actual)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (sandbox always)
+  (source_tree ../..))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:operand_key_ratchet.exe}
+    %{workspace_root}
+    %{dep:operand_key_ratchet.exe}
+    %{target}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-operand_key_ratchet)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff operand_key_ratchet.expected operand_key_ratchet.actual)))
+
+(test
+ ; ocannl-backend: none -- synthetic source cases and child scanner invocations.
+ (name operand_key_scan_cases)
+ (package neural_nets_lib)
+ (modules operand_key_scan_cases)
+ (libraries base stdio unix test_utils arrayjit.verdict)
+ (deps ocannl_config operand_key_ratchet.exe)
+ (action
+  (run %{test} %{dep:operand_key_ratchet.exe})))
 
 (test
  ; ocannl-backend: none -- synthetic source/Dune cases and child scanner invocations.
