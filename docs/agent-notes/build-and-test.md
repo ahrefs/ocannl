@@ -1665,6 +1665,8 @@ that they earn a lookup rather than always-loaded space.
   per run, and a stub-externals typecheck would be a hand-kept second copy of both binding APIs;
   the daily sweep compiles and runs both backends on their boxes, so a vendor-arm break that
   skipped machine verification surfaces on master within a day, under the roll-forward policy.
+  Metal is the same shape -- an optional library over the `metal` package behind a `select` -- and
+  `--expect-lib metal` proves it on mac-studio.
 - `tools/machine-verify.sh BOX BRANCH` is the one-off counterpart to the scheduled sweep for a pushed
   branch. `tools/remote-verify.sh` survives as a forwarding shim that prints a deprecation line on
   stderr; new callers name the new script. The verified machine's procedure is ONE file,
@@ -1703,9 +1705,9 @@ that they earn a lookup rather than always-loaded space.
   in the disposable worktree so a personal file above it cannot reach root-launched probes. A
   worktree root nested under any outer Dune root is refused: without that
   boundary Dune can build the parent checkout while this script reports the detached commit.
-  `--expect-lib cudajit|hipjit` asserts all three
+  `--expect-lib cudajit|hipjit|metal` asserts all three
   pieces of optional-backend provenance above (positive `.cmi`, vendor `select` arm, and the other
-  backend's absent `.cmi`). A test, probe or
+  two GPU backends' absent `.cmi` -- each fleet box carries one vendor package). A test, probe or
   `--record-golden` trip also requires a backend and
   asserts `_build/default/test/config/ocannl_backend.txt`; an unrestricted test alias is reported
   only as passing under that configuration, since the alias may be backend-independent, while a

@@ -93,6 +93,18 @@ if [ "$1" = build ]; then
           build-fail) echo 'fixture: compiler failed' >&2; exit 37 ;;
           timeout | trip-timeout) echo 'fixture: compiler stalled' >&2; exec perl -e 'sleep 4' ;;
           source-change) printf 'changed\n' >>source.ml ;;
+          lib-*)
+            # What dune leaves for an optional backend: its objects, and the
+            # `select` result naming the arm it copied (the stub, when absent).
+            case $WANT_BACKEND in cuda) arm=cudajit ;; hip) arm=hipjit ;; *) arm=$WANT_BACKEND ;; esac
+            [ "$MODE" != lib-stub ] || arm=missing
+            lib=_build/default/arrayjit/lib
+            mkdir -p "$lib/.${WANT_BACKEND}_backend.objs/byte"
+            [ "$MODE" = lib-absent ] || touch "$lib/.${WANT_BACKEND}_backend.objs/byte/${WANT_BACKEND}_backend.cmi"
+            printf '# 1 "arrayjit/lib/%s_backend_impl.%s.ml"\n' "$WANT_BACKEND" "$arm" >"$lib/${WANT_BACKEND}_backend_impl.ml"
+            if [ "$MODE" = lib-other ]; then
+              mkdir -p "$lib/.hip_backend.objs/byte" && touch "$lib/.hip_backend.objs/byte/hip_backend.cmi"
+            fi ;;
         esac ;;
       test/config/ocannl_backend.txt)
         if [ "$MODE" = backend-mismatch ]; then echo hip; else echo "$WANT_BACKEND"; fi >_build/default/test/config/ocannl_backend.txt ;;
@@ -285,6 +297,28 @@ ENDPOINT=127.0.0.1 ENDPOINT_PORT=2222 check_refusal forwarded-port \
 ENDPOINT=127.0.0.1 ENDPOINT_PROXY=jump.example.invalid check_refusal local-proxied \
   '^machine-verify: --local refused: .* via proxy jump\.example\.invalid$' --local
 check_refusal exclusive-flags '^machine-verify: --local and --ssh are mutually exclusive$' --local --ssh
+
+# Optional-backend provenance: the vendor library's objects, the `select` arm
+# that names it, and the other two GPU backends' objects absent on that build.
+BACKEND=metal ENDPOINT=127.0.0.1 TRANSPORT=local check_case lib-metal lib-ok 0 \
+  'verified .*backend=metal' --expect-lib metal --test @fixture
+if grep -q '^machine-verify: optional-library evidence: PASS _build/default/arrayjit/lib/.metal_backend.objs/byte/metal_backend.cmi$' \
+  "$TMP/runs/lib-metal/stdout" &&
+  grep -q '^machine-verify: select-arm evidence: PASS # 1 "arrayjit/lib/metal_backend_impl.metal.ml"$' \
+    "$TMP/runs/lib-metal/stdout" &&
+  grep -q '^machine-verify: other-backend negative control: PASS absent: .*cuda_backend.cmi .*hip_backend.cmi$' \
+    "$TMP/runs/lib-metal/stdout" &&
+  grep -q '|metal|build -j 4 @fixture' "$TMP/runs/lib-metal/audit"; then
+  report 0 'metal: library, select arm and negative controls are observed'
+else report 1 'metal: library, select arm and negative controls are observed' "$TMP/runs/lib-metal"; fi
+BACKEND=cuda check_case lib-cudajit lib-ok 0 'other-backend negative control: PASS absent: .*hip_backend.cmi .*metal_backend.cmi$' \
+  --expect-lib cudajit
+BACKEND=metal check_case lib-stub-arm lib-stub 2 'metal_backend_impl.ml selected the wrong arm: # 1 "arrayjit/lib/metal_backend_impl.missing.ml"' \
+  --expect-lib metal
+BACKEND=metal check_case lib-missing lib-absent 2 'metal evidence missing: .*metal_backend.cmi' --expect-lib metal
+BACKEND=metal check_case lib-other-present lib-other 2 "negative control failed: another backend's artifact exists at .*hip_backend.cmi" \
+  --expect-lib metal
+BACKEND=cc check_refusal lib-backend-conflict '^machine-verify: --expect-lib metal conflicts with --backend cc$' --expect-lib metal
 
 # The deprecated name forwards every argument and says so on stderr.
 shim_case() { # NAME

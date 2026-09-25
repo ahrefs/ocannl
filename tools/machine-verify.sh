@@ -8,8 +8,9 @@
 #
 # Options:
 #   --backend NAME           Pin and prove the resolved backend configuration.
-#   --expect-lib LIB         Prove cudajit or hipjit was compiled and selected.
-#                            This implies backend cuda or hip respectively.
+#   --expect-lib LIB         Prove cudajit, hipjit or metal was compiled and
+#                            selected. This implies backend cuda, hip or metal
+#                            respectively.
 #   --test ALIAS             Build one named test alias (repeatable).
 #   --run 'COMMAND'          Run an OCANNL probe under opam and the pinned
 #                            backend (repeatable).
@@ -42,7 +43,7 @@
 #
 # Examples (BOX is the booted system's ssh alias: rog-nv-linux / minix-amd-linux
 # on native Ubuntu, rog-nv-wsl / minix-amd-wsl on WSL -- the site's kind_of says
-# which):
+# which -- or mac-studio for Metal):
 #   tools/machine-verify.sh rog-nv-linux codex/my-branch \
 #     --expect-lib cudajit --test @arrayjit/runtest-test_cuda_arch_flags \
 #     --run 'dune build tools/fp8_soak.exe -j 4 && \
@@ -50,6 +51,8 @@
 #   tools/machine-verify.sh minix-amd-linux codex/my-branch \
 #     --expect-lib hipjit \
 #     --record-golden @test/training/train-transformer_names
+#   tools/machine-verify.sh mac-studio codex/my-branch --local \
+#     --expect-lib metal --test @test/operations/runtest-hello_world_op
 #
 # The output is deliberately unpiped. A failed dune diff must be dune's status,
 # not tail's or tee's. The verification procedure prints an exit sentinel only
@@ -109,7 +112,7 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --expect-lib)
-      [ $# -ge 2 ] || die "--expect-lib needs cudajit or hipjit"
+      [ $# -ge 2 ] || die "--expect-lib needs cudajit, hipjit or metal"
       expect_lib=$2
       shift 2
       ;;
@@ -173,16 +176,17 @@ case $backend in
 esac
 case $expect_lib in
   '') ;;
-  cudajit | hipjit)
+  cudajit | hipjit | metal)
     case $expect_lib in
       cudajit) lib_backend=cuda ;;
       hipjit) lib_backend=hip ;;
+      metal) lib_backend=metal ;;
     esac
     [ -z "$backend" ] || [ "$backend" = "$lib_backend" ] ||
       die "--expect-lib $expect_lib conflicts with --backend $backend"
     backend=$lib_backend
     ;;
-  *) die "unknown optional library '$expect_lib'; expected cudajit or hipjit" ;;
+  *) die "unknown optional library '$expect_lib'; expected cudajit, hipjit or metal" ;;
 esac
 
 for ((i = 0; i < operation_count; i += 2)); do

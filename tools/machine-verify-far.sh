@@ -335,26 +335,32 @@ assert_backend() {
   echo "machine-verify: backend evidence: requested=$backend resolved=$resolved_backend"
 }
 
+# The three GPU backends are optional libraries over their vendor packages, each
+# reached through a dune `select` whose fallback is a `.missing.ml` stub, so an
+# exit status cannot tell "compiled" from "skipped". Each fleet box carries
+# exactly one vendor package -- cudajit on rog, hipjit on minix/tuf, metal on
+# mac-studio -- so the OTHER two backends' absent `.cmi` on the same build is a
+# free negative control against a proof that would pass anywhere.
 assert_optional_library() {
   [ -n "$expect_lib" ] || return 0
   case $expect_lib in
-    cudajit)
-      impl=cuda
-      other=hip
-      arm=cudajit
-      ;;
-    hipjit)
-      impl=hip
-      other=cuda
-      arm=hipjit
-      ;;
+    cudajit) impl=cuda ;;
+    hipjit) impl=hip ;;
+    metal) impl=metal ;;
+    *) fail "internal unknown optional library: $expect_lib" ;;
   esac
+  arm=$expect_lib
   cmi="_build/default/arrayjit/lib/.$impl"_backend.objs/byte/"$impl"_backend.cmi
-  other_cmi="_build/default/arrayjit/lib/.$other"_backend.objs/byte/"$other"_backend.cmi
   selected="_build/default/arrayjit/lib/$impl"_backend_impl.ml
   [ -f "$cmi" ] || fail "$expect_lib evidence missing: $cmi"
-  [ ! -e "$other_cmi" ] ||
-    fail "negative control failed: opposite backend artifact exists at $other_cmi"
+  absent=
+  for other in cuda hip metal; do
+    [ "$other" != "$impl" ] || continue
+    other_cmi="_build/default/arrayjit/lib/.$other"_backend.objs/byte/"$other"_backend.cmi
+    [ ! -e "$other_cmi" ] ||
+      fail "negative control failed: another backend's artifact exists at $other_cmi"
+    absent="$absent $other_cmi"
+  done
   [ -f "$selected" ] || fail "select-arm evidence missing: $selected"
   first_line=$(sed -n '1p' "$selected") || fail "cannot read $selected"
   case $first_line in
@@ -363,7 +369,7 @@ assert_optional_library() {
   esac
   echo "machine-verify: optional-library evidence: PASS $cmi"
   echo "machine-verify: select-arm evidence: PASS $first_line"
-  echo "machine-verify: opposite-backend negative control: PASS $other_cmi absent"
+  echo "machine-verify: other-backend negative control: PASS absent:$absent"
 }
 
 echo "machine-verify: build: opam exec --switch=$opam_switch -- dune build -j $jobs @check"
