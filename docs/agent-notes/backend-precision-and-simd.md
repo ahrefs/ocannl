@@ -587,10 +587,15 @@ files.
   `cc_backend_fp_contract=fast` and `tune_inline_flips=2`, contract "results differ from the exact
   profiles by the tolerance the benchmark parity envelope names, never in shape or in which
   operations run". A rewrite that changes numerics for throughput (online-softmax attention,
-  gh-ocannl-483; Winograd, gh-ocannl-505) gets a key defaulting off, flips it in this payload, and
-  adds it to `Schedule_cache.numerics_tag` in the same PR — every knob the profile flips today is
-  already in the numerics or codegen digest, which is what keeps a default-flags run from
-  replaying a winner tuned under the profile. Benchmark side: `orchestrate.py --profile
+  gh-ocannl-483; Winograd, gh-ocannl-505) gets a key defaulting off, flips it in this payload (pinned
+  at its default in `reproducible`), and enters the schedule cache's identity in the same PR: a
+  codegen-time gate through the numerics digest (`Schedule_cache.numerics_tag`, classified `Keyed
+  "numerics"`), a lowering-time rewrite gate through the code digest (`Code_borne`, since the
+  rewritten code carries the decision and a numerics field would split cache entries for routines
+  the rewrite never touches). `test_config_consistency` checks the payloads and
+  `ocannl_config.reference`'s quote of them; `config_profiles` pins approximate ⊇ performance.
+  Every knob the profile flips today is already in the numerics or codegen digest, which is what
+  keeps a default-flags run from replaying a winner tuned under the profile. Benchmark side: `orchestrate.py --profile
   approximate` dispatches the OCANNL cells under `--ocannl_profile=approximate`, the torch cells
   under torch's own defaults (`high` matmul precision, SDPA, `cudnn.benchmark`), gates at
   `PARITY_TOL_APPROX` (looser than every exact envelope), labels every row with its regime, and
