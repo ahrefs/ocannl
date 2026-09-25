@@ -134,6 +134,29 @@ let () =
       Float.equal
         (Ll_test.cycle ~radix:7 ~dims ~modulus:5 ~offset:0. ~stride:1. idcs)
         (Ll_test.cycle_flat ~radix:7 ~dims ~modulus:5 ~offset:0. ~stride:1. i));
+  (* [weighted] is what the conv-shaped fixtures converted onto (gh-ocannl-1018): same arithmetic as
+     the idiom they were written in, so no golden moves, and the same guard [cycle] applies. *)
+  let conv = [| 2; 3; 3; 4 |] in
+  p_all "weighted computes the hand-written conv-fixture idiom it replaces" (all_indices conv)
+    ~f:(fun idcs ->
+      Float.equal
+        (Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1. idcs)
+        (Float.of_int ((idcs.(0) + idcs.(1) + (2 * idcs.(2)) + (3 * idcs.(3))) % 7)));
+  p "weighted refuses a weight that is a multiple of the modulus"
+    (refuses (fun () ->
+         Ll_test.weighted ~weights:[| 1; 14 |] ~modulus:7 ~offset:0. ~stride:1. [| 0; 0 |]));
+  p "weighted refuses a weight vector of the wrong rank"
+    (refuses (fun () ->
+         Ll_test.weighted ~weights:[| 1; 2 |] ~modulus:7 ~offset:0. ~stride:1. [| 0; 0; 0 |]));
+  let cube = [| 3; 3; 3 |] in
+  p_all "with no weight a multiple of the modulus, weighted varies with every index"
+    (all_indices cube) ~f:(fun idcs ->
+      moves_along_every_axis ~dims:cube
+        (Ll_test.weighted ~weights:[| 1; -1; 2 |] ~modulus:5 ~offset:0. ~stride:1.)
+        idcs);
+  p_all "a negative weight still lands in the value set" (all_indices cube) ~f:(fun idcs ->
+      let v = Ll_test.weighted ~weights:[| 1; -1; 2 |] ~modulus:5 ~offset:0. ~stride:1. idcs in
+      Float.(v >= 0. && v <= 4.));
   p_all "drift varies with every index of every shape used" shapes ~f:(fun dims ->
       let base = Array.map dims ~f:(fun _ -> 0) in
       Array.for_alli dims ~f:(fun ax _ ->

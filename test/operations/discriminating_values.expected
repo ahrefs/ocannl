@@ -11,6 +11,11 @@ a modulus past Ll_test.max_modulus is refused, and one at it is accepted: true
 a radix that would drop a value the row-major key reaches is refused: true
 a negative radix mints the operand its residue does: radix -2 is radix 3 under modulus 5: true
 under a radix, cycle_flat over the row-major offsets is cycle over the multi-indices: true
+weighted computes the hand-written conv-fixture idiom it replaces: true
+weighted refuses a weight that is a multiple of the modulus: true
+weighted refuses a weight vector of the wrong rank: true
+with no weight a multiple of the modulus, weighted varies with every index: true
+a negative weight still lands in the value set: true
 drift varies with every index of every shape used: true
 every drift cell is exact in bf16: true
 a drift reduction leaves bf16 exactness within the extents these tests reduce: true
