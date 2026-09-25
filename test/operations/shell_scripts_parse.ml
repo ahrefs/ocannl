@@ -1564,17 +1564,16 @@ end
       ({!is_test}: [\[], [\[\[] or [test], also by path and through [command]/[builtin], after [!],
       [time], assignments and redirections; on the first operand also after [then], [do], [else]);
     - nothing consumes the list's value: it is not introduced by [if]/[elif]/[while]/[until] (the
-      first operand's first word is then not a test), it is not followed by a [then]/[do] (a
-      condition whose keyword began an earlier line), and the first pipeline after it -- on the same
-      line, else the next non-blank non-comment line -- does not expand [$?]. Only the first: a
-      later command reads a later status. Only an expansion, read quote-aware: a single-quoted or
-      escaped [$?] is text. And only in the command itself, directly or through double quotes and
-      [$(( ))]: inside a [$( )] a nested command may already have replaced the status, so a [$?]
-      there is refused rather than traced.
+      first operand's first word is then not a test), and the first command after it -- on the same
+      line, else the next non-blank non-comment line -- is not an unquoted [then]/[do] (a condition
+      whose keyword began an earlier line).
 
     A [||] anywhere in the list is its consumer: [[ A ] && [ B ] || die ...] makes the failure
     explicit, so nothing is exempt. That is the spelling the refusal points at, together with one
-    predicate per statement.
+    predicate per statement. It is also the spelling for capturing the status in an expected-error
+    control: [[ A ] && [ B ] || rc=$?]. A [rc=$?] as the NEXT statement is refused like any other --
+    whether a later expansion still sees the list's status is a lexer of its own, and each of its
+    mistakes would be a silent pass.
 
     {1 What it deliberately does not read}
 
@@ -1587,9 +1586,11 @@ end
     - The line-shaped boundary {!Errexit_negation} states and gh-ocannl-907 tracks: a heredoc body
       or multi-line quoted value is read as script text, and a condition whose [if]/[while]/[until]
       stands alone on an earlier line is recognized only through the [then]/[do] that follows it on
-      the pair's line or the next one. A heredoc body and an unrecognized condition can only add
-      refusals (loud). A multi-line quoted value is the one silent residue: the line where it closes
-      is lexed from outside the quote, so a list on that same line can be hidden.
+      the pair's line or the next one; so is a brace-group condition
+      ([if { x; [ A ] && [ B ]; }; then]), whose statements are read as body statements. A heredoc
+      body and an unrecognized condition can only add refusals (loud). A multi-line quoted value is
+      the one silent residue: the line where it closes is lexed from outside the quote, so a list on
+      that same line can be hidden.
     - Scope. The last command of a FUNCTION BODY or a subshell is not inert -- its status becomes
       the function's (the subshell's), which errexit then weighs at the call site (measured under
       bash 3.2 and dash; a brace group, loop body or [if] branch does NOT propagate it). Seeing
@@ -1721,13 +1722,23 @@ module Errexit_and_list = struct
         if index < length && Char.is_whitespace line.[index] then skip (index + 1) else index
       in
       let next = skip index in
-      next < length
-      && (not (List.mem [ ';'; '&'; '|'; ')'; '<'; '>'; '#' ] line.[next] ~equal:Char.equal))
-      &&
-      (* [( ... ) 2>/dev/null]: a redirection, not a word. *)
-      match N.shell_words (String.drop_prefix line next) with
-      | word :: _ -> Option.is_none (N.redirection_prefix word)
-      | [] -> false
+      (* Redirections may follow a subshell's [)] but no word may, so skip them first: [( ... )
+         2>/dev/null] is a subshell, [(x) >/dev/null \[ A \]] a case arm. *)
+      let rec word_after = function
+        | [] -> false
+        | word :: rest -> (
+            if
+              String.is_empty word
+              || List.mem [ ';'; '&'; '|'; ')'; '#' ] word.[0] ~equal:Char.equal
+              || String.is_suffix word ~suffix:";"
+            then false
+            else
+              match N.redirection_prefix word with
+              | Some true -> word_after rest
+              | Some false -> word_after (List.drop rest 1)
+              | None -> true)
+      in
+      next < length && word_after (N.shell_words (String.drop_prefix line next))
     in
     (* A group still open at the end of the line continues on the next: its enclosing statements are
        incomplete, and dropped -- they end in a group operand, so they are never a bare test list --
@@ -1757,6 +1768,9 @@ module Errexit_and_list = struct
        [dbracket]: inside [\[\[ ... \]\]], where [&&], [||], [(] and [)] are the conditional
        expression's own operators. Single brackets need no tracking: [&&] inside [\[ ... \]] IS a
        list operator, and a literal [\[] argument is just a word. *)
+    (* The last index consumed as an escaped character: a word cannot start right after one, so
+       [foo\ #bar] is one word, not a comment. *)
+    let escaped_at = ref (-1) in
     let rec loop index start quote escaped parens dbracket =
       if index >= length then
         match quote with
@@ -1802,10 +1816,13 @@ module Errexit_and_list = struct
         | `None ->
             let word_start =
               index = 0
-              || Char.is_whitespace line.[index - 1]
-              || List.mem [ ';'; '&'; '|'; '('; ')' ] line.[index - 1] ~equal:Char.equal
+              || !escaped_at <> index - 1
+                 && (Char.is_whitespace line.[index - 1]
+                    || List.mem [ ';'; '&'; '|'; '('; ')' ] line.[index - 1] ~equal:Char.equal)
             in
-            if escaped then continue (index + 1)
+            if escaped then (
+              escaped_at := index;
+              continue (index + 1))
             else if Char.equal character '\\' then continue ~escaped:true (index + 1)
             else if Char.equal character '#' && word_start then finish start index
             else if N.starts_at line ~pos:index "$'" then continue ~quote:`Ansi_c (index + 2)
@@ -1920,105 +1937,24 @@ module Errexit_and_list = struct
     && List.for_all connectors ~f:(function And -> true | Or | Pipe -> false)
     && List.for_alli operands ~f:(fun index operand -> is_test ~first:(index = 0) operand)
 
-  (** Whether [text] expands [$?] (or [${?}]) in the command itself -- an expansion, not the two
-      characters: single and ANSI-C quotes and a backslash make it literal text, which reads
-      nothing, and double quotes keep it an expansion. One inside a [$( )] or backticks does NOT
-      count: any command the substitution runs first replaces the status it inherited, so it is
-      refused rather than traced (the loud direction). The nesting is still followed, so that the
-      quotes inside a substitution cannot end one outside it. *)
-  let reads_status text =
-    let length = String.length text in
-    (* [frames]: the enclosing contexts, innermost first. [`Code depth] is unquoted shell -- the top
-       level, or a [$( )] body at paren [depth] -- [`Backtick] a backtick body, and [`Arith depth] a
-       [$(( ))], which runs no command and so is as transparent as a double quote. *)
-    let rec loop index frames =
-      if index >= length then false
-      else
-        let at token = N.starts_at text ~pos:index token in
-        let character = text.[index] in
-        (* Directly in the command: nothing between it and the top level but double quotes and
-           arithmetic. *)
-        let expansion () =
-          (at "$?" || at "${?}")
-          &&
-          match List.rev frames with
-          | _top :: above ->
-              List.for_all above ~f:(function `Double | `Arith _ -> true | _ -> false)
-          | [] -> false
-        in
-        match frames with
-        | [] -> false
-        | `Single :: outer ->
-            if Char.equal character '\'' then loop (index + 1) outer else loop (index + 1) frames
-        | `Ansi_c :: outer ->
-            if Char.equal character '\\' then loop (index + 2) frames
-            else if Char.equal character '\'' then loop (index + 1) outer
-            else loop (index + 1) frames
-        | `Double :: outer ->
-            if Char.equal character '\\' then loop (index + 2) frames
-            else if expansion () then true
-            else if at "$((" then loop (index + 3) (`Arith 0 :: frames)
-            else if at "$(" then loop (index + 2) (`Code 0 :: frames)
-            else if Char.equal character '`' then loop (index + 1) (`Backtick :: frames)
-            else if Char.equal character '"' then loop (index + 1) outer
-            else loop (index + 1) frames
-        | `Arith depth :: outer ->
-            if expansion () then true
-            else if at "$((" then loop (index + 3) (`Arith 0 :: frames)
-            else if at "$(" then loop (index + 2) (`Code 0 :: frames)
-            else if Char.equal character '(' then loop (index + 1) (`Arith (depth + 1) :: outer)
-            else if Char.equal character ')' then
-              if depth > 0 then loop (index + 1) (`Arith (depth - 1) :: outer)
-              else loop (index + 2) outer
-            else loop (index + 1) frames
-        | ((`Code _ | `Backtick) as frame) :: outer -> (
-            if Char.equal character '\\' then loop (index + 2) frames
-            else if expansion () then true
-            else if at "$'" then loop (index + 2) (`Ansi_c :: frames)
-            else if at "$((" then loop (index + 3) (`Arith 0 :: frames)
-            else if at "$(" then loop (index + 2) (`Code 0 :: frames)
-            else if Char.equal character '\'' then loop (index + 1) (`Single :: frames)
-            else if Char.equal character '"' then loop (index + 1) (`Double :: frames)
-            else
-              match frame with
-              | `Backtick ->
-                  if Char.equal character '`' then loop (index + 1) outer
-                  else loop (index + 1) frames
-              | `Code depth ->
-                  if Char.equal character '`' then loop (index + 1) (`Backtick :: frames)
-                  else if Char.equal character '(' then loop (index + 1) (`Code (depth + 1) :: outer)
-                  else if Char.equal character ')' then
-                    if depth > 0 then loop (index + 1) (`Code (depth - 1) :: outer)
-                    else if List.is_empty outer then loop (index + 1) frames
-                    else loop (index + 1) outer
-                  else loop (index + 1) frames)
-    in
-    loop 0 [ `Code 0 ]
+  (** The first command of a statement: the one that says whether the list before it was a
+      condition. *)
+  let first_command { operands; _ } = match operands with operand :: _ -> operand | [] -> ""
 
-  (** The first pipeline of a statement: what runs next after the list before it. Every command in
-      it is expanded before any of them completes, so it is exactly the set whose [$?] is still the
-      list's status. *)
-  let first_command { operands; connectors } =
-    let rec pipeline operands connectors =
-      match (operands, connectors) with
-      | operand :: _, ([] | (And | Or) :: _) -> [ operand ]
-      | operand :: operands, Pipe :: connectors -> operand :: pipeline operands connectors
-      | [], _ -> []
-    in
-    String.concat ~sep:" | " (pipeline operands connectors)
-
-  (** Whether [next] -- the first command after the list -- makes the list a condition or reads its
-      status. *)
-  let consumes next =
-    (match N.shell_words next with ("then" | "do") :: _ -> true | _ -> false) || reads_status next
+  (** Whether [next] -- the first command after the list -- makes the list a condition: a [then] or
+      [do] written as the keyword, unquoted. A [$?] read there is NOT a consumer: the capture
+      spelling is [[ A ] && [ B ] || rc=$?], whose [||] makes the failure explicit. Deciding whether
+      some later expansion still sees the list's status took a lexer of its own and five review
+      rounds to approach, and every mistake it could make was a silent pass. *)
+  let consumes next = match N.shell_words next with ("then" | "do") :: _ -> true | _ -> false
 
   let findings text =
     let lines = Array.of_list (String.split_lines text) in
     if not (Array.exists lines ~f:N.line_enables_errexit) then []
     else
       let count = Array.length lines in
-      (* The first command of the next non-blank, non-comment line -- a command, so that a trailing
-         comment mentioning `$?` does not read as consuming anything. *)
+      (* The first command of the next non-blank, non-comment line: where a condition's [then]/[do]
+         would stand. *)
       let rec next_statement index =
         if index >= count then ""
         else
@@ -2145,6 +2081,11 @@ module Errexit_and_list = struct
         "set -e\ncase $x in\n  (a|b) [ -e a ] && [ -e b ] ;;\nesac\n",
         [ 3 ] );
       ("redirected subshell", "set -e\n( y; [ -e a ] && [ -e b ]; z ) 2>/dev/null\n", [ 2 ]);
+      ("escaped space before a hash", "set -e\n[ \"$x\" = foo\\ #bar ] && [ -e b ]\n", [ 2 ]);
+      ( "redirected parenthesized case arm",
+        "set -e\ncase x in (x) >/dev/null [ -e a ] && [ -e b ]; echo y;; esac\n",
+        [ 2 ] );
+      ("separately redirected subshell", "set -e\n( y; [ -e a ] && [ -e b ]; z ) > out\n", [ 2 ]);
       ("timed test", "set -e\ntime [ -e a ] && [ -e b ]\n", [ 2 ]);
       ("redirected test", "set -e\n2>/dev/null [ -e a ] && [ -e b ]\n", [ 2 ]);
       ("assignment-prefixed test", "set -e\nLC_ALL=C [ a \\< b ] && [ -e b ]\n", [ 2 ]);
@@ -2165,54 +2106,17 @@ module Errexit_and_list = struct
         "set -e\nif\n  [ -e a ] && [ -e b ]; then :; fi\n",
         [] );
       ("condition before a do line", "set -e\nwhile\n  [ -e a ] && [ -e b ]\ndo :; done\n", []);
-      ("status read on the same line", "set +e\n[ -e a ] && [ -e b ]; rc=$?\nset -e\n", []);
-      ("status read on the next line", "set -e\nset +e\n[ -e a ] && [ -e b ]\nrc=$?\nset -e\n", []);
-      ("status single-quoted", "set -e\n[ -e a ] && [ -e b ]; printf '%s\\n' '$?'\n", [ 2 ]);
-      ("status ANSI-C-quoted", "set -e\n[ -e a ] && [ -e b ]; echo $'$?'\n", [ 2 ]);
-      ("status backslash-escaped", "set -e\n[ -e a ] && [ -e b ]; echo \\$?\n", [ 2 ]);
-      ("status escaped in double quotes", "set -e\n[ -e a ] && [ -e b ]; echo \"\\$?\"\n", [ 2 ]);
-      ( "status single-quoted in a double-quoted substitution",
-        "set -e\n[ -e a ] && [ -e b ]; echo \"$(echo '$?')\"\n",
-        [ 2 ] );
-      ("status double-quoted", "set +e\n[ -e a ] && [ -e b ]; echo \"rc=$?\"\nset -e\n", []);
-      ("status braced", "set +e\n[ -e a ] && [ -e b ]; rc=${?}\nset -e\n", []);
-      ( "status read only inside a substitution",
-        "set +e\n[ -e a ] && [ -e b ]; rc=$(printf %s $?)\nset -e\n",
-        [ 2 ] );
-      ( "status read after a command inside a substitution",
-        "set -e\n[ -e a ] && [ -e b ]; rc=$(true; printf %s \"$?\")\n",
-        [ 2 ] );
-      ( "status read after an intervening command",
-        "set -e\n[ -e a ] && [ -e b ]; true && rc=$?\n",
-        [ 2 ] );
-      ( "status read by a later command on the next line",
-        "set -e\n[ -e a ] && [ -e b ]\ntrue; rc=$?\n",
-        [ 2 ] );
-      ( "status read after a trailing semicolon",
-        "set +e\n[ -e a ] && [ -e b ];\nrc=$?\nset -e\n",
+      (* A status capture is not a consumer: `|| rc=$?` is the spelling that is. *)
+      ("status captured on the same line", "set +e\n[ -e a ] && [ -e b ]; rc=$?\nset -e\n", [ 2 ]);
+      ( "status captured on the next line",
+        "set -e\nset +e\n[ -e a ] && [ -e b ]\nrc=$?\nset -e\n",
+        [ 3 ] );
+      ("status captured by an or-tail", "set +e\n[ -e a ] && [ -e b ] || rc=$?\nset -e\n", []);
+      ( "condition after a trailing semicolon",
+        "set -e\nif\n  [ -e a ] && [ -e b ];\nthen :; fi\n",
         [] );
-      ("status expanded inside the pair itself", "set -e\n{ [ $? -eq 0 ] && [ -e b ]; }\n", [ 2 ]);
-      ("status read in arithmetic", "set +e\n[ -e a ] && [ -e b ]; rc=$(( $? + 1 ))\nset -e\n", []);
-      ( "status read after a command inside arithmetic",
-        "set -e\n[ -e a ] && [ -e b ]; rc=$(( $(true; echo $?) + 1 ))\n",
-        [ 2 ] );
-      ( "status read later in the first pipeline",
-        "set +e\n[ -e a ] && [ -e b ]; true | printf '%s\\n' \"$?\"\nset -e\n",
-        [] );
-      ( "status read after the first pipeline",
-        "set -e\n[ -e a ] && [ -e b ]; true | cat && echo $?\n",
-        [ 2 ] );
-      ( "status read in a function defined next",
-        "set -e\n[ -e a ] && [ -e b ]; f() { echo \"$?\"; }; y\n",
-        [ 2 ] );
-      ( "status read in a function defined on the next line",
-        "set -e\n[ -e a ] && [ -e b ]\nf() { echo \"$?\"; }\n",
-        [ 2 ] );
       ("quoted do after the pair", "set -e\n[ -e a ] && [ -e b ]; \"do\"\n", [ 2 ]);
       ("escaped then after the pair", "set -e\n[ -e a ] && [ -e b ]; \\then\n", [ 2 ]);
-      ( "status named only in the next line's comment",
-        "set -e\n[ -e a ] && [ -e b ]\nx # not $?\n",
-        [ 2 ] );
       (* Not flagged: outside the declared shape. *)
       ("command -v lookups", "set -e\ncommand -v test && command -v jq\n", []);
       ("conditional action", "set -e\n[ -n \"$a\" ] && echo \"$a\"\n", []);

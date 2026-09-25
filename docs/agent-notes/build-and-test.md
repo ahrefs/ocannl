@@ -2329,7 +2329,7 @@ that they earn a lookup rather than always-loaded space.
   `[ A ] && [ B ]`: errexit exempts every operand of an `&&` list but the last, so the pair checks
   only `B` and is silent exactly when `A` — usually the point of the assertion — fails
   (gh-ocannl-1023, `cancel_sweep`'s readiness check). One predicate per statement, or end the list
-  with `|| die …` / `|| return 1`. `shell_scripts_parse` refuses both shapes in errexit scripts; its
+  with `|| die …` / `|| return 1` (`|| rc=$?` to capture it; a `rc=$?` on the next line is refused). `shell_scripts_parse` refuses both shapes in errexit scripts; its
   module headers state the line-shaped boundary each scan reads, and a function's final pair — not
   inert, its status is the return value — is refused too, since the scan cannot see function ends.
 - An unreachable machine records `skip (unreachable)`, and a sweep of skips is not a failure. It is

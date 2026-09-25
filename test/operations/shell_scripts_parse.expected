@@ -175,6 +175,9 @@ errexit-and-list fixture tests named by path is classified as specified: true
 errexit-and-list fixture parenthesized case pattern on the case line is classified as specified: true
 errexit-and-list fixture parenthesized case pattern on its own line is classified as specified: true
 errexit-and-list fixture redirected subshell is classified as specified: true
+errexit-and-list fixture escaped space before a hash is classified as specified: true
+errexit-and-list fixture redirected parenthesized case arm is classified as specified: true
+errexit-and-list fixture separately redirected subshell is classified as specified: true
 errexit-and-list fixture timed test is classified as specified: true
 errexit-and-list fixture redirected test is classified as specified: true
 errexit-and-list fixture assignment-prefixed test is classified as specified: true
@@ -190,30 +193,12 @@ errexit-and-list fixture until condition is classified as specified: true
 errexit-and-list fixture wrapped if condition is classified as specified: true
 errexit-and-list fixture condition keyword on an earlier line is classified as specified: true
 errexit-and-list fixture condition before a do line is classified as specified: true
-errexit-and-list fixture status read on the same line is classified as specified: true
-errexit-and-list fixture status read on the next line is classified as specified: true
-errexit-and-list fixture status single-quoted is classified as specified: true
-errexit-and-list fixture status ANSI-C-quoted is classified as specified: true
-errexit-and-list fixture status backslash-escaped is classified as specified: true
-errexit-and-list fixture status escaped in double quotes is classified as specified: true
-errexit-and-list fixture status single-quoted in a double-quoted substitution is classified as specified: true
-errexit-and-list fixture status double-quoted is classified as specified: true
-errexit-and-list fixture status braced is classified as specified: true
-errexit-and-list fixture status read only inside a substitution is classified as specified: true
-errexit-and-list fixture status read after a command inside a substitution is classified as specified: true
-errexit-and-list fixture status read after an intervening command is classified as specified: true
-errexit-and-list fixture status read by a later command on the next line is classified as specified: true
-errexit-and-list fixture status read after a trailing semicolon is classified as specified: true
-errexit-and-list fixture status expanded inside the pair itself is classified as specified: true
-errexit-and-list fixture status read in arithmetic is classified as specified: true
-errexit-and-list fixture status read after a command inside arithmetic is classified as specified: true
-errexit-and-list fixture status read later in the first pipeline is classified as specified: true
-errexit-and-list fixture status read after the first pipeline is classified as specified: true
-errexit-and-list fixture status read in a function defined next is classified as specified: true
-errexit-and-list fixture status read in a function defined on the next line is classified as specified: true
+errexit-and-list fixture status captured on the same line is classified as specified: true
+errexit-and-list fixture status captured on the next line is classified as specified: true
+errexit-and-list fixture status captured by an or-tail is classified as specified: true
+errexit-and-list fixture condition after a trailing semicolon is classified as specified: true
 errexit-and-list fixture quoted do after the pair is classified as specified: true
 errexit-and-list fixture escaped then after the pair is classified as specified: true
-errexit-and-list fixture status named only in the next line's comment is classified as specified: true
 errexit-and-list fixture command -v lookups is classified as specified: true
 errexit-and-list fixture conditional action is classified as specified: true
 errexit-and-list fixture tests then an action is classified as specified: true
