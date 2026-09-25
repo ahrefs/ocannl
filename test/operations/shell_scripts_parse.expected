@@ -179,6 +179,9 @@ errexit-and-list fixture escaped space before a hash is classified as specified:
 errexit-and-list fixture redirected parenthesized case arm is classified as specified: true
 errexit-and-list fixture separately redirected subshell is classified as specified: true
 errexit-and-list fixture timed test is classified as specified: true
+errexit-and-list fixture timed test with an option terminator is classified as specified: true
+errexit-and-list fixture portably timed test with an option terminator is classified as specified: true
+errexit-and-list fixture variable-descriptor redirected tests is classified as specified: true
 errexit-and-list fixture redirected test is classified as specified: true
 errexit-and-list fixture assignment-prefixed test is classified as specified: true
 errexit-and-list fixture function's final pair, explicit is classified as specified: true

@@ -1637,6 +1637,23 @@ module Errexit_and_list = struct
     | ([ "function"; _ ] | [ _; "()" ] | [ "function"; _; "()" ]) when brace -> `Function_body
     | _ -> `No
 
+  (** {!Errexit_negation.redirection_prefix}, also for bash's variable-descriptor form [{fd}>file] /
+      [{fd}> file]: [Some attached] when [word] is a redirection, [attached] telling whether its
+      target is in the same word. *)
+  let redirection word =
+    let variable_descriptor =
+      match String.chop_prefix word ~prefix:"{" with
+      | Some rest -> (
+          match String.lsplit2 rest ~on:'}' with
+          | Some (name, operator)
+            when N.assignment_prefix (name ^ "=")
+                 && List.exists [ "<"; ">" ] ~f:(fun prefix -> String.is_prefix operator ~prefix) ->
+              Some operator
+          | _ -> None)
+      | None -> None
+    in
+    N.redirection_prefix (Option.value variable_descriptor ~default:word)
+
   type frame = {
     kind : [ `Paren | `Brace | `Function ];
     outer_operands : string list;
@@ -1733,7 +1750,7 @@ module Errexit_and_list = struct
               || String.is_suffix word ~suffix:";"
             then false
             else
-              match N.redirection_prefix word with
+              match redirection word with
               | Some true -> word_after rest
               | Some false -> word_after (List.drop rest 1)
               | None -> true)
@@ -1906,27 +1923,27 @@ module Errexit_and_list = struct
 
   (** Whether [operand] is a test command: its command word is [\[], [\[\[] or [test] -- or a path
       naming one, [/bin/test] -- once everything that can stand in front of it is dropped: [!],
-      [time]/[time -p], assignments, redirections, and the POSIX wrappers that run a builtin as such
-      ([command], [command -p], [builtin], each with an optional [--]); on the first operand also
-      the keywords of {!statement_prefixes}. [command -v test] is not a test: [-v] is not a dropped
-      option. *)
+      [time]/[time -p], assignments, redirections ({!redirection}, so [{fd}>] too), and the wrappers
+      that run a builtin as such ([command], [command -p], [builtin]); [time] and each wrapper with
+      an optional [--]. On the first operand also the keywords of {!statement_prefixes}.
+      [command -v test] is not a test: [-v] is not a dropped option. *)
   let is_test ~first operand =
     let literal = N.literal_shell_word in
     let is word expected = String.equal (literal word) expected in
     let rec drop = function
-      | "!" :: rest | "time" :: "-p" :: rest | "time" :: rest -> drop rest
+      | "!" :: rest -> drop rest
+      | "time" :: "-p" :: rest | "time" :: rest -> drop (drop_raw_dashdash rest)
       | word :: rest when N.assignment_prefix word -> drop rest
-      | word :: rest when Option.is_some (N.redirection_prefix word) -> (
-          match N.redirection_prefix word with
-          | Some false -> drop (List.drop rest 1)
-          | _ -> drop rest)
+      | word :: rest when Option.is_some (redirection word) -> (
+          match redirection word with Some false -> drop (List.drop rest 1) | _ -> drop rest)
       | word :: rest when is word "command" || is word "builtin" -> (
           match rest with
           | option :: rest when is option "-p" && is word "command" -> drop (drop_dashdash rest)
           | rest -> drop (drop_dashdash rest))
       | word :: rest when first && List.mem statement_prefixes word ~equal:String.equal -> drop rest
       | words -> words
-    and drop_dashdash = function word :: rest when is word "--" -> rest | words -> words in
+    and drop_dashdash = function word :: rest when is word "--" -> rest | words -> words
+    and drop_raw_dashdash = function "--" :: rest -> rest | words -> words in
     match drop (N.shell_words operand) with
     | word :: _ ->
         List.mem [ "["; "[["; "test" ] (Shebang.basename (literal word)) ~equal:String.equal
@@ -2087,6 +2104,13 @@ module Errexit_and_list = struct
         [ 2 ] );
       ("separately redirected subshell", "set -e\n( y; [ -e a ] && [ -e b ]; z ) > out\n", [ 2 ]);
       ("timed test", "set -e\ntime [ -e a ] && [ -e b ]\n", [ 2 ]);
+      ("timed test with an option terminator", "set -e\ntime -- [ -e a ] && [ -e b ]\n", [ 2 ]);
+      ( "portably timed test with an option terminator",
+        "set -e\ntime -p -- [ -e a ] && time -- [ -e b ]\n",
+        [ 2 ] );
+      ( "variable-descriptor redirected tests",
+        "set -e\n{fd}>/dev/null [ -e a ] && {fd2}> /dev/null [ -e b ]\n",
+        [ 2 ] );
       ("redirected test", "set -e\n2>/dev/null [ -e a ] && [ -e b ]\n", [ 2 ]);
       ("assignment-prefixed test", "set -e\nLC_ALL=C [ a \\< b ] && [ -e b ]\n", [ 2 ]);
       ( "function's final pair, explicit",
