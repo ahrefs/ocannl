@@ -1287,9 +1287,6 @@ module Errexit_negation = struct
      line: a line that starts inside a quote opened on an earlier line is a construct left open
      across lines, outside the boundary. *)
 
-  (** The file's lines with every backslash-newline splice removed, as the shell removes them before
-      reading a word: [set \\] then [-e] on the next line is one [set -e]. Each comes with the
-      number of the physical line it starts on. *)
   let continues_past_newline line =
     let length = String.length line in
     let rec loop index quote =
@@ -1314,6 +1311,9 @@ module Errexit_negation = struct
     in
     loop 0 `None
 
+  (** The file's lines with every backslash-newline splice removed, as the shell removes them before
+      reading a word: [set] ending its line in a backslash, then [-e] on the next line, is one
+      [set -e]. Each comes with the number of the physical line it starts on. *)
   let numbered_spliced_lines text =
     let rec join acc pending number = function
       | [] -> List.rev (match pending with Some spliced -> spliced :: acc | None -> acc)
