@@ -149,6 +149,15 @@ errexit-and-list fixture pair wrapped after && and comment is classified as spec
 errexit-and-list fixture quoted operator in a test is classified as specified: true
 errexit-and-list fixture pair after async command is classified as specified: true
 errexit-and-list fixture function's final pair is classified as specified: true
+errexit-and-list fixture one-line function body is classified as specified: true
+errexit-and-list fixture spaced one-line function body is classified as specified: true
+errexit-and-list fixture function-keyword body is classified as specified: true
+errexit-and-list fixture function-keyword body with parens is classified as specified: true
+errexit-and-list fixture one-line function's final pair is classified as specified: true
+errexit-and-list fixture one-line function's final pair, explicit is classified as specified: true
+errexit-and-list fixture timed test is classified as specified: true
+errexit-and-list fixture redirected test is classified as specified: true
+errexit-and-list fixture assignment-prefixed test is classified as specified: true
 errexit-and-list fixture function's final pair, explicit is classified as specified: true
 errexit-and-list fixture or-die tail is classified as specified: true
 errexit-and-list fixture or-exit tail is classified as specified: true
@@ -163,6 +172,14 @@ errexit-and-list fixture condition keyword on an earlier line is classified as s
 errexit-and-list fixture condition before a do line is classified as specified: true
 errexit-and-list fixture status read on the same line is classified as specified: true
 errexit-and-list fixture status read on the next line is classified as specified: true
+errexit-and-list fixture status single-quoted is classified as specified: true
+errexit-and-list fixture status ANSI-C-quoted is classified as specified: true
+errexit-and-list fixture status backslash-escaped is classified as specified: true
+errexit-and-list fixture status escaped in double quotes is classified as specified: true
+errexit-and-list fixture status single-quoted in a double-quoted substitution is classified as specified: true
+errexit-and-list fixture status double-quoted is classified as specified: true
+errexit-and-list fixture status braced is classified as specified: true
+errexit-and-list fixture status in a substitution is classified as specified: true
 errexit-and-list fixture status named only in the next line's comment is classified as specified: true
 errexit-and-list fixture conditional action is classified as specified: true
 errexit-and-list fixture tests then an action is classified as specified: true

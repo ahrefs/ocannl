@@ -1555,13 +1555,15 @@ end
     as in {!Errexit_negation}, so an [&&] printed as data or written inside [[[ a && b ]]] is not a
     list operator. A statement is flagged when all of these hold:
     - it is an [&&]-only list of at least two operands, and every operand is a test command, whose
-      first word is [\[], [\[\[] or [test] after an optional [!] -- on the first operand also after
-      the keywords that put a body statement on a line ([then], [do], [else], [{], or a [(] opening
-      a subshell);
+      first word is [\[], [\[\[] or [test] once [!], [time], assignments and redirections are
+      dropped -- and on the first operand also the heads that put a body statement on a line:
+      [then], [do], [else], [{], a [(] opening a subshell, and a one-line function definition's
+      [f() {] / [function f {];
     - nothing consumes the list's value: it is not introduced by [if]/[elif]/[while]/[until] (the
       first operand's first word is then not a test), it is not followed by a [then]/[do] (a
       condition whose keyword began an earlier line), and the next statement -- on the same line,
-      else the next non-blank non-comment line -- does not read [$?].
+      else the next non-blank non-comment line -- does not expand [$?]. An expansion, read
+      quote-aware: a single-quoted or escaped [$?] is text and consumes nothing.
 
     A [||] anywhere in the list is its consumer: [[ A ] && [ B ] || die ...] makes the failure
     explicit, so nothing is exempt. That is the spelling the refusal points at, together with one
@@ -1758,24 +1760,101 @@ module Errexit_and_list = struct
     in
     loop 0 0 `None false 0 0
 
+  (** Whether [operand] is a test command once everything that can stand in front of one is dropped:
+      [!], [time]/[time -p], assignments and redirections anywhere, and on the first operand also
+      the keywords of {!statement_prefixes} and a one-line function definition's head ([f() {],
+      [f () {], [function f {], [function f() {]) -- whose body's statements are statements like any
+      other. *)
   let is_test ~first operand =
-    let prefixes = if first then statement_prefixes else [ "!" ] in
+    let literal = N.literal_shell_word in
+    let is word expected = String.equal (literal word) expected in
+    let is_function_name word = String.is_suffix word ~suffix:"()" && String.length word > 2 in
     let rec drop = function
-      | word :: rest when List.mem prefixes word ~equal:String.equal -> drop rest
+      | word :: rest when is word "!" -> drop rest
+      | time :: option :: rest when is time "time" && is option "-p" -> drop rest
+      | word :: rest when is word "time" -> drop rest
+      | word :: rest when N.assignment_prefix word -> drop rest
+      | word :: rest when Option.is_some (N.redirection_prefix word) -> (
+          match N.redirection_prefix word with
+          | Some false -> drop (List.drop rest 1)
+          | _ -> drop rest)
+      | word :: rest when first && List.mem statement_prefixes (literal word) ~equal:String.equal ->
+          drop rest
+      | name :: brace :: rest when first && is_function_name name && is brace "{" -> drop rest
+      | _name :: parens :: brace :: rest when first && is parens "()" && is brace "{" -> drop rest
+      | keyword :: name :: brace :: rest
+        when first && is keyword "function" && (not (is name "{")) && is brace "{" ->
+          drop rest
+      | keyword :: _name :: parens :: brace :: rest
+        when first && is keyword "function" && is parens "()" && is brace "{" ->
+          drop rest
       | words -> words
     in
-    match drop (words operand) with ("[" | "[[" | "test") :: _ -> true | _ -> false
+    match drop (N.shell_words operand) with
+    | word :: _ -> List.mem [ "["; "[["; "test" ] (literal word) ~equal:String.equal
+    | [] -> false
 
   let bare_test_list { operands; connectors; _ } =
     List.length operands >= 2
     && List.for_all connectors ~f:(function And -> true | Or | Pipe -> false)
     && List.for_alli operands ~f:(fun index operand -> is_test ~first:(index = 0) operand)
 
+  (** Whether [text] expands [$?] (or [${?}]) -- an expansion, not the two characters: single and
+      ANSI-C quotes and a backslash make it literal text, which reads nothing. Double quotes, [$( )]
+      and backticks keep it an expansion, and their nesting is followed, so that a single quote
+      inside a double-quoted [$( )] is a quote again. *)
+  let reads_status text =
+    let length = String.length text in
+    (* [frames]: the enclosing contexts, innermost first. [`Code depth] is unquoted shell -- the top
+       level, or a [$( )] body at paren [depth] -- and [`Backtick] a backtick body. *)
+    let rec loop index frames =
+      if index >= length then false
+      else
+        let at token = N.starts_at text ~pos:index token in
+        let character = text.[index] in
+        let expansion () = at "$?" || at "${?}" in
+        match frames with
+        | [] -> false
+        | `Single :: outer ->
+            if Char.equal character '\'' then loop (index + 1) outer else loop (index + 1) frames
+        | `Ansi_c :: outer ->
+            if Char.equal character '\\' then loop (index + 2) frames
+            else if Char.equal character '\'' then loop (index + 1) outer
+            else loop (index + 1) frames
+        | `Double :: outer ->
+            if Char.equal character '\\' then loop (index + 2) frames
+            else if expansion () then true
+            else if at "$(" then loop (index + 2) (`Code 0 :: frames)
+            else if Char.equal character '`' then loop (index + 1) (`Backtick :: frames)
+            else if Char.equal character '"' then loop (index + 1) outer
+            else loop (index + 1) frames
+        | ((`Code _ | `Backtick) as frame) :: outer -> (
+            if Char.equal character '\\' then loop (index + 2) frames
+            else if expansion () then true
+            else if at "$'" then loop (index + 2) (`Ansi_c :: frames)
+            else if at "$(" then loop (index + 2) (`Code 0 :: frames)
+            else if Char.equal character '\'' then loop (index + 1) (`Single :: frames)
+            else if Char.equal character '"' then loop (index + 1) (`Double :: frames)
+            else
+              match frame with
+              | `Backtick ->
+                  if Char.equal character '`' then loop (index + 1) outer
+                  else loop (index + 1) frames
+              | `Code depth ->
+                  if Char.equal character '`' then loop (index + 1) (`Backtick :: frames)
+                  else if Char.equal character '(' then loop (index + 1) (`Code (depth + 1) :: outer)
+                  else if Char.equal character ')' then
+                    if depth > 0 then loop (index + 1) (`Code (depth - 1) :: outer)
+                    else if List.is_empty outer then loop (index + 1) frames
+                    else loop (index + 1) outer
+                  else loop (index + 1) frames)
+    in
+    loop 0 [ `Code 0 ]
+
   (** Whether [next] -- the statement after the list -- makes the list a condition or reads its
       status. *)
   let consumes next =
-    (match words next with ("then" | "do") :: _ -> true | _ -> false)
-    || String.is_substring next ~substring:"$?"
+    (match words next with ("then" | "do") :: _ -> true | _ -> false) || reads_status next
 
   let findings text =
     let lines = Array.of_list (String.split_lines text) in
@@ -1868,6 +1947,19 @@ module Errexit_and_list = struct
          the call site weighs. The scan cannot see where a function ends; `|| return 1` is the
          spelling it accepts. *)
       ("function's final pair", "set -e\nready() {\n  [ -e a ] && [ -e b ]\n}\n", [ 3 ]);
+      ("one-line function body", "set -e\nready() { [ -e a ] && [ -e b ]; cleanup; }\n", [ 2 ]);
+      ("spaced one-line function body", "set -e\nready () { [ -e a ] && [ -e b ]; x; }\n", [ 2 ]);
+      ("function-keyword body", "set -e\nfunction ready { [ -e a ] && [ -e b ]; x; }\n", [ 2 ]);
+      ( "function-keyword body with parens",
+        "set -e\nfunction ready() { [ -e a ] && [ -e b ]; x; }\n",
+        [ 2 ] );
+      ("one-line function's final pair", "set -e\nready() { [ -e a ] && [ -e b ]; }\n", [ 2 ]);
+      ( "one-line function's final pair, explicit",
+        "set -e\nready() { [ -e a ] && [ -e b ] || return 1; }\n",
+        [] );
+      ("timed test", "set -e\ntime [ -e a ] && [ -e b ]\n", [ 2 ]);
+      ("redirected test", "set -e\n2>/dev/null [ -e a ] && [ -e b ]\n", [ 2 ]);
+      ("assignment-prefixed test", "set -e\nLC_ALL=C [ a \\< b ] && [ -e b ]\n", [ 2 ]);
       ( "function's final pair, explicit",
         "set -e\nready() {\n  [ -e a ] && [ -e b ] || return 1\n}\n",
         [] );
@@ -1887,6 +1979,16 @@ module Errexit_and_list = struct
       ("condition before a do line", "set -e\nwhile\n  [ -e a ] && [ -e b ]\ndo :; done\n", []);
       ("status read on the same line", "set +e\n[ -e a ] && [ -e b ]; rc=$?\nset -e\n", []);
       ("status read on the next line", "set -e\nset +e\n[ -e a ] && [ -e b ]\nrc=$?\nset -e\n", []);
+      ("status single-quoted", "set -e\n[ -e a ] && [ -e b ]; printf '%s\\n' '$?'\n", [ 2 ]);
+      ("status ANSI-C-quoted", "set -e\n[ -e a ] && [ -e b ]; echo $'$?'\n", [ 2 ]);
+      ("status backslash-escaped", "set -e\n[ -e a ] && [ -e b ]; echo \\$?\n", [ 2 ]);
+      ("status escaped in double quotes", "set -e\n[ -e a ] && [ -e b ]; echo \"\\$?\"\n", [ 2 ]);
+      ( "status single-quoted in a double-quoted substitution",
+        "set -e\n[ -e a ] && [ -e b ]; echo \"$(echo '$?')\"\n",
+        [ 2 ] );
+      ("status double-quoted", "set +e\n[ -e a ] && [ -e b ]; echo \"rc=$?\"\nset -e\n", []);
+      ("status braced", "set +e\n[ -e a ] && [ -e b ]; rc=${?}\nset -e\n", []);
+      ("status in a substitution", "set +e\n[ -e a ] && [ -e b ]; rc=$(printf %s $?)\nset -e\n", []);
       ( "status named only in the next line's comment",
         "set -e\n[ -e a ] && [ -e b ]\nx # not $?\n",
         [ 2 ] );
