@@ -122,7 +122,6 @@ let exempt_zero_reference_exports =
     "Numerics.compare_fp16_mode";
     "Numerics.default";
     "Numerics.equal";
-    "Numerics.equal_bf16_mode";
     "Numerics.fp16_mode_of_sexp";
     "Numerics.policy";
     "Numerics.t_of_sexp";

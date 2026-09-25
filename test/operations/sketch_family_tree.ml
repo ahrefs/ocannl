@@ -544,8 +544,12 @@ let () =
         }
       opt_b
   in
+  (* Every leg names its bf16 mode explicitly: the stanza declares OCANNL_BF16_ARITHMETIC, so the
+     ambient policy may already be [Bf16_wide]. *)
+  let bf16_auto = { saved_policy with bf16_arithmetic = Numerics.Bf16_auto } in
+  Numerics.set_policy bf16_auto;
   let bf16_default = bf16_seeds ~wide_scopes:[] in
-  Numerics.set_policy { saved_policy with fp16_arithmetic = Numerics.Fp16_wide };
+  Numerics.set_policy { bf16_auto with fp16_arithmetic = Numerics.Fp16_wide };
   let bf16_under_f16_wide = bf16_seeds ~wide_scopes:[] in
   Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_wide };
   let bf16_wide_no_arm = bf16_seeds ~wide_scopes:[] in

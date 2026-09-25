@@ -1144,8 +1144,18 @@ let () =
          ~f:(fun idcs -> wide_sums.((idcs.(0) * n) + idcs.(1)))
          ())
   in
-  let got_auto = bf16_matmul ~name:"aw_bf16_naive_auto" in
+  (* Pinned rather than inherited: the stanza declares OCANNL_BF16_ARITHMETIC, and the claim is
+     about [Bf16_auto]'s resolution, so both the run and the backend's widening are read under
+     it. *)
   let saved_policy = Numerics.get () in
+  Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_auto };
+  let got_auto = bf16_matmul ~name:"aw_bf16_naive_auto" in
+  let auto_widens_bf16 =
+    not
+      (Ir.Ops.equal_prec
+         (codegen_capabilities.Ir.Backend_intf.accum_prec Ir.Ops.bfloat16)
+         Ir.Ops.bfloat16)
+  in
   Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_wide };
   let got_wide = bf16_matmul ~name:"aw_bf16_naive_wide" in
   Numerics.set_policy
@@ -1156,4 +1166,4 @@ let () =
   p_all2 claim_bf16_wide_ncf32_off got_wide_nco want ~f:Float.equal;
   p claim_bf16_default_matmul
     ((not (Array.is_empty got_auto))
-    && Bool.equal (Array.for_all2_exn got_auto want ~f:Float.equal) widens_bf16)
+    && Bool.equal (Array.for_all2_exn got_auto want ~f:Float.equal) auto_widens_bf16)

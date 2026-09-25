@@ -891,14 +891,18 @@ let () =
     Tn.update_prec t.Tensor.value Ir.Ops.bfloat16;
     t
   in
-  (* Read under the default policy: whether this backend's bf16 accumulator keeps storage residency
-     there, i.e. whether the negative control below must exceed the bound. *)
+  (* The negative control is pinned to [Bf16_auto] rather than inherited: the stanza declares
+     OCANNL_BF16_ARITHMETIC, so the ambient policy may already be [Bf16_wide]. Read under it:
+     whether this backend's bf16 accumulator keeps storage residency there, i.e. whether the
+     negative control must exceed the bound. *)
+  Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_auto };
   let default_bf16_narrow =
     Ir.Ops.equal_prec
       ((Context.codegen_capabilities (Context.auto ())).Ir.Backend_intf.accum_prec Ir.Ops.bfloat16)
       Ir.Ops.bfloat16
   in
   let got_bw_default, _ = compile_mma_with_census ~name:"mm_bw_default_mma" (bf16_uniform_mma ()) in
+  Numerics.set_policy saved_policy;
   Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_wide };
   let want_bw = compile_serial ~name:"mm_bw_wide_serial" (bf16_uniform_mma ()) in
   let bw_seed_scopes = ref None in
@@ -1681,6 +1685,7 @@ let () =
       let ctx = Context.run ctx routine in
       Context.get_values ctx t.Tensor.value
     in
+    Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_auto };
     let got_default = run_staged ~name:"mm_bu_staged_mma" in
     Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_wide };
     let got_bw = run_staged ~name:"mm_buw_staged_mma" in

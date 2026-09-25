@@ -4998,9 +4998,9 @@
  ; must match, so every configuration key that can move either is an ambient dependency of it --
  ; undeclared, dune serves the previous run's result and the probe silently does not rerun
  ; (gh-ocannl-628). The set, and what each one moves:
- ;   NARROW_COMPUTE_F32, FP16_ARITHMETIC, CC_FP16_ARITHMETIC -- which reference the accumulator
- ;     policy selects (Numerics.cpu_compute_prec and Context.hardware_limits are consulted here,
- ;     not merely by the kernels).
+ ;   NARROW_COMPUTE_F32, FP16_ARITHMETIC, BF16_ARITHMETIC, CC_FP16_ARITHMETIC -- which reference
+ ;     the accumulator policy selects (Numerics.cpu_compute_prec and Context.hardware_limits are
+ ;     consulted here, not merely by the kernels).
  ;   CC_VECTOR_BYTES, CC_BACKEND_ARCH_FLAGS, CC_BACKEND_SIMD_FLAGS -- whether try_vectorize_reduce
  ;     renders at all (cc_vector_bytes=0 trips its vector_bytes < 8 guard), so the Vectorized
  ;     members' form. The SIMD flags reach BOTH arms of this test: vector_bytes is gated on avx2
