@@ -1040,9 +1040,11 @@ module Errexit_negation = struct
               match brace_group_runs_outside_parent line index with
               | Some after_group -> loop after_group start `None false nesting pipeline fragments
               | None -> loop (index + 1) start `None false nesting pipeline fragments
-            else if List.mem [ '('; '[' ] character ~equal:Char.equal then
+              (* Parentheses only: a single bracket is a word ([\[ \[ = x \]] is a valid test), so
+                 balancing brackets let a literal one hide every separator after it. *)
+            else if Char.equal character '(' then
               loop (index + 1) start `None false (nesting + 1) pipeline fragments
-            else if List.mem [ ')'; ']' ] character ~equal:Char.equal then
+            else if Char.equal character ')' then
               loop (index + 1) start `None false (Int.max 0 (nesting - 1)) pipeline fragments
             else if nesting = 0 && Char.equal character ';' then
               loop (index + 1) (index + 1) `None false nesting false
@@ -1587,6 +1589,9 @@ module Errexit_negation = struct
         [ 2 ] );
       ("errexit set by a continued command", "set \\\n-e\n! grep -q missing output\n", [ 3 ]);
       ("errexit set through shopt", "shopt -s -o errexit\n! grep -q missing output\n", [ 2 ]);
+      ( "errexit set after a literal-bracket test",
+        "[ [ = x ]; set -e\n! grep -q missing output\n",
+        [ 2 ] );
       ("errexit set through bundled shopt", "shopt -so errexit\n! grep -q missing output\n", [ 2 ]);
       ("errexit unset through shopt", "shopt -u -o errexit\n! grep -q missing output\n", []);
       ( "errexit set behind a variable-descriptor redirection",
@@ -1691,9 +1696,9 @@ end
       and a brace-group condition ([if { x; [ A ] && [ B ]; }; then]) has its statements read as
       body statements. (Loud.) A lookahead to the next line read a heredoc's data line as the
       keyword -- silently -- and was removed.
-    - A heredoc body is read as script text. (Loud: it can only add statements.) A multi-line quoted
-      value is lexed from outside the quote on the line where it closes, so a list on that same line
-      can be hidden. (Silent.)
+    - A heredoc body is read as script text. (Loud: it can only add statements.) A construct left
+      open across a physical line -- a multi-line quoted value, a [[[ ... ]]] test -- is lexed from
+      outside it on the line where it closes, so a list on that same line can be hidden. (Silent.)
     - Scope. The last command of a FUNCTION BODY or a subshell is not inert -- its status becomes
       the function's (the subshell's), which errexit then weighs at the call site (measured under
       bash 3.2 and dash; a brace group, loop body or [if] branch does NOT propagate it). Seeing
@@ -2210,6 +2215,12 @@ module Errexit_and_list = struct
         [ 4 ] );
       ( "double-bracket regex with a character class",
         "set -e\n[[ $x =~ [[:space:]] && -e a ]] && [[ -e b ]]\n",
+        [ 2 ] );
+      ( "errexit set after a literal-bracket test",
+        "[ [ = x ]; set -e\n[ -e a ] && [ -e b ]\n",
+        [ 2 ] );
+      ( "parenthesized case arm whose body is a subshell",
+        "set -e\ncase x in (x) ( [ -e a ] && [ -e b ]; : );; esac\n",
         [ 2 ] );
       ("timed test", "set -e\ntime [ -e a ] && [ -e b ]\n", [ 2 ]);
       ("timed test with an option terminator", "set -e\ntime -- [ -e a ] && [ -e b ]\n", [ 2 ]);
