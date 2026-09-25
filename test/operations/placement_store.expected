@@ -19,6 +19,10 @@ the forced run's routine computes the right values: true
 a forced arm searches both arms whatever the store holds: true
 a forced arm ships the forced arm: true
 a forced run leaves the recorded decision untouched: true
+the bypassed-store run's routine computes the right values: true
+a bypassed store compares both arms, in position, whatever the store holds: true
+a bypassed store's arms replay the schedule cache, whenever the cold run cached them: true
+a bypassed store leaves the recorded decision untouched: true
 after an entry that no longer reproduces its program, the routine computes the right values: true
 an entry that no longer reproduces its program is ignored and the placements re-tuned: true
 an entry that no longer reproduces its program is overwritten by the re-tune, given clean evidence: true

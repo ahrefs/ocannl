@@ -463,7 +463,8 @@
 # same key components, so a later process replays the decision -- one search from the recorded
 # placement, normally itself a cache replay -- instead of re-deriving it from both arms and a flip
 # chain. A recorded decision is ignored and re-tuned when it no longer reproduces the program it
-# was measured on; tune_ship_arm neither consults nor writes it.
+# was measured on. A forced tune_ship_arm neither consults nor writes the store, and neither does
+# a run with tune_placement_store=false, which bypasses it alone (the schedule cache replays).
 # An empty value disables both (every `Autotune.tune` call searches afresh, every
 # `Train.tune_placements` call decides afresh).
 #autotune_cache_dir=autotune_cache
@@ -511,6 +512,15 @@
 # and a forced arm whose search failed propagates that failure instead of falling back to the other
 # arm.
 #tune_ship_arm=auto
+
+# gh-ocannl-1020: whether `Train.tune_placements` consults and records the placement-decision
+# store (see autotune_cache_dir). `false` bypasses that store alone -- the posture tune_ship_arm
+# takes, without forcing an arm -- while the schedule cache keeps replaying, so a warm-cache run
+# compares the two arms again, both schedules replaying, both arms reporting in position, and ships
+# the measured winner. That is the placement A/B a warm benchmark pass measures, and what a test
+# sharing a warm cache directory across two-arm scenarios wants instead of sweeping the store's
+# `placements-*.sexp` entries by hand.
+#tune_placement_store=true
 
 # gh-ocannl-514: the ranking of the flip chain's candidates. `enablement` sorts the
 # decision surface family-first: a `materialize` flip whose node is an operand or destination of

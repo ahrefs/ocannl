@@ -840,7 +840,11 @@ files.
   search completed, uncontended, the shipped one timed something), never under `tune_ship_arm`,
   which also never consults it. `test/operations/placement_store.ml` pins all of this; the
   directory is `Autotune.resolve_cache_dir`'s, so `autotune_search=false` with an unchosen
-  directory disables both stores together.
+  directory disables both stores together. To bypass the placement store ALONE — a warm-cache
+  placement A/B (both arms reporting, both schedules replaying), or a test sharing one warm
+  directory across two-arm scenarios — set `tune_placement_store=false` (or pass
+  `~placement_store:false`; gh-ocannl-1020) rather than deleting `placements-*.sexp` entries:
+  `autotune_arm_containment`'s rule passes it on the command line.
 - **A `Scan_loop` is opaque to the schedule ops in both directions and transparent to the
   annotator** (gh-ocannl-696, `test/operations/scan_loop.ml` leg 7): `find_loops_env` and
   `rewrite_loop` do not enter it, so an op naming the scan's own index or a loop nested in its body

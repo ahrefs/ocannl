@@ -14,7 +14,9 @@
    values -- and the one search is a schedule-cache replay, which is what shows the recorded
    decision reproduces the very lowering the cold run tuned; - a stale entry -- a decision that no
    longer reproduces its program, or one naming a node the problem lacks -- is ignored, re-tuned,
-   and overwritten.
+   and overwritten; - a bypassed store (gh-ocannl-1020, [~placement_store:false], config
+   [tune_placement_store]) neither replays nor records: on the warm schedule cache both arms report
+   in position, each a schedule-cache replay, and the recorded entry is untouched.
 
    Times never enter the golden; the claims that involve one are waived by the load's own evidence
    (contention-refused windows), as autotune_arm_containment.ml does. *)
@@ -99,14 +101,14 @@ let () =
           (SC.digest
              (Train.placement_problem ~timing_ctx (Context.auto ()) t2 comp Ir.Indexing.Empty))));
   (* --- The runs. --- *)
-  let run ?ship_arm () =
+  let run ?ship_arm ?placement_store () =
     let arms = ref [] and flips = ref [] and shipped = ref None in
     let ctx_t, routine_t =
       Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir ~inline_flips:2
         ~report:(fun r -> arms := r :: !arms)
         ~flip_report:(fun r -> flips := r :: !flips)
         ~on_ship:(fun what -> shipped := Some what)
-        ?ship_arm (Context.auto ()) t2 comp Ir.Indexing.Empty
+        ?ship_arm ?placement_store (Context.auto ()) t2 comp Ir.Indexing.Empty
     in
     let ctx_t = Context.run ctx_t routine_t in
     let got = Context.get_values ctx_t t2.Tensor.value in
@@ -188,6 +190,21 @@ let () =
   p "a forced arm searches both arms whatever the store holds" (List.length arms3 = 2);
   p "a forced arm ships the forced arm" (String.equal shipped3 "B");
   p "a forced run leaves the recorded decision untouched"
+    (Option.equal Sexp.equal before (snapshot ())
+    && List.length (placement_keys ()) = Option.length recorded);
+  (* --- Run 3b: a bypassed store (gh-ocannl-1020) is the placement A/B on a warm schedule cache:
+     whatever the store holds, both arms are compared -- each replaying the schedule run 1 crowned
+     for it, exactly when run 1's evidence was clean -- and nothing is recorded or overwritten.
+     --- *)
+  Stdio.eprintf "run 3b (not part of the golden): bypassing a store that %s\n%!"
+    (if Option.is_some recorded then "holds an entry" else "is empty");
+  let arms3b, _, _, _, got3b = run ~placement_store:false () in
+  p_all2 "the bypassed-store run's routine computes the right values" got3b expected ~f:approx;
+  p "a bypassed store compares both arms, in position, whatever the store holds"
+    (List.length arms3b = 2);
+  p_all "a bypassed store's arms replay the schedule cache, whenever the cold run cached them"
+    arms3b ~f:(fun r -> (not (cache_available && clean1)) || replayed r);
+  p "a bypassed store leaves the recorded decision untouched"
     (Option.equal Sexp.equal before (snapshot ())
     && List.length (placement_keys ()) = Option.length recorded);
   (* --- Runs 4 and 5: stale entries are ignored, re-tuned, and overwritten. Each corruption comes

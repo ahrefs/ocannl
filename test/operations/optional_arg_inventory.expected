@@ -182,6 +182,7 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/train.ml:tune_placements ?inline_flips -- implemented
   lib/train.ml:tune_placements ?name -- implemented
   lib/train.ml:tune_placements ?on_ship -- implemented
+  lib/train.ml:tune_placements ?placement_store -- implemented
   lib/train.ml:tune_placements ?repeats -- implemented
   lib/train.ml:tune_placements ?report -- implemented
   lib/train.ml:tune_placements ?rounds -- implemented
