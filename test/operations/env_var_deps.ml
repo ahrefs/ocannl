@@ -688,6 +688,53 @@ let generated_runtest_names stanzas =
       | _ -> [])
   |> Set.of_list (module String)
 
+(* gh-ocannl-1037: per-module entry points into inline tests. Dune's generated `runtest-<library>`
+   runs every module of an inline-test library, so verifying ONE tutorial used to cost the whole
+   library -- on a GPU box, a reserved slot for a directory. Each module holding inline tests gets a
+   hand-written rule instead: it runs the library's generated runner restricted to that module by
+   `-only-test <module>.ml`, sits on `runtest-<module>` alone, and diffs `<module>.ml` against the
+   `.corrected` the runner writes -- the same diff dune's own action applies, so it promotes the
+   same way. The runner is addressed at the path dune generates it under, which is what makes such a
+   rule recognizable here without trusting its alias. *)
+let inline_runner_path library = Printf.sprintf ".%s.inline-tests/inline-test-runner.exe" library
+
+let inline_test_libraries stanzas =
+  List.concat_map stanzas ~f:(fun stanza ->
+      match stanza with
+      | Sexp.List (Sexp.Atom "library" :: _) when Option.is_some (Scan.field stanza "inline_tests")
+        ->
+          List.map (Scan.names_of stanza) ~f:(fun name -> (name, stanza))
+      | _ -> [])
+
+(* The `-only-test` operands of a command line, in order. *)
+let rec only_test_operands = function
+  | "-only-test" :: operand :: rest -> operand :: only_test_operands rest
+  | _ :: rest -> only_test_operands rest
+  | [] -> []
+
+(* Each run, in [stanza], of the runner of one of [libraries]: the library, and the `-only-test`
+   operands the run was given. Resolved against the command's working directory, so a `(chdir …)`
+   running another directory's runner of the same name is not this library's. *)
+let inline_runner_runs ~libraries stanza =
+  match Scan.head stanza with
+  | Some "rule" ->
+      List.filter_map (Scan.classified_command_sites_with_pins_preserving_multiplicity stanza)
+        ~f:(fun (cwd, _pinned, site, command) ->
+          match (site, command) with
+          | Scan.Program (_, args), Scan.Runs path ->
+              let resolved = normalize_path (Scan.in_subdir cwd path) in
+              List.find libraries ~f:(fun library ->
+                  String.equal resolved (inline_runner_path library))
+              |> Option.map ~f:(fun library -> (library, only_test_operands args))
+          | _ -> None)
+  | _ -> []
+
+(* Whether a module's source holds inline tests: the extension points `ppx_inline_test` and
+   `ppx_expect` register. A mention in a comment over-asks, which is the loud direction. *)
+let holds_inline_tests source =
+  List.exists [ "let%expect_test"; "let%test"; "module%test" ] ~f:(fun substring ->
+      String.is_substring source ~substring)
+
 (* The prefix `Utils.classify_env_var` reports for a per-module tracing gate. *)
 let gate_prefix = "ocannl_log_level_"
 
@@ -1367,10 +1414,30 @@ let main () =
                       else alias)));
           (* Each suite's members, against what it aggregates -- in the directory that defines
              it. *)
+          (* Less the per-module inline-test aliases (gh-ocannl-1037), which go the other way: the
+             library's generated action already runs every module on `runtest`, so aggregating one
+             would run its tests twice. An alias only such rules attach to is left out here, and the
+             inline-test check below refuses it in the aggregate. *)
+          let inline_only =
+            let libraries = List.map (inline_test_libraries here) ~f:fst in
+            let runs_inline_tests stanza =
+              not (List.is_empty (inline_runner_runs ~libraries stanza))
+            in
+            List.filter entries ~f:(fun alias ->
+                match
+                  List.filter here ~f:(fun s -> List.mem (aliases_of s) alias ~equal:String.equal)
+                with
+                | [] -> false
+                | attached -> List.for_all attached ~f:runs_inline_tests)
+          in
           List.iter suites ~f:(fun suite ->
               let reaches = aliases_reached_from here suite in
               List.iter entries ~f:(fun alias ->
-                  if member_of suite alias && not (Set.mem reaches alias) then
+                  if
+                    member_of suite alias
+                    && (not (Set.mem reaches alias))
+                    && not (List.mem inline_only alias ~equal:String.equal)
+                  then
                     fail
                       (Printf.sprintf
                          "%s attaches a rule to `%s` that the `%s` alias does not aggregate -- \
@@ -2131,6 +2198,91 @@ let main () =
                                         ". `%s` is no configuration key OCANNL reads, so it cannot \
                                          be declared -- pin it, or fix the spelling"
                                         key))))));
+      (* gh-ocannl-1037: the per-module entry points into inline tests. Every module of an
+         inline-test library that holds tests has one, every rule running such a runner IS one, and
+         none is aggregated onto `runtest`, where the library's generated action already runs it.
+         Derived from the library's own module set and its modules' sources, so a tutorial added
+         tomorrow is asked for its alias the day it lands. *)
+      check_per_directory (fun subdir group ->
+          let here = Scan.in_subdir dir subdir in
+          let directory = if String.is_empty here then "." else here in
+          let directory_modules =
+            List.filter_map source_files ~f:(fun (path, _) ->
+                if String.equal (Stdlib.Filename.dirname path) directory then
+                  Some (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path))
+                else None)
+          in
+          let where =
+            if String.is_empty subdir then dune_file
+            else Printf.sprintf "%s, in `(subdir %s …)`" dune_file subdir
+          in
+          let libraries = inline_test_libraries group in
+          let runs =
+            List.concat_map group ~f:(fun stanza ->
+                inline_runner_runs ~libraries:(List.map libraries ~f:fst) stanza
+                |> List.map ~f:(fun (library, operands) -> (stanza, library, operands)))
+          in
+          let modules_of_library library =
+            match List.Assoc.find libraries library ~equal:String.equal with
+            | None -> []
+            | Some stanza -> Scan.modules_of ~directory_modules group stanza
+          in
+          List.iter runs ~f:(fun (stanza, library, operands) ->
+              let entry_point =
+                match operands with
+                | [ operand ] -> (
+                    match String.chop_suffix operand ~suffix:".ml" with
+                    | Some module_name ->
+                        List.mem (modules_of_library library) module_name ~equal:String.equal
+                        && List.equal String.equal (aliases_of stanza) [ "runtest-" ^ module_name ]
+                        && List.equal String.equal (goldens_in stanza) [ operand ]
+                    | None -> false)
+                | _ -> false
+              in
+              if not entry_point then
+                fail
+                  (Printf.sprintf
+                     "%s: a rule runs the inline-test runner of `%s` with `-only-test` operands \
+                      [%s] on the aliases [%s], diffing [%s] -- a per-module entry point restricts \
+                      the runner to ONE module of that library by `-only-test <module>.ml`, sits \
+                      on `runtest-<module>` alone, and diffs `<module>.ml` against the \
+                      `.corrected` the runner writes"
+                     where library
+                     (String.concat ~sep:", " operands)
+                     (String.concat ~sep:", " (aliases_of stanza))
+                     (String.concat ~sep:", " (goldens_in stanza))));
+          List.iter libraries ~f:(fun (library, _) ->
+              List.iter (modules_of_library library) ~f:(fun module_name ->
+                  let holds =
+                    Option.value_map (source_of ~dir:here module_name) ~default:false
+                      ~f:(fun on_disk -> holds_inline_tests (In_channel.read_all on_disk))
+                  in
+                  let served =
+                    List.exists runs ~f:(fun (_, runs_library, operands) ->
+                        String.equal runs_library library
+                        && List.equal String.equal operands [ module_name ^ ".ml" ])
+                  in
+                  if holds && not served then
+                    fail
+                      (Printf.sprintf
+                         "%s: `%s.ml` holds inline tests of the `%s` library and no rule gives it \
+                          a per-module alias, so checking it alone means running every module \
+                          behind `runtest-%s`. Add a rule on `runtest-%s` that runs `%s` with \
+                          `-only-test %s.ml` and diffs the module against its `.corrected`, as the \
+                          neighbouring modules' rules do"
+                         where module_name library library module_name (inline_runner_path library)
+                         module_name)));
+          let reaches = aliases_reached_from group "runtest" in
+          List.iter runs ~f:(fun (stanza, library, _) ->
+              List.iter (aliases_of stanza) ~f:(fun alias ->
+                  if Set.mem reaches alias then
+                    fail
+                      (Printf.sprintf
+                         "%s puts `%s` on `runtest`, but its rule runs inline tests of `%s`, which \
+                          the library's generated action already runs there -- `dune runtest` \
+                          would run them twice. Leave the alias out of the `(alias (name runtest) \
+                          (deps …))` stanza"
+                         where alias library))));
       (* Every directory-scoped check above plugs into this one traversal. Keep the reverse: checks
          run in source order, so diagnostics and tables remain stable while the seam changes. *)
       per_directory file_stanzas ~checks:(List.rev !directory_checks);
@@ -4213,6 +4365,128 @@ let guard_control () =
     shouted_ok;
   try remove_tree root with Unix.Unix_error _ -> ()
 
+(* gh-ocannl-1037's control, a tree of its own for the reason the others give: the repository's
+   inline-test modules all have their aliases, so a control read off it would pass whether the rule
+   decides anything or not. Put to a synthetic library of two tested modules and one untested
+   helper, what is asserted is the rule: the complete wiring passes -- without aggregating its
+   aliases and without asking anything of the helper -- and each way of breaking it is reported. *)
+
+type inline_alias_variant =
+  | Inline_complete  (** a rule per tested module, none aggregated *)
+  | Inline_missing  (** the second tested module has no rule *)
+  | Inline_crossed  (** the second module's alias runs the FIRST module's tests *)
+  | Inline_aggregated  (** the complete wiring, with one alias listed in the `runtest` stanza *)
+
+let inline_alias_rule ~alias ~only =
+  Printf.sprintf
+    {dune|
+(rule
+ ; ocannl-backend: none -- a synthetic control fixture, judged on this marker alone.
+ (alias runtest-%s)
+ (deps ocannl_config (alias runtest-gate))
+ (action
+  (progn
+   (run %%{dep:.probelib.inline-tests/inline-test-runner.exe} inline-test-runner probelib
+    -only-test %s.ml -source-tree-root %%{workspace_root} -diff-cmd -)
+   (diff? %s.ml %s.ml.corrected))))
+|dune}
+    alias only alias alias
+
+let inline_alias_subject variant =
+  let second =
+    match variant with
+    | Inline_missing -> ""
+    | Inline_crossed -> inline_alias_rule ~alias:"probe2" ~only:"probe"
+    | Inline_complete | Inline_aggregated -> inline_alias_rule ~alias:"probe2" ~only:"probe2"
+  in
+  let aggregated = match variant with Inline_aggregated -> " (alias runtest-probe)" | _ -> "" in
+  Printf.sprintf
+    {dune|(test
+ ; ocannl-backend: none -- the ambient gate of this synthetic tree; it runs on no device.
+ (name gate)
+ (modules gate)
+ (deps ocannl_config (universe))
+ (libraries base))
+
+(rule
+ ; ocannl-backend: none -- the same gate, on the alias the per-module rules depend on.
+ (alias runtest-gate)
+ (deps ocannl_config (universe))
+ (action
+  (run %%{dep:gate.exe})))
+
+(alias
+ (name runtest)
+ (deps (alias runtest-gate)%s))
+
+(library
+ ; ocannl-backend: none -- a synthetic control fixture, judged on this marker alone.
+ (name probelib)
+ (modules probe probe2 helper)
+ (inline_tests
+  (deps ocannl_config))
+ (libraries base))
+%s%s|dune}
+    aggregated
+    (inline_alias_rule ~alias:"probe" ~only:"probe")
+    second
+
+let inline_alias_control () =
+  let exe =
+    let name = Stdlib.Sys.executable_name in
+    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
+    else name
+  in
+  let root = Stdlib.Filename.temp_dir "evd_inline" "" in
+  let context = control_context () in
+  List.iter context ~f:(fun (file, content) ->
+      write_file (Stdlib.Filename.concat root file) content);
+  let tested = "let%expect_test \"probe\" = print_string \"x\"; [%expect {| x |}]\n" in
+  write_file (Stdlib.Filename.concat root "t/gate.ml") "let () = ()\n";
+  write_file (Stdlib.Filename.concat root "t/probe.ml") tested;
+  write_file (Stdlib.Filename.concat root "t/probe2.ml") tested;
+  write_file (Stdlib.Filename.concat root "t/helper.ml") "let helper = ()\n";
+  let paths =
+    "t/dune" :: "t/gate.ml" :: "t/probe.ml" :: "t/probe2.ml" :: "t/helper.ml"
+    :: List.map context ~f:fst
+  in
+  let run variant =
+    write_file (Stdlib.Filename.concat root "t/dune") (inline_alias_subject variant);
+    run_checker ~root ~exe ("." :: paths)
+  in
+  let report label (status, text) =
+    eprintf "the inline-alias control's %s run %s. Its captured output:\n%s\n" label
+      (describe_status status) text
+  in
+  let exited n (status, _) = match status with Unix.WEXITED m -> m = n | _ -> false in
+  let says substring (_, text) = String.is_substring text ~substring in
+  let complete = run Inline_complete in
+  let missing = run Inline_missing in
+  let crossed = run Inline_crossed in
+  let aggregated = run Inline_aggregated in
+  let complete_ok =
+    exited 0 complete && (not (says "helper" complete)) && not (says "does not aggregate" complete)
+  in
+  let missing_ok = exited 1 missing && says "`probe2.ml` holds inline tests" missing in
+  let crossed_ok = exited 1 crossed && says "a per-module entry point restricts" crossed in
+  let aggregated_ok = exited 1 aggregated && says "puts `runtest-probe` on `runtest`" aggregated in
+  if not complete_ok then report "complete" complete;
+  if not missing_ok then report "missing" missing;
+  if not crossed_ok then report "crossed" crossed;
+  if not aggregated_ok then report "aggregated" aggregated;
+  printf
+    "The per-module inline-test aliases (gh-ocannl-1037) are put to a synthetic library of two\n\
+     tested modules and an untested helper, once wired completely and once broken each way.\n\n";
+  Verdict.p
+    "a rule per tested module passes unaggregated, and the untested helper is asked for nothing"
+    complete_ok;
+  Verdict.p "a tested module with no per-module rule is reported, and the checker exits 1"
+    missing_ok;
+  Verdict.p "a rule whose alias names one module and whose run tests another is reported" crossed_ok;
+  Verdict.p "a per-module alias listed in the `runtest` aggregate is reported as a double run"
+    aggregated_ok;
+  try remove_tree root with Unix.Unix_error _ -> ()
+
 let () =
   match Array.to_list argv with
   | _ :: [ "--control" ] ->
@@ -4222,6 +4496,7 @@ let () =
       floor_control ();
       guard_control ();
       family_control ();
+      inline_alias_control ();
       (* Dune's repository-wide rule hands the same source to [main] as [./env_var_deps.ml] after a
          full build has materialized the local build-tree copy. Exercise that spelling here too: the
          manifest identity is repository-relative even when the file used to extract the diagnostics

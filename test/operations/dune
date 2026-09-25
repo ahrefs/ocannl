@@ -1725,6 +1725,105 @@
   (pps ppx_here ppx_expect ppx_inline_test ppx_ocannl))
  (modes best))
 
+; Per-module entry points into the inline tests above (gh-ocannl-1037). Dune generates ONE alias
+; for the library, `runtest-operations_tutorials`, which runs every module's `%expect` tests; each
+; rule below runs the same generated runner restricted to one module by `-only-test`, so `dune build
+; @test/operations/runtest-hello_world_op` checks that tutorial alone, and its diff promotes like any
+; other. The action mirrors the one dune generates (the runner's flags and the sandbox), and
+; `-only-test` fails the run when it matches nothing, so a renamed module cannot leave its alias
+; passing on an empty run. Unlike the golden-diff rules, these are NOT listed in the `runtest`
+; aggregate: the library's generated action already runs every module there, and listing them would
+; run each tutorial twice. `test/operations/env_var_deps` requires one such rule per module with
+; inline tests, and refuses one in the aggregate.
+
+(rule
+ (alias runtest-hello_world_op)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (sandbox always))
+ (action
+  (progn
+   (run
+    %{dep:.operations_tutorials.inline-tests/inline-test-runner.exe}
+    inline-test-runner
+    operations_tutorials
+    -only-test
+    hello_world_op.ml
+    -source-tree-root
+    %{workspace_root}
+    -diff-cmd
+    -)
+   (diff? hello_world_op.ml hello_world_op.ml.corrected))))
+
+(rule
+ (alias runtest-zero2hero_1of7)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (sandbox always))
+ (action
+  (progn
+   (run
+    %{dep:.operations_tutorials.inline-tests/inline-test-runner.exe}
+    inline-test-runner
+    operations_tutorials
+    -only-test
+    zero2hero_1of7.ml
+    -source-tree-root
+    %{workspace_root}
+    -diff-cmd
+    -)
+   (diff? zero2hero_1of7.ml zero2hero_1of7.ml.corrected))))
+
+(rule
+ (alias runtest-primitive_ops)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (sandbox always))
+ (action
+  (progn
+   (run
+    %{dep:.operations_tutorials.inline-tests/inline-test-runner.exe}
+    inline-test-runner
+    operations_tutorials
+    -only-test
+    primitive_ops.ml
+    -source-tree-root
+    %{workspace_root}
+    -diff-cmd
+    -)
+   (diff? primitive_ops.ml primitive_ops.ml.corrected))))
+
+(rule
+ (alias runtest-test_threefry4x32)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (sandbox always))
+ (action
+  (progn
+   (run
+    %{dep:.operations_tutorials.inline-tests/inline-test-runner.exe}
+    inline-test-runner
+    operations_tutorials
+    -only-test
+    test_threefry4x32.ml
+    -source-tree-root
+    %{workspace_root}
+    -diff-cmd
+    -)
+   (diff? test_threefry4x32.ml test_threefry4x32.ml.corrected))))
+
 (test
  ; ocannl-backend: none -- drives Utils.resolve_config_value over synthetic alists; neither
  ; profile payload sets the backend key, so no precedence question here reaches one.

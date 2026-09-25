@@ -167,6 +167,55 @@
   (pps ppx_here ppx_expect ppx_inline_test ppx_ocannl))
  (modes best))
 
+; Per-module entry points into the inline tests above (gh-ocannl-1037), one alias per module beside
+; the `runtest-einsum_tutorials` dune generates for the whole library -- the arrangement, and why
+; these stay out of the `runtest` aggregate, is described at `operations_tutorials` in
+; `test/operations/dune`.
+
+(rule
+ (alias runtest-einsum_trivia)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (sandbox always))
+ (action
+  (progn
+   (run
+    %{dep:.einsum_tutorials.inline-tests/inline-test-runner.exe}
+    inline-test-runner
+    einsum_tutorials
+    -only-test
+    einsum_trivia.ml
+    -source-tree-root
+    %{workspace_root}
+    -diff-cmd
+    -)
+   (diff? einsum_trivia.ml einsum_trivia.ml.corrected))))
+
+(rule
+ (alias runtest-surjectivity)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (sandbox always))
+ (action
+  (progn
+   (run
+    %{dep:.einsum_tutorials.inline-tests/inline-test-runner.exe}
+    inline-test-runner
+    einsum_tutorials
+    -only-test
+    surjectivity.ml
+    -source-tree-root
+    %{workspace_root}
+    -diff-cmd
+    -)
+   (diff? surjectivity.ml surjectivity.ml.corrected))))
+
 (test
  (name inline_permuted_view)
  (package neural_nets_lib)
