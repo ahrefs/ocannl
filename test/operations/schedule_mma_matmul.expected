@@ -80,4 +80,8 @@ ta tensorized structure as expected: true
 tb tensorized matmul matches the serial twin: true
 tb C-backend fallback matches bitwise: true
 tb tensorized structure as expected: true
+every format triple's tensorized matmul renders its Tile_mma statements: true
+the format triples include advertised and unadvertised ones: true
+default policy: census is all-intrinsics exactly for the advertised format triples: true
+Fp16_wide/Bf16_wide: census is all-intrinsics exactly for the advertised format triples: true
 misassigned roles are rejected with a targeted error: true
