@@ -1551,9 +1551,12 @@ end
     line ending in [&&], [||], [|] or a backslash is joined with the next, so a list wrapped across
     lines is read whole. A logical line is cut into statements at top-level [;], [;;], a lone [&], a
     comment, and an unmatched [)] (a case pattern's terminator, so a case arm's body on the pattern
-    line is a statement). Quotes, [$( )], [${ }], backticks and [[ ]]/[[[ ]]] brackets are skipped
-    as in {!Errexit_negation}, so an [&&] printed as data or written inside [[[ a && b ]]] is not a
-    list operator. A statement is flagged when all of these hold:
+    line is a statement). A subshell or brace group opened in operand position -- after nothing but
+    [!]/[time]/[then]/[do]/[else], so also as a later operand of a list -- is a nested statement
+    context whose statements are read on their own. Quotes, [$( )], [${ }] and backticks are skipped
+    as in {!Errexit_negation}, and so is the inside of a [[[ ... ]]], so an [&&] printed as data or
+    written inside [[[ a && b ]]] is not a list operator. A single [\[] needs no tracking: an [&&]
+    between single brackets IS a list operator. A statement is flagged when all of these hold:
     - it is an [&&]-only list of at least two operands, and every operand is a test command, whose
       first word is [\[], [\[\[] or [test] once [!], [time], assignments and redirections are
       dropped -- and on the first operand also the heads that put a body statement on a line:
@@ -1561,9 +1564,10 @@ end
       [f() {] / [function f {];
     - nothing consumes the list's value: it is not introduced by [if]/[elif]/[while]/[until] (the
       first operand's first word is then not a test), it is not followed by a [then]/[do] (a
-      condition whose keyword began an earlier line), and the next statement -- on the same line,
-      else the next non-blank non-comment line -- does not expand [$?]. An expansion, read
-      quote-aware: a single-quoted or escaped [$?] is text and consumes nothing.
+      condition whose keyword began an earlier line), and the first command after it -- on the same
+      line, else the next non-blank non-comment line -- does not expand [$?]. Only the first: a
+      later command reads a later status. And an expansion, read quote-aware: a single-quoted or
+      escaped [$?] is text and consumes nothing.
 
     A [||] anywhere in the list is its consumer: [[ A ] && [ B ] || die ...] makes the failure
     explicit, so nothing is exempt. That is the spelling the refusal points at, together with one
@@ -1578,8 +1582,9 @@ end
     - The line-shaped boundary {!Errexit_negation} states and gh-ocannl-907 tracks: a heredoc body
       or multi-line quoted value is read as script text, and a condition whose [if]/[while]/[until]
       stands alone on an earlier line is recognized only through the [then]/[do] that follows it on
-      the pair's line or the next one. Both mis-readings are LOUD (valid shell refused), never a
-      pass.
+      the pair's line or the next one. A heredoc body and an unrecognized condition can only add
+      refusals (loud). A multi-line quoted value is the one silent residue: the line where it closes
+      is lexed from outside the quote, so a list on that same line can be hidden.
     - Scope. The last command of a FUNCTION BODY or a subshell is not inert -- its status becomes
       the function's (the subshell's), which errexit then weighs at the call site (measured under
       bash 3.2 and dash; a brace group, loop body or [if] branch does NOT propagate it). Seeing
@@ -1595,7 +1600,6 @@ module Errexit_and_list = struct
   type statement = {
     operands : string list;
     connectors : connector list;  (** Between consecutive operands. *)
-    raw : string;
   }
 
   (** Words that may precede a body statement on its line without being part of it. *)
@@ -1603,27 +1607,53 @@ module Errexit_and_list = struct
 
   let words text = List.map (N.shell_words text) ~f:N.literal_shell_word
 
-  let only_prefixes text =
-    List.for_all (words text) ~f:(List.mem statement_prefixes ~equal:String.equal)
+  (** Whether a [(] or [{] at the end of [text] -- the current operand so far -- opens a compound
+      command in operand position: nothing precedes it but the words that can stand before a command
+      ([!], [time], [time -p]) or put a body statement on the line ([then], [do], [else]). After
+      [if]/[elif]/[while]/[until] it does not qualify, and that is deliberate: errexit is ignored
+      throughout a condition, subshells included. *)
+  let operand_position text =
+    let rec drop = function
+      | ("then" | "do" | "else" | "!") :: rest -> drop rest
+      | "time" :: "-p" :: rest -> drop rest
+      | "time" :: rest -> drop rest
+      | words -> words
+    in
+    List.is_empty (drop (words text))
+
+  type frame = {
+    kind : [ `Paren | `Brace ];
+    outer_operands : string list;
+    outer_connectors : connector list;
+    outer_start : int;
+  }
+  (** An open compound command: the enclosing statement's state, restored at its closer. *)
 
   (** Cut one logical line into statements, or report that the line continues onto the next: at the
       returned offset (which drops a trailing comment or backslash), joined by the returned
-      separator. [~at_end] closes a dangling list instead, for the file's last line. *)
+      separator. [~at_end] closes a dangling list instead, for the file's last line.
+
+      A subshell or brace group opened in operand position is a nested statement context: its
+      statements are emitted on their own, and the group as a whole is one operand of the statement
+      around it -- so [x && { [ A ] && [ B ]; y; }] yields the inner pair and the outer
+      [x && {...}], rather than one list gluing [x] to the pair. A [)] with no open subshell ends
+      the statement (a case pattern's terminator). *)
   let scan ?(at_end = false) line =
     let length = String.length line in
     let text start finish = String.sub line ~pos:start ~len:(finish - start) in
-    let statements = ref [] and operands = ref [] and connectors = ref [] in
-    let statement_start = ref 0 in
+    let statements = ref [] and operands = ref [] and connectors = ref [] and frames = ref [] in
     let close_operand start finish = operands := text start finish :: !operands in
+    (* A blank statement -- the gap after a trailing [;] or before a [}] -- is not one: dropping it
+       keeps "the next statement" meaning the next command. *)
     let close_statement start finish =
       close_operand start finish;
-      statements :=
-        {
-          operands = List.rev !operands;
-          connectors = List.rev !connectors;
-          raw = text !statement_start finish;
-        }
-        :: !statements;
+      if
+        not
+          (List.is_empty !connectors
+          && List.for_all !operands ~f:(fun operand -> String.is_empty (String.strip operand)))
+      then
+        statements :=
+          { operands = List.rev !operands; connectors = List.rev !connectors } :: !statements;
       operands := [];
       connectors := []
     in
@@ -1632,9 +1662,41 @@ module Errexit_and_list = struct
       connectors := connector :: !connectors;
       next
     in
-    let restart index =
-      statement_start := index;
-      index
+    let open_frame kind start =
+      frames :=
+        { kind; outer_operands = !operands; outer_connectors = !connectors; outer_start = start }
+        :: !frames;
+      operands := [];
+      connectors := []
+    in
+    (* Close the innermost frame at [index]; the enclosing operand resumes from its own start. The
+       closer is recorded as a statement of its own, so that "the command after" the group's last
+       statement is the end of the group -- never the enclosing statement, whose text holds the
+       group's own body. *)
+    let close_frame start index =
+      match !frames with
+      | [] -> start
+      | frame :: rest ->
+          close_statement start index;
+          statements :=
+            {
+              operands = [ (match frame.kind with `Paren -> ")" | `Brace -> "}") ];
+              connectors = [];
+            }
+            :: !statements;
+          frames := rest;
+          operands := frame.outer_operands;
+          connectors := frame.outer_connectors;
+          frame.outer_start
+    in
+    (* A group still open at the end of the line continues on the next: its enclosing statements are
+       incomplete, and dropped -- they end in a group operand, so they are never a bare test list --
+       which leaves the group's last statement followed by the next line's first command, as it
+       is. *)
+    let emit start finish =
+      close_statement start finish;
+      frames := [];
+      `Statements (List.rev !statements)
     in
     (* End of the logical line at [cut]: it continues when a connector is still waiting for its
        right operand. *)
@@ -1644,25 +1706,32 @@ module Errexit_and_list = struct
         && (not (List.is_empty !connectors))
         && String.is_empty (String.strip (text start cut))
       then `Continues (cut, " ")
-      else (
-        close_statement start cut;
-        `Statements (List.rev !statements))
+      else emit start cut
     in
-    let rec loop index start quote escaped parens brackets =
-      if index >= length then (
+    let word_ends_at index =
+      index >= length
+      || Char.is_whitespace line.[index]
+      || List.mem [ ';'; '&'; '|'; ')'; '<'; '>' ] line.[index] ~equal:Char.equal
+    in
+    (* [parens]: nesting of parentheses that open no frame ([f()], [arr=( )], [(( ))], [<( )]).
+       [dbracket]: inside [\[\[ ... \]\]], where [&&], [||], [(] and [)] are the conditional
+       expression's own operators. Single brackets need no tracking: [&&] inside [\[ ... \]] IS a
+       list operator, and a literal [\[] argument is just a word. *)
+    let rec loop index start quote escaped parens dbracket =
+      if index >= length then
         match quote with
         | `None when escaped && not at_end -> `Continues (length - 1, "")
         | `None -> finish start length
         | _ ->
             (* A quote left open: a multi-line value, outside the line-shaped boundary. *)
-            close_statement start length;
-            `Statements (List.rev !statements))
+            emit start length
       else
         let character = line.[index] in
-        let continue ?(quote = quote) ?(escaped = false) ?(parens = parens) ?(brackets = brackets)
+        let continue ?(quote = quote) ?(escaped = false) ?(parens = parens) ?(dbracket = dbracket)
             next =
-          loop next start quote escaped parens brackets
+          loop next start quote escaped parens dbracket
         in
+        let fresh next = loop next next `None false 0 false in
         match quote with
         | `Single ->
             if Char.equal character '\'' then continue ~quote:`None (index + 1)
@@ -1696,7 +1765,6 @@ module Errexit_and_list = struct
               || Char.is_whitespace line.[index - 1]
               || List.mem [ ';'; '&'; '|'; '('; ')' ] line.[index - 1] ~equal:Char.equal
             in
-            let top = parens = 0 && brackets = 0 in
             if escaped then continue (index + 1)
             else if Char.equal character '\\' then continue ~escaped:true (index + 1)
             else if Char.equal character '#' && word_start then finish start index
@@ -1708,24 +1776,42 @@ module Errexit_and_list = struct
             else if Char.equal character '\'' then continue ~quote:`Single (index + 1)
             else if Char.equal character '"' then continue ~quote:`Double (index + 1)
             else if Char.equal character '`' then continue ~quote:`Backtick_none (index + 1)
-            else if Char.equal character '[' then continue ~brackets:(brackets + 1) (index + 1)
-            else if Char.equal character ']' then
-              continue ~brackets:(Int.max 0 (brackets - 1)) (index + 1)
-            else if not top then
-              if Char.equal character '(' then continue ~parens:(parens + 1) (index + 1)
-              else if Char.equal character ')' then
-                continue ~parens:(Int.max 0 (parens - 1)) (index + 1)
+            else if dbracket then
+              if word_start && N.starts_at line ~pos:index "]]" && word_ends_at (index + 2) then
+                continue ~dbracket:false (index + 2)
               else continue (index + 1)
+            else if parens > 0 then
+              if Char.equal character '(' then continue ~parens:(parens + 1) (index + 1)
+              else if Char.equal character ')' then continue ~parens:(parens - 1) (index + 1)
+              else continue (index + 1)
+            else if word_start && N.starts_at line ~pos:index "[[" && word_ends_at (index + 2) then
+              continue ~dbracket:true (index + 2)
             else if Char.equal character '(' then
-              if
-                List.is_empty !operands
-                && only_prefixes (text start index)
-                && not (N.starts_at line ~pos:index "((")
-              then
-                (* A subshell opened at statement position: its first statement starts here. *)
-                let next = restart (index + 1) in
-                loop next next `None false 0 0
+              if operand_position (text start index) && not (N.starts_at line ~pos:index "((") then (
+                open_frame `Paren start;
+                fresh (index + 1))
               else continue ~parens:1 (index + 1)
+            else if
+              Char.equal character '{' && word_start
+              && word_ends_at (index + 1)
+              && operand_position (text start index)
+            then (
+              open_frame `Brace start;
+              fresh (index + 1))
+            else if
+              Char.equal character '}' && word_start
+              && word_ends_at (index + 1)
+              && String.is_empty (String.strip (text start index))
+              && match !frames with { kind = `Brace; _ } :: _ -> true | _ -> false
+            then
+              let outer_start = close_frame start index in
+              loop (index + 1) outer_start `None false 0 false
+            else if
+              Char.equal character ')'
+              && match !frames with { kind = `Paren; _ } :: _ -> true | _ -> false
+            then
+              let outer_start = close_frame start index in
+              loop (index + 1) outer_start `None false 0 false
             else if Char.equal character ')' || Char.equal character ';' then (
               close_statement start index;
               let rec past index =
@@ -1733,32 +1819,24 @@ module Errexit_and_list = struct
                   past (index + 1)
                 else index
               in
-              let next = restart (past (index + 1)) in
-              loop next next `None false 0 0)
+              fresh (past (index + 1)))
             else if N.starts_at line ~pos:index "&&" then
-              let next = connect start index And (index + 2) in
-              loop next next `None false 0 0
-            else if N.starts_at line ~pos:index "||" then
-              let next = connect start index Or (index + 2) in
-              loop next next `None false 0 0
+              fresh (connect start index And (index + 2))
+            else if N.starts_at line ~pos:index "||" then fresh (connect start index Or (index + 2))
             else if N.starts_at line ~pos:index "|&" then
-              let next = connect start index Pipe (index + 2) in
-              loop next next `None false 0 0
+              fresh (connect start index Pipe (index + 2))
             else if Char.equal character '|' && not (index > 0 && Char.equal line.[index - 1] '>')
-            then
-              let next = connect start index Pipe (index + 1) in
-              loop next next `None false 0 0
+            then fresh (connect start index Pipe (index + 1))
             else if
               Char.equal character '&'
               && (index = 0 || not (List.mem [ '>'; '<' ] line.[index - 1] ~equal:Char.equal))
               && not (N.starts_at line ~pos:index "&>")
             then (
               close_statement start index;
-              let next = restart (index + 1) in
-              loop next next `None false 0 0)
+              fresh (index + 1))
             else continue (index + 1)
     in
-    loop 0 0 `None false 0 0
+    loop 0 0 `None false 0 false
 
   (** Whether [operand] is a test command once everything that can stand in front of one is dropped:
       [!], [time]/[time -p], assignments and redirections anywhere, and on the first operand also
@@ -1851,7 +1929,11 @@ module Errexit_and_list = struct
     in
     loop 0 [ `Code 0 ]
 
-  (** Whether [next] -- the statement after the list -- makes the list a condition or reads its
+  (** The first command of a statement: what runs next after the list before it, so the only command
+      whose [$?] is still the list's status. *)
+  let first_command { operands; _ } = match operands with operand :: _ -> operand | [] -> ""
+
+  (** Whether [next] -- the first command after the list -- makes the list a condition or reads its
       status. *)
   let consumes next =
     (match words next with ("then" | "do") :: _ -> true | _ -> false) || reads_status next
@@ -1861,8 +1943,8 @@ module Errexit_and_list = struct
     if not (Array.exists lines ~f:N.line_enables_errexit) then []
     else
       let count = Array.length lines in
-      (* The first statement of the next non-blank, non-comment line -- a statement, so that a
-         trailing comment mentioning `$?` does not read as consuming anything. *)
+      (* The first command of the next non-blank, non-comment line -- a command, so that a trailing
+         comment mentioning `$?` does not read as consuming anything. *)
       let rec next_statement index =
         if index >= count then ""
         else
@@ -1871,7 +1953,7 @@ module Errexit_and_list = struct
             next_statement (index + 1)
           else
             match scan ~at_end:true line with
-            | `Statements (statement :: _) -> statement.raw
+            | `Statements (statement :: _) -> first_command statement
             | `Statements [] | `Continues _ -> line
       in
       (* The statements of the logical line whose last physical line so far is [last], and the
@@ -1897,7 +1979,9 @@ module Errexit_and_list = struct
                 bare_test_list statement
                 && not
                      (consumes
-                        (match rest with next :: _ -> next.raw | [] -> next_statement (last + 1)))
+                        (match rest with
+                        | next :: _ -> first_command next
+                        | [] -> next_statement (last + 1)))
                 || flagged rest
           in
           go (last + 1) (if flagged statements then { line = first + 1 } :: acc else acc)
@@ -1941,6 +2025,21 @@ module Errexit_and_list = struct
       ("pair wrapped after &&", "set -e\n[ -e a ] &&\n  [ -e b ]\ncleanup\n", [ 2 ]);
       ("pair wrapped by backslash", "set -e\n[ -e a ] \\\n  && [ -e b ]\ncleanup\n", [ 2 ]);
       ("pair wrapped after && and comment", "set -e\n[ -e a ] && # a first\n  [ -e b ]\n", [ 2 ]);
+      ("literal opening-bracket argument", "set -e\n[ [ = x ] && [ -e b ]\n", [ 2 ]);
+      ("literal closing-bracket argument", "set -e\n[ x = ] ] && [ -e b ]\n", [ 2 ]);
+      ("timed subshell", "set -e\ntime ( [ -e a ] && [ -e b ]; : )\n", [ 2 ]);
+      ("portable timed subshell", "set -e\ntime -p ( [ -e a ] && [ -e b ]; : )\n", [ 2 ]);
+      ("negated subshell", "set -e\n! ( [ -e a ] && [ -e b ]; : )\n", [ 2 ]);
+      ("group as a later operand", "set -e\nprobe && { [ -e a ] && [ -e b ]; y; }\n", [ 2 ]);
+      ("subshell as a later operand", "set -e\nprobe || ( [ -e a ] && [ -e b ]; y )\n", [ 2 ]);
+      ("group in a pipeline", "set -e\n{ [ -e a ] && [ -e b ]; y; } | cat\n", [ 2 ]);
+      ("group nested in a subshell", "set -e\n( { [ -e a ] && [ -e b ]; y; } )\n", [ 2 ]);
+      ( "group opened on the pair's line",
+        "set -e\nprobe && {\n  [ -e a ] && [ -e b ]\n  y\n}\n",
+        [ 3 ] );
+      ( "double-bracket pair with a regex group",
+        "set -e\n[[ $x =~ ^(a|b)$ ]] && [[ -e b ]]\n",
+        [ 2 ] );
       ("quoted operator in a test", "set -e\n[ \"$x\" = '||' ] && [ -e b ]\n", [ 2 ]);
       ("pair after async command", "set -e\nserver & [ -e a ] && [ -e b ]\n", [ 2 ]);
       (* Flagged although not inert: a function's (or script's) last command is its status, which
@@ -1989,6 +2088,16 @@ module Errexit_and_list = struct
       ("status double-quoted", "set +e\n[ -e a ] && [ -e b ]; echo \"rc=$?\"\nset -e\n", []);
       ("status braced", "set +e\n[ -e a ] && [ -e b ]; rc=${?}\nset -e\n", []);
       ("status in a substitution", "set +e\n[ -e a ] && [ -e b ]; rc=$(printf %s $?)\nset -e\n", []);
+      ( "status read after an intervening command",
+        "set -e\n[ -e a ] && [ -e b ]; true && rc=$?\n",
+        [ 2 ] );
+      ( "status read by a later command on the next line",
+        "set -e\n[ -e a ] && [ -e b ]\ntrue; rc=$?\n",
+        [ 2 ] );
+      ( "status read after a trailing semicolon",
+        "set +e\n[ -e a ] && [ -e b ];\nrc=$?\nset -e\n",
+        [] );
+      ("status expanded inside the pair itself", "set -e\n{ [ $? -eq 0 ] && [ -e b ]; }\n", [ 2 ]);
       ( "status named only in the next line's comment",
         "set -e\n[ -e a ] && [ -e b ]\nx # not $?\n",
         [ 2 ] );
@@ -1996,6 +2105,8 @@ module Errexit_and_list = struct
       ("conditional action", "set -e\n[ -n \"$a\" ] && echo \"$a\"\n", []);
       ("tests then an action", "set -e\n[ -e a ] && [ -e b ] && touch ready\n", []);
       ("single double-bracket test", "set -e\n[[ -e a && -e b ]]\n", []);
+      ("double-bracket test with a group", "set -e\n[[ ( -e a || -e b ) && -e c ]]\n", []);
+      ("subshell as an if condition", "set -e\nif ( [ -e a ] && [ -e b ] ); then :; fi\n", []);
       ("mixed or-and list", "set -e\n[ -e a ] || [ -e b ] && [ -e c ]\n", []);
       ("pair piped", "set -e\n[ -e a ] && [ -e b ] | cat\n", []);
       ("quoted pair", "set -e\necho '[ -e a ] && [ -e b ]'\n", []);

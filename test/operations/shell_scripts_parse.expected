@@ -146,6 +146,17 @@ errexit-and-list fixture indented pair is classified as specified: true
 errexit-and-list fixture pair wrapped after && is classified as specified: true
 errexit-and-list fixture pair wrapped by backslash is classified as specified: true
 errexit-and-list fixture pair wrapped after && and comment is classified as specified: true
+errexit-and-list fixture literal opening-bracket argument is classified as specified: true
+errexit-and-list fixture literal closing-bracket argument is classified as specified: true
+errexit-and-list fixture timed subshell is classified as specified: true
+errexit-and-list fixture portable timed subshell is classified as specified: true
+errexit-and-list fixture negated subshell is classified as specified: true
+errexit-and-list fixture group as a later operand is classified as specified: true
+errexit-and-list fixture subshell as a later operand is classified as specified: true
+errexit-and-list fixture group in a pipeline is classified as specified: true
+errexit-and-list fixture group nested in a subshell is classified as specified: true
+errexit-and-list fixture group opened on the pair's line is classified as specified: true
+errexit-and-list fixture double-bracket pair with a regex group is classified as specified: true
 errexit-and-list fixture quoted operator in a test is classified as specified: true
 errexit-and-list fixture pair after async command is classified as specified: true
 errexit-and-list fixture function's final pair is classified as specified: true
@@ -180,10 +191,16 @@ errexit-and-list fixture status single-quoted in a double-quoted substitution is
 errexit-and-list fixture status double-quoted is classified as specified: true
 errexit-and-list fixture status braced is classified as specified: true
 errexit-and-list fixture status in a substitution is classified as specified: true
+errexit-and-list fixture status read after an intervening command is classified as specified: true
+errexit-and-list fixture status read by a later command on the next line is classified as specified: true
+errexit-and-list fixture status read after a trailing semicolon is classified as specified: true
+errexit-and-list fixture status expanded inside the pair itself is classified as specified: true
 errexit-and-list fixture status named only in the next line's comment is classified as specified: true
 errexit-and-list fixture conditional action is classified as specified: true
 errexit-and-list fixture tests then an action is classified as specified: true
 errexit-and-list fixture single double-bracket test is classified as specified: true
+errexit-and-list fixture double-bracket test with a group is classified as specified: true
+errexit-and-list fixture subshell as an if condition is classified as specified: true
 errexit-and-list fixture mixed or-and list is classified as specified: true
 errexit-and-list fixture pair piped is classified as specified: true
 errexit-and-list fixture quoted pair is classified as specified: true
