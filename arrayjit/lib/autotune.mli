@@ -1466,3 +1466,9 @@ val on_candidate_measured : (label:string -> digest:string -> float -> float) re
     pin the ranking — make the first admitted window the fastest and every later one slower —
     instead of depending on the machine's timings. The default is the identity and no configuration
     selects it. *)
+
+val default_seed_label : string
+(** The label {!on_candidate_measured} receives for the seed a search attributes as the untuned
+    default — the one whose refusal sets [report.default_refused] and whose time is
+    [report.default_ms]. Rendered from that seed's spec, so a test that targets the default follows
+    a reworded label rather than restating it. *)

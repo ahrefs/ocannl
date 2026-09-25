@@ -21,9 +21,7 @@ open Ocannl
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 
-(* The label of the [config_thresholds] seed that reproduces the untuned default. Should its
-   spelling change, the seam never sees it and the claims gated on a quiet host fail. *)
-let default_seed_label = "F_preset[bs=cfg cfg-thresh]"
+let default_seed_label = Autotune.default_seed_label
 
 let () =
   (* 128 x 128 output cells reach [cpu_schedule_min_parallel], so on cc the untuned default is
@@ -102,8 +100,11 @@ let () =
       p "at least one window was refused" (r.timings_contended >= 1);
       p "every refused window is one the seam or the host refused"
         (r.timings_contended = !seam_refused + List.length host_refused);
+      (* Where the host refused the default's own window first, the seam never learned its digest,
+         and an equivalent later seed it admitted measured the default after all. *)
       p "the unmeasured candidates are the default and at most the host's refusals"
-        (1 <= r.candidates_contended && r.candidates_contended <= 1 + List.length host_refused);
+        ((if default_reached_seam then 1 else 0) <= r.candidates_contended
+        && r.candidates_contended <= 1 + List.length host_refused);
       gated ~aggregation:`Environment ~when_:quiet_host ~on:"a host that refused a window"
         "exactly one distinct candidate stayed unmeasured" (r.candidates_contended = 1);
       gated ~aggregation:`Environment ~when_:default_reached_seam

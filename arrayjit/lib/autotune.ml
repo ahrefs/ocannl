@@ -1615,6 +1615,12 @@ let spec_label = function
       Printf.sprintf "F_split_saved[%d prelude ops, %d segs]" (List.length prelude)
         (List.length assoc)
 
+(* The seed [tune] attributes as the untuned default (the [default_seed_digest] match below), as the
+   measurement seam labels it. Rendered from the spec, so a test keyed on it follows a reworded
+   label instead of restating one. *)
+let default_seed_label =
+  spec_label (Fiss (F_preset { block_size = None; privatize = false; config_thresholds = true }))
+
 (* Every candidate derives its CODE from the ONE base lowering ([base_opt] with [canon] its
    canonical form, captured together in [tune]) rather than from the compile's own fresh lowering,
    whose llc the transform ignores. Re-lowering per candidate was subtly unsound: timing runs settle
