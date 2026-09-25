@@ -1197,8 +1197,8 @@ that they earn a lookup rather than always-loaded space.
   `test/operations/profiles` and `test/operations/startup_streams` depend on their own tracked
   `ocannl_config`, and an edit to the shared one leaves their rules untouched. Each new content is
   a new digest for the `<name>.exe.output` rule, so the executable runs again with no
-  recompilation. This is what sampling a timing-dependent test needs (the
-  `autotune_callback_release` skip decision, landing gh-ocannl-staging#764), and every other reflex
+  recompilation. This is what sampling a timing-dependent test needs (a
+  re-roll-or-skip decision needed it, gh-ocannl-staging#764), and every other reflex
   fails silently in the green direction, verified on dune 3.24.2: `dune build --force
   @<dir>/runtest-<name>` re-runs only the alias's diff action, while the content-keyed
   `<name>.exe.output` rule that runs the executable is served from the memo; a comment appended to the test's `.ml` rebuilds it, but

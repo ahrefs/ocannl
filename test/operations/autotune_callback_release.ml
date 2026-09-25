@@ -1,16 +1,14 @@
-(* gh-ocannl-975: both post-admission callback boundaries must release a losing candidate. Select
-   using actual admitted times, not attempt order; working pools count retained backend allocations
-   separately from the intentionally persistent constant cache.
+(* gh-ocannl-975: both post-admission callback boundaries must release a losing candidate. Working
+   pools count retained backend allocations separately from the intentionally persistent constant
+   cache.
 
-   Whether any admitted candidate measures strictly slower than the incumbent is a property of the
-   machine's timings: a short search whose samples happen to fall monotonically (warm-up, a loaded
-   GPU) admits only winners, and the injection never fires (rog-nv/cuda, sweep 2026-09-20). No seam
-   lets a test slow a candidate down, and injecting at a winner instead would prove nothing about
-   the pending-owner release this test exists for: a winner already sits in [best_so_far], which the
-   exit sweep released before the fix. So a leg whose search completes uninjected is re-rolled a few
-   times -- each attempt is a full search with fresh timings -- and only when every roll is monotone
-   are the three injection claims reported as a backend-scoped skip, with the census claims still
-   asserted over all attempts. *)
+   The injection must land on a NONWINNING admitted candidate: a winner already sits in
+   [best_so_far], which the exit sweep released before the fix, so injecting there proves nothing
+   about the pending-owner release this test exists for. Whether a real search ever admits a
+   candidate slower than its incumbent is a property of the machine's timings, so every leg pins the
+   ranking through [Autotune.on_candidate_measured] (gh-ocannl-1027): the first admitted window
+   measures 1 ms and the k-th k ms. The second admitted window is then the first nonwinner, on every
+   backend and every run, and the claims below name it exactly. *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -38,16 +36,23 @@ let () =
   let ref_ctx = Context.run ref_ctx ref_routine in
   let expected = Context.get_values ref_ctx product.Tensor.value in
   Context.release ref_ctx;
-  let backend = Context.backend_name parent in
-  let attempt ~scratch site =
-    let injected = ref false and report = ref None in
-    let old = !Autotune.on_candidate_callback and old_timed = !Autotune.on_candidate_timed in
+  let attempt ~name ~scratch site =
+    (* Labels of the admitted windows, newest first; the k-th admitted window measures k ms. *)
+    let admitted = ref [] and injected_at = ref None and report = ref None in
+    let old = !Autotune.on_candidate_callback
+    and old_timed = !Autotune.on_candidate_timed
+    and old_measured = !Autotune.on_candidate_measured in
     let result =
       Exn.protect
         ~finally:(fun () ->
           Autotune.on_candidate_callback := old;
-          Autotune.on_candidate_timed := old_timed)
+          Autotune.on_candidate_timed := old_timed;
+          Autotune.on_candidate_measured := old_measured)
         ~f:(fun () ->
+          (Autotune.on_candidate_measured :=
+             fun ~label ~digest:_ _ms ->
+               admitted := label :: !admitted;
+               Float.of_int (List.length !admitted));
           (Autotune.on_candidate_callback :=
              fun boundary ~candidate_ms ~incumbent_ms ->
                if
@@ -56,8 +61,10 @@ let () =
                then (
                  Stdio.eprintf "nonwinner callback: candidate %.9g ms > incumbent %.9g ms\n%!"
                    candidate_ms incumbent_ms;
+                 (* The callback follows the seam for the same window, so the newest admitted label
+                    is the candidate this callback is about. *)
                  let inject () =
-                   injected := true;
+                   injected_at := List.hd !admitted;
                    raise Callback_failure
                  in
                  match boundary with
@@ -73,16 +80,13 @@ let () =
             in
             let ctx = Context.run ctx routine in
             let got = Context.get_values ctx product.Tensor.value in
-            (* Only the control makes this claim on stdout: an injecting leg that completes has
-               nothing to verify here and is about to be re-rolled. *)
-            if Option.is_none site then
-              p_all2 "ordinary completion computes the reference" got expected ~f:(fun x y ->
-                  Float.(abs (x - y) < 1e-4));
+            p_all2 (name ^ ": completed search computes the reference") got expected ~f:(fun x y ->
+                Float.(abs (x - y) < 1e-4));
             Context.release ctx;
             `Returned
           with Callback_failure -> `Injected)
     in
-    (result, !injected, !report)
+    (result, List.rev !admitted, !injected_at, !report)
   in
   let run ~scratch site =
     let before = Ir.Alloc_census.snapshot () in
@@ -93,19 +97,11 @@ let () =
       | Some `Calibration -> "calibration"
     in
     let name = (if scratch then "scratch " else "direct ") ^ name in
-    let max_rolls = 4 in
-    let rec roll k =
-      match attempt ~scratch site with
-      | `Returned, _, _ when Option.is_some site && k < max_rolls ->
-          (* Every admitted candidate was a new best, so nothing qualified. The control run
-             completed and released everything it made, which the census below still covers; a new
-             search draws new timings. *)
-          Stdio.eprintf "%s: roll %d admitted no strictly slower candidate; re-rolling\n%!" name k;
-          roll (k + 1)
-      | outcome -> (outcome, k)
-    in
-    let (result, injected, report), rolls = roll 1 in
+    let result, admitted, injected_at, report = attempt ~name ~scratch site in
     let after = Ir.Alloc_census.snapshot () in
+    Stdio.eprintf "%s admitted windows: [%s]; injected at: %s\n%!" name
+      (String.concat ~sep:"; " admitted)
+      (Option.value injected_at ~default:"-");
     Stdio.eprintf "%s before: %s\n%s after: %s\n%!" name
       (Ir.Alloc_census.to_string before)
       name (Ir.Alloc_census.to_string after);
@@ -116,30 +112,32 @@ let () =
       (after.contexts_created - before.contexts_created)
       (after.contexts_released - before.contexts_released)
       (after.live_constant_pools - before.live_constant_pools);
+    let first_admitted = List.hd admitted in
+    (* The report's own accounting, its winner and its best time against what the seam pinned. *)
+    let report_pins r =
+      r.Autotune.candidates_timed = List.length admitted
+      && Option.exists first_admitted ~f:(String.equal r.Autotune.best_label)
+      && Float.equal r.best_ms 1.0
+    in
     (match site with
-    | None -> p "ordinary search completed" (Poly.equal result `Returned)
-    | Some _ when not injected ->
-        (* [max_rolls] full searches, none with a nonwinner: this backend's timings gave the leg
-           nothing to inject at. Not a cleanup failure, and not coverage either. Backend-scoped on
-           purpose: another backend on the same box finding a nonwinner says nothing about whether
-           THIS backend's release paths ran. *)
-        Stdio.eprintf "%s: %d searches admitted no strictly slower candidate\n%!" name rolls;
-        List.iter
-          [
-            "injected at a strictly slower admitted candidate";
-            "callback exception propagates";
-            "partial report retains a measured incumbent";
-          ] ~f:(fun claim -> skipped ~backend (name ^ ": " ^ claim))
+    | None ->
+        p (name ^ ": search completed") (Poly.equal result `Returned);
+        p
+          (name ^ ": the pinned-fastest first admitted window wins")
+          (Option.exists report ~f:(fun r ->
+               (match r.Autotune.outcome with Autotune.Searched -> true | _ -> false)
+               && List.length admitted >= 2
+               && report_pins r))
     | Some _ ->
-        Stdio.eprintf "%s: injected on roll %d\n%!" name rolls;
-        p (name ^ ": injected at a strictly slower admitted candidate") injected;
+        p
+          (name ^ ": injected at the second admitted window, the first nonwinner")
+          (List.length admitted = 2 && Option.equal String.equal injected_at (List.nth admitted 1));
         p (name ^ ": callback exception propagates") (Poly.equal result `Injected);
         p
-          (name ^ ": partial report retains a measured incumbent")
+          (name ^ ": partial report retains the pinned incumbent")
           (Option.exists report ~f:(fun r ->
-               match r.Autotune.outcome with
-               | Autotune.Search_died _ -> r.candidates_timed >= 2 && Float.is_finite r.best_ms
-               | _ -> false)));
+               (match r.Autotune.outcome with Autotune.Search_died _ -> true | _ -> false)
+               && report_pins r)));
     p
       (name ^ ": working pools return to their starting count")
       (after.live_working_pools = before.live_working_pools);
