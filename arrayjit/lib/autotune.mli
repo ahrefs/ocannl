@@ -1436,5 +1436,17 @@ val tune :
 val on_candidate_callback :
   ([ `Timed | `Calibration ] -> candidate_ms:float -> incumbent_ms:float -> unit) ref
 (** Default-no-op fault-injection seam immediately before each post-admission callback. The times
-    are real admitted measurements; a strictly larger [candidate_ms] selects a nonwinning candidate
-    while an already measured incumbent exists. *)
+    are the admitted measurements the search ranks, after {!on_candidate_measured}; a strictly
+    larger [candidate_ms] selects a nonwinner while an already measured incumbent exists. *)
+
+val on_candidate_measured : (label:string -> digest:string -> float -> float) ref
+(** Measurement seam (gh-ocannl-1027), called once per ADMITTED timing window — the dispatched
+    baseline's (label ["baseline"]) and each candidate's — with the candidate's label, its schedule
+    digest and the admitted time in milliseconds; the search ranks, records and reports the returned
+    time in its place: the beam, the best-so-far incumbent, {!on_candidate_callback},
+    [report.best_ms]/[baseline_ms], the calibration rows and the schedule cache's stored times. A
+    refused window (contended, or a degenerate clock reading) never reaches it, so it cannot admit
+    one; a returned time that is not finite and positive raises [Invalid_argument]. It exists so a
+    test about the nonwinner paths can pin the ranking — make the first admitted window the fastest
+    and every later one slower — instead of depending on the machine's timings. The default is the
+    identity and no configuration selects it. *)

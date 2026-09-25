@@ -518,6 +518,29 @@ let on_candidate_callback :
     ([ `Timed | `Calibration ] -> candidate_ms:float -> incumbent_ms:float -> unit) ref =
   ref (fun _ ~candidate_ms:_ ~incumbent_ms:_ -> ())
 
+(* Measurement seam (gh-ocannl-1027): the one place a test can decide what an ADMITTED window
+   measured. Without it, whether a search ever admits a candidate slower than its incumbent is a
+   property of the machine's timings, so a regression about the nonwinner paths (gh-ocannl-975)
+   could only re-roll the search and skip when every roll came out monotone. Applied once per
+   admitted window -- the dispatched baseline's and each candidate's -- before the time reaches
+   anything that ranks or records it; a refused window never reaches it, so it cannot admit one.
+   Default the identity; no configuration selects it. *)
+let on_candidate_measured : (label:string -> digest:string -> float -> float) ref =
+  ref (fun ~label:_ ~digest:_ ms -> ms)
+
+(* [timing_result] must already be admitted. The replaced time is held to the admission gate's own
+   terms, so the seam cannot feed ranking a number the gate would have refused. *)
+let apply_measurement_seam ~label ~digest timing_result =
+  let ms = !on_candidate_measured ~label ~digest timing_result.ms in
+  let measured = { timing_result with ms } in
+  if Option.is_none (admitted_timing_ms measured) then
+    invalid_arg
+      (Printf.sprintf
+         "Autotune.on_candidate_measured returned %h ms for %s: a measurement must be finite and \
+          positive"
+         ms label);
+  measured
+
 (* Observation seam for the timing tests (gh-ocannl-851), reporting the batch depth each
    [time_routine] call settles on -- after calibration, before the timed loop; [Isolated] reports 1.
    The negative control for a twice-divided queued reading needs the depth the call ACTUALLY used:
@@ -3566,9 +3589,12 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               with
               | timing_result -> (
                   match admitted_timing_ms timing_result with
-                  | Some ms ->
-                      baseline_timing_result := Some timing_result;
-                      ms
+                  | Some _ ->
+                      let measured =
+                        apply_measurement_seam ~label:"baseline" ~digest:base_digest timing_result
+                      in
+                      baseline_timing_result := Some measured;
+                      measured.ms
                   | None ->
                       baseline_contended := true;
                       logf
@@ -4020,7 +4046,13 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                         release_candidate c;
                         None
                     | Ok timing_result ->
-                        let ms = Option.value_exn (admitted_timing_ms timing_result) in
+                        (* Admitted: the guard above took every refusal. The calibration row below
+                           consumes the seamed result too, so it records what the search ranked. *)
+                        let timing_result =
+                          apply_measurement_seam ~label:(spec_label spec) ~digest:c.digest_after
+                            timing_result
+                        in
+                        let ms = timing_result.ms in
                         Int.incr n_timed;
                         (* Publish window accounting before the post-admission injection seam: it
                            can raise, and the partial report still owns this completed window. *)
