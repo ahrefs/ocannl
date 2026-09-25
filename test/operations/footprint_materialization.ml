@@ -784,9 +784,9 @@ let case_local_in_producer_statement () =
     (same got [ expected ])
 
 (* === A read under a scalar gate — the true arm of a [Where] whose condition keeps the shifted
-   index in range: not an [If] guard, so the access relations do not mark it, but the prologue would
-   instantiate the template unconditionally over the whole box and read the input out of range at
-   the last row. Ineligible; the cap materializes and the gate short-circuits. === *)
+   index in range: not an [If] guard ([a_guarded]) but a scalar gate ([a_gated]), and the prologue
+   would instantiate the template unconditionally over the whole box and read the input out of range
+   at the last row. Ineligible; the cap materializes and the gate short-circuits. === *)
 let case_gated_read () =
   let a = mk "agt" and x = mk ~dims:[| n |] "xgt" and o = mk ~dims:[| n |] "ogt" in
   materialize o;

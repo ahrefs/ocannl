@@ -175,12 +175,27 @@ files.
   backend would have to be regenerated on hardware the author usually does not have. The other honest form is putting the
   condition in the label itself (`"… (skipped: non-C backend)"`), which distinguishes the golden
   line; a bare `true` whose label is indistinguishable is the one to reject.
+- The skip's byte-identity is with `p`'s line (`<claim>: true`), never `pass_fail`'s
+  (`<claim>: PASS`), so a gated claim cannot pair `pass_fail` with `skipped`: the golden promoted
+  where the claim is evaluated then fails on exactly the host that skips it, silently until the
+  gate fires there (staging#735's depth gate and gh-ocannl-1031's host gate both shipped it as
+  far as review). Where the boolean is computable off-gate, write
+  `Verdict.gated ~when_ ~on ?detail ?aggregation label b` (gh-ocannl-997): it picks the dialect
+  itself, and gives the claim back `pass_fail`'s lazy `?detail` as `<claim> (<detail>): false`.
+  `~on` rather than `~backend`, because a host gate is not a backend. A leg that cannot compute its
+  boolean without the gate keeps its branch, with `p` on the evaluated side. `verdict_ratchet`
+  refuses a label reaching both `pass_fail`/`pass_fail_all2` and `skipped` in one source (keyed by
+  literal, by a name bound to one literal, or by a printed expression within one top-level item);
+  a wrapper of another name, or one label built two different ways, is outside what it sees.
 - The skip helper keeps the CLAIM line uniform; it says nothing about the descriptive `printf`s
   beside it. Guarding the whole leg — device run, dump, and claim — behind the `else` branch leaves
   the dump printed on some backends and not others, which is a golden diff on exactly the backend
   that skips. Hoist the descriptive output out of the branch, computing it from something that runs
   everywhere (usually the host-side reference the claim compares against), and gate only the
-  device-dependent comparison.
+  device-dependent comparison. The general rule: no golden line may be computed from a value the
+  gate can change. `foreign_c_stderr` shows it for a HOST gate: its `arm:` line prints the setting
+  the rule requested, not the detachment's effect, which a C runtime without an assignable
+  `stderr` would have moved (gh-ocannl-1031; neither `Verdict.gated` nor a scan can see this one).
 - Executed parity checks need a nonzero guard on the REFERENCE, not just the comparison: a fragment
   mapping that reads outside a staged block, a candidate kernel that never ran, and a reference
   whose own setup collapsed all produce all-zeros, and zeros compare equal to zeros. The convention

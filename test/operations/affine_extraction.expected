@@ -27,3 +27,35 @@ scope A's read not covered by the sibling operand's write: correct
 no ordering claimed across sibling operands (write-first): correct
 decide_placements classifies X as read-before-write: true
 X is a routine input (incoming buffer preserved): true
+
+=== scalar gates and statement effects (gh-ocannl-1016) ===
+rd H   [i8]           loops=[i8:0..3] path=[1.r] 
+rd P   [i8]           loops=[i8:0..3] path=[1.r] gated 
+rd Q   [i8]           loops=[i8:0..3] path=[1.r] gated 
+rd H   [i9]           loops=[i9:0..3] path=[2.r] 
+rd P   [i9]           loops=[i9:0..3] path=[2.r.a0.r] 
+wr R   [i9]           loops=[i9:0..3] path=[2.w] 
+rd P   [i10]          loops=[i10:0..3] path=[3.r] 
+rd Q   [i10]          loops=[i10:0..3] path=[3.r] gated 
+wr R   [i10]          loops=[i10:0..3] path=[3.w] 
+rd P   [0]            loops=[] path=[6.0.0.r] 
+rd Q   [i11]          loops=[i11:0..3] path=[6.1.r] 
+fx local-declare    loops=[] path=[0.w] 
+fx local-write      loops=[i8:0..3] path=[1.w] 
+fx scope-body       loops=[i9:0..3] path=[2.r.a0] 
+fx local-write      loops=[i9:0..3] path=[2.r.a0.w] 
+fx merge-read M     loops=[i9:0..3] path=[2.r] gated 
+fx barrier          loops=[] path=[4.w] 
+fx staged           loops=[] path=[5.w] 
+fx local-write      loops=[] path=[6.0.0.w] 
+fx local-write      loops=[i11:0..3] path=[6.1.w] 
+fx local-write      loops=[i11:0..3] path=[6.2.0.w] 
+fx local-write      loops=[i12:0..-1] path=[7.w] dead
+the Where's condition read is not gated: true
+both Where arms' reads are gated: true
+a scope body inside a gated arm runs ungated: true
+And's first operand is ungated and its second gated: true
+the merge read in the other arm is a gated effect row: true
+every statement's effect kinds are the expected ones: true
+only the dead loop's row is dead: true
+a_gated agrees with Access_fold's gated context, read for read: true

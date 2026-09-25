@@ -83,14 +83,19 @@ let () =
      arm has nothing to escape, and on one where the capture never reaches C neither arm is about
      anything. Gated by the host and not by a backend -- this executable links none -- so the skip
      aggregates as [`Environment]. The claim's own label is unchanged either way, so the golden is
-     one file for every host and a skip is visible only on stderr. *)
-  if not capture_reaches_c then
-    skipped ~aggregation:`Environment ~backend:"a host whose fd-2 capture does not reach C writes"
-      claim
-  else if requested then
-    if Utils.c_stderr_detached then p claim (not captured_foreign)
-    else skipped ~aggregation:`Environment ~backend:"a C runtime with no assignable stderr" claim
-  else p claim captured_foreign;
+     one file for every host and a skip is visible only on stderr -- which [gated] guarantees by
+     construction rather than by both branches remembering to use the same dialect. *)
+  let skipped_on =
+    if not capture_reaches_c then Some "a host whose fd-2 capture does not reach C writes"
+    else if requested && not Utils.c_stderr_detached then
+      Some "a C runtime with no assignable stderr"
+    else None
+  in
+  gated ~aggregation:`Environment ~when_:(Option.is_none skipped_on)
+    ~on:(Option.value skipped_on ~default:"")
+    ~detail:(fun () -> Printf.sprintf "the capture held %S" captured)
+    claim
+    (if requested then not captured_foreign else captured_foreign);
   (* Unconditional: detaching the C stream must leave OCANNL's own diagnostics exactly where they
      were, or every `.expected` golden that reports through stderr would have moved with it. *)
   p "OCaml's own stderr follows fd 2 either way" captured_ocaml

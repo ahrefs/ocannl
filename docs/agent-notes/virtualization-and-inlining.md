@@ -305,11 +305,12 @@ files.
   ahead of the reader's statement for an inherited template, the recompute-at-read reading
   inlining gives it, which is why an inherited template reading the reader's own target declines
   (`template_leaves`), why a reader placed before the producer's last write is ineligible, and why nothing but the producer may be written between its first and last write statements (a shared loop rewriting an input after the producer, a tensor OR A LOCAL rewritten between two
-  accumulating components — the query reads the raw code for effects the access relations do not carry, a local write inside
-  the producer's own statement included, and a dead loop is no writer for it or for the prologue's
-  position: the prologue replays every component after the last write; rounds 2-5). A read under a SCALAR gate (a `Where` arm, a gated operand) is not an `If` guard and the access
-  relations do not mark it — the query's own `Access_fold` pass does, and such a node is ineligible
-  (round 7: the gate may be what keeps an instance in range, and the prologue is unconditional).
+  accumulating components — local effects come from the routine's `Affine.statement_effect` rows,
+  a local write inside the producer's own statement included, and a dead loop is no writer for it
+  or for the prologue's position: the prologue replays every component after the last write;
+  rounds 2-5). A read under a SCALAR gate (a `Where` arm, a gated operand) is not an `If` guard:
+  `a_gated`, not `a_guarded`, marks it, and such a node is ineligible (round 7: the gate may be
+  what keeps an instance in range, and the prologue is unconditional).
   A reader statement that writes a local is ineligible too (an inherited prologue, ahead of the
   statement, would see the local as it was; round 10). An explicit preference exempts its node from
   the caps even where the form cannot serve the reads; the node then inlines. Flip pricing is per

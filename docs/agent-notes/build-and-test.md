@@ -818,6 +818,12 @@ that they earn a lookup rather than always-loaded space.
   `benchmarks/cell_group.process_is_alive` is the portable form — a zero-timeout wait on a process
   handle, where `WAIT_TIMEOUT` means "still running". `signal.SIGKILL` does not exist there either;
   `os.kill` with any other signal is `TerminateProcess`.
+- A child that publishes a value for its parent to poll — a pid, above all — writes a sibling and
+  renames it into place: `open(path, 'w')` creates the name EMPTY before the write lands, so a
+  parent polling `exists()` reads `''` (gh-ocannl-1041, a per-PR-matrix flake). The benchmarks'
+  Python tests go through `publish_pid` (`benchmarks/test/test_cell_group.py`), and a test there
+  fails any pid written in place. The shell harnesses poll with `[ -s file ]` instead, which holds
+  only because a pid lands in one `write`.
 - `(copy_files ...)` creates PASSIVE rules: they do not fire just because you build a sibling target
   in the same directory — only when listed in that target's `(deps ...)` or requested explicitly. A
   rule consuming copy_files output must therefore declare it. And validate a `(mode promote)` target
@@ -942,7 +948,7 @@ that they earn a lookup rather than always-loaded space.
   `verdict_ratchet` enforces the guard mechanically, for a quantifier (`for_all`/`for_alli`,
   `for_all2_exn`, `is_empty`, a negated `exists`/`existsi`, in Base's or `Stdlib`'s spelling)
   written directly into a
-  native claim (`Verdict.p`, `pf`, `claim`, `claimf`, `pass_fail`, opened or qualified) and for one
+  native claim (`Verdict.p`, `pf`, `claim`, `claimf`, `pass_fail`, `gated`, opened or qualified) and for one
   reached through a file-local binding, helper, wrapper or module (gh-ocannl-801, gh-ocannl-887,
   gh-ocannl-908). The reader is `test/support/verdict_provenance.ml` (gh-ocannl-931): ONE walker
   over the syntax that models each form once as a scope-and-polarity *provenance* -- two views,
@@ -990,6 +996,13 @@ that they earn a lookup rather than always-loaded space.
   exact same-line shape the check must distinguish. Direct quantifiers reaching a claim through a
   wrapper or a native call use the claimed ARGUMENT offset, so one intentional exemption cannot
   silently cover another call through the same wrapper or another claimed slot in the same call.
+- `verdict_ratchet`'s third reader is about DIALECT (gh-ocannl-997): `Verdict_scan.dialect_census`
+  refuses a label reported through both `pass_fail`/`pass_fail_all2` and `skipped` in one source,
+  since a skip prints `p`'s line and the pair breaks the golden on the host that skips. The rule,
+  the remedy (`Verdict.gated`) and what the reader cannot see are in the conventions note. A new
+  claim entry point that takes a label and a boolean joins `claim_kinds` in
+  `verdict_provenance.ml` (and `refusal_callees` in `refusal_control_scan.ml`), or the quantifier
+  reader goes blind at its call sites.
 - Boolean operator aliases in `verdict_provenance.ml` (gh-ocannl-968) keep their first
   argument until application, so constant annihilators and partial applications use the same
   conjunction/disjunction algebra as direct syntax. Partial Boolean predicates retain their captured
@@ -1078,7 +1091,16 @@ that they earn a lookup rather than always-loaded space.
   `Float.of_int (i % 13) *. 0.25` is `~modulus:13 ~offset:0. ~stride:0.25`, and `(x *. s) -. c` is
   `~offset:(-. c /. s) ~stride:s`, so no golden moves. The care is in `~dims`, which must be the
   operand's real row-major shape read off its `NTDSL.init`/`TDSL.ndarray` call (`~batch_dims` then
-  `~output_dims` then `~input_dims`), not the `Array.init` argument. What this does not buy is
+  `~output_dims` then `~input_dims`), not the `Array.init` argument. When the guard fires, keep the
+  modulus and pass `~radix:h` with `h` coprime to the MODULUS (not to the dims) and off
+  `1 (mod modulus)`: the key becomes the multi-index read in base `h`, so no axis can cancel at any
+  size while the value set — which an exactness argument may rest on — stays put
+  (ahrefs/ocannl#1024) — `cycle` also refuses a radix whose key would reach a different set of
+  residues than the row-major one (a short axis can leave one unreached), but the ORDER of the
+  values moves, so an argument about partial sums is re-exhibited, not inherited;
+  `h = 1 (mod modulus)` makes a square operand its own transpose. Changing
+  the modulus instead changes how many values there are, which is a numeric re-derivation wherever
+  the values are load-bearing. What this does not buy is
   aperiodicity: the values repeat with period `modulus`, so a shift by `modulus` is a symmetry, and
   where the blocking factors are searchable a packed panel can repeat under `k -> k + p` and hide a
   panel-substitution bug just as well; the recipe with no shift symmetry at any lag is
@@ -1197,8 +1219,8 @@ that they earn a lookup rather than always-loaded space.
   `test/operations/profiles` and `test/operations/startup_streams` depend on their own tracked
   `ocannl_config`, and an edit to the shared one leaves their rules untouched. Each new content is
   a new digest for the `<name>.exe.output` rule, so the executable runs again with no
-  recompilation. This is what sampling a timing-dependent test needs (the
-  `autotune_callback_release` skip decision, landing gh-ocannl-staging#764), and every other reflex
+  recompilation. This is what sampling a timing-dependent test needs (a
+  re-roll-or-skip decision needed it, gh-ocannl-staging#764), and every other reflex
   fails silently in the green direction, verified on dune 3.24.2: `dune build --force
   @<dir>/runtest-<name>` re-runs only the alias's diff action, while the content-keyed
   `<name>.exe.output` rule that runs the executable is served from the memo; a comment appended to the test's `.ml` rebuilds it, but

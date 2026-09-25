@@ -522,10 +522,14 @@ end = struct
        mma legs follow — not by being withheld, but by swapping arms: [mma_combo] renders the
        uniform-f16 combination against a [float] accumulator fragment, converting at the [d]
        boundary (gh-ocannl-789), so width stays schedule-uniform WITH the tensor unit rather than
-       against it, and [mma_f16_wide_acc_scopes] advertises both emission scopes. *)
+       against it, and [mma_f16_wide_acc_scopes] advertises both emission scopes.
+       [Numerics.Bf16_wide] does the same for bf16 (gh-ocannl-838) — the uniform-bf16 arm swaps to
+       an f32 accumulator fragment — which is what takes the uniform-bf16 legs off gfx11's
+       bf16-accumulate WMMA, whose result is not exactly rounded. *)
     let accum_prec prec =
       match prec with
       | Ops.Half_prec _ when Numerics.fp16_accum_wide () -> Ops.single
+      | Ops.Bfloat16_prec _ when Numerics.bf16_accum_wide () -> Ops.single
       | Ops.Fp8_prec _ when (Numerics.get ()).Numerics.narrow_compute_f32 -> Ops.single
       | _ -> prec
 
@@ -545,7 +549,7 @@ end = struct
        [rocwmma::bfloat16_t] / [float] need not be textually identical to the node's own C type
        ([__half] / [__hip_bfloat16]), so the operand pointers are [reinterpret_cast] to them at each
        call site. The accumulator and the destination storage types coincide on every arm but the
-       wide-f16 one; where they differ, [mma_d_boundary] carries the conversion. *)
+       wide-f16 and wide-bf16 ones; where they differ, [mma_d_boundary] carries the conversion. *)
     let mma_combo ~a_prec ~b_prec ~d_prec ~d_layout ~a_layout ~b_layout =
       (* rocWMMA fragments are opaque like [nvcuda::wmma]'s: there is no swizzle-aware fragment load
          here, so a swizzled operand layout declines to the caller's scalar fallback (gh-ocannl-481
@@ -569,6 +573,13 @@ end = struct
             Some ("rocwmma::float16_t", "rocwmma::float16_t", "rocwmma::float16_t", 8, 8)
         | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Single_prec _ ->
             Some ("rocwmma::bfloat16_t", "float", "float", 8, 4)
+        (* The uniform-bf16 twin of the wide-f16 arm (gh-ocannl-838): under [Bf16_wide] a [float]
+           accumulator against the bf16 STORAGE destination, converted by [mma_d_boundary]. gfx11's
+           bf16-accumulate WMMA is not exactly rounded (about a bf16 ulp at the partial-sum scale,
+           see schedule_mma_matmul's table), so this leaves only the narrowing rounding. *)
+        | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _
+          when Numerics.bf16_accum_wide () ->
+            Some ("rocwmma::bfloat16_t", "float", "rocwmma::bfloat16_t", 8, 8)
         | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ ->
             Some ("rocwmma::bfloat16_t", "rocwmma::bfloat16_t", "rocwmma::bfloat16_t", 8, 8)
         | _ -> None
@@ -578,19 +589,21 @@ end = struct
        the destination's storage type this is rocWMMA's own load/store, exactly as before
        gh-ocannl-789.
 
-       Where they differ -- the wide-f16 arm, a [float] accumulator over an f16-storage destination
-       -- neither rocWMMA call is type-correct, so the conversion stages through a DESTINATION-TYPED
-       accumulator fragment that rocWMMA does load and store, and copies element-for-element with
-       [num_elements] / [x[]], the surface rocWMMA documents as "compatibility with nvcuda::wmma".
-       This is legitimate despite fragments being opaque, because it never assumes WHICH matrix cell
-       an element index names: it only assumes that two accumulator fragments of the same 16x16x16
-       shape name the SAME cell at the same index, whatever that cell is. That holds by rocWMMA's
-       construction (the accumulator's IO layout is derived from the fragment shape and the wave
-       size, not from its element type) and is verified on gfx1151: loading a 16x16 tile of distinct
-       values through a [float] and a [float16_t] accumulator fragment and dumping every lane's
-       elements gives identical per-(lane, index) values, 8 elements each. Deliberately not the
-       warp-staged float tile in LDS that was the fallback design (gh-ocannl-789): this adds no
-       memory traffic at all.
+       Where they differ -- the wide-f16 and wide-bf16 arms, a [float] accumulator over a 16-bit
+       storage destination -- neither rocWMMA call is type-correct, so the conversion stages through
+       a DESTINATION-TYPED accumulator fragment that rocWMMA does load and store, and copies
+       element-for-element with [num_elements] / [x[]], the surface rocWMMA documents as
+       "compatibility with nvcuda::wmma". This is legitimate despite fragments being opaque, because
+       it never assumes WHICH matrix cell an element index names: it only assumes that two
+       accumulator fragments of the same 16x16x16 shape name the SAME cell at the same index,
+       whatever that cell is. That holds by rocWMMA's construction (the accumulator's IO layout is
+       derived from the fragment shape and the wave size, not from its element type) and is verified
+       on gfx1151: loading a 16x16 tile of distinct values through a [float] and a [float16_t]
+       accumulator fragment and dumping every lane's elements gives identical per-(lane, index)
+       values, 8 elements each; the [bfloat16_t] staging of the wide-bf16 arm is pinned end to end
+       by schedule_mma_matmul's [Bf16_wide] legs on the same device (gh-ocannl-838). Deliberately
+       not the warp-staged float tile in LDS that was the fallback design (gh-ocannl-789): this adds
+       no memory traffic at all.
 
        [acc] and [ptr] are C expressions for one block ([__mma_acc[__mi][__ni]] and the block's base
        pointer), so the caller keeps ownership of the block indexing. *)
@@ -1502,6 +1515,11 @@ end = struct
                        elementwise at each end — so the wide policy no longer costs this backend its
                        f16 tensor-unit legs (gh-ocannl-680's stated remainder). *)
                     mma_f16_wide_acc_scopes =
+                      [ Backend_intf.Mma_per_statement; Backend_intf.Mma_fragment_scope ];
+                    (* gh-ocannl-838: the uniform-bf16 arm swaps the same way under
+                       [Numerics.Bf16_wide], through rocWMMA's [(bf16, bf16, f32)] fragments and the
+                       same converted boundary. *)
+                    mma_bf16_wide_acc_scopes =
                       [ Backend_intf.Mma_per_statement; Backend_intf.Mma_fragment_scope ];
                     (* rocWMMA fragments are opaque like wmma's: no swizzle-aware fragment load here
                        (gh-ocannl-481 item 3, D3). *)

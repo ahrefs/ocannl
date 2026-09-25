@@ -1165,13 +1165,23 @@ val scalar_value_syms :
     embedded indices, dynamic-index sub-expressions — resolving scope-locals through [locals] (from
     {!scope_value_syms}). *)
 
-val affine_accesses : t -> Tnode.t Affine.access list
+val affine_relations : t -> Tnode.t Affine.access list * Tnode.t Affine.statement_effect list
 (** gh-494 waypoint 1: the routine's tensor-node accesses as explicit affine relations
     ({!Affine.access}), extracted from (typically optimized) code, in program order (a statement's
     right-hand-side reads precede its write; [Local_scope] bodies are descended into at their use
-    site; [Tile_mma] is traversed through its scalar [fallback]). Not represented: scope-locals,
-    merge-buffer reads, and opaque [Staged_compilation] — callers needing exhaustiveness must check
-    for the latter separately. *)
+    site; [Tile_mma] is traversed through its scalar [fallback]); read accesses carry their scalar
+    gatedness ([a_gated]). Beside them, from the same walk (gh-ocannl-1016), the
+    {!Affine.statement_effect} rows: everything the code does that no tensor-node access carries —
+    scope-local writes and declarations, [Local_scope] bodies, barriers, opaque [Staged_compilation]
+    (whose accesses are not enumerated: callers needing exhaustiveness check for its row),
+    [Tile_mma] as a construct, and merge-buffer reads. A "between two points, what else runs?"
+    question is a query over the pair — never a fresh walk over the raw code. *)
+
+val affine_accesses : t -> Tnode.t Affine.access list
+(** The access half of {!affine_relations}. *)
+
+val statement_effects : t -> Tnode.t Affine.statement_effect list
+(** The effect half of {!affine_relations}. *)
 
 val buffer_access_spans : stmt_serial:bool -> t list -> (Tnode.t, int * int) Base.Hashtbl.t option
 (** gh-ocannl-489 liveness-based buffer aliasing: per-tnode access span over the final

@@ -20,6 +20,7 @@ import cell_group
 import orchestrate
 from runners import bench_common
 from test.test_cell_group import CellGroupTest  # imported so unittest.main includes shared tests
+from test.test_cell_group import publish_pid
 
 HERE = Path(__file__).resolve().parent
 
@@ -2099,8 +2100,8 @@ class CellTimeoutTest(unittest.TestCase):
             "import os, subprocess, sys\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
             "  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
-            "open(os.environ['PROBE_HELPER_PID'], 'w').write(str(kid.pid))\n"
-            "CACHEDB = os.environ['CACHEDB']\n"
+            + publish_pid("os.environ['PROBE_HELPER_PID']", "kid.pid")
+            + "CACHEDB = os.environ['CACHEDB']\n"
         )
         env = os.environ.copy()
         env.update(
@@ -2182,8 +2183,8 @@ class CellTimeoutTest(unittest.TestCase):
         cell = self.python(
             "import subprocess, sys, time\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])\n"
-            "open(sys.argv[1], 'w').write(str(kid.pid))\n"
-            "time.sleep(300)\n",
+            + publish_pid("sys.argv[1]", "kid.pid")
+            + "time.sleep(300)\n",
             pidfile,
         )
 
@@ -2212,8 +2213,8 @@ class CellTimeoutTest(unittest.TestCase):
             "  'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN);"
             " time.sleep(300)'],\n"
             "  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
-            "open(sys.argv[1], 'w').write(str(kid.pid))\n"
-            "sys.stdout.flush()\n"
+            + publish_pid("sys.argv[1]", "kid.pid")
+            + "sys.stdout.flush()\n"
             "time.sleep(300)\n",
             pidfile,
         )
@@ -2287,14 +2288,16 @@ class CellTimeoutTest(unittest.TestCase):
         # in its own session precisely so the sweep's signals do NOT reach it (gh-ocannl-760
         # review).
         pidfile = self.dir / "orphan.pid"
+        cell_source = (
+            "import subprocess, sys, time\n"
+            "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])\n"
+            + publish_pid("sys.argv[1]", "kid.pid")
+            + "time.sleep(300)\n"
+        )
         driver = self.python(
             "import sys, orchestrate\n"
             "orchestrate.install_termination_handler()\n"
-            "cell = [sys.executable, '-c',\n"
-            "  'import subprocess, sys, time\\n"
-            "kid = subprocess.Popen([sys.executable, \\'-c\\', \\'import time; time.sleep(300)\\'])\\n"
-            "open(sys.argv[1], \\'w\\').write(str(kid.pid))\\n"
-            "time.sleep(300)\\n', sys.argv[1]]\n"
+            f"cell = [sys.executable, '-c', {cell_source!r}, sys.argv[1]]\n"
             "orchestrate.run_cell('cell under a cancelled sweep', cell)\n",
             pidfile,
         )
@@ -2434,8 +2437,8 @@ class CellTimeoutTest(unittest.TestCase):
             "import subprocess, sys\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
             "  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
-            "open(sys.argv[1], 'w').write(str(kid.pid))\n"
-            "sys.exit(1)\n",
+            + publish_pid("sys.argv[1]", "kid.pid")
+            + "sys.exit(1)\n",
             pidfile,
         )
 
@@ -2485,7 +2488,15 @@ class CellTimeoutTest(unittest.TestCase):
         # which is all the test needs of it, and the marker is the moment the grace loop opened.
         # Sleeping a fixed 4 s to land inside a 10 s window was the old way to hit that window,
         # and it cost the suite the wait on every run; waiting for the marker hits it exactly, so
-        # the grace can be shortened (below) without the cancellation racing the SIGKILL.
+        # the grace can be shortened (below) without the cancellation racing the SIGKILL. (The
+        # marker is read for its existence alone, so an empty file is the whole of it.)
+        cell_source = (
+            "import os, signal, sys, time\n"
+            "signal.signal(signal.SIGTERM, lambda *_: open(sys.argv[2], 'w').close())\n"
+            + publish_pid("sys.argv[1]", "os.getpid()")
+            + "sys.stdout.flush()\n"
+            "time.sleep(300)\n"
+        )
         driver = self.python(
             "import sys, orchestrate\n"
             "orchestrate.install_termination_handler()\n"
@@ -2494,12 +2505,7 @@ class CellTimeoutTest(unittest.TestCase):
             # escalation FINISHES across a signal, and the deferral that makes it do so is the
             # same at any grace length.
             "orchestrate.CELL_KILL_GRACE_S = 2.0\n"
-            "cell = [sys.executable, '-c',\n"
-            "  'import os, signal, sys, time\\n"
-            "signal.signal(signal.SIGTERM, lambda *_: open(sys.argv[2], \\'w\\').close())\\n"
-            "open(sys.argv[1], \\'w\\').write(str(os.getpid()))\\n"
-            "sys.stdout.flush()\\n"
-            "time.sleep(300)\\n', sys.argv[1], sys.argv[2]]\n"
+            f"cell = [sys.executable, '-c', {cell_source!r}, sys.argv[1], sys.argv[2]]\n"
             "orchestrate.run_cell('cell cancelled mid-kill', cell, timeout=2)\n",
             pidfile,
             termfile,
@@ -2607,8 +2613,8 @@ class CellTimeoutTest(unittest.TestCase):
             "import subprocess, sys\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
             "  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
-            "open(sys.argv[1], 'w').write(str(kid.pid))\n"
-            "sys.exit(1)\n",
+            + publish_pid("sys.argv[1]", "kid.pid")
+            + "sys.exit(1)\n",
             pidfile,
         )
 
@@ -2662,8 +2668,8 @@ class CellTimeoutTest(unittest.TestCase):
             "import subprocess, sys, time\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
             "  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
-            "open(sys.argv[1], 'w').write(str(kid.pid))\n"
-            "time.sleep(300)\n",
+            + publish_pid("sys.argv[1]", "kid.pid")
+            + "time.sleep(300)\n",
             pidfile,
         )
 
@@ -2716,8 +2722,8 @@ class CellTimeoutTest(unittest.TestCase):
             "print('the evidence', flush=True)\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
             "  start_new_session=True)\n"
-            "open(sys.argv[1], 'w').write(str(kid.pid))\n"
-            "time.sleep(300)\n",
+            + publish_pid("sys.argv[1]", "kid.pid")
+            + "time.sleep(300)\n",
             pidfile,
         )
 
@@ -2748,8 +2754,8 @@ class CellTimeoutTest(unittest.TestCase):
                 "import subprocess, sys, time\n"
                 "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
                 "  start_new_session=True)\n"
-                "open(sys.argv[1], 'w').write(str(kid.pid))\n"
-                "time.sleep(300)\n",
+                + publish_pid("sys.argv[1]", "kid.pid")
+                + "time.sleep(300)\n",
                 pidfile,
             ),
             stdout=subprocess.PIPE,
@@ -2815,8 +2821,8 @@ class CellTimeoutTest(unittest.TestCase):
             "import json, subprocess, sys\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
             "  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
-            "open(sys.argv[1], 'w').write(str(kid.pid))\n"
-            "print(json.dumps({'workload': 'w', 'step_ms': {'p50': 1.0}, 'compile_s': 0.5}))\n",
+            + publish_pid("sys.argv[1]", "kid.pid")
+            + "print(json.dumps({'workload': 'w', 'step_ms': {'p50': 1.0}, 'compile_s': 0.5}))\n",
             pidfile,
         )
 
@@ -2868,8 +2874,8 @@ class CellTimeoutTest(unittest.TestCase):
             "import subprocess, sys\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
             "  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
-            "open(sys.argv[1], 'w').write(str(kid.pid))\n"
-            "sys.exit(0)\n",
+            + publish_pid("sys.argv[1]", "kid.pid")
+            + "sys.exit(0)\n",
             pidfile,
         )
 

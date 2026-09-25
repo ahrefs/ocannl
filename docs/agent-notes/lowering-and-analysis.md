@@ -218,6 +218,20 @@ files.
   `Rhs` — a later operand's write would pose as prior to an earlier operand's read; Codex P1 on
   staging#297) nor claim cross-operand evaluation order at all (it would silently depend on codegen's
   scope emission order).
+- **"Between two points, what else runs?" is a query over `Low_level.affine_relations`, never a
+  fresh walk** (gh-ocannl-1016). The one walk yields the accesses (reads carry `a_gated`, the
+  `Access_fold` scalar-gate convention: a `Where` arm or gated operand, cleared inside a
+  `Local_scope` body, which is hoisted) and, beside them, `Affine.statement_effect` rows for what no
+  tensor-node access carries: local writes and declarations (scan inits and rotations included),
+  scope bodies (`Scope_body`, at the `Arg` base their rows extend), barriers, staged code, a
+  `Tile_mma` as a construct, merge-buffer reads. Consumers classify `e_kind` with an exhaustive
+  match, so a new kind forces every decision; statement-level questions filter
+  `Affine.in_scope_body`, and "inside that setter's statement" is `Affine.within_statement`. Before
+  the view, the footprint eligibility query, `template_leaves`, `computation_reads_merge` and
+  `Online_softmax.has_opaque` each re-walked the raw code, and the effect each walk forgot was the
+  next soundness bug (gh-616 rounds 2-10, gh-1001). The fan-in guard's `reads_of_proc` deliberately
+  stays a walk: it is a COST count that charges the wider `Where` arm, not the union, mirroring
+  `trace_node_facts`' per-arm sinks — arm identity a boolean gate cannot carry.
 - **`Ir.Affine` owns the peel-guard rule** (gh-ocannl-722), which is the pattern to follow when a
   legality question starts growing clauses somewhere else: `Affine.separates` is `pair_conflict`
   applied to one access taken twice (the instance-vs-instance form — two instances of the same

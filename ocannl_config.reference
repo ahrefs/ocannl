@@ -89,7 +89,7 @@
 #   performance  -- the fastest configuration AT UNCHANGED SEMANTICS.
 #   approximate  -- the fastest configuration at tolerance-bounded semantics: the
 #                   `performance` payload plus every numerics-changing knob (tf32_matmuls,
-#                   fp16_arithmetic, cc_backend_fast_math, cc_backend_fp_contract,
+#                   fp16_arithmetic, bf16_arithmetic, cc_backend_fast_math, cc_backend_fp_contract,
 #                   tune_inline_flips, and the algebraic-rewrite gates as they land).
 #                   Results differ from the exact profiles by the tolerance the benchmark
 #                   parity envelope names (`PARITY_TOL_APPROX` in benchmarks/orchestrate.py),
@@ -441,7 +441,7 @@
 
 # Directory of the autotuner's schedule disk cache, keyed by the canonical digest of the
 # optimized code, the backend name, a digest of the numerics policy (tf32_matmuls,
-# narrow_compute_f32, fp16_arithmetic -- gh-ocannl-568: the policy is not part of the code, so
+# narrow_compute_f32, fp16_arithmetic, bf16_arithmetic -- gh-ocannl-568: the policy is not part of the code, so
 # without it a default-flags run would replay a tf32-tuned winner it cannot render), a digest of
 # the codegen configuration (large_models, buffer_aliasing, the effective routine-logging
 # predicate, the logging-only settings once it holds, and the compiling backend's own knobs --
@@ -1109,8 +1109,9 @@
 # either way; their reduction-accumulator width follows the tensor-unit formats (gh-ocannl-663):
 # serial bf16 reductions on CUDA and fp8 reductions everywhere accumulate in f32 and narrow once
 # per nest, mirroring the mma legs, while bf16 on HIP/Metal (whose tiles accumulate in
-# storage-width fragments) keeps storage residency; f16 residency is fp16_arithmetic's question,
-# not this knob's (gh-ocannl-680). This knob reaches the GPU accumulators only
+# storage-width fragments) keeps storage residency under bf16_arithmetic=auto; f16 residency is
+# fp16_arithmetic's question and wide bf16 residency bf16_arithmetic's, not this knob's
+# (gh-ocannl-680, gh-ocannl-838). This knob reaches the GPU accumulators only
 # where per-step narrowing can be restored SCHEDULE-UNIFORMLY, which is fp8 on CUDA and HIP (no
 # backend tensorizes fp8 destinations). It cannot reach bf16 on CUDA — the seeded uniform-bf16
 # mma arm accumulates f32 in hardware, so narrowing only the serial legs would make results
@@ -1129,11 +1130,12 @@
 #   hardware where a wide f16 accumulate costs nothing (datacenter-class NVIDIA), so pin "true"
 #   or "false" where that must not move.
 # - "false": f16 reduction accumulators reside in f32 on every backend, narrowing once per nest
-#   -- the strict cross-backend-uniform semantics. On CUDA sm_80+ the uniform-f16 mma legs stay
-#   tensorized through an f32-accumulate inline-PTX arm; on Metal (no mixed-precision
-#   simdgroup_multiply_accumulate) and HIP (d-boundary conversion not wired) the uniform-f16 mma
-#   seeds are withheld instead -- widening only the serial legs would make results depend on the
-#   schedule again (gh-ocannl-663), so this setting trades the f16 tensor-unit legs there.
+#   -- the strict cross-backend-uniform semantics. HIP (gh-ocannl-789) and Metal (gh-ocannl-837)
+#   keep their uniform-f16 mma legs tensorized through an f32 accumulator fragment converted at
+#   the destination boundary; CUDA sm_80+ through an f32-accumulate inline-PTX arm in the
+#   per-statement scope only, so its staged multi-block uniform-f16 seeds are withheld --
+#   widening only the serial legs would make results depend on the schedule again
+#   (gh-ocannl-663).
 # - "true": compute fp16 in fp16 on CPU targets with native 16-bit arithmetic (ARMv8.2-FP16,
 #   AVX512-FP16) -- the lane count doubles against f32, at fp16's 10-bit mantissa and 65504
 #   range for intermediates. Unlike narrow_compute_f32 this trades accuracy for throughput.
@@ -1141,6 +1143,27 @@
 #   where it would cost accuracy for no speed; the GPU backends behave as under "auto".
 # Programmatic override: `Ir.Numerics.set_policy`.
 #fp16_arithmetic=auto
+
+# Numerics policy: how bf16 accumulates (gh-ocannl-838), the same three-way shape as
+# fp16_arithmetic. bf16 compute needs no knob of its own: no target has native bf16 arithmetic,
+# so narrow_compute_f32 decides it.
+# - "auto" (the default): each backend's structural residency -- f32 on the CPU backends (under
+#   narrow_compute_f32) and on CUDA (whose bf16 mma accumulates f32 in hardware), storage-width
+#   bf16 on HIP and Metal, mirroring their uniform-bf16 tensor-unit triples. On HIP that
+#   triple is gfx11's bf16-accumulate WMMA, which is not exactly rounded and loses close to a
+#   bf16 ulp at the partial-sum scale. Like fp16_arithmetic=auto the resolution retains latitude
+#   per backend.
+# - "false": bf16 reduction accumulators reside in f32 on every backend, narrowing once per nest,
+#   so the error is the narrowing rounding alone. HIP keeps its uniform-bf16 mma legs tensorized
+#   through an f32 accumulator fragment converted at the destination boundary (both emission
+#   scopes); CUDA's inline-PTX arm is already wide in the per-statement scope, so only its staged
+#   multi-block uniform-bf16 seeds are withheld; Metal's uniform-bf16 simdgroup_matrix arm
+#   declines and its seeds are withheld.
+# - "true": the narrow side of the trade wherever a backend offers one. It resolves as "auto" on
+#   every backend today; the `approximate` profile names it so that regime does not depend on
+#   how "auto" later resolves.
+# Programmatic override: `Ir.Numerics.set_policy`.
+#bf16_arithmetic=auto
 
 # Algebraic rewrite over lowered code (gh-ocannl-483): the online-softmax attention rewrite. The
 # composed softmax's max-reduction and sum-of-exp reduction over one axis become a single scan per
@@ -1248,8 +1271,10 @@
 # # what math is being done (they are the orthogonal axis; see the issue). fp16_arithmetic=auto
 # # resolves deterministically per backend (gh-ocannl-680), so pinning the default keeps the
 # # principle: this profile changes no math, and same-machine runs stay reproducible.
+# # bf16_arithmetic=auto likewise (gh-ocannl-838).
 # tf32_matmuls=false
 # fp16_arithmetic=auto
+# bf16_arithmetic=auto
 # narrow_compute_f32=true
 # # The algebraic-rewrite gates likewise at their defaults: no rewrite reassociates a reduction
 # # under this profile.
@@ -1301,6 +1326,10 @@
 # # f32 matmul operands computed at tf32 (10-bit mantissa, f32 accumulation) on the backends with
 # # a tf32 tile shape (CUDA sm_80+); a no-op elsewhere.
 # tf32_matmuls=true
+# # The narrow side of the bf16 accumulator trade (gh-ocannl-838), symmetric with fp16_arithmetic
+# # above: never the strict f32 residency `false` requests. It resolves as auto on every backend
+# # today; naming it keeps this regime's bf16 numerics independent of how auto later resolves.
+# bf16_arithmetic=true
 # # The online-softmax attention rewrite (gh-ocannl-483): the softmax normalizer's summation is
 # # reassociated into a per-row scan, and the probabilities are never materialized.
 # online_softmax=true

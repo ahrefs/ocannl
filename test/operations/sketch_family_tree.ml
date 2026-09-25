@@ -47,6 +47,7 @@ let gpu_plain_limits =
           mma_tile = (8, 8, 8);
           mma_format_tiles = [ ((f32, f32, f32), (8, 8, 8)) ];
           mma_f16_wide_acc_scopes = [];
+          mma_bf16_wide_acc_scopes = [];
           mma_staged_layouts = [];
           mma_pipeline_depths = [];
         };
@@ -65,6 +66,7 @@ let gpu_full_limits =
           mma_tile = (8, 8, 8);
           mma_format_tiles = [ ((f32, f32, f32), (8, 8, 8)) ];
           mma_f16_wide_acc_scopes = [];
+          mma_bf16_wide_acc_scopes = [];
           mma_staged_layouts = [ ((f32, f32, f32), Ir.Backend_intf.Mma_swizzled_b128) ];
           mma_pipeline_depths = [ 2 ];
         };
@@ -305,12 +307,13 @@ let () =
       ~f:(Ll_test.cycle ~dims:[| 20; 20 |] ~modulus:7 ~offset:0. ~stride:0.5)
       ()
   in
-  (* This site is where the guard bites: [wb]'s former modulus 5 divides the 20-wide row stride, so
-     the helper rejects it. 9 is coprime to 20 and keeps the cells in the same [-2, 2], at
-     half-integer steps. *)
+  (* This site is where the guard bites: [wb]'s cells are the five integers in [-2, 2], and modulus
+     5 divides the 20-wide row stride, so the row-major key would make every row identical. The
+     radix lifts that without touching the value set (ahrefs/ocannl#1024): 7 is coprime to 5 and off
+     1 (mod 5), so the square operand is not its own transpose either. *)
   let wb =
     NTDSL.init ~l:"wb" ~prec:Ir.Ops.single ~o:[ 20; 20 ]
-      ~f:(Ll_test.cycle ~dims:[| 20; 20 |] ~modulus:9 ~offset:(-4.) ~stride:0.5)
+      ~f:(Ll_test.cycle ~radix:7 ~dims:[| 20; 20 |] ~modulus:5 ~offset:(-2.) ~stride:1.)
       ()
   in
   let%op awk = wa +* "ik;kj=>ij" wb in
@@ -379,6 +382,7 @@ let () =
             mma_tile = (8, 8, 8);
             mma_format_tiles = [ ((f16t, f16t, f16t), (8, 8, 8)); ((f16t, f16t, f32), (8, 8, 8)) ];
             mma_f16_wide_acc_scopes = wide_scopes;
+            mma_bf16_wide_acc_scopes = [];
             mma_staged_layouts = [];
             mma_pipeline_depths = [];
           };
@@ -503,6 +507,69 @@ let () =
     "the wide-f16 policy under narrow_compute_f32 off omits the CPU register-tiled candidates \
      (accumulator residency diverges from compute)"
     (no_mma f16_cpu_wide_nco);
+  (* gh-ocannl-838: the bf16 twin of the gate, keyed on a bf16-storage destination and read from
+     [mma_bf16_wide_acc_scopes]. The seeds are compared silently (the per-scope listing above
+     already pins the menu's shape), and the wide-f16 policy must leave them alone: each gate asks
+     only its own format's scope list. *)
+  let bfa =
+    NTDSL.init ~l:"bfa" ~prec:Ir.Ops.bfloat16 ~o:[ nn; nn ]
+      ~f:(Ll_test.cycle ~dims:[| nn; nn |] ~modulus:7 ~offset:0. ~stride:0.5)
+      ()
+  in
+  let bfb =
+    NTDSL.init ~l:"bfb" ~prec:Ir.Ops.bfloat16 ~o:[ nn; nn ]
+      ~f:(Ll_test.cycle ~dims:[| nn; nn |] ~modulus:5 ~offset:(-2.) ~stride:1.)
+      ()
+  in
+  let%op bmm = bfa +* "ik;kj=>ij" bfb in
+  Ir.Tnode.update_prec bmm.Tensor.value Ir.Ops.bfloat16;
+  let opt_b = with_lowering ~name:"sft_bf16" bmm in
+  let bf16t = Ir.Backend_intf.Mma_bf16 in
+  let bf16_seeds ~wide_scopes =
+    Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false
+      ~limits:
+        {
+          Ir.Backend_intf.no_hardware_limits with
+          mma =
+            Some
+              {
+                Ir.Backend_intf.mma_simd_width = 32;
+                mma_tile = (8, 8, 8);
+                mma_format_tiles =
+                  [ ((bf16t, bf16t, bf16t), (8, 8, 8)); ((bf16t, bf16t, f32), (8, 8, 8)) ];
+                mma_f16_wide_acc_scopes = [];
+                mma_bf16_wide_acc_scopes = wide_scopes;
+                mma_staged_layouts = [];
+                mma_pipeline_depths = [];
+              };
+        }
+      opt_b
+  in
+  (* Every leg names its bf16 mode explicitly: the stanza declares OCANNL_BF16_ARITHMETIC, so the
+     ambient policy may already be [Bf16_wide]. *)
+  let bf16_auto = { saved_policy with bf16_arithmetic = Numerics.Bf16_auto } in
+  Numerics.set_policy bf16_auto;
+  let bf16_default = bf16_seeds ~wide_scopes:[] in
+  Numerics.set_policy { bf16_auto with fp16_arithmetic = Numerics.Fp16_wide };
+  let bf16_under_f16_wide = bf16_seeds ~wide_scopes:[] in
+  Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_wide };
+  let bf16_wide_no_arm = bf16_seeds ~wide_scopes:[] in
+  let bf16_wide_statement = bf16_seeds ~wide_scopes:[ Ir.Backend_intf.Mma_per_statement ] in
+  let bf16_wide_both =
+    bf16_seeds
+      ~wide_scopes:[ Ir.Backend_intf.Mma_per_statement; Ir.Backend_intf.Mma_fragment_scope ]
+  in
+  Numerics.set_policy saved_policy;
+  Verdict.p
+    "the wide-bf16 policy withholds uniform-bf16 mma seeds exactly in unsupported emission scopes, \
+     and the wide-f16 policy leaves them alone"
+    (has_unstaged_mma bf16_default && has_staged_mma bf16_default
+    && has_unstaged_mma bf16_under_f16_wide
+    && has_staged_mma bf16_under_f16_wide
+    && no_mma bf16_wide_no_arm
+    && has_unstaged_mma bf16_wide_statement
+    && no_staged_mma bf16_wide_statement && has_unstaged_mma bf16_wide_both
+    && has_staged_mma bf16_wide_both);
   (* Transposed B (k on its minor axis): whole-triple and the hoisted-only Grid shape read B in
      place, which the register tiling statically declines; packing shapes normalize the layout. *)
   let tb =
@@ -858,6 +925,7 @@ let () =
                 mma_tile = (16, 16, 16);
                 mma_format_tiles = [ ((f32, f32, f32), (8, 8, 8)) ];
                 mma_f16_wide_acc_scopes = [];
+                mma_bf16_wide_acc_scopes = [];
                 mma_staged_layouts = [];
                 mma_pipeline_depths = [];
               };

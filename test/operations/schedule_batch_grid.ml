@@ -300,6 +300,7 @@ let () =
                   (8, 8, 8) );
               ];
             mma_f16_wide_acc_scopes = [];
+            mma_bf16_wide_acc_scopes = [];
             mma_staged_layouts = [];
             mma_pipeline_depths = [];
           };
