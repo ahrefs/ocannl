@@ -1,13 +1,19 @@
 (* The child processes [exit_stream_teardown] runs and watches from outside (gh-ocannl-1036): what
-   happens at process exit can only be observed by a parent. One mode per argument:
+   happens at process exit can only be observed by a parent. The first argument picks the mode.
 
-   - [device]: a small computation on the configured backend, then a normal exit; prints the
-   backend's name, so the parent reports which backend the run actually reached. - [never_idle] /
-   [never_idle_raise]: no device at all. [Utils.bounded_exit_teardown] from an [at_exit] handler
-   over a stand-in stream that never becomes idle and whose teardown would hang for an hour -- the
-   hung-device case, which real hardware cannot stage on demand. The second then ends on an uncaught
-   exception, which OCaml runs [at_exit] for too. - [idle]: the same stand-in, idle at once, so its
-   teardown is due. *)
+   [device] runs a small computation on the configured backend and exits normally. It prints the
+   backend's name, so the parent reports which backend the run actually reached, and reads the
+   result back from an [at_exit] handler registered before the device opened.
+
+   [device_busy] stages the hung case as far as real hardware can: seconds of work queued on the
+   configured backend and never synced, then a normal exit. The backend's teardown reports how long
+   it waited on stderr, since nothing registered in here can run after it.
+
+   [never_idle] and [never_idle_raise] open no device. They run [Utils.bounded_exit_teardown] from
+   an [at_exit] handler over a stand-in stream that never becomes idle and whose teardown would hang
+   for an hour; the second then ends on an uncaught exception, which OCaml runs [at_exit] for too.
+   [two_never_idle] runs two such stand-ins, which share one bound. [idle] runs one that is idle at
+   once, so its teardown is due. *)
 
 open Base
 open Ocannl
