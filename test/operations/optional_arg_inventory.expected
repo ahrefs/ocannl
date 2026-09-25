@@ -119,6 +119,8 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/train.ml:compile_within_budget ?budget -- implemented
   lib/train.ml:compile_within_budget ?budget_report -- implemented
   lib/train.ml:compile_within_budget ?max_candidates -- implemented
+  lib/train.ml:decision_lowering_digest ?name -- implemented
+  lib/train.ml:decision_lowering_digest ?timing_ctx -- implemented
   lib/train.ml:fit_memory_budget ?budget -- implemented
   lib/train.ml:fit_memory_budget ?max_candidates -- implemented
   lib/train.ml:fit_memory_budget ?name -- implemented
@@ -140,6 +142,8 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/train.ml:init_params ?reinit_all -- implemented
   lib/train.ml:loss_accumulator ?label -- implemented
   lib/train.ml:params_for ?params -- implemented
+  lib/train.ml:placement_outcome_digest ?name -- implemented
+  lib/train.ml:placement_outcome_digest ?timing_ctx -- implemented
   lib/train.ml:placement_problem ?name -- implemented
   lib/train.ml:placement_problem ?timing_ctx -- implemented
   lib/train.ml:printf ?here -- implemented

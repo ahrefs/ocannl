@@ -683,6 +683,48 @@ let placement_problem ?name ?timing_ctx ctx loss comp bindings =
     ~lineage:(Context.placements ctx)
     (Context.lowered_for_decisions ?name ctx comp bindings)
 
+(** A recorded placement decision as the three lists the context API takes — materialized, inlined,
+    footprint-scoped — resolved against [problem]'s numbering ({!Ir.Schedule_cache.tn_of_ref} raises
+    on a node the problem lacks). [embedded] is the loss's embedded set, what [Materialize_all]
+    decides. *)
+let placement_decision_lists ~embedded problem = function
+  | Ir.Schedule_cache.Default -> ([], [], [])
+  | Materialize_all -> (embedded, [], [])
+  | Refined flips ->
+      List.fold_right flips ~init:([], [], [])
+        ~f:(fun { Ir.Schedule_cache.node; flip } (mat, inl, fp) ->
+          let tn = Ir.Schedule_cache.tn_of_ref problem node in
+          match flip with
+          | `Materialize -> (tn :: mat, inl, fp)
+          | `Inline -> (mat, tn :: inl, fp)
+          | `Footprint -> (mat, inl, tn :: fp))
+
+(** The placement-aware digest ({!Ir.Schedule_cache.canonicalize}) of the lowering the decision
+    lists produce in the lineage the arms are searched in — [timing_ctx] when given, else [ctx] —
+    recomputed analysis-only through {!Context.lowered_for_decisions}. The placement store's replay
+    guard (gh-ocannl-786): it must equal the recorded [outcome_digest], which since gh-ocannl-1022
+    is the shipped search's own {!Autotune.report.source_digest}. The search lineage, not [ctx],
+    because that is where the base lowering every candidate and the shipped winner derive from is
+    taken. *)
+let decision_lowering_digest ?name ?timing_ctx ctx comp bindings (mat, inl, fp) =
+  let module SC = Ir.Schedule_cache in
+  SC.digest
+    (SC.canonicalize
+       ~static_indices:(Ir.Indexing.bound_symbols bindings)
+       (Context.lowered_for_decisions ?name ~materialized:mat ~inline:inl ~footprint:fp
+          (Option.value timing_ctx ~default:ctx)
+          comp bindings))
+
+(** The replay guard of {!tune_placements}' placement store for [decision], from scratch: the
+    decision problem, the decision's lists against it, and {!decision_lowering_digest}. Exposed so a
+    test can assert the recomputation agrees with the digest the shipped search tuned
+    (gh-ocannl-1022). *)
+let placement_outcome_digest ?name ?timing_ctx ctx loss comp bindings decision =
+  decision_lowering_digest ?name ?timing_ctx ctx comp bindings
+    (placement_decision_lists ~embedded:(embedded_nodes loss)
+       (placement_problem ?name ?timing_ctx ctx loss comp bindings)
+       decision)
+
 (** Placement A/B autotuning: {!Autotune.tune} on [comp] under the graph's current (default)
     placements — virtual intermediates plus the compiler's promotions — and again with every
     embedded node of [loss] materialized, keeping the measured winner (the arms' [best_ms] are
@@ -1058,7 +1100,6 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      degrades to the cold path, which reports it in position; only the two process-level classes
      propagate from here. *)
   let module SC = Ir.Schedule_cache in
-  let static_indices = Ir.Indexing.bound_symbols bindings in
   let cache_dir = Autotune.resolve_cache_dir ?cache_dir ~search:(Autotune.search_setting ()) () in
   let placement_store =
     match placement_store with
@@ -1086,31 +1127,18 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
           logf "placement store not consulted: %s" (Exn.to_string exn);
           None
   in
-  (* A decision as the three lists the context API takes, resolved against the problem's numbering
-     ({!Ir.Schedule_cache.tn_of_ref} raises on a node the fresh problem lacks); the context it
-     yields; and the lowering it produces, whose placement-aware digest is the entry's guard. *)
-  let decisions_of problem = function
-    | SC.Default -> ([], [], [])
-    | SC.Materialize_all -> (embedded, [], [])
-    | SC.Refined flips ->
-        List.fold_right flips ~init:([], [], []) ~f:(fun { SC.node; flip } (mat, inl, fp) ->
-            let tn = SC.tn_of_ref problem node in
-            match flip with
-            | `Materialize -> (tn :: mat, inl, fp)
-            | `Inline -> (mat, tn :: inl, fp)
-            | `Footprint -> (mat, inl, tn :: fp))
-  in
+  (* A decision as the three lists the context API takes ({!placement_decision_lists}); the context
+     it yields; and, at replay, the lowering it produces in the search lineage, whose
+     placement-aware digest is the entry's guard ({!decision_lowering_digest}). *)
+  let decisions_of problem = placement_decision_lists ~embedded problem in
   let apply (mat, inl, fp) c =
     let decide f c = function [] -> c | tns -> f c tns in
     decide Context.decide_footprint
       (decide Context.decide_inline (decide Context.decide_materialized c mat) inl)
       fp
   in
-  let outcome_digest (mat, inl, fp) =
-    SC.digest
-      (SC.canonicalize ~static_indices
-         (Context.lowered_for_decisions ?name ~materialized:mat ~inline:inl ~footprint:fp ctx comp
-            bindings))
+  let outcome_digest decisions =
+    decision_lowering_digest ?name ?timing_ctx ctx comp bindings decisions
   in
   (* The refined vector's flips by structural position, [None] when a flipped node has none (every
      flip candidate is a node the raw code sets or reads, so this is defensive). *)
@@ -1131,44 +1159,52 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      candidate, or [autotune_search=false] over a schedule cache holding only the other arm) was
      never compared, and recording the winner over it would let a later search-enabled process skip
      the unmeasured competitor for good. A decision reached because an arm failed, or over refused
-     windows, is likewise this process's to make and not the next one's to inherit. *)
-  let persist ~decision ~shipped_ms ~a_ms ~b_ms =
+     windows, is likewise this process's to make and not the next one's to inherit.
+
+     gh-ocannl-1022: the entry's [outcome_digest] is the SHIPPED search's own
+     {!Autotune.report.source_digest} -- the digest of the base lowering it tuned, and the key its
+     schedule entry lives under -- not a re-lowering of the decision after the fact. The replay
+     guard still recomputes it ({!decision_lowering_digest}); that the two agree is lowering
+     determinism, which [test/operations/placement_store.ml] asserts directly. A shipped search that
+     reached no base lowering has no digest to record, and records nothing. *)
+  let persist ~decision ~(shipped : Autotune.report option) ~shipped_ms ~a_ms ~b_ms =
     match store with
     | None -> ()
-    | Some (problem, key, limits, backend) -> (
+    | Some (problem, key, limits, backend) ->
         let unclean =
           List.exists !observed ~f:(fun r ->
               r.Autotune.timings_contended > 0
               || Option.is_some (Autotune.terminal_failure r)
               || not (Float.is_finite r.Autotune.best_ms))
         in
+        let outcome_digest =
+          Option.value_map shipped ~default:"" ~f:(fun r -> r.Autotune.source_digest)
+        in
         if unclean || not (Float.is_finite shipped_ms) then
           logf
             "placement store: decision %s not recorded (a compared search failed, timed nothing, \
              or had contention-refused windows)"
             (SC.shipped_label decision)
-        else
-          match outcome_digest (decisions_of problem decision) with
-          | outcome_digest ->
-              SC.store_placements ~dir:cache_dir ~key:(Some key)
-                {
-                  SC.version = SC.placement_entry_version;
-                  backend;
-                  numerics = SC.numerics_tag ();
-                  codegen = SC.codegen_tag ~limits ();
-                  objective = SC.objective_tag ();
-                  problem_digest = SC.digest problem;
-                  decision;
-                  outcome_digest;
-                  shipped_ms;
-                  arm_a_ms = a_ms;
-                  arm_b_ms = b_ms;
-                };
-              logf "placement store: recorded decision %s (%.4f ms)" (SC.shipped_label decision)
-                shipped_ms
-          | exception exn when not (must_propagate exn) ->
-              logf "placement store: decision %s not recorded: %s" (SC.shipped_label decision)
-                (Exn.to_string exn))
+        else if String.is_empty outcome_digest then
+          logf "placement store: decision %s not recorded (its search reported no source digest)"
+            (SC.shipped_label decision)
+        else (
+          SC.store_placements ~dir:cache_dir ~key:(Some key)
+            {
+              SC.version = SC.placement_entry_version;
+              backend;
+              numerics = SC.numerics_tag ();
+              codegen = SC.codegen_tag ~limits ();
+              objective = SC.objective_tag ();
+              problem_digest = SC.digest problem;
+              decision;
+              outcome_digest;
+              shipped_ms;
+              arm_a_ms = a_ms;
+              arm_b_ms = b_ms;
+            };
+          logf "placement store: recorded decision %s (%.4f ms)" (SC.shipped_label decision)
+            shipped_ms)
   in
   let replay =
     match store with
@@ -1248,8 +1284,8 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                   Stdlib.Printexc.raise_with_backtrace exn backtrace));
             (* gh-ocannl-786: recorded once the artifact has actually shipped -- after the callback,
                whose failure means nothing shipped -- and protected like it: a process-level failure
-               while the outcome digest is recomputed or the entry written would otherwise leave the
-               one retained routine unreachable. *)
+               while the entry is written would otherwise leave the one retained routine
+               unreachable. *)
             (try commit ()
              with exn ->
                let backtrace = Stdlib.Printexc.get_raw_backtrace () in
@@ -1368,7 +1404,9 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                  else
                    Printf.sprintf " (its own best tensorized candidate: %.4f ms)"
                      s.Autotune.mma_best_ms)));
-    let winner, winner_ms = if a_wins then (a, a_ms) else (b, b_ms) in
+    let winner, winner_ms, winner_report =
+      if a_wins then (a, a_ms, a_report) else (b, b_ms, b_report)
+    in
     let inline_flips =
       match inline_flips with
       | Some n -> n
@@ -1390,7 +1428,9 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
     in
     let winner_arm = if a_wins then "A" else "B" in
     let winner_decision = if a_wins then SC.Default else SC.Materialize_all in
-    let commit_winner () = persist ~decision:winner_decision ~shipped_ms:winner_ms ~a_ms ~b_ms in
+    let commit_winner () =
+      persist ~decision:winner_decision ~shipped:winner_report ~shipped_ms:winner_ms ~a_ms ~b_ms
+    in
     if inline_flips <= 0 then ship ~what:winner_arm ~commit:commit_winner winner
     else
       let (* gh-555: greedy per-node refinement over the inlining decision vector. The vector lives
@@ -1468,7 +1508,10 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
              | None -> name ^ " (configured unconditionally, so no profitability evidence was read)")
             inline_flips
             (if bound_pruning then ", bound pruning on" else "");
-          let chain = ref (a, a_ms, ctx, timing_ctx) in
+          (* The incumbent: its result, time, contexts, and the report of the search that produced
+             it -- what a refined decision's recording reads its outcome digest from
+             (gh-ocannl-1022). *)
+          let chain = ref (a, a_ms, ctx, timing_ctx, a_report) in
           (* The accepted flips in chain order, the placement vector a refined result ships under
              and what the placement store records for it (gh-ocannl-786). *)
           let accepted = ref [] in
@@ -1503,7 +1546,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                   List.partition_tf rest ~f:(fun (o : LL.flip_candidate) -> Tn.equal o.LL.fc_tn tn)
                 in
                 let group = fc :: siblings in
-                let _, chain_ms, base_ctx, base_timing = !chain in
+                let _, chain_ms, base_ctx, base_timing, _ = !chain in
                 (* A group started is a group finished: the budget is checked between groups, not
                    between a node's alternatives, or the comparison against the same incumbent that
                    the group exists for would be cut short by an exhausted budget. *)
@@ -1540,19 +1583,19 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                       in
                       let ctx' = apply base_ctx in
                       let timing' = Option.map base_timing ~f:apply in
-                      let r, ms, _rep = tune_or_release ~to_report:flip_report arm ctx' timing' in
+                      let r, ms, rep = tune_or_release ~to_report:flip_report arm ctx' timing' in
                       record r;
                       Int.incr measured;
-                      Some (fc, r, ms, ctx', timing')
+                      Some (fc, r, ms, ctx', timing', rep)
                 in
                 let results = List.filter_map group ~f:try_alternative in
                 let best =
-                  List.min_elt results ~compare:(fun (_, _, a, _, _) (_, _, b, _, _) ->
+                  List.min_elt results ~compare:(fun (_, _, a, _, _, _) (_, _, b, _, _, _) ->
                       Float.compare a b)
                 in
                 (match best with
-                | Some (bfc, r, ms, ctx', timing') when Float.(ms < chain_ms) -> (
-                    chain := (r, ms, ctx', timing');
+                | Some (bfc, r, ms, ctx', timing', rep) when Float.(ms < chain_ms) -> (
+                    chain := (r, ms, ctx', timing', rep);
                     accepted := (tn, bfc.LL.fc_flip) :: !accepted;
                     if List.length group > 1 then
                       logf "flip group %s: %s wins at %.4f ms" (Tn.debug_name tn)
@@ -1576,13 +1619,14 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
           walk candidates;
           if !pruned > 0 then
             logf "flip refinement: %d flip(s) bound-pruned, %d measured" !pruned !measured;
-          let chain_result, chain_ms, _, _ = !chain in
+          let chain_result, chain_ms, _, _, chain_report = !chain in
           if Float.(chain_ms < winner_ms) then (
             logf "flip refinement ships: %.4f ms (the placement A/B winner was %.4f ms)" chain_ms
               winner_ms;
             let commit () =
               match refined_decision (List.rev !accepted) with
-              | Some decision -> persist ~decision ~shipped_ms:chain_ms ~a_ms ~b_ms
+              | Some decision ->
+                  persist ~decision ~shipped:chain_report ~shipped_ms:chain_ms ~a_ms ~b_ms
               | None ->
                   logf
                     "placement store: the refined vector names a node outside the decision \

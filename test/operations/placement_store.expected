@@ -8,13 +8,18 @@ the cold run's routine computes the right values: true
 the cold run records exactly one decision, whenever its evidence was clean: true
 a decision is never recorded over refused windows or a failed search: true
 the recorded decision is the shipped one: true
+the two arms report the distinct digests of the lowerings they tuned: true
+the recorded outcome digest is the shipped search's own source digest: true
+a fresh lowering of the recorded decision reproduces the digest the shipped search tuned: true
 the warm run's routine computes the right values: true
 the warm run replays the decision exactly when the cold run recorded one: one search, no flips: true
 a replay ships the recorded label: true
 a replay ships the recorded placement of the intermediate: true
 a replay's one search is a schedule-cache replay: true
+a replay's one search tunes the lowering the recorded decision was measured on: true
 after a failed replay, the routine computes the right values: true
 a failed replay is not reported; the arms it falls back to report in position: true
+the entry the store holds is reproduced by a fresh lowering of its decision: true
 the forced run's routine computes the right values: true
 a forced arm searches both arms whatever the store holds: true
 a forced arm ships the forced arm: true
@@ -29,3 +34,10 @@ an entry that no longer reproduces its program is overwritten by the re-tune, gi
 after an entry that names a node the problem lacks, the routine computes the right values: true
 an entry that names a node the problem lacks is ignored and the placements re-tuned: true
 an entry that names a node the problem lacks is overwritten by the re-tune, given clean evidence: true
+the caller's and the timing lineage lower the default placements differently: true
+with a timing context, the cold run's routine computes the right values: true
+with a timing context, the cold run records a decision of its own, whenever its evidence was clean: true
+with a timing context, the recorded outcome digest is the shipped search's own source digest: true
+with a timing context, a fresh lowering of the recorded decision in the timing lineage reproduces it: true
+with a timing context, the warm run's routine computes the right values: true
+with a timing context, the warm run replays the recorded decision: one search, no flips, the recorded label, tuning the recorded lowering: true

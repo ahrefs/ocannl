@@ -830,10 +830,16 @@ files.
   (`Context.placements` of the caller's context — prior decisions, or the intent the lookup falls
   back to) and its inline/footprint preferences; the decision itself is what the entry records, so
   it is outside the key. The entry holds `Default` / `Materialize_all` / `Refined flips` and an
-  `outcome_digest` — the placement-aware digest of the lowering the decision produces, recomputed
-  through `Context.lowered_for_decisions` at store time and at replay: an entry whose decision no
-  longer reproduces its program (a cap moved, a lineage inherits differently, a flip names a node
-  the problem lacks) is re-tuned and overwritten, never applied. A hit runs ONE search from the
+  `outcome_digest` — the placement-aware digest of the lowering the decision produces. It is
+  RECORDED from the shipped search's own `Autotune.report.source_digest` (gh-ocannl-1022: what was
+  tuned, the key its schedule entry lives under) and RECOMPUTED at replay through
+  `Train.decision_lowering_digest` (`Context.lowered_for_decisions` in the SEARCH lineage —
+  `timing_ctx` when given, since every candidate and the shipped winner derive from that lineage's
+  base lowering): an entry whose decision no longer reproduces its program (a cap moved, a lineage
+  inherits differently, a flip names a node the problem lacks) is re-tuned and overwritten, never
+  applied. That recording and recomputation agree is lowering determinism between a compile's
+  `lowered_transform` and the analysis-only path; the test asserts it as an equality, so a
+  divergence fails there instead of surfacing as a store that re-tunes every warm run. A hit runs ONE search from the
   replayed context (normally a schedule-cache replay), so `?report` sees one report there and the
   positional two-arm contract holds only on cold runs — attribute by `on_ship`, which the harness's
   `tune_json` now uses to name a lone report. Recorded only from clean evidence (every observed

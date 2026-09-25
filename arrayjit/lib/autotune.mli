@@ -879,14 +879,28 @@ type report = {
   best_schedule : Ir.Schedule_cache.saved_schedule;
       (** The winner's schedule; for a fissioned winner, the concatenation of the per-segment
           schedules (informational). Empty when nothing was timed. *)
+  source_digest : string;
+      (** The digest of the base lowering this call tuned (gh-ocannl-1022):
+          {!Ir.Schedule_cache.digest} of the placement-aware canonical form the base compile
+          captured inside its [lowered_transform], in the search's lineage ([timing_ctx] when one
+          was given). It is the digest the call's schedule entry is stored and looked up under, and
+          what [Train.tune_placements] records as a placement decision's [outcome_digest] — what the
+          shipped search actually tuned, rather than what a re-lowering says it would have.
+
+          Carried by every report the call emits once the capture has happened: completed searches,
+          cache replays, dead searches, a search-less call's cache miss, and the pre-search failures
+          that follow the base compile. [""] exactly when the call never reached a base lowering: a
+          search-less call with no cache directory (which skips the base compile), and a failure
+          before the base compile's transform ran (a failure after it, at codegen or link, carries
+          the digest of the lowering it had captured). *)
 }
 
 val no_search_report : timing:timing_mode -> report
 (** The report of a {!tune} call that never searched (config [autotune_search=false], gh-ocannl-559,
     and no cache entry to replay): [outcome = Search_disabled], every counter zero, every time
-    [infinity], [best_label] empty and [best_tensorization = None]. The caller gets the untuned
-    default compile. Also the base the pre-search failure reports are built on, with [outcome]
-    replaced and whatever census the call had reached filled in.
+    [infinity], [best_label] empty, [best_tensorization = None] and [source_digest = ""]. The caller
+    gets the untuned default compile. Also the base the pre-search failure reports are built on,
+    with [outcome] replaced and whatever census the call had reached filled in.
 
     [timing] is the objective the call resolved, which is all that distinguishes one of these from
     another: it names what the (absent) times {e would} have been measured under, and keeps

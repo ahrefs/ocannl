@@ -144,6 +144,9 @@ type report = {
           and on a [Cache_replay] report it is the storing search's measurement, like [best_ms] —
           the counters describe this call, the times describe the program. *)
   best_schedule : SC.saved_schedule;
+  source_digest : string;
+      (** The digest of the base lowering this call tuned (gh-ocannl-1022), [""] when it never
+          reached one. See the interface. *)
 }
 
 (** The report of a [tune] call that never searched (config [autotune_search=false], gh-ocannl-559):
@@ -198,6 +201,9 @@ let no_search_report ~timing =
     best_mma_scalar_fallbacks = 0;
     mma_best_ms = Float.infinity;
     best_schedule = [];
+    (* No base lowering reached yet: [tune] fills this in once its base compile has captured one,
+       and every report from then on carries it. *)
+    source_digest = "";
   }
 
 (** The stable one-word name of an outcome state, for logs, JSON records and test goldens. *)
@@ -3264,11 +3270,18 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
       | None, Error failure -> raise_pre_search failure
       | None, Ok _ -> failwith "Autotune.tune: backend compile did not invoke lowered_transform"
     in
+    (* The key this call's schedule entry is stored and looked up under, and (gh-ocannl-1022) the
+       [source_digest] of every report from here on, failures included: they all describe a search
+       of this lowering. Shadowing [base_report] reaches [census] and every [~base] passed below;
+       the report closures defined above keep the empty-digest one, which only the failures that
+       precede the capture use without a [~base]. *)
+    let base_digest = SC.digest canon in
+    let base_report = { base_report with source_digest = base_digest } in
     let baseline_linked, baseline_decline =
       match base_outcome with
       | Ok (bctx, broutine) -> (Some (bctx, broutine), None)
       | Error (Outcome.Classified classified) -> (None, Some classified)
-      | Error (Outcome.Fatal _ as failure) -> raise_pre_search failure
+      | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:base_report failure
     in
     (* gh-ocannl-550: the base compile runs BEFORE the cache is consulted — its lowering is what
        every candidate and every replay derives from — so on the two paths that do not search, its
@@ -3282,7 +3295,6 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
           release_quietly ~what:"the baseline compile" bctx)
     in
     release_baseline_hook := release_baseline;
-    let base_digest = SC.digest canon in
     let codegen_tag = SC.codegen_tag ~limits () in
     let objective = timing_string timing in
     let key =
@@ -3469,6 +3481,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                        none, and for entries written before the field existed. *)
                     mma_best_ms = Option.value entry.SC.mma_best_ms ~default:Float.infinity;
                     best_schedule = flat_schedule c.form;
+                    source_digest = base_digest;
                   };
                 Some (c.cctx, c.routine)
             | Error (Outcome.Classified classified) ->
@@ -3873,6 +3886,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               best_mma_scalar_fallbacks = Option.value_map best_c ~default:0 ~f:mma_scalar_fallbacks;
               mma_best_ms = !mma_best_ms;
               best_schedule = Option.value_map best_c ~default:[] ~f:(fun c -> flat_schedule c.form);
+              source_digest = base_digest;
             }
           in
           (* Reporting is best-effort on the exceptional path and must not replace the compiler
@@ -4643,6 +4657,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               best_mma_scalar_fallbacks = Option.value_map best_c ~default:0 ~f:mma_scalar_fallbacks;
               mma_best_ms = !mma_best_ms;
               best_schedule = Option.value_map best_c ~default:[] ~f:(fun c -> flat_schedule c.form);
+              source_digest = base_digest;
             }
           in
           let result =
