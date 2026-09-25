@@ -305,12 +305,13 @@ let () =
       ~f:(Ll_test.cycle ~dims:[| 20; 20 |] ~modulus:7 ~offset:0. ~stride:0.5)
       ()
   in
-  (* This site is where the guard bites: [wb]'s former modulus 5 divides the 20-wide row stride, so
-     the helper rejects it. 9 is coprime to 20 and keeps the cells in the same [-2, 2], at
-     half-integer steps. *)
+  (* This site is where the guard bites: [wb]'s cells are the five integers in [-2, 2], and modulus
+     5 divides the 20-wide row stride, so the row-major key would make every row identical. The
+     radix lifts that without touching the value set (ahrefs/ocannl#1024): 7 is coprime to 5 and off
+     1 (mod 5), so the square operand is not its own transpose either. *)
   let wb =
     NTDSL.init ~l:"wb" ~prec:Ir.Ops.single ~o:[ 20; 20 ]
-      ~f:(Ll_test.cycle ~dims:[| 20; 20 |] ~modulus:9 ~offset:(-4.) ~stride:0.5)
+      ~f:(Ll_test.cycle ~radix:7 ~dims:[| 20; 20 |] ~modulus:5 ~offset:(-2.) ~stride:1.)
       ()
   in
   let%op awk = wa +* "ik;kj=>ij" wb in

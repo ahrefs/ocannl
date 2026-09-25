@@ -7,6 +7,11 @@
    that out — [|2; 4; 3|] with modulus 3 has strides [12; 3; 1], so despite 3 and 4 being coprime
    only the innermost index moves the value.
 
+   Blindness and the value set are separate knobs (ahrefs/ocannl#1024): [~radix] lifts a blind axis
+   without touching [~modulus], so a site whose five values are load-bearing keeps them at a size
+   the plain row-major key cannot serve, while leaving [~radix] out keeps the arithmetic of the
+   hand-written idiom every converted site replaced.
+
    Exactness is numeric, so it is exhibited here rather than argued: the cells are bf16-exact, some
    partial sum of the reductions accum_width actually builds is NOT (which is what makes per-step
    narrowing visible — a nonzero mean over too few terms would be the zero-mean trap wearing a
@@ -39,6 +44,26 @@ let partials ~dims =
       let sum = acc +. Ll_test.drift ~dims (Array.append [| 0 |] rest) in
       (sum, sum))
 
+(* Whether stepping any one index of [idcs] by one, where [dims] leaves room, moves [f]'s value. *)
+let moves_along_every_axis ~dims f idcs =
+  Array.for_alli dims ~f:(fun ax extent ->
+      idcs.(ax) + 1 >= extent
+      ||
+      let next = Array.copy idcs in
+      next.(ax) <- idcs.(ax) + 1;
+      not (Float.equal (f idcs) (f next)))
+
+let refuses f =
+  try
+    ignore (f ());
+    false
+  with Invalid_argument _ -> true
+
+(* sketch_family_tree's [wb]: the five integers in [-2, 2] on a 20x20 operand, where 5 divides the
+   row stride. *)
+let square = [| 20; 20 |]
+let wb ?radix idcs = Ll_test.cycle ?radix ~dims:square ~modulus:5 ~offset:(-2.) ~stride:1. idcs
+
 let () =
   p "cycle rejects a modulus blind to an axis, which coprimality with the extent does not rule out"
     (try
@@ -46,7 +71,38 @@ let () =
        false
      with Invalid_argument _ -> true);
   p_all "cycle accepts the shapes the accumulator-width legs use" shapes ~f:(fun dims ->
-      Option.is_none (Ll_test.blind_axis ~dims ~modulus:13));
+      Option.is_none (Ll_test.blind_axis ~dims ~modulus:13 ()));
+  (* What lets a conversion move no golden: the default key is the row-major offset, so [cycle] is
+     the idiom [wa] was written in before sketch_family_tree converted it. *)
+  p_all "without a radix, cycle computes the hand-written flat idiom it replaces"
+    (all_indices square) ~f:(fun idcs ->
+      Float.equal
+        (Ll_test.cycle ~dims:square ~modulus:7 ~offset:0. ~stride:0.5 idcs)
+        (Float.of_int (((idcs.(0) * 20) + idcs.(1)) % 7) *. 0.5));
+  p "without a radix, cycle refuses modulus 5 on the 20x20 operand"
+    (refuses (fun () -> wb [| 0; 0 |]));
+  p_all "a radix coprime to the modulus lifts the blind axis: every index moves the value"
+    (all_indices square)
+    ~f:(moves_along_every_axis ~dims:square (wb ~radix:7));
+  p "under that radix the modulus still chooses the value set: exactly the five integers in [-2, 2]"
+    (let values = List.map (all_indices square) ~f:(wb ~radix:7) in
+     List.equal Float.equal
+       (List.dedup_and_sort values ~compare:Float.compare)
+       [ -2.; -1.; 0.; 1.; 2. ]);
+  p_exists "a radix off 1 (mod modulus) keeps the square operand distinct from its transpose"
+    (all_indices square) ~f:(fun idcs ->
+      not (Float.equal (wb ~radix:7 idcs) (wb ~radix:7 [| idcs.(1); idcs.(0) |])));
+  p "a radix sharing a factor with the modulus is refused, however it relates to the dims"
+    (refuses (fun () -> wb ~radix:5 [| 0; 0 |]) && refuses (fun () -> wb ~radix:10 [| 0; 0 |]));
+  (* The two forms a site is written in — [NTDSL.init]'s multi-index and [Array.init]'s flat offset,
+     in row-major order — have to mint the same operand once a radix makes the key more than the
+     offset itself. *)
+  let dims = [| 3; 4; 5 |] in
+  p_alli "under a radix, cycle_flat over the row-major offsets is cycle over the multi-indices"
+    (all_indices dims) ~f:(fun i idcs ->
+      Float.equal
+        (Ll_test.cycle ~radix:7 ~dims ~modulus:5 ~offset:0. ~stride:1. idcs)
+        (Ll_test.cycle_flat ~radix:7 ~dims ~modulus:5 ~offset:0. ~stride:1. i));
   p_all "drift varies with every index of every shape used" shapes ~f:(fun dims ->
       let base = Array.map dims ~f:(fun _ -> 0) in
       Array.for_alli dims ~f:(fun ax _ ->
