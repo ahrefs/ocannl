@@ -1467,8 +1467,12 @@ val on_candidate_measured : (label:string -> digest:string -> float -> float) re
     instead of depending on the machine's timings. The default is the identity and no configuration
     selects it. *)
 
-val default_seed_label : string
-(** The label {!on_candidate_measured} receives for the seed a search attributes as the untuned
-    default — the one whose refusal sets [report.default_refused] and whose time is
-    [report.default_ms]. Rendered from that seed's spec, so a test that targets the default follows
-    a reworded label rather than restating it. *)
+val default_seed_label : backend_name:string -> string option
+(** The label {!on_candidate_measured} receives for the candidate a search on [backend_name]
+    attributes as the untuned default — the one whose refused window sets [report.default_refused]
+    and whose time is [report.default_ms]. [Some "baseline"] with automatic scheduling inactive,
+    where the default is the serial form; the default-reproducing [config_thresholds] seed's label
+    with it active and fissioning; [None] when it is active without fission, where no candidate
+    reproduces the default. {!tune}'s own attribution reads this, so the two cannot disagree. One
+    case it cannot foresee: a default seed whose code equals the serial baseline's dedups against
+    it, and is timed only under the label ["baseline"]. *)

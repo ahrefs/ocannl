@@ -21,8 +21,6 @@ open Ocannl
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 
-let default_seed_label = Autotune.default_seed_label
-
 let () =
   (* 128 x 128 output cells reach [cpu_schedule_min_parallel], so on cc the untuned default is
      parallel and distinct from the serial baseline; below it, the default seed dedups against the
@@ -41,7 +39,14 @@ let () =
   let%op product = a * b in
   let comp = Train.forward product in
   let parent = Context.auto () in
-  Stdio.eprintf "measured refusal backend: %s\n%!" (Context.backend_name parent);
+  let backend_name = Context.backend_name parent in
+  Stdio.eprintf "measured refusal backend: %s\n%!" backend_name;
+  (* The test config leaves automatic scheduling and fission at their defaults, so the default is a
+     seed; [None] would mean no candidate reproduces it, and the claims below would have no
+     target. *)
+  let default_seed_label =
+    Option.value (Autotune.default_seed_label ~backend_name) ~default:"<no default seed>"
+  in
   let default_digest = ref None and seam_refused = ref 0 and report = ref None in
   (* The label of the latest attempt, the label of a timed window the seam has not yet followed, and
      the labels of the windows the host refused. *)
