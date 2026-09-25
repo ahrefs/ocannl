@@ -94,6 +94,14 @@ let () =
       not (Float.equal (wb ~radix:7 idcs) (wb ~radix:7 [| idcs.(1); idcs.(0) |])));
   p "a radix sharing a factor with the modulus is refused, however it relates to the dims"
     (refuses (fun () -> wb ~radix:5 [| 0; 0 |]) && refuses (fun () -> wb ~radix:10 [| 0; 0 |]));
+  (* Place values are reduced as they are built: 1_000_003^4 overflows an int, and the wrapped power
+     must not read as a multiple of the modulus (PR review round 1). *)
+  let rank5 = [| 2; 2; 2; 2; 2 |] in
+  p_all "a large radix on a high-rank shape is judged by its residue, not an overflowed power"
+    (all_indices rank5)
+    ~f:
+      (moves_along_every_axis ~dims:rank5
+         (Ll_test.cycle ~radix:1_000_003 ~dims:rank5 ~modulus:5 ~offset:0. ~stride:1.));
   (* The two forms a site is written in — [NTDSL.init]'s multi-index and [Array.init]'s flat offset,
      in row-major order — have to mint the same operand once a radix makes the key more than the
      offset itself. *)

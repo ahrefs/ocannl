@@ -89,34 +89,34 @@ let unflat ~dims i =
   if Array.length dims > 0 then idcs.(0) <- !rest;
   idcs
 
-(** [place_values ?radix ~dims ()] is the weight each axis's index carries in {!cycle}'s key,
-    outermost first: the row-major strides by default (so the key is {!flat}), and with [~radix:h]
-    the powers [h^(n-1-ax)] — the multi-index read as a base-[h] numeral whatever the extents are.
-*)
-let place_values ?radix ~dims () =
+(** [place_residues ?radix ~dims ~modulus ()] is the weight each axis's index carries in {!cycle}'s
+    key, outermost first, reduced mod [modulus]: the row-major strides by default (so the key is
+    {!flat}), and with [~radix:h] the powers [h^(n-1-ax)] — the multi-index read as a base-[h]
+    numeral whatever the extents are. Reduced at every step rather than materialized, so a large
+    radix or a high rank cannot overflow a power onto a false multiple of [modulus]. *)
+let place_residues ?radix ~dims ~modulus () =
   let n = Array.length dims in
-  let w = Array.create ~len:n 1 in
+  let w = Array.create ~len:n (1 % modulus) in
   for ax = n - 2 downto 0 do
-    w.(ax) <- w.(ax + 1) * Option.value radix ~default:dims.(ax + 1)
+    w.(ax) <- w.(ax + 1) * (Option.value radix ~default:dims.(ax + 1) % modulus) % modulus
   done;
   w
 
 (** [blind_axis ?radix ~dims ~modulus ()] is the outermost axis whose index {!cycle} would ignore,
-    if any, with that axis's place value: stepping along axis [ax] moves the key by the axis's place
-    value ({!place_values}), so the cycle is constant along [ax] exactly when [modulus] divides it.
-    Without [~radix] the place values are the row-major strides, which the site's [dims] fix; with
-    [~radix:h] coprime to [modulus] no place value is a multiple of it, whatever [dims] is. *)
+    if any: stepping along axis [ax] moves the key by the axis's place value, so the cycle is
+    constant along [ax] exactly when [modulus] divides it ({!place_residues}). Without [~radix] the
+    place values are the row-major strides, which the site's [dims] fix; with [~radix:h] coprime to
+    [modulus] no place value is a multiple of it, whatever [dims] is. *)
 let blind_axis ?radix ~dims ~modulus () =
-  let w = place_values ?radix ~dims () in
-  Array.foldi w ~init:None ~f:(fun ax found w_ax ->
-      match found with None when w_ax % modulus = 0 -> Some (ax, w_ax) | _ -> found)
+  Array.find_mapi (place_residues ?radix ~dims ~modulus ()) ~f:(fun ax r ->
+      if r = 0 then Some ax else None)
 
 (** [cycle ?radix ~dims ~modulus ~offset ~stride idcs] is
     [(key idcs mod modulus + offset) * stride]: the values [k * stride] for [k] cycling through
     [offset .. offset + modulus - 1]. The [key] is {!flat} by default — the row-major offset, so the
     period is [modulus] along the flat index and the arithmetic is byte-identical to the
     hand-written idiom a site converts from — and with [~radix:h] it is the multi-index read in base
-    [h] ({!place_values}).
+    [h] ({!place_residues}).
 
     The two knobs are independent on purpose (ahrefs/ocannl#1024). [~modulus] (with [~offset] and
     [~stride]) chooses the VALUE SET: how many distinct cells there are, and the range an exactness
@@ -176,7 +176,8 @@ let blind_axis ?radix ~dims ~modulus () =
     worked recipe, measured over lags 1..256 and over every block width from 1 to 64. *)
 let cycle_flat ?radix ~dims ~modulus ~offset ~stride i =
   (match blind_axis ?radix ~dims ~modulus () with
-  | Some (ax, w) ->
+  | Some ax ->
+      let dims_s = Sexp.to_string (Array.sexp_of_t Int.sexp_of_t dims) in
       raise
         (Invalid_argument
            (match radix with
@@ -185,22 +186,22 @@ let cycle_flat ?radix ~dims ~modulus ~offset ~stride i =
                  "Ll_test.cycle: modulus %d is blind to axis %d of %s (row-major stride %d is a \
                   multiple of it), so the value would not vary with that index; pass a ~radix \
                   coprime to the modulus to keep its value set"
-                 modulus ax
-                 (Sexp.to_string (Array.sexp_of_t Int.sexp_of_t dims))
-                 w
+                 modulus ax dims_s
+                 (Array.fold (Array.subo dims ~pos:(ax + 1)) ~init:1 ~f:( * ))
            | Some h ->
                Printf.sprintf
-                 "Ll_test.cycle: radix %d is blind to axis %d of %s under modulus %d (place value \
-                  %d is a multiple of it), so the value would not vary with that index; pick a \
-                  radix coprime to the modulus"
-                 h ax
-                 (Sexp.to_string (Array.sexp_of_t Int.sexp_of_t dims))
-                 modulus w))
+                 "Ll_test.cycle: radix %d is blind to axis %d of %s under modulus %d (%d^%d is a \
+                  multiple of it), so the value would not vary with that index; pick a radix \
+                  coprime to the modulus"
+                 h ax dims_s modulus h
+                 (Array.length dims - 1 - ax)))
   | None -> ());
   let key =
     match radix with
     | None -> i
-    | Some h -> Array.fold (unflat ~dims i) ~init:0 ~f:(fun acc j -> ((acc * h) + j) % modulus)
+    | Some h ->
+        let h = h % modulus in
+        Array.fold (unflat ~dims i) ~init:0 ~f:(fun acc j -> ((acc * h) + j) % modulus)
   in
   (Float.of_int (key % modulus) +. offset) *. stride
 
