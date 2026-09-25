@@ -348,6 +348,7 @@ let () =
       a_vec_last = vec_len > 0;
       a_vec_len = vec_len;
       a_guarded = false;
+      a_gated = false;
       a_rmw = false;
       a_val_syms = [];
       a_stmt_write = None;

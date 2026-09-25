@@ -773,6 +773,13 @@ type 'tn access = {
   a_vec_len : int;
       (** The run length of a vectorized write along the minor axis; [0] unless [a_vec_last]. *)
   a_guarded : bool;  (** Under an [If] guard: executes conditionally, never a definite write. *)
+  a_gated : bool;
+      (** Under a SCALAR gate (gh-ocannl-1016): a read inside a [Where] arm or a gated operand
+          ({!Ops.binop_conditionality} [Gated_second], {!Ops.ternop_conditionality}
+          [Cond_and_one_arm]) — evaluated only when the gate selects it, a conditionality inside one
+          statement that [a_guarded] (the [If] statement) does not carry. A [Local_scope] body
+          clears it: scope definitions are hoisted out of the expression and execute
+          unconditionally. Always [false] for a write (statements are never gated). *)
   a_rmw : bool;
       (** The statement also reads [a_tn] on its right-hand side (an accumulation): the write
           carries a reduction dependence — an order-sensitive legality dimension (the determinism
@@ -797,6 +804,71 @@ type 'tn access = {
           descends into. *)
 }
 [@@deriving sexp_of]
+
+(** {2 Statement effects}
+
+    gh-ocannl-1016: the sibling view of {!type-access}, from the same walk
+    ([Low_level.affine_relations]) — what a statement does that no tensor-node access carries. A
+    "between two points, what else runs?" question is a query over the two lists: a tensor write is
+    an access, everything else that can make code motion observable is a row here. Before the view,
+    every such question re-walked the raw code with a hand-rolled variant of the same read, and each
+    variant was where the next missed effect hid. *)
+
+type 'tn effect_kind =
+  | Local_write
+      (** A [Set_local], or a [Scan_loop]'s carried-state initialization or per-iteration rotation:
+          a scope local changes value. *)
+  | Local_declare  (** A [Declare_local]: a statement-level local comes into scope. *)
+  | Scope_body
+      (** A [Local_scope] occurrence: its body's statements run at this position, hoisted ahead of
+          the statement whose expression holds it, and unconditionally (whatever scalar gate the
+          occurrence sits under). The body's own accesses and effects are rows too, under the path
+          this row names ({!in_scope_body}). *)
+  | Barrier  (** A [Workgroup_barrier]. *)
+  | Staged  (** [Staged_compilation]: opaque code, whose accesses are not enumerated at all. *)
+  | Mma
+      (** A [Tile_mma]: its [fallback]'s accesses stand for its footprint, but the construct itself
+          is emitted as one tensor-core operation — a code-motion barrier, not the loop nest the
+          fallback spells. *)
+  | Merge_read of 'tn
+      (** A read of the merge buffer sourced from the node ([Get_merge_buffer]): a separate,
+          transient input — not an access of the node's own buffer, which is why it is no
+          {!type-access}. *)
+[@@deriving sexp_of]
+
+type 'tn statement_effect = {
+  e_kind : 'tn effect_kind;
+  e_loops : (Idx.symbol * (int * int)) list;
+      (** Enclosing loops, outermost first, as {!field-a_loops}. *)
+  e_guarded : bool;  (** Under an [If] guard, as {!field-a_guarded}. *)
+  e_gated : bool;
+      (** Under a scalar gate, as {!field-a_gated}: only a [Merge_read] can be; a [Scope_body] is
+          not, its body being hoisted out of the gate. *)
+  e_path : path_comp list;
+      (** The program position, in the components of {!field-a_path}: a statement-shaped effect
+          (every kind but [Scope_body] and [Merge_read]) sits at its statement's [Write] — a
+          [Set_local]'s right-hand-side reads at the same statement's [Rhs] order before it; a
+          [Merge_read] at its reading expression's position, like a read access; a [Scope_body] at
+          the base its body's rows extend (the [Arg] component). *)
+}
+[@@deriving sexp_of]
+
+(** Whether every enclosing loop of an access or effect executes: a row under a dead loop
+    ([to_ < from_]) never happens. *)
+let loops_live (loops : (Idx.symbol * (int * int)) list) : bool =
+  List.for_all loops ~f:(fun (_, (lo, hi)) -> hi >= lo)
+
+(** Whether a path lies inside a [Local_scope] body (it crosses an [Arg] component). *)
+let in_scope_body (path : path_comp list) : bool =
+  List.exists path ~f:(function Arg _ -> true | _ -> false)
+
+(** [within_statement ~write path]: whether [path] lies inside the [Set]-family statement whose own
+    write sits at [write] — its right-hand side, the [Local_scope] bodies inlined there, or the
+    write itself. [false] when [write] is not a write position. *)
+let within_statement ~(write : path_comp list) (path : path_comp list) : bool =
+  match (List.drop_last write, List.last write) with
+  | Some base, Some Write -> List.is_prefix path ~prefix:base ~equal:equal_path_comp
+  | _ -> false
 
 (** Whether two accesses (of the same node) can touch a common cell, each access taken over its
     whole loop box — the two sides' iterations paired independently, including iterations of loops

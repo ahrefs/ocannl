@@ -4046,7 +4046,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules affine_extraction)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict arrayjit.ll_builders)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

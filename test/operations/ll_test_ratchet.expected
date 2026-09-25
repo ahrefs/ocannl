@@ -1,7 +1,6 @@
 Source floor: test/ >= 200
 Source floor: arrayjit/test/ >= 20
 Adoption threshold: 1 record construction or 1 private traversal
-test/operations/affine_extraction.ml -- records<=14 traversals<=0: existing migration debt; adopt ll_test when touched
 test/operations/affine_lowering.ml -- records<=0 traversals<=3: existing migration debt; adopt ll_test when touched
 test/operations/autotune_scope_menu.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
 test/operations/autotune_smoke.ml -- records<=3 traversals<=1: existing migration debt; adopt ll_test when touched
