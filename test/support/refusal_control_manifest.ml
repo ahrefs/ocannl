@@ -253,6 +253,9 @@ let raw_entries =
         "[scanner-refusal:267a42b2812f4679c4463495cc199d36] reads the configuration";
         "[scanner-refusal:41d9bc729b5b8b3908a48d45b1e0203c] reads the configuration";
         "[scanner-refusal:a323f01100bfd685e76c62154cf4eaae] reads the configuration";
+        "[scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner";
+        "[scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests";
+        "[scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests";
         "[scanner-refusal:8340c017c83e73ac4649ceb92fa15ee7] scanner refusal";
         "[scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no";
         "[scanner-refusal:0b33370125e32eaa4bb0f50c6cc3bc1a] exempted declarations no";
@@ -347,6 +350,10 @@ let raw_entries =
         "[scanner-refusal:b098b95e7bbcc632b19f0e470447fd97] both declaring passes";
         "[scanner-refusal:d8c7b4408936ac9480281388a26eb873] dynamic reach whose";
         "[scanner-refusal:7a38e9cb5b4418e6e5bb8fe3b294d8fd] the same variable";
+        "[scanner-refusal:b8514eb10109dce5b36ef105c1bc36a6] module passes unaggregated";
+        "[scanner-refusal:9dc8db9d29efd1b85da8aff105b1aae8] tested module with";
+        "[scanner-refusal:775f43c0a7dca22c07a091f603457c7a] another is reported";
+        "[scanner-refusal:87104dd3758037b44d4f5c8979a42039] per-module alias listed";
       ] );
     ( "ocamlformat_ignore_scan.ml",
       [
@@ -524,6 +531,12 @@ let raw_direct_evidence =
     ( "digest_completeness.ml:1825a277ba0eda3313fbe079e465c15d",
       "ok: environment read -- a function of the file's own that happens to share the name is not \
        the reader" );
+    ( "env_var_deps.ml:b0ff4d4e5709299b84685f0fc189cc63",
+      "a rule whose alias names one module and whose run tests another is reported: true" );
+    ( "env_var_deps.ml:5893c6332b1f903470ec51cad4f20e8f",
+      "a tested module with no per-module rule is reported, and the checker exits 1: true" );
+    ( "env_var_deps.ml:5f2b09efad6e397fb5bd77b84255d0bf",
+      "a per-module alias listed in the `runtest` aggregate is reported as a double run: true" );
     ( "env_var_deps.ml:490ac5e3405d328c2953c38df4f0974b",
       "a rule reusing the alias dune generates for a `(test)` in the same `(subdir …)` group is \
        reported there too: true" );

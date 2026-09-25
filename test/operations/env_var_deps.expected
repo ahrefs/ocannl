@@ -114,8 +114,10 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   bin/dune                                 @bin-smoke
   bin/dune                                 @bin-smoke-env_spelling_gate
   test/einsum/dune                         @runtest
+  test/einsum/dune                         @runtest-einsum_trivia
   test/einsum/dune                         @runtest-env_spelling_gate
   test/einsum/dune                         @runtest-inline_permuted_view-c_fwd
+  test/einsum/dune                         @runtest-surjectivity
   test/einsum/dune                         @runtest-test_cse-cse_d_fwd
   test/gpt2/dune                           @runtest
   test/gpt2/dune                           @slow
@@ -159,6 +161,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-flip_bound_pruning
   test/operations/dune                     @runtest-foreign_c_stderr
   test/operations/dune                     @runtest-generated_provenance
+  test/operations/dune                     @runtest-hello_world_op
   test/operations/dune                     @runtest-ll_test_ratchet
   test/operations/dune                     @runtest-log_index_width_narrow
   test/operations/dune                     @runtest-log_index_width_wide
@@ -171,10 +174,12 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-optional_arg_inventory
   test/operations/dune                     @runtest-optional_arg_inventory_control
   test/operations/dune                     @runtest-placement_surface
+  test/operations/dune                     @runtest-primitive_ops
   test/operations/dune                     @runtest-shell_scripts_parse
   test/operations/dune                     @runtest-sweep_harness
   test/operations/dune                     @runtest-test_config_consistency
   test/operations/dune                     @runtest-test_log_stmt_format
+  test/operations/dune                     @runtest-test_threefry4x32
   test/operations/dune                     @runtest-test_where_precision-extension
   test/operations/dune                     @runtest-test_where_precision-unoptimized
   test/operations/dune                     @runtest-top_down_prec-extension
@@ -182,6 +187,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-verdict_quantified
   test/operations/dune                     @runtest-verdict_ratchet
   test/operations/dune                     @runtest-workflow_job_timeouts
+  test/operations/dune                     @runtest-zero2hero_1of7
   test/operations/dune                     @runtest-zero_out_local_decl-extension
   test/operations/dune                     @runtest-zero_out_local_decl-unoptimized
   test/operations/dune                     @scans
@@ -293,7 +299,7 @@ every stanza whose modules call Test_utils.Generated.init declares OCANNL_BUILD_
 Scanner refusal controls (gh-ocannl-800). Sources come from repository-wide scan rules;
 controls are *_cases.expected, *_control.expected, or a live scan golden with an explicit
 `Synthetic controls:` section. Printf substitutions do not decide coverage.
-  statically extracted diagnostics: 398 (details on stderr)
+  statically extracted diagnostics: 405 (details on stderr)
   named exemptions with reasons:
     (none)
 repository-wide scan rules resolve to scanner sources: true
