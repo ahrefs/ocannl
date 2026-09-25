@@ -1442,11 +1442,13 @@ val on_candidate_callback :
 val on_candidate_measured : (label:string -> digest:string -> float -> float) ref
 (** Measurement seam (gh-ocannl-1027), called once per ADMITTED timing window — the dispatched
     baseline's (label ["baseline"]) and each candidate's — with the candidate's label, its schedule
-    digest and the admitted time in milliseconds; the search ranks, records and reports the returned
-    time in its place: the beam, the best-so-far incumbent, {!on_candidate_callback},
-    [report.best_ms]/[baseline_ms], the calibration rows and the schedule cache's stored times. A
-    refused window (contended, or a degenerate clock reading) never reaches it, so it cannot admit
-    one; a returned time that is not finite and positive raises [Invalid_argument]. It exists so a
-    test about the nonwinner paths can pin the ranking — make the first admitted window the fastest
-    and every later one slower — instead of depending on the machine's timings. The default is the
-    identity and no configuration selects it. *)
+    digest and the admitted time in milliseconds. The returned time replaces the reading before the
+    admission gate, so it is what the search ranks, records and reports: the beam, the best-so-far
+    incumbent, {!on_candidate_callback}, [report.best_ms]/[baseline_ms], the calibration rows and
+    the schedule cache's stored times. A refused window (contended, or a degenerate clock reading)
+    never reaches it, so it cannot admit one; a returned time that is not finite and positive
+    refuses the window the way a degenerate reading does. It must return rather than raise: it runs
+    outside the search's containment boundaries. It exists so a test about the nonwinner paths can
+    pin the ranking — make the first admitted window the fastest and every later one slower —
+    instead of depending on the machine's timings. The default is the identity and no configuration
+    selects it. *)
