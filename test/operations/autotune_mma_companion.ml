@@ -28,8 +28,12 @@ let clean_cache dir =
 let () =
   clean_cache "autotune_cache_mma_companion";
   let n = 64 in
-  let xv = Array.init (n * n) ~f:(fun i -> Float.of_int (i % 7) *. 0.25) in
-  let wv = Array.init (n * n) ~f:(fun i -> Float.of_int (i % 5) *. 0.125) in
+  let xv =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:7 ~offset:0. ~stride:0.25)
+  in
+  let wv =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:5 ~offset:0. ~stride:0.125)
+  in
   let bv = Array.init n ~f:(fun i -> Float.of_int (i % 3) -. 1.) in
   let expected =
     Array.init (n * n) ~f:(fun idx ->

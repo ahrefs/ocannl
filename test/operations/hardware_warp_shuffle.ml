@@ -293,7 +293,10 @@ let () =
    while on the C backends it is a serial nest the localizing peel takes whole. --- *)
 let () =
   let n = 32 and inner = 4 in
-  let mv = Array.init (n * inner) ~f:(fun k -> (Float.of_int (k % 13) *. 0.25) -. 1.5) in
+  let mv =
+    Array.init (n * inner)
+      ~f:(Ll_test.cycle_flat ~dims:[| n; inner |] ~modulus:13 ~offset:(-6.) ~stride:0.25)
+  in
   let expected = Array.fold mv ~init:0. ~f:( +. ) in
   let mx = TDSL.ndarray mv ~label:[ "mx" ] ~output_dims:[ n; inner ] () in
   let%op ms = mx ++ "ij=>0" in
@@ -937,7 +940,10 @@ let () =
   (* --- gh-ocannl-959's own shape: a cell mentioning every bound axis is not a per-thread cell. [x]
      is [j: 2; i: 33] so that [acc = x ++ "ji=>i"] has the 33 cells [i + j] reaches; the loops are
      the transform's own, [j] a Workgroup of two and [i] a Workgroup_reduce of a warp. --- *)
-  let mv = Array.init (2 * 33) ~f:(fun k -> (Float.of_int (k % 7) *. 0.25) -. 1.) in
+  let mv =
+    Array.init (2 * 33)
+      ~f:(Ll_test.cycle_flat ~dims:[| 2; 33 |] ~modulus:7 ~offset:(-4.) ~stride:0.25)
+  in
   let mx = TDSL.ndarray mv ~label:[ "race_mx" ] ~output_dims:[ 2; 33 ] () in
   let%op macc = mx ++ "ji=>i" in
   let two_axes_transform ~cell =
@@ -959,7 +965,10 @@ let () =
     ~cpu_value:(mv.(5) +. mv.(33 + 4));
   (* The injective twin: [acc[2 i + j]] over [j < 2] is mixed-radix, and [acc = x ++ "ji=>i"] over
      [x: [2; 64]] has the 64 cells it reaches. [acc[5] = x[1, 2]] on every backend. *)
-  let iv = Array.init (2 * 64) ~f:(fun k -> (Float.of_int (k % 11) *. 0.125) -. 0.5) in
+  let iv =
+    Array.init (2 * 64)
+      ~f:(Ll_test.cycle_flat ~dims:[| 2; 64 |] ~modulus:11 ~offset:(-4.) ~stride:0.125)
+  in
   let ix = TDSL.ndarray iv ~label:[ "race_ix" ] ~output_dims:[ 2; 64 ] () in
   let%op iacc = ix ++ "ji=>i" in
   let injective_transform =
@@ -978,7 +987,10 @@ let () =
     ~value:iv.(64 + 2);
   (* The guards enclosing the reduce level reach its judgement: [j] pinned outside the level makes
      [acc[i + j]] a per-lane cell. [acc[5] = x[0, 5]] on every backend. *)
-  let ov = Array.init (2 * 33) ~f:(fun k -> (Float.of_int (k % 5) *. 0.5) -. 1.) in
+  let ov =
+    Array.init (2 * 33)
+      ~f:(Ll_test.cycle_flat ~dims:[| 2; 33 |] ~modulus:5 ~offset:(-2.) ~stride:0.5)
+  in
   let ox2 = TDSL.ndarray ov ~label:[ "race_ox2" ] ~output_dims:[ 2; 33 ] () in
   let%op oacc = ox2 ++ "ji=>i" in
   let outer_pin_transform =
@@ -1001,7 +1013,10 @@ let () =
   (* A range guard is a domain too: over [i < 16], [acc[i + 16 j]] with [j < 2] is mixed-radix.
      Without the narrowing [(i = 16, j = 0)] and [(i = 0, j = 1)] would meet on [acc[16]]. [acc[21]
      = x[1, 5]] on every backend. *)
-  let rgv = Array.init (2 * n) ~f:(fun k -> (Float.of_int (k % 6) *. 0.25) -. 0.5) in
+  let rgv =
+    Array.init (2 * n)
+      ~f:(Ll_test.cycle_flat ~dims:[| 2; n |] ~modulus:6 ~offset:(-2.) ~stride:0.25)
+  in
   let rgx = TDSL.ndarray rgv ~label:[ "race_rgx" ] ~output_dims:[ 2; n ] () in
   let%op racc = rgx ++ "ji=>i" in
   let range_guard_transform =
@@ -1026,7 +1041,9 @@ let () =
   (* A reduction axis bound as a plain Workgroup — the form [reduction_forms]' retype-workgroup
      member runs only where it serializes: [out[r] += x[r, k]] under a bound [k] is every lane on
      [out[r]], and the Grid/Workgroup pass refuses it before anything renders. *)
-  let rv = Array.init (2 * n) ~f:(fun k -> (Float.of_int (k % 5) *. 0.5) -. 1.) in
+  let rv =
+    Array.init (2 * n) ~f:(Ll_test.cycle_flat ~dims:[| 2; n |] ~modulus:5 ~offset:(-2.) ~stride:0.5)
+  in
   let rx = TDSL.ndarray rv ~label:[ "race_rx" ] ~output_dims:[ 2; n ] () in
   let%op rout = rx ++ "rk=>r" in
   let plain_workgroup_transform =
@@ -1110,8 +1127,12 @@ let () =
      [i] is not, and the fallback's [d[r, c] += a[r, l] * b[l, c]] does not separate it. Serially
      the tile accumulates once per [i]: [d[0, 0] = n * (a b)[0, 0]]. --- *)
   let t = 8 in
-  let mav = Array.init (t * t) ~f:(fun k -> Float.of_int (k % 5) -. 2.) in
-  let mbv = Array.init (t * t) ~f:(fun k -> Float.of_int (k % 3) -. 1.) in
+  let mav =
+    Array.init (t * t) ~f:(Ll_test.cycle_flat ~dims:[| t; t |] ~modulus:5 ~offset:(-2.) ~stride:1.)
+  in
+  let mbv =
+    Array.init (t * t) ~f:(Ll_test.cycle_flat ~dims:[| t; t |] ~modulus:3 ~offset:(-1.) ~stride:1.)
+  in
   let ma = TDSL.ndarray mav ~label:[ "race_ma" ] ~input_dims:[ t ] ~output_dims:[ t ] () in
   let mb = TDSL.ndarray mbv ~label:[ "race_mb" ] ~input_dims:[ t ] ~output_dims:[ t ] () in
   let%op md = ma * mb in

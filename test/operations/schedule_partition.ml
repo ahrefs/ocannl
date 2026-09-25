@@ -273,7 +273,11 @@ let () =
      absent a loop the very next op rewrites: here [partition_breakpoints] derives the pad guard's
      flip point from the scope-nested [s] loop, and the [Partition] it feeds applies. === *)
   let ni, nr, ns = (4, 6, 5) in
-  let xv6 = Array.init (ni * nr * ns) ~f:(fun t -> Float.of_int ((t % 7) + 1) *. 0.25) in
+  let xv6 =
+    Array.init
+      (ni * nr * ns)
+      ~f:(Ll_test.cycle_flat ~dims:[| ni; nr; ns |] ~modulus:7 ~offset:1. ~stride:0.25)
+  in
   let make_graph6 () =
     let x = TDSL.ndarray xv6 ~label:[ "sp_rx" ] ~output_dims:[ ni; nr; ns ] () in
     let%op out = x ++ "irs => i" in

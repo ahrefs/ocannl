@@ -42,6 +42,7 @@
   optional_arg_scan
   source_inventory
   ll_test_scan
+  operand_key_scan
   scan_argv
   scan_floors
   dune_stanza_scan

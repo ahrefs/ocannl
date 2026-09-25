@@ -103,8 +103,12 @@ let n = 64
 
 (* === Census: whole-triple Tensorize, standard vs. transposed-B layout (C backends). === *)
 let () =
-  let mav = Array.init (n * n) ~f:(fun x -> Float.of_int (x % 13) *. 0.25) in
-  let mbv = Array.init (n * n) ~f:(fun x -> Float.of_int (x % 17) -. 8.) in
+  let mav =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:13 ~offset:0. ~stride:0.25)
+  in
+  let mbv =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:17 ~offset:(-8.) ~stride:1.)
+  in
   let ma = TDSL.ndarray mav ~label:[ "tmd_a" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let mb = TDSL.ndarray mbv ~label:[ "tmd_b" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let tensorize_schedule ~out (opt : LL.optimized) : Sched.schedule =
@@ -182,8 +186,14 @@ let () =
     @ [ stage b [ k_i; j ]; stage a [ i_i; k_i ]; tz ]
   in
   let compile_bpack ?(run_parity = false) ~name ~dim () =
-    let av = Array.init (dim * dim) ~f:(fun x -> Float.of_int (x % 13) *. 0.25) in
-    let bv = Array.init (dim * dim) ~f:(fun x -> Float.of_int (x % 17) -. 8.) in
+    let av =
+      Array.init (dim * dim)
+        ~f:(Ll_test.cycle_flat ~dims:[| dim; dim |] ~modulus:13 ~offset:0. ~stride:0.25)
+    in
+    let bv =
+      Array.init (dim * dim)
+        ~f:(Ll_test.cycle_flat ~dims:[| dim; dim |] ~modulus:17 ~offset:(-8.) ~stride:1.)
+    in
     let a = TDSL.ndarray av ~label:[ "tmd_bp_a" ] ~input_dims:[ dim ] ~output_dims:[ dim ] () in
     let b = TDSL.ndarray bv ~label:[ "tmd_bp_b" ] ~input_dims:[ dim ] ~output_dims:[ dim ] () in
     let%op c = a * b in
@@ -263,8 +273,12 @@ let () =
       (count (fun p -> p.Autotune.sk_grid))
       (count (fun p -> p.Autotune.sk_pack_rest))
   in
-  let mav = Array.init (n * n) ~f:(fun x -> Float.of_int (x % 13) *. 0.25) in
-  let mbv = Array.init (n * n) ~f:(fun x -> Float.of_int (x % 17) -. 8.) in
+  let mav =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:13 ~offset:0. ~stride:0.25)
+  in
+  let mbv =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:17 ~offset:(-8.) ~stride:1.)
+  in
   (* Both operands hoistable, standard layout: every family seeds, no mixed shape (nothing left to
      pack in-kernel under the hoisted grid-outermost flavor). *)
   let ma = TDSL.ndarray mav ~label:[ "tmd_s_a" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
@@ -305,7 +319,9 @@ let () =
      pad-composition seeding (gh-ocannl-485): the padded micro-kernel's column extent is the panel
      width, so the register tiling genuinely fires — the (large) padding waste is the tuner's call.
      Unsplit-panel flavors ([bn = 0], panel width = nj) stay filtered. *)
-  let mbn = Array.init (n * 4) ~f:(fun x -> Float.of_int (x % 17) -. 8.) in
+  let mbn =
+    Array.init (n * 4) ~f:(Ll_test.cycle_flat ~dims:[| n; 4 |] ~modulus:17 ~offset:(-8.) ~stride:1.)
+  in
   let ma4 = TDSL.ndarray mav ~label:[ "tmd_s_a4" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let mb4 = TDSL.ndarray mbn ~label:[ "tmd_s_b4" ] ~input_dims:[ 4 ] ~output_dims:[ n ] () in
   let%op yn = ma4 * mb4 in
@@ -364,12 +380,12 @@ let () =
   let count_mma label ~name ~operand_prec ~acc_prec =
     let a =
       NTDSL.init ~l:(name ^ "_a") ~prec:operand_prec ~i:[ n ] ~o:[ n ]
-        ~f:(fun idcs -> Float.of_int (((idcs.(0) * n) + idcs.(1)) % 3) *. 0.25)
+        ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:3 ~offset:0. ~stride:0.25)
         ()
     in
     let b =
       NTDSL.init ~l:(name ^ "_b") ~prec:operand_prec ~i:[ n ] ~o:[ n ]
-        ~f:(fun idcs -> (Float.of_int (((idcs.(0) * n) + idcs.(1)) % 5) -. 2.) *. 0.5)
+        ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:(-2.) ~stride:0.5)
         ()
     in
     let%op c = a * b in
@@ -426,8 +442,12 @@ let () =
           };
     }
   in
-  let av = Array.init (n * n) ~f:(fun x -> Float.of_int (x % 13) *. 0.25) in
-  let bv = Array.init (n * n) ~f:(fun x -> Float.of_int (x % 17) -. 8.) in
+  let av =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:13 ~offset:0. ~stride:0.25)
+  in
+  let bv =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:17 ~offset:(-8.) ~stride:1.)
+  in
   let a = TDSL.ndarray av ~label:[ "tmd_swz_a" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let b = TDSL.ndarray bv ~label:[ "tmd_swz_b" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let%op c = a * b in

@@ -19,52 +19,16 @@ let exemptions =
     ( "test/operations/autotune_smoke.ml",
       Scan.Migration { records = 3; traversals = 1 },
       "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/buffer_aliasing.ml",
-      Scan.Migration { records = 1; traversals = 0 },
-      "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/cpu_simd_reduction.ml",
-      Scan.Migration { records = 5; traversals = 1 },
-      "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/fission_schedule.ml",
-      Scan.Migration { records = 9; traversals = 2 },
-      "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/hardware_axes_parity.ml",
       Scan.Migration { records = 4; traversals = 4 },
       "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/hip_scratch_budget.ml",
       Scan.Migration { records = 5; traversals = 0 },
       "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/mma_tensorization_label.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/model_default_fallback.ml",
       Scan.Migration { records = 2; traversals = 2 },
       "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/narrow_storage_compute.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/schedule_conv_gemm.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/schedule_cpu_pack_matmul.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/schedule_epilogue_fusion.ml",
-      Scan.Migration { records = 4; traversals = 4 },
-      "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/schedule_ldmatrix_matmul.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/schedule_pack_mma_matmul.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/schedule_pipelined_matmul.ml",
-      Scan.Migration { records = 3; traversals = 8 },
-      "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/schedule_register_matmul.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/schedule_swizzle_matmul.ml",
       Scan.Migration { records = 0; traversals = 1 },
       "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/scratch_value_variance.ml",
@@ -81,9 +45,6 @@ let exemptions =
       "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/test_slice_alias.ml",
       Scan.Migration { records = 0; traversals = 2 },
-      "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/tile_mma_declines.ml",
-      Scan.Migration { records = 0; traversals = 1 },
       "existing migration debt; adopt ll_test when touched" );
     ( "test/support/ll_builders.ml",
       Scan.Permanent,

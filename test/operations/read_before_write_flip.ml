@@ -29,8 +29,7 @@ let build () =
   Tensor.unsafe_reinitialize ();
   let x_src =
     NTDSL.init ~l:"rbwf_xsrc" ~prec:Ir.Ops.single ~o:[ 9; 9; 2 ]
-      ~f:(fun idcs ->
-        Float.of_int (((idcs.(0) * 3) + (idcs.(1) * 5) + (idcs.(2) * 7)) % 11) *. 0.125)
+      ~f:(Ll_test.weighted ~weights:[| 3; 5; 7 |] ~modulus:11 ~offset:0. ~stride:0.125)
       ()
   in
   (* An [init] data node has its layout committed at creation; the padded conv needs a fresh operand

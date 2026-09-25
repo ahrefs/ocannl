@@ -1,0 +1,13 @@
+Source floor: test/ >= 200
+Source floor: arrayjit/test/ >= 20
+test/support/ll_test.ml -- every site: the guard itself: its remainders are the arithmetic it checks, not an operand
+test/operations/discriminating_values.ml -- `(((idcs.(0) * 20) + idcs.(1)) % 7)`: the hand-written idiom cycle is pinned equal to: an oracle, not an operand
+test/operations/discriminating_values.ml -- `((idcs.(0) + idcs.(1) + (2 * idcs.(2)) + (3 * idcs.(3))) % 7)`: the hand-written idiom weighted is pinned equal to: an oracle, not an operand
+test/operations/fission_equivalence.ml -- `(idcs.(0) + idcs.(1)) % classes`: a one-hot label: the remainder picks the class a batch row is labelled with
+test/operations/bench_checksum_discrimination.ml -- `(Bc.mix ~salt:0x00A5 (t / n) (t % n) % 97)`: the key is Bench_checksum.mix, the aperiodic mixer; the remainder only bounds its range
+test/operations/autotune_split_reduce.ml -- `(x % 3)`: the remainder only scales a sin/cos term that already varies with every cell; the value is not a function of the key
+test/operations/autotune_split_reduce.ml -- `(x % 4)`: the remainder only scales a sin/cos term that already varies with every cell; the value is not a function of the key
+test/operations/autotune_split_reduce.ml -- `(x % 3)`: the remainder only scales a sin/cos term that already varies with every cell; the value is not a function of the key
+test/operations/autotune_split_reduce.ml -- `(x % 3)`: the remainder only scales a sin/cos term that already varies with every cell; the value is not a function of the key
+test/operations/schedule_split_reduce.ml -- `(x % 5)`: the remainder only scales a sin/cos term that already varies with every cell; the value is not a function of the key
+test/operations/wrap_prec_convert.ml -- `(i % 5)`: the remainder only scales a sin/cos term that already varies with every cell; the value is not a function of the key

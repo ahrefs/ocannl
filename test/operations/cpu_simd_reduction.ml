@@ -210,7 +210,10 @@ let () =
   (* --- Strided (non-contiguous) accumulation: ineligible for chains, must run as a plain serial
      loop without a vectorization pragma. Sums the even-indexed elements of [u]. --- *)
   let r = 24 in
-  let uv = Array.init (2 * r) ~f:(fun k -> (Float.of_int (k % 11) *. 0.125) -. 0.5) in
+  let uv =
+    Array.init (2 * r)
+      ~f:(Ll_test.cycle_flat ~dims:[| 2 * r |] ~modulus:11 ~offset:(-4.) ~stride:0.125)
+  in
   let expected_strided =
     Array.foldi uv ~init:0. ~f:(fun k acc x -> if k % 2 = 0 then acc +. x else acc)
   in

@@ -1,0 +1,31 @@
+the blind 20x20 fixture that started the issue is a multi-index site: true
+a weighted key over several axes is a site: true
+a key let-bound inside the body is followed to its remainder: true
+an axis aliased one name at a time is followed too: true
+a named function is read, not only an ~f argument: true
+mod, Int.rem and a qualified ( % ) are remainders too: true
+the Array.get spelling of an axis read is the same read: true
+an axis read through a computed index counts as several axes: true
+the flat spelling over a product length is a flat site: true
+a flat closure spread over several lines is read whole: both remainders are sites: true
+the positional Stdlib form and List.init are read too: true
+a divisor that is a LEADING factor is not unflattening: true
+a site converted onto the guard has no remainder left: true
+one literal axis under a remainder is out of scope: true
+unflattening by the trailing factor, or a trailing product, is the correct idiom: true
+a flat length that is not a product at the call is out of scope: true
+comments and string literals are not code: true
+a remainder that reads the parameter only on its right is not a key: true
+a remainder of values unrelated to the parameter is not a key: true
+the site key is the remainder's source text with whitespace collapsed: true
+one Site row absorbs one of two identical sites, and the other is refused: true
+two Site rows absorb two identical sites: true
+a File row absorbs every site of its file: true
+a Site row for another file absorbs nothing, and is stale: true
+a File row over a file with no sites is stale: true
+shipping scanner refuses the blind hand-rolled fixture: true
+shipping scanner accepts the fixture under a named exemption: true
+shipping scanner accepts the fixture converted onto the guard: true
+shipping scanner refuses the exemption the conversion left stale: true
+shipping scanner reads the arrayjit test root too: true
+shipping scanner refuses an emptied arrayjit source root: true

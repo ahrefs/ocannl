@@ -45,8 +45,12 @@ let approx a b = Float.(abs (a - b) < 1e-3 *. (1. +. abs b))
 
 let census tag ~m ~n ~k =
   Tensor.unsafe_reinitialize ();
-  let mav = Array.init (m * k) ~f:(fun i -> Float.of_int (i % 13) *. 0.25) in
-  let mbv = Array.init (k * n) ~f:(fun i -> Float.of_int (i % 17) -. 8.) in
+  let mav =
+    Array.init (m * k) ~f:(Ll_test.cycle_flat ~dims:[| m; k |] ~modulus:13 ~offset:0. ~stride:0.25)
+  in
+  let mbv =
+    Array.init (k * n) ~f:(Ll_test.cycle_flat ~dims:[| k; n |] ~modulus:17 ~offset:(-8.) ~stride:1.)
+  in
   let bv = Array.init m ~f:(fun i -> Float.of_int (i % 5) -. 2.) in
   let ma = TDSL.ndarray mav ~label:[ "ma" ] ~input_dims:[ k ] ~output_dims:[ m ] () in
   let mb = TDSL.ndarray mbv ~label:[ "mb" ] ~input_dims:[ n ] ~output_dims:[ k ] () in

@@ -275,6 +275,35 @@ let cycle_flat ?radix ~dims ~modulus ~offset ~stride i =
 let cycle ?radix ~dims ~modulus ~offset ~stride idcs =
   cycle_flat ?radix ~dims ~modulus ~offset ~stride (flat ~dims idcs)
 
+(** [weighted ~weights ~modulus ~offset ~stride idcs] is {!cycle} with the place values written out:
+    [((sum_ax weights.(ax) * idcs.(ax)) mod modulus + offset) * stride], with Base's [%], so a
+    negative weight still lands in [0 .. modulus - 1]. It is the guarded form of the conv-shaped
+    fixtures' [(idcs.(0) + idcs.(1) + (2 * idcs.(2)) + (3 * idcs.(3))) % 7], whose weights are
+    neither row-major strides nor powers of one radix, so a conversion onto it moves no value
+    (gh-ocannl-1018).
+
+    The guard is {!blind_axis}'s condition read off the weights directly: the value ignores axis
+    [ax] exactly when [modulus] divides [weights.(ax)], and this raises on that, and on a weight
+    vector whose length is not the index's. What it does NOT refuse is equal weights, which make the
+    value a function of the index SUM — on a square operand that is its own transpose, which
+    {!cycle}'s doc warns hides a transposition bug; a site with a reason to be symmetric keeps it,
+    and one without should pick distinct weights. *)
+let weighted ~weights ~modulus ~offset ~stride idcs =
+  if Array.length weights <> Array.length idcs then
+    invalid_arg
+      (Printf.sprintf "Ll_test.weighted: %d weights for a %d-axis index" (Array.length weights)
+         (Array.length idcs));
+  (match Array.findi weights ~f:(fun _ w -> w % modulus = 0) with
+  | Some (ax, w) ->
+      invalid_arg
+        (Printf.sprintf
+           "Ll_test.weighted: weight %d of axis %d is a multiple of modulus %d, so the value would \
+            not vary with that index"
+           w ax modulus)
+  | None -> ());
+  let key = Array.foldi idcs ~init:0 ~f:(fun ax acc i -> acc + (weights.(ax) * i)) in
+  (Float.of_int (key % modulus) +. offset) *. stride
+
 (** [drift ~dims idcs] is {!cycle} at [13/20/(1/64)], the accumulator-width tests' operand: cells
     are the multiples of 1/64 between 0.3125 and 0.5, i.e. [k * (1/64)] for [k] in [20 .. 32], with
     mean [k = 26]. In {!cycle}'s units: cells are exact in bf16 ([p = 8], [32 < 256]) and stay exact

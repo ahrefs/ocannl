@@ -58,8 +58,14 @@ let clean_cache dir =
 let () =
   clean_cache "autotune_cache_batched_companion";
   let b = 4 and n = 32 and m = 64 and k = 16 in
-  let xv = Array.init (b * n * k) ~f:(fun i -> Float.of_int (i % 7) *. 0.25) in
-  let wv = Array.init (k * m) ~f:(fun i -> Float.of_int (i % 5) *. 0.125) in
+  let xv =
+    Array.init
+      (b * n * k)
+      ~f:(Ll_test.cycle_flat ~dims:[| b; n; k |] ~modulus:7 ~offset:0. ~stride:0.25)
+  in
+  let wv =
+    Array.init (k * m) ~f:(Ll_test.cycle_flat ~dims:[| k; m |] ~modulus:5 ~offset:0. ~stride:0.125)
+  in
   let bv = Array.init m ~f:(fun i -> Float.of_int (i % 3) -. 1.) in
   let expected =
     Array.init
@@ -294,8 +300,14 @@ let () =
    the synchronization. *)
 let () =
   let b = 4 and n = 32 and m = 64 and k = 16 in
-  let xv = Array.init (b * n * k) ~f:(fun i -> Float.of_int (i % 7) *. 0.25) in
-  let wv = Array.init (k * m) ~f:(fun i -> Float.of_int (i % 5) *. 0.125) in
+  let xv =
+    Array.init
+      (b * n * k)
+      ~f:(Ll_test.cycle_flat ~dims:[| b; n; k |] ~modulus:7 ~offset:0. ~stride:0.25)
+  in
+  let wv =
+    Array.init (k * m) ~f:(Ll_test.cycle_flat ~dims:[| k; m |] ~modulus:5 ~offset:0. ~stride:0.125)
+  in
   let z_expected =
     Array.init
       (b * n * m)

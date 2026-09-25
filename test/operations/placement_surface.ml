@@ -55,12 +55,18 @@ let n = 8
 let m = 256
 
 let () =
-  let mav = Array.init (n * n) ~f:(fun i -> Float.of_int (i % 7) *. 0.5) in
-  let mbv = Array.init (n * n) ~f:(fun i -> Float.of_int (i % 5) -. 2.) in
+  let mav =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:7 ~offset:0. ~stride:0.5)
+  in
+  let mbv =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:5 ~offset:(-2.) ~stride:1.)
+  in
   let ma = TDSL.ndarray mav ~label:[ "ma" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let mb = TDSL.ndarray mbv ~label:[ "mb" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let uv = Array.init m ~f:(fun i -> Float.of_int (i % 3) *. 0.25) in
-  let wv = Array.init (m * m) ~f:(fun i -> Float.of_int (i % 11) *. 0.125) in
+  let wv =
+    Array.init (m * m) ~f:(Ll_test.cycle_flat ~dims:[| m; m |] ~modulus:11 ~offset:0. ~stride:0.125)
+  in
   let u = TDSL.ndarray uv ~label:[ "u" ] ~output_dims:[ m ] () in
   let w = TDSL.ndarray wv ~label:[ "w" ] ~output_dims:[ m; m ] () in
   (* The mma-site half: mbs and mc are policy-virtual. *)

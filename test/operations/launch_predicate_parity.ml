@@ -132,14 +132,12 @@ let () =
   let bb = 2 and hh = 4 and ss = 64 and jj = 32 and kk = 16 in
   let x () =
     NTDSL.init ~l:"lpp_x" ~prec:Ir.Ops.single ~o:[ bb; ss; kk ]
-      ~f:(fun idcs ->
-        Float.of_int (((idcs.(0) * ss * kk) + (idcs.(1) * kk) + idcs.(2)) % 13) *. 0.25)
+      ~f:(Ll_test.cycle ~dims:[| bb; ss; kk |] ~modulus:13 ~offset:0. ~stride:0.25)
       ()
   in
   let w () =
     NTDSL.init ~l:"lpp_w" ~prec:Ir.Ops.single ~o:[ hh; kk; jj ]
-      ~f:(fun idcs ->
-        (Float.of_int (((idcs.(0) * kk * jj) + (idcs.(1) * jj) + idcs.(2)) % 11) -. 5.) *. 0.5)
+      ~f:(Ll_test.cycle ~dims:[| hh; kk; jj |] ~modulus:11 ~offset:(-5.) ~stride:0.5)
       ()
   in
   let captured = ref None in

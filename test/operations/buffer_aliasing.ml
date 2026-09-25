@@ -128,7 +128,8 @@ let chain_phase ~label () =
   let a_mat =
     TDSL.init ~l:"a_mat" ~prec:Ir.Ops.single ~i:[ dim ] ~o:[ dim ]
       ~f:(fun idcs ->
-        if idcs.(0) = idcs.(1) then 0.5 else Float.of_int ((idcs.(0) + idcs.(1)) % 3) *. 0.001)
+        if idcs.(0) = idcs.(1) then 0.5
+        else Ll_test.weighted ~weights:[| 1; 1 |] ~modulus:3 ~offset:0. ~stride:0.001 idcs)
       ()
   in
   let%op h1 = relu (a_mat * x) in

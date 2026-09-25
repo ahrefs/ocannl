@@ -1105,8 +1105,25 @@ that they earn a lookup rather than always-loaded space.
   where the blocking factors are searchable a packed panel can repeat under `k -> k + p` and hide a
   panel-substitution bug just as well; the recipe with no shift symmetry at any lag is
   `bin/narrow_gebp_bench.ml`'s `mix`. A formula that is NOT a flat index —
-  `(i0 + i1 + 2*i2 + 3*i3) mod 7` — is not this class and needs no conversion, as long as no
-  coefficient is a multiple of the modulus.
+  `(i0 + i1 + 2*i2 + 3*i3) mod 7` — goes through `Ll_test.weighted`, which computes it unchanged
+  and raises when a weight is a multiple of the modulus, the same blindness read off the weights.
+- `operand_key_ratchet` (gh-ocannl-1018) is what makes the guard above reach more than its
+  callers: a test source minting a value from a remainder of a hand-rolled multi-axis key is
+  refused unless the key goes through `Ll_test.cycle`, `cycle_flat` or `weighted`, or the site
+  names an exact, stale-checked exemption with its reason (a `File` row covers the guard's own
+  source). One detector reads both spellings on the parse tree — the multi-index
+  `~f:(fun idcs -> … ((idcs.(0) * n) + idcs.(1)) % m …)`, following names `let`-bound in the body,
+  and the flat `Array.init (r * c) ~f:(fun i -> … i % m …)` — because the sweep that preceded it
+  missed a flat site four lines from a multi-index one it listed: to a person reading a file the
+  two do not look like the same thing. What it deliberately does not read is stated in
+  `Test_utils.Operand_key_scan`'s header: a remainder of one literal axis, `i % d` with `d` a
+  trailing run of the length's factors (unflattening), a key computed outside the closure, and
+  mixers other than a remainder. A converted site keeps its values, so a golden moves only where
+  the guard fires; the conversion found one blind term, `schedule_mma_matmul`'s tf32 perturbation
+  at modulus 3 over a `k = 24` row, which took `~radix:2`. Converting links `ll_test`, which
+  retires that file's `ll_test_ratchet` migration row in the same change. `operand_key_scan_cases`
+  puts each spelling beside its nearest legitimate text and drives the shipping scanner over a
+  synthetic tree holding the blind fixture it must refuse.
 - Dune roots at the OUTERMOST ancestor holding a `dune-workspace` (failing that, a `dune-project`)
   and ignores dot-directories, so from a worktree under `.claude/worktrees/` the main checkout wins
   and the worktree is invisible to dune: targeted commands fail with `Don't know about directory

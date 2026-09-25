@@ -321,6 +321,7 @@ env_var_deps.ml: [scanner-refusal:9dc8db9d29efd1b85da8aff105b1aae8] tested modul
 env_var_deps.ml: [scanner-refusal:775f43c0a7dca22c07a091f603457c7a] another is reported (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:87104dd3758037b44d4f5c8979a42039] per-module alias listed (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 ll_test_ratchet.ml has exactly the explicitly assigned refusal controls: true
+operand_key_ratchet.ml has exactly the explicitly assigned refusal controls: true
 ocamlformat_ignore_scan.ml has exactly the explicitly assigned refusal controls: true
 ocamlformat_ignore_scan.ml: [scanner-refusal:e1f2fc5fc55abe7d73725c939c81a516] ocamlformat-ignore ends in (claim) is catalogued beside ocamlformat_ignore_scan.expected: true
 ocamlformat_ignore_scan.ml: [scanner-refusal:d936cdade68aaf6cb4f1a8a0bfc17655] ocamlformat-ignore line contains (claim) is catalogued beside ocamlformat_ignore_scan.expected: true

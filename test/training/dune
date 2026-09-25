@@ -482,7 +482,7 @@
 (executable
  (name bench_circles_step)
  (modules bench_circles_step)
- (libraries ocannl dataprep unix)
+ (libraries ocannl dataprep unix ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

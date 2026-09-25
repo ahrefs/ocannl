@@ -107,8 +107,12 @@ let phase2 () =
      consumer), so the decision surface reports at least one [`Materialize] flip candidate (as in
      inline_flip_tune.ml). *)
   let n = 8 in
-  let mav = Array.init (n * n) ~f:(fun i -> Float.of_int (i % 7) *. 0.5) in
-  let mbv = Array.init (n * n) ~f:(fun i -> Float.of_int (i % 5) -. 2.) in
+  let mav =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:7 ~offset:0. ~stride:0.5)
+  in
+  let mbv =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:5 ~offset:(-2.) ~stride:1.)
+  in
   let ma = TDSL.ndarray mav ~label:[ "ac2_ma" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let mb = TDSL.ndarray mbv ~label:[ "ac2_mb" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let%op mc = ma * mb in

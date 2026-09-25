@@ -174,6 +174,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-n3_fwd_with_prec-unoptimized
   test/operations/dune                     @runtest-ocamlformat_ignore_scan
   test/operations/dune                     @runtest-online_softmax_fast_math
+  test/operations/dune                     @runtest-operand_key_ratchet
   test/operations/dune                     @runtest-optional_arg_inventory
   test/operations/dune                     @runtest-optional_arg_inventory_control
   test/operations/dune                     @runtest-placement_surface

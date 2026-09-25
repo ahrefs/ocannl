@@ -130,7 +130,8 @@ let () =
   let short = 32 in
   let ms =
     TDSL.ndarray
-      (Array.init (out_d * short) ~f:(fun x -> Float.of_int (x % 5)))
+      (Array.init (out_d * short)
+         ~f:(Ll_test.cycle_flat ~dims:[| out_d; short |] ~modulus:5 ~offset:0. ~stride:1.))
       ~label:[ "sr_ms" ] ~input_dims:[ short ] ~output_dims:[ out_d ] ()
   in
   let vs =

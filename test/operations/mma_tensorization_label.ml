@@ -77,8 +77,12 @@ let compile_twice ~name ~transform comp =
   (bracketed_routine.Context.mma, bracketed)
 
 let matmul ~tag =
-  let av = Array.init (n * n) ~f:(fun x -> Float.of_int (x % 13) *. 0.25) in
-  let bv = Array.init (n * n) ~f:(fun x -> Float.of_int (x % 17) -. 8.) in
+  let av =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:13 ~offset:0. ~stride:0.25)
+  in
+  let bv =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:17 ~offset:(-8.) ~stride:1.)
+  in
   let ma = TDSL.ndarray av ~label:[ tag ^ "_a" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let mb = TDSL.ndarray bv ~label:[ tag ^ "_b" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let%op mc = ma * mb in
@@ -86,8 +90,12 @@ let matmul ~tag =
 
 (* Transposed-B: the gradient-GEMM shape, whose operand layout the Tile_mma rendering declines. *)
 let matmul_tb ~tag =
-  let av = Array.init (n * n) ~f:(fun x -> Float.of_int (x % 13) *. 0.25) in
-  let bv = Array.init (n * n) ~f:(fun x -> Float.of_int (x % 17) -. 8.) in
+  let av =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:13 ~offset:0. ~stride:0.25)
+  in
+  let bv =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:17 ~offset:(-8.) ~stride:1.)
+  in
   let ma = TDSL.ndarray av ~label:[ tag ^ "_a" ] ~output_dims:[ n; n ] () in
   let mb = TDSL.ndarray bv ~label:[ tag ^ "_b" ] ~output_dims:[ n; n ] () in
   let%op mc = ma +* "ik;jk=>ij" mb in

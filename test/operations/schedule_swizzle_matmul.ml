@@ -95,8 +95,12 @@ let bm, bn, bk = (8, 8, 8)
 let simd_width = 32
 
 let () =
-  let mav = Array.init (n * n) ~f:(fun i -> Float.of_int (i % 13) *. 0.25) in
-  let mbv = Array.init (n * n) ~f:(fun i -> Float.of_int (i % 17) -. 8.) in
+  let mav =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:13 ~offset:0. ~stride:0.25)
+  in
+  let mbv =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:17 ~offset:(-8.) ~stride:1.)
+  in
   let ma = TDSL.ndarray mav ~label:[ "ma" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let mb = TDSL.ndarray mbv ~label:[ "mb" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
 
@@ -464,8 +468,14 @@ let () =
   (* A 24-wide matmul: splitting k by 12 gives a [8 x 12] tile whose minor dim is not a power of two
      (every divisor of 32 is, so the main tensors cannot produce this case). *)
   let n2 = 24 in
-  let ma2v = Array.init (n2 * n2) ~f:(fun i -> Float.of_int (i % 7) *. 0.5) in
-  let mb2v = Array.init (n2 * n2) ~f:(fun i -> Float.of_int (i % 11) -. 5.) in
+  let ma2v =
+    Array.init (n2 * n2)
+      ~f:(Ll_test.cycle_flat ~dims:[| n2; n2 |] ~modulus:7 ~offset:0. ~stride:0.5)
+  in
+  let mb2v =
+    Array.init (n2 * n2)
+      ~f:(Ll_test.cycle_flat ~dims:[| n2; n2 |] ~modulus:11 ~offset:(-5.) ~stride:1.)
+  in
   let ma2 = TDSL.ndarray ma2v ~label:[ "ma2" ] ~input_dims:[ n2 ] ~output_dims:[ n2 ] () in
   let mb2 = TDSL.ndarray mb2v ~label:[ "mb2" ] ~input_dims:[ n2 ] ~output_dims:[ n2 ] () in
   let%op mc5 = ma2 * mb2 in
