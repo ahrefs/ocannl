@@ -1,0 +1,9 @@
+the seam saw the default seed's window: true
+the search completed: true
+default_refused: true
+at least one window was refused: true
+every refused window is one the seam or the host refused: true
+the unmeasured candidates are the default and at most the host's refusals: true
+exactly one distinct candidate stayed unmeasured: true
+the default has no reference time: true
+the refused seed did not win: true
