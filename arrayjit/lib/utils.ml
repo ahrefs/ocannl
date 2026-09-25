@@ -1717,9 +1717,13 @@ let c_stderr_detached =
 (** What {!bounded_exit_teardown} did with one resource. *)
 type exit_teardown_outcome =
   | Torn_down
-  | Disabled  (** [exit_stream_teardown_timeout] is [0] (or negative). *)
+  | Disabled  (** [exit_stream_teardown_timeout] is [0] or negative. *)
   | Still_busy  (** Not idle within the bound: left to the driver, never waited on further. *)
   | Failed of exn  (** [is_idle] or [teardown] raised; the exception is swallowed. *)
+
+(** The [exit_stream_teardown_timeout] in effect when the setting is absent or not a finite number.
+*)
+let default_exit_stream_teardown_timeout = 2.0
 
 (** Process-exit teardown of one device resource (a GPU backend's stream), under a bound
     (gh-ocannl-1036). Meant to run from [Stdlib.at_exit]: polls [is_idle] until it holds or
@@ -1731,8 +1735,20 @@ type exit_teardown_outcome =
     uncaught exception does (the runtime runs [at_exit] before reporting it), which is why the
     bound, not an exit-status test, is what keeps a failing process from being held. *)
 let bounded_exit_teardown ~what ~is_idle ~teardown =
+  let default = default_exit_stream_teardown_timeout in
+  let setting =
+    get_global_arg ~default:(Float.to_string default) ~arg_name:"exit_stream_teardown_timeout"
+  in
+  (* A value that is not a finite number would break the bound ([inf] polls forever) or raise here,
+     outside the handler below; it falls back to the default instead. *)
   let timeout =
-    Float.of_string @@ get_global_arg ~default:"2.0" ~arg_name:"exit_stream_teardown_timeout"
+    match Float.of_string_opt (String.strip setting) with
+    | Some t when Float.is_finite t -> t
+    | _ ->
+        Stdio.eprintf
+          "OCANNL: exit_stream_teardown_timeout=%s is not a finite number of seconds; using %g\n%!"
+          setting default;
+        default
   in
   if Float.(timeout <= 0.) then Disabled
   else
@@ -1748,10 +1764,10 @@ let bounded_exit_teardown ~what ~is_idle ~teardown =
     match idle_within_bound () with
     | false ->
         Stdio.eprintf
-          "OCANNL: %s still busy %gs into process exit; left for the driver to reclaim \
-           (exit_stream_teardown_timeout)\n\
+          "OCANNL: %s still busy after %.3fs of process exit; left for the driver to reclaim \
+           (exit_stream_teardown_timeout=%g)\n\
            %!"
-          what timeout;
+          what (elapsed ()) timeout;
         Still_busy
     | true -> (
         match teardown () with

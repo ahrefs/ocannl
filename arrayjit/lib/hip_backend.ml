@@ -372,26 +372,28 @@ end = struct
      destroyed makes the ROCm runtime report its 77 signals as leaked on stderr when the process
      ends; the GC finalizer above does not run at exit, and would not destroy the stream if it did.
      [H.Stream.destroy] synchronizes unboundedly, so it is called only once [is_ready] says there is
-     nothing to wait for (see [Utils.bounded_exit_teardown]). The device records stay in [devices],
-     so the destroyed streams are never reached by their GC finalizers, and [H.Stream.destroy] is
-     idempotent anyway. [at_exit] handlers run most-recent first, so one registered later than this
-     (after the first device was opened) still finds the streams alive. *)
-  let exit_teardown_registered =
-    lazy
-      (Stdlib.at_exit (fun () ->
-           Array.iter
-             !(Lazy.force devices)
-             ~f:(function
-               | None -> ()
-               | Some (device : device) ->
-                   ignore
-                     (Utils.bounded_exit_teardown
-                        ~what:[%string "the HIP stream of device %{device.ordinal#Int}"]
-                        ~is_idle:(fun () ->
-                          set_ctx device.dev.primary_context;
-                          H.Stream.is_ready device.runner)
-                        ~teardown:(fun () -> H.Stream.destroy device.runner)
-                       : Utils.exit_teardown_outcome))))
+     nothing to wait for (see [Utils.bounded_exit_teardown]). Registered at module initialization,
+     not when the first device opens: [at_exit] handlers run most-recent first, and every module
+     that can reach this backend initializes after this one, so every handler that might still use a
+     stream runs before the streams go. The device records stay in [devices], so no GC finalizer
+     reaches a destroyed stream, and [H.Stream.destroy] is idempotent anyway. A process that never
+     opened a device finds [devices] unforced and does nothing. *)
+  let () =
+    Stdlib.at_exit (fun () ->
+        if Lazy.is_val devices then
+          Array.iter
+            !(Lazy.force devices)
+            ~f:(function
+              | None -> ()
+              | Some (device : device) ->
+                  ignore
+                    (Utils.bounded_exit_teardown
+                       ~what:[%string "the HIP stream of device %{device.ordinal#Int}"]
+                       ~is_idle:(fun () ->
+                         set_ctx device.dev.primary_context;
+                         H.Stream.is_ready device.runner)
+                       ~teardown:(fun () -> H.Stream.destroy device.runner)
+                      : Utils.exit_teardown_outcome)))
 
   let%track3_sexp get_device ~(ordinal : int) : device =
     let n = num_devices () in
@@ -420,7 +422,6 @@ end = struct
       let hip_stream = H.Stream.create ~non_blocking:true () in
       let result = make_device dev hip_stream ~ordinal in
       Stdlib.Gc.finalise finalize_device result;
-      Lazy.force exit_teardown_registered;
       !devices.(ordinal) <- Some result;
       result
     in

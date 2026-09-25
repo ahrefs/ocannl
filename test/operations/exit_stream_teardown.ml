@@ -81,6 +81,10 @@ let device_arms () =
      %!"
     (backend_of on_out) (backend_of off_out) on_leaks off_leaks;
   p "both device children exit normally" (on_code = 0 && off_code = 0);
+  (* On every backend: the program's own [at_exit], registered before the device opened, still reads
+     the device (7 * 2 + 1), so the backend's teardown ran after it rather than under it. *)
+  p "an at_exit handler registered before the device opened still reads it at exit"
+    (String.is_substring on_out ~substring:"read at exit: 15\n");
   let on_claim = "the exit teardown leaves no leaked-signal report"
   and off_claim = "without the teardown, the runtime reports leaked signals" in
   if not (String.equal (backend_of on_out) "hip" && String.equal (backend_of off_out) "hip") then (
@@ -105,10 +109,17 @@ let bound_flag = Printf.sprintf "--ocannl_exit_stream_teardown_timeout=%g" bound
 let busy_device_arm () =
   let code, seconds, out, err = run_child [ "device_busy"; bound_flag ] in
   let backend = backend_of out in
+  (* The teardown's own reading of how long it waited: nothing the child registers can run after the
+     backend's handler, which the backend registers at its module initialization. *)
   let teardown_seconds =
-    String.split_lines out
-    |> List.find_map ~f:(String.chop_prefix ~prefix:"exit teardown seconds: ")
-    |> Option.bind ~f:(fun s -> Float.of_string_opt (String.strip s))
+    String.split_lines err
+    |> List.find_map ~f:(fun line ->
+        match String.substr_index line ~pattern:"still busy after " with
+        | None -> None
+        | Some i ->
+            String.drop_prefix line (i + String.length "still busy after ")
+            |> String.lsplit2 ~on:'s' |> Option.map ~f:fst
+            |> Option.bind ~f:Float.of_string_opt)
   in
   eprintf
     "device_busy on %s: exit %d after %.3fs, of which the exit teardown %s (not part of the golden)\n\
@@ -124,7 +135,6 @@ let busy_device_arm () =
   else
     p claim
       (code = 0
-      && String.is_substring err ~substring:"still busy"
       && Option.exists teardown_seconds ~f:(fun t -> Float.(t >= bound && t < bound +. 5.)))
 
 let stand_in_arms () =
@@ -152,6 +162,19 @@ let stand_in_arms () =
   in
   p "the uncaught exception is still reported after the teardown gave up"
     (String.is_substring err ~substring:"deliberate uncaught exception");
+  (* An [inf] bound would poll forever; it falls back to the default instead. Two-sided against that
+     default, which is what [Utils.bounded_exit_teardown] reads when the key is unset. *)
+  let default_bound = Utils.default_exit_stream_teardown_timeout in
+  let code, seconds, out, err =
+    run_child [ "never_idle"; "--ocannl_exit_stream_teardown_timeout=inf" ]
+  in
+  eprintf "never_idle with an infinite bound: exit %d after %.3fs (not part of the golden)\n%!" code
+    seconds;
+  p "a non-finite bound falls back to the default, reported on stderr"
+    (code = 0
+    && Float.(seconds >= default_bound && seconds < default_bound +. 30.)
+    && String.is_substring out ~substring:"outcome: still_busy"
+    && String.is_substring err ~substring:"not a finite number");
   let code, _, out, _ = run_child [ "idle"; bound_flag ] in
   p "an idle stream is torn down at exit"
     (code = 0

@@ -1,4 +1,5 @@
 both device children exit normally: true
+an at_exit handler registered before the device opened still reads it at exit: true
 the exit teardown leaves no leaked-signal report: true
 without the teardown, the runtime reports leaked signals: true
 a device still busy at exit delays the teardown by the bound and no more: true
@@ -11,5 +12,6 @@ never-idle stream, uncaught exception: exit is delayed by the bound and no more:
 never-idle stream, uncaught exception: the busy stream's teardown is never called: true
 never-idle stream, uncaught exception: the outcome is still_busy, reported on stderr: true
 the uncaught exception is still reported after the teardown gave up: true
+a non-finite bound falls back to the default, reported on stderr: true
 an idle stream is torn down at exit: true
 a timeout of 0 turns the teardown off: true

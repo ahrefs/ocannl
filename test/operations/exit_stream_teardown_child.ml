@@ -33,19 +33,18 @@ let stand_in ~idle =
 let () =
   match Array.to_list (Sys.get_argv ()) |> List.tl_exn |> List.hd with
   | Some "device" ->
+      (* The program's own [at_exit], registered before the device opens, reads the device at exit:
+         the backend's teardown must not have destroyed the stream under it. *)
+      let read_at_exit = ref (fun () -> ()) in
+      Stdlib.at_exit (fun () -> !read_at_exit ());
       Tensor.unsafe_reinitialize ();
       let ctx = Context.auto () in
       let%op y = ({ hey = 7.0 } * ([ 2.0 ] : q)) + ([ 1.0 ] : p) in
       let ctx = Train.forward_once ctx y in
-      Stdio.printf "backend: %s\n%!" (Context.backend_name ctx)
+      Stdio.printf "backend: %s\n%!" (Context.backend_name ctx);
+      read_at_exit :=
+        fun () -> Stdio.printf "read at exit: %g\n%!" (Context.get_values ctx y.Tensor.value).(0)
   | Some "device_busy" ->
-      (* Registered before the device is opened, so it runs AFTER the backend's own teardown
-         ([at_exit] handlers run most-recent first) and times it. *)
-      let exit_began = ref None in
-      Stdlib.at_exit (fun () ->
-          Option.iter !exit_began ~f:(fun began ->
-              Stdio.printf "exit teardown seconds: %.3f\n%!"
-                (Mtime.Span.to_float_ns (Mtime_clock.count began) /. 1e9)));
       Tensor.unsafe_reinitialize ();
       let ctx = Context.auto () in
       let n = 1024 in
@@ -72,8 +71,7 @@ let () =
       done;
       Stdio.printf "backend: %s\n%!" (Context.backend_name ctx);
       Stdio.eprintf "queued %d runs of %.4fs each without a sync (not part of the golden)\n%!" runs
-        one_run;
-      exit_began := Some (Mtime_clock.counter ())
+        one_run
   | Some "never_idle" -> stand_in ~idle:false
   | Some "never_idle_raise" ->
       stand_in ~idle:false;
