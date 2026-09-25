@@ -712,6 +712,15 @@
 # If set and relevant, it's the `hipLimitPrintfFifoSize` HIP configuration.
 #hip_printf_fifo_size=
 
+# At process exit, the HIP backend destroys each device's stream, so the ROCm runtime does not
+# report the stream's signals as leaked (`Resource leak detected by SharedSignalPool, 77 Signals
+# leaked.`, gh-ocannl-1036). This is the bound, in seconds, on waiting for a stream that still has
+# work queued: past it the stream is left for the driver to reclaim and the process exits anyway,
+# so a hung device delays exit by at most this much. `0` turns the teardown off. The CUDA driver
+# reclaims streams silently and cudajit exposes no eager stream destruction, so the CUDA backend
+# does not consult it.
+#exit_stream_teardown_timeout=2.0
+
 # If `true` (the default), the HIP backend checks a freshly linked kernel's private (scratch)
 # segment size against what the device can back at full occupancy, and declines an over-budget
 # kernel as `Resource_exceeded Thread_scratch` instead of launching it. Launching one aborts the

@@ -212,6 +212,7 @@
   (alias runtest-log_index_width_wide)
   (alias runtest-config_var_spellings)
   (alias runtest-foreign_c_stderr)
+  (alias runtest-exit_stream_teardown)
   (alias runtest-config_var_warnings)
   (alias runtest-config_var_fatal_spelling)
   (alias runtest-test_config_consistency)
@@ -1905,6 +1906,50 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff foreign_c_stderr.expected foreign_c_stderr.actual)))
+
+;; gh-ocannl-1036: device streams torn down at process exit, observed from a parent process --
+;; the ROCm runtime reports a leaked stream on the exiting child's stderr, which nothing inside the
+;; child can read. The child's modes are listed in its header; the marker module is what both link.
+
+(executables
+ (names exit_stream_teardown exit_stream_teardown_child)
+ (modules
+  exit_stream_teardown
+  exit_stream_teardown_child
+  exit_stream_teardown_marker)
+ (libraries
+  base
+  ocannl
+  stdio
+  unix
+  mtime
+  mtime.clock.os
+  arrayjit.utils
+  arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ (target exit_stream_teardown.actual)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_EXIT_STREAM_TEARDOWN_TIMEOUT))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:exit_stream_teardown.exe}
+    %{dep:exit_stream_teardown_child.exe}))))
+
+(rule
+ (alias runtest-exit_stream_teardown)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff exit_stream_teardown.expected exit_stream_teardown.actual)))
 
 (executable
  (name config_var_spellings)

@@ -160,6 +160,7 @@ execution-neutral -- identifier spelling in generated code and in printouts
 execution-neutral -- host-side execution mechanics: where buffers sit, how many devices a scheduler opens, how launches are issued, how initialization is seeded, how checkpoint payloads reach host memory. The kernels are unchanged, and every candidate of a search meets the same mechanics as every other
   checkpoint_load_mmap
   cuda_printf_fifo_size [read at codegen]
+  exit_stream_teardown_timeout
   fixed_state_for_init
   hip_printf_fifo_size [read at codegen]
   multidev_num_devices

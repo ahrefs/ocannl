@@ -109,6 +109,7 @@ let known_config_keys =
       "output_dlls_in_build_directory";
       "cuda_printf_fifo_size";
       "hip_printf_fifo_size";
+      "exit_stream_teardown_timeout";
       "hip_scratch_validation";
       "gpu_graph_capture";
       "multidev_num_devices";
@@ -426,6 +427,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "multidev_num_devices";
         "cuda_printf_fifo_size";
         "hip_printf_fifo_size";
+        "exit_stream_teardown_timeout";
         "fixed_state_for_init";
         "checkpoint_load_mmap";
       ] );
@@ -1711,6 +1713,56 @@ external detach_c_stderr : unit -> bool = "ocannl_detach_c_stderr"
    harness or capture wrapper has had a chance to redirect fd 2. *)
 let c_stderr_detached =
   get_global_flag ~default:true ~arg_name:"detach_c_stderr" && detach_c_stderr ()
+
+(** What {!bounded_exit_teardown} did with one resource. *)
+type exit_teardown_outcome =
+  | Torn_down
+  | Disabled  (** [exit_stream_teardown_timeout] is [0] (or negative). *)
+  | Still_busy  (** Not idle within the bound: left to the driver, never waited on further. *)
+  | Failed of exn  (** [is_idle] or [teardown] raised; the exception is swallowed. *)
+
+(** Process-exit teardown of one device resource (a GPU backend's stream), under a bound
+    (gh-ocannl-1036). Meant to run from [Stdlib.at_exit]: polls [is_idle] until it holds or
+    [exit_stream_teardown_timeout] seconds pass, and calls [teardown] only in the former case, so a
+    process whose device is hung is delayed at exit by at most the bound, never held. [teardown]
+    itself must therefore not wait for the device beyond what [is_idle] already established. Nothing
+    escapes: an exception at exit would replace the program's own exit status or uncaught exception
+    report. A process that dies by a fatal signal never runs [at_exit] at all; one that ends on an
+    uncaught exception does (the runtime runs [at_exit] before reporting it), which is why the
+    bound, not an exit-status test, is what keeps a failing process from being held. *)
+let bounded_exit_teardown ~what ~is_idle ~teardown =
+  let timeout =
+    Float.of_string @@ get_global_arg ~default:"2.0" ~arg_name:"exit_stream_teardown_timeout"
+  in
+  if Float.(timeout <= 0.) then Disabled
+  else
+    let started = Mtime_clock.counter () in
+    let elapsed () = Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9 in
+    let rec idle_within_bound () =
+      is_idle ()
+      || Float.(elapsed () < timeout)
+         &&
+         (Unix.sleepf 0.001;
+          idle_within_bound ())
+    in
+    match idle_within_bound () with
+    | false ->
+        Stdio.eprintf
+          "OCANNL: %s still busy %gs into process exit; left for the driver to reclaim \
+           (exit_stream_teardown_timeout)\n\
+           %!"
+          what timeout;
+        Still_busy
+    | true -> (
+        match teardown () with
+        | () -> Torn_down
+        | exception e ->
+            Stdio.eprintf "OCANNL: tearing down %s at process exit failed: %s\n%!" what
+              (Exn.to_string e);
+            Failed e)
+    | exception e ->
+        Stdio.eprintf "OCANNL: polling %s at process exit failed: %s\n%!" what (Exn.to_string e);
+        Failed e
 
 let enable_runtime_debug () =
   settings.output_debug_files_in_build_directory <- true;
