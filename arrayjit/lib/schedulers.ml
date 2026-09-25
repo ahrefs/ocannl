@@ -26,19 +26,10 @@ let cpu_mma_limits () =
     codegen_tag = Some (Cc_backend.codegen_tag ());
     (* [mma_format_tiles] is empty: the register tiling is not a tensor-core instruction — no
        per-format intrinsic tiles exist, and its precision gates (f32/f64) live in the seeding. *)
-    mma =
-      Some
-        {
-          mma_simd_width = 1;
-          mma_tile = (1, 1, 1);
-          mma_format_tiles = [];
-          (* No format tiles, so the wide-f16/bf16 seeding gates never consult these; the CPU
-             register tiling follows [cpu_compute_prec]/[accum_prec] directly (gh-ocannl-680). *)
-          mma_f16_wide_acc_scopes = [];
-          mma_bf16_wide_acc_scopes = [];
-          mma_staged_layouts = [];
-          mma_pipeline_depths = [];
-        };
+    (* No format tiles, so the wide-f16/bf16 seeding gates never consult the (empty) wide-scope
+       lists; the CPU register tiling follows [cpu_compute_prec]/[accum_prec] directly
+       (gh-ocannl-680). *)
+    mma = Some { minimal_mma_capability with mma_simd_width = 1; mma_tile = (1, 1, 1) };
   }
 
 module Multidev (Backend : For_add_scheduler) :

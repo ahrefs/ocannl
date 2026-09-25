@@ -163,13 +163,9 @@ let () =
       mma =
         Some
           {
-            BI.mma_simd_width = 32;
+            BI.minimal_mma_capability with
             mma_tile = (8, 8, 8);
             mma_format_tiles = [ ((BI.Mma_f32, BI.Mma_f32, BI.Mma_f32), (8, 8, 8)) ];
-            mma_f16_wide_acc_scopes = [];
-            mma_bf16_wide_acc_scopes = [];
-            mma_staged_layouts = [];
-            mma_pipeline_depths = [];
           };
     }
   in

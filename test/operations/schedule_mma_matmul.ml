@@ -292,17 +292,12 @@ let () =
       mma =
         Some
           {
-            Ir.Backend_intf.mma_simd_width = 32;
-            mma_tile = (16, 16, 16);
+            Ir.Backend_intf.minimal_mma_capability with
             mma_format_tiles =
               [
                 ( (Ir.Backend_intf.Mma_tf32, Ir.Backend_intf.Mma_tf32, Ir.Backend_intf.Mma_f32),
                   (16, 16, 8) );
               ];
-            mma_f16_wide_acc_scopes = [];
-            mma_bf16_wide_acc_scopes = [];
-            mma_staged_layouts = [];
-            mma_pipeline_depths = [];
           };
     }
   in
