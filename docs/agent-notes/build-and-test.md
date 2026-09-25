@@ -2325,7 +2325,13 @@ that they earn a lookup rather than always-loaded space.
   whose body uses `if`, so the command errexit weighs is the CALL and the ERR trap names its line,
   and have it print what matched: `$BASH_COMMAND` from inside a function names the body, not the
   pattern. Same shape as the `p_all`/`p_none` rule for `Verdict` claims — a check that cannot fail is
-  worse than a missing one, because the golden and the roster both count it.
+  worse than a missing one, because the golden and the roster both count it. Its sibling is a bare
+  `[ A ] && [ B ]`: errexit exempts every operand of an `&&` list but the last, so the pair checks
+  only `B` and is silent exactly when `A` — usually the point of the assertion — fails
+  (gh-ocannl-1023, `cancel_sweep`'s readiness check). One predicate per statement, or end the list
+  with `|| die …` / `|| return 1`. `shell_scripts_parse` refuses both shapes in errexit scripts; its
+  module headers state the line-shaped boundary each scan reads, and a function's final pair — not
+  inert, its status is the return value — is refused too, since the scan cannot see function ends.
 - An unreachable machine records `skip (unreachable)`, and a sweep of skips is not a failure. It is
   not the expected steady state either: both GPU boxes are cabled and Wake-on-LAN armed, and wake
   over Ethernet from sleep and from full shutdown alike, so a run that is meant to cover CUDA or HIP

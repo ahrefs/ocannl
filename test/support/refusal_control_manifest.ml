@@ -372,6 +372,9 @@ let raw_entries =
         "[scanner-refusal:88b12da9841dbf6131676bf4fb0f4686] statement-position ! command";
         "[scanner-refusal:003eba7381c87352fb02cd374fa62ea9] errexit-negation fixture";
         "[scanner-refusal:b67c631ab7ecd7df55fc002761cf99f6] reaches the absent()-style";
+        "[scanner-refusal:b16ef3a2f724269c0b981a25871cbbb3] statement-position A &&";
+        "[scanner-refusal:2d086d94d5a797eb9901008d71d5c241] errexit-and-list fixture";
+        "[scanner-refusal:3f096017191c7a4d9f63d7a94dcfb6ff] reaches the one-predicate-per-statement";
         "[scanner-refusal:beeb940e51aa3dff752296c0bd236146] lifecycle are accepted";
         "[scanner-refusal:0d15e8eb18e96635004da2561ab0917c] harnesses are discovered";
         "[scanner-refusal:2a0fdaf225cc691ffc63804ceb591d29] production test-run is";

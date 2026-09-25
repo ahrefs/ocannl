@@ -1534,6 +1534,407 @@ module Errexit_negation = struct
     Verdict.p "the statement-position ! grep fixture reaches the absent()-style refusal" refused
 end
 
+(** The second member of the errexit-exempt family: a statement-position AND list of tests,
+    [[ A ] && [ B ]], in a script that enables errexit (gh-ocannl-1023).
+
+    Bash exempts every command of an [&&]/[||] list except the last from errexit, so when [A] fails
+    the list is simply false and the script carries on. Only [B] can stop the harness. The pair
+    reads as two checks and performs one, and it goes wrong only when the LEFT test fails -- which
+    for an assertion is usually the case it was written for: `cancel_sweep`'s readiness check in
+    `test/operations/sweep_harness.sh` was silent in exactly the tick-budget case it guarded. Unlike
+    [! cmd], which any positive control exposes, the pair passes every control that breaks its right
+    operand.
+
+    {1 What it reads}
+
+    The same files and the same errexit gate as {!Errexit_negation}, one LOGICAL line at a time: a
+    line ending in [&&], [||], [|] or a backslash is joined with the next, so a list wrapped across
+    lines is read whole. A logical line is cut into statements at top-level [;], [;;], a lone [&], a
+    comment, and an unmatched [)] (a case pattern's terminator, so a case arm's body on the pattern
+    line is a statement). Quotes, [$( )], [${ }], backticks and [[ ]]/[[[ ]]] brackets are skipped
+    as in {!Errexit_negation}, so an [&&] printed as data or written inside [[[ a && b ]]] is not a
+    list operator. A statement is flagged when all of these hold:
+    - it is an [&&]-only list of at least two operands, and every operand is a test command, whose
+      first word is [\[], [\[\[] or [test] after an optional [!] -- on the first operand also after
+      the keywords that put a body statement on a line ([then], [do], [else], [{], or a [(] opening
+      a subshell);
+    - nothing consumes the list's value: it is not introduced by [if]/[elif]/[while]/[until] (the
+      first operand's first word is then not a test), it is not followed by a [then]/[do] (a
+      condition whose keyword began an earlier line), and the next statement -- on the same line,
+      else the next non-blank non-comment line -- does not read [$?].
+
+    A [||] anywhere in the list is its consumer: [[ A ] && [ B ] || die ...] makes the failure
+    explicit, so nothing is exempt. That is the spelling the refusal points at, together with one
+    predicate per statement.
+
+    {1 What it deliberately does not read}
+
+    - Lists that mix a non-test command in, such as [[ A ] && grep -q x f] or
+      [grep -q x f && [ B ]]. [[ A ] && action] is the conditional-execution idiom and is correct;
+      telling an assertion from an action for arbitrary commands is not a textual question.
+    - Lists whose connectors mix [||] and [&&] (the [||] is read as the consumer), and pipelines.
+    - The line-shaped boundary {!Errexit_negation} states and gh-ocannl-907 tracks: a heredoc body
+      or multi-line quoted value is read as script text, and a condition whose [if]/[while]/[until]
+      stands alone on an earlier line is recognized only through the [then]/[do] that follows it on
+      the pair's line or the next one. Both mis-readings are LOUD (valid shell refused), never a
+      pass.
+    - Scope. The last command of a FUNCTION BODY or a subshell is not inert -- its status becomes
+      the function's (the subshell's), which errexit then weighs at the call site (measured under
+      bash 3.2 and dash; a brace group, loop body or [if] branch does NOT propagate it). Seeing
+      where a function ends needs brace matching across lines, so the scan does not try: such a pair
+      is flagged too, and [|| return 1] is the explicit spelling it accepts. The same holds for a
+      script's final line ([|| exit 1]). *)
+module Errexit_and_list = struct
+  module N = Errexit_negation
+
+  type finding = { line : int }
+  type connector = And | Or | Pipe
+
+  type statement = {
+    operands : string list;
+    connectors : connector list;  (** Between consecutive operands. *)
+    raw : string;
+  }
+
+  (** Words that may precede a body statement on its line without being part of it. *)
+  let statement_prefixes = [ "then"; "do"; "else"; "{"; "!" ]
+
+  let words text = List.map (N.shell_words text) ~f:N.literal_shell_word
+
+  let only_prefixes text =
+    List.for_all (words text) ~f:(List.mem statement_prefixes ~equal:String.equal)
+
+  (** Cut one logical line into statements, or report that the line continues onto the next: at the
+      returned offset (which drops a trailing comment or backslash), joined by the returned
+      separator. [~at_end] closes a dangling list instead, for the file's last line. *)
+  let scan ?(at_end = false) line =
+    let length = String.length line in
+    let text start finish = String.sub line ~pos:start ~len:(finish - start) in
+    let statements = ref [] and operands = ref [] and connectors = ref [] in
+    let statement_start = ref 0 in
+    let close_operand start finish = operands := text start finish :: !operands in
+    let close_statement start finish =
+      close_operand start finish;
+      statements :=
+        {
+          operands = List.rev !operands;
+          connectors = List.rev !connectors;
+          raw = text !statement_start finish;
+        }
+        :: !statements;
+      operands := [];
+      connectors := []
+    in
+    let connect start finish connector next =
+      close_operand start finish;
+      connectors := connector :: !connectors;
+      next
+    in
+    let restart index =
+      statement_start := index;
+      index
+    in
+    (* End of the logical line at [cut]: it continues when a connector is still waiting for its
+       right operand. *)
+    let finish start cut =
+      if
+        (not at_end)
+        && (not (List.is_empty !connectors))
+        && String.is_empty (String.strip (text start cut))
+      then `Continues (cut, " ")
+      else (
+        close_statement start cut;
+        `Statements (List.rev !statements))
+    in
+    let rec loop index start quote escaped parens brackets =
+      if index >= length then (
+        match quote with
+        | `None when escaped && not at_end -> `Continues (length - 1, "")
+        | `None -> finish start length
+        | _ ->
+            (* A quote left open: a multi-line value, outside the line-shaped boundary. *)
+            close_statement start length;
+            `Statements (List.rev !statements))
+      else
+        let character = line.[index] in
+        let continue ?(quote = quote) ?(escaped = false) ?(parens = parens) ?(brackets = brackets)
+            next =
+          loop next start quote escaped parens brackets
+        in
+        match quote with
+        | `Single ->
+            if Char.equal character '\'' then continue ~quote:`None (index + 1)
+            else continue (index + 1)
+        | `Ansi_c ->
+            if escaped then continue (index + 1)
+            else if Char.equal character '\\' then continue ~escaped:true (index + 1)
+            else if Char.equal character '\'' then continue ~quote:`None (index + 1)
+            else continue (index + 1)
+        | `Double ->
+            if escaped then continue (index + 1)
+            else if Char.equal character '\\' then continue ~escaped:true (index + 1)
+            else if N.starts_at line ~pos:index "$(" then
+              continue (N.skip_command_substitution line (index + 2))
+            else if N.starts_at line ~pos:index "${" then
+              continue (N.skip_parameter_expansion line (index + 2))
+            else if Char.equal character '`' then continue ~quote:`Backtick_double (index + 1)
+            else if Char.equal character '"' then continue ~quote:`None (index + 1)
+            else continue (index + 1)
+        | (`Backtick_none | `Backtick_double) as backtick ->
+            if escaped then continue (index + 1)
+            else if Char.equal character '\\' then continue ~escaped:true (index + 1)
+            else if Char.equal character '`' then
+              continue
+                ~quote:(match backtick with `Backtick_double -> `Double | `Backtick_none -> `None)
+                (index + 1)
+            else continue (index + 1)
+        | `None ->
+            let word_start =
+              index = 0
+              || Char.is_whitespace line.[index - 1]
+              || List.mem [ ';'; '&'; '|'; '('; ')' ] line.[index - 1] ~equal:Char.equal
+            in
+            let top = parens = 0 && brackets = 0 in
+            if escaped then continue (index + 1)
+            else if Char.equal character '\\' then continue ~escaped:true (index + 1)
+            else if Char.equal character '#' && word_start then finish start index
+            else if N.starts_at line ~pos:index "$'" then continue ~quote:`Ansi_c (index + 2)
+            else if N.starts_at line ~pos:index "$(" then
+              continue (N.skip_command_substitution line (index + 2))
+            else if N.starts_at line ~pos:index "${" then
+              continue (N.skip_parameter_expansion line (index + 2))
+            else if Char.equal character '\'' then continue ~quote:`Single (index + 1)
+            else if Char.equal character '"' then continue ~quote:`Double (index + 1)
+            else if Char.equal character '`' then continue ~quote:`Backtick_none (index + 1)
+            else if Char.equal character '[' then continue ~brackets:(brackets + 1) (index + 1)
+            else if Char.equal character ']' then
+              continue ~brackets:(Int.max 0 (brackets - 1)) (index + 1)
+            else if not top then
+              if Char.equal character '(' then continue ~parens:(parens + 1) (index + 1)
+              else if Char.equal character ')' then
+                continue ~parens:(Int.max 0 (parens - 1)) (index + 1)
+              else continue (index + 1)
+            else if Char.equal character '(' then
+              if
+                List.is_empty !operands
+                && only_prefixes (text start index)
+                && not (N.starts_at line ~pos:index "((")
+              then
+                (* A subshell opened at statement position: its first statement starts here. *)
+                let next = restart (index + 1) in
+                loop next next `None false 0 0
+              else continue ~parens:1 (index + 1)
+            else if Char.equal character ')' || Char.equal character ';' then (
+              close_statement start index;
+              let rec past index =
+                if index < length && List.mem [ ';'; '&' ] line.[index] ~equal:Char.equal then
+                  past (index + 1)
+                else index
+              in
+              let next = restart (past (index + 1)) in
+              loop next next `None false 0 0)
+            else if N.starts_at line ~pos:index "&&" then
+              let next = connect start index And (index + 2) in
+              loop next next `None false 0 0
+            else if N.starts_at line ~pos:index "||" then
+              let next = connect start index Or (index + 2) in
+              loop next next `None false 0 0
+            else if N.starts_at line ~pos:index "|&" then
+              let next = connect start index Pipe (index + 2) in
+              loop next next `None false 0 0
+            else if Char.equal character '|' && not (index > 0 && Char.equal line.[index - 1] '>')
+            then
+              let next = connect start index Pipe (index + 1) in
+              loop next next `None false 0 0
+            else if
+              Char.equal character '&'
+              && (index = 0 || not (List.mem [ '>'; '<' ] line.[index - 1] ~equal:Char.equal))
+              && not (N.starts_at line ~pos:index "&>")
+            then (
+              close_statement start index;
+              let next = restart (index + 1) in
+              loop next next `None false 0 0)
+            else continue (index + 1)
+    in
+    loop 0 0 `None false 0 0
+
+  let is_test ~first operand =
+    let prefixes = if first then statement_prefixes else [ "!" ] in
+    let rec drop = function
+      | word :: rest when List.mem prefixes word ~equal:String.equal -> drop rest
+      | words -> words
+    in
+    match drop (words operand) with ("[" | "[[" | "test") :: _ -> true | _ -> false
+
+  let bare_test_list { operands; connectors; _ } =
+    List.length operands >= 2
+    && List.for_all connectors ~f:(function And -> true | Or | Pipe -> false)
+    && List.for_alli operands ~f:(fun index operand -> is_test ~first:(index = 0) operand)
+
+  (** Whether [next] -- the statement after the list -- makes the list a condition or reads its
+      status. *)
+  let consumes next =
+    (match words next with ("then" | "do") :: _ -> true | _ -> false)
+    || String.is_substring next ~substring:"$?"
+
+  let findings text =
+    let lines = Array.of_list (String.split_lines text) in
+    if not (Array.exists lines ~f:N.line_enables_errexit) then []
+    else
+      let count = Array.length lines in
+      (* The first statement of the next non-blank, non-comment line -- a statement, so that a
+         trailing comment mentioning `$?` does not read as consuming anything. *)
+      let rec next_statement index =
+        if index >= count then ""
+        else
+          let line = String.strip lines.(index) in
+          if String.is_empty line || String.is_prefix line ~prefix:"#" then
+            next_statement (index + 1)
+          else
+            match scan ~at_end:true line with
+            | `Statements (statement :: _) -> statement.raw
+            | `Statements [] | `Continues _ -> line
+      in
+      (* The statements of the logical line whose last physical line so far is [last], and the
+         physical line it finally ends on. A backslash continuation joins without a separator, as
+         the shell does; an operator one joins with a space. *)
+      let rec logical last line =
+        match scan line with
+        | `Continues (cut, separator) when last + 1 < count ->
+            logical (last + 1) (String.prefix line cut ^ separator ^ lines.(last + 1))
+        | `Continues _ -> (
+            match scan ~at_end:true line with
+            | `Statements statements -> (statements, last)
+            | `Continues _ -> ([], last))
+        | `Statements statements -> (statements, last)
+      in
+      let rec go first acc =
+        if first >= count then List.rev acc
+        else
+          let statements, last = logical first lines.(first) in
+          let rec flagged = function
+            | [] -> false
+            | statement :: rest ->
+                bare_test_list statement
+                && not
+                     (consumes
+                        (match rest with next :: _ -> next.raw | [] -> next_statement (last + 1)))
+                || flagged rest
+          in
+          go (last + 1) (if flagged statements then { line = first + 1 } :: acc else acc)
+      in
+      go 0 []
+
+  let report ~fail ~rel text =
+    List.iter (findings text) ~f:(fun finding ->
+        fail
+          (Printf.sprintf
+             "%s:%d: statement-position `[ A ] && [ B ]` passes silently when its FIRST test fails \
+              under errexit; write one predicate per statement, or end the list with `|| die ...` \
+              / `|| return 1`"
+             rel finding.line))
+
+  let cases =
+    [
+      (* Flagged: the shape, and each place a body statement can sit. *)
+      ("bare pair", "set -e\n[ -e ready ] && [ -e running ]\n", [ 2 ]);
+      ( "the cancel_sweep readiness check",
+        "set -e\n[ -e \"$p.ready\" ] && [ -e \"$p.ssh\" ]\n",
+        [ 2 ] );
+      ("double-bracket pair", "set -e\n[[ -e ready ]] && [[ -e running ]]\n", [ 2 ]);
+      ("test-command pair", "set -e\ntest -e ready && test -e running\n", [ 2 ]);
+      ("three tests", "set -e\n[ -n \"$a\" ] && [ -d \"$a\" ] && [ \"$a\" != / ]\n", [ 2 ]);
+      ("negated left test", "set -e\n! [ -e ready ] && [ -e running ]\n", [ 2 ]);
+      ("negated right test", "set -e\n[ -e ready ] && ! [ -e running ]\n", [ 2 ]);
+      ("pair after semicolon", "set -e\nprepare; [ -e ready ] && [ -e running ]\n", [ 2 ]);
+      ("pair before semicolon", "set -e\n[ -e ready ] && [ -e running ]; cleanup\n", [ 2 ]);
+      ("pair before comment", "set -e\n[ -e ready ] && [ -e running ] # both up\n", [ 2 ]);
+      ("pair in then branch", "set -e\nif probe; then [ -e a ] && [ -e b ]; fi\n", [ 2 ]);
+      ("pair in else branch", "set -e\nif probe; then :; else [ -e a ] && [ -e b ]; fi\n", [ 2 ]);
+      ("pair in loop body", "set -e\nfor f in x; do [ -e a ] && [ -e b ]; done\n", [ 2 ]);
+      ("pair in brace group", "set -e\n{ [ -e a ] && [ -e b ]; }\n", [ 2 ]);
+      ("pair opening a subshell", "set -e\n( [ -e a ] && [ -e b ]; cleanup )\n", [ 2 ]);
+      ("pair in case arm", "set -e\ncase $x in\n  y) [ -e a ] && [ -e b ] ;;\nesac\n", [ 3 ]);
+      ( "pair in multi-pattern case arm",
+        "set -e\ncase $x in\n  y|z) [ -e a ] && [ -e b ] ;;\nesac\n",
+        [ 3 ] );
+      ("indented pair", "set -e\nf() {\n  [ -e a ] && [ -e b ]\n  cleanup\n}\n", [ 3 ]);
+      ("pair wrapped after &&", "set -e\n[ -e a ] &&\n  [ -e b ]\ncleanup\n", [ 2 ]);
+      ("pair wrapped by backslash", "set -e\n[ -e a ] \\\n  && [ -e b ]\ncleanup\n", [ 2 ]);
+      ("pair wrapped after && and comment", "set -e\n[ -e a ] && # a first\n  [ -e b ]\n", [ 2 ]);
+      ("quoted operator in a test", "set -e\n[ \"$x\" = '||' ] && [ -e b ]\n", [ 2 ]);
+      ("pair after async command", "set -e\nserver & [ -e a ] && [ -e b ]\n", [ 2 ]);
+      (* Flagged although not inert: a function's (or script's) last command is its status, which
+         the call site weighs. The scan cannot see where a function ends; `|| return 1` is the
+         spelling it accepts. *)
+      ("function's final pair", "set -e\nready() {\n  [ -e a ] && [ -e b ]\n}\n", [ 3 ]);
+      ( "function's final pair, explicit",
+        "set -e\nready() {\n  [ -e a ] && [ -e b ] || return 1\n}\n",
+        [] );
+      (* Not flagged: the list's value is consumed. *)
+      ("or-die tail", "set -e\n[ -e a ] && [ -e b ] || die 'not ready'\n", []);
+      ("or-exit tail", "set -e\n[ -e a ] && [ -e b ] || exit 2\n", []);
+      ("or-brace tail", "set -e\n[ -e a ] && [ -e b ] || { echo no >&2; exit 2; }\n", []);
+      ("or tail on the next line", "set -e\n[ -e a ] && [ -e b ] ||\n  die 'not ready'\n", []);
+      ("if condition", "set -e\nif [ -e a ] && [ -e b ]; then :; fi\n", []);
+      ("elif condition", "set -e\nif x; then :; elif [ -e a ] && [ -e b ]; then :; fi\n", []);
+      ("while condition", "set -e\nwhile [ -e a ] && [ -e b ]; do :; done\n", []);
+      ("until condition", "set -e\nuntil [ -e a ] && [ -e b ]; do :; done\n", []);
+      ("wrapped if condition", "set -e\nif [ -e a ] &&\n   [ -e b ]; then :; fi\n", []);
+      ( "condition keyword on an earlier line",
+        "set -e\nif\n  [ -e a ] && [ -e b ]; then :; fi\n",
+        [] );
+      ("condition before a do line", "set -e\nwhile\n  [ -e a ] && [ -e b ]\ndo :; done\n", []);
+      ("status read on the same line", "set +e\n[ -e a ] && [ -e b ]; rc=$?\nset -e\n", []);
+      ("status read on the next line", "set -e\nset +e\n[ -e a ] && [ -e b ]\nrc=$?\nset -e\n", []);
+      ( "status named only in the next line's comment",
+        "set -e\n[ -e a ] && [ -e b ]\nx # not $?\n",
+        [ 2 ] );
+      (* Not flagged: outside the declared shape. *)
+      ("conditional action", "set -e\n[ -n \"$a\" ] && echo \"$a\"\n", []);
+      ("tests then an action", "set -e\n[ -e a ] && [ -e b ] && touch ready\n", []);
+      ("single double-bracket test", "set -e\n[[ -e a && -e b ]]\n", []);
+      ("mixed or-and list", "set -e\n[ -e a ] || [ -e b ] && [ -e c ]\n", []);
+      ("pair piped", "set -e\n[ -e a ] && [ -e b ] | cat\n", []);
+      ("quoted pair", "set -e\necho '[ -e a ] && [ -e b ]'\n", []);
+      ("pair in command substitution", "set -e\nok=$([ -e a ] && [ -e b ] && echo y)\n", []);
+      ("assignment then a test", "set -e\nx=1 && [ -e b ]\n", []);
+      ("pair without errexit", "set -u\n[ -e a ] && [ -e b ]\n", []);
+    ]
+
+  let controls () =
+    List.iter cases ~f:(fun (name, text, expected) ->
+        let actual = List.map (findings text) ~f:(fun finding -> finding.line) in
+        if not (List.equal Int.equal actual expected) then
+          eprintf "errexit-and-list case %s: expected lines %s, found %s\n" name
+            (String.concat ~sep:"," (List.map expected ~f:Int.to_string))
+            (String.concat ~sep:"," (List.map actual ~f:Int.to_string));
+        Verdict.pf "errexit-and-list fixture %s is classified as specified" name
+          (List.equal Int.equal actual expected));
+    (* The negative control: a genuine bare pair reaches the refusal the repository scan issues. *)
+    let messages = ref [] in
+    report
+      ~fail:(fun message -> messages := message :: !messages)
+      ~rel:"fixture.sh" "set -e\n[ -e ready ] && [ -e running ]\n";
+    let refused =
+      List.equal String.equal !messages
+        [
+          "fixture.sh:2: statement-position `[ A ] && [ B ]` passes silently when its FIRST test \
+           fails under errexit; write one predicate per statement, or end the list with `|| die \
+           ...` / `|| return 1`";
+        ]
+    in
+    if refused then
+      Test_utils.Refusal_control_manifest.observe_failure
+        ~source:"test/operations/shell_scripts_parse.ml"
+        ~format:
+          "%s:%d: statement-position `[ A ] && [ B ]` passes silently when its FIRST test fails \
+           under errexit; write one predicate per statement, or end the list with `|| die ...` / \
+           `|| return 1`";
+    Verdict.p "the bare [ A ] && [ B ] fixture reaches the one-predicate-per-statement refusal"
+      refused
+end
+
 module Harness_contract = struct
   (* test-run.sh is the production supervisor. Standalone harnesses outside the filename convention
      declare their lifecycle explicitly; Dune actions use the function-only API. *)
@@ -1612,6 +2013,7 @@ let () =
         (if expected then "a shell script this check reports on" else "outside this check's scope")
         (Bool.equal actual expected));
   Errexit_negation.controls ();
+  Errexit_and_list.controls ();
   Harness_contract.controls ();
   let base = base_dir Stdlib.Sys.argv.(1) in
   (* Reported repository-relative, opened as dune handed them over: the working directory is deep in
@@ -1637,7 +2039,8 @@ let () =
       if Harness_contract.member rel text then
         Verdict.pf "%s uses the shared harness contract" rel (Harness_contract.compliant text);
       let first_line = Option.value (first_line_of path) ~default:"" in
-      Errexit_negation.report ~fail:Verdict.fail ~rel (In_channel.read_all path);
+      Errexit_negation.report ~fail:Verdict.fail ~rel text;
+      Errexit_and_list.report ~fail:Verdict.fail ~rel text;
       match Shebang.parse first_line with
       | Error reason -> Verdict.fail (Printf.sprintf "%s: %s" rel reason)
       | Ok parsed ->

@@ -125,6 +125,55 @@ errexit-negation fixture bang-adjacent output redirect is classified as specifie
 errexit-negation fixture bang-adjacent input redirect is classified as specified: true
 errexit-negation fixture bang-prefixed command name is classified as specified: true
 the statement-position ! grep fixture reaches the absent()-style refusal: true
+errexit-and-list fixture bare pair is classified as specified: true
+errexit-and-list fixture the cancel_sweep readiness check is classified as specified: true
+errexit-and-list fixture double-bracket pair is classified as specified: true
+errexit-and-list fixture test-command pair is classified as specified: true
+errexit-and-list fixture three tests is classified as specified: true
+errexit-and-list fixture negated left test is classified as specified: true
+errexit-and-list fixture negated right test is classified as specified: true
+errexit-and-list fixture pair after semicolon is classified as specified: true
+errexit-and-list fixture pair before semicolon is classified as specified: true
+errexit-and-list fixture pair before comment is classified as specified: true
+errexit-and-list fixture pair in then branch is classified as specified: true
+errexit-and-list fixture pair in else branch is classified as specified: true
+errexit-and-list fixture pair in loop body is classified as specified: true
+errexit-and-list fixture pair in brace group is classified as specified: true
+errexit-and-list fixture pair opening a subshell is classified as specified: true
+errexit-and-list fixture pair in case arm is classified as specified: true
+errexit-and-list fixture pair in multi-pattern case arm is classified as specified: true
+errexit-and-list fixture indented pair is classified as specified: true
+errexit-and-list fixture pair wrapped after && is classified as specified: true
+errexit-and-list fixture pair wrapped by backslash is classified as specified: true
+errexit-and-list fixture pair wrapped after && and comment is classified as specified: true
+errexit-and-list fixture quoted operator in a test is classified as specified: true
+errexit-and-list fixture pair after async command is classified as specified: true
+errexit-and-list fixture function's final pair is classified as specified: true
+errexit-and-list fixture function's final pair, explicit is classified as specified: true
+errexit-and-list fixture or-die tail is classified as specified: true
+errexit-and-list fixture or-exit tail is classified as specified: true
+errexit-and-list fixture or-brace tail is classified as specified: true
+errexit-and-list fixture or tail on the next line is classified as specified: true
+errexit-and-list fixture if condition is classified as specified: true
+errexit-and-list fixture elif condition is classified as specified: true
+errexit-and-list fixture while condition is classified as specified: true
+errexit-and-list fixture until condition is classified as specified: true
+errexit-and-list fixture wrapped if condition is classified as specified: true
+errexit-and-list fixture condition keyword on an earlier line is classified as specified: true
+errexit-and-list fixture condition before a do line is classified as specified: true
+errexit-and-list fixture status read on the same line is classified as specified: true
+errexit-and-list fixture status read on the next line is classified as specified: true
+errexit-and-list fixture status named only in the next line's comment is classified as specified: true
+errexit-and-list fixture conditional action is classified as specified: true
+errexit-and-list fixture tests then an action is classified as specified: true
+errexit-and-list fixture single double-bracket test is classified as specified: true
+errexit-and-list fixture mixed or-and list is classified as specified: true
+errexit-and-list fixture pair piped is classified as specified: true
+errexit-and-list fixture quoted pair is classified as specified: true
+errexit-and-list fixture pair in command substitution is classified as specified: true
+errexit-and-list fixture assignment then a test is classified as specified: true
+errexit-and-list fixture pair without errexit is classified as specified: true
+the bare [ A ] && [ B ] fixture reaches the one-predicate-per-statement refusal: true
 shared harness source and lifecycle are accepted: true
 new hand-run harnesses are discovered: true
 production test-run is outside the harness family: true
@@ -199,6 +248,9 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:88b12da9841dbf6131676bf4fb0f4686] statement-position ! command
   [scanner-refusal:003eba7381c87352fb02cd374fa62ea9] errexit-negation fixture
   [scanner-refusal:b67c631ab7ecd7df55fc002761cf99f6] reaches the absent()-style
+  [scanner-refusal:b16ef3a2f724269c0b981a25871cbbb3] statement-position A &&
+  [scanner-refusal:2d086d94d5a797eb9901008d71d5c241] errexit-and-list fixture
+  [scanner-refusal:3f096017191c7a4d9f63d7a94dcfb6ff] reaches the one-predicate-per-statement
   [scanner-refusal:beeb940e51aa3dff752296c0bd236146] lifecycle are accepted
   [scanner-refusal:0d15e8eb18e96635004da2561ab0917c] harnesses are discovered
   [scanner-refusal:2a0fdaf225cc691ffc63804ceb591d29] production test-run is
