@@ -1372,6 +1372,27 @@ that they earn a lookup rather than always-loaded space.
     literally: the alias must begin with the golden's name, since what a reader has in hand when
     they reach for the alias is the golden that just failed, and an alias that renames it is one
     they construct empty.
+- **Inline `%expect` tests get a per-MODULE alias too** (gh-ocannl-1037): the alias dune generates
+  for an inline-test library, `runtest-operations_tutorials`, runs every module, so one tutorial
+  checked on a GPU box used to cost the directory. Each module holding inline tests has a rule on
+  `runtest-<module>` running the library's generated runner,
+  `%{dep:.<library>.inline-tests/inline-test-runner.exe} inline-test-runner <library> -only-test
+  <module>.ml -source-tree-root %{workspace_root} -diff-cmd -`, then `(diff? <module>.ml
+  <module>.ml.corrected)` — the flags and the diff are the ones dune's own action uses, so the
+  result promotes the same way. Four mechanics. The runner is an ordinary target at the path dune
+  generates it under (`dune build test/operations/.operations_tutorials.inline-tests/inline-test-runner.exe`
+  builds it), so a `%{dep:…}` reaches it from the library's directory. `-only-test` (not
+  `-partition`) is the restriction because the runner fails when an `-only-test` matches nothing
+  (`the following -only-test flags matched nothing`), so a renamed module cannot leave its alias
+  passing on an empty run; `-partition` with an unknown name runs nothing and exits 0. The rule
+  takes `(sandbox always)`: dune's own inline-test action is sandboxed (lang >= 3.5), and both
+  write `<module>.ml.corrected`, which unsandboxed would race when one build requests both. And
+  these aliases are deliberately NOT aggregated onto `runtest` — the library's generated action
+  already runs every module there, so listing one runs its tests twice. `env_var_deps` derives the
+  obligation from the library's module set and its sources (`let%expect_test`, `let%test`,
+  `module%test`): it fails on a tested module without its rule, on a runner rule whose
+  `-only-test`, alias and golden do not name the same one module, and on such an alias in the
+  `runtest` aggregate, while the golden-diff naming rule above covers it like any other.
 - **A `(test)` stanza can only diff the one `<name>.expected` beside it**, so a test whose output
   legitimately differs per backend converts to an `(executable)` plus a diff rule that reads the
   resolved backend name and diffs `<name>-%{read:../config/ocannl_backend.txt}.expected`. That is
