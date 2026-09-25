@@ -121,6 +121,34 @@ let blind_axis ?radix ~dims ~modulus () =
   Array.find_mapi (place_residues ?radix ~dims ~modulus ()) ~f:(fun ax r ->
       if r = 0 then Some ax else None)
 
+(** [uncovered_residues ~radix ~dims ~modulus] is how the residues the base-[radix] key reaches over
+    [dims] differ from those the row-major key reaches, as [(reached, wanted)], or [None] when they
+    agree. The row-major key sweeps [0 .. N - 1] for [N] the product of [dims] (so [dims.(0)] counts
+    here), reaching [{0 .. min N modulus - 1}]; a radix reaches the sums of each axis's place
+    residue times its index, which is a different set whenever some axis is too short to sweep its
+    residues — [~radix:5] over [[|2; 2; 3|]] under modulus 6 reaches [{0, 1, 2, 3, 5}], dropping 4.
+    Computed over sets bounded by [min N modulus], never by enumerating the cells. *)
+let uncovered_residues ~radix ~dims ~modulus =
+  let w = place_residues ~radix ~dims ~modulus () in
+  let reached =
+    Array.foldi dims
+      ~init:(Set.singleton (module Int) 0)
+      ~f:(fun ax reach extent ->
+        let steps = List.init (Int.min extent modulus) ~f:(fun j -> j * w.(ax) % modulus) in
+        Set.fold reach
+          ~init:(Set.empty (module Int))
+          ~f:(fun acc r ->
+            List.fold steps ~init:acc ~f:(fun acc st -> Set.add acc ((r + st) % modulus))))
+  in
+  let n_wanted = Array.fold dims ~init:1 ~f:(fun acc d -> Int.min modulus (acc * d)) in
+  let wanted = Set.of_list (module Int) (List.init n_wanted ~f:Fn.id) in
+  if Set.equal reached wanted then None else Some (reached, wanted)
+
+(* The last [(radix, dims, modulus)] whose coverage {!cycle_flat} verified: a caller mints an
+   operand one cell at a time with the same arguments, so one entry makes the check once per
+   operand. *)
+let coverage_verified : (int * int array * int) option ref = ref None
+
 (** [cycle ?radix ~dims ~modulus ~offset ~stride idcs] is
     [(key idcs mod modulus + offset) * stride]: the values [k * stride] for [k] cycling through
     [offset .. offset + modulus - 1]. The [key] is {!flat} by default — the row-major offset, so the
@@ -140,6 +168,14 @@ let blind_axis ?radix ~dims ~modulus () =
     a square operand, where the value depends on the index SUM and the operand equals its own
     transpose, which hides a transposition bug as thoroughly as a blind axis hides a row
     substitution.
+
+    Coprimality stops blindness but does not by itself keep the value SET: an axis too short to
+    sweep its residues can leave one unreached ({!uncovered_residues}), so under [~radix] this also
+    raises unless the radix key reaches exactly the residues the row-major key reaches over the same
+    [dims]. What a radix does NOT keep is the ORDER of the values, hence how many of each land in a
+    given row or reduction and where a running sum crosses a threshold: a site whose argument rests
+    on the partial sums, as {!drift}'s does, re-exhibits it for the new arrangement (as
+    [test/operations/discriminating_values] does for [drift]) rather than inheriting it.
 
     Reusing it means checking two conditions, neither of which the obvious phrasings imply:
 
@@ -206,6 +242,27 @@ let cycle_flat ?radix ~dims ~modulus ~offset ~stride i =
                  h ax dims_s modulus h
                  (Array.length dims - 1 - ax)))
   | None -> ());
+  (match radix with
+  | Some h
+    when not
+           (match !coverage_verified with
+           | Some (h', dims', modulus') ->
+               h = h' && modulus = modulus' && Array.equal Int.equal dims dims'
+           | None -> false) ->
+      (match uncovered_residues ~radix:h ~dims ~modulus with
+      | Some (reached, wanted) ->
+          let show set = Sexp.to_string (Set.sexp_of_m__t (module Int) set) in
+          invalid_arg
+            (Printf.sprintf
+               "Ll_test.cycle: radix %d over %s under modulus %d reaches the residues %s, not the \
+                %s the row-major key reaches, so it would change the value set; pick another radix \
+                coprime to the modulus"
+               h
+               (Sexp.to_string (Array.sexp_of_t Int.sexp_of_t dims))
+               modulus (show reached) (show wanted))
+      | None -> ());
+      coverage_verified := Some (h, Array.copy dims, modulus)
+  | _ -> ());
   let key =
     match radix with
     | None -> i

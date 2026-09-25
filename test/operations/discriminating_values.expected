@@ -8,6 +8,8 @@ a radix off 1 (mod modulus) keeps the square operand distinct from its transpose
 a radix sharing a factor with the modulus is refused, however it relates to the dims: true
 a large radix on a high-rank shape is judged by its residue, not an overflowed power: true
 a modulus past Ll_test.max_modulus is refused, and one at it is accepted: true
+a radix that would drop a value the row-major key reaches is refused: true
+a negative radix mints the operand its residue does: radix -2 is radix 3 under modulus 5: true
 under a radix, cycle_flat over the row-major offsets is cycle over the multi-indices: true
 drift varies with every index of every shape used: true
 every drift cell is exact in bf16: true

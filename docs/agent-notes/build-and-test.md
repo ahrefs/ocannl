@@ -1082,7 +1082,10 @@ that they earn a lookup rather than always-loaded space.
   modulus and pass `~radix:h` with `h` coprime to the MODULUS (not to the dims) and off
   `1 (mod modulus)`: the key becomes the multi-index read in base `h`, so no axis can cancel at any
   size while the value set — which an exactness argument may rest on — stays put
-  (ahrefs/ocannl#1024); `h = 1 (mod modulus)` makes a square operand its own transpose. Changing
+  (ahrefs/ocannl#1024) — `cycle` also refuses a radix whose key would reach a different set of
+  residues than the row-major one (a short axis can leave one unreached), but the ORDER of the
+  values moves, so an argument about partial sums is re-exhibited, not inherited;
+  `h = 1 (mod modulus)` makes a square operand its own transpose. Changing
   the modulus instead changes how many values there are, which is a numeric re-derivation wherever
   the values are load-bearing. What this does not buy is
   aperiodicity: the values repeat with period `modulus`, so a shift by `modulus` is a symmetry, and

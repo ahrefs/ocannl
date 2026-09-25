@@ -103,15 +103,28 @@ let () =
       (moves_along_every_axis ~dims:rank5
          (Ll_test.cycle ~radix:1_000_003 ~dims:rank5 ~modulus:5 ~offset:0. ~stride:1.));
   (* Residue products stay below 2^60 only while the modulus is at most 2^30, so a larger one is
-     refused outright rather than risk a wrapped product (PR review round 2). Radix 7 is coprime to
-     both moduli and its residues are too small to wrap, so the bound is the only thing that can
-     refuse the first and nothing refuses the second. *)
+     refused outright rather than risk a wrapped product (PR review round 2). Over [|1; 8|] radix 3
+     is coprime to both moduli and reaches exactly the eight residues the row-major key does, so the
+     bound is the only thing that can refuse the first and nothing refuses the second. *)
   let at_modulus modulus () =
-    Ll_test.cycle ~radix:7 ~dims:[| 2; 2; 2 |] ~modulus ~offset:0. ~stride:1. [| 1; 1; 1 |]
+    Ll_test.cycle ~radix:3 ~dims:[| 1; 8 |] ~modulus ~offset:0. ~stride:1. [| 0; 7 |]
   in
   p "a modulus past Ll_test.max_modulus is refused, and one at it is accepted"
     (refuses (at_modulus (Ll_test.max_modulus + 1))
     && not (refuses (at_modulus Ll_test.max_modulus)));
+  (* Coprimality alone does not keep the value set: over [|2; 2; 3|] under modulus 6 the row-major
+     key reaches all six residues, while radix 5 — coprime, not blind — reaches {0, 1, 2, 3, 5}.
+     cycle refuses that rather than silently drop a value (PR review round 3). *)
+  p "a radix that would drop a value the row-major key reaches is refused"
+    (refuses (fun () ->
+         Ll_test.cycle ~radix:5 ~dims:[| 2; 2; 3 |] ~modulus:6 ~offset:0. ~stride:1. [| 0; 0; 0 |]));
+  (* Base's [%] is non-negative for a positive modulus, so a negative radix is its residue. *)
+  let sq5 = [| 5; 5 |] in
+  p_all "a negative radix mints the operand its residue does: radix -2 is radix 3 under modulus 5"
+    (all_indices sq5) ~f:(fun idcs ->
+      Float.equal
+        (Ll_test.cycle ~radix:(-2) ~dims:sq5 ~modulus:5 ~offset:0. ~stride:1. idcs)
+        (Ll_test.cycle ~radix:3 ~dims:sq5 ~modulus:5 ~offset:0. ~stride:1. idcs));
   (* The two forms a site is written in — [NTDSL.init]'s multi-index and [Array.init]'s flat offset,
      in row-major order — have to mint the same operand once a radix makes the key more than the
      offset itself. *)
