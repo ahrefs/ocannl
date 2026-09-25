@@ -2076,13 +2076,49 @@ class FixtureDigestTest(unittest.TestCase):
         self.assertEqual((self.dir / "fixtures" / fixture_digest.DIGEST_FILE).read_bytes(),
                          digests_before)
 
-    def test_fixture_path_takes_plain_names_only(self):
+    def test_out_dir_never_writes_through_a_link_in_dir(self):
+        # save_file writes THROUGH an existing entry, so a symlink or hard link in DIR to the
+        # recorded fixture would have the smoke bytes overwrite it with its digest untouched.
+        # The stub writes the way save_file does (opening the path, following links).
+        gen_fixtures = self.gen_fixtures_module()
+        spec, recorded_before, digests_before = self.smoke_layout()
+        # Named, as every spec build() can save is: the real build() reads the name first and
+        # refuses before writing without one, so the unlink pass sees every destination.
+        spec.write_text('{"name": "lenet"}')
+        recorded = self.dir / "fixtures" / "lenet.safetensors"
+
+        def build(spec_path, out_dir):
+            return self.write_fixture(out_dir / "lenet.safetensors", b"smoke bytes")
+
+        for kind, link in (("symlink", os.symlink), ("hard link", os.link)):
+            with self.subTest(kind=kind):
+                out = self.dir / f"smoke-{kind.replace(' ', '-')}"
+                out.mkdir()
+                link(recorded, out / "lenet.safetensors")
+                with unittest.mock.patch.object(gen_fixtures, "build", build), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    gen_fixtures.main(["--out-dir", str(out), str(spec)], here=self.dir)
+
+                self.assertEqual(recorded.read_bytes(), recorded_before)
+                smoke = out / "lenet.safetensors"
+                self.assertFalse(smoke.is_symlink())
+                self.assertEqual(smoke.stat().st_nlink, 1)
+                self.assertNotEqual(smoke.read_bytes(), recorded_before)
+        self.assertEqual((self.dir / "fixtures" / fixture_digest.DIGEST_FILE).read_bytes(),
+                         digests_before)
+
+    def test_fixture_path_takes_portable_names_only(self):
         # The check build() itself makes before writing, so a direct build() caller is covered
-        # too: every spelling that reaches outside out_dir on either platform's path rules.
+        # too: every spelling that reaches outside out_dir, or names no file in it, on either
+        # platform -- and the negative control, the names the workloads really use.
         gen_fixtures = self.gen_fixtures_module()
         out = self.dir / "smoke"
-        self.assertEqual(gen_fixtures.fixture_path(out, "lenet"), out / "lenet.safetensors")
-        for name in ("", ".", "..", "../x", "a/b", "/abs", "a\\b", "..\\x", "C:x", None):
+        for spec in (HERE / "workloads").glob("*.json"):
+            name = json.loads(spec.read_text())["name"]
+            self.assertEqual(gen_fixtures.fixture_path(out, name), out / f"{name}.safetensors")
+        self.assertEqual(gen_fixtures.fixture_path(out, "CONSOLE"), out / "CONSOLE.safetensors")
+        for name in ("", ".", "..", "../x", "a/b", "/abs", "a\\b", "..\\x", "C:x", "a b",
+                     "-x", "a\x00b", "CON", "nul", "Com1", "LPT9.x", "aux.tar", None):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 gen_fixtures.fixture_path(out, name)
 

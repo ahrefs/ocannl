@@ -9,7 +9,8 @@ only the fixture path. All payloads are float32; weights are [fan_out, fan_in] r
 
 import argparse
 import json
-from pathlib import Path, PurePosixPath, PureWindowsPath
+import re
+from pathlib import Path
 
 import numpy as np
 from safetensors.numpy import save_file
@@ -157,15 +158,24 @@ def build_gpt(spec, rng, tensors, meta):
         meta[key] = str(spec[key])
 
 
+#: Windows device names, reserved whatever extension follows them (`CON.safetensors` is CON).
+WINDOWS_DEVICES = {
+    "CON", "PRN", "AUX", "NUL", *(f"{dev}{i}" for dev in ("COM", "LPT") for i in range(1, 10))
+}
+
+
 def fixture_path(out_dir: Path, name):
-    """Where `build` writes the fixture for spec `name`: `out_dir/<name>.safetensors`, and
-    nowhere else. A name carrying a path component (`../fixtures/lenet`, a drive, a backslash)
-    would put the bytes outside `out_dir` -- with `--out-dir`, onto a recorded fixture without
-    touching its digest -- so it is refused under either platform's path rules."""
-    if (not isinstance(name, str) or name in ("", ".", "..")
-            or PurePosixPath(name).name != name or PureWindowsPath(name).name != name):
-        raise ValueError(f"spec name {name!r} is not a plain file name: the fixture is written to "
-                         f"{out_dir}/<name>.safetensors, and this name would leave that directory")
+    """Where `build` writes the fixture for spec `name`: `out_dir/<name>.safetensors`, as a
+    regular file, on every measuring host. So a name is an allowlisted portable word -- the
+    alphabet `fixture_digest.check_origin` holds origins to -- rather than anything a path parser
+    accepts: that excludes every separator, drive, `..` and whitespace (a name that would put the
+    bytes outside `out_dir`, with `--out-dir` onto a recorded fixture without touching its digest),
+    and a Windows device stem, which names no file in `out_dir` at all."""
+    if (not isinstance(name, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name) is None
+            or name.split(".")[0].upper() in WINDOWS_DEVICES):
+        raise ValueError(f"spec name {name!r} is not a portable file name (an ASCII letter or "
+                         "digit, then letters, digits, dot, underscore or hyphen; no Windows "
+                         f"device name): the fixture is written to {out_dir}/<name>.safetensors")
     return out_dir / f"{name}.safetensors"
 
 
@@ -265,14 +275,24 @@ def main(argv=None, here=None):
     # the previous bytes are overwritten. build() re-checks the first itself; checking every spec
     # here refuses before ANY is built. A spec this cannot parse is left for build() to refuse on
     # its own terms -- that refusal also happens before that spec mutates anything.
+    destinations = []
     for spec_path in specs:
         try:
             name = json.loads(spec_path.read_text())["name"]
         except (json.JSONDecodeError, KeyError, TypeError):
             continue
-        fixture_path(out_dir, name)
+        destinations.append(fixture_path(out_dir, name))
         if recording:
             fixture_digest.check_fixture_name(f"{name}.safetensors")
+    if not recording:
+        # save_file writes THROUGH an existing entry: a symlink in DIR (to a recorded fixture, say)
+        # or a hard link to one would have the smoke bytes overwrite that fixture with its digest
+        # untouched. Unlinking removes DIR's own directory entry and nothing it points to, so the
+        # build then creates a fresh regular file. After every name has passed, so a refusal
+        # above leaves DIR as it was.
+        for path in destinations:
+            if path.is_symlink() or path.is_file():
+                path.unlink()
     written = [build(spec, out_dir) for spec in specs]
     if not recording:
         print(f"recorded no digests: {len(written)} fixture(s) in {out_dir} are for smoke runs "
