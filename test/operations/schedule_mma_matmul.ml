@@ -1976,6 +1976,108 @@ let () =
   let%op td1 = mta +* "ik;jk=>ij" mtb in
   check_transposed ~tag:"tb" ~c_tiled:false ~serial:td0 ~tensorized:td1;
 
+  (* --- Metal's advertised formats and its resolver agree (gh-ocannl-923 follow-up): the
+     [mma_format_tiles] triples and the [mma_fragment_types] arms are maintained together by hand,
+     and the comment above the resolver states the invariant — an advertised triple with no arm
+     makes autotune time seeds that render the scalar fallback, an arm with no triple is never
+     seeded. Here both halves are derived from the backend: for every (a, b, d) storage triple over
+     {f32, f16, bf16, fp8}, the unstaged [mma_schedule] matmul's census is all-intrinsics exactly
+     when [advertises_mma_format] holds, under the default policy and again under
+     [Fp16_wide]/[Bf16_wide], whose uniform-narrow arms resolve the same storage triples through a
+     float accumulator. Compiled, not run: the census is the subject. Metal only — the C backends'
+     register tiling does not consult the descriptor, and CUDA/HIP gate their arms on device
+     capabilities this machine cannot vary. --- *)
+  (let formats =
+     [
+       ("f32", Ir.Ops.single, Ir.Backend_intf.Mma_f32);
+       ("f16", Ir.Ops.half, Ir.Backend_intf.Mma_f16);
+       ("bf16", Ir.Ops.bfloat16, Ir.Backend_intf.Mma_bf16);
+       ("fp8", Ir.Ops.fp8, Ir.Backend_intf.Mma_fp8_e5m2);
+     ]
+   in
+   let triples =
+     List.concat_map formats ~f:(fun a ->
+         List.concat_map formats ~f:(fun b -> List.map formats ~f:(fun d -> (a, b, d))))
+   in
+   let policies =
+     [
+       ("default policy", "dflt", Fn.id);
+       ( "Fp16_wide/Bf16_wide",
+         "wide",
+         fun (pol : Numerics.t) ->
+           { pol with fp16_arithmetic = Numerics.Fp16_wide; bf16_arithmetic = Numerics.Bf16_wide }
+       );
+     ]
+   in
+   let claim_rendered = "every format triple's tensorized matmul renders its Tile_mma statements" in
+   let claim_both_sides = "the format triples include advertised and unadvertised ones" in
+   let claim_agree tag =
+     Printf.sprintf "%s: census is all-intrinsics exactly for the advertised format triples" tag
+   in
+   if on_metal then (
+     let ma_of = Hashtbl.create (module String) and mb_of = Hashtbl.create (module String) in
+     let input tbl ~side (tag, prec, _) =
+       Hashtbl.find_or_add tbl tag ~default:(fun () ->
+           NTDSL.init
+             ~l:("fmt" ^ side ^ "_" ^ tag)
+             ~prec ~i:[ n ] ~o:[ n ]
+             ~f:(Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:(-2.) ~stride:1.)
+             ())
+     in
+     let rows =
+       List.concat_map policies ~f:(fun (ptag, pslug, adjust) ->
+           let saved = Numerics.get () in
+           Numerics.set_policy (adjust saved);
+           Exn.protect
+             ~finally:(fun () -> Numerics.set_policy saved)
+             ~f:(fun () ->
+               let limits = Context.hardware_limits (Context.auto ()) in
+               List.map triples ~f:(fun (((at, _, af) as a), ((bt, _, bf) as b), (dt, dprec, df)) ->
+                   let fa = input ma_of ~side:"a" a and fb = input mb_of ~side:"b" b in
+                   let%op mcf = fa * fb in
+                   Tn.update_prec mcf.Tensor.value dprec;
+                   let name = Printf.sprintf "mm_fmt_%s_%s_%s_%s" at bt dt pslug in
+                   let _ctx, routine =
+                     Context.compile
+                       ~lowered_transform:(fun o ->
+                         [ Sched.apply (mma_schedule ~out:mcf.Tensor.value o) o ])
+                       (Context.auto ())
+                       (named name (Train.forward mcf))
+                       Ir.Indexing.Empty
+                   in
+                   let census = List.map routine.Context.mma.Ir.C_syntax.renderings ~f:snd in
+                   let advertised =
+                     Ir.Backend_intf.advertises_mma_format limits ~a:af ~b:bf ~d:df
+                   in
+                   (ptag, Printf.sprintf "(%s, %s, %s)" at bt dt, advertised, census))))
+     in
+     p_all
+       ~min:(List.length policies * List.length triples)
+       claim_rendered rows
+       ~f:(fun (_, _, _, census) -> not (List.is_empty census));
+     p_all ~min:2 claim_both_sides [ true; false ] ~f:(fun want ->
+         List.exists rows ~f:(fun (_, _, advertised, _) -> Bool.equal advertised want));
+     List.iter policies ~f:(fun (ptag, _, _) ->
+         let mine = List.filter rows ~f:(fun (t, _, _, _) -> String.equal t ptag) in
+         p_all ~min:(List.length triples) (claim_agree ptag) mine
+           ~f:(fun (_, triple, advertised, census) ->
+             let all_intrinsics =
+               (not (List.is_empty census))
+               && List.for_all census
+                    ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics)
+             in
+             let ok = Bool.equal all_intrinsics advertised in
+             if not ok then
+               Stdio.eprintf "%s %s: advertised=%b, census=[%s]\n%!" ptag triple advertised
+                 (String.concat ~sep:"; "
+                    (List.map census ~f:(fun r ->
+                         Sexp.to_string (Ir.C_syntax.sexp_of_mma_rendering r))));
+             ok)))
+   else (
+     skipped claim_rendered;
+     skipped claim_both_sides;
+     List.iter policies ~f:(fun (ptag, _, _) -> skipped (claim_agree ptag))));
+
   (* --- Pattern discipline: Tensorize on a non-micro-kernel nest is a targeted error --- *)
   let%op mc2 = ma * mb in
   let bad_transform (opt : LL.optimized) : LL.optimized =

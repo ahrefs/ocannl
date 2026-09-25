@@ -691,7 +691,8 @@ module Impl = struct
        fragment types: [mma_d_boundary_lines] converts at the destination boundary exactly where the
        first and last differ. Arms and [mma_format_tiles]' STORAGE triples must correspond: an
        advertised triple with no arm makes autotune time seeds that render the scalar fallback, and
-       an arm with no triple is never seeded. *)
+       an arm with no triple is never seeded. [schedule_mma_matmul]'s format-triple leg checks the
+       correspondence over every triple of f32/f16/bf16/fp8, under both policies. *)
     let mma_fragment_types ~d_prec ~a_prec ~b_prec =
       match (a_prec, b_prec, d_prec) with
       | Ops.Single_prec _, Ops.Single_prec _, Ops.Single_prec _ ->
