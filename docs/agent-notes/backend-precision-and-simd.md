@@ -590,7 +590,9 @@ files.
   `Bf16_wide` (`false`) widens every backend's `accum_prec`, swaps HIP's uniform-bf16 rocWMMA arm to
   a `float` accumulator fragment through the gh-ocannl-789 converted `d` boundary (both scopes),
   leaves CUDA's inline-PTX arm alone (f32 in hardware; per-statement scope only, as for f16), and
-  makes Metal's `simdgroup_bfloat8x8` arm decline (no wide arm verified; empty scope list).
+  swaps Metal's `simdgroup_bfloat8x8` arm to a `simdgroup_float8x8` accumulator behind the
+  gh-ocannl-837 `thread_elements()` boundary (both scopes, gh-ocannl-923; before it that arm
+  declined and the scope list was empty).
   `Bf16_narrow` (`true`) resolves as auto everywhere today — no target has native bf16
   arithmetic — and is what the `approximate` payload names, so that regime does not move if auto
   later resolves wide; `reproducible` pins `auto`. Why it exists: gfx11's bf16-accumulate WMMA is not
@@ -666,8 +668,22 @@ files.
   each of the remaining eight contribute 1: residency across the reduction returns 2056, whereas
   narrowing at each block boundary returns 2048. The default policy still uses
   `simdgroup_half8x8`; only `Fp16_wide` selects the mixed accumulator. As on HIP, one shared
-  combination resolver and boundary helper feed both `mma_syntax` and `mma_fragment_syntax`, so
-  their accepted shapes cannot drift.
+  combination resolver (`mma_fragment_types`, keyed on the (a, b, d) STORAGE triple) and boundary
+  helper feed both `mma_syntax` and `mma_fragment_syntax`, so their accepted shapes cannot drift;
+  every arm must also be advertised in `mma_format_tiles`, or autotune never seeds it.
+  gh-ocannl-923 added the mixed-STORAGE triples `(f16, f16, f32)` and `(bf16, bf16, f32)`: the
+  float accumulator is the destination's own type, so they load/store `d` directly (no
+  `__mma_dstage`), are policy-independent, and serve both scopes; and the wide uniform-bf16 arm
+  (`Bf16_wide`), `bfloat` operands into a float accumulator with the same converted boundary
+  (`d_elem` picks the cast). Executed on M4 Max: bf16 k-split 264 wide vs 256 default; the
+  width-sensitive bf16 leg's worst excess over the half-ulp bound -0.0234 wide vs 0.0937 default.
+  **A value claim cannot tell Metal's f32-destination tensor unit from its scalar fallback**: the
+  fallback for a half-operand, float-destination `Tile_mma` renders `fma((float)a, (float)b, acc)`
+  in f32, which is exact wherever the intrinsic is (the f16→f32 k-split returns 2056 on both).
+  Discriminate the fallback with the census/structure claim, and give the value claim a NARROW
+  accumulator as its negative control (an f16 destination under `Fp16_auto` returns 2048 in both
+  scopes); a half-accumulator mutant of the mixed arm fails the value claims (2048), a declining
+  mutant only the structure ones.
 - **The warp-shuffle rendering stages at the residency, and gates on it** (gh-ocannl-682).
   `C_syntax.try_warp_reduce` holds `wred_v_*`, the `__shared__ wred_partials_*` slots and every
   `ocannl_shfl_xor` stage at `accum_prec` of the storage precision, and renders the contribution

@@ -13,6 +13,10 @@ C-backend fallback matches bitwise: true
 tensorized structure as expected: true
 half tensorized matmul matches the serial twin bitwise: true
 half tensorized structure as expected: true
+f16->f32 direct inputs hold products that f16 cannot represent: true
+f16->f32 direct exact sums are not f16-representable: true
+f16->f32 direct tensorized matmul equals the exact sum bitwise: true
+f16->f32 direct tensorized structure as expected: true
 Fp16_wide half serial rendering equals the once-narrowed wide reference bitwise: true
 Fp16_wide half tensorized matmul equals the same wide reference bitwise (the residency, not the schedule, sets the width): true
 Fp16_wide mma seeds match the backend's advertised emission scopes: true
@@ -61,6 +65,12 @@ staged+tensorized uniform-f16 matmul matches the serial twin bitwise: true
 staged+tensorized uniform-f16 fragment residency: true
 staged+tensorized Fp16_wide matmul equals the once-narrowed wide reference bitwise: true
 staged+tensorized Fp16_wide fragment residency converts d once: true
+f16->f32 k-split, direct scope: every cell accumulates to 2056 in f32: true
+f16->f32 k-split, fragment scope: every cell accumulates to 2056 in f32: true
+f16->f16 k-split under Fp16_auto, direct scope: no cell reaches 2056 (the discriminator discriminates): true
+f16->f16 k-split under Fp16_auto, fragment scope: no cell reaches 2056 (the discriminator discriminates): true
+f16->f32 k-split, direct scope: the mixed intrinsic loads and stores d unconverted: true
+f16->f32 k-split, fragment scope: the f32 fragment stays resident with d unconverted: true
 staged+tensorized Bf16_wide matmul equals the once-narrowed wide reference bitwise: true
 staged+tensorized default-policy uniform-bf16 matmul narrows between blocks (the discriminator discriminates): true
 staged+tensorized Bf16_wide fragment residency converts d once: true

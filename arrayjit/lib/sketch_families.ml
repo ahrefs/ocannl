@@ -220,8 +220,9 @@ let mma_format_triples ~a_prec ~b_prec ~d_prec =
 
    gh-ocannl-838: [Numerics.Bf16_wide] asks the same question of a bf16-storage destination, against
    [mma_bf16_wide_acc_scopes] — HIP's converted rocWMMA boundary serves both scopes, CUDA's
-   inline-PTX arm (f32 accumulate in hardware) only the per-statement one, Metal none. The witness
-   names whichever policy withheld the seed. *)
+   inline-PTX arm (f32 accumulate in hardware) only the per-statement one, and Metal's converted
+   [thread_elements()] boundary both since gh-ocannl-923. The witness names whichever policy
+   withheld the seed. *)
 let wide_acc_withholding (mma : Ir.Backend_intf.mma_capability) ~scope ~d_prec =
   let withheld ~policy scopes =
     if List.mem scopes scope ~equal:Ir.Backend_intf.equal_mma_emission_scope then None

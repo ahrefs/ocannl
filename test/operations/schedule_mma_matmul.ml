@@ -502,6 +502,71 @@ let () =
    in
    p "half tensorized structure as expected" ok);
 
+  (* --- f16 operands into f32 STORAGE, the direct (per-statement) scope (gh-ocannl-923): Metal's
+     mixed [simdgroup_matrix] arm — half A/B fragments, and a [simdgroup_float8x8] accumulator that
+     IS the destination's storage type, so it loads and stores [d] with no staging fragment — and
+     the C backends' register tiling with its half operands bridged. The inputs are FULL-PRODUCT:
+     [a] is [1 + t/1024] (eleven significant bits, f16-exact) and [b] a small integer, so a product
+     such as [3 * (1 + 7/1024)] needs twelve bits and is NOT f16-representable, and neither are
+     32-term sums such as those (multiples of 1/1024 below 100) — while every product and partial
+     sum is exact in f32, so ANY association returns the exact sum. Bitwise equality with the host's
+     exact sum therefore fails on a rendering that rounds a product, or an accumulator, to f16
+     anywhere; the host-side claim before it pins that the inputs can tell. Not the numerics of the
+     tensor unit against the scalar fallback: Metal's fallback for this triple computes
+     [fma((float)a, (float)b, acc)] in f32 and is exact too — the structure claim is what tells the
+     two apart. CUDA and HIP are skipped: their f16 -> f32 arms are the staged legs' subject below,
+     and whether their tensor units return this exact sum has not been run (gfx11's WMMA is not
+     exactly rounded even on exact data, per the bf16 legs' table). --- *)
+  let h32a idcs = 1. +. (Float.of_int (((idcs.(0) * 3) + idcs.(1)) % 8) /. 1024.) in
+  let h32b idcs = Float.of_int ((idcs.(0) + (2 * idcs.(1))) % 7) -. 3. in
+  let exact_h32 =
+    Array.init (n * n) ~f:(fun t ->
+        let i = t / n and j = t % n in
+        let acc = ref 0.0 in
+        for k = 0 to n - 1 do
+          acc := !acc +. (h32a [| i; k |] *. h32b [| k; j |])
+        done;
+        !acc)
+  in
+  (* A normal f16 carries 11 significant bits: [frexp]'s mantissa is in [0.5, 1). *)
+  let f16_exact x =
+    let m, _ = Float.frexp x in
+    Float.is_integer (Float.ldexp m 11)
+  in
+  let h32_products =
+    List.concat_map (List.range 0 n) ~f:(fun i ->
+        List.concat_map (List.range 0 n) ~f:(fun k ->
+            List.map (List.range 0 n) ~f:(fun j -> h32a [| i; k |] *. h32b [| k; j |])))
+  in
+  p_exists "f16->f32 direct inputs hold products that f16 cannot represent" h32_products
+    ~f:(fun x -> not (f16_exact x));
+  p_exists "f16->f32 direct exact sums are not f16-representable" (Array.to_list exact_h32)
+    ~f:(fun x -> not (f16_exact x));
+  (let claim_value = "f16->f32 direct tensorized matmul equals the exact sum bitwise" in
+   let claim_struct = "f16->f32 direct tensorized structure as expected" in
+   if on_gpu && not on_metal then (
+     skipped claim_value;
+     skipped claim_struct)
+   else
+     let h32ma = NTDSL.init ~l:"h32ma" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ n ] ~f:h32a () in
+     let h32mb = NTDSL.init ~l:"h32mb" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ n ] ~f:h32b () in
+     let%op mch32 = h32ma * h32mb in
+     Tn.update_prec mch32.Tensor.value Ir.Ops.single;
+     let got, census = compile_mma_with_census ~name:"mm_h32_mma" mch32 in
+     p_all2 claim_value got exact_h32 ~f:Float.equal;
+     let src = Generated.read "mm_h32_mma" in
+     let has s = String.is_substring src ~substring:s in
+     p claim_struct
+       (if on_metal then
+          (not (List.is_empty census))
+          && List.for_all census ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics)
+          && has "simdgroup_float8x8 __mma_acc"
+          && has "simdgroup_half8x8 __mma_af"
+          && (not (has "__mma_dstage"))
+          && (not (has "thread_elements()"))
+          && not (has "== 0)")
+        else has "Tile_mma register tiling" && has "narrow storage bridged: a:half b:half"));
+
   (* --- Fp16_wide (gh-ocannl-680): the uniform-f16 combination under the wide policy. CUDA sm_80+
      routes it to the f32-accumulate inline-PTX m16n8k16 arm (the bf16 uniform arm's body over the
      shared fragment layouts); HIP and Metal use f32 accumulator fragments over f16 A/B and bridge
@@ -787,8 +852,12 @@ let () =
     ~check:(fun src ->
       let has s = String.is_substring src ~substring:s in
       if on_metal then
-        (* [simdgroup_matrix] is uniform-precision only: this mixed combination declines. *)
-        has "== 0)"
+        (* gh-ocannl-923: bfloat operand fragments into a float accumulator that is the f32
+           destination's own type — no staging fragment, no lane-0 fallback. *)
+        has "simdgroup_float8x8 __mma_acc"
+        && has "simdgroup_bfloat8x8 __mma_af"
+        && (not (has "__mma_dstage"))
+        && not (has "== 0)")
       else if on_hip then
         if Lazy.force hip_mma then has "rocwmma::mma_sync" && not (has "== 0)")
         else has "== 0)" && not (has "rocwmma")
@@ -844,9 +913,10 @@ let () =
 
   (* --- Bf16_wide (gh-ocannl-838): the uniform-bf16 combination under the wide policy. HIP swaps
      its rocWMMA arm to an f32 accumulator fragment over the bf16 STORAGE destination, converting at
-     the [d] boundary; CUDA's inline-PTX arm is already f32 in hardware; Metal's uniform-bf16
-     [simdgroup_matrix] arm declines to the scalar fallback; the CPU register tiling renders as
-     under the default policy (its accumulator is f32 either way).
+     the [d] boundary, and so does Metal's [simdgroup_matrix] arm since gh-ocannl-923 (a
+     [simdgroup_float8x8] accumulator over [simdgroup_bfloat8x8] operands, the gh-ocannl-837
+     [thread_elements()] boundary); CUDA's inline-PTX arm is already f32 in hardware; the CPU
+     register tiling renders as under the default policy (its accumulator is f32 either way).
 
      The inputs are [mwa]/[mwb]'s WIDTH-SENSITIVE cycles, which are bf16-exact too (at most five
      significant bits): 32-term sums reach ~77, where bf16's spacing (1/2) cannot hold the
@@ -857,8 +927,8 @@ let () =
      inputs, rendered under the default policy, must FAIL wherever the backend keeps bf16 storage
      residency (HIP's bf16-accumulate WMMA, or its narrow serial fallback), which is what makes
      passing it evidence rather than a property of easy inputs. Metal's side of the negative control
-     is skipped: its bf16 [simdgroup_matrix] accumulate has not been characterized, so whether it
-     exceeds the bound is not a claim this test can make. --- *)
+     executes since gh-ocannl-923: its default-policy [simdgroup_bfloat8x8] accumulate exceeds the
+     bound (by 0.0937 on an M4 Max, against -0.0234 under [Bf16_wide]). --- *)
   let bwa = NTDSL.init ~l:"bwa" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fwa () in
   let bwb = NTDSL.init ~l:"bwb" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fwb () in
   let exact_bw =
@@ -931,8 +1001,7 @@ let () =
      "the default-policy uniform-bf16 matmul exceeds the narrowing rounding exactly where the \
       backend keeps bf16 storage residency (the inputs discriminate)"
    in
-   if on_metal then skipped claim
-   else p claim (Bool.equal Float.(worst_excess got_bw_default > 0.) default_bf16_narrow));
+   p claim (Bool.equal Float.(worst_excess got_bw_default > 0.) default_bf16_narrow));
   let bf16_wide_scopes =
     match (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.mma with
     | Some m -> m.Ir.Backend_intf.mma_bf16_wide_acc_scopes
@@ -964,7 +1033,14 @@ let () =
      && List.for_all census_bw ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_scalar_fallback)
    in
    let ok =
-     if on_metal then fallback && has "== 0)" && not (has "simdgroup_bfloat8x8")
+     if on_metal then
+       (* The float accumulator AND the converted boundary: the bf16-accumulate arm this replaces
+          declares [simdgroup_bfloat8x8 __mma_acc] and stages nothing (gh-ocannl-923). *)
+       intrinsics
+       && has "simdgroup_float8x8 __mma_acc"
+       && has "simdgroup_bfloat8x8 __mma_af"
+       && has "__mma_dstage" && has "thread_elements()[1]"
+       && not (has "== 0)")
      else if on_hip then
        if Lazy.force hip_mma then
          (* The [float] accumulator declaration AND the staging fragment: the bf16-accumulate arm
@@ -1473,10 +1549,10 @@ let () =
      staged leg above cannot see it on CUDA/HIP (wmma has no uniform-f32 combination, so it declines
      to the scalar fallback); with f16 operands the marked accumulator renders as a fragment array
      loaded from [d] once before the serial [k_o] body and stored once after it, the body containing
-     update-only MMA steps — Metal through [simdgroup_half8x8], CUDA through wmma accumulator
-     fragments. The inputs are the exact-in-f16 values of the mm_h case, and every partial sum is
-     also exact in f32, so parity with the half serial twin is bitwise on every backend and either
-     rendering path. --- *)
+     update-only MMA steps — Metal through a [simdgroup_float8x8] fragment over [simdgroup_half8x8]
+     operands (gh-ocannl-923), CUDA through wmma accumulator fragments. The inputs are the
+     exact-in-f16 values of the mm_h case, and every partial sum is also exact in f32, so parity
+     with the half serial twin is bitwise on every backend and either rendering path. --- *)
   let%op mchs = mah * mbh in
   Tn.update_prec mchs.Tensor.value Ir.Ops.single;
   if on_gpu then (
@@ -1496,11 +1572,10 @@ let () =
     let ctx_d = Context.run ctx_d routine_d in
     let got_h_staged = Context.get_values ctx_d mchs.Tensor.value in
     (* Parity is bitwise on CUDA (wmma computes the exactly-rounded dot product for these f16-exact
-       inputs) and on Metal (this mixed f16->f32 combination declines to the exact scalar fallback).
-       On HIP it is only within f32 tolerance: RDNA3's [v_wmma_f32_16x16x16_f16] does not produce
-       the exactly-rounded result (observed max abs diff ~1.3e-7), so the f32 accumulator differs
-       from the f16 serial twin by rounding. The uniform-f16 leg below stays bitwise on every
-       backend. *)
+       inputs) and on Metal (likewise its [simdgroup_matrix] f32 accumulate, gh-ocannl-923). On HIP
+       it is only within f32 tolerance: RDNA3's [v_wmma_f32_16x16x16_f16] does not produce the
+       exactly-rounded result (observed max abs diff ~1.3e-7), so the f32 accumulator differs from
+       the f16 serial twin by rounding. The uniform-f16 leg below stays bitwise on every backend. *)
     let h32_eq =
       (* The RDNA3 rounding exception belongs to the tensor unit; without an advertised tile-MMA
          (gh-ocannl-1032) HIP takes the same exact scalar fallback Metal does. *)
@@ -1510,13 +1585,17 @@ let () =
       ~f:h32_eq;
     let src = Generated.read "mm_h_staged_mma" in
     let has s = String.is_substring src ~substring:s in
-    (* f16 operands with an f32 accumulator: the wmma backends (HIP rocWMMA, CUDA wmma) render the
-       marked accumulator as an f32 fragment array resident across [k_o]. Metal's [simdgroup_matrix]
-       is uniform-precision only, so this mixed combination declines there to the scalar fallback —
-       the uniform-f16 leg below is the one that exercises Metal's fragment path. HIP is verified on
-       gfx1151, so its pin is strict; CUDA also accepts the pre-sm_70 lane-0 fallback. *)
+    (* f16 operands with an f32 accumulator: every tensor-core backend renders the marked
+       accumulator as an f32 fragment array resident across [k_o]. On Metal (gh-ocannl-923) the
+       fragment is the destination's own type, so it loads and stores [d] directly — no
+       [__mma_dstage], which is the wide-f16 arm's conversion. Metal and HIP are verified, so their
+       pins are strict; CUDA also accepts the pre-sm_70 lane-0 fallback. *)
     let ok =
-      if on_metal then has "== 0)"
+      if on_metal then
+        staged_half_resident src
+        && has "simdgroup_float8x8 __mma_fragment_"
+        && has "simdgroup_half8x8 __mma_af"
+        && not (has "__mma_dstage")
       else if on_hip then if Lazy.force hip_mma then staged_half_resident src else has "== 0)"
       else staged_half_resident src || has "== 0)"
     in
@@ -1638,14 +1717,126 @@ let () =
     skipped claim_fw_value;
     skipped claim_fw_struct);
 
+  (* --- f16 operands into f32 STORAGE under the k-split discriminator (gh-ocannl-923), in BOTH
+     emission scopes: the unstaged schedule keeps the whole k=144 reduction in one [Tile_mma]
+     (per-statement: [mma_syntax] loads and stores [d] around it), the staged one splits it into
+     nine [k_o] blocks around a resident fragment ([mma_fragment_syntax]). Same inputs as the
+     Fp16_wide leg: the first 16-wide block contributes 2048 and each later block 1. A float
+     accumulator reaches 2056 exactly in either scope; a half one — any arm that accumulated at the
+     operands' width — rounds every 2049 back to the even 2048, per [simdgroup_multiply_accumulate]
+     call, and ends at 2048. Two-sided: the negative control renders the same two compositions into
+     an f16 destination under [Fp16_auto], whose uniform-f16 arm accumulates in [simdgroup_half8x8],
+     and must NOT reach 2056 — so passing the value claims is evidence of the f32 accumulator, not a
+     property of easy inputs. The value claims cannot tell the tensor unit from Metal's scalar
+     fallback for this triple (which accumulates in f32 too and also reaches 2056); the structure
+     claims do, and fail on it. Metal-only: CUDA's and HIP's f16 -> f32 arms have not run this
+     discriminator (it is the uniform-f16 arms' test there), and the CPU backends cannot stage.
+     --- *)
+  let claim_h32k_value scope =
+    Printf.sprintf "f16->f32 k-split, %s scope: every cell accumulates to 2056 in f32" scope
+  in
+  let claim_h32k_control scope =
+    Printf.sprintf
+      "f16->f16 k-split under Fp16_auto, %s scope: no cell reaches 2056 (the discriminator \
+       discriminates)"
+      scope
+  in
+  let claim_h32k_direct_struct =
+    "f16->f32 k-split, direct scope: the mixed intrinsic loads and stores d unconverted"
+  in
+  let claim_h32k_staged_struct =
+    "f16->f32 k-split, fragment scope: the f32 fragment stays resident with d unconverted"
+  in
+  if on_metal then (
+    let kw = 144 in
+    let ksa =
+      NTDSL.init ~l:"h32ksa" ~prec:Ir.Ops.half ~i:[ kw ] ~o:[ n ]
+        ~f:(fun idcs -> if idcs.(1) % bm = 0 then 1. else 0.)
+        ()
+    in
+    let ksb =
+      NTDSL.init ~l:"h32ksb" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ kw ]
+        ~f:(fun idcs -> if idcs.(0) % bm <> 0 then 0. else if idcs.(0) = 0 then 2048. else 1.)
+        ()
+    in
+    let run ~staged ~d_prec ~name =
+      let%op t = ksa * ksb in
+      Tn.update_prec t.Tensor.value d_prec;
+      let transform opt =
+        let out = t.Tensor.value in
+        Sched.apply
+          (if staged then staged_schedule ~out ~src_a:ksa.Tensor.value ~src_b:ksb.Tensor.value opt
+           else mma_schedule ~out opt)
+          opt
+      in
+      let ctx, routine =
+        Context.compile
+          ~lowered_transform:(fun o -> [ transform o ])
+          (Context.auto ())
+          (named name (Train.forward t))
+          Ir.Indexing.Empty
+      in
+      let census = List.map routine.Context.mma.Ir.C_syntax.renderings ~f:snd in
+      let ctx = Context.run ctx routine in
+      (Array.to_list (Context.get_values ctx t.Tensor.value), census, Generated.read name)
+    in
+    let intrinsics census =
+      (not (List.is_empty census))
+      && List.for_all census ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics)
+    in
+    (* The f16 -> f32 arm is policy-independent, so it runs under the ambient policy (the stanza
+       declares OCANNL_FP16_ARITHMETIC); the control pins [Fp16_auto], whose uniform-f16 arm is the
+       narrow one. *)
+    let got_direct, census_direct, src_direct =
+      run ~staged:false ~d_prec:Ir.Ops.single ~name:"mm_h32k_mma"
+    in
+    let got_staged, census_staged, src_staged =
+      run ~staged:true ~d_prec:Ir.Ops.single ~name:"mm_h32k_staged_mma"
+    in
+    Numerics.set_policy { saved_policy with fp16_arithmetic = Numerics.Fp16_auto };
+    let ctl_direct, _, _ = run ~staged:false ~d_prec:Ir.Ops.half ~name:"mm_h16k_mma" in
+    let ctl_staged, _, _ = run ~staged:true ~d_prec:Ir.Ops.half ~name:"mm_h16k_staged_mma" in
+    Numerics.set_policy saved_policy;
+    Stdio.eprintf
+      "schedule_mma_matmul: f16->f32 k-split cell 0: direct %g, fragment %g; f16->f16 control: \
+       direct %g, fragment %g (not part of the golden)\n\
+       %!"
+      (List.hd_exn got_direct) (List.hd_exn got_staged) (List.hd_exn ctl_direct)
+      (List.hd_exn ctl_staged);
+    p_all (claim_h32k_value "direct") got_direct ~f:(Float.equal 2056.);
+    p_all (claim_h32k_value "fragment") got_staged ~f:(Float.equal 2056.);
+    p_none (claim_h32k_control "direct") ctl_direct ~f:(Float.equal 2056.);
+    p_none (claim_h32k_control "fragment") ctl_staged ~f:(Float.equal 2056.);
+    (let has s = String.is_substring src_direct ~substring:s in
+     p claim_h32k_direct_struct
+       (intrinsics census_direct
+       && has "simdgroup_float8x8 __mma_acc"
+       && has "simdgroup_half8x8 __mma_af"
+       && (not (has "__mma_dstage"))
+       && not (has "== 0)")));
+    let has s = String.is_substring src_staged ~substring:s in
+    p claim_h32k_staged_struct
+      (intrinsics census_staged && staged_half_resident src_staged
+      && has "simdgroup_float8x8 __mma_fragment_"
+      && has "simdgroup_half8x8 __mma_af"
+      && (not (has "__mma_dstage"))
+      && not (has "== 0)")))
+  else (
+    skipped (claim_h32k_value "direct");
+    skipped (claim_h32k_value "fragment");
+    skipped (claim_h32k_control "direct");
+    skipped (claim_h32k_control "fragment");
+    skipped claim_h32k_direct_struct;
+    skipped claim_h32k_staged_struct);
+
   (* --- Staged uniform-bf16 under [Numerics.Bf16_wide] (gh-ocannl-838): the gh-ocannl-789 k-split
      discriminator at bf16, executing the converted [d] boundary in the FRAGMENT scope. bf16's
      spacing at 256 is 2, so each later block's +1 is lost to any narrowing between blocks (257 ties
      back to the even 256) while an f32 fragment resident across all nine blocks reaches 264
      exactly. The negative control renders the same composition under the default policy — the
      bf16-accumulate fragment — and must NOT reach 264 (it narrows per step, whichever way gfx11
-     rounds the ties). HIP-only: Metal's uniform-bf16 arm declines under the wide policy, CUDA has
-     no fragment-scope uniform-bf16 arm, and the lane-0 fallback of a staged schedule narrows at
+     rounds the ties). HIP and Metal (whose wide uniform-bf16 arm landed with gh-ocannl-923); CUDA
+     has no fragment-scope uniform-bf16 arm, and the lane-0 fallback of a staged schedule narrows at
      every [k_o] boundary by construction. --- *)
   let claim_bw_value =
     "staged+tensorized Bf16_wide matmul equals the once-narrowed wide reference bitwise"
@@ -1655,7 +1846,7 @@ let () =
     "staged+tensorized default-policy uniform-bf16 matmul narrows between blocks (the \
      discriminator discriminates)"
   in
-  if on_hip && Lazy.force hip_mma then (
+  if on_metal || (on_hip && Lazy.force hip_mma) then (
     let kw = 144 in
     let bwsa =
       NTDSL.init ~l:"bwsa" ~prec:Ir.Ops.bfloat16 ~i:[ kw ] ~o:[ n ]
@@ -1701,8 +1892,11 @@ let () =
     let has s = String.is_substring src ~substring:s in
     p claim_bw_struct
       (staged_half_resident ~converted_d:true src
-      && has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>"
-      && has ".x[__ei]" && has "__mma_dstage"))
+      && (if on_metal then
+            has "simdgroup_float8x8 __mma_fragment_"
+            && has "simdgroup_bfloat8x8" && has "thread_elements()"
+          else has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>" && has ".x[__ei]")
+      && has "__mma_dstage"))
   else (
     (* Where the tensor unit is absent this leg has no fragment to convert (see the Fp16_wide leg's
        skip above for why this is the ordinary backend skip). *)

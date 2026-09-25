@@ -52,7 +52,8 @@ type fp16_mode = Fp16_auto | Fp16_narrow | Fp16_wide [@@deriving sexp, compare, 
       ({!Backend_intf.mma_capability.mma_bf16_wide_acc_scopes} omits it) have those seeds withheld
       (gh-ocannl-545's seeding-vs-emission discipline). HIP swaps its rocWMMA arm to an f32
       accumulator fragment with a converted [d] boundary (both scopes); CUDA's arm is already wide
-      in the per-statement scope; Metal's uniform-bf16 [simdgroup_matrix] arm declines.
+      in the per-statement scope; Metal swaps its [simdgroup_matrix] arm to a float accumulator over
+      bfloat operands with a converted [d] boundary (both scopes, gh-ocannl-923).
     - [Bf16_narrow] (config [true]): the narrow side of the trade wherever a backend offers one. No
       target has native general bf16 arithmetic, so today it resolves exactly as [Bf16_auto] on
       every backend; it exists so a profile can name the narrow side without depending on how
