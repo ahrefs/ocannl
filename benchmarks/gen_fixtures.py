@@ -9,7 +9,10 @@ only the fixture path. All payloads are float32; weights are [fan_out, fan_in] r
 
 import argparse
 import json
+import os
 import re
+import shutil
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -207,6 +210,32 @@ def build(spec_path: Path, out_dir: Path):
     return out_path
 
 
+def build_smoke(specs, out_dir: Path):
+    """Build `specs` into `out_dir`, each one replacing its destination ENTRY only once built.
+
+    save_file writes THROUGH an existing entry, so building in place would let a symlink -- or a
+    hard link -- in `out_dir` to a recorded fixture have the smoke bytes overwrite that fixture
+    with its digest untouched. Each spec is built into a staging directory beside the
+    destination and renamed over it: the rename replaces `out_dir`'s own directory entry and
+    nothing it points to, and a spec that fails to build leaves its previous output (and every
+    later spec's) where it was. The recording path keeps writing in place: a symlinked recorded
+    fixture is how measurement trees share ONE fixture file (gh612_cells.sh).
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".gen_fixtures-", dir=out_dir))
+    written = []
+    try:
+        for spec in specs:
+            staged = build(spec, staging)
+            final = out_dir / staged.name
+            os.replace(staged, final)
+            written.append(final)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    print(f"recorded no digests: {len(written)} fixture(s) in {out_dir} are for smoke runs only")
+    return written
+
+
 def main(argv=None, here=None):
     """Generate the requested fixtures and record their digests as this box's bytes.
 
@@ -250,8 +279,12 @@ def main(argv=None, here=None):
             ap.error("--origin names the box recorded bytes belong to; --out-dir records none")
         # The tracked directory is the one place these bytes must not land: writing there without
         # recording overwrites the fixtures the published numbers are on and leaves the new bytes
-        # matching no entry -- the loss the digest validation below exists to prevent.
-        if args.out_dir.resolve() == (here / "fixtures").resolve():
+        # matching no entry -- the loss the digest validation below exists to prevent. By
+        # filesystem identity, not by path: a case alias on a case-insensitive filesystem, a
+        # symlink or a `..` detour all name the same directory under different spellings.
+        fixtures = here / "fixtures"
+        if args.out_dir.exists() and fixtures.exists() and os.path.samefile(args.out_dir,
+                                                                            fixtures):
             ap.error(f"--out-dir {args.out_dir} is the recorded fixtures directory; "
                      "regenerate there without --out-dir, so the digests are recorded")
         out_dir = args.out_dir
@@ -275,29 +308,17 @@ def main(argv=None, here=None):
     # the previous bytes are overwritten. build() re-checks the first itself; checking every spec
     # here refuses before ANY is built. A spec this cannot parse is left for build() to refuse on
     # its own terms -- that refusal also happens before that spec mutates anything.
-    destinations = []
     for spec_path in specs:
         try:
             name = json.loads(spec_path.read_text())["name"]
         except (json.JSONDecodeError, KeyError, TypeError):
             continue
-        destinations.append(fixture_path(out_dir, name))
+        fixture_path(out_dir, name)
         if recording:
             fixture_digest.check_fixture_name(f"{name}.safetensors")
     if not recording:
-        # save_file writes THROUGH an existing entry: a symlink in DIR (to a recorded fixture, say)
-        # or a hard link to one would have the smoke bytes overwrite that fixture with its digest
-        # untouched. Unlinking removes DIR's own directory entry and nothing it points to, so the
-        # build then creates a fresh regular file. After every name has passed, so a refusal
-        # above leaves DIR as it was.
-        for path in destinations:
-            if path.is_symlink() or path.is_file():
-                path.unlink()
+        return build_smoke(specs, out_dir)
     written = [build(spec, out_dir) for spec in specs]
-    if not recording:
-        print(f"recorded no digests: {len(written)} fixture(s) in {out_dir} are for smoke runs "
-              "only")
-        return written
     # fixtures/ is gitignored, so this file is the only record of what was just generated
     # (gh-ocannl-645). Only this origin's regenerated entries are rewritten: generating one
     # workload must not drop the identities of the fixtures already on disk, and generating on

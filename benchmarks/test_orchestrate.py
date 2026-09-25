@@ -2019,7 +2019,8 @@ class FixtureDigestTest(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 written = gen_fixtures.main(["--out-dir", str(out)], here=self.dir)
 
-        self.assertEqual(built, [(spec, out)])
+        # Built into a staging directory inside DIR, which is gone afterwards.
+        self.assertEqual([(s, d.parent) for s, d in built], [(spec, out)])
         self.assertEqual(written, [out / "lenet.safetensors"])
         self.assertEqual((self.dir / "fixtures" / "lenet.safetensors").read_bytes(),
                          recorded_before)
@@ -2032,12 +2033,17 @@ class FixtureDigestTest(unittest.TestCase):
         # against: the published bytes overwritten, the new ones matching no entry.
         gen_fixtures = self.gen_fixtures_module()
         _, recorded_before, digests_before = self.smoke_layout()
-        # Spelled differently from `here / "fixtures"`, so the refusal compares resolved paths.
-        aliased = self.dir / "workloads" / ".." / "fixtures"
+        # Spelled differently from `here / "fixtures"`, so the refusal compares the directories'
+        # identity: a `..` detour, a symlink, and -- where the filesystem folds case, as a
+        # default macOS volume does -- a case alias, which path resolution keeps as spelled.
+        aliases = [self.dir / "workloads" / ".." / "fixtures", self.dir / "fixtures-link"]
+        aliases[1].symlink_to(self.dir / "fixtures", target_is_directory=True)
+        if (self.dir / "FIXTURES").exists():
+            aliases.append(self.dir / "FIXTURES")
         built = []
 
-        for argv in (["--out-dir", str(aliased)],
-                     ["--out-dir", str(self.dir / "smoke"), "--origin", "rog-nv"]):
+        for argv in ([["--out-dir", str(alias)] for alias in aliases]
+                     + [["--out-dir", str(self.dir / "smoke"), "--origin", "rog-nv"]]):
             with self.subTest(argv=argv):
                 with unittest.mock.patch.object(gen_fixtures, "build",
                                                 lambda s, d: built.append(s)), \
@@ -2082,9 +2088,6 @@ class FixtureDigestTest(unittest.TestCase):
         # The stub writes the way save_file does (opening the path, following links).
         gen_fixtures = self.gen_fixtures_module()
         spec, recorded_before, digests_before = self.smoke_layout()
-        # Named, as every spec build() can save is: the real build() reads the name first and
-        # refuses before writing without one, so the unlink pass sees every destination.
-        spec.write_text('{"name": "lenet"}')
         recorded = self.dir / "fixtures" / "lenet.safetensors"
 
         def build(spec_path, out_dir):
@@ -2094,7 +2097,12 @@ class FixtureDigestTest(unittest.TestCase):
             with self.subTest(kind=kind):
                 out = self.dir / f"smoke-{kind.replace(' ', '-')}"
                 out.mkdir()
-                link(recorded, out / "lenet.safetensors")
+                try:
+                    link(recorded, out / "lenet.safetensors")
+                except OSError as e:
+                    # Windows grants symlink creation only with Developer Mode or
+                    # SeCreateSymbolicLinkPrivilege; the hard-link leg still runs there.
+                    self.skipTest(f"cannot create a {kind} here: {e}")
                 with unittest.mock.patch.object(gen_fixtures, "build", build), \
                         contextlib.redirect_stdout(io.StringIO()):
                     gen_fixtures.main(["--out-dir", str(out), str(spec)], here=self.dir)
@@ -2106,6 +2114,29 @@ class FixtureDigestTest(unittest.TestCase):
                 self.assertNotEqual(smoke.read_bytes(), recorded_before)
         self.assertEqual((self.dir / "fixtures" / fixture_digest.DIGEST_FILE).read_bytes(),
                          digests_before)
+
+    def test_out_dir_keeps_previous_outputs_when_a_build_fails(self):
+        # Each destination is replaced only once its own build succeeded: a spec that fails
+        # (a missing seed, an unknown model) costs its own run, not the smoke fixtures already in
+        # DIR -- neither its own previous output nor those of specs never reached.
+        gen_fixtures = self.gen_fixtures_module()
+        spec, _, _ = self.smoke_layout()
+        other = spec.parent / "mlp.json"
+        other.write_text("{}")
+        out = self.dir / "smoke"
+        for name in ("lenet", "mlp"):
+            self.write_fixture(out / f"{name}.safetensors", f"previous {name}".encode())
+        before = {p.name: p.read_bytes() for p in out.iterdir()}
+
+        def build(spec_path, out_dir):
+            raise ValueError("unknown model")
+
+        with unittest.mock.patch.object(gen_fixtures, "build", build), \
+                self.assertRaises(ValueError):
+            gen_fixtures.main(["--out-dir", str(out), str(spec), str(other)], here=self.dir)
+
+        self.assertEqual({p.name: p.read_bytes() for p in out.iterdir()}, before,
+                         "previous outputs intact and no staging directory left behind")
 
     def test_fixture_path_takes_portable_names_only(self):
         # The check build() itself makes before writing, so a direct build() caller is covered
