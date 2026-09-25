@@ -78,28 +78,114 @@ let ramp base s = add (c base) (embed s)
 let flat ~dims idcs =
   Array.foldi idcs ~init:0 ~f:(fun ax acc i -> if ax = 0 then i else (acc * dims.(ax)) + i)
 
-(** [blind_axis ~dims ~modulus] is the outermost axis whose index {!cycle} would ignore, if any:
-    stepping along axis [ax] moves {!flat} by that axis's row-major stride, so the cycle is constant
-    along [ax] exactly when [modulus] divides that stride. *)
-let blind_axis ~dims ~modulus =
-  let found = ref None and stride = ref 1 in
-  for ax = Array.length dims - 1 downto 0 do
-    if !stride % modulus = 0 then found := Some (ax, !stride);
-    stride := !stride * dims.(ax)
+(** [unflat ~dims i] inverts {!flat}: the multi-index whose row-major offset is [i]. Like {!flat} it
+    never reads [dims.(0)], so the leading index absorbs whatever the trailing extents leave. *)
+let unflat ~dims i =
+  let idcs = Array.create ~len:(Array.length dims) 0 and rest = ref i in
+  for ax = Array.length dims - 1 downto 1 do
+    idcs.(ax) <- !rest % dims.(ax);
+    rest := !rest / dims.(ax)
   done;
-  !found
+  if Array.length dims > 0 then idcs.(0) <- !rest;
+  idcs
 
-(** [cycle ~dims ~modulus ~offset ~stride idcs] is [(flat idcs mod modulus + offset) * stride]: the
-    values [k * stride] for [k] cycling through [offset .. offset + modulus - 1] with period
-    [modulus]. Reusing it means checking two conditions, neither of which the obvious phrasings
-    imply:
+(** [place_residues ?radix ~dims ~modulus ()] is the weight each axis's index carries in {!cycle}'s
+    key, outermost first, reduced mod [modulus]: the row-major strides by default (so the key is
+    {!flat}), and with [~radix:h] the powers [h^(n-1-ax)] — the multi-index read as a base-[h]
+    numeral whatever the extents are. Reduced at every step rather than materialized, so a large
+    radix or a high rank cannot overflow a power onto a false multiple of [modulus].
+
+    That reduction is overflow-free only while a product of two residues fits an [int], so [modulus]
+    is bounded by {!max_modulus}, and this raises above it. The bound costs nothing real: [modulus]
+    is the number of distinct cell values, and a test operand wants a handful of them, exact in the
+    storage precision — 2^30 is past even f32's exact-integer range. *)
+let max_modulus = 1 lsl 30
+
+let place_residues ?radix ~dims ~modulus () =
+  if modulus < 1 || modulus > max_modulus then
+    invalid_arg
+      (Printf.sprintf "Ll_test.cycle: modulus %d is outside [1, 2^30] (Ll_test.max_modulus)" modulus);
+  let n = Array.length dims in
+  let w = Array.create ~len:n (1 % modulus) in
+  for ax = n - 2 downto 0 do
+    w.(ax) <- w.(ax + 1) * (Option.value radix ~default:dims.(ax + 1) % modulus) % modulus
+  done;
+  w
+
+(** [blind_axis ?radix ~dims ~modulus ()] is the outermost axis whose index {!cycle} would ignore,
+    if any: stepping along axis [ax] moves the key by the axis's place value, so the cycle is
+    constant along [ax] exactly when [modulus] divides it ({!place_residues}). Without [~radix] the
+    place values are the row-major strides, which the site's [dims] fix; with [~radix:h] coprime to
+    [modulus] no place value is a multiple of it, whatever [dims] is. *)
+let blind_axis ?radix ~dims ~modulus () =
+  Array.find_mapi (place_residues ?radix ~dims ~modulus ()) ~f:(fun ax r ->
+      if r = 0 then Some ax else None)
+
+(** [uncovered_residues ~radix ~dims ~modulus] is how the residues the base-[radix] key reaches over
+    [dims] differ from those the row-major key reaches, as [(reached, wanted)], or [None] when they
+    agree. The row-major key sweeps [0 .. N - 1] for [N] the product of [dims] (so [dims.(0)] counts
+    here), reaching [{0 .. min N modulus - 1}]; a radix reaches the sums of each axis's place
+    residue times its index, which is a different set whenever some axis is too short to sweep its
+    residues — [~radix:5] over [[|2; 2; 3|]] under modulus 6 reaches [{0, 1, 2, 3, 5}], dropping 4.
+    Computed over sets bounded by [min N modulus], never by enumerating the cells. *)
+let uncovered_residues ~radix ~dims ~modulus =
+  let w = place_residues ~radix ~dims ~modulus () in
+  let reached =
+    Array.foldi dims
+      ~init:(Set.singleton (module Int) 0)
+      ~f:(fun ax reach extent ->
+        let steps = List.init (Int.min extent modulus) ~f:(fun j -> j * w.(ax) % modulus) in
+        Set.fold reach
+          ~init:(Set.empty (module Int))
+          ~f:(fun acc r ->
+            List.fold steps ~init:acc ~f:(fun acc st -> Set.add acc ((r + st) % modulus))))
+  in
+  let n_wanted = Array.fold dims ~init:1 ~f:(fun acc d -> Int.min modulus (acc * d)) in
+  let wanted = Set.of_list (module Int) (List.init n_wanted ~f:Fn.id) in
+  if Set.equal reached wanted then None else Some (reached, wanted)
+
+(* The last [(radix, dims, modulus)] whose coverage {!cycle_flat} verified: a caller mints an
+   operand one cell at a time with the same arguments, so one entry makes the check once per
+   operand. *)
+let coverage_verified : (int * int array * int) option ref = ref None
+
+(** [cycle ?radix ~dims ~modulus ~offset ~stride idcs] is
+    [(key idcs mod modulus + offset) * stride]: the values [k * stride] for [k] cycling through
+    [offset .. offset + modulus - 1]. The [key] is {!flat} by default — the row-major offset, so the
+    period is [modulus] along the flat index and the arithmetic is byte-identical to the
+    hand-written idiom a site converts from — and with [~radix:h] it is the multi-index read in base
+    [h] ({!place_residues}).
+
+    The two knobs are independent on purpose (ahrefs/ocannl#1024). [~modulus] (with [~offset] and
+    [~stride]) chooses the VALUE SET: how many distinct cells there are, and the range an exactness
+    argument like {!drift}'s rests on. Whether every index moves the value is a third property, and
+    without [~radix] it is not the caller's to choose: the site's [dims] fix the row-major strides,
+    and the only way off a blind axis would be a different modulus — a different value set, and at a
+    site whose values are load-bearing a numeric re-derivation. [~radix] is the lever that moves
+    blindness alone: any [h] coprime to [modulus] makes every place value coprime to it, so no axis
+    can cancel and [~modulus] keeps whatever set the site needs. Coprime to the modulus, NOT to the
+    dims: [~radix:5] against [~modulus:5] is blind at any extent. And avoid [h = 1 (mod modulus)] on
+    a square operand, where the value depends on the index SUM and the operand equals its own
+    transpose, which hides a transposition bug as thoroughly as a blind axis hides a row
+    substitution.
+
+    Coprimality stops blindness but does not by itself keep the value SET: an axis too short to
+    sweep its residues can leave one unreached ({!uncovered_residues}), so under [~radix] this also
+    raises unless the radix key reaches exactly the residues the row-major key reaches over the same
+    [dims]. What a radix does NOT keep is the ORDER of the values, hence how many of each land in a
+    given row or reduction and where a running sum crosses a threshold: a site whose argument rests
+    on the partial sums, as {!drift}'s does, re-exhibits it for the new arrangement (as
+    [test/operations/discriminating_values] does for [drift]) rather than inheriting it.
+
+    Reusing it means checking two conditions, neither of which the obvious phrasings imply:
 
     - {b It must vary with every index.} Coprimality with the reduction EXTENT is not the condition
       — [dims = [|2; 4; 3|]] with [modulus = 3] has row-major strides [12; 3; 1], so despite 3 and 4
       being coprime the value depends on the innermost index alone and a wrong substitution on
-      either other axis stays invisible. The condition is on the STRIDES: no axis's stride may be a
-      multiple of [modulus] ({!blind_axis}, which this function raises on — a [modulus] coprime to
-      every [dims.(1 ..)] satisfies it, since the strides are their products).
+      either other axis stays invisible. The condition is on the place values: none may be a
+      multiple of [modulus] ({!blind_axis}, which this function raises on). Without [~radix] a
+      [modulus] coprime to every [dims.(1 ..)] satisfies it, since the strides are their products; a
+      [~radix] coprime to [modulus] satisfies it at any [dims].
     - {b The partial sums must actually leave exactness.} Count in units of [stride], which makes
       every cell and every partial sum an integer [k]: with [stride] a negative power of two, a
       format with [p] significand bits holds [k * stride] exactly for every [|k| <= 2^p], and above
@@ -111,8 +197,10 @@ let blind_axis ~dims ~modulus =
       [test/operations/discriminating_values] does so for {!drift}, and a nonzero mean over too few
       terms is the zero-mean trap wearing a different hat. *)
 
-(** [cycle_flat ~dims ~modulus ~offset ~stride i] is {!cycle} over an already-FLATTENED offset — the
-    form an [Array.init (rows * cols) ~f:…] operand is written in, which is most of them.
+(** [cycle_flat ?radix ~dims ~modulus ~offset ~stride i] is {!cycle} over an already-FLATTENED
+    offset — the form an [Array.init (rows * cols) ~f:…] operand is written in, which is most of
+    them. With [~radix] the offset is first unflattened against [dims] ({!unflat}), so the two forms
+    agree on every in-range index.
 
     The flat spelling is where this goes wrong in the field (gh-ocannl-640), and it goes wrong
     invisibly: [Array.init (m * k) ~f:(fun i -> Float.of_int (i % 13) *. 0.25)] LOOKS like it varies
@@ -123,30 +211,69 @@ let blind_axis ~dims ~modulus =
     included, can see it. It was found four times across three review rounds of one PR.
 
     Passing the real [~dims] is what buys the guard, and the guard is the reason to convert a site:
-    the arithmetic is identical to the idiom it replaces, so no golden moves, and the day someone
-    widens a size onto a multiple of the modulus the run raises instead of quietly passing.
+    without [~radix] the arithmetic is identical to the idiom it replaces, so no golden moves, and
+    the day someone widens a size onto a multiple of the modulus the run raises instead of quietly
+    passing — and the fix is a [~radix], which keeps the site's values, not a new modulus.
 
     What this does NOT give is aperiodicity. The values repeat with period [modulus] in the flat
     offset, so a shift by [modulus] is a symmetry, and where the BLOCKING factors are searchable a
     packed panel can repeat under [k -> k + p] and hide a panel-substitution bug just as thoroughly.
     That needs a mixer with no shift symmetry at any lag; [bin/narrow_gebp_bench.ml]'s [mix] is the
     worked recipe, measured over lags 1..256 and over every block width from 1 to 64. *)
-let cycle_flat ~dims ~modulus ~offset ~stride i =
-  (match blind_axis ~dims ~modulus with
-  | Some (ax, s) ->
+let cycle_flat ?radix ~dims ~modulus ~offset ~stride i =
+  (match blind_axis ?radix ~dims ~modulus () with
+  | Some ax ->
+      let dims_s = Sexp.to_string (Array.sexp_of_t Int.sexp_of_t dims) in
       raise
         (Invalid_argument
-           (Printf.sprintf
-              "Ll_test.cycle: modulus %d is blind to axis %d of %s (row-major stride %d is a \
-               multiple of it), so the value would not vary with that index"
-              modulus ax
-              (Sexp.to_string (Array.sexp_of_t Int.sexp_of_t dims))
-              s))
+           (match radix with
+           | None ->
+               Printf.sprintf
+                 "Ll_test.cycle: modulus %d is blind to axis %d of %s (row-major stride %d is a \
+                  multiple of it), so the value would not vary with that index; pass a ~radix \
+                  coprime to the modulus to keep its value set"
+                 modulus ax dims_s
+                 (Array.fold (Array.subo dims ~pos:(ax + 1)) ~init:1 ~f:( * ))
+           | Some h ->
+               Printf.sprintf
+                 "Ll_test.cycle: radix %d is blind to axis %d of %s under modulus %d (%d^%d is a \
+                  multiple of it), so the value would not vary with that index; pick a radix \
+                  coprime to the modulus"
+                 h ax dims_s modulus h
+                 (Array.length dims - 1 - ax)))
   | None -> ());
-  (Float.of_int (i % modulus) +. offset) *. stride
+  (match radix with
+  | Some h
+    when not
+           (match !coverage_verified with
+           | Some (h', dims', modulus') ->
+               h = h' && modulus = modulus' && Array.equal Int.equal dims dims'
+           | None -> false) ->
+      (match uncovered_residues ~radix:h ~dims ~modulus with
+      | Some (reached, wanted) ->
+          let show set = Sexp.to_string (Set.sexp_of_m__t (module Int) set) in
+          invalid_arg
+            (Printf.sprintf
+               "Ll_test.cycle: radix %d over %s under modulus %d reaches the residues %s, not the \
+                %s the row-major key reaches, so it would change the value set; pick another radix \
+                coprime to the modulus"
+               h
+               (Sexp.to_string (Array.sexp_of_t Int.sexp_of_t dims))
+               modulus (show reached) (show wanted))
+      | None -> ());
+      coverage_verified := Some (h, Array.copy dims, modulus)
+  | _ -> ());
+  let key =
+    match radix with
+    | None -> i
+    | Some h ->
+        let h = h % modulus in
+        Array.fold (unflat ~dims i) ~init:0 ~f:(fun acc j -> ((acc * h) + j) % modulus)
+  in
+  (Float.of_int (key % modulus) +. offset) *. stride
 
-let cycle ~dims ~modulus ~offset ~stride idcs =
-  cycle_flat ~dims ~modulus ~offset ~stride (flat ~dims idcs)
+let cycle ?radix ~dims ~modulus ~offset ~stride idcs =
+  cycle_flat ?radix ~dims ~modulus ~offset ~stride (flat ~dims idcs)
 
 (** [drift ~dims idcs] is {!cycle} at [13/20/(1/64)], the accumulator-width tests' operand: cells
     are the multiples of 1/64 between 0.3125 and 0.5, i.e. [k * (1/64)] for [k] in [20 .. 32], with

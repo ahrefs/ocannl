@@ -1091,7 +1091,16 @@ that they earn a lookup rather than always-loaded space.
   `Float.of_int (i % 13) *. 0.25` is `~modulus:13 ~offset:0. ~stride:0.25`, and `(x *. s) -. c` is
   `~offset:(-. c /. s) ~stride:s`, so no golden moves. The care is in `~dims`, which must be the
   operand's real row-major shape read off its `NTDSL.init`/`TDSL.ndarray` call (`~batch_dims` then
-  `~output_dims` then `~input_dims`), not the `Array.init` argument. What this does not buy is
+  `~output_dims` then `~input_dims`), not the `Array.init` argument. When the guard fires, keep the
+  modulus and pass `~radix:h` with `h` coprime to the MODULUS (not to the dims) and off
+  `1 (mod modulus)`: the key becomes the multi-index read in base `h`, so no axis can cancel at any
+  size while the value set — which an exactness argument may rest on — stays put
+  (ahrefs/ocannl#1024) — `cycle` also refuses a radix whose key would reach a different set of
+  residues than the row-major one (a short axis can leave one unreached), but the ORDER of the
+  values moves, so an argument about partial sums is re-exhibited, not inherited;
+  `h = 1 (mod modulus)` makes a square operand its own transpose. Changing
+  the modulus instead changes how many values there are, which is a numeric re-derivation wherever
+  the values are load-bearing. What this does not buy is
   aperiodicity: the values repeat with period `modulus`, so a shift by `modulus` is a symmetry, and
   where the blocking factors are searchable a packed panel can repeat under `k -> k + p` and hide a
   panel-substitution bug just as well; the recipe with no shift symmetry at any lag is
