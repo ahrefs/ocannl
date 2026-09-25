@@ -561,7 +561,7 @@ files.
   and narrows once to 2056. HIP advertises both scopes since gh-ocannl-789 (see the rocWMMA
   d-boundary bullet below). Metal advertises both scopes since gh-ocannl-837: its per-statement and
   persistent-fragment hooks use an f32 accumulator with converted `thread_elements()` boundaries.
-  `Sketch_families.fp16_wide_withholds` is keyed on the DESTINATION's storage precision, so
+  `Sketch_families.wide_acc_withholds` is keyed on the DESTINATION's storage precision, so
   `(f16,f16,f32-storage)` sites are untouched; `matmul_mma_scope` and `conv_mma_scope` derive the
   scope from the actual outer reduction extents rather than from whether operands happen to be
   staged. Placement enablement applies the same resolver to its unstaged eligibility gate, so a
@@ -582,6 +582,27 @@ files.
   performance profile keeps `true`. The CUDA `(mma-f16)` per-statement arm and the scope-boundary
   discriminator were executed on sm_120 by gh-ocannl-836; HIP's two-scope arm was closed by
   gh-ocannl-789.
+- **bf16 residency is the ternary `bf16_arithmetic` policy's question** (gh-ocannl-838), the same
+  shape as `fp16_arithmetic`: `Numerics.bf16_mode`, `Numerics.bf16_accum_wide`, and a per-format
+  capability list `mma_bf16_wide_acc_scopes` read by the same seeding gate
+  (`Sketch_families.wide_acc_withholds`, which names the withholding policy in its witness).
+  `Bf16_auto` keeps the gh-ocannl-663 table (f32 on CPU and CUDA, storage width on HIP/Metal);
+  `Bf16_wide` (`false`) widens every backend's `accum_prec`, swaps HIP's uniform-bf16 rocWMMA arm to
+  a `float` accumulator fragment through the gh-ocannl-789 converted `d` boundary (both scopes),
+  leaves CUDA's inline-PTX arm alone (f32 in hardware; per-statement scope only, as for f16), and
+  makes Metal's `simdgroup_bfloat8x8` arm decline (no wide arm verified; empty scope list).
+  `Bf16_narrow` (`true`) resolves as auto everywhere today — no target has native bf16
+  arithmetic — and is what the `approximate` payload names, so that regime does not move if auto
+  later resolves wide; `reproducible` pins `auto`. Why it exists: gfx11's bf16-accumulate WMMA is not
+  exactly rounded — on gfx1151, `schedule_mma_matmul`'s width-sensitive bf16 leg (32-term sums near
+  77, exact in f32) exceeds the half-bf16-ulp narrowing bound by 1.12 under auto and sits inside it
+  under `Bf16_wide` (a two-sided claim), and the bf16 k-split discriminator (256 + 1 per later block
+  over nine blocks) returns 256 under auto and 264 wide. RDNA3's f32-accumulate WMMA runs at the
+  bf16-accumulate rate with the same accumulator VGPR footprint, and HIP's scalar bf16 arithmetic
+  bridges through float anyway, so resolving auto wide on HIP is the obvious refinement — it waits
+  on a measurement, not on code. Pinned by: `schedule_mma_matmul`'s `Bf16_wide` legs,
+  `accum_width`'s universal bf16 legs (the default-policy leg pins auto's current resolution per
+  backend), `sketch_family_tree`'s wide-bf16 seeding claim.
 - **The `approximate` profile is the one word for the numerics-changing regime** (gh-ocannl-719):
   the `performance` payload plus `tf32_matmuls=true`, `cc_backend_fast_math=true`,
   `cc_backend_fp_contract=fast` and `tune_inline_flips=2`, contract "results differ from the exact

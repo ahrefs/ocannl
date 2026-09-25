@@ -1,34 +1,36 @@
-ordinary completion computes the reference: true
-ordinary search completed: true
+direct ordinary: completed search computes the reference: true
+direct ordinary: search completed: true
+direct ordinary: the pinned-fastest first admitted window wins: true
 direct ordinary: working pools return to their starting count: true
 direct ordinary: working bytes return to their starting count: true
 direct ordinary: every created context was explicitly released: true
-direct timed: injected at a strictly slower admitted candidate: true
+direct timed: injected at the second admitted window, the first nonwinner: true
 direct timed: callback exception propagates: true
-direct timed: partial report retains a measured incumbent: true
+direct timed: partial report retains the pinned incumbent: true
 direct timed: working pools return to their starting count: true
 direct timed: working bytes return to their starting count: true
 direct timed: every created context was explicitly released: true
-direct calibration: injected at a strictly slower admitted candidate: true
+direct calibration: injected at the second admitted window, the first nonwinner: true
 direct calibration: callback exception propagates: true
-direct calibration: partial report retains a measured incumbent: true
+direct calibration: partial report retains the pinned incumbent: true
 direct calibration: working pools return to their starting count: true
 direct calibration: working bytes return to their starting count: true
 direct calibration: every created context was explicitly released: true
-ordinary completion computes the reference: true
-ordinary search completed: true
+scratch ordinary: completed search computes the reference: true
+scratch ordinary: search completed: true
+scratch ordinary: the pinned-fastest first admitted window wins: true
 scratch ordinary: working pools return to their starting count: true
 scratch ordinary: working bytes return to their starting count: true
 scratch ordinary: every created context was explicitly released: true
-scratch timed: injected at a strictly slower admitted candidate: true
+scratch timed: injected at the second admitted window, the first nonwinner: true
 scratch timed: callback exception propagates: true
-scratch timed: partial report retains a measured incumbent: true
+scratch timed: partial report retains the pinned incumbent: true
 scratch timed: working pools return to their starting count: true
 scratch timed: working bytes return to their starting count: true
 scratch timed: every created context was explicitly released: true
-scratch calibration: injected at a strictly slower admitted candidate: true
+scratch calibration: injected at the second admitted window, the first nonwinner: true
 scratch calibration: callback exception propagates: true
-scratch calibration: partial report retains a measured incumbent: true
+scratch calibration: partial report retains the pinned incumbent: true
 scratch calibration: working pools return to their starting count: true
 scratch calibration: working bytes return to their starting count: true
 scratch calibration: every created context was explicitly released: true

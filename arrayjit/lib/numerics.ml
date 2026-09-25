@@ -36,6 +36,29 @@ open Base
       (their f16 arithmetic is native narrow already). *)
 type fp16_mode = Fp16_auto | Fp16_narrow | Fp16_wide [@@deriving sexp, compare, equal]
 
+(** The bf16 accumulator mode (gh-ocannl-838), the same three-way shape as {!fp16_mode} so the
+    policy surface stays one shape for both 16-bit float formats.
+
+    - [Bf16_auto] (the default): each backend's structural residency, unchanged from before this
+      knob. The CPU backends compute bf16 in f32 (under {!field-narrow_compute_f32}), CUDA's bf16
+      accumulators are f32 structurally (NVIDIA has no bf16 accumulate), and HIP and Metal keep
+      storage-width bf16 accumulators mirroring their uniform-bf16 tensor-unit triples. Like
+      [Fp16_auto] this retains latitude per backend: do not write code that assumes it equals
+      [Bf16_narrow] — ask the backend's [accum_prec]/seeding instead.
+    - [Bf16_wide] (config [false]): bf16 reduction accumulators reside in f32 on every backend,
+      narrowing once per nest — the rounding of the narrowing alone, where gfx11's bf16-accumulate
+      WMMA loses about a bf16 ulp at the partial-sum scale. As for [Fp16_wide], backends whose
+      uniform-bf16 tensor-unit arm cannot accumulate f32 in the required emission scope
+      ({!Backend_intf.mma_capability.mma_bf16_wide_acc_scopes} omits it) have those seeds withheld
+      (gh-ocannl-545's seeding-vs-emission discipline). HIP swaps its rocWMMA arm to an f32
+      accumulator fragment with a converted [d] boundary (both scopes); CUDA's arm is already wide
+      in the per-statement scope; Metal's uniform-bf16 [simdgroup_matrix] arm declines.
+    - [Bf16_narrow] (config [true]): the narrow side of the trade wherever a backend offers one. No
+      target has native general bf16 arithmetic, so today it resolves exactly as [Bf16_auto] on
+      every backend; it exists so a profile can name the narrow side without depending on how
+      [Bf16_auto] resolves. *)
+type bf16_mode = Bf16_auto | Bf16_narrow | Bf16_wide [@@deriving sexp, compare, equal]
+
 type t = {
   tf32_matmuls : bool;
       (** Allow tensor-core matmuls over uniform-f32 operands to compute in tf32 on backends with a
@@ -71,13 +94,14 @@ type t = {
           CUDA's bf16 mma legs hold f32 per-lane registers, so its serial bf16 legs widen to match,
           and fp8 — which has an accumulator format on no backend — takes f32 residency everywhere;
           bf16 on HIP/Metal (whose tiles accumulate in storage-width fragments) keeps storage
-          residency so serial and tensorized legs stay width-uniform per backend. f16 residency is
-          {!field-fp16_arithmetic}'s question, not this knob's (gh-ocannl-680). This knob reaches
-          the GPU accumulators only where per-step narrowing can be restored SCHEDULE-UNIFORMLY: fp8
-          on CUDA and HIP (nothing tensorizes fp8 destinations). CUDA's bf16 residency is structural
-          — the mma accumulate is hardware-f32, so narrowing only the serial legs would resurrect
-          the schedule-dependent width — and so is Metal's fp8 one: MSL has no fp8 type, every fp8
-          computation there runs in f32 ([Metal_backend]'s [compute_prec]). *)
+          residency so serial and tensorized legs stay width-uniform per backend (under
+          {!Bf16_auto}). f16 residency is {!field-fp16_arithmetic}'s question and wide bf16
+          residency {!field-bf16_arithmetic}'s, not this knob's (gh-ocannl-680, gh-ocannl-838). This
+          knob reaches the GPU accumulators only where per-step narrowing can be restored
+          SCHEDULE-UNIFORMLY: fp8 on CUDA and HIP (nothing tensorizes fp8 destinations). CUDA's bf16
+          residency is structural — the mma accumulate is hardware-f32, so narrowing only the serial
+          legs would resurrect the schedule-dependent width — and so is Metal's fp8 one: MSL has no
+          fp8 type, every fp8 computation there runs in f32 ([Metal_backend]'s [compute_prec]). *)
   fp16_arithmetic : fp16_mode;
       (** How f16 computes and accumulates, per {!fp16_mode} (gh-ocannl-680). The narrow request is
           fp16-specific because fp16 is the one narrow format a CPU can execute natively — bf16 has
@@ -87,6 +111,9 @@ type t = {
           than [Fp16_narrow] is the default, and why the narrow request only takes effect where the
           target's arithmetic is genuinely 16-bit
           ({!Ir.Backend_intf.hardware_limits.native_fp16_arithmetic}). *)
+  bf16_arithmetic : bf16_mode;
+      (** How bf16 accumulates, per {!bf16_mode} (gh-ocannl-838). bf16 COMPUTE needs no knob: no
+          target has native bf16 arithmetic, so {!field-narrow_compute_f32} already decides it. *)
 }
 [@@deriving sexp, compare, equal]
 
@@ -102,6 +129,14 @@ let default () =
        if String.equal s "auto" then Fp16_auto
        else if Utils.bool_of_config_string ~arg_name:"fp16_arithmetic" s then Fp16_narrow
        else Fp16_wide);
+    bf16_arithmetic =
+      (let s =
+         String.lowercase
+           (String.strip (Utils.get_global_arg ~default:"auto" ~arg_name:"bf16_arithmetic"))
+       in
+       if String.equal s "auto" then Bf16_auto
+       else if Utils.bool_of_config_string ~arg_name:"bf16_arithmetic" s then Bf16_narrow
+       else Bf16_wide);
   }
 
 (** A stable, exhaustive rendering of a policy, for cache keys and digests (gh-ocannl-568). Derived
@@ -132,6 +167,13 @@ let set_policy p = policy := Some p
 let fp16_accum_wide () =
   match (get ()).fp16_arithmetic with Fp16_wide -> true | Fp16_auto | Fp16_narrow -> false
 
+(** Whether the current policy is {!Bf16_wide}: bf16 reduction accumulators reside in f32 on every
+    backend (gh-ocannl-838). The bf16 twin of {!fp16_accum_wide}, consulted on both sides of the
+    same seam: every backend's [accum_prec] and [mma] arm table, and the seeding gate in
+    [Sketch_families]. *)
+let bf16_accum_wide () =
+  match (get ()).bf16_arithmetic with Bf16_wide -> true | Bf16_auto | Bf16_narrow -> false
+
 (** The compute precision the CPU backends resolve a storage precision to under the current policy:
     fp16 stays fp16 only where {!field-fp16_arithmetic} requests it ([Fp16_narrow]) AND the target's
     arithmetic is genuinely 16-bit (gh-ocannl-516); every other narrow float computes in f32 under
@@ -152,11 +194,13 @@ let cpu_compute_prec ~native_fp16_arithmetic (prec : Ops.prec) : Ops.prec =
 (** The accumulator residency the CPU backends resolve a storage precision to: {!cpu_compute_prec},
     except that {!Fp16_wide}'s contract — f32 f16-accumulators on every backend, unconditionally —
     holds even where [narrow_compute_f32 = false] leaves the f16 {e compute} at storage width
-    (gh-ocannl-680). Like {!cpu_compute_prec} this is the single source of truth shared by
-    [Cc_backend.accum_prec] (emission) and autotune's sketch seeding: where the two diverge, a
-    C-tile rendering cannot honor the residency and both the emission ([C_syntax.try_register_tile])
-    and the seeding pre-filter must decline (Codex P1 round 1 on staging PR #477). *)
+    (gh-ocannl-680), and {!Bf16_wide}'s likewise for bf16 (gh-ocannl-838). Like {!cpu_compute_prec}
+    this is the single source of truth shared by [Cc_backend.accum_prec] (emission) and autotune's
+    sketch seeding: where the two diverge, a C-tile rendering cannot honor the residency and both
+    the emission ([C_syntax.try_register_tile]) and the seeding pre-filter must decline (Codex P1
+    round 1 on staging PR #477). *)
 let cpu_accum_prec ~native_fp16_arithmetic (prec : Ops.prec) : Ops.prec =
   match prec with
   | Ops.Half_prec _ when fp16_accum_wide () -> Ops.single
+  | Ops.Bfloat16_prec _ when bf16_accum_wide () -> Ops.single
   | _ -> cpu_compute_prec ~native_fp16_arithmetic prec

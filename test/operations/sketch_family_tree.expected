@@ -383,6 +383,7 @@ tree leaves = flat enumeration: true
 the wide-f16 policy withholds uniform-f16 mma seeds exactly in unsupported emission scopes: true
 placement eligibility omits a wide-f16 site with no applicable MMA scope: true
 the wide-f16 policy under narrow_compute_f32 off omits the CPU register-tiled candidates (accumulator residency diverges from compute): true
+the wide-bf16 policy withholds uniform-bf16 mma seeds exactly in unsupported emission scopes, and the wide-f16 policy leaves them alone: true
 == transposed-B cpu: 16 seeds ==
 tree leaves = flat enumeration: true
 -- refuted --
@@ -405,7 +406,7 @@ tree leaves = flat enumeration: true
 -- refuted --
   fusion=unfused > pipeline=blocktile: GPU matmul companion coverage (gh-521): the cross-nest race analysis bails on this routine, so the 2 companion nest(s) (cred; cred) cannot be given aligned geometry
   fusion=unfused > pipeline=tensorized: GPU matmul companion coverage (gh-521): the cross-nest race analysis bails on this routine, so the 2 companion nest(s) (cred; cred) cannot be given aligned geometry
-  fusion=fused: Schedule.Fuse_epilogue: the tail is not the sole consumer: a later statement mentions n11
+  fusion=fused: Schedule.Fuse_epilogue: the tail is not the sole consumer: a later statement mentions n14
 == companion-reduction cpu: 34 seeds ==
 tree leaves = flat enumeration: true
 -- refuted --
@@ -422,7 +423,7 @@ tree leaves = flat enumeration: true
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm64 bn0 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm128 bn128 bk128: bm=128 gives 1 row block(s); a Grid split needs at least 2
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid > geometry=bm64 bn128 bk256: bm=64 gives 1 row block(s); a Grid split needs at least 2
-  fusion=fused: Schedule.Fuse_epilogue: the tail is not the sole consumer: a later statement mentions n11
+  fusion=fused: Schedule.Fuse_epilogue: the tail is not the sole consumer: a later statement mentions n14
 -- excluded --
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid-pack-rest: a hoistable operand exists: the hoisted shapes cover the one-dispatch role without per-chunk re-packing
 lifted-lattice search over the refuted family: 2 expanded, 0 scored, 3 refuted

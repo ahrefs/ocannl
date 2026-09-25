@@ -169,15 +169,13 @@ files.
   its previous owner if a tie had evicted it from the beam. The regression
   `test/operations/autotune_callback_release.ml` injects at both callback boundaries and compares
   exact working-pool and context census deltas against ordinary completion, separately from the
-  persistent constant cache. It selects a strictly slower admitted candidate — the nonwinner whose
+  persistent constant cache. It must inject at a NONWINNING admitted candidate — the one whose
   release the fix owns; injecting at a winner proves nothing, since a winner already sits in
-  `best_so_far` and the exit sweep released it before the fix — but whether one arrives is a
-  property of the machine's timings: a short search whose samples fall monotonically admits only
-  winners (rog-nv/cuda, sweep 2026-09-20), and no seam lets a test slow a candidate down. So a leg
-  whose search completes uninjected is re-rolled (a fresh search draws fresh timings), and only
-  when every roll is monotone are the injection claims reported as a skip — backend-scoped, the
-  default, since the monotone timings are the selected backend's and another backend's nonwinner on
-  the same box is not coverage of this one's release paths — with the census claims still asserted
-  over all attempts. A fault-injection precondition on measured
-  wall-clock is not a stable gate: re-roll it and skip honestly rather than report the vacuous run
-  as a broken invariant.
+  `best_so_far` and the exit sweep released it before the fix — and whether a real search admits
+  one is a property of the machine's timings (a short search whose samples fall monotonically
+  admits only winners: rog-nv/cuda, sweep 2026-09-20). So the test pins the ranking through
+  `Autotune.on_candidate_measured` (gh-ocannl-1027), the seam that replaces each ADMITTED window's
+  time before anything ranks or records it: the k-th admitted window measures k ms, the second is
+  the first nonwinner on every backend and run, and the claims name it and the partial report's
+  incumbent exactly. A fault-injection precondition on measured wall-clock is not a stable gate —
+  pin the measurement through that seam rather than re-rolling the search for a lucky ordering.

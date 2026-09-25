@@ -280,3 +280,144 @@ let scan content =
   in
   iterator#structure ast;
   { sites = List.rev !sites; literals = !literals; applied_literals = Hashtbl.length printers }
+
+(** {1 A gated claim reported in two dialects (gh-ocannl-997)}
+
+    [Verdict.skipped] prints [<label>: true] — {!Verdict.p}'s line — so that a leg one host cannot
+    evaluate leaves the golden exactly as a host that evaluated it does. A claim whose evaluated
+    branch reports through [Verdict.pass_fail] instead prints [<label>: PASS] there, and the golden
+    promoted on a machine that evaluates it breaks on the first machine that skips: silently, until
+    the gate actually fires, on whichever host is least likely to be the one promoting.
+    [Verdict.gated] removes the trap by picking the dialect itself; this reader keeps the mixed
+    spelling from regrowing.
+
+    What it pairs is a LABEL that reaches both a [pass_fail]/[pass_fail_all2] call and a [skipped]
+    call in one source. The label is the first positional argument, keyed three ways: a string
+    literal by its value; a name by the literal it is bound to, when every [let] of that name in the
+    source binds the same literal (the [let claim = "…"] shared by the two branches is the shape
+    both sightings had), otherwise by the name itself; anything else by its printed expression, so a
+    label computed the same way on both sides is still one label. A literal pairs across the whole
+    source; a name or an expression pairs only within one top-level item, since equal names in two
+    functions need not be one label. The callees are matched by their last path component, which is
+    how an opened [Verdict.Claims] and the per-test
+    [let skipped = Verdict.skipped ~backend:backend_name] both read.
+
+    What it cannot see: a skip or a PASS/FAIL claim routed through a wrapper of another name, and
+    one label computed by two different expressions. Those are the reason the remedy is an entry
+    point rather than this check — [Verdict.gated] has no second dialect to pair. *)
+
+type label_key = Literal of string | Named of string | Computed of string
+
+let label_key_text = function Literal text | Named text | Computed text -> text
+
+type dialect_site = { callee : string; key : label_key; item : int; line : int }
+(** One claim call: the callee as written, the label it reports, the top-level structure item it
+    sits in (counted from 0), and its line. *)
+
+type dialect_pairing = { pass_fail : dialect_site; skipped : dialect_site }
+(** A [pass_fail]-family call and a [skipped] call reporting the same label. *)
+
+type dialect_census = {
+  pairings : dialect_pairing list;
+  skipped_sites : int;  (** Every [skipped] call whose label was read. *)
+  pass_fail_sites : int;  (** Every [pass_fail]/[pass_fail_all2] call whose label was read. *)
+}
+(** The site counts are what a blind walk cannot produce, as {!scan}'s literal counts are for the
+    claim-shape scan: they let the consuming test tell "no pairing" from "nothing read". *)
+
+let pass_fail_callees = [ "pass_fail"; "pass_fail_all2" ]
+let skipped_callees = [ "skipped" ]
+
+(* The literal each name is bound to, where every [let] of that name binds the same literal. A name
+   bound to two different literals, or to anything else, is left to be keyed by itself. *)
+let literal_bindings ast =
+  let bound = Hashtbl.create (module String) in
+  let rec bound_name pattern =
+    match pattern.ppat_desc with
+    | Ppat_var { txt; _ } -> Some txt
+    | Ppat_constraint (inner, _) -> bound_name inner
+    | _ -> None
+  in
+  let iterator =
+    object
+      inherit Ast_traverse.iter as super
+      method! attribute _ = ()
+
+      method! value_binding binding =
+        Option.iter (bound_name binding.pvb_pat) ~f:(fun name ->
+            Hashtbl.add_multi bound ~key:name ~data:(Read.string_literal binding.pvb_expr));
+        super#value_binding binding
+    end
+  in
+  iterator#structure ast;
+  Hashtbl.filter_map bound ~f:(function
+    | Some literal :: rest
+      when List.for_all rest ~f:(fun other -> Option.equal String.equal other (Some literal)) ->
+        Some literal
+    | _ -> None)
+
+let dialect_census content =
+  let ast = Read.structure_of content in
+  let literals = literal_bindings ast in
+  let key_of argument =
+    match Read.string_literal argument with
+    | Some literal -> Literal literal
+    | None -> (
+        match argument.pexp_desc with
+        | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+            match Hashtbl.find literals name with
+            | Some literal -> Literal literal
+            | None -> Named name)
+        | _ -> Computed (Ppxlib.Pprintast.string_of_expression argument))
+  in
+  let pass_fails = ref [] and skips = ref [] and item = ref 0 in
+  let iterator =
+    object
+      inherit Ast_traverse.iter as super
+      method! attribute _ = ()
+
+      method! expression expr =
+        (match expr.pexp_desc with
+        | Pexp_apply (callee, arguments) -> (
+            let label =
+              List.find_map arguments ~f:(function
+                | Ppxlib.Asttypes.Nolabel, argument -> Some argument
+                | _ -> None)
+            in
+            match (Read.longident_of callee, label) with
+            | Some path, Some label ->
+                let name = List.last_exn path in
+                let site () =
+                  {
+                    callee = String.concat ~sep:"." path;
+                    key = key_of label;
+                    item = !item;
+                    line = expr.pexp_loc.loc_start.pos_lnum;
+                  }
+                in
+                if List.mem pass_fail_callees name ~equal:String.equal then
+                  pass_fails := site () :: !pass_fails
+                else if List.mem skipped_callees name ~equal:String.equal then
+                  skips := site () :: !skips
+            | _ -> ())
+        | _ -> ());
+        super#expression expr
+    end
+  in
+  List.iteri ast ~f:(fun index structure_item ->
+      item := index;
+      iterator#structure_item structure_item);
+  let pass_fails = List.rev !pass_fails and skips = List.rev !skips in
+  (* A literal is the same label anywhere in the source. A name, or an expression over names, is
+     only the same label within one top-level item: [label] is the parameter name of half the claim
+     helpers in [Verdict] itself, and two functions sharing it share nothing else. *)
+  let same_label a b =
+    Poly.equal a.key b.key
+    && match a.key with Literal _ -> true | Named _ | Computed _ -> a.item = b.item
+  in
+  let pairings =
+    List.concat_map pass_fails ~f:(fun pass_fail ->
+        List.filter_map skips ~f:(fun skipped ->
+            if same_label pass_fail skipped then Some { pass_fail; skipped } else None))
+  in
+  { pairings; skipped_sites = List.length skips; pass_fail_sites = List.length pass_fails }

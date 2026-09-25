@@ -24,7 +24,11 @@
    Two properties, not one. The claim must FAIL on an empty collection -- exit status and a line
    naming emptiness -- and it must print BYTE-IDENTICALLY to `Verdict.p` when the collection is not
    empty, which is what lets ~90 test files convert without their goldens moving. The second is
-   checked by running `p` beside each combinator in two children and comparing what each wrote. *)
+   checked by running `p` beside each combinator in two children and comparing what each wrote.
+
+   `Verdict.gated` (gh-ocannl-997) rides the same harness for the same second property, one gate
+   over: skipped or evaluated, a passing gated claim prints `p`'s line, which is the whole reason it
+   exists. *)
 
 open Base
 open Verdict.Claims
@@ -129,6 +133,19 @@ let () =
   | "shape_p_pairwise_distinct" ->
       p_pairwise_distinct "the claim" distinct ~equal:Int.equal ~to_string:Int.to_string
   | "shape_p_false" -> Verdict.p "the claim" false
+  (* gh-ocannl-997: a gated claim is [p] where its gate is open and a skip where it is closed, and
+     both must print [p]'s passing line. The closed gate is handed a FALSE value and a detail that
+     raises, so a skip that evaluated either would show. Children only: a skip announces itself on
+     stderr with a sweep record, which this suite's own log must not carry. *)
+  | "gated_open" -> gated ~when_:true ~on:"a fixture backend" "the gated claim" true
+  | "gated_closed" ->
+      gated ~when_:false ~on:"a fixture backend"
+        ~detail:(fun () -> failwith "detail evaluated")
+        "the gated claim" false
+  | "gated_false" ->
+      gated ~when_:true ~on:"a fixture backend"
+        ~detail:(fun () -> "measured 3 vs bound 2")
+        "the gated claim" false
   | "shape_p_all_false" -> Verdict.p_all "the claim" seeds ~f:odd
   | "shape_p_all2_false" -> Verdict.p_all2 "the claim" got [| 1.0; 9.0; 3.0 |] ~f:Float.equal
   (* === Must be refused: run as children by [refusals]. === *)
@@ -218,6 +235,21 @@ let () =
       refused "pairwise distinctness reports the first colliding pair directly"
         ~line:"the source values are pairwise distinct (collision: 7 = 7): false"
         (run_child "pairwise_collision");
+      refused "an evaluated gated claim that fails names its detail in p's dialect"
+        ~line:"the gated claim (measured 3 vs bound 2): false" (run_child "gated_false");
+      (* The trap gh-ocannl-997 removes: a skip must print what an evaluated pass prints, so the
+         golden is one file whichever side of the gate a host lands on. *)
+      let open_status, gated_open, _ = run_child "gated_open" in
+      let closed_status, gated_closed, closed_stderr = run_child "gated_closed" in
+      Verdict.p "a gated claim prints the same passing line whether evaluated or skipped"
+        (String.equal gated_open "the gated claim: true\n" && String.equal gated_open gated_closed);
+      Verdict.p "a closed gate exits 0 without evaluating the value or the detail"
+        (Poly.equal open_status (Unix.WEXITED 0)
+        && Poly.equal closed_status (Unix.WEXITED 0)
+        && not (String.is_substring closed_stderr ~substring:"detail evaluated"));
+      Verdict.p "a closed gate announces the skip on stderr, naming what it ran on"
+        (String.is_substring closed_stderr
+           ~substring:"SKIPPED on a fixture backend (vacuous): the gated claim");
       (* The conversion is golden-neutral exactly to the extent that this holds. *)
       let _, plain_true, _ = run_child "shape_p" in
       let _, all_true, _ = run_child "shape_p_all" in

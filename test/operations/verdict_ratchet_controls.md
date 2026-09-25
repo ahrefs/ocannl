@@ -436,3 +436,22 @@ Functor-valued module arguments and first-class standard Boolean ordering are su
 | Ordering primitive closure disabled; Stayed green (conservative boundary/control) | `refuses omitted unapplied callable default` | 20260913T195820Z-36571 |
 
 Both mutations exited 1 with exactly the failed controls listed above; each runner confirmed byte-identical restoration with cmp. The baseline run 20260913T195809Z-34949 and restored run 20260913T195852Z-40468 exited 0. Runs used tools/mutation-run.sh on macOS at source revision 12311e04d, with a 300-second cap. The named conservative boundaries also stayed green in the functor mutation.
+
+## gh-ocannl-997 mutation runs
+
+`Verdict.gated` is read as a native claim, and the dialect-pairing reader
+(`Verdict_scan.dialect_census`) refuses a label reported through both `pass_fail` and `skipped`.
+Every run used tools/mutation-run.sh on the named module and the focused verdict_ratchet alias,
+exited 1 on exactly the listed false claims, and restored the source byte-for-byte with cmp.
+The baseline run `20260925T141810Z-58665` exited 0.
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| `Verdict.gated` is a native claim by its qualified path | `verdict_provenance.ml`: the `gated` arm of `claim_kind_of_path` removed | Failed: `refuses an unguarded quantifier handed to Verdict.gated` | `20260925T141819Z-61616` |
+| `gated` is a native claim through an open of `Verdict.Claims` | `verdict_provenance.ml`: the `gated` entry removed from `claim_kinds` | Failed: `refuses an unguarded quantifier handed to gated through an open of Verdict.Claims` | `20260925T141830Z-64687` |
+| A pairing refuses the run | `verdict_scan.ml`: `same_label` answers false | Failed: `refuses a pass_fail claim whose label binding a skip also reports`, `refuses a planted pass_fail and skipped pairing, naming the gated remedy`, and with them the three other refusing pairing controls below | `20260925T141839Z-66269` |
+| A name bound to one literal is that literal | `verdict_scan.ml`: the literal-binding lookup never answers | Failed: `resolves a label binding to the literal the other side spells out`, and the first pairing control above, which then reports the name rather than its literal | `20260925T141849Z-67834` |
+| `pass_fail_all2` is the PASS/FAIL dialect too | `verdict_scan.ml`: `"pass_fail_all2"` removed from `pass_fail_callees` | Failed: `refuses an opened pass_fail_all2 paired with a bound skip wrapper` | `20260925T141902Z-71852` |
+| A computed label is keyed by its printed expression | `verdict_scan.ml`: each computed key made unique to its site | Failed: `refuses a label computed by the same expression on both sides` | `20260925T141912Z-74727` |
+| `p` is not the PASS/FAIL dialect | `verdict_scan.ml`: `"p"` added to `pass_fail_callees` | Failed: `accepts a gated claim reported through p on its evaluated side`, and the corpus claim that no label reaches both dialects, since every correctly converted gated leg then reads as a pairing | `20260925T141922Z-77799` |
+| A pairing needs one label on both sides | `verdict_scan.ml`: the key comparison dropped from `same_label` | Failed: `accepts pass_fail and skipped on different labels`, `does not pair labels computed by different expressions, the blind spot gated closes` | `20260925T141933Z-80834` |

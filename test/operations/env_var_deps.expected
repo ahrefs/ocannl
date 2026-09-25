@@ -23,6 +23,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   autotune_rounds
   autotune_search
   backend
+  bf16_arithmetic
   buffer_aliasing
   build_files_prefix
   cc_backend_arch_flags
@@ -293,7 +294,7 @@ every stanza whose modules call Test_utils.Generated.init declares OCANNL_BUILD_
 Scanner refusal controls (gh-ocannl-800). Sources come from repository-wide scan rules;
 controls are *_cases.expected, *_control.expected, or a live scan golden with an explicit
 `Synthetic controls:` section. Printf substitutions do not decide coverage.
-  statically extracted diagnostics: 395 (details on stderr)
+  statically extracted diagnostics: 398 (details on stderr)
   named exemptions with reasons:
     (none)
 repository-wide scan rules resolve to scanner sources: true

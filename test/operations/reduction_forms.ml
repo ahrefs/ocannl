@@ -234,10 +234,12 @@ let independent_residency prec =
   let policy = Numerics.get () in
   let narrow = policy.Numerics.narrow_compute_f32 in
   let wide_f16 = Numerics.fp16_accum_wide () in
+  let wide_bf16 = Numerics.bf16_accum_wide () in
   match Lazy.force selected_backend with
   | "cc" | "multidev_cc" -> (
       match prec with
       | Ops.Half_prec _ when wide_f16 -> Wider
+      | Ops.Bfloat16_prec _ when wide_bf16 -> Wider
       | Ops.Half_prec _
         when Numerics.equal_fp16_mode policy.fp16_arithmetic Numerics.Fp16_narrow
              && Lazy.force native_fp16 ->
@@ -247,6 +249,7 @@ let independent_residency prec =
   | "metal" -> (
       match prec with
       | Ops.Half_prec _ when wide_f16 -> Wider
+      | Ops.Bfloat16_prec _ when wide_bf16 -> Wider
       | Ops.Fp8_prec _ -> Wider
       | _ -> At_storage)
   | "cuda" -> (
@@ -258,6 +261,7 @@ let independent_residency prec =
   | "hip" -> (
       match prec with
       | Ops.Half_prec _ when wide_f16 -> Wider
+      | Ops.Bfloat16_prec _ when wide_bf16 -> Wider
       | Ops.Fp8_prec _ when narrow -> Wider
       | _ -> At_storage)
   | other -> failwith ("no independent accumulator policy recorded for backend " ^ other)
@@ -1777,7 +1781,8 @@ let () =
   let policy = Numerics.get () in
   p "the numerics policy is the default the member table's forms are stated for"
     (policy.Numerics.narrow_compute_f32
-    && Numerics.equal_fp16_mode policy.Numerics.fp16_arithmetic Numerics.Fp16_auto)
+    && Numerics.equal_fp16_mode policy.Numerics.fp16_arithmetic Numerics.Fp16_auto
+    && Numerics.equal_bf16_mode policy.Numerics.bf16_arithmetic Numerics.Bf16_auto)
 
 (* The [Tile_mma] fallback's own reduction is a serial nest like any other, and codegen's peel is
    what localizes it — the leg below checks that against the routine's peel census beside the

@@ -216,13 +216,27 @@ let mma_format_triples ~a_prec ~b_prec ~d_prec =
    rocWMMA d boundary supports both since gh-ocannl-789, and Metal's converted [thread_elements()]
    boundary supports both since gh-ocannl-837. Consulting the scope list here keeps a staged outer-k
    split from acquiring an extra f16 boundary merely because the same intrinsic is wide over its
-   inner tile. *)
-let fp16_wide_withholds (mma : Ir.Backend_intf.mma_capability) ~scope ~d_prec =
-  (match d_prec with Ir.Ops.Half_prec _ -> true | _ -> false)
-  && Ir.Numerics.fp16_accum_wide ()
-  && not
-       (List.mem mma.Ir.Backend_intf.mma_f16_wide_acc_scopes scope
-          ~equal:Ir.Backend_intf.equal_mma_emission_scope)
+   inner tile.
+
+   gh-ocannl-838: [Numerics.Bf16_wide] asks the same question of a bf16-storage destination, against
+   [mma_bf16_wide_acc_scopes] — HIP's converted rocWMMA boundary serves both scopes, CUDA's
+   inline-PTX arm (f32 accumulate in hardware) only the per-statement one, Metal none. The witness
+   names whichever policy withheld the seed. *)
+let wide_acc_withholding (mma : Ir.Backend_intf.mma_capability) ~scope ~d_prec =
+  let withheld ~policy scopes =
+    if List.mem scopes scope ~equal:Ir.Backend_intf.equal_mma_emission_scope then None
+    else Some policy
+  in
+  match d_prec with
+  | Ir.Ops.Half_prec _ when Ir.Numerics.fp16_accum_wide () ->
+      withheld ~policy:"Fp16_wide requires a wide uniform-f16"
+        mma.Ir.Backend_intf.mma_f16_wide_acc_scopes
+  | Ir.Ops.Bfloat16_prec _ when Ir.Numerics.bf16_accum_wide () ->
+      withheld ~policy:"Bf16_wide requires a wide uniform-bf16"
+        mma.Ir.Backend_intf.mma_bf16_wide_acc_scopes
+  | _ -> None
+
+let wide_acc_withholds mma ~scope ~d_prec = Option.is_some (wide_acc_withholding mma ~scope ~d_prec)
 
 let mma_tile_for_precisions (mma : Ir.Backend_intf.mma_capability) ~a_prec ~b_prec ~d_prec =
   List.find_map (mma_format_triples ~a_prec ~b_prec ~d_prec) ~f:(fun key ->
@@ -231,7 +245,7 @@ let mma_tile_for_precisions (mma : Ir.Backend_intf.mma_capability) ~a_prec ~b_pr
 
 let mma_tile_for_precisions_in_scope (mma : Ir.Backend_intf.mma_capability) ~scope ~a_prec ~b_prec
     ~d_prec =
-  if fp16_wide_withholds mma ~scope ~d_prec then None
+  if wide_acc_withholds mma ~scope ~d_prec then None
   else mma_tile_for_precisions mma ~a_prec ~b_prec ~d_prec
 
 (* The swizzled staged layout, if any, that the backend can read for this site's formats
@@ -2938,11 +2952,12 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
               | Ir.Backend_intf.Mma_per_statement -> "per-statement"
               | Ir.Backend_intf.Mma_fragment_scope -> "persistent-fragment"
             in
-            let wide_scope_ok scope = not (fp16_wide_withholds mma ~scope ~d_prec) in
+            let wide_scope_ok scope = not (wide_acc_withholds mma ~scope ~d_prec) in
             let wide_scope_witness scope =
               Printf.sprintf
-                "Fp16_wide requires a wide uniform-f16 accumulator in the %s emission scope, which \
-                 the backend does not advertise"
+                "%s accumulator in the %s emission scope, which the backend does not advertise"
+                (Option.value ~default:"The wide policy requires a wide"
+                   (wide_acc_withholding mma ~scope ~d_prec))
                 (scope_name scope)
             in
             let b128_units_ok prec extent =

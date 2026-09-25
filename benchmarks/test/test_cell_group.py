@@ -1,6 +1,7 @@
 import ast
 import contextlib
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -15,6 +16,24 @@ import gh675_cells
 
 
 HERE = Path(__file__).resolve().parent.parent
+
+
+def publish_pid(path, pid):
+    """One line of Python source, for a child a test spawns, that publishes `pid` to the file named
+    by `path` (both are Python expressions in the child) so that the file never exists without it.
+
+    `open(path, 'w').write(...)` creates the file EMPTY and fills it a moment later, so a parent
+    polling `exists()` can read `''` and fail on `int('')` -- which reddened the per-PR matrix
+    (gh-ocannl-1041). Writing a sibling and `os.replace`-ing it into place makes the final name
+    appear only with its content, which fixes every reader at once rather than each poll; the
+    rename is atomic on POSIX and on Windows alike, and `write_text` has closed the sibling before
+    it is renamed. `test_every_published_pid_goes_through_publish_pid` keeps new fixtures on it.
+    """
+    return (
+        "import os, pathlib; "
+        f"pathlib.Path({path} + '.pending').write_text(str({pid})); "
+        f"os.replace({path} + '.pending', {path})\n"
+    )
 
 
 class CellGroupTest(unittest.TestCase):
@@ -53,16 +72,13 @@ class CellGroupTest(unittest.TestCase):
         pidfile = self.dir / "grandchild.pid"
         child = cell_group.spawn(
             self.python(
-                "import os, signal, subprocess, sys, time\n"
+                "import signal, subprocess, sys, time\n"
                 "code = ('import signal, time; '\n"
                 "        'signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)')\n"
                 "kid = subprocess.Popen([sys.executable, '-c', code],\n"
                 "  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
-                "pending = sys.argv[1] + '.pending'\n"
-                "with open(pending, 'w') as stream:\n"
-                "  stream.write(str(kid.pid))\n"
-                "os.replace(pending, sys.argv[1])\n"
-                "time.sleep(300)\n",
+                + publish_pid("sys.argv[1]", "kid.pid")
+                + "time.sleep(300)\n",
                 pidfile,
             ),
             stdout=subprocess.PIPE,
@@ -151,7 +167,7 @@ class CellGroupTest(unittest.TestCase):
                 "import subprocess, sys\n"
                 "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
                 "  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
-                "open(sys.argv[1], 'w').write(str(kid.pid))\n",
+                + publish_pid("sys.argv[1]", "kid.pid"),
                 pidfile,
             ),
             stdout=subprocess.PIPE,
@@ -203,6 +219,50 @@ class CellGroupTest(unittest.TestCase):
                 ):
                     offenders.append(f"{path.name}:{node.lineno} subprocess.{node.func.attr}")
         self.assertEqual(offenders, [], "unmanaged benchmark child sites: " + ", ".join(offenders))
+
+    def test_a_published_pid_file_never_exists_without_its_pid(self):
+        # The property the pollers rely on, observed at the one moment it could fail: when the
+        # final name appears (the rename), it must not have existed before, and what lands there
+        # must already be the whole pid.
+        pidfile = self.dir / "published.pid"
+        seen = []
+        real_replace = os.replace
+
+        def observing_replace(src, dst):
+            seen.append((Path(dst).exists(), Path(src).read_text()))
+            return real_replace(src, dst)
+
+        with unittest.mock.patch.object(os, "replace", observing_replace):
+            exec(publish_pid("path", "4242"), {"path": str(pidfile)})
+
+        self.assertEqual(seen, [(False, "4242")])
+        self.assertEqual(pidfile.read_text(), "4242")
+        self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ["published.pid"])
+
+    def test_every_published_pid_goes_through_publish_pid(self):
+        # Fixtures here are written by copying a neighbour, so one truncating pid write left in
+        # any test source is how the empty-read flake comes back (gh-ocannl-1041).
+        truncating = re.compile(r"open\([^()\n]*,\s*\\*'w\\*'\)\.write\(str\(")
+        # Two-sided, so the scan cannot pass by matching nothing: it catches both spellings it
+        # replaced -- plain, and escaped inside a driver's nested source -- and not the helper.
+        # (Each is split across two literals so that this file does not match itself.)
+        for old in (
+            "open(sys.argv[1], 'w')" ".write(str(kid.pid))",
+            "open(sys.argv[1], \\'w\\')" ".write(str(os.getpid()))",
+        ):
+            self.assertRegex(old, truncating)
+        self.assertNotRegex(publish_pid("sys.argv[1]", "kid.pid"), truncating)
+
+        sources = sorted([*HERE.glob("test*.py"), *HERE.glob("test/test*.py")])
+        self.assertIn(HERE / "test_orchestrate.py", sources)
+        self.assertIn(HERE / "test" / "test_cell_group.py", sources)
+        offenders = [
+            f"{path.relative_to(HERE)}:{lineno}"
+            for path in sources
+            for lineno, line in enumerate(path.read_text().splitlines(), 1)
+            if truncating.search(line)
+        ]
+        self.assertEqual(offenders, [], "pid files written in place, not via publish_pid")
 
     def test_a_failed_windows_job_assignment_kills_the_unassigned_child_too(self):
         job = unittest.mock.Mock()

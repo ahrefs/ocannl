@@ -37,6 +37,7 @@ Profile "reproducible" sets:
   cc_vector_bytes=0
   tf32_matmuls=false
   fp16_arithmetic=auto
+  bf16_arithmetic=auto
   narrow_compute_f32=true
   online_softmax=false
 
@@ -58,6 +59,7 @@ Profile "approximate" sets:
   cc_backend_simd_flags=auto
   fp16_arithmetic=true
   tf32_matmuls=true
+  bf16_arithmetic=true
   online_softmax=true
   cc_backend_fast_math=true
   cc_backend_fp_contract=fast
