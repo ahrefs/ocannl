@@ -201,15 +201,25 @@ let stand_in_arms () =
     && Float.(seconds >= default_bound && seconds < default_bound +. 30.)
     && String.is_substring out ~substring:"outcome: still_busy"
     && String.is_substring err ~substring:"not a finite number");
-  (* One bound for every resource, not one each: two never-idle stand-ins under a 1s bound exit in
-     under 2s, which a bound restarted per resource could not. *)
+  (* One bound for every resource, not one each: two never-idle stand-ins under a 1s bound tear down
+     in under 2s, which a bound restarted per resource could not. Timed by the child around the
+     teardown call alone: the process's wall time adds startup, which a loaded runner can stretch
+     past the 1s margin. *)
   let code, seconds, out, _ =
     run_child [ "two_never_idle"; "--ocannl_exit_stream_teardown_timeout=1" ]
   in
-  eprintf "two_never_idle: exit %d after %.3fs (not part of the golden)\n%!" code seconds;
+  let teardown_seconds =
+    String.split_lines out
+    |> List.find_map ~f:(String.chop_prefix ~prefix:"teardown seconds: ")
+    |> Option.bind ~f:Float.of_string_opt
+  in
+  eprintf
+    "two_never_idle: exit %d after %.3fs, of which the teardown %s (not part of the golden)\n%!"
+    code seconds
+    (Option.value_map teardown_seconds ~default:"did not report" ~f:(Printf.sprintf "%.3fs"));
   p "two busy streams share one bound"
     (code = 0
-    && Float.(seconds >= 1. && seconds < 2.)
+    && Option.exists teardown_seconds ~f:(fun t -> Float.(t >= 1. && t < 2.))
     && List.count (String.split_lines out) ~f:(String.equal "outcome: still_busy") = 2);
   let code, _, out, _ = run_child [ "idle"; bound_flag ] in
   p "an idle stream is torn down at exit"

@@ -27,6 +27,7 @@ let outcome_name : Utils.exit_teardown_outcome -> string = function
 
 let stand_in ?(count = 1) ~idle () =
   Stdlib.at_exit (fun () ->
+      let started = Mtime_clock.counter () in
       Utils.bounded_exit_teardown
         (List.init count ~f:(fun k : Utils.exit_teardown_resource ->
              {
@@ -37,7 +38,10 @@ let stand_in ?(count = 1) ~idle () =
                    Stdio.printf "%s\n%!" Exit_stream_teardown_marker.teardown;
                    if not idle then Unix.sleepf 3600.);
              }))
-      |> List.iter ~f:(fun outcome -> Stdio.printf "outcome: %s\n%!" (outcome_name outcome)))
+      |> List.iter ~f:(fun outcome -> Stdio.printf "outcome: %s\n%!" (outcome_name outcome));
+      (* The teardown call alone, without process startup, for claims too tight to absorb it. *)
+      Stdio.printf "teardown seconds: %.3f\n%!"
+        (Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9))
 
 let () =
   match Array.to_list (Sys.get_argv ()) |> List.tl_exn |> List.hd with
