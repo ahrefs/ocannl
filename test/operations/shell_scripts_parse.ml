@@ -953,6 +953,20 @@ module Errexit_negation = struct
     then Some after_group
     else None
 
+  (** Whether an unquoted [#] at [index] starts a comment: only at the start of a word, so [foo#bar]
+      is one word and [foo\ #bar] too (the space is escaped when an odd run of backslashes precedes
+      it). *)
+  let comment_starts line index =
+    let rec backslashes_before index count =
+      if index > 0 && Char.equal line.[index - 1] '\\' then
+        backslashes_before (index - 1) (count + 1)
+      else count
+    in
+    index = 0
+    || (Char.is_whitespace line.[index - 1]
+       || List.mem [ ';'; '&'; '|'; '('; ')' ] line.[index - 1] ~equal:Char.equal)
+       && backslashes_before (index - 1) 0 % 2 = 0
+
   let command_fragments line =
     let length = String.length line in
     let add_fragment fragments start finish affects_parent =
@@ -1004,7 +1018,7 @@ module Errexit_negation = struct
             if escaped then loop (index + 1) start `None false nesting pipeline fragments
             else if Char.equal character '\\' then
               loop (index + 1) start `None true nesting pipeline fragments
-            else if Char.equal character '#' then
+            else if Char.equal character '#' && comment_starts line index then
               List.rev (add_fragment fragments start index (not pipeline))
             else if starts_at line ~pos:index "$(" then
               loop
@@ -1297,7 +1311,7 @@ module Errexit_negation = struct
         | `None ->
             if escaped then loop (index + 1) `None false nesting
             else if Char.equal character '\\' then loop (index + 1) `None true nesting
-            else if Char.equal character '#' then false
+            else if Char.equal character '#' && comment_starts line index then false
             else if starts_at line ~pos:index "$'" then loop (index + 2) `Ansi_c false nesting
             else if Char.equal character '\'' then loop (index + 1) `Single false nesting
             else if Char.equal character '"' then loop (index + 1) `Double false nesting
@@ -1503,6 +1517,10 @@ module Errexit_negation = struct
       ("bang-adjacent output redirect", "set -e\n!>/dev/null probe\n", [ 2 ]);
       ("bang-adjacent input redirect", "set -e\n!</dev/null probe\n", [ 2 ]);
       ("bang-prefixed command name", "set -e\n!probe\n", []);
+      ( "errexit set after an embedded hash",
+        "echo foo#bar; set -e\n! grep -q missing output\n",
+        [ 2 ] );
+      ("embedded hash before an outer OR", "set -e\n! grep -q x#y output || recover\n", []);
     ]
 
   let controls () =
@@ -1652,7 +1670,10 @@ module Errexit_and_list = struct
           | _ -> None)
       | None -> None
     in
-    N.redirection_prefix (Option.value variable_descriptor ~default:word)
+    (* [<<-] is an operator whose target follows: the generic reading takes the [-] for an attached
+       target. *)
+    if String.equal word "<<-" then Some false
+    else N.redirection_prefix (Option.value variable_descriptor ~default:word)
 
   type frame = {
     kind : [ `Paren | `Brace | `Function ];
@@ -2111,6 +2132,10 @@ module Errexit_and_list = struct
       ( "variable-descriptor redirected tests",
         "set -e\n{fd}>/dev/null [ -e a ] && {fd2}> /dev/null [ -e b ]\n",
         [ 2 ] );
+      ( "separated here-document redirections",
+        "set -e\n<<- EOF [ -e a ] && <<- EOF2 [ -e b ]\n",
+        [ 2 ] );
+      ("errexit set after an embedded hash", "echo foo#bar; set -e\n[ -e a ] && [ -e b ]\n", [ 2 ]);
       ("redirected test", "set -e\n2>/dev/null [ -e a ] && [ -e b ]\n", [ 2 ]);
       ("assignment-prefixed test", "set -e\nLC_ALL=C [ a \\< b ] && [ -e b ]\n", [ 2 ]);
       ( "function's final pair, explicit",

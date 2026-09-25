@@ -124,6 +124,8 @@ errexit-negation fixture nested AND/OR in case command is classified as specifie
 errexit-negation fixture bang-adjacent output redirect is classified as specified: true
 errexit-negation fixture bang-adjacent input redirect is classified as specified: true
 errexit-negation fixture bang-prefixed command name is classified as specified: true
+errexit-negation fixture errexit set after an embedded hash is classified as specified: true
+errexit-negation fixture embedded hash before an outer OR is classified as specified: true
 the statement-position ! grep fixture reaches the absent()-style refusal: true
 errexit-and-list fixture bare pair is classified as specified: true
 errexit-and-list fixture the cancel_sweep readiness check is classified as specified: true
@@ -182,6 +184,8 @@ errexit-and-list fixture timed test is classified as specified: true
 errexit-and-list fixture timed test with an option terminator is classified as specified: true
 errexit-and-list fixture portably timed test with an option terminator is classified as specified: true
 errexit-and-list fixture variable-descriptor redirected tests is classified as specified: true
+errexit-and-list fixture separated here-document redirections is classified as specified: true
+errexit-and-list fixture errexit set after an embedded hash is classified as specified: true
 errexit-and-list fixture redirected test is classified as specified: true
 errexit-and-list fixture assignment-prefixed test is classified as specified: true
 errexit-and-list fixture function's final pair, explicit is classified as specified: true
