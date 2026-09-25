@@ -1550,23 +1550,27 @@ end
     The same files and the same errexit gate as {!Errexit_negation}, one LOGICAL line at a time: a
     line ending in [&&], [||], [|] or a backslash is joined with the next, so a list wrapped across
     lines is read whole. A logical line is cut into statements at top-level [;], [;;], a lone [&], a
-    comment, and an unmatched [)] (a case pattern's terminator, so a case arm's body on the pattern
-    line is a statement). A subshell or brace group opened in operand position -- after nothing but
-    [!]/[time]/[then]/[do]/[else], so also as a later operand of a list -- is a nested statement
-    context whose statements are read on their own. Quotes, [$( )], [${ }] and backticks are skipped
-    as in {!Errexit_negation}, and so is the inside of a [[[ ... ]]], so an [&&] printed as data or
-    written inside [[[ a && b ]]] is not a list operator. A single [\[] needs no tracking: an [&&]
-    between single brackets IS a list operator. A statement is flagged when all of these hold:
+    comment, and a case pattern's [)] -- unmatched, or closing a [(pattern)] because a word follows
+    it -- so a case arm's body on the pattern line is a statement. A subshell or brace group opened
+    in operand position ({!opener}: after nothing but [!]/[time]/[then]/[do]/[else], so also as a
+    later operand of a list) is a nested statement context whose statements are read on their own;
+    so is a function body, except that the command running after the definition is the definition
+    itself, not its body. Keywords are matched as written: a quoted [then] is not one. Quotes,
+    [$( )], [${ }] and backticks are skipped as in {!Errexit_negation}, and so is the inside of a
+    [[[ ... ]]], so an [&&] printed as data or written inside [[[ a && b ]]] is not a list operator.
+    A single [\[] needs no tracking: an [&&] between single brackets IS a list operator. A statement
+    is flagged when all of these hold:
     - it is an [&&]-only list of at least two operands, and every operand is a test command
       ({!is_test}: [\[], [\[\[] or [test], also by path and through [command]/[builtin], after [!],
       [time], assignments and redirections; on the first operand also after [then], [do], [else]);
     - nothing consumes the list's value: it is not introduced by [if]/[elif]/[while]/[until] (the
       first operand's first word is then not a test), it is not followed by a [then]/[do] (a
-      condition whose keyword began an earlier line), and the first command after it -- on the same
+      condition whose keyword began an earlier line), and the first pipeline after it -- on the same
       line, else the next non-blank non-comment line -- does not expand [$?]. Only the first: a
       later command reads a later status. Only an expansion, read quote-aware: a single-quoted or
-      escaped [$?] is text. And only in the command itself: inside a [$( )] a nested command may
-      already have replaced the status, so a [$?] there is refused rather than traced.
+      escaped [$?] is text. And only in the command itself, directly or through double quotes and
+      [$(( ))]: inside a [$( )] a nested command may already have replaced the status, so a [$?]
+      there is refused rather than traced.
 
     A [||] anywhere in the list is its consumer: [[ A ] && [ B ] || die ...] makes the failure
     explicit, so nothing is exempt. That is the spelling the refusal points at, together with one
@@ -1606,16 +1610,18 @@ module Errexit_and_list = struct
   (** Words that may precede a body statement on its line without being part of it. *)
   let statement_prefixes = [ "then"; "do"; "else"; "{"; "!" ]
 
-  let words text = List.map (N.shell_words text) ~f:N.literal_shell_word
-
-  (** Whether a [(] or [{] at the end of [text] -- the current operand so far -- opens a compound
-      command in operand position: nothing precedes it but the words that can stand before a command
-      ([!], [time], [time -p]) or put a body statement on the line ([then], [do], [else]), or, for a
-      [{], a function definition's head in any spelling ([f() {], [f(){], [f () {], [function f {],
-      [function f() {]) -- a function body's statements are statements like any other. After
-      [if]/[elif]/[while]/[until] it does not qualify, and that is deliberate: errexit is ignored
-      throughout a condition, subshells included. *)
-  let operand_position ~brace text =
+  (** What a [(] or [{] at the end of [text] -- the current operand so far -- opens, if anything.
+      Keywords are matched RAW: a quoted [then] is a command named `then`, not a keyword.
+      - [`Group]: a compound command in operand position -- nothing precedes it but the words that
+        can stand before a command ([!], [time], [time -p]) or put a body statement on the line
+        ([then], [do], [else]). For a [(], also right after a case header ([case x in (x) ...]),
+        where it opens a pattern the closer then recognizes as one.
+      - [`Function_body]: a [{] after a function definition's head in any spelling ([f() {], [f(){],
+        [f () {], [function f {], [function f() {]). Its statements are read like any other, but
+        they do not run where they are written.
+      - [`No] otherwise, and deliberately after [if]/[elif]/[while]/[until]: errexit is ignored
+        throughout a condition, subshells included. *)
+  let opener ~brace text =
     let rec drop = function
       | ("then" | "do" | "else" | "!") :: rest -> drop rest
       | "time" :: "-p" :: rest -> drop rest
@@ -1623,14 +1629,15 @@ module Errexit_and_list = struct
       | words -> words
     in
     let named word = String.length word > 2 && String.is_suffix word ~suffix:"()" in
-    match drop (words text) with
-    | [] -> true
-    | [ name ] -> brace && named name
-    | [ "function"; _ ] | [ _; "()" ] | [ "function"; _; "()" ] -> brace
-    | _ -> false
+    match drop (N.shell_words text) with
+    | [] -> `Group
+    | [ "case"; _; "in" ] when not brace -> `Group
+    | [ name ] when brace && named name -> `Function_body
+    | ([ "function"; _ ] | [ _; "()" ] | [ "function"; _; "()" ]) when brace -> `Function_body
+    | _ -> `No
 
   type frame = {
-    kind : [ `Paren | `Brace ];
+    kind : [ `Paren | `Brace | `Function ];
     outer_operands : string list;
     outer_connectors : connector list;
     outer_start : int;
@@ -1688,7 +1695,7 @@ module Errexit_and_list = struct
           close_statement start index;
           statements :=
             {
-              operands = [ (match frame.kind with `Paren -> ")" | `Brace -> "}") ];
+              operands = [ (match frame.kind with `Paren -> ")" | `Brace | `Function -> "}") ];
               connectors = [];
             }
             :: !statements;
@@ -1696,6 +1703,31 @@ module Errexit_and_list = struct
           operands := frame.outer_operands;
           connectors := frame.outer_connectors;
           frame.outer_start
+    in
+    (* A [(...)] that turns out to be a case pattern -- a word follows its [)], which no subshell
+       admits -- was never a context: restore the enclosing statement and end it there, as an
+       unmatched [)] does. *)
+    let drop_frame index =
+      match !frames with
+      | [] -> ()
+      | frame :: rest ->
+          frames := rest;
+          operands := frame.outer_operands;
+          connectors := frame.outer_connectors;
+          close_statement frame.outer_start index
+    in
+    let followed_by_word index =
+      let rec skip index =
+        if index < length && Char.is_whitespace line.[index] then skip (index + 1) else index
+      in
+      let next = skip index in
+      next < length
+      && (not (List.mem [ ';'; '&'; '|'; ')'; '<'; '>'; '#' ] line.[next] ~equal:Char.equal))
+      &&
+      (* [( ... ) 2>/dev/null]: a redirection, not a word. *)
+      match N.shell_words (String.drop_prefix line next) with
+      | word :: _ -> Option.is_none (N.redirection_prefix word)
+      | [] -> false
     in
     (* A group still open at the end of the line continues on the next: its enclosing statements are
        incomplete, and dropped -- they end in a group operand, so they are never a bare test list --
@@ -1795,25 +1827,27 @@ module Errexit_and_list = struct
             else if word_start && N.starts_at line ~pos:index "[[" && word_ends_at (index + 2) then
               continue ~dbracket:true (index + 2)
             else if Char.equal character '(' then
-              if
-                operand_position ~brace:false (text start index)
-                && not (N.starts_at line ~pos:index "((")
-              then (
-                open_frame `Paren start;
-                fresh (index + 1))
-              else continue ~parens:1 (index + 1)
-            else if
-              Char.equal character '{' && word_start
-              && word_ends_at (index + 1)
-              && operand_position ~brace:true (text start index)
-            then (
-              open_frame `Brace start;
-              fresh (index + 1))
+              match opener ~brace:false (text start index) with
+              | `Group when not (N.starts_at line ~pos:index "((") ->
+                  open_frame `Paren start;
+                  fresh (index + 1)
+              | _ -> continue ~parens:1 (index + 1)
+            else if Char.equal character '{' && word_start && word_ends_at (index + 1) then
+              match opener ~brace:true (text start index) with
+              | `Group ->
+                  open_frame `Brace start;
+                  fresh (index + 1)
+              | `Function_body ->
+                  (* The definition is the command that runs here; its body does not. *)
+                  statements := { operands = [ text start index ]; connectors = [] } :: !statements;
+                  open_frame `Function start;
+                  fresh (index + 1)
+              | `No -> continue (index + 1)
             else if
               Char.equal character '}' && word_start
               && word_ends_at (index + 1)
               && String.is_empty (String.strip (text start index))
-              && match !frames with { kind = `Brace; _ } :: _ -> true | _ -> false
+              && match !frames with { kind = `Brace | `Function; _ } :: _ -> true | _ -> false
             then
               let outer_start = close_frame start index in
               loop (index + 1) outer_start `None false 0 false
@@ -1821,8 +1855,12 @@ module Errexit_and_list = struct
               Char.equal character ')'
               && match !frames with { kind = `Paren; _ } :: _ -> true | _ -> false
             then
-              let outer_start = close_frame start index in
-              loop (index + 1) outer_start `None false 0 false
+              if followed_by_word (index + 1) then (
+                drop_frame index;
+                fresh (index + 1))
+              else
+                let outer_start = close_frame start index in
+                loop (index + 1) outer_start `None false 0 false
             else if Char.equal character ')' || Char.equal character ';' then (
               close_statement start index;
               let rec past index =
@@ -1859,9 +1897,7 @@ module Errexit_and_list = struct
     let literal = N.literal_shell_word in
     let is word expected = String.equal (literal word) expected in
     let rec drop = function
-      | word :: rest when is word "!" -> drop rest
-      | time :: option :: rest when is time "time" && is option "-p" -> drop rest
-      | word :: rest when is word "time" -> drop rest
+      | "!" :: rest | "time" :: "-p" :: rest | "time" :: rest -> drop rest
       | word :: rest when N.assignment_prefix word -> drop rest
       | word :: rest when Option.is_some (N.redirection_prefix word) -> (
           match N.redirection_prefix word with
@@ -1871,8 +1907,7 @@ module Errexit_and_list = struct
           match rest with
           | option :: rest when is option "-p" && is word "command" -> drop (drop_dashdash rest)
           | rest -> drop (drop_dashdash rest))
-      | word :: rest when first && List.mem statement_prefixes (literal word) ~equal:String.equal ->
-          drop rest
+      | word :: rest when first && List.mem statement_prefixes word ~equal:String.equal -> drop rest
       | words -> words
     and drop_dashdash = function word :: rest when is word "--" -> rest | words -> words in
     match drop (N.shell_words operand) with
@@ -1894,16 +1929,22 @@ module Errexit_and_list = struct
   let reads_status text =
     let length = String.length text in
     (* [frames]: the enclosing contexts, innermost first. [`Code depth] is unquoted shell -- the top
-       level, or a [$( )] body at paren [depth] -- and [`Backtick] a backtick body. *)
+       level, or a [$( )] body at paren [depth] -- [`Backtick] a backtick body, and [`Arith depth] a
+       [$(( ))], which runs no command and so is as transparent as a double quote. *)
     let rec loop index frames =
       if index >= length then false
       else
         let at token = N.starts_at text ~pos:index token in
         let character = text.[index] in
-        (* Directly in the command: the top-level frame, or a double quote right inside it. *)
+        (* Directly in the command: nothing between it and the top level but double quotes and
+           arithmetic. *)
         let expansion () =
           (at "$?" || at "${?}")
-          && match frames with [ `Code _ ] | [ `Double; `Code _ ] -> true | _ -> false
+          &&
+          match List.rev frames with
+          | _top :: above ->
+              List.for_all above ~f:(function `Double | `Arith _ -> true | _ -> false)
+          | [] -> false
         in
         match frames with
         | [] -> false
@@ -1916,14 +1957,25 @@ module Errexit_and_list = struct
         | `Double :: outer ->
             if Char.equal character '\\' then loop (index + 2) frames
             else if expansion () then true
+            else if at "$((" then loop (index + 3) (`Arith 0 :: frames)
             else if at "$(" then loop (index + 2) (`Code 0 :: frames)
             else if Char.equal character '`' then loop (index + 1) (`Backtick :: frames)
             else if Char.equal character '"' then loop (index + 1) outer
+            else loop (index + 1) frames
+        | `Arith depth :: outer ->
+            if expansion () then true
+            else if at "$((" then loop (index + 3) (`Arith 0 :: frames)
+            else if at "$(" then loop (index + 2) (`Code 0 :: frames)
+            else if Char.equal character '(' then loop (index + 1) (`Arith (depth + 1) :: outer)
+            else if Char.equal character ')' then
+              if depth > 0 then loop (index + 1) (`Arith (depth - 1) :: outer)
+              else loop (index + 2) outer
             else loop (index + 1) frames
         | ((`Code _ | `Backtick) as frame) :: outer -> (
             if Char.equal character '\\' then loop (index + 2) frames
             else if expansion () then true
             else if at "$'" then loop (index + 2) (`Ansi_c :: frames)
+            else if at "$((" then loop (index + 3) (`Arith 0 :: frames)
             else if at "$(" then loop (index + 2) (`Code 0 :: frames)
             else if Char.equal character '\'' then loop (index + 1) (`Single :: frames)
             else if Char.equal character '"' then loop (index + 1) (`Double :: frames)
@@ -1943,14 +1995,22 @@ module Errexit_and_list = struct
     in
     loop 0 [ `Code 0 ]
 
-  (** The first command of a statement: what runs next after the list before it, so the only command
-      whose [$?] is still the list's status. *)
-  let first_command { operands; _ } = match operands with operand :: _ -> operand | [] -> ""
+  (** The first pipeline of a statement: what runs next after the list before it. Every command in
+      it is expanded before any of them completes, so it is exactly the set whose [$?] is still the
+      list's status. *)
+  let first_command { operands; connectors } =
+    let rec pipeline operands connectors =
+      match (operands, connectors) with
+      | operand :: _, ([] | (And | Or) :: _) -> [ operand ]
+      | operand :: operands, Pipe :: connectors -> operand :: pipeline operands connectors
+      | [], _ -> []
+    in
+    String.concat ~sep:" | " (pipeline operands connectors)
 
   (** Whether [next] -- the first command after the list -- makes the list a condition or reads its
       status. *)
   let consumes next =
-    (match words next with ("then" | "do") :: _ -> true | _ -> false) || reads_status next
+    (match N.shell_words next with ("then" | "do") :: _ -> true | _ -> false) || reads_status next
 
   let findings text =
     let lines = Array.of_list (String.split_lines text) in
@@ -2078,6 +2138,13 @@ module Errexit_and_list = struct
       ("builtin-wrapped tests", "set -e\nbuiltin [ -e a ] && builtin -- test -e b\n", [ 2 ]);
       ("command -p wrapped tests", "set -e\ncommand -p test -e a && command -- [ -e b ]\n", [ 2 ]);
       ("tests named by path", "set -e\n/bin/test -e a && /usr/bin/test -e b\n", [ 2 ]);
+      ( "parenthesized case pattern on the case line",
+        "set -e\ncase x in (x) [ -e a ] && [ -e b ]; echo y;; esac\n",
+        [ 2 ] );
+      ( "parenthesized case pattern on its own line",
+        "set -e\ncase $x in\n  (a|b) [ -e a ] && [ -e b ] ;;\nesac\n",
+        [ 3 ] );
+      ("redirected subshell", "set -e\n( y; [ -e a ] && [ -e b ]; z ) 2>/dev/null\n", [ 2 ]);
       ("timed test", "set -e\ntime [ -e a ] && [ -e b ]\n", [ 2 ]);
       ("redirected test", "set -e\n2>/dev/null [ -e a ] && [ -e b ]\n", [ 2 ]);
       ("assignment-prefixed test", "set -e\nLC_ALL=C [ a \\< b ] && [ -e b ]\n", [ 2 ]);
@@ -2125,6 +2192,24 @@ module Errexit_and_list = struct
         "set +e\n[ -e a ] && [ -e b ];\nrc=$?\nset -e\n",
         [] );
       ("status expanded inside the pair itself", "set -e\n{ [ $? -eq 0 ] && [ -e b ]; }\n", [ 2 ]);
+      ("status read in arithmetic", "set +e\n[ -e a ] && [ -e b ]; rc=$(( $? + 1 ))\nset -e\n", []);
+      ( "status read after a command inside arithmetic",
+        "set -e\n[ -e a ] && [ -e b ]; rc=$(( $(true; echo $?) + 1 ))\n",
+        [ 2 ] );
+      ( "status read later in the first pipeline",
+        "set +e\n[ -e a ] && [ -e b ]; true | printf '%s\\n' \"$?\"\nset -e\n",
+        [] );
+      ( "status read after the first pipeline",
+        "set -e\n[ -e a ] && [ -e b ]; true | cat && echo $?\n",
+        [ 2 ] );
+      ( "status read in a function defined next",
+        "set -e\n[ -e a ] && [ -e b ]; f() { echo \"$?\"; }; y\n",
+        [ 2 ] );
+      ( "status read in a function defined on the next line",
+        "set -e\n[ -e a ] && [ -e b ]\nf() { echo \"$?\"; }\n",
+        [ 2 ] );
+      ("quoted do after the pair", "set -e\n[ -e a ] && [ -e b ]; \"do\"\n", [ 2 ]);
+      ("escaped then after the pair", "set -e\n[ -e a ] && [ -e b ]; \\then\n", [ 2 ]);
       ( "status named only in the next line's comment",
         "set -e\n[ -e a ] && [ -e b ]\nx # not $?\n",
         [ 2 ] );

@@ -172,6 +172,9 @@ errexit-and-list fixture command-wrapped tests is classified as specified: true
 errexit-and-list fixture builtin-wrapped tests is classified as specified: true
 errexit-and-list fixture command -p wrapped tests is classified as specified: true
 errexit-and-list fixture tests named by path is classified as specified: true
+errexit-and-list fixture parenthesized case pattern on the case line is classified as specified: true
+errexit-and-list fixture parenthesized case pattern on its own line is classified as specified: true
+errexit-and-list fixture redirected subshell is classified as specified: true
 errexit-and-list fixture timed test is classified as specified: true
 errexit-and-list fixture redirected test is classified as specified: true
 errexit-and-list fixture assignment-prefixed test is classified as specified: true
@@ -202,6 +205,14 @@ errexit-and-list fixture status read after an intervening command is classified 
 errexit-and-list fixture status read by a later command on the next line is classified as specified: true
 errexit-and-list fixture status read after a trailing semicolon is classified as specified: true
 errexit-and-list fixture status expanded inside the pair itself is classified as specified: true
+errexit-and-list fixture status read in arithmetic is classified as specified: true
+errexit-and-list fixture status read after a command inside arithmetic is classified as specified: true
+errexit-and-list fixture status read later in the first pipeline is classified as specified: true
+errexit-and-list fixture status read after the first pipeline is classified as specified: true
+errexit-and-list fixture status read in a function defined next is classified as specified: true
+errexit-and-list fixture status read in a function defined on the next line is classified as specified: true
+errexit-and-list fixture quoted do after the pair is classified as specified: true
+errexit-and-list fixture escaped then after the pair is classified as specified: true
 errexit-and-list fixture status named only in the next line's comment is classified as specified: true
 errexit-and-list fixture command -v lookups is classified as specified: true
 errexit-and-list fixture conditional action is classified as specified: true
