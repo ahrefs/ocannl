@@ -1163,7 +1163,9 @@ that they earn a lookup rather than always-loaded space.
   re-runs actions attached to ALIASES. Either force the alias (`dune build --force
   @<dir>/runtest`), or run the built exe directly with its cwd set to `_build/default/<dir>`, which
   is exactly the environment dune gives it — the same cwd, hence the same `ocannl_config` search
-  root, that makes `dune exec` unusable (AGENTS.md). The cause is that dune trusts its own digest
+  root, that makes `dune exec` unusable: the config search walks up from the invoking cwd, where
+  the root `ocannl_config` is gitignored, so the program finds no config or `Context.auto` silently
+  picks a GPU. The cause is that dune trusts its own digest
   database and never stats a rule's targets, so a hand-deleted one is recorded as built forever;
   that also rules out the two other reflexes, since touching a source changes no CONTENT digest and
   deleting `_build/.digest-db` does not restore the memo either. Every golden-diff rule now has an
@@ -1409,7 +1411,10 @@ that they earn a lookup rather than always-loaded space.
   `(alias (name slow) …)` aggregate — `test/training/dune` is the pattern, and `env_var_deps` fails
   on a rule the aggregate omits, since `dune build @slow` would otherwise skip it silently. The
   action needs `(no-infer …)` here for the same reason as above: an `.actual` registered as a build
-  target puts the slow run on plain `dune build`'s `@all`.
+  target puts the slow run on plain `dune build`'s `@all`. Regular and `@slow` training actions take
+  the `ocannl_training_test` lock so their OpenMP pools never overlap; `test/operations/cpu_parallel`
+  stays unlocked on purpose. `dune build @runtest @slow` runs both families, and `@check` compiles
+  the slow executables, so they cannot bit-rot while off the default path.
 - Two focused aggregates sit beside `scans`, built the same way and answering a narrower question
   (gh-ocannl-783): `dune build @metal-codegen` runs the Metal-pinned tests — the executed Metal-only
   guards and the emitted-MSL structural ones — and `dune build @lifecycle` runs the
@@ -1832,7 +1837,13 @@ that they earn a lookup rather than always-loaded space.
   on the OCaml floor the opam files claim (`>= 5.3.0`, against 5.5 everywhere else).
   PR, push and ordinary `workflow_dispatch` runs use the Linux/macOS matrix.
   When a change needs Windows signal, AGENTS.md's *Windows verification placement* says where it
-  comes from: a box the user boots into Windows first, this dispatch as the fallback. On a booted
+  comes from: a box the user boots into Windows first, this dispatch as the fallback. The order is
+  latency: `rog-nv-win` and `minix-amd-win` normally boot Ubuntu, and one rebooted into Windows
+  answers in minutes where hosted Windows CI takes one to three hours. A wave coordinator batches
+  the boot requests and picks the box with less queued work. The fallback waits until the request
+  is withdrawn -- the user told, through the same channel, that CI is taking the check, so a late
+  reboot is not wasted -- because a dispatched run's checks gate the head, and cancelling one when
+  the box turns up leaves a no-verdict the merge refuses. On a booted
   Windows host, use native Git Bash in an isolated checkout of the intended commit, source
   `tools/opam-env.sh`, and run the relevant aliases through `tools/test-run.sh`, keeping host,
   SHA, command and exit sentinel as evidence; WSL does not establish native Windows coverage.
