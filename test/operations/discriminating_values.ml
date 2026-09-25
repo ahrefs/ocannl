@@ -102,6 +102,16 @@ let () =
     ~f:
       (moves_along_every_axis ~dims:rank5
          (Ll_test.cycle ~radix:1_000_003 ~dims:rank5 ~modulus:5 ~offset:0. ~stride:1.));
+  (* Residue products stay below 2^60 only while the modulus is at most 2^30, so a larger one is
+     refused outright rather than risk a wrapped product (PR review round 2). Radix 7 is coprime to
+     both moduli and its residues are too small to wrap, so the bound is the only thing that can
+     refuse the first and nothing refuses the second. *)
+  let at_modulus modulus () =
+    Ll_test.cycle ~radix:7 ~dims:[| 2; 2; 2 |] ~modulus ~offset:0. ~stride:1. [| 1; 1; 1 |]
+  in
+  p "a modulus past Ll_test.max_modulus is refused, and one at it is accepted"
+    (refuses (at_modulus (Ll_test.max_modulus + 1))
+    && not (refuses (at_modulus Ll_test.max_modulus)));
   (* The two forms a site is written in — [NTDSL.init]'s multi-index and [Array.init]'s flat offset,
      in row-major order — have to mint the same operand once a radix makes the key more than the
      offset itself. *)

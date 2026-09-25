@@ -7,6 +7,7 @@ under that radix the modulus still chooses the value set: exactly the five integ
 a radix off 1 (mod modulus) keeps the square operand distinct from its transpose: true
 a radix sharing a factor with the modulus is refused, however it relates to the dims: true
 a large radix on a high-rank shape is judged by its residue, not an overflowed power: true
+a modulus past Ll_test.max_modulus is refused, and one at it is accepted: true
 under a radix, cycle_flat over the row-major offsets is cycle over the multi-indices: true
 drift varies with every index of every shape used: true
 every drift cell is exact in bf16: true

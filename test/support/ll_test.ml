@@ -93,8 +93,18 @@ let unflat ~dims i =
     key, outermost first, reduced mod [modulus]: the row-major strides by default (so the key is
     {!flat}), and with [~radix:h] the powers [h^(n-1-ax)] — the multi-index read as a base-[h]
     numeral whatever the extents are. Reduced at every step rather than materialized, so a large
-    radix or a high rank cannot overflow a power onto a false multiple of [modulus]. *)
+    radix or a high rank cannot overflow a power onto a false multiple of [modulus].
+
+    That reduction is overflow-free only while a product of two residues fits an [int], so [modulus]
+    is bounded by {!max_modulus}, and this raises above it. The bound costs nothing real: [modulus]
+    is the number of distinct cell values, and a test operand wants a handful of them, exact in the
+    storage precision — 2^30 is past even f32's exact-integer range. *)
+let max_modulus = 1 lsl 30
+
 let place_residues ?radix ~dims ~modulus () =
+  if modulus < 1 || modulus > max_modulus then
+    invalid_arg
+      (Printf.sprintf "Ll_test.cycle: modulus %d is outside [1, 2^30] (Ll_test.max_modulus)" modulus);
   let n = Array.length dims in
   let w = Array.create ~len:n (1 % modulus) in
   for ax = n - 2 downto 0 do
