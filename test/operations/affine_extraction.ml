@@ -13,6 +13,7 @@ module Idx = Ir.Indexing
 module Aff = Ir.Affine
 module Tn = Ir.Tnode
 module Ops = Ir.Ops
+module B = Ll_builders
 
 let fresh_tn =
   let c = ref 960_000_000 in
@@ -42,6 +43,20 @@ let show_idx = function
   | Idx.Sub_axis -> "sub"
   | Idx.Concat _ -> "concat"
 
+let show_loops loops =
+  String.concat ~sep:","
+    (List.map loops ~f:(fun (s, (lo, hi)) -> Printf.sprintf "%s:%d..%d" (Idx.symbol_ident s) lo hi))
+
+let show_path path =
+  String.concat ~sep:"."
+    (List.map path ~f:(function
+      | Aff.Stmt k -> Int.to_string k
+      | Aff.Arg k -> "a" ^ Int.to_string k
+      | Aff.Cond -> "c"
+      | Aff.Body -> "b"
+      | Aff.Rhs -> "r"
+      | Aff.Write -> "w"))
+
 let show (a : Tn.t Aff.access) =
   let flags =
     String.concat ~sep:""
@@ -51,6 +66,7 @@ let show (a : Tn.t Aff.access) =
            (a.a_whole, "whole ");
            (a.a_vec_last, "vec ");
            (a.a_guarded, "guarded ");
+           (a.a_gated, "gated ");
            (a.a_rmw, "rmw ");
          ]
          ~f:(fun (b, s) -> Option.some_if b s))
@@ -59,18 +75,7 @@ let show (a : Tn.t Aff.access) =
     (if a.a_write then "wr" else "rd")
     (Tn.debug_name a.a_tn)
     (Printf.sprintf "[%s]" (String.concat_array ~sep:";" (Array.map a.a_map ~f:show_idx)))
-    (String.concat ~sep:","
-       (List.map a.a_loops ~f:(fun (s, (lo, hi)) ->
-            Printf.sprintf "%s:%d..%d" (Idx.symbol_ident s) lo hi)))
-    (String.concat ~sep:"."
-       (List.map a.a_path ~f:(function
-         | Aff.Stmt k -> Int.to_string k
-         | Aff.Arg k -> "a" ^ Int.to_string k
-         | Aff.Cond -> "c"
-         | Aff.Body -> "b"
-         | Aff.Rhs -> "r"
-         | Aff.Write -> "w")))
-    flags
+    (show_loops a.a_loops) (show_path a.a_path) flags
 
 let () =
   let a = fresh_tn "A" [| 4; 5 |] in
@@ -311,3 +316,154 @@ let () =
       Verdict.p "decide_placements classifies X as read-before-write" traced.LL.read_before_write);
   let (inputs, _outputs), _merge = LL.input_and_output_nodes opt in
   Verdict.p "X is a routine input (incoming buffer preserved)" (Base.Set.mem inputs x)
+
+(* gh-ocannl-1016: the two things the access relations did not carry, which every "between two
+   points, what else runs?" question used to re-walk the raw code for — scalar gatedness ([a_gated])
+   and the effects that are no tensor-node access ([LL.statement_effects], from the same walk). One
+   program exercises each effect kind the raw pipeline can meet (a [Tile_mma]'s row is pinned
+   through [Online_softmax]'s opacity legs in online_softmax.ml), a gate of each shape, a scope body
+   under a gate, and a dead loop. *)
+let () =
+  Stdio.printf "\n=== scalar gates and statement effects (gh-ocannl-1016) ===\n";
+  let scope_node label =
+    let tn = fresh_tn label [| 1 |] in
+    B.virtualize tn;
+    tn
+  in
+  let p_ = fresh_tn "P" [| 4 |] and q_ = fresh_tn "Q" [| 4 |] and h_ = fresh_tn "H" [| 4 |] in
+  let r_ = fresh_tn "R" [| 4 |] and m_ = fresh_tn "M" [| 4 |] in
+  let lc = LL.get_scope (scope_node "LC") and ls = LL.get_scope (scope_node "LS") in
+  let cr = B.carry ~init:(B.get p_ [| B.fixed 0 |]) (scope_node "CR") in
+  let i8 = B.sym () and i9 = B.sym () and i10 = B.sym () and i11 = B.sym () in
+  let dead = B.sym () in
+  let program =
+    LL.unflat_lines
+      [
+        (* 0 *)
+        LL.Declare_local { id = lc; needs_init = false };
+        (* 1: a [Where]'s arms are gated, its condition is not *)
+        B.loop_n i8 4
+          (LL.Set_local
+             ( lc,
+               B.where_
+                 (B.get h_ [| B.iter i8 |])
+                 (B.get p_ [| B.iter i8 |])
+                 (B.get q_ [| B.iter i8 |]) ));
+        (* 2: a scope body in a gated arm runs hoisted, ungated; a merge read in the other arm is
+           gated *)
+        B.loop_n i9 4
+          (B.set r_
+             [| B.iter i9 |]
+             (B.where_
+                (B.get h_ [| B.iter i9 |])
+                (LL.Local_scope
+                   {
+                     id = ls;
+                     body = LL.Set_local (ls, B.get p_ [| B.iter i9 |]);
+                     orig_indices = [| B.iter i9 |];
+                     mint = LL.Inlined_computation;
+                   })
+                (LL.Get_merge_buffer (m_, [| B.iter i9 |]))));
+        (* 3: a gated second operand *)
+        B.loop_n i10 4
+          (B.set r_
+             [| B.iter i10 |]
+             (B.conj (B.get p_ [| B.iter i10 |]) (B.get q_ [| B.iter i10 |])));
+        (* 4 *)
+        LL.Workgroup_barrier;
+        (* 5 *)
+        LL.Staged_compilation (fun () -> PPrint.empty);
+        (* 6: a scan's carried state is written at its init, by the body, and per rotation *)
+        B.scan ~upto:3 i11 ~carried:[ cr ]
+          (B.set_next cr (B.add (B.prev cr) (B.get q_ [| B.iter i11 |])));
+        (* 7: a dead loop's rows carry the dead bound *)
+        B.loop ~upto:(-1) dead (LL.Set_local (lc, B.c 0.));
+      ]
+  in
+  let accs, effs = LL.affine_relations program in
+  List.iter accs ~f:show;
+  let show_kind : Tn.t Aff.effect_kind -> string = function
+    | Aff.Local_write -> "local-write"
+    | Aff.Local_declare -> "local-declare"
+    | Aff.Scope_body -> "scope-body"
+    | Aff.Barrier -> "barrier"
+    | Aff.Staged -> "staged"
+    | Aff.Mma -> "mma"
+    | Aff.Merge_read tn -> "merge-read " ^ Tn.debug_name tn
+  in
+  List.iter effs ~f:(fun (e : Tn.t Aff.statement_effect) ->
+      Stdio.printf "fx %-16s loops=[%s] path=[%s] %s%s%s\n" (show_kind e.e_kind)
+        (show_loops e.e_loops) (show_path e.e_path)
+        (if e.e_guarded then "guarded " else "")
+        (if e.e_gated then "gated " else "")
+        (if Aff.loops_live e.e_loops then "" else "dead"));
+  let open Verdict.Claims in
+  let reads_in stmt tn =
+    List.filter accs ~f:(fun a ->
+        (not a.Aff.a_write) && Aff.stmt_head a.a_path = stmt && Tn.equal a.a_tn tn)
+  in
+  let gated_as name cases =
+    p_all name
+      (List.concat_map cases ~f:(fun (stmt, tn, expected) ->
+           List.map (reads_in stmt tn) ~f:(fun a -> (a, expected))))
+      ~f:(fun ((a : Tn.t Aff.access), expected) -> Bool.equal a.a_gated expected)
+  in
+  gated_as "the Where's condition read is not gated" [ (1, h_, false) ];
+  gated_as "both Where arms' reads are gated" [ (1, p_, true); (1, q_, true) ];
+  gated_as "a scope body inside a gated arm runs ungated" [ (2, p_, false) ];
+  gated_as "And's first operand is ungated and its second gated" [ (3, p_, false); (3, q_, true) ];
+  let kinds_at stmt =
+    List.filter_map effs ~f:(fun (e : Tn.t Aff.statement_effect) ->
+        Option.some_if (Aff.stmt_head e.e_path = stmt) (show_kind e.e_kind))
+  in
+  p_exists "the merge read in the other arm is a gated effect row" effs
+    ~f:(fun (e : Tn.t Aff.statement_effect) ->
+      (match e.e_kind with Aff.Merge_read tn -> Tn.equal tn m_ | _ -> false) && e.e_gated);
+  p "every statement's effect kinds are the expected ones"
+    (List.equal (List.equal String.equal)
+       (List.map (List.range 0 8) ~f:kinds_at)
+       [
+         [ "local-declare" ];
+         [ "local-write" ];
+         [ "scope-body"; "local-write"; "merge-read M" ];
+         [];
+         [ "barrier" ];
+         [ "staged" ];
+         [ "local-write"; "local-write"; "local-write" ];
+         [ "local-write" ];
+       ]);
+  p_all "only the dead loop's row is dead" effs ~f:(fun (e : Tn.t Aff.statement_effect) ->
+      Bool.equal (Aff.loops_live e.e_loops) (Aff.stmt_head e.e_path <> 7));
+  (* The relationship, not a restatement: the view's gatedness IS [Access_fold]'s gated context —
+     the convention every remaining [Access_fold] consumer reads — read for read, in order. *)
+  let fold_reads =
+    let open LL.Access_fold in
+    let policy =
+      {
+        discarded_operands = Skip;
+        gated_operands = Visit;
+        dead_loops = Visit;
+        local_scopes = Visit;
+        guards = Ignore;
+        scan_implicit = Skip;
+      }
+    in
+    let hooks =
+      {
+        (hooks ()) with
+        scalar =
+          (fun ctx acc sc ->
+            match sc with
+            | LL.Get (tn, _) | LL.Get_dynamic { tn; _ } -> Continue ((tn.Tn.uid, ctx.gated) :: acc)
+            | _ -> Continue acc);
+      }
+    in
+    List.rev (fold ~policy ~hooks ~init:[] program)
+  in
+  let view_reads =
+    List.filter_map accs ~f:(fun a ->
+        Option.some_if (not a.Aff.a_write) (a.Aff.a_tn.Tn.uid, a.Aff.a_gated))
+  in
+  p "a_gated agrees with Access_fold's gated context, read for read"
+    ((not (List.is_empty view_reads))
+    && List.equal (fun (u, g) (u2, g2) -> u = u2 && Bool.equal g g2) fold_reads view_reads)

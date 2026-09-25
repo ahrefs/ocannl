@@ -71,37 +71,22 @@ let nest_of (stmt : LL.t) : nest option =
   in
   go [] stmt
 
-(* Whether a statement holds code the write census cannot see: staged code, or a barrier the rewrite
-   would move a write across. *)
-let rec has_opaque (stmt : LL.t) =
-  match stmt with
-  | LL.Staged_compilation _ | LL.Workgroup_barrier -> true
-  | LL.Seq (a, b) -> has_opaque a || has_opaque b
-  | LL.For_loop { body; _ } -> has_opaque body
-  | LL.Scan_loop { carried; body; _ } ->
-      List.exists carried ~f:(fun (c : LL.carried) -> scalar_has_opaque c.init) || has_opaque body
-  | LL.If { cond = c, _; body } -> scalar_has_opaque c || has_opaque body
-  | LL.Tile_mma _ -> true
-  | LL.Set { llsc; _ } | LL.Set_local (_, llsc) -> scalar_has_opaque llsc
-  | LL.Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar_has_opaque v || scalar_has_opaque llsc
-  | LL.Set_from_vec { arg = a, _; _ } -> scalar_has_opaque a
-  | LL.Noop | LL.Comment _ | LL.Zero_out _ | LL.Declare_local _ -> false
-
-and scalar_has_opaque (llsc : LL.scalar_t) =
-  match llsc with
-  | LL.Local_scope _ ->
-      (* Raw lowering emits no scopes; a body's purity is checked only by the optimizer, downstream
-         of the tier, and the write census does not enter one -- so a scope in the span is code the
-         census cannot see. *)
-      true
-  | LL.Get_dynamic { dyn_value = v, _; _ } -> scalar_has_opaque v
-  | LL.Ternop (_, (a, _), (b, _), (c, _)) ->
-      scalar_has_opaque a || scalar_has_opaque b || scalar_has_opaque c
-  | LL.Binop (_, (a, _), (b, _)) -> scalar_has_opaque a || scalar_has_opaque b
-  | LL.Unop (_, (a, _)) -> scalar_has_opaque a
-  | LL.Get _ | LL.Get_local _ | LL.Get_merge_buffer _ | LL.Constant _ | LL.Constant_bits _
-  | LL.Embed_index _ ->
-      false
+(* Whether a statement holds code the write census cannot see, or that the rewrite must not move a
+   write across: a query over the statement's effect rows (gh-ocannl-1016), the one view of what
+   runs beside its accesses. *)
+let has_opaque (stmt : LL.t) =
+  List.exists (LL.statement_effects stmt) ~f:(fun (e : Tn.t Affine.statement_effect) ->
+      match e.e_kind with
+      | Affine.Staged | Affine.Barrier -> true
+      | Affine.Mma ->
+          (* A code-motion barrier as a construct, whatever its scalar fallback spells (gh-1001). *)
+          true
+      | Affine.Scope_body ->
+          (* Raw lowering emits no scopes; a body's purity is checked only by the optimizer,
+             downstream of the tier, and the write census ([LL.writes_of_stmt]) does not enter one
+             -- so a scope in the span is code the census cannot see. *)
+          true
+      | Affine.Local_write | Affine.Local_declare | Affine.Merge_read _ -> false)
 
 let wrap loops body =
   List.fold_right loops ~init:body ~f:(fun { index; from_; to_ } body ->

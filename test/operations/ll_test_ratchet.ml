@@ -10,9 +10,6 @@ module Inventory = Test_utils.Source_inventory
    harness or the package-safe arrayjit.ll_builders. *)
 let exemptions =
   [
-    ( "test/operations/affine_extraction.ml",
-      Scan.Migration { records = 14; traversals = 0 },
-      "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/affine_lowering.ml",
       Scan.Migration { records = 0; traversals = 3 },
       "existing migration debt; adopt ll_test when touched" );
