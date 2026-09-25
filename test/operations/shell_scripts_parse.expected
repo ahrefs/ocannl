@@ -127,6 +127,7 @@ errexit-negation fixture bang-prefixed command name is classified as specified: 
 errexit-negation fixture errexit set after an embedded hash is classified as specified: true
 errexit-negation fixture errexit set by a continued command is classified as specified: true
 errexit-negation fixture errexit set through shopt is classified as specified: true
+errexit-negation fixture builtin takes no -p is classified as specified: true
 errexit-negation fixture errexit set after a literal-bracket test is classified as specified: true
 errexit-negation fixture errexit set through bundled shopt is classified as specified: true
 errexit-negation fixture errexit unset through shopt is classified as specified: true
@@ -200,6 +201,9 @@ errexit-and-list fixture pair after a spliced line keeps its line number is clas
 errexit-and-list fixture double-bracket regex with a character class is classified as specified: true
 errexit-and-list fixture errexit set after a literal-bracket test is classified as specified: true
 errexit-and-list fixture parenthesized case arm whose body is a subshell is classified as specified: true
+errexit-and-list fixture pair after a comment ending in a backslash is classified as specified: true
+errexit-and-list fixture pair after a single-quoted trailing backslash is classified as specified: true
+errexit-and-list fixture builtin takes no -p is classified as specified: true
 errexit-and-list fixture timed test is classified as specified: true
 errexit-and-list fixture timed test with an option terminator is classified as specified: true
 errexit-and-list fixture portably timed test with an option terminator is classified as specified: true

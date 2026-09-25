@@ -1258,10 +1258,12 @@ module Errexit_negation = struct
     | words -> (
         (* [builtin]/[command] run the builtin itself, with [command -p] and a [--] allowed. *)
         let rec unwrap = function
-          | ("builtin" | "command") :: rest -> unwrap_options rest
+          | "builtin" :: rest -> unwrap_options rest
+          | "command" :: rest -> unwrap_command rest
           | words -> words
-        and unwrap_options = function
-          | ("-p" | "--") :: rest -> unwrap_options rest
+        and unwrap_options = function "--" :: rest -> unwrap rest | words -> unwrap words
+        and unwrap_command = function
+          | ("-p" | "--") :: rest -> unwrap_command rest
           | words -> unwrap words
         in
         match unwrap words with
@@ -1280,9 +1282,38 @@ module Errexit_negation = struct
                  "errexit" ~equal:String.equal
         | _ -> false)
 
+  (* Whether [line] ends in a backslash that escapes the newline: in code or inside double quotes,
+     not inside a comment, single quotes or ANSI-C quotes, where it is literal text. Judged per
+     line: a line that starts inside a quote opened on an earlier line is a construct left open
+     across lines, outside the boundary. *)
+
   (** The file's lines with every backslash-newline splice removed, as the shell removes them before
       reading a word: [set \\] then [-e] on the next line is one [set -e]. Each comes with the
       number of the physical line it starts on. *)
+  let continues_past_newline line =
+    let length = String.length line in
+    let rec loop index quote =
+      if index >= length then false
+      else
+        let character = line.[index] in
+        match quote with
+        | `Single -> loop (index + 1) (if Char.equal character '\'' then `None else `Single)
+        | `Ansi_c ->
+            if Char.equal character '\\' then loop (index + 2) `Ansi_c
+            else loop (index + 1) (if Char.equal character '\'' then `None else `Ansi_c)
+        | `Double ->
+            if Char.equal character '\\' then index + 1 >= length || loop (index + 2) `Double
+            else loop (index + 1) (if Char.equal character '"' then `None else `Double)
+        | `None ->
+            if Char.equal character '\\' then index + 1 >= length || loop (index + 2) `None
+            else if Char.equal character '#' && comment_starts line index then false
+            else if starts_at line ~pos:index "$'" then loop (index + 2) `Ansi_c
+            else if Char.equal character '\'' then loop (index + 1) `Single
+            else if Char.equal character '"' then loop (index + 1) `Double
+            else loop (index + 1) `None
+    in
+    loop 0 `None
+
   let numbered_spliced_lines text =
     let rec join acc pending number = function
       | [] -> List.rev (match pending with Some spliced -> spliced :: acc | None -> acc)
@@ -1292,11 +1323,7 @@ module Errexit_negation = struct
             | Some (first, prefix) -> (first, prefix ^ line)
             | None -> (number, line)
           in
-          let rec trailing index count =
-            if index >= 0 && Char.equal line.[index] '\\' then trailing (index - 1) (count + 1)
-            else count
-          in
-          if trailing (String.length line - 1) 0 % 2 = 1 then
+          if continues_past_newline line then
             join acc (Some (first, String.drop_suffix line 1)) (number + 1) rest
           else join ((first, line) :: acc) None (number + 1) rest
     in
@@ -1589,6 +1616,7 @@ module Errexit_negation = struct
         [ 2 ] );
       ("errexit set by a continued command", "set \\\n-e\n! grep -q missing output\n", [ 3 ]);
       ("errexit set through shopt", "shopt -s -o errexit\n! grep -q missing output\n", [ 2 ]);
+      ("builtin takes no -p", "builtin -p set -e\n! grep -q missing output\n", []);
       ( "errexit set after a literal-bracket test",
         "[ [ = x ]; set -e\n! grep -q missing output\n",
         [ 2 ] );
@@ -2222,6 +2250,13 @@ module Errexit_and_list = struct
       ( "parenthesized case arm whose body is a subshell",
         "set -e\ncase x in (x) ( [ -e a ] && [ -e b ]; : );; esac\n",
         [ 2 ] );
+      ( "pair after a comment ending in a backslash",
+        "set -e\n# note \\\n[ -e a ] && [ -e b ]\n",
+        [ 3 ] );
+      ( "pair after a single-quoted trailing backslash",
+        "set -e\necho 'x\\'\n[ -e a ] && [ -e b ]\n",
+        [ 3 ] );
+      ("builtin takes no -p", "builtin -p set -e\n[ -e a ] && [ -e b ]\n", []);
       ("timed test", "set -e\ntime [ -e a ] && [ -e b ]\n", [ 2 ]);
       ("timed test with an option terminator", "set -e\ntime -- [ -e a ] && [ -e b ]\n", [ 2 ]);
       ( "portably timed test with an option terminator",
