@@ -191,6 +191,8 @@ def main(argv=None, here=None):
     A function, not a bare `__main__` block, so the order of its steps is testable: what a
     fixture generator must never do is overwrite bytes it then turns out to be unable to record.
     `here` is the benchmarks directory (its `workloads/` and `fixtures/`), overridable for that.
+    With `--out-dir` it records nothing and touches neither `fixtures/` nor its digest file.
+    Returns the paths written.
     """
     here = Path(__file__).parent if here is None else Path(here)
     ap = argparse.ArgumentParser(
@@ -209,12 +211,34 @@ def main(argv=None, here=None):
         help="the box these bytes are, recorded with them "
         f"({fixture_digest.origin_default_help()})",
     )
+    ap.add_argument(
+        "--out-dir",
+        type=Path,
+        default=None,
+        help="write the fixtures into this directory instead, and record NO digest: bytes "
+        "generated for a smoke run publish nothing, so they must not become an origin's entry in "
+        "the tracked fixtures/DIGESTS.txt. orchestrate.py never sees them; hand one to a runner "
+        "directly (BENCH_FIXTURE=<path>, --fixture <path>), for smoke runs only",
+    )
     args = ap.parse_args(argv)
+    specs = args.specs or sorted((here / "workloads").glob("*.json"))
+    if args.out_dir is not None:
+        if args.origin is not None:
+            ap.error("--origin names the box recorded bytes belong to; --out-dir records none")
+        # The tracked directory is the one place these bytes must not land: writing there without
+        # recording overwrites the fixtures the published numbers are on and leaves the new bytes
+        # matching no entry -- the loss the digest validation below exists to prevent.
+        if args.out_dir.resolve() == (here / "fixtures").resolve():
+            ap.error(f"--out-dir {args.out_dir} is the recorded fixtures directory; "
+                     "regenerate there without --out-dir, so the digests are recorded")
+        written = [build(spec, args.out_dir) for spec in specs]
+        print(f"recorded no digests: {len(written)} fixture(s) in {args.out_dir} are for smoke "
+              "runs only")
+        return written
     # BEFORE building anything: generating rewrites the fixture bytes, so a bad origin discovered
     # at the recording step would leave a regenerated workload that cannot be attributed. Through
     # resolve_origin, which refuses an explicitly empty value instead of substituting this host.
     origin = fixture_digest.resolve_origin(args.origin)
-    specs = args.specs or sorted((here / "workloads").glob("*.json"))
     out_dir = here / "fixtures"
     digests = out_dir / fixture_digest.DIGEST_FILE
     # And for the same reason, parse the digest file BEFORE building: building OVERWRITES the
@@ -280,6 +304,7 @@ def main(argv=None, here=None):
               f"fixtures: {', '.join(others)} — regeneration is a cross-box event, so until "
               "they regenerate and record too, their published numbers and this box's may be on "
               "different workloads.")
+    return written
 
 
 if __name__ == "__main__":

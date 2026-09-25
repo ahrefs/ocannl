@@ -484,6 +484,14 @@ Windows venv's `Scripts/python.exe` is found without it.
 origin. Review that diff before publishing numbers: a changed digest means the workload changed,
 and reports measured on either side of it are not comparable.
 
+**A smoke run that only needs *a* fixture** (checking that a runner or an autotune pass works,
+such as gh-ocannl-1020's warm-pass A/B) generates it with `--out-dir DIR`: the fixtures go into
+`DIR` and nothing is recorded — `fixtures/DIGESTS.txt` and the fixtures it pins are left alone,
+and no origin is needed. Such fixtures are **for smoke runs only**: `orchestrate.py` reads only
+`fixtures/`, so hand one to a runner directly (`BENCH_FIXTURE=DIR/<name>.safetensors`,
+`--fixture`), and never publish a number measured on it — its bytes are recorded nowhere, so
+nothing could say which workload the number is on. `--out-dir` refuses `fixtures/` itself.
+
 **Do not run `gen_fixtures.py` to make an existing fixture pass the digest gate.** If your copies
 are simply not recorded yet, pin them with `python3 benchmarks/fixture_digest.py --record` — that states what
 the bytes are and changes no number's meaning. Regenerating instead draws a *new* workload from
