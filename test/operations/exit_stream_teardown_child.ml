@@ -60,28 +60,36 @@ let () =
   | Some "device_busy" ->
       Tensor.unsafe_reinitialize ();
       let ctx = Context.auto () in
-      let n = 1024 in
+      (* Large enough that the device, not the host's submission of it, bounds a run's time. *)
+      let n = 2048 in
       let a = TDSL.range_of_shape ~output_dims:[ n ] ~input_dims:[ n ] () in
       let b = TDSL.range_of_shape ~output_dims:[ n ] ~input_dims:[ n ] () in
       let%op c = a * b in
-      let ctx, routine = Train.to_routine ctx Train.IDX.empty (Train.forward c) in
-      let ctx = Context.run ctx routine in
-      Context.sync ctx;
-      let started = Mtime_clock.counter () in
-      let ctx = Context.run ctx routine in
-      Context.sync ctx;
-      let one_run = Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9 in
-      (* Seconds of queued work, far past the bound the driver passes, left unsynced -- on hip, the
-         backend that tears its stream down at exit. Elsewhere the driver skips the claim, and a
-         synchronous backend would spend those seconds right here. *)
-      let runs =
-        if String.equal (Context.backend_name ctx) "hip" then
-          Int.of_float (Float.round_up (3. /. Float.max one_run 1e-4))
-        else 0
+      (* Only on hip, the backend that tears its stream down at exit: elsewhere the driver skips the
+         claim, and a synchronous backend would spend the seconds below right here. *)
+      let runs, one_run =
+        if not (String.equal (Context.backend_name ctx) "hip") then (0, 0.)
+        else
+          let ctx, routine = Train.to_routine ctx Train.IDX.empty (Train.forward c) in
+          let ctx = Context.run ctx routine in
+          Context.sync ctx;
+          (* Amortized over a batch, so one sync's latency does not pass for device time. *)
+          let batch = 20 in
+          let started = Mtime_clock.counter () in
+          for _ = 1 to batch do
+            ignore (Context.run ctx routine : Context.t)
+          done;
+          Context.sync ctx;
+          let one_run =
+            Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9 /. Float.of_int batch
+          in
+          (* Seconds of queued work, far past the bound the driver passes, left unsynced. *)
+          let runs = Int.of_float (Float.round_up (3. /. Float.max one_run 1e-4)) in
+          for _ = 1 to runs do
+            ignore (Context.run ctx routine : Context.t)
+          done;
+          (runs, one_run)
       in
-      for _ = 1 to runs do
-        ignore (Context.run ctx routine : Context.t)
-      done;
       Stdio.printf "backend: %s\n%!" (Context.backend_name ctx);
       Stdio.eprintf "queued %d runs of %.4fs each without a sync (not part of the golden)\n%!" runs
         one_run

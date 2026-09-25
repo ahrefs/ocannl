@@ -1786,7 +1786,9 @@ let bounded_exit_teardown (resources : exit_teardown_resource list) : exit_teard
       Array.iteri resources ~f:(fun i r -> if Option.is_none outcomes.(i) then attempt i r);
       if Array.exists outcomes ~f:Option.is_none then
         if Float.(elapsed () < timeout) then (
-          Unix.sleepf 0.001;
+          (* A signal can interrupt the sleep (EINTR); the deadline, not the sleep, ends the
+             wait. *)
+          (try Unix.sleepf 0.001 with _ -> ());
           poll ())
         else
           Array.iteri resources ~f:(fun i { what; _ } ->
