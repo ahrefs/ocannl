@@ -518,6 +518,26 @@ let on_candidate_callback :
     ([ `Timed | `Calibration ] -> candidate_ms:float -> incumbent_ms:float -> unit) ref =
   ref (fun _ ~candidate_ms:_ ~incumbent_ms:_ -> ())
 
+(* Measurement seam (gh-ocannl-1027): the one place a test can decide what an ADMITTED window
+   measured. Without it, whether a search ever admits a candidate slower than its incumbent is a
+   property of the machine's timings, so a regression about the nonwinner paths (gh-ocannl-975)
+   could only re-roll the search and skip when every roll came out monotone. Called once per
+   admitted timing window -- the dispatched baseline's and each candidate's -- by
+   [apply_measurement_seam] below, before the admission gate that everything ranking or recording
+   the time goes through. Default the identity; no configuration selects it. *)
+let on_candidate_measured : (label:string -> digest:string -> float -> float) ref =
+  ref (fun ~label:_ ~digest:_ ms -> ms)
+
+(* Only an admitted window reaches the seam, so it cannot admit a refused one; its result then
+   passes the same [admitted_timing_ms] gate as a real reading, so a value that gate refuses (zero,
+   negative, NaN, infinite) refuses the window exactly as a degenerate clock reading would --
+   through the caller's ordinary refusal path, with nothing raised outside the search's cleanup
+   boundaries. *)
+let apply_measurement_seam ~label ~digest timing_result =
+  match admitted_timing_ms timing_result with
+  | None -> timing_result
+  | Some ms -> { timing_result with ms = !on_candidate_measured ~label ~digest ms }
+
 (* Observation seam for the timing tests (gh-ocannl-851), reporting the batch depth each
    [time_routine] call settles on -- after calibration, before the timed loop; [Isolated] reports 1.
    The negative control for a twice-divided queued reading needs the depth the call ACTUALLY used:
@@ -3565,6 +3585,9 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                 time_routine ~tag_failures:true ~timing ~repeats b.cctx b.routine
               with
               | timing_result -> (
+                  let timing_result =
+                    apply_measurement_seam ~label:"baseline" ~digest:base_digest timing_result
+                  in
                   match admitted_timing_ms timing_result with
                   | Some ms ->
                       baseline_timing_result := Some timing_result;
@@ -3989,6 +4012,10 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                         ~provenance:Outcome.Candidate ~phase:Outcome.Launch
                         ~candidate:(spec_label spec) (fun () ->
                           time_routine ~tag_failures:true ~timing ~repeats c.cctx c.routine)
+                      (* Outside the boundary: the seam is not a candidate failure to classify. *)
+                      |> Result.map
+                           ~f:
+                             (apply_measurement_seam ~label:(spec_label spec) ~digest:c.digest_after)
                     with
                     | Ok timing_result when Option.is_none (admitted_timing_ms timing_result) ->
                         (* The family counters answer whether a candidate compiled and reached a
