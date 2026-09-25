@@ -1,0 +1,105 @@
+(* The child processes [exit_stream_teardown] runs and watches from outside (gh-ocannl-1036): what
+   happens at process exit can only be observed by a parent. The first argument picks the mode.
+
+   [device] runs a small computation on the configured backend and exits normally. It prints the
+   backend's name, so the parent reports which backend the run actually reached, and reads the
+   result back from an [at_exit] handler registered before the device opened.
+
+   [device_busy] stages the hung case as far as real hardware can: seconds of work queued on the
+   configured backend and never synced, then a normal exit. The backend's teardown reports how long
+   it waited on stderr, since nothing registered in here can run after it.
+
+   [never_idle] and [never_idle_raise] open no device. They run [Utils.bounded_exit_teardown] from
+   an [at_exit] handler over a stand-in stream that never becomes idle and whose teardown would hang
+   for an hour; the second then ends on an uncaught exception, which OCaml runs [at_exit] for too.
+   [two_never_idle] runs two such stand-ins, which share one bound. [idle] runs one that is idle at
+   once, so its teardown is due. *)
+
+open Base
+open Ocannl
+open Nn_blocks.DSL_modules
+
+let outcome_name : Utils.exit_teardown_outcome -> string = function
+  | Torn_down -> "torn_down"
+  | Disabled -> "disabled"
+  | Still_busy -> "still_busy"
+  | Failed _ -> "failed"
+
+let stand_in ?(count = 1) ~idle () =
+  Stdlib.at_exit (fun () ->
+      let started = Mtime_clock.counter () in
+      Utils.bounded_exit_teardown
+        (List.init count ~f:(fun k : Utils.exit_teardown_resource ->
+             {
+               what = "stand-in stream " ^ Int.to_string k;
+               is_idle = (fun () -> idle);
+               teardown =
+                 (fun () ->
+                   Stdio.printf "%s\n%!" Exit_stream_teardown_marker.teardown;
+                   if not idle then Unix.sleepf 3600.);
+             }))
+      |> List.iter ~f:(fun outcome -> Stdio.printf "outcome: %s\n%!" (outcome_name outcome));
+      (* The teardown call alone, without process startup, for claims too tight to absorb it. *)
+      Stdio.printf "teardown seconds: %.3f\n%!"
+        (Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9))
+
+let () =
+  match Array.to_list (Sys.get_argv ()) |> List.tl_exn |> List.hd with
+  | Some "device" ->
+      (* The program's own [at_exit], registered before the device opens, reads the device at exit:
+         the backend's teardown must not have destroyed the stream under it. *)
+      let read_at_exit = ref (fun () -> ()) in
+      Stdlib.at_exit (fun () -> !read_at_exit ());
+      Tensor.unsafe_reinitialize ();
+      let ctx = Context.auto () in
+      let%op y = ({ hey = 7.0 } * ([ 2.0 ] : q)) + ([ 1.0 ] : p) in
+      let ctx = Train.forward_once ctx y in
+      Stdio.printf "backend: %s\n%!" (Context.backend_name ctx);
+      read_at_exit :=
+        fun () -> Stdio.printf "read at exit: %g\n%!" (Context.get_values ctx y.Tensor.value).(0)
+  | Some "device_busy" ->
+      Tensor.unsafe_reinitialize ();
+      let ctx = Context.auto () in
+      (* Large enough that the device, not the host's submission of it, bounds a run's time. *)
+      let n = 2048 in
+      let a = TDSL.range_of_shape ~output_dims:[ n ] ~input_dims:[ n ] () in
+      let b = TDSL.range_of_shape ~output_dims:[ n ] ~input_dims:[ n ] () in
+      let%op c = a * b in
+      (* Only on hip, the backend that tears its stream down at exit: elsewhere the driver skips the
+         claim, and a synchronous backend would spend the seconds below right here. *)
+      let runs, one_run =
+        if not (String.equal (Context.backend_name ctx) "hip") then (0, 0.)
+        else
+          let ctx, routine = Train.to_routine ctx Train.IDX.empty (Train.forward c) in
+          let ctx = Context.run ctx routine in
+          Context.sync ctx;
+          (* Amortized over a batch, so one sync's latency does not pass for device time. *)
+          let batch = 20 in
+          let started = Mtime_clock.counter () in
+          for _ = 1 to batch do
+            ignore (Context.run ctx routine : Context.t)
+          done;
+          Context.sync ctx;
+          let one_run =
+            Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9 /. Float.of_int batch
+          in
+          (* Seconds of queued work, far past the bound the driver passes, left unsynced. *)
+          let runs = Int.of_float (Float.round_up (3. /. Float.max one_run 1e-4)) in
+          for _ = 1 to runs do
+            ignore (Context.run ctx routine : Context.t)
+          done;
+          (runs, one_run)
+      in
+      Stdio.printf "backend: %s\n%!" (Context.backend_name ctx);
+      Stdio.eprintf "queued %d runs of %.4fs each without a sync (not part of the golden)\n%!" runs
+        one_run
+  | Some "never_idle" -> stand_in ~idle:false ()
+  | Some "two_never_idle" -> stand_in ~count:2 ~idle:false ()
+  | Some "never_idle_raise" ->
+      stand_in ~idle:false ();
+      failwith "exit_stream_teardown_child: deliberate uncaught exception"
+  | Some "idle" -> stand_in ~idle:true ()
+  | _ ->
+      failwith
+        "exit_stream_teardown_child: expected \
+         device|device_busy|never_idle|two_never_idle|never_idle_raise|idle"

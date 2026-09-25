@@ -314,6 +314,14 @@ configuration.
   the per-device HIP stream never being destroyed, not leaked events: the same pure-HIP probe
   reports exactly 77 whatever the iteration count when it skips `hipStreamDestroy`, and a count
   equal to the number of undestroyed events when it skips `hipEventDestroy` instead. OCANNL shows
-  the fixed 77, so its `Delimited_event` release discipline holds and the gap is process-exit
-  teardown (there is no `at_exit` anywhere in the library; `Gc.finalise finalize_device` does not
-  run at exit, and it would not destroy the stream if it did).
+  the fixed 77, so its `Delimited_event` release discipline holds and the gap was process-exit
+  teardown (`Gc.finalise finalize_device` does not run at exit, and would not destroy the stream if
+  it did). Since gh-ocannl-1036 `hip_backend.ml` registers, at module initialization (so every
+  handler a program registers runs before it), an `at_exit` that destroys each device's stream
+  through `Utils.bounded_exit_teardown`: it polls every device's `H.Stream.is_ready` under ONE
+  shared bound of `exit_stream_teardown_timeout` seconds and calls `H.Stream.destroy` (which
+  synchronizes unboundedly) only once idle, so hung devices cannot hold the process. `at_exit`
+  runs on an uncaught exception too, which is why the bound, not an exit-status test, does that
+  job. A reappearing 77 means the teardown was skipped: `0` in the config, or a busy stream at exit
+  (stderr says `still busy`). CUDA stays without it: the driver reports nothing and cudajit
+  (0.8.0) exposes no eager `Stream.destroy`. `test/operations/exit_stream_teardown` pins both.

@@ -368,6 +368,34 @@ end = struct
   (* No runtime linking needed since Threefry is included directly in each kernel *)
   let set_builtins_for_device ~primary_context:_ _kernel_module = assert !initialized
 
+  (* gh-ocannl-1036: destroy each device's stream at process exit. A HIP stream that is never
+     destroyed makes the ROCm runtime report its 77 signals as leaked on stderr when the process
+     ends; the GC finalizer above does not run at exit, and would not destroy the stream if it did.
+     [H.Stream.destroy] synchronizes unboundedly, so it is called only once [is_ready] says there is
+     nothing to wait for (see [Utils.bounded_exit_teardown]). Registered at module initialization,
+     not when the first device opens: [at_exit] handlers run most-recent first, and every module
+     that can reach this backend initializes after this one, so every handler that might still use a
+     stream runs before the streams go. The device records stay in [devices], so no GC finalizer
+     reaches a destroyed stream, and [H.Stream.destroy] is idempotent anyway. A process that never
+     opened a device finds [devices] unforced and does nothing. One bound covers every device. *)
+  let () =
+    Stdlib.at_exit (fun () ->
+        if Lazy.is_val devices then
+          ignore
+            (Utils.bounded_exit_teardown
+               (Array.to_list !(Lazy.force devices)
+               |> List.filter_opt
+               |> List.map ~f:(fun (device : device) : Utils.exit_teardown_resource ->
+                   {
+                     what = [%string "the HIP stream of device %{device.ordinal#Int}"];
+                     is_idle =
+                       (fun () ->
+                         set_ctx device.dev.primary_context;
+                         H.Stream.is_ready device.runner);
+                     teardown = (fun () -> H.Stream.destroy device.runner);
+                   }))
+              : Utils.exit_teardown_outcome list))
+
   let%track3_sexp get_device ~(ordinal : int) : device =
     let n = num_devices () in
     (* See the corresponding note in [Cuda_backend.get_device]. *)

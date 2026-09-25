@@ -35,6 +35,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   cc_vector_bytes
   debug_log_from_routines
   default_prec
+  exit_stream_teardown_timeout
   fp16_arithmetic
   gpu_schedule_block_size
   gpu_schedule_min_parallel
@@ -159,6 +160,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-env_spelling_gate
   test/operations/dune                     @runtest-env_var_deps
   test/operations/dune                     @runtest-env_var_deps_control
+  test/operations/dune                     @runtest-exit_stream_teardown
   test/operations/dune                     @runtest-flip_bound_pruning
   test/operations/dune                     @runtest-foreign_c_stderr
   test/operations/dune                     @runtest-generated_provenance

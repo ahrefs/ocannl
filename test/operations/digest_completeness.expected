@@ -160,6 +160,7 @@ execution-neutral -- identifier spelling in generated code and in printouts
 execution-neutral -- host-side execution mechanics: where buffers sit, how many devices a scheduler opens, how launches are issued, how initialization is seeded, how checkpoint payloads reach host memory. The kernels are unchanged, and every candidate of a search meets the same mechanics as every other
   checkpoint_load_mmap
   cuda_printf_fifo_size [read at codegen]
+  exit_stream_teardown_timeout
   fixed_state_for_init
   hip_printf_fifo_size [read at codegen]
   multidev_num_devices
@@ -168,7 +169,7 @@ execution-neutral -- memoization of toolchain probes: it changes how long resolv
   cc_backend_probe_cache [read at codegen]
 
 every scanned root meets its source-count floor: true
-OK: 119 config keys classified against 7 cache-key components.
+OK: 120 config keys classified against 7 cache-key components.
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count
