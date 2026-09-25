@@ -16,7 +16,13 @@
    longer reproduces its program, or one naming a node the problem lacks -- is ignored, re-tuned,
    and overwritten; - a bypassed store (gh-ocannl-1020, [~placement_store:false], config
    [tune_placement_store]) neither replays nor records: on the warm schedule cache both arms report
-   in position, each a schedule-cache replay, and the recorded entry is untouched.
+   in position, each a schedule-cache replay, and the recorded entry is untouched; - the entry's
+   guard is what was tuned (gh-ocannl-1022): its [outcome_digest] is the shipped search's own
+   [Autotune.report.source_digest], a fresh lowering of the recorded decision
+   ([Train.placement_outcome_digest], the replay guard's recomputation) reproduces it -- an equality
+   on lowering determinism, where the schedule-cache replay above pins it only by consequence -- and
+   under a timing context that lowers the program differently from the caller's lineage, both the
+   digest and the replay guard are the timing lineage's.
 
    Times never enter the golden; the claims that involve one are waived by the load's own evidence
    (contention-refused windows), as autotune_arm_containment.ml does. *)
@@ -56,6 +62,7 @@ let replayed (r : Autotune.report) =
   match r.Autotune.outcome with Autotune.Cache_replay -> true | _ -> false
 
 let uncontended (r : Autotune.report) = r.Autotune.timings_contended = 0
+let source_digest (r : Autotune.report) = r.Autotune.source_digest
 
 let graph ~label =
   let mav = Array.init (n * n) ~f:(fun i -> Float.of_int (i % 7) *. 0.5) in
@@ -101,14 +108,14 @@ let () =
           (SC.digest
              (Train.placement_problem ~timing_ctx (Context.auto ()) t2 comp Ir.Indexing.Empty))));
   (* --- The runs. --- *)
-  let run ?ship_arm ?placement_store () =
+  let run ?ship_arm ?placement_store ?timing_ctx () =
     let arms = ref [] and flips = ref [] and shipped = ref None in
     let ctx_t, routine_t =
       Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir ~inline_flips:2
         ~report:(fun r -> arms := r :: !arms)
         ~flip_report:(fun r -> flips := r :: !flips)
         ~on_ship:(fun what -> shipped := Some what)
-        ?ship_arm ?placement_store (Context.auto ()) t2 comp Ir.Indexing.Empty
+        ?ship_arm ?placement_store ?timing_ctx (Context.auto ()) t2 comp Ir.Indexing.Empty
     in
     let ctx_t = Context.run ctx_t routine_t in
     let got = Context.get_values ctx_t t2.Tensor.value in
@@ -146,6 +153,33 @@ let () =
   p "the recorded decision is the shipped one"
     ((not stored1)
     || String.equal (SC.shipped_label (read_entry (List.hd_exn keys1)).SC.decision) shipped1);
+  (* gh-ocannl-1022: the guard is what was tuned. The arms tune distinct lowerings (the intermediate
+     is policy-virtual in A and materialized in B), which is what keeps the equalities below from
+     being satisfied by accident. The shipped search is exact for an arm; a refined winner is one of
+     the flip searches. *)
+  p "the two arms report the distinct digests of the lowerings they tuned"
+    (match arms1 with
+    | [ ra; rb ] ->
+        (not (String.is_empty (source_digest ra)))
+        && (not (String.is_empty (source_digest rb)))
+        && not (String.equal (source_digest ra) (source_digest rb))
+    | _ -> false);
+  let entry1 = if stored1 then Some (read_entry (List.hd_exn keys1)) else None in
+  let shipped_searches1 =
+    match (shipped1, arms1) with "A", [ ra; _ ] -> [ ra ] | "B", [ _; rb ] -> [ rb ] | _ -> flips1
+  in
+  p "the recorded outcome digest is the shipped search's own source digest"
+    (match entry1 with
+    | None -> not stored1
+    | Some e ->
+        List.exists shipped_searches1 ~f:(fun r ->
+            String.equal (source_digest r) e.SC.outcome_digest));
+  p "a fresh lowering of the recorded decision reproduces the digest the shipped search tuned"
+    (match entry1 with
+    | None -> not stored1
+    | Some e ->
+        String.equal e.SC.outcome_digest
+          (Train.placement_outcome_digest (Context.auto ()) t2 comp Ir.Indexing.Empty e.SC.decision));
   (* --- Run 2: warm. --- *)
   let arms2, flips2, shipped2, materialized2, got2 = run () in
   p_all2 "the warm run's routine computes the right values" got2 expected ~f:approx;
@@ -159,6 +193,13 @@ let () =
      cold run's shipped search having stored nothing, which under a clean run 1 it did not. *)
   p "a replay's one search is a schedule-cache replay"
     ((not stored1) || (not clean1) || match arms2 with [ r ] -> replayed r | _ -> false);
+  (* The same fact without the cache in between (gh-ocannl-1022): the replayed search tuned the very
+     lowering whose digest the entry records. Not waived by contention. *)
+  p "a replay's one search tunes the lowering the recorded decision was measured on"
+    (match (entry1, arms2) with
+    | None, _ -> not stored1
+    | Some e, [ r ] -> String.equal (source_digest r) e.SC.outcome_digest
+    | Some _, _ -> false);
   (* --- Run 2b: a replayed search that fails without poisoning the lineage is a losing arm, not a
      failed tune: the recorded decision is treated as stale and the arms are searched. The failure
      is injected at the first candidate attempt of the process from here on -- the replayed search's
@@ -185,6 +226,16 @@ let () =
     Option.map recorded ~f:(fun (k, _) -> SC.sexp_of_placement_entry (read_entry k))
   in
   let before = snapshot () in
+  (* Whichever run recorded it -- run 1 under a clean load, else the re-tune that run 2 or 2b fell
+     back to -- the entry the store holds is one a fresh lowering of its decision reproduces
+     (gh-ocannl-1022). Run 1's claims above are waived exactly when run 1 recorded nothing; this one
+     only when no run did. *)
+  p "the entry the store holds is reproduced by a fresh lowering of its decision"
+    (match recorded with
+    | None -> true
+    | Some (_, e) ->
+        String.equal e.SC.outcome_digest
+          (Train.placement_outcome_digest (Context.auto ()) t2 comp Ir.Indexing.Empty e.SC.decision));
   let arms3, _, shipped3, _, got3 = run ~ship_arm:Train.Force_arm_b () in
   p_all2 "the forced run's routine computes the right values" got3 expected ~f:approx;
   p "a forced arm searches both arms whatever the store holds" (List.length arms3 = 2);
@@ -243,4 +294,71 @@ let () =
         || Option.value_map recorded ~default:true ~f:(fun (key, e) ->
             Option.value_map
               (SC.lookup_placements ~dir:cache_dir ~key:(Some key))
-              ~default:false ~f:(overwritten e))))
+              ~default:false ~f:(overwritten e))));
+  (* --- Run 6 (gh-ocannl-1022): the arms searched in a timing lineage that inherits a decision --
+     the intermediate materialized -- which the caller's lineage does not. The shipped search tuned
+     the TIMING lineage's lowering, so that is the digest recorded, and the replay guard recomputes
+     it in the timing lineage: recomputed in the caller's, which lowers the default placements
+     differently (the precondition claim), a recorded default would never replay. A new problem, so
+     a new entry beside run 1's. --- *)
+  let timing_ctx () = Context.decide_materialized (Context.auto ()) [ mc.Tensor.value ] in
+  p "the caller's and the timing lineage lower the default placements differently"
+    (not
+       (String.equal
+          (Train.placement_outcome_digest (Context.auto ()) t2 comp Ir.Indexing.Empty SC.Default)
+          (Train.placement_outcome_digest ~timing_ctx:(timing_ctx ()) (Context.auto ()) t2 comp
+             Ir.Indexing.Empty SC.Default)));
+  let keys_before6 = placement_keys () in
+  let arms6, flips6, shipped6, _, got6 = run ~timing_ctx:(timing_ctx ()) () in
+  p_all2 "with a timing context, the cold run's routine computes the right values" got6 expected
+    ~f:approx;
+  let clean6 =
+    List.for_all (arms6 @ flips6) ~f:(fun r ->
+        completed r && uncontended r && Float.is_finite r.Autotune.best_ms)
+  in
+  let entry6 =
+    List.find_map (placement_keys ()) ~f:(fun k ->
+        if List.mem keys_before6 k ~equal:String.equal then None else Some (read_entry k))
+  in
+  Stdio.eprintf "run 6 (not part of the golden): shipped %s, clean %b, stored %b\n%!" shipped6
+    clean6 (Option.is_some entry6);
+  if cache_available then
+    p
+      "with a timing context, the cold run records a decision of its own, whenever its evidence \
+       was clean"
+      ((not clean6) || Option.is_some entry6)
+  else
+    skipped ~aggregation:`Environment ~backend:(Context.backend_name ctx_ref)
+      "with a timing context, the cold run records a decision of its own, whenever its evidence \
+       was clean";
+  let shipped_searches6 =
+    match (shipped6, arms6) with "A", [ ra; _ ] -> [ ra ] | "B", [ _; rb ] -> [ rb ] | _ -> flips6
+  in
+  p "with a timing context, the recorded outcome digest is the shipped search's own source digest"
+    (match entry6 with
+    | None -> true
+    | Some e ->
+        List.exists shipped_searches6 ~f:(fun r ->
+            String.equal (source_digest r) e.SC.outcome_digest));
+  p
+    "with a timing context, a fresh lowering of the recorded decision in the timing lineage \
+     reproduces it"
+    (match entry6 with
+    | None -> true
+    | Some e ->
+        String.equal e.SC.outcome_digest
+          (Train.placement_outcome_digest ~timing_ctx:(timing_ctx ()) (Context.auto ()) t2 comp
+             Ir.Indexing.Empty e.SC.decision));
+  let arms6w, flips6w, shipped6w, _, got6w = run ~timing_ctx:(timing_ctx ()) () in
+  p_all2 "with a timing context, the warm run's routine computes the right values" got6w expected
+    ~f:approx;
+  p
+    "with a timing context, the warm run replays the recorded decision: one search, no flips, the \
+     recorded label, tuning the recorded lowering"
+    (match (entry6, arms6w) with
+    | None, _ -> true
+    | Some e, [ r ] ->
+        List.is_empty flips6w
+        && String.equal shipped6w (SC.shipped_label e.SC.decision)
+        && String.equal (source_digest r) e.SC.outcome_digest
+    | Some _, _ -> false)
