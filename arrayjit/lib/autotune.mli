@@ -1466,3 +1466,14 @@ val on_candidate_measured : (label:string -> digest:string -> float -> float) re
     pin the ranking — make the first admitted window the fastest and every later one slower —
     instead of depending on the machine's timings. The default is the identity and no configuration
     selects it. *)
+
+val default_seed_label : backend_name:string -> string option
+(** The label {!on_candidate_measured} receives for the candidate a search on [backend_name]
+    attributes as the untuned default — the one whose refused window sets [report.default_refused]
+    and whose time is [report.default_ms]. [Some "baseline"] with automatic scheduling inactive,
+    where the default is the serial form — [None] there on a GPU backend, which never dispatches it
+    (gh-ocannl-532); the default-reproducing [config_thresholds] seed's label with it active and
+    fissioning; [None] when it is active without fission, where no candidate reproduces the default.
+    {!tune}'s own attribution reads this, so the two cannot disagree. One case it cannot foresee: a
+    default seed whose code equals the serial baseline's dedups against it, and is timed only under
+    the label ["baseline"]. *)

@@ -1615,6 +1615,23 @@ let spec_label = function
       Printf.sprintf "F_split_saved[%d prelude ops, %d segs]" (List.length prelude)
         (List.length assoc)
 
+(* Which candidate [tune] attributes as the untuned default, by the label the measurement seam
+   receives for it -- and the ONE place that decides it: the [default_seed_digest] attribution in
+   [tune] reads this, so a test keyed on it cannot drift from what the report calls the default.
+   With automatic scheduling inactive the untuned default is the unscheduled serial form, the
+   baseline -- which a GPU backend never dispatches (gh-ocannl-532), so there the default reaches no
+   seam at all; with it active, the [config_thresholds] seed reproduces the default pipeline
+   exactly, but only when that pipeline fissions -- the whole-routine annotation it is otherwise has
+   no reproducing candidate (Codex P1 on PR #279). *)
+let default_seed_label ~backend_name =
+  if not (Sched.automatic_schedule_active ~backend_name) then
+    if Sched.backend_is_gpu backend_name then None else Some "baseline"
+  else if Sched.default_pipeline_fissions () then
+    Some
+      (spec_label
+         (Fiss (F_preset { block_size = None; privatize = false; config_thresholds = true })))
+  else None
+
 (* Every candidate derives its CODE from the ONE base lowering ([base_opt] with [canon] its
    canonical form, captured together in [tune]) rather than from the compile's own fresh lowering,
    whose llc the transform ignores. Re-lowering per candidate was subtly unsound: timing runs settle
@@ -3825,7 +3842,11 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
            candidate reproduces (the whole-routine presets use [min_parallel:1]): no attribution,
            rather than labeling a differently-scheduled pipeline as the default. *)
         let auto_sched = Sched.automatic_schedule_active ~backend_name:backend in
-        let config_seed_is_default = auto_sched && Sched.default_pipeline_fissions () in
+        (* A candidate label only when scheduling is active: inactive, the default is the base
+           digest attributed right here, never a seed. *)
+        let default_candidate_label =
+          if auto_sched then default_seed_label ~backend_name:backend else None
+        in
         let timed_ms_by_digest = Hashtbl.create (module String) in
         if baseline_timed then Hashtbl.set timed_ms_by_digest ~key:base_digest ~data:baseline_ms;
         let default_seed_digest = ref (if auto_sched then None else Some base_digest) in
@@ -3962,15 +3983,10 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                   pending := Some c;
                   (* Recorded whether or not this compile goes on to be timed: on dedup the code was
                      (or will not be) timed under the same digest, and the [default_ms] lookup
-                     follows the digest, not the seed (gh-ocannl-552). Guarded: the seed is the
-                     untuned default only when the default pipeline is active and fissions (Codex P1
-                     on PR #279). *)
-                  (match spec with
-                  | Fiss
-                      (F_preset { block_size = None; privatize = false; config_thresholds = true })
-                    when config_seed_is_default ->
-                      default_seed_digest := Some c.digest_after
-                  | _ -> ());
+                     follows the digest, not the seed (gh-ocannl-552). Which seed, if any, is
+                     [default_seed_label]'s to say. *)
+                  if Option.exists default_candidate_label ~f:(String.equal (spec_label spec)) then
+                    default_seed_digest := Some c.digest_after;
                   if Hash_set.mem seen c.digest_after then (
                     logf "%s: dedup (digest %s)" (spec_label spec) (dshort c.digest_after);
                     (* gh-ocannl-550: a dedup still PAID for a compile and a link, so it holds a
