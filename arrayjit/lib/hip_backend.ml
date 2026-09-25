@@ -377,23 +377,24 @@ end = struct
      that can reach this backend initializes after this one, so every handler that might still use a
      stream runs before the streams go. The device records stay in [devices], so no GC finalizer
      reaches a destroyed stream, and [H.Stream.destroy] is idempotent anyway. A process that never
-     opened a device finds [devices] unforced and does nothing. *)
+     opened a device finds [devices] unforced and does nothing. One bound covers every device. *)
   let () =
     Stdlib.at_exit (fun () ->
         if Lazy.is_val devices then
-          Array.iter
-            !(Lazy.force devices)
-            ~f:(function
-              | None -> ()
-              | Some (device : device) ->
-                  ignore
-                    (Utils.bounded_exit_teardown
-                       ~what:[%string "the HIP stream of device %{device.ordinal#Int}"]
-                       ~is_idle:(fun () ->
+          ignore
+            (Utils.bounded_exit_teardown
+               (Array.to_list !(Lazy.force devices)
+               |> List.filter_opt
+               |> List.map ~f:(fun (device : device) : Utils.exit_teardown_resource ->
+                   {
+                     what = [%string "the HIP stream of device %{device.ordinal#Int}"];
+                     is_idle =
+                       (fun () ->
                          set_ctx device.dev.primary_context;
-                         H.Stream.is_ready device.runner)
-                       ~teardown:(fun () -> H.Stream.destroy device.runner)
-                      : Utils.exit_teardown_outcome)))
+                         H.Stream.is_ready device.runner);
+                     teardown = (fun () -> H.Stream.destroy device.runner);
+                   }))
+              : Utils.exit_teardown_outcome list))
 
   let%track3_sexp get_device ~(ordinal : int) : device =
     let n = num_devices () in

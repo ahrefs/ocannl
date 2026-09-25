@@ -19,16 +19,19 @@ let outcome_name : Utils.exit_teardown_outcome -> string = function
   | Still_busy -> "still_busy"
   | Failed _ -> "failed"
 
-let stand_in ~idle =
+let stand_in ?(count = 1) ~idle () =
   Stdlib.at_exit (fun () ->
-      let outcome =
-        Utils.bounded_exit_teardown ~what:"a stand-in stream"
-          ~is_idle:(fun () -> idle)
-          ~teardown:(fun () ->
-            Stdio.printf "%s\n%!" Exit_stream_teardown_marker.teardown;
-            if not idle then Unix.sleepf 3600.)
-      in
-      Stdio.printf "outcome: %s\n%!" (outcome_name outcome))
+      Utils.bounded_exit_teardown
+        (List.init count ~f:(fun k : Utils.exit_teardown_resource ->
+             {
+               what = "stand-in stream " ^ Int.to_string k;
+               is_idle = (fun () -> idle);
+               teardown =
+                 (fun () ->
+                   Stdio.printf "%s\n%!" Exit_stream_teardown_marker.teardown;
+                   if not idle then Unix.sleepf 3600.);
+             }))
+      |> List.iter ~f:(fun outcome -> Stdio.printf "outcome: %s\n%!" (outcome_name outcome)))
 
 let () =
   match Array.to_list (Sys.get_argv ()) |> List.tl_exn |> List.hd with
@@ -72,11 +75,13 @@ let () =
       Stdio.printf "backend: %s\n%!" (Context.backend_name ctx);
       Stdio.eprintf "queued %d runs of %.4fs each without a sync (not part of the golden)\n%!" runs
         one_run
-  | Some "never_idle" -> stand_in ~idle:false
+  | Some "never_idle" -> stand_in ~idle:false ()
+  | Some "two_never_idle" -> stand_in ~count:2 ~idle:false ()
   | Some "never_idle_raise" ->
-      stand_in ~idle:false;
+      stand_in ~idle:false ();
       failwith "exit_stream_teardown_child: deliberate uncaught exception"
-  | Some "idle" -> stand_in ~idle:true
+  | Some "idle" -> stand_in ~idle:true ()
   | _ ->
       failwith
-        "exit_stream_teardown_child: expected device|device_busy|never_idle|never_idle_raise|idle"
+        "exit_stream_teardown_child: expected \
+         device|device_busy|never_idle|two_never_idle|never_idle_raise|idle"

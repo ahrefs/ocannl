@@ -13,5 +13,6 @@ never-idle stream, uncaught exception: the busy stream's teardown is never calle
 never-idle stream, uncaught exception: the outcome is still_busy, reported on stderr: true
 the uncaught exception is still reported after the teardown gave up: true
 a non-finite bound falls back to the default, reported on stderr: true
+two busy streams share one bound: true
 an idle stream is torn down at exit: true
 a timeout of 0 turns the teardown off: true

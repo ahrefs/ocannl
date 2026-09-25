@@ -28,23 +28,42 @@ let child_exe = (Sys.get_argv ()).(1)
 let bound = 0.5
 let leak_substring = "Signals leaked"
 
+(* Longer than any child here should take by far -- the slowest, on hip, compiles one matmul and
+   waits out a 0.5s bound -- yet short of a suite's own job timeout, so a child that hangs at exit
+   (the regression this test exists to catch) fails the claims instead of stalling the suite. *)
+let child_deadline = 120.
+
 (* Runs the child with [args], stdout and stderr each to their own file; the environment, and so
-   OCANNL_BACKEND, is inherited. Returns the exit code (a signal counts as a failure code), the wall
-   time and both outputs. *)
+   OCANNL_BACKEND, is inherited. Returns the exit code (a signal, or being killed at the deadline,
+   counts as 255), the wall time and both outputs. *)
 let run_child args =
   let out_path = Stdlib.Filename.temp_file "ocannl-exit-teardown-" ".out" in
   let err_path = Stdlib.Filename.temp_file "ocannl-exit-teardown-" ".err" in
   let open_w path = Unix.openfile path [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
   let out_fd = open_w out_path and err_fd = open_w err_path in
   let started = Mtime_clock.counter () in
+  let elapsed () = Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9 in
   let pid =
     Unix.create_process child_exe (Array.of_list (child_exe :: args)) Unix.stdin out_fd err_fd
   in
   Unix.close out_fd;
   Unix.close err_fd;
-  let _, status = Unix.waitpid [] pid in
-  let seconds = Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9 in
-  let code = match status with Unix.WEXITED c -> c | WSIGNALED _ | WSTOPPED _ -> 255 in
+  let rec reap () =
+    match Unix.waitpid [ Unix.WNOHANG ] pid with
+    | 0, _ when Float.(elapsed () < child_deadline) ->
+        Unix.sleepf 0.005;
+        reap ()
+    | 0, _ ->
+        eprintf "child %s still running after %gs: killed (not part of the golden)\n%!"
+          (String.concat ~sep:" " args) child_deadline;
+        (try Unix.kill pid Stdlib.Sys.sigkill with Unix.Unix_error _ -> ());
+        ignore (Unix.waitpid [] pid : int * Unix.process_status);
+        255
+    | _, Unix.WEXITED c -> c
+    | _, (WSIGNALED _ | WSTOPPED _) -> 255
+  in
+  let code = reap () in
+  let seconds = elapsed () in
   let read path =
     let s = In_channel.read_all path in
     (try Stdlib.Sys.remove path with _ -> ());
@@ -52,7 +71,6 @@ let run_child args =
   in
   (code, seconds, read out_path, read err_path)
 
-(* The signals the runtime reports leaked, summed over its reports: `... N Signals leaked.` *)
 let leaked_signals err =
   String.split_lines err
   |> List.sum
@@ -70,7 +88,15 @@ let backend_of out =
   |> Option.value ~default:"<none>"
 
 let device_arms () =
-  let on_code, _, on_out, on_err = run_child [ "device" ] in
+  (* Both arms pin the setting on the command line, which outranks an ambient one. *)
+  let on_code, _, on_out, on_err =
+    run_child
+      [
+        "device";
+        Printf.sprintf "--ocannl_exit_stream_teardown_timeout=%g"
+          Utils.default_exit_stream_teardown_timeout;
+      ]
+  in
   let off_code, _, off_out, off_err =
     run_child [ "device"; "--ocannl_exit_stream_teardown_timeout=0" ]
   in
@@ -175,6 +201,16 @@ let stand_in_arms () =
     && Float.(seconds >= default_bound && seconds < default_bound +. 30.)
     && String.is_substring out ~substring:"outcome: still_busy"
     && String.is_substring err ~substring:"not a finite number");
+  (* One bound for every resource, not one each: two never-idle stand-ins under a 1s bound exit in
+     under 2s, which a bound restarted per resource could not. *)
+  let code, seconds, out, _ =
+    run_child [ "two_never_idle"; "--ocannl_exit_stream_teardown_timeout=1" ]
+  in
+  eprintf "two_never_idle: exit %d after %.3fs (not part of the golden)\n%!" code seconds;
+  p "two busy streams share one bound"
+    (code = 0
+    && Float.(seconds >= 1. && seconds < 2.)
+    && List.count (String.split_lines out) ~f:(String.equal "outcome: still_busy") = 2);
   let code, _, out, _ = run_child [ "idle"; bound_flag ] in
   p "an idle stream is torn down at exit"
     (code = 0

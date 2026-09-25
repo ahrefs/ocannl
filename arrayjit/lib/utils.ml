@@ -1725,60 +1725,80 @@ type exit_teardown_outcome =
 *)
 let default_exit_stream_teardown_timeout = 2.0
 
-(** Process-exit teardown of one device resource (a GPU backend's stream), under a bound
-    (gh-ocannl-1036). Meant to run from [Stdlib.at_exit]: polls [is_idle] until it holds or
-    [exit_stream_teardown_timeout] seconds pass, and calls [teardown] only in the former case, so a
-    process whose device is hung is delayed at exit by at most the bound, never held. [teardown]
-    itself must therefore not wait for the device beyond what [is_idle] already established. Nothing
-    escapes: an exception at exit would replace the program's own exit status or uncaught exception
-    report. A process that dies by a fatal signal never runs [at_exit] at all; one that ends on an
-    uncaught exception does (the runtime runs [at_exit] before reporting it), which is why the
-    bound, not an exit-status test, is what keeps a failing process from being held. *)
-let bounded_exit_teardown ~what ~is_idle ~teardown =
+type exit_teardown_resource = { what : string; is_idle : unit -> bool; teardown : unit -> unit }
+(** One resource for {!bounded_exit_teardown}: [what] names it in diagnostics. *)
+
+(** Process-exit teardown of device resources (a GPU backend's streams), under ONE bound shared by
+    all of them (gh-ocannl-1036). Meant to run from [Stdlib.at_exit]: polls every resource's
+    [is_idle] in turn, calls a resource's [teardown] as soon as it is idle, and stops at
+    [exit_stream_teardown_timeout] seconds after the call, leaving whatever is still busy to the
+    driver -- so a process whose devices are hung is delayed at exit by at most the bound, however
+    many there are, and is never held. [teardown] itself must therefore not wait for the device
+    beyond what [is_idle] already established. Returns one outcome per resource, in order.
+
+    Nothing escapes, diagnostics included (stderr may be closed or broken by exit time): an
+    exception at exit would replace the program's own exit status or uncaught-exception report. A
+    process that dies by a fatal signal never runs [at_exit] at all; one that ends on an uncaught
+    exception does (the runtime runs [at_exit] before reporting it), which is why the bound, not an
+    exit-status test, is what keeps a failing process from being held. *)
+let bounded_exit_teardown (resources : exit_teardown_resource list) : exit_teardown_outcome list =
+  let note fmt =
+    Printf.ksprintf (fun line -> try Stdio.eprintf "OCANNL: %s\n%!" line with _ -> ()) fmt
+  in
   let default = default_exit_stream_teardown_timeout in
   let setting =
-    get_global_arg ~default:(Float.to_string default) ~arg_name:"exit_stream_teardown_timeout"
+    try
+      Some
+        (get_global_arg ~default:(Float.to_string default) ~arg_name:"exit_stream_teardown_timeout")
+    with _ -> None
   in
-  (* A value that is not a finite number would break the bound ([inf] polls forever) or raise here,
-     outside the handler below; it falls back to the default instead. *)
+  (* A value that is not a finite number would break the bound ([inf] polls forever) or raise
+     outside the handlers below; it falls back to the default instead. *)
   let timeout =
-    match Float.of_string_opt (String.strip setting) with
+    match Option.bind setting ~f:(fun s -> Float.of_string_opt (String.strip s)) with
     | Some t when Float.is_finite t -> t
     | _ ->
-        Stdio.eprintf
-          "OCANNL: exit_stream_teardown_timeout=%s is not a finite number of seconds; using %g\n%!"
-          setting default;
+        note "exit_stream_teardown_timeout=%s is not a finite number of seconds; using %g"
+          (Option.value setting ~default:"<unreadable>")
+          default;
         default
   in
-  if Float.(timeout <= 0.) then Disabled
+  if Float.(timeout <= 0.) then List.map resources ~f:(fun _ -> Disabled)
   else
     let started = Mtime_clock.counter () in
     let elapsed () = Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9 in
-    let rec idle_within_bound () =
-      is_idle ()
-      || Float.(elapsed () < timeout)
-         &&
-         (Unix.sleepf 0.001;
-          idle_within_bound ())
+    let resources = Array.of_list resources in
+    let outcomes = Array.map resources ~f:(fun _ -> None) in
+    let attempt i { what; is_idle; teardown } =
+      match is_idle () with
+      | false -> ()
+      | true -> (
+          match teardown () with
+          | () -> outcomes.(i) <- Some Torn_down
+          | exception e ->
+              note "tearing down %s at process exit failed: %s" what (Exn.to_string e);
+              outcomes.(i) <- Some (Failed e))
+      | exception e ->
+          note "polling %s at process exit failed: %s" what (Exn.to_string e);
+          outcomes.(i) <- Some (Failed e)
     in
-    match idle_within_bound () with
-    | false ->
-        Stdio.eprintf
-          "OCANNL: %s still busy after %.3fs of process exit; left for the driver to reclaim \
-           (exit_stream_teardown_timeout=%g)\n\
-           %!"
-          what (elapsed ()) timeout;
-        Still_busy
-    | true -> (
-        match teardown () with
-        | () -> Torn_down
-        | exception e ->
-            Stdio.eprintf "OCANNL: tearing down %s at process exit failed: %s\n%!" what
-              (Exn.to_string e);
-            Failed e)
-    | exception e ->
-        Stdio.eprintf "OCANNL: polling %s at process exit failed: %s\n%!" what (Exn.to_string e);
-        Failed e
+    let rec poll () =
+      Array.iteri resources ~f:(fun i r -> if Option.is_none outcomes.(i) then attempt i r);
+      if Array.exists outcomes ~f:Option.is_none then
+        if Float.(elapsed () < timeout) then (
+          Unix.sleepf 0.001;
+          poll ())
+        else
+          Array.iteri resources ~f:(fun i { what; _ } ->
+              if Option.is_none outcomes.(i) then (
+                note
+                  "%s still busy after %.3fs of process exit; left for the driver to reclaim \
+                   (exit_stream_teardown_timeout=%g)"
+                  what (elapsed ()) timeout;
+                outcomes.(i) <- Some Still_busy))
+    in
+    poll ();
+    Array.to_list outcomes |> List.map ~f:(Option.value ~default:Still_busy)
 
 let enable_runtime_debug () =
   settings.output_debug_files_in_build_directory <- true;
