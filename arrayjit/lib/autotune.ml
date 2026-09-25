@@ -1619,11 +1619,13 @@ let spec_label = function
    receives for it -- and the ONE place that decides it: the [default_seed_digest] attribution in
    [tune] reads this, so a test keyed on it cannot drift from what the report calls the default.
    With automatic scheduling inactive the untuned default is the unscheduled serial form, the
-   baseline; with it active, the [config_thresholds] seed reproduces the default pipeline exactly,
-   but only when that pipeline fissions -- the whole-routine annotation it is otherwise has no
-   reproducing candidate (Codex P1 on PR #279). *)
+   baseline -- which a GPU backend never dispatches (gh-ocannl-532), so there the default reaches no
+   seam at all; with it active, the [config_thresholds] seed reproduces the default pipeline
+   exactly, but only when that pipeline fissions -- the whole-routine annotation it is otherwise has
+   no reproducing candidate (Codex P1 on PR #279). *)
 let default_seed_label ~backend_name =
-  if not (Sched.automatic_schedule_active ~backend_name) then Some "baseline"
+  if not (Sched.automatic_schedule_active ~backend_name) then
+    if Sched.backend_is_gpu backend_name then None else Some "baseline"
   else if Sched.default_pipeline_fissions () then
     Some
       (spec_label
