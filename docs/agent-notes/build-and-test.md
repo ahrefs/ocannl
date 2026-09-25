@@ -1659,20 +1659,45 @@ that they earn a lookup rather than always-loaded space.
   build is a free negative control. `@check` also proves compilation and never execution, so pair it
   with a runnable probe wherever one exists. Two PRs in two days paid for this: gh-ocannl-758
   (staging#490) shipped a HIP arm unparsed beyond syntax and edited the CUDA arm blind the next day, and
-  gh-ocannl-773 (staging#494) touched both again. `tools/remote-verify.sh` (gh-ocannl-796) scripts
-  that off-box loop, and it stays the pre-merge check: CI compiling either file is a decision NOT
+  gh-ocannl-773 (staging#494) touched both again. `tools/machine-verify.sh` (gh-ocannl-796, renamed
+  from `tools/remote-verify.sh` by gh-ocannl-1047) scripts that off-box loop, and it stays the pre-merge check: CI compiling either file is a decision NOT
   to (gh-ocannl-794, closed). Installing cudajit or hipjit on a runner means a CUDA or ROCm toolkit
   per run, and a stub-externals typecheck would be a hand-kept second copy of both binding APIs;
   the daily sweep compiles and runs both backends on their boxes, so a vendor-arm break that
-  skipped remote verification surfaces on master within a day, under the roll-forward policy.
-- `tools/remote-verify.sh` is the one-off counterpart to the scheduled sweep for a pushed branch:
-  it derives the remote pointing to the staging repository by URL, fetches the named branch,
-  without rewriting the checkout's `FETCH_HEAD`, resolves one commit, creates a fresh detached
+  skipped machine verification surfaces on master within a day, under the roll-forward policy.
+  Metal is the same shape -- an optional library over the `metal` package behind a `select` -- and
+  `--expect-lib metal` proves it on mac-studio.
+- `tools/machine-verify.sh BOX BRANCH` is the one-off counterpart to the scheduled sweep for a pushed
+  branch. `tools/remote-verify.sh` survives as a forwarding shim that prints a deprecation line on
+  stderr; new callers name the new script. The verified machine's procedure is ONE file,
+  `tools/machine-verify-far.sh` (POSIX sh: dash on Ubuntu, the macOS `/bin/sh` on mac-studio), fed
+  unchanged through the same quoted argument string either to `ssh BOX` or, when BOX is this
+  machine, to a local `/bin/sh -c` under `env -i` from `$HOME`, keeping only the session basics
+  (HOME, USER, LOGNAME, PATH, SHELL, TMPDIR, LANG, LC_ALL, LC_CTYPE, SSH_AUTH_SOCK) -- so a check
+  added to the procedure runs on both transports, and a caller's `OPAMSWITCH` or Dune settings reach
+  it no more than they reach an SSH session. The local transport exists because self-ssh fails on
+  the native fleet boxes (no `known_hosts` entry for itself, no key authorized for self-login), which
+  left a worker resident on a GPU box unable to verify there (gh-ocannl-1047). Placement asks what
+  `ssh BOX` would reach, not what the host calls itself: Apple names mac-studio `LukaszsacStudio`,
+  and a table of the site's box names here would be a second copy of the ssh configuration. `ssh -G
+  BOX` names the endpoint offline, and BOX is this machine when every address that endpoint
+  resolves to can be `bind`-ed here (the kernel's own "is this address mine", the same on Linux and
+  macOS with no `ip`/`ifconfig` to parse; Debian's `/etc/hosts` maps the box's own name to
+  127.0.1.1, which Linux binds), at port 22 and with no ProxyJump/ProxyCommand. No local address
+  means SSH; a split answer (some addresses here, or a local one on another port -- a forward into a
+  VM) is refused as ambiguous rather than guessed. `--local` makes "BOX is here" an assertion:
+  it refuses, naming both hosts, when no endpoint address is this machine's, so a wrong box name
+  can never run silently on the wrong hardware; `--ssh` forces the old transport; `localhost`
+  always runs here. The whole-trip cap (`--trip-cap`, formerly `--ssh-cap`, still accepted) and
+  the per-command cap are the same perl process-group supervisor on both transports -- never
+  `timeout(1)`, which macOS lacks. The procedure derives the remote pointing to the staging
+  repository by URL, fetches the named branch, without rewriting the checkout's `FETCH_HEAD`, resolves one commit, creates a fresh detached
   worktree, resolves the checkout's selected opam switch before leaving it, runs explicitly under
   that switch, and removes just that worktree before its exit sentinel (never repository-wide
   `worktree prune`, which could unregister an unrelated temporarily unavailable worktree). The individual
-  commands (including worktree add/remove) and the whole SSH trip have separate process-group caps; the latter also bounds setup
-  and cleanup. Non-login shells receive the CUDA/WSL PATH prefix that `tools/sweep.sh` uses.
+  commands (including worktree add/remove) and the whole trip have separate process-group caps; the latter also bounds setup
+  and cleanup, and on the local transport its signal still lets the procedure remove its worktree.
+  Non-login shells receive the CUDA/WSL PATH prefix that `tools/sweep.sh` uses.
   Ambient `OCANNL_*` variable names are printed and cleared before opam runs; names injected by the
   selected switch are printed and stripped inside `opam exec`, so only the requested backend can
   override the pushed tree's configuration. A regular, non-symlink root `ocannl_config` from the pushed commit
@@ -1680,9 +1705,10 @@ that they earn a lookup rather than always-loaded space.
   in the disposable worktree so a personal file above it cannot reach root-launched probes. A
   worktree root nested under any outer Dune root is refused: without that
   boundary Dune can build the parent checkout while this script reports the detached commit.
-  `--expect-lib cudajit|hipjit` asserts all three
+  `--expect-lib cudajit|hipjit|metal` asserts all three
   pieces of optional-backend provenance above (positive `.cmi`, vendor `select` arm, and the other
-  backend's absent `.cmi`). A test, probe or `--record-golden` trip also requires a backend and
+  two GPU backends' absent `.cmi` -- each fleet box carries one vendor package). A test, probe or
+  `--record-golden` trip also requires a backend and
   asserts `_build/default/test/config/ocannl_backend.txt`; an unrestricted test alias is reported
   only as passing under that configuration, since the alias may be backend-independent, while a
   runnable probe must print its own backend/device evidence. An `@check`-only trip says explicitly
@@ -1695,13 +1721,17 @@ that they earn a lookup rather than always-loaded space.
   running another operation. Every path also reasserts exact HEAD, clean tracked/untracked source,
   and the unchanged configuration boundary after each operation and before the final certificate;
   a nominally successful probe that edits its checkout therefore fails loudly. Do not replace its
-  unpiped ssh output with a convenience pipe: the verifier source travels on a separate remote file
-  descriptor while child stdin is `/dev/null`, and the far-side sentinel is the build verdict plus
-  cleanup, and the local sentinel is ssh's transport verdict.
-  `tools/test-remote-verify.sh` runs that shipped script through fake SSH/opam/Dune and real
-  disposable Git repositories, directly in Ubuntu CI rather than inside Dune. It checks actual
-  checkout/environment observations, failure reasons, timeout statuses, cleanup ownership and
-  golden restoration; source-assertion and golden-scope mutants must fail the same oracles.
+  unpiped output with a convenience pipe: the procedure travels on a separate file descriptor
+  while child stdin is `/dev/null`, the procedure's `exit:` sentinel is the build verdict plus
+  cleanup, and the caller's `ssh exit:` / `local exit:` sentinel is the transport's verdict.
+  `tools/test-machine-verify.sh` runs the shipped pair and the shim through fake SSH/opam/Dune and
+  real disposable Git repositories, directly in Ubuntu CI rather than inside Dune; the fake `ssh -G`
+  places BOX at 192.0.2.1 (TEST-NET-1, never assigned) or 127.0.0.1, and the fakes read their
+  controls from a file because the local transport clears the environment. It checks actual
+  checkout/environment observations, failure reasons, timeout statuses, which transport carried the
+  trip (observed at the fake ssh), placement refusals, cleanup ownership and golden restoration;
+  source-assertion, golden-scope, local-address and environment-clearing mutants must fail the
+  same oracles.
 - `tools/ci-compiler-test.sh` is the cheap local proxy for a compiler-sensitive Ubuntu CI failure
   (gh-ocannl-846): it downloads the GCC 13 packages with `apt-get download`, extracts them into a
   scratch prefix with `dpkg-deb -x`, and runs exactly one named `runtest-` alias in a fresh Dune
