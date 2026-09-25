@@ -2052,6 +2052,40 @@ class FixtureDigestTest(unittest.TestCase):
         self.assertEqual((self.dir / "fixtures" / fixture_digest.DIGEST_FILE).read_bytes(),
                          digests_before)
 
+    def test_a_spec_name_that_leaves_the_output_dir_is_refused_before_building(self):
+        # build() writes <out_dir>/<spec name>.safetensors, so checking DIR alone is not enough:
+        # `--out-dir smoke` with name "../fixtures/lenet" lands on the recorded fixture without
+        # touching its digest. The recording path has the same hole, one directory up.
+        gen_fixtures = self.gen_fixtures_module()
+        _, recorded_before, digests_before = self.smoke_layout()
+        escaping = self.dir / "workloads" / "escaping.json"
+        escaping.write_text('{"name": "../fixtures/lenet"}')
+        built = []
+
+        for argv in (["--out-dir", str(self.dir / "smoke"), str(escaping)],
+                     ["--origin", "rog-nv", str(escaping)]):
+            with self.subTest(argv=argv):
+                with unittest.mock.patch.object(gen_fixtures, "build",
+                                                lambda s, d: built.append(s)), \
+                        self.assertRaises(ValueError):
+                    gen_fixtures.main(argv, here=self.dir)
+
+        self.assertEqual(built, [], "refused before any build")
+        self.assertEqual((self.dir / "fixtures" / "lenet.safetensors").read_bytes(),
+                         recorded_before)
+        self.assertEqual((self.dir / "fixtures" / fixture_digest.DIGEST_FILE).read_bytes(),
+                         digests_before)
+
+    def test_fixture_path_takes_plain_names_only(self):
+        # The check build() itself makes before writing, so a direct build() caller is covered
+        # too: every spelling that reaches outside out_dir on either platform's path rules.
+        gen_fixtures = self.gen_fixtures_module()
+        out = self.dir / "smoke"
+        self.assertEqual(gen_fixtures.fixture_path(out, "lenet"), out / "lenet.safetensors")
+        for name in ("", ".", "..", "../x", "a/b", "/abs", "a\\b", "..\\x", "C:x", None):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                gen_fixtures.fixture_path(out, name)
+
     def test_generated_fixtures_are_named_after_their_spec(self):
         # What the recorded-name check above relies on: gen_fixtures.py writes
         # fixtures/<spec name>.safetensors, and every spec's `name` is its file stem.
