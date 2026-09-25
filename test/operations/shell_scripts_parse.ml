@@ -1253,12 +1253,30 @@ module Errexit_negation = struct
       |> strip_redirections |> drop_case_arm_prefix |> drop_command_prefixes
       |> List.map ~f:literal_shell_word
     with
-    | "set" :: options -> options_enable_errexit options
-    | ("builtin" | "command") :: "set" :: options -> options_enable_errexit options
-    | ("builtin" | "command") :: "--" :: "set" :: options -> options_enable_errexit options
-    | "command" :: "-p" :: "set" :: options -> options_enable_errexit options
-    | "command" :: "-p" :: "--" :: "set" :: options -> options_enable_errexit options
-    | _ -> false
+    | words -> (
+        (* [builtin]/[command] run the builtin itself, with [command -p] and a [--] allowed. *)
+        let rec unwrap = function
+          | ("builtin" | "command") :: rest -> unwrap_options rest
+          | words -> words
+        and unwrap_options = function
+          | ("-p" | "--") :: rest -> unwrap_options rest
+          | words -> unwrap words
+        in
+        match unwrap words with
+        | "set" :: options -> options_enable_errexit options
+        | "shopt" :: arguments ->
+            (* bash's [shopt -s -o errexit] (or [-so]) is [set -o errexit] by another name. *)
+            let flags, names =
+              List.split_while arguments ~f:(fun word ->
+                  String.is_prefix word ~prefix:"-" && not (String.equal word "--"))
+            in
+            let has flag = List.exists flags ~f:(fun word -> String.contains word flag) in
+            has 's' && has 'o'
+            && (not (has 'u'))
+            && List.mem
+                 (List.filter names ~f:(Fn.non (String.equal "--")))
+                 "errexit" ~equal:String.equal
+        | _ -> false)
 
   (** The file's lines with every backslash-newline splice removed, as the shell removes them before
       reading a word: [set \\] then [-e] on the next line is one [set -e]. Each comes with the
@@ -1568,6 +1586,9 @@ module Errexit_negation = struct
         "echo foo#bar; set -e\n! grep -q missing output\n",
         [ 2 ] );
       ("errexit set by a continued command", "set \\\n-e\n! grep -q missing output\n", [ 3 ]);
+      ("errexit set through shopt", "shopt -s -o errexit\n! grep -q missing output\n", [ 2 ]);
+      ("errexit set through bundled shopt", "shopt -so errexit\n! grep -q missing output\n", [ 2 ]);
+      ("errexit unset through shopt", "shopt -u -o errexit\n! grep -q missing output\n", []);
       ( "errexit set behind a variable-descriptor redirection",
         "{fd}>/dev/null set -e\n! grep -q missing output\n",
         [ 2 ] );
@@ -1616,26 +1637,31 @@ end
 
     {1 What it reads}
 
-    The same files and the same errexit gate as {!Errexit_negation}, one LOGICAL line at a time: a
-    line ending in [&&], [||], [|] or a backslash is joined with the next, so a list wrapped across
-    lines is read whole. A logical line is cut into statements at top-level [;], [;;], a lone [&], a
-    comment, and a case pattern's [)] -- unmatched, or closing a [(pattern)] because a word follows
-    it -- so a case arm's body on the pattern line is a statement. A subshell or brace group opened
-    in operand position ({!opener}: after nothing but [!]/[time]/[then]/[do]/[else], so also as a
-    later operand of a list) is a nested statement context whose statements are read on their own;
-    so is a function body, except that the command running after the definition is the definition
-    itself, not its body. Keywords are matched as written: a quoted [then] is not one. Quotes,
-    [$( )], [${ }] and backticks are skipped as in {!Errexit_negation}, and so is the inside of a
-    [[[ ... ]]], so an [&&] printed as data or written inside [[[ a && b ]]] is not a list operator.
-    A single [\[] needs no tracking: an [&&] between single brackets IS a list operator. A statement
-    is flagged when all of these hold:
+    Every script {!Errexit_negation} reads, under the same gate: a [set] (or bash's [shopt -s -o])
+    that enables errexit as a command of its own on some line of the file, after
+    [builtin]/[command], [time], assignment and redirection prefixes -- not inside a function body,
+    a sourced file or a [bash -e] invocation. The file is read as the shell reads it, with every
+    backslash-newline removed, one LOGICAL line at a time: a line ending in [&&], [||] or [|] is
+    joined with the next, so a list wrapped across lines is read whole. Words are split at unquoted
+    whitespace.
+
+    A logical line is cut into statements at top-level [;], [;;], a lone [&], a comment, and a case
+    pattern's [)] -- unmatched, or closing a [(pattern)] because a word follows it, redirections
+    skipped -- so a case arm's body on the pattern line is a statement. A subshell or brace group
+    opened in operand position ({!opener}: after nothing but [!]/[time]/[then]/[do]/[else], so also
+    as a later operand of a list) is a nested statement context whose statements are read on their
+    own; so is a function body, except that the command running after the definition is the
+    definition itself, not its body. Keywords are matched as written: a quoted [then] is not one.
+    Quotes, [$( )], [${ }] and backticks are skipped as in {!Errexit_negation}, and so is the inside
+    of a [[[ ... ]]], so an [&&] printed as data or written inside [[[ a && b ]]] is not a list
+    operator. A single [\[] needs no tracking: an [&&] between single brackets IS a list operator. A
+    statement is flagged when all of these hold:
     - it is an [&&]-only list of at least two operands, and every operand is a test command
       ({!is_test}: [\[], [\[\[] or [test], also by path and through [command]/[builtin], after [!],
       [time], assignments and redirections; on the first operand also after [then], [do], [else]);
     - nothing consumes the list's value: it is not introduced by [if]/[elif]/[while]/[until] (the
-      first operand's first word is then not a test), and the first command after it -- on the same
-      line, else the next non-blank non-comment line -- is not an unquoted [then]/[do] (a condition
-      whose keyword began an earlier line).
+      first operand's first word is then not a test), and the next command on the same logical line
+      is not an unquoted [then]/[do] (a condition whose keyword began an earlier line).
 
     A [||] anywhere in the list is its consumer: [[ A ] && [ B ] || die ...] makes the failure
     explicit, so nothing is exempt. That is the spelling the refusal points at, together with one
@@ -1646,26 +1672,34 @@ end
 
     {1 What it deliberately does not read}
 
+    Everything below is outside the boundary. The LOUD items (valid shell refused) are accepted
+    costs; the SILENT ones are named so a reader knows exactly what the scan cannot vouch for, and
+    are tracked with gh-ocannl-907's lexical-context work.
     - Lists that mix a non-test command in, such as [[ A ] && grep -q x f] or
       [grep -q x f && [ B ]]. [[ A ] && action] is the conditional-execution idiom and is correct;
       telling an assertion from an action for arbitrary commands is not a textual question.
     - Lists whose connectors mix [||] and [&&] (the [||] is read as the consumer), and pipelines.
     - Wrappers beyond the POSIX builtin-runners: a test run through [env], [nice], [exec], [sudo]
-      and the like is not recognized as a test.
-    - The line-shaped boundary {!Errexit_negation} states and gh-ocannl-907 tracks: a heredoc body
-      or multi-line quoted value is read as script text, and a condition whose [if]/[while]/[until]
-      stands alone on an earlier line is recognized only through the [then]/[do] that follows it on
-      the pair's line or the next one; so is a brace-group condition
-      ([if { x; [ A ] && [ B ]; }; then]), whose statements are read as body statements. A heredoc
-      body and an unrecognized condition can only add refusals (loud). A multi-line quoted value is
-      the one silent residue: the line where it closes is lexed from outside the quote, so a list on
-      that same line can be hidden.
+      and the like is not recognized as a test. (Silent.)
+    - Operators glued to the word before them without whitespace, other than a redirection's own
+      descriptor ([2>], [{fd}>]): [command>/dev/null test -e a] keeps [command>/dev/null] as one
+      word, so the operand is not recognized as a test. (Silent.)
+    - Errexit enabled anywhere but a command of its own on a line: inside a function body
+      ([enable() { set -e; }]), in a sourced file, by the shebang or an invocation flag. Such a file
+      is not scanned at all. (Silent.)
+    - A condition keyword on a LATER line than the pair ([while] / pair / [do]) is not looked for,
+      and a brace-group condition ([if { x; [ A ] && [ B ]; }; then]) has its statements read as
+      body statements. (Loud.) A lookahead to the next line read a heredoc's data line as the
+      keyword -- silently -- and was removed.
+    - A heredoc body is read as script text. (Loud: it can only add statements.) A multi-line quoted
+      value is lexed from outside the quote on the line where it closes, so a list on that same line
+      can be hidden. (Silent.)
     - Scope. The last command of a FUNCTION BODY or a subshell is not inert -- its status becomes
       the function's (the subshell's), which errexit then weighs at the call site (measured under
       bash 3.2 and dash; a brace group, loop body or [if] branch does NOT propagate it). Seeing
       where a function ends needs brace matching across lines, so the scan does not try: such a pair
       is flagged too, and [|| return 1] is the explicit spelling it accepts. The same holds for a
-      script's final line ([|| exit 1]). *)
+      script's final line ([|| exit 1]). (Loud.) *)
 module Errexit_and_list = struct
   module N = Errexit_negation
 
@@ -2037,19 +2071,6 @@ module Errexit_and_list = struct
       let numbered = Array.of_list (N.numbered_spliced_lines text) in
       let lines = Array.map numbered ~f:snd in
       let count = Array.length lines in
-      (* The first command of the next non-blank, non-comment line: where a condition's [then]/[do]
-         would stand. *)
-      let rec next_statement index =
-        if index >= count then ""
-        else
-          let line = String.strip lines.(index) in
-          if String.is_empty line || String.is_prefix line ~prefix:"#" then
-            next_statement (index + 1)
-          else
-            match scan ~at_end:true line with
-            | `Statements (statement :: _) -> first_command statement
-            | `Statements [] | `Continues _ -> line
-      in
       (* The statements of the logical line whose last physical line so far is [last], and the
          physical line it finally ends on. A backslash continuation joins without a separator, as
          the shell does; an operator one joins with a space. *)
@@ -2071,11 +2092,7 @@ module Errexit_and_list = struct
             | [] -> false
             | statement :: rest ->
                 bare_test_list statement
-                && not
-                     (consumes
-                        (match rest with
-                        | next :: _ -> first_command next
-                        | [] -> next_statement (last + 1)))
+                && not (match rest with next :: _ -> consumes (first_command next) | [] -> false)
                 || flagged rest
           in
           go (last + 1) (if flagged statements then { line = fst numbered.(first) } :: acc else acc)
@@ -2188,12 +2205,12 @@ module Errexit_and_list = struct
         [ 2 ] );
       ("errexit set by a timed command", "time -- set -e\n[ -e a ] && [ -e b ]\n", [ 2 ]);
       ("errexit set by a portably timed command", "time -p -- set -e\n[ -e a ] && [ -e b ]\n", [ 2 ]);
-      ( "condition keyword split by a splice",
-        "set -e\nif\n  [ -e a ] && [ -e b ]\nth\\\nen :; fi\n",
-        [] );
       ( "pair after a spliced line keeps its line number",
         "set -e\necho a \\\n  b\n[ -e a ] && [ -e b ]\n",
         [ 4 ] );
+      ( "double-bracket regex with a character class",
+        "set -e\n[[ $x =~ [[:space:]] && -e a ]] && [[ -e b ]]\n",
+        [ 2 ] );
       ("timed test", "set -e\ntime [ -e a ] && [ -e b ]\n", [ 2 ]);
       ("timed test with an option terminator", "set -e\ntime -- [ -e a ] && [ -e b ]\n", [ 2 ]);
       ( "portably timed test with an option terminator",
@@ -2224,16 +2241,19 @@ module Errexit_and_list = struct
       ( "condition keyword on an earlier line",
         "set -e\nif\n  [ -e a ] && [ -e b ]; then :; fi\n",
         [] );
-      ("condition before a do line", "set -e\nwhile\n  [ -e a ] && [ -e b ]\ndo :; done\n", []);
       (* A status capture is not a consumer: `|| rc=$?` is the spelling that is. *)
       ("status captured on the same line", "set +e\n[ -e a ] && [ -e b ]; rc=$?\nset -e\n", [ 2 ]);
       ( "status captured on the next line",
         "set -e\nset +e\n[ -e a ] && [ -e b ]\nrc=$?\nset -e\n",
         [ 3 ] );
       ("status captured by an or-tail", "set +e\n[ -e a ] && [ -e b ] || rc=$?\nset -e\n", []);
-      ( "condition after a trailing semicolon",
-        "set -e\nif\n  [ -e a ] && [ -e b ];\nthen :; fi\n",
-        [] );
+      (* Refused by design (loud): a condition keyword on a LATER line than the pair is not looked
+         for -- a lookahead there read a heredoc's data line as the keyword (review round 10). *)
+      ("condition before a do line", "set -e\nwhile\n  [ -e a ] && [ -e b ]\ndo :; done\n", [ 3 ]);
+      ("condition before a then line", "set -e\nif\n  [ -e a ] && [ -e b ];\nthen :; fi\n", [ 3 ]);
+      ( "heredoc data line reading as a keyword",
+        "set -e\n[ -e a ] && [ -e b ] <<EOF\nthen\nEOF\n",
+        [ 2 ] );
       ("quoted do after the pair", "set -e\n[ -e a ] && [ -e b ]; \"do\"\n", [ 2 ]);
       ("escaped then after the pair", "set -e\n[ -e a ] && [ -e b ]; \\then\n", [ 2 ]);
       (* Not flagged: outside the declared shape. *)

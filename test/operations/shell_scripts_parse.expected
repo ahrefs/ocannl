@@ -126,6 +126,9 @@ errexit-negation fixture bang-adjacent input redirect is classified as specified
 errexit-negation fixture bang-prefixed command name is classified as specified: true
 errexit-negation fixture errexit set after an embedded hash is classified as specified: true
 errexit-negation fixture errexit set by a continued command is classified as specified: true
+errexit-negation fixture errexit set through shopt is classified as specified: true
+errexit-negation fixture errexit set through bundled shopt is classified as specified: true
+errexit-negation fixture errexit unset through shopt is classified as specified: true
 errexit-negation fixture errexit set behind a variable-descriptor redirection is classified as specified: true
 errexit-negation fixture embedded hash before an outer OR is classified as specified: true
 the statement-position ! grep fixture reaches the absent()-style refusal: true
@@ -192,8 +195,8 @@ errexit-and-list fixture errexit set behind a variable-descriptor redirection is
 errexit-and-list fixture function-keyword subshell body without parens is classified as specified: true
 errexit-and-list fixture errexit set by a timed command is classified as specified: true
 errexit-and-list fixture errexit set by a portably timed command is classified as specified: true
-errexit-and-list fixture condition keyword split by a splice is classified as specified: true
 errexit-and-list fixture pair after a spliced line keeps its line number is classified as specified: true
+errexit-and-list fixture double-bracket regex with a character class is classified as specified: true
 errexit-and-list fixture timed test is classified as specified: true
 errexit-and-list fixture timed test with an option terminator is classified as specified: true
 errexit-and-list fixture portably timed test with an option terminator is classified as specified: true
@@ -213,11 +216,12 @@ errexit-and-list fixture while condition is classified as specified: true
 errexit-and-list fixture until condition is classified as specified: true
 errexit-and-list fixture wrapped if condition is classified as specified: true
 errexit-and-list fixture condition keyword on an earlier line is classified as specified: true
-errexit-and-list fixture condition before a do line is classified as specified: true
 errexit-and-list fixture status captured on the same line is classified as specified: true
 errexit-and-list fixture status captured on the next line is classified as specified: true
 errexit-and-list fixture status captured by an or-tail is classified as specified: true
-errexit-and-list fixture condition after a trailing semicolon is classified as specified: true
+errexit-and-list fixture condition before a do line is classified as specified: true
+errexit-and-list fixture condition before a then line is classified as specified: true
+errexit-and-list fixture heredoc data line reading as a keyword is classified as specified: true
 errexit-and-list fixture quoted do after the pair is classified as specified: true
 errexit-and-list fixture escaped then after the pair is classified as specified: true
 errexit-and-list fixture command -v lookups is classified as specified: true
