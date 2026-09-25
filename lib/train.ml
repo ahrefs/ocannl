@@ -813,9 +813,16 @@ let placement_problem ?name ?timing_ctx ctx loss comp bindings =
     measured one -- and is ignored, and overwritten by the cold run that follows, when its decision
     no longer reproduces the program it was measured on. The directory is resolved as
     {!Autotune.tune} resolves it ({!Autotune.resolve_cache_dir}), [cache_dir = ""] disabling both
-    stores. *)
+    stores.
+
+    gh-ocannl-1020, [placement_store] (config [tune_placement_store], default [true]): [false]
+    bypasses the placement-decision store alone -- neither consulted nor recorded, the posture a
+    forced [ship_arm] takes, without forcing an arm -- while the schedule cache keeps replaying. On
+    a warm schedule cache that is the placement A/B with both arms' schedules replaying: both arms
+    report in position and the measured winner ships, which is the comparison a store hit
+    short-circuits into one search. *)
 let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?report ?flip_report
-    ?inline_flips ?ship_arm ?on_ship ctx loss comp bindings =
+    ?inline_flips ?ship_arm ?placement_store ?on_ship ctx loss comp bindings =
   (* Arm attribution on the same stderr trace as Autotune's config [autotune_log] — winner-arm
      ambiguity misdirected the CUDA benchmark debugging on PR #140. *)
   let log_arms =
@@ -1045,14 +1052,23 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
 
      Opened by the same rule as the schedule cache ({!Autotune.resolve_cache_dir}), and never under
      a forced arm: forcing ships a chosen artifact whatever the evidence says, which is neither a
-     decision to replay nor one to record. Every failure of the store -- an unreadable entry, a
-     lowering that declined, a device whose limits cannot be read -- degrades to the cold path,
-     which reports it in position; only the two process-level classes propagate from here. *)
+     decision to replay nor one to record. Nor under [placement_store = false] (gh-ocannl-1020),
+     which asks for the arms' comparison itself, schedule cache warm or not. Every failure of the
+     store -- an unreadable entry, a lowering that declined, a device whose limits cannot be read --
+     degrades to the cold path, which reports it in position; only the two process-level classes
+     propagate from here. *)
   let module SC = Ir.Schedule_cache in
   let static_indices = Ir.Indexing.bound_symbols bindings in
   let cache_dir = Autotune.resolve_cache_dir ?cache_dir ~search:(Autotune.search_setting ()) () in
+  let placement_store =
+    match placement_store with
+    | Some b -> b
+    | None -> Utils.get_global_flag ~default:true ~arg_name:"tune_placement_store"
+  in
+  if (not placement_store) && not forced then
+    logf "placement store bypassed (tune_placement_store=false): the arms are compared afresh";
   let store =
-    if forced || String.is_empty cache_dir then None
+    if forced || (not placement_store) || String.is_empty cache_dir then None
     else
       match
         let problem = placement_problem ?name ?timing_ctx ctx loss comp bindings in

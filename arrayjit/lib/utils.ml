@@ -156,6 +156,7 @@ let known_config_keys =
       "tune_flip_ordering";
       "tune_flip_profit_margin";
       "tune_ship_arm";
+      "tune_placement_store";
       "strict_failure_classification";
       (* Analytic cost model (gh-ocannl-491) *)
       "autotune_keep_fraction";
@@ -349,6 +350,13 @@ let config_key_classification : (config_key_class * string * string list) list =
        own digest, each arm's crown is cached under that digest either way, and a schedule crowned \
        under one setting is a valid crown under the other (gh-ocannl-638)",
       [ "tune_ship_arm" ] );
+    ( Search_shaping,
+      "it decides whether the placement decision is replayed from the placement-decision store or \
+       re-derived by comparing the two arms (gh-ocannl-1020): each arm and each flip is a \
+       different program keyed on its own digest and cached either way, the store holds only which \
+       of them shipped, and a decision re-derived from the arms is as valid a winner as a replayed \
+       one",
+      [ "tune_placement_store" ] );
     ( Execution_neutral,
       "startup and configuration-sourcing chatter, and which descriptor foreign C-library chatter \
        follows",

@@ -602,6 +602,14 @@ than the driver (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` at module load), run it wi
   the call reported (gh-ocannl-677) — which is what makes a *mixed* cell readable: one arm cached,
   the other searched because its half of the A/B never was. Read `mma_best_ms` against `best_ms` for the margin: tensorization
   losing by 1% and by 40% are different findings.
+- **A warm pass reports one arm unless the placement store is bypassed** (gh-ocannl-786,
+  gh-ocannl-1020). The search pass records which placement shipped beside the schedule entries,
+  and a later process over the same problem replays that decision as ONE search — so the pass-2
+  replay's `tune.arms` holds a single report, named by what shipped. To measure the placement A/B
+  on a warm schedule cache (both arms reporting, each replaying its own crowned schedule, the
+  measured winner shipping), run the sweep with `OCANNL_TUNE_PLACEMENT_STORE=false`; the schedule
+  cache replays as before, and the ambient-environment stamp records the setting on every OCANNL
+  row.
 - **`tensorized` is what the schedule asked for; `tensorization` is what the emission did**
   (gh-ocannl-626). Each arm carries both: `tensorization` is `"tensorized"`, `"scalar-fallback"`
   (every emitted `Tile_mma` declined to the lane-0 scalar loop) or `"not-requested"` (codegen

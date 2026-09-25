@@ -99,6 +99,9 @@ search-shaping -- it makes the tuner try alternative inlining decisions; each al
 search-shaping -- it decides which of the two searched placement arms ships, overriding the measured comparison rather than changing either arm: each arm is a different program keyed on its own digest, each arm's crown is cached under that digest either way, and a schedule crowned under one setting is a valid crown under the other (gh-ocannl-638)
   tune_ship_arm
 
+search-shaping -- it decides whether the placement decision is replayed from the placement-decision store or re-derived by comparing the two arms (gh-ocannl-1020): each arm and each flip is a different program keyed on its own digest and cached either way, the store holds only which of them shipped, and a decision re-derived from the arms is as valid a winner as a replayed one
+  tune_placement_store
+
 execution-neutral -- startup and configuration-sourcing chatter, and which descriptor foreign C-library chatter follows
   detach_c_stderr
   log_config_sourcing
@@ -165,7 +168,7 @@ execution-neutral -- memoization of toolchain probes: it changes how long resolv
   cc_backend_probe_cache [read at codegen]
 
 every scanned root meets its source-count floor: true
-OK: 118 config keys classified against 7 cache-key components.
+OK: 119 config keys classified against 7 cache-key components.
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count
