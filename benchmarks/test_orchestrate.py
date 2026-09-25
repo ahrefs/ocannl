@@ -2016,7 +2016,7 @@ class FixtureDigestTest(unittest.TestCase):
         # not need one.
         with unittest.mock.patch.object(gen_fixtures, "build", build), \
                 unittest.mock.patch.object(fixture_digest.platform, "node", return_value=""):
-            with contextlib.redirect_stdout(io.StringIO()):
+            with contextlib.redirect_stdout(io.StringIO()) as printed:
                 written = gen_fixtures.main(["--out-dir", str(out)], here=self.dir)
 
         # Built into a staging directory inside DIR, which is gone afterwards.
@@ -2027,6 +2027,10 @@ class FixtureDigestTest(unittest.TestCase):
         self.assertEqual((self.dir / "fixtures" / fixture_digest.DIGEST_FILE).read_bytes(),
                          digests_before)
         self.assertEqual(list(out.iterdir()), [out / "lenet.safetensors"])
+        # The path a caller hands to a runner is the one printed -- not the staging copy, which
+        # is gone by the time anyone reads the line.
+        self.assertIn(f"wrote {out / 'lenet.safetensors'} (", printed.getvalue())
+        self.assertNotIn(".gen_fixtures-", printed.getvalue())
 
     def test_out_dir_refuses_the_fixtures_dir_and_an_origin_before_building(self):
         # Writing into fixtures/ without recording is the loss the pre-build validation guards

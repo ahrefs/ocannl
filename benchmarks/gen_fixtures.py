@@ -206,8 +206,13 @@ def build(spec_path: Path, out_dir: Path):
     {"mlp": build_mlp, "conv": build_conv, "gpt": build_gpt}[model](spec, rng, tensors, meta)
     out_dir.mkdir(parents=True, exist_ok=True)
     save_file(tensors, str(out_path), metadata=meta)
-    print(f"wrote {out_path} ({out_path.stat().st_size} bytes)")
     return out_path
+
+
+def report_written(path):
+    """The per-fixture line, printed by the caller once `path` is where the fixture stays."""
+    print(f"wrote {path} ({path.stat().st_size} bytes)")
+    return path
 
 
 def build_smoke(specs, out_dir: Path):
@@ -229,7 +234,7 @@ def build_smoke(specs, out_dir: Path):
             staged = build(spec, staging)
             final = out_dir / staged.name
             os.replace(staged, final)
-            written.append(final)
+            written.append(report_written(final))
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     print(f"recorded no digests: {len(written)} fixture(s) in {out_dir} are for smoke runs only")
@@ -329,7 +334,7 @@ def main(argv=None, here=None):
             fixture_digest.check_fixture_name(f"{name}.safetensors")
     if not recording:
         return build_smoke(specs, out_dir)
-    written = [build(spec, out_dir) for spec in specs]
+    written = [report_written(build(spec, out_dir)) for spec in specs]
     # fixtures/ is gitignored, so this file is the only record of what was just generated
     # (gh-ocannl-645). Only this origin's regenerated entries are rewritten: generating one
     # workload must not drop the identities of the fixtures already on disk, and generating on
