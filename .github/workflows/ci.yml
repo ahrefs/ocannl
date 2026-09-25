@@ -226,8 +226,9 @@ jobs:
     # than a dune alias. These platform-sensitive harnesses share the SKIP
     # contract. The mutation harness also exercises the real supervisor in
     # isolated fixtures. Run every harness even when one fails, so one
-    # regression cannot mask the others' diagnostics. The remote verifier uses
-    # loopback SSH and fake opam/Dune, with real disposable Git worktrees.
+    # regression cannot mask the others' diagnostics. The machine verifier uses
+    # loopback SSH, its local transport and fake opam/Dune, with real disposable
+    # Git worktrees.
     - name: Test shell harnesses (Ubuntu)
       if: matrix.os == 'ubuntu-latest' && matrix.ocaml-compiler == '5.5.x' && matrix.suite == 'main'
       run: |
@@ -238,7 +239,7 @@ jobs:
         scripts/test-setup-ocaml-env.sh || failures=$((failures + 1))
         tools/test-ci-times.sh || failures=$((failures + 1))
         test/operations/ci_matrix.sh || failures=$((failures + 1))
-        tools/test-remote-verify.sh || failures=$((failures + 1))
+        tools/test-machine-verify.sh || failures=$((failures + 1))
         exit $((failures > 0 ? 1 : 0))
     - uses: ocaml/setup-ocaml@v3
       with:
