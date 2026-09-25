@@ -1858,6 +1858,12 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
                        fallbacks under a tensorized label (gh-ocannl-545). *)
                     mma_f16_wide_acc_scopes =
                       (if cc >= 80 then [ Backend_intf.Mma_per_statement ] else []);
+                    (* gh-ocannl-838: the uniform-bf16 key is the same inline-PTX arm, f32 in
+                       hardware whatever the policy, so [Numerics.Bf16_wide] changes no rendering
+                       here — but, exactly as for f16, a staged outer-k split would store bf16 at
+                       every block boundary, so the fragment scope is absent. *)
+                    mma_bf16_wide_acc_scopes =
+                      (if cc >= 80 then [ Backend_intf.Mma_per_statement ] else []);
                     (* Swizzled staged tiles (gh-ocannl-481 item 3, D3): only the inline-PTX arms
                        can read them, and only in the orientations the staged sketches mint. That is
                        the uniform-bf16 combination — both its operands' fragment registers hold

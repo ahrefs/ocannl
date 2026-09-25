@@ -23,6 +23,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   autotune_rounds
   autotune_search
   backend
+  bf16_arithmetic
   buffer_aliasing
   build_files_prefix
   cc_backend_arch_flags

@@ -3091,6 +3091,7 @@
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_FP16_ARITHMETIC)
+  (env_var OCANNL_BF16_ARITHMETIC)
   (env_var OCANNL_BACKEND))
  (modules hardware_warp_shuffle)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
@@ -3176,6 +3177,7 @@
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_FP16_ARITHMETIC)
+  (env_var OCANNL_BF16_ARITHMETIC)
   (env_var OCANNL_BACKEND))
  (modules accum_width)
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
@@ -3620,6 +3622,7 @@
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_FP16_ARITHMETIC)
+  (env_var OCANNL_BF16_ARITHMETIC)
   ; gh-ocannl-1032: this test's HIP arms branch on the ADVERTISED tile-MMA capability, so the three
   ; variables Hip_backend's rocWMMA-header probe reads are inputs to its verdict -- undeclared, a
   ; run that newly points at (or away from) a header tree is served the previous run's result as a
@@ -4212,6 +4215,7 @@
  (deps
   ocannl_config
   (env_var OCANNL_FP16_ARITHMETIC)
+  (env_var OCANNL_BF16_ARITHMETIC)
   (env_var OCANNL_BACKEND))
  (modules sketch_family_tree)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
@@ -4994,9 +4998,9 @@
  ; must match, so every configuration key that can move either is an ambient dependency of it --
  ; undeclared, dune serves the previous run's result and the probe silently does not rerun
  ; (gh-ocannl-628). The set, and what each one moves:
- ;   NARROW_COMPUTE_F32, FP16_ARITHMETIC, CC_FP16_ARITHMETIC -- which reference the accumulator
- ;     policy selects (Numerics.cpu_compute_prec and Context.hardware_limits are consulted here,
- ;     not merely by the kernels).
+ ;   NARROW_COMPUTE_F32, FP16_ARITHMETIC, BF16_ARITHMETIC, CC_FP16_ARITHMETIC -- which reference
+ ;     the accumulator policy selects (Numerics.cpu_compute_prec and Context.hardware_limits are
+ ;     consulted here, not merely by the kernels).
  ;   CC_VECTOR_BYTES, CC_BACKEND_ARCH_FLAGS, CC_BACKEND_SIMD_FLAGS -- whether try_vectorize_reduce
  ;     renders at all (cc_vector_bytes=0 trips its vector_bytes < 8 guard), so the Vectorized
  ;     members' form. The SIMD flags reach BOTH arms of this test: vector_bytes is gated on avx2
@@ -5027,6 +5031,7 @@
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_NARROW_COMPUTE_F32)
   (env_var OCANNL_FP16_ARITHMETIC)
+  (env_var OCANNL_BF16_ARITHMETIC)
   (env_var OCANNL_CC_FP16_ARITHMETIC)
   (env_var OCANNL_CC_VECTOR_BYTES)
   (env_var OCANNL_CC_BACKEND_ARCH_FLAGS)

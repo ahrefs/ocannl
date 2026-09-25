@@ -412,6 +412,9 @@ module Impl = struct
                        (gh-ocannl-837). *)
                     mma_f16_wide_acc_scopes =
                       [ Backend_intf.Mma_per_statement; Backend_intf.Mma_fragment_scope ];
+                    (* The uniform-bf16 arm has no wide counterpart and declines under
+                       [Numerics.Bf16_wide] (gh-ocannl-838). *)
+                    mma_bf16_wide_acc_scopes = [];
                     (* Metal banks too, but [simdgroup_load] takes a plain pointer and leading
                        dimension — no [ldmatrix] analogue (gh-ocannl-481 item 3, D3). *)
                     mma_staged_layouts = [];
@@ -687,6 +690,11 @@ module Impl = struct
               ("simdgroup_float8x8", "simdgroup_half8x8", "simdgroup_half8x8", "simdgroup_half8x8")
         | Ops.Half_prec _ ->
             Some ("simdgroup_half8x8", "simdgroup_half8x8", "simdgroup_half8x8", "simdgroup_half8x8")
+        (* gh-ocannl-838: no wide uniform-bf16 arm here (unlike the wide-f16 one above, nothing has
+           verified [simdgroup_multiply_accumulate] over bfloat operands into a float accumulator),
+           so under [Bf16_wide] this declines to the scalar fallback, whose accumulator follows
+           [accum_prec], and [mma_bf16_wide_acc_scopes] is empty so no such seed is timed. *)
+        | Ops.Bfloat16_prec _ when Numerics.bf16_accum_wide () -> None
         | Ops.Bfloat16_prec _ ->
             Some
               ( "simdgroup_bfloat8x8",
@@ -1220,6 +1228,9 @@ module Impl = struct
     let accum_prec prec =
       match prec with
       | Ops.Half_prec _ when Numerics.fp16_accum_wide () -> Ops.single
+      (* gh-ocannl-838: likewise bf16 under [Numerics.Bf16_wide], where the uniform-bf16 MMA arm
+         declines rather than accumulate in a bfloat fragment. *)
+      | Ops.Bfloat16_prec _ when Numerics.bf16_accum_wide () -> Ops.single
       | _ -> compute_prec prec
 
     (* MSL has no [long long]: its 64-bit signed scalar is [long] (what [int64_t] names here), so

@@ -38,3 +38,6 @@ fp8 e5m2 reduction accumulates wide and narrows once (16 + 8x0.5 reaches 20, not
 narrow_compute_f32=false recovers per-operator rounding: the result differs from the widened default: true
 narrow_compute_f32=false recovers per-step fp8 narrowing (16 + 8x0.5 stays 16): true
 narrow_compute_f32=false brings back the per-k-step narrowing in the k-loop: true
+under Bf16_wide the bf16 naive matmul equals the once-narrowed wide-accumulation reference: true
+under Bf16_wide + narrow_compute_f32=false the bf16 naive matmul still equals the wide reference: true
+the default-policy bf16 matmul matches the wide reference exactly where the backend widens bf16 and diverges where it keeps storage residency: true

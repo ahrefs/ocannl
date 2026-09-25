@@ -30,6 +30,7 @@ keyed: backend -- it decides which backend compiles, and the backend name is tha
   backend [read at codegen]
 
 keyed: numerics -- the numerics policy is consulted at codegen and by the autotune tile-shape choice, never in the lowered code (gh-ocannl-568)
+  bf16_arithmetic
   fp16_arithmetic
   narrow_compute_f32
   tf32_matmuls
@@ -164,7 +165,7 @@ execution-neutral -- memoization of toolchain probes: it changes how long resolv
   cc_backend_probe_cache [read at codegen]
 
 every scanned root meets its source-count floor: true
-OK: 117 config keys classified against 7 cache-key components.
+OK: 118 config keys classified against 7 cache-key components.
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count
