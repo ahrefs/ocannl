@@ -818,6 +818,12 @@ that they earn a lookup rather than always-loaded space.
   `benchmarks/cell_group.process_is_alive` is the portable form — a zero-timeout wait on a process
   handle, where `WAIT_TIMEOUT` means "still running". `signal.SIGKILL` does not exist there either;
   `os.kill` with any other signal is `TerminateProcess`.
+- A child that publishes a value for its parent to poll — a pid, above all — writes a sibling and
+  renames it into place: `open(path, 'w')` creates the name EMPTY before the write lands, so a
+  parent polling `exists()` reads `''` (gh-ocannl-1041, a per-PR-matrix flake). The benchmarks'
+  Python tests go through `publish_pid` (`benchmarks/test/test_cell_group.py`), and a test there
+  fails any pid written in place. The shell harnesses poll with `[ -s file ]` instead, which holds
+  only because a pid lands in one `write`.
 - `(copy_files ...)` creates PASSIVE rules: they do not fire just because you build a sibling target
   in the same directory — only when listed in that target's `(deps ...)` or requested explicitly. A
   rule consuming copy_files output must therefore declare it. And validate a `(mode promote)` target
