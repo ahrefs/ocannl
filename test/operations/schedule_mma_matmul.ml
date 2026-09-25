@@ -270,13 +270,18 @@ let () =
     nonzero name (Context.get_values ctx tensor.Tensor.value)
   in
   let tf32_inputs ~tag ~k =
+    (* The small second term is what a tf32 product rounds away. Its modulus 3 divides the k = 24
+       row stride, where the row-major key would make it constant along the rows, so it is keyed in
+       base 2 instead (gh-ocannl-1018): same three values, varying with both indices. *)
     let av =
       Array.init (n * k) ~f:(fun x ->
-          ((Float.of_int (x % 23) -. 11.) *. 0.03125) +. (Float.of_int (x % 3) *. 0.0007))
+          Ll_test.cycle_flat ~dims:[| n; k |] ~modulus:23 ~offset:(-11.) ~stride:0.03125 x
+          +. Ll_test.cycle_flat ~radix:2 ~dims:[| n; k |] ~modulus:3 ~offset:0. ~stride:0.0007 x)
     in
     let bv =
       Array.init (k * n) ~f:(fun x ->
-          ((Float.of_int (x % 19) -. 9.) *. 0.046875) -. (Float.of_int (x % 5) *. 0.0003))
+          Ll_test.cycle_flat ~dims:[| k; n |] ~modulus:19 ~offset:(-9.) ~stride:0.046875 x
+          -. Ll_test.cycle_flat ~dims:[| k; n |] ~modulus:5 ~offset:0. ~stride:0.0003 x)
     in
     ( TDSL.ndarray av ~label:[ tag ^ "a" ] ~input_dims:[ k ] ~output_dims:[ n ] (),
       TDSL.ndarray bv ~label:[ tag ^ "b" ] ~input_dims:[ n ] ~output_dims:[ k ] () )
@@ -367,11 +372,13 @@ let () =
 
     let atv =
       Array.init (n * n) ~f:(fun x ->
-          ((Float.of_int (x % 17) -. 8.) *. 0.0625) +. (Float.of_int (x % 7) *. 0.0002))
+          Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:17 ~offset:(-8.) ~stride:0.0625 x
+          +. Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:7 ~offset:0. ~stride:0.0002 x)
     in
     let btv =
       Array.init (n * n) ~f:(fun x ->
-          ((Float.of_int (x % 13) -. 6.) *. 0.078125) -. (Float.of_int (x % 3) *. 0.0004))
+          Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:13 ~offset:(-6.) ~stride:0.078125 x
+          -. Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:3 ~offset:0. ~stride:0.0004 x)
     in
     let at = TDSL.ndarray atv ~label:[ "tf32_at" ] ~output_dims:[ n; n ] () in
     let bt = TDSL.ndarray btv ~label:[ "tf32_bt" ] ~output_dims:[ n; n ] () in
@@ -1338,8 +1345,14 @@ let () =
     let fi = 8 and fk = 32 and fj = 32 in
     (* Full-mantissa operands: each product needs more bits than f32 carries, so fma and mul-add
        differ, and both vary with both axes (69 and 53 are coprime to the strides). *)
-    let fav = Array.init (fi * fk) ~f:(fun x -> 1.0 +. (Float.of_int ((x % 69) + 3) *. 0x1p-18)) in
-    let fbv = Array.init (fk * fj) ~f:(fun x -> -1.0 -. (Float.of_int ((x % 53) + 5) *. 0x1p-17)) in
+    let fav =
+      Array.init (fi * fk) ~f:(fun x ->
+          1.0 +. Ll_test.cycle_flat ~dims:[| fi; fk |] ~modulus:69 ~offset:3. ~stride:0x1p-18 x)
+    in
+    let fbv =
+      Array.init (fk * fj) ~f:(fun x ->
+          -1.0 -. Ll_test.cycle_flat ~dims:[| fk; fj |] ~modulus:53 ~offset:5. ~stride:0x1p-17 x)
+    in
     let fa = TDSL.ndarray fav ~label:[ "fua" ] ~input_dims:[ fk ] ~output_dims:[ fi ] () in
     let fb = TDSL.ndarray fbv ~label:[ "fub" ] ~input_dims:[ fj ] ~output_dims:[ fk ] () in
     let%op fc0 = fa * fb in

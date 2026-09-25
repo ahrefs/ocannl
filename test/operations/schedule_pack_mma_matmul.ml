@@ -153,8 +153,12 @@ let run_serial ~name (out : Tensor.t) =
   nonzero name (Context.get_values ctx out.Tensor.value)
 
 let () =
-  let mav = Array.init (n * n) ~f:(fun x -> Float.of_int (x % 13) *. 0.25) in
-  let mbv = Array.init (n * n) ~f:(fun x -> Float.of_int (x % 17) -. 8.) in
+  let mav =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:13 ~offset:0. ~stride:0.25)
+  in
+  let mbv =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:17 ~offset:(-8.) ~stride:1.)
+  in
   let ma = TDSL.ndarray mav ~label:[ "ma" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let mb = TDSL.ndarray mbv ~label:[ "mb" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
 
@@ -183,8 +187,12 @@ let () =
   (* === Transposed B (the layout the register tiling declines whole-triple): the packing normalizes
      it — [tile_loops = [k_i; j]] packs B~ k-major, so [Tensorize] sees [tb = false] and the
      register tiling fires. === *)
-  let mtav = Array.init (n * n) ~f:(fun x -> Float.of_int (x % 7) *. 0.5) in
-  let mtbv = Array.init (n * n) ~f:(fun x -> Float.of_int (x % 11) -. 5.) in
+  let mtav =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:7 ~offset:0. ~stride:0.5)
+  in
+  let mtbv =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:11 ~offset:(-5.) ~stride:1.)
+  in
   let mta = TDSL.ndarray mtav ~label:[ "mta" ] ~output_dims:[ n; n ] () in
   let mtb = TDSL.ndarray mtbv ~label:[ "mtb" ] ~output_dims:[ n; n ] () in
   let%op td0 = mta +* "ik;jk=>ij" mtb in
@@ -313,8 +321,13 @@ let () =
    panel) and A read in place — no in-kernel tile writes, so the Grid split pool-parallelizes with
    the Grid loop outermost. CPU-only schedule; identity transform elsewhere. === *)
 let () =
-  let gav = Array.init (n * n) ~f:(fun x -> Float.of_int (x % 19) *. 0.125) in
-  let gbv = Array.init (n * n) ~f:(fun x -> Float.of_int (x % 23) -. 11.) in
+  let gav =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:19 ~offset:0. ~stride:0.125)
+  in
+  let gbv =
+    Array.init (n * n)
+      ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:23 ~offset:(-11.) ~stride:1.)
+  in
   let ga = TDSL.ndarray gav ~label:[ "ga" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let gb = TDSL.ndarray gbv ~label:[ "gb" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let%op hc0 = ga * gb in
@@ -378,8 +391,14 @@ let () =
    the inference-GEMM case the seed targets (activations x constant weights). CPU-only schedule;
    identity transform elsewhere. === *)
 let () =
-  let gav = Array.init (n * n) ~f:(fun x -> (Float.of_int (x % 19) *. 0.125) -. 1.) in
-  let gbv = Array.init (n * n) ~f:(fun x -> Float.of_int (x % 23) -. 11.) in
+  let gav =
+    Array.init (n * n)
+      ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:19 ~offset:(-8.) ~stride:0.125)
+  in
+  let gbv =
+    Array.init (n * n)
+      ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:23 ~offset:(-11.) ~stride:1.)
+  in
   let gb = TDSL.ndarray gbv ~label:[ "mgb" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let xa0 = TDSL.param ~values:gav "xa0" ~input_dims:[ n ] ~output_dims:[ n ] () in
   let%op mx0 = xa0 * gb in

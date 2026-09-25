@@ -33,7 +33,7 @@ let () =
   let n_batches = 4 and batch = 16 and d_in = 8 and d_hid = 16 and classes = 4 in
   let xs =
     NTDSL.init ~l:"xs" ~prec:Ir.Ops.single ~b:[ n_batches; batch ] ~i:[] ~o:[ d_in ]
-      ~f:(fun idcs -> Float.of_int ((idcs.(0) + (2 * idcs.(1)) + idcs.(2)) % 5) *. 0.1)
+      ~f:(Ll_test.weighted ~weights:[| 1; 2; 1 |] ~modulus:5 ~offset:0. ~stride:0.1)
       ()
   in
   let ys =

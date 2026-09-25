@@ -197,8 +197,12 @@ let provenance = "geometry from the schedule"
 let elt_bytes = 4
 
 let () =
-  let mav = Array.init (n * n) ~f:(fun x -> Float.of_int (x % 13) *. 0.25) in
-  let mbv = Array.init (n * n) ~f:(fun x -> Float.of_int (x % 17) -. 8.) in
+  let mav =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:13 ~offset:0. ~stride:0.25)
+  in
+  let mbv =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:17 ~offset:(-8.) ~stride:1.)
+  in
   let ma = TDSL.ndarray mav ~label:[ "tmg_a" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let mb = TDSL.ndarray mbv ~label:[ "tmg_b" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let%op serial = ma * mb in
@@ -351,8 +355,13 @@ let () =
 (* === The seeding === *)
 let () =
   let m, nn, k = (64, 512, 64) in
-  let av = Array.init (m * k) ~f:(fun x -> Float.of_int (x % 11) *. 0.5) in
-  let bv = Array.init (k * nn) ~f:(fun x -> Float.of_int (x % 7) -. 3.) in
+  let av =
+    Array.init (m * k) ~f:(Ll_test.cycle_flat ~dims:[| m; k |] ~modulus:11 ~offset:0. ~stride:0.5)
+  in
+  let bv =
+    Array.init (k * nn)
+      ~f:(Ll_test.cycle_flat ~dims:[| k; nn |] ~modulus:7 ~offset:(-3.) ~stride:1.)
+  in
   let a = TDSL.ndarray av ~label:[ "tmg_sa" ] ~input_dims:[ k ] ~output_dims:[ m ] () in
   let b = TDSL.ndarray bv ~label:[ "tmg_sb" ] ~input_dims:[ nn ] ~output_dims:[ k ] () in
   let%op sc = a * b in

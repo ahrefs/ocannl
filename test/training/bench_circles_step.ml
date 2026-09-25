@@ -139,7 +139,9 @@ let () =
      event-chain overhead per boundary. --- *)
   let bench_k k =
     let n = 64 in
-    let xv = Array.init (n * n) ~f:(fun i -> Float.of_int (i % 13)) in
+    let xv =
+      Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:13 ~offset:0. ~stride:1.)
+    in
     let x0 = TDSL.ndarray xv ~label:[ "x0" ] ~output_dims:[ n; n ] () in
     let rec chain t i =
       if i = 0 then t

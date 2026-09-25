@@ -3373,7 +3373,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules cpu_simd_reduction)
- (libraries base ocannl stdio arrayjit.verdict test_utils)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -3503,7 +3503,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules materialize_after_compile)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -3593,7 +3593,7 @@
 (executable
  (name autotune_mma_companion)
  (modules autotune_mma_companion)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -3618,7 +3618,7 @@
 (executable
  (name autotune_batched_companion)
  (modules autotune_batched_companion)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -3666,7 +3666,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules fission_schedule)
- (libraries base ocannl stdio arrayjit.verdict test_utils)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -3723,7 +3723,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules launch_predicate_parity)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -3746,7 +3746,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules schedule_batch_grid)
- (libraries base ocannl stdio arrayjit.verdict test_utils)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -3832,7 +3832,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules schedule_pipelined_matmul)
- (libraries base ocannl stdio arrayjit.verdict test_utils)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -3844,7 +3844,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules schedule_ldmatrix_matmul)
- (libraries base ocannl stdio arrayjit.verdict test_utils)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -3856,7 +3856,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules schedule_swizzle_matmul)
- (libraries base ocannl stdio arrayjit.verdict test_utils)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -3868,7 +3868,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules schedule_register_matmul)
- (libraries base ocannl stdio arrayjit.verdict test_utils)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -3880,7 +3880,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules schedule_cpu_pack_matmul)
- (libraries base ocannl stdio arrayjit.verdict test_utils)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -3892,7 +3892,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules schedule_pack_mma_matmul)
- (libraries base ocannl stdio arrayjit.verdict test_utils)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -3916,7 +3916,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules mma_tensorization_label)
- (libraries base ocannl arrayjit.autotune stdio arrayjit.verdict)
+ (libraries base ocannl arrayjit.autotune stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -3947,7 +3947,14 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules tile_mma_declines)
- (libraries base ocannl arrayjit.autotune stdio arrayjit.verdict test_utils)
+ (libraries
+  base
+  ocannl
+  arrayjit.autotune
+  stdio
+  arrayjit.verdict
+  test_utils
+  ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -4062,7 +4069,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules buffer_aliasing)
- (libraries base ocannl stdio unix arrayjit.verdict)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -4092,7 +4099,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules schedule_epilogue_fusion)
- (libraries base ocannl stdio arrayjit.verdict test_utils)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -4138,7 +4145,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules schedule_conv_gemm)
- (libraries base ocannl stdio arrayjit.verdict test_utils)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -4149,7 +4156,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules padding_lifecycle)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -4441,7 +4448,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules read_before_write_flip)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -4481,7 +4488,7 @@
 (executable
  (name tune_ship_arm)
  (modules tune_ship_arm)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -4510,7 +4517,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules inline_flip_tune)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -4521,7 +4528,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules placement_store)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -4554,7 +4561,7 @@
 (executable
  (name autotune_arm_containment)
  (modules autotune_arm_containment)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -4629,7 +4636,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules autotune_split_reduce)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -4651,7 +4658,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules nonoverlap_pool_grads)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -4673,7 +4680,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules epilogue_fusion_mma_seeds)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -4745,7 +4752,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules autotune_candidate_release)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -4803,7 +4810,7 @@
 (executable
  (name placement_surface)
  (modules placement_surface)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -4837,7 +4844,7 @@
 (executable
  (name flip_bound_pruning)
  (modules flip_bound_pruning)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -5203,7 +5210,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules schedule_contraction_nest)
- (libraries base ocannl stdio arrayjit.verdict test_utils)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -5220,7 +5227,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules alloc_census_peak)
- (libraries base ocannl arrayjit.verdict)
+ (libraries base ocannl arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -5771,6 +5778,6 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules autotune_callback_release)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))

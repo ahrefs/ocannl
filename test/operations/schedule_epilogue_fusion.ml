@@ -67,8 +67,13 @@ let () = Generated.init ~backend_name
 let n = 32
 let bm = 16
 let simd_width = 32
-let mav = Array.init (n * n) ~f:(fun i -> Float.of_int (i % 13) *. 0.25)
-let mbv = Array.init (n * n) ~f:(fun i -> Float.of_int (i % 17) -. 8.)
+
+let mav =
+  Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:13 ~offset:0. ~stride:0.25)
+
+let mbv =
+  Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:17 ~offset:(-8.) ~stride:1.)
+
 let bv = Array.init n ~f:(fun i -> Float.of_int (i % 5) -. 2.)
 
 (* Each leg builds its own graph (tensors are single-use across routines here to keep the legs

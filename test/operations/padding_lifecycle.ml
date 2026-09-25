@@ -24,7 +24,7 @@ let named name (comp : Asgns.comp) : Asgns.comp =
 
 let make_x tag =
   NTDSL.init ~l:(tag ^ "x") ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 11; 11; 4 ]
-    ~f:(fun idcs -> Float.of_int ((idcs.(0) + idcs.(1) + (2 * idcs.(2)) + (3 * idcs.(3))) % 7))
+    ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
     ()
 
 let padding_to_string (tn : Ir.Tnode.t) =

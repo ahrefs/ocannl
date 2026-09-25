@@ -201,14 +201,12 @@ let () =
      f32 addition is exact in any order — bitwise parity is well-defined across tilings. *)
   let x () =
     NTDSL.init ~l:"bg_x" ~prec:Ir.Ops.single ~o:[ bb; ss; kk ]
-      ~f:(fun idcs ->
-        Float.of_int (((idcs.(0) * ss * kk) + (idcs.(1) * kk) + idcs.(2)) % 13) *. 0.25)
+      ~f:(Ll_test.cycle ~dims:[| bb; ss; kk |] ~modulus:13 ~offset:0. ~stride:0.25)
       ()
   in
   let w () =
     NTDSL.init ~l:"bg_w" ~prec:Ir.Ops.single ~o:[ hh; kk; jj ]
-      ~f:(fun idcs ->
-        (Float.of_int (((idcs.(0) * kk * jj) + (idcs.(1) * jj) + idcs.(2)) % 11) -. 5.) *. 0.5)
+      ~f:(Ll_test.cycle ~dims:[| hh; kk; jj |] ~modulus:11 ~offset:(-5.) ~stride:0.5)
       ()
   in
   (* --- The q/k/v shape: rank-4 output, two outer batch loops (batch, head) --- *)
@@ -242,21 +240,12 @@ let () =
   let bt = 2 and ss2 = 16 and hh2 = 2 and kk2 = 8 and jj2 = 32 in
   let att () =
     NTDSL.init ~l:"bg_att" ~prec:Ir.Ops.single ~o:[ bt; ss2; hh2; kk2 ]
-      ~f:(fun idcs ->
-        Float.of_int
-          (((idcs.(0) * ss2 * hh2 * kk2) + (idcs.(1) * hh2 * kk2) + (idcs.(2) * kk2) + idcs.(3))
-          % 11)
-        *. 0.125)
+      ~f:(Ll_test.cycle ~dims:[| bt; ss2; hh2; kk2 |] ~modulus:11 ~offset:0. ~stride:0.125)
       ()
   in
   let v () =
     NTDSL.init ~l:"bg_v" ~prec:Ir.Ops.single ~o:[ bt; kk2; hh2; jj2 ]
-      ~f:(fun idcs ->
-        (Float.of_int
-           (((idcs.(0) * kk2 * hh2 * jj2) + (idcs.(1) * hh2 * jj2) + (idcs.(2) * jj2) + idcs.(3))
-           % 7)
-        -. 3.)
-        *. 0.5)
+      ~f:(Ll_test.cycle ~dims:[| bt; kk2; hh2; jj2 |] ~modulus:7 ~offset:(-3.) ~stride:0.5)
       ()
   in
   leg ~tag:"interior" ~batch_product:(bt * hh2) ~fold_div:(reg ^ " / 2") ~fold_mod:(reg ^ " % 2")

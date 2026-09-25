@@ -217,13 +217,13 @@ let leg ?schedule_of ~tag ~build ~src_a ~src_b ~swz_a ~swz_b ~check ~acc_prec ?(
 (* The bf16 inputs are multiples of 1/4 and 1/2 with 32-term sums bounded by 16, so every product is
    a multiple of 1/8 and every partial sum is exactly representable in bf16's 8 mantissa bits: the
    result is exact regardless of accumulation order or accumulator width. *)
-let bf_a idcs = Float.of_int (((idcs.(0) * n) + idcs.(1)) % 3) *. 0.25
-let bf_b idcs = (Float.of_int (((idcs.(0) * n) + idcs.(1)) % 5) -. 2.) *. 0.5
+let bf_a = Ll_test.cycle ~dims:[| n; n |] ~modulus:3 ~offset:0. ~stride:0.25
+let bf_b = Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:(-2.) ~stride:0.5
 
 (* e5m2 has 2 mantissa bits: inputs from {-1,-0.5,0,0.5,1} and {-1.5..1.5 step 0.5} are exact, every
    product is a multiple of 0.25 bounded by 1.5, and a 32-term f32 sum of such products is exact. *)
-let f8_a idcs = (Float.of_int (((idcs.(0) * n) + idcs.(1)) % 5) *. 0.5) -. 1.
-let f8_b idcs = (Float.of_int (((idcs.(0) * n) + idcs.(1)) % 7) -. 3.) *. 0.5
+let f8_a = Ll_test.cycle ~dims:[| n; n |] ~modulus:5 ~offset:(-2.) ~stride:0.5
+let f8_b = Ll_test.cycle ~dims:[| n; n |] ~modulus:7 ~offset:(-3.) ~stride:0.5
 
 let () =
   let mk ~l ~prec ~f = NTDSL.init ~l ~prec ~i:[ n ] ~o:[ n ] ~f () in

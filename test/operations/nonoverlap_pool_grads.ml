@@ -64,10 +64,12 @@ let%op pool_gate ?(nonoverlapping = false) ?(stride = 2) ?(window_size = 2) ?(us
     @^+ "... | stride*oh< + wh, stride*ow< + ww, ..c..; |wh, ww => ... | oh, ow, ..c.."
           [ "wh"; "ww" ] (stretch 0.0)
 
-(* Deterministic data with in-window ties: coarse quantization repeats values. *)
+(* Deterministic data with in-window ties: coarse quantization repeats values. The operand is [h; w]
+   or [h; w; c], so the weights are cut to its rank. *)
 let input_f idcs =
-  let h = idcs.(0) and w = idcs.(1) and c = if Array.length idcs > 2 then idcs.(2) else 0 in
-  Float.of_int (((h * 7) + (w * 3) + (c * 5)) % 4)
+  Ll_test.weighted
+    ~weights:(Array.sub [| 7; 3; 5 |] ~pos:0 ~len:(Array.length idcs))
+    ~modulus:4 ~offset:0. ~stride:1. idcs
 
 (* Build pool(x) with [pool], run one update of the summed pool, return (y, gx). *)
 let run_pool ~label ~dims pool =

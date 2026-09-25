@@ -69,8 +69,13 @@ let annotated seg = not (List.is_empty (LL.hardware_axes seg.LL.llc))
    pointwise producer/consumer pair in one parallel kernel (no fission cut). --- *)
 let () =
   let n = 512 in
-  let av = Array.init (n * n) ~f:(fun i -> Float.of_int (i % 19) *. 0.5) in
-  let bv = Array.init (n * n) ~f:(fun i -> Float.of_int (i % 23) -. 11.) in
+  let av =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:19 ~offset:0. ~stride:0.5)
+  in
+  let bv =
+    Array.init (n * n)
+      ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:23 ~offset:(-11.) ~stride:1.)
+  in
   let expected = Array.init (n * n) ~f:(fun i -> (av.(i) +. bv.(i)) *. (av.(i) +. bv.(i))) in
   let a = TDSL.ndarray av ~label:[ "a" ] ~output_dims:[ n; n ] () in
   let b = TDSL.ndarray bv ~label:[ "b" ] ~output_dims:[ n; n ] () in
@@ -446,8 +451,14 @@ let () =
   in
   let seg_kinds tuples = List.map tuples ~f:(fun (kind, _, _, _) -> kind) in
   let b = 4 and n = 32 and m = 64 and k = 16 in
-  let xv = Array.init (b * n * k) ~f:(fun i -> Float.of_int (i % 7) *. 0.25) in
-  let wv = Array.init (k * m) ~f:(fun i -> Float.of_int (i % 5) *. 0.125) in
+  let xv =
+    Array.init
+      (b * n * k)
+      ~f:(Ll_test.cycle_flat ~dims:[| b; n; k |] ~modulus:7 ~offset:0. ~stride:0.25)
+  in
+  let wv =
+    Array.init (k * m) ~f:(Ll_test.cycle_flat ~dims:[| k; m |] ~modulus:5 ~offset:0. ~stride:0.125)
+  in
   let x = TDSL.ndarray xv ~label:[ "fx" ] ~batch_dims:[ b ] ~output_dims:[ n; k ] () in
   let w = TDSL.ndarray wv ~label:[ "fw" ] ~output_dims:[ k; m ] () in
   let%op z = x +* "b|ik;kj=>b|ij" w in
@@ -501,7 +512,9 @@ let () =
    accumulation nest. --- *)
 let () =
   let n = 192 in
-  let xv = Array.init (n * n) ~f:(fun i -> Float.of_int (i % 29) *. 0.125) in
+  let xv =
+    Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:29 ~offset:0. ~stride:0.125)
+  in
   let x = TDSL.ndarray xv ~label:[ "x" ] ~output_dims:[ n; n ] () in
   let%op l = ({ w = uniform (); o = [ 192; 192 ] } *. x) ++ "...|... => |->0" in
   let update = named "fission_bwd" (Train.grad_update l) in

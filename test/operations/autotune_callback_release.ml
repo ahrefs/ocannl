@@ -20,12 +20,12 @@ let () =
   let n = 16 in
   let a =
     TDSL.ndarray
-      (Array.init (n * n) ~f:(fun i -> Float.of_int (i % 7)))
+      (Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:7 ~offset:0. ~stride:1.))
       ~input_dims:[ n ] ~output_dims:[ n ] ()
   in
   let b =
     TDSL.ndarray
-      (Array.init (n * n) ~f:(fun i -> Float.of_int (i % 5)))
+      (Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:5 ~offset:0. ~stride:1.))
       ~input_dims:[ n ] ~output_dims:[ n ] ()
   in
   let%op product = a * b in

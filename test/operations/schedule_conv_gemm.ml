@@ -90,7 +90,7 @@ let nest_paths (llc : LL.t) : Ir.Indexing.symbol list list =
    compilation, so each leg builds its own graph). *)
 let make_x tag =
   NTDSL.init ~l:(tag ^ "x") ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 11; 11; 4 ]
-    ~f:(fun idcs -> Float.of_int ((idcs.(0) + idcs.(1) + (2 * idcs.(2)) + (3 * idcs.(3))) % 7))
+    ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
     ()
 
 (* Same values as {!make_x}, but through the padding-aware [reshape] constructor: the buffer is
@@ -100,14 +100,13 @@ let make_x tag =
 let make_x_fresh tag =
   let ndarray =
     Ir.Ndarray.init_array ~debug:(tag ^ "x") Ir.Ops.single ~dims:[| 2; 11; 11; 4 |] ~padding:None
-      ~f:(fun idcs -> Float.of_int ((idcs.(0) + idcs.(1) + (2 * idcs.(2)) + (3 * idcs.(3))) % 7))
+      ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
   in
   NTDSL.reshape ~l:(tag ^ "x") ~b:[ 2 ] ~o:[ 11; 11; 4 ] ndarray ()
 
 let make_kern tag =
   NTDSL.init ~l:(tag ^ "k") ~prec:Ir.Ops.single ~i:[ 3; 3; 4 ] ~o:[ 8 ]
-    ~f:(fun idcs ->
-      Float.of_int (((2 * idcs.(0)) + idcs.(1) + idcs.(2) + (3 * idcs.(3))) % 5) -. 2.)
+    ~f:(Ll_test.weighted ~weights:[| 2; 1; 1; 3 |] ~modulus:5 ~offset:(-2.) ~stride:1.)
     ()
 
 let run_plain name y =
@@ -181,12 +180,12 @@ let () =
   (* === Pattern discipline: a matmul is not a conv site === *)
   (let ma =
      NTDSL.init ~l:"cvm_a" ~prec:Ir.Ops.single ~i:[ 16 ] ~o:[ 16 ]
-       ~f:(fun idcs -> Float.of_int ((idcs.(0) + idcs.(1)) % 5))
+       ~f:(Ll_test.weighted ~weights:[| 1; 1 |] ~modulus:5 ~offset:0. ~stride:1.)
        ()
    in
    let mb =
      NTDSL.init ~l:"cvm_b" ~prec:Ir.Ops.single ~i:[ 16 ] ~o:[ 16 ]
-       ~f:(fun idcs -> Float.of_int ((idcs.(0) - idcs.(1)) % 3))
+       ~f:(Ll_test.weighted ~weights:[| 1; -1 |] ~modulus:3 ~offset:0. ~stride:1.)
        ()
    in
    let%op mc = ma * mb in
@@ -558,13 +557,12 @@ let () =
      the same shape the autotune per-segment seeding targets. === *)
   let make_x8 tag =
     NTDSL.init ~l:(tag ^ "x") ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 10; 10; 8 ]
-      ~f:(fun idcs -> Float.of_int ((idcs.(0) + idcs.(1) + (2 * idcs.(2)) + (3 * idcs.(3))) % 7))
+      ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
       ()
   in
   let make_kern8 tag =
     NTDSL.init ~l:(tag ^ "k") ~prec:Ir.Ops.single ~i:[ 3; 3; 8 ] ~o:[ 16 ]
-      ~f:(fun idcs ->
-        Float.of_int (((2 * idcs.(0)) + idcs.(1) + idcs.(2) + (3 * idcs.(3))) % 5) -. 2.)
+      ~f:(Ll_test.weighted ~weights:[| 2; 1; 1; 3 |] ~modulus:5 ~offset:(-2.) ~stride:1.)
       ()
   in
   let make_conv8 sub =
@@ -706,7 +704,7 @@ let () =
   let make_conv8_s2 sub =
     let x =
       NTDSL.init ~l:(sub ^ "x") ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 17; 17; 8 ]
-        ~f:(fun idcs -> Float.of_int ((idcs.(0) + idcs.(1) + (2 * idcs.(2)) + (3 * idcs.(3))) % 7))
+        ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
         ()
     in
     let kern = make_kern8 sub in
@@ -804,7 +802,7 @@ let () =
   let make_conv_s2_r12 sub =
     let x =
       NTDSL.init ~l:(sub ^ "x") ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 25; 25; 4 ]
-        ~f:(fun idcs -> Float.of_int ((idcs.(0) + idcs.(1) + (2 * idcs.(2)) + (3 * idcs.(3))) % 7))
+        ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
         ()
     in
     let kern = make_kern sub in
@@ -860,7 +858,7 @@ let () =
      cooperative-load barriers are well-formed. === *)
   let make_x16 tag =
     NTDSL.init ~l:(tag ^ "x") ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 18; 18; 8 ]
-      ~f:(fun idcs -> Float.of_int ((idcs.(0) + idcs.(1) + (2 * idcs.(2)) + (3 * idcs.(3))) % 7))
+      ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
       ()
   in
   let make_conv16 sub =

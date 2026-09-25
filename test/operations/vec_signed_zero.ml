@@ -150,7 +150,9 @@ let () =
        so row 0's products are [-0.0] rather than [+0.0]. Everything is a multiple of 1/8, hence
        exact in f32: the parity claims are about zero signs, not rounding. *)
     let av =
-      Array.init (mi * mk) ~f:(fun x -> if x < mk then -0.0 else Float.of_int ((x % 7) + 1) *. 0.5)
+      Array.init (mi * mk) ~f:(fun x ->
+          if x < mk then -0.0
+          else Ll_test.cycle_flat ~dims:[| mi; mk |] ~modulus:7 ~offset:1. ~stride:0.5 x)
     in
     let bv =
       Array.init (mk * mj)
