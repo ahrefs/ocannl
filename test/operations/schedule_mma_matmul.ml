@@ -295,6 +295,7 @@ let () =
                   (16, 16, 8) );
               ];
             mma_f16_wide_acc_scopes = [];
+            mma_bf16_wide_acc_scopes = [];
             mma_staged_layouts = [];
             mma_pipeline_depths = [];
           };
@@ -759,9 +760,10 @@ let () =
        loses close to a bf16 ulp at the partial-sum scale. The [staged+tensorized half] leg below
        already carried this exception for the f16->f32 combination; these legs arrived later
        (gh-ocannl-545) without AMD hardware in the loop, so they asserted the CUDA/Metal premise on
-       a backend where it does not hold. Keeping the comparison numeric rather than dropping it
-       preserves what it is for: a wrong stride or a mis-mapped fragment moves values by O(1), not
-       by 1e-2. *)
+       a backend where it does not hold. The [Bf16_wide] legs below take the uniform-bf16
+       combination off the bf16-accumulate unit (gh-ocannl-838). Keeping the comparison numeric
+       rather than dropping it preserves what it is for: a wrong stride or a mis-mapped fragment
+       moves values by O(1), not by 1e-2. *)
     let eq =
       (* The exception is the TENSOR UNIT's, so it applies only where the tensor unit runs: with no
          advertised tile-MMA (gh-ocannl-1032) HIP renders the same scalar fallback as everyone
@@ -839,6 +841,146 @@ let () =
   (* [bm = 32] makes the block extents 32x32x32, so the row-tile loop [__mi] runs twice: the
      m-direction fragment addressing is only exercised above one intrinsic row tile. *)
   bf16_leg ~bm:(2 * bm) ~tag:"bfu_m2" ~acc_prec:Ir.Ops.bfloat16 ~build:mul ~check:uniform_check ();
+
+  (* --- Bf16_wide (gh-ocannl-838): the uniform-bf16 combination under the wide policy. HIP swaps
+     its rocWMMA arm to an f32 accumulator fragment over the bf16 STORAGE destination, converting at
+     the [d] boundary; CUDA's inline-PTX arm is already f32 in hardware; Metal's uniform-bf16
+     [simdgroup_matrix] arm declines to the scalar fallback; the CPU register tiling renders as
+     under the default policy (its accumulator is f32 either way).
+
+     The inputs are [mwa]/[mwb]'s WIDTH-SENSITIVE cycles, which are bf16-exact too (at most five
+     significant bits): 32-term sums reach ~77, where bf16's spacing (1/2) cannot hold the
+     1/64-multiple partials, while every partial stays exact in f32. The claim is the issue's own
+     measure — the worst error against the EXACT product must drop to the narrowing rounding alone,
+     half a bf16 ulp (plus one f32 ulp of slack at the scale of the sum for gfx11's WMMA, whose f32
+     accumulate is not exactly rounded either) — and it is two-sided: the same bound over the same
+     inputs, rendered under the default policy, must FAIL wherever the backend keeps bf16 storage
+     residency (HIP's bf16-accumulate WMMA, or its narrow serial fallback), which is what makes
+     passing it evidence rather than a property of easy inputs. Metal's side of the negative control
+     is skipped: its bf16 [simdgroup_matrix] accumulate has not been characterized, so whether it
+     exceeds the bound is not a claim this test can make. --- *)
+  let bwa = NTDSL.init ~l:"bwa" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fwa () in
+  let bwb = NTDSL.init ~l:"bwb" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fwb () in
+  let exact_bw =
+    Array.init (n * n) ~f:(fun t ->
+        let i = t / n and j = t % n in
+        let acc = ref 0.0 in
+        for k = 0 to n - 1 do
+          acc := !acc +. (fwa [| i; k |] *. fwb [| k; j |])
+        done;
+        !acc)
+  in
+  let wide_ref_bw =
+    compile_serial ~name:"mm_bw_wide_ref"
+      (NTDSL.init ~l:"bwref" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ]
+         ~f:(fun idcs -> exact_bw.((idcs.(0) * n) + idcs.(1)))
+         ())
+  in
+  (* Half a bf16 ulp of the exact value (8 significand bits: [frexp]'s mantissa is in [0.5, 1), so
+     the ulp is [2^(e-8)]), plus one f32 ulp (2^(e-24)) of slack. *)
+  let narrowing_bound x =
+    let _, e = Float.frexp x in
+    Float.ldexp 1. (e - 9) +. Float.ldexp 1. (e - 24)
+  in
+  let worst_excess got =
+    Array.foldi got ~init:Float.neg_infinity ~f:(fun t acc g ->
+        Float.max acc (Float.abs (g -. exact_bw.(t)) -. narrowing_bound exact_bw.(t)))
+  in
+  let bf16_uniform_mma () =
+    let%op t = bwa * bwb in
+    Tn.update_prec t.Tensor.value Ir.Ops.bfloat16;
+    t
+  in
+  (* Read under the default policy: whether this backend's bf16 accumulator keeps storage residency
+     there, i.e. whether the negative control below must exceed the bound. *)
+  let default_bf16_narrow =
+    Ir.Ops.equal_prec
+      ((Context.codegen_capabilities (Context.auto ())).Ir.Backend_intf.accum_prec Ir.Ops.bfloat16)
+      Ir.Ops.bfloat16
+  in
+  let got_bw_default, _ = compile_mma_with_census ~name:"mm_bw_default_mma" (bf16_uniform_mma ()) in
+  Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_wide };
+  let want_bw = compile_serial ~name:"mm_bw_wide_serial" (bf16_uniform_mma ()) in
+  let bw_seed_scopes = ref None in
+  let got_bw, census_bw =
+    compile_mma_with_census
+      ~inspect:(fun opt ->
+        let limits = Context.hardware_limits (Context.auto ()) in
+        let seeds = Autotune.sketch_seed_params ~is_gpu:on_gpu ~is_cpu:(not on_gpu) ~limits opt in
+        let has_mma_with predicate =
+          List.exists seeds ~f:(fun p -> p.Autotune.sk_mma && predicate p.Autotune.sk_bk)
+        in
+        bw_seed_scopes := Some (has_mma_with (( = ) 0), has_mma_with (fun bk -> bk > 0)))
+      ~name:"mm_bw_wide_mma" (bf16_uniform_mma ())
+  in
+  Numerics.set_policy saved_policy;
+  Stdio.eprintf
+    "schedule_mma_matmul: uniform-bf16 worst excess over the narrowing bound on %s: Bf16_wide \
+     %.3g, default policy %.3g (not part of the golden)\n\
+     %!"
+    backend_name (worst_excess got_bw) (worst_excess got_bw_default);
+  p_all2 "Bf16_wide bf16 serial rendering equals the once-narrowed wide reference bitwise" want_bw
+    wide_ref_bw ~f:Float.equal;
+  p "Bf16_wide uniform-bf16 tensorized matmul errs by the narrowing rounding alone"
+    Float.(worst_excess got_bw <= 0.);
+  (let claim =
+     "the default-policy uniform-bf16 matmul exceeds the narrowing rounding exactly where the \
+      backend keeps bf16 storage residency (the inputs discriminate)"
+   in
+   if on_metal then skipped claim
+   else p claim (Bool.equal Float.(worst_excess got_bw_default > 0.) default_bf16_narrow));
+  let bf16_wide_scopes =
+    match (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.mma with
+    | Some m -> m.Ir.Backend_intf.mma_bf16_wide_acc_scopes
+    | None -> []
+  in
+  let bf16_wide_advertised scope =
+    List.mem bf16_wide_scopes scope ~equal:Ir.Backend_intf.equal_mma_emission_scope
+  in
+  (let claim = "Bf16_wide mma seeds match the backend's advertised emission scopes" in
+   if on_gpu then
+     match !bw_seed_scopes with
+     | Some (unstaged, staged) ->
+         (* As for the Fp16_wide seeds above: this site's staged menu includes a one-block form
+            whose accumulator is still per-statement. *)
+         p claim
+           (Bool.equal unstaged (bf16_wide_advertised Ir.Backend_intf.Mma_per_statement)
+           && Bool.equal staged
+                (bf16_wide_advertised Ir.Backend_intf.Mma_per_statement
+                || bf16_wide_advertised Ir.Backend_intf.Mma_fragment_scope))
+     | None -> p claim false
+   else skipped claim);
+  (let src = Generated.read "mm_bw_wide_mma" in
+   let has s = String.is_substring src ~substring:s in
+   let intrinsics =
+     List.exists census_bw ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics)
+   in
+   let fallback =
+     (not (List.is_empty census_bw))
+     && List.for_all census_bw ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_scalar_fallback)
+   in
+   let ok =
+     if on_metal then fallback && has "== 0)" && not (has "simdgroup_bfloat8x8")
+     else if on_hip then
+       if Lazy.force hip_mma then
+         (* The [float] accumulator declaration AND the staging fragment: the bf16-accumulate arm
+            this replaces declares [accumulator, 16, 16, 16, rocwmma::bfloat16_t] and stages
+            nothing. *)
+         intrinsics
+         && has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>"
+         && has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, rocwmma::bfloat16_t>"
+         && has "__mma_dstage"
+         && not (has "== 0)")
+       else fallback && (not (has "rocwmma")) && has "== 0)"
+     else if on_gpu then
+       if bf16_wide_advertised Ir.Backend_intf.Mma_per_statement then
+         intrinsics && has "mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32"
+       else fallback && has "== 0)"
+     else
+       has "Tile_mma register tiling"
+       && has "narrow storage bridged: d:bfloat16 a:bfloat16 b:bfloat16"
+   in
+   p "Bf16_wide uniform-bf16 tensorized structure as expected" ok);
 
   (* --- Fp8 (e5m2) inputs accumulated in f32: the inline-PTX [mma.sync] path on CUDA sm_89+
      (tensorize-mma T3+; wmma cannot express fp8), the scalar fallback elsewhere. e5m2 has 2
@@ -1491,6 +1633,77 @@ let () =
        `Backend` skips), and the host half is reported anyway, by name, in the note above. *)
     skipped claim_fw_value;
     skipped claim_fw_struct);
+
+  (* --- Staged uniform-bf16 under [Numerics.Bf16_wide] (gh-ocannl-838): the gh-ocannl-789 k-split
+     discriminator at bf16, executing the converted [d] boundary in the FRAGMENT scope. bf16's
+     spacing at 256 is 2, so each later block's +1 is lost to any narrowing between blocks (257 ties
+     back to the even 256) while an f32 fragment resident across all nine blocks reaches 264
+     exactly. The negative control renders the same composition under the default policy — the
+     bf16-accumulate fragment — and must NOT reach 264 (it narrows per step, whichever way gfx11
+     rounds the ties). HIP-only: Metal's uniform-bf16 arm declines under the wide policy, CUDA has
+     no fragment-scope uniform-bf16 arm, and the lane-0 fallback of a staged schedule narrows at
+     every [k_o] boundary by construction. --- *)
+  let claim_bw_value =
+    "staged+tensorized Bf16_wide matmul equals the once-narrowed wide reference bitwise"
+  in
+  let claim_bw_struct = "staged+tensorized Bf16_wide fragment residency converts d once" in
+  let claim_bw_control =
+    "staged+tensorized default-policy uniform-bf16 matmul narrows between blocks (the \
+     discriminator discriminates)"
+  in
+  if on_hip && Lazy.force hip_mma then (
+    let kw = 144 in
+    let bwsa =
+      NTDSL.init ~l:"bwsa" ~prec:Ir.Ops.bfloat16 ~i:[ kw ] ~o:[ n ]
+        ~f:(fun idcs -> if idcs.(1) % bm = 0 then 1. else 0.)
+        ()
+    in
+    let bwsb =
+      NTDSL.init ~l:"bwsb" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ kw ]
+        ~f:(fun idcs -> if idcs.(0) % bm <> 0 then 0. else if idcs.(0) = 0 then 256. else 1.)
+        ()
+    in
+    let run_staged ~name =
+      let%op t = bwsa * bwsb in
+      Tn.update_prec t.Tensor.value Ir.Ops.bfloat16;
+      let transform opt =
+        Sched.apply
+          (staged_schedule ~out:t.Tensor.value ~src_a:bwsa.Tensor.value ~src_b:bwsb.Tensor.value opt)
+          opt
+      in
+      let ctx, routine =
+        Context.compile
+          ~lowered_transform:(fun o -> [ transform o ])
+          (Context.auto ())
+          (named name (Train.forward t))
+          Ir.Indexing.Empty
+      in
+      let ctx = Context.run ctx routine in
+      Context.get_values ctx t.Tensor.value
+    in
+    let got_default = run_staged ~name:"mm_bu_staged_mma" in
+    Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_wide };
+    let got_bw = run_staged ~name:"mm_buw_staged_mma" in
+    Numerics.set_policy saved_policy;
+    Stdio.eprintf
+      "schedule_mma_matmul: staged uniform-bf16 k-split cell 0: Bf16_wide %g, default policy %g \
+       (not part of the golden)\n\
+       %!"
+      got_bw.(0) got_default.(0);
+    p_all claim_bw_value (Array.to_list got_bw) ~f:(Float.equal 264.);
+    p_all claim_bw_control (Array.to_list got_default) ~f:(fun v -> not (Float.equal v 264.));
+    let src = Generated.read "mm_buw_staged_mma" in
+    let has s = String.is_substring src ~substring:s in
+    p claim_bw_struct
+      (staged_half_resident ~converted_d:true src
+      && has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>"
+      && has ".x[__ei]" && has "__mma_dstage"))
+  else (
+    (* Where the tensor unit is absent this leg has no fragment to convert (see the Fp16_wide leg's
+       skip above for why this is the ordinary backend skip). *)
+    skipped claim_bw_value;
+    skipped claim_bw_control;
+    skipped claim_bw_struct);
 
   (* --- Transposed operand layouts (the gradient-GEMM access patterns): [d[i,j] += at[k,i] *
      b[k,j]] (a stored transposed) and [d[i,j] += a[i,k] * bt[j,k]] (b stored transposed). Tensorize

@@ -29,6 +29,11 @@ bfu_tb tensorized matmul matches the serial twin: true
 bfu_tb tensorized structure as expected: true
 bfu_m2 tensorized matmul matches the serial twin: true
 bfu_m2 tensorized structure as expected: true
+Bf16_wide bf16 serial rendering equals the once-narrowed wide reference bitwise: true
+Bf16_wide uniform-bf16 tensorized matmul errs by the narrowing rounding alone: true
+the default-policy uniform-bf16 matmul exceeds the narrowing rounding exactly where the backend keeps bf16 storage residency (the inputs discriminate): true
+Bf16_wide mma seeds match the backend's advertised emission scopes: true
+Bf16_wide uniform-bf16 tensorized structure as expected: true
 f8 tensorized matmul matches the serial twin bitwise: true
 f8 tensorized structure as expected: true
 f8 Metal fallback fences device memory on both sides: true
@@ -56,6 +61,9 @@ staged+tensorized uniform-f16 matmul matches the serial twin bitwise: true
 staged+tensorized uniform-f16 fragment residency: true
 staged+tensorized Fp16_wide matmul equals the once-narrowed wide reference bitwise: true
 staged+tensorized Fp16_wide fragment residency converts d once: true
+staged+tensorized Bf16_wide matmul equals the once-narrowed wide reference bitwise: true
+staged+tensorized default-policy uniform-bf16 matmul narrows between blocks (the discriminator discriminates): true
+staged+tensorized Bf16_wide fragment residency converts d once: true
 ta tensorized matmul matches the serial twin: true
 ta C-backend fallback matches bitwise: true
 ta tensorized structure as expected: true

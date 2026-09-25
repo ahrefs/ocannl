@@ -170,6 +170,7 @@ let known_config_keys =
       "tf32_matmuls";
       "narrow_compute_f32";
       "fp16_arithmetic";
+      "bf16_arithmetic";
       (* Algebraic rewrites over lowered code *)
       "online_softmax";
       (* Identifiers and other *)
@@ -246,7 +247,7 @@ let config_key_classification : (config_key_class * string * string list) list =
     ( Keyed "numerics",
       "the numerics policy is consulted at codegen and by the autotune tile-shape choice, never in \
        the lowered code (gh-ocannl-568)",
-      [ "tf32_matmuls"; "narrow_compute_f32"; "fp16_arithmetic" ] );
+      [ "tf32_matmuls"; "narrow_compute_f32"; "fp16_arithmetic"; "bf16_arithmetic" ] );
     ( Keyed "pool",
       "it decides the worker pool timings execute on, and CPU crowns do not transfer across pools \
        (gh-ocannl-530)",
@@ -1100,8 +1101,10 @@ cc_vector_bytes=0
 # what math is being done (they are the orthogonal axis; see the issue). fp16_arithmetic=auto
 # resolves deterministically per backend (gh-ocannl-680), so pinning the default keeps the
 # principle: this profile changes no math, and same-machine runs stay reproducible.
+# bf16_arithmetic=auto likewise (gh-ocannl-838).
 tf32_matmuls=false
 fp16_arithmetic=auto
+bf16_arithmetic=auto
 narrow_compute_f32=true
 # The algebraic-rewrite gates likewise at their defaults: no rewrite reassociates a reduction
 # under this profile.
@@ -1153,6 +1156,10 @@ fp16_arithmetic=true
 # f32 matmul operands computed at tf32 (10-bit mantissa, f32 accumulation) on the backends with
 # a tf32 tile shape (CUDA sm_80+); a no-op elsewhere.
 tf32_matmuls=true
+# The narrow side of the bf16 accumulator trade (gh-ocannl-838), symmetric with fp16_arithmetic
+# above: never the strict f32 residency `false` requests. It resolves as auto on every backend
+# today; naming it keeps this regime's bf16 numerics independent of how auto later resolves.
+bf16_arithmetic=true
 # The online-softmax attention rewrite (gh-ocannl-483): the softmax normalizer's summation is
 # reassociated into a per-row scan, and the probabilities are never materialized.
 online_softmax=true

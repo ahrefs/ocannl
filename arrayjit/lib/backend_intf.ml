@@ -105,6 +105,14 @@ type mma_capability = {
           [thread_elements()] boundary copy). Withholding only the unsupported scope preserves legal
           tensorized schedules without letting an outer [k] split introduce extra f16 narrowing
           boundaries. *)
+  mma_bf16_wide_acc_scopes : mma_emission_scope list;
+      (** The bf16 twin of {!mma_f16_wide_acc_scopes}: the emission scopes in which the backend's
+          uniform-bf16 arm holds the accumulator in f32 and converts once at that scope's [d]
+          boundary, as {!Numerics.Bf16_wide} requires (gh-ocannl-838). HIP advertises both scopes
+          (rocWMMA's [(bf16, bf16, f32)] fragments behind the same converted boundary as the wide
+          f16 arm); CUDA sm_80+ only {!Mma_per_statement} (its inline-PTX [m16n8k16] arm, whose
+          accumulate is f32 in hardware); Metal none (its uniform-bf16 [simdgroup_matrix] arm
+          declines under the wide policy). *)
   mma_staged_layouts :
     ((mma_input_format * mma_input_format * mma_input_format) * mma_staged_layout) list;
       (** Format triples whose cooperatively staged operand tiles the backend can read in a

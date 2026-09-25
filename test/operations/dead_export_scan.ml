@@ -116,10 +116,13 @@ let exempt_zero_reference_exports =
     "Ndarray.uint32_to_float";
     "Ndarray.uint64_to_float";
     "Ndarray.used_memory";
+    "Numerics.bf16_mode_of_sexp";
     "Numerics.compare";
+    "Numerics.compare_bf16_mode";
     "Numerics.compare_fp16_mode";
     "Numerics.default";
     "Numerics.equal";
+    "Numerics.equal_bf16_mode";
     "Numerics.fp16_mode_of_sexp";
     "Numerics.policy";
     "Numerics.t_of_sexp";

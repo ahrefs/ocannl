@@ -22,10 +22,11 @@
    hold f32 per-lane registers across the whole k extent — the hardware has no bf16 accumulate — so
    its serial legs must match. On HIP and Metal the tensor units accumulate in bf16 fragments and
    the serial legs deliberately keep bf16 storage residency (width-uniform with their mma legs), so
-   the bf16 widened claims are false there BY DESIGN and skipped — while the fp8 claim, which holds
-   universally, executes on every backend. The structural claims grep cc's generated C and the
-   SIMD/Workgroup_reduce-serialization legs exercise CPU-only renderings; they stay cc-only and
-   print their passing golden line as skipped elsewhere. *)
+   the bf16 widened claims are false there BY DESIGN (under the default [Bf16_auto]; the universal
+   legs at the end run them under [Bf16_wide], gh-ocannl-838) and skipped — while the fp8 claim,
+   which holds universally, executes on every backend. The structural claims grep cc's generated C
+   and the SIMD/Workgroup_reduce-serialization legs exercise CPU-only renderings; they stay cc-only
+   and print their passing golden line as skipped elsewhere. *)
 
 open Base
 open Ocannl
@@ -1101,3 +1102,58 @@ let () =
         let has s = String.is_substring src ~substring:s in
         p claim_off_shape (has "single_to_bfloat16(fmaf("))
   end
+
+(* === bf16 residency under the bf16_arithmetic policy (gh-ocannl-838) === *)
+(* Universal legs, executed on every backend: the widened bf16 claims the gate above skips on HIP
+   and Metal BY DESIGN hold there too once [Bf16_wide] asks for f32 residency, and the contract is
+   unconditional — [narrow_compute_f32 = false] leaves CPU bf16 COMPUTE at storage width, but the
+   accumulator still resides in f32 ([Numerics.cpu_accum_prec]). The default-policy leg is the
+   two-sided complement: on the same discriminating inputs it matches the wide reference exactly
+   where the backend already widens bf16, and diverges where it keeps storage residency — pinning
+   [Bf16_auto]'s CURRENT resolution, which (like [Fp16_auto]) retains latitude per backend. *)
+let claim_bf16_wide_matmul =
+  "under Bf16_wide the bf16 naive matmul equals the once-narrowed wide-accumulation reference"
+
+let claim_bf16_wide_ncf32_off =
+  "under Bf16_wide + narrow_compute_f32=false the bf16 naive matmul still equals the wide reference"
+
+let claim_bf16_default_matmul =
+  "the default-policy bf16 matmul matches the wide reference exactly where the backend widens bf16 \
+   and diverges where it keeps storage residency"
+
+let () =
+  let bf16_matmul ~name =
+    let ma = NTDSL.init ~l:(name ^ "_a") ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fa () in
+    let mb = NTDSL.init ~l:(name ^ "_b") ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fb () in
+    let%op mc = ma * mb in
+    Tn.update_prec mc.Tensor.value Ir.Ops.bfloat16;
+    run ~name mc
+  in
+  let wide_sums =
+    Array.init (n * n) ~f:(fun t ->
+        let i = t / n and j = t % n in
+        let acc = ref 0.0 in
+        for k = 0 to n - 1 do
+          acc := !acc +. (fa [| i; k |] *. fb [| k; j |])
+        done;
+        !acc)
+  in
+  let want =
+    run ~name:"aw_bf16w_ref"
+      (NTDSL.init ~l:"aw_bf16w_ref" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ]
+         ~f:(fun idcs -> wide_sums.((idcs.(0) * n) + idcs.(1)))
+         ())
+  in
+  let got_auto = bf16_matmul ~name:"aw_bf16_naive_auto" in
+  let saved_policy = Numerics.get () in
+  Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_wide };
+  let got_wide = bf16_matmul ~name:"aw_bf16_naive_wide" in
+  Numerics.set_policy
+    { saved_policy with bf16_arithmetic = Numerics.Bf16_wide; narrow_compute_f32 = false };
+  let got_wide_nco = bf16_matmul ~name:"aw_bf16_naive_wide_nco" in
+  Numerics.set_policy saved_policy;
+  p_all2 claim_bf16_wide_matmul got_wide want ~f:Float.equal;
+  p_all2 claim_bf16_wide_ncf32_off got_wide_nco want ~f:Float.equal;
+  p claim_bf16_default_matmul
+    ((not (Array.is_empty got_auto))
+    && Bool.equal (Array.for_all2_exn got_auto want ~f:Float.equal) widens_bf16)
