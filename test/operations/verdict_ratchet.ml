@@ -49,6 +49,11 @@
    their one-key/one-definition contract, the diagnostics, the controls and the syntax coverage
    matrix that pins the model.
 
+   gh-ocannl-997 adds a third reader, about DIALECT rather than gating: a claim label reported
+   through both [pass_fail] and [skipped] breaks its golden on whichever host skips it, since a skip
+   prints [p]'s [<claim>: true]. [Verdict.gated] picks the dialect itself; the pairing is refused
+   here so that the mixed spelling does not regrow ([Verdict_scan.dialect_census]).
+
    Every synthetic control below earned its place by a mutation run -- the scanner mechanism it pins
    disabled, this alias re-run, exactly that control failing. The manifest of those runs, one row
    per mechanism with the control labels and the retained `tools/test-run.sh` run ids, is
@@ -355,6 +360,17 @@ let () = p "the values agree" (close got want)|ocaml},
       {ocaml|open Verdict.Claims
 let close got want = Array.for_all2_exn got want ~f:Float.equal
 let () = p "the values agree" (close got want)|ocaml},
+      [ "close" ] );
+    (* gh-ocannl-997: [Verdict.gated] is [p] with a gate, so a quantifier handed to it is read
+       exactly as one handed to [p] -- qualified, and through the open. *)
+    ( "refuses an unguarded quantifier handed to Verdict.gated",
+      {ocaml|let close got want = Array.for_all2_exn got want ~f:Float.equal
+let () = Verdict.gated ~when_:on_gpu ~on:"cc" "the values agree" (close got want)|ocaml},
+      [ "close" ] );
+    ( "refuses an unguarded quantifier handed to gated through an open of Verdict.Claims",
+      {ocaml|open Verdict.Claims
+let close got want = Array.for_all2_exn got want ~f:Float.equal
+let () = gated ~when_:on_gpu ~on:"cc" "the values agree" (close got want)|ocaml},
       [ "close" ] );
     ( "keeps an open of Verdict.Claims inside its local scope",
       {ocaml|let close got want = Array.for_all2_exn got want ~f:Float.equal
@@ -3220,6 +3236,101 @@ let run_colliding_site_controls () =
   @ run_colliding_site_control "same-line repeated computed-label" Scan.Computed_label
       "fixture:%s repeated row: " same_line_repeated_computed_site_fixture
 
+(* {1 One dialect per gated claim (gh-ocannl-997)}
+
+   [Verdict.skipped] prints [Verdict.p]'s line, [<claim>: true], and never [pass_fail]'s [<claim>:
+   PASS]. A label reported through both breaks its golden on exactly the host that skips it,
+   silently until the gate fires there. [Verdict.gated] is the remedy -- one call that picks the
+   dialect itself -- and this is the ratchet that keeps the mixed spelling from regrowing. The
+   reader is [Verdict_scan.dialect_census]; its header lists what it can and cannot see. The
+   controls are the pairings it must find (their labels, in order) and the near misses it must not;
+   the last pins the documented blind spot, so a reader that started pairing every computed label
+   with every other would fail rather than grow noise. *)
+let dialect_pairing_controls =
+  [
+    ( "refuses a pass_fail claim whose label binding a skip also reports",
+      {ocaml|let claim = "the queued reading is per launch"
+let () =
+  if deep then Verdict.pass_fail claim ok
+  else Verdict.skipped ~aggregation:`Environment ~backend:"cc" claim|ocaml},
+      [ "the queued reading is per launch" ] );
+    ( "refuses an opened pass_fail_all2 paired with a bound skip wrapper",
+      {ocaml|open Verdict.Claims
+let skipped = Verdict.skipped ~backend:backend_name
+let () =
+  if on_gpu then pass_fail_all2 "the readback matches" got want ~f:Float.equal
+  else skipped "the readback matches"|ocaml},
+      [ "the readback matches" ] );
+    ( "resolves a label binding to the literal the other side spells out",
+      {ocaml|let claim = "the leg holds"
+let () =
+  if gate then Verdict.pass_fail "the leg holds" ok else Verdict.skipped ~backend:"cc" claim|ocaml},
+      [ "the leg holds" ] );
+    ( "refuses a label computed by the same expression on both sides",
+      {ocaml|let () =
+  if gate then Verdict.pass_fail (leg ^ " holds") ok
+  else Verdict.skipped ~backend:"cc" (leg ^ " holds")|ocaml},
+      [ "leg ^ \" holds\"" ] );
+    ( "accepts a gated claim reported through p on its evaluated side",
+      {ocaml|let claim = "the leg holds"
+let () = if gate then Verdict.p claim ok else Verdict.skipped ~backend:"cc" claim|ocaml},
+      [] );
+    ( "accepts pass_fail and skipped on different labels",
+      {ocaml|let () = Verdict.pass_fail "the direction holds" ok
+let () = Verdict.skipped ~backend:"cc" "the depth-gated leg holds"|ocaml},
+      [] );
+    ( "does not pair labels computed by different expressions, the blind spot gated closes",
+      {ocaml|let () =
+  if gate then Verdict.pass_fail (Printf.sprintf "%s holds" leg) ok
+  else Verdict.skipped ~backend:"cc" (leg ^ " holds")|ocaml},
+      [] );
+  ]
+
+let run_dialect_pairing_controls () =
+  List.map dialect_pairing_controls ~f:(fun (label, source, expected) ->
+      let found =
+        (Scan.dialect_census source).Scan.pairings
+        |> List.map ~f:(fun (pairing : Scan.dialect_pairing) ->
+            Scan.label_key_text pairing.pass_fail.key)
+      in
+      let ok = List.equal String.equal found expected in
+      if not ok then
+        eprintf "dialect-pairing control %S expected [%s], found [%s]\n" label
+          (String.concat ~sep:"; " expected)
+          (String.concat ~sep:"; " found);
+      (label, ok))
+
+let refuse_dialect_pairing ~fail ~source (pairing : Scan.dialect_pairing) =
+  fail
+    (Printf.sprintf
+       "%s:%d reports the claim `%s` through `%s`, and line %d skips the same claim through `%s` \
+        -- a skip prints `<claim>: true`, which is Verdict.p's line and never PASS, so the golden \
+        promoted where the claim is evaluated breaks on exactly the host that skips it. Report the \
+        claim through `Verdict.gated ~when_ ~on`, which picks the dialect itself"
+       source pairing.pass_fail.line
+       (Scan.label_key_text pairing.pass_fail.key)
+       pairing.pass_fail.callee pairing.skipped.line pairing.skipped.callee)
+
+(* The wiring from a pairing to the failure, exercised on the first control's fixture: the reader's
+   controls above say what it finds, this says that a finding refuses the run. *)
+let run_dialect_refusal_control () =
+  let source = "test/operations/verdict_ratchet.ml" in
+  let format =
+    "%s:%d reports the claim `%s` through `%s`, and line %d skips the same claim through `%s` -- a \
+     skip prints `<claim>: true`, which is Verdict.p's line and never PASS, so the golden promoted \
+     where the claim is evaluated breaks on exactly the host that skips it. Report the claim \
+     through `Verdict.gated ~when_ ~on`, which picks the dialect itself"
+  in
+  let refused = ref false in
+  let fail _message =
+    refused := true;
+    Test_utils.Refusal_control_manifest.observe_failure ~source ~format
+  in
+  let _, fixture, _ = List.hd_exn dialect_pairing_controls in
+  List.iter (Scan.dialect_census fixture).Scan.pairings
+    ~f:(refuse_dialect_pairing ~fail ~source:"fixture.ml");
+  ("refuses a planted pass_fail and skipped pairing, naming the gated remedy", !refused)
+
 let base_dir = Dune.base_dir
 let repo_relative = Dune.repo_relative
 
@@ -3271,6 +3382,7 @@ let () =
   let data_used = ref (Set.empty (module String)) in
   let literals = ref 0 and applied = ref 0 and offenders = ref 0 in
   let quantified_offenders = ref 0 in
+  let dialect_offenders = ref 0 and skipped_sites = ref 0 and pass_fail_sites = ref 0 in
   let manifest =
     List.find_map arguments ~f:(fun (relative, path) ->
         if String.is_suffix relative ~suffix:("/" ^ manifest_file) then
@@ -3281,7 +3393,8 @@ let () =
     run_quantified_helper_controls () @ run_refusal_controls ()
     @ [ run_stale_quantified_control () ]
     @ run_shadowed_quantified_controls ()
-    @ run_colliding_site_controls ()
+    @ run_colliding_site_controls () @ run_dialect_pairing_controls ()
+    @ [ run_dialect_refusal_control () ]
   in
   let matrix_rows = run_syntax_matrix () in
   let matrix_results =
@@ -3305,14 +3418,24 @@ let () =
          arrives is whatever the test directories hold -- including whatever a `(select …)` or a ppx
          put there -- and the one thing worse than a parse failure here is one that leaves nobody
          knowing which of three hundred files it was about. *)
-      let scanned, helper_claims =
-        try (Scan.scan content, quantified_claims (Sources.structure_of content))
+      let scanned, helper_claims, dialects =
+        try
+          ( Scan.scan content,
+            quantified_claims (Sources.structure_of content),
+            Scan.dialect_census content )
         with exception_ ->
           fail
             (Printf.sprintf "%s does not parse as OCaml, so this check cannot vouch for it: %s"
                source (Exn.to_string exception_));
-          ({ Scan.sites = []; literals = 0; applied_literals = 0 }, [])
+          ( { Scan.sites = []; literals = 0; applied_literals = 0 },
+            [],
+            { Scan.pairings = []; skipped_sites = 0; pass_fail_sites = 0 } )
       in
+      skipped_sites := !skipped_sites + dialects.Scan.skipped_sites;
+      pass_fail_sites := !pass_fail_sites + dialects.Scan.pass_fail_sites;
+      List.iter dialects.Scan.pairings ~f:(fun pairing ->
+          Int.incr dialect_offenders;
+          refuse_dialect_pairing ~fail ~source pairing);
       literals := !literals + scanned.Scan.literals;
       applied := !applied + scanned.Scan.applied_literals;
       Hashtbl.update per_directory (Stdlib.Filename.dirname source) ~f:(fun previous ->
@@ -3459,6 +3582,9 @@ let () =
   Verdict.p "every test source decides its claims through Verdict" (!offenders = 0);
   Verdict.p "every quantified binding used by a claim witnesses a non-empty population"
     (!quantified_offenders = 0);
+  Verdict.p "no claim label is reported through both pass_fail and skipped" (!dialect_offenders = 0);
+  Verdict.p "and the dialect reader found both skipped and pass_fail claims to pair"
+    (!skipped_sites > 0 && !pass_fail_sites > 0);
   Verdict.p "the scan found every literal planted for it" (Set.is_empty missing);
   Verdict.p "every exemption on this check's lists is still earned"
     (Set.is_empty unread && Set.is_empty stale && Set.is_empty stale_quantified);

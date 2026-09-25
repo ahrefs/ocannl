@@ -293,9 +293,46 @@ let skipped ?(aggregation = (`Backend : skip_aggregation)) ~backend name =
     (Stdlib.String.escaped name);
   p name true
 
+(** [gated ~when_ ~on label b] is a claim that is evaluated only where the gate [when_] is open:
+    there it is {!p} — [label: true], or a failure — and where the gate is closed it is {!skipped}
+    [~backend:on], [b] unread. Both outcomes print [label: true] on a passing run, so a host that
+    legitimately skips cannot break the [.expected] golden (gh-ocannl-997).
+
+    It exists because that byte-identity was a convention the call site had to know. A gated claim
+    written as [if gate then pass_fail label b else skipped ~backend label] records [label: PASS] in
+    the golden on the machine that promotes it, and fails the diff with [label: true] on the one
+    machine that reaches the skipping regime — which is the machine least likely to be promoting.
+    Twice this shipped as far as review (staging#735's depth gate, and a host gate in
+    gh-ocannl-1031's first draft). This entry point picks the dialect itself, and [verdict_ratchet]
+    refuses a label that reaches both {!pass_fail} and {!skipped}.
+
+    [~on] names what the run was on when it skipped — a backend for the default [`Backend]
+    aggregation, a host or configuration capability for [`Environment] — and is printed as
+    [SKIPPED on <on> (vacuous): <label>]. It is [~on] rather than {!skipped}'s [~backend] because a
+    host gate is not a backend. [?aggregation] is {!skipped}'s.
+
+    [?detail] is what {!pass_fail} offered and a gated claim had to give up: evaluated only on an
+    evaluated failure, and rendered the way this dialect renders what a bare [false] cannot say,
+    [<label> (<detail>): false] — the place for a measured number that must stay out of a passing
+    golden.
+
+    [b] is an ordinary [bool], evaluated by the caller whatever the gate says, so it must be
+    computable off-gate — which is also what lets [verdict_ratchet]'s quantifier reader treat this
+    exactly as {!p}. A leg that cannot even compute its boolean without the gate keeps its own
+    branch and reports through {!p} on one side and {!skipped} on the other: the same dialect. *)
+let gated ?aggregation ?detail ~when_ ~on label b =
+  if not when_ then skipped ?aggregation ~backend:on label
+  else
+    match detail with
+    | Some detail when not b -> short_fail label (detail ())
+    | Some _ | None -> p label b
+
 (** [pass_fail label b] prints [label: PASS] or [label: FAIL], and fails the run in the latter case.
     [?detail] is evaluated only on failure and appended in parentheses — the place for a machine-
-    specific number (a measured value, a difference) that must stay out of a passing golden. *)
+    specific number (a measured value, a difference) that must stay out of a passing golden.
+
+    Not for a claim some host skips: {!skipped} prints [label: true], never [label: PASS], so that
+    pairing breaks the golden wherever the skip fires. A gated claim goes through {!gated}. *)
 let pass_fail ?detail label b =
   if b then (
     record_pass label;
@@ -346,6 +383,7 @@ module Claims = struct
   let p_exists = p_exists
   let p_pairwise_distinct = p_pairwise_distinct
   let skipped = skipped
+  let gated = gated
   let pass_fail = pass_fail
   let pass_fail_all2 = pass_fail_all2
 end

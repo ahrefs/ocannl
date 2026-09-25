@@ -402,10 +402,13 @@ let () =
      machine where one dispatch already costs a whole batch target the claim is vacuously true, and
      a vacuous [true] must not read like a verified one. *)
   let batches_here = que.depth > 1 in
-  let claim = "queued timing either reports contention or dispatches more launches than isolated" in
-  if que.contended || iso.contended || batches_here then
-    p claim (que.contended || iso.contended || que.dispatches > iso.dispatches)
-  else Verdict.skipped ~aggregation:`Environment ~backend:(backend ()) claim;
+  gated ~aggregation:`Environment ~on:(backend ())
+    ~when_:(que.contended || iso.contended || batches_here)
+    ~detail:(fun () ->
+      Printf.sprintf "queued %d dispatches at depth %d vs isolated %d" que.dispatches que.depth
+        iso.dispatches)
+    "queued timing either reports contention or dispatches more launches than isolated"
+    (que.contended || iso.contended || que.dispatches > iso.dispatches);
   (* Per launch, not per batch. The two sides refuse mirror errors: a reading that forgot to divide
      by the depth is about [depth] times the cost of a launch in that call, and a reading divided by
      the depth TWICE is that cost's [1/depth]. Both errors are claims about the same quantity the
@@ -496,12 +499,14 @@ let () =
      reads back: every window it measured at below half its median WAS a contended one, because the
      invariant leaves no other possibility. *)
   let upper_discriminating_depth = 5 and low_discriminating_depth = 4 in
-  let upper_claim =
+  gated ~aggregation:`Environment ~on:(backend ())
+    ~when_:(que.depth >= upper_discriminating_depth)
+    ~detail:(fun () ->
+      Printf.sprintf "%.6f ms vs twice the median per launch %.6f ms at depth %d" que.ms
+        (2. *. median_per_launch que)
+        que.depth)
     "queued reading is a per-launch time rather than a per-batch one, or reports contention"
-  in
-  if que.depth >= upper_discriminating_depth then
-    p upper_claim (que.contended || Float.(que.ms <= 2. * median_per_launch que))
-  else Verdict.skipped ~aggregation:`Environment ~backend:(backend ()) upper_claim;
+    (que.contended || Float.(que.ms <= 2. * median_per_launch que));
   (* The low side, as the larger of two terms that refuse on different grounds. [2 / depth] is
      structural: the reading is a minimum over the batches this median is a middle of, so it cannot
      exceed that median, a twice-divided one cannot exceed [median / depth], and a bound at twice
@@ -539,22 +544,24 @@ let () =
     (que.ms /. timed_mean que)
     (que.ms /. median_per_launch que)
     queued_low_bound;
-  (* Both gated claims report through [p] rather than [Verdict.pass_fail]: [Verdict.skipped] ends in
-     [p name true], so only that dialect keeps a legitimate skip's stdout identical to an evaluated
-     pass and the golden intact (Codex P2, round 1 on PR #735). The numbers a failure would want are
-     on the stderr line above, where a calibration run reads them on a passing run too. *)
-  let low_claim =
-    "queued reading is not that per-launch time divided by the batch depth as well, or reports \
-     contention"
-  in
-  (* The low side's own threshold, one shallower than the upper side's: at depth 4 the bound is half
+  (* The gated claims report through [gated] rather than [Verdict.pass_fail]: a skip prints
+     [<claim>: true], so only [p]'s dialect keeps a legitimate skip's stdout identical to an
+     evaluated pass and the golden intact (Codex P2, round 1 on PR #735; gh-ocannl-997 made
+     [Verdict.gated] pick that dialect itself). The numbers a calibration run wants are on the
+     stderr line above, on a passing run too; a failure also names its own in the claim's detail.
+
+     The low side's own threshold, one shallower than the upper side's: at depth 4 the bound is half
      the window's median, which [median <= 2 * minimum] puts at or below a correct reading, while a
      twice-divided one -- a quarter of the minimum -- falls under it. Below that, a double division
      stops being separable from the window's ordinary spread and the leg says so rather than passing
      vacuously. *)
-  if que.depth >= low_discriminating_depth then
-    p low_claim (que.contended || Float.(que.ms >= queued_low_bound))
-  else Verdict.skipped ~aggregation:`Environment ~backend:(backend ()) low_claim;
+  gated ~aggregation:`Environment ~on:(backend ())
+    ~when_:(que.depth >= low_discriminating_depth)
+    ~detail:(fun () ->
+      Printf.sprintf "%.6f ms vs low bound %.6f ms at depth %d" que.ms queued_low_bound que.depth)
+    "queued reading is not that per-launch time divided by the batch depth as well, or reports \
+     contention"
+    (que.contended || Float.(que.ms >= queued_low_bound));
   (* Amortizing a round trip can only remove time, so a queued reading above the isolated one is the
      instrument reporting the wrong quantity, not a slow machine. The factor absorbs the noise a
      min-of-N leaves; the point of the claim is the direction.

@@ -77,7 +77,7 @@ let site_of_location (location : Ppxlib.Location.t) =
 
 let describe_site site = Printf.sprintf "%d:%d" site.line site.column
 
-type claim_kind = P | Pf | Pass_fail | Claim | Claimf
+type claim_kind = P | Pf | Pass_fail | Gated | Claim | Claimf
 
 type binding = {
   name : string;
@@ -627,13 +627,21 @@ let claim_kind_of_path = function
       | Some "p" -> Some P
       | Some "pf" -> Some Pf
       | Some "pass_fail" -> Some Pass_fail
+      | Some "gated" -> Some Gated
       | Some "claim" -> Some Claim
       | Some "claimf" -> Some Claimf
       | _ -> None)
   | _ -> None
 
 let claim_kinds =
-  [ ("p", P); ("pf", Pf); ("pass_fail", Pass_fail); ("claim", Claim); ("claimf", Claimf) ]
+  [
+    ("p", P);
+    ("pf", Pf);
+    ("pass_fail", Pass_fail);
+    ("gated", Gated);
+    ("claim", Claim);
+    ("claimf", Claimf);
+  ]
 
 let unlabelled arguments =
   List.filter_map arguments ~f:(function Asttypes.Nolabel, a -> Some a | _ -> None)
@@ -933,7 +941,7 @@ let native_claim kind ~site =
     { slot; label = Asttypes.Nolabel; patterns = []; names = [] }
   in
   match kind with
-  | P | Pass_fail | Claim ->
+  | P | Pass_fail | Gated | Claim ->
       let label = parameter "label" and value = parameter "value" in
       let claim =
         {

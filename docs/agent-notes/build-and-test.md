@@ -948,7 +948,7 @@ that they earn a lookup rather than always-loaded space.
   `verdict_ratchet` enforces the guard mechanically, for a quantifier (`for_all`/`for_alli`,
   `for_all2_exn`, `is_empty`, a negated `exists`/`existsi`, in Base's or `Stdlib`'s spelling)
   written directly into a
-  native claim (`Verdict.p`, `pf`, `claim`, `claimf`, `pass_fail`, opened or qualified) and for one
+  native claim (`Verdict.p`, `pf`, `claim`, `claimf`, `pass_fail`, `gated`, opened or qualified) and for one
   reached through a file-local binding, helper, wrapper or module (gh-ocannl-801, gh-ocannl-887,
   gh-ocannl-908). The reader is `test/support/verdict_provenance.ml` (gh-ocannl-931): ONE walker
   over the syntax that models each form once as a scope-and-polarity *provenance* -- two views,
@@ -996,6 +996,13 @@ that they earn a lookup rather than always-loaded space.
   exact same-line shape the check must distinguish. Direct quantifiers reaching a claim through a
   wrapper or a native call use the claimed ARGUMENT offset, so one intentional exemption cannot
   silently cover another call through the same wrapper or another claimed slot in the same call.
+- `verdict_ratchet`'s third reader is about DIALECT (gh-ocannl-997): `Verdict_scan.dialect_census`
+  refuses a label reported through both `pass_fail`/`pass_fail_all2` and `skipped` in one source,
+  since a skip prints `p`'s line and the pair breaks the golden on the host that skips. The rule,
+  the remedy (`Verdict.gated`) and what the reader cannot see are in the conventions note. A new
+  claim entry point that takes a label and a boolean joins `claim_kinds` in
+  `verdict_provenance.ml` (and `refusal_callees` in `refusal_control_scan.ml`), or the quantifier
+  reader goes blind at its call sites.
 - Boolean operator aliases in `verdict_provenance.ml` (gh-ocannl-968) keep their first
   argument until application, so constant annihilators and partial applications use the same
   conjunction/disjunction algebra as direct syntax. Partial Boolean predicates retain their captured
