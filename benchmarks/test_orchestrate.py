@@ -1986,6 +1986,211 @@ class FixtureDigestTest(unittest.TestCase):
         entries = fixture_digest.read_digests(digests)
         self.assertEqual([e.origin for e in entries["lenet.safetensors"]], [self.this_box])
 
+    def smoke_layout(self):
+        """A benchmarks dir whose recorded fixture and digest file a smoke run must not touch."""
+        fixtures = self.dir / "fixtures"
+        fixtures.mkdir()
+        recorded = fixtures / "lenet.safetensors"
+        self.write_fixture(recorded, b"the bytes the published numbers are on")
+        digests = fixtures / fixture_digest.DIGEST_FILE
+        fixture_digest.record(digests, [recorded], "rog-nv")
+        spec = self.dir / "workloads" / "lenet.json"
+        spec.parent.mkdir()
+        spec.write_text("{}")
+        return spec, recorded.read_bytes(), digests.read_bytes()
+
+    def test_out_dir_writes_elsewhere_and_records_nothing(self):
+        # A smoke run (gh-ocannl-1020's warm-pass A/B) needs a fixture but publishes no number,
+        # so its bytes must not become an origin's entry in the tracked DIGESTS.txt -- and must
+        # not replace the recorded fixture either.
+        gen_fixtures = self.gen_fixtures_module()
+        spec, recorded_before, digests_before = self.smoke_layout()
+        out = self.dir / "smoke"
+        built = []
+
+        def build(spec_path, out_dir):
+            built.append((spec_path, out_dir))
+            return self.write_fixture(out_dir / "lenet.safetensors", b"smoke bytes")
+
+        # A box with no name: the recording path refuses to invent an origin, and this one must
+        # not need one.
+        with unittest.mock.patch.object(gen_fixtures, "build", build), \
+                unittest.mock.patch.object(fixture_digest.platform, "node", return_value=""):
+            with contextlib.redirect_stdout(io.StringIO()) as printed:
+                written = gen_fixtures.main(["--out-dir", str(out)], here=self.dir)
+
+        # Built into a staging directory inside DIR, which is gone afterwards.
+        self.assertEqual([(s, d.parent) for s, d in built], [(spec, out)])
+        self.assertEqual(written, [out / "lenet.safetensors"])
+        self.assertEqual((self.dir / "fixtures" / "lenet.safetensors").read_bytes(),
+                         recorded_before)
+        self.assertEqual((self.dir / "fixtures" / fixture_digest.DIGEST_FILE).read_bytes(),
+                         digests_before)
+        self.assertEqual(list(out.iterdir()), [out / "lenet.safetensors"])
+        # The path a caller hands to a runner is the one printed -- not the staging copy, which
+        # is gone by the time anyone reads the line.
+        self.assertIn(f"wrote {out / 'lenet.safetensors'} (", printed.getvalue())
+        self.assertNotIn(".gen_fixtures-", printed.getvalue())
+
+    def test_out_dir_refuses_the_fixtures_dir_and_an_origin_before_building(self):
+        # Writing into fixtures/ without recording is the loss the pre-build validation guards
+        # against: the published bytes overwritten, the new ones matching no entry.
+        gen_fixtures = self.gen_fixtures_module()
+        _, recorded_before, digests_before = self.smoke_layout()
+        # Spelled differently from `here / "fixtures"`, so the refusal compares the directories'
+        # identity: a `..` detour, one through a directory that does not exist yet (so it becomes
+        # an alias only once DIR is created), a symlink, and -- where the filesystem folds case, as
+        # a default macOS volume does -- a case alias, which path resolution keeps as spelled.
+        aliases = [self.dir / "workloads" / ".." / "fixtures",
+                   self.dir / "fixtures" / "new" / ".."]
+        try:
+            (self.dir / "fixtures-link").symlink_to(self.dir / "fixtures",
+                                                    target_is_directory=True)
+            aliases.append(self.dir / "fixtures-link")
+        except OSError:
+            pass  # Windows without Developer Mode or SeCreateSymbolicLinkPrivilege
+        if (self.dir / "FIXTURES").exists():
+            aliases.append(self.dir / "FIXTURES")
+        built = []
+
+        for argv in ([["--out-dir", str(alias)] for alias in aliases]
+                     + [["--out-dir", str(self.dir / "smoke"), "--origin", "rog-nv"]]):
+            with self.subTest(argv=argv):
+                with unittest.mock.patch.object(gen_fixtures, "build",
+                                                lambda s, d: built.append(s)), \
+                        contextlib.redirect_stderr(io.StringIO()), \
+                        self.assertRaises(SystemExit):
+                    gen_fixtures.main(argv, here=self.dir)
+
+        self.assertEqual(built, [], "refused before any build")
+        self.assertFalse((self.dir / "smoke").exists())
+        self.assertEqual((self.dir / "fixtures" / "lenet.safetensors").read_bytes(),
+                         recorded_before)
+        self.assertEqual((self.dir / "fixtures" / fixture_digest.DIGEST_FILE).read_bytes(),
+                         digests_before)
+
+    def test_a_spec_name_that_leaves_the_output_dir_is_refused_before_building(self):
+        # build() writes <out_dir>/<spec name>.safetensors, so checking DIR alone is not enough:
+        # `--out-dir smoke` with name "../fixtures/lenet" lands on the recorded fixture without
+        # touching its digest. The recording path has the same hole, one directory up.
+        gen_fixtures = self.gen_fixtures_module()
+        _, recorded_before, digests_before = self.smoke_layout()
+        escaping = self.dir / "workloads" / "escaping.json"
+        escaping.write_text('{"name": "../fixtures/lenet"}')
+        built = []
+
+        for argv in (["--out-dir", str(self.dir / "smoke"), str(escaping)],
+                     ["--origin", "rog-nv", str(escaping)]):
+            with self.subTest(argv=argv):
+                with unittest.mock.patch.object(gen_fixtures, "build",
+                                                lambda s, d: built.append(s)), \
+                        self.assertRaises(ValueError):
+                    gen_fixtures.main(argv, here=self.dir)
+
+        self.assertEqual(built, [], "refused before any build")
+        self.assertEqual((self.dir / "fixtures" / "lenet.safetensors").read_bytes(),
+                         recorded_before)
+        self.assertEqual((self.dir / "fixtures" / fixture_digest.DIGEST_FILE).read_bytes(),
+                         digests_before)
+
+    def test_out_dir_never_writes_through_a_link_in_dir(self):
+        # save_file writes THROUGH an existing entry, so a symlink or hard link in DIR to the
+        # recorded fixture would have the smoke bytes overwrite it with its digest untouched.
+        # The stub writes the way save_file does (opening the path, following links).
+        gen_fixtures = self.gen_fixtures_module()
+        spec, recorded_before, digests_before = self.smoke_layout()
+        recorded = self.dir / "fixtures" / "lenet.safetensors"
+
+        def build(spec_path, out_dir):
+            return self.write_fixture(out_dir / "lenet.safetensors", b"smoke bytes")
+
+        for kind, link in (("symlink", os.symlink), ("hard link", os.link)):
+            with self.subTest(kind=kind):
+                out = self.dir / f"smoke-{kind.replace(' ', '-')}"
+                out.mkdir()
+                try:
+                    link(recorded, out / "lenet.safetensors")
+                except OSError as e:
+                    # Windows grants symlink creation only with Developer Mode or
+                    # SeCreateSymbolicLinkPrivilege; the hard-link leg still runs there.
+                    self.skipTest(f"cannot create a {kind} here: {e}")
+                with unittest.mock.patch.object(gen_fixtures, "build", build), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    gen_fixtures.main(["--out-dir", str(out), str(spec)], here=self.dir)
+
+                self.assertEqual(recorded.read_bytes(), recorded_before)
+                smoke = out / "lenet.safetensors"
+                self.assertFalse(smoke.is_symlink())
+                self.assertEqual(smoke.stat().st_nlink, 1)
+                self.assertNotEqual(smoke.read_bytes(), recorded_before)
+        self.assertEqual((self.dir / "fixtures" / fixture_digest.DIGEST_FILE).read_bytes(),
+                         digests_before)
+
+    def test_out_dir_keeps_previous_outputs_when_a_build_fails(self):
+        # Each destination is replaced only once its own build succeeded: a spec that fails
+        # (a missing seed, an unknown model) costs its own run, not the smoke fixtures already in
+        # DIR -- neither its own previous output nor those of specs never reached.
+        gen_fixtures = self.gen_fixtures_module()
+        spec, _, _ = self.smoke_layout()
+        other = spec.parent / "mlp.json"
+        other.write_text("{}")
+        out = self.dir / "smoke"
+        for name in ("lenet", "mlp"):
+            self.write_fixture(out / f"{name}.safetensors", f"previous {name}".encode())
+        before = {p.name: p.read_bytes() for p in out.iterdir()}
+
+        def build(spec_path, out_dir):
+            raise ValueError("unknown model")
+
+        with unittest.mock.patch.object(gen_fixtures, "build", build), \
+                self.assertRaises(ValueError):
+            gen_fixtures.main(["--out-dir", str(out), str(spec), str(other)], here=self.dir)
+
+        self.assertEqual({p.name: p.read_bytes() for p in out.iterdir()}, before,
+                         "previous outputs intact and no staging directory left behind")
+
+    def test_two_specs_with_one_destination_are_refused_before_building(self):
+        # On both paths: the later spec would silently replace the earlier's fixture, and on the
+        # case-insensitive measuring hosts a case-only difference is the same file.
+        gen_fixtures = self.gen_fixtures_module()
+        _, recorded_before, digests_before = self.smoke_layout()
+        workloads = self.dir / "workloads"
+        (workloads / "a.json").write_text('{"name": "mlp"}')
+        (workloads / "b.json").write_text('{"name": "mlp"}')
+        (workloads / "c.json").write_text('{"name": "MLP"}')
+        built = []
+
+        for pair in (("a", "b"), ("a", "c")):
+            specs = [str(workloads / f"{x}.json") for x in pair]
+            for argv in (["--out-dir", str(self.dir / "smoke"), *specs],
+                         ["--origin", "rog-nv", *specs]):
+                with self.subTest(argv=argv):
+                    with unittest.mock.patch.object(gen_fixtures, "build",
+                                                    lambda s, d: built.append(s)), \
+                            self.assertRaises(ValueError):
+                        gen_fixtures.main(argv, here=self.dir)
+
+        self.assertEqual(built, [], "refused before any build")
+        self.assertEqual((self.dir / "fixtures" / "lenet.safetensors").read_bytes(),
+                         recorded_before)
+        self.assertEqual((self.dir / "fixtures" / fixture_digest.DIGEST_FILE).read_bytes(),
+                         digests_before)
+
+    def test_fixture_path_takes_portable_names_only(self):
+        # The check build() itself makes before writing, so a direct build() caller is covered
+        # too: every spelling that reaches outside out_dir, or names no file in it, on either
+        # platform -- and the negative control, the names the workloads really use.
+        gen_fixtures = self.gen_fixtures_module()
+        out = self.dir / "smoke"
+        for spec in (HERE / "workloads").glob("*.json"):
+            name = json.loads(spec.read_text())["name"]
+            self.assertEqual(gen_fixtures.fixture_path(out, name), out / f"{name}.safetensors")
+        self.assertEqual(gen_fixtures.fixture_path(out, "CONSOLE"), out / "CONSOLE.safetensors")
+        for name in ("", ".", "..", "../x", "a/b", "/abs", "a\\b", "..\\x", "C:x", "a b",
+                     "-x", "a\x00b", "CON", "nul", "Com1", "LPT9.x", "aux.tar", None):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                gen_fixtures.fixture_path(out, name)
+
     def test_generated_fixtures_are_named_after_their_spec(self):
         # What the recorded-name check above relies on: gen_fixtures.py writes
         # fixtures/<spec name>.safetensors, and every spec's `name` is its file stem.

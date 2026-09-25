@@ -9,6 +9,10 @@ only the fixture path. All payloads are float32; weights are [fan_out, fan_in] r
 
 import argparse
 import json
+import os
+import re
+import shutil
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -157,8 +161,30 @@ def build_gpt(spec, rng, tensors, meta):
         meta[key] = str(spec[key])
 
 
+#: Windows device names, reserved whatever extension follows them (`CON.safetensors` is CON).
+WINDOWS_DEVICES = {
+    "CON", "PRN", "AUX", "NUL", *(f"{dev}{i}" for dev in ("COM", "LPT") for i in range(1, 10))
+}
+
+
+def fixture_path(out_dir: Path, name):
+    """Where `build` writes the fixture for spec `name`: `out_dir/<name>.safetensors`, as a
+    regular file, on every measuring host. So a name is an allowlisted portable word -- the
+    alphabet `fixture_digest.check_origin` holds origins to -- rather than anything a path parser
+    accepts: that excludes every separator, drive, `..` and whitespace (a name that would put the
+    bytes outside `out_dir`, with `--out-dir` onto a recorded fixture without touching its digest),
+    and a Windows device stem, which names no file in `out_dir` at all."""
+    if (not isinstance(name, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name) is None
+            or name.split(".")[0].upper() in WINDOWS_DEVICES):
+        raise ValueError(f"spec name {name!r} is not a portable file name (an ASCII letter or "
+                         "digit, then letters, digits, dot, underscore or hyphen; no Windows "
+                         f"device name): the fixture is written to {out_dir}/<name>.safetensors")
+    return out_dir / f"{name}.safetensors"
+
+
 def build(spec_path: Path, out_dir: Path):
     spec = json.loads(spec_path.read_text())
+    out_path = fixture_path(out_dir, spec["name"])
     rng = np.random.default_rng(spec["seed"])
     model = spec.get("model", "mlp")
     tensors = {}
@@ -179,10 +205,40 @@ def build(spec_path: Path, out_dir: Path):
     }
     {"mlp": build_mlp, "conv": build_conv, "gpt": build_gpt}[model](spec, rng, tensors, meta)
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{spec['name']}.safetensors"
     save_file(tensors, str(out_path), metadata=meta)
-    print(f"wrote {out_path} ({out_path.stat().st_size} bytes)")
     return out_path
+
+
+def report_written(path):
+    """The per-fixture line, printed by the caller once `path` is where the fixture stays."""
+    print(f"wrote {path} ({path.stat().st_size} bytes)")
+    return path
+
+
+def build_smoke(specs, out_dir: Path):
+    """Build `specs` into `out_dir`, each one replacing its destination ENTRY only once built.
+
+    save_file writes THROUGH an existing entry, so building in place would let a symlink -- or a
+    hard link -- in `out_dir` to a recorded fixture have the smoke bytes overwrite that fixture
+    with its digest untouched. Each spec is built into a staging directory beside the
+    destination and renamed over it: the rename replaces `out_dir`'s own directory entry and
+    nothing it points to, and a spec that fails to build leaves its previous output (and every
+    later spec's) where it was. The recording path keeps writing in place: a symlinked recorded
+    fixture is how measurement trees share ONE fixture file (gh612_cells.sh).
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".gen_fixtures-", dir=out_dir))
+    written = []
+    try:
+        for spec in specs:
+            staged = build(spec, staging)
+            final = out_dir / staged.name
+            os.replace(staged, final)
+            written.append(report_written(final))
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    print(f"recorded no digests: {len(written)} fixture(s) in {out_dir} are for smoke runs only")
+    return written
 
 
 def main(argv=None, here=None):
@@ -191,6 +247,8 @@ def main(argv=None, here=None):
     A function, not a bare `__main__` block, so the order of its steps is testable: what a
     fixture generator must never do is overwrite bytes it then turns out to be unable to record.
     `here` is the benchmarks directory (its `workloads/` and `fixtures/`), overridable for that.
+    With `--out-dir` it records nothing and touches neither `fixtures/` nor its digest file.
+    Returns the paths written.
     """
     here = Path(__file__).parent if here is None else Path(here)
     ap = argparse.ArgumentParser(
@@ -209,31 +267,74 @@ def main(argv=None, here=None):
         help="the box these bytes are, recorded with them "
         f"({fixture_digest.origin_default_help()})",
     )
+    ap.add_argument(
+        "--out-dir",
+        type=Path,
+        default=None,
+        help="write the fixtures into this directory instead, and record NO digest: bytes "
+        "generated for a smoke run publish nothing, so they must not become an origin's entry in "
+        "the tracked fixtures/DIGESTS.txt. orchestrate.py never sees them; hand one to a runner "
+        "directly (BENCH_FIXTURE=<path>, --fixture <path>), for smoke runs only",
+    )
     args = ap.parse_args(argv)
-    # BEFORE building anything: generating rewrites the fixture bytes, so a bad origin discovered
-    # at the recording step would leave a regenerated workload that cannot be attributed. Through
-    # resolve_origin, which refuses an explicitly empty value instead of substituting this host.
-    origin = fixture_digest.resolve_origin(args.origin)
     specs = args.specs or sorted((here / "workloads").glob("*.json"))
-    out_dir = here / "fixtures"
-    digests = out_dir / fixture_digest.DIGEST_FILE
-    # And for the same reason, parse the digest file BEFORE building: building OVERWRITES the
-    # fixture bytes, so anything record() would refuse -- a pre-gh-ocannl-759 three-field line, a
-    # duplicate origin, a malformed row -- has to be discovered while the previous bytes still
-    # exist. Refusing afterwards leaves regenerated bytes that nothing records AND the bytes the
-    # published numbers were measured on gone, which is worse than either alone.
-    fixture_digest.read_digests(digests)
-    # Names too, and for the same reason: build() writes fixtures/<spec name>.safetensors, and a
-    # name the digest format cannot carry would be refused by record() only AFTER the previous
-    # bytes are overwritten. A spec this cannot parse is left for build() to refuse on its own
-    # terms -- that refusal also happens before that spec mutates anything.
+    recording = args.out_dir is None
+    if not recording:
+        if args.origin is not None:
+            ap.error("--origin names the box recorded bytes belong to; --out-dir records none")
+        # The tracked directory is the one place these bytes must not land: writing there without
+        # recording overwrites the fixtures the published numbers are on and leaves the new bytes
+        # matching no entry -- the loss the digest validation below exists to prevent. By
+        # filesystem identity, not by path: a case alias on a case-insensitive filesystem, a
+        # symlink or a `..` detour all name the same directory under different spellings. And
+        # AFTER creating DIR, since creation can turn a spelling into an alias: `fixtures/new/..`
+        # names nothing until `new` exists, and fixtures/ itself from then on.
+        fixtures = here / "fixtures"
+        args.out_dir.mkdir(parents=True, exist_ok=True)
+        if fixtures.exists() and os.path.samefile(args.out_dir, fixtures):
+            ap.error(f"--out-dir {args.out_dir} is the recorded fixtures directory; "
+                     "regenerate there without --out-dir, so the digests are recorded")
+        out_dir = args.out_dir
+    else:
+        # BEFORE building anything: generating rewrites the fixture bytes, so a bad origin
+        # discovered at the recording step would leave a regenerated workload that cannot be
+        # attributed. Through resolve_origin, which refuses an explicitly empty value instead of
+        # substituting this host.
+        origin = fixture_digest.resolve_origin(args.origin)
+        out_dir = here / "fixtures"
+        digests = out_dir / fixture_digest.DIGEST_FILE
+        # And for the same reason, parse the digest file BEFORE building: building OVERWRITES the
+        # fixture bytes, so anything record() would refuse -- a pre-gh-ocannl-759 three-field
+        # line, a duplicate origin, a malformed row -- has to be discovered while the previous
+        # bytes still exist. Refusing afterwards leaves regenerated bytes that nothing records AND
+        # the bytes the published numbers were measured on gone, which is worse than either alone.
+        fixture_digest.read_digests(digests)
+    # Names too, and for the same reason: build() writes <out_dir>/<spec name>.safetensors, so a
+    # name with a path component would write outside out_dir (with --out-dir, onto a recorded
+    # fixture), and a name the digest format cannot carry would be refused by record() only AFTER
+    # the previous bytes are overwritten. build() re-checks the first itself; checking every spec
+    # here refuses before ANY is built. A spec this cannot parse is left for build() to refuse on
+    # its own terms -- that refusal also happens before that spec mutates anything. Two specs with
+    # one destination are refused as well: the later would silently replace the earlier's
+    # fixture. Compared case-folded (names are ASCII, by fixture_path), because on the
+    # case-insensitive macOS and Windows measuring hosts `Lenet` and `lenet` are one file.
+    claimed = {}
     for spec_path in specs:
         try:
             name = json.loads(spec_path.read_text())["name"]
         except (json.JSONDecodeError, KeyError, TypeError):
             continue
-        fixture_digest.check_fixture_name(f"{name}.safetensors")
-    written = [build(spec, out_dir) for spec in specs]
+        fixture_path(out_dir, name)
+        if name.lower() in claimed:
+            raise ValueError(f"{claimed[name.lower()]} and {spec_path} both generate "
+                             f"{name}.safetensors (names are compared ignoring case); the later "
+                             "would replace the earlier")
+        claimed[name.lower()] = spec_path
+        if recording:
+            fixture_digest.check_fixture_name(f"{name}.safetensors")
+    if not recording:
+        return build_smoke(specs, out_dir)
+    written = [report_written(build(spec, out_dir)) for spec in specs]
     # fixtures/ is gitignored, so this file is the only record of what was just generated
     # (gh-ocannl-645). Only this origin's regenerated entries are rewritten: generating one
     # workload must not drop the identities of the fixtures already on disk, and generating on
@@ -280,6 +381,7 @@ def main(argv=None, here=None):
               f"fixtures: {', '.join(others)} — regeneration is a cross-box event, so until "
               "they regenerate and record too, their published numbers and this box's may be on "
               "different workloads.")
+    return written
 
 
 if __name__ == "__main__":
