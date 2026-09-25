@@ -53,6 +53,12 @@ let codegen_stage_modules =
     "schedule_cache.ml";
   ]
 
+(* Lower bounds on the classified keys and on the keys the codegen-stage modules read: floors, not
+   counts, so that adding a key moves nothing (gh-ocannl-1046). There were 120 and 30 on 2026-09-25;
+   leave them well below that. *)
+let known_key_floor = 60
+let codegen_read_floor = 15
+
 let class_name : Utils.config_key_class -> string = function
   | Utils.Aggregate -> "aggregate"
   | Utils.Code_borne -> "code-borne (digest)"
@@ -157,9 +163,12 @@ let () =
      fields, so a settings-borne key cannot slip past check 3 (Codex P2 on PR #337). *)
   printf "Cache-key components (Schedule_cache.key_components): %s\n"
     (String.concat ~sep:", " SC.key_components);
-  printf "Keys read at codegen (%s): %d\n"
-    (String.concat ~sep:", " codegen_stage_modules)
-    (Set.length codegen_read);
+  (* Which keys, not how many: the tags below are the census, and its size is a tally every PR
+     adding a codegen-read key moved (gh-ocannl-1046). The count goes to stderr, and the floor under
+     it is asserted with check 3 below. *)
+  printf "Keys read at codegen (%s): tagged [read at codegen] below\n"
+    (String.concat ~sep:", " codegen_stage_modules);
+  eprintf "Keys read at codegen: %d (not part of the golden).\n" (Set.length codegen_read);
   List.iter Utils.config_key_classification ~f:(fun (cls, why, keys) ->
       printf "\n%s -- %s\n" (class_name cls) why;
       List.iter (List.sort keys ~compare:String.compare) ~f:(fun key ->
@@ -167,7 +176,16 @@ let () =
   printf "\n";
   Verdict.p_empty "every scanned root meets its source-count floor" ~over:source_files
     floor_violations;
-  if not (Verdict.any_failed ()) then
-    printf "OK: %d config keys classified against %d cache-key components.\n"
-      (Set.length classified) (List.length SC.key_components);
+  (* Checks 1 and 3 as claims with floors under them, where this golden used to pin how many keys
+     were classified: a tally every PR adding a key moved, and two such PRs merged cleanly to a
+     wrong total (gh-ocannl-1046). The numbers go to stderr. The codegen census is the scanned
+     population that can go blind, and check 3 holds over an empty one. *)
+  eprintf "Config keys classified: %d, against %d cache-key components (not part of the golden).\n"
+    (Set.length classified) (List.length SC.key_components);
+  p_empty ~min:known_key_floor
+    "every known config key is classified exactly once, and every classified key is known"
+    ~over:(Set.to_list Utils.known_config_keys)
+    (Set.to_list (Set.union_list (module String) [ duplicates; unclassified; unknown ]));
+  p_none ~min:codegen_read_floor "no config key read at codegen is classified code-borne"
+    (Set.to_list codegen_read) ~f:(Set.mem miscl);
   Test_utils.Refusal_control_manifest.print "digest_completeness.ml"

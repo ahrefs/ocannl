@@ -747,6 +747,15 @@ let gate_prefix = "ocannl_log_level_"
    2026-08-23. *)
 let artifact_caller_floor = 20
 
+(* A lower bound on how many scanner refusal diagnostics the repository census extracts statically
+   (gh-ocannl-800). The exact count used to sit in this scan's golden, where every PR adding a
+   scanner refusal moved it, concurrent PRs collided on it, and two branches that each moved it
+   merged cleanly to a wrong total (gh-ocannl-1046). What the number was for -- an extractor that
+   goes blind finds nothing, and the coverage claim over nothing holds -- is kept by this floor; the
+   count goes to stderr. There were 408 on 2026-09-25; leave the floor well below that rather than
+   raising it to the day's count, which would bring the tally back. *)
+let refusal_diagnostic_floor = 200
+
 (* The configuration key `OCANNL_BUILD_FILES_PREFIX` addresses, which is what a module reading it by
    name reads. *)
 let artifact_config_key = "build_files_prefix"
@@ -2639,12 +2648,13 @@ let main () =
        Scanner refusal controls (gh-ocannl-800). Sources come from repository-wide scan rules;\n\
        controls are *_cases.expected, *_control.expected, or a live scan golden with an explicit\n\
        `Synthetic controls:` section. Printf substitutions do not decide coverage.\n";
-    printf "  statically extracted diagnostics: %d (details on stderr)\n"
-      (List.length refusal_diagnostics);
+    printf "  statically extracted diagnostics: at least %d (count and details on stderr)\n"
+      refusal_diagnostic_floor;
     printf "  named exemptions with reasons:\n";
     if List.is_empty refusal_exemptions then printf "    (none)\n"
     else List.iter refusal_exemptions ~f:(fun (key, reason) -> printf "    %s -- %s\n" key reason);
-    eprintf "Repository scanner refusal diagnostics (not diffed):\n";
+    eprintf "Repository scanner refusal diagnostics: %d (not part of the golden):\n"
+      (List.length refusal_diagnostics);
     List.iter2_exn refusal_diagnostics refusal_coverage ~f:(fun (source, diagnostic) covered ->
         eprintf "  %s:%d  %s%s\n" source diagnostic.Refusals.line diagnostic.fragment
           (if covered then ""
@@ -2672,7 +2682,7 @@ let main () =
         (module String)
         (List.map orphan_refusals ~f:(fun (source, diagnostic) -> refusal_key source diagnostic))
     in
-    Verdict.p_all
+    Verdict.p_all ~min:refusal_diagnostic_floor
       "every statically recoverable scanner refusal diagnostic appears in a control golden or has \
        a named reasoned exemption"
       refusal_diagnostics ~f:(fun (source, diagnostic) ->

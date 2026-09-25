@@ -187,7 +187,11 @@ that they earn a lookup rather than always-loaded space.
   read by a SECOND reader that shares no machinery with the first (`Dune_stanza_scan.raw_stanzas`
   reads the stanzas and what each runs off the raw text, and a sexp walk going blind cannot take it
   down too), and the exact numbers on STDERR, which a `(test)` stanza does not diff. Assert the floor through `Verdict`
-  rather than as a golden line, so a scan that goes blind cannot be promoted back to green. And
+  rather than as a golden line, so a scan that goes blind cannot be promoted back to green. A
+  total printed BESIDE a list is a tally too, even with the list on stdout: two branches each adding
+  an item merge the list right and the total wrong (gh-ocannl-1046 — the refusal-diagnostic and
+  config-key counts) — keep the list, send the total to stderr tagged `(not part of the golden)`,
+  and give the claim quantifying over that population a `?min` floor. And
   compare the floor to the walk STANZA BY STANZA, never as two totals over a file: the second reader
   recognises fewer shapes than the walk — today an action head nobody has classified — so every
   stanza the walk places and the floor misses is a

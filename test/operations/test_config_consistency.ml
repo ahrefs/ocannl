@@ -12,6 +12,10 @@ let printf = Test_utils.Refusal_control_manifest.printf
 
 module Config_key_scan = Test_utils.Config_key_scan
 
+(* A lower bound on the config keys the call-site scan finds: a floor, not a count, so that adding a
+   key moves nothing (gh-ocannl-1046). There were 120 on 2026-09-25; leave it well below that. *)
+let call_site_key_floor = 60
+
 (* The reference file ships with every setting COMMENTED OUT (gh-ocannl-559), so that copying it
    wholesale to an `ocannl_config` states no settings. A commented-out setting is spelled `#key=…`
    with no space after the `#`; prose comments (and the verbatim profile-payload blocks at the end
@@ -302,16 +306,23 @@ let () =
   List.iter floor_violations ~f:fail;
   Verdict.p_empty "every scanned root meets its source-count floor" ~over:source_files
     floor_violations;
+  (* Checks 1-3 as one claim over the call-site census, with a floor under it. How many keys there
+     are is a tally that every PR adding a key moved, and two such PRs merged cleanly to a wrong
+     total (gh-ocannl-1046); the numbers go to stderr. What the count guarded -- a key scan that
+     goes blind finds no call site, and every check above holds over nothing -- is the floor's. *)
+  eprintf "Config keys (not part of the golden): %d at call sites, %d registered, %d documented.\n"
+    (Set.length source_keys) (Set.length code_keys) (Set.length file_keys);
+  let registry_matches_reference = Set.equal code_keys file_keys in
+  p_all ~min:call_site_key_floor
+    "every config key a call site reads is documented in the reference file and registered in \
+     known_config_keys, and the registry and the reference file name the same keys"
+    (Set.to_list source_keys) ~f:(fun key ->
+      registry_matches_reference && Set.mem file_keys key && Set.mem code_keys key);
+  List.iter payload_keys ~f:(fun (name, keys) ->
+      eprintf "Profile payload %s sets %d keys (not part of the golden).\n" name (Set.length keys));
   if not (Verdict.any_failed ()) then (
-    printf
-      "OK: %d call-site keys, all in reference file and registry; registry and reference agree on \
-       %d keys.\n"
-      (Set.length source_keys) (Set.length code_keys);
-    printf "OK: %d profile payloads, documented and quoted verbatim: %s.\n"
-      (List.length payload_keys)
-      (String.concat ~sep:", "
-      @@ List.map payload_keys ~f:(fun (name, keys) ->
-          Printf.sprintf "%s (%d keys)" name (Set.length keys)));
+    printf "OK: profile payloads, documented and quoted verbatim: %s.\n"
+      (String.concat ~sep:", " @@ List.map payload_keys ~f:fst);
     printf
       "OK: every scanned file spells every config key as a string literal, outside %d forwarding \
        functions: %s.\n"

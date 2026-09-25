@@ -171,6 +171,8 @@ digest_completeness.ml: [scanner-refusal:14b02d2180d3814d6746acd827aecbc3] class
 digest_completeness.ml: [scanner-refusal:8109160f59717560ff5e6f7251a6a2b2] cache-key components no (direct failure) is catalogued beside config_scan_lexing.expected, digest_completeness.expected: true
 digest_completeness.ml: [scanner-refusal:1825a277ba0eda3313fbe079e465c15d] but classified code-borne (direct failure) is catalogued beside config_scan_lexing.expected, digest_completeness.expected: true
 digest_completeness.ml: [scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count (claim) is catalogued beside config_scan_lexing.expected, digest_completeness.expected: true
+digest_completeness.ml: [scanner-refusal:a9c0305e1a7d7817b8ba147ce52e8f90] classified exactly once (claim) is catalogued beside config_scan_lexing.expected, digest_completeness.expected: true
+digest_completeness.ml: [scanner-refusal:5e2800ca22fd1c7629755f638e39e542] is classified code-borne (claim) is catalogued beside config_scan_lexing.expected, digest_completeness.expected: true
 env_var_deps.ml has exactly the explicitly assigned refusal controls: true
 env_var_deps.ml: [scanner-refusal:2b65edf20e36d983c1a016b72c2aadd1] plugged-in check receives (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:35bab4283cd8b87d51ca3476cb0e971e] source_tree (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
@@ -370,6 +372,7 @@ test_config_consistency.ml: [scanner-refusal:c56af001748a614d221709bf11098511] t
 test_config_consistency.ml: [scanner-refusal:e583c416783b3632963a66636f20f65e] string literal in (direct failure) is catalogued beside config_scan_lexing.expected, test_config_consistency.expected: true
 test_config_consistency.ml: [scanner-refusal:b4c59d5ad7a9c4e591998fccf8f039aa] exempted functions that (direct failure) is catalogued beside config_scan_lexing.expected, test_config_consistency.expected: true
 test_config_consistency.ml: [scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count (claim) is catalogued beside config_scan_lexing.expected, test_config_consistency.expected: true
+test_config_consistency.ml: [scanner-refusal:2314f0c5d2762ecb0069dfb64d5c8a54] known_config_keys (claim) is catalogued beside config_scan_lexing.expected, test_config_consistency.expected: true
 verdict_ratchet.ml has exactly the explicitly assigned refusal controls: true
 verdict_ratchet.ml: [scanner-refusal:977473ba169d481e2b57377845e9a8b8] exempted quantified bindings (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:52b0c212a9f1ba97a1400cd478d7cfda] shadowing definitions separate (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true

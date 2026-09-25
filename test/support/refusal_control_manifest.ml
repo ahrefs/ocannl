@@ -204,6 +204,8 @@ let raw_entries =
         "[scanner-refusal:8109160f59717560ff5e6f7251a6a2b2] cache-key components no";
         "[scanner-refusal:1825a277ba0eda3313fbe079e465c15d] but classified code-borne";
         "[scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count";
+        "[scanner-refusal:a9c0305e1a7d7817b8ba147ce52e8f90] classified exactly once";
+        "[scanner-refusal:5e2800ca22fd1c7629755f638e39e542] is classified code-borne";
       ] );
     ( "env_var_deps.ml",
       [
@@ -411,6 +413,7 @@ let raw_entries =
         "[scanner-refusal:e583c416783b3632963a66636f20f65e] string literal in";
         "[scanner-refusal:b4c59d5ad7a9c4e591998fccf8f039aa] exempted functions that";
         "[scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count";
+        "[scanner-refusal:2314f0c5d2762ecb0069dfb64d5c8a54] known_config_keys";
       ] );
     ( "verdict_ratchet.ml",
       [

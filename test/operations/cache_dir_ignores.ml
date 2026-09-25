@@ -314,7 +314,10 @@ let () =
   (* No count of sources SCANNED: the globs reach into the build tree, so how many `.ml` files they
      match depends on which `(select …)` copies have been built by the time this rule runs, and a
      golden pinning that would fail on build order rather than on anything true. *)
+  (* The list above is what the census establishes; its length is a tally that every new tuning test
+     moved, and two branches each adding one merged cleanly to a wrong total (gh-ocannl-1046). *)
+  eprintf "Sources naming a schedule cache directory: %d (not part of the golden).\n"
+    (List.length naming);
   if not (Verdict.any_failed ()) then
-    printf "\nOK: %d sources name one; the ignore list needs no entry per directory.\n"
-      (List.length naming);
+    printf "\nOK: every source listed names one; the ignore list needs no entry per directory.\n";
   Test_utils.Refusal_control_manifest.print "cache_dir_ignores.ml"
