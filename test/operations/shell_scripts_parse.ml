@@ -1168,29 +1168,46 @@ module Errexit_negation = struct
             Char.is_alphanum character || Char.equal character '_')
     | _ -> false
 
+  (** [Some attached] when [word] is a redirection, [attached] telling whether its target is in the
+      same word. Descriptors are a digit run or bash's variable form [{fd}]; [<<-] is an operator
+      whose target follows (the generic reading would take its [-] for an attached target). Both
+      arms and the errexit gate read redirections through this one function. *)
   let redirection_prefix word =
-    let rec skip_descriptor index =
-      if index < String.length word && Char.is_digit word.[index] then skip_descriptor (index + 1)
-      else index
+    let word =
+      match String.chop_prefix word ~prefix:"{" with
+      | Some rest -> (
+          match String.lsplit2 rest ~on:'}' with
+          | Some (name, operator)
+            when assignment_prefix (name ^ "=")
+                 && List.exists [ "<"; ">" ] ~f:(fun prefix -> String.is_prefix operator ~prefix) ->
+              operator
+          | _ -> word)
+      | None -> word
     in
-    let operator = if String.is_prefix word ~prefix:"&>" then 0 else skip_descriptor 0 in
-    if
-      operator >= String.length word
-      || not
-           (List.mem [ '<'; '>' ] word.[operator] ~equal:Char.equal
-           || Char.equal word.[operator] '&'
-              && operator + 1 < String.length word
-              && Char.equal word.[operator + 1] '>')
-    then None
+    if String.equal word "<<-" then Some false
     else
-      let rec skip_operator index =
-        if
-          index < String.length word
-          && List.mem [ '<'; '>'; '&'; '|' ] word.[index] ~equal:Char.equal
-        then skip_operator (index + 1)
+      let rec skip_descriptor index =
+        if index < String.length word && Char.is_digit word.[index] then skip_descriptor (index + 1)
         else index
       in
-      Some (skip_operator operator < String.length word)
+      let operator = if String.is_prefix word ~prefix:"&>" then 0 else skip_descriptor 0 in
+      if
+        operator >= String.length word
+        || not
+             (List.mem [ '<'; '>' ] word.[operator] ~equal:Char.equal
+             || Char.equal word.[operator] '&'
+                && operator + 1 < String.length word
+                && Char.equal word.[operator + 1] '>')
+      then None
+      else
+        let rec skip_operator index =
+          if
+            index < String.length word
+            && List.mem [ '<'; '>'; '&'; '|' ] word.[index] ~equal:Char.equal
+          then skip_operator (index + 1)
+          else index
+        in
+        Some (skip_operator operator < String.length word)
 
   let command_enables_errexit command =
     let rec strip_redirections = function
@@ -1237,6 +1254,23 @@ module Errexit_negation = struct
     | "command" :: "-p" :: "set" :: options -> options_enable_errexit options
     | "command" :: "-p" :: "--" :: "set" :: options -> options_enable_errexit options
     | _ -> false
+
+  (** The file's lines with every backslash-newline splice removed, as the shell removes them before
+      reading a word: [set \\] then [-e] on the next line is one [set -e]. *)
+  let spliced_lines text =
+    let rec join acc pending = function
+      | [] -> List.rev (match pending with Some line -> line :: acc | None -> acc)
+      | line :: rest ->
+          let line = match pending with Some prefix -> prefix ^ line | None -> line in
+          let rec trailing index count =
+            if index >= 0 && Char.equal line.[index] '\\' then trailing (index - 1) (count + 1)
+            else count
+          in
+          if trailing (String.length line - 1) 0 % 2 = 1 then
+            join acc (Some (String.drop_suffix line 1)) rest
+          else join (line :: acc) None rest
+    in
+    join [] None (String.split_lines text)
 
   let line_enables_errexit line =
     List.exists (command_fragments line) ~f:(fun (command, affects_parent) ->
@@ -1376,7 +1410,7 @@ module Errexit_negation = struct
     && not (has_outer_and_or stripped)
 
   let findings text =
-    if not (List.exists (String.split_lines text) ~f:line_enables_errexit) then []
+    if not (List.exists (spliced_lines text) ~f:line_enables_errexit) then []
     else
       String.split_lines text
       |> List.mapi ~f:(fun index text ->
@@ -1520,6 +1554,10 @@ module Errexit_negation = struct
       ( "errexit set after an embedded hash",
         "echo foo#bar; set -e\n! grep -q missing output\n",
         [ 2 ] );
+      ("errexit set by a continued command", "set \\\n-e\n! grep -q missing output\n", [ 3 ]);
+      ( "errexit set behind a variable-descriptor redirection",
+        "{fd}>/dev/null set -e\n! grep -q missing output\n",
+        [ 2 ] );
       ("embedded hash before an outer OR", "set -e\n! grep -q x#y output || recover\n", []);
     ]
 
@@ -1635,14 +1673,15 @@ module Errexit_and_list = struct
         can stand before a command ([!], [time], [time -p]) or put a body statement on the line
         ([then], [do], [else]). For a [(], also right after a case header ([case x in (x) ...]),
         where it opens a pattern the closer then recognizes as one.
-      - [`Function_body]: a [{] after a function definition's head in any spelling ([f() {], [f(){],
-        [f () {], [function f {], [function f() {]). Its statements are read like any other, but
-        they do not run where they are written.
+      - [`Function_body]: a [{] or [(] after a function definition's head in any spelling ([f() {],
+        [f(){], [f() (], [f () {], [function f {], [function f() {]). Its statements are read like
+        any other, but they do not run where they are written.
       - [`No] otherwise, and deliberately after [if]/[elif]/[while]/[until]: errexit is ignored
         throughout a condition, subshells included. *)
   let opener ~brace text =
     let rec drop = function
       | ("then" | "do" | "else" | "!") :: rest -> drop rest
+      | "time" :: "-p" :: "--" :: rest | "time" :: "--" :: rest -> drop rest
       | "time" :: "-p" :: rest -> drop rest
       | "time" :: rest -> drop rest
       | words -> words
@@ -1651,32 +1690,13 @@ module Errexit_and_list = struct
     match drop (N.shell_words text) with
     | [] -> `Group
     | [ "case"; _; "in" ] when not brace -> `Group
-    | [ name ] when brace && named name -> `Function_body
-    | ([ "function"; _ ] | [ _; "()" ] | [ "function"; _; "()" ]) when brace -> `Function_body
+    | [ name ] when named name -> `Function_body
+    | [ _; "()" ] | [ "function"; _; "()" ] -> `Function_body
+    | [ "function"; name ] when brace || named name -> `Function_body
     | _ -> `No
 
-  (** {!Errexit_negation.redirection_prefix}, also for bash's variable-descriptor form [{fd}>file] /
-      [{fd}> file]: [Some attached] when [word] is a redirection, [attached] telling whether its
-      target is in the same word. *)
-  let redirection word =
-    let variable_descriptor =
-      match String.chop_prefix word ~prefix:"{" with
-      | Some rest -> (
-          match String.lsplit2 rest ~on:'}' with
-          | Some (name, operator)
-            when N.assignment_prefix (name ^ "=")
-                 && List.exists [ "<"; ">" ] ~f:(fun prefix -> String.is_prefix operator ~prefix) ->
-              Some operator
-          | _ -> None)
-      | None -> None
-    in
-    (* [<<-] is an operator whose target follows: the generic reading takes the [-] for an attached
-       target. *)
-    if String.equal word "<<-" then Some false
-    else N.redirection_prefix (Option.value variable_descriptor ~default:word)
-
   type frame = {
-    kind : [ `Paren | `Brace | `Function ];
+    kind : [ `Paren | `Brace ];
     outer_operands : string list;
     outer_connectors : connector list;
     outer_start : int;
@@ -1723,6 +1743,11 @@ module Errexit_and_list = struct
       operands := [];
       connectors := []
     in
+    (* A function body is read as statements, but the command that runs where it is written is the
+       definition: record that first, so nothing in the body reads as following what precedes it. *)
+    let define start index =
+      statements := { operands = [ text start index ]; connectors = [] } :: !statements
+    in
     (* Close the innermost frame at [index]; the enclosing operand resumes from its own start. The
        closer is recorded as a statement of its own, so that "the command after" the group's last
        statement is the end of the group -- never the enclosing statement, whose text holds the
@@ -1734,7 +1759,7 @@ module Errexit_and_list = struct
           close_statement start index;
           statements :=
             {
-              operands = [ (match frame.kind with `Paren -> ")" | `Brace | `Function -> "}") ];
+              operands = [ (match frame.kind with `Paren -> ")" | `Brace -> "}") ];
               connectors = [];
             }
             :: !statements;
@@ -1771,7 +1796,7 @@ module Errexit_and_list = struct
               || String.is_suffix word ~suffix:";"
             then false
             else
-              match redirection word with
+              match N.redirection_prefix word with
               | Some true -> word_after rest
               | Some false -> word_after (List.drop rest 1)
               | None -> true)
@@ -1886,6 +1911,10 @@ module Errexit_and_list = struct
               | `Group when not (N.starts_at line ~pos:index "((") ->
                   open_frame `Paren start;
                   fresh (index + 1)
+              | `Function_body ->
+                  define start index;
+                  open_frame `Paren start;
+                  fresh (index + 1)
               | _ -> continue ~parens:1 (index + 1)
             else if Char.equal character '{' && word_start && word_ends_at (index + 1) then
               match opener ~brace:true (text start index) with
@@ -1893,16 +1922,15 @@ module Errexit_and_list = struct
                   open_frame `Brace start;
                   fresh (index + 1)
               | `Function_body ->
-                  (* The definition is the command that runs here; its body does not. *)
-                  statements := { operands = [ text start index ]; connectors = [] } :: !statements;
-                  open_frame `Function start;
+                  define start index;
+                  open_frame `Brace start;
                   fresh (index + 1)
               | `No -> continue (index + 1)
             else if
               Char.equal character '}' && word_start
               && word_ends_at (index + 1)
               && String.is_empty (String.strip (text start index))
-              && match !frames with { kind = `Brace | `Function; _ } :: _ -> true | _ -> false
+              && match !frames with { kind = `Brace; _ } :: _ -> true | _ -> false
             then
               let outer_start = close_frame start index in
               loop (index + 1) outer_start `None false 0 false
@@ -1944,10 +1972,10 @@ module Errexit_and_list = struct
 
   (** Whether [operand] is a test command: its command word is [\[], [\[\[] or [test] -- or a path
       naming one, [/bin/test] -- once everything that can stand in front of it is dropped: [!],
-      [time]/[time -p], assignments, redirections ({!redirection}, so [{fd}>] too), and the wrappers
-      that run a builtin as such ([command], [command -p], [builtin]); [time] and each wrapper with
-      an optional [--]. On the first operand also the keywords of {!statement_prefixes}.
-      [command -v test] is not a test: [-v] is not a dropped option. *)
+      [time]/[time -p], assignments, redirections ([{fd}>] too), and the wrappers that run a builtin
+      as such ([command], [command -p], [builtin]); [time] and each wrapper with an optional [--].
+      On the first operand also the keywords of {!statement_prefixes}. [command -v test] is not a
+      test: [-v] is not a dropped option. *)
   let is_test ~first operand =
     let literal = N.literal_shell_word in
     let is word expected = String.equal (literal word) expected in
@@ -1955,8 +1983,10 @@ module Errexit_and_list = struct
       | "!" :: rest -> drop rest
       | "time" :: "-p" :: rest | "time" :: rest -> drop (drop_raw_dashdash rest)
       | word :: rest when N.assignment_prefix word -> drop rest
-      | word :: rest when Option.is_some (redirection word) -> (
-          match redirection word with Some false -> drop (List.drop rest 1) | _ -> drop rest)
+      | word :: rest when Option.is_some (N.redirection_prefix word) -> (
+          match N.redirection_prefix word with
+          | Some false -> drop (List.drop rest 1)
+          | _ -> drop rest)
       | word :: rest when is word "command" || is word "builtin" -> (
           match rest with
           | option :: rest when is option "-p" && is word "command" -> drop (drop_dashdash rest)
@@ -1988,7 +2018,7 @@ module Errexit_and_list = struct
 
   let findings text =
     let lines = Array.of_list (String.split_lines text) in
-    if not (Array.exists lines ~f:N.line_enables_errexit) then []
+    if not (List.exists (N.spliced_lines text) ~f:N.line_enables_errexit) then []
     else
       let count = Array.length lines in
       (* The first command of the next non-blank, non-comment line: where a condition's [then]/[do]
@@ -2124,6 +2154,19 @@ module Errexit_and_list = struct
         "set -e\ncase x in (x) >/dev/null [ -e a ] && [ -e b ]; echo y;; esac\n",
         [ 2 ] );
       ("separately redirected subshell", "set -e\n( y; [ -e a ] && [ -e b ]; z ) > out\n", [ 2 ]);
+      ( "timed subshell with an option terminator",
+        "set -e\ntime -- ( [ -e a ] && [ -e b ]; : )\n",
+        [ 2 ] );
+      ( "portably timed subshell with an option terminator",
+        "set -e\ntime -p -- ( [ -e a ] && [ -e b ]; : )\n",
+        [ 2 ] );
+      ("subshell function body", "set -e\nf() ( [ -e a ] && [ -e b ]; : )\n", [ 2 ]);
+      ("spaced subshell function body", "set -e\nf () ( [ -e a ] && [ -e b ]; : )\n", [ 2 ]);
+      ("function-keyword subshell body", "set -e\nfunction f() ( [ -e a ] && [ -e b ]; : )\n", [ 2 ]);
+      ("errexit set by a continued command", "set \\\n-e\n[ -e a ] && [ -e b ]\n", [ 3 ]);
+      ( "errexit set behind a variable-descriptor redirection",
+        "{fd}>/dev/null set -e\n[ -e a ] && [ -e b ]\n",
+        [ 2 ] );
       ("timed test", "set -e\ntime [ -e a ] && [ -e b ]\n", [ 2 ]);
       ("timed test with an option terminator", "set -e\ntime -- [ -e a ] && [ -e b ]\n", [ 2 ]);
       ( "portably timed test with an option terminator",

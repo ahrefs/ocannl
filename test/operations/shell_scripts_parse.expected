@@ -125,6 +125,8 @@ errexit-negation fixture bang-adjacent output redirect is classified as specifie
 errexit-negation fixture bang-adjacent input redirect is classified as specified: true
 errexit-negation fixture bang-prefixed command name is classified as specified: true
 errexit-negation fixture errexit set after an embedded hash is classified as specified: true
+errexit-negation fixture errexit set by a continued command is classified as specified: true
+errexit-negation fixture errexit set behind a variable-descriptor redirection is classified as specified: true
 errexit-negation fixture embedded hash before an outer OR is classified as specified: true
 the statement-position ! grep fixture reaches the absent()-style refusal: true
 errexit-and-list fixture bare pair is classified as specified: true
@@ -180,6 +182,13 @@ errexit-and-list fixture redirected subshell is classified as specified: true
 errexit-and-list fixture escaped space before a hash is classified as specified: true
 errexit-and-list fixture redirected parenthesized case arm is classified as specified: true
 errexit-and-list fixture separately redirected subshell is classified as specified: true
+errexit-and-list fixture timed subshell with an option terminator is classified as specified: true
+errexit-and-list fixture portably timed subshell with an option terminator is classified as specified: true
+errexit-and-list fixture subshell function body is classified as specified: true
+errexit-and-list fixture spaced subshell function body is classified as specified: true
+errexit-and-list fixture function-keyword subshell body is classified as specified: true
+errexit-and-list fixture errexit set by a continued command is classified as specified: true
+errexit-and-list fixture errexit set behind a variable-descriptor redirection is classified as specified: true
 errexit-and-list fixture timed test is classified as specified: true
 errexit-and-list fixture timed test with an option terminator is classified as specified: true
 errexit-and-list fixture portably timed test with an option terminator is classified as specified: true
