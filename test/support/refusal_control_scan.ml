@@ -133,6 +133,7 @@ let refusal_callees =
     "claim";
     "claimf";
     "pass_fail";
+    "gated";
   ]
 
 let is_refusal expression =
