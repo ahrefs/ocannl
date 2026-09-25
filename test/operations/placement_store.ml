@@ -352,13 +352,14 @@ let () =
   let arms6w, flips6w, shipped6w, _, got6w = run ~timing_ctx:(timing_ctx ()) () in
   p_all2 "with a timing context, the warm run's routine computes the right values" got6w expected
     ~f:approx;
+  (* "No flips" is an absence: an empty flip-report list is the passing case, as in run 2. *)
   p
     "with a timing context, the warm run replays the recorded decision: one search, no flips, the \
      recorded label, tuning the recorded lowering"
     (match (entry6, arms6w) with
     | None, _ -> true
     | Some e, [ r ] ->
-        List.is_empty flips6w
+        List.length flips6w = 0
         && String.equal shipped6w (SC.shipped_label e.SC.decision)
         && String.equal (source_digest r) e.SC.outcome_digest
     | Some _, _ -> false)
