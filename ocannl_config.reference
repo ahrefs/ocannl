@@ -1176,8 +1176,8 @@
 #   so the error is the narrowing rounding alone. HIP keeps its uniform-bf16 mma legs tensorized
 #   through an f32 accumulator fragment converted at the destination boundary (both emission
 #   scopes); CUDA's inline-PTX arm is already wide in the per-statement scope, so only its staged
-#   multi-block uniform-bf16 seeds are withheld; Metal's uniform-bf16 simdgroup_matrix arm
-#   declines and its seeds are withheld.
+#   multi-block uniform-bf16 seeds are withheld; Metal swaps its uniform-bf16 simdgroup_matrix
+#   arm to an f32 accumulator the same way HIP does (both emission scopes).
 # - "true": the narrow side of the trade wherever a backend offers one. It resolves as "auto" on
 #   every backend today; the `approximate` profile names it so that regime does not depend on
 #   how "auto" later resolves.

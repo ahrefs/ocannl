@@ -378,9 +378,10 @@ module Impl = struct
            max_grid_yz = None;
            (* [simdgroup_matrix] (docs/proposals/tensorize-mma.md): 8×8×8 tiles cooperatively held
               by the 32-thread simdgroup, available on Apple7+ (M1 and later). Supported storage
-              precisions are decided per call by [mma_syntax] (f32/f16/bf16, uniform); under
-              [Fp16_wide], the uniform-f16 storage arm uses an f32 accumulator fragment and converts
-              only at the destination boundary (gh-ocannl-837). *)
+              precisions are decided per call by [mma_fragment_types] (f32/f16/bf16 uniform, plus
+              f16 or bf16 operands into f32 storage since gh-ocannl-923); under [Fp16_wide], the
+              uniform-f16 storage arm uses an f32 accumulator fragment and converts only at the
+              destination boundary (gh-ocannl-837). *)
            mma =
              (if
                 (* [for_all] is vacuously true on no devices, which would advertise simdgroup
@@ -395,15 +396,25 @@ module Impl = struct
                   {
                     Backend_intf.mma_simd_width = 32;
                     mma_tile = (8, 8, 8);
-                    (* These triples describe storage formats. The wide-f16 exception below uses the
-                       same f16 storage triple with an f32 accumulator fragment internally. *)
+                    (* These triples describe storage formats, one per [mma_fragment_types] arm. The
+                       wide-f16 exception below uses the same f16 storage triple with an f32
+                       accumulator fragment internally. *)
                     mma_format_tiles =
                       [
                         ( (Backend_intf.Mma_f32, Backend_intf.Mma_f32, Backend_intf.Mma_f32),
                           (8, 8, 8) );
                         ( (Backend_intf.Mma_f16, Backend_intf.Mma_f16, Backend_intf.Mma_f16),
                           (8, 8, 8) );
+                        (* gh-ocannl-923: half fragments into a float accumulator that IS the f32
+                           destination's storage — no boundary conversion, so both emission scopes
+                           and no policy gate. *)
+                        ( (Backend_intf.Mma_f16, Backend_intf.Mma_f16, Backend_intf.Mma_f32),
+                          (8, 8, 8) );
                         ( (Backend_intf.Mma_bf16, Backend_intf.Mma_bf16, Backend_intf.Mma_bf16),
+                          (8, 8, 8) );
+                        (* gh-ocannl-923: its bf16 twin, bfloat fragments into the f32
+                           destination. *)
+                        ( (Backend_intf.Mma_bf16, Backend_intf.Mma_bf16, Backend_intf.Mma_f32),
                           (8, 8, 8) );
                       ];
                     (* MSL's generic [simdgroup_multiply_accumulate] accepts half A/B fragments and
@@ -412,9 +423,10 @@ module Impl = struct
                        (gh-ocannl-837). *)
                     mma_f16_wide_acc_scopes =
                       [ Backend_intf.Mma_per_statement; Backend_intf.Mma_fragment_scope ];
-                    (* The uniform-bf16 arm has no wide counterpart and declines under
-                       [Numerics.Bf16_wide] (gh-ocannl-838). *)
-                    mma_bf16_wide_acc_scopes = [];
+                    (* gh-ocannl-923: the uniform-bf16 arm's wide counterpart, the same float
+                       accumulator and converted [thread_elements()] boundary in both hooks. *)
+                    mma_bf16_wide_acc_scopes =
+                      [ Backend_intf.Mma_per_statement; Backend_intf.Mma_fragment_scope ];
                     (* Metal banks too, but [simdgroup_load] takes a plain pointer and leading
                        dimension — no [ldmatrix] analogue (gh-ocannl-481 item 3, D3). *)
                     mma_staged_layouts = [];
@@ -675,33 +687,54 @@ module Impl = struct
       | _, 1 -> typ_of_prec prec
       | _ -> invalid_arg "Metal_backend.vec_typ_of_prec: invalid combination"
 
+    (* The one combination resolver both MMA hooks consult, as [(accumulator, a, b, destination)]
+       fragment types: [mma_d_boundary_lines] converts at the destination boundary exactly where the
+       first and last differ. Arms and [mma_format_tiles]' STORAGE triples must correspond: an
+       advertised triple with no arm makes autotune time seeds that render the scalar fallback, and
+       an arm with no triple is never seeded. *)
     let mma_fragment_types ~d_prec ~a_prec ~b_prec =
-      if not (Ops.equal_prec d_prec a_prec && Ops.equal_prec d_prec b_prec) then None
-      else
-        match d_prec with
-        | Ops.Single_prec _ ->
-            Some
-              ( "simdgroup_float8x8",
-                "simdgroup_float8x8",
-                "simdgroup_float8x8",
-                "simdgroup_float8x8" )
-        | Ops.Half_prec _ when Numerics.fp16_accum_wide () ->
-            Some
-              ("simdgroup_float8x8", "simdgroup_half8x8", "simdgroup_half8x8", "simdgroup_half8x8")
-        | Ops.Half_prec _ ->
-            Some ("simdgroup_half8x8", "simdgroup_half8x8", "simdgroup_half8x8", "simdgroup_half8x8")
-        (* gh-ocannl-838: no wide uniform-bf16 arm here (unlike the wide-f16 one above, nothing has
-           verified [simdgroup_multiply_accumulate] over bfloat operands into a float accumulator),
-           so under [Bf16_wide] this declines to the scalar fallback, whose accumulator follows
-           [accum_prec], and [mma_bf16_wide_acc_scopes] is empty so no such seed is timed. *)
-        | Ops.Bfloat16_prec _ when Numerics.bf16_accum_wide () -> None
-        | Ops.Bfloat16_prec _ ->
-            Some
-              ( "simdgroup_bfloat8x8",
-                "simdgroup_bfloat8x8",
-                "simdgroup_bfloat8x8",
-                "simdgroup_bfloat8x8" )
-        | _ -> None
+      match (a_prec, b_prec, d_prec) with
+      | Ops.Single_prec _, Ops.Single_prec _, Ops.Single_prec _ ->
+          Some
+            ("simdgroup_float8x8", "simdgroup_float8x8", "simdgroup_float8x8", "simdgroup_float8x8")
+      (* gh-ocannl-923: half operands into f32 destination STORAGE. The mixed multiply surface is
+         gh-ocannl-837's wide-f16 one ([simdgroup_multiply_accumulate] over half A/B fragments and a
+         float accumulator), but the destination already is the accumulator's type, so there is no
+         staging fragment and no conversion: [simdgroup_load]/[simdgroup_store] move the float tile
+         directly, in both emission scopes. Independent of [fp16_arithmetic], which is about f16
+         DESTINATIONS. *)
+      | Ops.Half_prec _, Ops.Half_prec _, Ops.Single_prec _ ->
+          Some ("simdgroup_float8x8", "simdgroup_half8x8", "simdgroup_half8x8", "simdgroup_float8x8")
+      | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ when Numerics.fp16_accum_wide () ->
+          Some ("simdgroup_float8x8", "simdgroup_half8x8", "simdgroup_half8x8", "simdgroup_half8x8")
+      | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ ->
+          Some ("simdgroup_half8x8", "simdgroup_half8x8", "simdgroup_half8x8", "simdgroup_half8x8")
+      (* The bf16 twins of the two f16 arms above (gh-ocannl-923, completing gh-ocannl-838's
+         [Bf16_wide] on Metal): [simdgroup_multiply_accumulate] is generic over its operand element
+         type, and bfloat operands into a float accumulator compile and execute on Apple silicon
+         (schedule_mma_matmul's bf32 and [Bf16_wide] legs, M4 Max). The f32-storage arm needs no
+         conversion; the wide arm converts at the bfloat destination through [thread_elements()]
+         exactly as the wide-f16 one does. *)
+      | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Single_prec _ ->
+          Some
+            ( "simdgroup_float8x8",
+              "simdgroup_bfloat8x8",
+              "simdgroup_bfloat8x8",
+              "simdgroup_float8x8" )
+      | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _
+        when Numerics.bf16_accum_wide () ->
+          Some
+            ( "simdgroup_float8x8",
+              "simdgroup_bfloat8x8",
+              "simdgroup_bfloat8x8",
+              "simdgroup_bfloat8x8" )
+      | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ ->
+          Some
+            ( "simdgroup_bfloat8x8",
+              "simdgroup_bfloat8x8",
+              "simdgroup_bfloat8x8",
+              "simdgroup_bfloat8x8" )
+      | _ -> None
 
     (* MSL exposes the distributed fragment elements through [thread_elements()]. On a 32-thread
        simdgroup each lane owns two elements of an 8x8 matrix, and the mapping depends only on the
@@ -723,10 +756,19 @@ module Impl = struct
             Printf.sprintf "%s.thread_elements()[1] = (%s)%s.thread_elements()[1];" dst cast src;
           ]
         in
+        (* The destination fragment's element type: half for the wide-f16 arm, bfloat for the
+           wide-bf16 one (gh-ocannl-923). The accumulator is float on both. *)
+        let d_elem =
+          match d_frag with
+          | "simdgroup_half8x8" -> "half"
+          | "simdgroup_bfloat8x8" -> "bfloat"
+          | _ -> invalid_arg ("Metal_backend.mma_d_boundary_lines: unconverted " ^ d_frag)
+        in
         let assertion =
-          "static_assert(sizeof(simdgroup_float8x8::storage_type) / sizeof(float) == "
-          ^ "sizeof(simdgroup_half8x8::storage_type) / sizeof(half), "
-          ^ "\"wide-f16 d boundary requires equal fragment element counts\");"
+          Printf.sprintf
+            "static_assert(sizeof(%s::storage_type) / sizeof(float) == sizeof(%s::storage_type) / \
+             sizeof(%s), \"wide %s d boundary requires equal fragment element counts\");"
+            acc_frag d_frag d_elem d_elem
         in
         match dir with
         | `Load ->
@@ -735,7 +777,7 @@ module Impl = struct
             @ copy acc "__mma_dstage" "float"
         | `Store ->
             [ Printf.sprintf "%s __mma_dstage;" d_frag; assertion ]
-            @ copy "__mma_dstage" acc "half"
+            @ copy "__mma_dstage" acc d_elem
             @ [ Printf.sprintf "simdgroup_store(__mma_dstage, %s, (ulong)%d);" ptr ldd ]
 
     (* Cooperative tile-MMA emission for [Low_level.Tile_mma] via MSL [simdgroup_matrix]
@@ -745,9 +787,9 @@ module Impl = struct
        [simdgroup_multiply_accumulate], stored once at the end — the accumulator fragments are
        resident across the whole [k] extent of the block statement. Transposed-stored operands
        ([ta]/[tb]) load with [simdgroup_load]'s [transpose_matrix] flag and swapped tile-offset
-       arithmetic. Declines (fallback path) on: non-{f32,f16,bf16} precision, extents not multiples
-       of 8, thread-space (stack-array) operands (not loadable by [simdgroup_load]), and devices
-       below the Apple7 family. *)
+       arithmetic. Declines (fallback path) on: a precision combination [mma_fragment_types] does
+       not resolve, extents not multiples of 8, thread-space (stack-array) operands (not loadable by
+       [simdgroup_load]), and devices below the Apple7 family. *)
     let mma_syntax =
       Some
         (fun ~d_prec
@@ -1229,7 +1271,7 @@ module Impl = struct
       match prec with
       | Ops.Half_prec _ when Numerics.fp16_accum_wide () -> Ops.single
       (* gh-ocannl-838: likewise bf16 under [Numerics.Bf16_wide], where the uniform-bf16 MMA arm
-         declines rather than accumulate in a bfloat fragment. *)
+         swaps to a float accumulator over bfloat operands (gh-ocannl-923). *)
       | Ops.Bfloat16_prec _ when Numerics.bf16_accum_wide () -> Ops.single
       | _ -> compute_prec prec
 
