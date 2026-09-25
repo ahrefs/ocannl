@@ -43,13 +43,9 @@ let gpu_plain_limits =
     mma =
       Some
         {
-          Ir.Backend_intf.mma_simd_width = 32;
+          Ir.Backend_intf.minimal_mma_capability with
           mma_tile = (8, 8, 8);
           mma_format_tiles = [ ((f32, f32, f32), (8, 8, 8)) ];
-          mma_f16_wide_acc_scopes = [];
-          mma_bf16_wide_acc_scopes = [];
-          mma_staged_layouts = [];
-          mma_pipeline_depths = [];
         };
   }
 
@@ -62,11 +58,9 @@ let gpu_full_limits =
     mma =
       Some
         {
-          Ir.Backend_intf.mma_simd_width = 32;
+          Ir.Backend_intf.minimal_mma_capability with
           mma_tile = (8, 8, 8);
           mma_format_tiles = [ ((f32, f32, f32), (8, 8, 8)) ];
-          mma_f16_wide_acc_scopes = [];
-          mma_bf16_wide_acc_scopes = [];
           mma_staged_layouts = [ ((f32, f32, f32), Ir.Backend_intf.Mma_swizzled_b128) ];
           mma_pipeline_depths = [ 2 ];
         };
@@ -378,13 +372,10 @@ let () =
       mma =
         Some
           {
-            Ir.Backend_intf.mma_simd_width = 32;
+            Ir.Backend_intf.minimal_mma_capability with
             mma_tile = (8, 8, 8);
             mma_format_tiles = [ ((f16t, f16t, f16t), (8, 8, 8)); ((f16t, f16t, f32), (8, 8, 8)) ];
             mma_f16_wide_acc_scopes = wide_scopes;
-            mma_bf16_wide_acc_scopes = [];
-            mma_staged_layouts = [];
-            mma_pipeline_depths = [];
           };
     }
   in
@@ -533,14 +524,11 @@ let () =
           mma =
             Some
               {
-                Ir.Backend_intf.mma_simd_width = 32;
+                Ir.Backend_intf.minimal_mma_capability with
                 mma_tile = (8, 8, 8);
                 mma_format_tiles =
                   [ ((bf16t, bf16t, bf16t), (8, 8, 8)); ((bf16t, bf16t, f32), (8, 8, 8)) ];
-                mma_f16_wide_acc_scopes = [];
                 mma_bf16_wide_acc_scopes = wide_scopes;
-                mma_staged_layouts = [];
-                mma_pipeline_depths = [];
               };
         }
       opt_b
@@ -921,13 +909,9 @@ let () =
           mma =
             Some
               {
-                Ir.Backend_intf.mma_simd_width = 32;
+                Ir.Backend_intf.minimal_mma_capability with
                 mma_tile = (16, 16, 16);
                 mma_format_tiles = [ ((f32, f32, f32), (8, 8, 8)) ];
-                mma_f16_wide_acc_scopes = [];
-                mma_bf16_wide_acc_scopes = [];
-                mma_staged_layouts = [];
-                mma_pipeline_depths = [];
               };
         }
       in

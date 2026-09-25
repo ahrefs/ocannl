@@ -314,6 +314,21 @@ let no_hardware_limits =
     codegen_tag = None;
   }
 
+(** A base for [{ minimal_mma_capability with ... }] literals, so adding a field to
+    {!mma_capability} touches one record instead of every mock and CPU descriptor: a 32-wide
+    simdgroup with the 16×16×16 canonical tile, and no format tiles, wide-accumulator scopes, staged
+    layouts or pipelining depths advertised. *)
+let minimal_mma_capability =
+  {
+    mma_simd_width = 32;
+    mma_tile = (16, 16, 16);
+    mma_format_tiles = [];
+    mma_f16_wide_acc_scopes = [];
+    mma_bf16_wide_acc_scopes = [];
+    mma_staged_layouts = [];
+    mma_pipeline_depths = [];
+  }
+
 type device_dump = {
   group : string;  (** The group atom naming the dump, e.g. ["cuda_devices"]. *)
   devices : (string * Sexp.t) list list;
