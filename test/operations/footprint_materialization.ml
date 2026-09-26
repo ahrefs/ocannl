@@ -25,7 +25,11 @@
    inlining; a single-cell footprint (fixed indices only); two readers, two scratches; a consumer
    that is itself a virtualization candidate (the read reaches a template, so the decision retracts
    to the cap's materialization); a shared-loop consumer (ineligible); and the configuration key
-   off. *)
+   off.
+
+   The decision surface is one candidate per node with its default reading a field (gh-ocannl-1017):
+   the inherited row and the full reader offer the same lone [`Inline] alternative from opposite
+   defaults, and only the inherited one withholds the placement floor. *)
 
 open Base
 open Ll_test
@@ -50,14 +54,26 @@ let scratch_dims (o : LL.optimized) =
   List.map (scratches o) ~f:(fun tn -> Array.to_list (Lazy.force tn.Tn.dims))
 
 let flips_of (o : LL.optimized) tn =
-  List.filter_map o.LL.flip_candidates ~f:(fun fc ->
-      Option.some_if (Tn.equal fc.LL.fc_tn tn) fc.LL.fc_flip)
+  List.concat_map o.LL.flip_candidates ~f:(fun fc ->
+      if Tn.equal fc.LL.fc_tn tn then List.map fc.LL.fc_alternatives ~f:(fun fa -> fa.LL.fa_flip)
+      else [])
 
-let offers o tn flip = List.mem (flips_of o tn) flip ~equal:Poly.equal
+let offers o tn flip = List.mem (flips_of o tn) flip ~equal:LL.equal_reading
 
 let costs_of (o : LL.optimized) tn =
-  List.filter_map o.LL.flip_candidates ~f:(fun fc ->
-      Option.some_if (Tn.equal fc.LL.fc_tn tn) fc.LL.fc_recompute_cost)
+  List.concat_map o.LL.flip_candidates ~f:(fun fc ->
+      if Tn.equal fc.LL.fc_tn tn then
+        List.map fc.LL.fc_alternatives ~f:(fun fa -> fa.LL.fa_recompute_cost)
+      else [])
+
+(* gh-ocannl-1017: the node's default reading, a field of its one candidate — [None] when the node
+   is no candidate, and a failed claim if it were listed twice. *)
+let default_of (o : LL.optimized) tn =
+  match List.filter o.LL.flip_candidates ~f:(fun fc -> Tn.equal fc.LL.fc_tn tn) with
+  | [ fc ] -> Some fc.LL.fc_default
+  | _ -> None
+
+let defaults_to o tn r = Option.exists (default_of o tn) ~f:(LL.equal_reading r)
 
 let with_setting ~set ~restore f =
   set ();
@@ -111,6 +127,10 @@ let case_diagonal_reduction () =
     (offers opt a `Materialize && offers opt a `Inline);
   p "diagonal: the footprint form is not offered where it is already chosen"
     (not (offers opt a `Footprint));
+  p "diagonal: the node's one candidate defaults to the footprint form"
+    (defaults_to opt a `Footprint);
+  p "diagonal: its materialize direction is open, so the placement floor stands"
+    (not (Autotune.placement_floor_withheld opt.LL.flip_candidates));
   (* One instantiation per read cell in both readings: the footprint reading prices like the inlined
      one. *)
   p "diagonal: both flips are priced alike (one instantiation per read cell)"
@@ -184,6 +204,13 @@ let case_full_reader () =
   p_empty "full: no scratch" ~over:(Hashtbl.keys opt.LL.traced_store) (scratches opt);
   p "full: the inline flip is offered, the footprint flip is not (as many cells as the node)"
     (offers opt a `Inline && not (offers opt a `Footprint));
+  (* The shape the inherited case below shares — a lone [`Inline] alternative — from the opposite
+     default (gh-ocannl-1017): what a node offers says nothing about where it stands. *)
+  p "full: the node's one candidate defaults to materialized" (defaults_to opt a `Materialize);
+  p
+    "full: a lone inline alternative over a materialized default leaves the placement floor \
+     standing"
+    (not (Autotune.placement_floor_withheld opt.LL.flip_candidates));
   let expected = Array.init (n * n) ~f:(fun c -> reduced (c / n) (c % n)) in
   let seed = [ (o, blank (n * n)) ] and read = [ o ] in
   let mat = execute ~name:"fp_full" opt ~seed ~read in
@@ -265,7 +292,11 @@ let case_inherited () =
   p "inherited: the consumer footprint-scopes the inherited node"
     (List.equal (List.equal Int.equal) (scratch_dims consumer) [ [ n ] ] && count_get consumer a = 0);
   p "inherited: the decision is searchable as an inline flip, and only that"
-    (List.equal Poly.equal (flips_of consumer a) [ `Inline ]);
+    (List.equal LL.equal_reading (flips_of consumer a) [ `Inline ]);
+  p "inherited: the node's one candidate still defaults to the footprint form"
+    (defaults_to consumer a `Footprint);
+  p "inherited: no materialize-all specialization reaches it, so the placement floor is withheld"
+    (Autotune.placement_floor_withheld consumer.LL.flip_candidates);
   let got = execute ~name:"fp_inh_consumer" consumer ~seed:[ (o, blank n) ] ~read:[ o ] in
   p "inherited: executed values are the diagonal of the inherited reduction" (same got [ diagonal ]);
   let i = sym () in

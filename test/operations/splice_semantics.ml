@@ -234,7 +234,8 @@ let phase1 () =
     (read_before_write o_cap r && Set.mem (inputs o_cap) r);
   p "cap-selected accumulator: keeps its Inline flip candidacy"
     (List.exists o_cap.LL.flip_candidates ~f:(fun fc ->
-         Tn.equal fc.LL.fc_tn r && match fc.LL.fc_flip with `Inline -> true | _ -> false));
+         Tn.equal fc.LL.fc_tn r
+         && List.exists fc.LL.fc_alternatives ~f:(fun fa -> LL.equal_reading fa.LL.fa_flip `Inline)));
   let r_seed = [| 71.; 72.; 73.; 74. |] in
   let ar_vals =
     Array.init 40 ~f:(fun i ->

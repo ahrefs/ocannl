@@ -188,10 +188,11 @@ searchable, per-compilation-lineage decision vector rather than a fixed pre-pass
   `inline_computation`, including the injectivity conditions that preserve reduction order — the
   determinism contract) and the observability pessimizations (read-only, read-before-write) apply
   regardless of the vector.
-- Each specialization reports its **decision surface** as `optimized.flip_candidates`: the nodes
-  the default policy decided, the flip a search can try, and the recompute-cost bound of the
-  virtual placement (reduction extent × per-cell read multiplicity — the affine metrics double as
-  the cost model's inputs).
+- Each specialization reports its **decision surface** as `optimized.flip_candidates`: one record
+  per node the default policy decided, carrying the reading it chose (`fc_default`) and the
+  mutually exclusive readings a search can flip it to (`fc_alternatives`), each with the
+  recompute-cost bound of its recompute reading (per-instantiation cost × per-cell read
+  multiplicity — the affine metrics double as the cost model's inputs).
 - The search is hierarchical: `Train.tune_placements` decides inlining coarsely first (the
   placement A/B), then — with a `tune_inline_flips` budget — refines greedily per node from the
   default-policy arm, tiling/scheduling within each candidate via the nested `Autotune.tune`. The

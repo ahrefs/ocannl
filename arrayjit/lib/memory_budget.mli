@@ -20,8 +20,9 @@ type plan = {
           recompute-cost bound. Flips committed as one joint group (see {!fit}) carry [0] each
           except the one that closed the group, which carries the group's whole relief — so the
           reliefs sum to exactly [bp_baseline - bp_final] either way. *)
-  bp_considered : int;  (** Inline candidates individually scored. *)
-  bp_dropped : int;  (** Inline candidates the [max_candidates] cut left unscored. *)
+  bp_considered : int;
+      (** Candidate nodes whose [`Inline]/[`Footprint] directions were individually scored. *)
+  bp_dropped : int;  (** Candidate nodes the [max_candidates] cut left unscored. *)
   bp_within_budget : bool;
       (** Whether [bp_final] meets the budget. Always [true] for {!Minimize}, which has no target to
           miss. A [false] here is a planning outcome, not an error: the selector reports that the
@@ -90,22 +91,24 @@ val fit :
     for zero bytes. Acceptance stops as soon as the budget is met; {!Minimize} takes every flip that
     helps.
 
-    [max_candidates] bounds the individually-scored candidates, keeping the cheapest-to-recompute
-    ones; the count left unscored is reported as [bp_dropped] and logged under config
+    [max_candidates] bounds the individually-scored candidates — nodes, each with all of its
+    directions (gh-ocannl-1017) — keeping the cheapest-to-recompute ones by each node's cheapest
+    direction; the count left unscored is reported as [bp_dropped] and logged under config
     [log_memory_budget], never silently dropped. It defaults to 32 for a {!Bytes} budget — which
     stops as soon as it is met, so the cut is a cost guard — and to {e unbounded} for {!Minimize},
     whose contract is every flip that still relieves footprint and whose config-only users
     ([memory_budget=minimize]) cannot raise a cap. Passing it explicitly bounds either kind, at two
-    lowerings per candidate scored.
+    lowerings per direction scored.
 
     The [`Inline] and [`Footprint] directions are considered — the opposite of the [`Materialize]
-    chain {!Ir.Low_level.field-flip_candidates} feeds in [Train.tune_placements]. A node carrying
-    both records is scored in each (their reliefs differ: an inlined reading keeps the template's
-    leaves live up to the late consumer, a footprint-scoped one only its scratch), and the first
-    direction that pays takes the node. Legality and observability are not this pass's to enforce
-    and it does not try: the decisions record preferences, the virtualizer's
-    [check_and_store_virtual] settles legality, and a rejected preference simply reproduces the
-    materialized placement — which is why relief is scored from a real lowering rather than assumed.
+    chain {!Ir.Low_level.field-flip_candidates} feeds in [Train.tune_placements]. A candidate
+    offering both is scored in each (their reliefs differ: an inlined reading keeps the template's
+    leaves live up to the late consumer, a footprint-scoped one only its scratch), both are then
+    evaluated against the same incumbent, and the one with the larger marginal relief takes the
+    node. Legality and observability are not this pass's to enforce and it does not try: the
+    decisions record preferences, the virtualizer's [check_and_store_virtual] settles legality, and
+    a rejected preference simply reproduces the materialized placement — which is why relief is
+    scored from a real lowering rather than assumed.
 
     Raises {!Ir.Utils.User_error} when config [buffer_aliasing] is off: without the liveness planner
     every node is always-live and the score has nothing to do with what the allocator would do. *)

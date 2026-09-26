@@ -2368,40 +2368,66 @@ let rank_flip_candidates ~ordering ?(profit = Unmeasured) ~enablement ~disableme
   let deduped =
     List.fold candidates ~init:[] ~f:(fun acc (fc : LL.flip_candidate) ->
         (* Identity is [Tn.uid] ([Tn.equal]), not the session [id], which can repeat across
-           namespaces and reinitializations — paired with the flip, since a node carries one record
-           per open direction (gh-ocannl-616). *)
-        if
-          List.exists acc ~f:(fun c ->
-              Ir.Tnode.equal c.LL.fc_tn fc.LL.fc_tn && Poly.equal c.LL.fc_flip fc.LL.fc_flip)
-        then acc
+           namespaces and reinitializations. A candidate is the whole node (gh-ocannl-1017), so a
+           repeated node is a repeated candidate. *)
+        if List.exists acc ~f:(fun c -> Ir.Tnode.equal c.LL.fc_tn fc.LL.fc_tn) then acc
         else fc :: acc)
     |> List.rev
   in
-  let by_cost a b =
-    match Int.compare b.LL.fc_recompute_cost a.LL.fc_recompute_cost with
-    | 0 -> Ir.Tnode.compare a.LL.fc_tn b.LL.fc_tn
+  let effective = effective_flip_ordering ~ordering ~profit in
+  (* An alternative's class: [`Cost] has one; [`Enablement] has three — family-unlocking
+     [`Materialize] flips first (their acceptance changes the feasible set, not just the objective),
+     neutral flips in the middle, family-breaking [`Inline] flips last — inlining an operand or
+     destination of an eligible site (whether reached by default placements or only by further
+     materialization) can only move away from the tensorized family. *)
+  let cls tn (fa : LL.flip_alternative) =
+    match (effective, fa.LL.fa_flip) with
+    | `Cost, _ -> 1
+    | `Enablement, `Materialize when Set.mem enablement tn -> 0
+    | `Enablement, (`Inline | `Footprint) when Set.mem enablement tn || Set.mem disablement tn ->
+        (* A footprint-scoped node is virtual in the lineage like an inlined one: neither reading
+           materializes the operand a tensorized site would stage. *)
+        2
+    | `Enablement, (`Materialize | `Inline | `Footprint) -> 1
+  in
+  (* Class ascending, cost descending within a class. *)
+  let by_rank tn_a (a : LL.flip_alternative) tn_b (b : LL.flip_alternative) =
+    match Int.compare (cls tn_a a) (cls tn_b b) with
+    | 0 -> Int.compare b.LL.fa_recompute_cost a.LL.fa_recompute_cost
     | c -> c
   in
-  match effective_flip_ordering ~ordering ~profit with
-  | `Cost -> List.sort deduped ~compare:by_cost
-  | `Enablement ->
-      (* Three classes, cost-descending within each: family-unlocking [`Materialize] flips first
-         (their acceptance changes the feasible set, not just the objective), neutral flips in the
-         middle, family-breaking [`Inline] flips last — inlining an operand or destination of an
-         eligible site (whether reached by default placements or only by further materialization)
-         can only move away from the tensorized family. *)
-      let cls (fc : LL.flip_candidate) =
-        match fc.LL.fc_flip with
-        | `Materialize when Set.mem enablement fc.LL.fc_tn -> 0
-        | (`Inline | `Footprint)
-          when Set.mem enablement fc.LL.fc_tn || Set.mem disablement fc.LL.fc_tn ->
-            (* A footprint-scoped node is virtual in the lineage like an inlined one: neither
-               reading materializes the operand a tensorized site would stage. *)
-            2
-        | `Materialize | `Inline | `Footprint -> 1
-      in
-      List.sort deduped ~compare:(fun a b ->
-          match Int.compare (cls a) (cls b) with 0 -> by_cost a b | c -> c)
+  (* A node's alternatives in rank order, and the node ranked where its best-ranked alternative is:
+     the position its first record held when the readings were separate records. *)
+  List.map deduped ~f:(fun (fc : LL.flip_candidate) ->
+      {
+        fc with
+        LL.fc_alternatives =
+          List.stable_sort fc.LL.fc_alternatives ~compare:(fun a b ->
+              by_rank fc.LL.fc_tn a fc.LL.fc_tn b);
+      })
+  |> List.sort ~compare:(fun (a : LL.flip_candidate) (b : LL.flip_candidate) ->
+      match
+        by_rank a.LL.fc_tn
+          (List.hd_exn a.LL.fc_alternatives)
+          b.LL.fc_tn
+          (List.hd_exn b.LL.fc_alternatives)
+      with
+      | 0 -> Ir.Tnode.compare a.LL.fc_tn b.LL.fc_tn
+      | c -> c)
+
+let offers_materialize (fc : LL.flip_candidate) =
+  List.exists fc.LL.fc_alternatives ~f:(fun fa -> LL.equal_reading fa.LL.fa_flip `Materialize)
+
+(* A node that is not materialized by default and offers no [`Materialize] alternative — the one an
+   earlier routine left virtual and this consumer footprint-scoped (gh-ocannl-616), which no routine
+   here writes — is one no materialize-all specialization reaches: that specialization keeps its
+   prologue and the scratch's traffic, which its inline completion would not have. The floor is then
+   not a lower bound over that node's completions, and no floor is better than a wrong one. Read off
+   the candidate's default (gh-ocannl-1017), never off which alternatives exist: [`Inline] alone is
+   also what a cap-materialized node with no smaller footprint offers. *)
+let placement_floor_withheld candidates =
+  List.exists candidates ~f:(fun (fc : LL.flip_candidate) ->
+      (not (LL.equal_reading fc.LL.fc_default `Materialize)) && not (offers_materialize fc))
 
 type placement_surface = {
   ps_candidates : LL.flip_candidate list;
@@ -2431,8 +2457,7 @@ let placement_surface ?name ?ordering ?(evidence = []) ctx comp bindings =
      sit in its own producer statement — the form [completion_floor]'s [open_placement] contract
      asks for. *)
   let to_materialize =
-    List.filter_map candidates ~f:(fun fc ->
-        match fc.LL.fc_flip with `Materialize -> Some fc.LL.fc_tn | `Inline | `Footprint -> None)
+    List.filter_map candidates ~f:(fun fc -> Option.some_if (offers_materialize fc) fc.LL.fc_tn)
   in
   let allmat = Context.lowered_for_decisions ?name ~materialized:to_materialize ctx comp bindings in
   let enablement, disablement = placement_enablement ~limits ~static_indices ~base ~allmat in
@@ -2441,18 +2466,9 @@ let placement_surface ?name ?ordering ?(evidence = []) ctx comp bindings =
     Set.of_list (module Ir.Tnode) (List.map ps_candidates ~f:(fun fc -> fc.LL.fc_tn))
   in
   let peak_flops, peak_memory_bandwidth = envelope ~limits in
-  (* gh-ocannl-616: a node an earlier routine left virtual and this consumer footprint-scoped offers
-     an [`Inline] record only, so no materialize-all specialization removes its scratch — [allmat]
-     keeps the prologue and the scratch's traffic, which the inline completion would not have. The
-     floor is then not a lower bound over that node's completions, and no floor is better than a
-     wrong one: the bound is withheld for a surface carrying such a node. *)
-  let inherited_footprint =
-    List.exists candidates ~f:(fun (fc : LL.flip_candidate) ->
-        Poly.equal fc.LL.fc_flip `Inline
-        && Ir.Tnode.Placements.known_virtual base.LL.optimize_ctx.LL.placements fc.LL.fc_tn)
-  in
+  let floor_withheld = placement_floor_withheld candidates in
   let ps_floor_ms ~materialized =
-    if inherited_footprint then None
+    if floor_withheld then None
     else
       let mat = Set.of_list (module Ir.Tnode) materialized in
       let open_placement tn = Set.mem candidate_set tn && not (Set.mem mat tn) in
@@ -2824,11 +2840,11 @@ let model_default ?name ?report ctx comp bindings =
     in
     (* gh-ocannl-514, the placement levels of the untuned regime (config [model_default_placements]
        = N > 0): before the compile, branch-and-bound over the top-N ranked flip candidates of the
-       decision surface — one keep/flip choice per level, the all-keep leaf visited first so the
-       default placements' own selection score is the running incumbent (ties stay with the default
-       placements), [select] pricing each leaf's hermetic lowering
-       ([Context.lowered_for_decisions]), and the partial-vector roofline floor
-       ([placement_surface.ps_floor_ms], monotone in the committed materializations) fathoming
+       decision surface — one node per level, kept at its default reading or flipped to one of its
+       alternatives, the all-keep leaf visited first so the default placements' own selection score
+       is the running incumbent (ties stay with the default placements), [select] pricing each
+       leaf's hermetic lowering ([Context.lowered_for_decisions]), and the partial-vector roofline
+       floor ([placement_surface.ps_floor_ms], monotone in the committed materializations) fathoming
        subtrees that cannot beat it. This is where the bound differentiates {e within} the tree: the
        family levels' floor is schedule-invariant, the placement levels' is not (phase 3). *)
     let placement_budget =
@@ -2840,66 +2856,51 @@ let model_default ?name ?report ctx comp bindings =
       else
         match
           let surface = placement_surface ?name ctx comp bindings in
+          (* The cut counts nodes (gh-ocannl-1017): a candidate is the whole node, so a level always
+             decides every reading it has. *)
           let cands = List.take surface.ps_candidates placement_budget in
-          (* The cut keeps a node's records together (gh-ocannl-616): a sibling of a taken record
-             joins it, so a level always decides the whole node. *)
-          let cands =
-            List.filter surface.ps_candidates ~f:(fun (o : LL.flip_candidate) ->
-                List.exists cands ~f:(fun (c : LL.flip_candidate) ->
-                    Ir.Tnode.equal c.LL.fc_tn o.LL.fc_tn))
-          in
           if List.is_empty cands then None
           else
-            let flip_name (fc : LL.flip_candidate) =
-              match fc.LL.fc_flip with
+            let flip_name (r : LL.reading) =
+              match r with
               | `Materialize -> "materialize"
               | `Inline -> "inline"
               | `Footprint -> "footprint"
             in
-            let level_name (group : LL.flip_candidate list) =
-              let fc = List.hd_exn group in
+            let level_name (fc : LL.flip_candidate) =
               Printf.sprintf "placement#%d %s %s" fc.LL.fc_tn.Ir.Tnode.uid
                 (Ir.Tnode.debug_name fc.LL.fc_tn)
-                (String.concat ~sep:"/" (List.map group ~f:flip_name))
+                (String.concat ~sep:"/"
+                   (List.map fc.LL.fc_alternatives ~f:(fun fa -> flip_name fa.LL.fa_flip)))
             in
             (* The placement levels commit to DATA like the family levels do (gh-ocannl-591): each
                child carries the candidate it decides and which way, so the bound below reads the
                path instead of finding the candidate back through the level name and the commitment
-               back through the label. [level_name] is the display name only. *)
+               back through the label. [level_name] is the display name only. A leaf is the vector
+               of the flips taken, one per flipped node. *)
             let rec build vector = function
               | [] -> Sspace.Leaf (List.rev vector)
-              | fc :: rest ->
-                  (* One MULTIWAY level per node (gh-ocannl-616): its records are mutually exclusive
-                     readings, so a level keeps them all or flips exactly one — two binary levels
-                     would spend leaves on vectors flipping both, of which only one reading can take
-                     effect. *)
-                  let siblings, rest =
-                    List.partition_tf rest ~f:(fun (o : LL.flip_candidate) ->
-                        Ir.Tnode.equal o.LL.fc_tn fc.LL.fc_tn)
-                  in
-                  let group = fc :: siblings in
-                  let kept = List.map group ~f:(fun g -> (g, false)) in
-                  let flip_one (g : LL.flip_candidate) =
-                    List.map group ~f:(fun o -> (o, Poly.equal o.LL.fc_flip g.LL.fc_flip))
-                  in
+              | (fc : LL.flip_candidate) :: rest ->
+                  (* One MULTIWAY level per node (gh-ocannl-616): its alternatives are mutually
+                     exclusive readings, so a level keeps the default or takes exactly one. *)
                   Sspace.Choice
                     {
-                      level = level_name group;
+                      level = level_name fc;
                       children =
-                        ((fc, `Keep), Sspace.Child (lazy (build (kept @ vector) rest)))
-                        :: List.map group ~f:(fun g ->
-                            ((g, `Flip), Sspace.Child (lazy (build (flip_one g @ vector) rest))));
+                        ((fc, `Keep), Sspace.Child (lazy (build vector rest)))
+                        :: List.map fc.LL.fc_alternatives ~f:(fun (fa : LL.flip_alternative) ->
+                            ( (fc, `Flip fa.LL.fa_flip),
+                              Sspace.Child
+                                (lazy (build ((fc.LL.fc_tn, fa.LL.fa_flip) :: vector) rest)) ));
                     }
             in
             let decisions vector =
               List.fold (List.rev vector) ~init:([], [], [])
-                ~f:(fun (mat, inl, fp) ((fc : LL.flip_candidate), flipped) ->
-                  if not flipped then (mat, inl, fp)
-                  else
-                    match fc.LL.fc_flip with
-                    | `Materialize -> (fc.LL.fc_tn :: mat, inl, fp)
-                    | `Inline -> (mat, fc.LL.fc_tn :: inl, fp)
-                    | `Footprint -> (mat, inl, fc.LL.fc_tn :: fp))
+                ~f:(fun (mat, inl, fp) ((tn : Ir.Tnode.t), (r : LL.reading)) ->
+                  match r with
+                  | `Materialize -> (tn :: mat, inl, fp)
+                  | `Inline -> (mat, tn :: inl, fp)
+                  | `Footprint -> (mat, inl, tn :: fp))
             in
             let score vector =
               let mat, inl, fp = decisions vector in
@@ -2915,24 +2916,16 @@ let model_default ?name ?report ctx comp bindings =
             let bound ~path _sub =
               let mat =
                 List.filter_map path ~f:(fun (_level, ((fc : LL.flip_candidate), commitment)) ->
-                    (* Certainly materialized below this node: a committed Materialize flip, or a
-                       kept DEFAULT-MATERIALIZED node — one with no [`Materialize] record, since a
-                       node carrying one is virtual or footprint-scoped by default and keeping its
-                       records keeps it so. A level keeps or flips every record of its node at once,
-                       so a kept level is the whole node kept. The other commitments (and every open
-                       level) contribute zero. *)
-                    let tn = fc.LL.fc_tn in
-                    let default_materialized =
-                      (* Read off the WHOLE surface, not the cut: the baseline placement is a
-                         property of the node, and a cut could drop its [`Materialize] record. *)
-                      not
-                        (List.exists surface.ps_candidates ~f:(fun (o : LL.flip_candidate) ->
-                             Ir.Tnode.equal o.LL.fc_tn tn && Poly.equal o.LL.fc_flip `Materialize))
-                    in
-                    match (commitment, fc.LL.fc_flip) with
-                    | `Flip, `Materialize -> Some tn
-                    | `Keep, _ -> if default_materialized then Some tn else None
-                    | `Flip, (`Inline | `Footprint) -> None)
+                    (* Certainly materialized below this node: a committed [`Materialize] flip, or a
+                       kept node whose default reading is [`Materialize] — the candidate's own field
+                       (gh-ocannl-1017), not an inference from which alternatives it offers. A level
+                       decides its whole node, so a kept level is the whole node kept. The other
+                       commitments (and every open level) contribute zero. *)
+                    match commitment with
+                    | `Flip `Materialize -> Some fc.LL.fc_tn
+                    | `Keep ->
+                        Option.some_if (LL.equal_reading fc.LL.fc_default `Materialize) fc.LL.fc_tn
+                    | `Flip (`Inline | `Footprint) -> None)
               in
               (* [ps_floor_ms] is milliseconds; [select]'s scores are roofline seconds. *)
               Option.map (surface.ps_floor_ms ~materialized:mat) ~f:(fun ms -> ms /. 1e3)
@@ -2944,7 +2937,7 @@ let model_default ?name ?report ctx comp bindings =
               (List.length cands) stats.Sspace.st_expanded stats.Sspace.st_scored
               stats.Sspace.st_unscored stats.Sspace.st_fathomed;
             match best with
-            | Some (vector, s) when List.exists vector ~f:(fun (_, flipped) -> flipped) ->
+            | Some (vector, s) when not (List.is_empty vector) ->
                 let mat, inl, fp = decisions vector in
                 let names tns = String.concat ~sep:"," (List.map tns ~f:Ir.Tnode.debug_name) in
                 logf

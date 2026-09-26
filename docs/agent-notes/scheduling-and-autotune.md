@@ -93,7 +93,7 @@ files.
   was `0` on every path — a SOUND lower bound, so nothing raised, no golden moved, and the family
   bound silently degraded to the schedule-invariant floor. If you add a level, add its constructor;
   if a consumer needs to know what was committed, match the datum. The same shape applies to
-  `model_default`'s placement tree, whose children carry `(flip_candidate, `Keep | `Flip)`.
+  `model_default`'s placement tree, whose children carry `(flip_candidate, `Keep | `Flip reading)`.
 - **A test that prices decision paths must walk them out of the tree, not write them down.**
   `sketch_family_tree.ml` used to call the traffic floor with literal paths, which pinned its own
   parser and let the tree mint anything. It now enumerates the real tree and asserts that every

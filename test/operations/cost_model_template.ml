@@ -7,7 +7,7 @@
    count), a [Where] body whose arm is a hoisted scope (exact, per Part 1), and a shared-loop body
    whose sibling setter instantiation drops. - [recompute_cost] through a real [optimize]: a
    two-link chain prices transitively, and the [`Materialize] flip candidates carry the modeled cost
-   ([fc_modeled]). - The ordering witness: two virtual nodes the proxy and the model rank in
+   ([fa_modeled]). - The ordering witness: two virtual nodes the proxy and the model rank in
    opposite orders — a three-operand sum (fan-in 3, two ops) against a four-deep unary chain (fan-in
    1, four ops). - [producer_cost] on the setter nest of a node the fan-in cap materialized (the
    [`Inline] flip), where no template was stored: the chain prefix's adds per cell, and the sum over
@@ -196,21 +196,25 @@ let () =
     | None -> false);
   p "chain: a materialized leaf has no template cost" (Option.is_none (cost x0));
   Stdio.printf "  flip candidates:\n";
+  let reading_name : LL.reading -> string = function
+    | `Materialize -> "materialize"
+    | `Inline -> "inline"
+    | `Footprint -> "footprint"
+  in
   List.iter o.LL.flip_candidates ~f:(fun fc ->
-      Stdio.printf "    %-11s %-4s cost %d %s\n"
-        (match fc.LL.fc_flip with
-        | `Materialize -> "materialize"
-        | `Inline -> "inline"
-        | `Footprint -> "footprint")
-        (Tn.debug_name fc.LL.fc_tn) fc.LL.fc_recompute_cost
-        (if fc.LL.fc_modeled then "(modeled)" else "(proxy)"));
-  let find tn =
+      List.iter fc.LL.fc_alternatives ~f:(fun fa ->
+          Stdio.printf "    %-4s %-11s -> %-11s cost %d %s\n" (Tn.debug_name fc.LL.fc_tn)
+            (reading_name fc.LL.fc_default) (reading_name fa.LL.fa_flip) fa.LL.fa_recompute_cost
+            (if fa.LL.fa_modeled then "(modeled)" else "(proxy)")));
+  let find tn r =
     List.find_map o.LL.flip_candidates ~f:(fun fc ->
-        if Tn.equal fc.LL.fc_tn tn then Some fc else None)
+        if Tn.equal fc.LL.fc_tn tn then
+          List.find fc.LL.fc_alternatives ~f:(fun fa -> LL.equal_reading fa.LL.fa_flip r)
+        else None)
   in
   p "chain: x2's Materialize flip is priced by the model (2 ops x multiplicity 1, one reader)"
-    (match find x2 with
-    | Some fc -> fc.LL.fc_modeled && fc.LL.fc_recompute_cost = 2
+    (match find x2 `Materialize with
+    | Some fa -> fa.LL.fa_modeled && fa.LL.fa_recompute_cost = 2
     | None -> false)
 
 (* The ordering witness: a = p + q + r (fan-in 3, two adds) and b = sin(sin(sin(sin(p)))) (fan-in 1,
@@ -241,7 +245,10 @@ let () =
   in
   let modeled tn =
     List.find_map o.LL.flip_candidates ~f:(fun fc ->
-        if Tn.equal fc.LL.fc_tn tn && fc.LL.fc_modeled then Some fc.LL.fc_recompute_cost else None)
+        if Tn.equal fc.LL.fc_tn tn then
+          List.find_map fc.LL.fc_alternatives ~f:(fun fa ->
+              Option.some_if fa.LL.fa_modeled fa.LL.fa_recompute_cost)
+        else None)
   in
   Stdio.printf "  %-4s proxy (extent x fan-in) %d  modeled %s\n" "a" (proxy a)
     (Option.value_map (modeled a) ~default:"none" ~f:Int.to_string);

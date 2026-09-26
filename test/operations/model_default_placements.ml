@@ -40,13 +40,17 @@ let () =
   (let module LL = Ir.Low_level in
    let surface = Autotune.placement_surface (Context.auto ()) comp Ir.Indexing.Empty in
    Stdio.printf "decision surface:\n";
+   let reading_name : LL.reading -> string = function
+     | `Materialize -> "materialize"
+     | `Inline -> "inline"
+     | `Footprint -> "footprint"
+   in
    List.iter surface.Autotune.ps_candidates ~f:(fun fc ->
-       Stdio.printf "  %-11s %-8s cost %d\n"
-         (match fc.LL.fc_flip with
-         | `Materialize -> "materialize"
-         | `Inline -> "inline"
-         | `Footprint -> "footprint")
-         (Ir.Tnode.debug_name fc.LL.fc_tn) fc.LL.fc_recompute_cost));
+       Stdio.printf "  %-8s %-11s -> %s\n" (Ir.Tnode.debug_name fc.LL.fc_tn)
+         (reading_name fc.LL.fc_default)
+         (String.concat ~sep:", "
+            (List.map fc.LL.fc_alternatives ~f:(fun fa ->
+                 Printf.sprintf "%s cost %d" (reading_name fa.LL.fa_flip) fa.LL.fa_recompute_cost)))));
   (* Reference values from a plain compile. *)
   let ctx_ref, routine_ref = Context.compile (Context.auto ()) comp Ir.Indexing.Empty in
   let ctx_ref = Context.run ctx_ref routine_ref in

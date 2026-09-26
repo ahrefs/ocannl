@@ -264,7 +264,7 @@ files.
   assertion copied into each read arm: forgetting a future arm fails at the pass boundary, before
   cleanup can make the result depend on whether it walks the undecided node's setter (`Virtual
   151/152`) or reader (`Never_virtual 17`) first.
-- **A flip candidate's `fc_recompute_cost` is the cost model's count, not the traced proxy**
+- **A flip alternative's `fa_recompute_cost` is the cost model's count, not the traced proxy**
   (gh-ocannl-637 Part 2): `Low_level.specialize_proc` prices each candidate through
   `Low_level.recompute_pricer`, a seam `Cost_model` registers at initialization (it sits above
   `Low_level`, so a hook is the only way the virtualizer can reach it — a program linking no cost
@@ -278,7 +278,7 @@ files.
   through `Cost_model.producer_cost`: the optimized code pruned to the node's own setter nest, per
   distinct written cell. Both give the ops of ONE instantiation; `specialize_proc` multiplies by the
   per-cell read multiplicity, exactly as the proxy did, and falls back to the proxy (reduction
-  extent × multiplicity × transitive fan-in, `fc_modeled = false`) when the model's count is only a
+  extent × multiplicity × transitive fan-in, `fa_modeled = false`) when the model's count is only a
   bound (a guarded body, a `Where` arm with inline work, opaque code). Magnitudes changed by an
   order of magnitude on reduction-shaped candidates (a scalar reduction's `Inline` flip is the whole
   nest per read: `placement_surface`'s `n11` went 16384 -> 1048576, `n12` 16 -> 144), so a test that
@@ -334,15 +334,17 @@ files.
   flips does not accumulate them); (c) the scratch's traced entry and its
   `Never_virtual 153` placement are minted in the virtualizer, ahead of `reconcile_traced_store`,
   which would otherwise read the scratch's write-then-read as a fresh node's read-before-write and
-  demand it from a prior context; (d) a footprint-scoped node carries TWO flip records
-  (`` `Materialize`` and `` `Inline``), a cap-materialized one whose footprint would be strictly
-  smaller `` `Inline`` and `` `Footprint`` — every consumer of `flip_candidates`
-  treats a node's records as ONE group of mutually exclusive readings: `tune_placements` measures
-  them against the same incumbent and commits the best, `model_default`'s placement tree gives the
-  node one multiway level, the memory planner scores each direction and lets the first that pays
-  take the node, and the certainty bounds count a node as materialized only when it has no
-  `` `Materialize`` record (a node with one is virtual or footprint-scoped by default) and every
-  record of it was kept or rejected.
+  demand it from a prior context; (d) `flip_candidates` is ONE record per node (gh-ocannl-1017):
+  `fc_default` (the reading the policy chose) and `fc_alternatives` (the mutually exclusive
+  readings a search may take — `` `Materialize``/`` `Inline`` for a footprint-scoped node, only
+  `` `Inline`` for an inherited one, `` `Inline``/`` `Footprint`` for a cap-materialized node with
+  a strictly smaller footprint), built in `specialize_proc` where both facts are known. The flat
+  list it replaced cost nine review rounds across five consumers re-deriving the grouping, the last
+  one an inference of the default from which records exist (an inherited footprint-scoped node and
+  a cap-materialized one both offer a lone `` `Inline``). Consumers decide a candidate whole — keep
+  the default or take one alternative — top-N cuts count candidates, and certainty bounds read
+  `fc_default`, never the alternatives' shapes; `Autotune.placement_floor_withheld` is the one
+  place a candidate's standing gates the floor.
   Structural probe for "inlined": `count_get` of the node, never `count_scopes` — the simplifier
   collapses a single-assignment scope into its expression. Pinned row by row, with executed parity
   against the materialized and (where the cap alone stands in the way) the inlined reading, by

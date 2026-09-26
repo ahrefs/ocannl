@@ -5,6 +5,8 @@ diagonal: the scratch is written by the prologue and read by the consumer: true
 diagonal: the prologue instantiates the reduction (a loop of the reduction extent survives): true
 diagonal: both lattice neighbours are offered as flips: true
 diagonal: the footprint form is not offered where it is already chosen: true
+diagonal: the node's one candidate defaults to the footprint form: true
+diagonal: its materialize direction is open, so the placement floor stands: true
 diagonal: both flips are priced alike (one instantiation per read cell): true
 diagonal: the inlined arm really inlines (no scratch): true
 diagonal: executed values are the diagonal of the reduction: true
@@ -18,6 +20,8 @@ visit-cap: footprint and materialized arms agree: true
 full: the reduction cap materializes the producer: true
 full: no scratch: true
 full: the inline flip is offered, the footprint flip is not (as many cells as the node): true
+full: the node's one candidate defaults to materialized: true
+full: a lone inline alternative over a materialized default leaves the placement floor standing: true
 full: executed values are the reduction: true
 full-preferred: the producer stays virtual: true
 full-preferred: one 2-D scratch over the reader's box: true
@@ -34,6 +38,8 @@ preference: footprint and inlined arms agree: true
 inherited: the producer routine commits the node virtual with an empty schedule: true
 inherited: the consumer footprint-scopes the inherited node: true
 inherited: the decision is searchable as an inline flip, and only that: true
+inherited: the node's one candidate still defaults to the footprint form: true
+inherited: no materialize-all specialization reaches it, so the placement floor is withheld: true
 inherited: executed values are the diagonal of the inherited reduction: true
 inherited-guarded: the read declines to inlining (no buffer read): true
 inherited-guarded: no scratch: true

@@ -55,9 +55,12 @@ let () =
   let expected = Context.get_values ctx_ref t2.Tensor.value in
   (* The surface the chain will walk: how many flips of each kind exist. *)
   let surface = Autotune.placement_surface (Context.auto ()) comp Ir.Indexing.Empty in
+  let alternatives =
+    List.concat_map surface.Autotune.ps_candidates ~f:(fun fc ->
+        List.map fc.LL.fc_alternatives ~f:(fun fa -> (fc.LL.fc_tn, fa.LL.fa_flip)))
+  in
   let mat_flips, inline_flips_on_surface =
-    List.partition_tf surface.Autotune.ps_candidates ~f:(fun fc ->
-        match fc.LL.fc_flip with `Materialize -> true | `Inline | `Footprint -> false)
+    List.partition_tf alternatives ~f:(fun (_, r) -> LL.equal_reading r `Materialize)
   in
   p "the surface reports at least one materialize flip" (List.length mat_flips >= 1);
   (* Budget above the whole surface: every candidate is either measured or fathomed. *)
@@ -83,7 +86,7 @@ let () =
   in
   let incumbent = arm_a.Autotune.best_ms in
   let floors =
-    List.map mat_flips ~f:(fun fc -> surface.Autotune.ps_floor_ms ~materialized:[ fc.LL.fc_tn ])
+    List.map mat_flips ~f:(fun (tn, _) -> surface.Autotune.ps_floor_ms ~materialized:[ tn ])
   in
   p_all "every materialize flip has a finite positive floor" floors ~f:(function
     | Some floor -> Float.is_finite floor && Float.(floor > 0.)

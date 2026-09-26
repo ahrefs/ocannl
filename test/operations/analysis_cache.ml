@@ -133,14 +133,7 @@ let phase2 () =
   p "sibling Context.compile shares the analysis" (Poly.equal (h2, m2) (`Hits 1, `Misses 0));
   let surface, h3, m3 = delta (fun () -> Context.decision_surface ctx comp Idx.Empty) in
   p "decision_surface shares the analysis too" (Poly.equal (h3, m3) (`Hits 1, `Misses 0));
-  let render fc =
-    ( fc.LL.fc_tn.Tn.id,
-      (match fc.LL.fc_flip with
-      | `Inline -> "inline"
-      | `Materialize -> "materialize"
-      | `Footprint -> "footprint"),
-      fc.LL.fc_recompute_cost )
-  in
+  let render fc = Sexp.to_string (LL.sexp_of_flip_candidate fc) in
   p "decision_surface matches the capture compile's flip candidates"
     (Poly.equal (List.map surface ~f:render) (List.map !captured ~f:render));
   p "decision_surface reports a nonempty surface here" (not (List.is_empty surface))

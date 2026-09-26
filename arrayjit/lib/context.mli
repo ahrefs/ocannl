@@ -199,12 +199,13 @@ val decision_surface :
   Ir.Indexing.unit_bindings ->
   Ir.Low_level.flip_candidate list
 (** gh-560: the analyze-only entry point — the routine's searchable inlining decision dimensions
-    ({!Ir.Low_level.field-flip_candidates}, most expensive first) as {!compile} would report them
-    from this context, computed by lowering and optimization alone: no backend codegen, no linking,
-    and no effect on the context (the lineage state is forked like a compile's, and the compilation
-    frontier and ledger are untouched). Sibling compiles of the same routine share the underlying
-    analysis via the analysis cache, so after a compile this costs only the specialization replay.
-    Used by [Train.tune_placements]' flip refinement to read the decision surface. *)
+    ({!Ir.Low_level.field-flip_candidates}, one per node, most expensive first) as {!compile} would
+    report them from this context, computed by lowering and optimization alone: no backend codegen,
+    no linking, and no effect on the context (the lineage state is forked like a compile's, and the
+    compilation frontier and ledger are untouched). Sibling compiles of the same routine share the
+    underlying analysis via the analysis cache, so after a compile this costs only the
+    specialization replay. Used by [Train.tune_placements]' flip refinement to read the decision
+    surface. *)
 
 val run : t -> routine -> t
 (** Execute a compiled routine. Mutates buffers in-place. Returns updated context with newly
