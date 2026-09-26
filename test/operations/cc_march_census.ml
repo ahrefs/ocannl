@@ -62,7 +62,12 @@
    [-march=sapphirerapids] where gcc 15.2 lowers it packed, from identical emission, and a golden
    holding the sharp claim over those rows would be pinning a compiler version. Which rows those are
    is asked of the compiler ({!packed_half_widen}), not assumed; - every register-tiled [Tile_mma]
-   k-loop does more vector than scalar work where the ISA has an FMA.
+   k-loop does more vector than scalar work where the ISA has an FMA (over its full passes); - and,
+   per register-tile GEOMETRY -- the renderer's default and every alternative the sketch seeding
+   proposes, full passes and column tails alike (gh-ocannl-948) -- every accumulator update is one
+   whole-width vector FMA per k step, and no k-loop whose pass fits the target's vector registers
+   references the stack. That last one is gh-ocannl-614's spill, reported by the matrix rather than
+   found by an asm read.
 
    A target the toolchain does not accept is reported with {!Verdict.skipped}, never dropped: a
    silently missing column reads exactly like a passing one. So is a claim whose population a
@@ -155,9 +160,37 @@ module Generated = Test_utils.Generated
 
    The [Tile_mma] block extents are chosen the same way, against the tiling's own geometry: [m] a
    multiple of [rm = 4], and [n = 192] divisible by every [rn * lanes] the cost model can pick at
-   these widths, so neither scalar peel is emitted. The anchors are proof against a peel regardless
-   -- each names a vector-register binding ([tmma_as_0__]) that only the full-block k-loop contains
-   -- but a peel-free tile is also the shape the census is about. *)
+   these widths, so the tile is its full passes alone and each row names exactly one k-loop. The
+   column tails, and every other geometry the tuner would time, are the next section's kernels.
+
+   {2 The register-tile geometry kernels (gh-ocannl-948)}
+
+   The tile above is the renderer's DEFAULT geometry at one site that has no alternatives -- and
+   gh-ocannl-614 found the spill at a geometry other than the default: whether gcc keeps the C-tile
+   in registers (18 instructions, no stack references) or spills it (279 and 73) is decided by [rm x
+   rn x lanes], a dimension no ranking model sees. Since gh-ocannl-619 the tuner times every
+   geometry {!Ir.Register_tile.alternatives} seeds, so every one of them is a kernel a timing could
+   ship, and a spill in one of them belongs in this matrix rather than in the next asm read.
+
+   So the f32 child also emits one kernel per (site, geometry): the renderer's own
+   {!Ir.Register_tile.default} (requested as [None], exactly as a schedule without a geometry leaves
+   it) and each alternative (requested by value, as the seeding does), at two sites chosen for what
+   their geometries' passes contain at EVERY width of the ladder:
+
+   - [n = 512], gh-ocannl-614's own site: every width's default ends in whole-vector column tail
+   passes and the seeding proposes the tail-free width twin beside it; - [n = 99], [3 mod 16] and
+   hence [3 mod] every f32 lane count here: every width's default ends in a 3-lane PARTIAL vector --
+   the zeroed-register load and width-counted store gh-ocannl-620 made the edge of every tile, which
+   the [n = 192] tile deliberately never emits.
+
+   The geometry is a field of the [Tile_mma] statement, not a process-wide setting, so it needs no
+   child of its own: the child that owns the width computes the seeds with the same vector width its
+   renderer reads, and each geometry gets a routine (hence a source file) of its own so that its
+   passes' anchors cannot meet another tile's. A pass is anchored on its B-row load, whose column
+   expression is [tmma_j__] in the full passes and the tail's literal first column in the tail pass
+   -- the two k-loops of one tile, told apart. The sites hold no row band ([m] is a multiple of
+   every seeded [rm]); the child refuses to emit one that does, since a band's k-loop repeats the
+   full passes' B-row lines. *)
 
 let extent = 4096
 let routine = "census_kernel"
@@ -168,6 +201,10 @@ let routine = "census_kernel"
 let mma_m = 8
 let mma_n = 192
 let mma_k = 32
+
+(* The geometry kernels' sites: (name, [n]); [m] and [k] are the tile's above. See the fixture
+   header for why these two column counts. *)
+let geometry_sites = [ ("n512", 512); ("n99", 99) ]
 
 (* The compute precision the cc backend resolves a storage precision to under this process's
    numerics policy. Not a second copy of that rule: [Cc_backend.compute_prec] is
@@ -181,6 +218,21 @@ type loop_kind =
   | Reduce  (** a [Vectorized] accumulation loop: {!C_syntax.try_vectorize_reduce}'s chain fold *)
   | Tile
       (** the k-loop of a register-tiled [Tile_mma]: {!C_syntax.try_register_tile}'s GEBP grid *)
+
+type tile_pass = Full | Tail
+
+type tile_geometry = {
+  site : string;
+  tile : Ir.Register_tile.t;
+  seeded : bool;
+      (** an alternative the sketch seeding proposes, requested by value; [false] for the renderer's
+          own default, requested as [None] *)
+  pass : tile_pass;
+  rows : int;
+  cols : int;  (** vector columns of this pass's accumulator grid *)
+  partial : bool;  (** whether this pass's last column is a partial vector *)
+}
+(** Which register-tile pass a [Tile] row is, at which geometry. *)
 
 type kernel_loop = {
   anchors : string list;
@@ -216,7 +268,42 @@ type kernel_loop = {
           about whether the emission REACHED that table's entry, and a second copy of the entry
           would make the claim true of itself. *)
   narrow : string;
+  geometry : tile_geometry option;
+      (** the register-tile geometry and pass a [Tile] row censuses, as the emitting child computed
+          it from {!Ir.Register_tile}; [None] for a reduction *)
 }
+
+let geometry_to_field = function
+  | None -> "-"
+  | Some { site; tile = { Ir.Register_tile.rm; rn; lanes }; seeded; pass; rows; cols; partial } ->
+      Printf.sprintf "%s,%d,%d,%d,%b,%s,%d,%d,%b" site rm rn lanes seeded
+        (match pass with Full -> "full" | Tail -> "tail")
+        rows cols partial
+
+let geometry_of_field field =
+  match String.split field ~on:',' with
+  | [ site; rm; rn; lanes; seeded; pass; rows; cols; partial ] ->
+      Some
+        {
+          site;
+          tile =
+            {
+              Ir.Register_tile.rm = Int.of_string rm;
+              rn = Int.of_string rn;
+              lanes = Int.of_string lanes;
+            };
+          seeded = Bool.of_string seeded;
+          pass = (if String.equal pass "tail" then Tail else Full);
+          rows = Int.of_string rows;
+          cols = Int.of_string cols;
+          partial = Bool.of_string partial;
+        }
+  | _ -> None
+
+(* The rendered tile's own header names the geometry it rendered ([C_syntax.try_register_tile]); a
+   row's label is only true of the measurement if the header agrees with it. *)
+let tile_header { Ir.Register_tile.rm; rn; lanes } =
+  Printf.sprintf "Tile_mma register tiling: %dx%d C-tile of %d-lane" rm rn lanes
 
 (* Directory handling through the OCaml stdlib rather than [Sys.command "mkdir -p"] / [Sys.command
    "rm -rf"]: those are POSIX shell spellings, and this test has to work on the native Windows
@@ -239,6 +326,9 @@ let build (emit_dir : string) =
   Utils.settings.output_debug_files_in_build_directory <- true;
   let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc") in
   Generated.init ~backend_name;
+  (* The width this child's renderer reads, which is what its register-tile geometries are ranked
+     and fit against: the seeds below are computed from the same number, never restated. *)
+  let vector_bytes = Cc_backend.vector_bytes_setting () in
   let nodes = ref [] in
   let mk =
     let next = ref 8100 in
@@ -255,7 +345,7 @@ let build (emit_dir : string) =
       tn
   in
   let loops = ref [] in
-  let add ~anchors ~op_class ~kind ~what ~store_prec =
+  let add ?geometry ~anchors ~op_class ~kind ~what ~store_prec () =
     let compute_prec = comp_prec store_prec in
     loops :=
       {
@@ -267,8 +357,28 @@ let build (emit_dir : string) =
         comp = Ir.Ops.prec_string compute_prec;
         widen = fst (Ir.Ops.c_convert_precision ~from:store_prec ~to_:compute_prec);
         narrow = fst (Ir.Ops.c_convert_precision ~from:compute_prec ~to_:store_prec);
+        geometry;
       }
       :: !loops
+  in
+  (* The register-tile passes of one [Tile_mma] at geometry [tile] over an [mma_m x n] site, as
+     {!Ir.Register_tile.coverage} decomposes it: the full passes, then the column tail when there is
+     one. *)
+  let tile_passes ~site ~seeded ~n (tile : Ir.Register_tile.t) =
+    let { Ir.Register_tile.m_full; n_full; tail_widths } =
+      Ir.Register_tile.coverage ~m:mma_m ~n tile
+    in
+    if m_full <> mma_m then
+      failwith
+        (Printf.sprintf "census site %s: geometry %s leaves a row band of %d rows" site
+           (Ir.Register_tile.to_string tile) (mma_m - m_full));
+    let g pass ~cols ~partial = { site; tile; seeded; pass; rows = tile.rm; cols; partial } in
+    (if n_full > 0 then [ (g Full ~cols:tile.rn ~partial:false, None) ] else [])
+    @
+    match List.last tail_widths with
+    | None -> []
+    | Some last ->
+        [ (g Tail ~cols:(List.length tail_widths) ~partial:(last < tile.lanes), Some n_full) ]
   in
   (* One (storage precision, row-name tag) group of three reduction loops. [tag] names the row, and
      is also what makes each loop's arrays -- hence its anchor -- unique in the kernel. *)
@@ -295,7 +405,7 @@ let build (emit_dir : string) =
         ~anchors:[ name ^ "s_" ^ tag ]
         ~op_class:Census.Max_min ~kind:Reduce
         ~what:(name ^ "/" ^ tag)
-        ~store_prec:prec;
+        ~store_prec:prec ();
       vloop (fun i ->
           LL.Set
             {
@@ -309,7 +419,7 @@ let build (emit_dir : string) =
     let min_loop = minmax Ir.Ops.Min "min" in
     add
       ~anchors:[ "dta_" ^ tag ]
-      ~op_class:Census.Fma ~kind:Reduce ~what:("dot/" ^ tag) ~store_prec:prec;
+      ~op_class:Census.Fma ~kind:Reduce ~what:("dot/" ^ tag) ~store_prec:prec ();
     let dot_loop =
       vloop (fun j ->
           LL.Set
@@ -333,17 +443,17 @@ let build (emit_dir : string) =
      tiles in one kernel apart; and the binding name is what keeps a scalar peel, which reads the
      same array through the same conversion into [tmma_acc__], from being the smaller loop the
      census would prefer. *)
-  let tile_mma ~tag ~prec ~anchors =
-    let d = mk ~prec ~dims:[| mma_m; mma_n |] ("mmad_" ^ tag) in
+  let tile_mma ?tile ?(n = mma_n) ~tag ~prec ~rows () =
+    let d = mk ~prec ~dims:[| mma_m; n |] ("mmad_" ^ tag) in
     let a = mk ~prec ~dims:[| mma_m; mma_k |] ("mmaa_" ^ tag) in
-    let b = mk ~prec ~dims:[| mma_k; mma_n |] ("mmab_" ^ tag) in
+    let b = mk ~prec ~dims:[| mma_k; n |] ("mmab_" ^ tag) in
     let i = Idx.get_symbol () and j = Idx.get_symbol () and k = Idx.get_symbol () in
     let lane = Idx.get_symbol () in
     let it s = Idx.Iterator s in
     let fallback =
       let serial index to_ body = LL.For_loop { index; from_ = 0; to_; axis = LL.Serial; body } in
       serial i (mma_m - 1)
-      @@ serial j (mma_n - 1)
+      @@ serial j (n - 1)
       @@ serial k (mma_k - 1)
       @@ LL.Set
            {
@@ -359,7 +469,8 @@ let build (emit_dir : string) =
            }
     in
     let origin = [| Idx.Fixed_idx 0; Idx.Fixed_idx 0 |] in
-    add ~anchors ~op_class:Census.Fma ~kind:Tile ~what:("mma/" ^ tag) ~store_prec:prec;
+    List.iter rows ~f:(fun (what, anchors, geometry) ->
+        add ?geometry ~anchors ~op_class:Census.Fma ~kind:Tile ~what ~store_prec:prec ());
     (* Lane extent 1: the cc backends render the [Workgroup] axis serially and guard the statement
        with [if (lane == 0)], so a wider lane loop would only wrap the tile in a loop that does
        nothing on all but one trip. *)
@@ -371,7 +482,7 @@ let build (emit_dir : string) =
           to_ = 0;
           axis = LL.Workgroup;
           body =
-            Ll_test.tile_mma ~m:mma_m ~n:mma_n ~k:mma_k ~lane ~d:(d, origin) ~a:(a, origin)
+            Ll_test.tile_mma ?tile ~m:mma_m ~n ~k:mma_k ~lane ~d:(d, origin) ~a:(a, origin)
               ~b:(b, origin) fallback;
         }
     in
@@ -407,30 +518,102 @@ let build (emit_dir : string) =
       ( [ ("f16w", Ir.Ops.half) ],
         [ ("f16w", Ir.Ops.half, [ "tmma_as_0__ = HALF_TO_FLOAT("; ", tmma_b_0__, &tmma_b__[" ]) ] )
   in
+  (* The main kernel's tiles are the renderer's default geometry over the [n = 192] site, whose full
+     passes cover it (see the fixture header), so each is one [Full] row. The geometry is the one
+     {!Ir.Register_tile.default} picks at the loop's COMPUTE precision -- the renderer ranks there
+     -- and the header claim in the driver checks that it is the one rendered. *)
+  let default_rows ~prec ~what ~anchors =
+    let elt_bytes = Ir.Ops.prec_in_bytes (comp_prec prec) in
+    let geometry =
+      Option.map (Ir.Register_tile.default ~vector_bytes ~elt_bytes ~m:mma_m ~n:mma_n)
+        ~f:(fun tile ->
+          {
+            site = "n192";
+            tile;
+            seeded = false;
+            pass = Full;
+            rows = tile.rm;
+            cols = tile.rn;
+            partial = false;
+          })
+    in
+    [ (what, anchors, geometry) ]
+  in
   let raw_tiles, scoped_tiles =
-    List.map tiles ~f:(fun (tag, prec, anchors) -> tile_mma ~tag ~prec ~anchors) |> List.unzip
+    List.map tiles ~f:(fun (tag, prec, anchors) ->
+        tile_mma ~tag ~prec ~rows:(default_rows ~prec ~what:("mma/" ^ tag) ~anchors) ())
+    |> List.unzip
   in
   let reduce_llc = seq (List.map reduction_groups ~f:reductions) in
   let raw = seq (reduce_llc :: raw_tiles) in
   let scoped = seq (reduce_llc :: scoped_tiles) in
-  (* [optimize_scoped] injects the nest AS WRITTEN past [LL.optimize], which is what keeps the
-     [Vectorized] annotations, the [Tile_mma] statements and the exact loop shapes -- the subject of
-     the census -- from being rewritten on the way to the backend. *)
-  let o = Ll_test.optimize_scoped ~materialized:!nodes ~name:routine ~raw scoped in
-  ignore (Ll_test.link ~name:routine o : Context.t * Context.routine);
+  (* One routine: optimized, linked, and its source and loop manifest written where the driver reads
+     them. Resets the per-kernel node and loop lists for the next one. *)
+  let emit ~name ~raw scoped =
+    (* [optimize_scoped] injects the nest AS WRITTEN past [LL.optimize], which is what keeps the
+       [Vectorized] annotations, the [Tile_mma] statements and the exact loop shapes -- the subject
+       of the census -- from being rewritten on the way to the backend. *)
+    let o = Ll_test.optimize_scoped ~materialized:!nodes ~name ~raw scoped in
+    ignore (Ll_test.link ~name o : Context.t * Context.routine);
+    Stdio.Out_channel.write_all
+      (Stdlib.Filename.concat emit_dir (name ^ ".c"))
+      ~data:(Generated.read name);
+    Stdio.Out_channel.write_all
+      (Stdlib.Filename.concat emit_dir (name ^ ".loops"))
+      ~data:
+        (String.concat ~sep:"\n"
+           (List.rev_map !loops
+              ~f:(fun { anchors; op_class; kind; what; store; comp; widen; narrow; geometry } ->
+                Printf.sprintf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" (String.concat ~sep:"|" anchors)
+                  (match op_class with Census.Fma -> "fma" | Census.Max_min -> "maxmin")
+                  (match kind with Reduce -> "reduce" | Tile -> "tile")
+                  what store comp widen narrow (geometry_to_field geometry))));
+    nodes := [];
+    loops := [];
+    name
+  in
+  let main = emit ~name:routine ~raw scoped in
+  (* {2 The geometry kernels} -- see the fixture header. f32 only, and so from one child per width:
+     f32 does not depend on the fp16 policy, and f32 is the configuration the tuner times these
+     geometries in. *)
+  let geometry_kernels =
+    if not native_fp16 then []
+    else
+      let elt_bytes = Ir.Ops.prec_in_bytes Ir.Ops.single in
+      List.concat_map geometry_sites ~f:(fun (site, n) ->
+          let requests =
+            (match Ir.Register_tile.default ~vector_bytes ~elt_bytes ~m:mma_m ~n with
+              | Some t -> [ (None, t) ]
+              | None -> [])
+            @ List.map (Ir.Register_tile.alternatives ~vector_bytes ~elt_bytes ~m:mma_m ~n)
+                ~f:(fun t -> (Some t, t))
+          in
+          List.map requests ~f:(fun (tile, (g : Ir.Register_tile.t)) ->
+              let seeded = Option.is_some tile in
+              let shape = Printf.sprintf "%dx%dx%d" g.rm g.rn g.lanes in
+              let tag = Printf.sprintf "%s_%d_%d_%d" site g.rm g.rn g.lanes in
+              let label =
+                Printf.sprintf "rt/%s/%s%s" site (if seeded then "alt" else "dflt") shape
+              in
+              let rows =
+                List.map (tile_passes ~site ~seeded ~n g) ~f:(fun (geometry, tail_from) ->
+                    (* The B-row load's column expression: [tmma_j__] in a full pass, the tail's
+                       literal first column in the tail pass. *)
+                    let column =
+                      match tail_from with
+                      | None -> "tmma_j__"
+                      | Some n_full -> Int.to_string n_full
+                    in
+                    ( (match tail_from with None -> label | Some _ -> label ^ "+tail"),
+                      [ Printf.sprintf "&tmma_b__[tmma_l__ * %d + %s + " n column ],
+                      Some geometry ))
+              in
+              let raw, scoped = tile_mma ?tile ~n ~tag ~prec:Ir.Ops.single ~rows () in
+              emit ~name:("census_rt_" ^ tag) ~raw scoped))
+  in
   Stdio.Out_channel.write_all
-    (Stdlib.Filename.concat emit_dir (routine ^ ".c"))
-    ~data:(Generated.read routine);
-  Stdio.Out_channel.write_all
-    (Stdlib.Filename.concat emit_dir (routine ^ ".loops"))
-    ~data:
-      (String.concat ~sep:"\n"
-         (List.rev_map !loops
-            ~f:(fun { anchors; op_class; kind; what; store; comp; widen; narrow } ->
-              Printf.sprintf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" (String.concat ~sep:"|" anchors)
-                (match op_class with Census.Fma -> "fma" | Census.Max_min -> "maxmin")
-                (match kind with Reduce -> "reduce" | Tile -> "tile")
-                what store comp widen narrow)))
+    (Stdlib.Filename.concat emit_dir "kernels")
+    ~data:(String.concat ~sep:"\n" (main :: geometry_kernels))
 
 (* {1 The driver} *)
 
@@ -518,6 +701,9 @@ let spawn_emit ~exe ~width ~fp16 ~dir =
 
 type caps = {
   vector_bytes : int;  (** the widest vector register the target has *)
+  vector_registers : int;
+      (** how many of them: 32 on aarch64 and with AVX-512 (whose EVEX encoding reaches [xmm16] to
+          [xmm31] at every width on the targets here), 16 on every other x86 target *)
   has_fma : bool;
   fp16_vector : bool;  (** 16-bit vector ARITHMETIC *)
   fp16_convert : bool;
@@ -537,6 +723,7 @@ let caps_of t =
   {
     vector_bytes =
       (if has "__AVX512F__" then 64 else if has "__AVX2__" || has "__AVX__" then 32 else 16);
+    vector_registers = (if has "__aarch64__" || has "__AVX512F__" then 32 else 16);
     has_fma = has "__FMA__" || has "__ARM_FEATURE_FMA";
     fp16_vector = has "__AVX512FP16__" || has "__ARM_FEATURE_FP16_VECTOR_ARITHMETIC";
     fp16_convert = has "__F16C__" || has "__AVX512FP16__" || has "__ARM_FP16_FORMAT_IEEE";
@@ -1027,6 +1214,7 @@ let packed_half_widen t ~width ~opt_level =
 type emitted = {
   width : int;
   fp16 : string;  (** the [fp16_arithmetic] setting this kernel was emitted under *)
+  kernel : string;  (** the routine's name, which is also its source file's basename *)
   src_path : string;
   source : string;
   loops : kernel_loop list;
@@ -1068,48 +1256,75 @@ type row = {
 
 let is_fma_row r = match r.loop.op_class with Census.Fma -> true | Census.Max_min -> false
 
+(* How the census table and the file names name a kernel: its emission setting, and for a geometry
+   kernel the site and geometry its routine name carries. *)
+let kernel_label (e : emitted) =
+  let setting = Printf.sprintf "w%d-%s" e.width e.fp16 in
+  match String.chop_prefix e.kernel ~prefix:"census_rt_" with
+  | Some geometry -> setting ^ "-" ^ geometry
+  | None -> setting
+
 let emit_all ~exe ~root =
   List.cartesian_product widths fp16_settings
-  |> List.filter_map ~f:(fun (width, (fp16_tag, fp16)) ->
+  |> List.concat_map ~f:(fun (width, (fp16_tag, fp16)) ->
       let describe = Printf.sprintf "width %d, fp16 %s" width fp16_tag in
       let dir = Stdlib.Filename.concat root (Printf.sprintf "w%d-%s" width fp16_tag) in
       match spawn_emit ~exe ~width ~fp16 ~dir with
       | Error out ->
           Verdict.fail (Printf.sprintf "%s: the emit child failed:\n%s" describe out);
-          None
-      | Ok () ->
-          let src_path = Stdlib.Filename.concat dir (routine ^ ".c") in
-          let loops_path = Stdlib.Filename.concat dir (routine ^ ".loops") in
-          if not (Stdlib.Sys.file_exists src_path && Stdlib.Sys.file_exists loops_path) then (
-            Verdict.fail (Printf.sprintf "%s: the emit child produced no kernel in %s" describe dir);
-            None)
-          else
-            let loops =
-              Stdio.In_channel.read_lines loops_path
-              |> List.filter_map ~f:(fun l ->
-                  match String.split l ~on:'\t' with
-                  | [ anchors; cls; kind; what; store; comp; widen; narrow ] ->
-                      Some
-                        {
-                          anchors = String.split anchors ~on:'|';
-                          op_class = (if String.equal cls "fma" then Census.Fma else Census.Max_min);
-                          kind = (if String.equal kind "tile" then Tile else Reduce);
-                          what;
-                          store;
-                          comp;
-                          widen;
-                          narrow;
-                        }
-                  | _ -> None)
-            in
-            Some
-              {
-                width;
-                fp16 = fp16_tag;
-                src_path;
-                source = Stdio.In_channel.read_all src_path;
-                loops;
-              })
+          []
+      | Ok () -> (
+          let index = Stdlib.Filename.concat dir "kernels" in
+          let kernels =
+            if Stdlib.Sys.file_exists index then Stdio.In_channel.read_lines index else []
+          in
+          (* The main kernel is always first: a child that indexed nothing, or lost it, emitted
+             nothing this test knows how to read. *)
+          match kernels with
+          | first :: _ when String.equal first routine ->
+              List.filter_map kernels ~f:(fun kernel ->
+                  let src_path = Stdlib.Filename.concat dir (kernel ^ ".c") in
+                  let loops_path = Stdlib.Filename.concat dir (kernel ^ ".loops") in
+                  if not (Stdlib.Sys.file_exists src_path && Stdlib.Sys.file_exists loops_path) then (
+                    Verdict.fail
+                      (Printf.sprintf
+                         "%s: the emit child indexed %s but wrote no source for it in %s" describe
+                         kernel dir);
+                    None)
+                  else
+                    let loops =
+                      Stdio.In_channel.read_lines loops_path
+                      |> List.filter_map ~f:(fun l ->
+                          match String.split l ~on:'\t' with
+                          | [ anchors; cls; kind; what; store; comp; widen; narrow; geometry ] ->
+                              Some
+                                {
+                                  anchors = String.split anchors ~on:'|';
+                                  op_class =
+                                    (if String.equal cls "fma" then Census.Fma else Census.Max_min);
+                                  kind = (if String.equal kind "tile" then Tile else Reduce);
+                                  what;
+                                  store;
+                                  comp;
+                                  widen;
+                                  narrow;
+                                  geometry = geometry_of_field geometry;
+                                }
+                          | _ -> None)
+                    in
+                    Some
+                      {
+                        width;
+                        fp16 = fp16_tag;
+                        kernel;
+                        src_path;
+                        source = Stdio.In_channel.read_all src_path;
+                        loops;
+                      })
+          | _ ->
+              Verdict.fail
+                (Printf.sprintf "%s: the emit child produced no kernel in %s" describe dir);
+              []))
 
 (* {2 What each target's ISA can be held to}
 
@@ -1228,6 +1443,36 @@ let () =
           && List.for_all e.loops ~f:(fun other ->
               String.equal other.what l.what
               || Set.is_empty (Set.inter mine (loop_anchor_range e other))));
+      (* {2 That the geometry rows cover what they were added for, and are what they say}
+
+         Every claim about a register-tile row below is quantified over the rows the children
+         emitted, so a seeding change that stopped proposing alternatives at these sites -- or a
+         coverage change that stopped leaving a partial vector at [n = 99] -- would shrink the
+         population to the default tiles and leave every claim passing over less than it names. So
+         the coverage is claimed per width, asked of the rows' own recorded geometries (which the
+         child took from {!Ir.Register_tile}), not of the site table.
+
+         And a row's geometry is the child's REQUEST; what was measured is what the renderer made of
+         it. [C_syntax.try_register_tile] honours a requested geometry exactly or declines it (and a
+         decline is already a "no loop carried the anchor" failure), but the default rows are
+         requested as [None], and there the geometry the row names is the child's own call of
+         {!Ir.Register_tile.default}: the rendered header is the only evidence that the renderer,
+         reading its own vector width, picked the same one. *)
+      let geometry_loops =
+        List.concat_map emitted ~f:(fun e ->
+            List.filter_map e.loops ~f:(fun l -> Option.map l.geometry ~f:(fun g -> (e, g))))
+      in
+      Verdict.p_all
+        "every vector width censuses a register-tile geometry the sketch seeding proposes beside \
+         the default"
+        widths ~f:(fun w -> List.exists geometry_loops ~f:(fun (e, g) -> e.width = w && g.seeded));
+      Verdict.p_all
+        "every vector width censuses a register-tile pass whose column tail ends in a partial \
+         vector"
+        widths ~f:(fun w -> List.exists geometry_loops ~f:(fun (e, g) -> e.width = w && g.partial));
+      Verdict.p_all "every censused register tile rendered the geometry its row names"
+        geometry_loops ~f:(fun (e, g) ->
+          String.is_substring e.source ~substring:(tile_header g.tile));
       let all = toolchains () in
       let available = List.filter all ~f:Census.accepts in
       Stdio.eprintf "\n=== cc kernel census (not part of the golden) ===\n";
@@ -1242,7 +1487,7 @@ let () =
             let caps = caps_of t in
             List.concat_map emitted ~f:(fun e ->
                 List.concat_map [ 2; 3 ] ~f:(fun opt ->
-                    let kernel = Printf.sprintf "w%d-%s" e.width e.fp16 in
+                    let kernel = kernel_label e in
                     let asm_path =
                       Stdlib.Filename.concat root
                         (Printf.sprintf "%s-%s-O%d.s"
@@ -1253,7 +1498,7 @@ let () =
                     match
                       compile_cached t ~opt_level:opt ~source:e.source ~src_path:e.src_path
                         ~asm_path ~validate:(fun asm ->
-                          String.is_substring asm ~substring:(routine ^ ".c"))
+                          String.is_substring asm ~substring:(e.kernel ^ ".c"))
                     with
                     | Error out ->
                         failed_compiles :=
@@ -1270,7 +1515,7 @@ let () =
                         let parsed =
                           Census.parse
                             ~asm:(Stdio.In_channel.read_all asm_path)
-                            ~source_basename:(routine ^ ".c")
+                            ~source_basename:(e.kernel ^ ".c")
                         in
                         (* Recorded before any anchor is looked for: an ISA whose branch spelling
                            {!Census.is_branch} does not know reports every anchor missing at once,
@@ -1480,19 +1725,106 @@ let () =
          bridges stop being whole-vector loads (a per-lane [vec_bridge] arm inside the k-loop would
          put [lanes] scalar conversions against the same [rm * rn] fused updates). Held where the
          ISA has a fused multiply-add, since without one the tile's updates are [fmaf] calls per
-         lane and the row is about that instead (the "calls libm" claim above covers it there). *)
+         lane and the row is about that instead (the "calls libm" claim above covers it there).
+
+         Held over the FULL passes only. A column-tail pass's grid can be one vector wide, which
+         puts its [rm] A splats -- scalar-classified on x86, where [vbroadcastss] is a scalar-single
+         mnemonic -- against as few as [rm] fused updates, and a zeroed partial load adds scalar
+         moves of its own: the inequality stops measuring the rendering there (clang at [x86-64-v3]
+         reads [vector=10 scalar_fp=10] on a 4x1 tail it rendered perfectly). The per-geometry FMA
+         claim below is what covers the tail passes. *)
       let tile_rows =
         List.filter served ~f:(fun r -> match r.loop.kind with Tile -> true | Reduce -> false)
+      in
+      let full_pass_rows =
+        List.filter tile_rows ~f:(fun r ->
+            match r.loop.geometry with Some { pass = Tail; _ } -> false | _ -> true)
       in
       let tile_claim =
         "every register-tiled Tile_mma k-loop does more vector than scalar work where the ISA has \
          a fused multiply-add"
       in
-      if List.is_empty tile_rows then
+      if List.is_empty full_pass_rows then
         Verdict.skipped ~aggregation:`Environment
           ~backend:"no accepted target serves the Tile_mma rows" tile_claim
       else
-        claim_all tile_claim tile_rows ~f:(fun r ->
+        claim_all tile_claim full_pass_rows ~f:(fun r ->
             match counts r with
             | Some c -> c.Census.vector_ops > c.Census.scalar_fp_ops
-            | None -> false)
+            | None -> false);
+      (* {2 Per geometry: one vector FMA per C-tile register per k step, and a resident C-tile}
+
+         The two claims gh-ocannl-614's measurement was an asm read of, held over every
+         register-tile row -- the default tiles, every seeded alternative, and every column-tail
+         pass -- in every column whose ISA serves it (the population of the claim above).
+
+         {b One whole-width vector FMA per update.} A k-step of a [rows x cols] pass issues [rows *
+         cols] fused updates, one per C-tile register, and a rendering that kept each one ONE vector
+         operation issues exactly that many vector FMAs per k-step, each at the row's vector width.
+         The loop may be unrolled, so the count is a positive multiple of the grid rather than equal
+         to it; a per-lane rendering of the update issues no vector FMA at all; and an update the
+         compiler SPLIT issues a count an unroll by two would also give, at half the width -- which
+         the summed register widths ({!Census.counts.vector_fma_bytes}) tell apart. That last one is
+         not hypothetical: clang on [-march=x86-64-v4] prefers 256-bit vectors and legalizes the
+         64-byte tile as [ymm] halves, doubling the grid's register demand into a spill. The
+         vector-majority claim above sees none of the three as long as the loads around them stay
+         packed. *)
+      let geometry_rows =
+        List.filter_map tile_rows ~f:(fun r -> Option.map r.loop.geometry ~f:(fun g -> (r, g)))
+      in
+      let fma_claim =
+        "every register-tile accumulator update is one whole-width vector FMA per k step where the \
+         ISA has a fused multiply-add"
+      in
+      let one_whole_fma (r, g) =
+        match counts r with
+        | Some c ->
+            c.Census.vector_fma_ops > 0
+            && c.Census.vector_fma_ops % (g.rows * g.cols) = 0
+            && c.Census.vector_fma_bytes = c.Census.vector_fma_ops * r.width
+        | None -> false
+      in
+      if List.is_empty geometry_rows then
+        Verdict.skipped ~aggregation:`Environment
+          ~backend:"no accepted target serves the register-tile rows" fma_claim
+      else (
+        Verdict.p_all fma_claim geometry_rows ~f:one_whole_fma;
+        report fma_claim (List.map geometry_rows ~f:fst) ~f:(fun r ->
+            match r.loop.geometry with Some g -> not (one_whole_fma (r, g)) | None -> true));
+      (* {b A resident C-tile.} gh-ocannl-614's spill -- 73 stack references in a k-loop that holds
+         none when the tile fits -- is the finding this matrix exists to report rather than an asm
+         read to rediscover. Claimed where the pass CAN be resident: its accumulator grid, the
+         smaller of its two operand sets (the [cols] B rows reused down the rows, or the [rows] A
+         splats reused across the columns) and one register for the other operand fit the target's
+         vector registers. That is the least any allocation keeping every operand in a register
+         needs, so a stack reference there is the allocator's (or the emission's) doing, not the
+         geometry's. Held against the TARGET's register count rather than the budget
+         {!Ir.Register_tile.budget} fits a geometry to, because the two are different facts: the
+         budget is keyed on the vector width, and a 16-byte file is 32 registers on NEON but 16 on
+         SSE -- the rows that falls outside are listed on stderr, where a geometry the seeding
+         thinks fits and the target cannot hold is visible without failing a golden that is about
+         the emission. *)
+      let resident_floor (g : tile_geometry) = (g.rows * g.cols) + Int.min g.rows g.cols + 1 in
+      let fits (r, g) = resident_floor g <= r.caps.vector_registers in
+      let resident_rows = List.filter geometry_rows ~f:fits in
+      let crowded = List.filter geometry_rows ~f:(fun rg -> not (fits rg)) in
+      if not (List.is_empty crowded) then (
+        Stdio.eprintf
+          "  %d register-tile row(s) whose pass needs more vector registers than the target has \
+           (not part of the golden):\n"
+          (List.length crowded);
+        List.iter crowded ~f:(fun (r, g) ->
+            Stdio.eprintf "    %s needs %d of %d -> %s\n" (describe r) (resident_floor g)
+              r.caps.vector_registers
+              (match r.profile with Some p -> Census.to_line p | None -> "no loop")));
+      let resident_claim =
+        "no register-tile k-loop references the stack where its pass fits the target's vector \
+         registers"
+      in
+      if List.is_empty resident_rows then
+        Verdict.skipped ~aggregation:`Environment
+          ~backend:"no accepted target holds a register-tile pass in its vector registers"
+          resident_claim
+      else
+        claim_none resident_claim (List.map resident_rows ~f:fst) ~f:(fun r ->
+            match counts r with Some c -> c.Census.stack_refs > 0 | None -> true)
