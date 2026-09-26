@@ -11,7 +11,6 @@ import argparse
 import math
 import os
 import sys
-import time
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 
@@ -61,9 +60,8 @@ sys.path.insert(0, _RUNNERS)
 from bench_common import (
     emit,
     instrument_tinygrad_beam,
-    peak_memory_fields,
-    percentiles,
     read_st_metadata,
+    run_protocol,
     tinygrad_peak_memory,
     tinygrad_searched,
 )
@@ -233,9 +231,6 @@ def main():
     mode = meta.get("mode", "train")
     batch_size = int(meta["batch_size"])
     lr = float(meta["lr"])
-    parity_steps = int(meta["parity_steps"])
-    warmup_steps = int(meta["warmup_steps"])
-    timed_steps = int(meta["timed_steps"])
 
     data = load_file(args.fixture)
     build = {"mlp": build_mlp, "conv": build_conv, "gpt": build_gpt}[model]
@@ -295,77 +290,24 @@ def main():
 
         train_ctx = Context(TRAINING=int(mode == "train"))
     with train_ctx:
-        k = 0
-        losses = []
-        t0 = time.perf_counter()
-        losses.append(step(k).item())
-        compile_s = time.perf_counter() - t0
-        k += 1
-        for _ in range(parity_steps - 1):
-            losses.append(step(k).item())
-            k += 1
-        for _ in range(warmup_steps):
-            step(k)
-            k += 1
-        sync()
-        # gh-ocannl-1006: the memory column's bracket, opened after the warmup so the peak is the
-        # timed steps' and not the JIT capture's. tinygrad exposes a current gauge only, so every
-        # `sample()` below is taken AFTER the step's elapsed time, costing the reported number
-        # nothing, and the result is a lower bound on the window (see `PeakMemoryProbe`).
-        peak_memory = tinygrad_peak_memory()
-        if peak_memory:
-            peak_memory.start()
-        synced = []
-        for _ in range(timed_steps):
-            t0 = time.perf_counter()
-            step(k)
-            k += 1
-            sync()
-            synced.append((time.perf_counter() - t0) * 1e3)
-            if peak_memory:
-                peak_memory.sample()
-        t0 = time.perf_counter()
-        for _ in range(timed_steps):
-            step(k)
-            k += 1
-        sync()
-        queued = (time.perf_counter() - t0) / timed_steps * 1e3
-        if peak_memory:
-            peak_memory.sample()
-        # Closed before the optional retime block, so the column reports the steps `step_ms` and
-        # `queued_step_ms` report on -- see the pytorch runner for why the placement matters per
-        # counter kind (review round 1).
-        peak_memory_result = peak_memory_fields(peak_memory)
-        retimed = None
-        if args.retime:
-            sync()
-            retimed = []
-            for _ in range(timed_steps):
-                t0 = time.perf_counter()
-                step(k)
-                k += 1
-                sync()
-                retimed.append((time.perf_counter() - t0) * 1e3)
+        # The measurement loop is bench_common's, one copy for both Python runners (gh-ocannl-1008):
+        # this runner supplies the step, the device sync and its framework's memory counter.
+        measured = run_protocol(
+            step, sync, meta, peak_memory=tinygrad_peak_memory(), retime=args.retime
+        )
 
     result = {
         "framework": "tinygrad",
         "backend": args.device,
         "variant": "beam" if args.beam else ("jit" if args.jit else "nojit"),
         "workload": meta["name"],
-        "compile_s": round(compile_s, 3),
         "searched": tinygrad_searched(beam_counts, args.beam),
         # No exact arm exists for tinygrad: its default reassociates freely, so the sweep stands
         # this one cell in the approximate regime whenever it runs one (gh-ocannl-719).
         "regime_settings": "tinygrad defaults (no exact pin; reassociates freely)",
-        "step_ms": percentiles(synced),
-        "queued_step_ms": queued,
-        "timed_steps": timed_steps,
-        "losses": losses,
         "version": pkg_version("tinygrad"),
-        **peak_memory_result,
+        **measured,
     }
-    if retimed:
-        result["retime_step_ms"] = percentiles(retimed)
     if tokens_per_step:
         result["tokens_per_step"] = tokens_per_step
     emit(result)

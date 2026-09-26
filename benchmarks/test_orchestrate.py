@@ -901,6 +901,107 @@ class PeakMemoryTest(unittest.TestCase):
         self.assertIsNone(bench_common.torch_peak_memory(torch, "mps"))
 
 
+class MeasurementProtocolTest(unittest.TestCase):
+    """gh-ocannl-1008: the one measurement loop both Python runners call, pinned as a trace.
+
+    The trace records every clock read, step, loss read, sync and probe call in order, so a change
+    to where a timing boundary, a sync or the memory window sits fails here once instead of having
+    to be made identically in two runners.
+    """
+
+    class Loss:
+        def __init__(self, log, k):
+            self.log, self.k = log, k
+
+        def item(self):
+            self.log.append("item")
+            return float(self.k)
+
+    class Probe:
+        tag, source = "fake", "fake counter"
+
+        def __init__(self, log):
+            self.log = log
+
+        def start(self):
+            self.log.append("open")
+
+        def sample(self):
+            self.log.append("sample")
+
+        def read(self):
+            self.log.append("close")
+            return 7
+
+    def measure(self, meta, probe=False, retime=False):
+        log = []
+        ticks = iter(range(1000))
+
+        def clock():
+            log.append("clock")
+            return next(ticks)  # one second per read, so every interval below is exact
+
+        def step(k):
+            log.append(f"step {k}")
+            return self.Loss(log, k)
+
+        clock_only = types.SimpleNamespace(perf_counter=clock)
+        with unittest.mock.patch.object(bench_common, "time", clock_only):
+            result = bench_common.run_protocol(
+                step,
+                lambda: log.append("sync"),
+                meta,
+                peak_memory=self.Probe(log) if probe else None,
+                retime=retime,
+            )
+        return log, result
+
+    META = {"parity_steps": "2", "warmup_steps": "1", "timed_steps": "2"}
+
+    def test_the_phases_run_in_order_and_the_window_closes_before_retiming(self):
+        log, result = self.measure(self.META, probe=True, retime=True)
+
+        synced_step = lambda k, probe: ["clock", f"step {k}", "sync", "clock"] + probe
+        self.assertEqual(
+            log,
+            # step 0 is the compile probe, timed up to its loss on the host; parity step 1
+            ["clock", "step 0", "item", "clock", "step 1", "item"]
+            # warmup, then a sync before anything is timed
+            + ["step 2", "sync"]
+            # the window opens, each synced step is sampled AFTER its elapsed time is taken
+            + ["open"] + synced_step(3, ["sample"]) + synced_step(4, ["sample"])
+            # the queued block: one sync for all of it, a sample, and the window closes
+            + ["clock", "step 5", "step 6", "sync", "clock", "sample", "close"]
+            # only then the retime block, synced and unsampled
+            + ["sync"] + synced_step(7, []) + synced_step(8, []),
+        )
+        self.assertEqual(result["compile_s"], 1.0)
+        self.assertEqual(result["step_ms"], {"p10": 1000.0, "p50": 1000.0, "p90": 1000.0})
+        self.assertEqual(result["queued_step_ms"], 500.0)
+        self.assertEqual(result["retime_step_ms"]["p50"], 1000.0)
+        self.assertEqual(result["losses"], [0.0, 1.0])
+        self.assertEqual(result["timed_steps"], 2)
+        self.assertEqual(result["peak_memory_bytes"], 7)
+        self.assertEqual(result["peak_memory_counter"], "fake")
+
+    def test_without_a_counter_or_retiming_the_line_says_so(self):
+        log, result = self.measure(self.META)
+
+        self.assertNotIn("open", log)
+        self.assertEqual(log[-5:], ["clock", "step 5", "step 6", "sync", "clock"])
+        self.assertNotIn("retime_step_ms", result)
+        # null for all three memory keys, never a zero (see `peak_memory_fields`)
+        self.assertEqual(
+            {k: v for k, v in result.items() if k.startswith("peak_memory")},
+            bench_common.peak_memory_fields(None),
+        )
+        self.assertEqual(
+            set(result),
+            {"compile_s", "step_ms", "queued_step_ms", "timed_steps", "losses"}
+            | set(bench_common.peak_memory_fields(None)),
+        )
+
+
 class RunnerProvenanceProbeTest(unittest.TestCase):
     """gh-ocannl-644: what the Python runners report, and what they refuse to claim."""
 
