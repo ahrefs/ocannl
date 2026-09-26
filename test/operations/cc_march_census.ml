@@ -712,7 +712,10 @@ type caps = {
           arm needs an instruction to convert with, and where there is none gcc widens lane by lane.
           x86 gets it with F16C (from [x86-64-v3]), aarch64 has it at the armv8-a baseline. *)
   named : bool;  (** a column whose [-march] this test chose, as opposed to the host's default *)
-  x86 : bool;  (** an x86-64 target, which is where the known register-tile defects live *)
+  x86 : bool;  (** an x86-64 target *)
+  gcc : bool;
+      (** the column's compiler is gcc (defines [__GNUC__] and not [__clang__], which defines both):
+          the known register-tile defects are gcc's lowering, not the target's *)
 }
 
 (* Read off the compiler's own predefined macros rather than pattern-matched from the label: what
@@ -726,6 +729,7 @@ let caps_of t =
       (if has "__AVX512F__" then 64 else if has "__AVX2__" || has "__AVX__" then 32 else 16);
     vector_registers = (if has "__aarch64__" || has "__AVX512F__" then 32 else 16);
     x86 = has "__x86_64__";
+    gcc = has "__GNUC__" && not (has "__clang__");
     has_fma = has "__FMA__" || has "__ARM_FEATURE_FMA";
     fp16_vector = has "__AVX512FP16__" || has "__ARM_FEATURE_FP16_VECTOR_ARITHMETIC";
     fp16_convert = has "__F16C__" || has "__AVX512FP16__" || has "__ARM_FP16_FORMAT_IEEE";
@@ -1826,10 +1830,11 @@ let () =
 
          - the partial-vector column tail: [vtyp x = {0}; __builtin_memcpy(&x, p, <width>)], which
          gcc lowers through a stack slot on every k step (8 references in a one-column tail whose
-         whole-vector twins at [n = 512] hold none). Clang lowers the same load in registers; - the
-         (fp16 storage, f32 compute) bridge, which gcc widens through general-purpose registers and
-         the stack (12 to 35 references) where the ISA has no native fp16 convert of the width in
-         use.
+         whole-vector twins at [n = 512] hold none). Clang lowers the same load in registers, so the
+         classes are asked of the column's COMPILER, from its predefined macros, as well as of its
+         target: on a clang x86 column these rows stay under the strict claim; - the (fp16 storage,
+         f32 compute) bridge, which gcc widens through general-purpose registers and the stack (12
+         to 35 references) where the ISA has no native fp16 convert of the width in use.
 
          They are pinned as CLASSES, not as a list of rows: which widths and targets show them is a
          fact about the gcc version as much as about the emission (gh-ocannl-752's lesson), and a
@@ -1841,10 +1846,12 @@ let () =
         [
           ( "the gcc partial-vector tail load",
             fun (r, (g : tile_geometry)) ->
-              r.caps.x86 && g.partial && match g.pass with Tail -> true | Full -> false );
+              r.caps.gcc && r.caps.x86 && g.partial
+              && match g.pass with Tail -> true | Full -> false );
           ( "the gcc fp16-to-f32 widening bridge",
             fun (r, _) ->
-              r.caps.x86 && String.equal r.loop.store half && not (String.equal r.loop.comp half) );
+              r.caps.gcc && r.caps.x86 && String.equal r.loop.store half
+              && not (String.equal r.loop.comp half) );
         ]
       in
       let known rg = List.exists known_defects ~f:(fun (_, is) -> is rg) in
@@ -1867,12 +1874,12 @@ let () =
             Stdio.eprintf "    %s -> %s\n" (describe r)
               (match r.profile with Some p -> Census.to_line p | None -> "no loop")));
       let reproduces_claim =
-        "each known register-tile defect still references the stack on some x86 column with a \
+        "each known register-tile defect still references the stack on some gcc x86 column with a \
          fused multiply-add"
       in
-      if not (List.exists resident_rows ~f:(fun (r, _) -> r.caps.x86)) then
+      if not (List.exists resident_rows ~f:(fun (r, _) -> r.caps.gcc && r.caps.x86)) then
         Verdict.skipped ~aggregation:`Environment
-          ~backend:"no accepted x86 target serves the register-tile rows" reproduces_claim
+          ~backend:"no accepted gcc x86 target serves the register-tile rows" reproduces_claim
       else
         Verdict.p_all reproduces_claim known_defects ~f:(fun (_, is) ->
             List.exists resident_rows ~f:(fun rg -> is rg && spills rg))
