@@ -5,6 +5,7 @@ import json
 import os
 import re
 import signal
+import stat as stat_module
 import subprocess
 import sys
 import tempfile
@@ -2203,6 +2204,263 @@ class FixtureDigestTest(unittest.TestCase):
                          recorded_before)
         self.assertEqual((self.dir / "fixtures" / fixture_digest.DIGEST_FILE).read_bytes(),
                          digests_before)
+
+    def recorded_layout(self, *names):
+        """A benchmarks dir with one recorded fixture and one spec per name, in `names` order."""
+        fixtures = self.dir / "fixtures"
+        fixtures.mkdir()
+        digests = fixtures / fixture_digest.DIGEST_FILE
+        recorded = [self.write_fixture(fixtures / f"{name}.safetensors",
+                                       f"published {name}".encode()) for name in names]
+        fixture_digest.record(digests, recorded, self.this_box)
+        workloads = self.dir / "workloads"
+        workloads.mkdir()
+        specs = []
+        for name in names:
+            spec = workloads / f"{name}.json"
+            spec.write_text(json.dumps({"name": name}))
+            specs.append(spec)
+        return fixtures, digests, specs
+
+    def regenerating_build(self, fail_on=None):
+        """A `build` stub writing the way save_file does, raising on the spec named `fail_on`."""
+
+        def build(spec_path, out_dir):
+            name = json.loads(spec_path.read_text())["name"]
+            if name == fail_on:
+                raise AssertionError("conv1: (image_size - kernel_size) mod stride1 != 0")
+            return self.write_fixture(out_dir / f"{name}.safetensors", f"new {name}".encode())
+
+        return build
+
+    def snapshot(self, fixtures):
+        """Every entry under `fixtures`, staging leftovers included, with the bytes it reads."""
+        return {str(p.relative_to(fixtures)): (p.read_bytes() if p.is_file() else None)
+                for p in fixtures.rglob("*")}
+
+    def test_a_later_spec_failing_to_build_replaces_and_records_nothing(self):
+        # gh-ocannl-1059: the build-time twin of the pre-build refusals. A spec that raises inside
+        # build() (here the second of three) must not cost the first its published bytes: every
+        # spec builds into a staging directory, and nothing is replaced until all of them built.
+        gen_fixtures = self.gen_fixtures_module()
+        fixtures, digests, specs = self.recorded_layout("conv", "gpt", "mlp")
+        before = self.snapshot(fixtures)
+        built = []
+        build = self.regenerating_build(fail_on="gpt")
+
+        def counting_build(spec_path, out_dir):
+            built.append(spec_path)
+            return build(spec_path, out_dir)
+
+        with unittest.mock.patch.object(gen_fixtures, "build", counting_build), \
+                contextlib.redirect_stdout(io.StringIO()) as printed, \
+                contextlib.redirect_stderr(io.StringIO()) as errors, \
+                self.assertRaises(AssertionError):
+            gen_fixtures.main(["--origin", self.this_box], here=self.dir)
+
+        # The first spec really was regenerated (into staging, specs build in sorted order), so
+        # the unchanged tree is the staging's doing, not a run that never got that far.
+        self.assertEqual(built, specs[:2])
+        self.assertEqual(self.snapshot(fixtures), before,
+                         "fixtures and DIGESTS.txt byte-identical, no staging directory left")
+        self.assertEqual(printed.getvalue(), "")
+        self.assertIn(f"FAILED to build {specs[1]}", errors.getvalue())
+        self.assertIn("no digest was recorded", errors.getvalue())
+
+    def test_a_failing_build_exits_nonzero(self):
+        # What the operator sees: the uncaught error is the process's exit status, not a warning
+        # scrolled past. Run as a program, with the stubs and the failing build installed first.
+        fixtures, _, _ = self.recorded_layout("lenet", "cifar")
+        before = self.snapshot(fixtures)
+        driver = self.dir / "driver.py"
+        driver.write_text(
+            "import json, sys, types\n"
+            "numpy = types.ModuleType('numpy'); st = types.ModuleType('safetensors')\n"
+            "stn = types.ModuleType('safetensors.numpy'); stn.save_file = None\n"
+            "sys.modules.update({'numpy': numpy, 'safetensors': st, 'safetensors.numpy': stn})\n"
+            f"sys.path.insert(0, {str(HERE)!r})\n"
+            "import gen_fixtures\n"
+            "def build(spec_path, out_dir):\n"
+            "    name = json.loads(spec_path.read_text())['name']\n"
+            "    if name == 'lenet': raise ValueError('unknown model')\n"
+            "    path = out_dir / f'{name}.safetensors'; path.write_bytes(b'new'); return path\n"
+            "gen_fixtures.build = build\n"
+            f"gen_fixtures.main(['--origin', 'test-box'], here={str(self.dir)!r})\n")
+        run = subprocess.run([sys.executable, str(driver)], capture_output=True, text=True,
+                             timeout=60)
+
+        self.assertNotEqual(run.returncode, 0, run.stdout)
+        self.assertIn("FAILED to build", run.stderr)
+        self.assertIn("lenet.json", run.stderr)
+        self.assertEqual(self.snapshot(fixtures), before)
+
+    def test_all_specs_building_replaces_and_records_every_one(self):
+        # The negative control for the refusal above: staging defers the replacement, it does not
+        # lose it. Every destination holds the new bytes and every digest names them.
+        gen_fixtures = self.gen_fixtures_module()
+        fixtures, digests, _ = self.recorded_layout("lenet", "cifar")
+
+        with unittest.mock.patch.object(gen_fixtures, "build", self.regenerating_build()), \
+                contextlib.redirect_stdout(io.StringIO()) as printed:
+            written = gen_fixtures.main(["--origin", self.this_box], here=self.dir)
+
+        self.assertEqual(written, [fixtures / "cifar.safetensors", fixtures / "lenet.safetensors"])
+        entries = fixture_digest.read_digests(digests)
+        for fixture in written:
+            self.assertEqual(fixture.read_bytes(), self.write_fixture(
+                self.dir / "expected" / fixture.name, f"new {fixture.stem}".encode()).read_bytes())
+            self.assertEqual(fixture_digest.status(fixture, entries)[0], "MATCH")
+            self.assertIn(f"wrote {fixture} (", printed.getvalue())
+        self.assertEqual(sorted(p.name for p in fixtures.iterdir()),
+                         [fixture_digest.DIGEST_FILE, "cifar.safetensors", "lenet.safetensors"])
+        self.assertNotIn(".gen_fixtures-", printed.getvalue())
+
+    def test_a_first_generation_creates_the_fixtures_directory(self):
+        # The resolved-target checks run before anything exists: with no fixtures/ yet (and so
+        # no DIGESTS.txt, which records nothing), a plain destination is still accepted.
+        gen_fixtures = self.gen_fixtures_module()
+        spec = self.dir / "workloads" / "lenet.json"
+        spec.parent.mkdir()
+        spec.write_text('{"name": "lenet"}')
+
+        with unittest.mock.patch.object(gen_fixtures, "build", self.regenerating_build()), \
+                contextlib.redirect_stdout(io.StringIO()):
+            written = gen_fixtures.main(["--origin", self.this_box], here=self.dir)
+
+        entries = fixture_digest.read_digests(self.dir / "fixtures" / fixture_digest.DIGEST_FILE)
+        self.assertEqual(written, [self.dir / "fixtures" / "lenet.safetensors"])
+        self.assertEqual(fixture_digest.status(written[0], entries)[0], "MATCH")
+
+    def symlinked_fixture(self, fixtures, name):
+        """Replace fixtures/<name>.safetensors by a symlink to a file in a sibling tree, the way
+        gh612_cells.sh shares one fixture between measurement trees; returns the shared file."""
+        shared = self.dir / "other-tree" / "fixtures" / f"{name}.safetensors"
+        shared.parent.mkdir(parents=True, exist_ok=True)
+        entry = fixtures / f"{name}.safetensors"
+        os.replace(entry, shared)
+        try:
+            entry.symlink_to(shared)
+        except OSError as e:
+            self.skipTest(f"cannot create a symlink here: {e}")
+        return shared
+
+    def test_a_symlinked_recorded_fixture_stays_shared(self):
+        # The recording path replaces the link's TARGET: replacing the entry would silently
+        # un-share every tree linked to it, leaving them on the previous bytes. Also across a
+        # filesystem boundary, where os.replace cannot rename a staged file onto the target and
+        # a copy beside the target is renamed instead -- simulated by reporting the shared tree
+        # on another device.
+        for cross_device in (False, True):
+            with self.subTest(cross_device=cross_device):
+                self.tmp.cleanup()
+                self.dir.mkdir()
+                gen_fixtures = self.gen_fixtures_module()
+                fixtures, digests, _ = self.recorded_layout("gpt2_mini")
+                shared = self.symlinked_fixture(fixtures, "gpt2_mini")
+                real_stat, other_device = os.stat, os.path.realpath(shared.parent)
+
+                def stat(path, *args, **kwargs):
+                    result = real_stat(path, *args, **kwargs)
+                    if cross_device and os.path.realpath(path) == other_device:
+                        fields = list(result)
+                        fields[stat_module.ST_DEV] += 1
+                        return os.stat_result(fields)
+                    return result
+
+                with unittest.mock.patch.object(gen_fixtures, "build",
+                                                self.regenerating_build()), \
+                        unittest.mock.patch.object(gen_fixtures.os, "stat", stat), \
+                        contextlib.redirect_stdout(io.StringIO()) as printed:
+                    gen_fixtures.main(["--origin", self.this_box], here=self.dir)
+
+                entry = fixtures / "gpt2_mini.safetensors"
+                self.assertTrue(entry.is_symlink())
+                self.assertEqual(os.readlink(entry), str(shared))
+                self.assertIn(b"new gpt2_mini", shared.read_bytes())
+                entries = fixture_digest.read_digests(digests)
+                self.assertEqual(fixture_digest.status(entry, entries)[0], "MATCH")
+                self.assertIn(f"through the symlink to {os.path.realpath(shared)}",
+                              printed.getvalue())
+                self.assertEqual(sorted(p.name for p in shared.parent.iterdir()),
+                                 ["gpt2_mini.safetensors"], "no copy left beside the target")
+
+    def test_a_hard_linked_recorded_fixture_is_announced_as_unshared(self):
+        # A rename replaces one NAME, so the other hard links keep the previous bytes. That is
+        # the price of never writing through a published file; it is printed, not silent.
+        gen_fixtures = self.gen_fixtures_module()
+        fixtures, _, _ = self.recorded_layout("lenet")
+        other = self.dir / "other-tree" / "lenet.safetensors"
+        other.parent.mkdir()
+        try:
+            os.link(fixtures / "lenet.safetensors", other)
+        except OSError as e:
+            self.skipTest(f"cannot create a hard link here: {e}")
+        before = other.read_bytes()
+
+        with unittest.mock.patch.object(gen_fixtures, "build", self.regenerating_build()), \
+                contextlib.redirect_stdout(io.StringIO()) as printed:
+            gen_fixtures.main(["--origin", self.this_box], here=self.dir)
+
+        self.assertEqual(other.read_bytes(), before)
+        self.assertIn("had 1 other hard link(s): they keep the previous bytes", printed.getvalue())
+
+    def test_a_failed_replacement_records_the_fixtures_already_replaced(self):
+        # Past the staging, only the renames are left, and a rename can still fail (a locked file
+        # on Windows, a read-only target directory). The fixtures replaced before it are new
+        # bytes, so they are recorded before the error propagates, never left matching no entry.
+        gen_fixtures = self.gen_fixtures_module()
+        fixtures, digests, _ = self.recorded_layout("cifar", "lenet")
+        real_replace = os.replace
+        calls = []
+
+        def replace(src, dst):
+            calls.append(dst)
+            if len(calls) == 2:
+                raise PermissionError(13, "locked", str(dst))
+            return real_replace(src, dst)
+
+        with unittest.mock.patch.object(gen_fixtures, "build", self.regenerating_build()), \
+                unittest.mock.patch.object(gen_fixtures.os, "replace", replace), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()) as errors, \
+                self.assertRaises(PermissionError):
+            gen_fixtures.main(["--origin", self.this_box], here=self.dir)
+
+        entries = fixture_digest.read_digests(digests)
+        self.assertIn(b"new cifar", (fixtures / "cifar.safetensors").read_bytes())
+        self.assertIn(b"published lenet", (fixtures / "lenet.safetensors").read_bytes())
+        for name in ("cifar", "lenet"):
+            self.assertEqual(
+                fixture_digest.status(fixtures / f"{name}.safetensors", entries)[0], "MATCH", name)
+        self.assertIn("FAILED to replace", errors.getvalue())
+        self.assertEqual(sorted(p.name for p in fixtures.iterdir()),
+                         [fixture_digest.DIGEST_FILE, "cifar.safetensors", "lenet.safetensors"])
+
+    def test_an_unreplaceable_resolved_target_is_refused_before_building(self):
+        # The resolved targets are checked with the names, before any build: two fixtures linked
+        # to one file (the later spec's bytes would be recorded under both names), a link into a
+        # directory that does not exist, and a link to a directory.
+        gen_fixtures = self.gen_fixtures_module()
+        fixtures, digests, specs = self.recorded_layout("cifar", "lenet")
+        shared = self.symlinked_fixture(fixtures, "cifar")
+        lenet = fixtures / "lenet.safetensors"
+        lenet.unlink()
+        built = []
+        for label, target in (("one shared file", shared),
+                              ("a missing directory", self.dir / "gone" / "lenet.safetensors"),
+                              ("a directory", self.dir / "workloads")):
+            with self.subTest(target=label):
+                if lenet.is_symlink():
+                    lenet.unlink()
+                lenet.symlink_to(target)
+                before = self.snapshot(fixtures)
+                with unittest.mock.patch.object(gen_fixtures, "build",
+                                                lambda s, d: built.append(s)), \
+                        self.assertRaises(ValueError):
+                    gen_fixtures.main(["--origin", self.this_box, *map(str, specs)],
+                                      here=self.dir)
+                self.assertEqual(self.snapshot(fixtures), before)
+        self.assertEqual(built, [], "refused before any build")
 
     #: Every spelling that reaches outside a directory, or names no file in it, on either
     #: platform.

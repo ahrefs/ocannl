@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -216,8 +217,9 @@ def build_smoke(specs, out_dir: Path):
     with its digest untouched. Each spec is built into a staging directory beside the
     destination and renamed over it: the rename replaces `out_dir`'s own directory entry and
     nothing it points to, and a spec that fails to build leaves its previous output (and every
-    later spec's) where it was. The recording path keeps writing in place: a symlinked recorded
-    fixture is how measurement trees share ONE fixture file (gh612_cells.sh).
+    later spec's) where it was. The recording path (`build_recorded`) stages too, but replaces a
+    symlink's TARGET rather than the entry: a symlinked recorded fixture is how measurement trees
+    share ONE fixture file (gh612_cells.sh).
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".gen_fixtures-", dir=out_dir))
@@ -234,14 +236,97 @@ def build_smoke(specs, out_dir: Path):
     return written
 
 
+def recorded_target(dest: Path):
+    """The file the recording path replaces for the destination entry `dest`: the entry's
+    resolved target, so a symlinked recorded fixture stays a symlink and every tree linking it
+    sees the new bytes -- how measurement trees share ONE fixture file (gh612_cells.sh). Refuses
+    a target the rename could not replace; `main` calls it for every spec before building any."""
+    target = Path(os.path.realpath(dest))
+    # Only a link can point into a missing directory: a plain entry's is `out_dir`, which a first
+    # generation creates.
+    if dest.is_symlink() and not target.parent.is_dir():
+        raise ValueError(f"{dest} resolves to {target}, whose directory does not exist")
+    if target.exists() and not target.is_file():
+        raise ValueError(f"{dest} resolves to {target}, which is not a regular file")
+    return target
+
+
+def build_recorded(specs, out_dir: Path, record_partial):
+    """Build `specs` for recording into `out_dir`, replacing nothing until ALL of them built.
+
+    Staged (gh-ocannl-1059): a spec that fails to build -- no `seed`, an unknown `model`, a
+    `build_conv` divisibility assertion, a disk-full `save_file` -- leaves every fixture in
+    `out_dir`, the bytes the published numbers are on, exactly as it was, and nothing is
+    recorded. Only then is each staged file renamed onto its destination's RESOLVED target rather
+    than onto the entry: a symlinked recorded fixture stays a symlink whose shared target holds
+    the new bytes. (A hard-linked one is un-shared, since a rename replaces one name; that is
+    announced.) Should a rename itself fail, `record_partial` is handed the fixtures already
+    replaced before the error propagates, so no replaced fixture is left unrecorded. Returns the
+    destination entries, which are what `record()` names.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".gen_fixtures-", dir=out_dir))
+    sidecars = []
+    try:
+        staged = []
+        for spec in specs:
+            try:
+                staged.append(build(spec, staging))
+            except BaseException:
+                print(f"gen_fixtures: FAILED to build {spec}; no fixture in {out_dir} was "
+                      "replaced and no digest was recorded", file=sys.stderr)
+                raise
+        # Every staged file goes onto its target's filesystem before any is renamed: a symlink
+        # into another filesystem needs a copy (os.replace cannot cross one), and that copy must
+        # fail, if it fails, while nothing has been replaced yet.
+        moves = []
+        for path in staged:
+            dest = out_dir / path.name
+            target = recorded_target(dest)
+            source = path
+            if os.stat(path).st_dev != os.stat(target.parent).st_dev:
+                fd, tmp = tempfile.mkstemp(prefix=".gen_fixtures-", suffix=".tmp",
+                                           dir=target.parent)
+                os.close(fd)
+                source = Path(tmp)
+                sidecars.append(source)
+                shutil.copyfile(path, source)
+            moves.append((source, dest, target))
+        written = []
+        for source, dest, target in moves:
+            links = target.stat().st_nlink if target.exists() else 1
+            try:
+                os.replace(source, target)
+            except BaseException:
+                print(f"gen_fixtures: FAILED to replace {target}; recording the "
+                      f"{len(written)} fixture(s) already replaced", file=sys.stderr)
+                if written:
+                    record_partial(written)
+                raise
+            written.append(report_written(dest))
+            if dest.is_symlink():
+                print(f"  through the symlink to {target}, shared by every tree linking it")
+            if links > 1:
+                print(f"  {dest} had {links - 1} other hard link(s): they keep the previous bytes")
+        return written
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+        for sidecar in sidecars:
+            try:
+                sidecar.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def main(argv=None, here=None):
     """Generate the requested fixtures and record their digests as this box's bytes.
 
     A function, not a bare `__main__` block, so the order of its steps is testable: what a
     fixture generator must never do is overwrite bytes it then turns out to be unable to record.
     `here` is the benchmarks directory (its `workloads/` and `fixtures/`), overridable for that.
-    With `--out-dir` it records nothing and touches neither `fixtures/` nor its digest file.
-    Returns the paths written.
+    A spec that fails to build replaces no fixture and records nothing: the error propagates
+    (a nonzero exit), naming the spec. With `--out-dir` it records nothing and touches neither
+    `fixtures/` nor its digest file. Returns the paths written.
     """
     here = Path(__file__).parent if here is None else Path(here)
     ap = argparse.ArgumentParser(
@@ -296,8 +381,8 @@ def main(argv=None, here=None):
         origin = fixture_digest.resolve_origin(args.origin)
         out_dir = here / "fixtures"
         digests = out_dir / fixture_digest.DIGEST_FILE
-        # And for the same reason, parse the digest file BEFORE building: building OVERWRITES the
-        # fixture bytes, so anything record() would refuse -- a pre-gh-ocannl-759 three-field
+        # And for the same reason, parse the digest file BEFORE building: once every spec has
+        # built, its bytes REPLACE the fixtures, so anything record() would refuse -- a pre-gh-ocannl-759 three-field
         # line, a duplicate origin, a malformed row -- has to be discovered while the previous
         # bytes still exist. Refusing afterwards leaves regenerated bytes that nothing records AND
         # the bytes the published numbers were measured on gone, which is worse than either alone.
@@ -307,12 +392,13 @@ def main(argv=None, here=None):
     # fixture), and a name the digest format cannot carry would be refused by record() only AFTER
     # the previous bytes are overwritten. fixture_path holds names to the one rule record()'s
     # check_fixture_name applies, so it refuses both; build() re-checks it itself, and checking
-    # every spec here refuses before ANY is built. A spec this cannot parse is left for build() to refuse on
-    # its own terms -- that refusal also happens before that spec mutates anything. Two specs with
+    # every spec here refuses before ANY is built. A spec this cannot parse is left for build() to
+    # refuse on its own terms -- like any failure inside build(), before anything is replaced:
+    # every spec builds into a staging directory first (gh-ocannl-1059). Two specs with
     # one destination are refused as well: the later would silently replace the earlier's
     # fixture. Compared case-folded (names are ASCII, by fixture_path), because on the
     # case-insensitive macOS and Windows measuring hosts `Lenet` and `lenet` are one file.
-    claimed = {}
+    claimed, targets = {}, {}
     for spec_path in specs:
         try:
             name = json.loads(spec_path.read_text())["name"]
@@ -324,9 +410,21 @@ def main(argv=None, here=None):
                              f"{name}.safetensors (names are compared ignoring case); the later "
                              "would replace the earlier")
         claimed[name.lower()] = spec_path
+        if recording:
+            # The recording path replaces a symlinked fixture's TARGET, so the destination that
+            # must be unique and replaceable is the resolved one: two fixtures linked to one file
+            # would have the later spec's bytes recorded under both names.
+            target = recorded_target(fixture_path(out_dir, name))
+            key = str(target).lower()
+            if key in targets:
+                raise ValueError(f"{targets[key]} and {spec_path} both generate {target} "
+                                 "(through a symlink; compared ignoring case); the later would "
+                                 "replace the earlier")
+            targets[key] = spec_path
     if not recording:
         return build_smoke(specs, out_dir)
-    written = [report_written(build(spec, out_dir)) for spec in specs]
+    written = build_recorded(specs, out_dir,
+                             lambda replaced: fixture_digest.record(digests, replaced, origin))
     # fixtures/ is gitignored, so this file is the only record of what was just generated
     # (gh-ocannl-645). Only this origin's regenerated entries are rewritten: generating one
     # workload must not drop the identities of the fixtures already on disk, and generating on

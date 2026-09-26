@@ -136,7 +136,11 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
     warning. Recording is not the same act: `--record` pins what exists and changes no
     number's meaning. `gen_fixtures.py` reads `DIGESTS.txt` *before* it builds anything, so a
     file it could not record into (a pre-gh-ocannl-759 unattributed line, a malformed row) stops
-    the run while the bytes your published numbers are on are still on disk.
+    the run while the bytes your published numbers are on are still on disk. It then builds
+    every spec into a staging directory and replaces fixtures only once all of them built, so a
+    spec that fails to build exits nonzero, naming the spec, with every fixture and `DIGESTS.txt`
+    unchanged (gh-ocannl-1059). A symlinked fixture keeps its link: the new bytes land in the
+    shared target, so every tree linking it moves to them together.
 - `runners/ocannl/bench_{mlp,conv,gpt}.ml` + `bench_harness.ml` — OCANNL runners
   (`dune build benchmarks/runners/ocannl/bench_mlp.exe` etc.). Env: `BENCH_FIXTURE` (path),
   `BENCH_TUNE=1` (`Train.tune_placements`: autotunes both the default placements graph and
