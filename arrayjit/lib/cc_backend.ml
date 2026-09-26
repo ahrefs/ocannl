@@ -592,16 +592,28 @@ let vector_bytes_setting () =
    other, so the kernel reads whatever [xmm0] held — a half [uniform1] draw read as [-0.0] on the
    Linux CI leg while every C-side call of the very same [.so] was correct. macOS has no such
    interposition (two-level namespaces bind a bundle's references to the bundle), which is why it
-   passed there; Windows DLLs resolve per module too. *)
+   passed there; Windows DLLs resolve per module too.
+
+   [-lm] on ELF (gh-ocannl-1045): the kernel names its math library instead of borrowing the host
+   process's. Scalar [expf] resolves against the libm the OCaml executable links, but under
+   [__FAST_MATH__] glibc declares [expf], [logf], ... as SIMD-callable and gcc vectorizes those
+   calls into libmvec entry points ([_ZGVdN8v_expf]) -- a library nothing in the process loads, so
+   the kernel died at dlopen on an undefined symbol. glibc's [libm.so] is a linker script,
+   [GROUP ( libm.so.6 AS_NEEDED ( libmvec.so.1 ) )], so the kernel gains a dependency on libmvec
+   exactly when it references a vector variant. That [cc_backend_fast_math]'s
+   [-fno-finite-math-only] currently keeps gcc from defining the macro is an accident of spelling,
+   not a guard: [test/operations/fast_math_libmvec] forces it back. Not for Darwin, where libm is
+   part of libSystem and [-undefined dynamic_lookup] resolves against it, nor for Windows. Link
+   flags reach no codegen identity: the emitted code is the same. *)
 let kernel_link_flags =
   lazy
     (match Sys.os_type with
     | "Unix" ->
         if Stdlib.Sys.command "uname -s | grep -q Darwin" = 0 then
           "-bundle -undefined dynamic_lookup"
-        else "-shared -fPIC -Wl,-Bsymbolic"
+        else "-shared -fPIC -Wl,-Bsymbolic -lm"
     | "Win32" | "Cygwin" -> "-shared"
-    | _ -> "-shared -fPIC -Wl,-Bsymbolic")
+    | _ -> "-shared -fPIC -Wl,-Bsymbolic -lm")
 
 (* gh-ocannl-530 (docs/proposals/gh-ocannl-530-pool-uniformity.md): on hybrid CPUs, one pool mixing
    two core speeds costs the tuned schedules 20-31% -- chunked Grid loops end at a barrier, so the

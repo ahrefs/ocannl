@@ -201,6 +201,7 @@
  (name runtest)
  (deps
   (alias runtest-online_softmax_fast_math)
+  (alias runtest-fast_math_libmvec)
   (alias runtest-micrograd_demo_logging)
   (alias runtest-n3_fwd_with_prec-unoptimized)
   (alias runtest-top_down_prec-unoptimized)
@@ -583,6 +584,40 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff online_softmax_fast_math.expected online_softmax_fast_math.actual)))
+
+; gh-ocannl-1045: a fast-math cc kernel whose `expf` loop vectorizes into libmvec must load and run.
+; The compiler command adds `-D__FAST_MATH__`, which `cc_backend_fast_math`'s
+; `-fno-finite-math-only` otherwise suppresses and which is what makes glibc declare the vector
+; variants (the header of fast_math_libmvec.ml has the mechanism).
+
+(executable
+ (name fast_math_libmvec)
+ (modules fast_math_libmvec)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ ; ocannl-backend: cc -- the defect is the cc kernel's link line; the command line pins the backend.
+ (target fast_math_libmvec.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:fast_math_libmvec.exe}
+    --ocannl_backend=cc
+    --ocannl_profile=approximate
+    "--ocannl_cc_backend_compiler_command=%{ocaml-config:c_compiler} -D__FAST_MATH__"))))
+
+(rule
+ (alias runtest-fast_math_libmvec)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff fast_math_libmvec.expected fast_math_libmvec.actual)))
 
 (test
  (name half_softmax)

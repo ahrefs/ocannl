@@ -1377,6 +1377,12 @@ files.
   and `x - x = 0` fold to a constant, silently disabling an overflow gate (the shape
   `Mixed_prec.gated_scaled_update` needs). It is the same reason `Builtins_metal`'s fp8 codec is
   written in integer/bitcast form rather than float arithmetic.
+- **A cc kernel links its own libm, because fast math can reach libmvec** (gh-ocannl-1045): under
+  `__FAST_MATH__` glibc declares `expf`/`logf`/... SIMD-callable and gcc vectorizes the calls into
+  `_ZGV*` entry points of `libmvec.so.1`, which nothing in the OCaml process loads — a dlopen
+  `undefined symbol: _ZGVdN8v_expf`. `-lm` on ELF (`Cc_backend.kernel_link_flags`) is the fix.
+  `-fno-finite-math-only` hides it only because gcc then stops defining the macro;
+  `test/operations/fast_math_libmvec` forces `-D__FAST_MATH__` and checks libmvec gets mapped.
 - **First suspect for a `reduction_forms` red on a GPU backend: that backend's fast math
   reassociated the recurrence.** HIP is the only one guarded by a flag (above). The other two:
   - **CUDA is a measured boundary, not a flag** (gh-ocannl-784). nvrtc has no `-fno-associative-math`
