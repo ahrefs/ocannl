@@ -71,6 +71,54 @@ let log_enabled =
 let logf fmt =
   Printf.ksprintf (fun s -> if Lazy.force log_enabled then Stdio.eprintf "autotune: %s\n%!" s) fmt
 
+(* gh-ocannl-1061: the search's cost record, gated by config [autotune_progress]. A search can run
+   for hours and be killed by a cap before it reports anything, and [autotune_log] is no substitute:
+   it is a line per candidate, and it pays for an extra untuned-default control compile, so it moves
+   the cost it would be recording. These lines are cheap (a clock read per candidate) and few (the
+   per-candidate line is rate-bounded; the phase, arm and flip lines are bounded by the search's own
+   structure), and each is flushed as it is written, so a kill keeps everything up to it. The format
+   is the interface's contract; see {!progressf}. *)
+let progress_default_interval_s = 30.
+
+let progress_interval_s =
+  lazy
+    (let raw = String.strip (Utils.get_global_arg ~arg_name:"autotune_progress" ~default:"false") in
+     match String.lowercase raw with
+     | "" | "false" -> None
+     | "true" -> Some progress_default_interval_s
+     | _ -> (
+         match Float.of_string_opt raw with
+         | Some s when Float.is_finite s && Float.(s >= 0.) -> Some s
+         | _ ->
+             (* A diagnostic's bad value is not worth failing a search over; the caller asked for
+                progress, so it gets progress at the default rate -- and is told. *)
+             Stdio.eprintf
+               "autotune: autotune_progress should be false, true or a non-negative number of \
+                seconds; found %S, using %g s\n\
+                %!"
+               raw progress_default_interval_s;
+             Some progress_default_interval_s))
+
+let progress_enabled () = Option.is_some (Lazy.force progress_interval_s)
+
+(* Taken when this module is initialized, i.e. at program start: [wall_s] places a line within the
+   process, which for a benchmark cell is within the cell's own wall clock. *)
+let process_clock = Mtime_clock.counter ()
+let seconds_since counter = Mtime.Span.to_float_ns (Mtime_clock.count counter) /. 1e9
+
+let progressf fmt =
+  Printf.ksprintf
+    (fun s ->
+      if progress_enabled () then
+        Stdio.eprintf "autotune-progress: wall_s=%.1f %s\n%!" (seconds_since process_clock) s)
+    fmt
+
+let progress_ms ms = if Float.is_finite ms then Printf.sprintf "%.4f" ms else "none"
+
+let progress_stopwatch () =
+  let c = Mtime_clock.counter () in
+  fun () -> seconds_since c
+
 (* The one admission gate for a timing verdict, for the consumers that RANK: candidate selection,
    the calibration rows, the roofline consistency check, cache attribution. Keeping it next to the
    result type prevents such a caller from proving only one half of usability (usually [not
@@ -3123,7 +3171,45 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
            | derived -> derived
            | exception Invalid_argument _ -> ""))
   in
-  let emit_report r = Option.iter report ~f:(fun f -> f r) in
+  (* gh-ocannl-1061: this call's progress state. [progress_compile_s] and [progress_timing_s]
+     accumulate the candidates' compiles and timing windows, so [elapsed_s] minus the two is what
+     the search spent elsewhere (the base compile, analyses, replays, the winner's recompile). *)
+  let progress_clock = Mtime_clock.counter () in
+  let progress_last_s = ref 0. in
+  let progress_compile_s = ref 0. and progress_timing_s = ref 0. in
+  let progress_attempts = ref 0 in
+  let progress_line event fields =
+    if progress_enabled () then (
+      let elapsed = seconds_since progress_clock in
+      progress_last_s := elapsed;
+      progressf "event=%s routine=%S elapsed_s=%.1f %s" event (Lazy.force routine_name) elapsed
+        fields)
+  in
+  let progress_due () =
+    match Lazy.force progress_interval_s with
+    | None -> false
+    | Some interval -> Float.(seconds_since progress_clock -. !progress_last_s >= interval)
+  in
+  let progress_costs () =
+    Printf.sprintf "attempts=%d compile_s=%.1f timing_s=%.1f" !progress_attempts !progress_compile_s
+      !progress_timing_s
+  in
+  let timed_into acc f =
+    let c = Mtime_clock.counter () in
+    Exn.protect ~f ~finally:(fun () -> acc := !acc +. seconds_since c)
+  in
+  progress_line "search_start"
+    (Printf.sprintf "backend=%s device=%d search=%b beam=%d rounds=%d" backend device search
+       beam_width rounds);
+  (* Every report goes through here, exactly once per call on every path (gh-ocannl-550), so this is
+     where a search's closing progress line is written: before the callback, which may raise. *)
+  let emit_report (r : report) =
+    progress_line "search_done"
+      (Printf.sprintf "outcome=%s timed=%d contended=%d failed=%d rounds=%d %s best_ms=%s best=%S"
+         (outcome_name r.outcome) r.candidates_timed r.timings_contended r.candidates_failed
+         r.rounds_run (progress_costs ()) (progress_ms r.best_ms) r.best_label);
+    Option.iter report ~f:(fun f -> f r)
+  in
   (* [tune] reports exactly once per call, on every path (gh-ocannl-550). The failures that happen
      before (or instead of) the search proper — the base compile failing before its lowering is
      captured, a fatal baseline link, a fatal cache replay, a baseline timing failure, and either
@@ -3972,7 +4058,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                 | Fiss (F_sketch _) -> Int.incr n_fiss_mma_proposed
                 | Whole _ | Fiss (F_preset _ | F_saved _ | F_split _ | F_split_saved _) -> ()
               end;
-              match compile_spec spec with
+              match timed_into progress_compile_s (fun () -> compile_spec spec) with
               | Error (Outcome.Classified classified) ->
                   record_decline declines classified;
                   logf "%s: FAILED at %s %s" (spec_label spec) (phase_label classified.phase)
@@ -4041,7 +4127,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                       Outcome.protect ~classify_backend:(Context.failure_classifier c.cctx)
                         ~provenance:Outcome.Candidate ~phase:Outcome.Launch
                         ~candidate:(spec_label spec) (fun () ->
-                          time_routine ~tag_failures:true ~timing ~repeats c.cctx c.routine)
+                          timed_into progress_timing_s (fun () ->
+                              time_routine ~tag_failures:true ~timing ~repeats c.cctx c.routine))
                       (* Outside the boundary: the seam is not a candidate failure to classify. *)
                       |> Result.map
                            ~f:
@@ -4212,6 +4299,42 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               logf "census after %s: %s | device %.1f MiB" (spec_label spec)
                 (Ir.Alloc_census.to_string (Ir.Alloc_census.snapshot ()))
                 (Float.of_int (Context.get_used_memory search_ctx) /. 1048576.);
+            result
+          in
+          (* gh-ocannl-1061: where the search is, on the [autotune_progress] stream. A phase is the
+             seed pass, the recombination composites that follow it, or one beam round; its
+             candidate total is known up front except for the composites'. *)
+          let progress_phase = ref "seeds" and progress_total = ref None in
+          let progress_tried = ref 0 in
+          let progress_best () =
+            let best_c, best_ms = !best_so_far in
+            let label =
+              match best_c with
+              | None -> if Float.is_finite best_ms then "baseline" else ""
+              | Some c ->
+                  Option.value (Hashtbl.find label_by_digest c.digest_after) ~default:"baseline"
+            in
+            Printf.sprintf "best_ms=%s best=%S" (progress_ms best_ms) label
+          in
+          let progress_where () =
+            Printf.sprintf "phase=%s tried=%d/%s timed=%d %s %s" !progress_phase !progress_tried
+              (Option.value_map !progress_total ~default:"?" ~f:Int.to_string)
+              !n_timed (progress_costs ()) (progress_best ())
+          in
+          let progress_phase_begin phase total =
+            progress_phase := phase;
+            progress_total := total;
+            progress_tried := 0;
+            Option.iter total ~f:(fun n ->
+                progress_line "phase"
+                  (Printf.sprintf "phase=%s candidates=%d timed=%d %s %s" phase n !n_timed
+                     (progress_costs ()) (progress_best ())))
+          in
+          let try_spec spec =
+            let result = try_spec spec in
+            Int.incr progress_attempts;
+            Int.incr progress_tried;
+            if progress_due () then progress_line "candidate" (progress_where ());
             result
           in
           let block_size_presets mk =
@@ -4404,6 +4527,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
             @ fiss_sketch_specs @ sr_specs
           in
           let fiss_single_results = ref [] in
+          progress_phase_begin "seeds" (Some (List.length seed_specs));
           List.iter seed_specs ~f:(fun spec ->
               let result = try_spec spec in
               (match (spec, result) with
@@ -4411,6 +4535,9 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                   fiss_single_results := (key, fine, (p, ms)) :: !fiss_single_results
               | _ -> ());
               Option.iter result ~f:admit);
+          (* At most three composites, each proposed only if its singles justify it: no total to
+             announce, so no phase line either; a composite's attempt still counts and can print. *)
+          progress_phase_begin "recombine" None;
           (match default_ms () with
           | Some ms -> logf "untuned-default pipeline: %.4f ms (gh-ocannl-552 reference)" ms
           | None ->
@@ -4535,6 +4662,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               pending := None;
               List.iter evicted ~f:(fun (c, _) -> release_candidate c)
             in
+            progress_phase_begin (Printf.sprintf "round%d" !rounds_run) (Some (List.length cands));
             List.iter cands ~f:(fun spec -> Option.iter (try_spec spec) ~f:round_admit);
             match !round with
             | [] -> continue_ := false

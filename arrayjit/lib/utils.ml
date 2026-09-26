@@ -153,6 +153,7 @@ let known_config_keys =
       "autotune_cache_dir";
       "autotune_split_reduce_max_sites";
       "autotune_log";
+      "autotune_progress";
       "tune_inline_flips";
       "tune_flip_ordering";
       "tune_flip_profit_margin";
@@ -375,6 +376,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "output_prec_in_ll_files";
         "autotune_cache_dir";
         "autotune_log";
+        "autotune_progress";
         "log_buffer_aliasing";
         "log_memory_budget";
         "schedule_log_launches";
