@@ -41,3 +41,19 @@ with a timing context, the recorded outcome digest is the shipped search's own s
 with a timing context, a fresh lowering of the recorded decision in the timing lineage reproduces it: true
 with a timing context, the warm run's routine computes the right values: true
 with a timing context, the warm run replays the recorded decision: one search, no flips, the recorded label, tuning the recorded lowering: true
+the recording process's routine computes the right values: true
+the replaying process runs to completion and reports what it observed: true
+the replaying process numbers the graph's tensor nodes differently: true
+the replaying process poses the same problem digest: true
+the replaying process's routine computes the right values: true
+across processes, the replay is exact when this process recorded a decision: one search, no flips: true
+a cross-process replay ships the recorded label: true
+a cross-process replay ships the recorded placement of the intermediate: true
+a cross-process replay's one search is a schedule-cache replay: true
+a cross-process replay's one search tunes the lowering the recorded decision was measured on: true
+a cross-process replay leaves the recorded decision untouched, and records nothing beside it: true
+the control process runs to completion and reports what it observed: true
+the control process, whose lineage inherits a decision, poses a different problem digest: true
+the control process's routine computes the right values: true
+the control process replays nothing recorded: both arms report: true
+the control process leaves the entry recorded for the other problem untouched: true

@@ -4559,7 +4559,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules placement_store)
- (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
