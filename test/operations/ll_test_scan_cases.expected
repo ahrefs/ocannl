@@ -11,7 +11,10 @@ nested private walkers are counted once, not again through their parent: true
 a walker inside a local module is not counted through its recursive parent: true
 the IR surface is derived: builders and their callers are in it, an operand helper is not: true
 a local binding that shadows a builder is not a call into the IR surface: true
-a type annotation through an Ir alias puts a value in the IR surface: true
+a type annotation through an Ir alias, its own or included, puts a value in the IR surface: true
+a qualified call into the builder tier puts a harness helper in the IR surface: true
+a harness redefinition of an included builder takes the class of its own definition: true
+each qualifier and open reads the class its own module gives a name: true
 a qualified builder call uses the IR surface: true
 linking for an operand helper alone uses nothing of the IR surface: true
 an alias of the harness reaches the IR surface: true
@@ -19,6 +22,7 @@ an alias of the public builder tier reaches the IR surface: true
 an unqualified builder counts only under an open of the harness: true
 a local open covers its body alone: true
 a name the file binds for itself is not taken for the builder under an open: true
+an alias counts only where it is in scope and not rebound: true
 a sibling stanza's harness does not cover this module: true
 default module membership links the owning harness: true
 ordered-set exclusion prevents harness membership: true

@@ -60,14 +60,38 @@ let () =
   p "a walker inside a local module is not counted through its recursive parent"
     ((counts ("let rec outer x = let module M = struct " ^ walker ^ " end in M.walk x")).traversals
    = 1);
-  let surface = Scan.surface [ builders_source; harness_source ] in
+  let harness ?(builders = builders_source) source =
+    Scan.surface [ ("Ll_builders", builders); ("Ll_test", source) ]
+  in
+  let surface = harness harness_source in
+  let members ?(of_ = surface) module_name ~ir = Scan.members of_ module_name ~ir in
   p "the IR surface is derived: builders and their callers are in it, an operand helper is not"
-    (Set.equal surface.ir (Set.of_list (module String) [ "seq"; "twice" ])
-    && Set.equal surface.other (Set.of_list (module String) [ "cycle" ]));
+    (List.equal String.equal (members "Ll_test" ~ir:true) [ "seq"; "twice" ]
+    && List.equal String.equal (members "Ll_test" ~ir:false) [ "cycle" ]
+    && List.equal String.equal (members "Ll_builders" ~ir:true) [ "seq" ]
+    && List.equal String.equal (members "Ll_builders" ~ir:false) []);
   p "a local binding that shadows a builder is not a call into the IR surface"
-    (Set.mem (Scan.surface [ builders_source; "let bump seq = seq + 1\n" ]).other "bump");
-  p "a type annotation through an Ir alias puts a value in the IR surface"
-    (Set.mem (Scan.surface [ builders_source; "let id (x : LL.t) = x\n" ]).ir "id");
+    (List.mem
+       (members ~of_:(harness "include Ll_builders\nlet bump seq = seq + 1\n") "Ll_test" ~ir:false)
+       "bump" ~equal:String.equal);
+  p "a type annotation through an Ir alias, its own or included, puts a value in the IR surface"
+    (Scan.is_ir (harness "module LL = Ir.Low_level\nlet id (x : LL.t) = x\n") "Ll_test" "id"
+    && Scan.is_ir (harness "include Ll_builders\nlet id (x : LL.t) = x\n") "Ll_test" "id"
+    && not (Scan.is_ir (harness "let id (x : LL.t) = x\n") "Ll_test" "id"));
+  p "a qualified call into the builder tier puts a harness helper in the IR surface"
+    (Scan.is_ir (harness "let twice x = Ll_builders.seq x x\n") "Ll_test" "twice"
+    && Scan.is_ir (harness "module B = Ll_builders\nlet twice x = B.seq x x\n") "Ll_test" "twice");
+  let redefined =
+    harness ~builders:"module LL = Ir.Low_level\nlet flat (x : LL.t) = x\n"
+      "include Ll_builders\nlet flat ~dims i = i + dims\n"
+  in
+  p "a harness redefinition of an included builder takes the class of its own definition"
+    ((not (Scan.is_ir redefined "Ll_test" "flat")) && Scan.is_ir redefined "Ll_builders" "flat");
+  p "each qualifier and open reads the class its own module gives a name"
+    ((not (Scan.uses_surface ~surface:redefined "let _ = Ll_test.flat"))
+    && Scan.uses_surface ~surface:redefined "let _ = Ll_builders.flat"
+    && (not (Scan.uses_surface ~surface:redefined "open Ll_test\nlet _ = flat"))
+    && Scan.uses_surface ~surface:redefined "open Ll_builders\nlet _ = flat");
   let uses source = Scan.uses_surface ~surface source in
   p "a qualified builder call uses the IR surface" (uses "let _ = Ll_test.seq");
   p "linking for an operand helper alone uses nothing of the IR surface"
@@ -84,6 +108,12 @@ let () =
     (uses "let _ = Ll_test.(seq)" && not (uses "let _ = Ll_test.(cycle)\nlet _ = seq"));
   p "a name the file binds for itself is not taken for the builder under an open"
     (not (uses "open Ll_test\nlet f seq = seq"));
+  p "an alias counts only where it is in scope and not rebound"
+    ((not (uses "module L = Other\nlet _ = L.seq\nmodule L = Ll_test\nlet _ = L.cycle"))
+    && (not (uses "module L = Ll_test\nmodule L = Other\nlet _ = L.seq"))
+    && (not (uses "module M = struct module L = Ll_test end\nlet _ = L.seq"))
+    && uses "let _ = let module L = Ll_test in L.seq"
+    && not (uses "let _ = let module L = Ll_test in 0\nlet _ = L.seq"));
   let linked content =
     Scan.linked ~directory_modules:[ "new"; "other" ] ~module_name:"new"
       (Test_utils.Dune_stanza_scan.stanzas content)
@@ -153,7 +183,10 @@ let () =
   check "shipping scanner accepts adoption without golden churn" ~exit:0
     ~message:"Adoption threshold:" (run ());
   check "shipping scanner prints the derived operand helpers that adopt nothing" ~exit:0
-    ~message:"Harness values outside the IR surface (adopt nothing): cycle\n" (run ());
+    ~message:
+      "Ll_builders values outside the IR surface (adopt nothing): (none)\n\
+       Ll_test values outside the IR surface (adopt nothing): cycle\n"
+    (run ());
   (* The gh-ocannl-1052 negative control: the stanza links ll_test, and the source calls only an
      operand helper, so its hand-built record is still debt. *)
   write "test/new.ml" (record ^ "let _ = Ll_test.cycle ~modulus:3 1\n");

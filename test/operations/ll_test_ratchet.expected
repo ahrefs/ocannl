@@ -1,7 +1,8 @@
 Source floor: test/ >= 200
 Source floor: arrayjit/test/ >= 20
 Adoption threshold: 1 record construction or 1 private traversal
-Harness values outside the IR surface (adopt nothing): base_ctx, blank, blind_axis, close, count, coverage_verified, cycle, cycle_flat, drift, flat, hooks_of, ignore1, max_modulus, no_hooks, place_residues, refused_as_local, same, sentinel, uncovered_residues, unflat, weighted
+Ll_builders values outside the IR surface (adopt nothing): (none)
+Ll_test values outside the IR surface (adopt nothing): base_ctx, blank, blind_axis, close, count, coverage_verified, cycle, cycle_flat, drift, flat, hooks_of, ignore1, max_modulus, no_hooks, place_residues, refused_as_local, same, sentinel, uncovered_residues, unflat, weighted
 test/operations/affine_lowering.ml -- records<=0 traversals<=3: existing migration debt; adopt ll_test when touched
 test/operations/autotune_scope_menu.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
 test/operations/autotune_smoke.ml -- records<=3 traversals<=1: existing migration debt; adopt ll_test when touched

@@ -149,8 +149,8 @@ let scan ~exemptions root generated =
   List.iter ownership_problems ~f:Verdict.fail;
   let surface =
     Scan.surface
-      (List.map Scan.harness_sources ~f:(fun path ->
-           In_channel.read_all (Stdlib.Filename.concat root path)))
+      (List.map Scan.harness_sources ~f:(fun (module_name, path) ->
+           (module_name, In_channel.read_all (Stdlib.Filename.concat root path))))
   in
   let rows =
     List.map sources ~f:(fun (file : Inventory.file) ->
@@ -182,8 +182,11 @@ let scan ~exemptions root generated =
   printf "Adoption threshold: 1 record construction or 1 private traversal\n";
   (* Derived, so printed: the golden shows which harness values adopt nothing when a test links the
      harness for them alone, and a new helper's class moves it (gh-ocannl-1052). *)
-  printf "Harness values outside the IR surface (adopt nothing): %s\n"
-    (String.concat ~sep:", " (Set.to_list surface.other));
+  List.iter Scan.harness_sources ~f:(fun (module_name, _) ->
+      printf "%s values outside the IR surface (adopt nothing): %s\n" module_name
+        (match Scan.members surface module_name ~ir:false with
+        | [] -> "(none)"
+        | names -> String.concat ~sep:", " names));
   List.iter exemptions ~f:(fun (path, kind, reason) ->
       match kind with
       | Scan.Permanent -> printf "%s -- permanent: %s\n" path reason
