@@ -3368,6 +3368,72 @@ class CellTimeoutTest(unittest.TestCase):
         self.assertEqual(called, [("killed", True)])
         self.assertIn("quarantined the cache", note)
 
+    def test_a_killed_cell_leaves_a_log_of_what_it_printed(self):
+        # gh-ocannl-1061: three tuned search passes over a 7200 s cap left 0-byte cell logs, so a
+        # search's progress up to the kill was unreadable. The log is written as the cell runs;
+        # what the cell printed before the cap is on disk after the kill.
+        logs = self.dir / "cells"
+        cell = self.python(
+            "import sys, time\n"
+            "print('autotune-progress: event=arm_start arm=\"A\"', flush=True)\n"
+            "sys.stderr.write('stderr evidence\\n'); sys.stderr.flush()\n"
+            "time.sleep(300)\n"
+        )
+        with unittest.mock.patch.object(orchestrate, "CELL_LOG_DIR", logs):
+            result, note, _ = self.run_cell("gpt2 ocannl/cc/tuned (search pass)", cell, timeout=2.0)
+
+        self.assertIsNone(result)
+        self.assertIn("TIMED OUT", note)
+        log = (logs / orchestrate.cell_log_name("gpt2 ocannl/cc/tuned (search pass)")).read_text()
+        self.assertIn("event=arm_start", log)
+        self.assertIn("stderr evidence", log)
+
+    def test_the_cell_log_grows_while_the_cell_runs(self):
+        # Streaming, not written at the end: the cell reads its own log back mid-run and reports
+        # whether its first line was already there.
+        logs = self.dir / "cells"
+        path = logs / orchestrate.cell_log_name("streaming")
+        cell = self.python(
+            "import json, sys, time\n"
+            "print('first line', flush=True)\n"
+            "time.sleep(0.2)\n"
+            "seen = 'first line' in open(sys.argv[1]).read()\n"
+            "print(json.dumps({'workload': 'w', 'step_ms': {'p50': 1.0}, 'compile_s': 0.5,"
+            " 'seen_mid_run': seen}))\n",
+            path,
+        )
+        with unittest.mock.patch.object(orchestrate, "CELL_LOG_DIR", logs):
+            result, note, _ = self.run_cell("streaming", cell, timeout=60)
+
+        self.assertIsNone(note)
+        self.assertTrue(result["seen_mid_run"], "the log was not on disk while the cell ran")
+        self.assertIn("first line", path.read_text())
+
+    def test_without_a_log_dir_the_output_is_still_read_and_then_removed(self):
+        made = []
+        real_mkstemp = tempfile.mkstemp
+
+        def recording_mkstemp(*args, **kwargs):
+            fd, name = real_mkstemp(*args, dir=self.dir, **kwargs)
+            made.append(Path(name))
+            return fd, name
+
+        cell = self.python(
+            "import json; print('chatter'); print(json.dumps("
+            "{'workload': 'tmp', 'step_ms': {'p50': 1.0}, 'compile_s': 0.5}))"
+        )
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(unittest.mock.patch.object(orchestrate, "CELL_LOG_DIR", None))
+            stack.enter_context(
+                unittest.mock.patch.object(orchestrate.tempfile, "mkstemp", recording_mkstemp)
+            )
+            result, note, _ = self.run_cell("no log dir", cell, timeout=60)
+
+        self.assertIsNone(note)
+        self.assertEqual(result["workload"], "tmp")
+        self.assertEqual(len(made), 1)
+        self.assertFalse(made[0].exists(), "the temporary cell output outlived the cell")
+
     def test_a_killed_beam_cell_quarantines_the_cache_it_was_writing(self):
         # The contaminated-cache consequence recorded on the issue's HIP leg: the search writes
         # its winners into one sqlite file as it goes, so a kill leaves a partial cache that the
@@ -3561,6 +3627,12 @@ class RegimeTest(unittest.TestCase):
         self.assertEqual(
             orchestrate.ocannl_regime_args("approximate"), ["--ocannl_profile=approximate"]
         )
+        # gh-ocannl-1061: a tuned cell writes the tuner's progress lines; no other variant tunes.
+        self.assertEqual(
+            orchestrate.ocannl_variant_args("tuned"), ["--ocannl_autotune_progress=true"]
+        )
+        for variant in ("default", "materialized"):
+            self.assertEqual(orchestrate.ocannl_variant_args(variant), [])
         self.assertEqual(orchestrate.torch_regime_args("exact"), [])
         self.assertEqual(orchestrate.torch_regime_args("approximate"), ["--regime", "approximate"])
         # Exact labels are unchanged; a non-exact cell says so in its label.
