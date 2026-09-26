@@ -1172,7 +1172,8 @@ val affine_relations : t -> Tnode.t Affine.access list * Tnode.t Affine.statemen
     site; [Tile_mma] is traversed through its scalar [fallback]); read accesses carry their scalar
     gatedness ([a_gated]). Beside them, from the same walk (gh-ocannl-1016), the
     {!Affine.statement_effect} rows: everything the code does that no tensor-node access carries —
-    scope-local writes and declarations, [Local_scope] bodies, barriers, opaque [Staged_compilation]
+    scope-local writes, reads and declarations (a local named by its node and scope id, so a hazard
+    query can match a read to a write), [Local_scope] bodies, barriers, opaque [Staged_compilation]
     (whose accesses are not enumerated: callers needing exhaustiveness check for its row),
     [Tile_mma] as a construct, and merge-buffer reads. A "between two points, what else runs?"
     question is a query over the pair — never a fresh walk over the raw code. *)

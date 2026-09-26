@@ -383,7 +383,8 @@ let () =
   let accs, effs = LL.affine_relations program in
   List.iter accs ~f:show;
   let show_kind : Tn.t Aff.effect_kind -> string = function
-    | Aff.Local_write -> "local-write"
+    | Aff.Local_write _ -> "local-write"
+    | Aff.Local_read _ -> "local-read"
     | Aff.Local_declare -> "local-declare"
     | Aff.Scope_body -> "scope-body"
     | Aff.Barrier -> "barrier"
@@ -429,9 +430,38 @@ let () =
          [];
          [ "barrier" ];
          [ "staged" ];
-         [ "local-write"; "local-write"; "local-write" ];
+         [ "local-write"; "local-read"; "local-write"; "local-read"; "local-write" ];
          [ "local-write" ];
        ]);
+  (* gh-ocannl-1050: a local row names its local, so a hazard query can match a read to a write. *)
+  let locals_at stmt =
+    List.filter_map effs ~f:(fun (e : Tn.t Aff.statement_effect) ->
+        if Aff.stmt_head e.e_path <> stmt then None
+        else
+          match e.e_kind with
+          | Aff.Local_write l -> Some ("write", l)
+          | Aff.Local_read l -> Some ("read", l)
+          | _ -> None)
+  in
+  let names (l : Tn.t Aff.local) (id : LL.scope_id) =
+    Tn.equal l.local_tn id.tn && l.local_id = id.scope_id
+  in
+  p
+    "the scan's rows name its locals: init writes prev, body reads prev and writes next, the \
+     rotation reads next and writes prev"
+    (match
+       List.for_all2 (locals_at 6)
+         [
+           ("write", cr.prev);
+           ("read", cr.prev);
+           ("write", cr.next);
+           ("read", cr.next);
+           ("write", cr.prev);
+         ]
+         ~f:(fun (kind, l) (kind', id) -> String.equal kind kind' && names l id)
+     with
+    | List.Or_unequal_lengths.Ok all -> all
+    | Unequal_lengths -> false);
   p_all "only the dead loop's row is dead" effs ~f:(fun (e : Tn.t Aff.statement_effect) ->
       Bool.equal (Aff.loops_live e.e_loops) (Aff.stmt_head e.e_path <> 7));
   (* The relationship, not a restatement: the view's gatedness IS [Access_fold]'s gated context —

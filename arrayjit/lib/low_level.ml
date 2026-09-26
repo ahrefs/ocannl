@@ -1798,16 +1798,17 @@ let scope_value_syms (llc : t) : (int, Indexing.symbol list) Hashtbl.t =
     ({!Affine.access}), extracted from (typically optimized) code — the queryable artifact behind
     the affine legality queries — and, from the same walk, gh-ocannl-1016's sibling view: the
     {!Affine.statement_effect} rows for everything the code does that no tensor-node access carries
-    (local writes and declarations, scope bodies, barriers, staged code, tensor-core statements,
-    merge-buffer reads). Fires in program order: a statement's right-hand-side reads precede its
-    write, [Local_scope] bodies are descended into at their use site. [Tile_mma] is traversed
-    through its scalar [fallback] (the fallback is the statement's access footprint, as in
+    (local writes, reads and declarations, scope bodies, barriers, staged code, tensor-core
+    statements, merge-buffer reads). Fires in program order: a statement's right-hand-side reads
+    precede its write, [Local_scope] bodies are descended into at their use site. [Tile_mma] is
+    traversed through its scalar [fallback] (the fallback is the statement's access footprint, as in
     [C_syntax.iter_local_accesses]), beside an [Mma] effect row for the construct itself. Scalar
     gatedness ([a_gated]) follows the {!Access_fold} convention: a gated operand's reads are gated,
     a [Local_scope] body inside one is not (hoisted, it executes unconditionally).
     [Staged_compilation] is an effect row but its accesses are not enumerated — callers needing
     exhaustiveness check for the [Staged] row. *)
 let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement_effect list =
+  let affine_local (id : scope_id) = { Affine.local_tn = id.tn; local_id = id.scope_id } in
   let rec reads_tn uid (llsc : scalar_t) =
     match llsc with
     | Get (tn, _) -> tn.Tn.uid = uid
@@ -1910,13 +1911,16 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
             let path = Affine.Stmt j :: Affine.Stmt 0 :: path in
             scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c ?stmt_write:None
               c.init;
-            add_effect ~loops ~path:(Affine.Write :: path) ~guarded Affine.Local_write);
+            add_effect ~loops ~path:(Affine.Write :: path) ~guarded
+              (Affine.Local_write (affine_local c.prev)));
         let loops = (index, (from_, to_)) :: loops in
         code ~loops ~path:(Affine.Stmt 1 :: path) ~guarded body;
-        List.iteri carried ~f:(fun j _ ->
-            add_effect ~loops
-              ~path:(Affine.Write :: Affine.Stmt j :: Affine.Stmt 2 :: path)
-              ~guarded Affine.Local_write)
+        List.iteri carried ~f:(fun j c ->
+            let path = Affine.Stmt j :: Affine.Stmt 2 :: path in
+            add_effect ~loops ~path:(Affine.Rhs :: path) ~guarded
+              (Affine.Local_read (affine_local c.next));
+            add_effect ~loops ~path:(Affine.Write :: path) ~guarded
+              (Affine.Local_write (affine_local c.prev)))
     | If { cond = c, _; body } ->
         scalar ~loops ~path:(Affine.Cond :: path) ~guarded ~gated:false ~arg_c ?stmt_write:None c;
         code ~loops ~path:(Affine.Body :: path) ~guarded:true body
@@ -1936,9 +1940,9 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
         scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c ~stmt_write:idcs a;
         add ~loops ~path:(Affine.Write :: path) ~guarded ~vec_len:length ~rmw:(reads_tn tn.Tn.uid a)
           ~val_syms:(scalar_syms a) ~write:true tn idcs
-    | Set_local (_, llsc) ->
+    | Set_local (id, llsc) ->
         scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c ?stmt_write:None llsc;
-        stmt_effect Affine.Local_write
+        stmt_effect (Affine.Local_write (affine_local id))
     | Tile_mma { fallback; _ } ->
         code ~loops ~path ~guarded fallback;
         stmt_effect Affine.Mma
@@ -1960,7 +1964,8 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
         add_effect ~loops ~path ~guarded Affine.Scope_body;
         code ~loops ~path ~guarded body
     | Get_merge_buffer (tn, _) -> add_effect ~loops ~path ~guarded ~gated (Affine.Merge_read tn)
-    | Get_local _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
+    | Get_local id -> add_effect ~loops ~path ~guarded ~gated (Affine.Local_read (affine_local id))
+    | Constant _ | Constant_bits _ | Embed_index _ -> ()
     | Get (tn, idcs) -> add ~loops ~path ~guarded ~gated ?stmt_write ~write:false tn idcs
     | Get_dynamic { tn; idcs; dyn_value = v, _; _ } ->
         add ~loops ~path ~guarded ~gated ~dynamic:true ?stmt_write ~write:false tn idcs;
@@ -2016,8 +2021,8 @@ let computation_reads_merge ~self code =
           Affine.loops_live e.e_loops
           && not
                (List.exists sibling_writes ~f:(fun write -> Affine.within_statement ~write e.e_path))
-      | Affine.Local_write | Affine.Local_declare | Affine.Scope_body | Affine.Barrier
-      | Affine.Staged | Affine.Mma ->
+      | Affine.Local_write _ | Affine.Local_read _ | Affine.Local_declare | Affine.Scope_body
+      | Affine.Barrier | Affine.Staged | Affine.Mma ->
           false)
 
 let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
@@ -7041,11 +7046,11 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list)
         if not (statement_level e.e_path) then (eff, loc)
         else
           match e.e_kind with
-          | Affine.Local_write | Affine.Local_declare -> (Set.add eff s, Set.add loc s)
+          | Affine.Local_write _ | Affine.Local_declare -> (Set.add eff s, Set.add loc s)
           | Affine.Barrier | Affine.Staged | Affine.Mma -> (Set.add eff s, loc)
-          (* A scope occurrence is no effect of its own (its body's rows are), and a merge-buffer
-             read changes nothing. *)
-          | Affine.Scope_body | Affine.Merge_read _ -> (eff, loc))
+          (* A scope occurrence is no effect of its own (its body's rows are), and a merge-buffer or
+             local read changes nothing. *)
+          | Affine.Scope_body | Affine.Merge_read _ | Affine.Local_read _ -> (eff, loc))
   in
   let reads_by_tn = Hashtbl.create (module Tn) in
   let writes_by_tn = Hashtbl.create (module Tn) in

@@ -86,7 +86,8 @@ let has_opaque (stmt : LL.t) =
              downstream of the tier, and the write census ([LL.writes_of_stmt]) does not enter one
              -- so a scope in the span is code the census cannot see. *)
           true
-      | Affine.Local_write | Affine.Local_declare | Affine.Merge_read _ -> false)
+      | Affine.Local_write _ | Affine.Local_read _ | Affine.Local_declare | Affine.Merge_read _ ->
+          false)
 
 let wrap loops body =
   List.fold_right loops ~init:body ~f:(fun { index; from_; to_ } body ->
