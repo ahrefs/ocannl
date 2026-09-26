@@ -1,0 +1,40 @@
+2-D control: detected, one conv axis per spatial axis: true
+2-D control: the C-backend leg seeds a conv candidate: true
+2-D control: the GPU leg seeds a conv candidate: true
+2-D control: the output and the kernel are indexed at plain iterators only: true
+2-D control: both operands read exactly one channel symbol: true
+3-D spatial: detected, one conv axis per spatial axis: true
+3-D spatial: the C-backend leg seeds a conv candidate: true
+3-D spatial: the GPU leg seeds a conv candidate: true
+two batch axes: detected, one conv axis per spatial axis: true
+two batch axes: the C-backend leg seeds a conv candidate: true
+two batch axes: the GPU leg seeds a conv candidate: true
+no batch axis: detected, one conv axis per spatial axis: true
+no batch axis: the C-backend leg seeds a conv candidate: true
+no batch axis: the GPU leg seeds a conv candidate: true
+1-D: detected, one conv axis per spatial axis: true
+1-D: the C-backend leg seeds a conv candidate: true
+1-D: the GPU leg seeds a conv candidate: true
+batch of one: not a conv site, and no sketch family seeds it: true
+batch of one: because lowering elided an extent-1 loop and the output is written at a fixed index: true
+output row extent one: not a conv site, and no sketch family seeds it: true
+output row extent one: because lowering elided an extent-1 loop and the output is written at a fixed index: true
+outer output spatial extent one: not a conv site, and no sketch family seeds it: true
+outer output spatial extent one: because lowering elided an extent-1 loop and the output is written at a fixed index: true
+3x1 window: not a conv site, and no sketch family seeds it: true
+3x1 window: because lowering elided an extent-1 loop and the kernel is read at a fixed index: true
+1x3 window: not a conv site, and no sketch family seeds it: true
+1x3 window: because lowering elided an extent-1 loop and the kernel is read at a fixed index: true
+lenet conv1 (one input channel): not a conv site, and no sketch family seeds it: true
+lenet conv1 (one input channel): because lowering elided an extent-1 loop and the kernel is read at a fixed index, and no reduction-channel loop is left: true
+two input-channel axes: not a conv site, and no sketch family seeds it: true
+two input-channel axes: because both operands read two channel symbols, and the pipelines contract exactly one: true
+1x1 window: not a conv site, but a matmul site: true
+1x1 window: the matmul family, not the conv family, seeds it on both legs: true
+1x1 window: because the window loops are gone and the kernel is read at a fixed index: true
+1x1 window, stride 2: not a conv site, but a matmul site: true
+1x1 window, stride 2: the matmul family, not the conv family, seeds it on both legs: true
+1x1 window, stride 2: because the window loops are gone and the kernel is read at a fixed index: true
+1-D width-1 window: not a conv site, but a matmul site: true
+1-D width-1 window: the matmul family, not the conv family, seeds it on both legs: true
+1-D width-1 window: because the window loops are gone and the kernel is read at a fixed index: true

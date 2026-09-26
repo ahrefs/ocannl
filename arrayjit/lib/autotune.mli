@@ -229,7 +229,17 @@ val detect_conv : Ir.Low_level.t -> conv_site option
     the output's last axis and a conv axis at its second-to-last (the implicit-GEMM row). Reads off
     the extracted access relations ([Ir.Low_level.affine_accesses] — the gh-494 artifact the
     op-legality oracle also consumes); under config [legality_crosscheck] the retained procedural
-    matcher runs alongside and any divergence raises. Exposed for tests. *)
+    matcher runs alongside and any divergence raises. Exposed for tests.
+
+    {b Boundary} (gh-ocannl-912): rank-generic — any number of batch axes and of spatial axes (1-D,
+    2-D, 3-D) beyond the row become outer loops — but it refuses every SINGLETON axis, because
+    lowering drops extent-1 loops and indexes the axis at a literal [Fixed_idx]: a batch of one or
+    an output spatial extent of one (the output is no longer written at plain iterators), a single
+    input channel or a k-by-1 window (the kernel is no longer read at plain iterators; with one
+    input channel no reduction-channel loop remains for [Tensorize (row, oc, ic)]). A channel row of
+    several axes is refused too (exactly one reduction channel). An all-singleton window (1x1, any
+    stride) is a plain GEMM: {!detect_matmul} owns it. Refused sites seed no sketch and run the
+    default schedule; [test/operations/conv_detection_boundary] is the witness. *)
 
 val matmul_launch_geometry : matmul_site -> sketch_params -> Ir.Schedule.launch_geometry
 (** The launch geometry a GPU matmul seed will have, predicted from the parameters alone
