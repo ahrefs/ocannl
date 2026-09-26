@@ -190,11 +190,13 @@ files.
   the tensorization lane as the sole `Workgroup` loop. `conv_seed_params` filters that lower-bound
   prediction through the same predicate. `launch_predicate_parity` derives a real conv site behind
   `fission_scheduled`, applies every GPU seed, and proves no predicted dimension exceeds
-  `launch_dims`; its negative control is a blocked conv whose outer grid loops are a 65536 batch
-  and a small non-row spatial axis, so the row blocks bind `.x`, the spatial extent `.y`, and the
-  batch folds ALONE onto `.z` at 65536 -- one past the cap. It proves the seed exists under a
-  permissive cap but is absent at the device cap. Blocking is what makes it a `.z` question:
-  unblocked the site has two grid coordinates and the batch lands on `.y`.
+  `launch_dims`. Its negative controls share one conv whose outer grid loops are a 65536 batch
+  and a non-row spatial 2: blocked, the row blocks bind `.x`, the spatial extent `.y`, and the
+  batch folds ALONE onto `.z`; unblocked, the batch lands on `.y` and nothing folds. Each claim
+  names the dimension, the requested extent and the cap (gh-ocannl-939) -- a resource-only claim
+  ("some seed is refused on `.z`") holds for a wrong reading of the geometry too -- and each
+  flavor is the other's control: the `.z` claim must fail on the `.y` refusals and vice versa,
+  and on the matmul twin's `.z` refusal at another extent.
 
   The GPU backends' `static_properties` dumps list the queried launch-dimension limits next to
   `max_threads_per_block` — HIP `max_grid_size` and `max_threads_dim`, CUDA `max_block_dim` and

@@ -344,16 +344,24 @@ let () =
           Stdio.eprintf "conv prediction: schedule FAILED: %s\n" (Exn.to_string exn);
           true);
 
-  (* Negative control: a 2-D conv whose outer [Grid] loops are the batch (65536) then the non-row
-     spatial axis (2), with the row axis (16) blocked. The blocked flavor's row-block loop is the
-     innermost grid coordinate, so the slot rule binds the row blocks to [.x] and the non-row
-     spatial extent to [.y], leaving the batch ALONE to fold onto [.z] -- 65536, one past the 16-bit
-     cap. Blocking is what makes this a [.z] question: unblocked, the same site has only two grid
-     coordinates and the batch lands on [.y] instead. The small spatial extents keep the fixture
-     cheap; the graph is compiled but never dispatched. *)
+  (* Negative controls: a 2-D conv whose outer [Grid] loops are the batch (65536) then the non-row
+     spatial axis (2 = 3 - 2 + 1), over 16 rows (17 - 2 + 1). The two flavors put the SAME batch on
+     different grid dimensions. Blocked ([sk_bm > 0]), the row-block loop is the innermost grid
+     coordinate, so the slot rule binds the row blocks to [.x], the spatial extent to [.y], and
+     folds the batch ALONE onto [.z] — 65536, one past the 16-bit cap. Unblocked ([sk_bm = 0]), the
+     site has only its two outer grid coordinates: the spatial extent binds [.x], the batch lands on
+     [.y] at the same 65536, and nothing folds onto [.z].
+
+     Each claim below names the dimension, the requested extent and the cap (gh-ocannl-939): a
+     resource-only claim ("some seed is refused on [.z]") holds for a wrong reading of the geometry
+     too. Blocking is what moves the batch from [.y] to [.z], so each flavor is the other's negative
+     control: the [.z] refusal claim must FAIL on every unblocked seed and the [.y] one on every
+     blocked seed. The small spatial extents keep the fixture cheap; the graph is compiled but never
+     dispatched. *)
+  let batch = 65_536 and spatial = 2 and rows = 16 and device_cap = 65_535 in
   let make_large_conv2 tag =
     let x =
-      NTDSL.init ~l:(tag ^ "_x") ~prec:Ir.Ops.single ~b:[ 65_536 ] ~o:[ 3; 17; 2 ]
+      NTDSL.init ~l:(tag ^ "_x") ~prec:Ir.Ops.single ~b:[ batch ] ~o:[ 3; 17; 2 ]
         ~f:(fun _ -> 1.)
         ()
     in
@@ -368,28 +376,83 @@ let () =
   in
   let large_opt = capture_conv_segment "lpp_conv_overcap" (make_large_conv2 "lpp_co") in
   let large_site = Option.value_exn ~here:[%here] (Autotune.detect_conv large_opt.LL.llc) in
+  (* The fixture's derived extents, which the geometry claims below are written against: shape
+     inference, not the fixture's literals, decides the spatial and row extents. *)
+  pf
+    "conv control premise: the site's outer grid loops are the %d batch then a non-row spatial %d, \
+     over %d rows"
+    batch spatial rows
+    (List.equal Int.equal (List.map large_site.Autotune.c_outer ~f:snd) [ batch; spatial ]
+    && large_site.Autotune.c_nrow = rows);
   let permissive_limits = { mma_limits with BI.max_grid_yz = Some 1_000_000 } in
-  let capped_limits = { mma_limits with BI.max_grid_yz = Some 65_535 } in
+  let capped_limits = { mma_limits with BI.max_grid_yz = Some device_cap } in
   let gpu_seeds limits =
     Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits large_opt
     |> List.filter ~f:(fun q -> q.Autotune.sk_gpu && q.Autotune.sk_conv)
   in
   let permissive = gpu_seeds permissive_limits in
-  let over_cap q =
-    match
-      Sched.launch_geometry_excess ~limits:capped_limits
-        (Autotune.conv_launch_geometry large_site q)
-    with
-    | Some x -> SO.equal_resource x.Sched.lx_resource SO.Grid_z_extent
+  let blocked = List.filter permissive ~f:(fun q -> q.Autotune.sk_bm > 0) in
+  let unblocked = List.filter permissive ~f:(fun q -> q.Autotune.sk_bm = 0) in
+  let predicted q = Autotune.conv_launch_geometry large_site q in
+  (* The claim each control makes: the capped predicate refuses the seed on exactly [resource], at
+     exactly the batch extent, against exactly the device cap. Any other dimension or extent — a
+     different first excess, a different requested value — makes it false. *)
+  let is_batch_excess ~resource (x : Sched.launch_excess) =
+    SO.equal_resource x.Sched.lx_resource resource
+    && x.Sched.lx_requested = batch && x.Sched.lx_limit = device_cap
+  in
+  let refused_on resource q =
+    match Sched.launch_geometry_excess ~limits:capped_limits (predicted q) with
+    | Some x -> is_batch_excess ~resource x
     | None -> false
   in
-  p_exists
-    "conv control: a permissive cap proposes a blocked seed folding the 65536 batch onto grid.z"
-    permissive ~f:over_cap;
-  let rejected_keys = List.filter permissive ~f:over_cap |> List.map ~f:key in
-  let leaked =
-    List.filter (gpu_seeds capped_limits) ~f:(fun q ->
-        List.mem rejected_keys (key q) ~equal:Poly.equal)
+  let grid_yz q = ((predicted q).Sched.lg_grid_y, (predicted q).Sched.lg_grid_z) in
+  let same_yz (a : int option * int option) b = Poly.equal a b in
+  p_all
+    (Printf.sprintf
+       "conv control: every blocked seed puts the spatial %d on grid.y and folds the %d batch \
+        alone onto grid.z"
+       spatial batch) blocked ~f:(fun q -> same_yz (grid_yz q) (Some spatial, Some batch));
+  p_all
+    (Printf.sprintf
+       "conv control: every unblocked seed puts the %d batch on grid.y, folding nothing onto grid.z"
+       batch) unblocked ~f:(fun q -> same_yz (grid_yz q) (Some batch, Some 1));
+  p_all
+    (Printf.sprintf
+       "conv control: every blocked seed is refused on grid.z at %d, against the %d cap" batch
+       device_cap)
+    blocked ~f:(refused_on SO.Grid_z_extent);
+  p_all
+    (Printf.sprintf
+       "conv control: every unblocked seed is refused on grid.y at %d, against the %d cap" batch
+       device_cap)
+    unblocked ~f:(refused_on SO.Grid_y_extent);
+  (* The discrimination the two claims above rest on: each rejects the other flavor's refusal. *)
+  p_none "conv control: the grid.z refusal claim fails on every seed refused on grid.y instead"
+    unblocked ~f:(refused_on SO.Grid_z_extent);
+  p_none "conv control: the grid.y refusal claim fails on every seed refused on grid.z instead"
+    blocked ~f:(refused_on SO.Grid_y_extent);
+  (* And the extent half: the matmul twin above is a real [.z] refusal at another extent (its 8-way
+     batch fold against a cap of 7), which the [.z] claim must reject on the extent alone. *)
+  p "conv control: the grid.z refusal claim fails on a grid.z refusal at another extent"
+    (match
+       Sched.launch_geometry_excess
+         ~limits:(grid_cap ((bb * hh) - 1))
+         (Autotune.matmul_launch_geometry site twin_seed)
+     with
+    | Some x ->
+        SO.equal_resource x.Sched.lx_resource SO.Grid_z_extent
+        && not (is_batch_excess ~resource:SO.Grid_z_extent x)
+    | None -> false);
+  let capped_keys = List.map (gpu_seeds capped_limits) ~f:key in
+  let leaked flavor =
+    List.filter flavor ~f:(fun q -> List.mem capped_keys (key q) ~equal:Poly.equal)
   in
-  p_empty "conv seeding: the 65535 grid.z cap omits every deliberately over-cap seed"
-    ~over:rejected_keys leaked
+  p_empty
+    (Printf.sprintf "conv seeding: the %d cap omits every blocked seed it refuses on grid.z"
+       device_cap)
+    ~over:blocked (leaked blocked);
+  p_empty
+    (Printf.sprintf "conv seeding: the %d cap omits every unblocked seed it refuses on grid.y"
+       device_cap)
+    ~over:unblocked (leaked unblocked)
