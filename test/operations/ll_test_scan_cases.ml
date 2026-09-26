@@ -10,6 +10,18 @@ let declaration =
 let constructors = Scan.constructors declaration
 let record = "let x = Alias.For_loop { body = Alias.Noop }\n"
 
+(* What a test that calls the harness's IR surface adds to its hand-built record: under
+   gh-ocannl-1052 linking the harness is not adoption, calling into it is. *)
+let use = "let _ = Ll_test.seq\n"
+let adopted = record ^ use
+
+(* A synthetic harness in the shipping layout: a builder tier with an [Ir] alias, and a harness that
+   includes it and adds one builder caller and one operand helper that touches no IR. *)
+let builders_source = "module LL = Ir.Low_level\nlet seq a b : LL.t = LL.Seq (a, b)\n"
+
+let harness_source =
+  "include Ll_builders\nlet twice x = seq x x\nlet cycle ~modulus i = i mod modulus\n"
+
 let walker =
   "let rec walk = function Alias.Seq (a,b) -> walk a + walk b | Alias.For_loop {body} -> walk body \
    | _ -> 0\n"
@@ -48,6 +60,30 @@ let () =
   p "a walker inside a local module is not counted through its recursive parent"
     ((counts ("let rec outer x = let module M = struct " ^ walker ^ " end in M.walk x")).traversals
    = 1);
+  let surface = Scan.surface [ builders_source; harness_source ] in
+  p "the IR surface is derived: builders and their callers are in it, an operand helper is not"
+    (Set.equal surface.ir (Set.of_list (module String) [ "seq"; "twice" ])
+    && Set.equal surface.other (Set.of_list (module String) [ "cycle" ]));
+  p "a local binding that shadows a builder is not a call into the IR surface"
+    (Set.mem (Scan.surface [ builders_source; "let bump seq = seq + 1\n" ]).other "bump");
+  p "a type annotation through an Ir alias puts a value in the IR surface"
+    (Set.mem (Scan.surface [ builders_source; "let id (x : LL.t) = x\n" ]).ir "id");
+  let uses source = Scan.uses_surface ~surface source in
+  p "a qualified builder call uses the IR surface" (uses "let _ = Ll_test.seq");
+  p "linking for an operand helper alone uses nothing of the IR surface"
+    (not (uses "let _ = Ll_test.cycle ~modulus:3 1"));
+  p "an alias of the harness reaches the IR surface"
+    (uses "module L = Ll_test\nlet _ = L.twice" && not (uses "module L = Ll_test\nlet _ = L.cycle"));
+  p "an alias of the public builder tier reaches the IR surface"
+    (uses "module B = Ll_builders\nlet _ = B.seq");
+  p "an unqualified builder counts only under an open of the harness"
+    (uses "open Ll_test\nlet _ = seq"
+    && (not (uses "let _ = seq"))
+    && not (uses "let _ = seq\nopen Ll_test"));
+  p "a local open covers its body alone"
+    (uses "let _ = Ll_test.(seq)" && not (uses "let _ = Ll_test.(cycle)\nlet _ = seq"));
+  p "a name the file binds for itself is not taken for the builder under an open"
+    (not (uses "open Ll_test\nlet f seq = seq"));
   let linked content =
     Scan.linked ~directory_modules:[ "new"; "other" ] ~module_name:"new"
       (Test_utils.Dune_stanza_scan.stanzas content)
@@ -72,6 +108,9 @@ let () =
   List.iter [ "test"; "arrayjit"; "arrayjit/test"; "arrayjit/lib" ] ~f:(fun dir ->
       Unix.mkdir (Stdlib.Filename.concat root dir) 0o700);
   write "arrayjit/lib/low_level.ml" declaration;
+  Unix.mkdir (Stdlib.Filename.concat root "test/support") 0o700;
+  write "test/support/ll_builders.ml" builders_source;
+  write "test/support/ll_test.ml" harness_source;
   List.iter
     [ ("test", 200); ("arrayjit/test", 20) ]
     ~f:(fun (dir, count) ->
@@ -107,19 +146,29 @@ let () =
     if not ok then eprintf "%s captured output:\n%s\n" label text;
     p label ok
   in
-  write "test/new.ml" record;
+  write "test/new.ml" adopted;
   check "shipping scanner refuses the first unlinked record builder" ~exit:1
     ~message:"test/new.ml: requires ll_test" (run ());
   write "test/dune" "(test (name new) (modules new) (libraries ll_test))";
   check "shipping scanner accepts adoption without golden churn" ~exit:0
     ~message:"Adoption threshold:" (run ());
+  check "shipping scanner prints the derived operand helpers that adopt nothing" ~exit:0
+    ~message:"Harness values outside the IR surface (adopt nothing): cycle\n" (run ());
+  (* The gh-ocannl-1052 negative control: the stanza links ll_test, and the source calls only an
+     operand helper, so its hand-built record is still debt. *)
+  write "test/new.ml" (record ^ "let _ = Ll_test.cycle ~modulus:3 1\n");
+  check "linking ll_test for an operand helper alone retires nothing" ~exit:1
+    ~message:"test/new.ml: links ll_test but calls none of its IR surface" (run ());
+  check "a linked-but-unused file is held to its migration row" ~exit:0 ~message:"control exemption"
+    (run ~exempt:true ());
+  write "test/new.ml" adopted;
   let base_stanza = "(test (name new) (modules new) (libraries ll_test))" in
   let selection ?(modules = "(modules choice)") ?(harness = "ll_test") () =
     "(test (name choice) " ^ modules ^ " (libraries " ^ harness
     ^ " (select choice.ml from (backend -> choice.real.ml) (-> choice.missing.ml))))"
   in
-  write "test/choice.real.ml" record;
-  write "test/choice.missing.ml" record;
+  write "test/choice.real.ml" adopted;
+  write "test/choice.missing.ml" adopted;
   write "test/dune" (base_stanza ^ selection ());
   check "both select arms inherit the generated target module's harness" ~exit:0
     ~message:"Adoption threshold:" (run ());
@@ -144,7 +193,7 @@ let () =
   Unix.unlink (Stdlib.Filename.concat root "test/choice.missing.ml");
   write "test/dune" base_stanza;
   Unix.mkdir (Stdlib.Filename.concat root "test/shared") 0o700;
-  write "test/shared/copied.ml" record;
+  write "test/shared/copied.ml" adopted;
   let copied_stanza ?(harness = "ll_test") ?(modules = "(modules copied)") () =
     "(test (name copied) " ^ modules ^ " (libraries " ^ harness ^ "))"
   in
@@ -239,12 +288,13 @@ let () =
   write "test/new.ml" (walker ^ walker);
   check "new private traversals in an exempt file exceed their independent cap" ~exit:1
     ~message:"traversals 2/1" (run ~exempt:true ());
+  write "test/new.ml" (walker ^ walker ^ use);
   write "test/dune" "(test (name new) (modules new) (libraries ll_test))";
   check "permanent exemptions also become stale after harness adoption" ~exit:1
     ~message:"test/new.ml: stale ll_test exemption" (run ~permanent:true ());
   write "test/dune" "(test (name new) (modules new))";
   write "test/new.ml" "";
-  write "arrayjit/test/new.ml" (record ^ record ^ record);
+  write "arrayjit/test/new.ml" (record ^ record ^ record ^ "module B = Ll_builders\nlet _ = B.seq\n");
   check "new arrayjit debt requires explicit adoption" ~exit:1
     ~message:"arrayjit/test/new.ml: requires ll_test" (run ());
   write "arrayjit/test/dune" "(test (name new) (modules new) (libraries arrayjit.ll_builders))";

@@ -3,14 +3,148 @@ open Base
     Low_level's t/scalar_t declarations, independent of qualifier spelling (including opens and
     aliases). A same-named foreign constructor is conservatively counted. Expressions and patterns
     are separate: one record construction or one recursive binding inspecting at least two distinct
-    IR constructors warrants the harness. Quoted fixtures and comments are not AST nodes. Linking
-    the harness is the adoption boundary; this does not ban test-specific match arms. *)
+    IR constructors warrants the harness. Quoted fixtures and comments are not AST nodes. Adoption
+    is linking the harness AND calling into its IR surface ({!surface}); linking it for an operand
+    helper alone adopts nothing (gh-ocannl-1052). This does not ban test-specific match arms. *)
 
 open Ppxlib
 module Dune = Dune_stanza_scan
+module Text = Codegen_text_scan
 
 type census = { records : int; traversals : int }
 type exemption = Migration of census | Permanent
+
+(** How far a test with detected debt has come: its stanzas do not link the harness, they link it
+    but the source calls nothing of its IR surface (the gh-ocannl-1052 state: linked for
+    [Ll_test.cycle] alone), or it links the harness and uses it. Only the last is adoption. *)
+type adoption = Unlinked | Linked_unused | Adopted
+
+(** The harness's module names, beside the libraries {!links_harness} reads: a qualifier, alias,
+    [open] or [include] of one of these is how a test reaches the harness's values. *)
+let harness_modules = [ "Ll_test"; "Ll_builders" ]
+
+(** The harness's sources, relative to the workspace root, in the order the second includes the
+    first. {!surface} classifies their top-level values. *)
+let harness_sources = [ "test/support/ll_builders.ml"; "test/support/ll_test.ml" ]
+
+type surface = { ir : Set.M(String).t; other : Set.M(String).t }
+
+let rec head = function Longident.Lident s -> s | Ldot (p, _) | Lapply (p, _) -> head p
+
+(** [surface sources] splits the harness's top-level values into its IR surface and the rest,
+    DERIVED from their definitions rather than listed, so the next helper added to [Ll_test] lands
+    in the right class without anyone deciding it: a value is IR when its definition mentions a
+    module path rooted at [Ir] (or an alias of one, [module LL = Ir.Low_level]) anywhere — body,
+    type annotation, record field — or calls an IR value defined before it, unshadowed. That puts
+    every builder, traversal and pipeline helper in [ir] ([tick] only through [add]/[c]/[embed]),
+    and leaves the operand-data helpers ([cycle], [cycle_flat], [weighted], [drift], [flat]) and the
+    value checks ([blank], [close], [same]) in [other]: integer and float arithmetic with no IR in
+    it. A local binding shadows an IR name ([cycle_flat]'s [show set]) and does not count as a call.
+    A group of recursive bindings is classified together. *)
+let surface sources =
+  let ir_modules = Hash_set.of_list (module String) [ "Ir" ] in
+  let ir = Hash_set.create (module String) and all = Hash_set.create (module String) in
+  let vars_in iterate =
+    let found = Hash_set.create (module String) in
+    let collector =
+      object
+        inherit Ast_traverse.iter as super
+
+        method! pattern p =
+          (match p.ppat_desc with Ppat_var { txt; _ } -> Hash_set.add found txt | _ -> ());
+          super#pattern p
+      end
+    in
+    iterate collector;
+    found
+  in
+  List.iter sources ~f:(fun source ->
+      List.iter (Text.structure_of source) ~f:(fun item ->
+          match item.pstr_desc with
+          | Pstr_module
+              {
+                pmb_name = { txt = Some alias; _ };
+                pmb_expr = { pmod_desc = Pmod_ident { txt; _ }; _ };
+                _;
+              }
+            when Hash_set.mem ir_modules (head txt) ->
+              Hash_set.add ir_modules alias
+          | Pstr_value (_, bindings) ->
+              let names = vars_in (fun c -> List.iter bindings ~f:(fun b -> c#pattern b.pvb_pat)) in
+              let local =
+                vars_in (fun c -> List.iter bindings ~f:(fun b -> c#expression b.pvb_expr))
+              in
+              let reaches = ref false in
+              let walker =
+                object
+                  inherit Ast_traverse.iter as super
+                  method! longident l = if Hash_set.mem ir_modules (head l) then reaches := true
+
+                  method! expression e =
+                    (match e.pexp_desc with
+                    | Pexp_ident { txt = Lident name; _ }
+                      when Hash_set.mem ir name && not (Hash_set.mem local name) ->
+                        reaches := true
+                    | _ -> ());
+                    super#expression e
+                end
+              in
+              List.iter bindings ~f:walker#value_binding;
+              Hash_set.iter names ~f:(fun name ->
+                  Hash_set.add all name;
+                  if !reaches then Hash_set.add ir name)
+          | _ -> ()));
+  let ir = Set.of_list (module String) (Hash_set.to_list ir) in
+  { ir; other = Set.diff (Set.of_list (module String) (Hash_set.to_list all)) ir }
+
+(** [uses_surface ~surface source]: whether the test calls an IR value of the harness — through a
+    qualifier naming a harness module or an alias of one ([Ll_test.set], [module B = Ll_builders]
+    then [B.loop_n]), or unqualified within the scope of an [open]/[include] of one. Scoped the way
+    the language scopes it: a structure-level open governs the items after it, an expression-level
+    one its body. An unqualified name the file binds anywhere for itself is not credited, so a local
+    [set] under an [open Ll_test] is not taken for the builder — erring toward reporting debt, the
+    direction the ratchet exists to keep honest. *)
+let uses_surface ~surface source =
+  let structure = Text.structure_of source in
+  let roots = Hash_set.create (module String) in
+  List.iter harness_modules ~f:(fun target ->
+      Hash_set.iter (Text.module_aliases ~target structure) ~f:(Hash_set.add roots));
+  let resolves module_expr =
+    Option.value_map (Text.module_source_name module_expr) ~default:false ~f:(Hash_set.mem roots)
+  in
+  let bound = Text.names_bound_anywhere structure in
+  let found = ref false in
+  let walker =
+    object (self)
+      inherit [bool] Ast_traverse.map_with_context as super
+
+      method! structure opened items =
+        ignore
+          (List.fold items ~init:opened ~f:(fun opened item ->
+               ignore (self#structure_item opened item : structure_item);
+               match item.pstr_desc with
+               | Pstr_open { popen_expr; _ } when resolves popen_expr -> true
+               | Pstr_include { pincl_mod; _ } when resolves pincl_mod -> true
+               | _ -> opened));
+        items
+
+      method! expression opened e =
+        match e.pexp_desc with
+        | Pexp_open ({ popen_expr; _ }, body) when resolves popen_expr ->
+            ignore (self#expression true body : expression);
+            e
+        | Pexp_ident { txt = Lident name; _ } ->
+            if opened && Set.mem surface.ir name && not (Set.mem bound name) then found := true;
+            e
+        | Pexp_ident { txt = Ldot (qualifier, name); _ } ->
+            if Set.mem surface.ir name && Hash_set.mem roots (Longident.last_exn qualifier) then
+              found := true;
+            e
+        | _ -> super#expression opened e
+    end
+  in
+  ignore (walker#structure false structure : structure);
+  !found
 
 let constructors source =
   let names = ref [] and records = ref [] in
@@ -274,11 +408,22 @@ let ownership ~sources ~dune_files =
   (is_linked, problems @ List.rev !copy_errors @ input_errors)
 
 let violations ~exemptions rows =
-  let debt = List.filter rows ~f:(fun (_, counts, linked) -> needs_harness counts && not linked) in
+  let debt =
+    List.filter rows ~f:(fun (_, counts, adoption) ->
+        needs_harness counts && match adoption with Adopted -> false | _ -> true)
+  in
   let missing =
-    List.filter_map debt ~f:(fun (path, counts, _) ->
+    List.filter_map debt ~f:(fun (path, counts, adoption) ->
         match List.find exemptions ~f:(fun (name, _, _) -> String.equal name path) with
-        | None -> Some (path ^ ": requires ll_test or a named migration exemption")
+        | None -> (
+            match adoption with
+            | Linked_unused ->
+                Some
+                  (path
+                 ^ ": links ll_test but calls none of its IR surface, so its hand-built Low_level \
+                    is still debt; use the harness's builders or name a migration exemption")
+            | Unlinked | Adopted -> Some (path ^ ": requires ll_test or a named migration exemption")
+            )
         | Some (_, Permanent, _) -> None
         | Some (_, Migration cap, _) ->
             if counts.records <= cap.records && counts.traversals <= cap.traversals then None

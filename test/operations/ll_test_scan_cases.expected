@@ -9,12 +9,25 @@ derived constructor membership includes a new inline-record constructor: true
 constructors in unrelated nested type declarations do not widen the census: true
 nested private walkers are counted once, not again through their parent: true
 a walker inside a local module is not counted through its recursive parent: true
+the IR surface is derived: builders and their callers are in it, an operand helper is not: true
+a local binding that shadows a builder is not a call into the IR surface: true
+a type annotation through an Ir alias puts a value in the IR surface: true
+a qualified builder call uses the IR surface: true
+linking for an operand helper alone uses nothing of the IR surface: true
+an alias of the harness reaches the IR surface: true
+an alias of the public builder tier reaches the IR surface: true
+an unqualified builder counts only under an open of the harness: true
+a local open covers its body alone: true
+a name the file binds for itself is not taken for the builder under an open: true
 a sibling stanza's harness does not cover this module: true
 default module membership links the owning harness: true
 ordered-set exclusion prevents harness membership: true
 a new subdirectory in either package is in scope: true
 shipping scanner refuses the first unlinked record builder: true
 shipping scanner accepts adoption without golden churn: true
+shipping scanner prints the derived operand helpers that adopt nothing: true
+linking ll_test for an operand helper alone retires nothing: true
+a linked-but-unused file is held to its migration row: true
 both select arms inherit the generated target module's harness: true
 default module ownership includes select targets, not arm basenames: true
 a sibling harness cannot cover the selected real source: true

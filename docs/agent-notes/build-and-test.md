@@ -1144,10 +1144,11 @@ that they earn a lookup rather than always-loaded space.
   trailing run of the length's factors (unflattening), a key computed outside the closure, and
   mixers other than a remainder. A converted site keeps its values, so a golden moves only where
   the guard fires; the conversion found one blind term, `schedule_mma_matmul`'s tf32 perturbation
-  at modulus 3 over a `k = 24` row, which took `~radix:2`. Converting links `ll_test`, which
-  retires that file's `ll_test_ratchet` migration row in the same change. `operand_key_scan_cases`
-  puts each spelling beside its nearest legitimate text and drives the shipping scanner over a
-  synthetic tree holding the blind fixture it must refuse.
+  at modulus 3 over a `k = 24` row, which took `~radix:2`. Converting links `ll_test`, which does
+  NOT retire an `ll_test_ratchet` row: linking for an operand helper is not adoption
+  (gh-ocannl-1052). `operand_key_scan_cases` puts each spelling beside its nearest legitimate
+  text and drives the shipping scanner over a synthetic tree holding the blind fixture it must
+  refuse.
 - Dune roots at the OUTERMOST ancestor holding a `dune-workspace` (failing that, a `dune-project`)
   and ignores dot-directories, so from a worktree under `.claude/worktrees/` the main checkout wins
   and the worktree is invisible to dune: targeted commands fail with `Don't know about directory
@@ -2730,6 +2731,15 @@ that they earn a lookup rather than always-loaded space.
   globs/dynamic inputs and inputs outside the declared test corpus are refused explicitly. Documented
   `test/ppx/*_expected.ml` goldens are not implementation modules and are excluded; arbitrary unowned
   sources remain checked. The `scans` aggregate runs the shipping scanner and its control suite.
+  Adoption is linking the harness AND calling its IR surface (gh-ocannl-1052): a link made for an
+  operand helper (`Ll_test.cycle`) had retired rows whose hand-built IR never moved, which is the
+  general trap of a ratchet whose adoption test is a proxy — the proxy spreads for other reasons. The
+  surface is DERIVED from `ll_builders.ml`/`ll_test.ml`: a value whose definition mentions an
+  `Ir`-rooted path (or an alias of one), or calls a surface value defined before it unshadowed, is
+  IR; the rest (`cycle`, `weighted`, `blank`, ...) is printed in the golden, so a new helper's class
+  shows in review. A use is a qualified call through a harness module or an alias of one, or an
+  unqualified one under an `open`/`include` in its scope, minus names the file binds itself. A linked
+  source that calls nothing of it gets its own refusal and still needs a migration row.
 
 - Pure IR node, index, statement and scalar builders live in public `arrayjit.ll_builders`
   (gh-ocannl-954), re-exported unchanged by `Ll_test`. Every Dune consumer spells the public name,
