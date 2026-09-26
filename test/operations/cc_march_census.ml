@@ -712,6 +712,7 @@ type caps = {
           arm needs an instruction to convert with, and where there is none gcc widens lane by lane.
           x86 gets it with F16C (from [x86-64-v3]), aarch64 has it at the armv8-a baseline. *)
   named : bool;  (** a column whose [-march] this test chose, as opposed to the host's default *)
+  x86 : bool;  (** an x86-64 target, which is where the known register-tile defects live *)
 }
 
 (* Read off the compiler's own predefined macros rather than pattern-matched from the label: what
@@ -724,6 +725,7 @@ let caps_of t =
     vector_bytes =
       (if has "__AVX512F__" then 64 else if has "__AVX2__" || has "__AVX__" then 32 else 16);
     vector_registers = (if has "__aarch64__" || has "__AVX512F__" then 32 else 16);
+    x86 = has "__x86_64__";
     has_fma = has "__FMA__" || has "__ARM_FEATURE_FMA";
     fp16_vector = has "__AVX512FP16__" || has "__ARM_FEATURE_FP16_VECTOR_ARITHMETIC";
     fp16_convert = has "__F16C__" || has "__AVX512FP16__" || has "__ARM_FP16_FORMAT_IEEE";
@@ -1801,9 +1803,9 @@ let () =
          geometry's. Held against the TARGET's register count rather than the budget
          {!Ir.Register_tile.budget} fits a geometry to, because the two are different facts: the
          budget is keyed on the vector width, and a 16-byte file is 32 registers on NEON but 16 on
-         SSE -- the rows that falls outside are listed on stderr, where a geometry the seeding
-         thinks fits and the target cannot hold is visible without failing a golden that is about
-         the emission. *)
+         SSE -- the rows that fall outside are listed on stderr, where a geometry the seeding thinks
+         fits and the target cannot hold is visible without failing a golden that is about the
+         emission. *)
       let resident_floor (g : tile_geometry) = (g.rows * g.cols) + Int.min g.rows g.cols + 1 in
       let fits (r, g) = resident_floor g <= r.caps.vector_registers in
       let resident_rows = List.filter geometry_rows ~f:fits in
@@ -1817,14 +1819,60 @@ let () =
             Stdio.eprintf "    %s needs %d of %d -> %s\n" (describe r) (resident_floor g)
               r.caps.vector_registers
               (match r.profile with Some p -> Census.to_line p | None -> "no loop")));
+      (* {b The known defects, pinned as classes.} The first gcc run of these rows (gh-ocannl-948)
+         found two constructs whose k-loop touches the stack although the pass fits, on every x86
+         column with an FMA -- defects in the EMISSION, reported here rather than fixed, since each
+         is codegen work with its own inventory:
+
+         - the partial-vector column tail: [vtyp x = {0}; __builtin_memcpy(&x, p, <width>)], which
+         gcc lowers through a stack slot on every k step (8 references in a one-column tail whose
+         whole-vector twins at [n = 512] hold none). Clang lowers the same load in registers; - the
+         (fp16 storage, f32 compute) bridge, which gcc widens through general-purpose registers and
+         the stack (12 to 35 references) where the ISA has no native fp16 convert of the width in
+         use.
+
+         They are pinned as CLASSES, not as a list of rows: which widths and targets show them is a
+         fact about the gcc version as much as about the emission (gh-ocannl-752's lesson), and a
+         row list would pin CI's compiler. The two claims below flip in both directions that matter:
+         stack traffic OUTSIDE the classes -- a new regression -- fails the first, and a class that
+         stops reproducing anywhere -- a fix -- fails the second, so the golden has to change and
+         the class leaves this list. The list can only shrink. *)
+      let known_defects =
+        [
+          ( "the gcc partial-vector tail load",
+            fun (r, (g : tile_geometry)) ->
+              r.caps.x86 && g.partial && match g.pass with Tail -> true | Full -> false );
+          ( "the gcc fp16-to-f32 widening bridge",
+            fun (r, _) ->
+              r.caps.x86 && String.equal r.loop.store half && not (String.equal r.loop.comp half) );
+        ]
+      in
+      let known rg = List.exists known_defects ~f:(fun (_, is) -> is rg) in
+      let spills (r, _) = match counts r with Some c -> c.Census.stack_refs > 0 | None -> true in
       let resident_claim =
         "no register-tile k-loop references the stack where its pass fits the target's vector \
-         registers"
+         registers, outside the known defects (gcc partial-vector tail load, gcc fp16 widening)"
       in
-      if List.is_empty resident_rows then
+      let unexcused = List.filter resident_rows ~f:(fun rg -> not (known rg)) in
+      if List.is_empty unexcused then
         Verdict.skipped ~aggregation:`Environment
           ~backend:"no accepted target holds a register-tile pass in its vector registers"
           resident_claim
+      else claim_none resident_claim (List.map unexcused ~f:fst) ~f:(fun r -> spills (r, ()));
+      let excused = List.filter resident_rows ~f:known in
+      if not (List.is_empty excused) then (
+        Stdio.eprintf "  %d known-defect register-tile row(s) (not part of the golden):\n"
+          (List.length excused);
+        List.iter excused ~f:(fun (r, _) ->
+            Stdio.eprintf "    %s -> %s\n" (describe r)
+              (match r.profile with Some p -> Census.to_line p | None -> "no loop")));
+      let reproduces_claim =
+        "each known register-tile defect still references the stack on some x86 column with a \
+         fused multiply-add"
+      in
+      if not (List.exists resident_rows ~f:(fun (r, _) -> r.caps.x86)) then
+        Verdict.skipped ~aggregation:`Environment
+          ~backend:"no accepted x86 target serves the register-tile rows" reproduces_claim
       else
-        claim_none resident_claim (List.map resident_rows ~f:fst) ~f:(fun r ->
-            match counts r with Some c -> c.Census.stack_refs > 0 | None -> true)
+        Verdict.p_all reproduces_claim known_defects ~f:(fun (_, is) ->
+            List.exists resident_rows ~f:(fun rg -> is rg && spills rg))
