@@ -13,7 +13,11 @@
    compiler command ([-D__FAST_MATH__], the state plain [-ffast-math] leaves the compiler in) and
    this test checks that the forcing took: libmvec must be mapped into the process after the kernel
    loaded, and must not have been before it. That leg is gated on Linux with a glibc libmvec beside
-   the process's libm; elsewhere the load-and-run claims still execute, with nothing to force. *)
+   the process's libm AND a gcc compiler command: clang does not route [expf] to libmvec unless
+   asked ([-fveclib=libmvec]), so under clang the kernel rightly keeps its scalar calls. The gate is
+   the compiler's identity rather than whether the artifact happened to reference [_ZGV*], so that
+   under gcc a loop that stopped vectorizing fails the claim instead of skipping it. Elsewhere the
+   load-and-run claims still execute, with nothing to force. *)
 
 open Base
 open Ocannl.Operation.DSL_modules
@@ -47,6 +51,20 @@ let libmvec_unmapped maps =
   let paths = mapped_paths maps in
   (not (List.is_empty paths)) && not (List.exists paths ~f:is_libmvec)
 
+(* Whether the configured compiler command is gcc: it predefines [__GNUC__] without [__clang__]
+   (which clang, and the compilers built on it, define beside [__GNUC__]). Asked only on Linux,
+   where the shell spelling below holds. *)
+let compiler_is_gcc () =
+  match Utils.get_global_arg ~default:"" ~arg_name:"cc_backend_compiler_command" with
+  | "" -> false
+  | command ->
+      let defines macro =
+        Stdlib.Sys.command
+          (Printf.sprintf "%s -dM -E - </dev/null 2>/dev/null | grep -q '#define %s '" command macro)
+        = 0
+      in
+      defines "__GNUC__" && not (defines "__clang__")
+
 let () =
   let before = maps () in
   let ctx = Context.auto () in
@@ -65,10 +83,12 @@ let () =
      on that and a tight one on anything other than [exp]. *)
   p_all2 "kernel loaded and computed exp to 1e-5 relative" got want ~f:(fun g w ->
       Float.(abs (g - w) <= 1e-5 * w));
-  let on_glibc = match before with Some m -> libmvec_available m | None -> false in
-  gated ~aggregation:`Environment ~when_:on_glibc ~on:"no glibc libmvec"
+  let gcc_on_glibc =
+    (match before with Some m -> libmvec_available m | None -> false) && compiler_is_gcc ()
+  in
+  gated ~aggregation:`Environment ~when_:gcc_on_glibc ~on:"no glibc libmvec with gcc"
     "libmvec unmapped before the kernel loaded"
     (match before with Some m -> libmvec_unmapped m | None -> false);
-  gated ~aggregation:`Environment ~when_:on_glibc ~on:"no glibc libmvec"
+  gated ~aggregation:`Environment ~when_:gcc_on_glibc ~on:"no glibc libmvec with gcc"
     "libmvec mapped after the kernel loaded (the vector variant was reached)"
     (match after with Some m -> libmvec_mapped m | None -> false)
