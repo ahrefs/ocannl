@@ -127,6 +127,16 @@
 #  57. every tracked ocannl_config naming a backend is one the kind is read from.
 #  58. the readers fleet-slot-run.sh builds are test/config's: ocannl_read_config
 #      answers --read=backend, ocannl_slot_kind asks Test_utils.Slot_kind.
+#  59-62 sit after leg 47: the source a run tested, recorded at launch
+#      (gh-ocannl-992), against a committed fixture checkout.
+#  59. a clean checkout records its HEAD as `head` and an empty `dirty`.
+#  60. a dirty one lists a modified tracked path and an untracked one (the
+#      latter although the checkout's config hides untracked files), and the
+#      launch leaves the checkout's index as it found it.
+#  61. an inherited GIT_DIR/GIT_WORK_TREE naming another repository does not
+#      redirect the record.
+#  62. outside Git, and in a copy sitting below a checkout's top level, neither
+#      file is recorded and the run launches as before.
 
 set -u
 
@@ -3046,6 +3056,122 @@ if diff -r "$TMP/lifecycle-before" "$life_root" >"$TMP/lifecycle-tree.diff"; the
   report 0 'lifecycle: every launch and recovery leaves the source tree byte-identical'
 else report 1 'lifecycle: every launch and recovery leaves the source tree byte-identical' "$(cat "$TMP/lifecycle-tree.diff")"; fi
 lifecycle_cleanup
+
+# ---------------------------------------------------------------------------
+# Legs 59-62: the source a run tested, recorded at launch (gh-ocannl-992)
+# ---------------------------------------------------------------------------
+# A fixture checkout of the staged script, committed, then launched clean and
+# dirty; the lifecycle fixture's fake dune does the running. Git's system and
+# global configuration are kept out of both the fixture's own git calls and the
+# launches (neither variable is one the shipping script drops), so a user's
+# hooks, signing or line-ending settings cannot move a verdict.
+if ! command -v git >/dev/null 2>&1; then
+  skip 'checkout: head and dirty recorded at launch (legs 59-62)' 'no git on PATH'
+else
+  ck_git() { GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git "$@"; }
+  ck_runs=$TMP/checkout-runs
+  ck_launch() { # <fixture root>; sets ck_rc and ck_dir, the run it recorded
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null OCANNL_TOOL_TEST_RUNS=$ck_runs \
+      PATH=$life_bin:$PATH "$1/tools/test-run.sh" run --cap 30 ok \
+      >"$TMP/checkout.out" 2>"$TMP/checkout.err"
+    ck_rc=$?
+    ck_dir=$(OCANNL_TOOL_TEST_RUNS=$ck_runs "$1/tools/test-run.sh" paths run last) || ck_dir=
+  }
+  ck_stage() { # <root>: the script and what it sources, nothing else
+    mkdir -p "$1/tools" "$1/scripts" || exit 2
+    cp "$SRC" "$1/tools/test-run.sh" || exit 2
+    stage_sourced "$1"
+    chmod +x "$1/tools/test-run.sh"
+  }
+  ck_init() { # <root>: a committed checkout with local identity and settings
+    ck_git init -q "$1" &&
+      ck_git -C "$1" config user.name harness &&
+      ck_git -C "$1" config user.email harness@invalid &&
+      ck_git -C "$1" config commit.gpgsign false &&
+      ck_git -C "$1" config core.autocrlf false &&
+      ck_git -C "$1" add -A &&
+      ck_git -C "$1" commit -q --no-verify -m fixture
+  }
+  ck_root=$TMP/checkout-repo
+  ck_stage "$ck_root"
+  printf 'first\n' >"$ck_root/NOTES"
+  printf 'unchanged\n' >"$ck_root/README"
+  ck_init "$ck_root" >/dev/null 2>&1 || { report 1 'checkout: fixture repository'; exit 1; }
+  ck_head=$(ck_git -C "$ck_root" rev-parse HEAD)
+
+  # Leg 59: a clean checkout records its HEAD and an EMPTY dirty record.
+  ck_launch "$ck_root"
+  if [ "$ck_rc" = 0 ] && [ -n "$ck_dir" ] \
+     && [ "$(cat "$ck_dir/head" 2>/dev/null)" = "$ck_head" ] \
+     && [ -f "$ck_dir/dirty" ] && [ ! -s "$ck_dir/dirty" ]; then
+    report 0 'checkout: a clean launch records its HEAD and an empty dirty record'
+  else
+    report 1 'checkout: a clean launch records its HEAD and an empty dirty record' \
+      "exit $ck_rc; run ${ck_dir:-?}; head $(cat "$ck_dir/head" 2>&1) (want $ck_head); dirty: $(cat "$ck_dir/dirty" 2>&1)"
+  fi
+
+  # Leg 60: a modified tracked file and an untracked one are both on record,
+  # the latter although the checkout's own config hides untracked files; and
+  # the launch leaves the index as it found it, although README's stat data
+  # is stale there -- the refresh an ordinary `git status` would write back.
+  printf 'second\n' >>"$ck_root/NOTES"
+  printf 'let () = ()\n' >"$ck_root/new_test.ml"
+  ck_git -C "$ck_root" config status.showUntrackedFiles no
+  touch -t 200001010000 "$ck_root/README"
+  ck_index=$(ck_git -C "$ck_root" rev-parse --git-path index)
+  case $ck_index in /*) ;; *) ck_index=$ck_root/$ck_index ;; esac
+  ck_index_before=$(cksum <"$ck_index")
+  ck_launch "$ck_root"
+  if [ "$ck_rc" = 0 ] && [ "$(cat "$ck_dir/head" 2>/dev/null)" = "$ck_head" ] \
+     && grep -Fqx ' M NOTES' "$ck_dir/dirty" && grep -Fqx '?? new_test.ml' "$ck_dir/dirty" \
+     && [ "$(wc -l <"$ck_dir/dirty" | tr -d ' ')" = 2 ]; then
+    report 0 'checkout: a dirty launch records every uncommitted path, untracked ones included'
+  else
+    report 1 'checkout: a dirty launch records every uncommitted path, untracked ones included' \
+      "exit $ck_rc; head $(cat "$ck_dir/head" 2>&1) (want $ck_head); dirty: $(cat "$ck_dir/dirty" 2>&1)"
+  fi
+  if [ "$(cksum <"$ck_index")" = "$ck_index_before" ]; then
+    report 0 "checkout: recording the dirty state leaves the checkout's index untouched"
+  else
+    report 1 "checkout: recording the dirty state leaves the checkout's index untouched" \
+      "index checksum $ck_index_before became $(cksum <"$ck_index")"
+  fi
+
+  # Leg 61: a launch that inherits another repository's GIT_DIR/GIT_WORK_TREE
+  # (as from inside a git hook) still records the checkout it tests.
+  ck_other=$TMP/checkout-other
+  mkdir -p "$ck_other"
+  printf 'other\n' >"$ck_other/NOTES"
+  ck_init "$ck_other" >/dev/null 2>&1 || { report 1 'checkout: second fixture repository'; exit 1; }
+  GIT_DIR=$ck_other/.git GIT_WORK_TREE=$ck_other ck_launch "$ck_root"
+  if [ "$ck_rc" = 0 ] && [ "$(cat "$ck_dir/head" 2>/dev/null)" = "$ck_head" ] \
+     && grep -Fqx ' M NOTES' "$ck_dir/dirty"; then
+    report 0 "checkout: an inherited GIT_DIR naming another repository does not redirect the record"
+  else
+    report 1 "checkout: an inherited GIT_DIR naming another repository does not redirect the record" \
+      "exit $ck_rc; head $(cat "$ck_dir/head" 2>&1) (want $ck_head, not $(ck_git -C "$ck_other" rev-parse HEAD))"
+  fi
+
+  # Leg 62: neither record where the script's root is not a checkout's top
+  # level -- outside Git (the lifecycle fixture), and a copy sitting below the
+  # checkout above, whose HEAD describes a different tree -- and the run is
+  # launched and judged as before.
+  ck_detail=
+  life_capture run --cap 30 ok
+  life_run=$(life paths run last)
+  { [ "$life_rc" = 0 ] && [ ! -e "$life_run/head" ] && [ ! -e "$life_run/dirty" ]; } ||
+    ck_detail="outside Git: exit $life_rc; $(ls "$life_run" 2>&1 | tr '\n' ' ')"
+  ck_stage "$ck_root/nested"
+  ck_launch "$ck_root/nested"
+  { [ "$ck_rc" = 0 ] && [ -n "$ck_dir" ] && [ ! -e "$ck_dir/head" ] && [ ! -e "$ck_dir/dirty" ]; } ||
+    ck_detail="$ck_detail${ck_detail:+; }below the top level: exit $ck_rc; $(ls "$ck_dir" 2>&1 | tr '\n' ' ')"
+  if [ -z "$ck_detail" ]; then
+    report 0 "checkout: a root that is not a checkout's top level records neither, and still runs"
+  else
+    report 1 "checkout: a root that is not a checkout's top level records neither, and still runs" "$ck_detail"
+  fi
+  lifecycle_cleanup
+fi
 
 # ---------------------------------------------------------------------------
 # Legs 53-58: the fleet's run-time slot, taken by the runner (gh-ocannl-1004)
