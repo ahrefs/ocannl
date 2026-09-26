@@ -46,14 +46,19 @@ let coverage ~m ~n t =
 (* Per unit of m*k, in vector-issue slots: one fused FMA per vector column, plus the B row loads
    (1/rm of one per FMA) and the A splats (1/rn). The columns the width does not cover are a
    narrower tile of [tail_widths] vector columns (gh-ocannl-620) -- whole issues at less A-reuse,
-   the last of them possibly partial -- never scalar code, so there is no fitted constant to
-   carry. *)
+   the last of them possibly partial -- never scalar code, so there is no fitted constant to carry.
+
+   Summed over the site, that is [ceil(n / lanes) * (1 + 1/rm)] for the vector columns -- the same
+   count whatever [rn] is, the tail's partial vector being a whole issue -- plus one A splat per row
+   per PASS, i.e. [ceil(n / (rn * lanes))] once divided by the [rm] rows: the full passes, and the
+   tail pass if there is one. Scaled by [rm] it is an integer, and it is computed as one: in floats
+   the [1/rn] and [1/rm] terms of two candidates the model prices EQUALLY differ in their last bits,
+   which decided such ties by rounding rather than by the documented tie-break -- at rm = 3 or 1 (m
+   < 4), on 16- and 64-byte files, the tail-bearing [rn] beat the tail-free one it tied
+   (gh-ocannl-947). Every candidate [default] ranks shares [rm], so the scaling ranks the same. *)
 let cost ~n ~rm ~lanes ~rn =
-  let per_column rn = 1. +. (1. /. Float.of_int rm) +. (1. /. Float.of_int rn) in
-  let { n_full; tail_widths; _ } = coverage ~m:rm ~n { rm; rn; lanes } in
-  let rn_tail = List.length tail_widths in
-  (Float.of_int (n_full / lanes) *. per_column rn)
-  +. if rn_tail = 0 then 0. else Float.of_int rn_tail *. per_column rn_tail
+  let ceil_div a b = (a + b - 1) / b in
+  (ceil_div n lanes * (rm + 1)) + (rm * ceil_div n (rn * lanes))
 
 let default ~vector_bytes ~elt_bytes ~m ~n =
   if m < 1 || n < 1 then None
@@ -69,7 +74,7 @@ let default ~vector_bytes ~elt_bytes ~m ~n =
         (* Ties go to the wider vector (more work per issue), then to the tail-free tile (one tile
            body rather than two), then to the larger tile (more A-reuse). *)
         match
-          Float.compare
+          Int.compare
             (cost ~n ~rm ~lanes:t1.lanes ~rn:t1.rn)
             (cost ~n ~rm ~lanes:t2.lanes ~rn:t2.rn)
         with
