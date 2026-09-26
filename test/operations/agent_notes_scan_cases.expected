@@ -185,6 +185,16 @@ ok: index -- the same bullet in two files
 ok: index -- the same bullet re-wrapped
 ok: index -- two bullets opening alike and diverging
 ok: index -- two bullets that merely start with the same few words
+ok: guide -- a pointer to a heading its note has
+ok: guide -- a pointer to a heading its note lacks
+ok: guide -- a pointer to a heading only another note has
+ok: guide -- a pointer spelled through docs/agent-notes/
+ok: guide -- a pointer into the index itself
+ok: guide -- a bare basename that is no note
+ok: guide -- a path outside the notes is not a pointer into them
+ok: guide -- a pointer set in a code span is still a pointer
+ok: guide -- a placeholder names no anchor
+ok: guide -- two pointers on one line are each checked
 ok: unnamed rule -- a finding the list does not name survives the report, last
 ok: unnamed rule -- the census reports it, and not the named one beside it
 ok: unnamed rule -- a named finding leaves the census empty

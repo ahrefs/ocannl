@@ -22,7 +22,7 @@
     in [test/operations/agent_notes_scan_cases.ml] exercise the same functions the live-tree scan in
     [test/operations/agent_notes_structure.ml] runs over the repository.
 
-    {1 The six rules}
+    {1 The seven rules}
 
     Each is stated as the thing that must be TRUE, and each finding names the rule that failed.
 
@@ -56,6 +56,12 @@
       silently resolves against whichever repository renders the note; [staging#NNN],
       [gh-ocannl-NNN] and [ahrefs/ocannl#NNN] do not. Inline code, fenced blocks, comments and
       identifier-attached hashes are inert to this rule.
+    - {b guide-anchors}: every [<note>.md#<anchor>] pointer in the agent guide ([AGENTS.md]) names a
+      notes file and a heading that file has. The guide keeps a rule and points at its mechanism; a
+      note long enough to need sections is useless to a pointer naming only the file, and a heading
+      renamed under an anchored pointer strands every rule pointing at it (gh-ocannl-1044). A bare
+      basename is a notes file; a path through [docs/agent-notes/] is resolved the same way, and a
+      path anywhere else is not a pointer into the notes and is not read.
 
     {1 What it deliberately does not read}
 
@@ -102,8 +108,9 @@ let rule_table_shape = "table-shape"
 let rule_reachability = "reachability"
 let rule_no_repetition = "no-repetition"
 let rule_qualified_citations = "qualified-citations"
+let rule_guide_anchors = "guide-anchors"
 
-(** All six, in the order the live-tree scan reports them.
+(** All seven, in the order the live-tree scan reports them.
 
     This list stands in for a protocol -- "the rules this scan has" -- that nothing else states, so
     the two ways it can part from the rules are both checked rather than assumed (gh-ocannl-706).
@@ -118,6 +125,7 @@ let rules =
     rule_reachability;
     rule_no_repetition;
     rule_qualified_citations;
+    rule_guide_anchors;
   ]
 
 let names_a_rule r = List.mem rules r ~equal:String.equal
@@ -1610,6 +1618,86 @@ let check_citations ~file contents =
       find 0 [])
 
 (* ------------------------------------------------------------------ *)
+(* Rule 7: the agent guide's anchored pointers resolve *)
+(* ------------------------------------------------------------------ *)
+
+type pointer = { pointer_line : int; path : string; anchor : string }
+(** One [<path>.md#<anchor>] occurrence in the guide, as written: [path] includes the [.md]. *)
+
+let path_char c = Char.is_alphanum c || List.mem [ '_'; '-'; '.'; '/' ] c ~equal:Char.equal
+let anchor_char c = Char.is_alphanum c || Char.equal c '_' || Char.equal c '-'
+
+(** Every [<path>.md#<anchor>] in [contents], code spans included: a pointer set in backticks is
+    still a pointer. The path is the maximal run of path characters before [.md#] and the anchor the
+    maximal run of slug characters after it; a placeholder such as [<note>.md#<slug>] has an empty
+    one and is not a pointer. *)
+let guide_pointers contents =
+  List.concat_map (lines contents) ~f:(fun (lineno, line) ->
+      let n = String.length line in
+      String.substr_index_all line ~may_overlap:false ~pattern:".md#"
+      |> List.filter_map ~f:(fun i ->
+          let start = ref i in
+          while !start > 0 && path_char line.[!start - 1] do
+            Int.decr start
+          done;
+          let stop = ref (i + 4) in
+          while !stop < n && anchor_char line.[!stop] do
+            Int.incr stop
+          done;
+          let path = String.sub line ~pos:!start ~len:(i + 3 - !start) in
+          let anchor = String.sub line ~pos:(i + 4) ~len:(!stop - i - 4) in
+          if String.equal path ".md" || String.is_empty anchor then None
+          else Some { pointer_line = lineno; path; anchor }))
+
+(** The notes file a guide pointer names, keyed as {!check_index} keys [files], or [None] when the
+    path points outside the notes. A bare basename is a note, which is how the guide spells them; a
+    path is read relative to the repository root, where [docs/agent-notes/] holds the notes and
+    [docs/agent-notes.md] is the index. A leading [./] makes a path of a bare name, which is how a
+    root file such as [./CHANGES.md#…] is spelled. *)
+let pointer_target path =
+  let from_root path =
+    match String.chop_prefix path ~prefix:"docs/" with
+    | Some rest when String.is_prefix rest ~prefix:"agent-notes/" -> Some rest
+    | Some rest when String.equal rest "agent-notes.md" -> Some rest
+    | _ -> None
+  in
+  match String.chop_prefix path ~prefix:"./" with
+  | Some rest -> from_root rest
+  | None -> if String.mem path '/' then from_root path else Some ("agent-notes/" ^ path)
+
+(** Rule 7 over the agent guide. [files] is keyed as {!check_index} describes; the index is looked
+    up beside them, so a pointer at [docs/agent-notes.md#…] is checked against the index's headings.
+*)
+let check_guide ~guide_file ~guide_contents ~index_file ~index_contents
+    ~(files : (string * string) list) =
+  let known = (index_file, index_contents) :: files in
+  List.filter_map (guide_pointers guide_contents) ~f:(fun p ->
+      let report msg =
+        Some (finding ~file:guide_file ~line:p.pointer_line ~rule:rule_guide_anchors msg)
+      in
+      match pointer_target p.path with
+      | None -> None
+      | Some target -> (
+          match List.Assoc.find known target ~equal:String.equal with
+          | None ->
+              report
+                (Printf.sprintf
+                   "%s#%s names %s, which is not a notes file: a bare basename is read as a note \
+                    under docs/agent-notes/, so spell any other file with its directory, ./ for \
+                    one at the root"
+                   p.path p.anchor ("docs/" ^ target))
+          | Some contents ->
+              if List.exists (headings contents) ~f:(fun h -> String.equal (slug h) p.anchor) then
+                None
+              else
+                report
+                  (Printf.sprintf
+                     "%s#%s names a heading %s does not have: the rule pointing here has lost its \
+                      mechanism -- restore the heading or re-point the rule (grep -n '^#' %s lists \
+                      them)"
+                     p.path p.anchor ("docs/" ^ target) ("docs/" ^ target))))
+
+(* ------------------------------------------------------------------ *)
 (* The whole scan *)
 (* ------------------------------------------------------------------ *)
 
@@ -1628,10 +1716,11 @@ let in_rule_order found =
   List.concat_map rules ~f:(fun r -> List.filter named ~f:(fun f -> String.equal f.rule r))
   @ unnamed
 
-(** Every rule, over an index and the files it indexes. Findings come back in {!in_rule_order} --
+(** Every rule, over an index and the files it indexes, and over the agent guide's pointers into
+    them when [guide] — [(name, contents)] — is given. Findings come back in {!in_rule_order} --
     grouped by rule in {!rules} order, and within a rule in file and line order, with any finding
     carrying an unnamed rule last. [files] is keyed as {!check_index} describes. *)
-let check_all ~index_file ~index_contents ~(files : (string * string) list) =
+let check_all ?guide ~index_file ~index_contents ~(files : (string * string) list) () =
   let all = (index_file, index_contents) :: files in
   let structure = List.concat_map all ~f:(fun (file, c) -> check_structure ~file c) in
   let table = List.concat_map all ~f:(fun (file, c) -> check_tables ~file c) in
@@ -1639,5 +1728,9 @@ let check_all ~index_file ~index_contents ~(files : (string * string) list) =
   let bullets = List.concat_map all ~f:(fun (file, c) -> bullets ~file c) in
   let repetition = check_repetition bullets in
   let citations = List.concat_map all ~f:(fun (file, c) -> check_citations ~file c) in
-  let found = structure @ table @ index @ repetition @ citations in
+  let guide =
+    Option.value_map guide ~default:[] ~f:(fun (guide_file, guide_contents) ->
+        check_guide ~guide_file ~guide_contents ~index_file ~index_contents ~files)
+  in
+  let found = structure @ table @ index @ repetition @ citations @ guide in
   (bullets, in_rule_order found)

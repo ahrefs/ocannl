@@ -5152,6 +5152,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  ../../AGENTS.md
   ../../docs/agent-notes.md
   (glob_files_rec ../../docs/agent-notes/*.md))
  (action

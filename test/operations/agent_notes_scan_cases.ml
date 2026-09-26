@@ -2,7 +2,7 @@
 
     The live-tree scan next door ([agent_notes_structure]) is green whenever the notes are intact,
     which is most days — and a check that is green because it sees nothing looks exactly like a
-    check that is green because everything holds. So each of the five rules is exercised here on
+    check that is green because everything holds. So each of the rules is exercised here on
     synthetic notes: a violation the rule must flag, and beside it the nearest legitimate text it
     must NOT, since a rule that fires on ordinary prose gets turned off rather than obeyed.
 
@@ -791,6 +791,49 @@ let index_cases =
       [] );
   ]
 
+(* Rule 7: the agent guide's anchored pointers into the notes (gh-ocannl-1044). Every case runs the
+   whole scan over one index, two clean notes and a guide, so a finding from any other rule would
+   show up too. The heading the pointers aim at lives in [a.md] only, and [b.md] has one of its own:
+   a reader that accepted a heading from ANY note would pass the "wrong note" case. *)
+let guide_notes =
+  [
+    ("agent-notes/a.md", file "## The Widget seam\n\n- A fact about `Widget`.\n");
+    ("agent-notes/b.md", file "## The Gadget seam\n\n- A fact about `Gadget`.\n");
+  ]
+
+let guide_index = index [ row "a.md" "the `Widget` seam"; row "b.md" "the `Gadget` seam" ]
+let guide line = "# OCANNL Agent Guide\n\n" ^ line ^ "\n"
+
+let guide_cases =
+  [
+    ( "a pointer to a heading its note has",
+      guide "- A rule; the mechanism: a.md#the-widget-seam.",
+      [] );
+    ( "a pointer to a heading its note lacks",
+      guide "- A rule; the mechanism: a.md#the-sprocket-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a pointer to a heading only another note has",
+      guide "- A rule; the mechanism: a.md#the-gadget-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a pointer spelled through docs/agent-notes/",
+      guide "- A rule (docs/agent-notes/b.md#the-gadget-seam).",
+      [] );
+    ("a pointer into the index itself", guide "- A rule (docs/agent-notes.md#agent-notes).", []);
+    ( "a bare basename that is no note",
+      guide "- A rule; the mechanism: c.md#the-widget-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a path outside the notes is not a pointer into them",
+      guide "- A rule; see docs/proposals/x.md#anything and ./CHANGES.md#unreleased.",
+      [] );
+    ( "a pointer set in a code span is still a pointer",
+      guide "- A rule; the mechanism: `a.md#the-sprocket-seam`.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ("a placeholder names no anchor", guide "- Pointers read `<note>.md#<anchor>`.", []);
+    ( "two pointers on one line are each checked",
+      guide "- Both a.md#the-widget-seam and b.md#the-widget-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+  ]
+
 (* The LEXICAL layer, tested directly rather than only through the rules above it.
 
    Round 3 was six findings and three of them were here -- code-span pairing, backslash parity, ATX
@@ -969,8 +1012,14 @@ let () =
       check ("citations -- " ^ name) expected
         (List.map (Notes.check_citations ~file:"f.md" body) ~f:render));
   List.iter index_cases ~f:(fun (name, index_contents, files, expected) ->
-      let _, found = Notes.check_all ~index_file:"agent-notes.md" ~index_contents ~files in
+      let _, found = Notes.check_all ~index_file:"agent-notes.md" ~index_contents ~files () in
       check ("index -- " ^ name) expected (List.map found ~f:render));
+  List.iter guide_cases ~f:(fun (name, guide_contents, expected) ->
+      let _, found =
+        Notes.check_all ~guide:("AGENTS.md", guide_contents) ~index_file:"agent-notes.md"
+          ~index_contents:guide_index ~files:guide_notes ()
+      in
+      check ("guide -- " ^ name) expected (List.map found ~f:render));
   (* gh-ocannl-706. A finding whose rule [Notes.rules] does not name -- a sixth rule written and not
      added to the list -- used to be dropped where the report is grouped by that list: the rule
      fired and nothing showed it. Put to the rule synthetically, since no fixture here can produce
@@ -997,6 +1046,7 @@ let () =
     @ List.concat_map table_cases ~f:(fun (_, _, e) -> e)
     @ List.concat_map index_cases ~f:(fun (_, _, _, e) -> e)
     @ List.concat_map citation_cases ~f:(fun (_, _, e) -> e)
+    @ List.concat_map guide_cases ~f:(fun (_, _, e) -> e)
     |> List.map ~f:rule_of_expectation
     |> List.dedup_and_sort ~compare:String.compare
   in
