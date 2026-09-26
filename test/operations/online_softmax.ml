@@ -95,8 +95,10 @@ let scans (o : LL.optimized) = scans_of o.LL.llc
 (* The nodes the optimized code writes that have two axes of extent [seq]: the attention's [seq,
    seq] intermediates (scores, probabilities) and nothing else in these models. *)
 let square_buffers (o : LL.optimized) =
-  Set.filter (LL.writes_of_stmt o.LL.llc) ~f:(fun tn ->
-      Array.count (Lazy.force tn.Tn.dims) ~f:(fun d -> d = seq) >= 2)
+  LL.affine_accesses o.LL.llc
+  |> List.filter_map ~f:(fun (a : Tn.t Ir.Affine.access) -> Option.some_if a.a_write a.a_tn)
+  |> Set.of_list (module Tn)
+  |> Set.filter ~f:(fun tn -> Array.count (Lazy.force tn.Tn.dims) ~f:(fun d -> d = seq) >= 2)
 
 type run = { values : float array; optimized : LL.optimized; raw : LL.t }
 
@@ -359,9 +361,31 @@ let () =
             ~a:(x, [| B.fixed 0 |])
             ~b:(x, [| B.fixed 0 |])
             LL.Noop
+      | `Scope_pure ->
+          (* A scope whose body reads nothing of the chain and writes only its own local. *)
+          let id = LL.get_scope v in
+          B.set_at y (B.fixed 0)
+            (LL.Local_scope
+               {
+                 id;
+                 orig_indices = [||];
+                 mint = LL.Inlined_computation;
+                 body = LL.Set_local (id, B.c 7.);
+               })
+      | `Scope_read_l ->
+          (* A scope whose body reads the normalizer. *)
+          let id = LL.get_scope v in
+          B.set_at y (B.fixed 0)
+            (LL.Local_scope
+               {
+                 id;
+                 orig_indices = [||];
+                 mint = LL.Inlined_computation;
+                 body = LL.Set_local (id, cell l);
+               })
       | `Scope_write ->
           (* A scope whose body writes a tensor: impure by the optimizer's contract, but the tier
-             runs ahead of that check and the write census does not enter scope bodies. *)
+             runs ahead of that check -- the census has to see the write inside the body. *)
           B.set_at y (B.fixed 0)
             (LL.Local_scope
                {
@@ -419,8 +443,12 @@ let () =
     (scans_of (rewritten [ `Opaque; `A_init; `A; `N; `E; `C_init; `C ]) = 1);
   p "staged code reachable only through a guard's condition inside the span is declined too"
     (declined [ `A_init; `A; `N; `Opaque_cond; `E; `C_init; `C ]);
-  p "a scope body inside the span is beyond the write census and declines the rewrite"
+  p "a scope body writing the scores inside the span is in the census and declines the rewrite"
     (declined [ `A_init; `A; `Scope_write; `N; `E; `C_init; `C ]);
+  p "a scope body reading the normalizer between the max and the sum is declined"
+    (declined [ `C_init; `A_init; `A; `Scope_read_l; `N; `E; `C ]);
+  p "a scope body inside the span touching nothing of the chain is no objection: the census sees it"
+    (scans_of (rewritten [ `A_init; `A; `Scope_pure; `N; `E; `C_init; `C ]) = 1);
   p "a whole-node zeroing of a normalizer wider than the reduction's cells is declined"
     (declined ~l_dims:[| 2 |] [ `A_init; `A; `N; `E; `C_init; `C ]);
   p "the same reduction with a cell-wise zeroing is accepted: the scan writes what the fill did"

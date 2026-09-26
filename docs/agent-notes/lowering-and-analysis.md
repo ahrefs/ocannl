@@ -229,7 +229,12 @@ files.
   `Affine.in_scope_body`, and "inside that setter's statement" is `Affine.within_statement`. Before
   the view, the footprint eligibility query, `template_leaves`, `computation_reads_merge` and
   `Online_softmax.has_opaque` each re-walked the raw code, and the effect each walk forgot was the
-  next soundness bug (gh-616 rounds 2-10, gh-1001). The fan-in guard's `reads_of_proc` deliberately
+  next soundness bug (gh-616 rounds 2-10, gh-1001). gh-ocannl-1050 retired the last two walks:
+  `Local_write`/`Local_read` rows name their local (`Affine.local`), so `hoist_shared_locals`' hazard
+  check is `scope_body_inputs` against `statement_changes` — whose local writes stay
+  STATEMENT-level, load-bearingly: the hoisted body's own copy in its first user writes the locals
+  its over-approximate input set names — and `Online_softmax`'s census, which enters scope bodies,
+  no longer treats `Scope_body` as opaque. The fan-in guard's `reads_of_proc` deliberately
   stays a walk: it is a COST count that charges the wider `Where` arm, not the union, mirroring
   `trace_node_facts`' per-arm sinks — arm identity a boolean gate cannot carry.
 - **`Ir.Affine` owns the peel-guard rule** (gh-ocannl-722), which is the pattern to follow when a

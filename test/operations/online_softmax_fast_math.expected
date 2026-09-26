@@ -45,7 +45,9 @@ staged code inside the span the rewrite reorders is declined: true
 a Tile_mma inside the span is opaque even when its scalar fallback is empty: true
 staged code outside that span is no objection: true
 staged code reachable only through a guard's condition inside the span is declined too: true
-a scope body inside the span is beyond the write census and declines the rewrite: true
+a scope body writing the scores inside the span is in the census and declines the rewrite: true
+a scope body reading the normalizer between the max and the sum is declined: true
+a scope body inside the span touching nothing of the chain is no objection: the census sees it: true
 a whole-node zeroing of a normalizer wider than the reduction's cells is declined: true
 the same reduction with a cell-wise zeroing is accepted: the scan writes what the fill did: true
 composed: a NaN score ahead of a masked one poisons the normalizer: true

@@ -4656,155 +4656,61 @@ let replace_local_scope_in_stmt ~target ~replacement ~stale_ids (stmt : t) : t =
   | Set_local (id, llsc) -> Set_local (id, repl llsc)
   | other -> other
 
-(** Collect all tensor nodes read via [Get(tn, _)] in a statement tree. *)
-let reads_of_body (body : t) : Set.M(Tn).t =
-  let acc = ref (Set.empty (module Tn)) in
-  let rec loop_proc (llc : t) =
-    match llc with
-    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier ->
-        ()
-    | Seq (c1, c2) ->
-        loop_proc c1;
-        loop_proc c2
-    | For_loop { body; _ } -> loop_proc body
-    | Scan_loop { carried; body; _ } ->
-        List.iter carried ~f:(fun c -> loop_scalar c.init);
-        loop_proc body
-    | Set { llsc; _ } -> loop_scalar llsc
-    | Set_dynamic { dyn_value = v, _; llsc; _ } ->
-        (* The RMW read of the scatter target surfaces via the [Get_dynamic] inside [llsc]. *)
-        loop_scalar v;
-        loop_scalar llsc
-    | Set_from_vec { arg = arg_scalar, _; _ } -> loop_scalar arg_scalar
-    | Set_local (_, llsc) -> loop_scalar llsc
-    | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; _ } ->
-        (* [d] is read-modify-written; [a]/[b] are reads. The fallback touches the same nodes. *)
-        acc := Set.add (Set.add (Set.add !acc d_tn) a_tn) b_tn
-    | If { cond = c, _; body } ->
-        loop_scalar c;
-        loop_proc body
-  and loop_scalar (llsc : scalar_t) =
-    match llsc with
-    | Get (tn, _) -> acc := Set.add !acc tn
-    | Get_dynamic { tn; dyn_value = v, _; _ } ->
-        (* gh-343: the table is read at [tn]; the dynamic index reads its own tensor inside
-           [dyn_value], so recurse to count it too. *)
-        acc := Set.add !acc tn;
-        loop_scalar v
-    | Get_merge_buffer (tn, _) -> acc := Set.add !acc tn
-    | Local_scope { body; _ } -> loop_proc body
-    | Get_local _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
-    | Ternop (_, (s1, _), (s2, _), (s3, _)) ->
-        loop_scalar s1;
-        loop_scalar s2;
-        loop_scalar s3
-    | Binop (_, (s1, _), (s2, _)) ->
-        loop_scalar s1;
-        loop_scalar s2
-    | Unop (_, (s, _)) -> loop_scalar s
-  in
-  loop_proc body;
-  !acc
+(* gh-ocannl-1050: [hoist_shared_locals]' hazard check is two queries over {!affine_relations} —
+   what a hoisted body reads, and what a statement it is lifted over changes — rather than the four
+   hand-rolled walkers it used to share with [Online_softmax]'s write census. *)
 
-(** Collect all tensor nodes written by a statement, recursing into [Seq] and [For_loop] bodies.
+let scope_id_of_local (l : Tn.t Affine.local) : scope_id =
+  { tn = l.local_tn; scope_id = l.local_id }
 
-    The recursion into [For_loop] is load-bearing for hoisting safety (Bug 2): [flat_lines] keeps
-    [For_loop] opaque, so [hoist_shared_locals]'s hazard check relies on this function to see writes
-    performed *inside* a sibling loop sitting between two users of a hoisted [Local_scope]. A
-    non-recursive version reported no writes for such a loop, which could permit an unsound hoist
-    above it (later users would then read the pre-loop value). Recursing can only enlarge the hazard
-    set, so it only ever narrows what is hoisted -- safe by construction. [Set_local] writes a
-    [scope_id] local rather than a materialized [Tn], so it contributes nothing here. *)
-let writes_of_stmt (stmt : t) : Set.M(Tn).t =
-  let acc = ref (Set.empty (module Tn)) in
-  let rec loop (s : t) =
-    match s with
-    | Set { tn; _ } | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } -> acc := Set.add !acc tn
-    | Zero_out tn -> acc := Set.add !acc tn
-    | Tile_mma { d = tn, _; _ } -> acc := Set.add !acc tn
-    | Seq (a, b) ->
-        loop a;
-        loop b
-    | For_loop { body; _ } | Scan_loop { body; _ } -> loop body
-    | If { body; _ } -> loop body
-    | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Set_local _ | Workgroup_barrier ->
-        ()
+(** A [Local_scope] body's inputs: the tensor nodes it reads (a merge-buffer read counting as a read
+    of its source node) and the scope locals it reads, at any depth — both halves, since a write to
+    either between the hoist point and a later user would make that user read a stale value
+    (gh-ocannl-584 review round 2). Over-approximate on purpose: the locals include those the body
+    itself owns, which no sibling statement can write, and an enlarged input set only narrows
+    hoisting. A projection's dead operand is never evaluated and contributes nothing. *)
+let scope_body_inputs (body : t) : Set.M(Tn).t * scope_id list =
+  let accs, effs = affine_relations body in
+  let reads =
+    List.fold accs
+      ~init:(Set.empty (module Tn))
+      ~f:(fun reads (a : _ Affine.access) -> if a.a_write then reads else Set.add reads a.a_tn)
   in
-  loop stmt;
-  !acc
+  List.fold effs ~init:(reads, []) ~f:(fun (reads, locals) (e : _ Affine.statement_effect) ->
+      match e.e_kind with
+      | Affine.Merge_read tn -> (Set.add reads tn, locals)
+      | Affine.Local_read l -> (reads, scope_id_of_local l :: locals)
+      | Affine.Local_write _ | Affine.Local_declare | Affine.Scope_body | Affine.Barrier
+      | Affine.Staged | Affine.Mma ->
+          (reads, locals))
 
-(** The scope locals a [Local_scope] body READS, at any depth. The companion of {!reads_of_body} for
-    the other half of a body's inputs: [reads_of_body] tracks tensor nodes and ignores [Get_local]
-    entirely, which left cross-statement hoisting blind to local-valued dependencies (gh-ocannl-584
-    review round 2). Over-approximate on purpose — it includes locals the body itself owns, which no
-    sibling statement can write, and an enlarged hazard set only narrows hoisting. *)
-let local_reads_of_body (body : t) : scope_id list =
-  let acc = ref [] in
-  let rec loop_proc (llc : t) =
-    match llc with
-    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier ->
-        ()
-    | Seq (c1, c2) ->
-        loop_proc c1;
-        loop_proc c2
-    | For_loop { body; _ } -> loop_proc body
-    | Scan_loop { carried; body; _ } ->
-        (* The rotation reads every [next]; the body's [Get_local prev]s are collected below. *)
-        List.iter carried ~f:(fun c ->
-            acc := c.next :: !acc;
-            loop_scalar c.init);
-        loop_proc body
-    | Set { llsc; _ } | Set_local (_, llsc) -> loop_scalar llsc
-    | Set_dynamic { dyn_value = v, _; llsc; _ } ->
-        loop_scalar v;
-        loop_scalar llsc
-    | Set_from_vec { arg = a, _; _ } -> loop_scalar a
-    | Tile_mma { fallback; _ } -> loop_proc fallback
-    | If { cond = c, _; body } ->
-        loop_scalar c;
-        loop_proc body
-  and loop_scalar (llsc : scalar_t) =
-    match llsc with
-    | Get_local id -> acc := id :: !acc
-    | Local_scope { body; _ } -> loop_proc body
-    | Get_dynamic { dyn_value = v, _; _ } -> loop_scalar v
-    | Ternop (_, (s1, _), (s2, _), (s3, _)) ->
-        loop_scalar s1;
-        loop_scalar s2;
-        loop_scalar s3
-    | Binop (_, (s1, _), (s2, _)) ->
-        loop_scalar s1;
-        loop_scalar s2
-    | Unop (_, (s, _)) -> loop_scalar s
-    | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
+(** What a statement changes that a hoisted body could read: the tensor nodes it writes, at any
+    depth, and the scope locals it writes at STATEMENT level — [Set_local]s and a scan's carried
+    [prev] (its initialization and rotation), inside loop, scan and guard bodies alike. A
+    [Local_scope] body's local writes are left out, and must be: scope purity confines them to
+    locals the body owns, which no other statement shares (gh-ocannl-584) — while the hoisted body's
+    own copy in its first user writes exactly the locals its over-approximate input set names.
+    [None] when the statement holds code the hazard check cannot see through or must not move work
+    across: [Staged_compilation] (whose accesses are not enumerated), a barrier or a [Tile_mma] (the
+    barrier split in [hoist_shared_locals] already keeps those out of a segment). *)
+let statement_changes (stmt : t) : (Set.M(Tn).t * scope_id list) option =
+  let accs, effs = affine_relations stmt in
+  let writes =
+    List.fold accs
+      ~init:(Set.empty (module Tn))
+      ~f:(fun writes (a : _ Affine.access) -> if a.a_write then Set.add writes a.a_tn else writes)
   in
-  loop_proc body;
-  !acc
-
-(** The scope locals a statement writes, mirroring {!writes_of_stmt}: recursive through [Seq],
-    [For_loop] and [If] bodies, and deliberately NOT into [Local_scope] bodies within its
-    expressions. Scope purity is what makes that omission sound — a body only writes locals it owns,
-    which by construction no other statement shares (gh-ocannl-584). *)
-let local_writes_of_stmt (stmt : t) : scope_id list =
-  let acc = ref [] in
-  let rec loop (s : t) =
-    match s with
-    | Set_local (id, _) -> acc := id :: !acc
-    | Seq (a, b) ->
-        loop a;
-        loop b
-    | For_loop { body; _ } -> loop body
-    | Scan_loop { carried; body; _ } ->
-        (* The rotation writes every [prev]; the body's [Set_local next]s are collected below. *)
-        List.iter carried ~f:(fun c -> acc := c.prev :: !acc);
-        loop body
-    | If { body; _ } -> loop body
-    | Set _ | Set_dynamic _ | Set_from_vec _ | Zero_out _ | Tile_mma _ | Noop | Comment _
-    | Staged_compilation _ | Declare_local _ | Workgroup_barrier ->
-        ()
-  in
-  loop stmt;
-  !acc
+  List.fold effs
+    ~init:(Some (writes, []))
+    ~f:(fun acc (e : _ Affine.statement_effect) ->
+      Option.bind acc ~f:(fun (writes, locals) ->
+          match e.e_kind with
+          | Affine.Local_write l when not (Affine.in_scope_body e.e_path) ->
+              Some (writes, scope_id_of_local l :: locals)
+          | Affine.Staged | Affine.Barrier | Affine.Mma -> None
+          | Affine.Local_write _ | Affine.Local_read _ | Affine.Local_declare | Affine.Scope_body
+          | Affine.Merge_read _ ->
+              Some (writes, locals)))
 
 (** Returns [true] if the given [scope_id] is read (via [Get_local]) before the first definitely
     executed [Set_local] to that id in [body]. Used to decide whether a [Local_scope] or hoisted
@@ -4878,9 +4784,8 @@ let reads_scope_before_set (target : scope_id) (body : t) : bool =
 
 (** Whether a statement tree contains a [Workgroup_barrier] anywhere, including inside [For_loop]
     bodies and [Local_scope] bodies of its scalar expressions. Used to delimit code motion:
-    [flat_lines] keeps [For_loop] opaque and [writes_of_stmt] treats barriers as writing no tensor,
-    so this recursive check is what makes a barrier nested in a sibling statement visible to
-    hoisting. *)
+    [flat_lines] keeps [For_loop] opaque, so this recursive check is what splits hoisting at a
+    barrier nested in a sibling statement. *)
 let rec contains_barrier (llc : t) : bool =
   match llc with
   | Workgroup_barrier -> true
@@ -4972,8 +4877,8 @@ exception Impure_scope of string
 
     Purity is about a body's effects, and it is not on its own enough for the hoist, which also
     needs the body's INPUTS unchanged across the statements it is lifted over — the obligation of
-    [hoist_shared_locals]'s hazard check, which covers tensor reads ({!reads_of_body}) and scope
-    locals ({!local_reads_of_body}) alike.
+    [hoist_shared_locals]'s hazard check, which covers tensor reads and scope locals alike
+    ({!scope_body_inputs}, over the body's {!affine_relations}).
 
     The statement match is deliberately exhaustive with no catch-all: a new {!t} constructor breaks
     this build until someone classifies it as body-legal or not.
@@ -5451,7 +5356,8 @@ let guard_annotated_extents ~(should_guard : [ `Grid | `Workgroup ] -> bool) (ll
     Operates on a flat list of sibling statements. *)
 let rec hoist_shared_locals (stmts : t list) : t list =
   (* No code motion across a barrier: hoist within each barrier-delimited segment separately. The
-     write-hazard check below cannot see barriers (they write no tensor), so splitting here is what
+     hazard check below refuses a barrier among the statements a body is lifted over, but not one
+     inside the last user, whose shared computation can sit after it — so splitting here is what
      enforces the barrier's full-fence contract for cross-statement CSE. A statement merely
      *containing* a barrier (e.g. a loop with a barrier in its body) is a boundary too: hoisting a
      shared computation from after it to before it would move work across the barrier. *)
@@ -5503,13 +5409,10 @@ and hoist_shared_locals_segment (stmts : t list) : t list =
            that user read a stale value (gh-ocannl-584 review round 2: the pipeline does produce
            bodies reading a local declared outside them, e.g. layer_norm_divided_mean, via
            [eliminate_common_subexpressions] and this pass's own [Get_local] rewrites). *)
-        let body_reads =
+        let body_reads, body_local_reads =
           match target_scalar with
-          | Local_scope { body; _ } -> reads_of_body body
-          | _ -> Set.empty (module Tn)
-        in
-        let body_local_reads =
-          match target_scalar with Local_scope { body; _ } -> local_reads_of_body body | _ -> []
+          | Local_scope { body; _ } -> scope_body_inputs body
+          | _ -> (Set.empty (module Tn), [])
         in
         (* Check for writes between first_user and last_user that could invalidate hoisting. Include
            writes from ALL statements (including user statements) from first_user up to but not
@@ -5526,16 +5429,14 @@ and hoist_shared_locals_segment (stmts : t list) : t list =
            which is why they do not validate. *)
         let pure_body = Option.is_none (scope_purity_violation_scalar target_scalar) in
         let safe =
-          let hazard_writes = ref (Set.empty (module Tn)) in
-          let hazard_local_writes = ref [] in
-          for i = first_user to last_user - 1 do
-            hazard_writes := Set.union !hazard_writes (writes_of_stmt stmts.(i));
-            hazard_local_writes := local_writes_of_stmt stmts.(i) @ !hazard_local_writes
-          done;
-          Set.is_empty (Set.inter body_reads !hazard_writes)
-          && not
-               (List.exists !hazard_local_writes ~f:(fun w ->
-                    List.mem body_local_reads w ~equal:equal_scope_id))
+          List.for_all (List.range first_user last_user) ~f:(fun i ->
+              match statement_changes stmts.(i) with
+              | None -> false
+              | Some (writes, local_writes) ->
+                  Set.is_empty (Set.inter body_reads writes)
+                  && not
+                       (List.exists local_writes ~f:(fun w ->
+                            List.mem body_local_reads w ~equal:equal_scope_id)))
         in
         if safe && pure_body then (
           (* Extract body from canonical Local_scope *)
