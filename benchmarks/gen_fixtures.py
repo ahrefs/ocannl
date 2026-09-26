@@ -251,7 +251,7 @@ def recorded_target(dest: Path):
     return target
 
 
-def build_recorded(specs, out_dir: Path, record_partial):
+def build_recorded(specs, out_dir: Path, commit):
     """Build `specs` for recording into `out_dir`, replacing nothing until ALL of them built.
 
     Staged (gh-ocannl-1059): a spec that fails to build -- no `seed`, an unknown `model`, a
@@ -260,9 +260,10 @@ def build_recorded(specs, out_dir: Path, record_partial):
     recorded. Only then is each staged file renamed onto its destination's RESOLVED target rather
     than onto the entry: a symlinked recorded fixture stays a symlink whose shared target holds
     the new bytes. (A hard-linked one is un-shared, since a rename replaces one name; that is
-    announced.) Should a rename itself fail, `record_partial` is handed the fixtures already
-    replaced before the error propagates, so no replaced fixture is left unrecorded. Returns the
-    destination entries, which are what `record()` names.
+    announced.) `commit(written, notes)` is then handed the replaced destination entries (what
+    `record()` names) with the lines to print under each -- also when a rename fails or anything
+    else interrupts the renames, for the fixtures replaced before it, so no replaced fixture is
+    left unrecorded. Returns the destination entries.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".gen_fixtures-", dir=out_dir))
@@ -291,23 +292,34 @@ def build_recorded(specs, out_dir: Path, record_partial):
                 source = Path(tmp)
                 sidecars.append(source)
                 shutil.copyfile(path, source)
+                # mkstemp creates it owner-only; the fixture gets the mode build() gave it.
+                shutil.copymode(path, source)
             moves.append((source, dest, target))
-        written = []
-        for source, dest, target in moves:
-            links = target.stat().st_nlink if target.exists() else 1
-            try:
+        # From the first rename on, the replaced fixtures are new bytes, so whatever ends the loop
+        # -- a failed rename, an interrupt -- `commit` records them before the error propagates.
+        # It records BEFORE it prints anything: an output that fails (a closed pipe) must not
+        # cost the record either.
+        written, notes, failed = [], {}, None
+        try:
+            for source, dest, target in moves:
+                links = target.stat().st_nlink if target.exists() else 1
+                failed = target
                 os.replace(source, target)
-            except BaseException:
-                print(f"gen_fixtures: FAILED to replace {target}; recording the "
-                      f"{len(written)} fixture(s) already replaced", file=sys.stderr)
-                if written:
-                    record_partial(written)
-                raise
-            written.append(report_written(dest))
-            if dest.is_symlink():
-                print(f"  through the symlink to {target}, shared by every tree linking it")
-            if links > 1:
-                print(f"  {dest} had {links - 1} other hard link(s): they keep the previous bytes")
+                failed = None
+                written.append(dest)
+                notes[dest] = []
+                if dest.is_symlink():
+                    notes[dest].append(f"through the symlink to {target}, shared by every tree "
+                                       "linking it")
+                if links > 1:
+                    notes[dest].append(f"{dest} had {links - 1} other hard link(s): they keep "
+                                       "the previous bytes")
+        finally:
+            if written:
+                commit(written, notes)
+            if failed is not None:
+                print(f"gen_fixtures: FAILED to replace {failed}; the {len(written)} fixture(s) "
+                      "replaced before it were recorded", file=sys.stderr)
         return written
     finally:
         shutil.rmtree(staging, ignore_errors=True)
@@ -316,6 +328,62 @@ def build_recorded(specs, out_dir: Path, record_partial):
                 sidecar.unlink()
             except FileNotFoundError:
                 pass
+
+
+def record_and_report(digests: Path, origin, written, notes):
+    """Record `written` as `origin`'s bytes in `digests`, THEN report them: the record first, so a
+    report that fails to print (a closed stdout pipe) cannot leave replaced fixtures unrecorded.
+    `notes` maps a fixture to the lines printed under its `wrote` line."""
+    # fixtures/ is gitignored, so this file is the only record of what was just generated
+    # (gh-ocannl-645). Only this origin's regenerated entries are rewritten: generating one
+    # workload must not drop the identities of the fixtures already on disk, and generating on
+    # one box must not drop the identities another box's published numbers rest on
+    # (gh-ocannl-759).
+    changes = fixture_digest.record(digests, written, origin)
+    for fixture in written:
+        report_written(fixture)
+        for note in notes.get(fixture, ()):
+            print(f"  {note}")
+    print(f"recorded {len(written)} digest(s) in {digests} as origin {origin!r}")
+    by_name = {fixture.name: fixture for fixture in written}
+    for name, org, was, now in changes:
+        replacement = fixture_digest.replacement_kind(by_name[name], was)
+        if was is None:
+            print(f"  new: {name} sha256 {now.sha256} [{org}]")
+        elif replacement == "same-file-migration":
+            print(f"  MIGRATED for {org}: {name} raw-v1 -> content-v1 (same file bytes)")
+            print(f"    now  sha256 {now.sha256} ({now.size} bytes)")
+        elif replacement == "new-content-baseline":
+            print(f"  NEW CONTENT BASELINE for {org}: {name}")
+            print(f"    historical raw-v1   sha256 {was.sha256} ({was.size} bytes)")
+            print(f"    baseline content-v1 sha256 {now.sha256} ({now.size} bytes)")
+        else:
+            # Loudly, and not only in a git diff: numbers measured on the old bytes are not
+            # comparable with numbers measured on the new ones, whatever the report calls the
+            # workload.
+            print(f"  CHANGED for {org}: {name}")
+            print(f"    was  sha256 {was.sha256} ({was.size} bytes)")
+            print(f"    now  sha256 {now.sha256} ({now.size} bytes)")
+    replacements = {
+        fixture_digest.replacement_kind(by_name[name], was) for name, _, was, _ in changes
+    }
+    if "content-change" in replacements:
+        print("  a changed fixture is a changed workload: reports measured on the previous "
+              "digest are not comparable with reports measured on this one.")
+    if "new-content-baseline" in replacements:
+        print("  the new content baseline is reproducible going forward, but does not prove "
+              "continuity with the historical raw digest; old reports retain that digest.")
+    others = fixture_digest.divergent_origins(digests, [fx.name for fx in written], origin)
+    if others:
+        # The trap gh-ocannl-759 was filed about: their entries survive (so their fixtures still
+        # pass the gate), but their bytes are now a different workload from this box's. Only
+        # A declared origin with no entry is named too: the declaration is what distinguishes
+        # "this measuring box has unrecorded bytes" from "this box never measures this workload".
+        # A coordinated regeneration that recorded the same bytes on both boxes remains quiet.
+        print(f"  measurement boxes missing an entry or still on DIFFERENT bytes for these "
+              f"fixtures: {', '.join(others)} — regeneration is a cross-box event, so until "
+              "they regenerate and record too, their published numbers and this box's may be on "
+              "different workloads.")
 
 
 def main(argv=None, here=None):
@@ -423,55 +491,8 @@ def main(argv=None, here=None):
             targets[key] = spec_path
     if not recording:
         return build_smoke(specs, out_dir)
-    written = build_recorded(specs, out_dir,
-                             lambda replaced: fixture_digest.record(digests, replaced, origin))
-    # fixtures/ is gitignored, so this file is the only record of what was just generated
-    # (gh-ocannl-645). Only this origin's regenerated entries are rewritten: generating one
-    # workload must not drop the identities of the fixtures already on disk, and generating on
-    # one box must not drop the identities another box's published numbers rest on
-    # (gh-ocannl-759).
-    changes = fixture_digest.record(digests, written, origin)
-    print(f"recorded {len(written)} digest(s) in {digests} as origin {origin!r}")
-    by_name = {fixture.name: fixture for fixture in written}
-    for name, org, was, now in changes:
-        replacement = fixture_digest.replacement_kind(by_name[name], was)
-        if was is None:
-            print(f"  new: {name} sha256 {now.sha256} [{org}]")
-        elif replacement == "same-file-migration":
-            print(f"  MIGRATED for {org}: {name} raw-v1 -> content-v1 (same file bytes)")
-            print(f"    now  sha256 {now.sha256} ({now.size} bytes)")
-        elif replacement == "new-content-baseline":
-            print(f"  NEW CONTENT BASELINE for {org}: {name}")
-            print(f"    historical raw-v1   sha256 {was.sha256} ({was.size} bytes)")
-            print(f"    baseline content-v1 sha256 {now.sha256} ({now.size} bytes)")
-        else:
-            # Loudly, and not only in a git diff: numbers measured on the old bytes are not
-            # comparable with numbers measured on the new ones, whatever the report calls the
-            # workload.
-            print(f"  CHANGED for {org}: {name}")
-            print(f"    was  sha256 {was.sha256} ({was.size} bytes)")
-            print(f"    now  sha256 {now.sha256} ({now.size} bytes)")
-    replacements = {
-        fixture_digest.replacement_kind(by_name[name], was) for name, _, was, _ in changes
-    }
-    if "content-change" in replacements:
-        print("  a changed fixture is a changed workload: reports measured on the previous "
-              "digest are not comparable with reports measured on this one.")
-    if "new-content-baseline" in replacements:
-        print("  the new content baseline is reproducible going forward, but does not prove "
-              "continuity with the historical raw digest; old reports retain that digest.")
-    others = fixture_digest.divergent_origins(digests, [fx.name for fx in written], origin)
-    if others:
-        # The trap gh-ocannl-759 was filed about: their entries survive (so their fixtures still
-        # pass the gate), but their bytes are now a different workload from this box's. Only
-        # A declared origin with no entry is named too: the declaration is what distinguishes
-        # "this measuring box has unrecorded bytes" from "this box never measures this workload".
-        # A coordinated regeneration that recorded the same bytes on both boxes remains quiet.
-        print(f"  measurement boxes missing an entry or still on DIFFERENT bytes for these "
-              f"fixtures: {', '.join(others)} — regeneration is a cross-box event, so until "
-              "they regenerate and record too, their published numbers and this box's may be on "
-              "different workloads.")
-    return written
+    return build_recorded(
+        specs, out_dir, lambda written, notes: record_and_report(digests, origin, written, notes))
 
 
 if __name__ == "__main__":

@@ -2383,6 +2383,11 @@ class FixtureDigestTest(unittest.TestCase):
                               printed.getvalue())
                 self.assertEqual(sorted(p.name for p in shared.parent.iterdir()),
                                  ["gpt2_mini.safetensors"], "no copy left beside the target")
+                # The mode a generated fixture gets, not the owner-only one of the copy's
+                # temporary file: other users and services read the shared fixture too.
+                fresh = self.write_fixture(self.dir / "mode-probe.safetensors")
+                self.assertEqual(stat_module.S_IMODE(shared.stat().st_mode),
+                                 stat_module.S_IMODE(fresh.stat().st_mode))
 
     def test_a_hard_linked_recorded_fixture_is_announced_as_unshared(self):
         # A rename replaces one NAME, so the other hard links keep the previous bytes. That is
@@ -2421,7 +2426,7 @@ class FixtureDigestTest(unittest.TestCase):
 
         with unittest.mock.patch.object(gen_fixtures, "build", self.regenerating_build()), \
                 unittest.mock.patch.object(gen_fixtures.os, "replace", replace), \
-                contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stdout(io.StringIO()) as printed, \
                 contextlib.redirect_stderr(io.StringIO()) as errors, \
                 self.assertRaises(PermissionError):
             gen_fixtures.main(["--origin", self.this_box], here=self.dir)
@@ -2435,6 +2440,32 @@ class FixtureDigestTest(unittest.TestCase):
         self.assertIn("FAILED to replace", errors.getvalue())
         self.assertEqual(sorted(p.name for p in fixtures.iterdir()),
                          [fixture_digest.DIGEST_FILE, "cifar.safetensors", "lenet.safetensors"])
+        # And announced through the same report as a complete run: a retry regenerates the same
+        # bytes, whose digest then already matches, so this is the only notice the published
+        # numbers on the previous cifar bytes ever get.
+        self.assertIn(f"CHANGED for {self.this_box}: cifar.safetensors", printed.getvalue())
+        self.assertNotIn("lenet", printed.getvalue())
+
+    def test_an_output_failure_after_the_renames_still_records(self):
+        # The report is printed only after record() ran: a closed stdout pipe
+        # (`gen_fixtures.py | head -1` with PYTHONUNBUFFERED) raising on the first `wrote` line
+        # must not leave the replaced fixtures matching no entry.
+        gen_fixtures = self.gen_fixtures_module()
+        fixtures, digests, _ = self.recorded_layout("cifar", "lenet")
+
+        def report_written(path):
+            raise BrokenPipeError(32, "Broken pipe")
+
+        with unittest.mock.patch.object(gen_fixtures, "build", self.regenerating_build()), \
+                unittest.mock.patch.object(gen_fixtures, "report_written", report_written), \
+                self.assertRaises(BrokenPipeError):
+            gen_fixtures.main(["--origin", self.this_box], here=self.dir)
+
+        entries = fixture_digest.read_digests(digests)
+        for name in ("cifar", "lenet"):
+            fixture = fixtures / f"{name}.safetensors"
+            self.assertIn(f"new {name}".encode(), fixture.read_bytes())
+            self.assertEqual(fixture_digest.status(fixture, entries)[0], "MATCH", name)
 
     def test_an_unreplaceable_resolved_target_is_refused_before_building(self):
         # The resolved targets are checked with the names, before any build: two fixtures linked
