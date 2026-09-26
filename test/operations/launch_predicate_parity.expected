@@ -37,5 +37,13 @@ seed .z grid fold: seeding and the gate refuse it with the same sentence: true
 conv prediction: the fission segment seeds a whole-extent GPU flavor: true
 conv prediction: the fission segment seeds a row-blocked GPU flavor: true
 conv prediction: no GPU seed predicts a dimension above its applied launch geometry: true
-conv control: a permissive cap proposes a blocked seed folding the 65536 batch onto grid.z: true
-conv seeding: the 65535 grid.z cap omits every deliberately over-cap seed: true
+conv control premise: the site's outer grid loops are the 65536 batch then a non-row spatial 2, over 16 rows: true
+conv control: every blocked seed puts the spatial 2 on grid.y and folds the 65536 batch alone onto grid.z: true
+conv control: every unblocked seed puts the 65536 batch on grid.y, folding nothing onto grid.z: true
+conv control: every blocked seed is refused on grid.z at 65536, against the 65535 cap: true
+conv control: every unblocked seed is refused on grid.y at 65536, against the 65535 cap: true
+conv control: the grid.z refusal claim fails on every seed refused on grid.y instead: true
+conv control: the grid.y refusal claim fails on every seed refused on grid.z instead: true
+conv control: the grid.z refusal claim fails on a grid.z refusal at another extent: true
+conv seeding: the 65535 cap omits every blocked seed it refuses on grid.z: true
+conv seeding: the 65535 cap omits every unblocked seed it refuses on grid.y: true
