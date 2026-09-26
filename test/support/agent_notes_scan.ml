@@ -1213,22 +1213,28 @@ let slug heading =
       else None)
   |> String.of_list
 
-(** The anchor ids GitHub gives a file's headings, in document order: each heading's {!slug}, with a
-    repeated slug suffixed [-1], [-2], … on its second, third, … occurrence. Comparing an anchor to
-    each heading's bare slug instead rejected a valid pointer at the later of two same-titled
-    sections and accepted [#title] as naming whichever one it liked (Codex P2, round 1 on
-    lukstafi/ocannl-staging#811). *)
+(** The anchor ids GitHub gives a file's headings, in document order — github-slugger's allocation:
+    a heading takes its {!slug} unless an EARLIER id already holds it, and then the first
+    [<slug>-<k>] no earlier id holds, [k] counting up from where that slug's last suffix left off.
+    Comparing an anchor to each heading's bare slug rejected a valid pointer at the later of two
+    same-titled sections (Codex P2, round 1 on lukstafi/ocannl-staging#811); counting only the bare
+    slug's repeats then collided with a heading whose own title is [Foo-1] (round 2), so every
+    candidate is checked against every id already emitted. *)
 let heading_ids contents =
-  let seen = Hashtbl.create (module String) in
+  let taken = Hashtbl.create (module String) in
+  let last_suffix = Hashtbl.create (module String) in
   List.map (headings contents) ~f:(fun h ->
-      let s = slug h in
-      match Hashtbl.find seen s with
-      | None ->
-          Hashtbl.set seen ~key:s ~data:1;
-          s
-      | Some n ->
-          Hashtbl.set seen ~key:s ~data:(n + 1);
-          Printf.sprintf "%s-%d" s n)
+      let base = slug h in
+      let rec allocate candidate =
+        if not (Hashtbl.mem taken candidate) then candidate
+        else
+          let k = Option.value (Hashtbl.find last_suffix base) ~default:0 + 1 in
+          Hashtbl.set last_suffix ~key:base ~data:k;
+          allocate (Printf.sprintf "%s-%d" base k)
+      in
+      let id = allocate base in
+      Hashtbl.set taken ~key:id ~data:();
+      id)
 
 (** A link's DESTINATION, separated from its optional title. [(../agent-notes.md "Agent notes")] is
     a perfectly ordinary link, and comparing the whole parenthesised text against the index filename
@@ -1643,30 +1649,60 @@ type pointer = { pointer_line : int; path : string; anchor : string }
 let path_char c = Char.is_alphanum c || List.mem [ '_'; '-'; '.'; '/' ] c ~equal:Char.equal
 let anchor_char c = Char.is_alphanum c || Char.equal c '_' || Char.equal c '-'
 
+(** A line as it RENDERS, for the purpose of finding pointers in it: a backslash escaping ASCII
+    punctuation outside a code span is dropped, since a pointer whose hash or underscore is escaped
+    with a backslash displays as the pointer it spells (Codex P2, round 2 on
+    lukstafi/ocannl-staging#811); inside a code span a backslash is literal and stays. Each rendered
+    character keeps its position in the source line, so a caller can still ask the lexer about it.
+*)
+let rendered_line ~code line =
+  let n = String.length line in
+  let rec go i acc =
+    if i >= n then List.rev acc
+    else if
+      Char.equal line.[i] '\\'
+      && i + 1 < n
+      && Char.is_print line.[i + 1]
+      && (not (Char.is_alphanum line.[i + 1]))
+      && (not (Char.equal line.[i + 1] ' '))
+      && not (in_any_span code i)
+    then go (i + 2) ((line.[i + 1], i + 1) :: acc)
+    else go (i + 1) ((line.[i], i) :: acc)
+  in
+  go 0 []
+
 (** Every [<path>.md#<anchor>] in [contents] that a reader sees, code spans and fenced blocks
     included: a pointer set in backticks is still a pointer. One inside an HTML comment renders
     nowhere, so it is not read -- neither checked nor counted toward the live scan's floor (Codex
-    P2, round 1 on lukstafi/ocannl-staging#811). The path is the maximal run of path characters
-    before [.md#] and the anchor the maximal run of slug characters after it; a placeholder such as
-    [<note>.md#<slug>] has an empty one and is not a pointer. *)
+    P2, round 1 on lukstafi/ocannl-staging#811). The text searched is {!rendered_line}'s, so an
+    escaped spelling is found as the pointer it displays. The path is the maximal run of path
+    characters before [.md#] and the anchor the maximal run of slug characters after it; a
+    placeholder such as [<note>.md#<slug>] has an empty one and is not a pointer. *)
 let guide_pointers contents =
-  let comments = (inert_by_line contents).comment_ranges in
+  let scan = inert_by_line contents in
   List.concat_map (lines contents) ~f:(fun (lineno, line) ->
-      let n = String.length line in
-      let hidden = spans_at comments lineno in
-      String.substr_index_all line ~may_overlap:false ~pattern:".md#"
-      |> List.filter ~f:(fun i -> not (in_any_span hidden i))
+      let hidden = spans_at scan.comment_ranges lineno in
+      let code =
+        List.filter (spans_at scan.ranges lineno) ~f:(fun r ->
+            not (List.mem hidden r ~equal:(fun (a, b) (c, d) -> a = c && b = d)))
+      in
+      let chars = rendered_line ~code line in
+      let text = String.of_list (List.map chars ~f:fst) in
+      let source = Array.of_list (List.map chars ~f:snd) in
+      let n = String.length text in
+      String.substr_index_all text ~may_overlap:false ~pattern:".md#"
+      |> List.filter ~f:(fun i -> not (in_any_span hidden source.(i)))
       |> List.filter_map ~f:(fun i ->
           let start = ref i in
-          while !start > 0 && path_char line.[!start - 1] do
+          while !start > 0 && path_char text.[!start - 1] do
             Int.decr start
           done;
           let stop = ref (i + 4) in
-          while !stop < n && anchor_char line.[!stop] do
+          while !stop < n && anchor_char text.[!stop] do
             Int.incr stop
           done;
-          let path = String.sub line ~pos:!start ~len:(i + 3 - !start) in
-          let anchor = String.sub line ~pos:(i + 4) ~len:(!stop - i - 4) in
+          let path = String.sub text ~pos:!start ~len:(i + 3 - !start) in
+          let anchor = String.sub text ~pos:(i + 4) ~len:(!stop - i - 4) in
           if String.equal path ".md" || String.is_empty anchor then None
           else Some { pointer_line = lineno; path; anchor }))
 

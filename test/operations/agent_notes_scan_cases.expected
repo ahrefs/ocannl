@@ -147,6 +147,8 @@ ok: index -- link text that does not name its file
 ok: index -- a first cell that is not a link
 ok: index -- an anchor the file has a heading for
 ok: index -- an anchor on the second of two same-titled headings
+ok: index -- an anchor past a heading whose own title holds the suffix
+ok: index -- an anchor past the last suffix allocated
 ok: index -- an anchor the file has no heading for
 ok: index -- a wrapped row takes the rest of the index out of the table
 ok: index -- an anchor on an identifier heading, which GitHub keeps underscored
@@ -199,6 +201,8 @@ ok: guide -- two pointers on one line are each checked
 ok: guide -- a pointer inside an HTML comment is not read
 ok: guide -- a pointer at the second of two same-titled headings
 ok: guide -- a pointer at a third that does not exist
+ok: guide -- an escaped hash is still a pointer
+ok: guide -- an escaped hash naming a real heading
 ok: unnamed rule -- a finding the list does not name survives the report, last
 ok: unnamed rule -- the census reports it, and not the named one beside it
 ok: unnamed rule -- a named finding leaves the census empty

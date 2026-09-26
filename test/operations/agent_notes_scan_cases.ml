@@ -484,6 +484,22 @@ let index_cases =
         );
       ],
       [] );
+    (* github-slugger allocates against every id already taken: the third heading's [-1] is held by
+       the second heading's own title, so it becomes [-2]. *)
+    ( "an anchor past a heading whose own title holds the suffix",
+      index [ "| [a.md](agent-notes/a.md#foo-2) | the `Widget` seam |" ],
+      [
+        ( "agent-notes/a.md",
+          file "## Foo\n\n- The `Widget` seam.\n\n## Foo-1\n\n- One.\n\n## Foo\n\n- Two.\n" );
+      ],
+      [] );
+    ( "an anchor past the last suffix allocated",
+      index [ "| [a.md](agent-notes/a.md#foo-3) | the `Widget` seam |" ],
+      [
+        ( "agent-notes/a.md",
+          file "## Foo\n\n- The `Widget` seam.\n\n## Foo-1\n\n- One.\n\n## Foo\n\n- Two.\n" );
+      ],
+      [ "index-agreement @ agent-notes.md:7" ] );
     ( "an anchor the file has no heading for",
       index [ "| [a.md](agent-notes/a.md#the-gadget-seam) | the `Widget` seam |" ],
       [ ("agent-notes/a.md", file "## The Widget seam\n\n- A fact about `Widget`.\n") ],
@@ -862,6 +878,13 @@ let guide_cases =
     ( "a pointer at a third that does not exist",
       guide "- A rule; the mechanism: c.md#the-widget-seam-2.",
       [ "guide-anchors @ AGENTS.md:3" ] );
+    (* Escapes render away, so an escaped pointer is the pointer it displays -- and is checked. *)
+    ( "an escaped hash is still a pointer",
+      guide "- A rule; the mechanism: a.md\\#the-sprocket-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "an escaped hash naming a real heading",
+      guide "- A rule; the mechanism: a.md\\#the-widget\\-seam.",
+      [] );
   ]
 
 (* The LEXICAL layer, tested directly rather than only through the rules above it.
