@@ -59,6 +59,7 @@ let with_master_weights_except_ln ~prec f =
 let () =
   let fixture = Stdlib.Sys.getenv "BENCH_FIXTURE" in
   let tune = H.env_flag "BENCH_TUNE" in
+  H.install_timing_trace ();
   let materialize = H.env_flag "BENCH_MATERIALIZE" in
   let debug = H.env_flag "BENCH_DEBUG" in
   let st = St.read fixture in

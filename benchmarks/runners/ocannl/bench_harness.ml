@@ -208,6 +208,84 @@ let percentile sorted p =
   let idx = Float.to_int (Float.round_nearest (p /. 100. *. Float.of_int (n - 1))) in
   sorted.(idx)
 
+(** {1 Where a tuning session's wall goes (gh-ocannl-834)}
+
+    [BENCH_TIMING_TRACE=1] splits a searching process's wall between candidate timing and everything
+    else, without changing what is measured: it only observes {!Autotune}'s seams. Each
+    [Autotune.time_routine] call prints one stderr line when its timed loop ends, with the batch
+    depth the call settled on, the launches it dispatched (the warmup, the calibration's and [depth]
+    per timed batch), and the wall of its warmup plus calibration (from the pre-dispatch validation
+    to the depth decision) and of its timed loop. Every line also carries the running totals, so the
+    last line of a run killed at a cell cap is still a lower bound on the whole — an [at_exit]
+    summary would never print there. Each candidate compile prints an [attempt] line with the
+    elapsed wall, which is how far a killed search got. What is not counted: the cc backend's
+    in-kernel fork/joins per launch are a property of each candidate's rendering, so a launch count
+    bounds them only together with the candidate's parallel-region count. *)
+
+let install_timing_trace () =
+  if env_flag "BENCH_TIMING_TRACE" then begin
+    let t0 = Unix.gettimeofday () in
+    let calls = ref 0 and attempts = ref 0 and launches = ref 0 in
+    let calib_s = ref 0. and timed_s = ref 0. in
+    let depths = Hashtbl.create (module Int) in
+    let preflight_at = ref None and depth_at = ref None in
+    let pr fmt = Stdlib.Printf.kfprintf Stdlib.flush Stdlib.stderr fmt in
+    let prev_attempt = !Autotune.on_candidate_attempt in
+    (Autotune.on_candidate_attempt :=
+       fun label ->
+         Int.incr attempts;
+         pr "timing-trace: attempt %d at %.1fs: %s\n" !attempts (Unix.gettimeofday () -. t0) label;
+         prev_attempt label);
+    let prev_preflight = !Autotune.on_candidate_preflight in
+    (Autotune.on_candidate_preflight :=
+       fun name ->
+         preflight_at := Some (Unix.gettimeofday ());
+         prev_preflight name);
+    let prev_depth = !Autotune.on_batch_depth in
+    (Autotune.on_batch_depth :=
+       fun depth ~calibration_samples ->
+         depth_at := Some (Unix.gettimeofday (), depth, calibration_samples);
+         prev_depth depth ~calibration_samples);
+    let prev_window = !Autotune.on_timed_window in
+    Autotune.on_timed_window :=
+      fun ~samples ~wall_ms ~median_wall_ms ->
+        let now = Unix.gettimeofday () in
+        (match !depth_at with
+        | None -> pr "timing-trace: a timed window without a depth decision\n"
+        | Some (at, depth, calibration) ->
+            (* No preflight time means an untagged call, which the tuner never makes: its warmup and
+               calibration are then unattributed rather than guessed. *)
+            let calib = Option.value_map !preflight_at ~default:0. ~f:(fun p -> at -. p) in
+            let n = 1 + calibration + (depth * samples) in
+            Int.incr calls;
+            launches := !launches + n;
+            calib_s := !calib_s +. calib;
+            timed_s := !timed_s +. (now -. at);
+            Hashtbl.update depths depth ~f:(fun c -> 1 + Option.value c ~default:0);
+            pr
+              "timing-trace: call %d at %.1fs: depth %d, %d batches, %d launches, calib %.1f ms, \
+               timed %.1f ms (median batch %.3f ms) | totals: %d calls, %d launches, calib %.2f s, \
+               timed %.2f s\n"
+              !calls (now -. t0) depth samples n (calib *. 1e3)
+              ((now -. at) *. 1e3)
+              median_wall_ms !calls !launches !calib_s !timed_s);
+        preflight_at := None;
+        depth_at := None;
+        prev_window ~samples ~wall_ms ~median_wall_ms;
+        Stdlib.at_exit (fun () ->
+            let hist =
+              Hashtbl.to_alist depths
+              |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+              |> List.map ~f:(fun (d, c) -> Printf.sprintf "%dx%d" c d)
+              |> String.concat ~sep:" "
+            in
+            pr
+              "timing-trace: summary: %.1fs wall, %d candidate attempts, %d timing calls, %d \
+               launches, calib %.2f s, timed %.2f s; depth histogram (calls x depth): %s\n"
+              (Unix.gettimeofday () -. t0)
+              !attempts !calls !launches !calib_s !timed_s hist)
+  end
+
 (** {1 Placement A/B arms in the emitted result (gh-ocannl-546)}
 
     A per-arm search outcome that never reaches the result line is invisible in every end-to-end

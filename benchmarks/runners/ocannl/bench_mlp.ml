@@ -56,6 +56,7 @@ let () =
     Stdlib.exit 0);
   let fixture = Stdlib.Sys.getenv "BENCH_FIXTURE" in
   let tune = H.env_flag "BENCH_TUNE" in
+  H.install_timing_trace ();
   let st = St.read fixture in
   let leg = H.precision_leg ~runner:"bench_mlp" ~training:(H.is_training st) ~st () in
   let mp_prec = leg.H.prec in

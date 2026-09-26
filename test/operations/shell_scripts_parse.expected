@@ -272,6 +272,7 @@ a comment mentioning support cannot satisfy sourcing: true
 benchmarks/gh514_cells.sh parses: true
 benchmarks/gh612_cells.sh parses: true
 benchmarks/gh612v_session.sh parses: true
+benchmarks/gh834_cells.sh parses: true
 docs/latex/gen-workshop-tex.sh parses: true
 scripts/harness-support.sh parses: true
 scripts/process-group.sh parses: true
