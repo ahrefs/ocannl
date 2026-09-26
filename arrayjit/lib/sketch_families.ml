@@ -3230,14 +3230,23 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
            whole-triple's rows are [m] or the row block, the packed composition's are the packed
            tile — "auto" first, so a site with no alternative keeps its pre-level leaf. The
            renderer's default is not re-seeded under a label: [auto] IS that geometry, and a
-           duplicate would time it twice. *)
+           duplicate would time it twice. Under [autotune_register_tile_rm_twin] the level also
+           carries {!Ir.Register_tile.rm_twin}, the two-row twin gh-ocannl-947 gates behind a
+           measured win: off by default, since each twin is one more candidate per leaf. *)
+        let rm_twin_seeded =
+          Utils.get_global_flag ~default:false ~arg_name:"autotune_register_tile_rm_twin"
+        in
         let leaf (p : sketch_params) =
           let m = if p.sk_bm = 0 then site.m_ni else p.sk_bm in
           let n = if p.sk_bn = 0 then site.m_nj else p.sk_bn in
+          let vector_bytes = limits.Ir.Backend_intf.simd_vector_bytes in
+          let elt_bytes = max 1 (Ir.Ops.prec_in_bytes prec) in
           match
-            Ir.Register_tile.alternatives ~vector_bytes:limits.Ir.Backend_intf.simd_vector_bytes
-              ~elt_bytes:(max 1 (Ir.Ops.prec_in_bytes prec))
-              ~m ~n
+            Ir.Register_tile.alternatives ~vector_bytes ~elt_bytes ~m ~n
+            @
+            if rm_twin_seeded then
+              Option.to_list (Ir.Register_tile.rm_twin ~vector_bytes ~elt_bytes ~m ~n)
+            else []
           with
           | [] -> leaf p
           | alts ->

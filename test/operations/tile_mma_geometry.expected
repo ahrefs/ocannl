@@ -12,6 +12,9 @@ no alternative repeats the default: true
 every alternative passes the fit rules: true
 every alternative is the largest tail-free width, or the register-budget cap with a tail of at most one vector: true
 at a single-width file the row count never changes the chosen columns: true
+rm twins: rm2 rn10 lanes4, rm2 rn5 lanes8, rm2 rn10 lanes16, rm2 rn5 lanes8, rm2 rn2 lanes16, rm2 rn5 lanes16, none, none
+the rm twin takes two rows at the default's width exactly where the default takes four: true
+the rm twin passes the fit rules, and one more vector column would not: true
 the coverage of a dividing geometry is all full blocks: true
 the coverage of a dividing geometry has no column tail: true
 the coverage of a non-dividing geometry ends in a partial vector and a row band: true
@@ -28,6 +31,8 @@ the declined routine still computes the serial values: true
 an over-width request declines to the scalar fallback: true
 the unrequested rendering carries the model's default geometry: true
 the unrequested header does not claim a schedule provenance: true
+the two-row twin renders register-tiled under its own header: true
+the two-row twin matches the serial twin bitwise: true
 f32: a site the tile divides in neither dimension renders register-tiled: true
 f32: the header names the one-vector column tail and the two-row band: true
 f32: no scalar accumulator is emitted: true
@@ -46,6 +51,8 @@ half: the tails match the serial twin bitwise: true
 seeds: whole-triple bm0 tiles on 16-byte vectors at 64x512x64: auto, rm4 rn4 lanes4
 the whole-triple seeds carry one auto geometry then exactly the model's alternatives: true
 the site offers at least one alternative to time: true
+seeds with the rm twin gate on: auto, rm4 rn4 lanes4, rm2 rn10 lanes4
+the gate adds exactly the model's two-row twin after the alternatives: true
 a seeded alternative instantiates through the sketch and renders its geometry: true
 a saved Tensorize with a geometry round-trips through its sexp: true
 saved Tensorize without a geometry: (Tensorize(i(Base 0))(j(Base 1))(k(Base 2))(simd_width 8))

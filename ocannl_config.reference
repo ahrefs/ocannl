@@ -476,6 +476,17 @@
 # (gh-ocannl-541). 0 disables the family.
 #autotune_split_reduce_max_sites=8
 
+# If true, the sketch seeding's `register-tile` level (the CPU register-tiled `Tile_mma` leaves,
+# gh-ocannl-619) also proposes a TWO-ROW twin of the renderer's own geometry wherever that
+# geometry takes four rows: `Ir.Register_tile.rm_twin`, rm = 2 at the same vector width with the
+# most vector columns the live-register budget admits beside two rows. The reuse model never picks
+# it (two rows reload every B vector twice as often), so only a timing can say whether its lower
+# register pressure ever wins, and each twin is one more candidate per tensorized leaf -- an
+# ungated width twin once took a site from 22 to 32 seeds. Off until a measurement shows a win
+# (gh-ocannl-947). It shapes what a search proposes, not what a crowned schedule means, so a warm
+# schedule cache replays its winner without searching again.
+#autotune_register_tile_rm_twin=false
+
 # If true, `Autotune.tune` logs each candidate to stderr: its spec, whether it failed (with the
 # error message), deduplicated against an already-seen post-schedule digest, or was timed (and
 # its time), plus the cache-hit, winner-replay and fallback outcomes. For debugging search

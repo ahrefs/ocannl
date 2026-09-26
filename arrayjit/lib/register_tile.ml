@@ -138,3 +138,18 @@ let alternatives ~vector_bytes ~elt_bytes ~m ~n =
       List.map rns ~f:(fun rn -> { rm; rn; lanes })
       |> List.filter ~f:(fun t -> not (equal t dflt))
       |> List.filter ~f:(fun t -> Result.is_ok (check ~vector_bytes ~elt_bytes ~m ~n t))
+
+(* Two rows, at the default's width, with every vector column the budget affords beside them: the
+   least register pressure and the most A-reuse a two-row tile has, which is the question a timing
+   answers and the model cannot (at rm = 2 each B vector is reloaded twice as often, so the model
+   ranks it below the four-row default everywhere). *)
+let rm_twin ~vector_bytes ~elt_bytes ~m ~n =
+  match default ~vector_bytes ~elt_bytes ~m ~n with
+  | Some dflt when dflt.rm = rm_cap ->
+      let rm = 2 in
+      let rn = min (rn_budget_cap ~vector_bytes ~rm) (n / dflt.lanes) in
+      let t = { rm; rn; lanes = dflt.lanes } in
+      (* Distinct from the default and from every alternative by construction: those all take the
+         default's four rows. *)
+      if rn >= 1 && Result.is_ok (check ~vector_bytes ~elt_bytes ~m ~n t) then Some t else None
+  | _ -> None
