@@ -24,16 +24,17 @@
    singleton's fixed index on the output or kernel map, or the count of channel symbols both
    operands read. The same reason predicates are evaluated on the accepted control, where they must
    be false — so a lowering change that stops eliding extent-1 loops fails a "because" claim here
-   rather than silently leaving this documentation stale. A refused site gets no sketch seeds from
-   any family and runs its default schedule.
+   rather than silently leaving this documentation stale. A refused site gets no matmul or conv
+   sketch seeds; a search can still time the preset (whole-routine and fissioned) and split-reduce
+   candidates over it, which this file does not exercise.
 
    Detection for the refused classes is deliberately not added (the wave decision on the issue: add
    it when a benchmark leg wants it). The one benchmark leg that owns such a site is lenet's conv1
    (one input channel, benchmarks/README.md), and no measurement says the implicit-GEMM formulation
    — whose GEMM reduction is the channel axis alone — pays at a reduction extent of one; the window
-   would have to join the reduction for it to. Everything here is structural: graphs are compiled
-   but never dispatched, and seeding runs against MOCKED limits, so the claims are
-   backend-independent. *)
+   would have to join the reduction for it to. Everything here is structural: graphs are lowered and
+   optimized but never compiled or dispatched, and seeding runs against MOCKED limits, so the claims
+   are backend-independent. *)
 
 open Base
 open Ocannl
@@ -43,11 +44,7 @@ module Sched = Ir.Schedule
 module A = Ir.Affine
 module BI = Ir.Backend_intf
 module Idx = Ir.Indexing
-module Asgns = Ir.Assignments
 open Verdict.Claims
-
-let named name (comp : Asgns.comp) : Asgns.comp =
-  { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
 (* An mma capability with 8x8x8 f32 tiles: enough for the GPU conv and matmul families to seed,
    whatever device (if any) the run has. *)
@@ -105,35 +102,25 @@ let accumulation name (x : Ir.Tnode.t) (llc : LL.t) =
            (List.length l))
 
 let observe name ~(x : Tensor.t) (y : Tensor.t) =
-  let result = ref None in
-  let ctx = Context.auto () in
-  let ctx = Train.init_params ctx Idx.Empty y in
-  let _ctx, _routine =
-    Context.compile
-      ~lowered_transform:(fun opt ->
-        let preset seg = Sched.default_gpu ~min_parallel:1 ~limits:mma_limits seg in
-        let zero_sched tns = Sched.zero_expansion ~limits:mma_limits tns in
-        let segments = Sched.fission_scheduled ~preset ~zero_sched ~static_indices:[] opt in
-        let out_map, in_map, kern_map = accumulation name x.Tensor.value opt.LL.llc in
-        result :=
-          Some
-            {
-              conv = Autotune.detect_conv opt.LL.llc;
-              matmul = Option.is_some (Autotune.detect_matmul opt.LL.llc);
-              cpu = Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits:cpu_limits opt;
-              gpu =
-                List.concat_map segments ~f:(fun (_, pre, _, _) ->
-                    Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits:mma_limits pre);
-              out_map;
-              in_map;
-              kern_map;
-            };
-        [ opt ])
-      ctx
-      (named name (Train.forward y))
-      Idx.Empty
-  in
-  Option.value_exn ~here:[%here] !result
+  (* The optimized lowering exactly as [Context.compile] would hand it to a [lowered_transform], by
+     lowering and optimization alone: no codegen, no linking, and so no [Train.init_params] (which
+     would compile AND run the parameter initialization). Nothing here is dispatched. *)
+  let opt = Context.lowered_for_decisions ~name (Context.auto ()) (Train.forward y) Idx.Empty in
+  let preset seg = Sched.default_gpu ~min_parallel:1 ~limits:mma_limits seg in
+  let zero_sched tns = Sched.zero_expansion ~limits:mma_limits tns in
+  let segments = Sched.fission_scheduled ~preset ~zero_sched ~static_indices:[] opt in
+  let out_map, in_map, kern_map = accumulation name x.Tensor.value opt.LL.llc in
+  {
+    conv = Autotune.detect_conv opt.LL.llc;
+    matmul = Option.is_some (Autotune.detect_matmul opt.LL.llc);
+    cpu = Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits:cpu_limits opt;
+    gpu =
+      List.concat_map segments ~f:(fun (_, pre, _, _) ->
+          Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits:mma_limits pre);
+    out_map;
+    in_map;
+    kern_map;
+  }
 
 (* The reasons, read off the lowered accumulation. *)
 let has_fixed map = Array.exists map ~f:(function Idx.Fixed_idx _ -> true | _ -> false)

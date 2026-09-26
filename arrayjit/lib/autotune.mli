@@ -238,8 +238,9 @@ val detect_conv : Ir.Low_level.t -> conv_site option
     input channel or a k-by-1 window (the kernel is no longer read at plain iterators; with one
     input channel no reduction-channel loop remains for [Tensorize (row, oc, ic)]). A channel row of
     several axes is refused too (exactly one reduction channel). An all-singleton window (1x1, any
-    stride) is a plain GEMM: {!detect_matmul} owns it. Refused sites seed no sketch and run the
-    default schedule; [test/operations/conv_detection_boundary] is the witness. *)
+    stride) is a plain GEMM: {!detect_matmul} owns it. Refused sites get no matmul or conv sketch
+    seeds (the preset and split-reduce candidates are unaffected);
+    [test/operations/conv_detection_boundary] is the witness. *)
 
 val matmul_launch_geometry : matmul_site -> sketch_params -> Ir.Schedule.launch_geometry
 (** The launch geometry a GPU matmul seed will have, predicted from the parameters alone
