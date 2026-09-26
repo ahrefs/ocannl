@@ -34,6 +34,15 @@ module Numerics = Ir.Numerics
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 let () = Numerics.set_policy { (Numerics.get ()) with tf32_matmuls = false }
 
+(* Runs [f] under [Fp16_auto], restoring the ambient policy after: a leg claiming default-policy f16
+   behaviour pins the policy rather than inheriting it, since the stanza declares
+   OCANNL_FP16_ARITHMETIC (gh-ocannl-1053; the bf16 controls pin [Bf16_auto] likewise). The policy
+   is read while compiling, so wrapping the compile suffices. *)
+let with_fp16_auto f =
+  let saved = Numerics.get () in
+  Numerics.set_policy { saved with fp16_arithmetic = Numerics.Fp16_auto };
+  Exn.protect ~f ~finally:(fun () -> Numerics.set_policy saved)
+
 open Verdict.Claims
 
 (* Zeros compare equal to zeros. A fragment mapping that reads outside the staged block, a kernel
@@ -493,11 +502,12 @@ let () =
   Tn.update_prec mch0.Tensor.value Ir.Ops.half;
   let ctx_hs = Context.auto () in
   let ctx_hs, routine_hs =
-    Context.compile
-      ~lowered_transform:(fun opt -> [ opt ])
-      ctx_hs
-      (named "mm_h_serial" (Train.forward mch0))
-      Ir.Indexing.Empty
+    with_fp16_auto (fun () ->
+        Context.compile
+          ~lowered_transform:(fun opt -> [ opt ])
+          ctx_hs
+          (named "mm_h_serial" (Train.forward mch0))
+          Ir.Indexing.Empty)
   in
   let ctx_hs = Context.run ctx_hs routine_hs in
   let got_h_serial = nonzero "mm_half_serial" (Context.get_values ctx_hs mch0.Tensor.value) in
@@ -506,11 +516,12 @@ let () =
   let transform_h opt = Sched.apply (mma_schedule ~out:mch1.Tensor.value opt) opt in
   let ctx_h = Context.auto () in
   let ctx_h, routine_h =
-    Context.compile
-      ~lowered_transform:(fun o -> [ transform_h o ])
-      ctx_h
-      (named "mm_h_mma" (Train.forward mch1))
-      Ir.Indexing.Empty
+    with_fp16_auto (fun () ->
+        Context.compile
+          ~lowered_transform:(fun o -> [ transform_h o ])
+          ctx_h
+          (named "mm_h_mma" (Train.forward mch1))
+          Ir.Indexing.Empty)
   in
   let ctx_h = Context.run ctx_h routine_h in
   let got_h = Context.get_values ctx_h mch1.Tensor.value in
@@ -592,7 +603,11 @@ let () =
      let h32mb = NTDSL.init ~l:"h32mb" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ n ] ~f:h32b () in
      let%op mch32 = h32ma * h32mb in
      Tn.update_prec mch32.Tensor.value Ir.Ops.single;
-     let got, census = compile_mma_with_census ~name:"mm_h32_mma" mch32 in
+     (* Pinned: on a native-fp16 CPU [Fp16_narrow] computes the half operands at storage width, so
+        the bridged register tiling below is the default policy's rendering. *)
+     let got, census =
+       with_fp16_auto (fun () -> compile_mma_with_census ~name:"mm_h32_mma" mch32)
+     in
      p_all2 claim_value got exact_h32 ~f:Float.equal;
      let src = Generated.read "mm_h32_mma" in
      let has s = String.is_substring src ~substring:s in
@@ -1664,11 +1679,12 @@ let () =
     in
     let ctx_u = Context.auto () in
     let ctx_u, routine_u =
-      Context.compile
-        ~lowered_transform:(fun o -> [ transform_hu o ])
-        ctx_u
-        (named "mm_hu_staged_mma" (Train.forward mchu))
-        Ir.Indexing.Empty
+      with_fp16_auto (fun () ->
+          Context.compile
+            ~lowered_transform:(fun o -> [ transform_hu o ])
+            ctx_u
+            (named "mm_hu_staged_mma" (Train.forward mchu))
+            Ir.Indexing.Empty)
     in
     let ctx_u = Context.run ctx_u routine_u in
     let got_hu = Context.get_values ctx_u mchu.Tensor.value in
