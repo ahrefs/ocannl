@@ -1213,6 +1213,23 @@ let slug heading =
       else None)
   |> String.of_list
 
+(** The anchor ids GitHub gives a file's headings, in document order: each heading's {!slug}, with a
+    repeated slug suffixed [-1], [-2], … on its second, third, … occurrence. Comparing an anchor to
+    each heading's bare slug instead rejected a valid pointer at the later of two same-titled
+    sections and accepted [#title] as naming whichever one it liked (Codex P2, round 1 on
+    lukstafi/ocannl-staging#811). *)
+let heading_ids contents =
+  let seen = Hashtbl.create (module String) in
+  List.map (headings contents) ~f:(fun h ->
+      let s = slug h in
+      match Hashtbl.find seen s with
+      | None ->
+          Hashtbl.set seen ~key:s ~data:1;
+          s
+      | Some n ->
+          Hashtbl.set seen ~key:s ~data:(n + 1);
+          Printf.sprintf "%s-%d" s n)
+
 (** A link's DESTINATION, separated from its optional title. [(../agent-notes.md "Agent notes")] is
     a perfectly ordinary link, and comparing the whole parenthesised text against the index filename
     reported a note unreachable over a link that navigates there (Codex P2, round 9). A destination
@@ -1446,8 +1463,7 @@ let check_index ~index_file ~index_contents ~(files : (string * string) list) =
                   match row.anchor with
                   | None -> []
                   | Some a ->
-                      if List.exists (headings contents) ~f:(fun h -> String.equal (slug h) a) then
-                        []
+                      if List.mem (heading_ids contents) a ~equal:String.equal then []
                       else
                         [
                           report
@@ -1627,14 +1643,19 @@ type pointer = { pointer_line : int; path : string; anchor : string }
 let path_char c = Char.is_alphanum c || List.mem [ '_'; '-'; '.'; '/' ] c ~equal:Char.equal
 let anchor_char c = Char.is_alphanum c || Char.equal c '_' || Char.equal c '-'
 
-(** Every [<path>.md#<anchor>] in [contents], code spans included: a pointer set in backticks is
-    still a pointer. The path is the maximal run of path characters before [.md#] and the anchor the
-    maximal run of slug characters after it; a placeholder such as [<note>.md#<slug>] has an empty
-    one and is not a pointer. *)
+(** Every [<path>.md#<anchor>] in [contents] that a reader sees, code spans and fenced blocks
+    included: a pointer set in backticks is still a pointer. One inside an HTML comment renders
+    nowhere, so it is not read -- neither checked nor counted toward the live scan's floor (Codex
+    P2, round 1 on lukstafi/ocannl-staging#811). The path is the maximal run of path characters
+    before [.md#] and the anchor the maximal run of slug characters after it; a placeholder such as
+    [<note>.md#<slug>] has an empty one and is not a pointer. *)
 let guide_pointers contents =
+  let comments = (inert_by_line contents).comment_ranges in
   List.concat_map (lines contents) ~f:(fun (lineno, line) ->
       let n = String.length line in
+      let hidden = spans_at comments lineno in
       String.substr_index_all line ~may_overlap:false ~pattern:".md#"
+      |> List.filter ~f:(fun i -> not (in_any_span hidden i))
       |> List.filter_map ~f:(fun i ->
           let start = ref i in
           while !start > 0 && path_char line.[!start - 1] do
@@ -1687,8 +1708,7 @@ let check_guide ~guide_file ~guide_contents ~index_file ~index_contents
                     one at the root"
                    p.path p.anchor ("docs/" ^ target))
           | Some contents ->
-              if List.exists (headings contents) ~f:(fun h -> String.equal (slug h) p.anchor) then
-                None
+              if List.mem (heading_ids contents) p.anchor ~equal:String.equal then None
               else
                 report
                   (Printf.sprintf

@@ -476,6 +476,14 @@ let index_cases =
       index [ "| [a.md](agent-notes/a.md#the-widget-seam) | the `Widget` seam |" ],
       [ ("agent-notes/a.md", file "## The Widget seam\n\n- A fact about `Widget`.\n") ],
       [] );
+    ( "an anchor on the second of two same-titled headings",
+      index [ "| [a.md](agent-notes/a.md#the-widget-seam-1) | the `Widget` seam |" ],
+      [
+        ( "agent-notes/a.md",
+          file "## The Widget seam\n\n- A fact about `Widget`.\n\n## The Widget seam\n\n- More.\n"
+        );
+      ],
+      [] );
     ( "an anchor the file has no heading for",
       index [ "| [a.md](agent-notes/a.md#the-gadget-seam) | the `Widget` seam |" ],
       [ ("agent-notes/a.md", file "## The Widget seam\n\n- A fact about `Widget`.\n") ],
@@ -799,9 +807,18 @@ let guide_notes =
   [
     ("agent-notes/a.md", file "## The Widget seam\n\n- A fact about `Widget`.\n");
     ("agent-notes/b.md", file "## The Gadget seam\n\n- A fact about `Gadget`.\n");
+    ( "agent-notes/c.md",
+      file
+        "## The Widget seam\n\n\
+         - A first fact about `Sprocket`.\n\n\
+         ## The Widget seam\n\n\
+         - A second fact about `Sprocket`.\n" );
   ]
 
-let guide_index = index [ row "a.md" "the `Widget` seam"; row "b.md" "the `Gadget` seam" ]
+let guide_index =
+  index
+    [ row "a.md" "the `Widget` seam"; row "b.md" "the `Gadget` seam"; row "c.md" "the `Sprocket`" ]
+
 let guide line = "# OCANNL Agent Guide\n\n" ^ line ^ "\n"
 
 let guide_cases =
@@ -820,7 +837,7 @@ let guide_cases =
       [] );
     ("a pointer into the index itself", guide "- A rule (docs/agent-notes.md#agent-notes).", []);
     ( "a bare basename that is no note",
-      guide "- A rule; the mechanism: c.md#the-widget-seam.",
+      guide "- A rule; the mechanism: d.md#the-widget-seam.",
       [ "guide-anchors @ AGENTS.md:3" ] );
     ( "a path outside the notes is not a pointer into them",
       guide "- A rule; see docs/proposals/x.md#anything and ./CHANGES.md#unreleased.",
@@ -831,6 +848,19 @@ let guide_cases =
     ("a placeholder names no anchor", guide "- Pointers read `<note>.md#<anchor>`.", []);
     ( "two pointers on one line are each checked",
       guide "- Both a.md#the-widget-seam and b.md#the-widget-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    (* A comment renders nowhere, so a stale pointer inside one is not a pointer; the same pointer
+       beside the comment on the next line still is. *)
+    ( "a pointer inside an HTML comment is not read",
+      guide "- A rule. <!-- was a.md#the-sprocket-seam -->\n- Another; a.md#the-sprocket-seam.",
+      [ "guide-anchors @ AGENTS.md:4" ] );
+    (* GitHub suffixes a repeated heading's anchor: the second "The Widget seam" in [c.md] is
+       [#the-widget-seam-1], and there is no third. *)
+    ( "a pointer at the second of two same-titled headings",
+      guide "- A rule; the mechanism: c.md#the-widget-seam-1.",
+      [] );
+    ( "a pointer at a third that does not exist",
+      guide "- A rule; the mechanism: c.md#the-widget-seam-2.",
       [ "guide-anchors @ AGENTS.md:3" ] );
   ]
 
