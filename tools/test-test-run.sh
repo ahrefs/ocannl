@@ -127,7 +127,7 @@
 #  57. every tracked ocannl_config naming a backend is one the kind is read from.
 #  58. the readers fleet-slot-run.sh builds are test/config's: ocannl_read_config
 #      answers --read=backend, ocannl_slot_kind asks Test_utils.Slot_kind.
-#  59-62 sit after leg 47: the source a run tested, recorded at launch
+#  59-63 sit after leg 47: the source a run tested, recorded at launch
 #      (gh-ocannl-992), against a committed fixture checkout.
 #  59. a clean checkout records its HEAD as `head` and an empty `dirty`.
 #  60. a dirty one lists a modified tracked path and an untracked one (the
@@ -137,6 +137,8 @@
 #      redirect the record.
 #  62. outside Git, and in a copy sitting below a checkout's top level, neither
 #      file is recorded and the run launches as before.
+#  63. a commit landing between the HEAD read and the status is re-read: the
+#      record never pairs the older HEAD with the newer tree's status.
 
 set -u
 
@@ -3058,7 +3060,7 @@ else report 1 'lifecycle: every launch and recovery leaves the source tree byte-
 lifecycle_cleanup
 
 # ---------------------------------------------------------------------------
-# Legs 59-62: the source a run tested, recorded at launch (gh-ocannl-992)
+# Legs 59-63: the source a run tested, recorded at launch (gh-ocannl-992)
 # ---------------------------------------------------------------------------
 # A fixture checkout of the staged script, committed, then launched clean and
 # dirty; the lifecycle fixture's fake dune does the running. Git's system and
@@ -3066,13 +3068,13 @@ lifecycle_cleanup
 # launches (neither variable is one the shipping script drops), so a user's
 # hooks, signing or line-ending settings cannot move a verdict.
 if ! command -v git >/dev/null 2>&1; then
-  skip 'checkout: head and dirty recorded at launch (legs 59-62)' 'no git on PATH'
+  skip 'checkout: head and dirty recorded at launch (legs 59-63)' 'no git on PATH'
 else
   ck_git() { GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git "$@"; }
   ck_runs=$TMP/checkout-runs
   ck_launch() { # <fixture root>; sets ck_rc and ck_dir, the run it recorded
     GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null OCANNL_TOOL_TEST_RUNS=$ck_runs \
-      PATH=$life_bin:$PATH "$1/tools/test-run.sh" run --cap 30 ok \
+      PATH=${ck_path_extra:+$ck_path_extra:}$life_bin:$PATH "$1/tools/test-run.sh" run --cap 30 ok \
       >"$TMP/checkout.out" 2>"$TMP/checkout.err"
     ck_rc=$?
     ck_dir=$(OCANNL_TOOL_TEST_RUNS=$ck_runs "$1/tools/test-run.sh" paths run last) || ck_dir=
@@ -3169,6 +3171,36 @@ else
     report 0 "checkout: a root that is not a checkout's top level records neither, and still runs"
   else
     report 1 "checkout: a root that is not a checkout's top level records neither, and still runs" "$ck_detail"
+  fi
+
+  # Leg 63: a commit landing between the HEAD read and the status. A git shim
+  # makes one, once, right after the first `git status` of the launch; the
+  # record must pair the status with the HEAD it was taken against -- the new
+  # commit, after a retake -- never the old commit with the new tree's status.
+  ck_shim=$TMP/checkout-shim
+  mkdir -p "$ck_shim"
+  ck_real_git=$(command -v git)
+  cat >"$ck_shim/git" <<EOF
+#!/usr/bin/env bash
+"$ck_real_git" "\$@"
+rc=\$?
+if [ "\${1:-}" = status ] && [ ! -e "$TMP/checkout-raced" ]; then
+  : >"$TMP/checkout-raced"
+  "$ck_real_git" commit -q --allow-empty --no-verify -m race >/dev/null 2>&1
+fi
+exit \$rc
+EOF
+  chmod +x "$ck_shim/git"
+  rm -f "$TMP/checkout-raced"
+  ck_path_extra=$ck_shim ck_launch "$ck_root"
+  ck_raced_head=$(ck_git -C "$ck_root" rev-parse HEAD)
+  if [ "$ck_rc" = 0 ] && [ -e "$TMP/checkout-raced" ] && [ "$ck_raced_head" != "$ck_head" ] \
+     && [ "$(cat "$ck_dir/head" 2>/dev/null)" = "$ck_raced_head" ] \
+     && grep -Fqx ' M NOTES' "$ck_dir/dirty"; then
+    report 0 'checkout: a commit landing mid-record is re-read, never paired with the older HEAD'
+  else
+    report 1 'checkout: a commit landing mid-record is re-read, never paired with the older HEAD' \
+      "exit $ck_rc; raced: $([ -e "$TMP/checkout-raced" ] && echo yes || echo no); head $(cat "$ck_dir/head" 2>&1) (want $ck_raced_head, was $ck_head)"
   fi
   lifecycle_cleanup
 fi
