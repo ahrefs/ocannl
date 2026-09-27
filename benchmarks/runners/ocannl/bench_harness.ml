@@ -185,6 +185,15 @@ let train_step_bindings = function
   | Host_gate (_, _, grad_routine, _) -> grad_routine.Context.bindings
   | Device_gate (_, _, routine, _) -> routine.Context.bindings
 
+(** How many times a host-gated step has launched its optimizer routine in this process — the gate
+    skips it on a non-finite gradient checksum. {!step_routines} reads it against the count at the
+    start of the timed window, so a kernel no measured step launched is not offered as the step's
+    dominant one. *)
+let host_gated_optimizer_runs = ref 0
+
+(** [!host_gated_optimizer_runs] when the timed window opened; set by {!measure_and_emit}. *)
+let optimizer_runs_at_window = ref 0
+
 (** Runs one step of [routines] — a training step, or a forward pass when the runner compiled its
     forward code as [Plain]. The scaled legs thread the context (the scaler overwrites the scale
     tensors), hence the reference. [step] is 0-based. *)
@@ -192,9 +201,8 @@ let run_train_step routines ctx_ref ~step =
   match routines with
   | Plain routine -> Train.run !ctx_ref routine
   | Host_gate (scaler, checksum, grad_routine, sgd_routine) ->
-      let ctx, _ran =
-        Mixed_prec.scaled_step ~scaler ~grad_routine ~sgd_routine ~checksum !ctx_ref
-      in
+      let ctx, ran = Mixed_prec.scaled_step ~scaler ~grad_routine ~sgd_routine ~checksum !ctx_ref in
+      if ran then Int.incr host_gated_optimizer_runs;
       ctx_ref := ctx
   | Device_gate (scaler, wflag, routine, interval) ->
       let ctx, _window_finite =
@@ -855,7 +863,11 @@ let dominant_kernel ?(repeats = 20) ~ctx ~bindings routines =
 (** The compiled routines of a step shape, for {!dominant_kernel}. *)
 let step_routines = function
   | Plain routine | Device_gate (_, _, routine, _) -> [ routine ]
-  | Host_gate (_, _, grad_routine, sgd_routine) -> [ grad_routine; sgd_routine ]
+  | Host_gate (_, _, grad_routine, sgd_routine) ->
+      (* The host gate skips the optimizer on a non-finite checksum: if no timed step launched it,
+         its kernels are not part of the measured step and cannot be its dominant kernel. *)
+      if !host_gated_optimizer_runs > !optimizer_runs_at_window then [ grad_routine; sgd_routine ]
+      else [ grad_routine ]
 
 (** {1 The measurement protocol's parameters, apart from the fixture (gh-ocannl-702)}
 
@@ -955,6 +967,7 @@ let measure_and_emit ~protocol ~backend ~variant ?(precision = "f32") ~compile_s
      steady-state footprint -- everything still held at this point, plus anything the timed steps go
      on to allocate -- which is the quantity a footprint-scoped materialization trades time for. *)
   Ir.Alloc_census.reset_peak ();
+  optimizer_runs_at_window := !host_gated_optimizer_runs;
   let synced =
     Array.init timed_steps ~f:(fun _ ->
         let c0 = Mtime_clock.counter () in

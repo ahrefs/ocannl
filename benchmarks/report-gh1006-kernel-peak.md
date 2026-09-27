@@ -1,8 +1,8 @@
-# gh-ocannl-1006: the `kernel %peak` column, one cell per backend
+# gh-ocannl-1006: the `kernel %peak` column on Metal, cc and CUDA
 
 The exhibit behind the report's second gh-ocannl-1006 column — %-of-peak for each cell's dominant
-kernel — showing it populated on every backend with its no-value cases in place. **This is a
-rendering claim, not a measurement campaign**: the `mlp_wide` fixture here was generated for a
+kernel — showing it populated on Metal, cc and CUDA (no HIP cell was run) with its no-value cases
+in place. **This is a rendering claim, not a measurement campaign**: the `mlp_wide` fixture here was generated for a
 smoke run on mac-studio (`gen_fixtures.py --out-dir`, recorded nowhere, measured under
 `--no-fixture-digest-check`), so each section names bytes no origin records and its numbers compare
 with nothing outside this file. Each section below is `orchestrate.py`'s own `report.md`, verbatim,

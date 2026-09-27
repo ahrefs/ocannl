@@ -404,7 +404,7 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   [report-cifar-cuda.md](report-cifar-cuda.md) (Linux/CUDA, the cifar-scale conv baseline
   for gh-ocannl-500/502 with a per-layer breakdown),
   [report-gh1006-kernel-peak.md](report-gh1006-kernel-peak.md) (the `kernel %peak` column
-  populated on every backend, its no-value cases in place — a rendering exhibit on a smoke
+  populated on Metal, cc and CUDA, its no-value cases in place — a rendering exhibit on a smoke
   fixture, not a measurement) and
   [report-gh537-metal.md](report-gh537-metal.md) (macOS/Metal, the paired before/after A/B of
   gh-ocannl-537's `Swap` ∘ `Split_reduce` seeding — the Metal leg of the CUDA measurement in

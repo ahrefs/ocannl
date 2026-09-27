@@ -189,20 +189,28 @@ let maybe_sink_zeros (lowered : Low_level.optimized) : Low_level.optimized =
    stores the result on the routine. The same bracket pattern as [C_syntax.with_census], for the
    same reason: which kernels a routine runs is a property of the compiled routine, and it cannot be
    recovered from outside -- a tuned routine's segments come out of a [lowered_transform] only the
-   search saw, so re-lowering its computation reproduces the default pipeline instead. *)
-let segments_census : Low_level.optimized list option ref = ref None
-let record_segments segments = segments_census := Some segments
+   search saw, so re-lowering its computation reproduces the default pipeline instead. Domain-local,
+   like the codegen censuses: backends are process-wide singletons, and two domains compiling at
+   once must not read or restore each other's segment lists. *)
+let segments_census =
+  let key : Low_level.optimized list option ref Stdlib.Domain.DLS.key =
+    Stdlib.Domain.DLS.new_key (fun () -> ref None)
+  in
+  fun () -> Stdlib.Domain.DLS.get key
+
+let record_segments segments = segments_census () := Some segments
 
 let with_segments_census f =
-  let saved = !segments_census in
-  segments_census := None;
+  let cell = segments_census () in
+  let saved = !cell in
+  cell := None;
   match f () with
   | result ->
-      let recorded = !segments_census in
-      segments_census := saved;
+      let recorded = !cell in
+      cell := saved;
       (result, Option.value recorded ~default:[])
   | exception exn ->
-      segments_census := saved;
+      cell := saved;
       raise exn
 
 (* Schedule ops applied per segment can CREATE tnodes the pre-fission store has never seen -- a
