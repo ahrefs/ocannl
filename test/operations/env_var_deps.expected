@@ -20,6 +20,7 @@ Directories whose sources this scan reads:
 
 Configuration keys tracked as ambient dependencies, in the one spelling OCANNL reads:
   autotune_beam_width
+  autotune_register_tile_rm_twin
   autotune_rounds
   autotune_search
   backend

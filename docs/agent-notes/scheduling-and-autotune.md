@@ -392,9 +392,13 @@ files.
   `; geometry from the schedule` on a request and nothing on a default, so pre-619 codegen goldens
   stand. Sweep a width by seeding it or by handing `?tile` to `Sched.tensorize` — never by
   patching the renderer again. The cache saves the field as `[@sexp.option]`, so pre-619 entries
-  parse. Not done: `rm` alternatives (seeding varies the width only), the conv family (not
-  tree-factored); gh-ocannl-947's `Cost_model`-derived peel weight has no peel left to price —
-  what remains of it is whether a partial vector's masked copies deserve a term.
+  parse. Summed over a site the model's price is `ceil(n/lanes)*(1+1/rm) + ceil(n/(rn*lanes))`,
+  so at one width it ranks by pass count alone and exact ties are common; it is computed as an
+  integer (scaled by `rm`) because the float form broke those ties by rounding at rm = 3 and 1
+  (gh-ocannl-947). The two-row twin `Register_tile.rm_twin` (rm = 2, the widest the budget admits)
+  joins the level only under `autotune_register_tile_rm_twin`, off until a timing shows it winning.
+  Not done: the conv family (not tree-factored); whether a partial vector's masked copies deserve
+  a term of their own.
 - "Crowned" is not "shipped", and neither is reproducible on a small routine. `Train.tune_placements`
   runs two searches and keeps one artifact, so a family can win the arm that is then discarded whole
   — read `report.best_label` / `best_tensorized` / `best_tensorization` / `mma_best_ms` per arm (the A/B calls `?report`

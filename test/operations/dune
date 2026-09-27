@@ -3981,13 +3981,15 @@
  (deps
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_AUTOTUNE_REGISTER_TILE_RM_TWIN))
  (modules tile_mma_geometry)
  (libraries
   base
   ocannl
   arrayjit.autotune
   stdio
+  unix
   arrayjit.verdict
   test_utils
   ll_test)

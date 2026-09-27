@@ -31,6 +31,11 @@
    exactly [Register_tile.alternatives] of the site's extents beside one auto seed, and one seeded
    alternative, instantiated through [Autotune.sketch_schedule], renders that geometry.
 
+   - The two-row twin (gh-ocannl-947): [Register_tile.rm_twin] exists exactly where the default
+   takes four rows, is the widest two-row tile the budget admits, renders register-tiled and bitwise
+   against the serial twin, and joins the seeds only under [autotune_register_tile_rm_twin], after
+   the alternatives.
+
    - The cache format: a saved [Tensorize] with a geometry round-trips through its sexp, and one
    without omits the field, so entries written before gh-ocannl-619 keep parsing. *)
 
@@ -131,6 +136,27 @@ let () =
         Option.map (RT.default ~vector_bytes:16 ~elt_bytes ~m ~n) ~f:(fun t -> (t.rn, t.lanes))
       in
       Option.equal (fun (a, b) (c, d) -> a = c && b = d) (cols m) (cols 64));
+  (* The two-row twin (gh-ocannl-947), proposed only under [autotune_register_tile_rm_twin]. *)
+  Stdio.printf "rm twins: %s\n"
+    (String.concat ~sep:", "
+       (List.map shapes ~f:(fun (vector_bytes, elt_bytes, m, n) ->
+            Option.value_map
+              (RT.rm_twin ~vector_bytes ~elt_bytes ~m ~n)
+              ~default:"none" ~f:RT.to_string)));
+  p_all "the rm twin takes two rows at the default's width exactly where the default takes four"
+    shapes ~f:(fun (vector_bytes, elt_bytes, m, n) ->
+      match
+        (RT.default ~vector_bytes ~elt_bytes ~m ~n, RT.rm_twin ~vector_bytes ~elt_bytes ~m ~n)
+      with
+      | Some d, Some t -> d.rm = RT.rm_cap && t.rm = 2 && t.lanes = d.lanes
+      | Some d, None -> d.rm < RT.rm_cap
+      | None, twin -> Option.is_none twin);
+  p_all "the rm twin passes the fit rules, and one more vector column would not" shapes
+    ~f:(fun shape ->
+      let vector_bytes, elt_bytes, m, n = shape in
+      match RT.rm_twin ~vector_bytes ~elt_bytes ~m ~n with
+      | None -> true
+      | Some t -> accepted t shape && not (accepted { t with rn = t.rn + 1 } shape));
   let dividing = RT.coverage ~m:64 ~n:64 { rm = 4; rn = 2; lanes = 8 } in
   p "the coverage of a dividing geometry is all full blocks"
     (dividing.m_full = 64 && dividing.n_full = 64);
@@ -240,6 +266,8 @@ let () =
         "an over-width request declines to the scalar fallback";
         "the unrequested rendering carries the model's default geometry";
         "the unrequested header does not claim a schedule provenance";
+        "the two-row twin renders register-tiled under its own header";
+        "the two-row twin matches the serial twin bitwise";
       ]
       ~f:skipped
   else begin
@@ -292,7 +320,17 @@ let () =
     p "the unrequested rendering carries the model's default geometry"
       (register_tiled census_d && String.is_substring src_d ~substring:(header dflt));
     p "the unrequested header does not claim a schedule provenance"
-      (not (String.is_substring src_d ~substring:provenance))
+      (not (String.is_substring src_d ~substring:provenance));
+    (* The two-row twin of this site's default (gh-ocannl-947): the widest two-row tile the file's
+       budget admits: 2x10 of 4 lanes on NEON and 2x5 of 8 on AVX2, each with a 24-column tail at n
+       = 64, and 2x4 of 16 on AVX-512, where the column extent caps it tail-free. *)
+    let twin = Option.value_exn (RT.rm_twin ~vector_bytes ~elt_bytes ~m:n ~n) in
+    let%op twin_t = ma * mb in
+    let got_tw, census_tw = compile_run ~name:"tmg_rm_twin" ~leg:(Tensorized (Some twin)) twin_t in
+    let src_tw = Generated.read "tmg_rm_twin" in
+    p "the two-row twin renders register-tiled under its own header"
+      (register_tiled census_tw && String.is_substring src_tw ~substring:(header twin));
+    p_all2 "the two-row twin matches the serial twin bitwise" got_tw want ~f:Float.equal
   end
 
 (* === The tails (gh-ocannl-620) === *)
@@ -396,6 +434,12 @@ let () =
       Ir.Indexing.Empty
   in
   let opt = Option.value_exn !captured in
+  (* The rm-twin gate is read per call; pin it off for the ungated claims whatever the ambient
+     environment says, and on only around the gated ones. *)
+  let rm_twin_gate on =
+    Unix.putenv "OCANNL_AUTOTUNE_REGISTER_TILE_RM_TWIN" (if on then "true" else "false")
+  in
+  rm_twin_gate false;
   let whole_tiles ~limits =
     Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits opt
     |> List.filter ~f:(fun p -> p.Autotune.sk_mma && p.Autotune.sk_bk = 0 && p.Autotune.sk_bm = 0)
@@ -411,6 +455,15 @@ let () =
     (List.equal (Option.equal RT.equal) tiles
        (None :: List.map (RT.alternatives ~vector_bytes:16 ~elt_bytes ~m ~n:nn) ~f:Option.some));
   p_exists "the site offers at least one alternative to time" tiles ~f:Option.is_some;
+  rm_twin_gate true;
+  let gated = whole_tiles ~limits:synthetic in
+  rm_twin_gate false;
+  Stdio.printf "seeds with the rm twin gate on: %s\n"
+    (String.concat ~sep:", " (List.map gated ~f:(Option.value_map ~default:"auto" ~f:RT.to_string)));
+  p "the gate adds exactly the model's two-row twin after the alternatives"
+    (List.equal (Option.equal RT.equal) gated
+       (tiles @ [ RT.rm_twin ~vector_bytes:16 ~elt_bytes ~m ~n:nn ])
+    && Option.is_some (RT.rm_twin ~vector_bytes:16 ~elt_bytes ~m ~n:nn));
   if not on_cpu then
     skipped "a seeded alternative instantiates through the sketch and renders its geometry"
   else begin
