@@ -475,11 +475,11 @@ let fixed_fit_noise_fraction = 0.25
    stall.
 
    Per calibration: once the probes' summed wall reaches eight target-sized probes -- one for each
-   probe a converging calibration can make: the provisional probe, four validations, an
-   interpolation or confirmation, its stall retry, and the rescue below -- no further validation,
-   confirmation or retry starts, and the calibration ends unresolved, so the wall-bounded fallback
-   decides the depth from what was measured. The synchronized singles are not charged: they are the
-   timed window whenever the depth settles at 1. *)
+   probe that checks this budget, i.e. every probe [queue_calibration_max_probes] below counts
+   except the rescue, which checks none -- no further validation, confirmation or retry starts, and
+   the calibration ends unresolved, so the wall-bounded fallback decides the depth from what was
+   measured. The synchronized singles are not charged: they are the timed window whenever the depth
+   settles at 1. *)
 let queue_batch_probe_min_runs = 3
 let queue_batch_probe_wall_ms = 2. *. Float.of_int queue_batch_probe_runs *. queued_batch_ms
 let queue_calibration_wall_ms = 8. *. Float.of_int queue_batch_probe_runs *. queued_batch_ms
