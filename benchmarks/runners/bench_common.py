@@ -344,7 +344,14 @@ def run_protocol(step, sync, meta, peak_memory=None, retime=False):
     6. With `retime`: a sync, then `timed_steps` more steps timed as in 4 (`retime_step_ms`).
 
     Returns `compile_s`, `step_ms`, `queued_step_ms`, `timed_steps`, `losses`, the three
-    `peak_memory_*` keys (see `peak_memory_fields`) and, when retiming, `retime_step_ms`.
+    `peak_memory_*` keys (see `peak_memory_fields`), `dominant_kernel` and, when retiming,
+    `retime_step_ms`.
+
+    `dominant_kernel` is always None here: the report's %-of-peak column (gh-ocannl-1006) scores
+    the kernel an OCANNL cell spends longest in against the envelope its own cost model counts
+    for, and neither Python framework exposes per-kernel op and byte counts to score. The key is
+    emitted anyway, as JSON null, so that every runner's row has the same keys and the report
+    prints a dash for "not measured" rather than inferring it from an absent field.
     """
     parity_steps = int(meta["parity_steps"])
     warmup_steps = int(meta["warmup_steps"])
@@ -401,6 +408,7 @@ def run_protocol(step, sync, meta, peak_memory=None, retime=False):
         "timed_steps": timed_steps,
         "losses": losses,
         **peak_memory_result,
+        "dominant_kernel": None,
     }
     if retimed:
         result["retime_step_ms"] = percentiles(retimed)

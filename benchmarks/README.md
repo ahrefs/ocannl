@@ -597,6 +597,43 @@ than the driver (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` at module load), run it wi
     rows do carry a number, because the shared allocator seam counts a `cc` pool exactly as it
     counts a CUDA one; what it covers is that seam's coverage, so a device's reserved merge-buffer
     slab, the loaded code modules and the host-side `Ndarray` arrays are outside it.
+- **The dominant kernel's %-of-peak column** (gh-ocannl-1006, what gh-ocannl-620/627 close against;
+  its definition shares the envelope constants gh-ocannl-636 settled). `kernel %peak` scores ONE
+  kernel per cell: after the timed steps (so none of it is in the step times or the memory
+  column), `Bench_harness.dominant_kernel` compiles every kernel the step **shipped** — the
+  routine's own `Context.routine.segments`, so a tuned cell's searched winner is what gets timed,
+  not the default pipeline a re-lowering would produce — as a routine of its own through the
+  `?prelowered` seam, times each min-of-20 with a device sync per run, and takes the slowest. The
+  cell reads `41.3% f32 memory · k3/12 0.412 ms w1.grad`: the attainment, its ceiling, the roofline
+  leg that binds, then the kernel's launch position, its own time and the nodes it writes. Four
+  decisions, each stated in the section header where the numbers are read:
+  - *Which kernel.* By **measured** time, not by the cost model's own roofline bound — the column
+    exists partly to check the model's counts, and choosing by its prediction would be circular.
+    A kernel the backend refuses to compile on its own (the gh-ocannl-533 scratch validator on a
+    hermetic segment) is counted as `+N untimed`, and the dominant one is dominant among the rest.
+  - *What number.* The roofline lower bound over the measured time — `max(ops / peak FLOP/s, bytes
+    / peak bandwidth)` on `Ir.Cost_model.analyze`'s counts — so a memory-bound kernel is scored
+    against bandwidth and a compute-bound one against arithmetic. Printed **only on an exact
+    count**: `approx` for an op or byte count that is an upper bound (`Cost_model.approximate`,
+    the per-leg rule the calibration fit follows), `opaque` for code the model cannot see.
+  - *Which ceiling.* Matched to the kernel: `f32` is the backend's single-precision scalar
+    `peak_flops` with `peak_memory_bandwidth`; `f16-native` doubles the flops leg for a kernel whose
+    arithmetic is all 16-bit on a target where that is native (gh-ocannl-575). A **GPU tensor-core
+    kernel has none** — `no ceiling` — because `peak_flops` is scalar f32 and no class constant for
+    the mma unit exists, so scoring against it would read above 100% on exactly the rows this
+    column is for. The C backends' `Tile_mma` register tile runs on the SIMD units `peak_flops`
+    describes and keeps the scalar ceiling. Both legs or nothing: the C backends carry no class
+    constant, so a `cc` row prints `no ceiling` unless `model_peak_flops` and
+    `model_peak_memory_bandwidth` are set (fit them with `tools/fit_envelope.exe` /
+    `tools/calibrate_bandwidth.exe`); the envelope is `Autotune.envelope_legs`, the one the model
+    ranks with, and the header names each ceiling's constants and whose they are.
+  - *Whose ceiling.* These are CLASS constants (or one machine's override), not this device's
+    peak: the column ranks before/after on one box and certifies nothing about the hardware. A
+    number above 100% says the constant is below this card. A small kernel's launch overhead counts
+    against it, since the kernel is timed with its launch.
+  The Python runners carry `"dominant_kernel": null` (they expose no per-kernel counts), printed
+  `—`. `BENCH_DOMINANT_KERNEL=0` turns the instrument off for an OCANNL cell — it costs one compile
+  per kernel of the step — and its row then prints `—` too.
 - Losses are recorded per step *before* that step's SGD update (forward runs first in every
   framework's step). The first step doubles as the compile probe in the Python runners; for
   OCANNL, `compile_s` wraps `Context.compile` (or `Autotune.tune`).

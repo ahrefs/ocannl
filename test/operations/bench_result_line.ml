@@ -86,6 +86,60 @@ let tune =
           ~terminal_failure:None;
       ]
 
+(* gh-ocannl-1006: the dominant kernel's %-of-peak, one fabricated kernel per verdict. The constants
+   are round so the arithmetic can be checked by eye: 1e9 bytes at 1e12 B/s is 1 ms, 1e9 ops at 5e12
+   FLOP/s is 0.2 ms, so the memory leg binds and a 4 ms kernel attains 25%. *)
+let class_legs = (Some (5e12, "fab class constant"), Some (1e12, "fab class constant"))
+
+let ceiling ?(gpu = true) ?(tensorization = "not-requested") ?(narrow_native = false)
+    ?(legs = class_legs) () =
+  Bench_json.choose_ceiling ~gpu ~tensorization ~narrow_native ~peak_flops:(fst legs)
+    ~peak_memory_bandwidth:(snd legs)
+
+let kernel ?(flops = 1_000_000_000) ?(bytes = 1_000_000_000) ?(flops_exact = true)
+    ?(bytes_exact = true) ?(opaque = false) ?(tensorization = "not-requested") ?(seg_ms = 4.) () =
+  {
+    Bench_json.segment = 3;
+    segments = 12;
+    declined = 0;
+    (* A label with the characters that would invalidate the record, as a node name can carry. *)
+    writes = "w1.grad \"b1\"";
+    seg_ms;
+    segments_ms = 10.;
+    tensorization;
+    flops;
+    bytes;
+    flops_exact;
+    bytes_exact;
+    opaque;
+  }
+
+let dominant_kernels =
+  [
+    ("exact", Bench_json.dominant_kernel_object ~ceiling:(ceiling ()) (Some (kernel ())));
+    ( "exact f16-native",
+      (* 4e10 ops at twice 5e12 is 4 ms against 1 ms of bytes: compute binds, 8 ms is 50%. *)
+      Bench_json.dominant_kernel_object
+        ~ceiling:(ceiling ~gpu:false ~narrow_native:true ())
+        (Some (kernel ~flops:40_000_000_000 ~seg_ms:8. ())) );
+    ( "approximate",
+      Bench_json.dominant_kernel_object ~ceiling:(ceiling ()) (Some (kernel ~bytes_exact:false ()))
+    );
+    ( "opaque",
+      Bench_json.dominant_kernel_object ~ceiling:(ceiling ()) (Some (kernel ~opaque:true ())) );
+    ( "no-ceiling (no constants)",
+      Bench_json.dominant_kernel_object
+        ~ceiling:(ceiling ~gpu:false ~legs:(None, Some (1e12, "fab config")) ())
+        (Some (kernel ())) );
+    ( "no-ceiling (gpu tensor cores)",
+      Bench_json.dominant_kernel_object
+        ~ceiling:(ceiling ~tensorization:"tensorized" ())
+        (Some (kernel ~tensorization:"tensorized" ())) );
+    ( "no-kernel",
+      Bench_json.dominant_kernel_object ~note:"all 12 kernels declined to compile on their own"
+        ~ceiling:(Error "no kernel") None );
+  ]
+
 let ordinary =
   Bench_json.result_line ~backend:"cc" ~variant:"default" ~precision:"f32" ~profile:None
     ~regime_knobs:[ ("tf32_matmuls", None); ("cc_backend_fast_math", None) ]
@@ -94,6 +148,7 @@ let ordinary =
       (* A fabricated counter name, deliberately not the harness's own spelling: what this test pins
          is that the wire format carries the pair, not what any one runner calls its counter. *)
     ~peak_memory:(Some (2097152, "fab-hw", "fabricated \"high-water\" counter (requested bytes)"))
+    ~dominant_kernel:(List.Assoc.find_exn dominant_kernels "exact" ~equal:String.equal)
     ~losses:[| 2.5; 1.75; 1.25 |] ()
 
 (* Everything a diverged, half-measured, tuned cell reports at once. *)
@@ -116,6 +171,10 @@ let diverged =
     ()
 
 let () =
+  (* Not '{'-prefixed: [orchestrate.py] takes a cell's result from the last line that is, and
+     [benchmarks/test_orchestrate.py] reads these by their prefix to render every verdict. *)
+  Stdio.printf "=== dominant kernel objects ===\n";
+  List.iter dominant_kernels ~f:(fun (name, o) -> Stdio.printf "dominant_kernel %s: %s\n" name o);
   Stdio.printf "\n=== ordinary cell ===\n%s\n" ordinary;
   Stdio.printf "\n=== diverged cell ===\n%s\n" diverged;
   Stdio.printf "\n=== verdicts ===\n";
@@ -206,6 +265,56 @@ let () =
              (Bench_json.tune_object ~shipped:"A" ~searches:1 ~replays:0 ~no_searches:0
                 ~shipped_mma:None ~arms:[])))
        `Null)
+
+let () =
+  let dk name =
+    Yojson.Safe.from_string (List.Assoc.find_exn dominant_kernels name ~equal:String.equal)
+  in
+  let verdict name = member "verdict" (dk name) in
+  p_all "every dominant-kernel object parses as JSON" dominant_kernels ~f:(fun (_, o) -> parses o);
+  p "an exact memory-bound kernel attains its roofline over its time: 1 ms of bytes in 4 ms is 25%"
+    (Yojson.Safe.equal (verdict "exact") (`String "exact")
+    && Yojson.Safe.equal (member "pct_of_peak" (dk "exact")) (`Int 25)
+    && Yojson.Safe.equal (member "bound" (dk "exact")) (`String "memory")
+    && Yojson.Safe.equal (member "ceiling" (dk "exact")) (`String "f32"));
+  p "the f16-native ceiling doubles the flops constant, and compute binds at 50%"
+    (let o = dk "exact f16-native" in
+     Yojson.Safe.equal (member "ceiling" o) (`String "f16-native")
+     && Yojson.Safe.equal (member "ceiling_flops" o) (`Float 1e13)
+     && Yojson.Safe.equal (member "bound" o) (`String "compute")
+     && Yojson.Safe.equal (member "pct_of_peak" o) (`Int 50));
+  p_all "an inexact or opaque count prints no number, but keeps its counts on the line"
+    [ ("approximate", "approximate"); ("opaque", "opaque") ]
+    ~f:(fun (name, v) ->
+      Yojson.Safe.equal (verdict name) (`String v)
+      && Yojson.Safe.equal (member "pct_of_peak" (dk name)) `Null
+      && Yojson.Safe.equal (member "bytes" (dk name)) (`Int 1_000_000_000));
+  p "one missing envelope leg is no ceiling, naming the missing leg"
+    (Yojson.Safe.equal (verdict "no-ceiling (no constants)") (`String "no-ceiling")
+    && Yojson.Safe.equal (member "pct_of_peak" (dk "no-ceiling (no constants)")) `Null
+    &&
+    match member "note" (dk "no-ceiling (no constants)") with
+    | `String n -> String.is_substring n ~substring:"no peak_flops"
+    | _ -> false);
+  p "a GPU tensor-core kernel is not scored against the scalar f32 constant"
+    (Yojson.Safe.equal (verdict "no-ceiling (gpu tensor cores)") (`String "no-ceiling")
+    && Yojson.Safe.equal (member "ceiling" (dk "no-ceiling (gpu tensor cores)")) `Null);
+  p "a C backend's register tile keeps the scalar ceiling, since it runs on the SIMD units"
+    (match ceiling ~gpu:false ~tensorization:"tensorized" () with
+    | Ok c -> String.equal c.Bench_json.tag "f32"
+    | Error _ -> false);
+  p "a kernel that was never timed carries no counts and says why"
+    (Yojson.Safe.equal (verdict "no-kernel") (`String "no-kernel")
+    && Yojson.Safe.equal (member "seg_ms" (dk "no-kernel")) `Null
+    && Yojson.Safe.equal
+         (member "note" (dk "no-kernel"))
+         (`String "all 12 kernels declined to compile on their own"));
+  p "a cell that did not run the instrument says null on the result line"
+    (Yojson.Safe.equal (member "dominant_kernel" (Yojson.Safe.from_string diverged)) `Null);
+  p "a cell that ran it carries the object"
+    (Yojson.Safe.equal
+       (member "verdict" (member "dominant_kernel" (Yojson.Safe.from_string ordinary)))
+       (`String "exact"))
 
 (* The negative control: without the mapping the line carries OCaml's own spellings, and this oracle
    rejects each of them — which is what makes the verdicts above evidence rather than ceremony. (A

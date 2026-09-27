@@ -902,6 +902,140 @@ class PeakMemoryTest(unittest.TestCase):
         self.assertIsNone(bench_common.torch_peak_memory(torch, "mps"))
 
 
+class DominantKernelTest(unittest.TestCase):
+    """gh-ocannl-1006: the report's %-of-peak column for the dominant kernel.
+
+    What makes the column misleadable is pinned here, against the OCaml emitter's own objects
+    where it matters: the number is printed only on an exact count, every no-value verdict says
+    which one it is in the cell, the ceiling a number is a percentage OF is named in the section
+    header with its constants and whose they are, and the header says the constants are class
+    constants that certify nothing about the device.
+    """
+
+    GOLDEN = HERE.parent / "test/operations/bench_result_line.expected"
+    PREFIX = "dominant_kernel "
+
+    def emitted(self):
+        """The OCaml emitter's fabricated objects, one per verdict, by name."""
+        out = {}
+        for line in self.GOLDEN.read_text().splitlines():
+            if line.startswith(self.PREFIX):
+                name, _, obj = line[len(self.PREFIX):].partition(": ")
+                out[name] = strict_loads(obj)
+        return out
+
+    def row(self, framework, backend, kernel, p50=1.0):
+        r = cell(framework, backend, "default", [2.3, 2.2, 2.1], p50=p50)
+        r["dominant_kernel"] = kernel
+        return r
+
+    def rendered(self, rows):
+        orchestrate.parity_check(rows)
+        out = Path(tempfile.mkdtemp())
+        orchestrate.report(rows, out)
+        return (out / "report.md").read_text()
+
+    def test_the_emitter_offers_every_verdict(self):
+        # The fabricated set is what the rendering tests below stand on; a verdict missing from it
+        # would be a verdict whose cell nobody has looked at.
+        verdicts = {k["verdict"] for k in self.emitted().values()}
+        self.assertEqual(
+            verdicts, {"exact", "approximate", "opaque", "no-ceiling", "no-kernel"}
+        )
+
+    def test_every_emitted_verdict_renders_as_a_named_cell(self):
+        for name, k in self.emitted().items():
+            with self.subTest(name=name):
+                text = orchestrate.dominant_kernel_cell({"dominant_kernel": k})
+                self.assertNotIn("UNKNOWN", text)
+                self.assertNotEqual(text, "\u2014")
+                if k["verdict"] == "exact":
+                    self.assertIn("%", text)
+                else:
+                    # No number on an inexact count, a missing ceiling or no kernel at all.
+                    self.assertNotIn("%", text)
+                    self.assertIn(orchestrate.DOMINANT_KERNEL_MARK[k["verdict"]], text)
+
+    def test_an_exact_cell_names_its_ceiling_leg_and_kernel(self):
+        k = self.emitted()["exact"]
+
+        self.assertEqual(
+            orchestrate.dominant_kernel_cell({"dominant_kernel": k}),
+            "25.0% f32 memory \u00b7 k3/12 4.000 ms w1.grad 'b1'",
+        )
+
+    def test_an_inexact_cell_keeps_the_kernels_identity_but_prints_no_number(self):
+        k = self.emitted()["approximate"]
+
+        self.assertEqual(
+            orchestrate.dominant_kernel_cell({"dominant_kernel": k}),
+            "approx \u00b7 k3/12 4.000 ms w1.grad 'b1'",
+        )
+
+    def test_untimed_kernels_are_counted_in_the_cell(self):
+        # The dominant kernel is dominant among the kernels that could be timed alone; the cell
+        # says how many could not.
+        k = dict(self.emitted()["exact"], declined=2)
+
+        self.assertIn("(+2 untimed)", orchestrate.dominant_kernel_cell({"dominant_kernel": k}))
+
+    def test_a_row_without_the_instrument_is_a_dash_beside_one_with_it(self):
+        text = self.rendered(
+            [
+                self.row("ocannl", "metal", self.emitted()["exact"], p50=1.0),
+                self.row("pytorch", "mps", None, p50=2.0),
+            ]
+        )
+
+        self.assertIn(" kernel %peak |", text)
+        self.assertIn("| 25.0% f32 memory \u00b7 k3/12 4.000 ms w1.grad 'b1' |", text)
+        pytorch_row = next(l for l in text.splitlines() if l.startswith("| pytorch"))
+        self.assertIn("| \u2014 |", pytorch_row)
+
+    def test_a_section_where_no_row_ran_the_instrument_carries_no_column(self):
+        text = self.rendered([self.row("pytorch", "cpu", None)])
+
+        self.assertNotIn("kernel %peak", text)
+
+    def test_the_header_names_each_ceiling_with_its_constants_and_whose_they_are(self):
+        emitted = self.emitted()
+        rows = [
+            self.row("ocannl", "metal", emitted["exact"], p50=1.0),
+            self.row("ocannl", "cc", emitted["exact f16-native"], p50=2.0),
+        ]
+
+        self.assertEqual(
+            orchestrate.dominant_kernel_ceilings(rows),
+            [
+                ("f32", "fab class constant", 5e12, 1e12),
+                ("f16-native", "fab class constant", 1e13, 1e12),
+            ],
+        )
+        text = self.rendered(rows)
+        self.assertIn("`f32` = fab class constant: 5e+12 FLOP/s, 1e+12 B/s", text)
+        self.assertIn("`f16-native` = fab class constant: 1e+13 FLOP/s, 1e+12 B/s", text)
+        # The recorded decision (gh-ocannl-1006): what the constants are, said where they are read.
+        self.assertIn("certifies nothing about the device", text)
+        self.assertIn("ranks before/after on one box", text)
+
+    def test_a_section_with_no_scored_row_says_so_rather_than_listing_nothing(self):
+        text = self.rendered([self.row("ocannl", "cc", self.emitted()["no-ceiling (no constants)"])])
+
+        self.assertIn("none in this section", text)
+        self.assertIn("| no ceiling \u00b7 k3/12", text)
+
+    def test_the_result_line_carries_the_object_through_the_report_unchanged(self):
+        # results.jsonl is what a later re-render reads: the object must survive serialization.
+        k = self.emitted()["exact"]
+        out = Path(tempfile.mkdtemp())
+        rows = [self.row("ocannl", "metal", k)]
+        orchestrate.parity_check(rows)
+        orchestrate.report(rows, out)
+        (saved,) = [strict_loads(l) for l in (out / "results.jsonl").read_text().splitlines()]
+
+        self.assertEqual(saved["dominant_kernel"], k)
+
+
 class MeasurementProtocolTest(unittest.TestCase):
     """gh-ocannl-1008: the one measurement loop both Python runners call, pinned as a trace.
 
@@ -996,9 +1130,12 @@ class MeasurementProtocolTest(unittest.TestCase):
             {k: v for k, v in result.items() if k.startswith("peak_memory")},
             bench_common.peak_memory_fields(None),
         )
+        # gh-ocannl-1006: no per-kernel counts to score, so the %-of-peak column's key is null --
+        # present, so the report can tell "not measured" from a runner that predates the column.
+        self.assertIsNone(result["dominant_kernel"])
         self.assertEqual(
             set(result),
-            {"compile_s", "step_ms", "queued_step_ms", "timed_steps", "losses"}
+            {"compile_s", "step_ms", "queued_step_ms", "timed_steps", "losses", "dominant_kernel"}
             | set(bench_common.peak_memory_fields(None)),
         )
 

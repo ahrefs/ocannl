@@ -125,6 +125,152 @@ let regime_knobs_object knobs =
                  (string source)))
   ^ "}"
 
+(** {1 The dominant kernel's %-of-peak (gh-ocannl-1006, the report's second column)}
+
+    One kernel per cell: the one that takes longest when every kernel the step SHIPPED is timed on
+    its own ([Bench_harness.dominant_kernel] — min-of-N, a device sync per run). Chosen by measured
+    time rather than by the model's own roofline bound, because checking the model is the point:
+    ranking by its prediction would pick the kernel the model already agrees with. Its attainment is
+    the roofline lower bound over the measured time —
+    [max (flops / peak_flops, bytes / peak_memory_bandwidth)] over [seg_ms] — so a memory-bound
+    kernel is scored against bandwidth and a compute-bound one against arithmetic, and [bound] names
+    which leg decided.
+
+    Everything that makes such a number mislead is a rule here, so that the rule is written once and
+    pinned by [test/operations/bench_result_line] on fabricated values. *)
+
+type ceiling = {
+  tag : string;
+      (** The short name a report row carries: ["f32"] for the backend's single-precision scalar
+          constant, ["f16-native"] for twice it on a target whose 16-bit arithmetic is native
+          (gh-ocannl-575). *)
+  ceiling_flops : float;  (** FLOP/s, FMA counted as two, as [Cost_model]'s op counts are. *)
+  ceiling_bandwidth : float;  (** bytes/s. *)
+  source : string;  (** Whose constants: the backend's class constants, or a config override. *)
+}
+(** The ceiling a kernel is scored against. *)
+
+(** The ceiling matched to the kernel, or why there is none.
+
+    - Both legs or nothing. A roofline with one leg missing is still a lower bound on the time, so
+      the attainment it gives is a lower bound too — a compute-bound kernel read against bandwidth
+      alone would score near zero, which reads as "far from peak" rather than "unscored". The C
+      backends carry no class constant at all ([model_peak_flops] / [model_peak_memory_bandwidth]
+      supply one per machine).
+    - A tensorized kernel on a GPU backend has no ceiling. [peak_flops] is a scalar single-precision
+      constant; tensor cores are a separate unit several times faster, so scoring against it reads
+      above 100% on exactly the rows this column exists for, and no class constant for the mma unit
+      exists to use instead. On the C backends the [Tile_mma] register tile runs on the SIMD units
+      [peak_flops] describes, so it keeps the scalar ceiling.
+    - A kernel whose arithmetic is all 16-bit on a target where that is native gets twice the scalar
+      ceiling ([native_fp16_arithmetic], gh-ocannl-575). *)
+let choose_ceiling ~gpu ~tensorization ~narrow_native ~peak_flops ~peak_memory_bandwidth =
+  match (peak_flops, peak_memory_bandwidth) with
+  | None, _ | _, None ->
+      let missing =
+        String.concat ~sep:" and "
+          (List.filter_map
+             [ ("peak_flops", peak_flops); ("peak_memory_bandwidth", peak_memory_bandwidth) ]
+             ~f:(fun (name, leg) -> if Option.is_none leg then Some name else None))
+      in
+      Error
+        (Printf.sprintf
+           "no %s for this backend (the C backends carry no class constant; set model_peak_flops \
+            and model_peak_memory_bandwidth)"
+           missing)
+  | Some _, Some _ when gpu && String.equal tensorization "tensorized" ->
+      Error "tensor-core kernel: no class constant for the mma unit, and peak_flops is scalar f32"
+  | Some (flops, flops_source), Some (bandwidth, bandwidth_source) ->
+      let source =
+        if String.equal flops_source bandwidth_source then flops_source
+        else Printf.sprintf "flops: %s; bandwidth: %s" flops_source bandwidth_source
+      in
+      if narrow_native then
+        Ok
+          { tag = "f16-native"; ceiling_flops = 2. *. flops; ceiling_bandwidth = bandwidth; source }
+      else Ok { tag = "f32"; ceiling_flops = flops; ceiling_bandwidth = bandwidth; source }
+
+type kernel = {
+  segment : int;  (** Its position among the step's kernels, in launch order. *)
+  segments : int;  (** How many kernels the step shipped. *)
+  declined : int;
+      (** Kernels that could not be timed on their own (a hermetic compile the backend refused): the
+          dominant one is dominant among the others only. *)
+  writes : string;  (** The nodes it writes, the label a reader finds it by. *)
+  seg_ms : float;  (** Its min-of-N time on its own, launch and sync included. *)
+  segments_ms : float;  (** The same, summed over the kernels that were timed. *)
+  tensorization : string;  (** [Ir.C_syntax.tensorization_name] of its own compile. *)
+  flops : int;
+  bytes : int;
+  flops_exact : bool;
+  bytes_exact : bool;
+  opaque : bool;
+}
+(** The dominant kernel, as measured and as counted by [Ir.Cost_model.analyze]. *)
+
+(** The [dominant_kernel] object. [verdict] says whether [pct_of_peak] is a number and, when not,
+    why — in the order the report needs to say it:
+
+    - ["no-kernel"]: nothing was timed ([kernel] is [None]; [note] says why).
+    - ["opaque"]: the kernel has code the cost model cannot see, so its counts may under-count.
+    - ["approximate"]: a count is an upper bound rather than exact ([Cost_model.approximate]). The
+      same per-leg exactness rule the calibration fit follows, so this column and the fit agree on
+      what counts as evidence; a number derived from a guards-taken count is not one.
+    - ["no-ceiling"]: exact counts, nothing to score them against ({!choose_ceiling}'s reason).
+    - ["exact"]: [pct_of_peak] and [bound] are set.
+
+    The counts ride on the line whatever the verdict, so a reader can redo the arithmetic under
+    another ceiling. *)
+let dominant_kernel_object ?note ~ceiling (kernel : kernel option) =
+  let str s = Printf.sprintf {|"%s"|} (string s) in
+  let opt f = Option.value_map ~default:"null" ~f in
+  let verdict, pct, bound, note =
+    match kernel with
+    | None -> ("no-kernel", None, None, Option.value note ~default:"no kernel was timed")
+    | Some k when k.opaque -> ("opaque", None, None, "the cost model cannot see all of its code")
+    | Some k when not (k.flops_exact && k.bytes_exact) ->
+        ( "approximate",
+          None,
+          None,
+          if k.flops_exact then "byte count is an upper bound"
+          else if k.bytes_exact then "op count is an upper bound"
+          else "op and byte counts are upper bounds" )
+    | Some k -> (
+        match ceiling with
+        | Error reason -> ("no-ceiling", None, None, reason)
+        | Ok c ->
+            let compute_s = Float.of_int k.flops /. c.ceiling_flops
+            and memory_s = Float.of_int k.bytes /. c.ceiling_bandwidth in
+            let roofline_s = Float.max compute_s memory_s in
+            ( "exact",
+              Some (100. *. roofline_s /. (k.seg_ms /. 1000.)),
+              Some (if Float.(compute_s >= memory_s) then "compute" else "memory"),
+              "" ))
+  in
+  let ceiling_fields =
+    match ceiling with
+    | Ok c ->
+        Printf.sprintf
+          {|"ceiling":%s,"ceiling_flops":%s,"ceiling_bandwidth":%s,"ceiling_source":%s|} (str c.tag)
+          (num c.ceiling_flops) (num c.ceiling_bandwidth) (str c.source)
+    | Error _ ->
+        {|"ceiling":null,"ceiling_flops":null,"ceiling_bandwidth":null,"ceiling_source":null|}
+  in
+  let kernel_fields =
+    match kernel with
+    | None ->
+        {|"segment":null,"segments":null,"declined":null,"writes":null,"seg_ms":null,"segments_ms":null,"tensorization":null,"flops":null,"bytes":null,"flops_exact":null,"bytes_exact":null,"opaque":null|}
+    | Some k ->
+        Printf.sprintf
+          {|"segment":%d,"segments":%d,"declined":%d,"writes":%s,"seg_ms":%s,"segments_ms":%s,"tensorization":%s,"flops":%d,"bytes":%d,"flops_exact":%b,"bytes_exact":%b,"opaque":%b|}
+          k.segment k.segments k.declined (str k.writes) (num k.seg_ms) (num k.segments_ms)
+          (str k.tensorization) k.flops k.bytes k.flops_exact k.bytes_exact k.opaque
+  in
+  Printf.sprintf {|{%s,"verdict":"%s",%s,"bound":%s,"pct_of_peak":%s,"note":%s}|} kernel_fields
+    verdict ceiling_fields (opt str bound)
+    (opt (num ~prec:4) pct)
+    (if String.is_empty note then "null" else str note)
+
 (** The result line [orchestrate.py] parses, as a string without its trailing newline.
 
     [tune] is the already-built [tune] object (see [Bench_harness.tune_json]) or [None] for an
@@ -148,9 +294,13 @@ let regime_knobs_object knobs =
     Two spellings of it, because a report needs the name in two places at two lengths (review round
     1): [counter] is the short tag that goes ON each table row, so a row states its own counter
     rather than leaving the reader to a section-wide list that says only which counters occur
-    somewhere; [source] is the long description the legend expands that tag into. *)
+    somewhere; [source] is the long description the legend expands that tag into.
+
+    [dominant_kernel] is the already-built {!dominant_kernel_object}, or [None] — [null] on the wire
+    — for a cell that did not run the instrument, which the report prints as a dash. *)
 let result_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload ~compile_s ~searched
-    ?tokens_per_step ?tune ~p10 ~p50 ~p90 ~queued_ms ~timed_steps ~peak_memory ~losses () =
+    ?tokens_per_step ?tune ~p10 ~p50 ~p90 ~queued_ms ~timed_steps ~peak_memory ?dominant_kernel
+    ~losses () =
   let tokens_field =
     match tokens_per_step with Some t -> Printf.sprintf {|"tokens_per_step":%d,|} t | None -> ""
   in
@@ -167,9 +317,10 @@ let result_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload ~c
           Printf.sprintf {|"%s"|} (string source) )
   in
   Printf.sprintf
-    {|{"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"regime_knobs":%s,"workload":"%s","compile_s":%s,"searched":%b,%s%s"step_ms":{"p10":%s,"p50":%s,"p90":%s},"queued_step_ms":%s,"timed_steps":%d,"peak_memory_bytes":%s,"peak_memory_counter":%s,"peak_memory_source":%s,"losses":[%s]}|}
+    {|{"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"regime_knobs":%s,"workload":"%s","compile_s":%s,"searched":%b,%s%s"step_ms":{"p10":%s,"p50":%s,"p90":%s},"queued_step_ms":%s,"timed_steps":%d,"peak_memory_bytes":%s,"peak_memory_counter":%s,"peak_memory_source":%s,"dominant_kernel":%s,"losses":[%s]}|}
     (string backend) (string variant) (string precision) profile_field
     (regime_knobs_object regime_knobs)
     (string workload) (fixed compile_s) searched tokens_field tune_field (num p10) (num p50)
     (num p90) (num queued_ms) timed_steps peak_bytes_field peak_counter_field peak_source_field
+    (Option.value dominant_kernel ~default:"null")
     (nums ~prec:9 losses)

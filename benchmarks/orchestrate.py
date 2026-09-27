@@ -1338,6 +1338,65 @@ def peak_memory_mib(result):
     return f"{bytes_ / MIB:,.1f} {counter}" if counter else f"{bytes_ / MIB:,.1f}"
 
 
+# gh-ocannl-1006: the %-of-peak column's no-value cases, each said in the cell rather than left to a
+# dash -- a dash is reserved for a cell that did not run the instrument at all.
+DOMINANT_KERNEL_MARK = {
+    "approximate": "approx",
+    "opaque": "opaque",
+    "no-ceiling": "no ceiling",
+    "no-kernel": "no kernel",
+}
+
+
+def dominant_kernel_cell(result):
+    """The %-of-peak column's cell for one row.
+
+    `41.3% f32 memory · k3/12 0.412 ms w1.grad`: the attainment, the ceiling it was scored against
+    and the roofline leg that binds, then which kernel it is -- its launch position among the
+    kernels the cell shipped, its own measured time and the nodes it writes. The number is printed
+    only for an `exact` verdict; every other verdict prints its mark in its place, keeping the
+    kernel's identity beside it so a reader can still see which kernel dominated. A cell whose
+    runner did not run the instrument -- every Python row, and an OCANNL row under
+    BENCH_DOMINANT_KERNEL=0 -- is an em dash.
+    """
+    k = result.get("dominant_kernel")
+    if not k:
+        return "\u2014"
+    verdict = k.get("verdict")
+    if verdict == "exact" and finite(k.get("pct_of_peak")):
+        head = f"{k['pct_of_peak']:.1f}% {k.get('ceiling')} {k.get('bound')}"
+    else:
+        head = DOMINANT_KERNEL_MARK.get(verdict, f"**UNKNOWN VERDICT {verdict}**")
+    if k.get("segment") is None:
+        return head
+    where = f"k{k['segment']}/{k['segments']} {num(k.get('seg_ms'), '.3f')} ms"
+    if k.get("writes"):
+        where += f" {k['writes']}"
+    if k.get("declined"):
+        where += f" (+{k['declined']} untimed)"
+    return f"{head} \u00b7 {where}"
+
+
+def dominant_kernel_ceilings(rows):
+    """The distinct ceilings this section's rows were scored against, first-seen, as the legend's
+    `(tag, source, FLOP/s, bytes/s)` entries -- so the header names every ceiling a number in the
+    column is a percentage OF, with the constants and whose they are."""
+    seen = []
+    for r in rows:
+        k = r.get("dominant_kernel") or {}
+        if k.get("ceiling") is None:
+            continue
+        entry = (
+            k["ceiling"],
+            k.get("ceiling_source"),
+            k.get("ceiling_flops"),
+            k.get("ceiling_bandwidth"),
+        )
+        if entry not in seen:
+            seen.append(entry)
+    return seen
+
+
 def failure_line(failure):
     """One `(label, note)` runner failure, as the run log and the report name it."""
     label, note = failure
@@ -1614,6 +1673,47 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None, amb
                 "NOT the device-wide figure a driver reports -- so rank rows within a counter, and "
                 "read across counters only as the orders of magnitude they are.\n"
             )
+        # gh-ocannl-1006: the %-of-peak column appears once any row ran the instrument; the
+        # Python rows, which have no per-kernel counts, print a dash beside it.
+        with_dominant_kernel = any(r.get("dominant_kernel") for r in rows)
+        if with_dominant_kernel:
+            ceilings = dominant_kernel_ceilings(rows)
+            lines.append(
+                "`kernel %peak` is the attainment of the cell's DOMINANT KERNEL (gh-ocannl-1006): "
+                "of the kernels the cell shipped -- a tuned cell's searched winner included -- the "
+                "one that takes longest when each is timed on its own (min of 20 runs, launch and "
+                "device sync included, after the timed steps; chosen by measured time, not by the "
+                "cost model's own bound, which the column exists partly to check). `kN/M` is its "
+                "launch position among M kernels, then its time and the nodes it writes. The "
+                "number is its roofline lower bound over that time -- max(ops / peak FLOP/s, "
+                "bytes / peak bandwidth) on the cost model's counts -- and `compute` / `memory` "
+                "names the leg that binds. Ceilings, matched to the kernel's precision and mma "
+                "status: "
+                + (
+                    "; ".join(
+                        f"`{tag}` = {source}: {num(flops, '.3g')} FLOP/s, "
+                        f"{num(bandwidth, '.3g')} B/s"
+                        for tag, source, flops, bandwidth in ceilings
+                    )
+                    if ceilings
+                    else "none in this section"
+                )
+                + ". `f32` is the backend's single-precision scalar constant (FMA counted as two); "
+                "`f16-native` is twice it, for a kernel whose arithmetic is all 16-bit on a target "
+                "where that is native. These are CLASS constants (or a machine's `model_peak_*` "
+                "override), not this device's measured peak: the column ranks before/after on one "
+                "box and certifies nothing about the device -- a number above 100% says the "
+                "constant is below this card, not that the kernel beat physics. A small kernel's "
+                "launch overhead counts against it. Printed only on an exact count: `approx` is a "
+                "kernel whose op or byte count is an upper bound (the calibration fit's rule), "
+                "`opaque` one with code the cost model cannot see, `no ceiling` one with nothing "
+                "to score against (a C backend without `model_peak_*`, or a GPU tensor-core kernel "
+                "-- no class constant exists for the mma unit, and the scalar f32 peak would read "
+                "above 100%), `no kernel` a cell none of whose kernels could be timed alone; `+N "
+                "untimed` counts kernels that could not, so the dominant one is dominant among the "
+                "rest. `\u2014` is a cell that did not run the instrument: the Python frameworks "
+                "expose no per-kernel counts to score.\n"
+            )
         # gh-ocannl-626: only cells that tuned something have an emission census to report.
         with_tensorization = any(r.get("tensorization") for r in rows)
         if with_tensorization:
@@ -1636,6 +1736,9 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None, amb
         rule += "---|---|---|---|---|"
         if with_peak_memory:
             header += " peak MiB |"
+            rule += "---|"
+        if with_dominant_kernel:
+            header += " kernel %peak |"
             rule += "---|"
         if with_provenance:
             header += " pass |"
@@ -1677,6 +1780,8 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None, amb
             compile_s = num(r["compile_s"], ".2f")
             compile_s += COMPILE_S_NOTE.get(r.get("search_pass"), "")
             peak_memory = f" {peak_memory_mib(r)} |" if with_peak_memory else ""
+            if with_dominant_kernel:
+                peak_memory += f" {dominant_kernel_cell(r)} |"
             provenance = ""
             if with_provenance:
                 provenance = " %s |" % PROVENANCE_MARK.get(r.get("provenance"), "—")
