@@ -1012,6 +1012,16 @@ val model_score :
     counts may under-estimate, so ranking on them could prune the true winner), or no envelope
     constant is present. A ranking score, not a runtime prediction. Exposed for tests. *)
 
+val envelope_legs :
+  limits:Ir.Backend_intf.hardware_limits ->
+  (float * [ `Config | `Backend ]) option * (float * [ `Config | `Backend ]) option
+(** The envelope constants {!model_score} scores against — [(peak_flops, peak_memory_bandwidth)],
+    FLOP/s and bytes/s — each with where it came from: [`Config] for a [model_peak_flops] /
+    [model_peak_memory_bandwidth] override, [`Backend] for [limits]' advisory class constant. [None]
+    for a leg neither provides (the C backends carry no class constant). Exposed so that a report
+    scoring a measured kernel against the envelope reads the very constants the model ranks with,
+    and can say whose they are (gh-ocannl-1006). *)
+
 val model_prefilter : keep_fraction:float -> ('a * float option) list -> ('a * float option) list
 (** The order-preserving pre-filter over model-scored candidates: keeps every unscored ([None])
     candidate — the no-coverage exemption: never dropped, only measured — plus the best

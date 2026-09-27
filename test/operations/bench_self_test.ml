@@ -92,6 +92,23 @@ let () =
       Verdict.p_all "and it names the counter it was read from, in both spellings"
         [ "peak_memory_counter"; "peak_memory_source" ] ~f:(fun k ->
           Option.value_map (string_field j k) ~default:false ~f:(Fn.non String.is_empty));
+      (* gh-ocannl-1006: the %-of-peak column's instrument, which lives in [measure_and_emit] after
+         the timed steps and compiles every kernel the step SHIPPED ([Context.routine.segments]) on
+         its own. What is backend-uniform is that it ran and found a kernel: a routine whose
+         segments the census failed to record reaches here as [no-kernel], which is the break this
+         guards. Whether the number prints depends on the backend's envelope (the C backends carry
+         none), so the verdict itself goes to stderr, and the claim is only that the verdict and the
+         number agree. *)
+      let dk = Option.value (field j "dominant_kernel") ~default:`Null in
+      Stdio.eprintf "bench_self_test: dominant kernel %s\n%!" (Yojson.Safe.to_string dk);
+      Verdict.p "dominant_kernel names a kernel timed on its own, with a positive time"
+        ((match field dk "segment" with Some (`Int i) -> i >= 0 | _ -> false)
+        && Option.value_map (number dk "seg_ms") ~default:false ~f:(fun t -> Float.(t > 0.)));
+      Verdict.p "its verdict is one the report renders, and a number is printed exactly when exact"
+        (match (string_field dk "verdict", field dk "pct_of_peak") with
+        | Some "exact", Some (`Float _ | `Int _) -> true
+        | Some ("approximate" | "opaque" | "no-ceiling"), Some `Null -> true
+        | _ -> false);
       Verdict.p "timed_steps is the count the protocol asked for"
         (match field j "timed_steps" with
         | Some (`Int n) -> n = protocol.H.timed_steps

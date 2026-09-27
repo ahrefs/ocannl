@@ -1254,11 +1254,20 @@ let peak_flops_override =
 let peak_bandwidth_override =
   peak_override (fun () -> Utils.get_global_arg ~arg_name:"model_peak_memory_bandwidth" ~default:"")
 
-let envelope ~(limits : Ir.Backend_intf.hardware_limits) =
-  ( Option.first_some (Lazy.force peak_flops_override) limits.Ir.Backend_intf.peak_flops,
-    Option.first_some
-      (Lazy.force peak_bandwidth_override)
-      limits.Ir.Backend_intf.peak_memory_bandwidth )
+let envelope_legs ~(limits : Ir.Backend_intf.hardware_limits) =
+  let leg override advisory =
+    match Lazy.force override with
+    | Some v -> Some (v, `Config)
+    | None -> Option.map advisory ~f:(fun v -> (v, `Backend))
+  in
+  ( leg peak_flops_override limits.Ir.Backend_intf.peak_flops,
+    leg peak_bandwidth_override limits.Ir.Backend_intf.peak_memory_bandwidth )
+
+(* The same constants without their provenance: one resolution, so the report's column and the model
+   cannot read different envelopes. *)
+let envelope ~limits =
+  let flops, bandwidth = envelope_legs ~limits in
+  (Option.map flops ~f:fst, Option.map bandwidth ~f:fst)
 
 (* The roofline lower bound summed over a candidate's kernels; [None] — no model coverage — when any
    kernel is opaque (its counts may UNDER-estimate, so ranking on them could prune the true winner)

@@ -46,6 +46,14 @@ val score_footprint :
     the driver page-rounds pool bases. Enumeration is canonical (by {!Ir.Tnode.uid}) so the greedy
     coloring is reproducible across processes. *)
 
+val with_segments_census : (unit -> 'a) -> 'a * Ir.Low_level.optimized list
+(** gh-ocannl-1006: runs [f] and returns, beside its result, the kernel segments the backend compile
+    inside it shipped — one element per kernel, in launch order, exactly what the compile's
+    [lowered_transform] (or, without one, {!Ir.Schedule.maybe_default_schedules}) returned; [[]]
+    when [f] reached no backend compile. Brackets like {!Ir.C_syntax.with_census}: the previous
+    reading is restored on exit, exception or not. [Context.compile_outcome] is the one caller, and
+    stores the result on the routine as its [segments]. *)
+
 val finalize :
   'dev 'runner 'event.
   (module Ir.Backend_intf.Backend

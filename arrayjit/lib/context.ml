@@ -143,6 +143,7 @@ type routine = {
   mma : Ir.C_syntax.mma_summary;
   peel : Ir.C_syntax.peel_summary;
   volatility : Ir.C_syntax.volatility_summary;
+  segments : Ir.Low_level.optimized list;
 }
 
 let can_run ctx routine = Set.is_subset routine.execution_deps ~of_:ctx.ledger.executed
@@ -215,13 +216,14 @@ let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate 
                codegen (gh-ocannl-626): whether a routine tensorized is a property of the compiled
                routine, not of whichever timing harness remembered to bracket the global. Fissioned
                segments compile inside this bracket, so their kernels land in the same summary. *)
-            let ((outcome, mma), peel), volatility =
+            let (((outcome, mma), peel), volatility), segments =
               (* And the reduction peel's own census (gh-ocannl-733), bracketed the same way and for
                  the same reason: which decision produced a kernel is a property of the compiled
                  routine, not of whichever test remembered to collect it. Likewise the volatility
                  census (gh-ocannl-782): which of this routine's serial accumulations the Metal
                  compiler-bug workaround pinned to memory, and therefore which of them are not
-                 register-resident. *)
+                 register-resident. And the shipped kernel segments themselves (gh-ocannl-1006). *)
+              Backends.with_segments_census @@ fun () ->
               Ir.C_syntax.with_volatility_census @@ fun () ->
               Ir.C_syntax.with_peel_census @@ fun () ->
               Ir.C_syntax.with_census (fun () ->
@@ -246,7 +248,8 @@ let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate 
                       r.BI.outputs,
                       mma,
                       peel,
-                      volatility ) )
+                      volatility,
+                      segments ) )
             | Error failure -> (bctx, Error failure));
       }
   in
@@ -261,7 +264,8 @@ let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate 
         backend_outputs,
         mma,
         peel,
-        volatility ) ->
+        volatility,
+        segments ) ->
       (* Allocate unique ID from shared ledger *)
       let id = ctx.ledger.next_id in
       ctx.ledger.next_id <- id + 1;
@@ -363,6 +367,7 @@ let compile_outcome ?name ?lowered_transform ?prelowered ~provenance ?candidate 
           mma;
           peel;
           volatility;
+          segments;
         }
       in
 
