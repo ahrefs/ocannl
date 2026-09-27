@@ -108,7 +108,7 @@ batch_box_has_hazard() {
 # The command runs in a process group of its own, and the deadline kills the
 # whole group: a reader's child that outlives it would otherwise hold a pipe
 # open to its own end. INT, TERM and HUP reaching the perl runner are relayed
-# to the group. And the runner is waited on in the BACKGROUND, because bash
+# to the group, which gets five seconds to act on them before it is KILLed. And the runner is waited on in the BACKGROUND, because bash
 # defers a trap until a foreground command completes: this way a signal to
 # the launcher alone runs its trap at once, and batch_cancel_hook (the
 # launcher's) decides whether to end the runner (Codex review round 2).
@@ -121,11 +121,26 @@ batch_bounded() { # [-C dir] command...
     [ "$left" -gt 0 ] || return 124
   fi
   perl -e '
+    use POSIX ":sys_wait_h";
     my ($left, $dir) = splice(@ARGV, 0, 2);
     defined(my $pid = fork) or exit 127;
     if (!$pid) { setpgrp(0, 0); chdir $dir or exit 127; exec @ARGV or exit 127 }
     setpgrp($pid, $pid);
-    my $end = sub { kill $_[0], -$pid; kill $_[0], $pid; exit $_[1] };
+    # Ending early: the signal to the group, a bounded grace for it to act,
+    # then KILL to whatever of the group is left, and the leader reaped --
+    # a group that ignores TERM must not outlive this runner holding the
+    # worktree lock with no alarm left over it (Codex review round 3).
+    my $end = sub {
+      my ($sig, $code) = @_;
+      $SIG{$_} = "IGNORE" for qw(ALRM INT TERM HUP);
+      kill $sig, -$pid; kill $sig, $pid;
+      if ($sig ne "KILL") {
+        for (1 .. 50) { last if waitpid($pid, WNOHANG) != 0; select(undef, undef, undef, 0.1) }
+      }
+      kill "KILL", -$pid; kill "KILL", $pid;
+      waitpid($pid, 0);
+      exit $code;
+    };
     $SIG{ALRM} = sub { $end->("KILL", 124) };
     $SIG{INT} = sub { $end->("INT", 130) };
     $SIG{TERM} = sub { $end->("TERM", 143) };

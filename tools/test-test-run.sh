@@ -894,6 +894,7 @@ batch_reach=$TMP/fake-slot-kind.sh
 cat >"$batch_reach" <<'FAKE'
 #!/usr/bin/env bash
 [ -z "${FAKE_REACH_CALLS:-}" ] || printf '%s\n' "$*" >>"$FAKE_REACH_CALLS"
+[ -z "${FAKE_REACH_IGNORE_TERM:-}" ] || trap '' TERM INT HUP
 [ -z "${FAKE_REACH_SLEEP:-}" ] || sleep "$FAKE_REACH_SLEEP"
 printf '%b\n' "${FAKE_REACH:-end}"
 FAKE
@@ -2762,13 +2763,18 @@ fi
 # A signal to the launcher alone -- not the terminal's group, not a stop --
 # ends the resolution at once: the reader is waited on in the background, so
 # the trap runs and ends it (Codex review round 2 on PR #832).
-if [ -z "$plan_stop_detail" ]; then
-  plan_sig_runs=$TMP/argv-runs-plan-sig
+# A reader that ignores TERM gets a grace and then KILL, so it cannot keep
+# the worktree locked after the launch withdrew (Codex review round 3).
+for plan_sig_kind in plain stubborn; do
+  [ -z "$plan_stop_detail" ] || break
+  plan_sig_ignore=
+  [ "$plan_sig_kind" = plain ] || plan_sig_ignore=1
+  plan_sig_runs=$TMP/argv-runs-plan-sig-$plan_sig_kind
   mkdir -p "$plan_sig_runs"
   : >"$TMP/plan-sig.counter"
   : >"$TMP/plan-sig.calls"
   plan_sig_start=$SECONDS
-  FAKE_REACH_SLEEP=30 \
+  FAKE_REACH_SLEEP=30 FAKE_REACH_IGNORE_TERM=$plan_sig_ignore \
   REPEAT_TEST_MODE=stable REPEAT_TEST_COUNTER=$TMP/plan-sig.counter REPEAT_TEST_CALLS=$TMP/plan-sig.calls \
   REPEAT_TEST_WAIT_PREFIX= REPEAT_TEST_WAIT_AT= REPEAT_TEST_ORPHAN_PID= REPEAT_TEST_ORPHAN_REAPED= \
   REPEAT_TEST_DIFF_WAIT_PREFIX= REPEAT_TEST_REAL_DIFF="$(command -v diff)" \
@@ -2793,10 +2799,11 @@ if [ -z "$plan_stop_detail" ]; then
     plan_sig_rc=$?
     plan_sig_took=$((SECONDS - plan_sig_start))
     { [ "$plan_sig_rc" = 143 ] && [ "$plan_sig_took" -lt 15 ] && [ ! -s "$TMP/plan-sig.calls" ] &&
-      [ ! -e "$(dirname "$plan_sig_marker")" ]; } ||
-      plan_stop_detail="a TERM to the launcher alone: exit $plan_sig_rc (want 143) after ${plan_sig_took}s; calls: $(cat "$TMP/plan-sig.calls"); stderr: $(cat "$TMP/plan-sig.err")"
+      [ ! -e "$(dirname "$plan_sig_marker")" ] &&
+      OCANNL_TOOL_TEST_RUNS=$plan_sig_runs "$repeat_root/tools/test-run.sh" idle 2>/dev/null; } ||
+      plan_stop_detail="a TERM to the launcher alone ($plan_sig_kind reader): not idle, or exit $plan_sig_rc (want 143) after ${plan_sig_took}s; calls: $(cat "$TMP/plan-sig.calls"); stderr: $(cat "$TMP/plan-sig.err")"
   fi
-fi
+done
 if [ -z "$plan_stop_detail" ]; then
   report 0 "plan: a stop in the planning window withdraws the launch, and the worktree is idle"
 else
@@ -3572,9 +3579,13 @@ if [ -z "$slot_detail" ]; then
 fi
 if [ -z "$slot_detail" ]; then
   # At most half the cap, so a refusal returns before the cap's alarm.
+  # Half of what the resolution left of the cap: 45, or 44 when resolving
+  # crossed a second (Codex review round 3 on PR #832).
   slot_probe slot-capped hold cc cc run --cap 90 build @cheap
-  [ "$slot_calls" = "execution slot --wait 45 --cpu -- dune build @cheap" ] ||
-    slot_detail="capped: the slot's wait is not half the cap: ${slot_calls:-<none>}"
+  case $slot_calls in
+    "execution slot --wait 45 --cpu -- dune build @cheap" | "execution slot --wait 44 --cpu -- dune build @cheap") ;;
+    *) slot_detail="capped: the slot's wait is not half the cap: ${slot_calls:-<none>}" ;;
+  esac
 fi
 if [ -z "$slot_detail" ]; then
   report 0 "slot: a fleet box's run takes its slot, --cpu only when none of the batch's resolved backends holds a GPU"
