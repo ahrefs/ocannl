@@ -140,7 +140,9 @@
   (alias runtest-shell_scripts_parse)
   (alias runtest-refusal_control_scan_cases)
   (alias runtest-optional_arg_inventory)
-  (alias runtest-optional_arg_inventory_control)))
+  (alias runtest-optional_arg_inventory_control)
+  (alias runtest-nonvirtual_code_inventory)
+  (alias runtest-nonvirtual_code_scan_cases)))
 
 ; Two focused aggregates beyond `scans` (gh-ocannl-783). Same arrangement and same completeness
 ; check, a different question: `scans` collects the tests that read the REPOSITORY, these collect
@@ -255,6 +257,7 @@
   (alias runtest-ocamlformat_ignore_scan)
   (alias runtest-ll_test_ratchet)
   (alias runtest-operand_key_ratchet)
+  (alias runtest-nonvirtual_code_inventory)
   (alias runtest-census_total_ratchet)
   (alias runtest-workflow_job_timeouts)
   (alias runtest-shell_scripts_parse)
@@ -2331,6 +2334,9 @@
   operand_key_ratchet.ml
   operand_key_ratchet.expected
   operand_key_scan_cases.expected
+  nonvirtual_code_inventory.ml
+  nonvirtual_code_inventory.expected
+  nonvirtual_code_scan_cases.expected
   ocamlformat_ignore_scan.ml
   ocamlformat_ignore_scan.expected
   optional_arg_inventory.ml
@@ -2378,6 +2384,8 @@
    ll_test_ratchet.expected,ll_test_scan_cases.expected
    operand_key_ratchet.ml
    operand_key_ratchet.expected,operand_key_scan_cases.expected
+   nonvirtual_code_inventory.ml
+   nonvirtual_code_inventory.expected,nonvirtual_code_scan_cases.expected
    ocamlformat_ignore_scan.ml
    ocamlformat_ignore_scan.expected
    optional_arg_inventory.ml
@@ -2690,8 +2698,9 @@
    atomic_file_rename_scan_control.actual)))
 
 ; gh-ocannl-806: modules without interfaces implicitly export every top-level binding. The live
-; scan ratchets every source-declared value in direct modules under arrayjit/lib and tensor against
-; external qualified, aliased, opened, or included references. The matching policy is pure in
+; scan ratchets every source-declared value in direct modules under arrayjit/lib, tensor and lib
+; against external qualified, aliased, opened, or included references, and (gh-ocannl-1009) every
+; top-level type declaration against a mention of its name anywhere but its own declaration. The matching policy is pure in
 ; test/support/dead_export_scan.ml, so these cases exercise it against synthetic violations and
 ; near misses rather than trusting today's usually-clean repository as its own control.
 
@@ -2704,8 +2713,14 @@
  (libraries
   base
   stdio
+  ppx_compare
   ppx_compare.expander
+  ppx_enumerate
+  ppx_fields_conv
+  ppx_hash.expander
+  ppx_sexp_conv
   ppx_sexp_conv.expander
+  ppx_variants_conv
   test_utils
   arrayjit.verdict))
 
@@ -2749,7 +2764,7 @@
   (diff dead_export_scan.expected dead_export_scan.actual)))
 
 (rule
- ; ocannl-backend: none -- runs the scanner's three synthetic direct-refusal branches.
+ ; ocannl-backend: none -- runs the scanner's four synthetic direct-refusal branches.
  (target dead_export_scan_control.actual)
  (package neural_nets_lib)
  (deps ocannl_config dead_export_scan.ml)
@@ -6023,6 +6038,53 @@
  (deps ocannl_config operand_key_ratchet.exe)
  (action
   (run %{test} %{dep:operand_key_ratchet.exe})))
+
+; gh-ocannl-1015: every file naming one of the virtualizer's rejection codes, the checklist a change
+; to pipeline order reads -- whether a code can fire is decided by the passes ahead of its raise
+; site, and a stale "cannot fire" once had six copies nobody could list. The codes are derived from
+; the library sources; the boundary test's phase table is held to the functions minting them.
+; Same arrangement as ll_test_ratchet.
+
+(executable
+ (name nonvirtual_code_inventory)
+ (modules nonvirtual_code_inventory)
+ (libraries base stdio test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- reads library sources, docs and tests without running a backend.
+ (target nonvirtual_code_inventory.actual)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (sandbox always)
+  (source_tree ../..))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:nonvirtual_code_inventory.exe}
+    %{workspace_root}
+    %{dep:nonvirtual_code_inventory.exe}
+    %{target}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-nonvirtual_code_inventory)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff nonvirtual_code_inventory.expected nonvirtual_code_inventory.actual)))
+
+(test
+ ; ocannl-backend: none -- synthetic source cases and child scanner invocations.
+ (name nonvirtual_code_scan_cases)
+ (package neural_nets_lib)
+ (modules nonvirtual_code_scan_cases)
+ (libraries base stdio unix test_utils arrayjit.verdict)
+ (deps ocannl_config nonvirtual_code_inventory.exe)
+ (action
+  (run %{test} %{dep:nonvirtual_code_inventory.exe})))
 
 (test
  ; ocannl-backend: none -- synthetic source/Dune cases and child scanner invocations.

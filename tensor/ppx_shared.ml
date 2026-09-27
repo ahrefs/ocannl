@@ -44,8 +44,6 @@ open Ppxlib
    and not to a version: every one of them is byte-identical from Ast_502 through Ast_506,
    [Pexp_function]'s [params * constraint * body] triple included. *)
 
-type li = longident
-
 let rec collect_list accu = function
   | [%expr [%e? hd] :: [%e? tl]] -> collect_list (hd :: accu) tl
   | [%expr []] -> List.rev accu

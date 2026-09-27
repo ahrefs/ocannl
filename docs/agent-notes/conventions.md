@@ -235,6 +235,12 @@ files.
   framing churn). The failure mode review is actually there to catch runs in both directions — quoting
   whichever control flatters the story — so a report shows ALL matched contrasts side by side rather
   than the decisive one.
+- A timestamp is an instant of ONE clock, and the controller's is not the box's (gh-ocannl-979):
+  read both bounds of a window with `date +%s` ON the box that produces the artifact, never from a
+  controller mtime or a local duration. How each whole-second end keeps a neighbour's events out,
+  and the `journalctl` traps (`-k`, fractional `--since`), are in the sweep section of
+  [build-and-test.md](build-and-test.md#the-cross-machine-sweep). Still exposed: `ts` in
+  `benchmarks/gh675_cells.py` (no zone); `tools/machine-verify.sh` reads no far-side clock.
 - When the next review finding is "leg X missed guard Y", look for the unfactored duplication instead
   of patching leg X. In `tools/sweep.sh`'s nine rounds every point-wise guard had a leg, a path or a
   machine it had not been applied to, and the fixes that actually closed a class REMOVED or UNIFIED
