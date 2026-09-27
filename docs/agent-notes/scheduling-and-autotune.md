@@ -822,7 +822,13 @@ files.
   injected `batch` function, which is how `autotune_timing_modes` counts a call's launches exactly
   without a device or a machine-dependent slow routine. The gh-755 offset
   had shrunk to 0-6 us on the same site by 2026-09-27, yet the isolated crown still moved in 3 of 4
-  site-runs (gh-ocannl-833).
+  site-runs (gh-ocannl-833); it moved in 3 of 4 on M4 Max Metal and 0 of 4 on CUDA sm_120, and
+  queued crowned the batched winner everywhere. On CUDA the time inside `time_routine` was 1.35x
+  isolated under the post-gh-ocannl-1074 policy, but a CUDA session pair's whole-search wall is
+  confounded by run order: the driver's PTX ComputeCache (`~/.nv/ComputeCache`) serves the second
+  session's kernels warm, and it persists across runs, so an ABBA order still charges the cold
+  start to the first arm alone. Clear it before EACH arm, or discard a cold warm-up run and compare
+  only warm ones, before comparing CUDA search walls.
 - **A batched per-launch reading is not comparable to a synchronized round trip, on any constant**
   (gh-ocannl-994). `autotune_timing_modes` bracketed its `Queued` reading from below at
   `floor_ms / 16`, where `floor_ms` is a minimum over one-launch-plus-one-sync round trips. Those

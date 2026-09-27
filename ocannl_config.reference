@@ -425,9 +425,14 @@
 # gh-ocannl-833, 2026-09-27) the two fastest seeds run in ~59 and ~61 us, "isolated" reads them
 # 1.5-5.0 us high (at most 1.08x; gh-ocannl-755's run there had read a ~50-60 us round trip), and
 # that is still enough to move the crown in 3 of the 4 site-runs, while "queued" crowned the
-# batched-throughput winner in all 4. CUDA and Metal are not yet measured. A best_ms measured under
-# "isolated" is therefore not a throughput number and must not be compared against a batched
-# per-kernel figure.
+# batched-throughput winner in all 4. The same four site-runs on the other two GPU backends
+# (gh-ocannl-833, 2026-09-27): on M4 Max Metal "isolated" reads 42-143 us high and moved the crown
+# in 3 of 4 as well; on CUDA sm_120 (RTX 5070 Ti Laptop, discrete; at a master carrying the
+# gh-ocannl-1074/1096/1098 queued policy) it reads a uniform 3.8-5.6 us high against a 10-18% gap
+# between the top two, so both modes crowned the batched winner in 4 of 4. On all three backends
+# "queued" never crowned anything but the batched winner. cc is not measured (its host round trip
+# is ~0.2 us, so the modes are expected to coincide). A best_ms measured under "isolated" is
+# therefore not a throughput number and must not be compared against a batched per-kernel figure.
 # What queued timing costs a search. The ~25 ms top-up budget accumulates PER-LAUNCH samples in
 # both modes, not queued-batch wall. A fast queued candidate can therefore take all 64 timed batches
 # (about 640 ms when calibration hits the 10 ms target). On CUDA/HIP, before those, one
@@ -455,8 +460,16 @@
 # gh-ocannl-1096 that fallback is wall-bounded: when the batch probes never fit, the depth goes no
 # deeper than the deepest batch measured within the 10 ms target -- depth 1 for a candidate slower
 # than the target.
+# CUDA sm_120 (RTX 5070 Ti Laptop), the same session pair under the gh-ocannl-1074/1096/1098 queued
+# policy (gh-ocannl-834, 2026-09-27): time inside Autotune.time_routine was 682 s isolated vs 924 s
+# queued (1.35x), a slow depth-1 call dispatching 23 launches against isolated's 17 (218 of 220
+# calls settled at depth 1, their calibration reused as the window). The whole-search wall (1090 s
+# vs 990 s) is order-confounded: isolated ran first and the NVIDIA driver's PTX ComputeCache
+# (~/.nv/ComputeCache; OCANNL keeps no CUDA compile cache of its own) served the second session's
+# kernels warm, cutting its non-timing remainder from ~406 s to ~64 s. With that remainder
+# equalized the queued session is an estimated ~1.22x isolated -- an estimate, not a measurement.
 # On cc a queued gpt2_mini search exceeded 2 h (gh-ocannl-719, rog-nv) with no isolated run to
-# compare. The exact worst-case dispatch-count bounds are documented on Autotune.time_routine.
+# compare, so cc's session cost stays unmeasured. The exact worst-case dispatch-count bounds are documented on Autotune.time_routine.
 # The objective is part of the schedule disk-cache key (the "timing" component), so entries do not
 # transfer between the two modes and entries written before gh-ocannl-755 are not replayed: an entry
 # crowned under one objective is not the answer to a search asking the other, and the times it
