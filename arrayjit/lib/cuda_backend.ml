@@ -702,6 +702,114 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
         "}";
       ]
 
+    (* Operand predicates shared by [mma_syntax] and [mma_fragment_syntax], so a fragment scope
+       accepts exactly the operands its nested update-only calls do. *)
+    let mma_loadable = function
+      | `Device | `Shared -> true (* generic-address loads cover both *)
+      | `Thread | `Fragment _ -> false
+
+    let mma_plain = function `Plain -> true | `Swizzled_b128 -> false
+
+    (* An operand eligible for the warp-cooperative [ldmatrix] load (gh-ocannl-481 item 3): the
+       swizzled 16-byte-unit layout, in shared memory, which is the only combination whose per-lane
+       row addresses [ldmatrix] can both reach and de-conflict. Everything else keeps the per-lane
+       gathers, which stay correct for plain shared tiles and device pointers alike. Note the
+       asymmetry the arms rely on: eligibility is [space AND layout], but the DECLINE is on the
+       layout alone — a swizzled operand an arm cannot [ldmatrix] must not silently fall through to
+       row-major gathers, whatever space it sits in. *)
+    let mma_ldm = function
+      | `Shared, `Swizzled_b128 -> true
+      | (`Shared | `Device | `Thread | `Fragment _), (`Plain | `Swizzled_b128) -> false
+
+    (* The element-type spellings of the inline-PTX m16n8k16 arm, shared by its two 16-bit forms:
+       the C type, the bits-as-ushort intrinsic, the widening and narrowing conversions, the
+       instruction's element infix, and the marker [gpu_arch_options] greps for the arch floor
+       (sm_80 for both). [None]: the combination has no m16n8k16 form.
+
+       gh-ocannl-545: [nvcuda::wmma] pairs [__nv_bfloat16] operands with a [float] accumulator only
+       — [crt/mma.hpp] declares no bf16 accumulator fragment — so a uniformly-bf16 network, where
+       the GEMM's destination node is itself bf16, has no wmma combination. The hardware is not the
+       limit: [mma.sync] accumulates bf16 operands in per-lane f32 registers, which we can convert
+       at the [d] boundary because that layout is architecturally defined.
+
+       gh-ocannl-680: under [Numerics.Fp16_wide] the uniform-f16 combination renders through the
+       same arm — the PTX ISA's "Matrix Fragments for mma.m16n8k16" layouts are shared by .f16 and
+       .bf16 — which is exactly the residency [accum_prec] gives the serial legs under that policy.
+       Under [Fp16_auto]/[Fp16_narrow] the wmma f16-accumulate combo renders instead. *)
+    let mma16_spellings ~a_prec ~b_prec ~d_prec =
+      match (a_prec, b_prec, d_prec) with
+      | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ ->
+          Some
+            ( "__nv_bfloat16",
+              "__bfloat16_as_ushort",
+              "__bfloat162float",
+              "__float2bfloat16",
+              "bf16",
+              "mma-bf16" )
+      | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ when Numerics.fp16_accum_wide () ->
+          Some ("__half", "__half_as_ushort", "__half2float", "__float2half", "f16", "mma-f16")
+      | _ -> None
+
+    (* Which m16n8k16 combinations the persistent-fragment scope renders as the arm's own per-lane
+       f32 registers held across the enclosing serial reduction (gh-ocannl-1063), rather than as
+       wmma fragments: uniform bf16, which has no wmma combination to render the scope through, and
+       whose staged twins include the [ldmatrix]-fed swizzled one that wmma cannot read. Wide
+       uniform f16 keeps gh-ocannl-925's wmma scope ([wmma_combo]'s ["-f16-wide"] arm) — it has no
+       swizzled twin, so no second rendering is needed. *)
+    let mma16_register_scope ~a_prec ~b_prec ~d_prec =
+      match (a_prec, b_prec, d_prec) with
+      | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ -> true
+      | _ -> false
+
+    (* Whether the m16n8k16 arm can read these operands at these extents: each operand plain, or
+       swizzled where [ldmatrix] reaches it; the intrinsic tile divides the block; sm_80+. The
+       destination's own conditions differ between the per-statement and the fragment-scope
+       renderings, so they stay with the callers. *)
+    let mma16_operands_ok ~m ~n ~k ~a:(a_space, a_layout) ~b:(b_space, b_layout) =
+      (mma_plain a_layout || mma_ldm (a_space, a_layout))
+      && (mma_plain b_layout || mma_ldm (b_space, b_layout))
+      && m % 16 = 0
+      && n % 8 = 0
+      && k % 16 = 0
+      && mma_loadable a_space && mma_loadable b_space
+      && min_compute_capability () >= 80
+
+    (* The [d] boundary of an m16n8k16 register fragment [frag] ([float frag[mt][nt][4]], one m16n8
+       accumulator tile per [(__mi, __ni)]; gh-ocannl-1063): [`Load] fills it from the [elt] storage
+       at [__mma_dp] widened with [widen], [`Store] writes it back narrowed with [narrow]. Unlike
+       [wmma_d_boundary_lines] no coordinate table is needed: the PTX ISA fixes the accumulator
+       layout — with groupID g = lane>>2 and threadID-in-group t = lane&3, registers 0..3 hold rows
+       {g, g+8} x columns {2t, 2t+1} — which is the same mapping the per-statement rendering in
+       [mma_syntax] loads and stores through. *)
+    let mma16_d_boundary_lines ~dir ~frag ~elt_typ ~widen ~narrow ~ldd ~mt ~nt =
+      let reg i = Printf.sprintf "%s[__mi][__ni][%d]" frag i in
+      let cell row col = Printf.sprintf "__mma_dr%d[%d]" row col in
+      let move i row col =
+        match dir with
+        | `Load -> Printf.sprintf "%s = %s(%s);" (reg i) widen (cell row col)
+        | `Store -> Printf.sprintf "%s = %s(%s);" (cell row col) narrow (reg i)
+      in
+      [
+        "{ /* mma.sync register fragment d boundary: the m16n8k16 accumulator layout */";
+        "  unsigned __mma_lid;";
+        "  asm(\"mov.u32 %0, %%laneid;\" : \"=r\"(__mma_lid));";
+        "  const int __mma_g = (int)(__mma_lid >> 2);";
+        "  const int __mma_t = (int)(__mma_lid & 3);";
+        "#pragma unroll";
+        Printf.sprintf "  for (int __mi = 0; __mi < %d; ++__mi) {" mt;
+        "#pragma unroll";
+        Printf.sprintf "    for (int __ni = 0; __ni < %d; ++__ni) {" nt;
+        Printf.sprintf
+          "      %s *__mma_dr0 = __mma_dp + (__mi * 16 + __mma_g) * %d + __ni * 8 + 2 * __mma_t;"
+          elt_typ ldd;
+        Printf.sprintf "      %s *__mma_dr1 = __mma_dr0 + 8 * %d;" elt_typ ldd;
+        Printf.sprintf "      %s %s" (move 0 0 0) (move 1 0 1);
+        Printf.sprintf "      %s %s" (move 2 1 0) (move 3 1 1);
+        "    }";
+        "  }";
+        "}";
+      ]
+
     (* Tensorize-mma T3: cooperative tile-MMA emission for [Low_level.Tile_mma]. Two renderings:
 
        - The CUDA wmma C++ API for the 16-bit combinations: f16 x f16 -> f32 (the flagship), f16 x
@@ -747,23 +855,8 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
              with [wmma_combo]'s fragment element types (tf32 fragments load from plain [float]
              pointers). *)
           let combo = wmma_combo ~a_prec ~b_prec ~d_prec in
-          let loadable = function
-            | `Device | `Shared -> true (* generic-address loads cover both *)
-            | `Thread | `Fragment _ -> false
-          in
-          let plain = function `Plain -> true | `Swizzled_b128 -> false in
-          (* An operand eligible for the warp-cooperative [ldmatrix] load (gh-ocannl-481 item 3):
-             the swizzled 16-byte-unit layout, in shared memory, which is the only combination whose
-             per-lane row addresses [ldmatrix] can both reach and de-conflict. Everything else keeps
-             the per-lane gathers, which stay correct for plain shared tiles and device pointers
-             alike. Note the asymmetry the arms below rely on: eligibility is [space AND layout],
-             but the DECLINE is on the layout alone — a swizzled operand this arm cannot [ldmatrix]
-             must not silently fall through to row-major gathers, whatever space it sits in. *)
-          let ldm = function
-            | `Shared, `Swizzled_b128 -> true
-            | (`Shared | `Device | `Thread | `Fragment _), (`Plain | `Swizzled_b128) -> false
-          in
-          let a_swz = ldm (a_space, a_layout) and b_swz = ldm (b_space, b_layout) in
+          let loadable = mma_loadable and plain = mma_plain in
+          let a_swz = mma_ldm (a_space, a_layout) and b_swz = mma_ldm (b_space, b_layout) in
           (* The shared-window address of the element at (row, col) of a [Swizzle_b128] tile whose
              minor dim is [ld]: the column's 16-byte-unit index is XORed with the low bits of the
              row (see [Low_level.Swizzle_b128]), everything within a unit left alone. Every fragment
@@ -817,46 +910,14 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
             | Ops.Fp8_prec _, Ops.Fp8_prec _, Ops.Single_prec _ -> true
             | _ -> false
           in
-          (* gh-ocannl-545: [nvcuda::wmma] pairs [__nv_bfloat16] operands with a [float] accumulator
-             only — [crt/mma.hpp] declares no bf16 accumulator fragment — so a uniformly-bf16
-             network, where the GEMM's destination node is itself bf16, has no wmma combination and
-             used to render the lane-0 scalar fallback under a tensorized label. The hardware is not
-             the limit: [mma.sync] accumulates bf16 operands in per-lane f32 registers, which we can
-             convert at the [d] boundary because that layout is architecturally defined (unlike wmma
-             fragments, whose element mapping is opaque and forces a warp-uniform [float] staging
-             buffer). Rendered by the inline-PTX arm below. *)
-          let is_bf16_uniform =
-            match (a_prec, b_prec, d_prec) with
-            | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ -> true
-            | _ -> false
-          in
-          (* gh-ocannl-680: under [Numerics.Fp16_wide] the uniform-f16 combination renders through
-             the same m16n8k16 inline-PTX arm — the PTX ISA's "Matrix Fragments for mma.m16n8k16"
-             layouts are shared by .f16 and .bf16 — holding f32 per-lane registers across the whole
-             k extent and converting once at the [d] boundary: exactly the residency [accum_prec]
-             gives the serial legs under that policy. Under [Fp16_auto]/[Fp16_narrow] the wmma
-             f16-accumulate combo above renders instead and this stays false. *)
-          let is_f16_uniform_wide =
-            match (a_prec, b_prec, d_prec) with
-            | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ -> Numerics.fp16_accum_wide ()
-            | _ -> false
-          in
-          (* The element-type spellings of the m16n8k16 arm, shared by its two 16-bit forms: the C
-             type, the bits-as-ushort intrinsic, the widening and narrowing conversions, the
-             instruction's element infix, and the marker [gpu_arch_options] greps for the arch floor
-             (sm_80 for both). *)
-          let mma16_spellings =
-            if is_bf16_uniform then
-              Some
-                ( "__nv_bfloat16",
-                  "__bfloat16_as_ushort",
-                  "__bfloat162float",
-                  "__float2bfloat16",
-                  "bf16",
-                  "mma-bf16" )
-            else if is_f16_uniform_wide then
-              Some ("__half", "__half_as_ushort", "__half2float", "__float2half", "f16", "mma-f16")
-            else None
+          let mma16_spellings = mma16_spellings ~a_prec ~b_prec ~d_prec in
+          (* gh-ocannl-1063: an update-only call against the register fragment array
+             [mma_fragment_syntax] declared — the scope renders that form for exactly these
+             combinations, so a [`Fragment] destination here is always one of its arrays. *)
+          let resident =
+            match d_space with
+            | `Fragment frag when mma16_register_scope ~a_prec ~b_prec ~d_prec -> Some frag
+            | `Fragment _ | `Device | `Shared | `Thread -> None
           in
           (* fp8's [ldmatrix] eligibility is one-sided per operand, and the sides are opposite
              (gh-ocannl-481 item 3, D2). [ldmatrix.b16] moves 16-bit units, so it can build a
@@ -1014,13 +1075,8 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
                needs is contiguous under one of the two forms — [.trans] transposes each 8x8 tile on
                distribution, which is exactly the difference between the two orientations. *)
             Option.is_some mma16_spellings && plain d_layout
-            && (plain a_layout || a_swz)
-            && (plain b_layout || b_swz)
-            && m % 16 = 0
-            && n % 8 = 0
-            && k % 16 = 0
-            && loadable d_space && loadable a_space && loadable b_space
-            && min_compute_capability () >= 80
+            && (loadable d_space || Option.is_some resident)
+            && mma16_operands_ok ~m ~n ~k ~a:(a_space, a_layout) ~b:(b_space, b_layout)
           then
             (* Raw [mma.sync] with the architecturally-defined per-lane fragment layouts of m16n8k16
                (PTX ISA "Matrix Fragments for mma.m16n8k16", shared by .f16 and .bf16 — which is
@@ -1042,7 +1098,15 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
                with the whole [k] extent accumulated in f32 registers in between. For bf16 that is
                strictly better rounding than the scalar fallback this replaces, which rounds to bf16
                per term; for f16 it is the [Numerics.Fp16_wide] residency [accum_prec] gives every
-               serial rendering (gh-ocannl-680). *)
+               serial rendering (gh-ocannl-680).
+
+               Against a [resident] register fragment (gh-ocannl-1063) the call is update-only: the
+               f32 registers are [frag[__mi][__ni][0..3]], loaded and stored once by the enclosing
+               [mma_fragment_syntax] scope, so no [d] crosses a 16-bit boundary per outer [k] block.
+               The leading barrier goes too — no sibling zeroing of [d] is read here, and the staged
+               tiles' visibility is the staging's own barrier, as for the wmma update form — while
+               the trailing one stays: it releases the staged tiles for the next serial iteration's
+               cooperative loads. *)
             let open PPrint in
             let elt_typ, as_ushort, to_float, from_float, instr_elt, marker =
               Option.value_exn mma16_spellings
@@ -1109,26 +1173,46 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
                        ~row:"__ki * 16 + (__mma_lid & 15)" ~col:"__ni * 8")
             in
             let barrier = "__syncthreads();" in
+            (* Which of two renderings: against the scope's register [fragment], or the
+               self-contained [statement] that loads and stores [d] itself. *)
+            let either ~fragment ~statement =
+              match resident with Some _ -> fragment | None -> statement
+            in
+            (* The accumulator register [i] of the current [(__mi, __ni)] tile. *)
+            let acc i =
+              match resident with
+              | None -> Printf.sprintf "__mma_d%d" i
+              | Some frag -> Printf.sprintf "%s[__mi][__ni][%d]" frag i
+            in
+            let unroll = either ~fragment:[ "#pragma unroll" ] ~statement:[] in
             let body_lines =
-              [
-                barrier;
-                "unsigned __mma_lid;";
-                "asm(\"mov.u32 %0, %%laneid;\" : \"=r\"(__mma_lid));";
-                "const int __mma_g = (int)(__mma_lid >> 2);";
-                "const int __mma_t = (int)(__mma_lid & 3);";
-                Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-                Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                Printf.sprintf
-                  "    %s *__mma_dr0 = __mma_dp + (__mi * 16 + __mma_g) * %d + __ni * 8 + 2 * \
-                   __mma_t;"
-                  elt_typ ldd;
-                Printf.sprintf "    %s *__mma_dr1 = __mma_dr0 + 8 * %d;" elt_typ ldd;
-                Printf.sprintf "    float __mma_d0 = %s(__mma_dr0[0]), __mma_d1 = %s(__mma_dr0[1]);"
-                  to_float to_float;
-                Printf.sprintf "    float __mma_d2 = %s(__mma_dr1[0]), __mma_d3 = %s(__mma_dr1[1]);"
-                  to_float to_float;
-                Printf.sprintf "    for (int __ki = 0; __ki < %d; ++__ki) {" kt;
-              ]
+              either ~fragment:[] ~statement:[ barrier ]
+              @ [
+                  "unsigned __mma_lid;";
+                  "asm(\"mov.u32 %0, %%laneid;\" : \"=r\"(__mma_lid));";
+                  "const int __mma_g = (int)(__mma_lid >> 2);";
+                  "const int __mma_t = (int)(__mma_lid & 3);";
+                ]
+              @ unroll
+              @ [ Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt ]
+              @ unroll
+              @ [ Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt ]
+              @ either ~fragment:[]
+                  ~statement:
+                    [
+                      Printf.sprintf
+                        "    %s *__mma_dr0 = __mma_dp + (__mi * 16 + __mma_g) * %d + __ni * 8 + 2 \
+                         * __mma_t;"
+                        elt_typ ldd;
+                      Printf.sprintf "    %s *__mma_dr1 = __mma_dr0 + 8 * %d;" elt_typ ldd;
+                      Printf.sprintf
+                        "    float __mma_d0 = %s(__mma_dr0[0]), __mma_d1 = %s(__mma_dr0[1]);"
+                        to_float to_float;
+                      Printf.sprintf
+                        "    float __mma_d2 = %s(__mma_dr1[0]), __mma_d3 = %s(__mma_dr1[1]);"
+                        to_float to_float;
+                    ]
+              @ [ Printf.sprintf "    for (int __ki = 0; __ki < %d; ++__ki) {" kt ]
               @ (if a_swz then a_ldm_lines
                  else
                    [
@@ -1142,25 +1226,27 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
                   Printf.sprintf "      asm(\"mma.sync.aligned.m16n8k16.row.col.f32.%s.%s.f32 \""
                     instr_elt instr_elt;
                   "          \"{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\"";
-                  "          : \"+f\"(__mma_d0), \"+f\"(__mma_d1), \"+f\"(__mma_d2), \
-                   \"+f\"(__mma_d3)";
+                  Printf.sprintf "          : \"+f\"(%s), \"+f\"(%s), \"+f\"(%s), \"+f\"(%s)"
+                    (acc 0) (acc 1) (acc 2) (acc 3);
                   "          : \"r\"(__mma_a0), \"r\"(__mma_a1), \"r\"(__mma_a2), \"r\"(__mma_a3), \
                    \"r\"(__mma_b0), \"r\"(__mma_b1));";
                   "    }";
-                  Printf.sprintf "    __mma_dr0[0] = %s(__mma_d0); __mma_dr0[1] = %s(__mma_d1);"
-                    from_float from_float;
-                  Printf.sprintf "    __mma_dr1[0] = %s(__mma_d2); __mma_dr1[1] = %s(__mma_d3);"
-                    from_float from_float;
-                  "  }";
-                  "}";
-                  barrier;
                 ]
+              @ either ~fragment:[]
+                  ~statement:
+                    [
+                      Printf.sprintf "    __mma_dr0[0] = %s(__mma_d0); __mma_dr0[1] = %s(__mma_d1);"
+                        from_float from_float;
+                      Printf.sprintf "    __mma_dr1[0] = %s(__mma_d2); __mma_dr1[1] = %s(__mma_d3);"
+                        from_float from_float;
+                    ]
+              @ [ "  }"; "}"; barrier ]
             in
             let ptr_decl name typ ptr =
               string (Printf.sprintf "%s *%s = " typ name) ^^ ptr ^^ semi
             in
             let body ~a_ptr ~b_ptr =
-              ptr_decl "__mma_dp" elt_typ d_ptr ^^ hardline
+              either ~fragment:empty ~statement:(ptr_decl "__mma_dp" elt_typ d_ptr ^^ hardline)
               ^^ ptr_decl "__mma_ap" ("const " ^ elt_typ) a_ptr
               ^^ hardline
               ^^ ptr_decl "__mma_bp" ("const " ^ elt_typ) b_ptr
@@ -1171,8 +1257,9 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
               (fun ~a_ptr ~b_ptr ->
                 group
                   (string
-                     (Printf.sprintf "{ /* tile_mma %dx%dx%d (%s)%s */" m n k marker
-                        (ldm_tag ~a:a_swz ~b:b_swz))
+                     (Printf.sprintf "{ /* tile_mma %s%dx%dx%d (%s)%s */"
+                        (either ~fragment:"fragment update " ~statement:"")
+                        m n k marker (ldm_tag ~a:a_swz ~b:b_swz))
                   ^^ nest 2 (hardline ^^ body ~a_ptr ~b_ptr)
                   ^^ hardline ^^ rbrace))
           else
@@ -1365,9 +1452,18 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
        accepted scope never strands its inner call. The fp8 inline-PTX combination declines: its
        accumulator lives in per-lane f32 registers with the m16n8k32 layout, not wmma fragments, so
        it keeps the per-[k_o] rendering through the caller's target-aliasing path. Swizzled operands
-       decline for the same reason the wmma arm of [mma_syntax] does — opaque fragments cannot be
-       fed from [ldmatrix] — which is precisely what routes a swizzled staged bf16 leg to the
-       inline-PTX arm via the caller's target aliasing (gh-ocannl-481 item 3, D3). *)
+       decline the wmma rendering for the same reason the wmma arm of [mma_syntax] does — opaque
+       fragments cannot be fed from [ldmatrix].
+
+       Uniform bf16 has no wmma combination at all, and before gh-ocannl-1063 declined here too, so
+       its staged schedules took the per-[k_o] inline-PTX rendering — narrowing the f32 accumulator
+       to bf16 at every outer block although [accum_prec] (and every other rendering) keeps it f32.
+       It now renders as the inline-PTX arm's own per-lane registers held across the reduction
+       ([mma16_register_scope]): [float frag[mt][nt][4]] in the architected m16n8k16 accumulator
+       layout, converted once at each end by [mma16_d_boundary_lines], with the nested calls
+       rendering update-only against it. The registers do not care how the operands arrive, so the
+       plain and the [ldmatrix]-fed swizzled staged twins share this one scope, and with it their
+       numerics. *)
     let mma_fragment_syntax =
       Some
         (fun ~d_prec
@@ -1382,28 +1478,71 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
           ~b:(ldb, b_space, b_layout)
           ~body
         ->
-          let loadable = function
-            | `Device | `Shared -> true (* generic-address loads cover both *)
-            | `Thread | `Fragment _ -> false
+          let loadable = mma_loadable and plain = mma_plain in
+          let barrier = "__syncthreads();" in
+          let d_decl =
+            PPrint.(string (Printf.sprintf "%s *__mma_dp = " (typ_of_prec d_prec)) ^^ d_ptr ^^ semi)
           in
-          let plain = function `Plain -> true | `Swizzled_b128 -> false in
+          (* Bracketing barriers: sibling statements (the zeroing of [d], cooperative staging)
+             execute lane-partitioned, so the fragment loads must observe the other lanes' writes,
+             and later statements the stores. *)
+          let scope_doc ~title ~lines_before ~lines_after =
+            let open PPrint in
+            group
+              (string title
+              ^^ nest 2
+                   (hardline ^^ d_decl ^^ hardline
+                   ^^ separate_map hardline string lines_before
+                   ^^ hardline ^^ body () ^^ hardline
+                   ^^ separate_map hardline string lines_after)
+              ^^ hardline ^^ rbrace)
+          in
+          (* The register scope first: its combinations have no wmma form. *)
+          let register_scope =
+            match mma16_spellings ~a_prec ~b_prec ~d_prec with
+            | Some spellings
+              when mma16_register_scope ~a_prec ~b_prec ~d_prec
+                   && plain d_layout && loadable d_space
+                   && mma16_operands_ok ~m ~n ~k ~a:(a_space, a_layout) ~b:(b_space, b_layout) ->
+                Some spellings
+            | _ -> None
+          in
           match
-            if plain d_layout && plain a_layout && plain b_layout then
-              wmma_combo ~a_prec ~b_prec ~d_prec
-            else None
+            ( register_scope,
+              if plain d_layout && plain a_layout && plain b_layout then
+                wmma_combo ~a_prec ~b_prec ~d_prec
+              else None )
           with
-          | Some
-              {
-                wc_acc_typ = acc_typ;
-                wc_tm;
-                wc_tn;
-                wc_tk;
-                wc_ab_ld_mult = ab_ld_mult;
-                wc_d_ld_mult = d_ld_mult;
-                wc_min_cc = min_cc;
-                wc_d_cvt = d_cvt;
-                _;
-              }
+          | Some (elt_typ, _, widen, narrow, _, marker), _ ->
+              let mt = m / 16 and nt = n / 8 in
+              let boundary dir =
+                mma16_d_boundary_lines ~dir ~frag:fragment ~elt_typ ~widen ~narrow ~ldd ~mt ~nt
+              in
+              Some
+                (scope_doc
+                   ~title:
+                     (Printf.sprintf "{ /* mma.sync register fragment %dx%d across k_o (%s) */" m n
+                        marker)
+                   ~lines_before:
+                     ([ barrier; Printf.sprintf "float %s[%d][%d][4];" fragment mt nt ]
+                     @ boundary `Load
+                     @ [ "/* mma.sync fragment reduction body begins */" ])
+                   ~lines_after:
+                     (("/* mma.sync fragment reduction body ends */" :: boundary `Store)
+                     @ [ barrier ]))
+          | ( None,
+              Some
+                {
+                  wc_acc_typ = acc_typ;
+                  wc_tm;
+                  wc_tn;
+                  wc_tk;
+                  wc_ab_ld_mult = ab_ld_mult;
+                  wc_d_ld_mult = d_ld_mult;
+                  wc_min_cc = min_cc;
+                  wc_d_cvt = d_cvt;
+                  _;
+                } )
             when m % wc_tm = 0
                  && n % wc_tn = 0
                  && k % wc_tk = 0
@@ -1412,19 +1551,14 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
                  && ldd % d_ld_mult = 0
                  && loadable d_space && loadable a_space && loadable b_space
                  && min_compute_capability () >= min_cc ->
-              let open PPrint in
               let mt = m / wc_tm and nt = n / wc_tn in
-              let barrier = "__syncthreads();" in
               let acc_frag =
                 Printf.sprintf "nvcuda::wmma::fragment<nvcuda::wmma::accumulator, %d, %d, %d, %s>"
                   wc_tm wc_tn wc_tk acc_typ
               in
-              (* Bracketing barriers: sibling statements (the zeroing of [d], cooperative staging)
-                 execute lane-partitioned, so the fragment loads must observe the other lanes'
-                 writes, and later statements the stores. *)
-              (* The [d] boundary: the fragment array's own loads and stores, or — for a
-                 destination whose storage type is not the accumulator's (gh-ocannl-925) — the
-                 element-wise conversion through the layout-independent coordinate table. *)
+              (* The [d] boundary: the fragment array's own loads and stores, or — for a destination
+                 whose storage type is not the accumulator's (gh-ocannl-925) — the element-wise
+                 conversion through the layout-independent coordinate table. *)
               let boundary dir =
                 match d_cvt with
                 | Some (widen, narrow) ->
@@ -1456,18 +1590,10 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
               let lines_after =
                 ("/* wmma fragment reduction body ends */" :: boundary `Store) @ [ barrier ]
               in
-              let d_decl =
-                string (Printf.sprintf "%s *__mma_dp = " (typ_of_prec d_prec)) ^^ d_ptr ^^ semi
-              in
               Some
-                (group
-                   (string (Printf.sprintf "{ /* wmma fragment %dx%d across k_o */" m n)
-                   ^^ nest 2
-                        (hardline ^^ d_decl ^^ hardline
-                        ^^ separate_map hardline string lines_before
-                        ^^ hardline ^^ body () ^^ hardline
-                        ^^ separate_map hardline string lines_after)
-                   ^^ hardline ^^ rbrace))
+                (scope_doc
+                   ~title:(Printf.sprintf "{ /* wmma fragment %dx%d across k_o */" m n)
+                   ~lines_before ~lines_after)
           | _ -> None)
 
     let convert_precision ~from ~to_ =
@@ -1931,12 +2057,15 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
                        else []);
                     (* gh-ocannl-838: the uniform-bf16 key is the same inline-PTX arm, f32 in
                        hardware whatever the policy, so [Numerics.Bf16_wide] changes no rendering
-                       here — but a staged outer-k split would store bf16 at every block boundary,
-                       so the fragment scope is absent: wmma's bf16 x bf16 -> f32 fragments could
-                       carry it behind the same converted boundary as the f16 arm, but that arm is
-                       not written yet. *)
+                       here. Since gh-ocannl-1063 a staged outer-k split keeps it f32 too: the
+                       persistent-fragment scope holds that arm's per-lane registers across the
+                       outer reduction and converts [d] once at each end ([mma16_register_scope]),
+                       for the plain and the swizzled staged twins alike — under every policy, as
+                       [accum_prec] keeps bf16 accumulators f32 under every policy. *)
                     mma_bf16_wide_acc_scopes =
-                      (if cc >= 80 then [ Backend_intf.Mma_per_statement ] else []);
+                      (if cc >= 80 then
+                         [ Backend_intf.Mma_per_statement; Backend_intf.Mma_fragment_scope ]
+                       else []);
                     (* Swizzled staged tiles (gh-ocannl-481 item 3, D3): only the inline-PTX arms
                        can read them, and only in the orientations the staged sketches mint. That is
                        the uniform-bf16 combination — both its operands' fragment registers hold
