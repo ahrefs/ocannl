@@ -262,6 +262,20 @@ val conv_launch_geometry : conv_site -> sketch_params -> Ir.Schedule.launch_geom
     {!Ir.Schedule.fission_scheduled} and cross-check every GPU seed against
     {!Ir.Low_level.launch_dims}. {!Ir.Schedule.unknown_launch_geometry} for CPU parameters. *)
 
+val mma_format_triples :
+  a_prec:Ir.Ops.prec ->
+  b_prec:Ir.Ops.prec ->
+  d_prec:Ir.Ops.prec ->
+  (Ir.Backend_intf.mma_input_format
+  * Ir.Backend_intf.mma_input_format
+  * Ir.Backend_intf.mma_input_format)
+  list
+(** The (operand, operand, accumulator) format triples a site with these storage precisions resolves
+    to, in preference order — the key the typed seeds look up in [mma_format_tiles] and
+    [mma_staged_layouts]. Single-precision operands read as tf32 first only under
+    {!Ir.Numerics.t.tf32_matmuls}. Exposed for tests, which derive the storage precisions of an
+    advertised triple from it rather than restating the format table. *)
+
 val sketch_seed_params :
   is_gpu:bool ->
   is_cpu:bool ->
