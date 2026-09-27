@@ -922,6 +922,9 @@ let guide_cases =
       guide "- A rule; the mechanism: b.md#the-gadget-seam+more.",
       [ "guide-anchors @ AGENTS.md:3" ] );
     (* A path outside the notes is out of scope whatever its slug says. *)
+    ( "a directory path cut on the left is out of scope",
+      guide "- Set URL=docs/syntax_extensions.md#operators, or URL=docs/agent-notes/a.md#nope.",
+      [] );
     ( "an external path with a Unicode slug is not read",
       guide "- See docs/syntax_extensions.md#\xc3\xa9criture.",
       [] );

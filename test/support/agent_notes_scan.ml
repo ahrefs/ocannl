@@ -1753,6 +1753,11 @@ let check_guide ~guide_file ~guide_contents ~index_file ~index_contents
         Some (finding ~file:guide_file ~line:p.pointer_line ~rule:rule_guide_anchors msg)
       in
       match pointer_target p.path with
+      (* A left-cut path with a directory in it is out of scope either way: the name written is the
+         read path with something in front, so it cannot be [docs/agent-notes/...] or a bare
+         basename (Codex P2, round 11 on lukstafi/ocannl-staging#811). A left-cut bare name could be
+         a note's, so which note is unknown and it is refused. *)
+      | _ when p.cut_left && String.mem p.path '/' -> None
       | _ when p.cut_left ->
           report
             (Printf.sprintf
