@@ -2105,15 +2105,16 @@ let () =
      list (gh-ocannl-1073's fp8 candidate) is covered the day it is advertised — compile a
      multi-block staged schedule plain and with that layout, and claim that the two renderings'
      censuses agree apart from [ldmatrix] (the load path, not the rendering, is what the layout
-     changes), that both hold the register fragment across the outer reduction (loaded before the
-     reduction body, stored after it, and no [d] traffic inside it), and that both compute the same
-     values bitwise (the same registers through the same instructions in the same order). The
-     storage precisions of each triple are the ones whose site resolves to it
-     ([Autotune.mma_format_triples]) — the seeding relation itself, not a second format table. Only
-     CUDA advertises a layout; an empty list (pre-sm_80, or any other backend) is the ordinary
-     backend skip. --- *)
+     changes) and that only the swizzled twin's loads go through it, that both hold the register
+     fragment across the outer reduction (loaded before the reduction body, stored after it, and no
+     [d] traffic inside it), and that both compute the same values bitwise (the same registers
+     through the same instructions in the same order). The storage precisions of each triple are the
+     ones whose site resolves to it ([Autotune.mma_format_triples]) — the seeding relation itself,
+     not a second format table. Only CUDA advertises a layout; an empty list (pre-sm_80, or any
+     other backend) is the ordinary backend skip. --- *)
   let claim_twin_census =
-    "staged twins per advertised swizzled layout: the censuses agree apart from ldmatrix"
+    "staged twins per advertised swizzled layout: the censuses agree apart from ldmatrix, which \
+     only the swizzled twin uses"
   in
   let claim_twin_resident =
     "staged twins per advertised swizzled layout: both keep the register fragment resident across \
@@ -2231,6 +2232,13 @@ let () =
             (not (List.is_empty plain))
             && List.equal Ir.C_syntax.equal_mma_rendering (apart_from_ldmatrix plain)
                  (apart_from_ldmatrix swizzled)
+            (* The layout must actually reach the loads: a swizzle the pipeline dropped would leave
+               two identical plain renderings, which every other claim here accepts. *)
+            && List.exists swizzled
+                 ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics_ldmatrix)
+            && not
+                 (List.exists plain
+                    ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics_ldmatrix))
           in
           if not agree then
             Stdio.eprintf "staged twins %s: plain census %s, swizzled census %s\n%!" tag
