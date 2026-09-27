@@ -16,6 +16,7 @@ let cross_entropy_loss = Nn_blocks.cross_entropy_loss
 let () =
   let fixture = Stdlib.Sys.getenv "BENCH_FIXTURE" in
   let tune = H.env_flag "BENCH_TUNE" in
+  H.install_timing_trace ();
   let materialize = H.env_flag "BENCH_MATERIALIZE" in
   let debug = H.env_flag "BENCH_DEBUG" in
   let st = St.read fixture in
@@ -113,6 +114,7 @@ let () =
      timing_ctx replay fallback ships something no arm report describes. *)
   H.collect_shipped arms (H.Plain routine);
   let compile_s = Unix.gettimeofday () -. t0 in
+  H.trace_search_done ~compile_s;
   (* Autotune's timing context re-ran param inits on [ctx]; restore fixture weights. *)
   let ctx = if tune then H.inject ctx st batch_loss mapping else ctx in
   let batch_ref = IDX.find_exn routine.Context.bindings batch_n in

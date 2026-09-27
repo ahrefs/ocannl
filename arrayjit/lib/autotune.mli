@@ -627,9 +627,13 @@ val admitted_timing_ms : timing_result -> float option
     offset varies from candidate to candidate with the block count and the per-launch queue work
     (39-86 us over that site's ten seeded geometries, and up to 45 us of spread within a single
     run), which is what lets two candidates 5-8 us apart in steady state swap places — measured, in
-    2 of 8 runs. Consequently a [best_ms] measured under {!Isolated} is not a throughput number and
-    must not be compared with a batched per-kernel figure; under {!Queued} it is, up to the batch's
-    residual ~1% of round trip. *)
+    2 of 8 runs. Re-measured on the same device at the same site (gh-ocannl-833, 2026-09-27) the
+    offset had shrunk to 0-6 us ({!Isolated} at most 1.08x {!Queued}), and the crown still moved in
+    3 of 4 site-runs, {!Queued} keeping the batched-throughput winner in all 4: the offset's
+    candidate-to-candidate variation, not its size, is what reorders a close pair. Consequently a
+    [best_ms] measured under {!Isolated} is not a throughput number and must not be compared with a
+    batched per-kernel figure; under {!Queued} it is, up to the batch's residual ~1% of round trip.
+*)
 
 type report = {
   outcome : outcome;

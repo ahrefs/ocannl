@@ -766,6 +766,14 @@ files.
   template every report starts from, `Autotune.no_search_report`, therefore takes `~timing` — it is
   a function of the objective rather than a constant, which is the only reason the field can be
   plain (the option it briefly had existed solely to let that constant exist).
+- **Queued timing's search cost is dominated by candidates SLOWER than the batch target, not fast
+  ones** (gh-ocannl-834). A gpt2_mini tuned search on gfx1151 took 794 s isolated against 1370 s
+  queued: equal timed loops, but 587 s of calibration against 14 s, because 215 of 220 calls settle
+  at depth 1 after ~40 calibration launches (sixteen singles plus the depth-2 confirmation) and
+  then time exactly what `isolated` would. `BENCH_TIMING_TRACE=1` in the benchmark runners splits a
+  session's wall this way; `benchmarks/gh834_cells.sh` is the per-box driver. The gh-755 offset
+  had shrunk to 0-6 us on the same site by 2026-09-27, yet the isolated crown still moved in 3 of 4
+  site-runs (gh-ocannl-833).
 - **A batched per-launch reading is not comparable to a synchronized round trip, on any constant**
   (gh-ocannl-994). `autotune_timing_modes` bracketed its `Queued` reading from below at
   `floor_ms / 16`, where `floor_ms` is a minimum over one-launch-plus-one-sync round trips. Those
