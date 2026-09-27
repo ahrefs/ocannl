@@ -2006,8 +2006,11 @@ case $sub in
     [ $# -gt 0 ] || set -- runtest
     select_dune
     plan_slot
-    trap 'batch_abort; rm -rf "$run_dir"; exit 130' INT
-    trap 'batch_abort; rm -rf "$run_dir"; exit 143' TERM HUP
+    # Guarded: a signal before new_run has named the directory finds none
+    # (set -u; Codex review round 7 on PR #832).
+    run_dir=
+    trap 'batch_abort; [ -z "$run_dir" ] || rm -rf "$run_dir"; exit 130' INT
+    trap 'batch_abort; [ -z "$run_dir" ] || rm -rf "$run_dir"; exit 143' TERM HUP
     new_run "$@"
     take_lock
     mark_planning
