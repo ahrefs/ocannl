@@ -815,10 +815,11 @@ files.
   is not a cold session: the backend's own compiled-code cache persists across processes, and in
   gh-ocannl-834's CUDA pair the second session's compile-and-bookkeeping time was 64 s against the
   first's 406 s from the PTX ComputeCache alone — the driver gives each CUDA session an empty
-  `CUDA_CACHE_PATH`; on backends whose cache it cannot redirect, run the modes ABBA. Since
-  gh-ocannl-1074 a depth-1 settle does not time that window again: the calibration's singles are
-  depth-1 batches taken under the timed loop's own stopping rule, so `sample_window ~prior` resumes
-  them as the window and the loop only tops up past the caller's `repeats` floor. That is not a change of
+  `CUDA_CACHE_PATH`; on backends whose cache it cannot redirect, warm it with a discarded session
+  first (a fresh OUT does not reset it), then run the modes ABBA. Since gh-ocannl-1074 a depth-1
+  settle does not time that window again: the calibration's singles are depth-1 batches taken under
+  the timed loop's own stopping rule, so `sample_window ~prior` resumes them as the window and the
+  loop only tops up past the caller's `repeats` floor. That is not a change of
   objective (no cache-key generation bump): the reading is still a min-of-N synchronized singles
   judged whole by the 2x-majority rule — only the redundant second window is gone. The trace's
   `timed` share at depth 1 therefore drops to ~0 while `calib` is unchanged; each call line says

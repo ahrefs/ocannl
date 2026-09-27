@@ -36,10 +36,14 @@
 #   gh-ocannl-834's CUDA pair the isolated session ran first and the driver's PTX ComputeCache
 #   served the queued one warm (406 s vs 64 s of compile and bookkeeping outside timing). On cuda
 #   each session therefore gets its own empty CUDA_CACHE_PATH=OUT/nvcache-<mode>, recorded in
-#   driver.log, overriding any the caller exported. Other backends keep caches this script cannot
-#   redirect (HIP's comgr cache, macOS's Metal shader cache): there, run the sessions in ABBA order
-#   (session-isolated session-queued in one invocation, session-queued session-isolated in a second
-#   on a fresh OUT) and compare each mode's pair, so warm-cache advantage cancels.
+#   driver.log (with its final size) and removed after the step so OUT archives only results; it
+#   overrides any the caller exported. Other backends keep caches this script cannot redirect
+#   (HIP's comgr cache, macOS's Metal shader cache), and a fresh OUT does not reset them: the first
+#   session ever run warms every later one, the next invocation's included. There, bring every
+#   measured session to the same cache state -- a discarded warm-up session first (or the cache
+#   cleared by hand before each session) -- then run the modes ABBA (session-isolated
+#   session-queued in one invocation, the reverse in a second on a fresh OUT) and compare each
+#   mode's pair, so order effects cancel.
 set -u
 # Hermetic against ambient configuration, as gh612_cells.sh is: every treatment is pinned on the
 # command line, so an exported OCANNL_* or BENCH_* could only contaminate every cell consistently.
@@ -334,6 +338,11 @@ for s in "$@"; do
           echo "== step $s: capped outside its search (before it began or after it ended); not a lower bound"
         status=1
       fi
+    fi
+    # The session's driver cache is scratch, not evidence: record its size, then drop it.
+    if [ "$backend" = cuda ]; then
+      echo "nvcache-$mode $(du -sk "$out/nvcache-$mode" | cut -f1) KiB after $s; removed"
+      rm -rf "$out/nvcache-$mode"
     fi
     # The result line (compile_s is the search wall) and the trace's last word: the summary on a
     # completed run, the running totals of the last timing call on a capped one.
