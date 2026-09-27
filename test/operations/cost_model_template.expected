@@ -1,48 +1,62 @@
-== template_cost on hand-built templates ==
-  reduction body, one instantiation            flops=5 bytes=20 exact
-reduction: kernel flops = instantiation flops x projected extent: true
-reduction: bytes are the operand's cells of one instantiation, self excluded: true
-reduction: no index vector, no collapse: true
-  where body, hoisted reduction arm            flops=6 bytes=24 exact
-where: exact, 6 ops and 24 bytes per instantiation: true
-  where body, arm the simplifier inlines (bound) flops=2 bytes=8 approx
+== instantiation_cost on hand-built computations ==
+  reduction, one read                            flops=5 (exact) bytes=20 (exact)
+reduction: kernel flops = read flops x projected extent, 20 bytes, exact: true
+  where, hoisted reduction arm                   flops=6 (exact) bytes=24 (exact)
+where: exact, 6 ops and 24 bytes per read: true
+  where, arm the simplifier collapses            flops=2 (bound) bytes=8 (bound)
 where: a collapsible arm prices as the simplified, conditional form: true
-  shared-loop body priced for S (sibling dropped) flops=1 bytes=4 exact
+  shared loop read as S (sibling filtered)       flops=1 (exact) bytes=4 (exact)
 shared loop: the sibling's ops and reads do not price: true
-  affine index position (loops kept, bound)    flops=4 bytes=16 approx
-  bare iterator positions (collapsed, exact)   flops=1 bytes=4 exact
-affine position: the loops stay and the count is a bound: true
-bare positions: both loops collapse, exact: true
-  packed-uniform producer (bound)              flops=4 bytes=4 approx
-packed-uniform producer prices as a bound: true
-  two alpha-equivalent scopes (CSE'd)          flops=6 bytes=20 exact
+  two alpha-equivalent scopes (CSE'd)            flops=6 (exact) bytes=20 (exact)
 alpha-equivalent scope bodies price once: true
-  diagonal producer (bound)                    flops=1 bytes=4 approx
-a repeated bare symbol prices as a bound: true
+  broadcast operands, per read                   flops=1 (exact) bytes=8 (exact)
+broadcast operands: one add and both cells per read, exact: true
+  packed-uniform producer (lane extract)         flops=3 (exact) bytes=16 (bound)
+packed-uniform producer: the lane-extract form, exact ops, dynamic-read bytes a bound: true
+== guard-emitting shapes: price = emitted read ==
+  affine position, priced                        flops=8 (bound) bytes=8 (bound)
+  affine position, emitted                       flops=8 (bound) bytes=8 (bound)
+affine position: the producer is inlined at the reader: true
+affine position: the price is the emitted read, counts and exactness: true
+affine position: the kept loop's range guard is priced (the arm itself has no op): true
+  diagonal producer, priced                      flops=2 (exact) bytes=4 (bound)
+  diagonal producer, emitted                     flops=2 (exact) bytes=4 (bound)
+diagonal producer: the producer is inlined at the reader: true
+diagonal producer: the price is the emitted read, counts and exactness: true
+diagonal producer: the consistency guard is counted, the op count exact: true
+  two-component concat, priced                   flops=6 (bound) bytes=8 (bound)
+  two-component concat, emitted                  flops=6 (bound) bytes=8 (bound)
+two-component concat: the producer is inlined at the reader: true
+two-component concat: the price is the emitted read, counts and exactness: true
+two-component concat: the per-component guards and selects are priced (the arms have no op): true
+  two-component concat, re-derived from setters  flops=6 (bound) bytes=8 (bound)
+re-derivation: the materialized node's setters price as its stored computations: true
 == recompute_cost through optimize ==
 chain: both links virtual: true
-  x1 = x0 + w1                                 flops=1 bytes=8 exact
-  x2 = sin(x1), x1 expanded                    flops=2 bytes=8 exact
+  x1 = x0 + w1                                   flops=1 (exact) bytes=8 (exact)
+  x2 = sin(x1), x1 nested                        flops=2 (exact) bytes=8 (exact)
 chain: x2's recompute is transitive (2 ops, x0 and w1's cells): true
-chain: a materialized leaf has no template cost: true
+chain: a materialized leaf has no stored computation to price: true
   flip candidates:
     x2   inline      -> materialize cost 2 (modeled)
     x1   inline      -> materialize cost 1 (modeled)
 chain: x2's Materialize flip is priced by the model (2 ops x multiplicity 1, one reader): true
+pricing draws no symbol from the global counter: true
+pricing leaves the lineage's placements untouched: true
 == ordering witness: proxy vs model ==
   a    proxy (extent x fan-in) 3  modeled 2
   b    proxy (extent x fan-in) 1  modeled 4
 witness: the proxy ranks the wide sum above the deep chain: true
 witness: the model ranks the deep chain above the wide sum: true
 witness: executed values match the reference: true
-== producer_cost on a materialized setter nest ==
-producer: x1 and x2 inlined into x3's setter: true
-  x3's setter nest, per cell                   flops=3 bytes=16 exact
-producer: three adds and four leaf cells per written cell: true
-producer: a node the code never sets has no producer cost: true
-  two-component producer, per read             flops=2 bytes=8 approx
-two-component producer: components sum (2 ops, 8 bytes per read), a bound: true
-an affine setter map prices as a bound: true
-a setter reading a hoisted local it does not define prices as a bound: true
-  broadcast operands, per read                 flops=1 bytes=8 exact
-broadcast operands: one add and both cells per read, exact: true
+== the Inline flip of a cap-materialized node ==
+capped: the reduction cap materialized R: true
+  R materialize -> inline cost 20 (modeled)
+capped: preferred inline, R is inlined at the reader: true
+  R inlined, emitted read                        flops=20 (exact) bytes=80 (exact)
+capped: the Inline flip is modeled and prices the emitted read's ops (multiplicity 1): true
+capped: a node the code never sets has no producer cost: true
+== an Inline flip the store refuses ==
+  re-derivation refused: 9:sibling-escaping-read-index
+refused flip: offered, and priced by the proxy rather than modeled: true
+refused flip: preferred inline, the virtualizer refuses it with the re-derivation's code: true

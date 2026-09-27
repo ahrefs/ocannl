@@ -7901,21 +7901,167 @@ let post_virtualization_pipeline plc traced_store ~input_scopes ~static_indices 
   @@ simplify_llc static_indices
   @@ cleanup_virtual_llc plc ~input_scopes ~static_indices llc
 
-(* gh-ocannl-637: the modeled per-instantiation op count of a flip candidate's recompute — the cost
-   model's account of one inlined computation ([Cost_model.recompute_cost] over the stored templates
-   for a [`Materialize] flip, [Cost_model.producer_cost] over the setter nest for an [`Inline] one),
-   [None] where the count is not exact. [Cost_model] sits above this module, so it registers the
-   pricer at initialization; until then (or in a program linking no cost model) the traced proxy
-   prices every candidate. *)
+(* gh-ocannl-1011: the computations [virtual_llc] would have stored for [self] had it been a
+   candidate, re-derived from the virtualized code that holds its setters — for a node a heuristic
+   cap materialized before the walk, whose computation was never stored. The capture points are
+   [virtual_llc]'s: the outermost loop whose symbol [self]'s write indices mention (a shared loop's
+   sibling statements ride along, as they do in a stored template, and the inliner filters them), or
+   the setter statement itself; the loops above a capture point are its [enclosing] context, a guard
+   above it makes it [guarded], a scan [in_scan]. Each capture then passes the same
+   {!capture_rejection} a store would, so a nest the store refuses is refused here with the store's
+   code. Newest first, like the table. *)
+let rederive_computations ~static_indices (self : Tn.t) (virtualized : t) :
+    ((Indexing.axis_index array option * t) list, string) Result.t =
+  let rec writes_self (c : t) =
+    match c with
+    | Seq (a, b) -> writes_self a || writes_self b
+    | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> writes_self body
+    | Set { tn; _ } | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } | Zero_out tn ->
+        Tn.equal tn self
+    | Tile_mma { d = tn, _; _ } -> Tn.equal tn self
+    | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Set_local _ ->
+        false
+  in
+  let mentioned =
+    let acc = ref (Set.empty (module Indexing.Symbol)) in
+    let add_idcs idcs =
+      Array.iter idcs ~f:(function
+        | Indexing.Iterator s -> acc := Set.add !acc s
+        | Indexing.Affine { symbols; _ } ->
+            List.iter symbols ~f:(fun (_, s) -> acc := Set.add !acc s)
+        | Indexing.Concat syms -> List.iter syms ~f:(fun s -> acc := Set.add !acc s)
+        | Indexing.Fixed_idx _ | Indexing.Sub_axis -> ())
+    in
+    let rec go (c : t) =
+      match c with
+      | Seq (a, b) ->
+          go a;
+          go b
+      | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> go body
+      | Set { tn; idcs; _ } | Set_from_vec { tn; idcs; _ } | Set_dynamic { tn; idcs; _ } ->
+          if Tn.equal tn self then add_idcs idcs
+      | Zero_out _ | Tile_mma _ | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier
+      | Declare_local _ | Set_local _ ->
+          ()
+    in
+    go virtualized;
+    !acc
+  in
+  let rec captures ~guarded ~in_scan ~enclosing (c : t) acc =
+    if not (writes_self c) then acc
+    else
+      match c with
+      | Seq _ ->
+          List.fold (flat_lines [ c ]) ~init:acc ~f:(fun acc stmt ->
+              captures ~guarded ~in_scan ~enclosing stmt acc)
+      (* Dead loops are dropped at virtualization. *)
+      | For_loop { from_; to_; _ } when to_ < from_ -> acc
+      | For_loop { index; _ } when Set.mem mentioned index ->
+          (guarded, in_scan, enclosing, c) :: acc
+      | For_loop { index; from_; to_; body; _ } ->
+          captures ~guarded ~in_scan ~enclosing:((index, (from_, to_)) :: enclosing) body acc
+      (* No capture at a scan's binder: its setters are refused wherever the store is attempted. *)
+      | Scan_loop { index; from_; to_; body; _ } ->
+          captures ~guarded ~in_scan:true ~enclosing:((index, (from_, to_)) :: enclosing) body acc
+      | If { body; _ } -> captures ~guarded:true ~in_scan ~enclosing body acc
+      | Set _ | Set_dynamic _ | Set_from_vec _ | Zero_out _ | Tile_mma _ ->
+          (guarded, in_scan, enclosing, c) :: acc
+      | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Set_local _
+        ->
+          acc
+  in
+  match captures ~guarded:false ~in_scan:false ~enclosing:[] virtualized [] with
+  | [] -> Error "12:no-setter"
+  | newest_first ->
+      List.fold_result (List.rev newest_first) ~init:[]
+        ~f:(fun acc (guarded, in_scan, enclosing, top) ->
+          Result.map (capture_rejection ~guarded ~in_scan ~enclosing self static_indices top)
+            ~f:(fun at -> (at, top) :: acc))
+
+(* gh-ocannl-1011: what ONE read of [self] executes, as code — [computations] instantiated by the
+   inliner itself ({!instantiate_computations}, the core of [inline_computation]) at a synthetic
+   read site, wrapped as the scope a reader's statement would carry, and put through
+   {!post_virtualization_pipeline}. The read site is the most general in-bounds reader: per axis, a
+   fresh symbol ranging over the axis (so the interval folds any reader spanning the axis gets are
+   taken, and none a narrower reader would add), except where every value-carrying computation
+   writes the same position free of non-static symbols (a fixed slice, a static index), which is the
+   only position a reader can be served at. Side-effect free: the fresh symbols are negative (never
+   minted by [Indexing.get_symbol], so the numbering generated code prints is undisturbed), the
+   scope ids are [0] and [-1] (never minted by [get_scope]), and the pipeline runs on a copy of
+   [placements] in which [self] is virtual — the reading being priced. [Error] carries the rejection
+   code where the inliner or the pipeline refuses the read. *)
+let instantiate_at_synthetic_read ~(placements : Tn.Placements.t) ~static_indices (self : Tn.t)
+    (computations : (Indexing.axis_index array option * t) list) : (t, string) Result.t =
+  let statics =
+    Set.of_list (module Indexing.Symbol)
+    @@ List.map static_indices ~f:(fun s -> s.Indexing.static_symbol)
+  in
+  let next = ref 0 in
+  let fresh_symbol () =
+    Int.decr next;
+    Indexing.Symbol !next
+  in
+  let nonstatic = function
+    | Indexing.Iterator s -> not (Set.mem statics s)
+    | Indexing.Affine { symbols; _ } ->
+        List.exists symbols ~f:(fun (_, s) -> not (Set.mem statics s))
+    | Indexing.Concat _ -> true
+    | Indexing.Fixed_idx _ | Indexing.Sub_axis -> false
+  in
+  let ats = List.filter_map computations ~f:fst in
+  let rank = List.fold ats ~init:0 ~f:(fun m at -> max m (Array.length at)) in
+  let dims = Lazy.force self.Tn.dims in
+  let reader = ref [] in
+  let call_args =
+    Array.init rank ~f:(fun a ->
+        match List.filter_map ats ~f:(fun at -> Option.some_if (a < Array.length at) at.(a)) with
+        | p :: rest when (not (nonstatic p)) && List.for_all rest ~f:(Indexing.equal_axis_index p)
+          ->
+            p
+        | _ ->
+            let s = fresh_symbol () in
+            let static_range = Option.some_if (a < Array.length dims && dims.(a) > 0) dims.(a) in
+            reader :=
+              {
+                Indexing.static_symbol = s;
+                static_range;
+                used_as_extent = false;
+                used_as_slice = false;
+              }
+              :: !reader;
+            Indexing.Iterator s)
+  in
+  let id = { tn = self; scope_id = 0 } and sink = { tn = self; scope_id = -1 } in
+  match
+    instantiate_computations ~fresh_symbol ~commit_counter:false ~placements ~id self computations
+      static_indices call_args
+  with
+  | Error _ as e -> e
+  | Ok body -> (
+      let plc = Tn.Placements.copy placements in
+      Tn.Placements.unsafe_restore plc self (Some (Virtual, Site "1011:synthetic-read"));
+      let program =
+        Set_local
+          (sink, Local_scope { id; body; orig_indices = call_args; mint = Inlined_computation })
+      in
+      try
+        Ok
+          (post_virtualization_pipeline plc
+             (Hashtbl.create (module Tnode))
+             ~input_scopes:(Set.empty (module Scope_id))
+             ~static_indices:(static_indices @ List.rev !reader)
+             program)
+      with Utils.User_error m | Invalid_argument m | Failure m -> Error m)
+
+(* gh-ocannl-637, gh-ocannl-1011: the modeled per-instantiation op count of a flip candidate's
+   recompute — the cost model's account of one read of the node ([Cost_model.recompute_cost]: the
+   node's stored computations, or the ones re-derived from its setters in the virtualized code,
+   instantiated at a synthetic read), [None] where the count is not exact. [Cost_model] sits above
+   this module, so it registers the pricer at initialization; until then (or in a program linking no
+   cost model) the traced proxy prices every candidate. *)
 let recompute_pricer :
-    (optimize_ctx ->
-    static_indices:Indexing.static_symbol list ->
-    t ->
-    Tnode.t ->
-    reading ->
-    int option)
-    ref =
-  ref (fun _ctx ~static_indices:_ _llc _tn _flip -> None)
+    (optimize_ctx -> static_indices:Indexing.static_symbol list -> t -> Tnode.t -> int option) ref =
+  ref (fun _ctx ~static_indices:_ _virtualized _tn -> None)
 
 let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : optimized =
   let static_indices = an.an_static_indices in
@@ -7958,7 +8104,7 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
      ([default_to_most_local]) has not yet rewritten the cap provenances. *)
   let flip_candidates =
     let plc = input_ctx.placements in
-    let price = !recompute_pricer input_ctx ~static_indices llc in
+    let price = !recompute_pricer input_ctx ~static_indices virtual_llc_result in
     Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:traced acc ->
         let one_hot = traced.prefers_virtual_one_hot && not traced.has_non_one_hot_setter in
         (* gh-ocannl-616: a node an earlier routine left virtual and this specialization
@@ -8040,7 +8186,7 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
                 (* gh-ocannl-637: the modeled op count of one recompute, times the instantiations;
                    the traced proxy (reduction extent × instantiations × transitive fan-in) where
                    the model's count is not exact. *)
-                let modeled = price tn fa_flip in
+                let modeled = price tn in
                 let fa_recompute_cost =
                   match modeled with
                   | Some flops -> flops * instantiations

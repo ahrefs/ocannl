@@ -145,90 +145,90 @@ val roofline_seconds :
     raising either constant never increases the bound. A lower bound only up to the model's
     upper-bound byte/op counts — rank with it, do not predict. *)
 
-(** {2 The cost of one inlined computation (gh-ocannl-637 Part 2)}
+(** {2 The cost of one inlined computation (gh-ocannl-637 Part 2, gh-ocannl-1011)}
 
-    The cost model's account of what a virtual node costs to recompute at ONE read site — the flops
-    and bytes of one instantiation of its computation, with the exactness the extraction tracks. The
+    The cost model's account of what a node costs to recompute at ONE read site — the flops and
+    bytes of one instantiation of its computation, with the exactness the extraction tracks. The
     reader's multiplicity stays outside, as in the virtualizer's traced proxy
     ([inline_reduction_extent × read multiplicity × inline_fanin]); these queries replace the extent
     × fan-in factor with the modeled arithmetic, and {!Low_level.recompute_pricer} feeds them to the
     flip-candidate ordering (gh-ocannl-555), the memory-budget planner and, through
-    [fa_recompute_cost], footprint-scoped materialization (gh-ocannl-616). Priced per Part 1: a
-    hoisted scope body under a [Where] counts as what executes.
+    [fa_recompute_cost], footprint-scoped materialization (gh-ocannl-616).
 
-    The exactness contract: a count is exact for ONE instantiation of the computation as it stands
-    under a generic point read, after the passes the emitted code receives. What a particular reader
-    does on top of that — folding arithmetic once a constant stands for an index, collapsing a loop
-    over a sub-image, or sharing one instantiation between sibling statements through
-    [hoist_cross_statement_cse] — only LOWERS what executes, so a modeled count times a read
-    multiplicity is an upper bound in the same sense the traced proxy's is; the reader's side of the
-    account stays outside these queries, as the issue scoped it. *)
+    What is priced is code, not a rewrite of it: the inliner's own instantiation of the node's
+    computations at a synthetic read site, after the pipeline the emitted code receives
+    ({!Low_level.instantiate_at_synthetic_read}). The guards the inliner emits (a multi-setter
+    node's per-component range guards and selects, a diagonal producer's consistency guards, a
+    unit-solved affine position's range guard and the loop it keeps), the lane-extract form of a
+    packed-uniform producer, a scope retracted to a read, the simplifier's collapses and the CSE are
+    all in that code, so their cost — and whether each leg is exact — is {!analyze}'s verdict on it:
+    a guarded arm with inline work makes the op count a guards-taken bound there as everywhere, a
+    read under a guard's arm makes the byte count one, and a component whose work hoists or whose
+    arm only reads keeps the op count exact.
+
+    The exactness contract: a count is exact for the most general in-bounds reader — per axis a
+    fresh index spanning the axis. What a particular reader does on top of that — folding arithmetic
+    once a constant stands for an index, binding an affine position structurally where the generic
+    reader's unit solving keeps a loop, collapsing a loop over a sub-image, or sharing one
+    instantiation between sibling statements through [hoist_cross_statement_cse] — only LOWERS what
+    executes, so a modeled count times a read multiplicity is an upper bound in the same sense the
+    traced proxy's is; the reader's side of the account stays outside these queries. *)
 
 type recompute = {
   rc_flops : int;  (** Operations of one instantiation. *)
   rc_bytes : int;
       (** Bytes one instantiation reads from nodes other than the computed one — its own cells are a
-          scope local once inlined. Distinct cells within the instantiation's own body; an expanded
-          producer's traffic ({!recompute_cost}) multiplies by the enclosing trip count. *)
-  rc_approx : bool;  (** Either count is an upper bound rather than exact ({!analyze}'s flags). *)
+          scope local once inlined. Distinct cells within the instantiation's code. *)
+  rc_flops_approx : bool;
+      (** The op count is an upper bound rather than exact ({!analyze}'s [flops_approx]): a guarded
+          arm with inline work, charged guards-taken. {!Low_level.recompute_pricer} prices only
+          operations, so this flag alone decides whether it returns a count. *)
+  rc_bytes_approx : bool;
+      (** The byte count is an upper bound ({!analyze}'s per-node footprint flags): notably a read
+          under a guard's arm, of which one executes per read. Exactness is per leg, as in
+          {!summary}. *)
   rc_opaque : bool;  (** Opaque code: the counts may under-estimate. *)
 }
 [@@deriving sexp_of]
 
-val template_cost :
+val instantiation_cost :
   ?static_indices:Indexing.static_symbol list ->
+  ?placements:Tnode.Placements.t ->
   self:Tnode.t ->
-  ?at:Indexing.axis_index array ->
+  (Indexing.axis_index array option * Low_level.t) list ->
+  recompute option
+(** One read of a node whose computations are given (an [optimize_ctx.computations] entry, newest
+    first): {!analyze} over {!Low_level.instantiate_at_synthetic_read}'s code, the node's own
+    traffic excluded. [placements] (default: empty) is the lineage the read is instantiated against
+    — it decides which nested scopes the pipeline retracts to reads and whether a packed-uniform
+    producer's counter can serve the lane-extract form; [static_indices] are the routine's. [None]
+    when the inliner refuses the read. *)
+
+val producer_cost :
+  ?static_indices:Indexing.static_symbol list ->
+  ?placements:Tnode.Placements.t ->
+  self:Tnode.t ->
   Low_level.t ->
-  recompute
-(** One stored template body ([optimize_ctx.computations]' [(at, body)] entry) as one instantiation:
-    sibling setters (a shared-loop template) are dropped as instantiation drops them, the loops
-    binding a bare iterator position of [at] — the ones the ordinary point read substitutes away —
-    collapse to a single iteration, so a reduction loop is the only trip count left, and the passes
-    the emitted code receives after virtualization run over the result, in their order and under the
-    routine's [static_indices] interval environment — the simplifier, the one-hot reduction rewrite
-    and the scalar CSE, which a stored template predates: a single-assignment scope under a [Where]
-    arm collapses into the arm's expression (conditional, hence a bound), a dense one-hot reduction
-    becomes a dynamic gather, two alpha-equivalent scope bodies execute once. What the query cannot
-    see is the substitution a reader applies, and where it changes the count the result is only a
-    bound ([rc_approx]): a symbol occurring inside an affine position of [at], or repeated across
-    bare positions (a diagonal producer's consistency guards), may be bound or left free with its
-    loop range-guarded or guarded, depending on the reader's index; a packed-uniform producer
-    ([Set_from_vec]) inlines as the lane-extract form rather than its vector store; and a scope
-    local read without its definition in the priced code stands for hoisted work the price cannot
-    see. A consumer instantiating over a sub-image that collapses a further loop (gh-ocannl-616)
-    applies that correction itself. Reads of other virtual nodes count as reads here;
-    {!recompute_cost} expands them. *)
+  recompute option
+(** The twin of {!instantiation_cost} for a node whose computation was never stored — a node a
+    heuristic cap materialized before the virtualizer's walk: its computations re-derived from the
+    VIRTUALIZED code holding its setters ({!Low_level.rederive_computations}, the store's own
+    capture points and refusals), then instantiated the same way. Re-inlining a multi-setter node
+    replays every component, guarded, so the sum is the inliner's, guards included. [None] when the
+    code sets the node nowhere or the store or the inliner would refuse it. *)
 
 val recompute_cost :
   ?static_indices:Indexing.static_symbol list ->
+  ?virtualized:Low_level.t ->
   Low_level.optimize_ctx ->
   Tnode.t ->
   recompute option
-(** The transitive cost of one inlined computation of the node, summed over its stored templates
-    (every component of a multi-setter node replays at a read site, guarded — and its body hoists,
-    so all execute; the guards themselves are the inliner's work no template carries, so a
-    multi-setter node's price is a bound): each template's {!template_cost}, plus, for every read of
-    a producer with a stored template that is not committed non-virtual in the lineage, that
-    producer's own recompute per enclosing iteration (its read cells then are not traffic). [None]
-    when the node has no stored computation — a materialized node prices through {!producer_cost}.
-    Memoized per lineage: partially apply to the context once per compile. Cycles (a node reached
-    through its own producers) are cut at the node, priced once. *)
-
-val producer_cost : self:Tnode.t -> Low_level.t -> recompute option
-(** The per-cell cost of a materialized producer in optimized code — the twin of {!recompute_cost}
-    for a node a heuristic cap materialized, whose computation was never stored: per setter
-    statement of the node, one instantiation — the code pruned to that setter with the loops its
-    index vector mentions collapsed to one iteration, so an operand read at a fixed position counts
-    for every cell's computation (an aggregate footprint averaged over the written cells would lose
-    it) — summed over the setters: re-inlining a multi-setter node replays every component at a read
-    site, guards selecting the value while the hoisted bodies all execute. Its virtual producers are
-    already inlined there, so the count is transitive by construction. A bound rather than exact
-    when the write is not injective over the collapsed loops or its index vector is
-    substitution-dependent (an affine or repeated position, as in {!template_cost}), when the node
-    has several setters (the inliner wraps each component in the range guards and the [Where] that
-    select it, work the setters do not carry), for a packed-uniform setter, or when the pruning left
-    a scope local's hoisted definition behind. [None] when the code sets the node nowhere. *)
+(** One read of the node in the lineage: its stored computations through {!instantiation_cost}, or,
+    when it has none, its setters in [virtualized] (the routine's code as the virtualizer's walk
+    left it) through {!producer_cost}. Nested virtual producers need no expansion: a stored
+    computation carries every producer inlined when it was stored as a nested scope, exactly what a
+    read replays, and a producer read that stayed a read is a read in the emitted code too. Memoized
+    per lineage: partially apply to the context once per compile. *)
 
 module Calibration : sig
   (** The calibration TSV schema (config [autotune_calibration_file], gh-ocannl-491 task 4) and the
