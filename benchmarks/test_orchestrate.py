@@ -4658,6 +4658,55 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(args.cell_timeout, 900.0)
 
 
+class ResultsDirTest(unittest.TestCase):
+    """`BENCH_RESULTS_DIR`: where a sweep's results/ goes (gh-ocannl-719).
+
+    A sweep measured in a throwaway checkout -- machine-verify's detached worktree, removed on
+    exit -- loses results/ with the checkout unless it is written somewhere that outlives it.
+    """
+
+    def test_unset_or_empty_is_results_beside_the_orchestrator(self):
+        for env in ({}, {"BENCH_RESULTS_DIR": ""}):
+            with self.subTest(env=env):
+                self.assertEqual(orchestrate.results_dir(env), HERE / "results")
+
+    def test_a_relative_directory_is_taken_against_the_launch_directory(self):
+        launch = Path(tempfile.mkdtemp()).resolve()
+        cwd = os.getcwd()
+        os.chdir(launch)
+        try:
+            got = orchestrate.results_dir({"BENCH_RESULTS_DIR": "out/sweep"})
+        finally:
+            os.chdir(cwd)
+
+        self.assertEqual(got, launch / "out" / "sweep")
+
+    def test_the_module_reads_the_variable_at_import(self):
+        # The wiring, observed in a fresh interpreter rather than by calling the helper again: the
+        # directory main writes into is the module constant, fixed from the launch environment.
+        outside = Path(tempfile.mkdtemp()).resolve() / "kept"
+        probe = "import orchestrate; print(orchestrate.RESULTS_DIR)"
+        for value, want in ((str(outside), outside), (None, HERE / "results")):
+            env = {k: v for k, v in os.environ.items() if k != "BENCH_RESULTS_DIR"}
+            if value is not None:
+                env["BENCH_RESULTS_DIR"] = value
+            with self.subTest(value=value):
+                out = subprocess.run(
+                    [sys.executable, "-c", probe],
+                    cwd=HERE, env=env, capture_output=True, text=True, check=True,
+                )
+                self.assertEqual(Path(out.stdout.strip()), want)
+
+    def test_every_sweep_output_is_written_under_the_results_directory(self):
+        # main names its three outputs from RESULTS_DIR; a path spelled from HERE instead would
+        # still land in the checkout the override exists to leave.
+        source = Path(orchestrate.__file__).read_text()
+        main = source[source.index("\ndef main():") :]
+        self.assertNotIn('HERE / "results"', main)
+        for name in ("partial.jsonl", "partial-failures.jsonl"):
+            self.assertIn(f'RESULTS_DIR / "{name}"', main)
+        self.assertIn("report(results, RESULTS_DIR,", main)
+
 
 class SkipCellTest(unittest.TestCase):
     """`--skip-cell`: an operator leaving one OCANNL cell out of a sweep (gh-ocannl-719).
