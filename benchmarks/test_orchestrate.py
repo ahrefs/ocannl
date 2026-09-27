@@ -4649,5 +4649,141 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(args.cell_timeout, 900.0)
 
 
+
+class SkipCellTest(unittest.TestCase):
+    """`--skip-cell`: an operator leaving one OCANNL cell out of a sweep (gh-ocannl-719).
+
+    The case it exists for is a GPU tuned acceptance row behind an uncapped CPU search that runs
+    first and for hours; what matters is that a misspelt entry is refused rather than skipping
+    nothing, and that a skipped cell's absence is reported as a choice.
+    """
+
+    def parse(self, *argv):
+        return orchestrate.build_arg_parser().parse_args(list(argv))
+
+    def test_no_entries_by_default(self):
+        self.assertEqual(self.parse().skip_cell, [])
+
+    def test_an_entry_without_precision_is_a_precision_wildcard(self):
+        args = self.parse("--skip-cell", "gpt2_mini/cc/tuned", "--skip-cell", "mlp/cuda/default/bf16")
+
+        self.assertEqual(
+            args.skip_cell,
+            [("gpt2_mini", "cc", "tuned", None), ("mlp", "cuda", "default", "bf16")],
+        )
+        skips = set(args.skip_cell)
+        for precision in ("f32", "bf16", "f16"):
+            self.assertTrue(
+                orchestrate.cell_skipped("gpt2_mini", "cc", "tuned", precision, skips), precision
+            )
+        self.assertFalse(orchestrate.cell_skipped("gpt2_mini", "cuda", "tuned", "f32", skips))
+        self.assertFalse(orchestrate.cell_skipped("mlp", "cuda", "default", "f32", skips))
+
+    def test_a_misspelt_entry_is_refused_at_parse_time(self):
+        for bad in (
+            "gpt2_mini/cc",
+            "gpt2_mini/cc/tuned/f32/x",
+            "gpt2_mini//tuned",
+            "gpt2_mini/cpu/tuned",
+            "gpt2_mini/cc/tune",
+            "gpt2_mini/cc/tuned/f64",
+        ):
+            with self.subTest(bad=bad), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.parse("--skip-cell", bad)
+
+    def test_the_accepted_names_are_the_ones_the_sweep_dispatches(self):
+        # Derived, not restated: every variant the flags can select and every backend a --gpu
+        # choice dispatches on is a name an entry may use, and nothing else is.
+        args = self.parse("--materialized", "--tuned")
+        self.assertEqual(orchestrate.selected_variants(args), list(orchestrate.SWEEP_VARIANTS))
+        backends = {
+            b for gpu in orchestrate.GPU_DEVICES.values() for b in orchestrate.swept_backends(gpu[0])
+        }
+        self.assertEqual(backends, set(orchestrate.SWEEP_BACKENDS))
+
+    def test_an_entry_naming_no_cell_of_the_sweep_is_unmatched(self):
+        args = self.parse("--tuned", "--precision", "bf16")
+        cells = orchestrate.dispatchable_cells(
+            {"gpt2_mini": ["f32", "bf16"]},
+            orchestrate.swept_backends("cuda"),
+            orchestrate.selected_variants(args),
+        )
+        good = ("gpt2_mini", "cc", "tuned", None)
+        self.assertEqual(orchestrate.unmatched_skips([good], cells), [])
+        self.assertEqual(
+            orchestrate.unmatched_skips([("gpt2_mini", "cuda", "tuned", "bf16")], cells), []
+        )
+        for bad in (
+            ("gpt2_small", "cc", "tuned", None),  # workload not selected
+            ("gpt2_mini", "hip", "tuned", None),  # backend not swept under --gpu cuda
+            ("gpt2_mini", "cc", "materialized", None),  # variant not requested
+            ("gpt2_mini", "cc", "tuned", "f16"),  # precision not requested
+        ):
+            with self.subTest(bad=bad):
+                self.assertEqual(orchestrate.unmatched_skips([good, bad], cells), [bad])
+
+    def test_a_precision_the_workload_cannot_express_is_no_cell(self):
+        # Review round 1: `--precision bf16` is requested sweep-wide, but a conv workload cannot
+        # express it, so a skip naming its bf16 tuned cell skips nothing -- and must be refused
+        # rather than let the f32 cell beside it run in the operator's belief it was skipped.
+        # The precisions come from `available_precisions`, the dispatch loop's own filter.
+        precisions, unavailable = orchestrate.available_precisions("conv", "train", ["bf16"])
+        self.assertEqual(precisions, ["f32"])
+        self.assertEqual([p for p, _ in unavailable], ["bf16"])
+        cells = orchestrate.dispatchable_cells(
+            {"lenet": precisions}, orchestrate.swept_backends("cuda"), ["default", "tuned"]
+        )
+        bad = ("lenet", "cc", "tuned", "bf16")
+
+        self.assertEqual(orchestrate.unmatched_skips([bad], cells), [bad])
+        self.assertEqual(
+            orchestrate.unmatched_skips([("lenet", "cc", "tuned", None)], cells), []
+        )
+
+    def test_an_operator_skip_beats_no_skip_cells(self):
+        skips = {("gpt2_mini", "cc", "tuned", None)}
+        why = orchestrate.skip_reason("gpt2_mini", "cc", "tuned", "f32", skips, no_skip_cells=True)
+
+        self.assertIn("--skip-cell", why)
+        self.assertIsNone(
+            orchestrate.skip_reason("gpt2_mini", "cuda", "tuned", "f32", skips, no_skip_cells=True)
+        )
+
+    def test_a_checked_in_skip_still_yields_to_no_skip_cells(self):
+        entry = ("some_workload", "metal", "tuned", None)
+        orchestrate.SKIP_CELLS.add(entry)
+        try:
+            why = orchestrate.skip_reason("some_workload", "metal", "tuned", "f32", set(), False)
+            self.assertIn("SKIP_CELLS", why)
+            self.assertIsNone(
+                orchestrate.skip_reason("some_workload", "metal", "tuned", "f32", set(), True)
+            )
+        finally:
+            orchestrate.SKIP_CELLS.discard(entry)
+
+    def test_a_skipped_cell_is_named_in_the_report(self):
+        out = Path(tempfile.mkdtemp())
+        cells = [cell("pytorch", "cpu", "eager", [2.3, 2.2, 2.1])]
+        orchestrate.parity_check(cells)
+        skipped = [("gpt2_mini ocannl/cc/tuned [approximate]", "--skip-cell (operator)")]
+
+        orchestrate.report(cells, out, skipped=skipped)
+
+        text = (out / "report.md").read_text()
+        self.assertIn("Cells skipped", text)
+        self.assertIn("| gpt2_mini ocannl/cc/tuned [approximate] | --skip-cell (operator) |", text)
+        self.assertNotIn("Runner failures", text)
+
+    def test_a_run_with_no_skips_says_nothing_about_them(self):
+        out = Path(tempfile.mkdtemp())
+        cells = [cell("pytorch", "cpu", "eager", [2.3, 2.2, 2.1])]
+        orchestrate.parity_check(cells)
+
+        orchestrate.report(cells, out)
+
+        self.assertNotIn("Cells skipped", (out / "report.md").read_text())
+
+
 if __name__ == "__main__":
     unittest.main()

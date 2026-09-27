@@ -251,6 +251,10 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   `--only ocannl pytorch tinygrad`, `--skip-build`, `--no-skip-cells` (run the `SKIP_CELLS`
   entries too — each was observed pathological on a single machine/backend/OS, so use this to
   retest whether an entry still applies in your environment),
+  `--skip-cell WORKLOAD/BACKEND/VARIANT[/PRECISION]` (repeatable: leave one OCANNL cell out in
+  every regime, e.g. `gpt2_mini/cc/tuned` to reach a GPU tuned row without first sitting through
+  an uncapped CPU search; the report lists it under "Cells skipped", and an entry naming no cell
+  of the sweep is refused),
   `--gpu metal|cuda|hip|none` (the GPU column of the matrix — OCANNL backend, PyTorch device,
   tinygrad device together; defaults to metal on macOS and cuda elsewhere, `none` runs a
   CPU-only matrix), `--no-fixture-digest-check` (measure fixtures that do not match
