@@ -2613,7 +2613,9 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   record the retry dropped is either stale (the retry executed the claim — a capability probe the
   refused device answered `no`) or another stanza's genuine skip of the same executable (one
   executable often runs under several aliases); the log cannot attribute a record to its action,
-  so filtering by executable name would clear the genuine one silently.
+  so filtering by executable name would clear the genuine one silently. The retry runs under
+  `--display short`, whose `<program> [alias ]<target>` lines name every executable it re-ran —
+  a directory fallback's included — alongside the alias's own `<family>-<name>`.
   Dropping those lost minix/hip's evaluations on 2026-09-27 (red only from a ROCr scratch
   assertion at parallel width) and reported its hip-only claims as skipped on every box. An
   intersection over only the completed backends is a loud `POTENTIAL` report; it becomes `FAIL`

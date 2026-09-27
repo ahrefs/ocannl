@@ -34,7 +34,7 @@ on_error() {
     environment_executed partial_matrix singleton_fail repeated_backend_fail \
     repeated_backend_pass mixed_scope_fail mixed_scope_cleared historical_matrix \
     undeclared_cleared undeclared_skipped undeclared_only rerun_cleared rerun_red completion_red \
-    retry_agrees retry_disagrees local_identity_error unsafe_identity_error only_typo_error matrix_error state_first state_same \
+    retry_agrees retry_disagrees fallback_disagrees local_identity_error unsafe_identity_error only_typo_error matrix_error state_first state_same \
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
     capped capped_target remote_opt_in dest_wsl dest_linux dest_missing dest_local_only \
     dest_bogus dest_no_kind_of dest_half dest_override dest_override_wins dest_bad_override \
@@ -1453,11 +1453,11 @@ Error: the claim itself' run_sweep_backend cc --target serial-probe)
 grep -q 'm4-max/cc: fail ' <<<"$serial_red"
 # One dune call per stanza, so each has its own verdict; sorted, after the unit.
 [ "$(tail -6 "$calls" | sed -n '1p')" = 'exec -- dune runtest serial-probe' ]
-[ "$(tail -6 "$calls" | sed -n '2p')" = 'exec -- dune build -j 1 @test/runtest-pre-diff-probe' ]
-[ "$(tail -6 "$calls" | sed -n '3p')" = 'exec -- dune build -j 1 @test/runtest-serial-probe' ]
-[ "$(tail -6 "$calls" | sed -n '4p')" = 'exec -- dune build -j 1 @test/runtest-serial-alpha' ]
-[ "$(tail -6 "$calls" | sed -n '5p')" = 'exec -- dune build -j 1 @test/runtest-serial-beta' ]
-[ "$(tail -6 "$calls" | sed -n '6p')" = 'exec -- dune build -j 1 @test/runtest' ]
+[ "$(tail -6 "$calls" | sed -n '2p')" = 'exec -- dune build -j 1 --display short @test/runtest-pre-diff-probe' ]
+[ "$(tail -6 "$calls" | sed -n '3p')" = 'exec -- dune build -j 1 --display short @test/runtest-serial-probe' ]
+[ "$(tail -6 "$calls" | sed -n '4p')" = 'exec -- dune build -j 1 --display short @test/runtest-serial-alpha' ]
+[ "$(tail -6 "$calls" | sed -n '5p')" = 'exec -- dune build -j 1 --display short @test/runtest-serial-beta' ]
+[ "$(tail -6 "$calls" | sed -n '6p')" = 'exec -- dune build -j 1 --display short @test/runtest' ]
 # The verdict reaches all three channels: the summary, the log, the fingerprint.
 grep -q 'm4-max/cc: environment-red, 4 stanzas and 1 directory fallback rerun at -j 1' \
   <<<"$serial_red"
@@ -1498,7 +1498,7 @@ diff --git a/test/inline_two.ml b/_build/default/test/inline_two.ml.corrected'
 serial_two_inline=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$two_inline_failure \
   run_sweep_backend cc --target two-inline-probe)
 [ "$(tail -2 "$calls" | sed -n '1p')" = 'exec -- dune runtest two-inline-probe' ]
-[ "$(tail -2 "$calls" | sed -n '2p')" = 'exec -- dune build -j 1 @test/runtest' ]
+[ "$(tail -2 "$calls" | sed -n '2p')" = 'exec -- dune build -j 1 --display short @test/runtest' ]
 grep -q 'm4-max/cc: environment-red, 0 stanzas and 1 directory fallback rerun at -j 1' \
   <<<"$serial_two_inline"
 two_inline_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
@@ -1578,6 +1578,19 @@ retry_disagrees=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT_RETRY=$common \
 grep -q 'm4-max/cc: serial rerun: first attempt disagrees: fixture.exe$' <<<"$retry_disagrees"
 retry_disagrees_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$retry_disagrees" | tail -1)
 grep -q '^completed backends: <none>$' "$retry_disagrees_report"
+# A directory fallback names no executable, but Dune's short display names the
+# program each re-run action ran: the inline-only red below re-runs
+# `@test/runtest`, whose retry ran fixture and announced nothing, so fixture's
+# first-attempt skips are unconfirmed and the unit is not counted.
+fallback_disagrees=$(SWEEP_TEST_OPAM_RC=1 \
+  SWEEP_TEST_OPAM_OUT_RETRY='        fixture alias test/runtest' \
+  SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log$'\n'$two_inline_failure \
+  run_sweep_args --force --only cc)
+grep -q 'm4-max/cc: serial rerun: directory fallback (2 inline sites): @test/runtest$' \
+  <<<"$fallback_disagrees"
+grep -q 'm4-max/cc: serial rerun: first attempt disagrees: fixture.exe$' <<<"$fallback_disagrees"
+fallback_disagrees_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$fallback_disagrees" | tail -1)
+grep -q '^completed backends: <none>$' "$fallback_disagrees_report"
 
 # The opposing controls, in one run: a red whose serial rerun stays red, and a
 # red with no refusal signature (never rerun), both remain excluded.

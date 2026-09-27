@@ -1903,13 +1903,16 @@ rerun_aliases() { # log
 # The rerun as shell text for the machine that owns the worktree, one dune call
 # per stanza so each has its own status: a single call over all of them would
 # report one verdict for the set. The markers are what serial_rerun reads back.
+# `--display short` makes Dune name the program of every action it runs
+# (`<program> [alias ]<target>`), which is how first_attempt_disagreement knows
+# which executables a retry re-ran -- a directory fallback's included.
 serial_rerun_cmd() { # backend wt alias...
   local backend=$1 wt=$2 a
   shift 2
   printf 'cd "%s" || exit 127; ' "$wt"
   for a in "$@"; do
     printf 'echo "=== serial rerun %s ==="; ' "$a"
-    printf 'OCANNL_BACKEND=%s opam exec -- dune build -j 1 %s; ' "$backend" "$a"
+    printf 'OCANNL_BACKEND=%s opam exec -- dune build -j 1 --display short %s; ' "$backend" "$a"
     printf 'echo "=== serial rerun %s: exit $? ==="; ' "$a"
   done
   printf 'exit 0'
@@ -1939,26 +1942,30 @@ suite_completion_cmd() { # backend wt
 # executable (test_cse.exe runs under two aliases), and the log cannot tell
 # which, so a disagreeing unit is not counted. Agreement makes every
 # first-attempt record of a re-run executable one the retry confirmed. A
-# re-run executable is one its rerun block announced a record for, or the one
-# its alias names (`<family>-<name>[-<variant>]`, gh-ocannl-726; executable
-# names hold no `-`); a retry that announced nothing under an unmapped alias
-# goes unchecked, which can only keep a skip, never hide one.
+# re-run executable is any Dune's short display shows the retry running, any
+# its alias names (`<family>-<name>[-<variant>]`; executable names hold no
+# `-`), and any the retry announced a record for. A test-output line of the
+# display's shape only adds an executable to check, which can exclude a unit
+# but never count a stale record; an executable a retry ran only through a
+# shell wrapper goes unattributed, which can only keep a skip, never hide one.
 first_attempt_disagreement() { # log
   awk '
     function exe_of(record, f) { split(record, f, "\t"); return f[3] }
+    function add(program) { sub(/\.exe$/, "", program); if (program != "") rerun[program ".exe"] = 1 }
     /^=== serial rerun: [0-9]+ stanzas at -j 1 ===$/ { after = 1; next }
     !after && index($0, "OCANNL_TOOL_VERDICT_SKIP\t") == 1 { first[$0] = 1; next }
     index($0, "=== serial rerun @") == 1 && $0 !~ /: exit [0-9]+ ===$/ {
       block = 1
       name = substr($0, length("=== serial rerun ") + 1)
       sub(/ ===$/, "", name); sub(/.*\//, "", name)
-      if (split(name, part, "-") >= 2 && part[2] != "") rerun[part[2] ".exe"] = 1
+      if (split(name, part, "-") >= 2) add(part[2])
       next
     }
     index($0, "=== serial rerun @") == 1 { block = 0; next }
     block && index($0, "OCANNL_TOOL_VERDICT_SKIP\t") == 1 {
-      retry[$0] = 1; rerun[exe_of($0)] = 1
+      retry[$0] = 1; add(exe_of($0)); next
     }
+    block && /^ *[A-Za-z0-9_.-]+ (alias )?[^ ]+$/ { split($0, word, " "); add(word[1]) }
     END {
       for (record in first)
         if ((exe_of(record) in rerun) && !(record in retry)) bad[exe_of(record)] = 1
