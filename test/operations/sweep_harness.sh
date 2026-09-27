@@ -33,7 +33,8 @@ on_error() {
   for name in incremental forced slow_forced coverage hostile complete_fail \
     environment_executed partial_matrix singleton_fail repeated_backend_fail \
     repeated_backend_pass mixed_scope_fail mixed_scope_cleared historical_matrix \
-    local_identity_error unsafe_identity_error only_typo_error matrix_error state_first state_same \
+    undeclared_cleared undeclared_skipped undeclared_only rerun_cleared rerun_red completion_red \
+    retry_agrees retry_disagrees fallback_disagrees local_identity_error unsafe_identity_error only_typo_error matrix_error state_first state_same \
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
     capped capped_target remote_opt_in dest_wsl dest_linux dest_missing dest_local_only \
     dest_bogus dest_no_kind_of dest_half dest_override dest_override_wins dest_bad_override \
@@ -79,7 +80,8 @@ absent() {
 unset SWEEP_TEST_CALLS SWEEP_TEST_WAIT_PREFIX SWEEP_TEST_OPAM_RC \
   SWEEP_TEST_OPAM_OUT SWEEP_TEST_OPAM_OUT_CC SWEEP_TEST_OPAM_OUT_MULTIDEV_CC \
   SWEEP_TEST_OPAM_OUT_METAL SWEEP_TEST_LOCAL_BOX SWEEP_TEST_JOBS \
-  SWEEP_TEST_OPAM_SERIAL_RED SWEEP_TEST_OPAM_OUT_SERIAL SWEEP_TEST_SSH_CALLS \
+  SWEEP_TEST_OPAM_SERIAL_RED SWEEP_TEST_OPAM_OUT_SERIAL SWEEP_TEST_OPAM_OUT_RETRY \
+  SWEEP_TEST_SSH_CALLS \
   SWEEP_TEST_SSH_MODE SWEEP_TEST_OWN_GROUP SWEEP_TEST_WAIT_TICKS \
   SWEEP_TEST_HOSTS SWEEP_TEST_DEST_ROG SWEEP_TEST_DEST_MINIX \
   SWEEP_TEST_KERNEL_LINES SWEEP_TEST_BOOT_ID SWEEP_TEST_DEST_TUF SWEEP_TEST_WAKE_LAB \
@@ -149,7 +151,8 @@ printf '%s\n' "$*" >>"$SWEEP_TEST_CALLS"
 # A serial rerun (gh-ocannl-945) -- the sweep's `-j 1` call for ONE stanza, its
 # alias the last argument -- answers on its own: red exactly when that alias is
 # listed in SWEEP_TEST_OPAM_SERIAL_RED, with SWEEP_TEST_OPAM_OUT_SERIAL as its
-# failure text, so a fixture can hold one stanza red while another clears.
+# failure text, so a fixture can hold one stanza red while another clears. A
+# clean one prints SWEEP_TEST_OPAM_OUT_RETRY: what the retry announced.
 case " $* " in
   *" -j 1 "*)
     # The last positional parameter: `${*##* }` is not it -- pattern removal on
@@ -160,9 +163,16 @@ case " $* " in
         [ -n "${SWEEP_TEST_OPAM_OUT_SERIAL:-}" ] && printf '%s\n' "$SWEEP_TEST_OPAM_OUT_SERIAL"
         exit 1
         ;;
-      *) exit 0 ;;
+      *)
+        [ -n "${SWEEP_TEST_OPAM_OUT_RETRY:-}" ] && printf '%s\n' "$SWEEP_TEST_OPAM_OUT_RETRY"
+        exit 0
+        ;;
     esac
     ;;
+  # A forced unit's `dune clean` precondition succeeds whatever the suite's
+  # fixture status: a failing clean is harness non-coverage (`error`), and the
+  # forced red units below need the suite itself to be what fails.
+  *" dune clean "*) exit 0 ;;
 esac
 # Stands in for what a test run writes to the unit's log. The common output
 # drives failure-fingerprint coverage; the per-backend outputs let the skip
@@ -444,6 +454,7 @@ run_sweep_args() {
     "SWEEP_TEST_OPAM_OUT_METAL=${SWEEP_TEST_OPAM_OUT_METAL:-}" \
     "SWEEP_TEST_OPAM_SERIAL_RED=${SWEEP_TEST_OPAM_SERIAL_RED:-}" \
     "SWEEP_TEST_OPAM_OUT_SERIAL=${SWEEP_TEST_OPAM_OUT_SERIAL:-}" \
+    "SWEEP_TEST_OPAM_OUT_RETRY=${SWEEP_TEST_OPAM_OUT_RETRY:-}" \
     "SWEEP_TEST_SSH_CALLS=$ssh_calls" \
     "SWEEP_TEST_SSH_MODE=${SWEEP_TEST_SSH_MODE:-}" \
     "SWEEP_TEST_KERNEL_LINES=${SWEEP_TEST_KERNEL_LINES:-}" \
@@ -857,6 +868,47 @@ singleton_pass=$("$aggregate" \
   --run cc m4-max "$tmp/cc.log")
 grep -q '^environment result: PASS -- no claim was skipped on every declared box$' \
   <<<"$singleton_pass"
+
+# A box outside the declared matrix is evidence without obligation. The
+# 2026-09-27 shape: tuf ran hip beside the declared boxes and executed the
+# environment-gated leg, so the leg was not skipped on every box.
+for backend in cc cuda multidev_cc; do
+  "$verdict_probe" "$backend" >"$tmp/undeclared-$backend.log" 2>&1
+done
+"$verdict_probe" hip execute-environment >"$tmp/undeclared-tuf.log" 2>&1
+undeclared_matrix=(--known cc --known multidev_cc --known cuda --known hip
+  --known-box m4-max --known-box minix --known-box rog-nv
+  --run cc m4-max "$tmp/undeclared-cc.log"
+  --run multidev_cc minix "$tmp/undeclared-multidev_cc.log"
+  --run cuda rog-nv "$tmp/undeclared-cuda.log")
+set +e
+undeclared_cleared=$("$aggregate" "${undeclared_matrix[@]}" \
+  --run hip tuf "$tmp/undeclared-tuf.log" 2>&1)
+set -e
+grep -q '^environment status: complete (3 of 3 declared boxes completed)$' \
+  <<<"$undeclared_cleared"
+grep -q '^undeclared boxes (their executions count, their absence does not): tuf$' \
+  <<<"$undeclared_cleared"
+grep -q '^environment result: PASS -- no claim was skipped on every declared box$' \
+  <<<"$undeclared_cleared"
+# ...while its skips add nothing: skipped there too, the complete matrix FAILs.
+"$verdict_probe" hip >"$tmp/undeclared-tuf.log" 2>&1
+set +e
+undeclared_skipped=$("$aggregate" "${undeclared_matrix[@]}" \
+  --run hip tuf "$tmp/undeclared-tuf.log" 2>&1)
+set -e
+grep -q '^FAIL: skipped on every declared box: verdict_skip_probe.exe: common environment-gated claim$' \
+  <<<"$undeclared_skipped"
+# ...and it never stands in for a declared box: with minix and rog-nv absent,
+# m4-max plus tuf is one declared box, too few to aggregate.
+set +e
+undeclared_only=$("$aggregate" --known cc --known hip \
+  --known-box m4-max --known-box minix --known-box rog-nv \
+  --run cc m4-max "$tmp/undeclared-cc.log" --run hip tuf "$tmp/undeclared-tuf.log" 2>&1)
+set -e
+grep -q '^missing boxes: minix, rog-nv$' <<<"$undeclared_only"
+grep -q '^environment status: insufficient (1 of 3 declared boxes completed; need at least 2 unless the matrix is complete)$' \
+  <<<"$undeclared_only"
 
 # Equal human labels in two DIFFERENT executables are different test legs. Copy
 # the real probe under another basename so this control reaches the production
@@ -1401,11 +1453,11 @@ Error: the claim itself' run_sweep_backend cc --target serial-probe)
 grep -q 'm4-max/cc: fail ' <<<"$serial_red"
 # One dune call per stanza, so each has its own verdict; sorted, after the unit.
 [ "$(tail -6 "$calls" | sed -n '1p')" = 'exec -- dune runtest serial-probe' ]
-[ "$(tail -6 "$calls" | sed -n '2p')" = 'exec -- dune build -j 1 @test/runtest-pre-diff-probe' ]
-[ "$(tail -6 "$calls" | sed -n '3p')" = 'exec -- dune build -j 1 @test/runtest-serial-probe' ]
-[ "$(tail -6 "$calls" | sed -n '4p')" = 'exec -- dune build -j 1 @test/runtest-serial-alpha' ]
-[ "$(tail -6 "$calls" | sed -n '5p')" = 'exec -- dune build -j 1 @test/runtest-serial-beta' ]
-[ "$(tail -6 "$calls" | sed -n '6p')" = 'exec -- dune build -j 1 @test/runtest' ]
+[ "$(tail -6 "$calls" | sed -n '2p')" = 'exec -- dune build -j 1 --display short @test/runtest-pre-diff-probe' ]
+[ "$(tail -6 "$calls" | sed -n '3p')" = 'exec -- dune build -j 1 --display short @test/runtest-serial-probe' ]
+[ "$(tail -6 "$calls" | sed -n '4p')" = 'exec -- dune build -j 1 --display short @test/runtest-serial-alpha' ]
+[ "$(tail -6 "$calls" | sed -n '5p')" = 'exec -- dune build -j 1 --display short @test/runtest-serial-beta' ]
+[ "$(tail -6 "$calls" | sed -n '6p')" = 'exec -- dune build -j 1 --display short @test/runtest' ]
 # The verdict reaches all three channels: the summary, the log, the fingerprint.
 grep -q 'm4-max/cc: environment-red, 4 stanzas and 1 directory fallback rerun at -j 1' \
   <<<"$serial_red"
@@ -1446,7 +1498,7 @@ diff --git a/test/inline_two.ml b/_build/default/test/inline_two.ml.corrected'
 serial_two_inline=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$two_inline_failure \
   run_sweep_backend cc --target two-inline-probe)
 [ "$(tail -2 "$calls" | sed -n '1p')" = 'exec -- dune runtest two-inline-probe' ]
-[ "$(tail -2 "$calls" | sed -n '2p')" = 'exec -- dune build -j 1 @test/runtest' ]
+[ "$(tail -2 "$calls" | sed -n '2p')" = 'exec -- dune build -j 1 --display short @test/runtest' ]
 grep -q 'm4-max/cc: environment-red, 0 stanzas and 1 directory fallback rerun at -j 1' \
   <<<"$serial_two_inline"
 two_inline_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
@@ -1474,6 +1526,97 @@ grep -q '^serial rerun: nothing to rerun -- no site names a stanza$' "$many_inli
 grep -q '^serial rerun: unmapped: \[File "test/compile_error.ml", line 1\] \[File "test/inline_one.ml", line 1\] \[File "test/inline_three.ml", line 1\] \[File "test/inline_two.ml", line 1\]$' \
   "$many_inline_log"
 absent '^serial rerun: directory fallback' "$many_inline_log"
+
+# A red unit whose every failure the serial rerun cleared is skip evidence like
+# a pass: its failing stanzas ran again into the same log. The 2026-09-27 sweep
+# dropped minix/hip that way -- red only from a ROCr scratch assertion at
+# parallel width, `all clean` at -j 1 -- and reported its hip-only claims as
+# skipped on every declared box. Both units here fail with a runtime-refusal
+# signature and clear serially (one through the inline site's directory
+# fallback), so the intersection is the two-unit one of the clean coverage run.
+rerun_cleared=$(SWEEP_TEST_OPAM_RC=1 \
+  SWEEP_TEST_OPAM_OUT_CC=$environment_failure$'\n'$cc_unit_log \
+  SWEEP_TEST_OPAM_OUT_METAL=$environment_failure$'\n'$metal_unit_log \
+  run_sweep_args --force --only cc --only metal)
+grep -q 'm4-max/cc: serial rerun: all clean$' <<<"$rerun_cleared"
+grep -q 'm4-max/metal: serial rerun: all clean$' <<<"$rerun_cleared"
+# A clean rerun of the red stanzas does not reach the actions a red
+# prerequisite held back, so each unit then completes its whole suite
+# incrementally (no --force: only what never completed runs) before counting.
+grep -q 'm4-max/cc: serial rerun: suite completed$' <<<"$rerun_cleared"
+grep -q 'm4-max/metal: serial rerun: suite completed$' <<<"$rerun_cleared"
+[ "$(grep -cx 'exec -- dune build -j 1 @runtest @train' "$calls")" -ge 2 ]
+rerun_cleared_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$rerun_cleared" | tail -1)
+[ -f "$rerun_cleared_report" ]
+grep -q '^red units counted after a clean serial rerun: m4-max/cc m4-max/metal$' \
+  "$rerun_cleared_report"
+grep -q '^status: partial (2 of 5 known backends completed)$' "$rerun_cleared_report"
+[ "$(grep -E '^  (result|FAIL|POTENTIAL): ' <<<"$rerun_cleared")" = "$coverage_findings" ]
+
+# The retry must confirm its first attempt. Here fixture.exe's own stanza
+# (`runtest-fixture`) is the one re-run. A retry that announces every skip its
+# first attempt did leaves no record stale, and the unit counts (the real
+# minix/hip shape: all ten schedule_conv_gemm records re-announced).
+own_stanza_failure='File "test/dune", line 2, characters 7-28:
+2 |  (alias runtest-fixture)
+Fatal error: exception hip_init:
+HIP_ERROR_INVALID_DEVICE'
+retry_agrees=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT_RETRY=$cc_unit_log \
+  SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log$'\n'$own_stanza_failure \
+  run_sweep_args --force --only cc)
+grep -q 'm4-max/cc: serial rerun: suite completed$' <<<"$retry_agrees"
+absent 'first attempt disagrees' <<<"$retry_agrees"
+retry_agrees_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$retry_agrees" | tail -1)
+grep -q '^completed backends: cc$' "$retry_agrees_report"
+# A retry that no longer announces the cc-only skip either executed it (the
+# first-attempt record is stale) or never re-ran the stanza that announced it
+# (a genuine skip of the same executable); the log cannot tell which, so the
+# unit is not counted -- neither a stale skip counted nor a genuine one dropped.
+retry_disagrees=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT_RETRY=$common \
+  SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log$'\n'$own_stanza_failure \
+  run_sweep_args --force --only cc)
+grep -q 'm4-max/cc: serial rerun: first attempt disagrees: fixture.exe$' <<<"$retry_disagrees"
+retry_disagrees_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$retry_disagrees" | tail -1)
+grep -q '^completed backends: <none>$' "$retry_disagrees_report"
+# A directory fallback names no executable, but Dune's short display names the
+# program each re-run action ran: the inline-only red below re-runs
+# `@test/runtest`, whose retry ran fixture and announced nothing, so fixture's
+# first-attempt skips are unconfirmed and the unit is not counted.
+fallback_disagrees=$(SWEEP_TEST_OPAM_RC=1 \
+  SWEEP_TEST_OPAM_OUT_RETRY='        fixture alias test/runtest' \
+  SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log$'\n'$two_inline_failure \
+  run_sweep_args --force --only cc)
+grep -q 'm4-max/cc: serial rerun: directory fallback (2 inline sites): @test/runtest$' \
+  <<<"$fallback_disagrees"
+grep -q 'm4-max/cc: serial rerun: first attempt disagrees: fixture.exe$' <<<"$fallback_disagrees"
+fallback_disagrees_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$fallback_disagrees" | tail -1)
+grep -q '^completed backends: <none>$' "$fallback_disagrees_report"
+
+# The opposing controls, in one run: a red whose serial rerun stays red, and a
+# red with no refusal signature (never rerun), both remain excluded.
+rerun_red=$(SWEEP_TEST_OPAM_RC=1 \
+  SWEEP_TEST_OPAM_SERIAL_RED='@test/runtest-serial-probe' \
+  SWEEP_TEST_OPAM_OUT_CC=$environment_failure$'\n'$cc_unit_log \
+  SWEEP_TEST_OPAM_OUT_METAL=$'Error: a test-logic failure\n'$metal_unit_log \
+  run_sweep_args --force --only cc --only metal)
+grep -q 'm4-max/cc: serial rerun: still red: @test/runtest-serial-probe$' <<<"$rerun_red"
+absent 'm4-max/metal: environment-red' <<<"$rerun_red"
+rerun_red_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$rerun_red" | tail -1)
+[ -f "$rerun_red_report" ]
+grep -q '^completed backends: <none>$' "$rerun_red_report"
+absent 'counted after a clean serial rerun' "$rerun_red_report"
+absent 'suite completion' <<<"$rerun_red"
+
+# A clean rerun whose completion pass is red stays excluded: an action the red
+# had held back failed, so the suite is not known to have completed.
+completion_red=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_SERIAL_RED='@train' \
+  SWEEP_TEST_OPAM_OUT_CC=$two_inline_failure$'\n'$cc_unit_log \
+  run_sweep_args --force --only cc)
+grep -q 'm4-max/cc: serial rerun: all clean$' <<<"$completion_red"
+grep -q 'm4-max/cc: serial rerun: suite completion red (exit 1)$' <<<"$completion_red"
+completion_red_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$completion_red" | tail -1)
+[ -f "$completion_red_report" ]
+grep -q '^completed backends: <none>$' "$completion_red_report"
 
 # The dxg window filter (gh-ocannl-979), driven directly: tools/kernel-window.sh is
 # sourced by the sweep and by this harness for exactly that reason (after

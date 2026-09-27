@@ -5,7 +5,11 @@
 #
 # A claim absent from one COMPLETE backend log was evaluated there; a claim
 # present in every complete log was not.  The caller owns completeness -- the
-# sweep passes only successful forced full-suite units, never incremental logs.
+# sweep passes only forced full-suite units that passed, or whose every failure
+# a serial rerun cleared, never incremental logs.
+# A box outside the declared matrix is evidence without obligation: a claim it
+# executed is not skipped on every box, but its absence never makes the matrix
+# incomplete and its skips alone never make a finding.
 # A legacy human SKIPPED line without its paired machine record makes the log
 # incompatible rather than turning an old --ref run into false empty evidence.
 #
@@ -130,6 +134,7 @@ done
 
 completed_boxes=()
 missing_boxes=()
+undeclared_boxes=()
 environment_logs=()
 if [ ${#known_boxes[@]} -gt 0 ]; then
   for box in "${known_boxes[@]}"; do
@@ -139,9 +144,13 @@ if [ ${#known_boxes[@]} -gt 0 ]; then
       missing_boxes+=("$box")
     fi
   done
-  for ((i = 0; i < ${#run_boxes[@]}; i++)); do
-    contains "${run_boxes[$i]}" "${known_boxes[@]}" &&
-      environment_logs+=("${run_logs[$i]}")
+  # Every log is environment evidence, declared box or not: an execution on an
+  # undeclared box (tuf beside minix for hip) proves the claim is reachable.
+  # Only completeness is judged against the declaration.
+  environment_logs=("${run_logs[@]}")
+  for box in "${run_boxes[@]}"; do
+    contains "$box" "${known_boxes[@]}" && continue
+    contains "$box" "${undeclared_boxes[@]:-}" || undeclared_boxes+=("$box")
   done
 fi
 
@@ -197,8 +206,8 @@ intersect_claims() {
 # Scope is an observation, not part of a claim's identity. A claim can be
 # backend-gated in one run and configuration-gated in another. Backend findings
 # still require backend-scoped records in every log. Environment ownership,
-# however, is established by an environment record in ANY declared-box log;
-# once owned, either ordinary scope means that log did not execute the claim.
+# however, is established by an environment record in ANY log; once owned,
+# either ordinary scope means that log did not execute the claim.
 intersect_claims backend "$tmp/common-backend" "${run_logs[@]}"
 if [ ${#environment_logs[@]} -gt 0 ]; then
   : >"$tmp/environment-owned-unsorted"
@@ -263,6 +272,9 @@ else
     report_line "missing boxes: <none>"
   else
     report_line "missing boxes: $(join_by_comma "${missing_boxes[@]}")"
+  fi
+  if [ ${#undeclared_boxes[@]} -gt 0 ]; then
+    report_line "undeclared boxes (their executions count, their absence does not): $(join_by_comma "${undeclared_boxes[@]}")"
   fi
 
   if [ ${#missing_boxes[@]} -eq 0 ]; then

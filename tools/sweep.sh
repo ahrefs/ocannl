@@ -483,12 +483,15 @@ environment_red() { # log
 # Successful forced full-suite units are the only logs from which absence of a
 # skip announcement means execution. Incremental Dune runs may serve a cached
 # test without replaying its stderr, and a red or interrupted unit may not have
-# reached every test. Keep the qualifying evidence from THIS invocation rather
+# reached every test -- unless the serial rerun re-ran every failing stanza
+# clean and its completion pass then ran whatever they had held back, all into
+# the same log (rerun_cleared), which the report names. Keep the qualifying evidence from THIS invocation rather
 # than recovering it by timestamp from history (two invocations can begin in
 # the same second in the integration harness).
 SKIP_RUN_BACKENDS=()
 SKIP_RUN_BOXES=()
 SKIP_RUN_LOGS=()
+SKIP_RERUN_CLEARED=()
 
 contains() {
   local wanted=$1 item
@@ -1900,16 +1903,90 @@ rerun_aliases() { # log
 # The rerun as shell text for the machine that owns the worktree, one dune call
 # per stanza so each has its own status: a single call over all of them would
 # report one verdict for the set. The markers are what serial_rerun reads back.
+# `--display short` makes Dune name the program of every action it runs
+# (`<program> [alias ]<target>`), which is how first_attempt_disagreement knows
+# which executables a retry re-ran -- a directory fallback's included.
 serial_rerun_cmd() { # backend wt alias...
   local backend=$1 wt=$2 a
   shift 2
   printf 'cd "%s" || exit 127; ' "$wt"
   for a in "$@"; do
     printf 'echo "=== serial rerun %s ==="; ' "$a"
-    printf 'OCANNL_BACKEND=%s opam exec -- dune build -j 1 %s; ' "$backend" "$a"
+    printf 'OCANNL_BACKEND=%s opam exec -- dune build -j 1 --display short %s; ' "$backend" "$a"
     printf 'echo "=== serial rerun %s: exit $? ==="; ' "$a"
   done
   printf 'exit 0'
+}
+
+# The completion pass that follows a clean serial rerun on a forced full-suite
+# unit: the unit's own aliases again, at `-j 1` and WITHOUT --force, so Dune
+# runs exactly the actions that never completed -- the dependents a red
+# prerequisite held back, which rerunning the red stanzas alone does not reach
+# -- and replays nothing that already passed. Its exit 0 is the proof that
+# every action of the suite completed with its stderr in the log, which is what
+# lets rerun_cleared stage the unit as skip evidence.
+suite_completion_cmd() { # backend wt
+  local slow_alias=
+  [ "$SLOW" = 1 ] && slow_alias=' @slow'
+  printf 'cd "%s" || exit 127; ' "$2"
+  printf 'echo "=== suite completion ==="; '
+  printf 'OCANNL_BACKEND=%s opam exec -- dune build -j 1 @runtest @train%s; ' "$1" "$slow_alias"
+  printf 'echo "=== suite completion: exit $? ==="; '
+  printf 'exit 0'
+}
+
+# The executables whose first attempt disagrees with their serial retry, one per
+# line: a skip record the first attempt announced for an executable the rerun
+# re-ran, which the retry did not announce again. Such a record is stale (the
+# retry executed the claim) or another stanza's genuine skip of the same
+# executable (test_cse.exe runs under two aliases), and the log cannot tell
+# which, so a disagreeing unit is not counted. Agreement makes every
+# first-attempt record of a re-run executable one the retry confirmed. A
+# re-run executable is any Dune's short display shows the retry running, any
+# its alias names (`<family>-<name>[-<variant>]`; executable names hold no
+# `-`), and any the retry announced a record for. A test-output line of the
+# display's shape only adds an executable to check, which can exclude a unit
+# but never count a stale record; an executable a retry ran only through a
+# shell wrapper goes unattributed, which can only keep a skip, never hide one.
+first_attempt_disagreement() { # log
+  awk '
+    function exe_of(record, f) { split(record, f, "\t"); return f[3] }
+    function add(program) { sub(/\.exe$/, "", program); if (program != "") rerun[program ".exe"] = 1 }
+    /^=== serial rerun: [0-9]+ stanzas at -j 1 ===$/ { after = 1; next }
+    !after && index($0, "OCANNL_TOOL_VERDICT_SKIP\t") == 1 { first[$0] = 1; next }
+    index($0, "=== serial rerun @") == 1 && $0 !~ /: exit [0-9]+ ===$/ {
+      block = 1
+      name = substr($0, length("=== serial rerun ") + 1)
+      sub(/ ===$/, "", name); sub(/.*\//, "", name)
+      if (split(name, part, "-") >= 2) add(part[2])
+      next
+    }
+    index($0, "=== serial rerun @") == 1 { block = 0; next }
+    block && index($0, "OCANNL_TOOL_VERDICT_SKIP\t") == 1 {
+      retry[$0] = 1; add(exe_of($0)); next
+    }
+    block && /^ *[A-Za-z0-9_.-]+ (alias )?[^ ]+$/ { split($0, word, " "); add(word[1]) }
+    END {
+      for (record in first)
+        if ((exe_of(record) in rerun) && !(record in retry)) bad[exe_of(record)] = 1
+      for (exe in bad) print exe
+    }
+  ' "$1" | LC_ALL=C sort
+}
+
+# Run a post-unit shell command where the unit's worktree lives, under its lock
+# and the unit's CAP, appending to the log (the serial rerun's legs).
+run_on_unit_host() { # host wt cmd log path_prefix
+  local host=$1 wt=$2 cmd=$3 log=$4 path_prefix=$5
+  if [ -n "$host" ]; then
+    run_capped "$(( CAP + 300 ))" ssh -o BatchMode=yes -o ConnectTimeout=8 \
+      -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
+      "$host" "$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $cmd" \
+        "$(sleep_guard_why "$host" serial-rerun)")" \
+      >>"$log" 2>&1
+  else
+    run_capped "$CAP" /bin/sh -c "$cmd" >>"$log" 2>&1
+  fi
 }
 
 # Rerun an environment-red unit's failing stanzas one at a time, appending to
@@ -1920,10 +1997,12 @@ serial_rerun_cmd() { # backend wt alias...
 # unit's own CAP rather than CONTEXT_CAP, because this is not a diagnostic of
 # fixed size but the suite's red stanzas run again -- 27 of them on the day this
 # was measured -- and a stanza the cap cut short is reported `unjudged`, never
-# folded into `all clean`.
+# folded into `all clean`. On a forced full-suite unit an `all clean` rerun is
+# followed by suite_completion_cmd, reported as `suite completed` or not.
 serial_rerun() { # backend host wt log label [path_prefix]
   local backend=$1 host=$2 wt=$3 log=$4 label=$5 path_prefix=${6:-}
-  local line cmd started rc a entry site stanza_count inline_count fallback_suffix=s
+  local line cmd started rc a entry site stanza_count inline_count fallback_suffix=s completion
+  local disagreeing
   local aliases=() fallback_aliases=() inline_entries=() inline_sites=()
   local unmapped=() red=() unjudged=()
   environment_red "$log" || return 0
@@ -1952,15 +2031,7 @@ serial_rerun() { # backend host wt log label [path_prefix]
   if [ ${#aliases[@]} -gt 0 ]; then
     cmd=$(serial_rerun_cmd "$backend" "$wt" "${aliases[@]}")
     echo "=== serial rerun: ${#aliases[@]} stanzas at -j 1 ===" >>"$log"
-    if [ -n "$host" ]; then
-      run_capped "$(( CAP + 300 ))" ssh -o BatchMode=yes -o ConnectTimeout=8 \
-        -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
-        "$host" "$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $cmd" \
-          "$(sleep_guard_why "$host" serial-rerun)")" \
-        >>"$log" 2>&1
-    else
-      run_capped "$CAP" /bin/sh -c "$cmd" >>"$log" 2>&1
-    fi
+    run_on_unit_host "$host" "$wt" "$cmd" "$log" "$path_prefix"
     rc=$?
     for a in "${aliases[@]}"; do
       line=$(grep -hF -- "=== serial rerun $a: exit " "$log" | tail -1)
@@ -1972,6 +2043,25 @@ serial_rerun() { # backend host wt log label [path_prefix]
     done
   else
     rc=0
+  fi
+  # Only a clean rerun of a forced full-suite unit can become skip evidence, so
+  # only that one pays for the completion pass.
+  completion=
+  if [ ${#red[@]} -eq 0 ] && [ ${#unjudged[@]} -eq 0 ] && [ ${#aliases[@]} -gt 0 ] &&
+    [ ${#unmapped[@]} -eq 0 ] && [ "$FORCE" = 1 ] && [ -z "$TARGET" ]; then
+    run_on_unit_host "$host" "$wt" "$(suite_completion_cmd "$backend" "$wt")" "$log" "$path_prefix"
+    line=$(grep -hF -- '=== suite completion: exit ' "$log" | tail -1)
+    case $line in
+      "") completion='serial rerun: suite completion unjudged' ;;
+      *": exit 0 ==="*)
+        completion='serial rerun: suite completed'
+        disagreeing=$(first_attempt_disagreement "$log" | tr '\n' ' ')
+        [ -z "$disagreeing" ] ||
+          completion="$completion"$'\n'"serial rerun: first attempt disagrees: ${disagreeing% }"
+        ;;
+      *) completion="serial rerun: suite completion red (${line#=== suite completion: }"
+         completion="${completion% ===})" ;;
+    esac
   fi
   {
     if [ ${#red[@]} -gt 0 ]; then
@@ -2000,11 +2090,30 @@ serial_rerun() { # backend host wt log label [path_prefix]
       printf ' [%s]' "${unmapped[@]}"
       printf '\n'
     fi
+    [ -z "$completion" ] || printf '%s\n' "$completion"
   } >>"$log"
   [ ${#fallback_aliases[@]} -eq 1 ] && fallback_suffix=
   say "  $label: environment-red, $stanza_count stanzas and ${#fallback_aliases[@]} directory fallback$fallback_suffix rerun at -j 1 ($(( $(date +%s) - started ))s)"
   grep -h '^serial rerun: ' "$log" | sed "s|^|  $label: |" >>"$LANE_OUT"
   return 0
+}
+
+# Whether serial_rerun cleared every failure of the log's unit AND proved the
+# rest of the suite complete: `all clean`, `suite completed`, and no verdict
+# line that leaves a site unjudged, unmapped or red, or a first attempt the
+# retry disagreed with. A directory fallback is
+# judged inside `all clean`, so it does not disqualify.
+rerun_cleared() { # log
+  local line clean= completed=
+  while IFS= read -r line; do
+    case $line in
+      'serial rerun: all clean') clean=1 ;;
+      'serial rerun: suite completed') completed=1 ;;
+      'serial rerun: directory fallback '*) ;;
+      *) return 1 ;;
+    esac
+  done < <(grep -h '^serial rerun: ' "$1" 2>/dev/null)
+  [ -n "$clean" ] && [ -n "$completed" ]
 }
 
 # An outcome that is not a pass, with nothing extractable from its log, is its
@@ -2435,6 +2544,18 @@ run_unit() { # machine backend host
   case $outcome in
     fail) serial_rerun "$backend" "$host" "$wt" "$log" "$machine/$backend" "${path_prefix:-}" ;;
   esac
+  # A red the serial rerun wholly cleared, and whose completion pass then ran
+  # every action the red had held back, is skip evidence like a pass: every
+  # action completed in the suite, the rerun or the completion pass, all of
+  # which write the same log -- provided each re-run executable's retry
+  # confirmed its first attempt's skips (first_attempt_disagreement), so no
+  # record in the log is one the retry made stale. Dropping it lost minix/hip's evaluations on
+  # 2026-09-27 and reported its hip-only claims as skipped on every box.
+  if [ "$outcome" = fail ] && [ -z "$TARGET" ] && rerun_cleared "$log"; then
+    printf '%s\n' "$log" >"$LANE_DIR/skip-run.$machine.$backend" &&
+      : >"$LANE_DIR/skip-cleared.$machine.$backend" ||
+      die "cannot stage skip evidence for $machine/$backend"
+  fi
   case $outcome in
     fail | timeout | error) write_fingerprint "$log" "$machine/$backend" ;;
   esac
@@ -2766,6 +2887,8 @@ for unit in "${UNITS[@]}"; do
   SKIP_RUN_BACKENDS+=("$backend")
   SKIP_RUN_BOXES+=("$machine")
   SKIP_RUN_LOGS+=("$(cat "$evidence")")
+  [ -f "$LANE_DIR/skip-cleared.$machine.$backend" ] &&
+    SKIP_RERUN_CLEARED+=("$machine/$backend")
 done
 
 echo
@@ -2789,6 +2912,8 @@ if [ "$FORCE" = 1 ] && [ -z "$TARGET" ]; then
   [ "$SLOW" = 1 ] && scope="$scope + @slow"
   {
     echo "skip coverage for $run_sha ($scope; forced execution)"
+    [ ${#SKIP_RERUN_CLEARED[@]} -eq 0 ] ||
+      echo "red units counted after a clean serial rerun: ${SKIP_RERUN_CLEARED[*]}"
     "$AGGREGATE_SKIPS" "${aggregate_args[@]}"
   } >"$report_stage"
   aggregate_rc=$?
