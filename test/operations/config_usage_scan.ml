@@ -1069,7 +1069,8 @@ let fixture path config_path multiline_path =
         (In_channel.read_all config_path)
     @ markdown_occurrences ~allow_bare:true
         ~path:(Stdlib.Filename.basename multiline_path)
-        (In_channel.read_all multiline_path))
+        (In_channel.read_all multiline_path));
+  Verdict.exit_negative_control ()
 
 let live workspace_root generated =
   let inventory = Inventory.of_dune_sandbox ~workspace_root ~generated in

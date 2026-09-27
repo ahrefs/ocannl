@@ -39,4 +39,3 @@ FAIL: config_usage_scan_bogus_config.fixture:4: configuration-file assignment `O
 FAIL: config_usage_scan_bogus_config.fixture:5: configuration-file assignment `# OCANNL_DEFINITELY_NOT_A_LEADING_SPACE_COMMENT_KEY=` names `# ocannl_definitely_not_a_leading_space_comment_key`, absent from Utils.known_config_keys
 FAIL: config_usage_scan_bogus_config.fixture:6: configuration-file assignment `=` names ``, absent from Utils.known_config_keys
 FAIL: config_usage_scan_multiline_bogus.fixture:2: documentation assignment `--ocannl_definitely_not_a_multiline_config_key=true` names `definitely_not_a_multiline_config_key`, absent from Utils.known_config_keys
-FAILED: 41 checks did not hold.

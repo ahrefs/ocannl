@@ -364,6 +364,19 @@ let pass_fail_all2 ?min ?detail label got want ~f =
     run; the exit status is taken care of without it. *)
 let any_failed () = !failures > 0
 
+(** Ends a NEGATIVE-CONTROL run, one whose failures are the output its golden pins: exits 1 when
+    something failed and 0 when nothing did, without the teardown's ["FAILED: n checks …"] line.
+    That line totals the failure lines above it, and a total in a golden merges wrong -- two
+    branches each adding a control merge the lines right and the count wrong (gh-ocannl-1056). The
+    rule running such a control accepts exit 1 alone, so a control that stopped refusing still
+    fails. *)
+let exit_negative_control () =
+  let failed = !failures > 0 in
+  failures := 0;
+  Stdio.Out_channel.flush Stdio.stdout;
+  Stdio.Out_channel.flush Stdio.stderr;
+  Stdlib.exit (if failed then 1 else 0)
+
 (** The claim surface intended for [open Verdict.Claims]. Keeping the open-oriented names in one
     module means a new combinator is exposed to every migrated test by changing this file alone; the
     top-level bindings above remain for compatibility with qualified call sites. State and
