@@ -710,6 +710,117 @@ uint16_t single_to_bfloat16(float f)
 #endif
 |},
       [ "OCANNL_HAS_CONVERTVECTOR"; "HAS_NATIVE_FLOAT16"; "HALF_T"; "FLOAT_TO_HALF" ] );
+    (* The widening bridges at the three f32 lane counts an x86 register holds, each ONE packed
+       instruction where the target has it (gh-ocannl-1072), and otherwise the portable bridge above
+       under another name. [C_syntax.vec_widen_macro] picks the name; the arguments are the portable
+       bridge's, so the fallback is a rename.
+
+       The portable spellings are whole-vector C, but gcc lowers two of them badly inside the
+       register tile's k-loop. [__builtin_convertvector] from a [_Float16] vector to a float one has
+       no packed pattern without AVX512-FP16, so gcc widens lane by lane -- each half moved to a
+       general-purpose register ([movq], [shrq]), reinserted ([vpinsrw]) and converted by a scalar
+       [vcvtph2ps] -- and the temporaries spill: 12 to 35 stack references per k step at [x86-64-v3]
+       and [x86-64-v4] on gcc 15. And gcc 13 lowers the zero-extension of an 8-byte [unsigned short]
+       vector as a split, two [vpmovzxwd] and a [vpunpcklqdq], whose two extra registers spill the
+       31-register bf16 tile at [-march=sapphirerapids]. The builtins below are [<immintrin.h>]'s
+       [_mm*_cvtph_ps] and [_mm*_cvtepu16_epi32] as gcc spells them (the 512-bit forms with an
+       all-ones mask and [_MM_FROUND_CUR_DIRECTION] = 4), so their semantics are the ISA's. A
+       compiler that spells one differently -- clang implements [_mm*_cvtepu16_epi32] with
+       [__builtin_convertvector], and lowers that well -- fails [__has_builtin] and takes the
+       portable bridge, as in [C_syntax.vec_fma_builtin].
+
+       Parity: the bf16 arms are the portable arm's zero-extend and shift, bit for bit. The fp16
+       arms keep the portable arm's [HAS_NATIVE_FLOAT16] guard, so they replace only its
+       [__builtin_convertvector] from [_Float16] -- the conversion gcc itself emits for the scalar
+       path's [(float)] cast of a [_Float16] on an F16C target, [vcvtph2ps] (quieting a signalling
+       NaN exactly as the scalar path does). Without [_Float16], the scalar path is the software
+       codec, and so is the fallback. A partial vector (LANES below the width) is zeroed and only
+       LANES elements are read, as in the portable arms. *)
+    ( "OCANNL_VEC_WIDEN_BFLOAT16_X4",
+      {|
+#if defined(__SSE4_1__) && __has_builtin(__builtin_ia32_pmovzxwd128)
+  #define OCANNL_VEC_WIDEN_BFLOAT16_X4(U16V, U32V, LANES, dst, src) do { \
+    typedef short ocannl_w8hi__ __attribute__((vector_size(16))); \
+    typedef long long ocannl_w2di__ __attribute__((vector_size(16))); \
+    long long ocannl_nq__ = 0; __builtin_memcpy(&ocannl_nq__, (src), (LANES) * 2); \
+    (dst) = (__typeof__(dst))((U32V)__builtin_ia32_pmovzxwd128( \
+      (ocannl_w8hi__)(ocannl_w2di__){ocannl_nq__, 0}) << 16); \
+  } while (0)
+#else
+  #define OCANNL_VEC_WIDEN_BFLOAT16_X4 OCANNL_VEC_WIDEN_BFLOAT16
+#endif
+|},
+      [ "OCANNL_VEC_WIDEN_BFLOAT16" ] );
+    ( "OCANNL_VEC_WIDEN_BFLOAT16_X8",
+      {|
+#if defined(__AVX2__) && __has_builtin(__builtin_ia32_pmovzxwd256)
+  #define OCANNL_VEC_WIDEN_BFLOAT16_X8(U16V, U32V, LANES, dst, src) do { \
+    typedef short ocannl_w8hi__ __attribute__((vector_size(16))); \
+    ocannl_w8hi__ ocannl_nb__ = {0}; __builtin_memcpy(&ocannl_nb__, (src), (LANES) * 2); \
+    (dst) = (__typeof__(dst))((U32V)__builtin_ia32_pmovzxwd256(ocannl_nb__) << 16); \
+  } while (0)
+#else
+  #define OCANNL_VEC_WIDEN_BFLOAT16_X8 OCANNL_VEC_WIDEN_BFLOAT16
+#endif
+|},
+      [ "OCANNL_VEC_WIDEN_BFLOAT16" ] );
+    ( "OCANNL_VEC_WIDEN_BFLOAT16_X16",
+      {|
+#if defined(__AVX512F__) && __has_builtin(__builtin_ia32_pmovzxwd512_mask)
+  #define OCANNL_VEC_WIDEN_BFLOAT16_X16(U16V, U32V, LANES, dst, src) do { \
+    typedef short ocannl_w16hi__ __attribute__((vector_size(32))); \
+    typedef int ocannl_w16si__ __attribute__((vector_size(64))); \
+    ocannl_w16hi__ ocannl_nb__ = {0}; __builtin_memcpy(&ocannl_nb__, (src), (LANES) * 2); \
+    (dst) = (__typeof__(dst))((U32V)__builtin_ia32_pmovzxwd512_mask( \
+      ocannl_nb__, (ocannl_w16si__){0}, (unsigned short)-1) << 16); \
+  } while (0)
+#else
+  #define OCANNL_VEC_WIDEN_BFLOAT16_X16 OCANNL_VEC_WIDEN_BFLOAT16
+#endif
+|},
+      [ "OCANNL_VEC_WIDEN_BFLOAT16" ] );
+    ( "OCANNL_VEC_WIDEN_HALF_X4",
+      {|
+#if HAS_NATIVE_FLOAT16 && defined(__F16C__) && __has_builtin(__builtin_ia32_vcvtph2ps)
+  #define OCANNL_VEC_WIDEN_HALF_X4(FV, HV, LANES, dst, src) do { \
+    typedef short ocannl_w8hi__ __attribute__((vector_size(16))); \
+    typedef long long ocannl_w2di__ __attribute__((vector_size(16))); \
+    long long ocannl_nq__ = 0; __builtin_memcpy(&ocannl_nq__, (src), (LANES) * 2); \
+    (dst) = (FV)__builtin_ia32_vcvtph2ps((ocannl_w8hi__)(ocannl_w2di__){ocannl_nq__, 0}); \
+  } while (0)
+#else
+  #define OCANNL_VEC_WIDEN_HALF_X4 OCANNL_VEC_WIDEN_HALF
+#endif
+|},
+      [ "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_WIDEN_HALF" ] );
+    ( "OCANNL_VEC_WIDEN_HALF_X8",
+      {|
+#if HAS_NATIVE_FLOAT16 && defined(__F16C__) && __has_builtin(__builtin_ia32_vcvtph2ps256)
+  #define OCANNL_VEC_WIDEN_HALF_X8(FV, HV, LANES, dst, src) do { \
+    typedef short ocannl_w8hi__ __attribute__((vector_size(16))); \
+    ocannl_w8hi__ ocannl_nh__ = {0}; __builtin_memcpy(&ocannl_nh__, (src), (LANES) * 2); \
+    (dst) = (FV)__builtin_ia32_vcvtph2ps256(ocannl_nh__); \
+  } while (0)
+#else
+  #define OCANNL_VEC_WIDEN_HALF_X8 OCANNL_VEC_WIDEN_HALF
+#endif
+|},
+      [ "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_WIDEN_HALF" ] );
+    ( "OCANNL_VEC_WIDEN_HALF_X16",
+      {|
+#if HAS_NATIVE_FLOAT16 && defined(__AVX512F__) && __has_builtin(__builtin_ia32_vcvtph2ps512_mask)
+  #define OCANNL_VEC_WIDEN_HALF_X16(FV, HV, LANES, dst, src) do { \
+    typedef short ocannl_w16hi__ __attribute__((vector_size(32))); \
+    typedef float ocannl_w16sf__ __attribute__((vector_size(64))); \
+    ocannl_w16hi__ ocannl_nh__ = {0}; __builtin_memcpy(&ocannl_nh__, (src), (LANES) * 2); \
+    (dst) = (FV)__builtin_ia32_vcvtph2ps512_mask( \
+      ocannl_nh__, (ocannl_w16sf__){0}, (unsigned short)-1, 4); \
+  } while (0)
+#else
+  #define OCANNL_VEC_WIDEN_HALF_X16 OCANNL_VEC_WIDEN_HALF
+#endif
+|},
+      [ "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_WIDEN_HALF" ] );
     ( "half_to_single",
       {|
 /* Half (Float16) to Float conversion (C function) */
