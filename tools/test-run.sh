@@ -1507,11 +1507,14 @@ digest() {
   # `.expected` or `.corrected` file is not one -- dune quotes the failing
   # stanza, `(diff? x.ml x.ml.corrected)` included, for a rule whose action
   # failed before any diff ran, and sending that reader to `dune promote`
-  # hides the real failure (gh-ocannl-1055). A run that chose its own diff
-  # presentation (`--diff-command`, or DUNE_DIFF_COMMAND at launch: `-` prints
-  # none at all) can hold a real promotion with no such headers, so there the
-  # log cannot tell the two apart: the digest says so, with the naming
-  # heuristic as the trigger.
+  # hides the real failure (gh-ocannl-1055). Two runs cannot be told "no diff"
+  # from their log: one that chose its own diff presentation (`--diff-command`,
+  # or DUNE_DIFF_COMMAND at launch; `-` prints nothing, and an inline-expect
+  # rule's remaining location names only its `.ml`), whose failure may be a
+  # pending promotion whatever the log says; and one whose log outgrew the
+  # scanned tail, which may hold a hunk above it.
+  local log_bytes
+  log_bytes=$(wc -c <"$dir/log" 2>/dev/null | tr -d ' ')
   if scan_log | awk 'BEGIN { esc = sprintf("%c", 27) }
                      { gsub(esc "\\[[0-9;]*m", "") }
                      prev ~ /^---+ / && /^\+\+\++ / { found = 1; exit }
@@ -1519,10 +1522,12 @@ digest() {
                      END { exit found ? 0 : 1 }'; then
     echo "promotion diffs present -- inspect the log, accept with \`dune promote\`" \
          "(tools/promote.sh on Windows)"
-  elif [ -s "$dir/diff-command" ] &&
-       scan_log | grep -qE '^File "[^"]*\.expected"|\.corrected'; then
+  elif [ "$verdict" = FAIL ] && [ -s "$dir/diff-command" ]; then
     echo "promotion diffs possible -- the run chose its own diff command, whose" \
          "output this digest cannot read; inspect the log before \`dune promote\`"
+  elif [ "$verdict" = FAIL ] && [ "${log_bytes:-0}" -gt 10000000 ]; then
+    echo "action failed; no diff in the log's last 10MB, but the log is longer --" \
+         "search it whole before concluding there is nothing to promote"
   elif [ "$verdict" = FAIL ] && [ "$(cat "$dir/mode" 2>/dev/null)" != repeat ]; then
     # Not for a repeat set: its red can be drift between iterations that each
     # passed, which no failed action explains.

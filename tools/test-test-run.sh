@@ -148,8 +148,10 @@
 #      offers neither. A run that chose its own diff command (patdiff's
 #      doubled headers still count; `-`, on the command line or in
 #      DUNE_DIFF_COMMAND, prints none) is told promotion is possible, never
-#      "no diff" -- unless the option sits past dune's own `--`. And a repeat
-#      set red on drift alone is not called a failed action.
+#      "no diff" -- unless the option sits past dune's own `--` -- whatever
+#      its log names (an inline-expect rule's names only its `.ml`). A log
+#      longer than the digest's scan window is never "nothing to promote",
+#      and a repeat set red on drift alone is not called a failed action.
 #  66 sits after leg 63: the digest's `source:` line reads the record -- the
 #      commit and `(clean)`, or `+ N uncommitted paths`; nothing unrecorded.
 
@@ -1618,6 +1620,18 @@ case $REPEAT_TEST_MODE in
   diff_suppressed)
     printf 'File "test/operations/fixture.expected", line 1, characters 0-0:\n' >&2
     exit 1 ;;
+  # An inline-expect rule's mismatch under `--diff-command -`: the remaining
+  # location names the `.ml` source, no `.expected` or `.corrected` at all.
+  inline_suppressed)
+    printf 'File "test/einsum/surjectivity.ml", line 12, characters 0-1:\n' >&2
+    exit 1 ;;
+  # A real hunk followed by more output than the digest's 10MB scan window.
+  diff_then_noise)
+    printf -- '--- a/_build/default/test/operations/fixture.expected\n' >&2
+    printf '+++ b/_build/default/test/operations/fixture.exe.output\n' >&2
+    printf '@@ -1 +1 @@\n-old line\n+new line\n' >&2
+    yes 'noise from a parallel action' | head -c 10500000
+    exit 1 ;;
   *) echo "unknown repeat fixture mode: $REPEAT_TEST_MODE" >&2; exit 92 ;;
 esac
 EOF
@@ -2835,6 +2849,8 @@ for probe in "patdiff_hunk|present|build --diff-command patdiff @cheap" \
              "diff_suppressed|possible|build --diff - @cheap" \
              "diff_suppressed|env|build @cheap" \
              "diff_suppressed|nodiff|build @cheap" \
+             "inline_suppressed|possible|build --diff-command - @cheap" \
+             "action_no_diff|possible|build --diff-command - @cheap" \
              "diff_suppressed|nodiff|exec ./prog.exe -- --diff-command -"; do
   mode=${probe%%|*}; rest=${probe#*|}; want=${rest%%|*}
   if [ "$want" = env ]; then export DUNE_DIFF_COMMAND=-; want=possible; fi
@@ -2857,6 +2873,18 @@ if [ -z "$custom_detail" ]; then
   report 0 "$custom_label"
 else
   report 1 "$custom_label" "$custom_detail"
+fi
+# A log longer than the digest's scan window may hold a hunk above it: the
+# digest must say it did not look there, never "nothing to promote".
+argv_mode=diff_then_noise argv_probe noise-hunk run build @cheap
+argv_mode=
+noise_label="a log past the scanned tail is never told 'nothing to promote'"
+if [ "$argv_rc" = 1 ] \
+   && case $argv_out in *"the log is longer"*) true ;; *) false ;; esac \
+   && case $argv_out in *"(no diff)"* | *"nothing to promote;"*) false ;; *) true ;; esac; then
+  report 0 "$noise_label"
+else
+  report 1 "$noise_label" "exit $argv_rc: $(printf '%s' "$argv_out" | head -c 2000)"
 fi
 # A repeat set's red can be drift between iterations that each passed: its
 # digest must not blame a failed action.
