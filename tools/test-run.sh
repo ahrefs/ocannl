@@ -115,6 +115,13 @@
 # and publishes the run, and a perl supervisor that inherits the lock, caps
 # and signals dune, and records the verdict (see supervisor_perl).
 #
+# A run directory also records WHICH source ran, as of the launch: `head` (the
+# checkout's HEAD commit) and `dirty` (its `git status --porcelain`, empty when
+# clean). Both are optional -- absent outside a Git checkout -- and neither
+# says anything about an edit made after the launch, or about ignored files and
+# the environment, which are configuration rather than source (see
+# record_checkout).
+#
 # Windows: run it from Git Bash, whose MSYS perl carries the flock and the cap.
 # Best-effort even there -- process-group kills may only reach dune itself, not
 # its compiler children. A Cygwin bash ships no perl by default, so the
@@ -914,6 +921,62 @@ take_lock() {
   esac
 }
 
+# The revision a run tests, as a launch-time fact (gh-ocannl-992): `head` holds
+# the checkout's HEAD commit and `dirty` its `git status --porcelain` -- empty
+# for a clean tree, otherwise one line per uncommitted path, untracked ones
+# included. Without them a run directory said what ran and how it ended but not
+# on which source, and a reader had to infer it: from the worktree's HEAD now
+# (which a reset or a later commit moves, and a commit-time guard cannot tell
+# apart), or from a worker's transcript. Written in that order, so `head`'s
+# presence means both are on record; they are optional for every reader, since
+# a run outside a Git checkout, or one git cannot describe, records neither and
+# launches as before. What they cannot say: an edit made after the launch --
+# during a fleet slot's wait, or while dune runs -- is not in them; nor is
+# anything git does not track or would not: an ignored file (a root
+# `ocannl_config`, whose settings a test can pick up through the ancestor
+# search) and the environment (`OCANNL_*`) are configuration, not source, and
+# a report that depends on them states them itself.
+#
+# Recorded only where this script's root IS the checkout's top level: a copy
+# sitting inside some other repository (a harness fixture under a checkout)
+# would otherwise record that repository's HEAD for a tree it does not
+# describe. The repository-selecting environment (GIT_DIR, GIT_WORK_TREE,
+# GIT_INDEX_FILE, ...: git's own --local-env-vars list) is dropped for the
+# same reason -- a launch from inside a git hook inherits them. Untracked files
+# are listed whatever `status.showUntrackedFiles` says: a new test source is
+# exactly the edit a dirty record exists to show. And the status takes no
+# optional lock: git would otherwise rewrite the index to refresh its stat
+# cache, which is a write into the checkout (and a transient index.lock that
+# can fail the caller's own concurrent `git commit`).
+#
+# HEAD is read on both sides of the status, and the pair retaken while it
+# moved: a commit or reset landing in between would otherwise pair the OLD
+# commit with the NEW tree's clean status -- a record certifying a revision
+# that did not run. Three attempts, then neither file (a checkout committing
+# that fast is not one a launch-time fact can describe).
+record_checkout() {
+  (
+    command -v git >/dev/null 2>&1 || exit 0
+    # shellcheck disable=SC2046 # a list of variable names, split on purpose
+    unset $(git rev-parse --local-env-vars 2>/dev/null)
+    [ "$(git rev-parse --is-inside-work-tree --show-prefix 2>/dev/null)" = true ] || exit 0
+    attempt=1
+    while :; do
+      head=$(git rev-parse --verify --quiet HEAD 2>/dev/null) || exit 0
+      case $head in '' | *[!0-9a-f]*) exit 0 ;; esac
+      if ! GIT_OPTIONAL_LOCKS=0 git status --porcelain=v1 --untracked-files=normal \
+           >"$run_dir/dirty" 2>/dev/null; then
+        rm -f "$run_dir/dirty"
+        exit 0
+      fi
+      [ "$(git rev-parse --verify --quiet HEAD 2>/dev/null)" = "$head" ] && break
+      [ "$attempt" -lt 3 ] || { rm -f "$run_dir/dirty"; exit 0; }
+      attempt=$((attempt + 1))
+    done
+    printf '%s\n' "$head" >"$run_dir/head"
+  )
+}
+
 new_run() {
   run_dir=$RUNS/$(date -u +%Y%m%dT%H%M%SZ)-$$
   mkdir "$run_dir" || die "cannot create $run_dir"
@@ -924,6 +987,7 @@ new_run() {
     printf '%s\n' "$cap" >"$run_dir/cap" &&
     printf '%s\n' "$PWD" >"$run_dir/wt" &&
     printf '%s\n' "$RUNS" >"$run_dir/runs" &&
+    record_checkout &&
     : >"$run_dir/log"; } || die "cannot write run metadata in $run_dir"
   # `runs` is the state root this run's lock and pointers live under: `stop`
   # and retention read them from there, whichever OCANNL_TOOL_TEST_RUNS the

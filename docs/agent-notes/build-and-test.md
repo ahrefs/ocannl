@@ -690,6 +690,26 @@ that they earn a lookup rather than always-loaded space.
   children that close their locks. The forged publication window records settle sleeps before
   checking reaping; `last` squatter/legacy lock cases end with a byte comparison of the fixture
   tree. Fixtures use `paths`/`lock-status`, identity-checked cleanup and bounded child waits.
+- **A run directory says which source it ran, as of the launch** (gh-ocannl-992): beside `cmd`,
+  `cap`, `wt`, `runs`, `log` and the verdict, `run`/`start`/`repeat` record `head` (the checkout's
+  HEAD commit) and `dirty` (its `git status --porcelain`: empty when clean, else one line per
+  uncommitted path, untracked included). Before them a run's revision could only be inferred — from
+  the worktree's HEAD at reading time, which a reset or a later commit moves and a
+  commit-time-vs-`cmd`-mtime guard cannot tell apart (ludics-lite#158's review), or from the
+  worker's transcript (staging#762 rebuilt its runs' pre/post commits and dirty instrumentation that
+  way). Evidence cites a run as tested at `head` only when `dirty` is empty; a nonempty one is a run
+  over uncommitted edits, whatever the report says. The record is SOURCE only: ignored files (a root
+  `ocannl_config`, which a test can pick up through the ancestor search) and the environment
+  (`OCANNL_*`) are configuration, and a report that depends on them states them. Both files are
+  optional: written only where the script's root is a checkout's TOP level (a fixture copy under
+  some checkout would otherwise record that checkout's HEAD), `dirty` first, so `head` means both
+  exist; git's repository-selecting variables (`--local-env-vars`: `GIT_DIR`, `GIT_WORK_TREE`, ...)
+  are dropped, untracked files are listed whatever `status.showUntrackedFiles` says, and the status
+  runs with `GIT_OPTIONAL_LOCKS=0`, so the launch never rewrites the index. HEAD is read on both
+  sides of the status and the pair retaken while it moves, so a commit landing in between cannot
+  pair the old commit with the new tree's clean status. An edit made after the launch — during a
+  fleet slot's wait, or while dune runs — is in neither. Legs 59–63 of `tools/test-test-run.sh` pin
+  clean, dirty, an inherited `GIT_DIR`, the absent cases and that mid-record commit.
 - **`cmd 2>/dev/null` does not silence a failed REDIRECTION.** The shell reports that before the
   command's own stderr redirection applies, so `read -r line <"$f" 2>/dev/null` prints
   `/proc/NNN/stat: No such file or directory` whenever the entry vanishes mid-scan — routine, not
