@@ -685,7 +685,15 @@ let matmul_mma_scope (site : matmul_site) ~bk =
     Unlike the matmul pipelines, the reorder moves the [ic] reduction inside the kernel loops, so
     the per-element reduction order changes: conv sketch candidates match the unscheduled form
     within float-reassociation tolerance (like the GPU fragment paths), while the tensorized
-    pipeline stays bitwise against the reorder-only form on the C backends. *)
+    pipeline stays bitwise against the reorder-only form on the C backends.
+
+    Recognition boundary (gh-ocannl-912): the matcher is rank-generic — every output axis other than
+    the row and the out-channel is an outer loop, however many batch and spatial axes there are —
+    but it requires plain iterators on the output and the kernel, and lowering indexes an extent-1
+    axis at [Fixed_idx 0] with its loop gone. So singleton output axes (batch 1, output extent 1)
+    and singleton kernel axes (one input channel, a k-by-1 window) are refused, as is a multi-axis
+    channel row (one reduction channel); a 1x1 window lowers to a plain GEMM that [detect_matmul]
+    owns. Pinned, with the reasons, by [test/operations/conv_detection_boundary]. *)
 
 type conv_axis = {
   cx_o : Idx.symbol;  (** Output spatial symbol (appears in [d] as a plain iterator). *)

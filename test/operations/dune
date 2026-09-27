@@ -4170,6 +4170,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name conv_detection_boundary)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules conv_detection_boundary)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name padding_lifecycle)
  (package neural_nets_lib)
  (deps

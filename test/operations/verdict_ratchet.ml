@@ -304,6 +304,10 @@ let exempt_quantified_helpers =
        the mma subset over" );
     ( "test/operations/schedule_batched_mma.ml:variance-like site: no gpu mma seeds",
       "the same site, on the GPU seeder" );
+    ( "test/operations/conv_detection_boundary.ml:refused",
+      "a refused conv site is deliberately recognized by no family, so both seeders yield no seeds \
+       of any kind and there is no seed population to quantify over; the claim beside it pins the \
+       refusal's reason on the lowered maps, which are non-empty" );
     (* Equivalences `Bool.equal <quantifier> <backend fact>` (staging#681 round 11): the reader sees
        that the quantifier's false polarity -- the empty population -- is what the claim accepts on
        one side of the fact, and on that side emptiness is the designed reading. *)

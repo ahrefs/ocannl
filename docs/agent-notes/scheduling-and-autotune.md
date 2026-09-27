@@ -215,6 +215,14 @@ files.
   `(1024 1024 1024)`, i.e. `max_grid_yz = 65535` and a `max_workgroup_dims` that equals the product
   cap — that device cannot exercise the per-dimension cliff; CUDA's `.z` of 64 is the one that
   can.
+- `detect_conv`'s boundary is SINGLETON axes, not rank (gh-ocannl-912). 3-D, 1-D, batchless and
+  multi-batch convs are detected and seeded on both legs; what it refuses is any extent-1 axis,
+  because lowering drops the loop and indexes the axis at `Fixed_idx 0` while the matcher wants
+  plain iterators on the output and kernel: batch 1, output extent 1, one input channel (lenet's
+  conv1), a k-by-1 window. A 1x1 window is a GEMM and goes to the matmul family. A conv fixture
+  that "is not detected" usually has a singleton somewhere — keep every axis at extent >= 2 unless
+  the singleton is the point. `test/operations/conv_detection_boundary` pins each class with its
+  reason, derived from the lowered maps.
 - **A dispatch's launch parameters are read on the HOST, at `Context.run`, and carried to the
   device** — never re-read from the caller's refs when the device gets around to the task. Only
   `Schedulers.Multidev` defers a task at all (`Sync.schedule_task` is `Task.run`, and the GPU
