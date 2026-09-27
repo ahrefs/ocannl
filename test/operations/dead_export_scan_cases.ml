@@ -15,6 +15,9 @@ let%trace _extended = 4
 let pair, alias = (2, 3)
 let (!@) x = x
 let%trace extended = 4
+include struct
+  let included = 7
+end
 external primitive : int -> int = "fixture_primitive"
 let sexp_of_handwritten () = Sexplib0.Sexp.List []
 type t = Root [@@deriving sexp_of, compare, equal]
@@ -74,7 +77,7 @@ let expanded_names deriver source =
   (declaration, generated_value_names expansion)
 
 let () =
-  Verdict.p "top-level lets, patterns, extensions, and externals are exports"
+  Verdict.p "top-level lets, patterns, extensions, include structs, and externals are exports"
     (List.equal String.equal (export_keys fixture_exports)
        [
          "Sample.!@";
@@ -87,6 +90,7 @@ let () =
          "Sample.equal_group_b";
          "Sample.equal_named";
          "Sample.extended";
+         "Sample.included";
          "Sample.named_of_sexp";
          "Sample.outer";
          "Sample.pair";
@@ -277,6 +281,11 @@ type in_with = W
 type in_package = Pk
 type by_fields = { fields_label : int } [@@deriving fields]
 type fields_module = { module_label : int } [@@deriving fields]
+type fields_alias = { alias_label : int } [@@deriving fields]
+type variants_open = Vo [@@deriving variants]
+include struct
+  type in_include = Ii
+end
 type extensible = ..
 type _private = X
 let own_use (x : annotated) = x
@@ -307,13 +316,16 @@ let () =
          "Sample.derived_sexp";
          "Sample.example_train_result";
          "Sample.extensible";
+         "Sample.fields_alias";
          "Sample.fields_module";
          "Sample.in_extension";
+         "Sample.in_include";
          "Sample.in_package";
          "Sample.in_with";
          "Sample.interfaced";
          "Sample.prose";
          "Sample.tree";
+         "Sample.variants_open";
        ]);
   let consumers =
     [
@@ -335,7 +347,15 @@ let () =
     ]
   in
   let counts =
-    type_counts ~interfaces:[ ("other.mli", "val f : Sample.interfaced -> unit\n") ] consumers
+    type_counts
+      ~interfaces:
+        [
+          ( "other.mli",
+            "val f : Sample.interfaced -> unit\n\
+             module F = Sample.Fields_of_fields_alias\n\
+             open Sample.Variants_of_variants_open\n" );
+        ]
+      consumers
   in
   Verdict.p "the dead record is detected though another record shares its label names"
     (mentions counts "example_train_result" = 0);
@@ -350,6 +370,10 @@ let () =
     ~f:(fun name -> mentions counts name > 0);
   Verdict.p_all "extension payloads, with-constraints, and type extensions mention the type"
     [ "in_extension"; "in_with"; "extensible" ] ~f:(fun name -> mentions counts name > 0);
+  Verdict.p "a type declared inside a top-level include struct is censused and can be unmentioned"
+    (mentions counts "in_include" = 0);
+  Verdict.p_all "a derived module mentions its type from an interface's alias or open"
+    [ "fields_alias"; "variants_open" ] ~f:(fun name -> mentions counts name > 0);
   Verdict.p "a first-class module's package constraint mentions the type"
     (mentions counts "in_package" > 0);
   Verdict.p "a fields deriving is credited by its module, never by a same-named label or value"

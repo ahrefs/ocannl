@@ -147,6 +147,9 @@ let exports_of_source ~source contents =
            still a source-declared top-level value, so unwrap structure payloads at this level but
            never descend into a nested module. *)
         | Pstr_extension ((_, PStr nested), _) -> items acc nested
+        (* [include struct ... end] declares into the enclosing module as much as a bare item. *)
+        | Pstr_include { pincl_mod = { pmod_desc = Pmod_structure nested; _ }; _ } ->
+            items acc nested
         | _ -> acc
       in
       items [] (Read.structure_of contents)
@@ -396,7 +399,9 @@ let counts ~(exports : export list) references =
     them in a value or module path -- never in a label path, and never inside a [[@@deriving]]
     payload, which names derivers rather than using their output -- since a caller can use the type
     through its converter alone. Comments, docstrings and string literals never parse into a path,
-    so prose cannot keep a type alive.
+    so prose cannot keep a type alive. A type named with a leading [_] is not censused, as it is not
+    for OCaml's own unused-type warning (34): its author marked it deliberately unused, the
+    convention the value census follows for [let].
 
     Out of scope, by design: the constructors and record labels of a type are not resolved to it (a
     record built only by its labels, never annotated, reads as unmentioned), and neither are the
@@ -461,6 +466,9 @@ let type_exports_of_source ~source contents =
                   }
                   :: acc)
         | Pstr_extension ((_, PStr nested), _) -> items acc nested
+        (* [include struct ... end] declares into the enclosing module as much as a bare item. *)
+        | Pstr_include { pincl_mod = { pmod_desc = Pmod_structure nested; _ }; _ } ->
+            items acc nested
         | _ -> acc
       in
       items [] (Read.structure_of contents)
@@ -525,7 +533,8 @@ let type_mention_counts ~(type_exports : type_export list) ~implementations ~int
       method! with_constraint constraint_ =
         (match constraint_ with
         | Pwith_type (path, _) | Pwith_typesubst (path, _) -> record_type_path path
-        | Pwith_module _ | Pwith_modtype _ | Pwith_modsubst _ | Pwith_modtypesubst _ -> ());
+        | Pwith_module (_, path) | Pwith_modsubst (_, path) -> record_derived_path path
+        | Pwith_modtype _ | Pwith_modtypesubst _ -> ());
         super#with_constraint constraint_
 
       method! type_extension extension =
@@ -539,6 +548,21 @@ let type_mention_counts ~(type_exports : type_export list) ~implementations ~int
       method! module_expr module_expr =
         (match module_expr.pmod_desc with Pmod_ident path -> record_derived_path path | _ -> ());
         super#module_expr module_expr
+
+      (* The signature-side module paths: an alias ([module F = M.Fields_of_foo]) and a module type
+         path, an [open], and a module substitution. *)
+      method! module_type module_type =
+        (match module_type.pmty_desc with
+        | Pmty_alias path | Pmty_ident path -> record_derived_path path
+        | _ -> ());
+        super#module_type module_type
+
+      method! signature_item item =
+        (match item.psig_desc with
+        | Psig_open { popen_expr = path; _ } -> record_derived_path path
+        | Psig_modsubst { pms_manifest = path; _ } -> record_derived_path path
+        | _ -> ());
+        super#signature_item item
 
       (* A deriving payload names the derivers ([equal], [compare], [hash]), which for a type [t]
          are exactly its derived names; it uses nothing. *)
