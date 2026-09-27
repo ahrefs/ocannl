@@ -237,9 +237,9 @@ files.
   than the decisive one.
 - A timestamp is an instant of ONE clock, and the controller's is not the box's (gh-ocannl-979):
   read both bounds of a window with `date +%s` ON the box that produces the artifact, never from a
-  controller mtime or a local duration; floor the start, ceil the end, and take the end before
-  anything else touches the resource. `journalctl -k` implies `-b`, and on both sweep boxes a
-  fractional `--since` returns ZERO lines (`tools/kernel-window.sh`). Still exposed: `ts` in
+  controller mtime or a local duration; floor the start, ceil the end, and keep the resource to the
+  producer until the window is collected. The `journalctl` traps (`-k`, a fractional `--since`) are
+  owned by [build-and-test.md](build-and-test.md#the-cross-machine-sweep). Still exposed: `ts` in
   `benchmarks/gh675_cells.py` (no zone), and `tools/machine-verify.sh` reads no far-side clock.
 - When the next review finding is "leg X missed guard Y", look for the unfactored duplication instead
   of patching leg X. In `tools/sweep.sh`'s nine rounds every point-wise guard had a leg, a path or a
