@@ -79,7 +79,9 @@ let () =
   p "a window's reading is its minimum, not its sum or its mean"
     (Float.equal spread.ms 2. && spread.samples = 16 && not spread.contended);
   p "a refused positive timing cannot enter ranking or calibration"
-    (Option.is_none (Autotune.admitted_timing_ms { ms = 0.0002; contended = true; samples = 16 }));
+    (Option.is_none
+       (Autotune.admitted_timing_ms
+          { ms = 0.0002; contended = true; unbatched = false; samples = 16 }));
   (* gh-ocannl-888: the contention verdict judged single dispatches, whose dispersion on a GPU is
      the round trip's own tail. Refusing a depth on it starved every search on both GPU backends,
      and a deeper batch is the remedy for that dispersion rather than a casualty of it. Pinned both
@@ -186,6 +188,14 @@ let confirmation_cases =
     (* A resolved overshoot brackets the target. Interpolation should reduce it rather than
        preserving a batch substantially longer than the contention rule's stated scale. *)
     ("a batch probe that overshoots the target", 512, 8., 1024, 16., 640, Some 10.);
+    (* gh-ocannl-1098: the tolerance is a quarter of the base batch's wall, not of the target. A
+       slow candidate 3% superlinear at depth 2 reads a -4 ms fixed term -- under 7% of its 61 ms
+       base, over the old absolute 2.5 ms, which sent its calibration doubling. *)
+    ("a slow pair superlinear by under a quarter of its base", 1, 61., 2, 126., 1, Some 61.);
+    (* A resolved pair between two over-target batches: the base is not the model's first target
+       crossing, and keeping it would time 256 ms batches. The crossing is one launch. *)
+    ("an over-target base that is not the first crossing", 4, 256., 8, 512., 1, Some 64.);
+    ("an over-target superlinear pair", 4, 260., 8, 528., 1, Some 59.);
   ]
 
 let () =
@@ -197,13 +207,18 @@ let () =
       Autotune.queue_depth_cap_for_backend backend = 200);
   Verdict.p_all "every calibration estimate gets the depth the policy owes it" depth_cases
     ~f:(fun (what, est_ms, want) ->
-      let got = Autotune.queued_batch_depth { ms = est_ms; contended = false; samples = 0 } in
+      let got =
+        Autotune.queued_batch_depth
+          { ms = est_ms; contended = false; unbatched = false; samples = 0 }
+      in
       if got <> want then
         Stdio.eprintf "  %s: est %g ms -> depth %d, expected %d\n%!" what est_ms got want;
       got = want);
   Verdict.p_all "every degenerate calibration estimate is refused by ranking but still batched"
     degenerate_depth_cases ~f:(fun (what, est_ms, want) ->
-      let result : Autotune.timing_result = { ms = est_ms; contended = false; samples = 16 } in
+      let result : Autotune.timing_result =
+        { ms = est_ms; contended = false; unbatched = false; samples = 16 }
+      in
       let admitted = Autotune.admitted_timing_ms result in
       let depth = Autotune.queued_batch_depth result in
       if Option.is_some admitted || depth <> want then
@@ -215,10 +230,12 @@ let () =
   let all_depth_cases = depth_cases @ degenerate_depth_cases in
   Verdict.p_all "no calibration estimate ever yields a depth below 1" all_depth_cases
     ~f:(fun (_, est_ms, _) ->
-      Autotune.queued_batch_depth { ms = est_ms; contended = false; samples = 0 } >= 1);
+      Autotune.queued_batch_depth { ms = est_ms; contended = false; unbatched = false; samples = 0 }
+      >= 1);
   Verdict.p_all "no calibration estimate ever yields a depth above the cap" all_depth_cases
     ~f:(fun (_, est_ms, _) ->
-      Autotune.queued_batch_depth { ms = est_ms; contended = false; samples = 0 } <= 2048);
+      Autotune.queued_batch_depth { ms = est_ms; contended = false; unbatched = false; samples = 0 }
+      <= 2048);
   Verdict.p_all "depth refinement removes fixed synchronization cost from launch scaling"
     refinement_cases ~f:(fun (what, single_ms, probe_depth, probe_ms, want_depth, want_wall) ->
       let depth, wall = Autotune.refine_queued_batch_depth ~single_ms ~probe_depth ~probe_ms in
@@ -291,17 +308,25 @@ type synthetic_call = {
   reused_batches : int;
   fresh_launches : int;
   all_launches : int;
+  probes : (int * float) list;
+      (** The calibration's batch probes, one [(depth, wall)] per batch in dispatch order: every
+          batch before the depth decision but the synchronized singles, which are depth 1 while no
+          probe is (gh-ocannl-1098). *)
   reading : Autotune.timing_result;
 }
 
 let synthetic_call ?(repeats = 3) ?walls ~timing ~cap ~fixed_ms ~launch_ms () =
-  let launches = ref 0 and batches = ref 0 in
+  let launches = ref 0 and batches = ref 0 and probes = ref [] and decided = ref None in
   let batch d =
     launches := !launches + d;
     Int.incr batches;
-    match walls with Some f -> f !batches d | None -> fixed_ms +. (launch_ms *. Float.of_int d)
+    let wall =
+      match walls with Some f -> f !batches d | None -> fixed_ms +. (launch_ms *. Float.of_int d)
+    in
+    if d > 1 && Option.is_none !decided then probes := (d, wall) :: !probes;
+    wall
   in
-  let decided = ref None and window = ref None in
+  let window = ref None in
   let old_depth = !Autotune.on_batch_depth and old_window = !Autotune.on_timed_window in
   Exn.protect
     ~finally:(fun () ->
@@ -323,6 +348,7 @@ let synthetic_call ?(repeats = 3) ?walls ~timing ~cap ~fixed_ms ~launch_ms () =
         reused_batches;
         fresh_launches = at_window - at_decision;
         all_launches = !launches;
+        probes = List.rev !probes;
         reading;
       })
 
@@ -333,7 +359,13 @@ let describe what c =
      %!"
     what c.settled_depth c.calibration_launches c.window_batches c.reused_batches c.fresh_launches
     c.all_launches c.reading.ms
-    (if c.reading.contended then " (contended)" else "")
+    (String.concat
+       [
+         Printf.sprintf ", probes %d batches in %g ms" (List.length c.probes)
+           (List.sum (module Float) c.probes ~f:snd);
+         (if c.reading.contended then " (contended)" else "");
+         (if c.reading.unbatched then " (unbatched)" else "");
+       ])
 
 let () =
   let gpu_cap = Autotune.queue_depth_cap_for_backend "hip"
@@ -433,10 +465,11 @@ let () =
    back into an isolated one.
 
    Where no batch at all was measured within the target for a candidate whose single launch owed it
-   one -- the first threshold device, and a 0.1 ms kernel whose every batched probe is stalled to 40
-   ms (Codex P1, round 3 on PR #846) -- the depth-1 reading left would be the isolated objective.
-   Such a call is refused, not ranked, exactly as a stalled window is. A slow candidate, owed depth
-   1 by its own single launch, is not. *)
+   one -- a 0.1 ms kernel whose every batched probe is stalled to 40 ms (Codex P1, round 3 on PR
+   #846) -- the depth-1 reading left would be the isolated objective. Such a call is refused, not
+   ranked, exactly as a stalled window is. A slow candidate, owed depth 1 by its own single launch,
+   is not. The first threshold device used to be refused the same way, on every search; since
+   gh-ocannl-1098 a rescue probe below its shallowest over-target batch times it (below). *)
 let () =
   Stdio.printf "\n== the no-verdict fallback is wall-bounded ==\n";
   let gpu_cap = Autotune.queue_depth_cap_for_backend "hip" in
@@ -492,15 +525,11 @@ let () =
   p "a slow candidate whose fits never resolve is timed at depth 1, as isolated times it"
     (slow.settled_depth = 1
     && Option.equal Float.equal (Autotune.admitted_timing_ms slow.reading) (Some (slow_clean 1)));
-  Verdict.p_all
-    "a candidate owed a batch that measured none within the target is refused, not timed isolated"
-    [ ("queue threshold", threshold); ("every batch stalled", stalled) ]
-    ~f:(fun (what, c) ->
-      let refused = Option.is_none (Autotune.admitted_timing_ms c.reading) in
-      if not refused then
-        Stdio.eprintf "  %s: depth %d reading %g ms was admitted\n%!" what c.settled_depth
-          c.reading.ms;
-      refused);
+  if Option.is_some (Autotune.admitted_timing_ms stalled.reading) then
+    Stdio.eprintf "  every batch stalled: depth %d reading %g ms was admitted\n%!"
+      stalled.settled_depth stalled.reading.ms;
+  p "a candidate owed a batch that measured none within the target is refused, not timed isolated"
+    (Option.is_none (Autotune.admitted_timing_ms stalled.reading));
   Verdict.p_all "a fallback that kept a batch measured within the target is admitted"
     [ ("queue threshold above a fixed term", offset); ("fast", fast) ]
     ~f:(fun (what, c) ->
@@ -517,7 +546,134 @@ let () =
   p "a slow candidate's unresolved calibration costs no more than its probes"
     (slow.fresh_launches = 0
     && slow.all_launches = slow.calibration_launches
-    && slow.all_launches <= 16 + (12 * (2 + 4 + 8 + 16 + 32)))
+    && slow.all_launches <= 16 + (12 * (2 + 4 + 8 + 16 + 32)));
+  (* {2 The probes themselves are wall-budgeted (gh-ocannl-1098)}
+
+     The fallback above bounds the depth a call settles on, not what the calibration spends getting
+     there. Its probes were budgeted in probes and launches only, and a launch can cost anything:
+     the slow device above spent 760 launches (~49 s) doubling before the fallback, and the first
+     threshold device ~1600 s doubling toward the cap. Four fixes, each pinned by a claim that
+     failed before it:
+
+     - the probes' summed wall has a budget, after which only the rescue probe may start, and each
+     probe stops at three minima once its own wall passes two target-sized probes' -- the same
+     threshold devices a per-launch bound was defeated by are the fixtures here, since a wall budget
+     makes no per-launch extrapolation for them to defeat; - the fit's noise tolerance is a quarter
+     of the base batch's wall rather than a quarter of the target, so a slow candidate's slightly
+     superlinear first pair fits at once; - a resolved fit whose base is over the target but not its
+     first crossing projects to the crossing, rather than keeping a batch of any length; - before
+     refusing a candidate that measured no batch within the target, one rescue probe below its
+     shallowest over-target batch, and a refusal that stands carries a reason of its own.
+
+     The first threshold device, and the three below, are the fixtures. A 64 ms linear candidate is
+     the depth-1 settle every slow gpt2_mini step takes (gh-ocannl-834). A 61 ms one whose depth-2
+     batch is 3% superlinear is the pair the absolute 2.5 ms tolerance refused. A 16 ms one whose
+     depth-2 probe reads low sends its calibration doubling from an unresolved pair to a resolved
+     one between two over-target batches, depths 4 and 8. The clean fast kernel is the negative
+     control: a converging calibration's probes are target-sized, and the budget must not touch
+     them. *)
+  Stdio.printf "\n== calibration probes are wall-budgeted ==\n";
+  let device what ?(fixed_ms = 0.) ~launch_ms clean =
+    let c =
+      synthetic_call ~timing:Autotune.Queued ~cap:gpu_cap ~fixed_ms ~launch_ms
+        ~walls:(fun _nth d -> clean d)
+        ()
+    in
+    describe what c;
+    c
+  in
+  let linear_clean d = 64. *. Float.of_int d in
+  let linear = device "64 ms a launch" ~launch_ms:64. linear_clean in
+  let superlinear_clean d = (59. *. Float.of_int d) +. (2. *. Float.of_int (d * d)) in
+  let superlinear =
+    device "61 ms a launch, 3% superlinear at depth 2" ~launch_ms:61. superlinear_clean
+  in
+  let dip_clean d = 16. *. Float.of_int d in
+  let dip =
+    device "16 ms a launch, its depth-2 probe reading low" ~launch_ms:16. (fun d ->
+        if d = 2 then 15. else dip_clean d)
+  in
+  let converging =
+    device "fast, clean" ~fixed_ms:fast_fixed_ms ~launch_ms:fast_launch_ms (fun d ->
+        fast_fixed_ms +. fast_launch_work d)
+  in
+  (* Consecutive batches at one depth are one probe, as [(depth, batches, wall)]. A stall retry at
+     the confirmation depth merges with the confirmation it repeats, which can only hide a late
+     start, never invent one. *)
+  let probes c =
+    List.group c.probes ~break:(fun (d, _) (d', _) -> d <> d')
+    |> List.map ~f:(fun g -> (fst (List.hd_exn g), List.length g, List.sum (module Float) g ~f:snd))
+  in
+  let every_device =
+    [
+      ("slow, unresolved fits", slow);
+      ("every batch stalled", stalled);
+      ("queue threshold", threshold);
+      ("queue threshold above a fixed term", offset);
+      ("fast, stalled validation", fast);
+      ("64 ms a launch", linear);
+      ("61 ms a launch, superlinear", superlinear);
+      ("16 ms a launch, low depth-2 probe", dip);
+      ("fast, clean", converging);
+    ]
+  in
+  (* The last probe is exempt: it may be the rescue, which is charged to no budget because its depth
+     bounds its own wall. *)
+  Verdict.p_all
+    "no calibration probe but the last starts once the probes' wall has reached the budget"
+    every_device ~f:(fun (what, c) ->
+      let late =
+        List.fold
+          (Option.value ~default:[] (List.drop_last (probes c)))
+          ~init:(0., 0)
+          ~f:(fun (spent, late) (_, _, wall) ->
+            ( spent +. wall,
+              if Float.(spent >= Autotune.queue_calibration_wall_ms) then late + 1 else late ))
+        |> snd
+      in
+      if late > 0 then Stdio.eprintf "  %s: %d probes started past the budget\n%!" what late;
+      late = 0);
+  Verdict.p_all
+    "a converging calibration is untouched by the budgets: every probe takes all twelve minima"
+    (probes converging) ~f:(fun (depth, batches, _) ->
+      if batches % 12 <> 0 then
+        Stdio.eprintf "  fast, clean: depth %d took %d minima\n%!" depth batches;
+      batches % 12 = 0);
+  p "a converging calibration still reaches its affine target depth"
+    (converging.settled_depth = 1272);
+  (* gh-ocannl-834's depth-1 settle: sixteen singles, then the depth-2 confirmation, whose 128 ms
+     batches pass the per-probe budget at the second -- three minima rather than twelve, 6 launches
+     rather than 24. *)
+  p "a 64 ms candidate's depth-2 confirmation stops at three minima"
+    (linear.settled_depth = 1 && linear.fresh_launches = 0
+    && linear.calibration_launches = 16 + (3 * 2));
+  p "a slow candidate's superlinear first pair fits within the wall-relative tolerance"
+    (superlinear.settled_depth = 1
+    && List.equal Int.equal (List.map (probes superlinear) ~f:(fun (d, _, _) -> d)) [ 2 ]);
+  Verdict.p_all
+    "a resolved calibration never settles on a batch whose launch work exceeds the target"
+    [
+      ("64 ms a launch", linear, linear_clean);
+      ("61 ms a launch, superlinear", superlinear, superlinear_clean);
+      ("16 ms a launch, low depth-2 probe", dip, dip_clean);
+      ("fast, clean", converging, fast_launch_work);
+    ]
+    ~f:(fun (what, c, launch_work) ->
+      let ok =
+        c.settled_depth = 1 || Float.(launch_work c.settled_depth <= Autotune.queued_batch_ms)
+      in
+      if not ok then
+        Stdio.eprintf "  %s: depth %d carries %g ms of launch work\n%!" what c.settled_depth
+          (launch_work c.settled_depth);
+      ok);
+  p
+    "a kernel with a queue threshold below its provisional depth is rescued, timed within the \
+     target"
+    (threshold.settled_depth > 1
+    && Float.(threshold_clean threshold.settled_depth <= Autotune.queued_batch_ms)
+    && Option.is_some (Autotune.admitted_timing_ms threshold.reading));
+  p "a refusal no rescue could lift carries its own reason, not contention"
+    (stalled.reading.unbatched && not stalled.reading.contended)
 
 (* {1 The setting's spelling} *)
 
@@ -608,7 +764,7 @@ let () =
     let wall_ms = Mtime.Span.to_float_ns (Mtime_clock.count c0) /. 1e6 in
     {
       ms = result.ms;
-      contended = result.contended;
+      contended = result.contended || result.unbatched;
       samples = result.samples;
       wall_ms;
       dispatches = count () - before;

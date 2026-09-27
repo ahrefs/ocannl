@@ -600,15 +600,20 @@ type timing_result = {
           refusal signal: the window mostly measured host stalls, so the autotuner does not rank or
           cache the number (gh-ocannl-855). Dispersion only — a window whose minimum is non-positive
           or non-finite is a clock that resolved nothing, a separate fact that {!admitted_timing_ms}
-          refuses on the number itself (gh-ocannl-888). Also set when a CUDA/HIP queued calibration
-          measured no batch within its target for a candidate whose single launch owed it one
-          (gh-ocannl-1096): only an isolated depth-1 reading was left, and every batched probe read
-          over the target, which the readings cannot tell from a stall.
+          refuses on the number itself (gh-ocannl-888). Not set for {!field-unbatched}'s refusal,
+          which has its own reason (gh-ocannl-1098).
 
           Because they are separate, [not contended] is HALF a proof of usability: a consumer
           deciding whether to keep a number asks {!admitted_timing_ms}, never this field. Reading it
           directly is for saying something about contention itself — a diagnostic, a test that
           excuses a claim under host load. *)
+  unbatched : bool;
+      (** A CUDA/HIP queued calibration measured no batch within its target for a candidate whose
+          single launch owed it one (gh-ocannl-1096), even at the rescue probe below its shallowest
+          over-target batch (gh-ocannl-1098): only an isolated depth-1 reading was left, and the
+          readings cannot tell a stall from a queue threshold, so the reading is refused exactly as
+          a contended one is -- but under its own reason, so a report does not present it as host
+          load. A refusal like [contended]: {!admitted_timing_ms} admits neither. *)
   samples : int;
       (** The number of samples behind [ms] and [contended], for diagnostics and exact dispatch
           accounting. *)
@@ -656,7 +661,13 @@ type report = {
           retry when appropriate. Counts WINDOWS: a refused digest is dropped from the dedup set so
           an equivalent seed can retry it, so one candidate refused twice contributes two. Sound
           evidence for "was this search's measurement set complete?", and for nothing narrower — see
-          [candidates_contended] and [default_refused] for the per-candidate facts. *)
+          [candidates_contended] and [default_refused] for the per-candidate facts. Includes the
+          [timings_unbatched] windows. *)
+  timings_unbatched : int;
+      (** Of [timings_contended], the windows refused because queued calibration measured no batch
+          within its target ({!field-unbatched}, gh-ocannl-1098) rather than for host contention or
+          a degenerate clock. A kernel with a queue threshold the rescue probe could not get under
+          is refused on every search; this count is what tells that apart from a loaded host. *)
   candidates_contended : int;
       (** Distinct candidate digests whose timing window was refused and which no later equivalent
           seed managed to time — the population [timings_contended] over-counts (Codex P2 on PR
@@ -960,8 +971,8 @@ val no_search_report : timing:timing_mode -> report
       is the rule the stream keeps: every step that can block is named by a line written before it,
       so a killed search is inside the step its last line names.
     - [search_done] ({!tune}, exactly once per call, with its report): [routine], [elapsed_s],
-      [outcome] ({!outcome_name}), [timed], [contended], [failed], [rounds], [attempts],
-      [compile_s], [timing_s], [best_ms], [best].
+      [outcome] ({!outcome_name}), [timed], [contended], [unbatched], [failed], [rounds],
+      [attempts], [compile_s], [timing_s], [best_ms], [best].
     - [arm_start] / [arm_done] ({!Train.tune_placements}, around each arm's, flip's or replayed
       placement's search): [arm]; a flip's carry [flip=<k>/<budget>]; [arm_done] adds [result] ([ok]
       or [failed]), [best_ms] and [elapsed_s].
@@ -1264,6 +1275,13 @@ val queued_batch_ms : float
 (** The wall time, in milliseconds, one {!Queued} batch aims for (10 ms). Exposed so a test can
     state a batch-wall bound against the policy's own target rather than a copy of it. *)
 
+val queue_calibration_wall_ms : float
+(** The wall budget, in milliseconds, on one CUDA/HIP queued calibration's batch probes
+    (gh-ocannl-1098): eight target-sized twelve-minimum probes. Once the probes' summed wall reaches
+    it, no further validation, confirmation or retry starts and the calibration ends unresolved, for
+    the wall-bounded fallback to decide from what was measured; only the one rescue probe may
+    follow. Exposed so a test states the budget against the policy's own value. *)
+
 val queue_depth_cap_for_backend : string -> int
 (** Queue-memory bound selected by canonical backend name: 2048 for CUDA/HIP, and the historical 200
     for cc/Metal. Exposed with the neighboring pure calibration seams so the backend scoping of
@@ -1302,12 +1320,15 @@ val refine_queued_batch_depth : single_ms:float -> probe_depth:int -> probe_ms:f
 val refine_queued_batch_depth_between :
   base_depth:int -> base_ms:float -> probe_depth:int -> probe_ms:float -> int * float
 (** The same affine refinement between two batch observations. An already-target-sized [base_ms] is
-    retained only when the pair's inferred fixed component is below the target and no more than one
-    quarter-target negative (the noise tolerance matching the 25% confirmation step); this is the
-    depth-separated confirmation that keeps a shared fixed stall or a physically invalid fit from
-    selecting a shallow final depth while preserving legitimate submit/sync overhead. Otherwise an
-    unresolved pair requests a deeper retry and reports a [nan] wall. Exposed as the deterministic
-    validation-policy seam for tests. *)
+    retained only when the pair's inferred fixed component is below the target and no more negative
+    than a quarter of the larger of the target and [base_ms] (the noise tolerance matching the 25%
+    confirmation step, relative to the base's wall since gh-ocannl-1098 so that a slow candidate's
+    slightly superlinear pair still fits), and only when the base is the fit's first target
+    crossing; a resolved base further over the target projects to that crossing instead, shallower
+    than the base. This is the depth-separated confirmation that keeps a shared fixed stall or a
+    physically invalid fit from selecting a shallow final depth while preserving legitimate
+    submit/sync overhead. Otherwise an unresolved pair requests a deeper retry and reports a [nan]
+    wall. Exposed as the deterministic validation-policy seam for tests. *)
 
 val sample_min : repeats:int -> sample:(unit -> timing_sample) -> timing_result
 (** Pure sampling-policy seam used by calibration and the timed loop (gh-ocannl-855). Takes at least
@@ -1367,7 +1388,11 @@ val time_routine :
     that is above 1, a provisional queued probe separates fixed synchronization from marginal launch
     cost and selects the depth whose affine wall estimate reaches the target. The batch probes take
     the minimum of twelve runs: unlike ranked timing, they only choose scale and are already
-    milliseconds long. Up to four further probes validate the depth. The first target-sized batch is
+    milliseconds long. Since gh-ocannl-1098 both are wall-budgeted: a probe stops at three minima
+    once its own wall passes two target-sized probes', and once the probes' summed wall reaches
+    {!queue_calibration_wall_ms} no further probe starts and the calibration ends unresolved. Up to
+    four further probes validate the depth; a resolved crossing shallower than the batches it was
+    fitted from is sampled and checked like an interpolation. The first target-sized batch is
     confirmed at a 25% deeper depth (clamped to and measured at the cap) and retained only when the
     pair's inferred fixed component is below the target. A confirmation over 2x its supported base
     is retried once before an unresolved pair selects the cap. Such a no-verdict fallback is then
@@ -1376,27 +1401,29 @@ val time_routine :
     for any cost that grows with depth, since the readings that left the fits unresolved cannot tell
     a host stall from a queue threshold. So a slow candidate whose fits never resolve is timed at
     depth 1, not in 2048-launch batches, while a fast one whose deeper probes stalled still batches;
-    one that measured no batch within the target at all is refused as [contended] rather than timed
-    as an isolated depth-1 reading. An unresolved single/probe pair retries at double depth, and the
-    next affine fit uses the two batch observations so an inflated single window cannot force the
-    cap. If the bounded loop first reaches the target on its last probe, the interpolated target
-    depth is still sampled and checked against the measured overshoot. A non-monotone confirmation
-    scales from the deeper measured batch, never the earlier suspect crossing. When a clean pair's
-    fixed component already fills the target, its marginal slope selects a depth carrying ~10 ms of
-    launch work instead of accepting a shallow stalled window or jumping to the cap. After four
-    noisy but resolved underestimates, calibration keeps the latest affine projection rather than
-    jumping to a 20--30 ms cap batch that would blunt the 2x contention threshold. A CUDA/HIP
-    routine slower than the target is confirmed by a depth-2 probe, stays at depth 1, and is
-    measured identically in both modes. Whenever a queued call settles at depth 1 its timed window
-    resumes the calibration's synchronized singles ({!sample_window}'s [prior]) rather than timing a
-    fresh one (gh-ocannl-1074): at depth 1 they are samples of the very quantity the window
-    measures, taken under the same stopping rule, so the loop dispatches only what the caller's
-    [repeats] floor asks beyond the calibration's sixteen. The calibration always yields a depth;
-    the result of the timed loop reports when most of ITS samples were stalled, and the tuner
-    refuses such a candidate measurement rather than ranking and caching it (gh-ocannl-888). Since
-    the budget is per-launch rather than batch wall, queued timing can spend up to [max 64 repeats]
-    batches on a fast candidate; [max_timing_runs] bounds the top-up beyond the caller's requested
-    floor.
+    one that measured no batch within the target at all first takes one rescue probe below its
+    shallowest over-target batch, projected linearly to the target (gh-ocannl-1098) -- where a
+    queue-threshold or superlinear cost reads within the target -- and is refused as [unbatched]
+    only when that also reads over it, rather than timed as an isolated depth-1 reading. An
+    unresolved single/probe pair retries at double depth, and the next affine fit uses the two batch
+    observations so an inflated single window cannot force the cap. If the bounded loop first
+    reaches the target on its last probe, the interpolated target depth is still sampled and checked
+    against the measured overshoot. A non-monotone confirmation scales from the deeper measured
+    batch, never the earlier suspect crossing. When a clean pair's fixed component already fills the
+    target, its marginal slope selects a depth carrying ~10 ms of launch work instead of accepting a
+    shallow stalled window or jumping to the cap. After four noisy but resolved underestimates,
+    calibration keeps the latest affine projection rather than jumping to a 20--30 ms cap batch that
+    would blunt the 2x contention threshold. A CUDA/HIP routine slower than the target is confirmed
+    by a depth-2 probe, stays at depth 1, and is measured identically in both modes. Whenever a
+    queued call settles at depth 1 its timed window resumes the calibration's synchronized singles
+    ({!sample_window}'s [prior]) rather than timing a fresh one (gh-ocannl-1074): at depth 1 they
+    are samples of the very quantity the window measures, taken under the same stopping rule, so the
+    loop dispatches only what the caller's [repeats] floor asks beyond the calibration's sixteen.
+    The calibration always yields a depth; the result of the timed loop reports when most of ITS
+    samples were stalled, and the tuner refuses such a candidate measurement rather than ranking and
+    caching it (gh-ocannl-888). Since the budget is per-launch rather than batch wall, queued timing
+    can spend up to [max 64 repeats] batches on a fast candidate; [max_timing_runs] bounds the
+    top-up beyond the caller's requested floor.
 
     With [~tag_failures:true] the pre-dispatch validation, the launches and the synchronization are
     wrapped in their {!Ir.Schedule_outcome} phases, which is what lets a caller's
@@ -1404,10 +1431,11 @@ val time_routine :
     propagate raw. Timing dispatches the routine repeatedly against live buffers, so an accumulating
     routine must be timed on a scratch lineage (see [tune]'s [?timing_ctx]) if its inputs matter
     afterwards. [Queued] raises how many such dispatches happen. For [repeats <= 64], the maxima are
-    65 under [Isolated] and, under [Queued], 278593 on CUDA/HIP or 12865 on cc/Metal. The CUDA/HIP
-    bound includes warmup, 64 single-launch calibration runs, at most seven twelve-sample
-    calibration probes and 64 timed batches at the cap; cc/Metal have no batch probes. In general
-    the queued bounds are [65 + 2048 * (84 + max 64 repeats)] on CUDA/HIP and
+    65 under [Isolated] and, under [Queued], 352321 on CUDA/HIP or 12865 on cc/Metal. The CUDA/HIP
+    bound includes warmup, 64 single-launch calibration runs, at most nine twelve-sample calibration
+    probes (the provisional probe, four validations, a confirmation, its stall retry, a sampled
+    shallower crossing, and the rescue) and 64 timed batches at the cap; cc/Metal have no batch
+    probes. In general the queued bounds are [65 + 2048 * (108 + max 64 repeats)] on CUDA/HIP and
     [65 + 200 * max 64 repeats] on cc/Metal. Thus a routine whose values grow per run reaches larger
     ones. That is a fact about the scratch buffers, not about the measurement: the cap bounds each
     in-memory queue while the ~25 ms budget accumulates per-launch samples, and a candidate's time

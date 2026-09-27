@@ -695,8 +695,10 @@ files.
   up to four further batch probes; each short probe refits the affine model. The first probe that
   reaches the target is first interpolated back inside a measured below/above bracket when it
   overshoots, then confirmed at a 25% deeper depth (clamped to and measured at the cap) and retained
-  only when the pair's inferred fixed component is below the target and no more than one
-  quarter-target negative (the noise tolerance matching that confirmation step), so one fixed stall
+  only when the pair's inferred fixed component is below the target and no more negative than a
+  quarter of the larger of the target and the base's wall (the noise tolerance matching that
+  confirmation step; relative since gh-ocannl-1098, because the absolute 2.5 ms was under 1% of a
+  slow candidate's batch and its slightly superlinear pairs never fit), so one fixed stall
   or a physically invalid negative fit cannot select a shallow final depth while ordinary
   submit/sync overhead remains in the wall model. When a clean pair's fixed component alone fills
   the wall target, its positive marginal slope selects a depth carrying ~10 ms of launch work: the
@@ -705,24 +707,38 @@ files.
   is itself treated as a contention outlier and retried once before an unresolved pair selects the
   cap, so one transient stall cannot inflate both the timed batch and its later refusal threshold.
   **Every unresolved outcome is then wall-bounded** (gh-ocannl-1096): the cap bounds launches, not
-  wall, and a ~61 ms gfx1151 candidate whose slightly superlinear batches never fit (the 2.5 ms fit
-  tolerance is under 1% of a slow batch) was timed in 126 s batches, 2016 s for one call. A
+  wall, and a ~61 ms gfx1151 candidate whose slightly superlinear batches never fit was timed in
+  126 s batches, 2016 s for one call. A
   NaN-wall outcome of `calibrate_and_time` now settles no deeper than the deepest depth it MEASURED
   within the target (depth 1 when none): slow candidates fall back to the isolated reading, a fast
   one whose deeper probes stalled keeps its deepest clean batch, and one whose single launch owed
-  it a batch but that measured none within the target is REFUSED (`contended`), because its
-  depth-1 reading would be the isolated objective. A kernel with a genuine queue threshold below
-  its provisional depth is therefore refused on every search until calibration learns to probe
-  shallower (the probe-budget follow-up). Do not replace this with a bound
+  it a batch but that measured none within the target first takes ONE rescue probe at the
+  shallowest over-target batch projected linearly to the target (`rescue_depth` in
+  `autotune.ml`; any cost whose per-launch average does not fall with depth reads within the
+  target there, so a genuine queue threshold below the provisional depth is timed and cacheable),
+  and is REFUSED only if that also reads over — as `unbatched`, not `contended`, counted in
+  `report.timings_unbatched` (a subset of `timings_contended`, so every cache and completeness
+  gate is unchanged), because its depth-1 reading would be the isolated objective. Do not replace
+  this with a bound
   extrapolated through a per-launch cost (least `wall / depth`): the readings that leave the fits
   unresolved cannot tell a host stall from a cost that jumps past a queue threshold, and two review
   rounds on staging#846 each built a threshold device that defeated such a bound (400 and 600 ms
-  timed batches); monotonicity of wall in depth is the only premise that survives both. The
-  fallback bound does not bound the validation probes themselves: on a threshold device the
-  doubling retries spend minutes before reaching it. The objective is unchanged (the depth picks
-  the scale; an entry timed at the old fallback is an accurate, merely expensive, reading), so no
-  cache-key generation bump. `autotune_timing_modes` reproduces the minix call on the injected
-  clock to the launch (760 calibration + 16 x 2048).
+  timed batches); monotonicity of wall in depth is the only premise that survives both.
+  **The probes themselves are wall-budgeted** (gh-ocannl-1098), because the fallback bounds only
+  the settled depth: the doubling retries still spent 760 launches (~49 s) on an unresolved 64 ms
+  candidate and ~1600 s on a threshold device. A probe stops at three minima once its own wall
+  passes two target-sized probes' (a 64 ms step's depth-2 confirmation costs 3 batches, not 12),
+  and once the probes' summed wall reaches `Autotune.queue_calibration_wall_ms` (eight
+  target-sized probes) nothing but the rescue starts and the calibration ends unresolved. These are
+  WALL budgets, not per-launch bounds, so the staging#846 threshold devices have no extrapolation to
+  defeat; they are the regression fixtures. A converging calibration's probes are target-sized and
+  never reach either budget (pinned: the clean fast device still takes twelve minima per probe).
+  A resolved fit between two over-target batches projects to the fit's first target crossing and
+  samples it rather than keeping its base, which could be any length (a doubling that reached
+  depth 4 of a 64 ms kernel would keep 256 ms batches). None of this changes the objective (the depth picks the scale;
+  an entry timed at an older depth is an accurate, merely expensive, reading), so no cache-key
+  generation bump. `autotune_timing_modes` pins each change on the injected clock with a claim
+  that fails without it.
   An unresolved first pair retries at double depth, and the next fit uses the two batch observations so an
   inflated synchronized-single window cannot force the cap. If the last bounded probe first reaches
   the target, the interpolated target depth is still sampled and checked against the measured
