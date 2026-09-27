@@ -313,7 +313,13 @@ type synthetic_call = {
           batch before the depth decision but the synchronized singles, which are depth 1 while no
           probe is (gh-ocannl-1098). *)
   reading : Autotune.timing_result;
+  cap : int;
+  repeats : int;
 }
+
+(* Every synthetic call this file describes, as [(what, call)], for the dispatch bound checked over
+   all of them at the end of the budget section. *)
+let synthetic_calls : (string * synthetic_call) list ref = ref []
 
 let synthetic_call ?(repeats = 3) ?walls ~timing ~cap ~fixed_ms ~launch_ms () =
   let launches = ref 0 and batches = ref 0 and probes = ref [] and decided = ref None in
@@ -350,9 +356,12 @@ let synthetic_call ?(repeats = 3) ?walls ~timing ~cap ~fixed_ms ~launch_ms () =
         all_launches = !launches;
         probes = List.rev !probes;
         reading;
+        cap;
+        repeats;
       })
 
 let describe what c =
+  synthetic_calls := (what, c) :: !synthetic_calls;
   Stdio.eprintf
     "  (not part of the golden) %s: depth %d, %d calibration launches, window %d batches (%d \
      reused), %d fresh launches, %d in all, reading %g ms%s\n\
@@ -699,7 +708,24 @@ let () =
     && Float.(threshold_clean threshold.settled_depth <= Autotune.queued_batch_ms)
     && Option.is_some (Autotune.admitted_timing_ms threshold.reading));
   p "a refusal no rescue could lift carries its own reason, apart from the contention verdict"
-    (stalled.reading.unbatched && not stalled.reading.contended)
+    (stalled.reading.unbatched && not stalled.reading.contended);
+  (* [time_routine]'s documented queued maximum, over every synthetic device in this file: a warmup
+     and at most 64 synchronized singles, at most [queue_calibration_max_probes] probes of at most
+     [queue_batch_probe_runs] batches, and a timed window of at most [max 64 repeats] batches, every
+     batch at most the cap deep. [calibrate_and_time] dispatches no warmup, so the 65 is slack of
+     one. *)
+  let max_probe_batches = Autotune.queue_calibration_max_probes * Autotune.queue_batch_probe_runs in
+  Verdict.p_all "every synthetic device's dispatches stay within time_routine's documented maximum"
+    !synthetic_calls ~f:(fun (what, c) ->
+      let bound = 65 + (c.cap * (max_probe_batches + Int.max 64 c.repeats)) in
+      if c.all_launches > bound then
+        Stdio.eprintf "  %s: %d launches past the documented %d\n%!" what c.all_launches bound;
+      c.all_launches <= bound);
+  Stdio.eprintf
+    "  (not part of the golden) most dispatches of any synthetic device: %d, probes %d\n%!"
+    (List.fold !synthetic_calls ~init:0 ~f:(fun m (_, c) -> Int.max m c.all_launches))
+    (List.fold !synthetic_calls ~init:0 ~f:(fun m (_, c) ->
+         Int.max m (List.length (List.group c.probes ~break:(fun (d, _) (d', _) -> d <> d')))))
 
 (* {1 The setting's spelling} *)
 

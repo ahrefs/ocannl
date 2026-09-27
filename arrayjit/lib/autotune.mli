@@ -1287,6 +1287,17 @@ val queue_calibration_wall_ms : float
     the wall-bounded fallback to decide from what was measured; only the one rescue probe may
     follow. Exposed so a test states the budget against the policy's own value. *)
 
+val queue_batch_probe_runs : int
+(** The minima one queued calibration batch probe takes when its wall stays within twice the target
+    (12); an over-target probe may stop at three. Exposed so a dispatch bound is stated against the
+    policy's own count. *)
+
+val queue_calibration_max_probes : int
+(** The most batch probes one CUDA/HIP queued calibration dispatches (9): the provisional probe,
+    four validations, a confirmation, its stall retry, a sampled shallower crossing, and the rescue.
+    Enforced alongside {!queue_calibration_wall_ms}: once all but the last have started, only the
+    rescue may follow. Exposed so {!time_routine}'s dispatch maximum is stated against it. *)
+
 val queue_depth_cap_for_backend : string -> int
 (** Queue-memory bound selected by canonical backend name: 2048 for CUDA/HIP, and the historical 200
     for cc/Metal. Exposed with the neighboring pure calibration seams so the backend scoping of
@@ -1437,10 +1448,11 @@ val time_routine :
     routine must be timed on a scratch lineage (see [tune]'s [?timing_ctx]) if its inputs matter
     afterwards. [Queued] raises how many such dispatches happen. For [repeats <= 64], the maxima are
     65 under [Isolated] and, under [Queued], 352321 on CUDA/HIP or 12865 on cc/Metal. The CUDA/HIP
-    bound includes warmup, 64 single-launch calibration runs, at most nine twelve-sample calibration
-    probes (the provisional probe, four validations, a confirmation, its stall retry, a sampled
-    shallower crossing, and the rescue) and 64 timed batches at the cap; cc/Metal have no batch
-    probes. In general the queued bounds are [65 + 2048 * (108 + max 64 repeats)] on CUDA/HIP and
+    bound includes warmup, 64 single-launch calibration runs, at most
+    {!queue_calibration_max_probes} (nine) {!queue_batch_probe_runs}-sample calibration probes (the
+    provisional probe, four validations, a confirmation, its stall retry, a sampled shallower
+    crossing, and the rescue) and 64 timed batches at the cap; cc/Metal have no batch probes. In
+    general the queued bounds are [65 + 2048 * (108 + max 64 repeats)] on CUDA/HIP and
     [65 + 200 * max 64 repeats] on cc/Metal. Thus a routine whose values grow per run reaches larger
     ones. That is a fact about the scratch buffers, not about the measurement: the cap bounds each
     in-memory queue while the ~25 ms budget accumulates per-launch samples, and a candidate's time
