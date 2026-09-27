@@ -482,6 +482,13 @@ let queue_batch_probe_min_runs = 3
 let queue_batch_probe_wall_ms = 2. *. Float.of_int queue_batch_probe_runs *. queued_batch_ms
 let queue_calibration_wall_ms = 8. *. Float.of_int queue_batch_probe_runs *. queued_batch_ms
 
+(* The most batch probes one CUDA/HIP calibration dispatches: the provisional probe, four
+   validations, a confirmation, its stall retry and a sampled shallower crossing -- eight -- then
+   the rescue. The calibration's branches already stop there; the count is also enforced, as if the
+   wall budget were spent, so that [time_routine]'s documented dispatch maximum is a bound the code
+   keeps rather than a reading of its control flow. *)
+let queue_calibration_max_probes = 9
+
 (* The calibration policy itself, as a function of the estimate, so a test can pin it without a
    device: what [Queued] measures depends on it, and its two boundaries are the ones a regression
    would silently cross -- a depth stuck at 1 turns a queued search back into an isolated one, and
@@ -749,9 +756,14 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
   (* The probes' summed wall, against [queue_calibration_wall_ms]. Only finite positive readings are
      charged: a clock that resolved nothing spends no measurable wall, and must not end a probe on a
      NaN comparison. *)
-  let probe_wall_ms = ref 0. in
-  let probe_budget_spent () = Float.(!probe_wall_ms >= queue_calibration_wall_ms) in
+  let probe_wall_ms = ref 0. and probes_started = ref 0 in
+  (* The last of [queue_calibration_max_probes] is kept for the rescue, which checks no budget. *)
+  let probe_budget_spent () =
+    Float.(!probe_wall_ms >= queue_calibration_wall_ms)
+    || !probes_started >= queue_calibration_max_probes - 1
+  in
   let probe_batch depth =
+    Int.incr probes_started;
     let best_ms = ref Float.infinity and runs = ref 0 and wall_ms = ref 0. in
     while
       !runs < queue_batch_probe_runs
