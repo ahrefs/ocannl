@@ -58,6 +58,11 @@ packed-uniform, virtual counter: a heuristic cap materialized the node: true
 packed-uniform, virtual counter: preferred inline, the node is inlined at the reader: true
   packed-uniform, virtual counter, emitted read once inlined flops=3 (exact) bytes=4 (bound)
 packed-uniform, virtual counter: the Inline flip is modeled and prices the emitted read's ops per instantiation: true
+shared loop with a virtual sibling: a heuristic cap materialized the node: true
+  shared loop with a virtual sibling, Inline flip cost 60 (modeled)
+shared loop with a virtual sibling: preferred inline, the node is inlined at the reader: true
+  shared loop with a virtual sibling, emitted read once inlined flops=60 (exact) bytes=84 (exact)
+shared loop with a virtual sibling: the Inline flip is modeled and prices the emitted read's ops per instantiation: true
 footprint: the producer routine leaves the node virtual: true
 consumer of a footprint-scoped producer: a heuristic cap materialized the node: true
   consumer of a footprint-scoped producer, Inline flip cost 202 (modeled)

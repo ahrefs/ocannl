@@ -475,6 +475,31 @@ let () =
     (inline_flip_vs_emitted ~name:"packed-uniform, virtual counter" ~self:v ~reader:o
        ~materialized:[ wp; o ] ~mult:2 llc
       : LL.optimized);
+  (* A cap-materialized node sharing its captured loop with a virtual sibling it reads: for i: (P[i]
+     = 2 A[i]; for k < 20: R[i] += P[i] B[i][k]). The walk re-run stores only the priced node — the
+     sibling keeps the computation the routine's walk stored, so a read of R inlines one copy of P,
+     as the preferred-inline routine does (review round 3). *)
+  let ps = mk "Ps" and rs = mk "Rs" and a_s = mk "As2" and bs = mk ~dims:[| 4; 20 |] "Bs" in
+  let os = mk "os" in
+  let i = sym () and k = sym () and x = sym () in
+  let llc =
+    seq (zero rs)
+      (seq
+         (loop_n i 4
+            (seq
+               (set ps [| iter i |] (mul (get a_s [| iter i |]) (c 2.)))
+               (loop_n k 20
+                  (set rs
+                     [| iter i |]
+                     (add
+                        (get rs [| iter i |])
+                        (mul (get ps [| iter i |]) (get bs [| iter i; iter k |])))))))
+         (loop_n x 4 (set os [| iter x |] (get rs [| iter x |]))))
+  in
+  ignore
+    (inline_flip_vs_emitted ~name:"shared loop with a virtual sibling" ~self:rs ~reader:os
+       ~materialized:[ a_s; bs; os ] ~mult:1 llc
+      : LL.optimized);
   (* A consumer read twice per cell (the visit cap materializes it), reading an inherited virtual
      producer diagonally: by default the consumer's setter hosts the producer's footprint scratch.
      Once the consumer is inlined its setter is no longer a materialized one, the footprint decision

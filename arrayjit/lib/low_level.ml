@@ -2692,11 +2692,15 @@ let fresh_footprint_id =
     Int.incr c;
     !c
 
-let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
+let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope) ?only_store
     (optim_ctx : optimize_ctx) traced_store reverse_node_map static_indices
     ~(footprint_scoped : (Tn.t, Tn.provenance option) Hashtbl.t)
     ~(footprint_retracted : Tnode.t Hash_set.t) (llc : t) : t * Tnode.t Hash_set.t =
   let plc = optim_ctx.placements in
+  (* gh-ocannl-1011: a pricing re-walk ({!walked_computations}) stores only the node it prices;
+     every other node keeps the computation the routine's own walk stored, rather than gaining a
+     second copy of it. *)
+  let stores tn = match only_store with None -> true | Some self -> Tn.equal self tn in
   (* Every array read inside the inlined body of an INHERITED computation (present in the lineage
      table at routine entry — the snapshot above): cross-routine splicing introduces reads the raw
      analysis never saw, so the reconcile-time strict coverage verdicts apply exactly to these
@@ -3012,25 +3016,28 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
                  [check_and_store]/[inline_computation] filter the stored body to [k]'s own setters,
                  so the irrelevant sibling setters left un-rewritten here are dropped. *)
               List.iteri candidates ~f:(fun k tn ->
-                  let node : traced_array = get_node traced_store tn in
-                  let store_pf = List.fold (List.drop candidates k) ~init:process_for ~f:Set.add in
-                  let stored =
-                    (* gh-509 task 4: vector-store producers are stored raw, see
-                       [proc_contains_set_from_vec]. *)
-                    if proc_contains_set_from_vec tn body then For_loop { for_config with body }
-                    else
-                      For_loop
-                        {
-                          for_config with
-                          body =
-                            loop_proc ~process_for:store_pf ~owned:owned' ~in_storage_pass:true
-                              ~guarded ~in_scan ~enclosing:enclosing' body;
-                        }
-                  in
-                  (* The stored subtree is rooted AT this loop, so [enclosing] (not [enclosing']) is
-                     what it fails to contain. *)
-                  check_and_store_virtual optim_ctx ~guarded ~in_scan ~enclosing node static_indices
-                    stored);
+                  if stores tn then
+                    let node : traced_array = get_node traced_store tn in
+                    let store_pf =
+                      List.fold (List.drop candidates k) ~init:process_for ~f:Set.add
+                    in
+                    let stored =
+                      (* gh-509 task 4: vector-store producers are stored raw, see
+                         [proc_contains_set_from_vec]. *)
+                      if proc_contains_set_from_vec tn body then For_loop { for_config with body }
+                      else
+                        For_loop
+                          {
+                            for_config with
+                            body =
+                              loop_proc ~process_for:store_pf ~owned:owned' ~in_storage_pass:true
+                                ~guarded ~in_scan ~enclosing:enclosing' body;
+                          }
+                    in
+                    (* The stored subtree is rooted AT this loop, so [enclosing] (not [enclosing'])
+                       is what it fails to contain. *)
+                    check_and_store_virtual optim_ctx ~guarded ~in_scan ~enclosing node
+                      static_indices stored);
               (* Phase 2 -- emit. Candidates are NOT in [process_for], so surviving readers
                  (materialized siblings, and later virtual siblings, all now stored) inline the
                  provider; [owned'] still suppresses candidate auto-store; each candidate setter
@@ -3049,6 +3056,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           (not @@ Set.mem process_for tn)
           && (not @@ Set.mem owned tn)
           && (not @@ Tn.Placements.known_non_virtual plc traced.tn)
+          && stores tn
         then
           check_and_store_virtual optim_ctx ~guarded ~in_scan ~enclosing traced static_indices llc;
         llc
@@ -3080,6 +3088,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           (not @@ Set.mem process_for tn)
           && (not @@ Set.mem owned tn)
           && (not @@ Tn.Placements.known_non_virtual plc traced.tn)
+          && stores tn
         then
           check_and_store_virtual optim_ctx ~guarded ~in_scan ~enclosing traced static_indices
             result;
@@ -3110,6 +3119,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           (not @@ Set.mem process_for tn)
           && (not @@ Set.mem owned tn)
           && (not @@ Tn.Placements.known_non_virtual plc traced.tn)
+          && stores tn
         then
           (* gh-509 task 4: store the raw statement (argument not rewritten), see
              [proc_contains_set_from_vec]. The emitted statement remains [result]. *)
@@ -7913,12 +7923,13 @@ let rec writes_node (self : Tn.t) (c : t) =
    therefore never stored — obtained by running that walk ({!virtual_llc}) over the routine's raw
    statements writing [self], in a scratch world: copies of the lineage ([ctx]), of the placements
    as the routine's walk left them ([placements]) with [self] undecided, of the traced store and of
-   the footprint decisions. So the walk decides everything a flip to inlining changes about the
-   node's own computation — where it is captured, which refusals apply, the raw storage of a
-   packed-uniform producer, and a footprint read its setter no longer hosts retracting to inlining
-   or to the producer's materialization — and returns the scratch placements with the stored
-   computations, the world a read of the flipped node is instantiated in. [Error] carries the
-   store's rejection code. *)
+   the footprint decisions — storing only [self] ([~only_store]), so every other node keeps the
+   computation the routine's walk stored instead of gaining a second copy. So the walk decides
+   everything a flip to inlining changes about the node's own computation — where it is captured,
+   which refusals apply, the raw storage of a packed-uniform producer, and a footprint read its
+   setter no longer hosts retracting to inlining or to the producer's materialization — and returns
+   the scratch placements with the stored computations, the world a read of the flipped node is
+   instantiated in. [Error] carries the store's rejection code. *)
 let walked_computations ~(ctx : optimize_ctx) ~placements ~traced_store ~reverse_node_map
     ~footprint_scoped ~static_indices ~raw (self : Tn.t) :
     (Tn.Placements.t * (Indexing.axis_index array option * t) list, string) Result.t =
@@ -7931,8 +7942,8 @@ let walked_computations ~(ctx : optimize_ctx) ~placements ~traced_store ~reverse
       Hashtbl.remove scratch.computations self;
       try
         ignore
-          (virtual_llc ~fresh_symbol:pricing_symbol ~fresh_scope:pricing_scope scratch
-             (copy_traced_store traced_store) reverse_node_map static_indices
+          (virtual_llc ~fresh_symbol:pricing_symbol ~fresh_scope:pricing_scope ~only_store:self
+             scratch (copy_traced_store traced_store) reverse_node_map static_indices
              ~footprint_scoped:(Hashtbl.copy footprint_scoped)
              ~footprint_retracted:(Hash_set.create (module Tnode))
              (unflat_lines stmts)
