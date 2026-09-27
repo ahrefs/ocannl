@@ -151,7 +151,14 @@ batch_bounded() { # [-C dir] command...
     $SIG{HUP} = sub { $end->("TERM", 129) };
     alarm $left if $left > 0;
     waitpid($pid, 0);
-    exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
+    my $st = $?;
+    # A reader that left a background descendant behind has not finished:
+    # that descendant holds the worktree lock with no alarm over it, so the
+    # group goes too, whatever the leader answered (Codex review round 5).
+    $SIG{$_} = "IGNORE" for qw(ALRM INT TERM HUP);
+    alarm 0;
+    kill "KILL", -$pid;
+    exit(($st & 127) ? 128 + ($st & 127) : $st >> 8);
   ' "$left" "$dir" "$@" &
   batch_child=$!
   while :; do
@@ -222,9 +229,16 @@ batch_resolve() { # <dune> <log> <cap> dune-argv...
     fi
   fi
   if [ -z "$batch_unknown" ]; then
-    batch_bounded "$reach" "$@" >"$log.reach" 2>/dev/null
-    out=$(cat "$log.reach" 2>/dev/null)
+    if batch_bounded "$reach" "$@" >"$log.reach" 2>/dev/null; then
+      out=$(cat "$log.reach" 2>/dev/null)
+    else
+      # A failed read is not an answer, however complete what it printed
+      # looks (Codex review round 5 on PR #832).
+      batch_unknown="ocannl_slot_kind failed (exit $?)"
+    fi
     rm -f "$log.reach"
+  fi
+  if [ -z "$batch_unknown" ]; then
     while IFS= read -r line; do
       [ -z "$ended" ] || { batch_unknown="ocannl_slot_kind answered past its end: '$line'"; break; }
       case $line in

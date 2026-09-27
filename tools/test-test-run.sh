@@ -896,7 +896,9 @@ cat >"$batch_reach" <<'FAKE'
 [ -z "${FAKE_REACH_CALLS:-}" ] || printf '%s\n' "$*" >>"$FAKE_REACH_CALLS"
 [ -z "${FAKE_REACH_IGNORE_TERM:-}" ] || trap '' TERM INT HUP
 [ -z "${FAKE_REACH_SLEEP:-}" ] || sleep "$FAKE_REACH_SLEEP"
+[ -z "${FAKE_REACH_LEAVE:-}" ] || sleep "$FAKE_REACH_LEAVE" &
 printf '%b\n' "${FAKE_REACH:-end}"
+exit "${FAKE_REACH_EXIT:-0}"
 FAKE
 chmod +x "$batch_reader" "$batch_reach"
 export OCANNL_TOOL_READ_CONFIG=$batch_reader OCANNL_TOOL_SLOT_KIND=$batch_reach
@@ -2796,6 +2798,18 @@ if [ -z "$plan_stop_detail" ]; then
     grep -q "dune was not started" "$argv_dir/log" && [ "$(cat "$argv_dir/exit" 2>/dev/null)" = 142 ]; } ||
     plan_stop_detail="a hung reader: the log or the verdict does not say so: $(cat "$argv_dir/log" 2>/dev/null)"
 fi
+# A reader that exits leaving a background descendant behind does not leave it
+# holding the worktree lock: the runner reaps the reader's whole group
+# (Codex review round 5 on PR #832).
+if [ -z "$plan_stop_detail" ]; then
+  export FAKE_REACH_LEAVE=30
+  argv_runs=$TMP/argv-runs-plan-leave dxg_probe plan-leave "$dxg_present" cuda run build @cheap
+  unset FAKE_REACH_LEAVE
+  argv_runs=
+  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build -j 2 @cheap" ] &&
+    OCANNL_TOOL_TEST_RUNS=$TMP/argv-runs-plan-leave "$repeat_root/tools/test-run.sh" idle 2>/dev/null; } ||
+    plan_stop_detail="a reader's leftover descendant: exit $argv_rc; calls: ${argv_calls:-<none>}; or the worktree is not idle after the run"
+fi
 # A signal to the launcher alone -- not the terminal's group, not a stop --
 # ends the resolution at once: the reader is waited on in the background, so
 # the trap runs and ends it (Codex review round 2 on PR #832).
@@ -3608,6 +3622,13 @@ for probe in "garbled:garbled" "cut-short:names cc: it reaches x in y, which nam
   [ "$slot_calls" = "execution slot --wait 600 --gpu -- dune build @cheap" ] ||
     slot_detail="an unreadable reachability answer (${probe%%:*}): slot call: ${slot_calls:-<none>} (want --gpu)"
 done
+# A reachability read that fails is unread whatever it printed -- even a
+# complete, CPU-safe `end` (Codex review round 5 on PR #832).
+if [ -z "$slot_detail" ]; then
+  FAKE_REACH_EXIT=1 slot_probe slot-reach-failed hold cc cc run build @cheap
+  [ "$slot_calls" = "execution slot --wait 600 --gpu -- dune build @cheap" ] ||
+    slot_detail="a failed reachability read: slot call: ${slot_calls:-<none>} (want --gpu)"
+fi
 if [ -z "$slot_detail" ]; then
   slot_probe slot-argv-cpu-flag hold cc cc run build @cheap --ocannl_backend=cc
   [ "$slot_calls" = "execution slot --wait 600 --cpu -- dune build @cheap --ocannl_backend=cc" ] ||
