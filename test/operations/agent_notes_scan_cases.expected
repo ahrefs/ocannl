@@ -201,8 +201,12 @@ ok: guide -- two pointers on one line are each checked
 ok: guide -- a pointer inside an HTML comment is not read
 ok: guide -- a pointer at the second of two same-titled headings
 ok: guide -- a pointer at a third that does not exist
-ok: guide -- an escaped hash is still a pointer
-ok: guide -- an escaped hash naming a real heading
+ok: guide -- an escaped hash is refused
+ok: guide -- an escape inside the slug is refused
+ok: guide -- a comment splitting a pointer is refused
+ok: guide -- a Unicode slug is refused
+ok: guide -- a pointer with no slug is refused
+ok: guide -- plain mentions of a note are not pointers
 ok: unnamed rule -- a finding the list does not name survives the report, last
 ok: unnamed rule -- the census reports it, and not the named one beside it
 ok: unnamed rule -- a named finding leaves the census empty

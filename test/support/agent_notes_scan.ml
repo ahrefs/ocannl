@@ -1643,68 +1643,69 @@ let check_citations ~file contents =
 (* Rule 7: the agent guide's anchored pointers resolve *)
 (* ------------------------------------------------------------------ *)
 
-type pointer = { pointer_line : int; path : string; anchor : string }
-(** One [<path>.md#<anchor>] occurrence in the guide, as written: [path] includes the [.md]. *)
+type pointer = {
+  pointer_line : int;
+  path : string;  (** As written, including the [.md]. *)
+  anchor : string;  (** The slug after the [#], possibly empty. *)
+  canonical : bool;
+      (** Whether the pointer is written [<path>.md#<slug>] in one piece: a nonempty slug, and no
+          rendering hazard (see {!rendering_hazard}) right after the [.md] or right after the slug.
+      *)
+}
+(** One pointer-shaped occurrence in the guide: a path ending [.md] followed by [#], or by a
+    character that could render into one. *)
 
 let path_char c = Char.is_alphanum c || List.mem [ '_'; '-'; '.'; '/' ] c ~equal:Char.equal
 let anchor_char c = Char.is_alphanum c || Char.equal c '_' || Char.equal c '-'
 
-(** A line as it RENDERS, for the purpose of finding pointers in it: a backslash escaping ASCII
-    punctuation outside a code span is dropped, since a pointer whose hash or underscore is escaped
-    with a backslash displays as the pointer it spells (Codex P2, round 2 on
-    lukstafi/ocannl-staging#811); inside a code span a backslash is literal and stays. Each rendered
-    character keeps its position in the source line, so a caller can still ask the lexer about it.
-*)
-let rendered_line ~code line =
-  let n = String.length line in
-  let rec go i acc =
-    if i >= n then List.rev acc
-    else if
-      Char.equal line.[i] '\\'
-      && i + 1 < n
-      && Char.is_print line.[i + 1]
-      && (not (Char.is_alphanum line.[i + 1]))
-      && (not (Char.equal line.[i + 1] ' '))
-      && not (in_any_span code i)
-    then go (i + 2) ((line.[i + 1], i + 1) :: acc)
-    else go (i + 1) ((line.[i], i) :: acc)
-  in
-  go 0 []
+(** A byte that, standing where a pointer's [#] or the end of its slug would be, can make what a
+    reader sees differ from the source: an escape, an HTML comment or tag, an entity, a
+    percent-escape, or the start of a non-ASCII character. Emulating the renderer around these grew
+    one case per review round (an escaped hash, then a comment splitting the pointer, then a Unicode
+    slug -- Codex P2, rounds 2 and 3 on lukstafi/ocannl-staging#811), each a pointer the reader
+    silently failed to see. So they are not interpreted at all: a pointer written with one is
+    refused, loudly, with the one spelling that is read. *)
+let rendering_hazard c =
+  List.mem [ '\\'; '<'; '&'; '%' ] c ~equal:Char.equal || Char.to_int c >= 128
 
-(** Every [<path>.md#<anchor>] in [contents] that a reader sees, code spans and fenced blocks
+(** Every pointer-shaped occurrence in [contents] that a reader sees, code spans and fenced blocks
     included: a pointer set in backticks is still a pointer. One inside an HTML comment renders
     nowhere, so it is not read -- neither checked nor counted toward the live scan's floor (Codex
-    P2, round 1 on lukstafi/ocannl-staging#811). The text searched is {!rendered_line}'s, so an
-    escaped spelling is found as the pointer it displays. The path is the maximal run of path
-    characters before [.md#] and the anchor the maximal run of slug characters after it; a
-    placeholder such as [<note>.md#<slug>] has an empty one and is not a pointer. *)
+    P2, round 1 on lukstafi/ocannl-staging#811). The path is the maximal run of path characters
+    before [.md], and a placeholder such as [<note>.md#<slug>], whose path is empty, is not a
+    pointer. A [.md] followed by anything but [#] or a {!rendering_hazard} is a plain mention. *)
 let guide_pointers contents =
-  let scan = inert_by_line contents in
+  let comments = (inert_by_line contents).comment_ranges in
   List.concat_map (lines contents) ~f:(fun (lineno, line) ->
-      let hidden = spans_at scan.comment_ranges lineno in
-      let code =
-        List.filter (spans_at scan.ranges lineno) ~f:(fun r ->
-            not (List.mem hidden r ~equal:(fun (a, b) (c, d) -> a = c && b = d)))
-      in
-      let chars = rendered_line ~code line in
-      let text = String.of_list (List.map chars ~f:fst) in
-      let source = Array.of_list (List.map chars ~f:snd) in
-      let n = String.length text in
-      String.substr_index_all text ~may_overlap:false ~pattern:".md#"
-      |> List.filter ~f:(fun i -> not (in_any_span hidden source.(i)))
+      let n = String.length line in
+      let hidden = spans_at comments lineno in
+      String.substr_index_all line ~may_overlap:false ~pattern:".md"
+      |> List.filter ~f:(fun i -> not (in_any_span hidden i))
       |> List.filter_map ~f:(fun i ->
           let start = ref i in
-          while !start > 0 && path_char text.[!start - 1] do
+          while !start > 0 && path_char line.[!start - 1] do
             Int.decr start
           done;
-          let stop = ref (i + 4) in
-          while !stop < n && anchor_char text.[!stop] do
-            Int.incr stop
-          done;
-          let path = String.sub text ~pos:!start ~len:(i + 3 - !start) in
-          let anchor = String.sub text ~pos:(i + 4) ~len:(!stop - i - 4) in
-          if String.equal path ".md" || String.is_empty anchor then None
-          else Some { pointer_line = lineno; path; anchor }))
+          let path = String.sub line ~pos:!start ~len:(i + 3 - !start) in
+          let after = i + 3 in
+          if String.equal path ".md" || after >= n then None
+          else if Char.equal line.[after] '#' then (
+            let stop = ref (after + 1) in
+            while !stop < n && anchor_char line.[!stop] do
+              Int.incr stop
+            done;
+            let anchor = String.sub line ~pos:(after + 1) ~len:(!stop - after - 1) in
+            let hazard_after = !stop < n && rendering_hazard line.[!stop] in
+            Some
+              {
+                pointer_line = lineno;
+                path;
+                anchor;
+                canonical = (not (String.is_empty anchor)) && not hazard_after;
+              })
+          else if rendering_hazard line.[after] then
+            Some { pointer_line = lineno; path; anchor = ""; canonical = false }
+          else None))
 
 (** The notes file a guide pointer names, keyed as {!check_index} keys [files], or [None] when the
     path points outside the notes. A bare basename is a note, which is how the guide spells them; a
@@ -1734,6 +1735,14 @@ let check_guide ~guide_file ~guide_contents ~index_file ~index_contents
       in
       match pointer_target p.path with
       | None -> None
+      | Some _ when not p.canonical ->
+          report
+            (Printf.sprintf
+               "a pointer at %s written so that what renders may differ from the source (an \
+                escape, comment, tag, entity, percent-escape or non-ASCII byte at its # or right \
+                after its slug, or no slug at all): write it in one piece as <note>.md#<slug>, the \
+                one spelling this scan reads -- the notes' headings are ASCII"
+               p.path)
       | Some target -> (
           match List.Assoc.find known target ~equal:String.equal with
           | None ->

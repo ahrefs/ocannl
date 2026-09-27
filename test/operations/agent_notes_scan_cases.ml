@@ -878,12 +878,25 @@ let guide_cases =
     ( "a pointer at a third that does not exist",
       guide "- A rule; the mechanism: c.md#the-widget-seam-2.",
       [ "guide-anchors @ AGENTS.md:3" ] );
-    (* Escapes render away, so an escaped pointer is the pointer it displays -- and is checked. *)
-    ( "an escaped hash is still a pointer",
-      guide "- A rule; the mechanism: a.md\\#the-sprocket-seam.",
+    (* A spelling whose rendering could differ from its source is refused, not interpreted: an
+       escaped hash, a comment splitting the pointer, a Unicode slug -- valid target or not. *)
+    ( "an escaped hash is refused",
+      guide "- A rule; the mechanism: a.md\\#the-widget-seam.",
       [ "guide-anchors @ AGENTS.md:3" ] );
-    ( "an escaped hash naming a real heading",
-      guide "- A rule; the mechanism: a.md\\#the-widget\\-seam.",
+    ( "an escape inside the slug is refused",
+      guide "- A rule; the mechanism: a.md#the-widget\\-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a comment splitting a pointer is refused",
+      guide "- A rule; the mechanism: a.md<!-- old -->#the-widget-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a Unicode slug is refused",
+      guide "- A rule; the mechanism: a.md#\xe8\xae\xad\xe7\xbb\x83.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a pointer with no slug is refused",
+      guide "- A rule; the mechanism: a.md#.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "plain mentions of a note are not pointers",
+      guide "- See a.md, (a.md) and `a.md`; a [link](a.md) too.",
       [] );
   ]
 
