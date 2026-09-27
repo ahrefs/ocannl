@@ -402,7 +402,10 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   the three-instrument discipline (per-kernel profile 0.08–1.6%, untuned-default 0.2–0.7%, shipped
   tuned p50 2.6–19.1%) that a tuned-cell A/B on that box needs),
   [report-cifar-cuda.md](report-cifar-cuda.md) (Linux/CUDA, the cifar-scale conv baseline
-  for gh-ocannl-500/502 with a per-layer breakdown) and
+  for gh-ocannl-500/502 with a per-layer breakdown),
+  [report-gh1006-kernel-peak.md](report-gh1006-kernel-peak.md) (the `kernel %peak` column
+  populated on every backend, its no-value cases in place — a rendering exhibit on a smoke
+  fixture, not a measurement) and
   [report-gh537-metal.md](report-gh537-metal.md) (macOS/Metal, the paired before/after A/B of
   gh-ocannl-537's `Swap` ∘ `Split_reduce` seeding — the Metal leg of the CUDA measurement in
   `report-gh537-cuda.md`, replicating it),
