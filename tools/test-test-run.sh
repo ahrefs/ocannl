@@ -139,6 +139,21 @@
 #      file is recorded and the run launches as before.
 #  63. a commit landing between the HEAD read and the status is re-read: the
 #      record never pairs the older HEAD with the newer tree's status.
+#  64-65 sit after leg 36: promotion is offered only on a diff dune printed
+#      (gh-ocannl-1055).
+#  64. a rule whose action failed, its quoted stanza naming a `.corrected`
+#      file, digests as `action failed (no diff)` with its fingerprint, and is
+#      never sent to `dune promote`.
+#  65. a real diff hunk, plain or colored, still offers promotion; a green run
+#      offers neither. A run that chose its own diff command (patdiff's
+#      doubled headers still count; `-`, on the command line or in
+#      DUNE_DIFF_COMMAND, prints none) is told promotion is possible, never
+#      "no diff" -- unless the option sits past dune's own `--` -- whatever
+#      its log names (an inline-expect rule's names only its `.ml`). A log
+#      longer than the digest's scan window is never "nothing to promote",
+#      and a repeat set red on drift alone is not called a failed action.
+#  66 sits after leg 63: the digest's `source:` line reads the record -- the
+#      commit and `(clean)`, or `+ N uncommitted paths`; nothing unrecorded.
 
 set -u
 
@@ -150,6 +165,10 @@ harness_args "$@"
 # the fixture runs below must neither hold nor wait for one. The slot legs
 # name their fake fleet-worker.sh explicitly.
 export OCANNL_TOOL_FLEET_WORKER=none
+# Hermetic against the caller's dune presentation: a DUNE_DIFF_COMMAND in the
+# environment is recorded by every launch and changes what the digest may
+# conclude from a log (gh-ocannl-1055); the legs that want one set it.
+unset DUNE_DIFF_COMMAND
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC="$HERE/test-run.sh"
@@ -1571,6 +1590,48 @@ case $REPEAT_TEST_MODE in
     printf "dune: unknown option '--frobnicate'.\nUsage: dune build [OPTION]… [TARGET]…\nTry 'dune build --help' or 'dune --help' for more information.\n" >&2
     printf 'the program went on to print this and then failed\n'
     exit 1 ;;
+  # gh-ocannl-1055. A rule whose action failed before its diff ran: dune
+  # quotes the stanza -- naming the `.corrected` file its `diff?` would read --
+  # over the runner's own error, verbatim from the reported run (plus an
+  # `.expected` stanza line and a test's `--- ` banner that no `+++ ` follows).
+  action_no_diff)
+    printf 'File "test/einsum/dune", lines 197-217, characters 0-458:\n197 | (rule\n198 |  (alias runtest-surjectivity)\n.....\n215 |     -diff-cmd\n216 |     -)\n217 |    (diff? surjectivity.ml surjectivity.ml.corrected))))\n' >&2
+    printf 'File "test/operations/fixture.expected", line 1, characters 0-0:\n--- stage 2 ---\nnot a diff\n' >&2
+    printf 'ppx_inline_test error: the following -only-test flags matched nothing: surjectivty.ml.\n' >&2
+    exit 1 ;;
+  # A golden mismatch as dune prints it (git diff), plain and colored.
+  diff_hunk | diff_hunk_color)
+    if [ "$REPEAT_TEST_MODE" = diff_hunk_color ]; then b=$(printf '\033[1m') r=$(printf '\033[0m')
+    else b= r=; fi
+    printf 'File "test/operations/fixture.expected", line 1, characters 0-0:\n' >&2
+    printf '%sdiff --git a/_build/default/test/operations/fixture.expected b/_build/default/test/operations/fixture.exe.output%s\n' "$b" "$r" >&2
+    printf '%s--- a/_build/default/test/operations/fixture.expected%s\n' "$b" "$r" >&2
+    printf '%s+++ b/_build/default/test/operations/fixture.exe.output%s\n' "$b" "$r" >&2
+    printf '@@ -1 +1 @@\n-old line\n+new line\n' >&2
+    exit 1 ;;
+  # The same mismatch through `--diff-command patdiff` (its doubled headers),
+  # and through `--diff-command -`, which prints the location and no diff.
+  patdiff_hunk)
+    printf 'File "test/operations/fixture.expected", line 1, characters 0-0:\n' >&2
+    printf -- '------ _build/default/test/operations/fixture.expected\n' >&2
+    printf '++++++ _build/default/test/operations/fixture.exe.output\n' >&2
+    printf '@|-1,1 +1,1 ====\n-|old line\n+|new line\n' >&2
+    exit 1 ;;
+  diff_suppressed)
+    printf 'File "test/operations/fixture.expected", line 1, characters 0-0:\n' >&2
+    exit 1 ;;
+  # An inline-expect rule's mismatch under `--diff-command -`: the remaining
+  # location names the `.ml` source, no `.expected` or `.corrected` at all.
+  inline_suppressed)
+    printf 'File "test/einsum/surjectivity.ml", line 12, characters 0-1:\n' >&2
+    exit 1 ;;
+  # A real hunk followed by more output than the digest's 10MB scan window.
+  diff_then_noise)
+    printf -- '--- a/_build/default/test/operations/fixture.expected\n' >&2
+    printf '+++ b/_build/default/test/operations/fixture.exe.output\n' >&2
+    printf '@@ -1 +1 @@\n-old line\n+new line\n' >&2
+    yes 'noise from a parallel action' | head -c 10500000
+    exit 1 ;;
   *) echo "unknown repeat fixture mode: $REPEAT_TEST_MODE" >&2; exit 92 ;;
 esac
 EOF
@@ -2729,6 +2790,116 @@ else
   report 1 "$red_label" "$red_detail"
 fi
 
+# Legs 64-65 (gh-ocannl-1055): promotion is offered only on a diff dune printed.
+# A rule whose action failed names its `.corrected` file in the quoted stanza,
+# and the digest used to send that reader to `dune promote`; it must instead say
+# the action failed with no diff, and still show the fingerprint. The other
+# half: a real hunk, plain or colored, is still promotion -- and a green run is
+# neither.
+nodiff_label="a failed action with no diff hunk is 'action failed (no diff)', never promotion"
+argv_mode=action_no_diff argv_probe nodiff-action run build @cheap
+nodiff_detail=
+[ "$argv_rc" = 1 ] || nodiff_detail="run exited $argv_rc (want 1)"
+[ -n "$nodiff_detail" ] || case $argv_out in
+  *"verdict: FAIL (exit 1)"*"action failed (no diff)"*) ;;
+  *) nodiff_detail="no 'action failed (no diff)' under a FAIL verdict" ;;
+esac
+[ -n "$nodiff_detail" ] || case $argv_out in
+  *"promotion diffs present"*) nodiff_detail="promotion offered without a diff" ;;
+esac
+[ -n "$nodiff_detail" ] || case $argv_out in
+  *"fingerprint:"*'File "test/einsum/dune", lines 197-217'*) ;;
+  *) nodiff_detail="the stanza's location is not fingerprinted" ;;
+esac
+if [ -z "$nodiff_detail" ]; then
+  report 0 "$nodiff_label"
+else
+  report 1 "$nodiff_label" "$nodiff_detail; stdout: $argv_out"
+fi
+hunk_label="a printed diff hunk, plain or colored, is still promotion; a green run is neither"
+hunk_detail=
+for mode in diff_hunk diff_hunk_color stable; do
+  argv_mode=$mode argv_probe "hunk-$mode" run build @cheap
+  case $mode:$argv_rc:$argv_out in
+    stable:0:*"promotion diffs present"* | stable:0:*"no diff)"*)
+      hunk_detail="$mode: a green run was told about promotion" ;;
+    stable:0:*) ;;
+    diff_hunk*:1:*"action failed (no diff)"*)
+      hunk_detail="$mode: a diff read as no diff" ;;
+    diff_hunk*:1:*"promotion diffs present"*) ;;
+    *) hunk_detail="$mode: exit $argv_rc; no promotion line" ;;
+  esac
+  [ -z "$hunk_detail" ] || { hunk_detail="$hunk_detail; stdout: $argv_out"; break; }
+done
+argv_mode=
+if [ -z "$hunk_detail" ]; then
+  report 0 "$hunk_label"
+else
+  report 1 "$hunk_label" "$hunk_detail"
+fi
+# A run that chose its own diff presentation: patdiff's doubled headers are
+# still a hunk; `--diff-command -` (or DUNE_DIFF_COMMAND=- at launch) prints
+# none for a real promotion, and the digest says promotion is POSSIBLE rather
+# than "no diff" -- which the same log without the choice does say.
+custom_label="a run that chose its own diff command is never told 'no diff' over a pending promotion"
+custom_detail=
+for probe in "patdiff_hunk|present|build --diff-command patdiff @cheap" \
+             "diff_suppressed|possible|build --diff-command - @cheap" \
+             "diff_suppressed|possible|build --diff-command=- @cheap" \
+             "diff_suppressed|possible|build --diff - @cheap" \
+             "diff_suppressed|env|build @cheap" \
+             "diff_suppressed|nodiff|build @cheap" \
+             "inline_suppressed|possible|build --diff-command - @cheap" \
+             "action_no_diff|possible|build --diff-command - @cheap" \
+             "diff_suppressed|nodiff|exec ./prog.exe -- --diff-command -"; do
+  mode=${probe%%|*}; rest=${probe#*|}; want=${rest%%|*}
+  if [ "$want" = env ]; then export DUNE_DIFF_COMMAND=-; want=possible; fi
+  # shellcheck disable=SC2086
+  argv_mode=$mode argv_probe "custom-$mode-$want" run ${rest#*|}
+  unset DUNE_DIFF_COMMAND
+  case $want:$argv_out in
+    present:*"promotion diffs present"*) ;;
+    possible:*"promotion diffs possible"*) ;;
+    nodiff:*"action failed (no diff)"*) ;;
+    *) custom_detail="$mode (${rest#*|}): want $want: $argv_out"; break ;;
+  esac
+  case $want:$argv_out in
+    possible:*"no diff)"* | present:*"no diff)"*)
+      custom_detail="$mode (${rest#*|}): also said no diff: $argv_out"; break ;;
+  esac
+done
+argv_mode=
+if [ -z "$custom_detail" ]; then
+  report 0 "$custom_label"
+else
+  report 1 "$custom_label" "$custom_detail"
+fi
+# A log longer than the digest's scan window may hold a hunk above it: the
+# digest must say it did not look there, never "nothing to promote".
+argv_mode=diff_then_noise argv_probe noise-hunk run build @cheap
+argv_mode=
+noise_label="a log past the scanned tail is never told 'nothing to promote'"
+if [ "$argv_rc" = 1 ] \
+   && case $argv_out in *"the log is longer"*) true ;; *) false ;; esac \
+   && case $argv_out in *"(no diff)"* | *"nothing to promote;"*) false ;; *) true ;; esac; then
+  report 0 "$noise_label"
+else
+  report 1 "$noise_label" "exit $argv_rc: $(printf '%s' "$argv_out" | head -c 2000)"
+fi
+# A repeat set's red can be drift between iterations that each passed: its
+# digest must not blame a failed action.
+repeat_probe repeat-drift-nodiff stdout 2 build @cheap
+argv_runs=$TMP/repeat-runs-repeat-drift-nodiff argv_probe repeat-drift-nodiff-wait wait last
+argv_runs=
+drift_label="a repeat set's drift is not called a failed action"
+if [ "$repeat_rc" = 1 ] && [ "$argv_rc" = 1 ] \
+   && case $argv_out in *"verdict: FAIL"*) true ;; *) false ;; esac \
+   && case $repeat_out$argv_out in *"no diff)"*) false ;; *) true ;; esac; then
+  report 0 "$drift_label"
+else
+  report 1 "$drift_label" "repeat exit $repeat_rc: $repeat_out; wait exit $argv_rc: $argv_out"
+fi
+
 # The guard from leg 26 is not made redundant by the digest: it knows the
 # correct order and refuses without spawning dune. With a fixture that WOULD
 # refuse, the guard's refusal is the one that arrives, and the calls file --
@@ -3060,7 +3231,7 @@ else report 1 'lifecycle: every launch and recovery leaves the source tree byte-
 lifecycle_cleanup
 
 # ---------------------------------------------------------------------------
-# Legs 59-63: the source a run tested, recorded at launch (gh-ocannl-992)
+# Legs 59-63 and 66: the source a run tested, recorded at launch (gh-ocannl-992)
 # ---------------------------------------------------------------------------
 # A fixture checkout of the staged script, committed, then launched clean and
 # dirty; the lifecycle fixture's fake dune does the running. Git's system and
@@ -3103,6 +3274,7 @@ else
 
   # Leg 59: a clean checkout records its HEAD and an EMPTY dirty record.
   ck_launch "$ck_root"
+  ck_clean_out=$(cat "$TMP/checkout.out")
   if [ "$ck_rc" = 0 ] && [ -n "$ck_dir" ] \
      && [ "$(cat "$ck_dir/head" 2>/dev/null)" = "$ck_head" ] \
      && [ -f "$ck_dir/dirty" ] && [ ! -s "$ck_dir/dirty" ]; then
@@ -3124,6 +3296,7 @@ else
   case $ck_index in /*) ;; *) ck_index=$ck_root/$ck_index ;; esac
   ck_index_before=$(cksum <"$ck_index")
   ck_launch "$ck_root"
+  ck_dirty_out=$(cat "$TMP/checkout.out")
   if [ "$ck_rc" = 0 ] && [ "$(cat "$ck_dir/head" 2>/dev/null)" = "$ck_head" ] \
      && grep -Fqx ' M NOTES' "$ck_dir/dirty" && grep -Fqx '?? new_test.ml' "$ck_dir/dirty" \
      && [ "$(wc -l <"$ck_dir/dirty" | tr -d ' ')" = 2 ]; then
@@ -3165,6 +3338,7 @@ else
     ck_detail="outside Git: exit $life_rc; $(ls "$life_run" 2>&1 | tr '\n' ' ')"
   ck_stage "$ck_root/nested"
   ck_launch "$ck_root/nested"
+  ck_nested_out=$(cat "$TMP/checkout.out")
   { [ "$ck_rc" = 0 ] && [ -n "$ck_dir" ] && [ ! -e "$ck_dir/head" ] && [ ! -e "$ck_dir/dirty" ]; } ||
     ck_detail="$ck_detail${ck_detail:+; }below the top level: exit $ck_rc; $(ls "$ck_dir" 2>&1 | tr '\n' ' ')"
   if [ -z "$ck_detail" ]; then
@@ -3201,6 +3375,23 @@ EOF
   else
     report 1 'checkout: a commit landing mid-record is re-read, never paired with the older HEAD' \
       "exit $ck_rc; raced: $([ -e "$TMP/checkout-raced" ] && echo yes || echo no); head $(cat "$ck_dir/head" 2>&1) (want $ck_raced_head, was $ck_head)"
+  fi
+
+  # Leg 66: the digest quotes the record as its `source:` line, so evidence
+  # pasted from it carries the revision: the commit and `(clean)` for leg 59's
+  # launch, `+ 2 uncommitted paths` for leg 60's, and no line at all for leg
+  # 62's copy below the top level, which recorded nothing.
+  ck_detail=
+  grep -Fqx "source:  $ck_head (clean)" <<<"$ck_clean_out" ||
+    ck_detail="clean: $ck_clean_out"
+  grep -Fqx "source:  $ck_head + 2 uncommitted paths" <<<"$ck_dirty_out" ||
+    ck_detail="$ck_detail${ck_detail:+; }dirty: $ck_dirty_out"
+  { [ -n "$ck_nested_out" ] && ! grep -q '^source:' <<<"$ck_nested_out"; } ||
+    ck_detail="$ck_detail${ck_detail:+; }unrecorded: ${ck_nested_out:-<no digest>}"
+  if [ -z "$ck_detail" ]; then
+    report 0 "checkout: the digest's source line names the commit and the uncommitted count"
+  else
+    report 1 "checkout: the digest's source line names the commit and the uncommitted count" "$ck_detail"
   fi
   lifecycle_cleanup
 fi
