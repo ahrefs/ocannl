@@ -3174,6 +3174,13 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
     Printf.sprintf "attempts=%d compile_s=%.1f timing_s=%.1f" !progress_attempts !progress_compile_s
       !progress_timing_s
   in
+  (* A line BEFORE every step outside the candidates that can block for long -- the base compile, a
+     cache replay, the baseline's timing window, the seed enumeration's lowerings, the winner's
+     recompile, an untuned fallback -- for the same reason a candidate's line precedes it: a search
+     killed inside the step is inside the one its last line names. *)
+  let progress_stage stage =
+    progress_line "stage" (Printf.sprintf "stage=%s %s" stage (progress_costs ()))
+  in
   let timed_into acc f =
     let c = Mtime_clock.counter () in
     Exn.protect ~f ~finally:(fun () -> acc := !acc +. seconds_since c)
@@ -3252,6 +3259,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
      reports the phase it carries. [Context.compile] is exactly this plus [raise_failure], which is
      what [raise_pre_search] ends with, so the caller sees the same exception either way. *)
   let compile_untuned_default ?base () =
+    progress_stage "untuned_default_compile";
     match
       Context.compile_outcome ?name ~provenance:Ir.Schedule_outcome.User_schedule ctx comp bindings
     with
@@ -3334,6 +3342,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
        default?" reference by [report.default_ms] — the [config_thresholds] seed's measurement, not
        a new baseline. *)
     let base_capture = ref None in
+    progress_stage "base_compile";
     let base_outcome =
       Context.compile_outcome ?name
         ~lowered_transform:(fun opt ->
@@ -3470,6 +3479,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                        })
               | None -> Whole (W_saved entry.SC.saved)
             in
+            progress_stage "cache_replay";
             match compile_spec_real Outcome.Cache_replay spec with
             | Ok c when not (dispatchable ~is_gpu c.all_opts) ->
                 (* An entry written before the gh-ocannl-532 rule can name the serial baseline as
@@ -3678,6 +3688,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                    and never reaches it (gh-ocannl-569). *)
                 Outcome.tag Outcome.Preflight (fun () ->
                     Context.check_lineage_runnable b.cctx b.routine);
+                progress_stage "baseline_timing";
                 time_routine ~tag_failures:true ~timing ~repeats b.cctx b.routine
               with
               | timing_result -> (
@@ -3996,6 +4007,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
            which for a link failure is simply wrong. The exception the caller sees is unchanged:
            [emit_partial_and_raise] ends in [raise_failure], exactly as [Context.compile] does. *)
         let untuned_default_or_raise () =
+          progress_stage "untuned_default_compile";
           match
             Context.compile_outcome ?name ~provenance:Ir.Schedule_outcome.User_schedule ctx comp
               bindings
@@ -4007,6 +4019,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                 (Outcome.fatal_of_classified ~candidate:"untuned default fallback" classified)
         in
         let search () =
+          progress_stage "seed_enumeration";
           (* gh-ocannl-521: tensorized candidates are counted where they are TIMED, not where they
              are enumerated — a family can be seeded in bulk and rejected in bulk at candidate
              compile, and the enumerated count alone reads as coverage it does not have. Both
@@ -4727,7 +4740,10 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
              program yet a separately-run untuned process measures faster (PR #140 round 6: same
              digest, 3.4x runtime difference across processes on cuda). *)
           (if Lazy.force log_enabled then
-             match Context.compile ?name search_ctx comp bindings with
+             match
+               progress_stage "untuned_control";
+               Context.compile ?name search_ctx comp bindings
+             with
              | cctx, croutine ->
                  (match time_routine ~timing ~repeats cctx croutine with
                  | timing_result -> (
@@ -4822,6 +4838,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                    schedule — so the whole beam goes before the compile that reproduces it
                    (gh-ocannl-550). *)
                 release_all_candidates ~keep:[] ();
+                progress_stage "winner_compile";
                 match compile_spec_real Outcome.Candidate spec with
                 | Ok c when not (dispatchable ~is_gpu c.all_opts) ->
                     (* Completes the invariant rather than fixing an observed bug: the winner was

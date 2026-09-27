@@ -148,6 +148,12 @@ let () =
   p_all "each search printed one candidate line per attempt it reports" searches ~f:(fun s ->
       let _, done_fields = List.last_exn s in
       Option.equal Int.equal (int_field done_fields "attempts") (Some (List.length (candidates s))));
+  (* Every step that can block is named by a line written before it: the first thing a search does
+     is its base compile. *)
+  p_all "each search names its base compile before starting it" searches ~f:(function
+    | _ :: (ev, f) :: _ ->
+        String.equal ev "stage" && Option.equal String.equal (field f "stage") (Some "base_compile")
+    | _ -> false);
   p_all "every candidate line names the attempt it starts" (List.concat_map searches ~f:candidates)
     ~f:(fun (_, f) -> Option.exists (field f "attempt") ~f:(Fn.non String.is_empty));
   p_all "each search's candidate compile and timing seconds fit within its elapsed time" dones
@@ -188,6 +194,17 @@ let () =
   p_all "every arm_done says whether its arm succeeded" arm_dones ~f:(fun (_, f) ->
       List.mem [ "ok"; "failed" ] (Option.value (field f "result") ~default:"") ~equal:String.equal);
   let flip_arms = List.filter arm_starts ~f:(fun (_, f) -> Option.is_some (field f "flip")) in
+  p "the flip surface's lowering is named before the refinement starts"
+    (let rec before = function
+       | (ev, f) :: (ev', _) :: _
+         when String.equal ev "stage"
+              && Option.equal String.equal (field f "stage") (Some "flip_surface")
+              && String.equal ev' "flips_start" ->
+           true
+       | _ :: rest -> before rest
+       | [] -> false
+     in
+     before events);
   p "the flip refinement is framed by one flips_start and one flips_done"
     (List.length (named "flips_start") = 1 && List.length (named "flips_done") = 1);
   p "flips_done's measured count equals the flip searches' arm_start lines"

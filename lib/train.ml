@@ -1117,7 +1117,10 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
     logf "placement store bypassed (tune_placement_store=false): the arms are compared afresh";
   let store =
     if forced || (not placement_store) || String.is_empty cache_dir then None
-    else
+    else (
+      (* gh-ocannl-1061: the store's problem is a lowering, and a replay check another -- steps that
+         can block, so a line names them first, as {!Autotune.tune} does its own. *)
+      Autotune.progressf "event=stage stage=placement_store";
       match
         let problem = placement_problem ?name ?timing_ctx ctx loss comp bindings in
         if SC.complete problem then
@@ -1132,7 +1135,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
       | store -> store
       | exception exn when not (must_propagate exn) ->
           logf "placement store not consulted: %s" (Exn.to_string exn);
-          None
+          None)
   in
   (* A decision as the three lists the context API takes ({!placement_decision_lists}); the context
      it yields; and, at replay, the lowering it produces in the search lineage, whose
@@ -1479,6 +1482,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
       let surface =
         (* Outside the tuner's failure containment; a lowering failure (the A/B searches above can
            still have crowned a winner) must skip the refinement, not fail the tune. *)
+        Autotune.progressf "event=stage stage=flip_surface";
         match Autotune.placement_surface ?name ~evidence ctx comp bindings with
         | s -> Some s
         (* This containment is for a lowering that declined, and for nothing else. A malformed

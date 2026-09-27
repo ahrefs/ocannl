@@ -4,11 +4,13 @@ wall_s never decreases from one line to the next: true
 one search_start and one search_done per report: true
 each search_done names its report's outcome and timed count: true
 each search printed one candidate line per attempt it reports: true
+each search names its base compile before starting it: true
 every candidate line names the attempt it starts: true
 each search's candidate compile and timing seconds fit within its elapsed time: true
 a beam round ran: true
 each phase's candidate lines count 1..N against its announced total N: true
 one arm_start and one arm_done per report: true
 every arm_done says whether its arm succeeded: true
+the flip surface's lowering is named before the refinement starts: true
 the flip refinement is framed by one flips_start and one flips_done: true
 flips_done's measured count equals the flip searches' arm_start lines: true

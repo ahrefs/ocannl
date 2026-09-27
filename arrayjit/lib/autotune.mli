@@ -933,6 +933,14 @@ val no_search_report : timing:timing_mode -> report
       inside the one its last [candidate] line names. The rate is bounded by the attempts
       themselves, not by a clock: a time bound would leave a window in which the candidate being
       worked on is unnamed.
+    - [stage] ({!tune}): [routine], [elapsed_s], [stage], [attempts], [compile_s], [timing_s],
+      written BEFORE each step outside the candidates that can block for long: [base_compile],
+      [cache_replay], [baseline_timing], [seed_enumeration] (the lowerings the seeds are derived
+      from), [winner_compile], [untuned_default_compile], [untuned_control] (under [autotune_log]
+      only). From {!Train.tune_placements}, [stage] alone: [placement_store] (the decision problem's
+      lowering and replay check) and [flip_surface]. Together with [candidate] and [arm_start] this
+      is the rule the stream keeps: every step that can block is named by a line written before it,
+      so a killed search is inside the step its last line names.
     - [search_done] ({!tune}, exactly once per call, with its report): [routine], [elapsed_s],
       [outcome] ({!outcome_name}), [timed], [contended], [failed], [rounds], [attempts],
       [compile_s], [timing_s], [best_ms], [best].
