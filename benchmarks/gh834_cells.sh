@@ -6,7 +6,8 @@
 #   benchmarks/gh834_cells.sh BACKEND OUT FIXTURE CAP STEP...
 #
 #   BACKEND  cc | hip | cuda | metal, pinned on every command line (out-ranks every other source).
-#   OUT      results directory, created. OUT/driver.log records everything this script prints
+#   OUT      results directory, created, and refused unless empty. OUT/driver.log records everything
+#            this script prints
 #            (provenance, the device state around each step, each step's exit and wall); each
 #            measurement step also writes OUT/<step>.out and OUT/<step>.err.
 #   FIXTURE  absolute path of a gpt2_mini.safetensors (only the session steps read it).
@@ -14,8 +15,11 @@
 #            whole process group is terminated (exit 124) and its trace lines stand
 #            as a lower bound.
 #   STEP     build | provenance | crown-fwd | crown-rev | session-isolated | session-queued
-#            A measurement step needs `build` earlier in the same invocation: _build/ is ignored, so
-#            the clean-tree check cannot vouch for binaries an earlier checkout left there.
+#            A measurement step needs `build` and `provenance` earlier in the same invocation:
+#            _build/ is ignored, so the clean-tree check cannot vouch for binaries an earlier checkout
+#            left there, and a measurement is only evidence beside the identity it was taken on.
+# Exit: 0 all steps complete; 1 a step failed or lacked its evidence; 124 no failure but a step
+# hit CAP (its record is a lower bound); 125 a process outlived its step; 130 interrupted; 2 usage.
 #
 # crown-{fwd,rev}: gh-ocannl-833's instrument, bin/projection_shape_bench.exe 200 8 d <order>
 #   seeds -- the out-projection sites (group d), every seeded candidate ranked by the batched
@@ -35,6 +39,13 @@ while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(BENCH_[A-Z0-9_]*\)=.
 backend=$1 out=$2 fixture=$3 cap=$4
 shift 4
 case $backend in cc | hip | cuda | metal) ;; *) echo "gh834: unknown backend $backend" >&2; exit 2 ;; esac
+case $cap in '' | *[!0-9]* | 0*) echo "gh834: CAP must be a positive decimal integer, got '$cap'" >&2; exit 2 ;; esac
+# A fresh OUT per invocation: driver.log appends and old step files would otherwise sit beside new
+# ones, so provenance from an earlier checkout could be read as this run's.
+if [ -e "$out" ] && [ -n "$(ls -A "$out" 2>/dev/null)" ]; then
+  echo "gh834: OUT $out is not empty; give each invocation a fresh directory" >&2
+  exit 2
+fi
 mkdir -p "$out" || exit 2
 out=$(cd "$out" && pwd -P)
 # Everything printed from here on is also kept with the results it describes.
@@ -105,10 +116,13 @@ capped() {
       close $ps;
       return $rows ? $live : 1;
     };
-    if ($alive->()) {
+    # The signals go to any REACHABLE group (kill 0), whatever the census says: ps is a snapshot, and
+    # a member forked during the scan must not escape cleanup. The census only ends the grace waits
+    # early and decides whether what is left is a survivor or zombies.
+    if (kill 0, -$pid) {
       kill "TERM", -$pid;
       for (1 .. 10) { last unless $alive->(); sleep 1 }
-      kill "KILL", -$pid if $alive->();
+      kill "KILL", -$pid if kill 0, -$pid;
       for (1 .. 10) { last unless $alive->(); sleep 1 }
       if ($alive->()) { print STDERR "gh834: process group $pid survived SIGKILL\n"; exit 125 }
     }
@@ -151,7 +165,9 @@ step() {
   return "$rc"
 }
 
-status=0
+status=0 capped_any=
+# A step's nonzero exit is a failure unless it is the cap's 124, which keeps its lower bound.
+record_rc() { if [ "$1" -eq 124 ]; then capped_any=1; else status=1; fi; }
 # A step that exited 0 without a line its conclusion rests on fails the run rather than publishing
 # an incomplete record (a regressed hook, a config source that did not take).
 require() {
@@ -184,10 +200,10 @@ require_complete_session() {
   fi
 }
 
-built=
+built= identified=
 need_build() {
-  [ -n "$built" ] && return 0
-  echo "gh834: step $1 needs the build step earlier in this invocation" >&2
+  [ -n "$built" ] && [ -n "$identified" ] && return 0
+  echo "gh834: step $1 needs the build and provenance steps earlier in this invocation" >&2
   exit 2
 }
 
@@ -195,7 +211,7 @@ for s in "$@"; do
   case $s in
   build)
     step build sh -c "cd '$root' && dune build bin/projection_shape_bench.exe \
-      benchmarks/runners/ocannl/bench_gpt.exe" || { cat "$out/build.err"; exit 1; }
+      benchmarks/runners/ocannl/bench_gpt.exe" || { rc=$?; cat "$out/build.err"; exit "$rc"; }
     built=1
     ;;
   provenance)
@@ -218,6 +234,8 @@ for s in "$@"; do
       echo "== provenance: MISSING EVIDENCE: fixture $fixture is not readable"
       status=1
     fi
+    # A measurement needs a provenance that identified the device and the fixture.
+    [ "$status" -eq 0 ] && identified=1
     ;;
   crown-fwd | crown-rev)
     need_build "$s"
@@ -226,7 +244,7 @@ for s in "$@"; do
       require "$s" out '^== gh-ocannl-755: candidate ranking'
       require "$s" out '^   crown: '
       require "$s" err "^Found $backend, commandline --ocannl_backend=$backend\$"
-    else status=1; fi
+    else record_rc $?; fi
     # The ranking table and the crown verdicts, which are the gh-ocannl-833 deliverable.
     sed -n '/== gh-ocannl-755/,$p' "$out/$s.out"
     grep 'Found .*--ocannl_backend=' "$out/$s.err" | sort -u
@@ -246,7 +264,7 @@ for s in "$@"; do
       require "$s" err "^Found $backend, commandline --ocannl_backend=$backend\$"
       require "$s" err "^Found $mode, commandline --ocannl_autotune_timing=$mode\$"
       require_complete_session "$s"
-    else status=1; fi
+    else record_rc $?; fi
     # The result line (compile_s is the search wall) and the trace's last word: the summary on a
     # completed run, the running totals of the last timing call on a capped one.
     cat "$out/$s.out"
@@ -257,4 +275,5 @@ for s in "$@"; do
   *) echo "gh834: unknown step $s" >&2; exit 2 ;;
   esac
 done
+[ "$status" -eq 0 ] && [ -n "$capped_any" ] && exit 124
 exit "$status"

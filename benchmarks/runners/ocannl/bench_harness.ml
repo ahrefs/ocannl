@@ -225,9 +225,12 @@ let percentile sorted p =
     see a timing call raise, so a tagged call that fails after its validation leaves its start
     behind until the next attempt clears it: only when a search's LAST timing call fails that way
     and an [autotune_log] control follows is that control's interval over-attributed, which is why
-    [benchmarks/gh834_cells.sh] pins [autotune_log=false]. What is not counted: the cc backend's
-    in-kernel fork/joins per launch are a property of each candidate's rendering, so a launch count
-    bounds them only together with the candidate's parallel-region count. *)
+    [benchmarks/gh834_cells.sh] pins [autotune_log=false]. A tagged call that raises (a classified
+    launch or synchronization failure the search survives) is closed by no window: it is counted as
+    raised, and a summary with any says INCOMPLETE, since that call's cost is in no total. What is
+    not counted: the cc backend's in-kernel fork/joins per launch are a property of each candidate's
+    rendering, so a launch count bounds them only together with the candidate's parallel-region
+    count. *)
 
 let install_timing_trace () =
   if env_flag "BENCH_TIMING_TRACE" then begin
@@ -236,23 +239,34 @@ let install_timing_trace () =
     let now () = Mtime.Span.to_float_ns (Mtime_clock.elapsed ()) /. 1e9 in
     let t0 = now () in
     let calls = ref 0 and attempts = ref 0 and launches = ref 0 and untagged = ref 0 in
+    (* Tagged calls that raised after their pre-dispatch validation: no window closes them, so their
+       warmup, calibration and any timed batches are in no total -- counted, so a summary that is
+       missing timing cost says so. *)
+    let raised = ref 0 in
+    let preflight_at = ref None and depth_at = ref None in
+    let drop_open_call () =
+      if Option.is_some !preflight_at then begin
+        Int.incr raised;
+        preflight_at := None
+      end
+    in
     let calib_s = ref 0. and timed_s = ref 0. in
     let depths = Hashtbl.create (module Int) in
-    let preflight_at = ref None and depth_at = ref None in
     let pr fmt = Stdlib.Printf.kfprintf Stdlib.flush Stdlib.stderr fmt in
     let prev_attempt = !Autotune.on_candidate_attempt in
     (Autotune.on_candidate_attempt :=
        fun label ->
          (* A tagged call that raised between its pre-dispatch validation and its timed window left
-            its start behind; a new candidate begins a new call, so that start is dropped here
-            rather than charged to a later untagged call. *)
-         preflight_at := None;
+            its start behind; a new candidate begins a new call, so that start is dropped here --
+            and counted as raised -- rather than charged to a later untagged call. *)
+         drop_open_call ();
          Int.incr attempts;
          pr "timing-trace: attempt %d at %.1fs: %s\n" !attempts (now () -. t0) label;
          prev_attempt label);
     let prev_preflight = !Autotune.on_candidate_preflight in
     (Autotune.on_candidate_preflight :=
        fun name ->
+         drop_open_call ();
          preflight_at := Some (now ());
          prev_preflight name);
     let prev_depth = !Autotune.on_batch_depth in
@@ -287,14 +301,15 @@ let install_timing_trace () =
              pr
                "timing-trace: call %d at %.1fs: depth %d, %d batches, %d launches, %s, timed %.1f \
                 ms (median batch %.3f ms) | totals: %d calls, %d launches, calib %.2f s (%d calls \
-                unattributed), timed %.2f s\n"
+                unattributed), timed %.2f s, %d calls raised\n"
                !calls (now -. t0) depth samples n calib
                ((now -. at) *. 1e3)
-               median_wall_ms !calls !launches !calib_s !untagged !timed_s);
+               median_wall_ms !calls !launches !calib_s !untagged !timed_s !raised);
          preflight_at := None;
          depth_at := None;
          prev_window ~samples ~wall_ms ~median_wall_ms);
     Stdlib.at_exit (fun () ->
+        drop_open_call ();
         let hist =
           Hashtbl.to_alist depths
           |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
@@ -303,9 +318,16 @@ let install_timing_trace () =
         in
         pr
           "timing-trace: summary: %.1fs wall, %d candidate attempts, %d timing calls, %d launches, \
-           calib %.2f s (%d calls unattributed), timed %.2f s; depth histogram (calls x depth): %s\n"
+           calib %.2f s (%d calls unattributed), timed %.2f s; depth histogram (calls x depth): \
+           %s%s\n"
           (now () -. t0)
-          !attempts !calls !launches !calib_s !untagged !timed_s hist)
+          !attempts !calls !launches !calib_s !untagged !timed_s hist
+          (if !raised = 0 then ""
+           else
+             Printf.sprintf
+               "; INCOMPLETE: %d tagged timing calls raised after validation, and their cost is in \
+                none of these totals"
+               !raised))
   end
 
 (** {1 Placement A/B arms in the emitted result (gh-ocannl-546)}
