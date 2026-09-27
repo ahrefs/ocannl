@@ -12,9 +12,11 @@
     So verdicts go through here. Each check records its outcome; a run with any failure exits
     nonzero from a teardown registered once, whatever the checks are and however many of them there
     are — so a test built on this module gets the exit-status gate by construction, without an
-    end-of-file call it could forget. The failures are also echoed to stderr, because dune never
-    writes the redirected stdout of a process that exits nonzero: stderr is the channel on which the
-    message survives to be read.
+    end-of-file call it could forget. The failures are also echoed to stderr, because dune neither
+    displays nor diffs the redirected stdout of a process that exits nonzero: it does write it, to
+    [<name>.exe.output] (or the rule's [.actual]) under [_build/default/<dir>/], where
+    [tools/mutation-run.sh] reads it, but stderr is the channel on which the message reaches whoever
+    ran the build.
 
     Assertions belong here; descriptive output does not. Printing a fact the golden pins ("losses:
     [1.0; 0.5]", "producer inlined: true" where the point is to record what happened) stays a plain
