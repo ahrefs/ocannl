@@ -633,15 +633,16 @@
 
 # gh-ocannl-514, the placement levels of the untuned regime: with model_default_schedule=true and
 # this set to N > 0, `Autotune.model_default` first branch-and-bounds over the top-N ranked flip
-# candidates of the placement decision surface (see tune_flip_ordering) — each level a keep/flip
-# choice, each leaf a placement vector whose hermetic lowering is scored by the same selection
-# that scores the pipelines (so the search is joint over placements and sketch families), the
-# all-keep leaf scored first so ties stay with the default placements, and subtrees fathomed by
-# the partial vector's roofline floor, which unlike the sketch levels' schedule-invariant floor
-# tightens as materialize commitments accumulate (gh-ocannl-514 phase 3). The picked vector is
+# candidates of the placement decision surface (see tune_flip_ordering), N counting nodes — each
+# level one node, kept at its default reading or flipped to exactly one of its alternatives, each
+# leaf a placement vector whose hermetic lowering is scored by the same selection that scores the
+# pipelines (so the search is joint over placements and sketch families), the all-keep leaf
+# scored first so ties stay with the default placements, and subtrees fathomed by the partial
+# vector's roofline floor, which unlike the sketch levels' schedule-invariant floor tightens as
+# materialize commitments accumulate (gh-ocannl-514 phase 3). The picked vector is
 # applied via the same context-level decisions as `Train.tune_placements`' flips and remains
 # advisory: any classified failure under the picked placements falls back to selecting from the
-# caller's own placements. Zero timing runs either way; the walk costs up to 2^N hermetic
+# caller's own placements. Zero timing runs either way; the walk costs up to 3^N hermetic
 # lowerings plus model scoring, so keep N small (the levels beyond N keep their default
 # placements). 0 (the default) disables the placement levels.
 #model_default_placements=0

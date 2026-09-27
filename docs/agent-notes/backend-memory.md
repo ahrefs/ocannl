@@ -161,7 +161,8 @@ files.
 - `Inline`-direction candidates want the CHEAPEST recompute cost first; `flip_candidates` is sorted
   most-expensive-first because the `Materialize` chain of `Train.tune_placements` wants that end. A
   pre-filter cut that forgets to reverse keeps exactly the flips a budget would least want to pay
-  for.
+  for. The planner's cut counts nodes (gh-ocannl-1017), ranked by each node's cheapest
+  `Inline`/`Footprint` alternative, so it cannot split a node's directions.
 
 - Post-admission callbacks can fail before a nonwinning candidate enters the beam or round
   (`Autotune.tune`, gh-ocannl-975). The pending owner covers compile-to-admission, and the exit

@@ -1040,7 +1040,9 @@ val rank_flip_candidates :
 (** Deduplicate (by [Tn.uid], keep-first) and rank the decision surface. [`Cost] is the legacy
     recompute-cost-descending order (the gh-555 chain's, kept as the evaluation baseline);
     [`Enablement] sorts family-unlocking [`Materialize] flips ([enablement] members) first and
-    family-breaking [`Inline] flips (members of either set) last, cost-descending within each class;
+    family-breaking [`Inline] flips (members of either set) last, cost-descending within each class.
+    The unit ranked is the candidate (gh-ocannl-1017): each node's alternatives are sorted by that
+    order and the node ranks where its best-ranked alternative does, so a top-N prefix is N nodes.
     [`Profitable] (gh-ocannl-579) is [`Enablement] weighed against [profit] per
     {!effective_flip_ordering} — the prior models expressibility, and on a device where the family
     it unlocks is measured hopeless, promotion is pure opportunity cost that displaces the winning
@@ -1048,9 +1050,20 @@ val rank_flip_candidates :
     such as {!model_default}, gets the prior). Config [tune_flip_ordering] selects the default
     ordering. Exposed for tests. *)
 
+val placement_floor_withheld : Ir.Low_level.flip_candidate list -> bool
+(** Whether {!placement_surface} withholds [ps_floor_ms] over these candidates: when one of them is
+    not materialized by default ([fc_default]) and offers no [`Materialize] alternative — a node an
+    earlier routine of the lineage left virtual and this routine footprint-scoped, which nothing
+    here writes (gh-ocannl-616). The all-materialized specialization the floor is read from keeps
+    that node's scratch, so the floor would not lower-bound its inline completion. Decided by the
+    default reading (gh-ocannl-1017), not by which alternatives exist: a cap-materialized node with
+    no smaller footprint offers the same lone [`Inline] and leaves the floor sound. Exposed for
+    tests. *)
+
 type placement_surface = {
   ps_candidates : Ir.Low_level.flip_candidate list;
-      (** Deduplicated, ranked per {!rank_flip_candidates} under config [tune_flip_ordering]. *)
+      (** Deduplicated, ranked per {!rank_flip_candidates} under config [tune_flip_ordering]: one
+          candidate per node, its alternatives in rank order. *)
   ps_ordering : [ `Cost | `Enablement ];
       (** The ordering [ps_candidates] actually came out in — with [tune_flip_ordering=profitable]
           (the default) this is where the measured evidence landed, so a log line or a test can say
@@ -1069,7 +1082,7 @@ type placement_surface = {
           [open_placement]), so it is a sound branch-and-bound fathom: in the tuned regime, a flip
           whose floor meets the best {e measured} time cannot win and is skipped without spending
           budget (the admissible direction — the bound already exceeds the incumbent's measurement).
-          [None] when no envelope constant is present. *)
+          [None] when no envelope constant is present, or when {!placement_floor_withheld}. *)
 }
 (** The placement decision surface prepared for search (gh-ocannl-514): the per-node
     inline/materialize levels of the joint placement x sketch x fission space. *)

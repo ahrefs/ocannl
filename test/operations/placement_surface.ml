@@ -19,7 +19,8 @@
    The floor closure is asserted monotone in the committed materializations, under the envelope
    constants pinned by the rule's command line (cc carries none of its own).
 
-   Printed candidate lists carry names, flip kinds, costs and enablement marks: the ranking is
+   Printed candidate lists carry, per node (gh-ocannl-1017), its name, its default reading, the
+   alternatives in rank order with their costs, and the enablement mark: the ranking is
    deterministic given the computation and the synthetic limits. *)
 
 open Base
@@ -28,6 +29,12 @@ open Ocannl.Operation.DSL_modules
 module LL = Ir.Low_level
 module Tn = Ir.Tnode
 module Asgns = Ir.Assignments
+
+let reading_name : LL.reading -> string = function
+  | `Materialize -> "materialize"
+  | `Inline -> "inline"
+  | `Footprint -> "footprint"
+
 open Verdict.Claims
 
 let named name (comp : Asgns.comp) : Asgns.comp =
@@ -79,7 +86,10 @@ let () =
   let candidates = base.LL.flip_candidates in
   let to_materialize =
     List.filter_map candidates ~f:(fun fc ->
-        match fc.LL.fc_flip with `Materialize -> Some fc.LL.fc_tn | `Inline | `Footprint -> None)
+        Option.some_if
+          (List.exists fc.LL.fc_alternatives ~f:(fun fa ->
+               LL.equal_reading fa.LL.fa_flip `Materialize))
+          fc.LL.fc_tn)
   in
   let allmat =
     Context.lowered_for_decisions ~materialized:to_materialize ctx comp Ir.Indexing.Empty
@@ -97,12 +107,11 @@ let () =
   let show ordering =
     let ranked = Autotune.rank_flip_candidates ~ordering ~enablement ~disablement candidates in
     List.iter ranked ~f:(fun fc ->
-        Stdio.printf "  %-11s %-12s cost %-5d%s\n"
-          (match fc.LL.fc_flip with
-          | `Materialize -> "materialize"
-          | `Inline -> "inline"
-          | `Footprint -> "footprint")
-          (Tn.debug_name fc.LL.fc_tn) fc.LL.fc_recompute_cost
+        Stdio.printf "  %-12s %-11s -> %s%s\n" (Tn.debug_name fc.LL.fc_tn)
+          (reading_name fc.LL.fc_default)
+          (String.concat ~sep:", "
+             (List.map fc.LL.fc_alternatives ~f:(fun fa ->
+                  Printf.sprintf "%s cost %d" (reading_name fa.LL.fa_flip) fa.LL.fa_recompute_cost)))
           (if Set.mem enablement fc.LL.fc_tn then "  [enablement]" else ""));
     ranked
   in
@@ -111,18 +120,16 @@ let () =
   Stdio.printf "enablement ranking:\n";
   let by_enablement = show `Enablement in
   let is_en fc = Set.mem enablement fc.LL.fc_tn in
+  (* A candidate ranks where its best-ranked alternative does, and lists that one first. *)
+  let leads fc r =
+    match fc.LL.fc_alternatives with fa :: _ -> LL.equal_reading fa.LL.fa_flip r | [] -> false
+  in
   p "cost ranking buries the enablement candidates below the decoy"
     (match by_cost with fc :: _ -> not (is_en fc) | [] -> false);
   p "enablement ranking puts the family-unlocking materialize flip first"
-    (match by_enablement with
-    | fc :: _ -> (
-        is_en fc && match fc.LL.fc_flip with `Materialize -> true | `Inline | `Footprint -> false)
-    | [] -> false);
+    (match by_enablement with fc :: _ -> is_en fc && leads fc `Materialize | [] -> false);
   p "enablement ranking puts the family-breaking inline flip last"
-    (match List.last by_enablement with
-    | Some fc -> (
-        is_en fc && match fc.LL.fc_flip with `Inline -> true | `Materialize | `Footprint -> false)
-    | None -> false);
+    (match List.last by_enablement with Some fc -> is_en fc && leads fc `Inline | None -> false);
   (* gh-ocannl-579, the profitability term: the prior above prices EXPRESSIBILITY only, so on a
      device where the family it unlocks has been MEASURED to lose, promoting its flips is pure
      opportunity cost — it displaces cheaper flips out of a small budget. The evidence is the

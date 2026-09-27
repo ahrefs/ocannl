@@ -98,9 +98,12 @@ let expected_out =
 let chain_seed { x0; ws; out; _ } =
   ((x0, x0_vals) :: List.init n_links ~f:(fun k -> (ws.(k), w_vals k))) @ [ (out, blank dim) ]
 
+(* The node's candidate when it offers exactly one alternative: that flip and its cost. *)
 let find_flip (o : LL.optimized) tn =
   List.find_map o.LL.flip_candidates ~f:(fun fc ->
-      if Tn.equal fc.LL.fc_tn tn then Some (fc.LL.fc_flip, fc.LL.fc_recompute_cost) else None)
+      match fc.LL.fc_alternatives with
+      | [ fa ] when Tn.equal fc.LL.fc_tn tn -> Some (fa.LL.fa_flip, fa.LL.fa_recompute_cost)
+      | _ -> None)
 
 (* === Phase 1: hand-built chain, one routine === *)
 

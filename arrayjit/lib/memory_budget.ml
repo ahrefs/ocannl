@@ -73,8 +73,8 @@ let footprint ?name ctx comp bindings =
    consumer, a footprint-scoped one only the scratch. *)
 type direction = [ `Inline | `Footprint ]
 
-let direction_of (fc : LL.flip_candidate) : direction =
-  match fc.LL.fc_flip with `Footprint -> `Footprint | `Inline | `Materialize -> `Inline
+let direction_of (r : LL.reading) : direction option =
+  match r with `Footprint -> Some `Footprint | `Inline -> Some `Inline | `Materialize -> None
 
 let direction_name (d : direction) = match d with `Inline -> "inline" | `Footprint -> "footprint"
 
@@ -137,38 +137,33 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
     else
       (* The [`Inline] and [`Footprint] directions (gh-ocannl-616): demoting a materialized
          intermediate to recompute-at-use relieves footprint, and so does confining it to a
-         sub-image scratch; a node carrying both records is scored in each direction, and the first
-         that pays takes the node (its other direction is then skipped). Ranked
-         CHEAPEST-recompute-first for the pre-filter (the surface's own order is
-         most-expensive-first, which the [Materialize]-direction search wants), so a
-         [max_candidates] cut keeps the flips a budget would most want to pay for. *)
+         sub-image scratch; a node offering both is scored in each, and they are decided as one
+         group below. A candidate is the whole node (gh-ocannl-1017), so the [max_candidates] cut
+         counts nodes and cannot split a node's directions. Ranked CHEAPEST-recompute-first by a
+         node's cheapest direction for the pre-filter (the surface's own order is
+         most-expensive-first, which the [Materialize]-direction search wants), so the cut keeps the
+         nodes a budget would most want to pay for. *)
+      let cheapest dirs =
+        List.fold dirs ~init:Int.max_value ~f:(fun m (_, (fa : LL.flip_alternative)) ->
+            min m fa.LL.fa_recompute_cost)
+      in
       let all =
-        List.fold surface ~init:[] ~f:(fun acc fc ->
-            match fc.LL.fc_flip with
-            | `Materialize -> acc
-            | `Inline | `Footprint ->
-                if
-                  List.exists acc ~f:(fun c ->
-                      Tn.equal c.LL.fc_tn fc.LL.fc_tn && Poly.equal c.LL.fc_flip fc.LL.fc_flip)
-                then acc
-                else fc :: acc)
-        |> List.sort ~compare:(fun a b ->
-            match Int.compare a.LL.fc_recompute_cost b.LL.fc_recompute_cost with
-            | 0 -> Tn.compare a.LL.fc_tn b.LL.fc_tn
-            | c -> c)
+        List.filter_map surface ~f:(fun (fc : LL.flip_candidate) ->
+            match
+              List.filter_map fc.LL.fc_alternatives ~f:(fun (fa : LL.flip_alternative) ->
+                  Option.map (direction_of fa.LL.fa_flip) ~f:(fun d -> (d, fa)))
+            with
+            | [] -> None
+            | dirs -> Some (fc.LL.fc_tn, dirs))
+        |> List.sort ~compare:(fun (ta, da) (tb, db) ->
+            match Int.compare (cheapest da) (cheapest db) with 0 -> Tn.compare ta tb | c -> c)
       in
-      (* The cut keeps a node's directions together (gh-ocannl-616): a sibling of a taken record
-         joins it, so the group comparison below always sees both. *)
-      let considered =
-        let taken = List.take all max_candidates in
-        List.filter all ~f:(fun (o : LL.flip_candidate) ->
-            List.exists taken ~f:(fun (c : LL.flip_candidate) -> Tn.equal c.LL.fc_tn o.LL.fc_tn))
-      in
+      let considered = List.take all max_candidates in
       let bp_dropped = List.length all - List.length considered in
       if bp_dropped > 0 then
-        logf "%d of %d inline candidates dropped by max_candidates=%d (cheapest recompute kept)"
+        logf "%d of %d candidate nodes dropped by max_candidates=%d (cheapest recompute kept)"
           bp_dropped (List.length all) max_candidates;
-      (* Round 1: each candidate's relief against the ACTUAL baseline layout. A node whose span was
+      (* Round 1: each direction's relief against the ACTUAL baseline layout. A node whose span was
          already shared relieves nothing on its own (the gh-ocannl-558 lesson in reverse: relief is
          not a function of the node's own size). Solo relief only RANKS here -- a zero-relief
          candidate is kept, at the back, because relief is not additive in either direction: two
@@ -176,22 +171,28 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
          dropping them outright would report an otherwise reachable budget unreachable. Round 2
          picks those up jointly. *)
       let scored =
-        List.map considered ~f:(fun fc ->
-            let fp = score [ (fc.LL.fc_tn, direction_of fc) ] in
-            let relief = bp_baseline.LL.fp_total - fp.LL.fp_total in
-            logf "candidate %s (%s): recompute cost %d, solo relief %d bytes"
-              (Tn.debug_name fc.LL.fc_tn)
-              (direction_name (direction_of fc))
-              fc.LL.fc_recompute_cost relief;
-            (fc, relief))
+        List.map considered ~f:(fun (tn, dirs) ->
+            ( tn,
+              List.map dirs ~f:(fun (dir, (fa : LL.flip_alternative)) ->
+                  let fp = score [ (tn, dir) ] in
+                  let relief = bp_baseline.LL.fp_total - fp.LL.fp_total in
+                  logf "candidate %s (%s): recompute cost %d, solo relief %d bytes"
+                    (Tn.debug_name tn) (direction_name dir) fa.LL.fa_recompute_cost relief;
+                  (dir, fa.LL.fa_recompute_cost, relief)) ))
       in
+      (* Descending by relief per unit of recompute cost, then by relief. *)
+      let by_ratio (_, ca, ra) (_, cb, rb) =
+        let ca = max 1 ca and cb = max 1 cb in
+        (* Descending, so [b] against [a]. *)
+        match compare_relief_ratio rb cb ra ca with
+        | 0 -> Int.compare rb ra
+        | c -> c
+      in
+      (* A node ranks where its best direction does. *)
       let ranked =
-        List.sort scored ~compare:(fun (a, ra) (b, rb) ->
-            let ca = max 1 a.LL.fc_recompute_cost and cb = max 1 b.LL.fc_recompute_cost in
-            (* Descending by ratio, so [b] against [a]. *)
-            match compare_relief_ratio rb cb ra ca with
-            | 0 -> ( match Int.compare rb ra with 0 -> Tn.compare a.LL.fc_tn b.LL.fc_tn | c -> c)
-            | c -> c)
+        List.sort scored ~compare:(fun (ta, da) (tb, db) ->
+            let best d = List.min_elt d ~compare:by_ratio |> Option.value_exn in
+            match by_ratio (best da) (best db) with 0 -> Tn.compare ta tb | c -> c)
       in
       (* Round 2: accept a prefix, re-scoring the CUMULATIVE vector each time. Inlining one node
          moves the others' live spans, so a candidate's solo relief is not what it is worth here. A
@@ -228,7 +229,6 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
          the direction with the larger marginal relief (the cheaper recompute on a tie) is the one
          committed or held; the other is dropped. Visiting them one at a time would commit the first
          that pays and never see the sibling relieve more. *)
-      let decided = Hash_set.create (module Tn) in
       let evaluate dec ~held =
         let cand_alone = dec :: !accepted in
         let fp_alone = score cand_alone in
@@ -248,19 +248,14 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
         let fp = match verdict with `Load_bearing -> fp_joint | _ -> fp_alone in
         (cand, fp, verdict, !cur.LL.fp_total - fp.LL.fp_total)
       in
-      List.iter ranked ~f:(fun (fc, _) ->
-          let tn = fc.LL.fc_tn in
-          if Hash_set.mem decided tn || met !cur then ()
+      List.iter ranked ~f:(fun (tn, dirs) ->
+          if met !cur then ()
           else begin
-            Hash_set.add decided tn;
             let held = !speculative in
-            let group =
-              List.filter ranked ~f:(fun ((o : LL.flip_candidate), _) -> Tn.equal o.LL.fc_tn tn)
-            in
             let outcomes =
-              List.map group ~f:(fun (g, solo) ->
-                  let dec = (tn, direction_of g) in
-                  (dec, g.LL.fc_recompute_cost, solo, evaluate dec ~held))
+              List.map dirs ~f:(fun (dir, cost, solo) ->
+                  let dec = (tn, dir) in
+                  (dec, cost, solo, evaluate dec ~held))
             in
             let best =
               List.max_elt outcomes
@@ -271,7 +266,7 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
             let dec, cost, solo, (cand, fp, verdict, marginal) = best in
             let dir = direction_name (snd dec) in
             let sibling_note =
-              if List.length group > 1 then " (over the node's other direction)" else ""
+              if List.length dirs > 1 then " (over the node's other direction)" else ""
             in
             if marginal > 0 then (
               logf "accept %s (%s)%s: %d bytes (solo %d), cost %d%s, footprint now %d"

@@ -1,8 +1,8 @@
 decision surface:
-  inline      n4       cost 192
-  inline      n3       cost 128
-  materialize relu_s1  cost 2
-  materialize exp_y    cost 1
+  n4       materialize -> inline cost 192
+  n3       materialize -> inline cost 128
+  relu_s1  inline      -> materialize cost 2
+  exp_y    inline      -> materialize cost 1
 model_default with placement levels returns a routine with correct values: true
 selection ran (scored the default pipeline and the placement leaves): true
 the placement pick fired and the label carries it: true

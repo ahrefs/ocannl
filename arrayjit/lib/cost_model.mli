@@ -153,7 +153,7 @@ val roofline_seconds :
     ([inline_reduction_extent × read multiplicity × inline_fanin]); these queries replace the extent
     × fan-in factor with the modeled arithmetic, and {!Low_level.recompute_pricer} feeds them to the
     flip-candidate ordering (gh-ocannl-555), the memory-budget planner and, through
-    [fc_recompute_cost], footprint-scoped materialization (gh-ocannl-616). Priced per Part 1: a
+    [fa_recompute_cost], footprint-scoped materialization (gh-ocannl-616). Priced per Part 1: a
     hoisted scope body under a [Where] counts as what executes.
 
     The exactness contract: a count is exact for ONE instantiation of the computation as it stands

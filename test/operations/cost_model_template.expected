@@ -26,8 +26,8 @@ chain: both links virtual: true
 chain: x2's recompute is transitive (2 ops, x0 and w1's cells): true
 chain: a materialized leaf has no template cost: true
   flip candidates:
-    materialize x2   cost 2 (modeled)
-    materialize x1   cost 1 (modeled)
+    x2   inline      -> materialize cost 2 (modeled)
+    x1   inline      -> materialize cost 1 (modeled)
 chain: x2's Materialize flip is priced by the model (2 ops x multiplicity 1, one reader): true
 == ordering witness: proxy vs model ==
   a    proxy (extent x fan-in) 3  modeled 2

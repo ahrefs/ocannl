@@ -813,7 +813,7 @@ type traced_array = {
       (** The transitive inline fan-in the guard computed for this node under the current
           placements: the number of distinct materialized nodes the node's fully-inlined computation
           would load (at least 1). Decision-dependent (written by [decide_placements] on the
-          candidate's private store copy); multiplies into the proxy [fc_recompute_cost] — the
+          candidate's private store copy); multiplies into the proxy [fa_recompute_cost] — the
           fallback where the cost model's count is not exact (gh-ocannl-637) — so the search and the
           memory-budget planner see the true cost of re-inlining a node the fanin cap materialized.
       *)
@@ -935,30 +935,46 @@ type swizzle_kind =
           byte length to be a multiple of 16 and a power of two in 16-byte units. *)
 [@@deriving sexp, compare, equal]
 
-type flip_candidate = {
-  fc_tn : Tnode.t;
-  fc_flip : [ `Materialize | `Inline | `Footprint ];
-  fc_recompute_cost : int;
-  fc_modeled : bool;
-}
+type reading = [ `Materialize | `Inline | `Footprint ] [@@deriving sexp, compare, equal]
+(** gh-ocannl-616/1017: the three placements of a node in the inlining lattice — materialized (a
+    full-domain buffer), inlined (recomputed at every read) and footprint-scoped (a routine-private
+    scratch over the readers' footprint, filled at the producer). A flip moves a node from its
+    default reading to another one. *)
+
+type flip_alternative = { fa_flip : reading; fa_recompute_cost : int; fa_modeled : bool }
 [@@deriving sexp_of]
-(** gh-555: one searchable inlining decision dimension of a compile — a node whose placement the
-    default policy decided, together with the flip a search can try and the recompute-cost bound of
-    the recompute reading the flip involves (the per-instantiation cost — the cost model's count
-    where exact, else reduction extent × transitive inline fan-in — times the number of
+(** One reading a search can flip a node to, with the recompute-cost bound of the recompute reading
+    the flip involves (the per-instantiation cost — the cost model's count where exact
+    ([fa_modeled]), else reduction extent × transitive inline fan-in — times the number of
     instantiations the reading performs: the per-cell read multiplicity for an inlined reading, the
     scratch cell count for a footprint-scoped one; without the fan-in factor a node the fanin cap
     materialized would rank among the cheapest to re-inline, and the memory-budget planner would
-    prefer undoing exactly the guard's decision). [`Materialize] flips a node the policy left
-    virtual — inlined or footprint-scoped (gh-ocannl-616) — via [Context.decide_materialized];
-    [`Inline] flips a node materialized by the heuristic caps (provenance 1, 39 or 41 — never by
-    legality or observability, which are not decisions) or one the policy footprint-scoped, via
-    [Context.decide_inline]; [`Footprint] flips a cap-materialized node whose reads are all
-    footprintable onto a footprint strictly smaller than the node, via [Context.decide_footprint]. A
-    node the policy footprint-scoped therefore carries two records, one per direction, as does a
-    cap-materialized node with such a footprint — consumers deduplicate by (node, flip), not by
-    node. An [`Inline] or [`Footprint] flip's legality is settled only when the virtualizer replays
-    ([check_and_store_virtual]): a rejected flip reproduces the materialized placement. *)
+    prefer undoing exactly the guard's decision). *)
+
+type flip_candidate = {
+  fc_tn : Tnode.t;
+  fc_default : reading;
+  fc_alternatives : flip_alternative list;
+}
+[@@deriving sexp_of]
+(** gh-555, grouped per node by gh-ocannl-1017: one searchable inlining decision dimension of a
+    compile — a node whose placement the default policy decided, the reading it decided
+    ([fc_default]), and the readings a search can flip it to ([fc_alternatives]: non-empty, pairwise
+    distinct, none equal to [fc_default], most expensive first). The alternatives are the node's
+    mutually exclusive readings, so a consumer decides a candidate as a whole — keep the default or
+    take exactly one alternative — and a top-N cut counts candidates, not alternatives. The default
+    is a field, never an inference from which alternatives exist: a node an earlier routine left
+    virtual and this one footprint-scoped offers [`Inline] alone, like a cap-materialized node with
+    no smaller footprint, yet its default is [`Footprint].
+
+    [`Materialize] flips a node the policy left virtual — inlined or footprint-scoped
+    (gh-ocannl-616) — via [Context.decide_materialized]; [`Inline] flips a node materialized by the
+    heuristic caps (provenance 1, 39 or 41 — never by legality or observability, which are not
+    decisions) or one the policy footprint-scoped, via [Context.decide_inline]; [`Footprint] flips a
+    cap-materialized node whose reads are all footprintable onto a footprint strictly smaller than
+    the node, via [Context.decide_footprint]. An [`Inline] or [`Footprint] flip's legality is
+    settled only when the virtualizer replays ([check_and_store_virtual]): a rejected flip
+    reproduces the materialized placement. *)
 
 type pipelined_tile = { pt_depth : int; pt_rotor : Indexing.symbol } [@@deriving sexp_of]
 (** gh-487: a software-pipelined (double-buffered) staged tile — codegen allocates [pt_depth]
@@ -1006,12 +1022,12 @@ type optimized = {
           guards or by the host-side constant packing. [Schedule.Tensorize] consults this to
           discharge pad guards on the intrinsic path. *)
   flip_candidates : flip_candidate list;
-      (** gh-555: the searchable inlining decision dimensions of this compile, most expensive first,
-          as decided at the whole-routine specialization (schedule-transform copies inherit the
-          whole-routine list). Excluded: nodes never assigned or never read (no decision to make),
-          scalar constexprs and pure one-hot selector producers (must stay virtual for their
-          rewrites), and nodes placed by legality, intent or observability rather than the heuristic
-          policy. *)
+      (** gh-555: the searchable inlining decision dimensions of this compile, one per node, most
+          expensive first by each node's most expensive alternative, as decided at the whole-routine
+          specialization (schedule-transform copies inherit the whole-routine list). Excluded: nodes
+          never assigned or never read (no decision to make), scalar constexprs and pure one-hot
+          selector producers (must stay virtual for their rewrites), and nodes placed by legality,
+          intent or observability rather than the heuristic policy. *)
   spliced_rbw : Set.M(Tnode).t;
       (** gh-610 review round 6: the nodes whose [read_before_write] was set by the FINAL-code
           reconciliation (a spliced read preceding, or not definitely covered by, the routine's own
@@ -7942,7 +7958,7 @@ let recompute_pricer :
     static_indices:Indexing.static_symbol list ->
     t ->
     Tnode.t ->
-    [ `Materialize | `Inline | `Footprint ] ->
+    reading ->
     int option)
     ref =
   ref (fun _ctx ~static_indices:_ _llc _tn _flip -> None)
@@ -8027,52 +8043,72 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
                node whose virtuality is declared intent (e.g. Mixed_prec.Twin_virtual) would make
                [Context.decide_materialized] a no-op and waste a search slot; reading the raw entry
                also keeps tnode-level intent provenances from coincidentally matching the cap
-               provenances on the [`Inline] side. *)
+               provenances on the [`Inline] side. The default reading is decided HERE, where the
+               placement and the footprint decision are both in hand (gh-ocannl-1017). *)
             match Tn.Placements.raw_entry plc tn with
             | Some (Virtual, _) when not (Tn.known_virtual tn || Tn.known_constant tn) ->
                 (* A footprint-scoped node is virtual in the lineage; both of its neighbours in the
                    lattice are open. *)
-                if footprinted then [ `Materialize; `Inline ] else [ `Materialize ]
+                if footprinted then Some (`Footprint, [ `Materialize; `Inline ])
+                else Some (`Inline, [ `Materialize ])
             | Some (Never_virtual, p) when is_cap_provenance p ->
-                if Option.is_some per_cell then [ `Inline; `Footprint ] else [ `Inline ]
+                Some
+                  ( `Materialize,
+                    if Option.is_some per_cell then [ `Inline; `Footprint ] else [ `Inline ] )
             (* A cap-selected node the reconcile-stage interface classification promoted [On_device
                36] (gh-618 round 4): the promotion is the interface consequence of the cap's own
                materialization, not a legality/intent decision, so the [`Inline] flip stays
                searchable — a virtual reading has no interface to classify. *)
             | Some (On_device, Read_before_write) when Hash_set.mem cap_inline_flips tn ->
-                [ `Inline ]
-            | _ -> []
+                Some (`Materialize, [ `Inline ])
+            | _ -> None
           in
-          let flips =
-            if traced.has_assignment then flips else List.filter flips ~f:(Poly.equal `Inline)
-          in
-          List.fold flips ~init:acc ~f:(fun acc fc_flip ->
+          match flips with
+          | None -> acc
+          | Some (fc_default, flips) -> (
+              (* A node no routine of this specialization writes (the inherited footprint-scoped
+                 one) has no [`Materialize] direction: nothing would write the buffer. Its default
+                 stays [`Footprint] all the same — the reading is a field, not an inference from
+                 which alternatives survive this filter (gh-ocannl-1017). *)
+              let flips =
+                if traced.has_assignment then flips
+                else List.filter flips ~f:(equal_reading `Inline)
+              in
               let mult = max 1 ((Lazy.force an.an_read_multiplicity) tn) in
-              (* The instantiations the flip's recompute reading performs, per read cell: the read
-                 multiplicity for an inlined reading, the sites' fiber cardinalities for a
-                 footprint-scoped one (gh-ocannl-616: one instantiation per scratch cell, so per
-                 distinct read cell the fiber of the site's map — 1 for an injective site — and only
-                 the instantiating side knows that count). *)
-              let instantiations =
-                match fc_flip with
-                | `Footprint -> Option.value per_cell ~default:mult
-                | `Materialize when footprinted -> Option.value per_cell ~default:mult
-                | `Materialize | `Inline -> mult
+              let alternative fa_flip =
+                (* The instantiations the flip's recompute reading performs, per read cell: the read
+                   multiplicity for an inlined reading, the sites' fiber cardinalities for a
+                   footprint-scoped one (gh-ocannl-616: one instantiation per scratch cell, so per
+                   distinct read cell the fiber of the site's map — 1 for an injective site — and
+                   only the instantiating side knows that count). *)
+                let instantiations =
+                  match fa_flip with
+                  | `Footprint -> Option.value per_cell ~default:mult
+                  | `Materialize when footprinted -> Option.value per_cell ~default:mult
+                  | `Materialize | `Inline -> mult
+                in
+                (* gh-ocannl-637: the modeled op count of one recompute, times the instantiations;
+                   the traced proxy (reduction extent × instantiations × transitive fan-in) where
+                   the model's count is not exact. *)
+                let modeled = price tn fa_flip in
+                let fa_recompute_cost =
+                  match modeled with
+                  | Some flops -> flops * instantiations
+                  | None -> traced.inline_reduction_extent * instantiations * traced.inline_fanin
+                in
+                { fa_flip; fa_recompute_cost; fa_modeled = Option.is_some modeled }
               in
-              (* gh-ocannl-637: the modeled op count of one recompute, times the instantiations; the
-                 traced proxy (reduction extent × instantiations × transitive fan-in) where the
-                 model's count is not exact. *)
-              let modeled = price tn fc_flip in
-              let fc_recompute_cost =
-                match modeled with
-                | Some flops -> flops * instantiations
-                | None -> traced.inline_reduction_extent * instantiations * traced.inline_fanin
-              in
-              { fc_tn = tn; fc_flip; fc_recompute_cost; fc_modeled = Option.is_some modeled } :: acc))
+              match
+                List.map flips ~f:alternative
+                |> List.stable_sort ~compare:(fun a b ->
+                    Int.compare b.fa_recompute_cost a.fa_recompute_cost)
+              with
+              | [] -> acc
+              | fc_alternatives -> { fc_tn = tn; fc_default; fc_alternatives } :: acc))
     |> List.sort ~compare:(fun a b ->
-        match Int.compare b.fc_recompute_cost a.fc_recompute_cost with
-        | 0 -> Tn.compare a.fc_tn b.fc_tn
-        | c -> c)
+        (* Most expensive first by the node's most expensive alternative. *)
+        let top fc = (List.hd_exn fc.fc_alternatives).fa_recompute_cost in
+        match Int.compare (top b) (top a) with 0 -> Tn.compare a.fc_tn b.fc_tn | c -> c)
   in
   let optimize_ctx = input_ctx in
   {

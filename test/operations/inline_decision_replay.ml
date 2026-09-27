@@ -76,7 +76,9 @@ let phase1 () =
      opposite direction, with the recompute-cost bound (extent 1 × multiplicity 2). *)
   let find_flip o tn =
     List.find_map o.LL.flip_candidates ~f:(fun fc ->
-        if fc.LL.fc_tn.Tn.id = tn.Tn.id then Some (fc.LL.fc_flip, fc.LL.fc_recompute_cost) else None)
+        match fc.LL.fc_alternatives with
+        | [ fa ] when fc.LL.fc_tn.Tn.id = tn.Tn.id -> Some (fa.LL.fa_flip, fa.LL.fa_recompute_cost)
+        | _ -> None)
   in
   p "default arm reports the producer as an Inline flip of cost 2"
     (match find_flip o_default prod with Some (`Inline, 2) -> true | _ -> false);
