@@ -139,6 +139,7 @@ config_dep_completeness.ml: [scanner-refusal:328553bf93b184a97ab7d44d97c369a4] e
 config_dep_completeness.ml: [scanner-refusal:c4c555263d62473311fe0cfc7f769958] stanza inline-test library (claim) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
 config_dep_completeness.ml: [scanner-refusal:bdc9f2c15b8f17359eec6d359dfefbdd] that floor applies (claim) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
 config_usage_scan.ml has exactly the explicitly assigned refusal controls: true
+config_usage_scan.ml: [scanner-refusal:3b2d3f635929bbf3953b407c49ee91fd] Builtins_cc (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:7f7db667dc63d73faefa570451cf5f2b] ambiguous command-line value (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:7a3d690e9ef5541a1c754952c6cf6877] ambiguous bare config (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:200477f5fecf3e08ff5055af77a00298] prefix-free config flag (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
@@ -151,6 +152,7 @@ config_usage_scan.ml: [scanner-refusal:2908ea301f2b18efa6c95e6ab0302abf] histori
 config_usage_scan.ml: [scanner-refusal:6d76bc1e86b8d630263d70bd7c30e50b] config-mention occurrence counts (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:8c14e661ffe9cdf859b5111394d557a8] prefix-free config-mention occurrence (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:7c5c4cc0bd161e76fe99e9983d2db70f] command-line value occurrence (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
+config_usage_scan.ml: [scanner-refusal:1b21aa78af1c8c8d33b55c395590e92a] spelling unregistered keys (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:e592c4ffcb391edf546553bd50accc7a] runtime value separator (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:cb1b0916f3d396c6fb100a6cf2ba4a2e] scanner command-line prefix (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:319310c8c133f76c009e4954fa7fc7de] runtime-generated command-line spellings (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true

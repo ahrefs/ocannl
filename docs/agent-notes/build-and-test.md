@@ -148,6 +148,10 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   value separator accepted by `Utils.cmdline_var_prefixes`, or the environment form
   `OCANNL_<KEY>` beginning and ending at identifier boundaries (with or without an assignment); the
   explicit open namespaces `OCANNL_TOOL_*` and `OCANNL_LOG_LEVEL_<MODULE>` are not runtime config.
+  Nor are the cc prelude's C macros: the scan DERIVES them from what `Builtins_cc` defines (read
+  from a build-time copy, so it links no backend) and exempts only their upper-case C spelling
+  outside config files; a registered key colliding with one fails (gh-ocannl-1080). The counted
+  `non_config_environment_mentions` list keeps only synthetic names no other module owns.
   The explicit token name normally wins over a shorter registered-key prefix. Inherently ambiguous
   alternate-value spellings such as `--ocannl_backend_cuda=true` are file/token/key/count-pinned
   judgments (that example means key `backend` with value cuda=true); any other such ambiguity,
