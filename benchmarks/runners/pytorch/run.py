@@ -15,18 +15,10 @@ import argparse
 import math
 import os
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from bench_common import (
-    emit,
-    peak_memory_fields,
-    percentiles,
-    read_st_metadata,
-    torch_peak_memory,
-    torch_searched,
-)
+from bench_common import emit, read_st_metadata, run_protocol, torch_peak_memory, torch_searched
 
 import torch
 import torch.nn.functional as F
@@ -228,9 +220,6 @@ def main():
     mode = meta.get("mode", "train")
     batch_size = int(meta["batch_size"])
     lr = float(meta["lr"])
-    parity_steps = int(meta["parity_steps"])
-    warmup_steps = int(meta["warmup_steps"])
-    timed_steps = int(meta["timed_steps"])
 
     torch.set_float32_matmul_precision("high" if approximate else "highest")
     torch.backends.cudnn.benchmark = approximate
@@ -300,59 +289,11 @@ def main():
         elif args.device == "cuda":
             torch.cuda.synchronize()
 
-    # The first step doubles as the compile probe (graph build; with --compile, compilation).
-    # Its loss value is unaffected by the timing, so it is also parity step 0.
-    k = 0
-    losses = []
-    t0 = time.perf_counter()
-    losses.append(step(k).item())
-    compile_s = time.perf_counter() - t0
-    k += 1
-    for _ in range(parity_steps - 1):
-        losses.append(step(k).item())
-        k += 1
-    for _ in range(warmup_steps):
-        step(k)
-        k += 1
-    sync()
-    # gh-ocannl-1006: the memory column's bracket, opened after the warmup so the peak is the timed
-    # steps' and not the graph build's. Every `probe.sample()` below sits AFTER the step's elapsed
-    # time is taken, so a gauge read costs the reported number nothing.
-    peak_memory = torch_peak_memory(torch, args.device)
-    if peak_memory:
-        peak_memory.start()
-    synced = []
-    for _ in range(timed_steps):
-        t0 = time.perf_counter()
-        step(k)
-        k += 1
-        sync()
-        synced.append((time.perf_counter() - t0) * 1e3)
-        if peak_memory:
-            peak_memory.sample()
-    t0 = time.perf_counter()
-    for _ in range(timed_steps):
-        step(k)
-        k += 1
-    sync()
-    queued = (time.perf_counter() - t0) / timed_steps * 1e3
-    if peak_memory:
-        peak_memory.sample()
-    # The window closes HERE, before the optional retime block, so the column reports the same
-    # steps `step_ms` and `queued_step_ms` do. Read after retiming instead, a high-water counter
-    # would take in the retimed block while a sampled one -- which takes no samples there -- would
-    # not, so the window's meaning would depend on the counter's kind (review round 1).
-    peak_memory_result = peak_memory_fields(peak_memory)
-    retimed = None
-    if args.retime:
-        sync()
-        retimed = []
-        for _ in range(timed_steps):
-            t0 = time.perf_counter()
-            step(k)
-            k += 1
-            sync()
-            retimed.append((time.perf_counter() - t0) * 1e3)
+    # The measurement loop is bench_common's, one copy for both Python runners (gh-ocannl-1008):
+    # this runner supplies the step, the device sync and its framework's memory counter.
+    measured = run_protocol(
+        step, sync, meta, peak_memory=torch_peak_memory(torch, args.device), retime=args.retime
+    )
 
     # ROCm builds alias HIP onto torch's "cuda" device; label the report row honestly.
     backend = "cuda(hip)" if args.device == "cuda" and torch.version.hip else args.device
@@ -361,15 +302,10 @@ def main():
         "backend": backend,
         "variant": "compiled" if args.compile else "eager",
         "workload": meta["name"],
-        "compile_s": round(compile_s, 3),
         # Whether inductor's codegen ran here or came from its cache (gh-ocannl-644). A compiled
         # cell compiles in the process that then times steps, unlike an OCANNL tuned cell; the
         # report states that rather than leaving it assumed (gh-ocannl-675).
         "searched": torch_searched(torch, args.compile),
-        "step_ms": percentiles(synced),
-        "queued_step_ms": queued,
-        "timed_steps": timed_steps,
-        "losses": losses,
         "version": torch.__version__,
         # What this process ran under, for the sweep's regime gate and the report (gh-ocannl-719):
         # derived from torch's effective settings above, not echoed from --regime. `runner_regime`,
@@ -377,12 +313,10 @@ def main():
         # would let the stamp mask a runner that ran the other arm.
         "runner_regime": runner_regime,
         "regime_settings": regime_settings,
-        **peak_memory_result,
+        **measured,
     }
     if args.compile_mode:
         result["compile_mode"] = args.compile_mode
-    if retimed:
-        result["retime_step_ms"] = percentiles(retimed)
     if tokens_per_step:
         result["tokens_per_step"] = tokens_per_step
     emit(result)

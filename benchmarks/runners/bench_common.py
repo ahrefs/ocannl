@@ -3,6 +3,7 @@
 import json
 import math
 import struct
+import time
 
 
 def read_st_metadata(path):
@@ -293,3 +294,114 @@ def peak_memory_fields(probe):
         "peak_memory_counter": probe.tag,
         "peak_memory_source": probe.source,
     }
+
+
+# --- The measurement protocol -------------------------------------------------------------
+#
+# One loop for both Python runners (gh-ocannl-1008). Before it lived here each runner carried its
+# own copy, so a protocol defect -- the peak-memory window closed after the retime block rather than
+# before it (gh-ocannl-1006 review round 1) -- existed identically in two files and was fixed twice.
+# A new per-step or per-window concern goes HERE, once. The OCANNL runner's counterpart is
+# `Bench_harness.measure_and_emit`, with the same parity, warmup, synced and queued phases; its
+# `compile_s` times the compilation itself rather than step 0, and it has no retime block.
+
+
+def run_protocol(step, sync, meta, peak_memory=None, retime=False):
+    """Run the cross-framework measurement protocol; return its result-line fields.
+
+    The runner owns the model and the two closures, the protocol owns everything between them:
+
+    - `step(k)` runs step `k` (the runner picks the batch) and returns the loss as something with
+      `.item()`. Whatever has to be realized or synchronized INSIDE a step belongs to the step, not
+      to this loop -- tinygrad's loss must be realized before `opt.step()` rewrites the weights it
+      was computed from, which no boundary out here can fix.
+    - `sync()` blocks until everything the device has queued is done.
+    - `meta` is the fixture's metadata: `parity_steps`, `warmup_steps` and `timed_steps` are read
+      from it.
+    - `peak_memory` is a `PeakMemoryProbe`, or None where the framework has no counter; creating
+      one must not touch the counter (the window opens in `start()`).
+    - `retime` times a second synced block after the reported ones (gh-ocannl-675).
+
+    A framework-wide mode the steps need (tinygrad's training context) is the caller's: call this
+    inside it.
+
+    The phases, in order, `k` counting steps across all of them:
+
+    1. Step 0, timed on its own as `compile_s` up to its loss value on the host: graph build, and
+       compilation or JIT capture where the variant has one. Its loss is unaffected by the timing,
+       so it is also parity step 0.
+    2. Parity steps 1 .. parity_steps-1, each loss read to the host (`losses`).
+    3. `warmup_steps` untimed steps, then a sync.
+    4. The peak-memory window opens (after the warmup, so the peak is the timed steps' and not the
+       graph build's), then `timed_steps` steps each timed from before the step to after its own
+       sync (`step_ms` percentiles). Each `sample()` sits AFTER the step's elapsed time is taken,
+       so a gauge read costs the reported number nothing.
+    5. `timed_steps` steps enqueued back to back with one final sync, timed as a block and divided
+       (`queued_step_ms`); one more sample; then the window CLOSES, before the optional retime
+       block, so the column reports the steps `step_ms` and `queued_step_ms` report on. Read after
+       retiming instead, a high-water counter would take in the retimed block while a sampled one,
+       which takes no samples there, would not (gh-ocannl-1006 review round 1).
+    6. With `retime`: a sync, then `timed_steps` more steps timed as in 4 (`retime_step_ms`).
+
+    Returns `compile_s`, `step_ms`, `queued_step_ms`, `timed_steps`, `losses`, the three
+    `peak_memory_*` keys (see `peak_memory_fields`) and, when retiming, `retime_step_ms`.
+    """
+    parity_steps = int(meta["parity_steps"])
+    warmup_steps = int(meta["warmup_steps"])
+    timed_steps = int(meta["timed_steps"])
+
+    k = 0
+    losses = []
+    t0 = time.perf_counter()
+    losses.append(step(k).item())
+    compile_s = time.perf_counter() - t0
+    k += 1
+    for _ in range(parity_steps - 1):
+        losses.append(step(k).item())
+        k += 1
+    for _ in range(warmup_steps):
+        step(k)
+        k += 1
+    sync()
+
+    def synced_block(probe):
+        nonlocal k
+        times = []
+        for _ in range(timed_steps):
+            t0 = time.perf_counter()
+            step(k)
+            k += 1
+            sync()
+            times.append((time.perf_counter() - t0) * 1e3)
+            if probe:
+                probe.sample()
+        return times
+
+    if peak_memory:
+        peak_memory.start()
+    synced = synced_block(peak_memory)
+    t0 = time.perf_counter()
+    for _ in range(timed_steps):
+        step(k)
+        k += 1
+    sync()
+    queued = (time.perf_counter() - t0) / timed_steps * 1e3
+    if peak_memory:
+        peak_memory.sample()
+    peak_memory_result = peak_memory_fields(peak_memory)
+    retimed = None
+    if retime:
+        sync()
+        retimed = synced_block(None)  # no probe: the window closed above
+
+    result = {
+        "compile_s": round(compile_s, 3),
+        "step_ms": percentiles(synced),
+        "queued_step_ms": queued,
+        "timed_steps": timed_steps,
+        "losses": losses,
+        **peak_memory_result,
+    }
+    if retimed:
+        result["retime_step_ms"] = percentiles(retimed)
+    return result

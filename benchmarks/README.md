@@ -11,7 +11,11 @@ Apples-to-apples training-step benchmarks built on two pillars:
    `warmup_steps` untimed steps, then reports per-step wall times two ways: `step_ms`
    percentiles (sync after every step) and `queued_step_ms` (enqueue `timed_steps` steps, one
    final sync). One-time cost (graph build / codegen / JIT capture) is reported separately as
-   `compile_s`, never amortized into step time.
+   `compile_s`, never amortized into step time. The protocol is written down twice, once per
+   language: `Bench_harness.measure_and_emit` for OCANNL, and `run_protocol` in
+   `runners/bench_common.py` for both Python runners, which supply only a `step`, a device `sync`
+   and their framework's memory counter (gh-ocannl-1008). A protocol change is made in those two
+   places, never in an individual runner.
 
 The parity gate doubles as a cross-framework correctness oracle for OCANNL: on its first run
 it caught two real backward-pass optimizer bugs (wrong gradients with a correct forward), both
@@ -562,11 +566,11 @@ than the driver (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` at module load), run it wi
   - *When.* The counter is bracketed around the timed steps, not read at process exit. A tuned
     cell's schedule search allocates a candidate buffer per arm, so an exit reading reports the
     search's high water rather than the workload's. OCANNL brackets with
-    `Ir.Alloc_census.reset_peak` in `measure_and_emit`; the Python runners open their probe's
-    window after the warmup sync and **close** it (`peak_memory_fields` reads the probe) before the
-    optional `--retime` block, so the window is the steps `step_ms` and `queued_step_ms` report on
-    whatever the counter's kind — read later, a high-water counter would take the retimed block in
-    and a sampled one, which takes no samples there, would not.
+    `Ir.Alloc_census.reset_peak` in `measure_and_emit`; the Python runners' shared `run_protocol`
+    opens its probe's window after the warmup sync and **closes** it (`peak_memory_fields` reads
+    the probe) before the optional `--retime` block, so the window is the steps `step_ms` and
+    `queued_step_ms` report on whatever the counter's kind — read later, a high-water counter would
+    take the retimed block in and a sampled one, which takes no samples there, would not.
   - *What.* The counters are not one quantity, so each row **names** the one it read, on the row
     itself: the cell reads `123.7 ocannl-seam`, and the section's legend expands that tag. Three
     keys carry it — `peak_memory_bytes`, `peak_memory_counter` (the short tag) and
