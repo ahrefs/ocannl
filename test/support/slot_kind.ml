@@ -1,19 +1,24 @@
-(** Whether a dune invocation can run a stanza that holds a GPU whatever the configuration says
-    (gh-ocannl-1004).
+(** Which backends a dune invocation can run a stanza on whatever the configuration says
+    (gh-ocannl-1004, gh-ocannl-1066).
 
-    tools/fleet-slot-run.sh declares a batch's fleet slot [--cpu] only when the batch cannot hold a
-    GPU. The resolved configuration answers that for every stanza that selects its backend from it
-    -- the ones declaring [(env_var OCANNL_BACKEND)] -- but not for the ones that NAME theirs: a
-    stanza carrying [; ocannl-backend: cuda -- …] goes at the CUDA backend by name, and its [select]
-    arm follows the library's availability, not the environment. So [dune runtest test/operations]
-    on a box with cudajit runs [test_cuda_pool_offset] on the GPU while both configurations say cc.
-    Those markers are complete by construction -- [env_var_deps] fails a stanza that runs an
-    executable and carries neither the variable nor a marker (gh-ocannl-659) -- so the stanzas a run
-    can reach, and their markers, are the whole answer.
+    tools/batch-backends.sh resolves the backends a [tools/test-run.sh] batch can hold, and from
+    them both the dune width the batch runs at and the fleet slot it takes ([--cpu] only when it
+    holds no GPU). The resolved configuration answers that for every stanza that selects its backend
+    from it -- the ones declaring [(env_var OCANNL_BACKEND)] -- but not for the ones that NAME
+    theirs: a stanza carrying [; ocannl-backend: cuda -- …] goes at the CUDA backend by name, and
+    its [select] arm follows the library's availability, not the environment. So
+    [dune runtest test/operations] on a box with hipjit runs the hip-marked stanzas on the GPU while
+    both configurations say cc. Those markers are complete by construction -- [env_var_deps] fails a
+    stanza that runs an executable and carries neither the variable nor a marker (gh-ocannl-659) --
+    so the stanzas a run can reach, and their markers, are the whole answer. Every backend a reached
+    marker names is reported, a CPU one included: the width a batch runs at is the tightest any of
+    its backends meets on the box, and on the fleet's rog-nv-linux a CPU batch has a width of its
+    own.
 
     What a run reaches is read from a CLOSED set of argv shapes, the ones the runner is used with;
-    any other word is unmodelled and answered as a GPU. (Codex review rounds 3-4 on PR #803 found a
-    new corner of dune's CLI each round, so this stopped trying to model the CLI.)
+    any other word is unmodelled, and answered as [Unknown] -- every backend. (Codex review rounds
+    3-4 on PR #803 found a new corner of dune's CLI each round, so this stopped trying to model the
+    CLI.)
     - [build] with alias targets only: [@dir/alias] builds [alias] in [dir] and every directory
       below it, [@@dir/alias] in [dir] alone, [dir] plain (no [.], [..], leading or trailing [/]).
       An alias reaches what its stanzas attach to it, closed under the [(alias …)] its [deps] name
@@ -23,10 +28,10 @@
     - [runtest]/[test] with plain directories runs [@runtest] under each, and with none under the
       root.
     - Options only from the listed harmless ones, and no [--].
-    - Any other subcommand runs no test and reaches nothing. [exec] is refused before this is asked
+    - Any other subcommand runs no test and reaches nothing. [exec] is answered before this is asked
       (its program may pick any backend), and so is a command-line backend flag.
 
-    A dune file this cannot read is itself a GPU answer, for the same reason. *)
+    A dune file this cannot read is itself an [Unknown] answer, for the same reason. *)
 
 open Base
 module Scan = Dune_stanza_scan
@@ -37,7 +42,7 @@ type stanza = {
   dir : string;  (** the directory dune applies it in, repository-relative, [""] for the root *)
   attached : string list;  (** the aliases it attaches to or defines *)
   sexp : Sexplib.Sexp.t;
-  gpu : string option;  (** the GPU backends its marker names, if any *)
+  named : string list;  (** the backends its marker names, [none] left out *)
 }
 
 (** The aliases a stanza sits on, including the per-stanza one dune generates for a test and an
@@ -52,12 +57,10 @@ let attached_aliases sexp =
   in
   Scan.aliases_of sexp @ Option.to_list (Scan.alias_stanza_name sexp) @ generated
 
-let gpu_of_marker = function
+let named_of_marker = function
   | Scan.Names_backend (_, { backend; _ }) | Scan.Declares_and_names (_, { backend; _ }) ->
-      let named = String.split backend ~on:',' in
-      let gpus = List.filter named ~f:(List.mem gpu_backends ~equal:String.equal) in
-      if List.is_empty gpus then None else Some (String.concat ~sep:"," gpus)
-  | _ -> None
+      String.split backend ~on:',' |> List.filter ~f:(fun b -> not (String.equal b "none"))
+  | _ -> []
 
 let join dir sub = match (dir, sub) with "", s -> s | d, "" -> d | d, s -> d ^ "/" ^ s
 
@@ -74,7 +77,7 @@ let stanzas_of ~dir content =
         dir = join dir st.Scan.marked_subdir;
         attached = attached_aliases sexp;
         sexp;
-        gpu = gpu_of_marker (Scan.backend_rule_of marked);
+        named = named_of_marker (Scan.backend_rule_of marked);
       })
 
 type target = Alias of { dir : string; alias : string; recursive : bool }
@@ -226,26 +229,26 @@ let in_scope ~recursive ~root dir =
   String.equal root dir
   || (recursive && (String.is_empty root || String.is_prefix dir ~prefix:(root ^ "/")))
 
-(** The first GPU stanza [target] reaches, as [(dir, names, backends)]. *)
-let reached_gpu stanzas target =
-  let gpu_in stanzas_here reached =
-    List.find_map stanzas_here ~f:(fun s ->
-        match s.gpu with
-        | Some backends when List.exists s.attached ~f:(Set.mem reached) ->
-            let what =
-              match Scan.names_of s.sexp with
-              | [] -> "the rule on " ^ String.concat ~sep:"," (Scan.aliases_of s.sexp)
-              | names -> String.concat ~sep:"," names
-            in
-            Some (s.dir, what, backends)
-        | _ -> None)
+(** Every stanza [target] reaches that names a backend, as [(dir, names, backends)], in directory
+    order. *)
+let reached_named stanzas target =
+  let named_in stanzas_here reached =
+    List.filter_map stanzas_here ~f:(fun s ->
+        if (not (List.is_empty s.named)) && List.exists s.attached ~f:(Set.mem reached) then
+          let what =
+            match Scan.names_of s.sexp with
+            | [] -> "the rule on " ^ String.concat ~sep:"," (Scan.aliases_of s.sexp)
+            | names -> String.concat ~sep:"," names
+          in
+          Some (s.dir, what, s.named)
+        else None)
   in
   let by_dir = List.sort_and_group stanzas ~compare:(fun a b -> String.compare a.dir b.dir) in
-  List.find_map by_dir ~f:(fun group ->
+  List.concat_map by_dir ~f:(fun group ->
       let dir = (List.hd_exn group).dir in
       match target with
       | Alias { dir = root; alias; recursive } ->
-          if not (in_scope ~recursive ~root dir) then None
+          if not (in_scope ~recursive ~root dir) then []
           else
             let sexps = List.map group ~f:(fun s -> s.sexp) in
             (* `default` builds every target in the directory rather than an alias's members, so it
@@ -255,19 +258,21 @@ let reached_gpu stanzas target =
                 Set.of_list (module String) (List.concat_map group ~f:(fun s -> s.attached))
               else Scan.aliases_reached_from sexps alias
             in
-            gpu_in group reached)
+            named_in group reached)
 
-(** The verdict for [argv], given every dune file of the tree as [(dir, content)]: [Ok None] when
-    the run cannot reach a stanza that names a GPU backend, [Ok (Some why)] when it can, and
-    [Error why] when a dune file could not be read -- which the caller also treats as a GPU. *)
-let verdict ~dune_files argv =
+(** What a dune argv can hold by name: [Names] lists each backend a reached stanza's marker names,
+    once, with the first stanza that names it ([Names []] when the run reaches none, or runs no
+    test); [Unknown why] is an argv this does not model or a dune file it could not read, which the
+    caller takes as every backend. *)
+type answer = Names of (string * string) list | Unknown of string
+
+let answer ~dune_files argv =
   match targets argv with
   | Error opt ->
-      Ok
-        (Some
-           (Printf.sprintf
-              "it carries `%s`, which this does not model (it could change what is built)" opt))
-  | Ok None -> Ok None
+      Unknown
+        (Printf.sprintf "it carries `%s`, which this does not model (it could change what is built)"
+           opt)
+  | Ok None -> Names []
   | Ok (Some targets) -> (
       let read =
         List.fold_result dune_files ~init:[] ~f:(fun acc (dir, content) ->
@@ -280,12 +285,25 @@ let verdict ~dune_files argv =
                      (Exn.to_string exn)))
       in
       match read with
-      | Error why -> Error why
+      | Error why -> Unknown why
       | Ok stanzas ->
           let stanzas = List.concat stanzas in
-          Ok
-            (List.find_map targets ~f:(fun t ->
-                 Option.map (reached_gpu stanzas t) ~f:(fun (dir, names, backends) ->
-                     Printf.sprintf "it reaches %s in %s, which names %s" names
-                       (if String.is_empty dir then "." else dir)
-                       backends))))
+          let found =
+            List.concat_map targets ~f:(fun t ->
+                List.concat_map (reached_named stanzas t) ~f:(fun (dir, names, backends) ->
+                    let why =
+                      Printf.sprintf "it reaches %s in %s, which names %s" names
+                        (if String.is_empty dir then "." else dir)
+                        (String.concat ~sep:"," backends)
+                    in
+                    List.map backends ~f:(fun b -> (b, why))))
+          in
+          Names
+            (List.fold found ~init:[] ~f:(fun acc (b, why) ->
+                 if List.Assoc.mem acc b ~equal:String.equal then acc else (b, why) :: acc)
+            |> List.rev))
+
+(** Whether [answer] can hold a GPU: an unknown answer can. *)
+let holds_gpu = function
+  | Unknown _ -> true
+  | Names named -> List.exists named ~f:(fun (b, _) -> List.mem gpu_backends b ~equal:String.equal)

@@ -45,6 +45,13 @@ DUNE
 chmod +x "$fixture/bin/dune"
 export TMPDIR="$fixture"
 export PATH="$fixture/bin:$PATH" PROBE_HOME="$fixture" OCANNL_TOOL_TEST_RUNS="$fixture/runs"
+# Hermetic against the box it runs on, as tools/test-test-run.sh is: on a fleet
+# box the runner would take a real run-time slot through the deployed
+# fleet-worker.sh (gh-ocannl-1004), and on a GPU box it would resolve the
+# batch's backends -- a dune build this fixture's dune refuses -- for a width
+# the fixture already names (gh-ocannl-1066). No slot, and no device to meet.
+export OCANNL_TOOL_FLEET_WORKER=none OCANNL_TOOL_DXG_DEVICE="$fixture/no-such-dxg" \
+  OCANNL_TOOL_KFD_TOPOLOGY="$fixture/no-such-kfd" OCANNL_TOOL_NVIDIA_DEVICE="$fixture/no-such-nvidia"
 cd "$fixture/repo"
 printf 'prefix\r\nANCHOR\r\nsuffix without newline' > module.ml
 chmod 640 module.ml

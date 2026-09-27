@@ -153,7 +153,7 @@ let rec takes_training_lock = function
   | Sexp.Atom _ -> false
 
 (* The alias vocabulary -- what a stanza attaches to, what its `deps` build, what an `(alias …)`
-   stanza defines -- lives in the shared scanner, which tools/fleet-slot-run.sh's reachability
+   stanza defines -- lives in the shared scanner, which tools/batch-backends.sh's reachability
    question (Test_utils.Slot_kind) reads too: two readers of one dune grammar must not drift. *)
 let aliases_of = Scan.aliases_of
 let alias_deps = Scan.alias_deps

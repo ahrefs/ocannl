@@ -6,9 +6,10 @@
 ; the config file beside it, the environment, the command line. It lives here rather than beside a
 ; consumer because any test directory can need it -- `test/operations` reads the emitted-code
 ; extension in its codegen rules and the resolved backend name in its `micrograd_demo_logging` log
-; goldens; tools/fleet-slot-run.sh asks it which backend a batch holds, to take the fleet's slot as
-; --cpu or --gpu -- and a copy per consumer is a second resolution to keep in step. Its `(public_name)` is
-; what makes `%{bin:ocannl_read_config}` resolve from anywhere in the workspace.
+; goldens; tools/batch-backends.sh asks it which backend a tools/test-run.sh batch holds, for the
+; batch's dune width and fleet slot -- and a copy per consumer is a second resolution to keep in
+; step. Its `(public_name)` is what makes `%{bin:ocannl_read_config}` resolve from anywhere in the
+; workspace.
 
 (executable
  (name ocannl_read_config)
@@ -17,9 +18,9 @@
  (modules ocannl_read_config)
  (libraries base arrayjit.utils))
 
-; The reachability half of the fleet slot's kind (gh-ocannl-1004): whether a dune argv can run a
-; stanza that NAMES a GPU backend, which no configuration value shows. tools/fleet-slot-run.sh builds
-; it beside `ocannl_read_config` and runs it from the repository root; the reasoning is
+; The reachability half of a batch's backends (gh-ocannl-1004, gh-ocannl-1066): which backends the
+; stanzas a dune argv can run NAME, which no configuration value shows. tools/batch-backends.sh
+; builds it beside `ocannl_read_config` and runs it from the repository root; the reasoning is
 ; Test_utils.Slot_kind's, which reads the same backend markers `env_var_deps` enforces.
 
 (executable
