@@ -1137,12 +1137,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      it yields; and, at replay, the lowering it produces in the search lineage, whose
      placement-aware digest is the entry's guard ({!decision_lowering_digest}). *)
   let decisions_of problem = placement_decision_lists ~embedded problem in
-  let apply (mat, inl, fp) c =
-    List.fold
-      [ (`Materialize, mat); (`Inline, inl); (`Footprint, fp) ]
-      ~init:c
-      ~f:(fun c (r, tns) -> if List.is_empty tns then c else Context.decide_reading c r tns)
-  in
+  let apply decisions c = Context.decide_readings c decisions in
   let outcome_digest decisions =
     decision_lowering_digest ?name ?timing_ctx ctx comp bindings decisions
   in

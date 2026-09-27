@@ -3278,12 +3278,9 @@ let model_default ?name ?report ctx comp bindings =
       match placement_pick with
       | None -> compile_from ctx
       | Some (mat, inl, fp) -> (
-          let ctx' =
-            List.fold
-              [ (`Materialize, mat); (`Inline, inl); (`Footprint, fp) ]
-              ~init:ctx
-              ~f:(fun c (r, tns) -> Context.decide_reading c r tns)
-          in
+          (* Every reading gets its call, empty or not — the historical context lineage of this
+             path, kept as is; skipping would change only context identity, not the decisions. *)
+          let ctx' = Context.decide_readings ~skip_empty:false ctx (mat, inl, fp) in
           match compile_from ctx' with
           | result ->
               (* The emitted label carries the placement decision: the in-compile selection only

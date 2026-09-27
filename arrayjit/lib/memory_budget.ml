@@ -316,12 +316,7 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
             bp_final.LL.fp_total (List.length !flips)
             (if bp_within_budget then "within budget" else "STILL OVER BUDGET"));
       let inline, footprint = split !accepted in
-      let ctx =
-        List.fold
-          [ (`Inline, inline); (`Footprint, footprint) ]
-          ~init:ctx
-          ~f:(fun c (r, tns) -> if List.is_empty tns then c else Context.decide_reading c r tns)
-      in
+      let ctx = Context.decide_readings ctx ([], inline, footprint) in
       ( ctx,
         {
           bp_baseline;

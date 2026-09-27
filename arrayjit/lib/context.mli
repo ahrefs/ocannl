@@ -541,3 +541,13 @@ val decide_reading : t -> Ir.Low_level.reading -> Ir.Tnode.t list -> t
 (** Dispatches a reading to its decision: [`Materialize] to {!decide_materialized}, [`Inline] to
     {!decide_inline}, [`Footprint] to {!decide_footprint} — how a flip of an
     {!Ir.Low_level.flip_candidate} is applied. *)
+
+val decide_readings :
+  ?skip_empty:bool -> t -> Ir.Tnode.t list * Ir.Tnode.t list * Ir.Tnode.t list -> t
+(** Applies a whole decision vector in the [(materialized, inline, footprint)] form
+    {!Ir.Low_level.partition_readings} produces and {!lowered_for_decisions} takes: one
+    {!decide_reading} per reading, in the order [`Materialize], [`Inline], [`Footprint]. With
+    [skip_empty] (the default) an empty list is skipped; without it every reading gets its call. The
+    two differ only in context identity, not in the decisions recorded: a {!decide_reading} with
+    [[]] records nothing, but still derives a fresh child context (a new context id and a backend
+    child counted by the allocation census). *)
