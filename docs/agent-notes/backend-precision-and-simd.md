@@ -1037,8 +1037,9 @@ files.
   registers: on x86 (16 registers) the default 4x6 tile needs 29 and spills (gcc: 32 stack
   references per k step). Two gcc emission defects are pinned as classes rather than fixed, with a
   claim that fails when either stops reproducing: the partial-vector tail load goes through a stack
-  slot every k step, and the fp16-to-f32 widening bridge goes through general-purpose registers
-  and the stack.
+  slot every k step, and the narrow-storage widening bridges go through general-purpose registers
+  and the stack (fp16 on gcc 15; bf16 at `sapphirerapids` too on gcc 13, so the class is the
+  bridge family, not the format one compiler showed).
 - **A census reading is a fact about the emission AND about the compiler, and CI runs two of them**
   (gh-ocannl-752). The extended fixture passed on a gcc 15.2 box and was red on BOTH CI legs, in two
   unrelated ways, neither reachable from a gcc-only host. (a) **Line attribution.** A row is found

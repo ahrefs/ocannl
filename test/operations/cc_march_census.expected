@@ -23,5 +23,5 @@ no accumulator loop is rendered wholly scalar where a named target's ISA has the
 no accumulator loop is scalarized where a named target's ISA has the operation: true
 every register-tiled Tile_mma k-loop does more vector than scalar work where the ISA has a fused multiply-add: true
 every register-tile accumulator update is one whole-width vector FMA per k step where the ISA has a fused multiply-add: true
-no register-tile k-loop references the stack where its pass fits the target's vector registers, outside the known defects (gcc partial-vector tail load, gcc fp16 widening): true
+no register-tile k-loop references the stack where its pass fits the target's vector registers, outside the known defects (gcc partial-vector tail load, gcc narrow-storage bridges): true
 each known register-tile defect still references the stack on some gcc x86 column with a fused multiply-add: true

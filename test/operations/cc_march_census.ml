@@ -1832,9 +1832,13 @@ let () =
          gcc lowers through a stack slot on every k step (8 references in a one-column tail whose
          whole-vector twins at [n = 512] hold none). Clang lowers the same load in registers, so the
          classes are asked of the column's COMPILER, from its predefined macros, as well as of its
-         target: on a clang x86 column these rows stay under the strict claim; - the (fp16 storage,
-         f32 compute) bridge, which gcc widens through general-purpose registers and the stack (12
-         to 35 references) where the ISA has no native fp16 convert of the width in use.
+         target: on a clang x86 column these rows stay under the strict claim; - the narrow-storage
+         widening bridges ([vec_bridge]'s arms for a storage precision narrower than the compute
+         one), which gcc routes through general-purpose registers ([movq]/[shrq]) and the stack: the
+         (fp16, f32) tile at 12 to 35 references on gcc 15, and on CI's gcc 13 the bf16 tile at
+         [-march=sapphirerapids] too (2 references, none on gcc 15). That is why the class is the
+         bridge FAMILY and not one format: a class drawn around the format one compiler happened to
+         show is a row list by another name.
 
          They are pinned as CLASSES, not as a list of rows: which widths and targets show them is a
          fact about the gcc version as much as about the emission (gh-ocannl-752's lesson), and a
@@ -1848,17 +1852,16 @@ let () =
             fun (r, (g : tile_geometry)) ->
               r.caps.gcc && r.caps.x86 && g.partial
               && match g.pass with Tail -> true | Full -> false );
-          ( "the gcc fp16-to-f32 widening bridge",
-            fun (r, _) ->
-              r.caps.gcc && r.caps.x86 && String.equal r.loop.store half
-              && not (String.equal r.loop.comp half) );
+          ( "the gcc narrow-storage widening bridges",
+            fun (r, _) -> r.caps.gcc && r.caps.x86 && not (String.equal r.loop.store r.loop.comp) );
         ]
       in
       let known rg = List.exists known_defects ~f:(fun (_, is) -> is rg) in
       let spills (r, _) = match counts r with Some c -> c.Census.stack_refs > 0 | None -> true in
       let resident_claim =
         "no register-tile k-loop references the stack where its pass fits the target's vector \
-         registers, outside the known defects (gcc partial-vector tail load, gcc fp16 widening)"
+         registers, outside the known defects (gcc partial-vector tail load, gcc narrow-storage \
+         bridges)"
       in
       let unexcused = List.filter resident_rows ~f:(fun rg -> not (known rg)) in
       if List.is_empty unexcused then
