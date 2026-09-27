@@ -34,6 +34,7 @@ on_error() {
     environment_executed partial_matrix singleton_fail repeated_backend_fail \
     repeated_backend_pass mixed_scope_fail mixed_scope_cleared historical_matrix \
     undeclared_cleared undeclared_skipped undeclared_only rerun_cleared rerun_red completion_red \
+    rerun_final_attempt \
     local_identity_error unsafe_identity_error only_typo_error matrix_error state_first state_same \
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
     capped capped_target remote_opt_in dest_wsl dest_linux dest_missing dest_local_only \
@@ -1546,6 +1547,30 @@ grep -q '^red units counted after a clean serial rerun: m4-max/cc m4-max/metal$'
   "$rerun_cleared_report"
 grep -q '^status: partial (2 of 5 known backends completed)$' "$rerun_cleared_report"
 [ "$(grep -E '^  (result|FAIL|POTENTIAL): ' <<<"$rerun_cleared")" = "$coverage_findings" ]
+
+# Only an executable's FINAL attempt speaks for it. Here the red stanza is
+# fixture.exe's own (`runtest-fixture`), whose first attempt announced every
+# fixture skip before its device was refused, and whose clean retry announced
+# none: it executed them. Counting the first attempt would put the common claim
+# back into the intersection as POTENTIAL; the staged evidence drops those
+# records, pairs and all, so it clears, while the unit's log keeps them.
+final_attempt_failure='File "test/dune", line 2, characters 7-28:
+2 |  (alias runtest-fixture)
+Fatal error: exception hip_init:
+HIP_ERROR_INVALID_DEVICE'
+rerun_final_attempt=$(SWEEP_TEST_OPAM_RC=1 \
+  SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log$'\n'$final_attempt_failure \
+  SWEEP_TEST_OPAM_OUT_METAL=$metal_unit_log$'\n'$final_attempt_failure \
+  run_sweep_args --force --only cc --only metal)
+grep -q 'm4-max/cc: serial rerun: suite completed$' <<<"$rerun_final_attempt"
+final_attempt_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$rerun_final_attempt" | tail -1)
+[ -f "$final_attempt_report" ]
+grep -q '^status: partial (2 of 5 known backends completed)$' "$final_attempt_report"
+grep -q '^result: CLEAR across completed backends -- absent backends remain unknown$' \
+  "$final_attempt_report"
+final_attempt_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
+grep -q 'common unevaluated claim' "$final_attempt_log"
+absent 'fixture.exe' "${final_attempt_log%.log}.skip-evidence"
 
 # The opposing controls, in one run: a red whose serial rerun stays red, and a
 # red with no refusal signature (never rerun), both remain excluded.

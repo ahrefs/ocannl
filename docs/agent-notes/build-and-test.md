@@ -2607,7 +2607,10 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   whole suite (no `--force`), which runs exactly the actions that never completed — the dependents
   a red prerequisite held back, which rerunning the red stanzas alone does not reach. Every action
   has then completed into the same log, so its records are complete, and the report names the
-  unit on a `red units counted after a clean serial rerun:` line.
+  unit on a `red units counted after a clean serial rerun:` line. Only an executable's final
+  attempt speaks for it: the staged `<log>.skip-evidence` drops the first-attempt records of every
+  executable a `runtest-<name>` rerun re-ran, since a capability probe the refused device answered
+  `no` can skip a claim the clean retry executes.
   Dropping those lost minix/hip's evaluations on 2026-09-27 (red only from a ROCr scratch
   assertion at parallel width) and reported its hip-only claims as skipped on every box. An
   intersection over only the completed backends is a loud `POTENTIAL` report; it becomes `FAIL`
