@@ -86,7 +86,7 @@ let () =
   in
   let pointers =
     List.filter (Notes.guide_pointers guide_contents) ~f:(fun p ->
-        Option.is_some (Notes.pointer_target p.Notes.path))
+        Option.is_some (Notes.pointer_scope p))
   in
   eprintf "Scanned %d notes files plus the index, %d bullets, %d AGENTS.md pointers, %d findings.\n"
     (List.length files) (List.length bullets) (List.length pointers) (List.length findings);

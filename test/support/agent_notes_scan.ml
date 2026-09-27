@@ -1762,6 +1762,12 @@ let pointer_target path =
   | Some rest -> from_root rest
   | None -> if String.mem path '/' then from_root path else Some ("agent-notes/" ^ path)
 
+(** The notes file a pointer is classified as naming, if any: by the whole name as written when the
+    path run was cut on the left ([token]), else by the path read. The one classification both
+    {!check_guide} and the live scan's pointer floor use, so the floor cannot count a pointer the
+    rule treats as out of scope (Codex P2, round 13 on lukstafi/ocannl-staging#811). *)
+let pointer_scope p = pointer_target (if p.cut_left then p.token else p.path)
+
 (** Rule 7 over the agent guide. [files] is keyed as {!check_index} describes; the index is looked
     up beside them, so a pointer at [docs/agent-notes.md#…] is checked against the index's headings.
 *)
@@ -1777,7 +1783,7 @@ let check_guide ~guide_file ~guide_contents ~index_file ~index_contents
          [docs/agent-notes/team+ci/setup.md] is a notes path whatever was cut inside it (round 12 on
          lukstafi/ocannl-staging#811). In scope, which note it names is unknown, so it is
          refused. *)
-      match pointer_target (if p.cut_left then p.token else p.path) with
+      match pointer_scope p with
       | None -> None
       | Some _ when p.cut_left ->
           report
