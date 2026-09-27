@@ -912,6 +912,22 @@ let guide_cases =
     ( "a slug running into a Unicode letter is refused",
       guide "- A rule; the mechanism: a.md#the-widget-seam\xc3\xa9.",
       [ "guide-anchors @ AGENTS.md:3" ] );
+    (* A pointer is a token the source delimits; a run stopping at anything else was cut short, and
+       could name a different file or heading than the one written. [b.md] HAS the heading, so
+       reading [a+b.md#...] as [b.md#...] would pass. *)
+    ( "a file name with a character outside the path alphabet is refused",
+      guide "- A rule; the mechanism: a+b.md#the-gadget-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a slug running into a character outside the slug alphabet is refused",
+      guide "- A rule; the mechanism: b.md#the-gadget-seam+more.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    (* A path outside the notes is out of scope whatever its slug says. *)
+    ( "an external path with a Unicode slug is not read",
+      guide "- See docs/syntax_extensions.md#\xc3\xa9criture.",
+      [] );
+    ( "a pointer in bold is read",
+      guide "- A rule; the mechanism: **a.md#the-sprocket-seam**.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
     ( "hashes that are no pointer",
       guide
         "- Cited as staging#413 and ahrefs/ocannl#1044; `#ident_blacklist`; `LOG_FILTER=#debug`; \

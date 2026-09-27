@@ -207,6 +207,10 @@ ok: guide -- pointers in ordinary surroundings are read
 ok: guide -- a Unicode slug is refused
 ok: guide -- a Unicode file name is refused
 ok: guide -- a slug running into a Unicode letter is refused
+ok: guide -- a file name with a character outside the path alphabet is refused
+ok: guide -- a slug running into a character outside the slug alphabet is refused
+ok: guide -- an external path with a Unicode slug is not read
+ok: guide -- a pointer in bold is read
 ok: guide -- hashes that are no pointer
 ok: guide -- plain mentions of a note are not pointers
 ok: unnamed rule -- a finding the list does not name survives the report, last

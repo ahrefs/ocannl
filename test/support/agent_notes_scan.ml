@@ -1649,14 +1649,32 @@ type pointer = {
   pointer_line : int;
   path : string;  (** As written, including the [.md]. *)
   anchor : string;
-  non_ascii : bool;
-      (** Whether a non-ASCII byte touches the path or the slug, in which case both may be cut short
-          where the ASCII runs stopped. *)
+  cut_left : bool;
+      (** Whether the path run stopped at something other than a delimiter ({!plain_before}): the
+          name goes on past what was read -- [a+b.md], a Unicode name -- so which file it names is
+          unknown. *)
+  cut_right : bool;
+      (** Whether the slug run stopped at something other than a delimiter ({!plain_after}): the
+          slug goes on past what was read. *)
 }
 (** One [<path>.md#<anchor>] in the guide, as written. *)
 
 let path_char c = Char.is_alphanum c || List.mem [ '_'; '-'; '.'; '/' ] c ~equal:Char.equal
 let anchor_char c = Char.is_alphanum c || Char.equal c '_' || Char.equal c '-'
+
+(** What may delimit a pointer token in the source: before its path, and after its slug. Anything
+    else where a run stopped means the token goes on -- a file name with a [+] in it, a non-ASCII
+    name or slug -- and a pointer read cut short there could resolve to a different file or heading
+    than the one written (Codex P2, rounds 9-10 on lukstafi/ocannl-staging#811). The lists are
+    closed on purpose, so an unforeseen character refuses rather than truncates. *)
+let plain_before c =
+  Char.is_whitespace c || List.mem [ '('; '['; '"'; '\''; '`'; '<'; '*'; ':' ] c ~equal:Char.equal
+
+let plain_after c =
+  Char.is_whitespace c
+  || List.mem
+       [ ')'; ']'; '"'; '\''; '`'; '>'; '*'; '.'; ','; ';'; ':'; '!'; '?' ]
+       c ~equal:Char.equal
 
 (** Every [<path>.md#<anchor>] in [contents] as the SOURCE spells it, code spans and fenced blocks
     included: a pointer set in backticks is still a pointer. The path is the maximal run of path
@@ -1675,11 +1693,12 @@ let anchor_char c = Char.is_alphanum c || Char.equal c '_' || Char.equal c '-'
     [LOG_FILTER=#debug], a decoded entity inside a code span), so the machinery was removed in
     favour of this contract.
 
-    The notes are ASCII -- their file names and their headings -- and so is what is read here: a
-    non-ASCII byte touching a pointer's path or slug marks it [non_ascii], and it is refused rather
-    than read cut short at the first such byte. Modelling GitHub's Unicode ids instead (letters kept
-    and case-folded, punctuation dropped) would need the slugger's tables; rounds 3, 8 and 9 of that
-    review found one gap after another in the byte-level approximations. *)
+    The notes are ASCII -- their file names and their headings -- and a pointer is a token the
+    source delimits: a path run or slug run that stopped at anything other than a delimiter
+    ({!plain_before}, {!plain_after}) marks the pointer cut, and it is refused rather than read cut
+    short. A non-ASCII byte is one such stop, so GitHub's Unicode ids (letters kept and case-folded,
+    punctuation dropped) never need modelling; rounds 3, 8 and 9 of that review found one gap after
+    another in byte-level approximations of them. *)
 let guide_pointers contents =
   let comments = (inert_by_line contents).comment_ranges in
   List.concat_map (lines contents) ~f:(fun (lineno, line) ->
@@ -1698,11 +1717,14 @@ let guide_pointers contents =
           done;
           let path = String.sub line ~pos:!start ~len:(i + 3 - !start) in
           let anchor = String.sub line ~pos:(i + 4) ~len:(!stop - i - 4) in
-          let non_ascii_at j = j >= 0 && j < n && Char.to_int line.[j] >= 128 in
-          let non_ascii = non_ascii_at (!start - 1) || non_ascii_at !stop in
-          if non_ascii then Some { pointer_line = lineno; path; anchor; non_ascii }
-          else if String.equal path ".md" || String.is_empty anchor then None
-          else Some { pointer_line = lineno; path; anchor; non_ascii }))
+          let cut_left = !start > 0 && not (plain_before line.[!start - 1]) in
+          let cut_right = !stop < n && not (plain_after line.[!stop]) in
+          let pointer = Some { pointer_line = lineno; path; anchor; cut_left; cut_right } in
+          let nameless = String.equal path ".md" in
+          if nameless && String.is_empty anchor then None (* a placeholder: <note>.md#<slug> *)
+          else if cut_left then pointer
+          else if nameless || (String.is_empty anchor && not cut_right) then None
+          else pointer))
 
 (** The notes file a guide pointer names, keyed as {!check_index} keys [files], or [None] when the
     path points outside the notes. A bare basename is a note, which is how the guide spells them; a
@@ -1731,14 +1753,22 @@ let check_guide ~guide_file ~guide_contents ~index_file ~index_contents
         Some (finding ~file:guide_file ~line:p.pointer_line ~rule:rule_guide_anchors msg)
       in
       match pointer_target p.path with
-      | _ when p.non_ascii ->
+      | _ when p.cut_left ->
           report
             (Printf.sprintf
-               "a pointer touching non-ASCII text (read as %s#%s, cut where the ASCII ran out): \
-                the notes' file names and headings are ASCII, and this scan models only ASCII ids \
-                -- write the pointer, and the heading it names, in ASCII"
+               "a pointer whose name runs on past what this scan reads (read as %s#%s): a note's \
+                file name is ASCII letters, digits, _ - . and /, and a pointer starts after a \
+                space or an opening bracket, quote, backtick or * -- which file this names is \
+                unknown"
                p.path p.anchor)
       | None -> None
+      | Some _ when p.cut_right || String.is_empty p.anchor ->
+          report
+            (Printf.sprintf
+               "a pointer whose slug runs on past what this scan reads (read as %s#%s): a heading \
+                id here is ASCII letters, digits, _ and -, ended by a space or closing punctuation \
+                -- write the heading and the pointer in that alphabet"
+               p.path p.anchor)
       | Some target -> (
           match List.Assoc.find known target ~equal:String.equal with
           | None ->
