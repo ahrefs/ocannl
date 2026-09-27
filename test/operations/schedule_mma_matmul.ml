@@ -2172,15 +2172,16 @@ let () =
                tn n);
         let bi = Int.max bm tm and bk = Int.max bm tk in
         let kw = 4 * bk in
-        (* Small integers (0..2), exact in every storage format, varying along both axes of each
-           operand. The period, 3, is coprime to every block extent (tile extents are powers of
-           two), so no row tile, column tile or [k_o] panel repeats another: a twin staging the
-           wrong panel reads different values. Every partial sum is a nonnegative integer no larger
-           than the final one, so the host reference is exact whatever the narrowing order as long
-           as the final sums survive the accumulator's storage unchanged — checked by round-tripping
-           them through a [d_prec] array. *)
-        let a_key = Ll_test.weighted ~weights:[| 1; 2 |] ~modulus:3 ~offset:0. ~stride:1. in
-        let b_key = Ll_test.weighted ~weights:[| 2; 1 |] ~modulus:3 ~offset:0. ~stride:1. in
+        (* Small integers (0..2), exact in every storage format, drawn through the aperiodic
+           [Bench_checksum.mix]: a cyclic key of period p makes panels p apart identical (period 2
+           repeated every row tile and [k_o] panel; period 3 made the fourth panel the first), so a
+           twin staging the wrong panel would read the same values. The mix has no shift symmetry at
+           any lag. Every partial sum is a nonnegative integer no larger than the final one, so the
+           host reference is exact whatever the narrowing order as long as the final sums survive
+           the accumulator's storage unchanged — checked by round-tripping them through a [d_prec]
+           array. *)
+        let a_key idcs = Float.of_int (Bench_checksum.mix ~salt:0x5A17 idcs.(0) idcs.(1) % 3) in
+        let b_key idcs = Float.of_int (Bench_checksum.mix ~salt:0x3C6E idcs.(0) idcs.(1) % 3) in
         let reference =
           Array.init (n * n) ~f:(fun cell ->
               List.sum

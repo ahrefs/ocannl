@@ -3863,7 +3863,14 @@
   (env_var HIP_PATH)
   (env_var OCANNL_BACKEND))
  (modules schedule_mma_matmul)
- (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  test_utils
+  ll_test
+  bench_checksum)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
