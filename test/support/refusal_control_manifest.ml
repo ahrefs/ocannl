@@ -130,6 +130,8 @@ let raw_entries =
         "[scanner-refusal:ad85758e7d6a2b46d81c3d7e6b921d71] outside the boundary";
         "[scanner-refusal:4166c0bca69640c175777244011fc4e2] that allows nothing";
         "[scanner-refusal:5aac880a61d2880852d33a0856daa83f] behind a member's";
+        "[scanner-refusal:396ecaa5128a1569c6279921019721c1] directory the action";
+        "[scanner-refusal:531d64a37eb2ccc8b4c3fee2c5a2fac9] quoted-source entry spans";
         "[scanner-refusal:22c73fdc7f08c48d003aabefe9f59d17] checked in contributes";
       ] );
     ( "codegen_text_inventory.ml",

@@ -107,6 +107,8 @@ census_total_ratchet.ml: [scanner-refusal:b018f905e59688b7aa91c2ca39f76c38] digi
 census_total_ratchet.ml: [scanner-refusal:ad85758e7d6a2b46d81c3d7e6b921d71] outside the boundary (claim) is catalogued beside census_total_ratchet.expected: true
 census_total_ratchet.ml: [scanner-refusal:4166c0bca69640c175777244011fc4e2] that allows nothing (claim) is catalogued beside census_total_ratchet.expected: true
 census_total_ratchet.ml: [scanner-refusal:5aac880a61d2880852d33a0856daa83f] behind a member's (claim) is catalogued beside census_total_ratchet.expected: true
+census_total_ratchet.ml: [scanner-refusal:396ecaa5128a1569c6279921019721c1] directory the action (claim) is catalogued beside census_total_ratchet.expected: true
+census_total_ratchet.ml: [scanner-refusal:531d64a37eb2ccc8b4c3fee2c5a2fac9] quoted-source entry spans (claim) is catalogued beside census_total_ratchet.expected: true
 census_total_ratchet.ml: [scanner-refusal:22c73fdc7f08c48d003aabefe9f59d17] checked in contributes (claim) is catalogued beside census_total_ratchet.expected: true
 codegen_text_inventory.ml has exactly the explicitly assigned refusal controls: true
 codegen_text_inventory.ml: [scanner-refusal:83dfdd0395c402128515f27b2f3b1b1c] the exclusion for (direct failure) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true

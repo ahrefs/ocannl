@@ -19,11 +19,12 @@
       aliases that alias reaches -- its [deps], then the [deps] of each stanza attached to one of
       those, to a fixed point ([Dune_stanza_scan.aliases_reached_from]) -- are the family. A golden
       is the first operand of each [(diff …)] or [(diff? …)] in the action of a rule attached to a
-      family alias, and [<name>.expected], where it is checked in, for a [(test)] or [(tests)]
-      stanza whose per-test alias [runtest-<name>] is in the family. Not read: stderr, [.actual]
-      outputs, inline [%expect] blocks, goldens of tests outside the family, an alias dependency
-      naming another directory ([(alias dir/name)], [(alias_rec …)]), and dune fragments pulled in
-      by [(include …)] (no dune file uses either today). A diffed golden named through a pform is
+      family alias, resolved in the directory any enclosing [(chdir …)] moves it to, and
+      [<name>.expected], where it is checked in, for a [(test)] or [(tests)] stanza whose per-test
+      alias [runtest-<name>] is in the family. Not read: stderr, [.actual] outputs, inline [%expect]
+      blocks, goldens of tests outside the family, an alias dependency naming another directory
+      ([(alias dir/name)], [(alias_rec …)]), and dune fragments pulled in by [(include …)] (no dune
+      file uses either today). A diffed golden named through a pform, or under a [chdir] to one, is
       not skipped: it is no checked-in file, so the first claim refuses it.
     - WHAT IS A NUMBER. A maximal run of two or more ASCII digits that is not immediately preceded
       by an ASCII letter or an underscore: a run continuing a name ([bf16], [m16n8k16],
@@ -70,7 +71,7 @@ let allowed =
     };
     {
       golden = Golden "test/operations/agents_md_size.expected";
-      pattern = {|[0-9]+ KiB|};
+      pattern = {|32 KiB|};
       reason = "the cap Claude Code applies to an imported instructions file, the scan's constant";
     };
     {
@@ -106,8 +107,8 @@ let allowed =
     };
     {
       golden = Golden "test/operations/operand_key_ratchet.expected";
-      pattern = {|`[^`]*`|};
-      reason = "an exempted site's source text, quoted from the file it sits in";
+      pattern = {|^[^ ]+ -- `[^`]*`: |};
+      reason = "an exempted site's source text, quoted between its path and its reason";
     };
     {
       golden = Golden "test/operations/operand_key_scan_cases.expected";
@@ -121,8 +122,10 @@ let allowed =
     };
     {
       golden = Golden "test/operations/verdict_ratchet.expected";
-      pattern = {|^  [a-z_/]+\.ml:.*$|};
-      reason = "an exempted claim format, quoted from the file it sits in, with its reason";
+      pattern = {|^  [a-z_/]+\.ml:\([^ ]\|  *[^ -]\|  *-[^- ]\|  *--[^ ]\)*|};
+      reason =
+        "an exempted claim format quoted from the file it sits in, up to the ` -- ` before its \
+         reason";
     };
   ]
 
@@ -135,9 +138,13 @@ let number_floor = 100
 
 (** {1 The family's goldens} *)
 
-let rec diffed_goldens = function
-  | Sexp.List [ Sexp.Atom ("diff" | "diff?"); Sexp.Atom golden; _ ] -> [ golden ]
-  | Sexp.List l -> List.concat_map l ~f:diffed_goldens
+(* A [(chdir <dir> …)] moves where the operands of the diffs inside it resolve; a [<dir>] holding a
+   pform resolves to no checked-in file, which the first claim refuses. *)
+let rec diffed_goldens ?(cwd = "") = function
+  | Sexp.List [ Sexp.Atom ("diff" | "diff?"); Sexp.Atom golden; _ ] -> [ Dune.in_subdir cwd golden ]
+  | Sexp.List (Sexp.Atom "chdir" :: Sexp.Atom dir :: body) ->
+      List.concat_map body ~f:(diffed_goldens ~cwd:(Dune.in_subdir cwd dir))
+  | Sexp.List l -> List.concat_map l ~f:(diffed_goldens ~cwd)
   | Sexp.Atom _ -> []
 
 (** The goldens of every [scans] family among [dune_files] (path, content), repository-relative,
@@ -168,7 +175,7 @@ let family_goldens ~dune_files ~checked_in =
             | Sexp.List (Sexp.Atom "rule" :: _)
               when List.exists (Dune.aliases_of stanza) ~f:(Set.mem family) ->
                 Option.value_map (Dune.field stanza "action") ~default:[] ~f:(fun action ->
-                    List.concat_map action ~f:diffed_goldens |> List.map ~f:in_dir)
+                    List.concat_map action ~f:(diffed_goldens ~cwd:"") |> List.map ~f:in_dir)
             | _ -> []))
   |> List.dedup_and_sort ~compare:String.compare
 
@@ -309,6 +316,28 @@ let controls () =
     (List.equal String.equal
        (family_goldens ~dune_files:[ ("x/dune", dune) ] ~checked_in:(fun _ -> true))
        [ "x/a.expected"; "x/b.expected"; "x/d.expected"; "x/sub/f.expected" ]);
+  p "a diff under a chdir resolves in the directory the action runs in"
+    (List.equal String.equal
+       (family_goldens
+          ~dune_files:
+            [
+              ( "x/dune",
+                {|(alias (name scans) (deps (alias runtest-h)))
+(rule (alias runtest-h) (action (chdir fixtures (progn (diff h.expected h.actual)))))|}
+              );
+            ]
+          ~checked_in:(fun _ -> true))
+       [ "x/fixtures/h.expected" ]);
+  (* The live allow-list as a whole, so a wider entry for the same golden cannot hide behind the one
+     this is about. *)
+  let refused_by golden text = refused ~entries:allowed (numbers_of ~golden text) in
+  p "a quoted-source entry spans the quotation and not the reason written after it"
+    (at [ 50 ]
+       (refused_by "test/operations/verdict_ratchet.expected"
+          "  test/operations/foo.ml:row (K=64): -- the other 170 rows")
+    && at [ 46 ]
+         (refused_by "test/operations/operand_key_ratchet.expected"
+            "test/operations/foo.ml -- `(x % 97)`: one of `170` sites"));
   p "a test outside the family, or with no golden checked in, contributes nothing"
     (List.equal String.equal
        (family_goldens
