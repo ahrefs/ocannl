@@ -41,7 +41,10 @@ type outcome =
    single run it spans up to 45 us across candidates that are 5-8 us apart in steady state. Two such
    candidates therefore swap places once each has its own round trip added to it, and at that site
    they do -- in 2 of 8 measured runs, against 0 of 8 for [Queued] against an independent batched
-   instrument. See the tables in gh-ocannl-755.
+   instrument. See the tables in gh-ocannl-755. Re-measured there on 2026-09-27 (gh-ocannl-833) the
+   offset had shrunk to 0-6 us (at most 1.08x), and the crown still moved in 3 of 4 site-runs
+   against 0 of 4 for [Queued]: the offset's variation between candidates, not its size, reorders a
+   close pair.
 
    [Queued] is the default because it is the objective the workload presents: a training step queues
    every kernel of a layer into one stream and synchronizes at the end, so no kernel in it pays a
