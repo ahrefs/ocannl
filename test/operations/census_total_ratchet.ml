@@ -334,12 +334,16 @@ let controls () =
     (at [ 41 ] (line "bf16_arithmetic m16n8k16 gh514_cells.sh: 170 lines"));
   p "a single digit is outside the boundary" (at [ 11 ] (line "7 tests of 170"));
   (* Only the two-digit count is a number the boundary reads; the teardown rule refuses both whole
-     lines, and not the line that merely begins like one. *)
+     lines, and not the line that merely begins like one. The lines are Verdict's own, so a reworded
+     teardown fails this control rather than leaving the matcher blind. *)
   let teardown_golden =
-    "FAIL: a\n\
-     FAILED: 3 checks did not hold.\n\
-     FAILED: 12 checks did not hold.\n\
-     FAILED: 1 check did not hold. (not a teardown)\n"
+    String.concat_lines
+      [
+        "FAIL: a";
+        Verdict.teardown_line 3;
+        Verdict.teardown_line 12;
+        Verdict.teardown_line 1 ^ " (not a teardown)";
+      ]
   in
   p "a one-digit teardown total is refused as a line, though no number the boundary reads"
     (List.equal Int.equal

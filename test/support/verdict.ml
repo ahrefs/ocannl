@@ -462,9 +462,15 @@ let rec teardown () =
     Stdlib.at_exit teardown;
     raise Checks_failed)
 
+(** The teardown line for [n] failed checks, without its newline. Exposed so that
+    [census_total_ratchet], which refuses this line in scan goldens, builds its control from the
+    text the teardown really writes. *)
+let teardown_line n =
+  Printf.sprintf "FAILED: %d check%s did not hold." n (if n = 1 then "" else "s")
+
 let report_failures () =
   Stdio.Out_channel.flush Stdio.stdout;
-  Stdio.eprintf "FAILED: %d check%s did not hold.\n" !failures (if !failures = 1 then "" else "s");
+  Stdio.eprintf "%s\n" (teardown_line !failures);
   Stdio.Out_channel.flush Stdio.stderr
 
 let () =
