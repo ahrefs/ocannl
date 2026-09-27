@@ -14,6 +14,8 @@
 #            whole process group is terminated (exit 124) and its trace lines stand
 #            as a lower bound.
 #   STEP     build | provenance | crown-fwd | crown-rev | session-isolated | session-queued
+#            A measurement step needs `build` earlier in the same invocation: _build/ is ignored, so
+#            the clean-tree check cannot vouch for binaries an earlier checkout left there.
 #
 # crown-{fwd,rev}: gh-ocannl-833's instrument, bin/projection_shape_bench.exe 200 8 d <order>
 #   seeds -- the out-projection sites (group d), every seeded candidate ranked by the batched
@@ -142,11 +144,43 @@ require() {
   status=1
 }
 
+# Every session must be a COMPLETE two-arm experiment on an uncontended box, or its wall and totals
+# are not comparable across modes: a placement arm that dies can still ship its sibling
+# (Train.tune_placements), and "searched":true covers a died search too.
+require_complete_session() {
+  local line arm
+  line=$(grep '^{' "$out/$1.out" | tail -1)
+  for arm in A B; do
+    case $line in
+    *"\"arm\":\"$arm\",\"state\":\"searched\""*) ;;
+    *) echo "== step $1: INCOMPLETE SESSION: arm $arm did not complete a search"; status=1 ;;
+    esac
+  done
+  # Whatever shape a terminal failure takes, it is not null; and every contention count is zero.
+  if [ "$(printf '%s' "$line" | grep -o '"terminal_failure":' | wc -l)" -ne \
+    "$(printf '%s' "$line" | grep -o '"terminal_failure":null' | wc -l)" ]; then
+    echo "== step $1: INCOMPLETE SESSION: an arm carries a terminal failure"
+    status=1
+  fi
+  if printf '%s' "$line" | grep -o '"timings_contended":[0-9]*' | grep -qv ':0$'; then
+    echo "== step $1: CONTENDED SESSION: timing windows were refused for host contention"
+    status=1
+  fi
+}
+
+built=
+need_build() {
+  [ -n "$built" ] && return 0
+  echo "gh834: step $1 needs the build step earlier in this invocation" >&2
+  exit 2
+}
+
 for s in "$@"; do
   case $s in
   build)
     step build sh -c "cd '$root' && dune build bin/projection_shape_bench.exe \
       benchmarks/runners/ocannl/bench_gpt.exe" || { cat "$out/build.err"; exit 1; }
+    built=1
     ;;
   provenance)
     echo "host $(hostname) sha $(git -C "$root" rev-parse HEAD) backend $backend cap ${cap}s"
@@ -170,6 +204,7 @@ for s in "$@"; do
     fi
     ;;
   crown-fwd | crown-rev)
+    need_build "$s"
     if step "$s" ../_build/default/bin/projection_shape_bench.exe 200 8 d "${s#crown-}" seeds \
       --ocannl_backend="$backend" --ocannl_log_config_sourcing=true; then
       require "$s" out '^== gh-ocannl-755: candidate ranking'
@@ -181,18 +216,20 @@ for s in "$@"; do
     grep 'Found .*--ocannl_backend=' "$out/$s.err" | sort -u
     ;;
   session-isolated | session-queued)
+    need_build "$s"
     mode=${s#session-}
     rm -rf "$out/cache-$mode"
     if step "$s" env BENCH_FIXTURE="$fixture" BENCH_TUNE=1 BENCH_TIMING_TRACE=1 \
       ../_build/default/benchmarks/runners/ocannl/bench_gpt.exe --ocannl_backend="$backend" \
       --ocannl_autotune_timing="$mode" --ocannl_autotune_cache_dir="$out/cache-$mode" \
-      --ocannl_log_config_sourcing=true; then
+      --ocannl_autotune_log=false --ocannl_log_config_sourcing=true; then
       # A completed session is evidence only with its treatment and its cost record in it.
       require "$s" out '"compile_s":'
       require "$s" out '"searched":true'
       require "$s" err '^timing-trace: summary: '
       require "$s" err "^Found $backend, commandline --ocannl_backend=$backend\$"
       require "$s" err "^Found $mode, commandline --ocannl_autotune_timing=$mode\$"
+      require_complete_session "$s"
     else status=1; fi
     # The result line (compile_s is the search wall) and the trace's last word: the summary on a
     # completed run, the running totals of the last timing call on a capped one.

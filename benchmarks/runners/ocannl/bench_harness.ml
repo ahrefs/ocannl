@@ -221,10 +221,13 @@ let percentile sorted p =
     the elapsed wall, which is how far a killed search got; an attempt is a compile unless
     [autotune_bound_pruning] prunes it first. A call made without failure tagging — the untuned
     control [autotune_log=true] times after a search — fires no pre-dispatch seam, so its warmup and
-    calibration are reported as unattributed and counted apart rather than as zero. What is not
-    counted: the cc backend's in-kernel fork/joins per launch are a property of each candidate's
-    rendering, so a launch count bounds them only together with the candidate's parallel-region
-    count. *)
+    calibration are reported as unattributed and counted apart rather than as zero. The seams cannot
+    see a timing call raise, so a tagged call that fails after its validation leaves its start
+    behind until the next attempt clears it: only when a search's LAST timing call fails that way
+    and an [autotune_log] control follows is that control's interval over-attributed, which is why
+    [benchmarks/gh834_cells.sh] pins [autotune_log=false]. What is not counted: the cc backend's
+    in-kernel fork/joins per launch are a property of each candidate's rendering, so a launch count
+    bounds them only together with the candidate's parallel-region count. *)
 
 let install_timing_trace () =
   if env_flag "BENCH_TIMING_TRACE" then begin
@@ -240,6 +243,10 @@ let install_timing_trace () =
     let prev_attempt = !Autotune.on_candidate_attempt in
     (Autotune.on_candidate_attempt :=
        fun label ->
+         (* A tagged call that raised between its pre-dispatch validation and its timed window left
+            its start behind; a new candidate begins a new call, so that start is dropped here
+            rather than charged to a later untagged call. *)
+         preflight_at := None;
          Int.incr attempts;
          pr "timing-trace: attempt %d at %.1fs: %s\n" !attempts (now () -. t0) label;
          prev_attempt label);
