@@ -1,7 +1,7 @@
 (* gh-ocannl-806: a top-level helper in a module without an [.mli] is an exported value, even when
    its author meant it to be private. Two incidental hand sweeps found many such exports and still
    undercounted one family twofold. This repository scan makes the census mechanical for direct
-   [*.ml] modules in [arrayjit/lib/] and [tensor/].
+   [*.ml] modules in [arrayjit/lib/], [tensor/] and (gh-ocannl-1009) [lib/], the user-facing half.
 
    The matching policy lives in [test/support/dead_export_scan.ml] and its synthetic negative
    controls. In particular, qualified paths through aliases count, and a bare identifier inside the
@@ -345,15 +345,66 @@ let exempt_zero_reference_exports =
     "Utils.settings_of_sexp";
     "Utils.split_with_seps";
     "Utils.str_nonempty";
+    (* gh-ocannl-1009 widened the census to lib/, the user-facing recipe library, where these
+       implicit exports have no caller in the tree. Unlike the entries above, most are not helpers
+       leaked by a missing interface: [Nn_blocks]' architectures and initializers and [Train]'s
+       entry points are the surface lib/ exists to offer, and some -- [normal], [kaiming], [xavier]
+       -- are reached through [Nn_blocks.DSL_modules] re-exports this census does not follow. Which
+       of them an interface should publish, and which it should hide, is gh-ocannl-1010's decision
+       (lib/ has no interfaces); this block is its census. *)
+    "Calibrate.named";
+    "Nn_blocks.avg_pool2d";
+    "Nn_blocks.batch_norm2d";
+    "Nn_blocks.box_muller";
+    "Nn_blocks.conv_bn_relu";
+    "Nn_blocks.cross_attention";
+    "Nn_blocks.decoder_only_block";
+    "Nn_blocks.dropout";
+    "Nn_blocks.global_avg_pool2d";
+    "Nn_blocks.kaiming";
+    "Nn_blocks.kaiming_at";
+    "Nn_blocks.kaiming_impl";
+    "Nn_blocks.mobile_cnn";
+    "Nn_blocks.multi_head_att_workshop";
+    "Nn_blocks.normal";
+    "Nn_blocks.normal1";
+    "Nn_blocks.normal_at";
+    "Nn_blocks.normal_at1";
+    "Nn_blocks.reduce_specified_axes";
+    "Nn_blocks.resnet_block";
+    "Nn_blocks.set_uint32_id";
+    "Nn_blocks.sokoban_cnn";
+    "Nn_blocks.transformer_decoder";
+    "Nn_blocks.transformer_decoder_block";
+    "Nn_blocks.transformer_encoder";
+    "Nn_blocks.transformer_encoder_block";
+    "Nn_blocks.vgg_block";
+    "Nn_blocks.xavier";
+    "Nn_blocks.xavier_at";
+    "Nn_blocks.xavier_impl";
+    "Parallel.host_get";
+    "Parallel.schedule";
+    "Train.compile_with_model_gate";
+    "Train.compile_within_budget";
+    "Train.decision_lowering_digest";
+    "Train.dump_cd_file";
+    "Train.embedded_nodes";
+    "Train.ensure_printable";
+    "Train.filter_out_grad_zeroing";
+    "Train.fit_memory_budget";
+    "Train.params_for";
+    "Train.placement_arm_name";
+    "Train.placement_decision_lists";
+    "Train.run_once";
   ]
 
 let in_scan_root path =
   let directory = Stdlib.Filename.dirname path in
-  String.equal directory "arrayjit/lib" || String.equal directory "tensor"
+  List.mem [ "arrayjit/lib"; "tensor"; "lib" ] directory ~equal:String.equal
 
 let require_implementations ~fail implementations =
   if List.is_empty implementations then (
-    fail "no .mli-less implementation modules found under arrayjit/lib or tensor";
+    fail "no .mli-less implementation modules found under arrayjit/lib, tensor or lib";
     false)
   else true
 
@@ -387,8 +438,8 @@ let refusal_control () =
     Verdict.p label !refused
   in
   case "an empty implementation census reaches its refusal"
-    ~format:"no .mli-less implementation modules found under arrayjit/lib or tensor" (fun fail ->
-      ignore (require_implementations ~fail [] : bool));
+    ~format:"no .mli-less implementation modules found under arrayjit/lib, tensor or lib"
+    (fun fail -> ignore (require_implementations ~fail [] : bool));
   case "an invalid implementation reaches the export-parser refusal"
     ~format:"%s does not parse as OCaml, so this scan cannot vouch for it: %s" (fun fail ->
       ignore (exports_or_refusal ~fail ~source:"arrayjit/lib/bad.ml" "let =" : Scan.export list));

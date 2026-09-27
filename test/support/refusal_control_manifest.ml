@@ -207,7 +207,7 @@ let raw_entries =
       ] );
     ( "dead_export_scan.ml",
       [
-        "[scanner-refusal:ab97825eb17bf92bf92973b99e0849ff] mli-less implementation modules";
+        "[scanner-refusal:0379aebd6902dcef1b8a879a586303c6] mli-less implementation modules";
         "[scanner-refusal:20f449385ebca8a7a25b2d306c8e0f44] scan cannot vouch";
         "[scanner-refusal:085de8c521f251df70b65fc6454dfdad] OCaml source does";
         "[scanner-refusal:e8c85fd2a3138c8fe3283ab67595826c] zero-reference implicit export";

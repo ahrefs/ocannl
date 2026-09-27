@@ -6,7 +6,7 @@
     already marked them deliberately unused, matching OCaml warning 32. This also covers patterns
     and extension payloads; externals and inferred deriving names retain their existing census
     policy, including polymorphic-variant parser helpers. We enumerate those declarations in
-    [arrayjit/lib/] and [tensor/], then count references from every other OCaml source.
+    [arrayjit/lib/], [tensor/] and [lib/], then count references from every other OCaml source.
 
     A reference is conservative: a direct qualified path ([M.v]), a path through a module alias, or
     an unqualified identifier inside the lexical range of [open M]. Alias scopes are deliberately

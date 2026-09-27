@@ -2689,8 +2689,8 @@
    atomic_file_rename_scan_control.actual)))
 
 ; gh-ocannl-806: modules without interfaces implicitly export every top-level binding. The live
-; scan ratchets every source-declared value in direct modules under arrayjit/lib and tensor against
-; external qualified, aliased, opened, or included references. The matching policy is pure in
+; scan ratchets every source-declared value in direct modules under arrayjit/lib, tensor and lib
+; against external qualified, aliased, opened, or included references. The matching policy is pure in
 ; test/support/dead_export_scan.ml, so these cases exercise it against synthetic violations and
 ; near misses rather than trusting today's usually-clean repository as its own control.
 

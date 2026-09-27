@@ -174,7 +174,7 @@ config_usage_scan.ml: [scanner-refusal:13b4153d0202d6c0c37807c3b9149ec9] ocannl_
 config_usage_scan.ml: [scanner-refusal:e457cc60db51565a141d184de6993035] ocannl_config.reference (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:e325a76c47f652bc02203717ce08c44a] checked-in debug config (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 dead_export_scan.ml has exactly the explicitly assigned refusal controls: true
-dead_export_scan.ml: [scanner-refusal:ab97825eb17bf92bf92973b99e0849ff] mli-less implementation modules (direct failure) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
+dead_export_scan.ml: [scanner-refusal:0379aebd6902dcef1b8a879a586303c6] mli-less implementation modules (direct failure) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
 dead_export_scan.ml: [scanner-refusal:20f449385ebca8a7a25b2d306c8e0f44] scan cannot vouch (direct failure) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
 dead_export_scan.ml: [scanner-refusal:085de8c521f251df70b65fc6454dfdad] OCaml source does (direct failure) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
 dead_export_scan.ml: [scanner-refusal:e8c85fd2a3138c8fe3283ab67595826c] zero-reference implicit export (claim) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
