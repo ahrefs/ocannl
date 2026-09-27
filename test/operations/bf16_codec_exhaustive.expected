@@ -1,0 +1,29 @@
+bf16 converters, exhaustive sweep
+  f32 bit patterns narrowed: 4294967296
+  bf16 codes widened: 65536
+OCANNL_VEC_NARROW_BFLOAT16 narrows every f32 input to the code single_to_bfloat16 gives it, bit for bit: true
+single_to_bfloat16 rounds every finite f32 input to the nearest bf16 code, ties to even, overflowing to infinity from 0x7F7F8000 up: true
+single_to_bfloat16 carries the sign of every f32 input over, zeros, infinities and NaNs included: true
+every infinite f32 input narrows to the infinity 0x7F80 of its sign: true
+no NaN f32 input narrows to a non-NaN code: true
+every NaN f32 input narrows to its quieted, truncated image (bits >> 16) | 0x0040, keeping its sign and the top of its payload: true
+single_to_bfloat16 agrees with the native __bf16 cast on every f32 input, NaNs up to payload: true
+the pre-gh-1069 bit-add carries exactly 131072 NaN inputs out of the NaN class: true
+the pre-gh-1069 bit-add agrees with single_to_bfloat16 on every non-NaN f32 input: true
+  distinct bf16 codes produced by narrowing: 65410
+narrowing f32 reaches every finite, infinite and quiet-NaN bf16 code, and no signaling-NaN code: true
+bfloat16_to_single widens all 65536 codes to their exact bf16 values, signed zero included, and every NaN code to the f32 NaN with its sign and payload: true
+the format's decode is strictly increasing over the 32640 non-negative finite codes: true
+every non-NaN code survives a widen-and-narrow round trip: true
+every NaN code widens and narrows back to itself with the quiet bit set, so every quiet NaN code survives the round trip: true
+the reference decode refuses a code that is not a finite bf16 magnitude: true
+the widening entry points refuse a code outside 16 bits: true
+the narrowing entry point refuses a pattern outside 32 bits: true
+the sweep refuses a counters buffer too short to hold its results: true
+the sweep refuses a negative base or count, or a range past 2^32: true
+  smallest subnormal (0x0001): 0x1p-133
+  largest subnormal (0x007F): 0x1.fcp-127
+  smallest normal (0x0080): 0x1p-126
+  one (0x3F80): 0x1p+0
+  largest finite (0x7F7F): 0x1.fep+127
+  negative zero (0x8000): -0x0p+0

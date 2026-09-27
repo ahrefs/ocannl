@@ -250,11 +250,20 @@ files.
   in the ordering as the code after 0x7BFF, so the overflow threshold is the tie at 65520, not a
   saturation — and bit-for-bit against the native `_Float16` cast where the compiler has one (NaNs
   up to payload), and widens all 65536 codes against the format's exact values. The C it compiles
-  is the table's own text: `gen_half_emulated` emits the converters' dependency closure from a copy
+  is the table's own text: `gen_codec_header` emits the converters' dependency closure from a copy
   of `builtins_cc.ml` with only `HAS_NATIVE_FLOAT16` forced to 0. Reintroducing the
   gh-ocannl-981 cutoff (`total_shift >= 24`) fails it with exactly 16 777 214 misroundings and as
   many native disagreements. Emulated widening returns a POSITIVE NaN for a negative NaN code, as
   `fp8_to_single` does; the sweep asks only for "a NaN" there, matching the fp8 contract.
+- **bf16 narrowing is live on every box, and its rounding add must not see a NaN** (gh-ocannl-1069).
+  `single_to_bfloat16` (host stubs, every cc kernel, lane-wise in the vector narrowing bridge) rounded
+  with the bit-add `f32 + 0x7FFF + lsb`, which carried 131072 NaNs out of the class (low-half payload
+  truncated to ±inf, an all-ones top payload carried into the sign: ±0). Both spellings now quiet and
+  truncate a NaN first, `(bits >> 16) | 0x0040` — what clang's `__bf16` cast gives on AArch64, bit
+  for bit. `@test/operations/slow-bf16_codec_exhaustive` sweeps all 2^32 inputs with the pre-fix
+  arithmetic as negative control (exactly 131072 escapes, identical elsewhere — hence no digest bump:
+  `numerics_tag` fingerprints the policy). GPU backends narrow through vendor code only. A sweep's
+  "agrees with the native cast up to NaN payload" must require BOTH sides NaN, or NaN-to-inf passes.
 - **fp16 is the one narrow format a CPU can compute in natively** (gh-ocannl-516), and whether it
   can is a C-preprocessor fact the OCaml renderer cannot see. `cc` probes the configured compiler
   once per process and reports three states — no `_Float16`, `_Float16` with arithmetic *promoted*
