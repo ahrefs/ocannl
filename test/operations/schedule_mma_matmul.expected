@@ -80,6 +80,7 @@ swizzled staged twin keeps the same register fragment, fed through ldmatrix: tru
 staged twins per advertised swizzled layout: the censuses agree apart from ldmatrix, which only the swizzled twin uses: true
 staged twins per advertised swizzled layout: both keep the register fragment resident across k_o: true
 staged twins per advertised swizzled layout: both equal the host reference exactly: true
+staged twins per advertised swizzled layout: every row and column of each operand is distinct: true
 ta tensorized matmul matches the serial twin: true
 ta C-backend fallback matches bitwise: true
 ta tensorized structure as expected: true
