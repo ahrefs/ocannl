@@ -358,11 +358,18 @@ let contention_ratio = 2.
    the quantity being ranked; contention is detected independently on [contention_ms], the raw batch
    wall before queued mode divides it by depth. A deep queue therefore neither spends the budget on
    a whole batch at once nor divides a fixed host stall out of the refusal signal. The sample floor
-   keeps a burst from ending the min-of-N after the caller's usual three repeats. *)
-let sample_min ~repeats ~sample =
-  let samples = ref [] in
-  let total = ref 0. in
-  let count = ref 0 in
+   keeps a burst from ending the min-of-N after the caller's usual three repeats.
+
+   Resumable (gh-ocannl-1074): [prior] is a window already taken, oldest first, and the loop
+   continues it under the same stopping rule rather than starting a fresh one -- so a resumed window
+   stops exactly where one uninterrupted window over the same samples would. The timed loop resumes
+   the queued calibration's synchronized singles this way when the depth settles at 1, where they
+   are samples of the very quantity it would otherwise time again. Returns the whole window, oldest
+   first. *)
+let sample_window ?(prior = []) ~repeats ~sample () =
+  let samples = ref (List.rev prior) in
+  let total = ref (List.fold prior ~init:0. ~f:(fun total s -> total +. s.per_launch_ms)) in
+  let count = ref (List.length prior) in
   while
     !count < Int.max min_timing_samples (Int.max 1 repeats)
     || (Float.(!total < min_timing_ms) && !count < max_timing_runs)
@@ -372,20 +379,26 @@ let sample_min ~repeats ~sample =
     total := !total +. per_launch_ms;
     Int.incr count
   done;
+  List.rev !samples
+
+let window_result samples =
   let ms =
-    List.fold !samples ~init:Float.infinity ~f:(fun best s -> Float.min best s.per_launch_ms)
+    List.fold samples ~init:Float.infinity ~f:(fun best s -> Float.min best s.per_launch_ms)
   in
   let contention_floor =
-    List.fold !samples ~init:Float.infinity ~f:(fun best s -> Float.min best s.contention_ms)
+    List.fold samples ~init:Float.infinity ~f:(fun best s -> Float.min best s.contention_ms)
   in
   let stalled =
-    List.count !samples ~f:(fun s -> Float.(s.contention_ms > contention_floor * contention_ratio))
+    List.count samples ~f:(fun s -> Float.(s.contention_ms > contention_floor * contention_ratio))
   in
+  let count = List.length samples in
   (* Dispersion only. A window whose minimum is zero, NaN or infinite is a clock that resolved
      nothing -- a different fact, and one [admitted_timing_ms] already refuses on the number itself.
      Folding the two lost the distinction exactly where it is load-bearing (gh-ocannl-888): the
      depth policy consults one and must ignore the other. *)
-  { ms; contended = stalled * 2 >= !count; samples = !count }
+  { ms; contended = stalled * 2 >= count; samples = count }
+
+let sample_min ~repeats ~sample = window_result (sample_window ~repeats ~sample ())
 
 (* A usable winner drawn from an incomplete measurement set may ship for this call, but must not
    become the answer to every later call through the schedule cache. A later idle process needs to
@@ -604,9 +617,262 @@ let on_batch_depth : (int -> calibration_samples:int -> unit) ref =
    window's mean is still a stalled minority's to move: [contended] is declared on a MAJORITY of the
    window's batches exceeding twice its floor, so a bound meant to hold whenever the claim is not
    bypassed belongs on a statistic a minority cannot move -- which the median is over exactly the
-   regime the contention rule leaves to it. Default no-op; no configuration key selects it. *)
-let on_timed_window : (samples:int -> wall_ms:float -> median_wall_ms:float -> unit) ref =
-  ref (fun ~samples:_ ~wall_ms:_ ~median_wall_ms:_ -> ())
+   regime the contention rule leaves to it. [reused] says how many of the window's [samples] the
+   loop did NOT dispatch (gh-ocannl-1074): a queued call that settles at depth 1 resumes the
+   calibration's synchronized singles as its window, and those launches are already counted in
+   [on_batch_depth]'s [calibration_samples] -- so the launches the timed loop itself dispatched are
+   [depth * (samples - reused)]. Default no-op; no configuration key selects it. *)
+let on_timed_window :
+    (samples:int -> reused:int -> wall_ms:float -> median_wall_ms:float -> unit) ref =
+  ref (fun ~samples:_ ~reused:_ ~wall_ms:_ ~median_wall_ms:_ -> ())
+
+(* The measurement proper, after the warmup: the calibration and the timed loop, with the device
+   reduced to [batch depth], which dispatches [depth] launches back to back, synchronizes once and
+   returns the wall in milliseconds. Separated from [time_routine] so a test can drive the whole
+   policy -- which depth a call settles on, which window it times, how many launches each costs --
+   on an injected clock, with no device and no machine-dependent routine (gh-ocannl-1074). *)
+let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
+  let probe_batch depth =
+    let best_ms = ref Float.infinity in
+    for _ = 1 to queue_batch_probe_runs do
+      best_ms := Float.min !best_ms (batch depth)
+    done;
+    { ms = !best_ms; contended = false; samples = queue_batch_probe_runs }
+  in
+  (* [singles] is the calibration's window of synchronized single launches, kept rather than reduced
+     to its minimum: they are depth-1 batches, sampled under the timed loop's own stopping rule, so
+     when the depth settles at 1 they are the timed window's first samples (below). *)
+  let calibration_dispatches, depth, estimated_batch_wall_ms, singles =
+    match timing with
+    | Isolated -> (0, 1, None, [])
+    | Queued ->
+        let singles =
+          sample_window ~repeats:queue_calibration_runs
+            ~sample:(fun () ->
+              let wall = batch 1 in
+              { per_launch_ms = wall; contention_ms = wall })
+            ()
+        in
+        let single_estimate = window_result singles in
+        let calibration_dispatches, depth, estimated_batch_wall_ms =
+          if queue_depth_cap <> max_queue_depth then
+            (* The affine refinement repairs the CUDA/HIP dispatch-scale defect in gh-ocannl-892.
+               Preserve the historical single-estimate policy on cc and Metal: Metal's measured
+               depth is already below the old cap, while extra probes and a deeper timed queue on cc
+               multiplied the repository's CPU autotune-suite wall past its CI ceiling. *)
+            ( single_estimate.samples,
+              queued_batch_depth_with_cap ~max_depth:queue_depth_cap single_estimate,
+              None )
+          else
+            let provisional_depth =
+              queued_batch_depth_with_cap ~max_depth:queue_depth_cap single_estimate
+            in
+            (* Depth 1 is probed at depth 2 before it is retained: a genuinely slow routine's affine
+               pair confirms depth 1, while an inflated synchronized-single window enters the same
+               retry path as every other suspect target crossing. *)
+            let probe_depth = Int.max 2 provisional_depth in
+            (* A synchronized single dispatch includes the round trip queueing is meant to amortize,
+               so its estimate safely seeds a probe but is not the batch's steady-state per-launch
+               cost. On HIP's STREAM kernels it selected 105--209 launches whose actual batch wall
+               was only 1.3--2.6 ms. Measure that provisional queue and split its wall into fixed
+               synchronization and marginal launch costs; their affine model selects the depth whose
+               whole batch reaches the target even when the provisional depth is shallow. Budget the
+               probe on batch wall rather than per-launch time: it is calibration, not a candidate
+               measurement, and need not spend 64 whole batches to learn the scale. *)
+            let probe = probe_batch probe_depth in
+            let depth, estimated_batch_wall_ms =
+              refine_queued_batch_depth_with_cap ~max_depth:queue_depth_cap
+                ~single_ms:single_estimate.ms ~probe_depth ~probe_ms:probe.ms
+            in
+            let rec confirm_or_scale ?(retry_stall = true) calibration_dispatches depth wall_ms =
+              if depth = queue_depth_cap then
+                (* The cap itself cannot provide a depth-separated confirmation. Its directly
+                   measured wall is still the best scale evidence; repeating the same depth only
+                   spends another queue and can replace that observation with [nan] on noise. *)
+                (calibration_dispatches, depth, wall_ms)
+              else
+                let confirmation_depth = Int.min queue_depth_cap (depth + Int.max 1 (depth / 4)) in
+                let confirmation = probe_batch confirmation_depth in
+                let calibration_dispatches =
+                  calibration_dispatches + (confirmation.samples * confirmation_depth)
+                in
+                let confirmed_depth, confirmed_wall_ms =
+                  refine_queued_batch_depth_between_with_cap ~max_depth:queue_depth_cap
+                    ~base_depth:depth ~base_ms:wall_ms ~probe_depth:confirmation_depth
+                    ~probe_ms:confirmation.ms
+                in
+                if confirmed_depth = depth then (calibration_dispatches, depth, wall_ms)
+                else if
+                  Float.is_nan confirmed_wall_ms
+                  && Float.(confirmation.ms >= queued_batch_ms && confirmation.ms >= wall_ms)
+                then
+                  if retry_stall && Float.(confirmation.ms > wall_ms * contention_ratio) then
+                    (* This confirmation is itself a contention outlier against the supported
+                       target-sized base. Retry the same depth once: jumping straight to the cap
+                       would inflate the timed batch and its 2x refusal threshold precisely when
+                       calibration observed the stall that rule is meant to reject. *)
+                    confirm_or_scale ~retry_stall:false calibration_dispatches depth wall_ms
+                  else (calibration_dispatches, queue_depth_cap, Float.nan)
+                else
+                  let depth, wall_ms =
+                    depth_from_batch_wall_with_cap ~max_depth:queue_depth_cap
+                      ~depth:confirmation_depth ~wall_ms:confirmation.ms
+                  in
+                  (calibration_dispatches, depth, wall_ms)
+            in
+            let confirm_interpolated calibration_dispatches depth ~upper_depth ~upper_ms =
+              let measured = probe_batch depth in
+              let calibration_dispatches = calibration_dispatches + (measured.samples * depth) in
+              let confirmed_depth, confirmed_wall_ms =
+                refine_queued_batch_depth_between_with_cap ~max_depth:queue_depth_cap
+                  ~base_depth:depth ~base_ms:measured.ms ~probe_depth:upper_depth ~probe_ms:upper_ms
+              in
+              if confirmed_depth = depth then (calibration_dispatches, depth, measured.ms)
+              else if Float.is_finite confirmed_wall_ms then
+                (calibration_dispatches, confirmed_depth, confirmed_wall_ms)
+              else if Float.(upper_ms >= queued_batch_ms && upper_ms >= measured.ms) then
+                (calibration_dispatches, queue_depth_cap, Float.nan)
+              else
+                let depth, wall_ms =
+                  depth_from_batch_wall_with_cap ~max_depth:queue_depth_cap ~depth:upper_depth
+                    ~wall_ms:upper_ms
+                in
+                (calibration_dispatches, depth, wall_ms)
+            in
+            let rec validate_depth probes_left calibration_dispatches base_depth base_ms depth
+                estimated_wall_ms =
+              if depth = queue_depth_cap then (calibration_dispatches, depth, estimated_wall_ms)
+              else
+                let validation = probe_batch depth in
+                let calibration_dispatches =
+                  calibration_dispatches + (validation.samples * depth)
+                in
+                let next_depth, next_wall_ms =
+                  refine_queued_batch_depth_between_with_cap ~max_depth:queue_depth_cap ~base_depth
+                    ~base_ms ~probe_depth:depth ~probe_ms:validation.ms
+                in
+                if next_depth = base_depth then
+                  (* A valid pair can confirm its earlier, already-target-sized observation. Stop
+                     there: probing that shallower depth again would reverse the refinement order
+                     and can oscillate until unrelated noise forces the cap. *)
+                  (calibration_dispatches, base_depth, base_ms)
+                else if Float.(base_ms < queued_batch_ms && validation.ms >= queued_batch_ms) then
+                  if next_depth < depth then
+                    (* The measured pair brackets the target. Interpolate inside that bracket before
+                       confirming: retaining an overshooting validation would turn a well-resolved
+                       10 ms target into a 20 ms batch and blunt the 2x rule. *)
+                    if probes_left <= 1 then
+                      confirm_interpolated calibration_dispatches next_depth ~upper_depth:depth
+                        ~upper_ms:validation.ms
+                    else
+                      validate_depth (probes_left - 1) calibration_dispatches base_depth base_ms
+                        next_depth next_wall_ms
+                  else confirm_or_scale calibration_dispatches depth validation.ms
+                else if next_depth = queue_depth_cap then
+                  let depth, wall_ms =
+                    if
+                      Float.is_nan next_wall_ms
+                      && Float.(validation.ms >= queued_batch_ms && validation.ms >= base_ms)
+                    then (queue_depth_cap, Float.nan)
+                    else if Float.is_nan next_wall_ms then
+                      depth_from_batch_wall_with_cap ~max_depth:queue_depth_cap ~depth
+                        ~wall_ms:validation.ms
+                    else (next_depth, next_wall_ms)
+                  in
+                  (calibration_dispatches, depth, wall_ms)
+                else if probes_left <= 1 && Float.is_nan next_wall_ms then
+                  (* Do not fall back to the earlier target crossing: it may be the inflated window
+                     this validation was meant to expose. Scale from the deepest measured batch when
+                     it is non-monotone; a monotone, fixed-dominated pair still binds at the cap. *)
+                  let depth, wall_ms =
+                    if Float.(validation.ms >= queued_batch_ms && validation.ms >= base_ms) then
+                      (queue_depth_cap, Float.nan)
+                    else
+                      depth_from_batch_wall_with_cap ~max_depth:queue_depth_cap ~depth
+                        ~wall_ms:validation.ms
+                  in
+                  (calibration_dispatches, depth, wall_ms)
+                else if probes_left <= 1 then
+                  (* Keep the latest supported affine projection after the bounded validation loop.
+                     Jumping to the cap here would turn a noisy near-target probe into a 20--30 ms
+                     batch whose 2x contention threshold no longer catches the fixed host stall this
+                     policy exists to detect. *)
+                  (calibration_dispatches, next_depth, next_wall_ms)
+                else
+                  validate_depth (probes_left - 1) calibration_dispatches depth validation.ms
+                    next_depth next_wall_ms
+            in
+            let calibration_dispatches = single_estimate.samples + (probe.samples * probe_depth) in
+            let calibration_dispatches, depth, estimated_batch_wall_ms =
+              if provisional_depth = 1 && depth = 1 then
+                (calibration_dispatches, 1, single_estimate.ms)
+              else if Float.(probe.ms >= queued_batch_ms) && depth < probe_depth then
+                validate_depth max_depth_validation_probes calibration_dispatches 1
+                  single_estimate.ms depth estimated_batch_wall_ms
+              else if depth = probe_depth && Float.(probe.ms >= queued_batch_ms) then
+                confirm_or_scale calibration_dispatches probe_depth probe.ms
+              else
+                validate_depth max_depth_validation_probes calibration_dispatches probe_depth
+                  probe.ms depth estimated_batch_wall_ms
+            in
+            (calibration_dispatches, depth, Some estimated_batch_wall_ms)
+        in
+        (calibration_dispatches, depth, estimated_batch_wall_ms, singles)
+  in
+  Option.iter estimated_batch_wall_ms ~f:(fun estimated_wall_ms ->
+      if depth = queue_depth_cap then
+        if Float.is_finite estimated_wall_ms && Float.is_positive estimated_wall_ms then (
+          if Float.(estimated_wall_ms < queued_batch_ms) then
+            logf
+              "queued batch capped at depth %d: estimated wall %.4f ms, %.4f ms short of the %.1f \
+               ms target"
+              depth estimated_wall_ms
+              (queued_batch_ms -. estimated_wall_ms)
+              queued_batch_ms)
+        else
+          logf
+            "queued batch capped at depth %d: batch wall estimate is unresolved, so the shortfall \
+             from the %.1f ms target cannot be quantified"
+            depth queued_batch_ms);
+  !on_batch_depth depth ~calibration_samples:calibration_dispatches;
+  (* The calibration's own contention verdict is not consulted (gh-ocannl-888): it judged single
+     dispatches, and the window that gets judged for refusal is the batch below.
+
+     At depth 1 that batch IS a synchronized single, so the calibration has already sampled the very
+     quantity the timed loop would measure, under the same stopping rule -- which is also exactly
+     what [Isolated] measures: a warmup, then a min-of-N over single launches. Timing a fresh
+     depth-1 window re-measured it, and on a search dominated by candidates slower than the batch
+     target that repeat was a large share of the session's wall (gh-ocannl-1074: 215 of 220 calls of
+     a gfx1151 gpt2_mini search settled at depth 1). So the window resumes from the singles, topping
+     up only as far as the caller's [repeats] floor asks beyond the calibration's, and the resumed
+     window is judged for contention whole, exactly as a fresh one would be. At any other depth the
+     singles are a different quantity from the batch and are left out. *)
+  let reused = if depth = 1 then singles else [] in
+  let timed_wall_ms = ref (List.fold reused ~init:0. ~f:(fun total s -> total +. s.contention_ms))
+  and timed_batches = ref (List.length reused)
+  and timed_walls = ref (List.rev_map reused ~f:(fun s -> s.contention_ms)) in
+  let result =
+    window_result
+    @@ sample_window ~prior:reused ~repeats
+         ~sample:(fun () ->
+           let wall = batch depth in
+           timed_wall_ms := !timed_wall_ms +. wall;
+           timed_walls := wall :: !timed_walls;
+           Int.incr timed_batches;
+           { per_launch_ms = wall /. Float.of_int depth; contention_ms = wall })
+         ()
+  in
+  let median_wall_ms =
+    let sorted = Array.of_list !timed_walls in
+    Array.sort sorted ~compare:Float.compare;
+    let n = Array.length sorted in
+    if n = 0 then 0.
+    else if n % 2 = 1 then sorted.(n / 2)
+    else (sorted.((n / 2) - 1) +. sorted.(n / 2)) /. 2.
+  in
+  !on_timed_window ~samples:!timed_batches ~reused:(List.length reused) ~wall_ms:!timed_wall_ms
+    ~median_wall_ms;
+  result
 
 (* [routine.bindings] exposes the routine's live binding refs — restore them after timing (Codex P2
    on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)
@@ -649,229 +915,9 @@ let time_routine ?(tag_failures = false) ~timing ~repeats cctx routine =
         sync !ctx;
         Mtime.Span.to_float_ns (Mtime_clock.count c0) /. 1e6
       in
-      let probe_batch depth =
-        let best_ms = ref Float.infinity in
-        for _ = 1 to queue_batch_probe_runs do
-          best_ms := Float.min !best_ms (batch depth)
-        done;
-        { ms = !best_ms; contended = false; samples = queue_batch_probe_runs }
-      in
-      let calibration_dispatches, depth, estimated_batch_wall_ms =
-        match timing with
-        | Isolated -> (0, 1, None)
-        | Queued ->
-            let queue_depth_cap = queue_depth_cap_for_backend (Context.backend_name cctx) in
-            let single_estimate =
-              sample_min ~repeats:queue_calibration_runs ~sample:(fun () ->
-                  let wall = batch 1 in
-                  { per_launch_ms = wall; contention_ms = wall })
-            in
-            if queue_depth_cap <> max_queue_depth then
-              (* The affine refinement repairs the CUDA/HIP dispatch-scale defect in gh-ocannl-892.
-                 Preserve the historical single-estimate policy on cc and Metal: Metal's measured
-                 depth is already below the old cap, while extra probes and a deeper timed queue on
-                 cc multiplied the repository's CPU autotune-suite wall past its CI ceiling. *)
-              ( single_estimate.samples,
-                queued_batch_depth_with_cap ~max_depth:queue_depth_cap single_estimate,
-                None )
-            else
-              let provisional_depth =
-                queued_batch_depth_with_cap ~max_depth:queue_depth_cap single_estimate
-              in
-              (* Depth 1 is probed at depth 2 before it is retained: a genuinely slow routine's
-                 affine pair confirms depth 1, while an inflated synchronized-single window enters
-                 the same retry path as every other suspect target crossing. *)
-              let probe_depth = Int.max 2 provisional_depth in
-              (* A synchronized single dispatch includes the round trip queueing is meant to
-                 amortize, so its estimate safely seeds a probe but is not the batch's steady-state
-                 per-launch cost. On HIP's STREAM kernels it selected 105--209 launches whose actual
-                 batch wall was only 1.3--2.6 ms. Measure that provisional queue and split its wall
-                 into fixed synchronization and marginal launch costs; their affine model selects
-                 the depth whose whole batch reaches the target even when the provisional depth is
-                 shallow. Budget the probe on batch wall rather than per-launch time: it is
-                 calibration, not a candidate measurement, and need not spend 64 whole batches to
-                 learn the scale. *)
-              let probe = probe_batch probe_depth in
-              let depth, estimated_batch_wall_ms =
-                refine_queued_batch_depth_with_cap ~max_depth:queue_depth_cap
-                  ~single_ms:single_estimate.ms ~probe_depth ~probe_ms:probe.ms
-              in
-              let rec confirm_or_scale ?(retry_stall = true) calibration_dispatches depth wall_ms =
-                if depth = queue_depth_cap then
-                  (* The cap itself cannot provide a depth-separated confirmation. Its directly
-                     measured wall is still the best scale evidence; repeating the same depth only
-                     spends another queue and can replace that observation with [nan] on noise. *)
-                  (calibration_dispatches, depth, wall_ms)
-                else
-                  let confirmation_depth =
-                    Int.min queue_depth_cap (depth + Int.max 1 (depth / 4))
-                  in
-                  let confirmation = probe_batch confirmation_depth in
-                  let calibration_dispatches =
-                    calibration_dispatches + (confirmation.samples * confirmation_depth)
-                  in
-                  let confirmed_depth, confirmed_wall_ms =
-                    refine_queued_batch_depth_between_with_cap ~max_depth:queue_depth_cap
-                      ~base_depth:depth ~base_ms:wall_ms ~probe_depth:confirmation_depth
-                      ~probe_ms:confirmation.ms
-                  in
-                  if confirmed_depth = depth then (calibration_dispatches, depth, wall_ms)
-                  else if
-                    Float.is_nan confirmed_wall_ms
-                    && Float.(confirmation.ms >= queued_batch_ms && confirmation.ms >= wall_ms)
-                  then
-                    if retry_stall && Float.(confirmation.ms > wall_ms * contention_ratio) then
-                      (* This confirmation is itself a contention outlier against the supported
-                         target-sized base. Retry the same depth once: jumping straight to the cap
-                         would inflate the timed batch and its 2x refusal threshold precisely when
-                         calibration observed the stall that rule is meant to reject. *)
-                      confirm_or_scale ~retry_stall:false calibration_dispatches depth wall_ms
-                    else (calibration_dispatches, queue_depth_cap, Float.nan)
-                  else
-                    let depth, wall_ms =
-                      depth_from_batch_wall_with_cap ~max_depth:queue_depth_cap
-                        ~depth:confirmation_depth ~wall_ms:confirmation.ms
-                    in
-                    (calibration_dispatches, depth, wall_ms)
-              in
-              let confirm_interpolated calibration_dispatches depth ~upper_depth ~upper_ms =
-                let measured = probe_batch depth in
-                let calibration_dispatches = calibration_dispatches + (measured.samples * depth) in
-                let confirmed_depth, confirmed_wall_ms =
-                  refine_queued_batch_depth_between_with_cap ~max_depth:queue_depth_cap
-                    ~base_depth:depth ~base_ms:measured.ms ~probe_depth:upper_depth
-                    ~probe_ms:upper_ms
-                in
-                if confirmed_depth = depth then (calibration_dispatches, depth, measured.ms)
-                else if Float.is_finite confirmed_wall_ms then
-                  (calibration_dispatches, confirmed_depth, confirmed_wall_ms)
-                else if Float.(upper_ms >= queued_batch_ms && upper_ms >= measured.ms) then
-                  (calibration_dispatches, queue_depth_cap, Float.nan)
-                else
-                  let depth, wall_ms =
-                    depth_from_batch_wall_with_cap ~max_depth:queue_depth_cap ~depth:upper_depth
-                      ~wall_ms:upper_ms
-                  in
-                  (calibration_dispatches, depth, wall_ms)
-              in
-              let rec validate_depth probes_left calibration_dispatches base_depth base_ms depth
-                  estimated_wall_ms =
-                if depth = queue_depth_cap then (calibration_dispatches, depth, estimated_wall_ms)
-                else
-                  let validation = probe_batch depth in
-                  let calibration_dispatches =
-                    calibration_dispatches + (validation.samples * depth)
-                  in
-                  let next_depth, next_wall_ms =
-                    refine_queued_batch_depth_between_with_cap ~max_depth:queue_depth_cap
-                      ~base_depth ~base_ms ~probe_depth:depth ~probe_ms:validation.ms
-                  in
-                  if next_depth = base_depth then
-                    (* A valid pair can confirm its earlier, already-target-sized observation. Stop
-                       there: probing that shallower depth again would reverse the refinement order
-                       and can oscillate until unrelated noise forces the cap. *)
-                    (calibration_dispatches, base_depth, base_ms)
-                  else if Float.(base_ms < queued_batch_ms && validation.ms >= queued_batch_ms) then
-                    if next_depth < depth then
-                      (* The measured pair brackets the target. Interpolate inside that bracket
-                         before confirming: retaining an overshooting validation would turn a
-                         well-resolved 10 ms target into a 20 ms batch and blunt the 2x rule. *)
-                      if probes_left <= 1 then
-                        confirm_interpolated calibration_dispatches next_depth ~upper_depth:depth
-                          ~upper_ms:validation.ms
-                      else
-                        validate_depth (probes_left - 1) calibration_dispatches base_depth base_ms
-                          next_depth next_wall_ms
-                    else confirm_or_scale calibration_dispatches depth validation.ms
-                  else if next_depth = queue_depth_cap then
-                    let depth, wall_ms =
-                      if
-                        Float.is_nan next_wall_ms
-                        && Float.(validation.ms >= queued_batch_ms && validation.ms >= base_ms)
-                      then (queue_depth_cap, Float.nan)
-                      else if Float.is_nan next_wall_ms then
-                        depth_from_batch_wall_with_cap ~max_depth:queue_depth_cap ~depth
-                          ~wall_ms:validation.ms
-                      else (next_depth, next_wall_ms)
-                    in
-                    (calibration_dispatches, depth, wall_ms)
-                  else if probes_left <= 1 && Float.is_nan next_wall_ms then
-                    (* Do not fall back to the earlier target crossing: it may be the inflated
-                       window this validation was meant to expose. Scale from the deepest measured
-                       batch when it is non-monotone; a monotone, fixed-dominated pair still binds
-                       at the cap. *)
-                    let depth, wall_ms =
-                      if Float.(validation.ms >= queued_batch_ms && validation.ms >= base_ms) then
-                        (queue_depth_cap, Float.nan)
-                      else
-                        depth_from_batch_wall_with_cap ~max_depth:queue_depth_cap ~depth
-                          ~wall_ms:validation.ms
-                    in
-                    (calibration_dispatches, depth, wall_ms)
-                  else if probes_left <= 1 then
-                    (* Keep the latest supported affine projection after the bounded validation
-                       loop. Jumping to the cap here would turn a noisy near-target probe into a
-                       20--30 ms batch whose 2x contention threshold no longer catches the fixed
-                       host stall this policy exists to detect. *)
-                    (calibration_dispatches, next_depth, next_wall_ms)
-                  else
-                    validate_depth (probes_left - 1) calibration_dispatches depth validation.ms
-                      next_depth next_wall_ms
-              in
-              let calibration_dispatches =
-                single_estimate.samples + (probe.samples * probe_depth)
-              in
-              let calibration_dispatches, depth, estimated_batch_wall_ms =
-                if provisional_depth = 1 && depth = 1 then
-                  (calibration_dispatches, 1, single_estimate.ms)
-                else if Float.(probe.ms >= queued_batch_ms) && depth < probe_depth then
-                  validate_depth max_depth_validation_probes calibration_dispatches 1
-                    single_estimate.ms depth estimated_batch_wall_ms
-                else if depth = probe_depth && Float.(probe.ms >= queued_batch_ms) then
-                  confirm_or_scale calibration_dispatches probe_depth probe.ms
-                else
-                  validate_depth max_depth_validation_probes calibration_dispatches probe_depth
-                    probe.ms depth estimated_batch_wall_ms
-              in
-              (calibration_dispatches, depth, Some estimated_batch_wall_ms)
-      in
-      Option.iter estimated_batch_wall_ms ~f:(fun estimated_wall_ms ->
-          if depth = queue_depth_cap_for_backend (Context.backend_name cctx) then
-            if Float.is_finite estimated_wall_ms && Float.is_positive estimated_wall_ms then (
-              if Float.(estimated_wall_ms < queued_batch_ms) then
-                logf
-                  "queued batch capped at depth %d: estimated wall %.4f ms, %.4f ms short of the \
-                   %.1f ms target"
-                  depth estimated_wall_ms
-                  (queued_batch_ms -. estimated_wall_ms)
-                  queued_batch_ms)
-            else
-              logf
-                "queued batch capped at depth %d: batch wall estimate is unresolved, so the \
-                 shortfall from the %.1f ms target cannot be quantified"
-                depth queued_batch_ms);
-      !on_batch_depth depth ~calibration_samples:calibration_dispatches;
-      (* The calibration's own contention verdict is not consulted (gh-ocannl-888): it judged single
-         dispatches, and the window that gets judged for refusal is the batch below. *)
-      let timed_wall_ms = ref 0. and timed_batches = ref 0 and timed_walls = ref [] in
-      let result =
-        sample_min ~repeats ~sample:(fun () ->
-            let wall = batch depth in
-            timed_wall_ms := !timed_wall_ms +. wall;
-            timed_walls := wall :: !timed_walls;
-            Int.incr timed_batches;
-            { per_launch_ms = wall /. Float.of_int depth; contention_ms = wall })
-      in
-      let median_wall_ms =
-        let sorted = Array.of_list !timed_walls in
-        Array.sort sorted ~compare:Float.compare;
-        let n = Array.length sorted in
-        if n = 0 then 0.
-        else if n % 2 = 1 then sorted.(n / 2)
-        else (sorted.((n / 2) - 1) +. sorted.(n / 2)) /. 2.
-      in
-      !on_timed_window ~samples:!timed_batches ~wall_ms:!timed_wall_ms ~median_wall_ms;
-      result)
+      calibrate_and_time ~timing ~repeats
+        ~queue_depth_cap:(queue_depth_cap_for_backend (Context.backend_name cctx))
+        ~batch)
 
 (* gh-ocannl-532: on a GPU backend, code that binds no hardware dimension runs the whole routine in
    a single work-item — every nest a serial scalar loop, at one lane's throughput. Such a candidate

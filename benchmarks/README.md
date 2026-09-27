@@ -224,9 +224,10 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   [report-gh558-hip-flips.md](report-gh558-hip-flips.md)).
   `BENCH_TIMING_TRACE=1` (all three runners) splits a searching process's wall between candidate
   timing and the rest (gh-ocannl-834): one stderr line per `Autotune.time_routine` call (the batch
-  depth it settled on, its launches, its warmup-plus-calibration and timed-loop walls, and running
-  totals, so a cell killed at its cap still leaves a lower bound) and one per candidate attempt
-  (a compile, unless `autotune_bound_pruning` prunes it first), plus a closing summary with the
+  depth it settled on, its launches, how many of its window's batches it `reused` from the
+  calibration (a depth-1 settle, gh-ocannl-1074), its warmup-plus-calibration and timed-loop
+  walls, and running totals, so a cell killed at its cap still leaves a lower bound) and one per
+  candidate attempt (a compile, unless `autotune_bound_pruning` prunes it first), plus a closing summary with the
   depth histogram. An untagged call (the untuned control `autotune_log=true` times) has its warmup
   and calibration counted as unattributed rather than as zero. A `timing-trace: search done` line
   marks where the measured compile (`compile_s`) ended, so a cell cut off later is not read as a

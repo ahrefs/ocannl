@@ -771,7 +771,16 @@ files.
   queued: equal timed loops, but 587 s of calibration against 14 s, because 215 of 220 calls settle
   at depth 1 after ~40 calibration launches (sixteen singles plus the depth-2 confirmation) and
   then time exactly what `isolated` would. `BENCH_TIMING_TRACE=1` in the benchmark runners splits a
-  session's wall this way; `benchmarks/gh834_cells.sh` is the per-box driver. The gh-755 offset
+  session's wall this way; `benchmarks/gh834_cells.sh` is the per-box driver. Since gh-ocannl-1074 a
+  depth-1 settle does not time that window again: the calibration's singles are depth-1 batches
+  taken under the timed loop's own stopping rule, so `sample_window ~prior` resumes them as the
+  window and the loop only tops up past the caller's `repeats` floor. That is not a change of
+  objective (no cache-key generation bump): the reading is still a min-of-N synchronized singles
+  judged whole by the 2x-majority rule — only the redundant second window is gone. The trace's
+  `timed` share at depth 1 therefore drops to ~0 while `calib` is unchanged; each call line says
+  how many batches it `reused`. `Autotune.calibrate_and_time` is the whole policy behind an
+  injected `batch` function, which is how `autotune_timing_modes` counts a call's launches exactly
+  without a device or a machine-dependent slow routine. The gh-755 offset
   had shrunk to 0-6 us on the same site by 2026-09-27, yet the isolated crown still moved in 3 of 4
   site-runs (gh-ocannl-833).
 - **A batched per-launch reading is not comparable to a synchronized round trip, on any constant**
@@ -789,8 +798,8 @@ files.
   hatch. A bound on a batched reading belongs on the SAME quantity, and specifically on the WINDOW
   the reading is a minimum over: the timed batches and their summed wall, which `time_routine`
   reports through `Autotune.on_timed_window` (payload: `~samples` — counted by the loop, not
-  restated from its result, so a test can hold the two against each other — `~wall_ms` and
-  `~median_wall_ms`). Not the whole call — its wall also holds the warmup
+  restated from its result, so a test can hold the two against each other — `~reused`, the window's
+  batches taken from the calibration and already counted there, `~wall_ms` and `~median_wall_ms`). Not the whole call — its wall also holds the warmup
   and the calibration's synchronized singles, and on a backend whose round trip is two orders of
   magnitude above an amortized launch those few dozen singles are ~40% of the call against tens of
   thousands of timed dispatches, so a whole-call mean is diluted by construction and a stall in the

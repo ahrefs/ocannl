@@ -1308,7 +1308,23 @@ val sample_min : repeats:int -> sample:(unit -> timing_sample) -> timing_result
     overrides the top-up limit. Reports [contended] when at least half the raw [contention_ms]
     samples exceed their minimum by 2x — dispersion only; a minimum that is non-positive or
     non-finite is refused by {!admitted_timing_ms} instead. Exposed so tests can inject a
-    deterministic clock. *)
+    deterministic clock. Equal to [window_result (sample_window ~repeats ~sample ())]. *)
+
+val sample_window :
+  ?prior:timing_sample list ->
+  repeats:int ->
+  sample:(unit -> timing_sample) ->
+  unit ->
+  timing_sample list
+(** {!sample_min}'s loop, returning the window itself, oldest first. [prior] (default empty) is a
+    window already taken, which the loop resumes under the same stopping rule rather than restarting
+    (gh-ocannl-1074): a resumed window stops exactly where one uninterrupted window over the same
+    samples would, so it takes no fresh sample when [prior] already meets the floor and the top-up
+    budget. *)
+
+val window_result : timing_sample list -> timing_result
+(** A window's reading: its minimum [per_launch_ms], its sample count, and the dispersion-only
+    [contended] verdict {!sample_min} documents. *)
 
 val search_measurements_cacheable : nothing_timed:bool -> timings_contended:int -> bool
 (** Pure cache-policy seam (gh-ocannl-855). A search result is cacheable only when at least one
@@ -1356,12 +1372,16 @@ val time_routine :
     window or jumping to the cap. After four noisy but resolved underestimates, calibration keeps
     the latest affine projection rather than jumping to a 20--30 ms cap batch that would blunt the
     2x contention threshold. A CUDA/HIP routine slower than the target is confirmed by a depth-2
-    probe, stays at depth 1, and is measured identically in both modes. The calibration always
-    yields a depth; the result of the timed loop reports when most of ITS samples were stalled, and
-    the tuner refuses such a candidate measurement rather than ranking and caching it
-    (gh-ocannl-888). Since the budget is per-launch rather than batch wall, queued timing can spend
-    up to [max 64 repeats] batches on a fast candidate; [max_timing_runs] bounds the top-up beyond
-    the caller's requested floor.
+    probe, stays at depth 1, and is measured identically in both modes. Whenever a queued call
+    settles at depth 1 its timed window resumes the calibration's synchronized singles
+    ({!sample_window}'s [prior]) rather than timing a fresh one (gh-ocannl-1074): at depth 1 they
+    are samples of the very quantity the window measures, taken under the same stopping rule, so the
+    loop dispatches only what the caller's [repeats] floor asks beyond the calibration's sixteen.
+    The calibration always yields a depth; the result of the timed loop reports when most of ITS
+    samples were stalled, and the tuner refuses such a candidate measurement rather than ranking and
+    caching it (gh-ocannl-888). Since the budget is per-launch rather than batch wall, queued timing
+    can spend up to [max 64 repeats] batches on a fast candidate; [max_timing_runs] bounds the
+    top-up beyond the caller's requested floor.
 
     With [~tag_failures:true] the pre-dispatch validation, the launches and the synchronization are
     wrapped in their {!Ir.Schedule_outcome} phases, which is what lets a caller's
@@ -1389,7 +1409,17 @@ val on_batch_depth : (int -> calibration_samples:int -> unit) ref
     depth-validation calibration for {!Queued}. The default is a no-op and no configuration selects
     it. *)
 
-val on_timed_window : (samples:int -> wall_ms:float -> median_wall_ms:float -> unit) ref
+val calibrate_and_time :
+  timing:timing_mode -> repeats:int -> queue_depth_cap:int -> batch:(int -> float) -> timing_result
+(** {!time_routine} after its warmup — the calibration and the timed loop, seams included — with the
+    device reduced to [batch depth], which must dispatch [depth] launches back to back, synchronize
+    once and return the wall in milliseconds. [queue_depth_cap] is {!queue_depth_cap_for_backend}'s
+    value for the backend being modelled; it also selects between the CUDA/HIP affine calibration
+    and the historical cc/Metal single estimate. Exposed so a test can drive the whole timing policy
+    on an injected clock and count its launches exactly (gh-ocannl-1074). *)
+
+val on_timed_window :
+  (samples:int -> reused:int -> wall_ms:float -> median_wall_ms:float -> unit) ref
 (** Observation seam for the timing tests (gh-ocannl-994), called by each {!time_routine} call once
     its timed loop has finished, with the number of batches that loop ran — counted by the loop
     rather than restated from its result, so a test can hold the two against each other — and their
@@ -1402,8 +1432,13 @@ val on_timed_window : (samples:int -> wall_ms:float -> median_wall_ms:float -> u
     walls, reported alongside the sum because this window's mean is still a stalled minority's to
     move: {!sample_min} declares [contended] on a majority of the window exceeding twice its floor,
     so a bound that must hold whenever the claim is not bypassed belongs on a statistic a minority
-    cannot move — which the median is over exactly the regime the contention rule leaves to it. The
-    default is a no-op and no configuration selects it. *)
+    cannot move — which the median is over exactly the regime the contention rule leaves to it.
+    [reused] is how many of the window's [samples] the loop did not dispatch itself: a {!Queued}
+    call that settles at depth 1 resumes the calibration's synchronized singles as its window
+    (gh-ocannl-1074), and those launches are already counted in {!on_batch_depth}'s
+    [calibration_samples], so the loop's own launches are [depth * (samples - reused)]; it is 0 at
+    every other depth and under {!Isolated}. The default is a no-op and no configuration selects it.
+*)
 
 val on_candidate_attempt : (string -> unit) ref
 (** Fault-injection seam for the containment tests (gh-ocannl-550), called with each candidate's

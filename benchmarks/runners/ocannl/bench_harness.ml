@@ -222,23 +222,26 @@ let percentile sorted p =
     else, without changing what is measured: it only observes {!Autotune}'s seams. Each
     [Autotune.time_routine] call prints one stderr line when its timed loop ends, with the batch
     depth the call settled on, the launches it dispatched (the warmup, the calibration's and [depth]
-    per timed batch), and the wall of its warmup plus calibration (from the pre-dispatch validation
-    to the depth decision) and of its timed loop. Every line also carries the running totals, so the
-    last line of a run killed at a cell cap is still a lower bound on the whole — an [at_exit]
-    summary would never print there. Each candidate the tuner attempts prints an [attempt] line with
-    the elapsed wall, which is how far a killed search got; an attempt is a compile unless
-    [autotune_bound_pruning] prunes it first. A call made without failure tagging — the untuned
-    control [autotune_log=true] times after a search — fires no pre-dispatch seam, so its warmup and
-    calibration are reported as unattributed and counted apart rather than as zero. The seams cannot
-    see a timing call raise, so a tagged call that fails after its validation leaves its start
-    behind until the next attempt clears it: only when a search's LAST timing call fails that way
-    and an [autotune_log] control follows is that control's interval over-attributed, which is why
-    [benchmarks/gh834_cells.sh] pins [autotune_log=false]. A tagged call that raises (a classified
-    launch or synchronization failure the search survives) is closed by no window: it is counted as
-    raised, and a summary with any says INCOMPLETE, since that call's cost is in no total. What is
-    not counted: the cc backend's in-kernel fork/joins per launch are a property of each candidate's
-    rendering, so a launch count bounds them only together with the candidate's parallel-region
-    count. *)
+    per timed batch the loop itself dispatched), and the wall of its warmup plus calibration (from
+    the pre-dispatch validation to the depth decision) and of its timed loop. A call that settles at
+    depth 1 resumes the calibration's synchronized singles as its window (gh-ocannl-1074): its line
+    says how many of its batches were [reused] -- already dispatched, and counted, as calibration --
+    and its timed wall is only the top-up the caller's [repeats] floor asked for beyond them. Every
+    line also carries the running totals, so the last line of a run killed at a cell cap is still a
+    lower bound on the whole — an [at_exit] summary would never print there. Each candidate the
+    tuner attempts prints an [attempt] line with the elapsed wall, which is how far a killed search
+    got; an attempt is a compile unless [autotune_bound_pruning] prunes it first. A call made
+    without failure tagging — the untuned control [autotune_log=true] times after a search — fires
+    no pre-dispatch seam, so its warmup and calibration are reported as unattributed and counted
+    apart rather than as zero. The seams cannot see a timing call raise, so a tagged call that fails
+    after its validation leaves its start behind until the next attempt clears it: only when a
+    search's LAST timing call fails that way and an [autotune_log] control follows is that control's
+    interval over-attributed, which is why [benchmarks/gh834_cells.sh] pins [autotune_log=false]. A
+    tagged call that raises (a classified launch or synchronization failure the search survives) is
+    closed by no window: it is counted as raised, and a summary with any says INCOMPLETE, since that
+    call's cost is in no total. What is not counted: the cc backend's in-kernel fork/joins per
+    launch are a property of each candidate's rendering, so a launch count bounds them only together
+    with the candidate's parallel-region count. *)
 
 let timing_trace_on = ref false
 
@@ -257,6 +260,9 @@ let install_timing_trace () =
     let now () = Mtime.Span.to_float_ns (Mtime_clock.elapsed ()) /. 1e9 in
     let t0 = now () in
     let calls = ref 0 and attempts = ref 0 and launches = ref 0 and untagged = ref 0 in
+    (* Calls whose window resumed the calibration's singles, and the batches those windows
+       reused. *)
+    let reusing_calls = ref 0 and reused_batches = ref 0 in
     (* Tagged calls that raised after their pre-dispatch validation: no window closes them, so their
        warmup, calibration and any timed batches are in no total -- counted, so a summary that is
        missing timing cost says so. *)
@@ -296,7 +302,7 @@ let install_timing_trace () =
     (* Parenthesized like the three above: an unparenthesized [fun] would swallow the [at_exit]
        below into the callback and register one summary per timing call. *)
     (Autotune.on_timed_window :=
-       fun ~samples ~wall_ms ~median_wall_ms ->
+       fun ~samples ~reused ~wall_ms ~median_wall_ms ->
          let now = now () in
          (match !depth_at with
          | None -> pr "timing-trace: a timed window without a depth decision\n"
@@ -311,21 +317,24 @@ let install_timing_trace () =
                    "calib unattributed (untagged call)"
              in
              Option.iter !preflight_at ~f:(fun p -> calib_s := !calib_s +. (at -. p));
-             let n = 1 + calibration + (depth * samples) in
+             let n = 1 + calibration + (depth * (samples - reused)) in
              Int.incr calls;
+             if reused > 0 then Int.incr reusing_calls;
+             reused_batches := !reused_batches + reused;
              launches := !launches + n;
              timed_s := !timed_s +. (now -. at);
              Hashtbl.update depths depth ~f:(fun c -> 1 + Option.value c ~default:0);
              pr
-               "timing-trace: call %d at %.1fs: depth %d, %d batches, %d launches, %s, timed %.1f \
-                ms (median batch %.3f ms) | totals: %d calls, %d launches, calib %.2f s (%d calls \
-                unattributed), timed %.2f s, %d calls raised\n"
-               !calls (now -. t0) depth samples n calib
+               "timing-trace: call %d at %.1fs: depth %d, %d batches (%d reused), %d launches, %s, \
+                timed %.1f ms (median batch %.3f ms) | totals: %d calls, %d launches, calib %.2f s \
+                (%d calls unattributed), timed %.2f s, %d calls raised, %d calls reused %d batches\n"
+               !calls (now -. t0) depth samples reused n calib
                ((now -. at) *. 1e3)
-               median_wall_ms !calls !launches !calib_s !untagged !timed_s !raised);
+               median_wall_ms !calls !launches !calib_s !untagged !timed_s !raised !reusing_calls
+               !reused_batches);
          preflight_at := None;
          depth_at := None;
-         prev_window ~samples ~wall_ms ~median_wall_ms);
+         prev_window ~samples ~reused ~wall_ms ~median_wall_ms);
     Stdlib.at_exit (fun () ->
         drop_open_call ();
         let hist =
@@ -337,9 +346,9 @@ let install_timing_trace () =
         pr
           "timing-trace: summary: %.1fs wall, %d candidate attempts, %d timing calls, %d launches, \
            calib %.2f s (%d calls unattributed), timed %.2f s; depth histogram (calls x depth): \
-           %s%s\n"
+           %s; %d calls reused %d calibration batches as their window%s\n"
           (now () -. t0)
-          !attempts !calls !launches !calib_s !untagged !timed_s hist
+          !attempts !calls !launches !calib_s !untagged !timed_s hist !reusing_calls !reused_batches
           (if !raised = 0 then ""
            else
              Printf.sprintf

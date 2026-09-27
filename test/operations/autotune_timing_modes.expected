@@ -22,6 +22,17 @@ no calibration estimate ever yields a depth above the cap: true
 depth refinement removes fixed synchronization cost from launch scaling: true
 over-target calibration requires a depth-separated marginal confirmation: true
 
+== a depth-1 settle reuses its calibration ==
+a window resumed after any prefix is the uninterrupted window: true
+a slow candidate settles at depth 1 under either calibration: true
+a depth-1 settle times no fresh window: its window is the calibration's singles: true
+a reused window's reading is the per-launch time: true
+the instrument counts a fresh window where one is timed: isolated dispatches its 16: true
+at depth 1 the queued reading is the isolated one: true
+a caller floor above the calibration's is topped up with exactly the missing launches: true
+a reused window is judged for contention whole: true
+a batching depth reuses nothing and dispatches its whole window: true
+
 == autotune_timing spelling ==
 "queued" selects the queued objective: true
 "isolated" selects the isolated objective: true
@@ -33,6 +44,7 @@ both modes returned a positive finite per-launch time or reported contention: tr
 isolated timing either reports contention or dispatches one launch per timed run: true
 isolated timing reports batch depth 1: true
 queued timing either refuses contention or dispatches whole batches at the reported depth: true
+isolated timing reuses no calibration: true
 queued timing either reports contention or dispatches more launches than isolated: true
 both readings are anchored on the timed window they reported: true
 isolated reading is a per-launch time or reports contention: PASS

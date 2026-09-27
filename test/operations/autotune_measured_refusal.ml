@@ -66,7 +66,7 @@ let () =
     ~f:(fun () ->
       (Autotune.on_candidate_attempt := fun label -> attempt := label);
       (Autotune.on_timed_window :=
-         fun ~samples:_ ~wall_ms:_ ~median_wall_ms:_ ->
+         fun ~samples:_ ~reused:_ ~wall_ms:_ ~median_wall_ms:_ ->
            settle_window ();
            unfollowed := Some !attempt);
       (Autotune.on_candidate_measured :=
