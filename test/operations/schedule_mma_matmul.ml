@@ -213,6 +213,11 @@ let hip_table_boundary ~acc src =
    uniform-f16 wmma leg below pins (gh-ocannl-925). *)
 let wmma_f32_acc = "nvcuda::wmma::fragment<nvcuda::wmma::accumulator, 16, 16, 16, float>"
 
+(* The reduction-body markers of CUDA's inline-PTX register fragment scope (gh-ocannl-1063), bound
+   once for every leg that pins its residency. *)
+let register_body_begin = "/* mma.sync fragment reduction body begins */"
+let register_body_end = "/* mma.sync fragment reduction body ends */"
+
 (* The capability the CUDA legs derive their expectations from, as the HIP gate above does. *)
 let cuda_mma () =
   if on_cuda then (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.mma else None
@@ -1505,7 +1510,10 @@ let () =
      the serial twin; the C backends cannot express shared placement and must reject cleanly (same
      pinning as the SMEM matmul test). --- *)
   let%op mc3 = ma * mb in
-  let staged_schedule ?swizzle ~out ~src_a ~src_b (opt : LL.optimized) : Sched.schedule =
+  (* [bm] is the row block and [bk] the outer-k block — the extents of each [k_o] step's [Tile_mma]
+     — for formats whose intrinsic tile exceeds the default (fp8's m16n8k32). *)
+  let staged_schedule ?swizzle ?(bm = bm) ?(bk = bm) ~out ~src_a ~src_b (opt : LL.optimized) :
+      Sched.schedule =
     let paths = nest_paths opt.LL.llc in
     let i, j, k =
       match List.find_exn paths ~f:(fun p -> List.length p = 3) with
@@ -1517,7 +1525,7 @@ let () =
     let sp_zi, _, _ = Sched.split ~axis:zi ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
     let rz = Sched.Retype { axis = zj; ty = LL.Workgroup } in
     let sp_i, _, i_i = Sched.split ~axis:i ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
-    let sp_k, k_o, k_i = Sched.split ~axis:k ~factor:bm ~outer:LL.Serial ~inner:LL.Serial in
+    let sp_k, k_o, k_i = Sched.split ~axis:k ~factor:bk ~outer:LL.Serial ~inner:LL.Serial in
     let tz, _lane = Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width () in
     [
       ez;
@@ -2102,8 +2110,6 @@ let () =
        with nothing narrowed to bf16 in between — the per-[k_o] rendering this replaces stores
        [__float2bfloat16(__mma_d0)] inside the body, at every block. *)
     let cuda_register_resident src =
-      let register_body_begin = "/* mma.sync fragment reduction body begins */" in
-      let register_body_end = "/* mma.sync fragment reduction body ends */" in
       residency_holds src ~frag_load:"[0] = __bfloat162float(__mma_dr0[0]);"
         ~body_begin:register_body_begin ~body_end:register_body_end
         ~frag_store:"__mma_dr0[0] = __float2bfloat16(__mma_fragment_" ~barrier:"__syncthreads();"
@@ -2167,6 +2173,236 @@ let () =
     skipped claim_bw_struct;
     skipped claim_bw_swz_value;
     skipped claim_bw_swz_struct);
+
+  (* --- Staged twins per advertised swizzled layout (gh-ocannl-1063 follow-up): the autotuner seeds
+     a swizzled staged twin beside the plain one for exactly the format triples in
+     [mma_staged_layouts], and whichever twin is crowned must do the same thing. So for EACH
+     advertised triple — read from the capability, not restated here, so a triple that joins the
+     list (gh-ocannl-1073's fp8 candidate) is covered the day it is advertised — compile a
+     multi-block staged schedule plain and with that layout, its geometry taken from the triple's
+     advertised tile, and claim that the two renderings' censuses agree apart from [ldmatrix] (the
+     load path, not the rendering, is what the layout changes) and that only the swizzled twin's
+     loads go through it, that both hold the register fragment across the outer reduction (loaded
+     before the reduction body, stored after it, and no [d] traffic inside it), and that both equal
+     an exact host-computed product. The storage precisions of each triple are the members of
+     [Ir.Ops.float_precs] whose site resolves to it ([Autotune.mma_format_triples]) — the seeding
+     relation itself, not a second format table. Only CUDA advertises a layout today, and the leg is
+     CUDA's: an empty list (pre-sm_80, or a backend advertising none) is the ordinary backend skip,
+     and a non-empty one on another backend fails until that backend's evidence is added. --- *)
+  let claim_twin_census =
+    "staged twins per advertised swizzled layout: the censuses agree apart from ldmatrix, which \
+     only the swizzled twin uses"
+  in
+  let claim_twin_resident =
+    "staged twins per advertised swizzled layout: both keep the register fragment resident across \
+     k_o"
+  in
+  let claim_twin_values =
+    "staged twins per advertised swizzled layout: both equal the host reference exactly"
+  in
+  let claim_twin_distinct =
+    "staged twins per advertised swizzled layout: every row and column of each operand is distinct"
+  in
+  let twin_claims =
+    [ claim_twin_census; claim_twin_resident; claim_twin_values; claim_twin_distinct ]
+  in
+  (* Read on every backend, not through [cuda_mma], so that a staged layout another backend starts
+     advertising is not skipped in silence: the pins below are CUDA's dialect ([ldmatrix], the
+     mma.sync register scope, the 32-lane warp), and another backend's layout needs its own. *)
+  (match (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.mma with
+  | Some mma when (not (List.is_empty mma.Ir.Backend_intf.mma_staged_layouts)) && not on_cuda ->
+      Stdio.eprintf
+        "staged twins: %s advertises staged layouts, but this leg pins only CUDA's rendering of \
+         them; extend it with that backend's load and residency evidence\n\
+         %!"
+        backend_name;
+      List.iter twin_claims ~f:(fun claim -> p claim false)
+  | Some mma when not (List.is_empty mma.Ir.Backend_intf.mma_staged_layouts) ->
+      let module BI = Ir.Backend_intf in
+      (* The twins' lane loop and cooperative staging are [simd_width] wide, and the output's column
+         extent is that lane loop. *)
+      if mma.BI.mma_simd_width <> simd_width || n <> simd_width then
+        failwith
+          (Printf.sprintf
+             "staged twins: the leg's %d-lane geometry does not match the warp width %d" simd_width
+             mma.BI.mma_simd_width);
+      let format_tag f =
+        String.chop_prefix_if_exists ~prefix:"mma_"
+          (String.lowercase (Sexp.to_string (BI.sexp_of_mma_input_format f)))
+      in
+      let run_twins (((fa, fb, fd) as triple), layout) =
+        let tag = String.concat ~sep:"_" (List.map [ fa; fb; fd ] ~f:format_tag) in
+        let swizzle = match layout with BI.Mma_swizzled_b128 -> LL.Swizzle_b128 in
+        (* tf32 is a policy-gated reading of f32 storage, so a tf32 triple resolves (and renders)
+           only with the policy on. *)
+        Numerics.set_policy
+          {
+            saved_policy with
+            tf32_matmuls =
+              List.exists [ fa; fb; fd ] ~f:(function BI.Mma_tf32 -> true | _ -> false);
+          };
+        let storage = Ir.Ops.float_precs in
+        let a_prec, b_prec, d_prec =
+          match
+            List.find_map storage ~f:(fun a_prec ->
+                List.find_map storage ~f:(fun b_prec ->
+                    List.find storage ~f:(fun d_prec ->
+                        List.mem
+                          (Autotune.mma_format_triples ~a_prec ~b_prec ~d_prec)
+                          triple ~equal:BI.equal_mma_format_triple)
+                    |> Option.map ~f:(fun d_prec -> (a_prec, b_prec, d_prec))))
+          with
+          | Some precs -> precs
+          | None -> failwith ("staged twins: no storage precisions seed the triple " ^ tag)
+        in
+        (* The geometry follows the triple's advertised intrinsic tile: the row block and the block
+           of every [k_o] step cover the tile's m and k (tile extents are powers of two, so the
+           larger one is a multiple of the smaller), and four [k_o] blocks make the reduction
+           multi-block. The column extent is the whole [n]: the zeroing's column loop is the lane
+           loop, so [n] is the warp width and the tile's n must divide it. *)
+        (* A staged layout without a format tile is a capability the seeder never reaches: the
+           typed seeds look the tile up first and refute the tensorized branch without one. *)
+        let tm, tn, tk =
+          match
+            List.Assoc.find mma.BI.mma_format_tiles triple ~equal:BI.equal_mma_format_triple
+          with
+          | Some tile -> tile
+          | None ->
+              failwith
+                ("staged twins: the advertised staged layout of " ^ tag
+               ^ " has no mma_format_tiles entry, so no seed would reach it")
+        in
+        if n % tn <> 0 then
+          failwith
+            (Printf.sprintf
+               "staged twins %s: the tile's n=%d does not divide the lane-wide column extent %d" tag
+               tn n);
+        let bi = Int.max bm tm and bk = Int.max bm tk in
+        let kw = 4 * bk in
+        (* Small integers (1..2), exact in every storage format and clear of the zero init, drawn
+           from a well-mixed bit of the aperiodic [Bench_checksum.mix]: a cyclic key of period p
+           makes panels p apart identical, and the mix's low bits alias whole rows and columns, so a
+           twin staging the wrong panel, row or column would read the same values. Rather than argue
+           that premise, [claim_twin_distinct] checks it: every row and every column of each operand
+           differs from every other. Every partial sum is a nonnegative integer no larger than the
+           final one, so the host reference is exact whatever the narrowing order as long as the
+           final sums survive the accumulator's storage unchanged — checked by round-tripping them
+           through a [d_prec] array. *)
+        let a_key idcs =
+          Float.of_int (1 + ((Bench_checksum.mix ~salt:0x5A17 idcs.(0) idcs.(1) lsr 16) land 1))
+        in
+        let b_key idcs =
+          Float.of_int (1 + ((Bench_checksum.mix ~salt:0x3C6E idcs.(0) idcs.(1) lsr 16) land 1))
+        in
+        let reference =
+          Array.init (n * n) ~f:(fun cell ->
+              List.sum
+                (module Float)
+                (List.range 0 kw)
+                ~f:(fun k -> a_key [| cell / n; k |] *. b_key [| k; cell % n |]))
+        in
+        let stored =
+          let nd =
+            Ir.Ndarray.create_array ~debug:"twin_reference" d_prec ~dims:[| n * n |] ~padding:None
+          in
+          Ir.Ndarray.set_flat_values nd reference;
+          Ir.Ndarray.retrieve_flat_values nd
+        in
+        if not (Array.equal Float.equal stored reference) then
+          failwith
+            (Printf.sprintf "staged twins %s: k=%d sums outgrow the accumulator's exact integers"
+               tag kw);
+        let twa = NTDSL.init ~l:("twa_" ^ tag) ~prec:a_prec ~i:[ kw ] ~o:[ n ] ~f:a_key () in
+        let twb = NTDSL.init ~l:("twb_" ^ tag) ~prec:b_prec ~i:[ n ] ~o:[ kw ] ~f:b_key () in
+        let run ?swizzle ~name () =
+          let%op t = twa * twb in
+          Tn.update_prec t.Tensor.value d_prec;
+          let transform opt =
+            Sched.apply
+              (staged_schedule ?swizzle ~bm:bi ~bk ~out:t.Tensor.value ~src_a:twa.Tensor.value
+                 ~src_b:twb.Tensor.value opt)
+              opt
+          in
+          let ctx, routine =
+            Context.compile
+              ~lowered_transform:(fun o -> [ transform o ])
+              (Context.auto ())
+              (named name (Train.forward t))
+              Ir.Indexing.Empty
+          in
+          let census = List.map routine.Context.mma.Ir.C_syntax.renderings ~f:snd in
+          let ctx = Context.run ctx routine in
+          (nonzero name (Context.get_values ctx t.Tensor.value), census, Generated.read name)
+        in
+        let plain = run ~name:("mm_twin_plain_" ^ tag) () in
+        let swizzled = run ~swizzle ~name:("mm_twin_swz_" ^ tag) () in
+        Numerics.set_policy saved_policy;
+        let lines_distinct key ~rows ~cols =
+          let distinct lines =
+            not (List.contains_dup lines ~compare:(List.compare Float.compare))
+          in
+          distinct (List.init rows ~f:(fun r -> List.init cols ~f:(fun c -> key [| r; c |])))
+          && distinct (List.init cols ~f:(fun c -> List.init rows ~f:(fun r -> key [| r; c |])))
+        in
+        let distinct =
+          lines_distinct a_key ~rows:n ~cols:kw && lines_distinct b_key ~rows:kw ~cols:n
+        in
+        (tag, plain, swizzled, nonzero ("reference_" ^ tag) reference, distinct)
+      in
+      let twins = List.map mma.BI.mma_staged_layouts ~f:run_twins in
+      let apart_from_ldmatrix =
+        List.map ~f:(function
+          | Ir.C_syntax.Mma_intrinsics_ldmatrix -> Ir.C_syntax.Mma_intrinsics
+          | rendering -> rendering)
+      in
+      (* The register scope's [d] boundary, whatever the accumulator's storage type: the load fills
+         the fragment's registers ([frag[__mi][__ni][0] = widen(__mma_dr0[0]);]) and the store
+         writes the rows back ([__mma_dr0[0] = narrow(frag…)]). The per-[k_o] rendering this
+         replaces reads and writes the same [__mma_dr0] rows inside the body, at every block. *)
+      let register_resident src =
+        residency_holds src ~frag_load:"[__mi][__ni][0] = " ~body_begin:register_body_begin
+          ~body_end:register_body_end ~frag_store:"__mma_dr0[0] = " ~barrier:"__syncthreads();"
+        &&
+        match
+          ( String.substr_index src ~pattern:register_body_begin,
+            String.substr_index src ~pattern:register_body_end )
+        with
+        | Some beg, Some fin ->
+            not
+              (String.is_substring
+                 (String.sub src ~pos:beg ~len:(fin - beg))
+                 ~substring:"__mma_dr0")
+        | _ -> false
+      in
+      p_all claim_twin_census twins ~f:(fun (tag, (_, plain, _), (_, swizzled, _), _, _) ->
+          let agree =
+            (not (List.is_empty plain))
+            && List.equal Ir.C_syntax.equal_mma_rendering (apart_from_ldmatrix plain)
+                 (apart_from_ldmatrix swizzled)
+            (* The layout must actually reach the loads: a swizzle the pipeline dropped would leave
+               two identical plain renderings, which every other claim here accepts. On CUDA the
+               swizzled tile is readable only through [ldmatrix]. *)
+            && List.exists swizzled
+                 ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics_ldmatrix)
+            && not
+                 (List.exists plain
+                    ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics_ldmatrix))
+          in
+          if not agree then
+            Stdio.eprintf "staged twins %s: plain census %s, swizzled census %s\n%!" tag
+              (Sexp.to_string (List.sexp_of_t Ir.C_syntax.sexp_of_mma_rendering plain))
+              (Sexp.to_string (List.sexp_of_t Ir.C_syntax.sexp_of_mma_rendering swizzled));
+          agree);
+      p_all claim_twin_resident twins ~f:(fun (_, (_, _, src_plain), (_, _, src_swizzled), _, _) ->
+          register_resident src_plain && register_resident src_swizzled);
+      (* An independent oracle, not the twins against each other: a defect both paths share (a
+         staging index, the fragment mapping) would leave two equal wrong arrays. *)
+      p_all claim_twin_values twins
+        ~f:(fun (_, (got_plain, _, _), (got_swizzled, _, _), reference, _) ->
+          Array.equal Float.equal got_plain reference
+          && Array.equal Float.equal got_swizzled reference);
+      p_all claim_twin_distinct twins ~f:(fun (_, _, _, _, distinct) -> distinct)
+  | _ -> List.iter twin_claims ~f:skipped);
 
   (* --- Transposed operand layouts (the gradient-GEMM access patterns): [d[i,j] += at[k,i] *
      b[k,j]] (a stored transposed) and [d[i,j] += a[i,k] * bt[j,k]] (b stored transposed). Tensorize

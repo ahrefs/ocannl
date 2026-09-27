@@ -278,6 +278,7 @@ test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name]
     "__device__ __align__(32) float ocannl_wmma_rc16[256]"
     "__float2bfloat16"
     "__float_to_tf32"
+    "__mma_dr0"
     "__mma_dstage"
     "__shared__ float tile_"
     "__syncthreads()"
