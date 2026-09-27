@@ -79,7 +79,7 @@ swizzled staged twin under Bf16_wide and the default policy equals the once-narr
 swizzled staged twin keeps the same register fragment, fed through ldmatrix: true
 staged twins per advertised swizzled layout: the censuses agree apart from ldmatrix, which only the swizzled twin uses: true
 staged twins per advertised swizzled layout: both keep the register fragment resident across k_o: true
-staged twins per advertised swizzled layout: both compute the same values bitwise: true
+staged twins per advertised swizzled layout: both equal the host reference exactly: true
 ta tensorized matmul matches the serial twin: true
 ta C-backend fallback matches bitwise: true
 ta tensorized structure as expected: true
