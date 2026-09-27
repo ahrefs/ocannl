@@ -107,19 +107,24 @@ module Slab = struct
       H.Stream.memset_d8 ~offset base Unsigned.UChar.zero ~length:size_in_bytes device.runner
 end
 
-(* The HIP SDK include dir (no-spaces junction on Windows / HIP_PATH / /opt/rocm), forward-slashed
-   for the clang command line. [None] when no SDK is found (the Linux built-in-headers path). Lifted
-   out of [Impl] for the same reason [Cuda_backend.cuda_include_options] was: it is a policy every
-   hiprtc caller has to agree with, and tools/fp8_soak.ml is one -- a soak that guessed its own
-   include path would report the HIP arm ready and then fail to compile its kernel wherever the SDK
-   does not sit where the guess looked (Codex P2 on PR #463, for the CUDA side of the same
-   program). *)
+(* The HIP SDK include dir (no-spaces junction on Windows / HIP_PATH / /opt/rocm / /usr),
+   forward-slashed for the clang command line. [None] when no SDK is found (the Linux
+   built-in-headers path). [/usr] is the distro ROCm stack (Ubuntu 26.04's packages, the native
+   fleet's AMD boxes), which has no /opt/rocm and is only reached through [HIP_PATH=/usr] from a
+   login shell: without it a bare non-login environment -- tools/machine-verify.sh's hermetic leg --
+   found no rocWMMA headers either, since [rocwmma_include_dir] searches this tree, and every WMMA
+   test silently ran the scalar fallback while staying green (gh-ocannl-1070). It comes last so an
+   explicit [HIP_PATH] or a vendor /opt/rocm install still wins over distro headers. Lifted out of
+   [Impl] for the same reason [Cuda_backend.cuda_include_options] was: it is a policy every hiprtc
+   caller has to agree with, and tools/fp8_soak.ml is one -- a soak that guessed its own include
+   path would report the HIP arm ready and then fail to compile its kernel wherever the SDK does not
+   sit where the guess looked (Codex P2 on PR #463, for the CUDA side of the same program). *)
 let hip_sdk_include_dir =
   lazy
     (let candidates =
        (match Sys.getenv "LOCALAPPDATA" with Some l -> [ l ^ "/hip_path_link" ] | None -> [])
        @ (match Sys.getenv "HIP_PATH" with Some p -> [ p ] | None -> [])
-       @ [ "/opt/rocm" ]
+       @ [ "/opt/rocm"; "/usr" ]
      in
      List.find_map candidates ~f:(fun p ->
          if Stdlib.Sys.file_exists (p ^ "/include/hip/hip_fp16.h") then
@@ -255,16 +260,18 @@ end = struct
      unsupported device (CDNA gfx9 wave64, a mixed fleet) or a host without rocWMMA decline to the
      scalar fallback rather than emit an uncompilable kernel. Memoized behind [lazy]: device
      enumeration and filesystem probes must not run at module init. *)
+  let tile_mma_eligible (a : H.Device.attributes) =
+    (String.is_prefix a.gcn_arch_name ~prefix:"gfx11"
+    || String.is_prefix a.gcn_arch_name ~prefix:"gfx12")
+    && a.warp_size = 32
+
   let all_rdna_wave32 =
     lazy
       (let n = num_devices () in
        n > 0
        && Array.for_all
             (Array.init n ~f:(fun ordinal -> H.Device.get_attributes (H.Device.get ~ordinal)))
-            ~f:(fun (a : H.Device.attributes) ->
-              (String.is_prefix a.gcn_arch_name ~prefix:"gfx11"
-              || String.is_prefix a.gcn_arch_name ~prefix:"gfx12")
-              && a.warp_size = 32))
+            ~f:tile_mma_eligible)
 
   (* A directory containing a COMPLETE rocWMMA header tree, if any: [ROCWMMA_PATH] variants, a clone
      under [%LOCALAPPDATA%/rocwmma], or the HIP include tree (rocWMMA installs there on Linux).
@@ -319,8 +326,8 @@ end = struct
        given. On Linux hiprtc ships built-in HIP headers; on Windows (observed with ROCm 7.1)
        [#include <hip/hip_fp16.h>] is not found without an include path, so point at the SDK's
        include directory ([hip_sdk_include_dir]: the no-spaces junction created by ocaml-hipjit,
-       falling back to HIP_PATH or /opt/rocm). The -I is only added when the directory exists, so
-       the Linux built-in-headers path is unaffected. *)
+       falling back to HIP_PATH, /opt/rocm or /usr). The -I is only added when the directory exists,
+       so a Linux box with no SDK tree keeps hiprtc's built-in headers. *)
     let hip_include_opt = hip_include_options () in
     (* rocWMMA include dir, only for tensor-core kernels ([rocwmma_include_dir] finds the dir
        holding [rocwmma/rocwmma.hpp]). *)
@@ -1403,6 +1410,12 @@ end = struct
               ("max_grid_size", [%sexp_of: int * int * int] attributes.max_grid_size);
               ("max_threads_dim", [%sexp_of: int * int * int] attributes.max_threads_dim);
               ("unified_addressing", [%sexp_of: bool] attributes.unified_addressing);
+              (* The DEVICE half of [mma_supported], read through the predicate the backend gates
+                 on, so a verifier can tell a device that can never tensorize from a host missing
+                 the rocWMMA headers -- [hardware_limits.mma] reports only the conjunction.
+                 tools/machine-verify.sh pairs it with its own header probe to assert the capability
+                 where both halves hold (gh-ocannl-1070). *)
+              ("tile_mma_eligible", [%sexp_of: bool] (tile_mma_eligible attributes));
             ]
           in
           Sexp.message "device" props)

@@ -9,12 +9,12 @@ end
 
 val hip_include_options : unit -> string list
 (** The [-I] options a hiprtc compile needs in order to find the HIP headers ([<hip/hip_fp16.h>],
-    [<hip/hip_fp8.h>]): the no-spaces junction ocaml-hipjit creates on Windows, HIP_PATH, and
-    /opt/rocm as the fallback; empty on a Linux box where hiprtc's built-in headers suffice.
-    Separated out of the compile path so that other hiprtc callers agree with it rather than
-    reimplementing a subset — tools/fp8_soak.ml's HIP arm is one, and the CUDA half of that program
-    learned in review what a divergent guess costs (a soak that probes "ready" and then fails to
-    compile wherever the SDK is not where the guess looked). *)
+    [<hip/hip_fp8.h>]): the no-spaces junction ocaml-hipjit creates on Windows, HIP_PATH, then
+    /opt/rocm and the distro tree /usr as the fallbacks; empty on a Linux box where hiprtc's
+    built-in headers suffice. Separated out of the compile path so that other hiprtc callers agree
+    with it rather than reimplementing a subset — tools/fp8_soak.ml's HIP arm is one, and the CUDA
+    half of that program learned in review what a divergent guess costs (a soak that probes "ready"
+    and then fails to compile wherever the SDK is not where the guess looked). *)
 
 val fp8_guard_source : unit -> string
 (** The device-side source text of the two guarded narrowing helpers HIP emits in place of a bare
