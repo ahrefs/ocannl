@@ -148,7 +148,8 @@
 #      offers neither. A run that chose its own diff command (patdiff's
 #      doubled headers still count; `-`, on the command line or in
 #      DUNE_DIFF_COMMAND, prints none) is told promotion is possible, never
-#      "no diff".
+#      "no diff" -- unless the option sits past dune's own `--`. And a repeat
+#      set red on drift alone is not called a failed action.
 #  66 sits after leg 63: the digest's `source:` line reads the record -- the
 #      commit and `(clean)`, or `+ N uncommitted paths`; nothing unrecorded.
 
@@ -2831,8 +2832,10 @@ custom_detail=
 for probe in "patdiff_hunk|present|build --diff-command patdiff @cheap" \
              "diff_suppressed|possible|build --diff-command - @cheap" \
              "diff_suppressed|possible|build --diff-command=- @cheap" \
+             "diff_suppressed|possible|build --diff - @cheap" \
              "diff_suppressed|env|build @cheap" \
-             "diff_suppressed|nodiff|build @cheap"; do
+             "diff_suppressed|nodiff|build @cheap" \
+             "diff_suppressed|nodiff|exec ./prog.exe -- --diff-command -"; do
   mode=${probe%%|*}; rest=${probe#*|}; want=${rest%%|*}
   if [ "$want" = env ]; then export DUNE_DIFF_COMMAND=-; want=possible; fi
   # shellcheck disable=SC2086
@@ -2854,6 +2857,19 @@ if [ -z "$custom_detail" ]; then
   report 0 "$custom_label"
 else
   report 1 "$custom_label" "$custom_detail"
+fi
+# A repeat set's red can be drift between iterations that each passed: its
+# digest must not blame a failed action.
+repeat_probe repeat-drift-nodiff stdout 2 build @cheap
+argv_runs=$TMP/repeat-runs-repeat-drift-nodiff argv_probe repeat-drift-nodiff-wait wait last
+argv_runs=
+drift_label="a repeat set's drift is not called a failed action"
+if [ "$repeat_rc" = 1 ] && [ "$argv_rc" = 1 ] \
+   && case $argv_out in *"verdict: FAIL"*) true ;; *) false ;; esac \
+   && case $repeat_out$argv_out in *"no diff)"*) false ;; *) true ;; esac; then
+  report 0 "$drift_label"
+else
+  report 1 "$drift_label" "repeat exit $repeat_rc: $repeat_out; wait exit $argv_rc: $argv_out"
 fi
 
 # The guard from leg 26 is not made redundant by the digest: it knows the

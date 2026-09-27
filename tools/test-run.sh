@@ -224,6 +224,21 @@ explicit_jobs() { # dune argv; 0 iff it names a width before dune's own `--`
   return 1
 }
 
+# 0 iff the dune argv chooses its own diff presentation before dune's own `--`
+# (the digest's reading of a log depends on it; see `digest`): `--diff-command`
+# in either spelling, or an abbreviation cmdliner accepts -- `--dif` already
+# names no other option. Erring towards "chosen" is the safe direction: it only
+# makes the digest say a promotion is possible rather than absent.
+explicit_diff_command() { # dune argv
+  for arg do
+    case $arg in
+      --) return 1 ;;
+      --dif*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
 # What each hazard is, for the announcements: the condition that was found,
 # and why dune's default width is wrong under it.
 hazard_name() { # <hazard>; a noun phrase for the host, and the issue behind its cap
@@ -989,12 +1004,15 @@ new_run() {
     printf '%s\n' "$PWD" >"$run_dir/wt" &&
     printf '%s\n' "$RUNS" >"$run_dir/runs" &&
     record_checkout &&
-    { [ -z "${DUNE_DIFF_COMMAND:-}" ] ||
-      printf '%s\n' "$DUNE_DIFF_COMMAND" >"$run_dir/diff-command"; } &&
+    if explicit_diff_command "$@"; then
+      echo 'on the command line' >"$run_dir/diff-command"
+    elif [ -n "${DUNE_DIFF_COMMAND:-}" ]; then
+      printf 'DUNE_DIFF_COMMAND=%s\n' "$DUNE_DIFF_COMMAND" >"$run_dir/diff-command"
+    fi &&
     : >"$run_dir/log"; } || die "cannot write run metadata in $run_dir"
-  # `diff-command` records a diff presentation chosen through dune's
-  # environment, which the digest must know about (see `digest`); one chosen
-  # on the command line is in `cmd` already.
+  # `diff-command` records that the run chose its own diff presentation, on
+  # dune's command line or through its environment -- a launch-time fact the
+  # digest's reading of the log depends on (see `digest`).
   # `runs` is the state root this run's lock and pointers live under: `stop`
   # and retention read them from there, whichever OCANNL_TOOL_TEST_RUNS the
   # caller has -- and its absence marks a run of the version that kept them
@@ -1501,12 +1519,13 @@ digest() {
                      END { exit found ? 0 : 1 }'; then
     echo "promotion diffs present -- inspect the log, accept with \`dune promote\`" \
          "(tools/promote.sh on Windows)"
-  elif { [ -s "$dir/diff-command" ] ||
-         grep -Eq '(^| )--diff-command([= ]|$)' "$dir/cmd" 2>/dev/null; } &&
+  elif [ -s "$dir/diff-command" ] &&
        scan_log | grep -qE '^File "[^"]*\.expected"|\.corrected'; then
     echo "promotion diffs possible -- the run chose its own diff command, whose" \
          "output this digest cannot read; inspect the log before \`dune promote\`"
-  elif [ "$verdict" = FAIL ]; then
+  elif [ "$verdict" = FAIL ] && [ "$(cat "$dir/mode" 2>/dev/null)" != repeat ]; then
+    # Not for a repeat set: its red can be drift between iterations that each
+    # passed, which no failed action explains.
     echo "action failed (no diff) -- nothing to promote; read the failure below"
   fi
   if [ "$rc" != 0 ]; then
