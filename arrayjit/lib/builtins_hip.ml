@@ -28,6 +28,15 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
   return __shfl_xor(v, lane_mask, 32);
 }|},
       [] );
+    (* The coordinate table of the rocWMMA converted [d] boundary (gh-ocannl-1064, [Hip_backend]'s
+       [mma_d_boundary_lines]), the twin of CUDA's: entry [16 * row + col] holds that number, so a
+       16x16 float accumulator fragment [load_matrix_sync]ed from it names, per lane and element,
+       the matrix coordinate the fragment type keeps there. *)
+    ( "ocannl_wmma_rc16",
+      "__device__ __align__(32) float ocannl_wmma_rc16[256] = {"
+      ^ String.concat ", " (List.init 256 (Printf.sprintf "%d.f"))
+      ^ "};",
+      [] );
     ("int32x4_t", {|typedef struct { int v[4]; } int32x4_t;|}, []);
     ("int64x2_t", {|typedef struct { long long v[2]; } int64x2_t;|}, []);
     ("int8x16_t", {|typedef struct { signed char v[16]; } int8x16_t;|}, []);
