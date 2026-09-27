@@ -903,6 +903,16 @@ that they earn a lookup rather than always-loaded space.
   can always put its keys behind an abstraction — and the module header says so. If that trade stops
   holding, the answer is a structural contract for how a guard spells its keys, matched rather than
   inferred, not another name in its tables.
+- A negative control confirms the run REACHED its last row, not only that `FAIL:` lines appeared
+  (gh-ocannl-1067): the claims it printed, passed plus failed, number the golden's lines, or the
+  rows run under `Verdict.case`. A raise ends a run at the case that raised, and the rows after it
+  are absent, not failed. gh-ocannl-1016's control read six FAILs as "the rest pass" while a raise
+  had cut the run two rows short, invisibly: Verdict's teardown called `exit 1` from `at_exit`,
+  which the runtime runs before printing the exception. The teardown now raises instead, and
+  Verdict's uncaught-exception handler prints `STOPPED EARLY` and the exception (status 2).
+  `Verdict.case label f` turns a raise into `<label>: the case ran to completion (raised …): false`
+  and runs the next case, printing nothing when `f` returns, so wrapping is golden-neutral
+  (`footprint_materialization` is the exemplar; `verdict_teardown` pins every ending).
 - One claim surface, opened rather than copied. Every test that decides a verdict reaches the claim
   names through `open Verdict.Claims`; nothing in the tree rebinds them per file any more
   (gh-ocannl-815). The aliases the population used to carry were a maintenance defect with a
