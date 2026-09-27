@@ -1042,7 +1042,9 @@ let () =
       ((Context.codegen_capabilities (Context.auto ())).Ir.Backend_intf.accum_prec Ir.Ops.bfloat16)
       Ir.Ops.bfloat16
   in
-  let got_bw_narrow, _ = compile_mma_with_census ~name:"mm_bw_narrow_mma" (bf16_uniform_mma ()) in
+  let got_bw_narrow, census_bw_narrow =
+    compile_mma_with_census ~name:"mm_bw_narrow_mma" (bf16_uniform_mma ())
+  in
   Numerics.set_policy saved_policy;
   Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_wide };
   let want_bw = compile_serial ~name:"mm_bw_wide_serial" (bf16_uniform_mma ()) in
@@ -1078,6 +1080,16 @@ let () =
       keeps bf16 storage residency"
    in
    p claim (Bool.equal Float.(worst_excess got_bw_narrow > 0.) narrow_bf16_narrow));
+  (* The twin's value claims hold for a scalar fallback too (it also accumulates at bf16), so on HIP
+     — where [Bf16_narrow] is the approximate profile's TENSORIZED arm — the census must say the
+     bf16-accumulate rocWMMA arm actually rendered. *)
+  (let claim = "on HIP with tile MMA, the Bf16_narrow uniform-bf16 twin tensorizes" in
+   if on_hip && Lazy.force hip_mma then
+     p claim
+       ((not (List.is_empty census_bw_narrow))
+       && List.for_all census_bw_narrow
+            ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics))
+   else skipped claim);
   let bf16_wide_scopes =
     match (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.mma with
     | Some m -> m.Ir.Backend_intf.mma_bf16_wide_acc_scopes
@@ -1974,6 +1986,9 @@ let () =
     "staged+tensorized Bf16_narrow k-split lies between the per-block-narrowed value and one bf16 \
      ulp more per later block (a known-answer envelope a zeroed output fails)"
   in
+  let claim_bw_narrow_tensorizes =
+    "on HIP, the staged Bf16_narrow twin tensorizes (the approximate profile's arm)"
+  in
   let claim_bw_discriminates =
     "the k-split inputs discriminate: narrowing per block and once give different bf16 values"
   in
@@ -2045,7 +2060,7 @@ let () =
         ((Context.codegen_capabilities (Context.auto ())).Ir.Backend_intf.accum_prec Ir.Ops.bfloat16)
         Ir.Ops.bfloat16
     in
-    let got_narrow, _ = run_staged ~name:"mm_bun_staged_mma" () in
+    let got_narrow, census_narrow = run_staged ~name:"mm_bun_staged_mma" () in
     Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_wide };
     let got_bw, census_bw = run_staged ~name:"mm_buw_staged_mma" () in
     Numerics.set_policy saved_policy;
@@ -2071,6 +2086,13 @@ let () =
      in
      let hi = bws_narrow +. (ulp *. Float.of_int (List.length bws_block_sums - 1)) in
      p_all claim_bw_narrow_envelope got_narrow ~f:(fun v -> Float.(v >= bws_narrow && v <= hi)));
+    (let claim = claim_bw_narrow_tensorizes in
+     if on_hip then
+       p claim
+         ((not (List.is_empty census_narrow))
+         && List.for_all census_narrow
+              ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics))
+     else skipped claim);
     let src = Generated.read "mm_buw_staged_mma" in
     let has s = String.is_substring src ~substring:s in
     (* CUDA's register fragment: loaded once before the reduction body and stored once after it,
@@ -2138,6 +2160,7 @@ let () =
     skipped claim_bw_control;
     skipped claim_bw_narrow_control;
     skipped claim_bw_narrow_envelope;
+    skipped claim_bw_narrow_tensorizes;
     skipped claim_bw_struct;
     skipped claim_bw_swz_value;
     skipped claim_bw_swz_struct);

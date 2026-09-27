@@ -99,15 +99,16 @@ type t = {
           reduction-{e accumulator} residency follows the tensor-unit formats (gh-ocannl-663):
           CUDA's bf16 mma legs hold f32 per-lane registers, so its serial bf16 legs widen to match,
           and fp8 — which has an accumulator format on no backend — takes f32 residency everywhere;
-          bf16 on HIP/Metal (whose tiles accumulate in storage-width fragments) keeps storage
-          residency so serial and tensorized legs stay width-uniform per backend (under
-          {!Bf16_auto}). f16 residency is {!field-fp16_arithmetic}'s question and wide bf16
-          residency {!field-bf16_arithmetic}'s, not this knob's (gh-ocannl-680, gh-ocannl-838). This
-          knob reaches the GPU accumulators only where per-step narrowing can be restored
-          SCHEDULE-UNIFORMLY: fp8 on CUDA and HIP (nothing tensorizes fp8 destinations). CUDA's bf16
-          residency is structural — the mma accumulate is hardware-f32, so narrowing only the serial
-          legs would resurrect the schedule-dependent width — and so is Metal's fp8 one: MSL has no
-          fp8 type, every fp8 computation there runs in f32 ([Metal_backend]'s [compute_prec]). *)
+          bf16 on Metal (whose tiles accumulate in storage-width fragments) keeps storage residency
+          so serial and tensorized legs stay width-uniform (under {!Bf16_auto}), as HIP's does only
+          under {!Bf16_narrow} since gh-ocannl-1051. f16 residency is {!field-fp16_arithmetic}'s
+          question and wide bf16 residency {!field-bf16_arithmetic}'s, not this knob's
+          (gh-ocannl-680, gh-ocannl-838). This knob reaches the GPU accumulators only where per-step
+          narrowing can be restored SCHEDULE-UNIFORMLY: fp8 on CUDA and HIP (nothing tensorizes fp8
+          destinations). CUDA's bf16 residency is structural — the mma accumulate is hardware-f32,
+          so narrowing only the serial legs would resurrect the schedule-dependent width — and so is
+          Metal's fp8 one: MSL has no fp8 type, every fp8 computation there runs in f32
+          ([Metal_backend]'s [compute_prec]). *)
   fp16_arithmetic : fp16_mode;
       (** How f16 computes and accumulates, per {!fp16_mode} (gh-ocannl-680). The narrow request is
           fp16-specific because fp16 is the one narrow format a CPU can execute natively — bf16 has

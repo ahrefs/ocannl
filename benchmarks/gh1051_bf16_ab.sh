@@ -29,7 +29,8 @@
 # status cannot do for bf16 (its partial sums round, and the narrow tensorized arm's error is gross
 # by design). benchmarks/gh1051_cells.py, shared with gh1051_boundary_split.sh, checks every
 # cell's status and whole-output checksums (determinism across rounds, a structural bound against
-# the exact f32 control, bitwise agreement of the narrow arm's two tensorized pipelinings) and
+# the exact f32 control, identical checksums from the narrow arm's two tensorized pipelinings,
+# every tensorized cell's census reporting intrinsics) and
 # prints the table; any failure fails the run.
 #
 # Hermetic like gh514_cells.sh: every OCANNL_* variable is unset, every treatment is on argv, and the

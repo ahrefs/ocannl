@@ -764,8 +764,9 @@ files.
   `accum_prec`'d, so nothing else moves). A bf16 `Workgroup_reduce` on CUDA therefore shuffles
   `float` and computes exactly what its serial rendering does, and no backend needs a narrow
   `ocannl_shfl_xor` overload — the two float/double ones remain the whole ask. The gate is on the
-  RESIDENCY, not on storage: f16 under `Fp16_auto`/`Fp16_narrow`, and bf16 on HIP/Metal, still
-  raise (`accumulator residency` in the message) rather than gaining an untested narrow-shuffle
+  RESIDENCY, not on storage: f16 under `Fp16_auto`/`Fp16_narrow`, bf16 on Metal, and bf16 on HIP
+  under `Bf16_narrow` (under `auto` HIP's bf16 residency is f32 since gh-ocannl-1051, so it
+  shuffles `float` as CUDA does) still raise (`accumulator residency` in the message) rather than gaining an untested narrow-shuffle
   path, since a plain hardware binding would race the accumulator; under `Fp16_wide` the f16
   residency is f32 (gh-ocannl-680), so f16 shuffles float exactly as bf16 on CUDA does. **RNG-bearing contributions are refused too**, but
   only where the residency is actually wider than storage — and the reason is worth holding onto,

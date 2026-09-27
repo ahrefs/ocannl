@@ -9,7 +9,11 @@ cell differences as rounding (since 78d664c1; before that it exited 1 on them), 
 tensorized arm's error is gross by design -- it is the finding (a 2048-term cell reads 93 where the
 exact answer is 536) -- so no single error bound separates it from a corrupt kernel. The checks
 are therefore read off the bench's position-weighted whole-output checksums (`chk a/b`), which see
-every cell:
+every cell. Equality checks compare the checksums as printed: losslessly since schedule_bench
+renders them with %.17g (the gh-ocannl-1051 change to Bench_checksum.render), to ten significant
+digits at older revisions -- the split mode's two revisions among them -- and the report says
+which it could establish. Equal checksums are strong evidence of equal outputs, not
+proof: a weighted double sum can in principle collide.
 
 - DETERMINISM, every cell: each (size, arm, precision, variant) prints the identical checksum in
   every round. A racy or uninitialized kernel does not.
@@ -21,7 +25,7 @@ every cell:
   schedule even under Bf16_wide on HIP, whose privatized register tile keeps bf16 residency (its
   2048 checksum equals the narrow serial legs' bit for bit). Each cell's error is REPORTED in the
   table instead. The narrow arm's two tensorized pipelinings (mma_pd1, mma_pd2), whose error is
-  gross by design, run the same arithmetic and must agree with each other BITWISE, and each
+  gross by design, run the same arithmetic and must print IDENTICAL checksums, and each
   checksum stream must be NON-DEGENERATE: the exact answer's sign and at least a tenth of its
   magnitude, which a zeroed or sign-flipped output fails. RESIDUAL, stated rather than hidden: a
   deterministic defect shared by both pipelinings that still yields plausible magnitudes is not
@@ -35,7 +39,7 @@ every cell:
 - EVERY log is accounted for: a cell file the parser cannot name (a mistyped size, say) is a
   problem, not silently skipped.
 - SPLIT mode: the two revisions differ only in how the wide d boundary is addressed, with identical
-  conversions, so every variant's checksum must be bitwise identical across them; the mma cells
+  conversions, so every variant's checksum must be identical across them; the mma cells
   must also lie within REL_BOUND of the same run's parallel (serial, wide) checksum.
 
 Exit statuses: 0, or 1 only for a bf16 cell whose log carries the pre-78d664c1 bench's rounding
@@ -49,10 +53,16 @@ import statistics
 import sys
 
 VARIANTS = ["parallel", "smem", "regtile", "mma_pd1", "mma_pd2"]
+DIGITS = set()
 # The structural bound (see above): five times the ~5% a legitimately per-step-narrowed 2048-term
 # bf16 cell shows on minix and tuf, a quarter of what a zeroed output shows.
 REL_BOUND = 0.25
 LINE = re.compile(r"^(\w+)\s+([0-9.]+) ms\s+([0-9.]+) GFLOP/s\s+\(.*chk ([^,]+),.*\[(.*)\]\s*$")
+
+
+def digits(chk):
+    """The most significant digits any stream of a printed checksum carries."""
+    return max(len(re.sub(r"[^0-9]", "", x.split("e")[0]).lstrip("0")) for x in chk.split("/"))
 
 
 def parse_log(path):
@@ -62,6 +72,7 @@ def parse_log(path):
         m = LINE.match(line)
         if m and m.group(1) in VARIANTS:
             chk = tuple(float(x) for x in m.group(4).split("/"))
+            DIGITS.add(digits(m.group(4)))
             out[m.group(1)] = (float(m.group(2)), chk, m.group(5))
     return out
 
@@ -219,6 +230,13 @@ def split(out, label):
 if __name__ == "__main__":
     mode, out, label = sys.argv[1], sys.argv[2], sys.argv[3]
     problems = {"ab": ab, "split": split}[mode](out, label)
+    # %.10g never prints more than ten significant digits and %.17g is lossless whatever it prints
+    # (it drops trailing zeros), so a longer checksum anywhere proves the lossless renderer.
+    if max(DIGITS, default=0) > 10:
+        print("checksum equality compared losslessly (the bench renders %.17g)")
+    else:
+        print("checksum equality compared as printed: at most ten significant digits, lossless only "
+              "if this bench renders %.17g (older revisions' %.10g may round)")
     for p in problems:
         print("INVALID:", p)
     sys.exit(1 if problems else 0)

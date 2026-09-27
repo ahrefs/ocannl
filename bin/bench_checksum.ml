@@ -134,9 +134,12 @@ let row_weights ~row_stride ~row =
          List.init row_stride ~f:(fun j ->
              1 + residue ~salt ~row_stride ~modulus:weight_cap ((row * row_stride) + j))))
 
-(** A checksum rendered for a bench's timing line. *)
+(** A checksum rendered for a bench's timing line, LOSSLESSLY: [%.17g] round-trips a double, so a
+    reader comparing two lines compares the checksums themselves, not a rounding of them — the
+    gh-ocannl-1051 A/B validator's equality checks rest on this (%.10g dropped deltas below the
+    tenth digit). *)
 let render checksums =
-  String.concat ~sep:"/" (List.map checksums ~f:(fun c -> Printf.sprintf "%.10g" c))
+  String.concat ~sep:"/" (List.map checksums ~f:(fun c -> Printf.sprintf "%.17g" c))
 
 (** How one variant's output differs from the reference variant's. *)
 type disagreement =

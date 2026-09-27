@@ -12,7 +12,7 @@
 # generated HIP, and those three variants' sources must be byte-identical across revisions, while
 # the mma sources must differ (before: __mma_dstage; after: ocannl_wmma_rc16) -- else it stops.
 # Every cell is validated by benchmarks/gh1051_cells.py (shared with gh1051_bf16_ab.sh): its exit
-# status, and its whole-output checksums -- identical across rounds, bitwise identical across the
+# status, its census, and its whole-output checksums -- identical across rounds, identical across the
 # two revisions (the change touches only how the wide d boundary is addressed, with the same
 # conversions), and the mma cells within a structural bound of the same run's serial wide one.
 # Hermetic: OCANNL_* unset, treatments on argv, run from benchmarks/.
