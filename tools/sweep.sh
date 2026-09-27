@@ -2067,41 +2067,6 @@ rerun_cleared() { # log
   [ -n "$clean" ] && [ -n "$completed" ]
 }
 
-# The skip evidence of a rerun-cleared log: the log itself, less the
-# first-attempt skip records of every executable the serial rerun re-ran. A
-# skip announced before the transient failure -- a capability probe the refused
-# device answered `no` -- may be a claim the clean retry executed, and the
-# aggregator reads any record as a skip. The executable is the stanza's
-# `runtest-<name>` alias (gh-ocannl-726); a directory fallback names no
-# executable, so its first attempt stays, which can only report a skip, never
-# hide one. A machine record goes together with the human line Verdict prints
-# just before it, or not at all, so the aggregator's pairing check still holds.
-final_attempt_evidence() { # log out
-  awk '
-    function flush() { if (have) print held; have = 0 }
-    index($0, "=== serial rerun @") == 1 && $0 ~ / ===$/ && $0 !~ /: exit / {
-      name = substr($0, length("=== serial rerun ") + 1)
-      name = substr(name, 1, length(name) - 4)
-      sub(/.*\//, "", name)
-      if (sub(/^runtest-/, "", name) && name != "") rerun[name ".exe"] = 1
-    }
-    { lines[NR] = $0 }
-    END {
-      for (i = 1; i <= NR; i++) {
-        line = lines[i]
-        if (line ~ /^=== serial rerun: [0-9]+ stanzas at -j 1 ===$/) after = 1
-        if (!after && index(line, "OCANNL_TOOL_VERDICT_SKIP\t") == 1) {
-          split(line, f, "\t")
-          if ((f[3] in rerun) && have && index(held, "SKIPPED on ") == 1) { have = 0; continue }
-        }
-        flush()
-        held = line; have = 1
-      }
-      flush()
-    }
-  ' "$1" >"$2"
-}
-
 # An outcome that is not a pass, with nothing extractable from its log, is its
 # own condition -- not a fingerprint of zero failures. The consumer diffs this
 # file against the previous non-pass run's, and an empty file compares equal to
@@ -2533,11 +2498,13 @@ run_unit() { # machine backend host
   # A red the serial rerun wholly cleared, and whose completion pass then ran
   # every action the red had held back, is skip evidence like a pass: every
   # action completed in the suite, the rerun or the completion pass, all of
-  # which write the same log. Dropping it lost minix/hip's evaluations on
+  # which write the same log. The whole log: a re-run executable's first-attempt
+  # records stay, since another stanza running the same executable may hold a
+  # genuine skip the log cannot tell from a stale one -- kept, a stale record
+  # can only report a skip, never hide one. Dropping it lost minix/hip's evaluations on
   # 2026-09-27 and reported its hip-only claims as skipped on every box.
   if [ "$outcome" = fail ] && [ -z "$TARGET" ] && rerun_cleared "$log"; then
-    final_attempt_evidence "$log" "${log%.log}.skip-evidence" &&
-      printf '%s\n' "${log%.log}.skip-evidence" >"$LANE_DIR/skip-run.$machine.$backend" &&
+    printf '%s\n' "$log" >"$LANE_DIR/skip-run.$machine.$backend" &&
       : >"$LANE_DIR/skip-cleared.$machine.$backend" ||
       die "cannot stage skip evidence for $machine/$backend"
   fi
