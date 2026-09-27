@@ -20,6 +20,7 @@ Directories whose sources this scan reads:
 
 Configuration keys tracked as ambient dependencies, in the one spelling OCANNL reads:
   autotune_beam_width
+  autotune_register_tile_rm_twin
   autotune_rounds
   autotune_search
   backend
@@ -143,6 +144,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-bin_smoke_membership_scan_control
   test/operations/dune                     @runtest-cache_dir_ignores
   test/operations/dune                     @runtest-cache_dir_ignores_control
+  test/operations/dune                     @runtest-census_total_ratchet
   test/operations/dune                     @runtest-changelog_unreleased_scan
   test/operations/dune                     @runtest-codegen_text_inventory
   test/operations/dune                     @runtest-codegen_text_inventory_control
@@ -203,6 +205,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @slow-autotune_mma_companion
   test/operations/dune                     @slow-env_spelling_gate
   test/operations/dune                     @slow-fp8_codec_exhaustive
+  test/operations/dune                     @slow-half_codec_exhaustive
   test/operations/dune                     @slow-hip_scratch_budget
   test/operations/dune                     @slow-hip_scratch_tune_survives
   test/operations/dune                     @slow-tune_ship_arm

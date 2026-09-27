@@ -50,6 +50,16 @@
     - {b libm_calls}: a call to the censused class's library function ([fmax]/[fmin] and friends,
       [fma]/[fmaf]). One of these inside a vector loop is the worst outcome of all: an opaque call
       cannot be vectorized at any optimization level or grid size.
+    - {b vector_fma_ops}: the subset of [vector_ops] that are fused multiply-adds -- an x86
+      [vfmadd]/[vfmsub]/[vfnmadd]/[vfnmsub] family mnemonic on packed operands, an aarch64 [fmla] or
+      [fmls] in either dialect's vector form, lane-indexed ([v2.s[0]]) included. It is what says an
+      accumulator update stayed ONE vector operation: a register-tiled k-step issues exactly one per
+      C-tile register, and a per-lane rendering of the same update issues none (gh-ocannl-948).
+    - {b vector_fma_bytes}: those FMAs' register widths, summed ([%xmm]/[%ymm]/[%zmm] = 16/32/64; an
+      aarch64 arrangement's 8 or 16; 0 for a width no operand states). Against [vector_fma_ops] this
+      tells a whole-width update from one the compiler SPLIT: clang on [-march=x86-64-v4] prefers
+      256-bit vectors and legalizes a 64-byte GNU C vector as two [ymm] halves -- twice the FMAs,
+      the count of a loop unrolled by two, at half the width each.
     - {b stack_refs}: instructions addressing through the stack or frame pointer -- the spill signal
       gh-ocannl-614 measured.
     - {b residual}: instructions matched by none of those classifiers. Loop-control and integer
@@ -219,6 +229,8 @@ type op_class = Fma | Max_min
 type counts = {
   instructions : int;
   vector_ops : int;
+  vector_fma_ops : int;  (** of [vector_ops], the fused multiply-adds *)
+  vector_fma_bytes : int;  (** their register widths, summed *)
   scalar_fp_ops : int;
   libm_calls : int;
   stack_refs : int;
@@ -386,6 +398,48 @@ let is_scalar_fp_insn ~mnemonic ~rest =
       && (not (aarch64_arrangement_mnemonic mnemonic))
       && (not (aarch64_vector_operand rest))
       && aarch64_scalar_fp rest
+
+(* A fused multiply-add mnemonic, whatever its operands: x86's FMA3 [vfmadd231ps] and FMA4
+   [vfmaddps] families (the [v] prefix stripped, so the scalar [vfmadd231ss] matches too -- the
+   packed test is {!is_vector_insn}'s), and aarch64's [fmla]/[fmls], whose Apple spelling carries
+   the arrangement on the mnemonic ([fmla.4s]). aarch64's scalar four-operand [fmadd s0, s1, s2, s3]
+   matches the x86 prefix and is then excluded by the vector test, like [vfmadd231ss]. *)
+let is_fma_mnemonic mnemonic =
+  let m =
+    if String.is_prefix mnemonic ~prefix:"v" then String.drop_prefix mnemonic 1 else mnemonic
+  in
+  let base = match String.lsplit2 m ~on:'.' with Some (b, _) -> b | None -> m in
+  List.exists [ "fmadd"; "fmsub"; "fnmadd"; "fnmsub" ] ~f:(fun p -> String.is_prefix base ~prefix:p)
+  || List.mem [ "fmla"; "fmls" ] base ~equal:String.equal
+
+(* The width in bytes of a vector instruction's registers: the widest x86 register class an operand
+   names, or an aarch64 arrangement on the mnemonic (Apple) or on an operand (GAS) -- [4s], [2d],
+   [8h], [16b] are a q register's 16 bytes, [2s], [4h], [8b], [1d] a d register's 8. 0 when nothing
+   says, which a caller comparing widths reads as a mismatch rather than as a pass. *)
+let vector_bytes_of ~mnemonic ~rest =
+  let arrangement_bytes = function
+    | "4s" | "2d" | "8h" | "16b" -> Some 16
+    | "2s" | "4h" | "8b" | "1d" -> Some 8
+    | _ -> None
+  in
+  let on_operand () =
+    String.split_on_chars rest ~on:[ ','; ' '; '\t' ]
+    |> List.find_map ~f:(fun w ->
+        match String.lsplit2 w ~on:'.' with
+        | Some (reg, a)
+          when String.length reg > 1
+               && Char.equal reg.[0] 'v'
+               && String.for_all (String.drop_prefix reg 1) ~f:Char.is_digit ->
+            arrangement_bytes a
+        | _ -> None)
+  in
+  if has_substr rest ~sub:"%zmm" then 64
+  else if has_substr rest ~sub:"%ymm" then 32
+  else if has_substr rest ~sub:"%xmm" then 16
+  else
+    match Option.bind (String.rsplit2 mnemonic ~on:'.') ~f:(fun (_, a) -> arrangement_bytes a) with
+    | Some b -> b
+    | None -> Option.value (on_operand ()) ~default:0
 
 let is_stack_ref ~rest =
   List.exists [ "%rsp"; "%rbp"; "%esp"; "%ebp"; "[sp"; "[x29"; "sp,"; "x29," ] ~f:(fun p ->
@@ -650,6 +704,8 @@ let count_range lines op_class ~from_ ~to_ =
       {
         instructions = 0;
         vector_ops = 0;
+        vector_fma_ops = 0;
+        vector_fma_bytes = 0;
         scalar_fp_ops = 0;
         libm_calls = 0;
         stack_refs = 0;
@@ -671,6 +727,15 @@ let count_range lines op_class ~from_ ~to_ =
         let stack_ref = is_stack_ref ~rest in
         let c = { c with instructions = c.instructions + 1 } in
         let c = if vector then { c with vector_ops = c.vector_ops + 1 } else c in
+        let c =
+          if vector && is_fma_mnemonic mnemonic then
+            {
+              c with
+              vector_fma_ops = c.vector_fma_ops + 1;
+              vector_fma_bytes = c.vector_fma_bytes + vector_bytes_of ~mnemonic ~rest;
+            }
+          else c
+        in
         let c = if scalar_fp then { c with scalar_fp_ops = c.scalar_fp_ops + 1 } else c in
         let c = if libm_call then { c with libm_calls = c.libm_calls + 1 } else c in
         let c = if stack_ref then { c with stack_refs = c.stack_refs + 1 } else c in
@@ -779,10 +844,20 @@ let to_line
       loop_label;
       span;
       counts =
-        { instructions; vector_ops; scalar_fp_ops; libm_calls; stack_refs; residual; _ } as counts;
+        {
+          instructions;
+          vector_ops;
+          vector_fma_ops;
+          vector_fma_bytes;
+          scalar_fp_ops;
+          libm_calls;
+          stack_refs;
+          residual;
+          _;
+        } as counts;
     } =
   Printf.sprintf
-    "%s span=%d insns=%d vector=%d scalar_fp=%d libm_calls=%d stack=%d residual=%d \
-     residual_mnemonics=%s"
-    loop_label span instructions vector_ops scalar_fp_ops libm_calls stack_refs residual
-    (residual_to_line counts)
+    "%s span=%d insns=%d vector=%d vector_fma=%d (%d bytes) scalar_fp=%d libm_calls=%d stack=%d \
+     residual=%d residual_mnemonics=%s"
+    loop_label span instructions vector_ops vector_fma_ops vector_fma_bytes scalar_fp_ops libm_calls
+    stack_refs residual (residual_to_line counts)

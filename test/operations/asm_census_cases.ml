@@ -365,7 +365,61 @@ let residual_probe () =
   Verdict.p "a fully classified listing has an empty residual diagnostic"
     (String.equal (Census.residual_to_line (profile [ "\taddps %xmm1, %xmm0" ])) "[]")
 
+(* {2 Which vector instructions are fused multiply-adds (gh-ocannl-948)}
+
+   [cc_march_census]'s register-tile rows claim that every C-tile update of a k-step is ONE vector
+   FMA, reading the [vector_fma_ops] count against the pass's grid. That count has four spellings to
+   recognize -- x86's packed FMA3 forms, GAS's aarch64 [fmla] with the arrangement on the registers,
+   Apple's with it on the mnemonic, and either one lane-indexed, which is how clang multiplies by a
+   splat -- and three look-alikes to refuse: the scalar [vfmadd231ss] and [fmadd s0, s1, s2, s3],
+   which a per-lane rendering of the same update leaves behind, and a packed multiply that is not
+   fused. Each FMA's register width is summed beside the count, which is how the census tells an
+   update the compiler split into halves from one it issued whole. Each listing below holds one of
+   each, so an exact count fails both when a real spelling stops counting and when a look-alike
+   starts. *)
+let fma_probe () =
+  let count instructions =
+    let c = Census.profile_all Census.Fma ~asm:(String.concat ~sep:"\n" instructions) in
+    (c.vector_fma_ops, c.vector_fma_bytes)
+  in
+  let x86 =
+    [
+      "\tvfmadd231ps %ymm1, %ymm2, %ymm0";
+      "\tvfnmadd213pd %zmm1, %zmm2, %zmm0";
+      "\tvfmadd231ss %xmm1, %xmm2, %xmm0";
+      "\tvmulps %ymm1, %ymm2, %ymm0";
+    ]
+  in
+  let arm64_gas =
+    [
+      "\tfmla\tv0.4s, v1.4s, v2.4s";
+      "\tfmla\tv3.2s, v1.2s, v2.s[0]";
+      "\tfmadd\ts0, s1, s2, s3";
+      "\tfmul\tv4.4s, v1.4s, v2.4s";
+    ]
+  in
+  let arm64_apple =
+    [
+      "\tfmla.4s\tv0, v1, v2";
+      "\tfmla.2s\tv3, v1, v2[0]";
+      "\tfmadd\ts0, s1, s2, s3";
+      "\tfmul.4s\tv4, v1, v2";
+    ]
+  in
+  (* Two vector FMAs per listing, of two different widths, so the width sum fails both when a
+     register class stops being read and when two classes read alike. *)
+  Verdict.p_all
+    "vector FMAs are counted with their register widths in every dialect, and scalar FMAs and \
+     packed multiplies are not"
+    [
+      ("x86", x86, 32 + 64); ("arm64/gas", arm64_gas, 16 + 8); ("arm64/apple", arm64_apple, 16 + 8);
+    ]
+    ~f:(fun (_, listing, bytes) ->
+      let ops, summed = count listing in
+      ops = 2 && summed = bytes)
+
 let () =
   dialect_probes ();
   anchor_precedence_probe ();
-  residual_probe ()
+  residual_probe ();
+  fma_probe ()

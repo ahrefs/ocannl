@@ -152,6 +152,7 @@ let known_config_keys =
       "autotune_timing";
       "autotune_cache_dir";
       "autotune_split_reduce_max_sites";
+      "autotune_register_tile_rm_twin";
       "autotune_log";
       "tune_inline_flips";
       "tune_flip_ordering";
@@ -319,6 +320,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "autotune_rounds";
         "autotune_repeats";
         "autotune_split_reduce_max_sites";
+        "autotune_register_tile_rm_twin";
         "autotune_keep_fraction";
         "autotune_bound_pruning";
         "autotune_calibration_file";

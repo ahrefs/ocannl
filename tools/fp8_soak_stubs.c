@@ -59,7 +59,7 @@ extern uint8_t double_to_fp8(double f);
 
 static void mark(int64_t *out, int slot, unsigned int code)
 {
-  out[slot + (code >> 6)] |= (int64_t)1 << (code & 63);
+  out[slot + (code >> 6)] |= (int64_t)((uint64_t)1 << (code & 63));
 }
 
 static void record(int64_t *out, int64_t bits, unsigned int ours, unsigned int theirs)

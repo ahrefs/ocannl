@@ -98,3 +98,15 @@ val alternatives : vector_bytes:int -> elt_bytes:int -> m:int -> n:int -> t list
     second tile the model already prices), minus the default itself and anything {!check} would
     decline. Deliberately small: at most two alternatives per site, one on the common shapes, none
     where the width divides the extent. *)
+
+val rm_twin : vector_bytes:int -> elt_bytes:int -> m:int -> n:int -> t option
+(** The two-row twin of {!default} (gh-ocannl-947), which the sketch seeding proposes beside
+    {!alternatives} only under the [autotune_register_tile_rm_twin] config key (off by default): on
+    a site whose default takes {!rm_cap} rows, [rm = 2] at the default's [lanes] with the largest
+    [rn] the live-register budget admits beside two rows (capped by [n / lanes]) -- the least
+    register pressure and the most A-reuse a two-row tile has. The ranking model always prefers the
+    four-row default (at [rm = 2] every B vector is reloaded twice as often), so whether the twin
+    ever wins is a timing question, and seeding it on every leaf would grow the candidate count for
+    a shape the tuner may always reject. It never repeats the default or one of the {!alternatives},
+    which all take the default's four rows. [None] where the default has fewer rows or where
+    {!check} would decline the twin. *)

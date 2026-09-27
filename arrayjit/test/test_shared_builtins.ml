@@ -94,7 +94,9 @@ let run mode flags =
              the emulated narrowing used to flush all of it. Expectations are an independent bit
              oracle over f32 patterns, not a second reading of either converter: the exact midpoint
              0x1p-25 ties down to signed zero, while its next f32 neighbour, 0x1.8p-25, the last
-             pattern below 2^-24 and 2^-24 itself all round to the smallest subnormal. *)
+             pattern below 2^-24 and 2^-24 itself all round to the smallest subnormal. These are
+             per-PR pins of the wiring; every f32 input is checked against a rounding oracle by
+             @test/operations/slow-half_codec_exhaustive (gh-ocannl-985). *)
           let f32_of_bits b = Int32.float_of_bits (Int32.of_int b) in
           let underflow =
             [
