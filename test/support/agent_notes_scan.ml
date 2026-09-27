@@ -1645,66 +1645,65 @@ let check_citations ~file contents =
 
 type pointer = {
   pointer_line : int;
-  path : string;  (** As written, including the [.md]. *)
+  path : string;  (** The path characters before the [#], as written. *)
   anchor : string;  (** The slug after the [#], possibly empty. *)
   canonical : bool;
       (** Whether the pointer is written [<path>.md#<slug>] in one piece: a nonempty slug, and no
-          rendering hazard (see {!rendering_hazard}) right after the [.md] or right after the slug.
-      *)
+          rendering hazard (see {!rendering_hazard}) touching the path or the slug. *)
 }
-(** One pointer-shaped occurrence in the guide: a path ending [.md] followed by [#], or by a
-    character that could render into one. *)
+(** One pointer-shaped occurrence in the guide: a [#] after a path ending [.md], or a [#] followed
+    by slug characters whose path side touches a rendering hazard. *)
 
 let path_char c = Char.is_alphanum c || List.mem [ '_'; '-'; '.'; '/' ] c ~equal:Char.equal
 let anchor_char c = Char.is_alphanum c || Char.equal c '_' || Char.equal c '-'
 
-(** A byte that, standing where a pointer's [#] or the end of its slug would be, can make what a
-    reader sees differ from the source: an escape, an HTML comment or tag, an entity, a
-    percent-escape, or the start of a non-ASCII character. Emulating the renderer around these grew
-    one case per review round (an escaped hash, then a comment splitting the pointer, then a Unicode
-    slug -- Codex P2, rounds 2 and 3 on lukstafi/ocannl-staging#811), each a pointer the reader
-    silently failed to see. So they are not interpreted at all: a pointer written with one is
-    refused, loudly, with the one spelling that is read. *)
+(** A byte that can make what a reader sees differ from the source when it touches a pointer: an
+    escape, an HTML tag, an entity, a percent-escape, or the start of a non-ASCII character. (An
+    HTML comment is recognized from the lexer's ranges, not from this.) Emulating the renderer
+    around these grew one case per review round -- an escaped hash, a comment splitting the pointer,
+    a Unicode slug, then a hazard inside the extension that hid the pointer from discovery itself
+    (Codex P2, rounds 2-4 on lukstafi/ocannl-staging#811), each a pointer the reader silently failed
+    to see. So they are not interpreted at all: a pointer they touch is refused, loudly, naming the
+    one spelling that is read. *)
 let rendering_hazard c =
   List.mem [ '\\'; '<'; '&'; '%' ] c ~equal:Char.equal || Char.to_int c >= 128
 
 (** Every pointer-shaped occurrence in [contents] that a reader sees, code spans and fenced blocks
-    included: a pointer set in backticks is still a pointer. One inside an HTML comment renders
-    nowhere, so it is not read -- neither checked nor counted toward the live scan's floor (Codex
-    P2, round 1 on lukstafi/ocannl-staging#811). The path is the maximal run of path characters
-    before [.md], and a placeholder such as [<note>.md#<slug>], whose path is empty, is not a
-    pointer. A [.md] followed by anything but [#] or a {!rendering_hazard} is a plain mention. *)
+    included: a pointer set in backticks is still a pointer. Discovery is anchored on the [#], which
+    every rendered pointer contains, rather than on [.md], which a hazard can split. A [#] inside an
+    HTML comment renders nowhere and is not read -- neither checked nor counted toward the live
+    scan's floor (Codex P2, round 1 on lukstafi/ocannl-staging#811).
+
+    For each visible [#], the path is the maximal run of path characters before it and the slug the
+    maximal run of slug characters after it. When the byte before the path (or before the [#], for
+    an empty path) is a {!rendering_hazard} or lies in a comment, and a slug follows, the occurrence
+    is a non-canonical pointer whatever its path says -- an escaped [.md], a comment inside the
+    name, an escaped [#]. Otherwise it is a pointer when its path ends [.md] after a nonempty name,
+    and canonical when its slug is nonempty and not followed by a hazard or a comment. Anything else
+    -- [staging#413], a placeholder such as [<note>.md#<slug>] -- is not a pointer. *)
 let guide_pointers contents =
   let comments = (inert_by_line contents).comment_ranges in
   List.concat_map (lines contents) ~f:(fun (lineno, line) ->
       let n = String.length line in
       let hidden = spans_at comments lineno in
-      String.substr_index_all line ~may_overlap:false ~pattern:".md"
+      let hazard_at j = j >= 0 && j < n && (rendering_hazard line.[j] || in_any_span hidden j) in
+      String.substr_index_all line ~may_overlap:false ~pattern:"#"
       |> List.filter ~f:(fun i -> not (in_any_span hidden i))
       |> List.filter_map ~f:(fun i ->
           let start = ref i in
           while !start > 0 && path_char line.[!start - 1] do
             Int.decr start
           done;
-          let path = String.sub line ~pos:!start ~len:(i + 3 - !start) in
-          let after = i + 3 in
-          if String.equal path ".md" || after >= n then None
-          else if Char.equal line.[after] '#' then (
-            let stop = ref (after + 1) in
-            while !stop < n && anchor_char line.[!stop] do
-              Int.incr stop
-            done;
-            let anchor = String.sub line ~pos:(after + 1) ~len:(!stop - after - 1) in
-            let hazard_after = !stop < n && rendering_hazard line.[!stop] in
-            Some
-              {
-                pointer_line = lineno;
-                path;
-                anchor;
-                canonical = (not (String.is_empty anchor)) && not hazard_after;
-              })
-          else if rendering_hazard line.[after] then
-            Some { pointer_line = lineno; path; anchor = ""; canonical = false }
+          let stop = ref (i + 1) in
+          while !stop < n && anchor_char line.[!stop] do
+            Int.incr stop
+          done;
+          let path = String.sub line ~pos:!start ~len:(i - !start) in
+          let anchor = String.sub line ~pos:(i + 1) ~len:(!stop - i - 1) in
+          let pointer canonical = Some { pointer_line = lineno; path; anchor; canonical } in
+          if hazard_at (!start - 1) && not (String.is_empty anchor) then pointer false
+          else if String.is_suffix path ~suffix:".md" && String.length path > 3 then
+            pointer ((not (String.is_empty anchor)) && not (hazard_at !stop))
           else None))
 
 (** The notes file a guide pointer names, keyed as {!check_index} keys [files], or [None] when the
@@ -1738,11 +1737,11 @@ let check_guide ~guide_file ~guide_contents ~index_file ~index_contents
       | Some _ when not p.canonical ->
           report
             (Printf.sprintf
-               "a pointer at %s written so that what renders may differ from the source (an \
-                escape, comment, tag, entity, percent-escape or non-ASCII byte at its # or right \
-                after its slug, or no slug at all): write it in one piece as <note>.md#<slug>, the \
-                one spelling this scan reads -- the notes' headings are ASCII"
-               p.path)
+               "the pointer-shaped %s#%s is written so that what renders may differ from the \
+                source (an escape, comment, tag, entity, percent-escape or non-ASCII byte touching \
+                its path or slug, or no slug at all): write it in one piece as <note>.md#<slug>, \
+                the one spelling this scan reads -- the notes' headings are ASCII"
+               p.path p.anchor)
       | Some target -> (
           match List.Assoc.find known target ~equal:String.equal with
           | None ->

@@ -895,6 +895,18 @@ let guide_cases =
     ( "a pointer with no slug is refused",
       guide "- A rule; the mechanism: a.md#.",
       [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a comment inside the extension is refused",
+      guide "- A rule; the mechanism: a.m<!-- old -->d#the-widget-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "an escaped extension is refused",
+      guide "- A rule; the mechanism: a\\.md#the-widget-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "an entity for the hash is refused",
+      guide "- A rule; the mechanism: a.md&#35;the-widget-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "hashes that are no pointer",
+      guide "- Cited as staging#413 and ahrefs/ocannl#1044; `#ident_blacklist`; C# too.",
+      [] );
     ( "plain mentions of a note are not pointers",
       guide "- See a.md, (a.md) and `a.md`; a [link](a.md) too.",
       [] );
