@@ -2029,8 +2029,11 @@ case $sub in
     echo "command: dune $*"
     echo "backends: $(batch_summary)"
     sed -n 's/^test-run: batch: /  /p' "$plan_log"
-    rm -rf "$run_dir"
+    # The lock goes first, then the state it names: the owner pointer never
+    # names a deleted directory while the lock is held (Codex review round 8).
     trap - INT TERM HUP
+    exec 9>&-
+    rm -rf "$run_dir"
     if [ -n "$width_cap" ]; then
       echo "width: -j $width_cap, injected ($batch_width_hazard hazard, for $batch_width_backend)"
     elif explicit_jobs "$@"; then
@@ -2118,16 +2121,18 @@ case $sub in
     # launch plus suite stay within the one wall-clock cap the caller gave
     # (Codex review round 1 on PR #832). The recorded `cap` stays the caller's.
     deduct_planning "$plan_start"
-    if [ -n "$cancelled" ]; then
-      # Signalled while the readers built -- by the caller, or by a `stop`
-      # of this run, which reaps the lock's holders: nothing was published,
-      # so the launch is withdrawn like a refused one, in both modes (what a
-      # `start` survives is its launcher's end once the run is published),
-      # and the lock goes with this shell.
+    # Signalled while the readers built -- by the caller, or by a `stop` of
+    # this run, which TERMs this launcher: nothing was published, so the
+    # launch is withdrawn like a refused one, in both modes (what a `start`
+    # survives is its launcher's end once the run is published), and the lock
+    # goes with this shell. Asked again right before anything is published.
+    withdraw_if_cancelled() {
+      [ -n "$cancelled" ] || return 0
       rm -rf "$run_dir"
       echo "test-run: cancelled ($cancelled) before the launch; nothing ran" >&2
       case $cancelled in INT) exit 130 ;; *) exit 143 ;; esac
-    fi
+    }
+    withdraw_if_cancelled
     plan_width_cap "$@"
     if [ -n "$width_cap" ]; then
       width_sub=$1
@@ -2144,6 +2149,7 @@ case $sub in
       # The resolution used the whole cap: the run is over before dune starts,
       # and its verdict is the cap's, 142, published like any other rather
       # than a fresh budget for dune (Codex review round 2 on PR #832).
+      withdraw_if_cancelled
       printf 'test-run: the cap expired while the batch'"'"'s backends resolved; dune was not started\n' |
         tee -a "$run_dir/log" >&2
       publish_run || { rm -rf "$run_dir"; die "cannot publish $run_dir"; }
@@ -2573,7 +2579,20 @@ case $sub in
       # One that died there leaves only leftovers, which are reaped.
       if proc_alive "$run_dir/planning" "$run_dir/planning.token"; then
         kill -TERM "$(cat "$run_dir/planning")" 2>/dev/null
-        echo "sent TERM to the launcher, which was resolving the batch's backends; it withdraws the launch"
+        # The launcher may have finished resolving and started its supervisor
+        # meanwhile (Codex review round 8): if one is on record now, it is the
+        # run's owner and takes the TERM too.
+        for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+          [ -f "$run_dir/pid" ] || [ -f "$run_dir/planning" ] || break
+          [ ! -f "$run_dir/pid" ] || break
+          sleep 0.1
+        done
+        if [ -f "$run_dir/pid" ] && sup_alive "$run_dir"; then
+          kill -TERM "$(cat "$run_dir/pid")" 2>/dev/null
+          echo "sent TERM to the launcher and to the supervisor it had just started; confirm with: tools/test-run.sh wait $(printf %q "$run_dir")"
+        else
+          echo "sent TERM to the launcher, which was resolving the batch's backends; it withdraws the launch"
+        fi
       else
         report_reap "the launch had not started its supervisor (resolving the batch's backends?)"
       fi
