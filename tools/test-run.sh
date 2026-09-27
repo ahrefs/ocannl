@@ -312,6 +312,22 @@ plan_width_cap() { # dune argv; after plan_batch
   explicit -j to run at a width of your own."
 }
 
+# What the resolution spent comes out of the cap, which it shares: the suite
+# gets the rest, the slot's wait at most half of that, and a cap the
+# resolution used up entirely is spent -- the cap's verdict, not a fresh budget
+# for dune (Codex review rounds 1-2 on PR #832). `plan` forecasts the same.
+cap_spent=
+deduct_planning() { # <SECONDS at the resolution's start>
+  cap_spent=
+  [ "$cap" -gt 0 ] || return 0
+  cap=$((cap - (SECONDS - $1)))
+  if [ "$cap" -le 0 ]; then
+    cap_spent=1
+  else
+    [ -z "$slot_wait" ] || [ "$slot_wait" -le $((cap / 2)) ] || slot_wait=$((cap / 2))
+  fi
+}
+
 # Resolves the batch's backends (tools/batch-backends.sh) where something reads
 # them: a box where a backend meets a width cap, or a fleet slot, whose kind is
 # the other reading. Elsewhere nothing is built and nothing is said. Called
@@ -1918,7 +1934,9 @@ case $sub in
     : >"$run_dir/planning" 2>/dev/null
     plan_log=$run_dir/log
     # Resolved whatever this box is: the backends are what was asked for.
+    plan_start=$SECONDS
     batch_resolve "$DUNE" "$plan_log" "$cap" "$@"
+    deduct_planning "$plan_start"
     plan_width_cap "$@"
     plan_slot_kind
     if [ -n "$width_cap" ]; then
@@ -1943,7 +1961,9 @@ case $sub in
       echo "width: dune's default (no backend of the batch meets a cap on this box)"
     fi
     [ -z "$width_announce" ] || printf '  %s\n' "$width_announce"
-    if [ -n "$slot_fw" ]; then
+    if [ -n "$cap_spent" ]; then
+      echo "slot: none -- resolving the backends used the whole cap, so run would record the cap's verdict (142) without starting dune"
+    elif [ -n "$slot_fw" ]; then
       echo "slot: --$slot_kind"
       printf '  %s\n' "$slot_announce"
     else
@@ -2013,15 +2033,7 @@ case $sub in
     # so the suite gets what is left, and the slot's wait at most half of that:
     # launch plus suite stay within the one wall-clock cap the caller gave
     # (Codex review round 1 on PR #832). The recorded `cap` stays the caller's.
-    cap_spent=
-    if [ "$cap" -gt 0 ]; then
-      cap=$((cap - (SECONDS - plan_start)))
-      if [ "$cap" -le 0 ]; then
-        cap_spent=1
-      else
-        [ -z "$slot_wait" ] || [ "$slot_wait" -le $((cap / 2)) ] || slot_wait=$((cap / 2))
-      fi
-    fi
+    deduct_planning "$plan_start"
     if [ -n "$cancelled" ]; then
       # Signalled while the readers built -- by the caller, or by a `stop`
       # of this run, which reaps the lock's holders: nothing was published,

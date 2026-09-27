@@ -2686,6 +2686,42 @@ if [ -z "$native_detail" ]; then
   { [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] && grep -q "another test-run is active" <<<"$argv_err"; } ||
     native_detail="plan under a held lock: exit $argv_rc; stderr: $argv_err; stdout: $argv_out"
 fi
+# A resolution that spends the plan's cap is forecast as the cap's verdict,
+# the way run records it (Codex review round 4 on PR #832).
+if [ -z "$native_detail" ]; then
+  export FAKE_REACH_SLEEP=30
+  plan_spent_start=$SECONDS
+  native_probe native-plan-spent "$dxg_absent" "$kfd_small" "$nv_absent" "" plan --cap 2 build @cheap
+  unset FAKE_REACH_SLEEP
+  { [ "$argv_rc" = 0 ] && [ -z "$argv_calls" ] && [ $((SECONDS - plan_spent_start)) -lt 15 ] &&
+    grep -q "used the whole cap" <<<"$argv_out"; } ||
+    native_detail="plan with its cap spent: exit $argv_rc; stdout: $argv_out"
+fi
+# A plan cancelled while a TERM-ignoring reader runs waits for that reader's
+# grace and KILL before it exits, so the worktree is idle the moment it is
+# gone (Codex review round 4 on PR #832).
+if [ -z "$native_detail" ]; then
+  plan_term_runs=$TMP/argv-runs-plan-term
+  mkdir -p "$plan_term_runs"
+  FAKE_REACH_SLEEP=30 FAKE_REACH_IGNORE_TERM=1 FAKE_BACKEND_TEST=hip \
+  OCANNL_TOOL_TEST_RUNS=$plan_term_runs OCANNL_TOOL_DXG_DEVICE=$dxg_absent \
+  OCANNL_TOOL_KFD_TOPOLOGY=$kfd_small OCANNL_TOOL_NVIDIA_DEVICE=$nv_absent PATH=$repeat_bin:$PATH \
+    "$repeat_root/tools/test-run.sh" plan build @cheap >"$TMP/plan-term.out" 2>"$TMP/plan-term.err" &
+  plan_term_pid=$!
+  plan_term_marker=
+  for _ in $(seq 1 100); do
+    plan_term_marker=$(ls "$plan_term_runs"/2*/planning 2>/dev/null | head -n 1)
+    [ -z "$plan_term_marker" ] || break
+    sleep 0.1
+  done
+  sleep 0.5
+  kill -TERM "$plan_term_pid" 2>/dev/null
+  wait "$plan_term_pid"
+  plan_term_rc=$?
+  { [ -n "$plan_term_marker" ] && [ "$plan_term_rc" = 143 ] && [ ! -e "$(dirname "$plan_term_marker")" ] &&
+    OCANNL_TOOL_TEST_RUNS=$plan_term_runs "$repeat_root/tools/test-run.sh" idle 2>/dev/null; } ||
+    native_detail="a cancelled plan: marker ${plan_term_marker:-<none>}; exit $plan_term_rc (want 143); or not idle once it exited: $(cat "$TMP/plan-term.err")"
+fi
 if [ -z "$native_detail" ]; then
   report 0 "plan: prints the resolved backends, the width and the slot, and runs nothing"
 else

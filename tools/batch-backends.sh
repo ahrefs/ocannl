@@ -116,6 +116,10 @@ batch_child=   # the runner in flight, for batch_abort
 batch_bounded() { # [-C dir] command...
   local left=0 dir=. rc
   if [ "${1:-}" = -C ]; then dir=$2; shift 2; fi
+  # A cancellation the launcher trapped before this reader started (in
+  # new_run, take_lock, or an earlier reader) starts nothing more (Codex
+  # review round 4 on PR #832).
+  ! batch_cancel_hook || return 143
   if [ "$bcap" -ne 0 ]; then
     left=$((bcap - (SECONDS - bstart)))
     [ "$left" -gt 0 ] || return 124
@@ -165,9 +169,14 @@ batch_bounded() { # [-C dir] command...
 # launcher redefines it; standalone, nothing cancels.
 batch_cancel_hook() { return 1; }
 
-# Ends a runner in flight (for a trap that exits at once).
+# Ends a runner in flight and waits for it -- its grace and KILL included --
+# so that nothing holding the worktree lock outlives a trap that exits at once
+# (Codex review round 4 on PR #832).
 batch_abort() {
-  [ -z "$batch_child" ] || kill -TERM "$batch_child" 2>/dev/null
+  [ -n "$batch_child" ] || return 0
+  kill -TERM "$batch_child" 2>/dev/null
+  while kill -0 "$batch_child" 2>/dev/null; do wait "$batch_child" 2>/dev/null; done
+  batch_child=
   return 0
 }
 
