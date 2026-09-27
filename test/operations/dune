@@ -85,6 +85,7 @@
   (alias slow-autotune_arm_containment)
   (alias slow-tune_ship_arm)
   (alias slow-fp8_codec_exhaustive)
+  (alias slow-half_codec_exhaustive)
   (alias slow-hip_scratch_budget)
   (alias slow-hip_scratch_tune_survives)))
 
@@ -5348,6 +5349,58 @@
      fp8_codec_exhaustive.actual
      (run %{dep:fp8_codec_exhaustive.exe}))
     (diff fp8_codec_exhaustive.expected fp8_codec_exhaustive.actual)))))
+
+; gh-ocannl-985: the same treatment for the emulated fp16 converters, which every fleet box
+; preprocesses away (all have _Float16) and which a curated corpus had let a whole rounding interval
+; slip through (gh-ocannl-981). `float_to_half_emulated` over all 2^32 f32 bit patterns against the
+; rounding oracle and, where the compiler has _Float16, the native cast; `half_to_float_emulated`
+; over all 65536 codes. The converters are the definition table's own text: gen_half_emulated emits
+; them into half_emulated.h with the native switch forced off, from a copy of builtins_cc.ml the way
+; arrayjit/lib/gen_builtins reads it.
+
+(rule
+ (target half_builtins_table.ml)
+ (action
+  (copy %{project_root}/arrayjit/lib/builtins_cc.ml %{target})))
+
+(executable
+ (name gen_half_emulated)
+ (modules gen_half_emulated half_builtins_table))
+
+(rule
+ ; ocannl-backend: none -- stdlib-only header generator; no configuration or backend selection.
+ (target half_emulated.h)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{exe:gen_half_emulated.exe}))))
+
+(executable
+ (name half_codec_exhaustive)
+ (modules half_codec_exhaustive)
+ (libraries base stdio unix arrayjit.verdict test_utils)
+ (foreign_stubs
+  (language c)
+  (names half_codec_exhaustive_stubs)
+  (extra_deps half_emulated.h)))
+
+(rule
+ ; ocannl-backend: none -- links no backend; the stubs compile the emulated converters' C text and
+ ; call them directly, with no kernel compiled and no device opened.
+ (alias slow-half_codec_exhaustive)
+ (package neural_nets_lib)
+ (locks ocannl_training_test)
+ (deps
+  (alias slow-env_spelling_gate)
+  half_codec_exhaustive.expected
+  ocannl_config)
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     half_codec_exhaustive.actual
+     (run %{dep:half_codec_exhaustive.exe}))
+    (diff half_codec_exhaustive.expected half_codec_exhaustive.actual)))))
 
 ; gh-ocannl-438 follow-up: the repository's shell scripts parse. Neither `dune build @check` nor
 ; `dune runtest` looks at shell otherwise, while `scripts/setup-ocaml-env.sh` is the SessionStart
