@@ -401,6 +401,73 @@ let () =
       && c.fresh_launches = c.window_batches * c.settled_depth
       && c.all_launches = c.calibration_launches + c.fresh_launches)
 
+(* {1 The no-verdict fallback is wall-bounded (gh-ocannl-1096)} *)
+
+(* When the CUDA/HIP calibration's affine fits never resolve, it falls back to a depth the fits did
+   not choose. That fallback used to be the 2048 cap unconditionally: a bet that the per-launch cost
+   is negligible, which the cap bounds in launches but not in wall. On gfx1151 a ~61 ms gpt2_mini
+   candidate lost that bet: 126 s batches, 33,529 launches and 2016 s on one timing call. The
+   synthetic devices below reproduce both sides of the bet, and the claim is the wall bound itself,
+   read off each device's own clean cost model rather than off the policy: the launch work of the
+   settled batch fits the 10 ms target, or the batch is a single launch.
+
+   The slow device is 64 ms a launch whose batches grow slightly faster than linearly (1.5% at depth
+   4, 12.5% at depth 32), and whose depth-2 probe reads non-monotone. Drift proportional to the wall
+   is all it takes: the fit's 2.5 ms noise tolerance is under 1% of a slow candidate's batch, so
+   every depth-separated pair reads as an impossible negative fixed term, and each unresolved pair
+   doubles the depth until the validation loop runs out. The fast device is the negative control: a
+   ~8 us launch behind a 62.5 us round trip whose validation and confirmation batches, the ones
+   deeper than its provisional probe, are stalled to a flat 40 ms, which also leaves the fits
+   unresolved. Its measured batches bound its launch cost far below the target's share, so its
+   fallback must still batch deeply -- a fix that returned depth 1 on every unresolved calibration
+   would turn its queued reading back into an isolated one. *)
+let () =
+  Stdio.printf "\n== the no-verdict fallback is wall-bounded ==\n";
+  let gpu_cap = Autotune.queue_depth_cap_for_backend "hip" in
+  let slow_launch_ms = 64. in
+  let slow_clean d = (slow_launch_ms *. Float.of_int d) +. (Float.of_int (d * d) /. 4.) in
+  let slow =
+    synthetic_call ~timing:Autotune.Queued ~cap:gpu_cap ~fixed_ms:0. ~launch_ms:slow_launch_ms
+      ~walls:(fun _nth d -> if d = 2 then 60. else slow_clean d)
+      ()
+  in
+  describe "slow, unresolved fits" slow;
+  let fast_fixed_ms = 0.0625 and fast_launch_ms = 0.0078125 in
+  let fast_clean d = fast_fixed_ms +. (fast_launch_ms *. Float.of_int d) in
+  let fast =
+    synthetic_call ~timing:Autotune.Queued ~cap:gpu_cap ~fixed_ms:fast_fixed_ms
+      ~launch_ms:fast_launch_ms
+      ~walls:(fun _nth d -> if d >= 1272 then 40. else fast_clean d)
+      ()
+  in
+  describe "fast, unresolved fits" fast;
+  let cases =
+    [
+      ("slow", slow, slow_launch_ms, fun d -> slow_clean d);
+      ("fast", fast, fast_launch_ms, fun d -> fast_clean d -. fast_fixed_ms);
+    ]
+  in
+  Verdict.p_all
+    "an unresolved calibration never settles on a batch whose launch work exceeds the target" cases
+    ~f:(fun (what, c, _, launch_work) ->
+      let ok =
+        c.settled_depth = 1 || Float.(launch_work c.settled_depth <= Autotune.queued_batch_ms)
+      in
+      if not ok then
+        Stdio.eprintf "  %s: depth %d carries %g ms of launch work\n%!" what c.settled_depth
+          (launch_work c.settled_depth);
+      ok);
+  p "a slow candidate whose fits never resolve is timed at depth 1, as isolated times it"
+    (slow.settled_depth = 1 && Float.equal slow.reading.ms (slow_clean 1));
+  (* The cost the issue is about, in launches: sixteen singles, twelve probes at each of depths 2
+     through 32, and a timed window that reuses the singles. The cap fallback spent 16 x 2048
+     more. *)
+  p "a slow candidate's unresolved calibration costs no more than its probes"
+    (slow.fresh_launches = 0
+    && slow.all_launches = slow.calibration_launches
+    && slow.all_launches <= 16 + (12 * (2 + 4 + 8 + 16 + 32)));
+  p "a fast candidate's unresolved calibration still batches deeply" (fast.settled_depth > 1000)
+
 (* {1 The setting's spelling} *)
 
 let () =

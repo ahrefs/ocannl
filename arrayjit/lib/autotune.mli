@@ -1257,6 +1257,10 @@ val set_test_bindings : Context.routine -> unit
     extent-value-independent, so the single tuned entry is measured at the maximum). Unranged
     bindings are left at their current values. Exposed for tests and custom timing harnesses. *)
 
+val queued_batch_ms : float
+(** The wall time, in milliseconds, one {!Queued} batch aims for (10 ms). Exposed so a test can
+    state a batch-wall bound against the policy's own target rather than a copy of it. *)
+
 val queue_depth_cap_for_backend : string -> int
 (** Queue-memory bound selected by canonical backend name: 2048 for CUDA/HIP, and the historical 200
     for cc/Metal. Exposed with the neighboring pure calibration seams so the backend scoping of
@@ -1289,7 +1293,8 @@ val refine_queued_batch_depth : single_ms:float -> probe_depth:int -> probe_ms:f
     overshoots is interpolated back inside the measured bracket. An unresolved pair requests a
     doubled retry and returns [nan] for the wall rather than jumping to the cap or labeling the
     shallow probe as a cap-wall estimate; repeated unresolved batch pairs eventually reach the
-    2048-launch memory cap. Exposed as the deterministic policy seam for tests. *)
+    2048-launch memory cap, which {!calibrate_and_time} then bounds by the measured walls
+    (gh-ocannl-1096). Exposed as the deterministic policy seam for tests. *)
 
 val refine_queued_batch_depth_between :
   base_depth:int -> base_ms:float -> probe_depth:int -> probe_ms:float -> int * float
@@ -1362,10 +1367,14 @@ val time_routine :
     milliseconds long. Up to four further probes validate the depth. The first target-sized batch is
     confirmed at a 25% deeper depth (clamped to and measured at the cap) and retained only when the
     pair's inferred fixed component is below the target. A confirmation over 2x its supported base
-    is retried once before an unresolved pair selects the cap. An unresolved single/probe pair
-    retries at double depth, and the next affine fit uses the two batch observations so an inflated
-    single window cannot force the cap. If the bounded loop first reaches the target on its last
-    probe, the interpolated target depth is still sampled and checked against the measured
+    is retried once before an unresolved pair selects the cap. Such a no-verdict fallback is then
+    wall-bounded (gh-ocannl-1096): the least [wall / depth] any calibration measurement read bounds
+    the per-launch cost from above, and the fallback depth is shortened until that bound times the
+    depth fits the ~10 ms target -- so a slow candidate whose fits never resolve is timed at depth
+    1, not in 2048-launch batches, while a fast one still batches deeply. An unresolved single/probe
+    pair retries at double depth, and the next affine fit uses the two batch observations so an
+    inflated single window cannot force the cap. If the bounded loop first reaches the target on its
+    last probe, the interpolated target depth is still sampled and checked against the measured
     overshoot. A non-monotone confirmation scales from the deeper measured batch, never the earlier
     suspect crossing. When a clean pair's fixed component already fills the target, its marginal
     slope selects a depth carrying ~10 ms of launch work instead of accepting a shallow stalled

@@ -704,6 +704,15 @@ files.
   many-second cap batch. A confirmation more than 2x its supported target-sized base
   is itself treated as a contention outlier and retried once before an unresolved pair selects the
   cap, so one transient stall cannot inflate both the timed batch and its later refusal threshold.
+  **Every unresolved outcome is then wall-bounded** (gh-ocannl-1096): the cap bounds launches, not
+  wall, and a ~61 ms gfx1151 candidate whose slightly superlinear batches never fit (the 2.5 ms fit
+  tolerance is under 1% of a slow batch) was timed in 126 s batches, 2016 s for one call. Every
+  measured `wall / depth` bounds the marginal launch cost from above, so `calibrate_and_time`
+  shortens a NaN-wall outcome until depth times the least such bound fits the target: slow
+  candidates fall back to depth 1, fast ones keep a deep batch. The objective is unchanged (the
+  depth picks the scale, and an entry timed at the old fallback is an accurate, merely expensive,
+  reading), so no cache-key generation bump. `autotune_timing_modes` reproduces the minix call on
+  the injected clock to the launch (760 calibration + 16 x 2048).
   An unresolved first pair retries at double depth, and the next fit uses the two batch observations so an
   inflated synchronized-single window cannot force the cap. If the last bounded probe first reaches
   the target, the interpolated target depth is still sampled and checked against the measured

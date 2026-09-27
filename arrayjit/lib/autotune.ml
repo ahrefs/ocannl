@@ -547,6 +547,26 @@ let depth_from_batch_wall_with_cap ~max_depth ~depth ~wall_ms =
     in
     (depth', wall_ms *. Float.of_int depth' /. Float.of_int depth)
 
+(* The wall bound on a depth the affine fits did not choose (gh-ocannl-1096). When calibration ends
+   unresolved -- every fit refused, or the cap taken without a measurement there -- the depth it
+   returns is a bet that the per-launch cost is negligible against a fixed synchronization cost the
+   fits could not separate. The cap bounds that bet in launches, not in wall: a ~61 ms gfx1151
+   candidate whose superlinear batches never fit settled at 2048 and spent 126 s per batch, 2016 s
+   on one timing call. The measurements the calibration did take bound the bet: every batch wall is
+   at least its depth times the marginal launch cost (the fixed term is non-negative and noise only
+   adds time), so the least [wall / depth] over the singles and every probe is an upper bound
+   [launch_ms_bound] on that cost. Keep the fallback's launch work, depth times that bound, within
+   the batch target: a slow candidate falls back to depth 1 -- measured exactly as [Isolated]
+   measures it -- while a fast one, whose deep probes bound its launch cost to microseconds, still
+   batches deeply. Only ever shortens the depth; with no finite positive reading at all (a clock
+   that resolved nothing) there is no bound and the depth stands, as [queued_batch_depth] batches
+   such estimates at the cap. *)
+let wall_bounded_fallback_depth ~launch_ms_bound depth =
+  if (not (Float.is_finite launch_ms_bound)) || not (Float.is_positive launch_ms_bound) then depth
+  else
+    let fits = queued_batch_ms /. launch_ms_bound in
+    if Float.(fits >= of_int depth) then depth else Int.max 1 (Float.iround_down_exn fits)
+
 (* Sibling fault-injection seam to [on_candidate_attempt], at a timing run's pre-dispatch validation
    rather than at a candidate's compile (gh-ocannl-564). Default no-op, no config key selects it.
    Needed because the causes this phase contains — an unsatisfied dependency, an out-of-range
@@ -632,11 +652,19 @@ let on_timed_window :
    policy -- which depth a call settles on, which window it times, how many launches each costs --
    on an injected clock, with no device and no machine-dependent routine (gh-ocannl-1074). *)
 let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
+  (* The least [wall / depth] the calibration has observed: an upper bound on the marginal launch
+     cost, which bounds an unresolved calibration's fallback depth. *)
+  let launch_ms_bound = ref Float.infinity in
+  let observe ~depth wall_ms =
+    if Float.is_finite wall_ms && Float.is_positive wall_ms then
+      launch_ms_bound := Float.min !launch_ms_bound (wall_ms /. Float.of_int depth)
+  in
   let probe_batch depth =
     let best_ms = ref Float.infinity in
     for _ = 1 to queue_batch_probe_runs do
       best_ms := Float.min !best_ms (batch depth)
     done;
+    observe ~depth !best_ms;
     { ms = !best_ms; contended = false; samples = queue_batch_probe_runs }
   in
   (* [singles] is the calibration's window of synchronized single launches, kept rather than reduced
@@ -654,6 +682,7 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
             ()
         in
         let single_estimate = window_result singles in
+        observe ~depth:1 single_estimate.ms;
         let calibration_dispatches, depth, estimated_batch_wall_ms =
           if queue_depth_cap <> max_queue_depth then
             (* The affine refinement repairs the CUDA/HIP dispatch-scale defect in gh-ocannl-892.
@@ -814,6 +843,13 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
               else
                 validate_depth max_depth_validation_probes calibration_dispatches probe_depth
                   probe.ms depth estimated_batch_wall_ms
+            in
+            (* An unresolved outcome is the only one whose depth no measured wall or fit supports;
+               every resolved one carries its own wall estimate. *)
+            let depth =
+              if Float.is_nan estimated_batch_wall_ms then
+                wall_bounded_fallback_depth ~launch_ms_bound:!launch_ms_bound depth
+              else depth
             in
             (calibration_dispatches, depth, Some estimated_batch_wall_ms)
         in
