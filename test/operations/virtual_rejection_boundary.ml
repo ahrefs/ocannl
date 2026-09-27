@@ -29,25 +29,30 @@
    The shapes are hand-built [Ir.Low_level.t] through the [Ll_test] harness (gh-ocannl-600): most of
    them are unreachable through [Assignments], which gives each assignment its own loop nest.
 
-   Codes with no minimal shape here, and why — each of these was tried, not assumed:
+   Codes with no minimal shape here, and why — each of these was tried, not assumed. They are cited
+   by tag, which is a spelling test/operations/nonvirtual_code_inventory reads, so a change to where
+   one can fire finds this list on its checklist.
 
-   - 5 (a symbol no call site can ground) is preempted: a single-symbol affine position is injective
-   unless its coefficient is zero, so a non-injective map arrives as 51 (multi-symbol) or 52. - 52
-   (a [Concat] LHS position) is unreachable from this side. [trace_node_facts] runs first and raises
-   [invalid_arg] on a [Concat] index outright, so the virtualizer's arm never sees one. - 11
-   (already decided materialized) fires, but records nothing of its own: the placement it finds is
-   the one it keeps, so the provenance a test would read is the earlier decision's. That is the
-   [~materialized] arm every row below already runs. - 12 (no setter in the captured subtree) cannot
-   fire: every call site is a setter arm, or a candidate drawn from the assignment-index map, which
-   is where its setters put it. - 8, 141, 143, 144 guard constructors no pre-virtualization pass
-   emits (staged compilation, barriers, cooperative tiles, dynamic scatters). These will never
-   become inlineable, so a row would pin nothing that could move. - 14, 140, 145, 146 belong to the
-   vector-store (packed-uniform) consumption path, exercised through the uniform tests rather than
-   by hand.
+   - [5:index-not-groundable] (a symbol no call site can ground) is preempted: a single-symbol
+   affine position is injective unless its coefficient is zero, so a non-injective map arrives as
+   [51:affine-not-injective] (multi-symbol) or [52:concat-index]. - [52:concat-index] (a [Concat]
+   LHS position) is unreachable from this side. [trace_node_facts] runs first and raises
+   [invalid_arg] on a [Concat] index outright, so the virtualizer's arm never sees one. -
+   [11:already-non-virtual] (already decided materialized) fires, but records nothing of its own:
+   the placement it finds is the one it keeps, so the provenance a test would read is the earlier
+   decision's. That is the [~materialized] arm every row below already runs. - [12:no-setter] (no
+   setter in the captured subtree) cannot fire: every call site is a setter arm, or a candidate
+   drawn from the assignment-index map, which is where its setters put it. - [8:staged-compilation],
+   [141:workgroup-barrier], [143:tile-mma] and [144:dynamic-write] guard constructors no
+   pre-virtualization pass emits (staged compilation, barriers, cooperative tiles, dynamic
+   scatters). These will never become inlineable, so a row would pin nothing that could move. -
+   [14:empty-inlined-body], [140:vector-setter-unsupported], [145:lane-extract-layout] and
+   [146:lane-extract-counter] belong to the vector-store (packed-uniform) consumption path,
+   exercised through the uniform tests rather than by hand.
 
-   19 was in that list and is not: gh-ocannl-483 put the algebraic rewrite tier AHEAD of
-   [Low_level.optimize], and [Online_softmax.hoist] declares its cached probability cell as a
-   [Declare_local], so the arm fires on the ordinary path with [online_softmax] on. It is rowed
+   [19:declare-local] was in that list and is not: gh-ocannl-483 put the algebraic rewrite tier
+   AHEAD of [Low_level.optimize], and [Online_softmax.hoist] declares its cached probability cell as
+   a [Declare_local], so the arm fires on the ordinary path with [online_softmax] on. It is rowed
    below ([row_hoisted_local]) — what the walk refuses is the CONSTRUCTOR, so a plain hoisted local
    reaches it without reconstructing the rewrite. *)
 
@@ -67,31 +72,46 @@ let equal_phase a b =
 
 type verdict = Rejected of phase * Ir.Tnode.provenance | Accepted
 
-(* The phase table. Not derivable from any one place in the source: the store- and consumption-time
-   tags are [Site] literals at their raise sites, spread over three functions in [low_level.ml] plus
-   the cleanup pass, with no exported owner to ask. Those arms are exemplars, and a row naming the
-   wrong phase for its tag fails, so they are under test rather than beside the source.
+(* The phase table: where each tag a row exercises is decided. Written down here because the phase
+   has no exported owner a test could ask -- the store- and consumption-time tags are [Site]
+   literals at their raise sites, in two functions of [low_level.ml] -- and held to those raise
+   sites from outside: test/operations/nonvirtual_code_inventory reads this binding and refuses an
+   entry whose phase's function does not mint its tag (Store is [check_and_store_virtual],
+   Consumption is [inline_computation]; a tag minted in both, as [148:scan-recurrence] is, takes the
+   phase its row reaches it through). Keep it a list of literal pairs, which is what that reader
+   accepts.
 
-   The Cap arm is the exception, and it is DERIVED rather than restated: [Low_level] owns the cap
-   set and answers for it exhaustively ([is_cap_provenance]), so a fourth cap is classified here
-   without an edit — and cannot be classified here as anything else. Since gh-ocannl-609 each tag
-   also carries its own reason, so what is left to pin is the PHASE that minted it. *)
+   An entry no row exercises is refused below, so the table cannot double as documentation of the
+   codes this test does not reach: the header lists those, and the inventory's golden lists every
+   code by the function minting it. A new row adds its entry here; a row removed takes its entry.
+
+   The Cap arm is not in the table: [Low_level] owns the cap set and answers for it exhaustively
+   ([is_cap_provenance]), so a fourth cap is classified here without an edit -- and cannot be
+   classified as anything else. Since gh-ocannl-609 each tag also carries its own reason, so what is
+   left to pin is the PHASE that minted it. *)
+let phase_table =
+  [
+    ("4:lhs-idcs-differ", Store);
+    ("7:sibling-escaping-write-index", Store);
+    ("9:sibling-escaping-read-index", Store);
+    ("10:escaping-index-symbol", Store);
+    ("19:declare-local", Store);
+    ("51:affine-not-injective", Store);
+    ("142:guarded-computation", Store);
+    ("147:enclosing-repetition-loop", Store);
+    ("148:scan-recurrence", Store);
+    ("13:call-site-index-mismatch", Consumption);
+  ]
+
 let phase_of_code tag =
   if Ir.Low_level.is_cap_provenance tag then Some Cap
   else
     match tag with
-    | Ir.Tnode.Site
-        ( "4:lhs-idcs-differ" | "5:index-not-groundable" | "7:sibling-escaping-write-index"
-        | "8:staged-compilation" | "9:sibling-escaping-read-index" | "10:escaping-index-symbol"
-        | "11:already-non-virtual" | "12:no-setter" | "19:declare-local" | "51:affine-not-injective"
-        | "52:concat-index" | "141:workgroup-barrier" | "142:guarded-computation" | "143:tile-mma"
-        | "144:dynamic-write" | "147:enclosing-repetition-loop" | "148:scan-recurrence" ) ->
-        Some Store
-    | Ir.Tnode.Site
-        ( "13:call-site-index-mismatch" | "14:empty-inlined-body" | "140:vector-setter-unsupported"
-        | "145:lane-extract-layout" | "146:lane-extract-counter" ) ->
-        Some Consumption
+    | Ir.Tnode.Site site -> List.Assoc.find phase_table ~equal:String.equal site
     | _ -> None
+
+(* The tags some row's verdict named, for the exercised-only rule. *)
+let exercised = Hash_set.create (module String)
 
 let phase_name = function
   | Cap -> "by a heuristic cap"
@@ -101,12 +121,14 @@ let phase_name = function
 let claim = function
   | Accepted -> "inlined"
   | Rejected (ph, code) ->
-      Printf.sprintf "rejected %s as Non_virtual %s" (phase_name ph)
-        (Ir.Tnode.provenance_to_string code)
+      Printf.sprintf "rejected %s as %s" (phase_name ph) (Ir.Tnode.provenance_to_string code)
 
 (* One row: assert where the verdict was decided, then execute both readings of the same program. *)
 let row ~label ~llc ~cand ~out ~seed ~expected ~verdict =
   let o = optimize ~name:label llc in
+  (match verdict with
+  | Rejected (_, Ir.Tnode.Site site) -> Hash_set.add exercised site
+  | Rejected _ | Accepted -> ());
   let placed =
     match verdict with
     | Accepted -> known_virtual o cand && count_get o cand = 0
@@ -412,4 +434,6 @@ let () =
   row_block_components ();
   row_hoisted_local ();
   row_scan_recurrence ();
+  p_all "every phase-table entry is exercised by a row" phase_table ~f:(fun (site, _) ->
+      Hash_set.mem exercised site);
   Stdio.printf "%!"
