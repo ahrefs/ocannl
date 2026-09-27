@@ -235,6 +235,27 @@ files.
   framing churn). The failure mode review is actually there to catch runs in both directions — quoting
   whichever control flatters the story — so a report shows ALL matched contrasts side by side rather
   than the decisive one.
+- A timestamp is an instant of ONE clock, and the controller's is not the box's: a WSL VM
+  resynchronises after a host resume, so anything correlating a local reading with a remote artifact
+  is exposed; gh-ocannl-979 (staging#727) hit it three ways. Take BOTH bounds of a window on the box
+  that produces the artifact, read on a round trip already being made (`tools/sweep.sh`'s
+  reachability probe reads `date +%s` beside `$HOME`), in whole seconds rounded AWAY from the
+  neighbours, and close it before anything else touches the same resource (the sweep's end bound
+  precedes its RTC diagnostics). Never compare a controller-side mtime with a box-side journal, and
+  never rebuild a remote instant from a duration measured locally. Two `journalctl` facts, measured
+  and cited in `tools/kernel-window.sh`: `-k` is `_TRANSPORT=kernel` plus an implied `-b`, so it
+  answers for the CURRENT boot only and silently truncates a window spanning a reboot; and a
+  fractional `--since "@<epoch>.<frac>"` is refused with ZERO lines, not an error. Two neighbouring
+  traps from the same work: a whole-second stamp is not a unique name — take the first one that
+  names nothing (`stamp_taken` in `tools/sweep.sh`, the `.wedged-<stamp>` names in
+  `benchmarks/orchestrate.py`), since a same-second retry once overwrote the run it retried
+  (gh-ocannl-977) — and a record field is either an instant, of a named clock, or an elapsed time,
+  never one derived from the other. Still exposed: benchmark records stamp box-local wall time with
+  no zone (`ts` in `benchmarks/gh675_cells.py`, the `date +%T` cell lines of
+  `benchmarks/gh514_cells.sh`) — the right clock, comparable only with that box's own log in its own
+  zone; and `tools/machine-verify.sh` (formerly `tools/remote-verify.sh`) reads no far-side clock
+  and keeps no far-side log, so a trip's only record is the controller's capture, whose mtime says
+  nothing about the box's journal — read `date +%s` on the box at both ends instead.
 - When the next review finding is "leg X missed guard Y", look for the unfactored duplication instead
   of patching leg X. In `tools/sweep.sh`'s nine rounds every point-wise guard had a leg, a path or a
   machine it had not been applied to, and the fixes that actually closed a class REMOVED or UNIFIED
