@@ -68,7 +68,8 @@ let () =
   let shapes =
     (* (vector bytes, element bytes, m, n): NEON/AVX2/AVX-512 f32 at the n = 512 the gh-575 sweeps
        measured, the 64-column site the tree test seeds, gh-575's n = 40 step-down, pure-fp16 on
-       32-byte vectors, and a two-row site. *)
+       32-byte vectors, a two-row site, and a three-row site where the float-priced model broke a
+       tie by rounding (gh-ocannl-947). *)
     [
       (16, 4, 64, 512);
       (32, 4, 64, 512);
@@ -77,6 +78,7 @@ let () =
       (64, 4, 64, 40);
       (32, 2, 64, 512);
       (32, 4, 2, 48);
+      (16, 4, 3, 53);
     ]
   in
   Stdio.printf "model: vector_bytes elt_bytes m n -> default | alternatives\n";
@@ -112,6 +114,23 @@ let () =
           let tail_free rn = n % (rn * t.lanes) = 0 in
           (tail_free t.rn && not (List.exists (List.range (t.rn + 1) (cap + 1)) ~f:tail_free))
           || (t.rn = cap && n % RT.width t <= t.lanes)));
+  (* The ranking's own structure, not a restated pick: every candidate's vector columns cost the
+     same [1 + 1/rm] whatever its [rn], so at ONE width the row count scales the columns' term and
+     cannot reorder the candidates -- the column choice is the same at every [m]. A 16-byte file
+     renders one width per element size. The float-priced model broke equal prices by rounding at rm
+     = 3 and rm = 1 and failed this at (3, 53), (1, 100) and a few dozen other sites
+     (gh-ocannl-947). *)
+  let sites =
+    List.concat_map [ 4; 2 ] ~f:(fun elt_bytes ->
+        List.concat_map (List.range 1 9) ~f:(fun m ->
+            List.map (List.range 4 401) ~f:(fun n -> (elt_bytes, m, n))))
+  in
+  p_all "at a single-width file the row count never changes the chosen columns" sites
+    ~f:(fun (elt_bytes, m, n) ->
+      let cols m =
+        Option.map (RT.default ~vector_bytes:16 ~elt_bytes ~m ~n) ~f:(fun t -> (t.rn, t.lanes))
+      in
+      Option.equal (fun (a, b) (c, d) -> a = c && b = d) (cols m) (cols 64));
   let dividing = RT.coverage ~m:64 ~n:64 { rm = 4; rn = 2; lanes = 8 } in
   p "the coverage of a dividing geometry is all full blocks"
     (dividing.m_full = 64 && dividing.n_full = 64);

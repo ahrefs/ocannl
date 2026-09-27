@@ -74,8 +74,13 @@ val default : vector_bytes:int -> elt_bytes:int -> m:int -> n:int -> t option
     is a narrower tile, gh-ocannl-620; a partial last vector is a whole issue). No fitted constant:
     until gh-ocannl-620 the tail was a scalar peel priced at a measured 10 lane-slots per column
     (gh-ocannl-575), which made the width a divisibility question — now it is a reuse question, and
-    the model only has to RANK. Ties go to the wider vector, then to the tail-free tile, then to the
-    larger tile. [None] when even the narrowest width exceeds [n] (or [m], [n] < 1). *)
+    the model only has to RANK. Summed over the site the price is [ceil(n / lanes) * (1 + 1/rm)]
+    plus [ceil(n / (rn * lanes))] A-splat passes, which the ranking computes as an exact integer
+    (scaled by [rm]) so that equal prices reach the tie-break rather than being decided by float
+    rounding (gh-ocannl-947). At one width the columns' term is the same for every [rn], so the pick
+    is the fewest passes whatever the row count. Ties go to the wider vector, then to the tile with
+    fewer column-tail vectors (a tail-free one first), then to the larger tile. [None] when even the
+    narrowest width exceeds [n] (or [m], [n] < 1). *)
 
 val check : vector_bytes:int -> elt_bytes:int -> m:int -> n:int -> t -> (unit, string) Result.t
 (** Whether the renderer can honour [t] on an [m x n] site: [lanes] is a width the file renders and
