@@ -162,7 +162,7 @@ static void sweep_narrow(uint64_t base, uint64_t count, int64_t *out)
     h = float_to_half_emulated(x);
     m = h & 0x7FFFu;
     sign = (u >> 16) & 0x8000u;
-    out[OUT_REACHED + (h >> 6)] |= (int64_t)1 << (h & 63u);
+    out[OUT_REACHED + (h >> 6)] |= (int64_t)((uint64_t)1 << (h & 63u));
 #if SWEEP_HAS_NATIVE
     {
       unsigned int n = native_narrow(x);

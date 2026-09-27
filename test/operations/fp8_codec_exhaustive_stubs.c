@@ -126,7 +126,7 @@ static void record(int64_t *out, int64_t bits, unsigned int code, int64_t reason
 static int check_narrowing(int64_t *out, int64_t bits, double d, unsigned int sign, uint8_t code)
 {
   unsigned int m = code & 0x7Fu;
-  out[OUT_REACHED + (code >> 6)] |= (int64_t)1 << (code & 63);
+  out[OUT_REACHED + (code >> 6)] |= (int64_t)((uint64_t)1 << (code & 63));
   if (((unsigned int)code & 0x80u) != sign)
   {
     out[OUT_SIGN]++;
