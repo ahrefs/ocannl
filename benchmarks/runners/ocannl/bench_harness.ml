@@ -247,43 +247,45 @@ let install_timing_trace () =
          depth_at := Some (Unix.gettimeofday (), depth, calibration_samples);
          prev_depth depth ~calibration_samples);
     let prev_window = !Autotune.on_timed_window in
-    Autotune.on_timed_window :=
-      fun ~samples ~wall_ms ~median_wall_ms ->
-        let now = Unix.gettimeofday () in
-        (match !depth_at with
-        | None -> pr "timing-trace: a timed window without a depth decision\n"
-        | Some (at, depth, calibration) ->
-            (* No preflight time means an untagged call, which the tuner never makes: its warmup and
-               calibration are then unattributed rather than guessed. *)
-            let calib = Option.value_map !preflight_at ~default:0. ~f:(fun p -> at -. p) in
-            let n = 1 + calibration + (depth * samples) in
-            Int.incr calls;
-            launches := !launches + n;
-            calib_s := !calib_s +. calib;
-            timed_s := !timed_s +. (now -. at);
-            Hashtbl.update depths depth ~f:(fun c -> 1 + Option.value c ~default:0);
-            pr
-              "timing-trace: call %d at %.1fs: depth %d, %d batches, %d launches, calib %.1f ms, \
-               timed %.1f ms (median batch %.3f ms) | totals: %d calls, %d launches, calib %.2f s, \
-               timed %.2f s\n"
-              !calls (now -. t0) depth samples n (calib *. 1e3)
-              ((now -. at) *. 1e3)
-              median_wall_ms !calls !launches !calib_s !timed_s);
-        preflight_at := None;
-        depth_at := None;
-        prev_window ~samples ~wall_ms ~median_wall_ms;
-        Stdlib.at_exit (fun () ->
-            let hist =
-              Hashtbl.to_alist depths
-              |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
-              |> List.map ~f:(fun (d, c) -> Printf.sprintf "%dx%d" c d)
-              |> String.concat ~sep:" "
-            in
-            pr
-              "timing-trace: summary: %.1fs wall, %d candidate attempts, %d timing calls, %d \
-               launches, calib %.2f s, timed %.2f s; depth histogram (calls x depth): %s\n"
-              (Unix.gettimeofday () -. t0)
-              !attempts !calls !launches !calib_s !timed_s hist)
+    (* Parenthesized like the three above: an unparenthesized [fun] would swallow the [at_exit]
+       below into the callback and register one summary per timing call. *)
+    (Autotune.on_timed_window :=
+       fun ~samples ~wall_ms ~median_wall_ms ->
+         let now = Unix.gettimeofday () in
+         (match !depth_at with
+         | None -> pr "timing-trace: a timed window without a depth decision\n"
+         | Some (at, depth, calibration) ->
+             (* No preflight time means an untagged call, which the tuner never makes: its warmup
+                and calibration are then unattributed rather than guessed. *)
+             let calib = Option.value_map !preflight_at ~default:0. ~f:(fun p -> at -. p) in
+             let n = 1 + calibration + (depth * samples) in
+             Int.incr calls;
+             launches := !launches + n;
+             calib_s := !calib_s +. calib;
+             timed_s := !timed_s +. (now -. at);
+             Hashtbl.update depths depth ~f:(fun c -> 1 + Option.value c ~default:0);
+             pr
+               "timing-trace: call %d at %.1fs: depth %d, %d batches, %d launches, calib %.1f ms, \
+                timed %.1f ms (median batch %.3f ms) | totals: %d calls, %d launches, calib %.2f \
+                s, timed %.2f s\n"
+               !calls (now -. t0) depth samples n (calib *. 1e3)
+               ((now -. at) *. 1e3)
+               median_wall_ms !calls !launches !calib_s !timed_s);
+         preflight_at := None;
+         depth_at := None;
+         prev_window ~samples ~wall_ms ~median_wall_ms);
+    Stdlib.at_exit (fun () ->
+        let hist =
+          Hashtbl.to_alist depths
+          |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+          |> List.map ~f:(fun (d, c) -> Printf.sprintf "%dx%d" c d)
+          |> String.concat ~sep:" "
+        in
+        pr
+          "timing-trace: summary: %.1fs wall, %d candidate attempts, %d timing calls, %d launches, \
+           calib %.2f s, timed %.2f s; depth histogram (calls x depth): %s\n"
+          (Unix.gettimeofday () -. t0)
+          !attempts !calls !launches !calib_s !timed_s hist)
   end
 
 (** {1 Placement A/B arms in the emitted result (gh-ocannl-546)}
