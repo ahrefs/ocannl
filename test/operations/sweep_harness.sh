@@ -45,7 +45,8 @@ on_error() {
     native_of_dxg dxg_of_native native_collection native_unit_linux native_unit_wsl \
     native_unit_cpu native_abort_run native_other_abort hold_lock_ok \
     contract_alias contract_box contract_lock_path contract_scope contract_unchecked \
-    lane_lock_linux lane_lock_wsl \
+    lane_lock_linux lane_lock_wsl res_measured res_windows res_local res_local_other res_between \
+    res_unreadable res_garbled res_off res_absent \
     tuf_asleep tuf_no_wake_lab tuf_up tuf_unreachable tuf_inhibited tuf_sleep_fails \
     tuf_unguarded tuf_unguarded_prep tuf_unguarded_wsl tuf_self_refusal tuf_cancelled \
     guard_held guard_refused guard_stalled \
@@ -88,7 +89,9 @@ unset SWEEP_TEST_CALLS SWEEP_TEST_WAIT_PREFIX SWEEP_TEST_OPAM_RC \
   SWEEP_TEST_HOSTS SWEEP_TEST_DEST_ROG SWEEP_TEST_DEST_MINIX \
   SWEEP_TEST_KERNEL_LINES SWEEP_TEST_BOOT_ID SWEEP_TEST_DEST_TUF SWEEP_TEST_WAKE_LAB \
   SWEEP_TEST_WAKE_LAB_CALLS SWEEP_TEST_TUF_STATUS SWEEP_TEST_TUF_SLEEP SWEEP_TEST_HOLD_DENIED \
-  SWEEP_TEST_PREP_OK SWEEP_TEST_ENDPOINT_MAP SWEEP_TEST_LOCK_PATH_DIR SWEEP_TEST_LAB_LOCK_WAIT
+  SWEEP_TEST_PREP_OK SWEEP_TEST_ENDPOINT_MAP SWEEP_TEST_LOCK_PATH_DIR SWEEP_TEST_LAB_LOCK_WAIT \
+  SWEEP_TEST_FLEET_WORKER SWEEP_TEST_FLEET_CALLS SWEEP_TEST_FLEET_BOX SWEEP_TEST_REGISTRY \
+  SWEEP_TEST_REGISTRY_FROM
 
 sweep=$1
 aggregate=$2
@@ -116,6 +119,7 @@ fake_bin=$tmp/bin
 calls=$tmp/opam.calls
 ssh_calls=$tmp/ssh.calls
 wake_lab_calls=$tmp/wake-lab.calls
+fleet_calls=$tmp/fleet-worker.calls
 # Every fixture wait in this file -- the fake opam's hold, the fake ssh's
 # release and hang, and the harness's own readiness checks -- is bounded by
 # this many 50ms ticks. Each wait ends as soon as its condition holds, so the
@@ -395,6 +399,40 @@ esac
 EOF
 chmod +x "$fake_bin/wake-lab.sh"
 
+# The fleet's registry reader, as the sweep uses it (gh-ocannl-1097): `execution slot --probe`,
+# answered as a fleet box answers it (SWEEP_TEST_FLEET_BOX names this host, mac-studio by default),
+# and `execution list --active --compact`, answered with the registry file SWEEP_TEST_REGISTRY names
+# -- unset is an empty registry, and `unreadable` an anchor that did not answer, with the real
+# script's exit 4. With SWEEP_TEST_REGISTRY_FROM=<n>, reads before the n-th of the run find the
+# registry empty and the n-th and later find the file: a measurement reserved while a lane is
+# between units. Anything else is refused, so a verb the sweep should not be asking fails loudly.
+cat >"$fake_bin/fleet-worker.sh" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$SWEEP_TEST_FLEET_CALLS"
+case $* in
+  'execution slot --probe') echo "EXECUTION SLOT PROBE ${SWEEP_TEST_FLEET_BOX:-mac-studio} 6 6" ;;
+  'execution list --active --compact')
+    reads=$(grep -c '^execution list' "$SWEEP_TEST_FLEET_CALLS")
+    case ${SWEEP_TEST_REGISTRY:-} in
+      '') echo '[]' ;;
+      unreadable)
+        echo 'EXECUTION LIST FAILED: the anchor mac-studio did not answer' >&2
+        exit 4
+        ;;
+      *)
+        if [ "$reads" -lt "${SWEEP_TEST_REGISTRY_FROM:-1}" ]; then
+          echo '[]'
+        else
+          cat "$SWEEP_TEST_REGISTRY"
+        fi
+        ;;
+    esac
+    ;;
+  *) echo "fake fleet-worker.sh: unexpected $*" >&2; exit 2 ;;
+esac
+EOF
+chmod +x "$fake_bin/fleet-worker.sh"
+
 # Stand-ins for the site's wake-lab host table (gh-ocannl-1030), which is site data outside the
 # repository: the sweep sources it and asks `kind_of <box>` which boot -- native Ubuntu (`linux`) or
 # the WSL guest (`wsl`) -- each GPU box's destination is. The nested sweep is pointed at one of
@@ -452,6 +490,10 @@ run_sweep_args() {
   # cases depend on. The script's own default, unless a case that holds a lane lock on purpose
   # names SWEEP_TEST_LAB_LOCK_WAIT so its refusal is prompt.
   #
+  # The fleet's registry reader is pinned to the fake above for the same reason, and more sharply:
+  # on a fleet box the default candidates reach the REAL registry, and a real measurement
+  # outstanding on this host would skip the local units the cases assert (gh-ocannl-1097).
+  #
   # Quoted, unlike the assignment prefix this replaces: these are `env`'s
   # ARGUMENTS now, so the multi-line fixture logs would otherwise be split into
   # words and `env` would try to run one of them as the command.
@@ -463,6 +505,11 @@ run_sweep_args() {
   local environment=(-u OCANNL_BACKEND -u OCANNL_TOOL_SWEEP_CAP -u OCANNL_TOOL_SWEEP_CONTEXT_CAP \
     -u OCANNL_TOOL_SWEEP_LOCAL_BOX \
     "OCANNL_TOOL_SWEEP_LAB_LOCK_WAIT=${SWEEP_TEST_LAB_LOCK_WAIT:-300}" \
+    "OCANNL_TOOL_FLEET_WORKER=${SWEEP_TEST_FLEET_WORKER-$fake_bin/fleet-worker.sh}" \
+    "SWEEP_TEST_FLEET_CALLS=$fleet_calls" \
+    "SWEEP_TEST_FLEET_BOX=${SWEEP_TEST_FLEET_BOX:-mac-studio}" \
+    "SWEEP_TEST_REGISTRY=${SWEEP_TEST_REGISTRY:-}" \
+    "SWEEP_TEST_REGISTRY_FROM=${SWEEP_TEST_REGISTRY_FROM:-1}" \
     "SWEEP_TEST_ENDPOINT_MAP=${SWEEP_TEST_ENDPOINT_MAP:-}" \
     "SWEEP_TEST_LOCK_PATH_DIR=${SWEEP_TEST_LOCK_PATH_DIR:-}" \
     "HOME=$tmp/home" \
@@ -1978,6 +2025,101 @@ grep -q '^  rog-nv/cuda: skip (box rog reserved by another lane (pid 1))$' <<<"$
 absent rog-nv "$ssh_calls"
 exec 6>&-
 rm -f "$lane_lock_at"
+
+# The fleet's execution reservations (gh-ocannl-1097). Before each unit a lane asks the registry
+# whether an outstanding `measurement` names its box, and skips the unit if one does. The registry
+# below holds one on rog (the #719 shape: its Linux boot, running), a CORRECTNESS one on minix --
+# which must not defer anything: correctness shares a box by the fleet's policy -- and a
+# measurement on a host that is none of the lab's, which must not either.
+registry=$tmp/registry.json
+cat >"$registry" <<'JSON'
+[
+  {"request_id": "wave-719-rog-1", "state": "running",
+   "request": {"kind": "measurement", "execution_host": "rog-nv-linux"}},
+  {"request_id": "wave-900-minix-1", "state": "running",
+   "request": {"kind": "correctness", "execution_host": "minix-amd-linux"}},
+  {"request_id": "wave-901-elsewhere-1", "state": "launching",
+   "request": {"kind": "measurement", "execution_host": "elsewhere-linux"}}
+]
+JSON
+: >"$ssh_calls"
+: >"$fleet_calls"
+res_measured=$(SWEEP_TEST_REGISTRY=$registry \
+  run_sweep_args --only cc --only cuda --only hip --only multidev_cc --target reservation-probe)
+grep -qF "reservations: consulted before each unit through $fake_bin/fleet-worker.sh (this host is mac-studio)" \
+  <<<"$res_measured"
+grep -qF '  rog-nv/cuda: skip (box rog under an exclusive measurement: wave-719-rog-1 (running on rog-nv-linux))' \
+  <<<"$res_measured"
+grep -q '^  minix/hip: skip (unreachable)$' <<<"$res_measured"
+grep -q '^  minix/multidev_cc: skip (unreachable)$' <<<"$res_measured"
+grep -q '^  m4-max/cc: incremental-pass ' <<<"$res_measured"
+absent rog-nv "$ssh_calls"
+grep -q minix-amd-linux "$ssh_calls"
+[ "$(awk -F '\t' '$7 == "reservation-probe" { print $2 "/" $3 ":" $5 }' "$state/history.tsv" | sort)" = \
+  "$(printf '%s\n' m4-max/cc:incremental-pass minix/hip:skip minix/multidev_cc:skip rog-nv/cuda:skip \
+    tuf/hip:gate | sort)" ]
+# One probe for the run, and one read per unit that ran its lane's loop -- four; the gated tuf lane
+# stops before it. Exactly the registry's supervision read, and nothing that could mutate it.
+[ "$(grep -c '^execution slot --probe$' "$fleet_calls")" -eq 1 ]
+[ "$(grep -c '^execution list --active --compact$' "$fleet_calls")" -eq 4 ]
+[ -z "$(awk '!/^execution (slot --probe|list --active --compact)$/' "$fleet_calls")" ]
+# A measurement booked on the box's WINDOWS side -- a dual-boot verification reboot -- holds the box
+# as surely as one on its Linux: every endpoint on the box's row of the endpoint map is its name.
+res_windows_registry=$tmp/registry-windows.json
+printf '%s\n' '[{"request_id": "wave-3-rog-win-1", "state": "launching",' \
+  ' "request": {"kind": "measurement", "execution_host": "rog-nv-win"}}]' >"$res_windows_registry"
+res_windows=$(SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh SWEEP_TEST_REGISTRY=$res_windows_registry \
+  run_sweep_args --only cuda --target reservation-windows-probe)
+grep -qF '  rog-nv/cuda: skip (box rog under an exclusive measurement: wave-3-rog-win-1 (launching on rog-nv-win))' \
+  <<<"$res_windows"
+# The local lane's name is the one the probe gives this host, not the history's `m4-max`: a
+# measurement there skips the local unit before it builds anything...
+res_local_registry=$tmp/registry-local.json
+printf '%s\n' '[{"request_id": "wave-4-mac-1", "state": "running",' \
+  ' "request": {"kind": "measurement", "execution_host": "mac-studio"}}]' >"$res_local_registry"
+: >"$calls"
+res_local=$(SWEEP_TEST_REGISTRY=$res_local_registry run_sweep_args --target reservation-local-probe)
+grep -qF '  m4-max/cc: skip (box mac-studio under an exclusive measurement: wave-4-mac-1 (running on mac-studio))' \
+  <<<"$res_local"
+absent -e 'dune build' -e 'dune runtest' "$calls"
+# ...and the same registry read on a host the fleet names otherwise skips nothing.
+res_local_other=$(SWEEP_TEST_FLEET_BOX=another-box SWEEP_TEST_REGISTRY=$res_local_registry \
+  run_sweep_args --target reservation-local-probe)
+grep -q '^  m4-max/cc: incremental-pass ' <<<"$res_local_other"
+# Asked before EACH unit, not once per lane: a measurement reserved on minix after its hip unit
+# started still stops its multidev_cc unit (the fake's registry is empty for the first read).
+res_between_registry=$tmp/registry-between.json
+printf '%s\n' '[{"request_id": "wave-5-minix-1", "state": "running",' \
+  ' "request": {"kind": "measurement", "execution_host": "minix-amd-linux"}}]' \
+  >"$res_between_registry"
+: >"$fleet_calls"
+res_between=$(SWEEP_TEST_REGISTRY=$res_between_registry SWEEP_TEST_REGISTRY_FROM=2 \
+  run_sweep_args --only hip --only multidev_cc --target reservation-between-probe)
+grep -q '^  minix/hip: skip (unreachable)$' <<<"$res_between"
+grep -qF '  minix/multidev_cc: skip (box minix under an exclusive measurement: wave-5-minix-1 (running on minix-amd-linux))' \
+  <<<"$res_between"
+# A registry that cannot be read fails OPEN and says so: the unit runs, under a WARNING.
+res_unreadable=$(SWEEP_TEST_REGISTRY=unreadable run_sweep_args --target reservation-unreadable-probe)
+grep -qF "  m4-max/cc: WARNING -- the fleet's execution registry could not be read (execution list exited 4: EXECUTION LIST FAILED: the anchor mac-studio did not answer); running without knowing whether a measurement holds the box" \
+  <<<"$res_unreadable"
+grep -q '^  m4-max/cc: incremental-pass ' <<<"$res_unreadable"
+printf 'not a registry\n' >"$tmp/registry-garbled.json"
+res_garbled=$(SWEEP_TEST_REGISTRY=$tmp/registry-garbled.json \
+  run_sweep_args --target reservation-garbled-probe)
+grep -qF "  m4-max/cc: WARNING -- the fleet's execution registry could not be read (execution list printed no registry this could read)" \
+  <<<"$res_garbled"
+grep -q '^  m4-max/cc: incremental-pass ' <<<"$res_garbled"
+# Outside the fleet, or with the fleet turned off, nothing is asked and the header says which.
+: >"$fleet_calls"
+res_off=$(SWEEP_TEST_FLEET_WORKER=none SWEEP_TEST_REGISTRY=$res_local_registry \
+  run_sweep_args --target reservation-off-probe)
+grep -q '^reservations: NOT CONSULTED -- OCANNL_TOOL_FLEET_WORKER=none$' <<<"$res_off"
+grep -q '^  m4-max/cc: incremental-pass ' <<<"$res_off"
+[ ! -s "$fleet_calls" ]
+res_absent=$(SWEEP_TEST_FLEET_WORKER=$tmp/no-such-fleet-worker.sh \
+  run_sweep_args --target reservation-off-probe)
+grep -qF "reservations: NOT CONSULTED -- no fleet-worker.sh answered 'execution slot --probe' ($tmp/no-such-fleet-worker.sh)" \
+  <<<"$res_absent"
 
 # The rows are those of a serial run in everything but their order: one per
 # unit, each under its own machine.

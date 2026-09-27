@@ -2257,8 +2257,8 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   `sweep-hold: WARNING` into the log and the unit's summary line says `ran WITHOUT a sleep guard`.
   The harness runs the extracted supervisor against fake inhibitors (held for exactly the unit's
   lifetime, refused, absent, not asked). Residual: the seconds BETWEEN legs are unguarded.
-- **A lane coordinates with the lab through a lock it does not own**: wake-lab's lab locks
-  (lukstafi/ludics-lite). A remote lane holds the box's
+- **A lane coordinates with the fleet through two things it does not own**: wake-lab's lab locks
+  and the fleet's execution registry (both lukstafi/ludics-lite). A remote lane holds the box's
   LANE lock (`$WAKE_LAB_LOCK_DIR/<box>.lock`, never `<box>.hold.lock`; the comment above
   `LAB_LOCK_DIR` in `tools/sweep.sh` says why each) for its whole length, so wake-lab's destroyers
   (`restart-wsl`, `sleep`, the boot verbs) refuse the box under it. That contract is four facts
@@ -2269,7 +2269,17 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   A disagreement refuses the run (startup exit 2, no record) naming what moved; no wake-lab.sh, or
   one without `endpoint-map`, prints `lab locks: NOT CHECKED` in the header and runs. ludics-lite's
   `scripts/test-wake-lab.sh` checks the same contract from its side, against a staging checkout it
-  never fetches.
+  never fetches. Separately, before EACH unit the lane reads the registry
+  (`fleet-worker.sh execution list --active --compact`, through the fleet-worker.sh
+  `tools/fleet-worker-candidates.sh` finds, the one `tools/test-run.sh` takes its slot through) and
+  records `skip (box <box> under an exclusive measurement: <request_id> (<state> on <host>))`
+  when an outstanding `measurement` names any endpoint of the box — the fleet name `execution slot
+  --probe` gives for the local lane (gh-ocannl-1097: the rog lane's cuda `@slow` ran into a 4-7 h
+  tuned measurement and contaminated every timing after it). Correctness reservations defer
+  nothing (the fleet lets them share a box, and a standing one lasts a worker's life). An
+  unreadable registry fails open with a `WARNING` on the unit; no fleet-worker.sh, or
+  `OCANNL_TOOL_FLEET_WORKER=none`, prints `reservations: NOT CONSULTED`. The harness pins its
+  registry reader to a fake, since the default candidates reach the real registry on a fleet box.
 - **The per-run record `~/.ocannl-sweep/logs/<stamp>-run.tsv` is what a consumer reads; the stdout
   summary is for humans** (gh-ocannl-977). Its absence is itself a verdict: a run that refused at
   startup swept nothing and writes no record, which is what distinguishes that exit 2 from a

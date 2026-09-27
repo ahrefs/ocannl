@@ -293,6 +293,7 @@ tools/ci-compiler-test.sh parses: true
 tools/ci-durations.sh parses: true
 tools/ci-times.sh parses: true
 tools/dune-quiet.sh parses: true
+tools/fleet-worker-candidates.sh parses: true
 tools/fmt-check.sh parses: true
 tools/kernel-window.sh parses: true
 tools/machine-verify-far.sh parses: true

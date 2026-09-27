@@ -381,8 +381,10 @@ plan_batch() { # <log> dune argv
 # nested-slot rule has no `--probe` and is not used, so a worker's wrapper
 # around this script can never cost two slots. Anything else the probe says --
 # a machine outside the fleet, no skill deployed -- runs dune directly, as
-# before, and silently. OCANNL_TOOL_FLEET_WORKER names another fleet-worker.sh
-# (the harness's fake), and `none` turns the slot off. `repeat` never takes it:
+# before, and silently. The candidates -- and OCANNL_TOOL_FLEET_WORKER, which
+# names another fleet-worker.sh (the harness's fake) or turns the slot off with
+# `none` -- are tools/fleet-worker-candidates.sh's, shared with tools/sweep.sh,
+# which reads the fleet's registry through the same one. `repeat` never takes it:
 # an isolation tool runs as given, like its width (wrap it yourself on a
 # fleet box). The slot's wait comes out of the run's cap: it is the smaller of
 # half the cap and OCANNL_TOOL_SLOT_WAIT (600s), after which the slot refuses
@@ -390,16 +392,6 @@ plan_batch() { # <log> dune argv
 slot_fw=          # the fleet-worker.sh to take the slot through, empty for none
 slot_wait=
 slot_announce=
-fleet_worker_candidates() { # prints the fleet-worker.sh candidates, one per line
-  case ${OCANNL_TOOL_FLEET_WORKER-} in
-    none) ;;
-    '')
-      printf '%s\n' "$HOME/.claude/skills/issue-wave/scripts/fleet-worker.sh" \
-        "$HOME/.codex/skills/issue-wave/scripts/fleet-worker.sh"
-      ;;
-    *) printf '%s\n' "$OCANNL_TOOL_FLEET_WORKER" ;;
-  esac
-}
 plan_slot() {
   local fw probe tag box= slots tokens
   slot_fw= slot_wait= slot_announce=
@@ -498,6 +490,10 @@ cd -P "$(dirname "$0")/.." || die "cannot cd to repo root"
 [ -r tools/batch-backends.sh ] || die "cannot read tools/batch-backends.sh"
 # shellcheck source=batch-backends.sh
 . tools/batch-backends.sh
+# Where this host's fleet-worker.sh might be (plan_slot), shared with tools/sweep.sh.
+[ -r tools/fleet-worker-candidates.sh ] || die "cannot read tools/fleet-worker-candidates.sh"
+# shellcheck source=fleet-worker-candidates.sh
+. tools/fleet-worker-candidates.sh
 
 # perl is load-bearing rather than a convenience: the per-worktree flock, the
 # cap supervisor and the atomic rename behind the `last` pointer are all
