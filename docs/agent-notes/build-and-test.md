@@ -2278,7 +2278,9 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   tuned measurement and contaminated every timing after it). Correctness reservations defer
   nothing (the fleet lets them share a box, and a standing one lasts a worker's life). An
   unreadable registry fails open with a `WARNING` on the unit; no fleet-worker.sh, or
-  `OCANNL_TOOL_FLEET_WORKER=none`, prints `reservations: NOT CONSULTED`. The harness pins its
+  `OCANNL_TOOL_FLEET_WORKER=none`, prints `reservations: NOT CONSULTED`. It is a read before each
+  unit and the sweep owns no registry record, so a measurement reserved while a unit RUNS is not
+  refused by anything — the fleet-side interlock is lukstafi/ludics-lite#445. The harness pins its
   registry reader to a fake, since the default candidates reach the real registry on a fleet box.
 - **The per-run record `~/.ocannl-sweep/logs/<stamp>-run.tsv` is what a consumer reads; the stdout
   summary is for humans** (gh-ocannl-977). Its absence is itself a verdict: a run that refused at

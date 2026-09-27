@@ -390,10 +390,19 @@ lab_contract_check() { # -- sets LAB_MAP and LAB_CONTRACT; refuses the run on a 
 # fleet's policy lets correctness runs share a box (its run-time slots bound them), and a standing
 # one lasts a worker's whole life, so a sweep that stood aside for those would rarely run at all.
 #
+# One direction only. The check is a read before the unit, and the sweep owns no registry record,
+# so a measurement reserved WHILE a unit runs is not refused by anything and the unit runs on under
+# it. Closing that needs the registry to see the sweep -- a record per unit, or a measurement
+# reservation that refuses a box whose lab lane lock is held -- which is fleet machinery, not this
+# script's (lukstafi/ludics-lite#445; the fleet's measurement guidance meanwhile has the owner inspect
+# the box's activity, where `wake-lab.sh status` shows the lane lock, before timing).
+#
 # A record names its box by an ssh identity, and a box has one per endpoint. A remote lane's names
 # are every alias on its box's row of wake-lab.sh's endpoint map, read once above (a measurement
 # booked on a dual-boot box's Windows side, for a verification reboot, holds the box as surely as
-# one on its Linux), plus lab_dest_of's own aliases for when that map could not be read. The local
+# one on its Linux). Where that map could not be read the names are derived from lab_dest_of's own
+# aliases by the rule wake-lab.sh enforces on every row (check_endpoints): a box's `-linux`,
+# `-win` and `-wsl` aliases share one stem, and its LAN route is `<box>-lan`. The local
 # lane's name is the one `execution slot --probe` gives this host -- the fleet's `mac-studio`, not
 # the `m4-max` measurement-box ID the history rows carry.
 #
@@ -438,12 +447,16 @@ lane_fleet_names() { # ssh-destination (empty for the local lane)
   box=$(lab_box_of "$dest")
   row=$(awk -v b="$box" '$1 == b { $1 = ""; print; exit }' <<<"$LAB_MAP")
   names="$dest $row"
-  for pair in $LAB_LANE_BOXES; do
-    [ "${pair#*=}" = "$dest" ] || continue
-    for kind in linux wsl; do
-      alias=$(lab_dest_of "${pair%%=*}" "$kind") && names="$names $alias"
+  if [ -z "$row" ]; then
+    names="$names $box-lan"
+    for pair in $LAB_LANE_BOXES; do
+      [ "${pair#*=}" = "$dest" ] || continue
+      for kind in linux wsl; do
+        alias=$(lab_dest_of "${pair%%=*}" "$kind") || continue
+        names="$names $alias ${alias%-*}-win"
+      done
     done
-  done
+  fi
   printf '%s' "$names"
 }
 
