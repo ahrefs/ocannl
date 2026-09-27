@@ -96,6 +96,10 @@ let () =
      (not (Scan.is_ir destructured "Ll_test" "cycle"))
      && (not (Scan.is_ir destructured "Ll_test" "seq"))
      && Scan.is_ir destructured "Ll_test" "solo");
+  p "a binding operator's pattern annotation is IR evidence"
+    (Scan.is_ir
+       (harness "include Ll_builders\nlet helper m = let* (x : LL.t) = m in x\n")
+       "Ll_test" "helper");
   p "a harness external is classified by its declared type"
     (let externals =
        harness
@@ -150,12 +154,13 @@ let () =
   p "a constrained alias of the harness is still the harness"
     (uses "module B : S = Ll_builders\nlet _ = B.seq"
     && uses "module B = (Ll_builders : S)\nlet _ = B.seq");
-  p "functor parameters, unpacked modules, externals and instance variables shadow the harness"
+  p "functor parameters, unpacks, externals, instance variables and ancestors shadow the harness"
     ((not (uses "module B = Ll_builders\nmodule F (B : S) = struct let _ = B.seq end"))
     && (not (uses "module B = Ll_builders\nlet f (module B : S) = B.seq"))
     && (not (uses "open Ll_test\nexternal seq : int -> int = \"x\"\nlet _ = seq"))
     && (not (uses "open Ll_test\nlet o = object val seq = 1 method m = seq end"))
-    && not (uses "open Ll_test\nclass c seq = object method m = seq end"));
+    && (not (uses "open Ll_test\nclass c seq = object method m = seq end"))
+    && not (uses "open Ll_test\nclass c = object inherit p as seq method m = seq#x end"));
   p "a class-expression open of the harness reaches its builders"
     (uses "class c = let open Ll_test in object method m = seq end");
   (* The deliberate boundary: an open the scan cannot read is not taken to shadow the harness, as

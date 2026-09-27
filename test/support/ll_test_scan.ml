@@ -303,7 +303,9 @@ class virtual scoped (surface : surface) =
           e
       | Pexp_letop { let_; ands; body } ->
           let operands = let_ :: ands in
-          List.iter operands ~f:(fun b -> ignore (self#expression env b.pbop_exp : expression));
+          List.iter operands ~f:(fun b ->
+              ignore (self#expression env b.pbop_exp : expression);
+              ignore (self#pattern env b.pbop_pat : pattern));
           let inner = bind_patterns env (List.map operands ~f:(fun b -> b.pbop_pat)) in
           ignore (self#expression inner body : expression);
           e
@@ -330,6 +332,7 @@ class virtual scoped (surface : surface) =
       match ce.pcl_desc with
       | Pcl_fun (_, default, pattern, body) ->
           Option.iter default ~f:(fun d -> ignore (self#expression env d : expression));
+          ignore (self#pattern env pattern : pattern);
           ignore (self#class_expr (bind_patterns env [ pattern ]) body : class_expr);
           ce
       | Pcl_let (rec_flag, bindings, body) ->
@@ -341,11 +344,15 @@ class virtual scoped (surface : surface) =
           ce
       | _ -> super#class_expr env ce
 
-    (* An object's self and its instance variables are in scope in every field. *)
+    (* An object's self, instance variables and ancestor names ([inherit c as a]) are in scope in
+       every field -- the whole body, which errs toward the source's own. *)
     method! class_structure env cs =
+      ignore (self#pattern env cs.pcstr_self : pattern);
       let vals =
         List.filter_map cs.pcstr_fields ~f:(fun field ->
-            match field.pcf_desc with Pcf_val ({ txt; _ }, _, _) -> Some txt | _ -> None)
+            match field.pcf_desc with
+            | Pcf_val ({ txt; _ }, _, _) | Pcf_inherit (_, _, Some { txt; _ }) -> Some txt
+            | _ -> None)
       in
       let inner = bind_values (bind_patterns env [ cs.pcstr_self ]) vals Local in
       List.iter cs.pcstr_fields ~f:(fun field ->
