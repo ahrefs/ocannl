@@ -43,6 +43,9 @@ ROUNDS=${3:-6}
 shift $(($# < 3 ? $# : 3))
 SIZES=("$@")
 [ ${#SIZES[@]} -gt 0 ] || SIZES=(1024 2048)
+for size in "${SIZES[@]}"; do
+  case $size in '' | *[!0-9]* | 0) echo "sizes must be positive integers, got '$size'"; exit 2 ;; esac
+done
 case $ROUNDS in '' | *[!0-9]*) echo "rounds must be a positive even integer, got '$ROUNDS'"; exit 2 ;; esac
 if ((ROUNDS == 0 || ROUNDS % 2 != 0)); then
   echo "rounds must be a positive even integer (complete ABBA blocks), got $ROUNDS"

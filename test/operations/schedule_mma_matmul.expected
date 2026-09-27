@@ -76,6 +76,7 @@ the k-split inputs discriminate: narrowing per block and once give different bf1
 staged+tensorized Bf16_wide matmul equals the once-narrowed wide reference bitwise: true
 staged+tensorized default-policy uniform-bf16 matmul narrows between blocks exactly where the backend keeps bf16 storage residency: true
 staged+tensorized Bf16_narrow uniform-bf16 matmul narrows between blocks exactly where that mode keeps bf16 storage residency: true
+staged+tensorized Bf16_narrow k-split lies between the per-block-narrowed value and one bf16 ulp more per later block (a known-answer envelope a zeroed output fails): true
 staged+tensorized Bf16_wide fragment residency converts d once: true
 swizzled staged twin under Bf16_wide and the default policy equals the once-narrowed wide reference bitwise: true
 swizzled staged twin keeps the same register fragment, fed through ldmatrix: true

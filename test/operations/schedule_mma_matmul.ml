@@ -1970,6 +1970,10 @@ let () =
     "staged+tensorized Bf16_narrow uniform-bf16 matmul narrows between blocks exactly where that \
      mode keeps bf16 storage residency"
   in
+  let claim_bw_narrow_envelope =
+    "staged+tensorized Bf16_narrow k-split lies between the per-block-narrowed value and one bf16 \
+     ulp more per later block (a known-answer envelope a zeroed output fails)"
+  in
   let claim_bw_discriminates =
     "the k-split inputs discriminate: narrowing per block and once give different bf16 values"
   in
@@ -2055,6 +2059,18 @@ let () =
     else p_all claim_bw_control got_default ~f:(Float.equal bws_wide);
     if narrow_bf16_narrow then p_none claim_bw_narrow_control got_narrow ~f:(Float.equal bws_wide)
     else p_all claim_bw_narrow_control got_narrow ~f:(Float.equal bws_wide);
+    (* A known answer for the narrow arm, whose rounding the claims above deliberately do not pin
+       (gfx11's bf16-accumulate is not exactly rounded): adding a positive +1 per later block to a
+       bf16 partial can round it down to where it was or up by one ulp, never lower and never more,
+       so any narrowing between blocks lands in [bws_narrow, bws_narrow + ulp * later blocks] — and
+       a wide reading ([bws_wide]) lies inside it too, so the claim is universal. The gh1051 A/B
+       drivers cite this as where the narrow arm's values are pinned. *)
+    (let ulp =
+       let _, e = Float.frexp bws_narrow in
+       Float.ldexp 1. (e - 8)
+     in
+     let hi = bws_narrow +. (ulp *. Float.of_int (List.length bws_block_sums - 1)) in
+     p_all claim_bw_narrow_envelope got_narrow ~f:(fun v -> Float.(v >= bws_narrow && v <= hi)));
     let src = Generated.read "mm_buw_staged_mma" in
     let has s = String.is_substring src ~substring:s in
     (* CUDA's register fragment: loaded once before the reduction body and stored once after it,
@@ -2121,6 +2137,7 @@ let () =
     skipped claim_bw_value;
     skipped claim_bw_control;
     skipped claim_bw_narrow_control;
+    skipped claim_bw_narrow_envelope;
     skipped claim_bw_struct;
     skipped claim_bw_swz_value;
     skipped claim_bw_swz_struct);

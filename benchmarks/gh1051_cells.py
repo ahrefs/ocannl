@@ -21,7 +21,19 @@ every cell:
   schedule even under Bf16_wide on HIP, whose privatized register tile keeps bf16 residency (its
   2048 checksum equals the narrow serial legs' bit for bit). Each cell's error is REPORTED in the
   table instead. The narrow arm's two tensorized pipelinings (mma_pd1, mma_pd2), whose error is
-  gross by design, run the same arithmetic and must agree with each other BITWISE.
+  gross by design, run the same arithmetic and must agree with each other BITWISE, and each
+  checksum stream must be NON-DEGENERATE: the exact answer's sign and at least a tenth of its
+  magnitude, which a zeroed or sign-flipped output fails. RESIDUAL, stated rather than hidden: a
+  deterministic defect shared by both pipelinings that still yields plausible magnitudes is not
+  detectable here -- gfx11's bf16-accumulate is not exactly rounded, and this bench's operands are
+  exact in bf16 at no k, so no cheap independent oracle exists at the driver. The narrow arm's
+  values are pinned where one does: schedule_mma_matmul's Bf16_narrow twins (a known-answer k-split
+  envelope and the two-sided narrowing-bound claim).
+- TENSORIZED means tensorized: every bf16 mma_pd1/mma_pd2 cell's census must report
+  Mma_intrinsics and no scalar fallback -- schedule_bench only warns when a Tile_mma declines (no
+  tile MMA on the device, no rocWMMA headers), and a scalar timing must not stand in for a WMMA one.
+- EVERY log is accounted for: a cell file the parser cannot name (a mistyped size, say) is a
+  problem, not silently skipped.
 - SPLIT mode: the two revisions differ only in how the wide d boundary is addressed, with identical
   conversions, so every variant's checksum must be bitwise identical across them; the mma cells
   must also lie within REL_BOUND of the same run's parallel (serial, wide) checksum.
@@ -67,6 +79,10 @@ def status_ok(path, prec):
     return False, f"unexpected exit {status}"
 
 
+def non_degenerate(c, exact):
+    return all(x * y > 0 and abs(x) >= 0.1 * abs(y) for x, y in zip(c, exact))
+
+
 def rel(a, b):
     return max(abs(x - y) / max(abs(y), 1e-300) for x, y in zip(a, b))
 
@@ -76,6 +92,7 @@ def load(out, pattern, key_of):
     for f in sorted(glob.glob(os.path.join(out, pattern))):
         key = key_of(os.path.basename(f))
         if key is None:
+            problems.append(f"{os.path.basename(f)}: not a cell this driver can name")
             continue
         ok, why = status_ok(f, key["prec"])
         if not ok:
@@ -85,6 +102,11 @@ def load(out, pattern, key_of):
             if v not in parsed:
                 problems.append(f"{os.path.basename(f)}: MISSING timing for {v}")
                 continue
+            census = parsed[v][2]
+            if key["prec"] == "bfloat16" and v.startswith("mma") and (
+                "Mma_intrinsics" not in census or "fallback" in census
+            ):
+                problems.append(f"{os.path.basename(f)}: {v} did not tensorize [{census}]")
             cells.setdefault(tuple(key[k] for k in ("size", "arm", "prec")) + (v,), []).append(
                 parsed[v]
             )
@@ -114,7 +136,7 @@ def ab(out, label):
         m = re.match(r"n(\d+)_r(\d+)_(\w+?)_(bfloat16|single)\.log$", name)
         return m and {"size": int(m.group(1)), "arm": m.group(3), "prec": m.group(4)}
 
-    cells, problems = load(out, "n*_r*_*_*.log", key_of)
+    cells, problems = load(out, "n*.log", key_of)
     sizes = sorted({k[0] for k in cells})
     for size in sizes:
         chk = {}
@@ -141,6 +163,9 @@ def ab(out, label):
         p1, p2 = chk[("true", "bfloat16", "mma_pd1")], chk[("true", "bfloat16", "mma_pd2")]
         if p1 is not None and p2 is not None and p1 != p2:
             problems.append(f"n={size} narrow mma_pd1/mma_pd2: checksums differ ({p1} vs {p2})")
+        for v, c in (("mma_pd1", p1), ("mma_pd2", p2)):
+            if c is not None and not non_degenerate(c, exact):
+                problems.append(f"n={size} narrow {v}: checksum {c} degenerate against exact {exact}")
         if p1 is not None:
             print(f"n={size}: narrow tensorized checksum off the exact one by {rel(p1, exact):.3g} "
                   f"(the arm's accuracy, reported not bounded)")
@@ -167,7 +192,7 @@ def split(out, label):
         m = re.match(r"n(\d+)_r(\d+)_(before|after)\.log$", name)
         return m and {"size": int(m.group(1)), "arm": m.group(3), "prec": "bfloat16"}
 
-    cells, problems = load(out, "n*_r*_*.log", key_of)
+    cells, problems = load(out, "n*.log", key_of)
     sizes = sorted({k[0] for k in cells})
     for size in sizes:
         for v in VARIANTS:

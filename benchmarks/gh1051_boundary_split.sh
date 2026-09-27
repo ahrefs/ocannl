@@ -26,6 +26,9 @@ ROUNDS=${4:-6}
 shift $(($# < 4 ? $# : 4))
 SIZES=("$@")
 [ ${#SIZES[@]} -gt 0 ] || SIZES=(1024 2048)
+for size in "${SIZES[@]}"; do
+  case $size in '' | *[!0-9]* | 0) echo "sizes must be positive integers, got '$size'"; exit 2 ;; esac
+done
 case $ROUNDS in '' | *[!0-9]*) echo "bad rounds '$ROUNDS'"; exit 2 ;; esac
 ((ROUNDS > 0 && ROUNDS % 2 == 0)) || { echo "rounds must be positive and even, got $ROUNDS"; exit 2; }
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(OCANNL_[A-Z0-9_]*\)=.*/\1/p')
