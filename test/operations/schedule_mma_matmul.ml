@@ -2172,11 +2172,14 @@ let () =
                tn n);
         let bi = Int.max bm tm and bk = Int.max bm tk in
         let kw = 4 * bk in
-        (* Small integers, exact in every storage format, varying along both axes of each operand.
-           Every partial sum is then an integer no larger than [2 * kw], and the host reference
-           below is exact whatever the narrowing order, provided that bound stays within the
-           narrowest accumulator's exact-integer reach (bf16's 8-bit significand: 256). *)
-        let a_key = Ll_test.weighted ~weights:[| 1; 3 |] ~modulus:2 ~offset:0. ~stride:1. in
+        (* Small integers (0..2), exact in every storage format, varying along both axes of each
+           operand. The period, 3, is coprime to every block extent (tile extents are powers of
+           two), so no row tile, column tile or [k_o] panel repeats another: a twin staging the
+           wrong panel reads different values. Every partial sum is a nonnegative integer no larger
+           than the final one, so the host reference is exact whatever the narrowing order as long
+           as the final sums survive the accumulator's storage unchanged — checked by round-tripping
+           them through a [d_prec] array. *)
+        let a_key = Ll_test.weighted ~weights:[| 1; 2 |] ~modulus:3 ~offset:0. ~stride:1. in
         let b_key = Ll_test.weighted ~weights:[| 2; 1 |] ~modulus:3 ~offset:0. ~stride:1. in
         let reference =
           Array.init (n * n) ~f:(fun cell ->
@@ -2185,8 +2188,17 @@ let () =
                 (List.range 0 kw)
                 ~f:(fun k -> a_key [| cell / n; k |] *. b_key [| k; cell % n |]))
         in
-        if Array.exists reference ~f:(fun x -> Float.(x > 256.)) then
-          failwith (Printf.sprintf "staged twins %s: k=%d outgrows bf16's exact integers" tag kw);
+        let stored =
+          let nd =
+            Ir.Ndarray.create_array ~debug:"twin_reference" d_prec ~dims:[| n * n |] ~padding:None
+          in
+          Ir.Ndarray.set_flat_values nd reference;
+          Ir.Ndarray.retrieve_flat_values nd
+        in
+        if not (Array.equal Float.equal stored reference) then
+          failwith
+            (Printf.sprintf "staged twins %s: k=%d sums outgrow the accumulator's exact integers"
+               tag kw);
         let twa = NTDSL.init ~l:("twa_" ^ tag) ~prec:a_prec ~i:[ kw ] ~o:[ n ] ~f:a_key () in
         let twb = NTDSL.init ~l:("twb_" ^ tag) ~prec:b_prec ~i:[ n ] ~o:[ kw ] ~f:b_key () in
         let run ?swizzle ~name () =
