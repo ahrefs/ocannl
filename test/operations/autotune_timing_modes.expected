@@ -40,6 +40,17 @@ a candidate owed a batch that measured none within the target is refused, not ti
 a fallback that kept a batch measured within the target is admitted: true
 a slow candidate's unresolved calibration costs no more than its probes: true
 
+== calibration probes are wall-budgeted ==
+no calibration probe but the last starts once the probes' wall has reached the budget: true
+a converging calibration is untouched by the budgets: every probe takes all twelve minima: true
+a converging calibration still reaches its affine target depth: true
+a 64 ms candidate's depth-2 confirmation stops at three minima: true
+a slow candidate's superlinear first pair fits within the wall-relative tolerance: true
+a resolved calibration never settles on a batch whose launch work exceeds the target: true
+a refitted crossing never settles past the batches it was checked against: true
+a kernel with a queue threshold below its provisional depth is rescued, timed within the target: true
+a refusal no rescue could lift carries its own reason, apart from the contention verdict: true
+
 == autotune_timing spelling ==
 "queued" selects the queued objective: true
 "isolated" selects the isolated objective: true
