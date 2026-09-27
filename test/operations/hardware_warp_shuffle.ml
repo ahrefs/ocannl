@@ -555,15 +555,13 @@ let claim_f16_wide_types =
    the residency type, never at half storage"
 
 let () =
-  let saved = Numerics.get () in
-  Exn.protect
-    ~finally:(fun () -> Numerics.set_policy saved)
-    ~f:(fun () ->
-      p_pairwise_distinct "the f16 single-warp rival-rendering values are pairwise distinct"
-        (values f16_1w_values) ~equal:Float.equal ~to_string:Float.to_string;
-      p_pairwise_distinct "the f16 four-warp rival-rendering values are pairwise distinct"
-        (values f16_4w_values) ~equal:Float.equal ~to_string:Float.to_string;
-      Numerics.set_policy { saved with fp16_arithmetic = Numerics.Fp16_wide };
+  p_pairwise_distinct "the f16 single-warp rival-rendering values are pairwise distinct"
+    (values f16_1w_values) ~equal:Float.equal ~to_string:Float.to_string;
+  p_pairwise_distinct "the f16 four-warp rival-rendering values are pairwise distinct"
+    (values f16_4w_values) ~equal:Float.equal ~to_string:Float.to_string;
+  Test_utils.with_policy
+    (fun pol -> { pol with Numerics.fp16_arithmetic = Numerics.Fp16_wide })
+    (fun () ->
       p claim_f16_wide_1w
         (Float.equal
            (f16_sum ~name:"f16_wide_1warp_wshfl" f16_1w_fixture)

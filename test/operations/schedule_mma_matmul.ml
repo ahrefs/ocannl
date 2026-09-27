@@ -34,15 +34,6 @@ module Numerics = Ir.Numerics
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 let () = Numerics.set_policy { (Numerics.get ()) with tf32_matmuls = false }
 
-(* Runs [f] under [Fp16_auto], restoring the ambient policy after: a leg claiming default-policy f16
-   behaviour pins the policy rather than inheriting it, since the stanza declares
-   OCANNL_FP16_ARITHMETIC (gh-ocannl-1053; the bf16 controls pin [Bf16_auto] likewise). The policy
-   is read while compiling, so wrapping the compile suffices. *)
-let with_fp16_auto f =
-  let saved = Numerics.get () in
-  Numerics.set_policy { saved with fp16_arithmetic = Numerics.Fp16_auto };
-  Exn.protect ~f ~finally:(fun () -> Numerics.set_policy saved)
-
 open Verdict.Claims
 
 (* Zeros compare equal to zeros. A fragment mapping that reads outside the staged block, a kernel
@@ -521,7 +512,7 @@ let () =
   Tn.update_prec mch0.Tensor.value Ir.Ops.half;
   let ctx_hs = Context.auto () in
   let ctx_hs, routine_hs =
-    with_fp16_auto (fun () ->
+    Test_utils.with_fp16_auto (fun () ->
         Context.compile
           ~lowered_transform:(fun opt -> [ opt ])
           ctx_hs
@@ -535,7 +526,7 @@ let () =
   let transform_h opt = Sched.apply (mma_schedule ~out:mch1.Tensor.value opt) opt in
   let ctx_h = Context.auto () in
   let ctx_h, routine_h =
-    with_fp16_auto (fun () ->
+    Test_utils.with_fp16_auto (fun () ->
         Context.compile
           ~lowered_transform:(fun o -> [ transform_h o ])
           ctx_h
@@ -625,7 +616,7 @@ let () =
      (* Pinned: on a native-fp16 CPU [Fp16_narrow] computes the half operands at storage width, so
         the bridged register tiling below is the default policy's rendering. *)
      let got, census =
-       with_fp16_auto (fun () -> compile_mma_with_census ~name:"mm_h32_mma" mch32)
+       Test_utils.with_fp16_auto (fun () -> compile_mma_with_census ~name:"mm_h32_mma" mch32)
      in
      p_all2 claim_value got exact_h32 ~f:Float.equal;
      let src = Generated.read "mm_h32_mma" in
@@ -1690,7 +1681,7 @@ let () =
     in
     let ctx_u = Context.auto () in
     let ctx_u, routine_u =
-      with_fp16_auto (fun () ->
+      Test_utils.with_fp16_auto (fun () ->
           Context.compile
             ~lowered_transform:(fun o -> [ transform_hu o ])
             ctx_u
@@ -2216,11 +2207,7 @@ let () =
      in
      let rows =
        List.concat_map policies ~f:(fun (ptag, pslug, adjust) ->
-           let saved = Numerics.get () in
-           Numerics.set_policy (adjust saved);
-           Exn.protect
-             ~finally:(fun () -> Numerics.set_policy saved)
-             ~f:(fun () ->
+           Test_utils.with_policy adjust (fun () ->
                let limits = Context.hardware_limits (Context.auto ()) in
                List.map triples ~f:(fun (((at, _, af) as a), ((bt, _, bf) as b), (dt, dprec, df)) ->
                    let fa = input ma_of ~side:"a" a and fb = input mb_of ~side:"b" b in
