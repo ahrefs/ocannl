@@ -6,6 +6,14 @@
 # Usage:
 #   tools/machine-verify.sh BOX BRANCH [OPTIONS]
 #
+# BRANCH may also be a full 40-hex commit (either case) that some branch of the
+# staging remote already contains -- a merged commit, a PR head -- so that
+# measuring a commit needs no throwaway branch pushed for it. The remote's
+# branch heads are fetched into a private namespace (dropped again) and one that
+# contains the commit is named in the provenance; a commit no branch contains is
+# refused, even when the checkout on BOX holds the object. An abbreviated hash
+# is read as a branch name.
+#
 # Options:
 #   --backend NAME           Pin and prove the resolved backend configuration.
 #   --expect-lib LIB         Prove cudajit, hipjit or metal was compiled and
@@ -168,6 +176,10 @@ while [ $# -gt 0 ]; do
 done
 
 case $box in '' | -*) die "BOX must not be empty or begin with '-'" ;; esac
+case $branch in
+  *[!0-9a-fA-F]*) ;;
+  *) [ "${#branch}" -ne 40 ] || branch=$(printf %s "$branch" | tr A-F a-f) ;;
+esac
 git check-ref-format --branch "$branch" >/dev/null 2>&1 || die "invalid branch name: $branch"
 
 case $jobs in 1 | 2 | 3 | 4) ;; *) die "jobs must be between 1 and 4" ;; esac

@@ -36,6 +36,13 @@ SHA=$("$REAL_GIT" -C "$TMP/seed" rev-parse HEAD)
 "$REAL_GIT" -C "$TMP/seed" branch fixture "$SHA" || exit 2
 "$REAL_GIT" clone -q --bare "$TMP/seed" "$TMP/pushed.git" || exit 2
 touch "$GIT_CONFIG_GLOBAL"
+# A commit no branch of the remote contains, for the commit form of BRANCH: the
+# remote holds its object unreachable, and the `unpushed` mode gives the
+# checkout a local branch at it -- neither may certify it.
+UNPUSHED=$("$REAL_GIT" -C "$TMP/seed" commit-tree -p "$SHA" -m unpushed "$SHA^{tree}") &&
+  "$REAL_GIT" -C "$TMP/seed" branch unpushed "$UNPUSHED" &&
+  "$REAL_GIT" -C "$TMP/pushed.git" fetch -q "$TMP/seed" unpushed:refs/dangling &&
+  "$REAL_GIT" -C "$TMP/pushed.git" update-ref -d refs/dangling || exit 2
 cat >"$TMP/bin/ssh" <<'SH'
 #!/usr/bin/env bash
 if [ "$1" = -G ]; then
@@ -190,6 +197,8 @@ rm -f "$TMP/fake"
 # Placement of the fixture BOX, read by the fake `ssh -G`, and the transport a
 # case expects. A case overrides them with a prefix assignment on its call.
 ENDPOINT=192.0.2.1 ENDPOINT_PORT=22 ENDPOINT_PROXY= TRANSPORT=ssh BACKEND=cc HIP_TREE=hip-complete
+# The BRANCH operand, and the commit the fake dune requires the worktree at.
+REF=fixture WANT_SHA=$SHA
 
 run_case() { # SUBJECT NAME MODE [verifier args]
   local subject=$1 name=$2 mode=$3
@@ -201,15 +210,23 @@ run_case() { # SUBJECT NAME MODE [verifier args]
   "$REAL_GIT" -C "$run/repo" remote set-url origin https://github.com/lukstafi/ocannl-staging.git || return 1
   printf 'do not touch\n' >"$run/repo/untouched"
   printf 'fetch head sentinel\n' >"$run/repo/.git/FETCH_HEAD"
+  # Remote-tracking refs are the checkout's, and only the named branch's may
+  # move: with origin/master gone, a verifier fetching every head into them
+  # would bring it back.
+  "$REAL_GIT" -C "$run/repo" update-ref -d refs/remotes/origin/HEAD &&
+    "$REAL_GIT" -C "$run/repo" update-ref -d refs/remotes/origin/master || return 1
+  local tracking
+  tracking=$("$REAL_GIT" -C "$run/repo" for-each-ref refs/remotes/)
   # A poisonous parent config must be blocked by the empty root boundary.
   printf 'backend=hip\n' >"$run/ocannl_config"
   case $mode in
     wrong-remote) "$REAL_GIT" -C "$run/repo" remote set-url origin https://example.invalid/wrong.git ;;
     nested) touch "$run/dune-project" ;;
+    unpushed) "$REAL_GIT" -C "$run/repo" fetch -q --no-write-fetch-head "$TMP/seed" unpushed:refs/heads/unpushed ;;
   esac
   local var
   for var in GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$GIT_CONFIG_GLOBAL" REAL_GIT="$REAL_GIT" \
-    FIXTURE_PUSHED="$TMP/pushed.git" MODE="$mode" FIXTURE_REPO="$run/repo" FIXTURE_SHA="$SHA" \
+    FIXTURE_PUSHED="$TMP/pushed.git" MODE="$mode" FIXTURE_REPO="$run/repo" FIXTURE_SHA="$WANT_SHA" \
     AUDIT="$run/audit" SSH_LOG="$run/ssh-log" ENDPOINT="$ENDPOINT" ENDPOINT_PORT="$ENDPOINT_PORT" \
     ENDPOINT_PROXY="$ENDPOINT_PROXY" WANT_BACKEND="$BACKEND" FIXTURE_HIP_ROOT="$TMP/$HIP_TREE"; do
     printf 'export %s=%q\n' "${var%%=*}" "${var#*=}"
@@ -220,14 +237,15 @@ run_case() { # SUBJECT NAME MODE [verifier args]
     GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$GIT_CONFIG_GLOBAL" \
     OCANNL_PRINT_DECIMALS_PRECISION=ambient-secret OCANNL_BACKEND=cuda \
     OPAMSWITCH=caller-switch DUNE_BUILD_DIR=caller-build \
-    bash "$subject" loopback fixture --backend "$BACKEND" --repo "$run/repo" \
+    bash "$subject" loopback "$REF" --backend "$BACKEND" --repo "$run/repo" \
     --worktree-root "$run/worktrees" --cap 10 --trip-cap 30 "$@" >"$run/stdout" 2>&1 || rc=$?
   printf '%s\n' "$rc" >"$run/rc"
   # Prove ownership: the original checkout, its dirty file and FETCH_HEAD stay
   # intact. Inspect actual Git registration and filesystem after every outcome.
   [ "$(cat "$run/repo/untouched")" = 'do not touch' ] &&
     [ "$(cat "$run/repo/.git/FETCH_HEAD")" = 'fetch head sentinel' ] &&
-    [ "$("$REAL_GIT" -C "$run/repo" rev-parse HEAD)" = "$SHA" ] || return 1
+    [ "$("$REAL_GIT" -C "$run/repo" rev-parse HEAD)" = "$SHA" ] &&
+    [ "$("$REAL_GIT" -C "$run/repo" for-each-ref refs/remotes/)" = "$tracking" ] || return 1
   if [ "$mode" = cleanup-fail ]; then
     local owned
     owned=$(sed -n 's/^worktree:      //p' "$run/stdout")
@@ -235,7 +253,8 @@ run_case() { # SUBJECT NAME MODE [verifier args]
     [ -d "$owned" ] || return 1
     "$REAL_GIT" -C "$run/repo" worktree remove --force "$owned" || return 1
   fi
-  [ -z "$(ls -A "$run/worktrees")" ] &&
+  [ -z "$("$REAL_GIT" -C "$run/repo" for-each-ref refs/machine-verify/)" ] &&
+    [ -z "$(ls -A "$run/worktrees")" ] &&
     [ "$("$REAL_GIT" -C "$run/repo" worktree list --porcelain | grep -c '^worktree ')" = 1 ]
 }
 # Which transport carried the trip, observed at the fake ssh rather than read
@@ -299,6 +318,24 @@ else report 1 'golden: apply-ready patch and restored source'; fi
 check_case nongolden-refusal nongolden 2 'produced a non-golden correction: source.ml' --record-golden @golden
 check_case golden-mutation golden-source-change 2 'non-golden source change during golden recording:  M source.ml' --record-golden @golden
 check_case golden-rerun-failure rerun-fail 38 'fixture: unrelated rerun failure' --record-golden @golden
+
+# The commit form of BRANCH: certified exactly when a branch of the remote,
+# fetched now, contains it; the provenance names one, preferring master.
+REF=$SHA check_case commit-success success 0 "verified .*commit=$SHA backend=cc" --test @fixture
+if grep -qx "pushed commit: $SHA" "$TMP/runs/commit-success/stdout" &&
+  grep -qx 'reachable from: origin/master (2 branch head(s) contain it)' "$TMP/runs/commit-success/stdout" &&
+  grep -qx "resolved commit: $SHA" "$TMP/runs/commit-success/stdout" &&
+  grep -q '|cc|build -j 4 @fixture' "$TMP/runs/commit-success/audit"; then
+  report 0 'commit: provenance names the commit and a branch containing it'
+else report 1 'commit: provenance names the commit and a branch containing it' "$TMP/runs/commit-success"; fi
+REF=$(printf %s "$SHA" | tr a-f A-F) check_case commit-uppercase success 0 "verified .*commit=$SHA backend=cc"
+REF=$UNPUSHED check_case commit-dangling success 2 \
+  "commit $UNPUSHED is not reachable from any branch of origin"
+REF=$UNPUSHED check_case commit-unpushed unpushed 2 \
+  "commit $UNPUSHED is not reachable from any branch of origin"
+REF=$SHA check_case commit-failed-fetch fetch-fail 2 'cannot fetch the branch heads of origin'
+REF=$SHA ENDPOINT=127.0.0.1 TRANSPORT=local check_case local-commit success 0 \
+  "verified .*commit=$SHA backend=cc" --test @fixture
 
 # The local transport: BOX's endpoint is an address of this machine, so the
 # same procedure runs here with no SSH session, from a cleared environment
@@ -426,6 +463,16 @@ golden_mutation_oracle() {
   [ "$(cat "$TMP/runs/$name/rc")" = 2 ] &&
     grep -q 'non-golden source change during golden recording' "$TMP/runs/$name/stdout"
 }
+# The containment check dropped: a commit that exists only in BOX's checkout,
+# on a local branch, certifies as though the staging remote held it.
+containment_oracle() {
+  local subject=$1 name=$2
+  REF=$UNPUSHED WANT_SHA=$UNPUSHED run_case "$subject" "$name" unpushed || return 1
+  [ "$(cat "$TMP/runs/$name/rc")" = 2 ] &&
+    grep -q 'is not reachable from any branch of origin' "$TMP/runs/$name/stdout"
+}
+mutated=$(mutant_pair no-containment far '/^  \[ -n "\$containing" \] \|\|$/ { getline; next } { print }') || exit 2
+expect_rejected 'commit containment removed' "$mutated" containment_oracle "^machine-verify: verified .*commit=$UNPUSHED "
 mutated=$(mutant_pair no-golden-scope far '/^assert_only_promoted_goldens\(\) \{/ { print; print "  return 0"; next } { print }') || exit 2
 expect_rejected 'golden scope removed' "$mutated" golden_mutation_oracle '^machine-verify: verified '
 # The capability assertion dropped: an eligible device beside a complete

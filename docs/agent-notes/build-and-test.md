@@ -1836,7 +1836,17 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   can never run silently on the wrong hardware; `--ssh` forces the old transport; `localhost`
   always runs here. The whole-trip cap (`--trip-cap`, formerly `--ssh-cap`, still accepted) and
   the per-command cap are the same perl process-group supervisor on both transports -- never
-  `timeout(1)`, which macOS lacks. The procedure derives the remote pointing to the staging
+  `timeout(1)`, which macOS lacks. BRANCH may instead be a full 40-hex commit that a branch of the
+  staging remote contains, so measuring a merged commit or a PR head pushes no throwaway branch
+  (gh-ocannl-719 pushed two `claude/issue-719-measure-<sha>` for it). The object being present in
+  BOX's checkout proves nothing -- it may be an unpushed local commit, or one the remote holds
+  unreachable -- so the procedure fetches the remote's branch heads now, into a private
+  `refs/machine-verify/heads-<pid>` namespace (the checkout's remote-tracking refs never move),
+  requires one to contain the commit, names it in the provenance (`reachable from:`, preferring
+  master) and drops the namespace, again in cleanup. For a sweep inside that worktree,
+  `BENCH_RESULTS_DIR` points `benchmarks/orchestrate.py`'s `results/` outside it, and
+  `OCANNL_AUTOTUNE_CACHE_DIR` the autotune cache, so nothing needs copying out before the worktree
+  is removed. The procedure derives the remote pointing to the staging
   repository by URL, fetches the named branch, without rewriting the checkout's `FETCH_HEAD`, resolves one commit, creates a fresh detached
   worktree, resolves the checkout's selected opam switch before leaving it, runs explicitly under
   that switch, and removes just that worktree before its exit sentinel (never repository-wide
@@ -1886,8 +1896,8 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   controls from a file because the local transport clears the environment. It checks actual
   checkout/environment observations, failure reasons, timeout statuses, which transport carried the
   trip (observed at the fake ssh), placement refusals, cleanup ownership and golden restoration;
-  source-assertion, golden-scope, local-address and environment-clearing mutants must fail the
-  same oracles.
+  source-assertion, commit-containment, golden-scope, local-address and environment-clearing
+  mutants must fail the same oracles.
 - `tools/ci-compiler-test.sh` is the cheap local proxy for a compiler-sensitive Ubuntu CI failure
   (gh-ocannl-846): it downloads the GCC 13 packages with `apt-get download`, extracts them into a
   scratch prefix with `dpkg-deb -x`, and runs exactly one named `runtest-` alias in a fresh Dune

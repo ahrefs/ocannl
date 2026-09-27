@@ -39,11 +39,31 @@ repo=${repo_arg:-$HOME/ocannl-staging}
 worktree_root=${worktree_root_arg:-$HOME/ocannl-staging-worktrees}
 wt=
 wt_registered=0
+heads_ns=
 finished=0
+
+# BRANCH is a pushed branch name, or a full commit hash (the driver lowercases
+# one): a commit is verified exactly when some branch of the staging remote
+# contains it, which is checked below rather than assumed.
+case $branch in
+  *[!0-9a-f]*) ref_kind=branch ;;
+  *) if [ "${#branch}" -eq 40 ]; then ref_kind=commit; else ref_kind=branch; fi ;;
+esac
 
 fail() {
   echo "machine-verify: $*" >&2
   exit 2
+}
+
+# A commit's containment is read from the remote's branch heads fetched into a
+# private namespace, so the checkout's own remote-tracking refs never move;
+# the namespace is dropped once read, and again by finish().
+drop_heads() {
+  [ -n "$heads_ns" ] || return 0
+  git -C "$repo" for-each-ref --format='delete %(refname)' "$heads_ns/" |
+    git -C "$repo" update-ref --stdin || return 1
+  [ -z "$(git -C "$repo" for-each-ref "$heads_ns/")" ] || return 1
+  heads_ns=
 }
 
 finish() {
@@ -52,6 +72,8 @@ finish() {
   finished=1
   trap - EXIT HUP INT TERM
   cleanup_rc=0
+  cleanup_ns=$heads_ns
+  drop_heads || cleanup_rc=1
 
   if [ -n "$wt" ]; then
     if [ "$wt_registered" -eq 1 ]; then
@@ -65,7 +87,7 @@ finish() {
   if [ "$cleanup_rc" -eq 0 ]; then
     echo "machine-verify: cleanup: PASS${wt:+ ($wt removed)}"
   else
-    echo "machine-verify: cleanup: FAIL ($wt may need manual removal)" >&2
+    echo "machine-verify: cleanup: FAIL (${wt:+$wt }${cleanup_ns:+$cleanup_ns/* }may need manual removal)" >&2
     [ "$main_rc" -ne 0 ] || main_rc=125
   fi
   echo "machine-verify: exit: $main_rc"
@@ -203,7 +225,11 @@ echo "transport:     $transport"
 echo "repository:    $repo"
 echo "staging remote: $staging_remote ($staging_url)"
 echo "opam switch:    $opam_switch (resolved from the checkout)"
-echo "pushed branch: $branch"
+if [ "$ref_kind" = commit ]; then
+  echo "pushed commit: $branch"
+else
+  echo "pushed branch: $branch"
+fi
 echo "requested backend: ${backend:-none (@check compiles only)}"
 echo "expected optional library: ${expect_lib:-none}"
 echo "dune jobs:     $jobs"
@@ -213,11 +239,40 @@ echo "PATH prefix:   /usr/local/cuda/bin:/usr/lib/wsl/lib"
 
 # Fetch the named pushed branch explicitly. Resolving an already-present remote
 # tracking ref after a failed fetch would certify stale source.
-capped git -C "$repo" fetch -q --no-write-fetch-head "$staging_remote" \
-  "+refs/heads/$branch:refs/remotes/$staging_remote/$branch" ||
-  fail "cannot fetch pushed branch $staging_remote/$branch"
-full_sha=$(git -C "$repo" rev-parse --verify "refs/remotes/$staging_remote/$branch^{commit}") ||
-  fail "cannot resolve $staging_remote/$branch to a commit"
+if [ "$ref_kind" = branch ]; then
+  capped git -C "$repo" fetch -q --no-write-fetch-head "$staging_remote" \
+    "+refs/heads/$branch:refs/remotes/$staging_remote/$branch" ||
+    fail "cannot fetch pushed branch $staging_remote/$branch"
+  full_sha=$(git -C "$repo" rev-parse --verify "refs/remotes/$staging_remote/$branch^{commit}") ||
+    fail "cannot resolve $staging_remote/$branch to a commit"
+else
+  # A commit object present here proves nothing about the remote: it may be an
+  # unpushed local commit, or one the remote holds unreachable. What certifies
+  # it is a branch head fetched NOW that contains it.
+  heads_ns=refs/machine-verify/heads-$$
+  capped git -C "$repo" fetch -q --no-write-fetch-head --no-tags "$staging_remote" \
+    "+refs/heads/*:$heads_ns/*" ||
+    fail "cannot fetch the branch heads of $staging_remote"
+  containing=
+  if git -C "$repo" cat-file -e "$branch^{commit}" 2>/dev/null; then
+    containing=$(git -C "$repo" for-each-ref --contains "$branch" \
+      --format='%(refname)' "$heads_ns/") ||
+      fail "cannot read which branches of $staging_remote contain $branch"
+  fi
+  [ -n "$containing" ] ||
+    fail "commit $branch is not reachable from any branch of $staging_remote"
+  contained_n=$(printf '%s\n' "$containing" | grep -c .)
+  if printf '%s\n' "$containing" | grep -qx "$heads_ns/master"; then
+    witness=master
+  else
+    witness=$(printf '%s\n' "$containing" | sed -n "1s|^$heads_ns/||p")
+  fi
+  drop_heads || fail "cannot remove the fetched branch heads under $heads_ns"
+  full_sha=$(git -C "$repo" rev-parse --verify "$branch^{commit}") ||
+    fail "cannot resolve $branch to a commit"
+  [ "$full_sha" = "$branch" ] || fail "commit $branch resolved as $full_sha"
+  echo "reachable from: $staging_remote/$witness ($contained_n branch head(s) contain it)"
+fi
 echo "resolved commit: $full_sha"
 
 wt=$(mktemp -d "$worktree_root/machine-verify.XXXXXX") ||
