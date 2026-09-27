@@ -20,8 +20,10 @@ grows a topic its hooks do not already name. The structure below is checked, by
 `agent_notes_structure` (gh-ocannl-691): a bullet ends in punctuation and its continuations sit two
 spaces in, every row of the table is one physical line, every backticked hook occurs in the file its
 row links, and every file under `docs/agent-notes/` is linked from exactly one row — so a new file
-does need its row the day it appears. The dialect it reads is deliberately small: headings, prose
-paragraphs, `- ` bullets one level deep, and the table above. Anything else — a fenced block, an
+does need its row the day it appears. It also reads AGENTS.md: each `<note>.md#<anchor>` pointer
+there must name a heading of that note, so renaming a heading means re-pointing its rules. The
+dialect it reads is deliberately small: headings, prose paragraphs, `- ` bullets one level deep, and
+the table above. Anything else — a fenced block, an
 ordered or `*` item, a block quote whether or not its marker carries a space, an HTML comment, a
 heading underlined instead of written with hashes — is REPORTED rather than guessed at, because a
 construct the scan cannot read is text no rule checks. Two of those readings are Markdown's rather
