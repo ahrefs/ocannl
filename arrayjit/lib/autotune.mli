@@ -1369,12 +1369,14 @@ val time_routine :
     pair's inferred fixed component is below the target. A confirmation over 2x its supported base
     is retried once before an unresolved pair selects the cap. Such a no-verdict fallback is then
     wall-bounded (gh-ocannl-1096): the least [wall / depth] any calibration measurement read bounds
-    the per-launch cost from above, and the fallback depth is shortened until that bound times the
-    depth fits the ~10 ms target -- so a slow candidate whose fits never resolve is timed at depth
-    1, not in 2048-launch batches, while a fast one still batches deeply. An unresolved single/probe
-    pair retries at double depth, and the next affine fit uses the two batch observations so an
-    inflated single window cannot force the cap. If the bounded loop first reaches the target on its
-    last probe, the interpolated target depth is still sampled and checked against the measured
+    a depth-independent per-launch cost from above, and the fallback depth is shortened until that
+    bound times the depth fits the ~10 ms target; a batch measured over the target at or below that
+    depth refutes the depth-independence, and the fallback then takes the deepest depth measured
+    within the target, or 1. So a slow candidate whose fits never resolve is timed at depth 1, not
+    in 2048-launch batches, while a fast one still batches deeply. An unresolved single/probe pair
+    retries at double depth, and the next affine fit uses the two batch observations so an inflated
+    single window cannot force the cap. If the bounded loop first reaches the target on its last
+    probe, the interpolated target depth is still sampled and checked against the measured
     overshoot. A non-monotone confirmation scales from the deeper measured batch, never the earlier
     suspect crossing. When a clean pair's fixed component already fills the target, its marginal
     slope selects a depth carrying ~10 ms of launch work instead of accepting a shallow stalled

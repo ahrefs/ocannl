@@ -420,7 +420,13 @@ let () =
    deeper than its provisional probe, are stalled to a flat 40 ms, which also leaves the fits
    unresolved. Its measured batches bound its launch cost far below the target's share, so its
    fallback must still batch deeply -- a fix that returned depth 1 on every unresolved calibration
-   would turn its queued reading back into an isolated one. *)
+   would turn its queued reading back into an isolated one.
+
+   The threshold device is the case a per-launch bound alone gets wrong (Codex P1, round 1 on PR
+   #846): cheap at shallow depth (0.125 ms, so its provisional depth is 80), but from depth 80 its
+   batch wall grows quadratically -- 400 ms at the provisional depth itself. Its cheapest measured
+   [wall / depth] is the single launch's, which would put the fallback right back at 80; the batch
+   actually measured there refutes the linear cost the bound assumes. *)
 let () =
   Stdio.printf "\n== the no-verdict fallback is wall-bounded ==\n";
   let gpu_cap = Autotune.queue_depth_cap_for_backend "hip" in
@@ -441,15 +447,25 @@ let () =
       ()
   in
   describe "fast, unresolved fits" fast;
+  let threshold_clean d =
+    if d < 80 then 0.125 *. Float.of_int d else 0.0625 *. Float.of_int (d * d)
+  in
+  let threshold =
+    synthetic_call ~timing:Autotune.Queued ~cap:gpu_cap ~fixed_ms:0. ~launch_ms:0.125
+      ~walls:(fun _nth d -> threshold_clean d)
+      ()
+  in
+  describe "queue threshold, unresolved fits" threshold;
   let cases =
     [
-      ("slow", slow, slow_launch_ms, fun d -> slow_clean d);
-      ("fast", fast, fast_launch_ms, fun d -> fast_clean d -. fast_fixed_ms);
+      ("slow", slow, slow_clean);
+      ("fast", fast, fun d -> fast_clean d -. fast_fixed_ms);
+      ("queue threshold", threshold, threshold_clean);
     ]
   in
   Verdict.p_all
     "an unresolved calibration never settles on a batch whose launch work exceeds the target" cases
-    ~f:(fun (what, c, _, launch_work) ->
+    ~f:(fun (what, c, launch_work) ->
       let ok =
         c.settled_depth = 1 || Float.(launch_work c.settled_depth <= Autotune.queued_batch_ms)
       in

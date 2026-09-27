@@ -552,20 +552,43 @@ let depth_from_batch_wall_with_cap ~max_depth ~depth ~wall_ms =
    returns is a bet that the per-launch cost is negligible against a fixed synchronization cost the
    fits could not separate. The cap bounds that bet in launches, not in wall: a ~61 ms gfx1151
    candidate whose superlinear batches never fit settled at 2048 and spent 126 s per batch, 2016 s
-   on one timing call. The measurements the calibration did take bound the bet: every batch wall is
-   at least its depth times the marginal launch cost (the fixed term is non-negative and noise only
-   adds time), so the least [wall / depth] over the singles and every probe is an upper bound
-   [launch_ms_bound] on that cost. Keep the fallback's launch work, depth times that bound, within
-   the batch target: a slow candidate falls back to depth 1 -- measured exactly as [Isolated]
-   measures it -- while a fast one, whose deep probes bound its launch cost to microseconds, still
-   batches deeply. Only ever shortens the depth; with no finite positive reading at all (a clock
-   that resolved nothing) there is no bound and the depth stands, as [queued_batch_depth] batches
-   such estimates at the cap. *)
-let wall_bounded_fallback_depth ~launch_ms_bound depth =
-  if (not (Float.is_finite launch_ms_bound)) || not (Float.is_positive launch_ms_bound) then depth
+   on one timing call. [observed] is every finite positive [(depth, wall)] the calibration measured,
+   the synchronized singles as depth 1, and it bounds the bet in two steps.
+
+   While the marginal launch cost does not depend on depth, every batch wall is at least its depth
+   times that cost (the fixed term is non-negative and noise only adds time), so the least [wall /
+   depth] is an upper bound on it, and the depth whose launch work under that bound fits the batch
+   target is safe: a slow candidate falls back to depth 1 -- measured exactly as [Isolated] measures
+   it -- while a fast one, whose deep probes bound its launch cost to microseconds, still batches
+   deeply. A batch measured over the target at or below that depth refutes the premise on this
+   candidate (Codex P1, round 1 on PR #846: a kernel cheap at shallow depth whose wall jumps past a
+   queue threshold keeps its cheap single-launch ratio as the least one), and then only a depth
+   measured within the target is safe: the true wall grows with depth and a measured wall bounds the
+   true one, so the deepest such depth, and depth 1 when there is none. A stall landing on a probe
+   can only push this toward the shallower answer.
+
+   Only ever shortens the depth; with no finite positive reading at all (a clock that resolved
+   nothing) there is no bound and the depth stands, as [queued_batch_depth] batches such estimates
+   at the cap. *)
+let wall_bounded_fallback_depth ~observed depth =
+  let launch_ms_bound =
+    List.fold observed ~init:Float.infinity ~f:(fun bound (d, wall_ms) ->
+        Float.min bound (wall_ms /. Float.of_int d))
+  in
+  if not (Float.is_finite launch_ms_bound) then depth
   else
     let fits = queued_batch_ms /. launch_ms_bound in
-    if Float.(fits >= of_int depth) then depth else Int.max 1 (Float.iround_down_exn fits)
+    let linear_depth =
+      if Float.(fits >= of_int depth) then depth else Int.max 1 (Float.iround_down_exn fits)
+    in
+    let refuted =
+      List.exists observed ~f:(fun (d, wall_ms) ->
+          d <= linear_depth && Float.(wall_ms > queued_batch_ms))
+    in
+    if not refuted then linear_depth
+    else
+      List.fold observed ~init:1 ~f:(fun best (d, wall_ms) ->
+          if Float.(wall_ms <= queued_batch_ms) && d <= linear_depth then Int.max best d else best)
 
 (* Sibling fault-injection seam to [on_candidate_attempt], at a timing run's pre-dispatch validation
    rather than at a candidate's compile (gh-ocannl-564). Default no-op, no config key selects it.
@@ -652,12 +675,12 @@ let on_timed_window :
    policy -- which depth a call settles on, which window it times, how many launches each costs --
    on an injected clock, with no device and no machine-dependent routine (gh-ocannl-1074). *)
 let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
-  (* The least [wall / depth] the calibration has observed: an upper bound on the marginal launch
-     cost, which bounds an unresolved calibration's fallback depth. *)
-  let launch_ms_bound = ref Float.infinity in
+  (* Every finite positive batch minimum the calibration measured, as [(depth, wall)]: the evidence
+     that bounds an unresolved calibration's fallback depth. *)
+  let observed = ref [] in
   let observe ~depth wall_ms =
     if Float.is_finite wall_ms && Float.is_positive wall_ms then
-      launch_ms_bound := Float.min !launch_ms_bound (wall_ms /. Float.of_int depth)
+      observed := (depth, wall_ms) :: !observed
   in
   let probe_batch depth =
     let best_ms = ref Float.infinity in
@@ -848,7 +871,7 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
                every resolved one carries its own wall estimate. *)
             let depth =
               if Float.is_nan estimated_batch_wall_ms then
-                wall_bounded_fallback_depth ~launch_ms_bound:!launch_ms_bound depth
+                wall_bounded_fallback_depth ~observed:!observed depth
               else depth
             in
             (calibration_dispatches, depth, Some estimated_batch_wall_ms)

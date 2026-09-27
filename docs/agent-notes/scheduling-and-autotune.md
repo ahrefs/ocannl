@@ -709,7 +709,12 @@ files.
   tolerance is under 1% of a slow batch) was timed in 126 s batches, 2016 s for one call. Every
   measured `wall / depth` bounds the marginal launch cost from above, so `calibrate_and_time`
   shortens a NaN-wall outcome until depth times the least such bound fits the target: slow
-  candidates fall back to depth 1, fast ones keep a deep batch. The objective is unchanged (the
+  candidates fall back to depth 1, fast ones keep a deep batch. That bound assumes a
+  depth-independent launch cost; a batch measured over the target at or below the depth it picks
+  refutes it (a cheap kernel whose wall jumps past a queue threshold keeps its cheap single-launch
+  ratio as the least one), and the fallback then takes the deepest depth measured within the
+  target, or 1. The fallback bound does not bound the validation probes themselves: on such a
+  threshold device the doubling retries spend minutes before reaching it. The objective is unchanged (the
   depth picks the scale, and an entry timed at the old fallback is an accurate, merely expensive,
   reading), so no cache-key generation bump. `autotune_timing_modes` reproduces the minix call on
   the injected clock to the launch (760 calibration + 16 x 2048).
