@@ -811,10 +811,14 @@ files.
   queued: equal timed loops, but 587 s of calibration against 14 s, because 215 of 220 calls settle
   at depth 1 after ~40 calibration launches (sixteen singles plus the depth-2 confirmation) and
   then time exactly what `isolated` would. `BENCH_TIMING_TRACE=1` in the benchmark runners splits a
-  session's wall this way; `benchmarks/gh834_cells.sh` is the per-box driver. Since gh-ocannl-1074 a
-  depth-1 settle does not time that window again: the calibration's singles are depth-1 batches
-  taken under the timed loop's own stopping rule, so `sample_window ~prior` resumes them as the
-  window and the loop only tops up past the caller's `repeats` floor. That is not a change of
+  session's wall this way; `benchmarks/gh834_cells.sh` is the per-box driver. A cold schedule cache
+  is not a cold session: the backend's own compiled-code cache persists across processes, and in
+  gh-ocannl-834's CUDA pair the second session's compile-and-bookkeeping time was 64 s against the
+  first's 406 s from the PTX ComputeCache alone — the driver gives each CUDA session an empty
+  `CUDA_CACHE_PATH`; on backends whose cache it cannot redirect, run the modes ABBA. Since
+  gh-ocannl-1074 a depth-1 settle does not time that window again: the calibration's singles are
+  depth-1 batches taken under the timed loop's own stopping rule, so `sample_window ~prior` resumes
+  them as the window and the loop only tops up past the caller's `repeats` floor. That is not a change of
   objective (no cache-key generation bump): the reading is still a min-of-N synchronized singles
   judged whole by the 2x-majority rule — only the redundant second window is gone. The trace's
   `timed` share at depth 1 therefore drops to ~0 while `calib` is unchanged; each call line says

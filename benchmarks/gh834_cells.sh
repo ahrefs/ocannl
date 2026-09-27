@@ -32,6 +32,14 @@
 #   placement arms) under autotune_timing=<mode> on a COLD schedule cache (OUT/cache-<mode>, wiped
 #   first), with BENCH_TIMING_TRACE=1 splitting the wall between candidate timing and the rest.
 #   compile_s in the result line is the whole search's wall.
+#   Cold also means the backend's own compiled-code caches, which outlive the process: in
+#   gh-ocannl-834's CUDA pair the isolated session ran first and the driver's PTX ComputeCache
+#   served the queued one warm (406 s vs 64 s of compile and bookkeeping outside timing). On cuda
+#   each session therefore gets its own empty CUDA_CACHE_PATH=OUT/nvcache-<mode>, recorded in
+#   driver.log, overriding any the caller exported. Other backends keep caches this script cannot
+#   redirect (HIP's comgr cache, macOS's Metal shader cache): there, run the sessions in ABBA order
+#   (session-isolated session-queued in one invocation, session-queued session-isolated in a second
+#   on a fresh OUT) and compare each mode's pair, so warm-cache advantage cancels.
 set -u
 # Hermetic against ambient configuration, as gh612_cells.sh is: every treatment is pinned on the
 # command line, so an exported OCANNL_* or BENCH_* could only contaminate every cell consistently.
@@ -290,7 +298,16 @@ for s in "$@"; do
     need_build "$s"
     mode=${s#session-}
     rm -rf "$out/cache-$mode"
-    if step "$s" env BENCH_FIXTURE="$fixture" BENCH_TUNE=1 BENCH_TIMING_TRACE=1 \
+    # A cold driver-side code cache per session (see the header): only CUDA's is redirectable.
+    # The ${a[@]+...} form keeps an empty array legal under set -u on macOS's bash 3.2.
+    nvcache=()
+    if [ "$backend" = cuda ]; then
+      rm -rf "$out/nvcache-$mode" && mkdir "$out/nvcache-$mode" || exit 2
+      nvcache=(CUDA_CACHE_PATH="$out/nvcache-$mode")
+      echo "env CUDA_CACHE_PATH=$out/nvcache-$mode (empty, for $s)"
+    fi
+    if step "$s" env ${nvcache[@]+"${nvcache[@]}"} BENCH_FIXTURE="$fixture" BENCH_TUNE=1 \
+      BENCH_TIMING_TRACE=1 \
       ../_build/default/benchmarks/runners/ocannl/bench_gpt.exe --ocannl_backend="$backend" \
       --ocannl_autotune_timing="$mode" --ocannl_autotune_cache_dir="$out/cache-$mode" \
       --ocannl_autotune_log=false --ocannl_log_config_sourcing=true; then
