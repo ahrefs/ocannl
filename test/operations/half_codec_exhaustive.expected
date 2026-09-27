@@ -1,0 +1,23 @@
+fp16 emulated converters, exhaustive sweep
+  f32 bit patterns narrowed: 4294967296
+  half codes widened: 65536
+float_to_half_emulated rounds every finite f32 input to the nearest half code, ties to even, overflowing to infinity from 65520 up: true
+float_to_half_emulated carries the sign of every f32 input over, zeros and NaNs included: true
+every infinite f32 input narrows to 0x7C00 and every NaN to the quiet NaN 0x7E00, keeping its sign: true
+float_to_half_emulated agrees with the native _Float16 cast on every f32 input, NaNs up to payload: true
+  distinct half codes produced by narrowing: 63492
+narrowing f32 reaches every finite and infinite half code and the quiet NaN, and nothing else: true
+half_to_float_emulated widens all 65536 codes to their exact half values, signed zero included, and every NaN code to a NaN: true
+the format's decode is strictly increasing over the 31744 non-negative finite codes: true
+half_to_float_emulated agrees with the native _Float16 widening on all 65536 codes, NaNs up to sign and payload: true
+every non-NaN code survives a widen-and-narrow round trip through the emulated pair: true
+every NaN code widens to a NaN that narrows back to the quiet NaN 0x7E00: true
+the reference decode refuses a code that is not a finite half magnitude: true
+the widening entry points refuse a code outside 16 bits: true
+the sweep refuses a counters buffer too short to hold its results: true
+the sweep refuses a negative base or count: true
+  smallest subnormal (0x0001): 0x1p-24
+  largest subnormal (0x03FF): 0x1.ff8p-15
+  smallest normal (0x0400): 0x1p-14
+  largest finite (0x7BFF): 0x1.ffcp+15
+  negative zero (0x8000): -0x0p+0
