@@ -17,9 +17,10 @@
 #            _build/ is ignored, so the clean-tree check cannot vouch for binaries an earlier checkout
 #            left there, and a measurement is only evidence beside the identity it was taken on.
 # Exit: 0 all steps complete; 1 a step failed or lacked its evidence; 124 no failure but a SESSION
-# hit CAP after its search had begun (its record is a lower bound); 125 a process outlived its step;
+# hit CAP during its search (its record is a lower bound); 125 a process outlived its step;
 # 130 interrupted; 2 usage. A crown or build that hits CAP, or a session capped before its first
-# candidate attempt, is a failure: none of them leaves a partial measurement.
+# candidate attempt or after the runner's "search done" marker, is a failure: none of them leaves a
+# partial search measurement.
 # The environment is cleared of OCANNL_*, BENCH_* and the OpenMP controls (OMP_*, GOMP_*, KMP_*);
 # device-selection variables (CUDA_*, HIP_*, ROCR_*, HSA_*, ...) are kept and recorded.
 #
@@ -293,12 +294,16 @@ for s in "$@"; do
       rc=$?
       # A capped session is a lower bound only if the search had begun under the pinned treatment;
       # a cap spent loading the fixture or building the graph measured no search at all.
+      # ... and only if the search was still going: a cap reached after the runner's
+      # "search done" marker cut off the post-search steps, not the search.
       if [ "$rc" -eq 124 ] && grep -q '^timing-trace: attempt ' "$out/$s.err" &&
+        ! grep -q '^timing-trace: search done: ' "$out/$s.err" &&
         grep -q "^Found $backend, commandline --ocannl_backend=$backend\$" "$out/$s.err" &&
         grep -q "^Found $mode, commandline --ocannl_autotune_timing=$mode\$" "$out/$s.err"; then
         capped_any=1
       else
-        [ "$rc" -eq 124 ] && echo "== step $s: capped before its search began; not a lower bound"
+        [ "$rc" -eq 124 ] &&
+          echo "== step $s: capped outside its search (before it began or after it ended); not a lower bound"
         status=1
       fi
     fi

@@ -224,7 +224,9 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   totals, so a cell killed at its cap still leaves a lower bound) and one per candidate attempt
   (a compile, unless `autotune_bound_pruning` prunes it first), plus a closing summary with the
   depth histogram. An untagged call (the untuned control `autotune_log=true` times) has its warmup
-  and calibration counted as unattributed rather than as zero. It only observes the tuner's seams, so the
+  and calibration counted as unattributed rather than as zero. A `timing-trace: search done` line
+  marks where the measured compile (`compile_s`) ended, so a cell cut off later is not read as a
+  search still running. It only observes the tuner's seams, so the
   searched schedules are the ones an untraced run crowns.
 - `runners/pytorch/run.py` — flags: `--device cpu|mps|cuda`, `--regime exact|approximate`
   (exact, the default and the parity reference: `highest` matmul precision, cudnn tf32 off,

@@ -114,6 +114,7 @@ let () =
      timing_ctx replay fallback ships something no arm report describes. *)
   H.collect_shipped arms (H.Plain routine);
   let compile_s = Unix.gettimeofday () -. t0 in
+  H.trace_search_done ~compile_s;
   (* Autotune's timing context re-ran param inits on [ctx]; restore fixture weights. *)
   let ctx = if tune then H.inject ctx st batch_loss mapping else ctx in
   let batch_ref = IDX.find_exn routine.Context.bindings batch_n in

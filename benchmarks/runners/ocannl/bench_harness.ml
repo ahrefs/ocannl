@@ -232,8 +232,18 @@ let percentile sorted p =
     rendering, so a launch count bounds them only together with the candidate's parallel-region
     count. *)
 
+let timing_trace_on = ref false
+
+(** Marks the end of the measured compile (the search, when tuning) on a traced run, so a cell cut
+    off after it -- in the fixture reinjection or the timed steps -- is not read as a search that
+    was still going. *)
+let trace_search_done ~compile_s =
+  if !timing_trace_on then
+    Stdlib.Printf.eprintf "timing-trace: search done: compile_s %.3f\n%!" compile_s
+
 let install_timing_trace () =
   if env_flag "BENCH_TIMING_TRACE" then begin
+    timing_trace_on := true;
     (* Monotonic, like every timing path in this harness: a search runs for tens of minutes, and a
        wall-clock step inside it would skew every interval the trace reports. *)
     let now () = Mtime.Span.to_float_ns (Mtime_clock.elapsed ()) /. 1e9 in

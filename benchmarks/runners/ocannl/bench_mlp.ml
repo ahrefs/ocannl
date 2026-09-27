@@ -298,6 +298,7 @@ let () =
      or a timing_ctx replay fallback ships something no arm report describes. *)
   H.collect_shipped arms routines;
   let compile_s = Unix.gettimeofday () -. t0 in
+  H.trace_search_done ~compile_s;
   (* The scaled step threads the context (Loss_scaler.update overwrites the scale tensors). *)
   let ctx_ref = ref ctx in
   let batch_ref =
