@@ -10,8 +10,8 @@
 #            (provenance, the device state around each step, each step's exit and wall); each
 #            measurement step also writes OUT/<step>.out and OUT/<step>.err.
 #   FIXTURE  absolute path of a gpt2_mini.safetensors (only the session steps read it).
-#   CAP      per-step wall cap in seconds; a capped step's whole process group is terminated
-#            (exit 124) and its trace lines stand
+#   CAP      wall cap in seconds for the build and for each measurement step; a capped step's
+#            whole process group is terminated (exit 124) and its trace lines stand
 #            as a lower bound.
 #   STEP     build | provenance | crown-fwd | crown-rev | session-isolated | session-queued
 #
@@ -40,6 +40,17 @@ exec > >(tee -a "$out/driver.log") 2>&1
 root=$(cd "$(dirname "$0")/.." && pwd -P)
 # The runners read the nearest ocannl_config; benchmarks/ has the suite's own.
 cd "$root/benchmarks" || exit 2
+# Every artifact is labelled by the commit, so the tracked tree must BE that commit: a locally edited
+# benchmarks/ocannl_config (autotune_repeats, a profile, a placement key) would change every cell
+# while the label stayed the same. The effective config file is recorded as well as checked.
+dirty=$(git -C "$root" status --porcelain --untracked-files=no)
+if [ -n "$dirty" ]; then
+  echo "gh834: refusing to measure from a tree with tracked changes:" >&2
+  echo "$dirty" >&2
+  exit 2
+fi
+echo "config benchmarks/ocannl_config sha256 $(shasum -a 256 ocannl_config | cut -d' ' -f1):" \
+  "$(grep -v '^#' ocannl_config | grep -v '^$' | tr '\n' ' ')"
 
 # A portable wall cap over the step's whole PROCESS GROUP (macOS has no timeout(1) or setsid(1)):
 # a cc candidate's compiler is a child of the runner, and a compile outliving its capped runner
@@ -103,15 +114,22 @@ step() {
 }
 
 status=0
+# A step that exited 0 without a line its conclusion rests on fails the run rather than publishing
+# an incomplete record (a regressed hook, a config source that did not take).
+require() {
+  grep -q -- "$3" "$out/$1.$2" && return 0
+  echo "== step $1: MISSING EVIDENCE in $1.$2: no line matching $3"
+  status=1
+}
+
 for s in "$@"; do
   case $s in
   build)
-    echo "== build"
-    (cd "$root" && dune build bin/projection_shape_bench.exe benchmarks/runners/ocannl/bench_gpt.exe) 2>&1 || exit 1
+    step build sh -c "cd '$root' && dune build bin/projection_shape_bench.exe \
+      benchmarks/runners/ocannl/bench_gpt.exe" || { cat "$out/build.err"; exit 1; }
     ;;
   provenance)
     echo "host $(hostname) sha $(git -C "$root" rev-parse HEAD) backend $backend cap ${cap}s"
-    git -C "$root" status --porcelain | head -5
     case $backend in
     hip) rocminfo 2>/dev/null | grep -E "Marketing|gfx" | sort -u | head -4 ;;
     cuda) nvidia-smi -L ;;
@@ -121,8 +139,12 @@ for s in "$@"; do
     [ -r "$fixture" ] && echo "fixture $fixture sha256 $(shasum -a 256 "$fixture" | cut -d' ' -f1)"
     ;;
   crown-fwd | crown-rev)
-    step "$s" ../_build/default/bin/projection_shape_bench.exe 200 8 d "${s#crown-}" seeds \
-      --ocannl_backend="$backend" --ocannl_log_config_sourcing=true || status=1
+    if step "$s" ../_build/default/bin/projection_shape_bench.exe 200 8 d "${s#crown-}" seeds \
+      --ocannl_backend="$backend" --ocannl_log_config_sourcing=true; then
+      require "$s" out '^== gh-ocannl-755: candidate ranking'
+      require "$s" out '^   crown: '
+      require "$s" err "^Found $backend, commandline --ocannl_backend=$backend\$"
+    else status=1; fi
     # The ranking table and the crown verdicts, which are the gh-ocannl-833 deliverable.
     sed -n '/== gh-ocannl-755/,$p' "$out/$s.out"
     grep 'Found .*--ocannl_backend=' "$out/$s.err" | sort -u
@@ -130,10 +152,17 @@ for s in "$@"; do
   session-isolated | session-queued)
     mode=${s#session-}
     rm -rf "$out/cache-$mode"
-    step "$s" env BENCH_FIXTURE="$fixture" BENCH_TUNE=1 BENCH_TIMING_TRACE=1 \
+    if step "$s" env BENCH_FIXTURE="$fixture" BENCH_TUNE=1 BENCH_TIMING_TRACE=1 \
       ../_build/default/benchmarks/runners/ocannl/bench_gpt.exe --ocannl_backend="$backend" \
       --ocannl_autotune_timing="$mode" --ocannl_autotune_cache_dir="$out/cache-$mode" \
-      --ocannl_log_config_sourcing=true || status=1
+      --ocannl_log_config_sourcing=true; then
+      # A completed session is evidence only with its treatment and its cost record in it.
+      require "$s" out '"compile_s":'
+      require "$s" out '"searched":true'
+      require "$s" err '^timing-trace: summary: '
+      require "$s" err "^Found $backend, commandline --ocannl_backend=$backend\$"
+      require "$s" err "^Found $mode, commandline --ocannl_autotune_timing=$mode\$"
+    else status=1; fi
     # The result line (compile_s is the search wall) and the trace's last word: the summary on a
     # completed run, the running totals of the last timing call on a capped one.
     cat "$out/$s.out"

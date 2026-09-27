@@ -224,7 +224,10 @@ let percentile sorted p =
 
 let install_timing_trace () =
   if env_flag "BENCH_TIMING_TRACE" then begin
-    let t0 = Unix.gettimeofday () in
+    (* Monotonic, like every timing path in this harness: a search runs for tens of minutes, and a
+       wall-clock step inside it would skew every interval the trace reports. *)
+    let now () = Mtime.Span.to_float_ns (Mtime_clock.elapsed ()) /. 1e9 in
+    let t0 = now () in
     let calls = ref 0 and attempts = ref 0 and launches = ref 0 in
     let calib_s = ref 0. and timed_s = ref 0. in
     let depths = Hashtbl.create (module Int) in
@@ -234,24 +237,24 @@ let install_timing_trace () =
     (Autotune.on_candidate_attempt :=
        fun label ->
          Int.incr attempts;
-         pr "timing-trace: attempt %d at %.1fs: %s\n" !attempts (Unix.gettimeofday () -. t0) label;
+         pr "timing-trace: attempt %d at %.1fs: %s\n" !attempts (now () -. t0) label;
          prev_attempt label);
     let prev_preflight = !Autotune.on_candidate_preflight in
     (Autotune.on_candidate_preflight :=
        fun name ->
-         preflight_at := Some (Unix.gettimeofday ());
+         preflight_at := Some (now ());
          prev_preflight name);
     let prev_depth = !Autotune.on_batch_depth in
     (Autotune.on_batch_depth :=
        fun depth ~calibration_samples ->
-         depth_at := Some (Unix.gettimeofday (), depth, calibration_samples);
+         depth_at := Some (now (), depth, calibration_samples);
          prev_depth depth ~calibration_samples);
     let prev_window = !Autotune.on_timed_window in
     (* Parenthesized like the three above: an unparenthesized [fun] would swallow the [at_exit]
        below into the callback and register one summary per timing call. *)
     (Autotune.on_timed_window :=
        fun ~samples ~wall_ms ~median_wall_ms ->
-         let now = Unix.gettimeofday () in
+         let now = now () in
          (match !depth_at with
          | None -> pr "timing-trace: a timed window without a depth decision\n"
          | Some (at, depth, calibration) ->
@@ -284,7 +287,7 @@ let install_timing_trace () =
         pr
           "timing-trace: summary: %.1fs wall, %d candidate attempts, %d timing calls, %d launches, \
            calib %.2f s, timed %.2f s; depth histogram (calls x depth): %s\n"
-          (Unix.gettimeofday () -. t0)
+          (now () -. t0)
           !attempts !calls !launches !calib_s !timed_s hist)
   end
 
