@@ -36,6 +36,50 @@ def publish_pid(path, pid):
     )
 
 
+def kill_the_group(pid):
+    """SIGKILL what is left of `pid`'s process group, if it is still shaped like a cell's.
+
+    The pid may name a process long gone and the number reused, so the group is killed only while
+    it is the whole of a session -- which `cell_group.spawn` gives every child it starts -- and
+    never when it is this process's own. POSIX only: on Windows there is no group to kill and no
+    need, since every spawn there sits in a kill-on-close Job.
+    """
+    if os.name != "posix":
+        return
+    # ProcessLookupError: everything is gone (on macOS a zombie already answers so);
+    # PermissionError: the number was reused by a process that is not ours to signal.
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        group = os.getpgid(pid)
+        if group == os.getsid(pid) and group != os.getpgrp():
+            os.killpg(group, signal.SIGKILL)
+
+
+def kill_the_group_on_cleanup(case, pidfile):
+    """Register on the TestCase `case` a cleanup that SIGKILLs whatever is left of the group of
+    the pid a child published (through `publish_pid`) to `pidfile`.
+
+    Every fixture that publishes a pid parks a process in `time.sleep(300)`, and it is the test's
+    own assertions that establish the code under test killed it. When one of them fails, nothing
+    else will: a cell sits in a session of its own by design, so killing the test's direct child
+    -- or a sweep driver, which the cancellation tests SIGKILL, running no handler -- leaves it
+    orphaned for the full 300 s (gh-ocannl-1054: a forced failure left three such processes
+    behind, and on a shared box or a CI runner they hold whatever a later timing test measures
+    against). So the kill is owed on every path; registered after `setUp`, it runs before the
+    directory holding the pidfile is removed.
+
+    It kills the GROUP, not the pid: where the published pid is a grandchild, its sleeping parent
+    -- the cell -- is the same leak, and `cell_group.spawn` keeps both in the cell's group. The
+    pid is read at cleanup time, which is why `kill_the_group` guards against a reused number.
+    `test_every_published_pid_is_killed_on_cleanup` keeps new fixtures registering it.
+    """
+
+    def kill_what_is_left():
+        if pidfile.exists():
+            kill_the_group(int(pidfile.read_text()))
+
+    case.addCleanup(kill_what_is_left)
+
+
 class CellGroupTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -70,6 +114,7 @@ class CellGroupTest(unittest.TestCase):
 
     def test_a_sleep_chain_is_killed_and_reaped_as_one_group(self):
         pidfile = self.dir / "grandchild.pid"
+        kill_the_group_on_cleanup(self, pidfile)
         child = cell_group.spawn(
             self.python(
                 "import signal, subprocess, sys, time\n"
@@ -103,16 +148,19 @@ class CellGroupTest(unittest.TestCase):
         "communicate timeouts expose no partial pipe snapshot on Windows",
     )
     def test_a_child_killed_mid_stream_preserves_its_partial_stdout(self):
-        ready = self.dir / "stdout-ready"
+        # The readiness marker is the child's published pid, so that a failure before `terminate`
+        # does not leave a SIGTERM-ignoring sleeper behind.
+        pidfile = self.dir / "stdout-ready.pid"
+        kill_the_group_on_cleanup(self, pidfile)
         child = cell_group.spawn(
             self.python(
                 "import signal, sys, time\n"
                 "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
                 "sys.stdout.write('partial child output')\n"
                 "sys.stdout.flush()\n"
-                "open(sys.argv[1], 'w').write('ready')\n"
-                "time.sleep(300)\n",
-                ready,
+                + publish_pid("sys.argv[1]", "os.getpid()")
+                + "time.sleep(300)\n",
+                pidfile,
             ),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -121,7 +169,7 @@ class CellGroupTest(unittest.TestCase):
         # The readiness marker is published only after stdout was flushed. This ordering makes
         # the test deterministic: the parent cannot kill the child before the asserted bytes
         # exist, which was the macOS CI flake in the old combined sleep-chain test.
-        self.wait_file(ready)
+        self.wait_file(pidfile)
         real_communicate = child.communicate
 
         def shorter_final_snapshot(*args, **kwargs):
@@ -162,6 +210,7 @@ class CellGroupTest(unittest.TestCase):
 
     def test_an_orphan_spawner_is_observed_and_collected_after_its_leader_exits(self):
         pidfile = self.dir / "orphan.pid"
+        kill_the_group_on_cleanup(self, pidfile)
         child = cell_group.spawn(
             self.python(
                 "import subprocess, sys\n"
@@ -177,12 +226,11 @@ class CellGroupTest(unittest.TestCase):
         child.communicate(timeout=10)
         self.wait_file(pidfile)
         orphan = int(pidfile.read_text())
-        # `signal.SIGKILL` does not exist on Windows, and this lambda only reaches the kill when
-        # the orphan survived -- so the platform where the cleanup matters most is the one where it
-        # would have raised `AttributeError` instead of killing anything.  `os.kill` with any other
-        # signal is `TerminateProcess` there, which is what is wanted.
-        hard_kill = getattr(signal, "SIGKILL", signal.SIGTERM)
-        self.addCleanup(lambda: self.alive(orphan) and os.kill(orphan, hard_kill))
+        # On POSIX the group kill registered above collects the orphan on every path; Windows has
+        # no group to kill, so the orphan is killed by pid there.  `os.kill` with any signal is
+        # `TerminateProcess` on Windows, which is what is wanted (`signal.SIGKILL` does not exist).
+        if os.name != "posix":
+            self.addCleanup(lambda: self.alive(orphan) and os.kill(orphan, signal.SIGTERM))
 
         self.assertIsNot(child.observe(), cell_group.GONE)
         result = cell_group.terminate(child, grace=0.2)
@@ -264,6 +312,46 @@ class CellGroupTest(unittest.TestCase):
         ]
         self.assertEqual(offenders, [], "pid files written in place, not via publish_pid")
 
+    def test_every_published_pid_is_killed_on_cleanup(self):
+        # Fixtures here are written by copying a neighbour, and one that drops the registration
+        # passes every green run: the leak shows only when an assertion fails (gh-ocannl-1054,
+        # gh-ocannl-1089). Over the same test sources as the scan above, not just one module's.
+        # (The two needles are split so that this test's own source matches neither.)
+        publishes, registers = "publish" "_pid(", "kill_the_group" "_on_cleanup(self, pidfile)"
+        # Tests that publish in-process and spawn nothing. Registering there would be WRONG, not
+        # just idle: the cleanup would SIGKILL whatever group the fake pid 4242 happens to lead.
+        spawn_nothing = {
+            "test_a_published_pid_file_never_exists_without_its_pid",
+            "test_every_published_pid_goes_through_publish_pid",
+        }
+        sources = sorted([*HERE.glob("test*.py"), *HERE.glob("test/test*.py")])
+        fixtures, offenders = set(), []
+        for path in sources:
+            text = path.read_text()
+            for case in ast.walk(ast.parse(text, filename=str(path))):
+                if not isinstance(case, ast.ClassDef):
+                    continue
+                for method in case.body:
+                    if not (
+                        isinstance(method, ast.FunctionDef) and method.name.startswith("test")
+                    ):
+                        continue
+                    source = ast.get_source_segment(text, method)
+                    if publishes in source:
+                        fixtures.add(method.name)
+                        if method.name not in spawn_nothing and registers not in source:
+                            offenders.append(f"{path.relative_to(HERE)}:{method.lineno}")
+        # Two-sided: the scan reaches the tests the leak was found in, in both files, so it
+        # cannot pass by finding no fixture at all -- and the exemptions are still publishers.
+        for found in (
+            "test_a_sigterm_to_the_sweep_takes_the_running_cell_with_it",
+            "test_a_cancellation_during_the_kill_does_not_abandon_the_group",
+            "test_a_sleep_chain_is_killed_and_reaped_as_one_group",
+            *spawn_nothing,
+        ):
+            self.assertIn(found, fixtures)
+        self.assertEqual(offenders, [], "pid-publishing fixtures with no kill on cleanup")
+
     def test_a_failed_windows_job_assignment_kills_the_unassigned_child_too(self):
         job = unittest.mock.Mock()
         child = unittest.mock.Mock()
@@ -300,6 +388,9 @@ class CellGroupTest(unittest.TestCase):
         self.addCleanup(signal.signal, signal.SIGINT, previous_int)
         self.addCleanup(setattr, cancellation, "depth", 0)
         self.addCleanup(setattr, cancellation, "held_signal", None)
+        # The child sleeps 300 s in a session of its own; when the cancellation this test pins
+        # fails to collect it, nothing else will (gh-ocannl-1089).
+        self.addCleanup(lambda: [kill_the_group(pid) for pid in spawned])
         cancellation.install()
 
         def popen_then_cancel(*args, **kwargs):
