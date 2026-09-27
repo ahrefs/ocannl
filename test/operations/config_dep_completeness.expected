@@ -18,7 +18,7 @@ test/config/dune: exe-running rules
 test/einsum/dune: tests, inline-test libraries, exe-running rules
 test/gpt2/dune: tests, exe-running rules
 test/operations/atomic_file_rename_scan_fixture/dune: tests, exe-running rules
-test/operations/dune: tests, inline-test libraries, exe-running rules, exempt rules (gen_half_emulated.exe)
+test/operations/dune: tests, inline-test libraries, exe-running rules, exempt rules (gen_codec_header.exe)
 test/operations/profiles/dune: tests, exe-running rules
 test/operations/startup_streams/dune: tests, exe-running rules
 test/ppx/dune: tests, exe-running rules, exempt rules (pp.exe)
@@ -33,7 +33,7 @@ Actions that do not: progn, concurrent, chdir, setenv, with-stdout-to, with-stde
 
 Exempt from the dependency, running an executable that reads no configuration:
   arrayjit/lib:gen_builtins/generate.exe -- the builtin header generator links only the OCaml stdlib and a pure C definition table; it reads no OCANNL configuration
-  test/operations:gen_half_emulated.exe -- the emulated-fp16 header generator for half_codec_exhaustive (gh-ocannl-985) links only the OCaml stdlib and a copy of the same pure C definition table; it reads no OCANNL configuration
+  test/operations:gen_codec_header.exe -- the codec header generator for half_codec_exhaustive and bf16_codec_exhaustive (gh-ocannl-985, gh-ocannl-1069) links only the OCaml stdlib and a copy of the same pure C definition table; it reads no OCANNL configuration
   test/ppx:pp.exe -- the ppx driver, run to expand a source file and diff the expansion: `ppx_ocannl` links base, ppxlib, str and einsum_parser -- no configuration reader -- so no `ocannl_config` can reach its output
   benchmarks/runners/ocannl:metal_queue_probe.exe -- the standalone Metal queue probe, run on `@bin-smoke` as the bindings' runtime canary (gh-ocannl-905): it links `metal`, `ctypes` and `unix` and no arrayjit at all -- no configuration reader, so no `ocannl_config` can reach what it does
   benchmarks:python3, handed %{dep:test_orchestrate.py} -- the benchmark orchestrator's own unit tests, in Python: the interpreter runs a script that imports orchestrate.py and runners/bench_common.py and calls no OCANNL executable, so there is no configuration in reach -- and a Python process would not read one anyway
