@@ -846,7 +846,17 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
      a gfx1151 gpt2_mini search settled at depth 1). So the window resumes from the singles, topping
      up only as far as the caller's [repeats] floor asks beyond the calibration's, and the resumed
      window is judged for contention whole, exactly as a fresh one would be. At any other depth the
-     singles are a different quantity from the batch and are left out. *)
+     singles are a different quantity from the batch and are left out.
+
+     What reuse gives up is independence between the depth decision and the reading (Codex P2, round
+     1 on PR #839): depth 1 is chosen because these singles' minimum reached the batch target, so a
+     depth-1 reading cannot fall below the target the way an independent window's could. That
+     conditioning moves a reading only for a candidate whose min-of-16 straddles the target, and
+     only by less than that minimum's own spread -- the band in which an independent window's
+     ordering was already decided by jitter. The reading has a larger discontinuity at the same
+     place anyway: a candidate whose minimum falls just short settles at depth 2 and reads the
+     batched, amortized cost. The candidates reuse exists for sit far above the target (55-70 ms
+     gpt2_mini steps against 10 ms), where the condition holds with or without the conditioning. *)
   let reused = if depth = 1 then singles else [] in
   let timed_wall_ms = ref (List.fold reused ~init:0. ~f:(fun total s -> total +. s.contention_ms))
   and timed_batches = ref (List.length reused)
