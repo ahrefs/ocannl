@@ -536,3 +536,8 @@ val decide_footprint : t -> Ir.Tnode.t list -> t
     the other's preference, so the later request wins. Honored only under
     [virtualize_footprint_materialization]; same hermeticity and same pre-compile-sibling rule as
     {!decide_inline}. *)
+
+val decide_reading : t -> Ir.Low_level.reading -> Ir.Tnode.t list -> t
+(** Dispatches a reading to its decision: [`Materialize] to {!decide_materialized}, [`Inline] to
+    {!decide_inline}, [`Footprint] to {!decide_footprint} — how a flip of an
+    {!Ir.Low_level.flip_candidate} is applied. *)

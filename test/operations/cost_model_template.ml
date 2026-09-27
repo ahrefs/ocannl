@@ -301,15 +301,12 @@ let () =
     | None -> false);
   p "chain: a materialized leaf has no stored computation to price" (Option.is_none (cost x0));
   Stdio.printf "  flip candidates:\n";
-  let reading_name : LL.reading -> string = function
-    | `Materialize -> "materialize"
-    | `Inline -> "inline"
-    | `Footprint -> "footprint"
-  in
   List.iter o.LL.flip_candidates ~f:(fun fc ->
       List.iter fc.LL.fc_alternatives ~f:(fun fa ->
           Stdio.printf "    %-4s %-11s -> %-11s cost %d %s\n" (Tn.debug_name fc.LL.fc_tn)
-            (reading_name fc.LL.fc_default) (reading_name fa.LL.fa_flip) fa.LL.fa_recompute_cost
+            (LL.reading_to_string fc.LL.fc_default)
+            (LL.reading_to_string fa.LL.fa_flip)
+            fa.LL.fa_recompute_cost
             (if fa.LL.fa_modeled then "(modeled)" else "(proxy)")));
   let find tn r =
     List.find_map o.LL.flip_candidates ~f:(fun fc ->

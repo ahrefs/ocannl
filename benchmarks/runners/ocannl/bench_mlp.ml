@@ -251,22 +251,17 @@ let () =
       match
         Context.compile
           ~lowered_transform:(fun o ->
-            let reading_name : Ir.Low_level.reading -> string = function
-              | `Inline -> "inline"
-              | `Materialize -> "materialize"
-              | `Footprint -> "footprint"
-            in
             List.iteri o.Ir.Low_level.flip_candidates ~f:(fun i fc ->
                 Stdlib.Printf.eprintf "flip candidate %d: %s uid=%d prec=%s default=%s -> %s\n%!" i
                   (Ir.Tnode.debug_name fc.Ir.Low_level.fc_tn)
                   fc.Ir.Low_level.fc_tn.Ir.Tnode.uid
                   (Ir.Ops.prec_string
                      (Stdlib.Lazy.force fc.Ir.Low_level.fc_tn.Ir.Tnode.storage_prec))
-                  (reading_name fc.Ir.Low_level.fc_default)
+                  (Ir.Low_level.reading_to_string fc.Ir.Low_level.fc_default)
                   (String.concat ~sep:", "
                      (List.map fc.Ir.Low_level.fc_alternatives ~f:(fun fa ->
                           Stdlib.Printf.sprintf "%s cost=%d"
-                            (reading_name fa.Ir.Low_level.fa_flip)
+                            (Ir.Low_level.reading_to_string fa.Ir.Low_level.fa_flip)
                             fa.Ir.Low_level.fa_recompute_cost))));
             [ o ])
           ctx comp bindings

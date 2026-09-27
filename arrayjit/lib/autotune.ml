@@ -3173,17 +3173,11 @@ let model_default ?name ?report ctx comp bindings =
           let cands = List.take surface.ps_candidates placement_budget in
           if List.is_empty cands then None
           else
-            let flip_name (r : LL.reading) =
-              match r with
-              | `Materialize -> "materialize"
-              | `Inline -> "inline"
-              | `Footprint -> "footprint"
-            in
             let level_name (fc : LL.flip_candidate) =
               Printf.sprintf "placement#%d %s %s" fc.LL.fc_tn.Ir.Tnode.uid
                 (Ir.Tnode.debug_name fc.LL.fc_tn)
                 (String.concat ~sep:"/"
-                   (List.map fc.LL.fc_alternatives ~f:(fun fa -> flip_name fa.LL.fa_flip)))
+                   (List.map fc.LL.fc_alternatives ~f:(fun fa -> LL.reading_to_string fa.LL.fa_flip)))
             in
             (* The placement levels commit to DATA like the family levels do (gh-ocannl-591): each
                child carries the candidate it decides and which way, so the bound below reads the
@@ -3279,9 +3273,10 @@ let model_default ?name ?report ctx comp bindings =
       | None -> compile_from ctx
       | Some (mat, inl, fp) -> (
           let ctx' =
-            Context.decide_footprint
-              (Context.decide_inline (Context.decide_materialized ctx mat) inl)
-              fp
+            List.fold
+              [ (`Materialize, mat); (`Inline, inl); (`Footprint, fp) ]
+              ~init:ctx
+              ~f:(fun c (r, tns) -> Context.decide_reading c r tns)
           in
           match compile_from ctx' with
           | result ->

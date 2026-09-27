@@ -941,6 +941,11 @@ type reading = [ `Materialize | `Inline | `Footprint ] [@@deriving sexp, compare
     scratch over the readers' footprint, filled at the producer). A flip moves a node from its
     default reading to another one. *)
 
+let reading_to_string : reading -> string = function
+  | `Materialize -> "materialize"
+  | `Inline -> "inline"
+  | `Footprint -> "footprint"
+
 type flip_alternative = { fa_flip : reading; fa_recompute_cost : int; fa_modeled : bool }
 [@@deriving sexp_of]
 (** One reading a search can flip a node to, with the recompute-cost bound of the recompute reading
