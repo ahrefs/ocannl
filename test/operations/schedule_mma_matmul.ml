@@ -2161,9 +2161,17 @@ let () =
            larger one is a multiple of the smaller), and four [k_o] blocks make the reduction
            multi-block. The column extent is the whole [n]: the zeroing's column loop is the lane
            loop, so [n] is the warp width and the tile's n must divide it. *)
+        (* A staged layout without a format tile is a capability the seeder never reaches: the
+           typed seeds look the tile up first and refute the tensorized branch without one. *)
         let tm, tn, tk =
-          Option.value ~default:(bm, n, bm)
-            (List.Assoc.find mma.BI.mma_format_tiles triple ~equal:BI.equal_mma_format_triple)
+          match
+            List.Assoc.find mma.BI.mma_format_tiles triple ~equal:BI.equal_mma_format_triple
+          with
+          | Some tile -> tile
+          | None ->
+              failwith
+                ("staged twins: the advertised staged layout of " ^ tag
+               ^ " has no mma_format_tiles entry, so no seed would reach it")
         in
         if n % tn <> 0 then
           failwith
@@ -2172,16 +2180,20 @@ let () =
                tn n);
         let bi = Int.max bm tm and bk = Int.max bm tk in
         let kw = 4 * bk in
-        (* Small integers (0..2), exact in every storage format, drawn through the aperiodic
-           [Bench_checksum.mix]: a cyclic key of period p makes panels p apart identical (period 2
-           repeated every row tile and [k_o] panel; period 3 made the fourth panel the first), so a
-           twin staging the wrong panel would read the same values. The mix has no shift symmetry at
-           any lag. Every partial sum is a nonnegative integer no larger than the final one, so the
-           host reference is exact whatever the narrowing order as long as the final sums survive
-           the accumulator's storage unchanged — checked by round-tripping them through a [d_prec]
-           array. *)
-        let a_key idcs = Float.of_int (Bench_checksum.mix ~salt:0x5A17 idcs.(0) idcs.(1) % 3) in
-        let b_key idcs = Float.of_int (Bench_checksum.mix ~salt:0x3C6E idcs.(0) idcs.(1) % 3) in
+        (* Small integers (1..2), exact in every storage format and clear of the zero init, drawn
+           through the aperiodic [Bench_checksum.mix]: a cyclic key of period p makes panels p apart
+           identical (period 2 repeated every row tile and [k_o] panel; period 3 made the fourth
+           panel the first), so a twin staging the wrong panel would read the same values. The mix
+           has no shift symmetry at any lag. Every partial sum is a nonnegative integer no larger
+           than the final one, so the host reference is exact whatever the narrowing order as long
+           as the final sums survive the accumulator's storage unchanged — checked by round-tripping
+           them through a [d_prec] array. *)
+        let a_key idcs =
+          Float.of_int (1 + (Bench_checksum.mix ~salt:0x5A17 idcs.(0) idcs.(1) % 2))
+        in
+        let b_key idcs =
+          Float.of_int (1 + (Bench_checksum.mix ~salt:0x3C6E idcs.(0) idcs.(1) % 2))
+        in
         let reference =
           Array.init (n * n) ~f:(fun cell ->
               List.sum

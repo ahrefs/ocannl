@@ -32,10 +32,10 @@ let exemptions =
       Scan.Site "(Bc.mix ~salt:0x00A5 (t / n) (t % n) % 97)",
       "the key is Bench_checksum.mix, the aperiodic mixer; the remainder only bounds its range" );
     ( "test/operations/schedule_mma_matmul.ml",
-      Scan.Site "(Bench_checksum.mix ~salt:0x5A17 idcs.(0) idcs.(1) % 3)",
+      Scan.Site "(Bench_checksum.mix ~salt:0x5A17 idcs.(0) idcs.(1) % 2)",
       "the key is Bench_checksum.mix, the aperiodic mixer; the remainder only bounds its range" );
     ( "test/operations/schedule_mma_matmul.ml",
-      Scan.Site "(Bench_checksum.mix ~salt:0x3C6E idcs.(0) idcs.(1) % 3)",
+      Scan.Site "(Bench_checksum.mix ~salt:0x3C6E idcs.(0) idcs.(1) % 2)",
       "the key is Bench_checksum.mix, the aperiodic mixer; the remainder only bounds its range" );
     ("test/operations/autotune_split_reduce.ml", Scan.Site "(x % 3)", sin_scaled);
     ("test/operations/autotune_split_reduce.ml", Scan.Site "(x % 4)", sin_scaled);
