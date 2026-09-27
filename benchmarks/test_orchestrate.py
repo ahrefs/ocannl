@@ -1,5 +1,6 @@
 import argparse
 import contextlib
+import inspect
 import io
 import json
 import os
@@ -2853,6 +2854,68 @@ class CellTimeoutTest(unittest.TestCase):
             time.sleep(0.05)
         return not self.alive(pid)
 
+    def kill_the_group_on_cleanup(self, pidfile):
+        """Register a cleanup that SIGKILLs whatever is left of the group of the pid in `pidfile`.
+
+        Every fixture here that publishes a pid parks a process in `time.sleep(300)`, and it is
+        the test's own assertions that establish the code under test killed it. When one of them
+        fails, nothing else will: the two tests that cancel a sweep DRIVER clean up by SIGKILLing
+        the driver, which runs no handler and leaves its cell -- in a session of its own by design
+        -- orphaned for the full 300 s (gh-ocannl-1054: a forced failure left three such processes
+        behind, and on a shared box or a CI runner they hold whatever a later timing test measures
+        against). So the kill is owed on every path; registered after `setUp`, it runs before the
+        directory holding the pidfile is removed.
+
+        It kills the GROUP, not the pid: where the published pid is a grandchild, its sleeping
+        parent -- the cell -- is the same leak, and `cell_group.spawn` keeps both in the cell's
+        group. The pid is read at cleanup time, when the process it named may be long gone and
+        the number reused, so the group is killed only while it is still shaped like a cell's --
+        the whole of a session, which `cell_group.spawn` gives every child it starts -- and never
+        when it is this process's own. On Windows there is no group to kill and no need: every
+        spawn there sits in a kill-on-close Job.
+        """
+        if os.name != "posix":
+            return
+
+        def kill_what_is_left():
+            if not pidfile.exists():
+                return
+            pid = int(pidfile.read_text())
+            # ProcessLookupError: everything is gone (on macOS a zombie already answers so);
+            # PermissionError: the number was reused by a process that is not ours to signal.
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                group = os.getpgid(pid)
+                if group == os.getsid(pid) and group != os.getpgrp():
+                    os.killpg(group, signal.SIGKILL)
+
+        self.addCleanup(kill_what_is_left)
+
+    def test_every_published_pid_is_killed_on_cleanup(self):
+        # Fixtures here are written by copying a neighbour, and one that drops the registration
+        # passes every green run: the leak shows only when an assertion fails (gh-ocannl-1054).
+        # (The two needles are split so that this test's own source matches neither.)
+        publishes, registers = "publish" "_pid(", "self.kill_the_group" "_on_cleanup(pidfile)"
+        fixtures, offenders = [], []
+        for case in vars(sys.modules[__name__]).values():
+            if not (
+                isinstance(case, type)
+                and issubclass(case, unittest.TestCase)
+                and case.__module__ == __name__
+            ):
+                continue
+            for name in dir(case):
+                if name.startswith("test"):
+                    source = inspect.getsource(getattr(case, name))
+                    if publishes in source:
+                        fixtures.append(name)
+                        if registers not in source:
+                            offenders.append(f"{case.__name__}.{name}")
+        # Two-sided: the scan reaches the two tests the leak was found in, so it cannot pass by
+        # finding no fixture at all.
+        self.assertIn("test_a_sigterm_to_the_sweep_takes_the_running_cell_with_it", fixtures)
+        self.assertIn("test_a_cancellation_during_the_kill_does_not_abandon_the_group", fixtures)
+        self.assertEqual(offenders, [], "pid-publishing fixtures with no kill on cleanup")
+
     def test_a_held_termination_is_delivered_during_exceptional_unwinding(self):
         # Code after a contextmanager's finally is skipped when the body raises.  The old
         # deferral put delivery there, so a SIGTERM held while spawn/cleanup also raised stayed
@@ -2894,6 +2957,7 @@ class CellTimeoutTest(unittest.TestCase):
         package.mkdir()
         (package / "__init__.py").write_text("")
         pidfile = self.dir / "probe-helper.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         cachedb = self.dir / "cache.db"
         (package / "helpers.py").write_text(
             "import os, subprocess, sys\n"
@@ -2979,6 +3043,7 @@ class CellTimeoutTest(unittest.TestCase):
         # does not go away. So the assertion is both halves: the grandchild dies, and the call
         # returns promptly rather than waiting on the inherited pipe.
         pidfile = self.dir / "grandchild.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         cell = self.python(
             "import subprocess, sys, time\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])\n"
@@ -3006,6 +3071,7 @@ class CellTimeoutTest(unittest.TestCase):
         # it. So the SIGKILL has to be owed to the GROUP still having members (gh-ocannl-760
         # review).
         pidfile = self.dir / "stubborn.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         cell = self.python(
             "import signal, subprocess, sys, time\n"
             "kid = subprocess.Popen([sys.executable, '-c',\n"
@@ -3087,6 +3153,7 @@ class CellTimeoutTest(unittest.TestCase):
         # in its own session precisely so the sweep's signals do NOT reach it (gh-ocannl-760
         # review).
         pidfile = self.dir / "orphan.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         cell_source = (
             "import subprocess, sys, time\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])\n"
@@ -3232,6 +3299,7 @@ class CellTimeoutTest(unittest.TestCase):
         # about a worker that redirected its own output -- and that worker still holds the GPU, so
         # every later cell of the sweep would be measured against it (gh-ocannl-760 review).
         pidfile = self.dir / "leftover.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         cell = self.python(
             "import subprocess, sys\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
@@ -3282,6 +3350,7 @@ class CellTimeoutTest(unittest.TestCase):
         # the group outlives the sweep (gh-ocannl-760 review). The cell here holds the grace open
         # by ignoring SIGTERM, and the sweep is cancelled while it does.
         pidfile = self.dir / "mid_kill.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         termfile = self.dir / "mid_kill.termed"
         # The cell RECORDS the SIGTERM instead of `SIG_IGN`-ing it -- it still does not die of one,
         # which is all the test needs of it, and the marker is the moment the grace loop opened.
@@ -3408,6 +3477,7 @@ class CellTimeoutTest(unittest.TestCase):
         # state the kill path quarantines, whatever the leader's own exit said.
         seen = []
         pidfile = self.dir / "leftover_killed.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         cell = self.python(
             "import subprocess, sys\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
@@ -3463,6 +3533,7 @@ class CellTimeoutTest(unittest.TestCase):
         # as a cell: `subprocess.run` kills its direct child on an exception but knows nothing of
         # that child's children, and `dune build` forks compilers (gh-ocannl-760 review).
         pidfile = self.dir / "build_worker.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         build = self.python(
             "import subprocess, sys, time\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
@@ -3516,6 +3587,7 @@ class CellTimeoutTest(unittest.TestCase):
         # which reproduces the property that matters here: every `communicate` in the kill loop
         # times out, so the output can only come off the exception.
         pidfile = self.dir / "pipe_holder.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         cell = self.python(
             "import subprocess, sys, time\n"
             "print('the evidence', flush=True)\n"
@@ -3526,12 +3598,6 @@ class CellTimeoutTest(unittest.TestCase):
             pidfile,
         )
 
-        def clear_the_holder():
-            if pidfile.exists():
-                with contextlib.suppress(ProcessLookupError):
-                    os.kill(int(pidfile.read_text()), signal.SIGKILL)
-
-        self.addCleanup(clear_the_holder)
         with unittest.mock.patch.object(orchestrate, "CELL_KILL_GRACE_S", 1.0):
             _, note, log = self.run_cell("wedged behind a held pipe", cell, timeout=1.5)
 
@@ -3548,6 +3614,7 @@ class CellTimeoutTest(unittest.TestCase):
         # ESCAPES the group into its own session while still holding the stdout it inherited,
         # which is what makes every reap in the loop time out.
         pidfile = self.dir / "unreapable.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         holder = cell_group.spawn(
             self.python(
                 "import subprocess, sys, time\n"
@@ -3561,15 +3628,18 @@ class CellTimeoutTest(unittest.TestCase):
             stderr=subprocess.STDOUT,
             text=True,
         )
-        # The kill loop cannot reap this leader (that is the point), so the test reaps it.
-        self.addCleanup(holder.wait)
+        # The kill loop cannot reap this leader (that is the point), so the test reaps it -- killing
+        # it first when the test failed before the kill loop did, or the wait would sit out the
+        # leader's whole 300 s sleep. The escaped survivor's cleanup cannot stand in for that: it
+        # kills another session. The kill is asked of an UNREAPED leader only (`poll()` is None),
+        # which is when its group id cannot yet belong to anything else.
+        def reap_the_holder():
+            if holder.poll() is None:
+                holder.signal(force=True)
+            holder.wait()
 
-        def clear_the_holder():
-            if pidfile.exists():
-                with contextlib.suppress(ProcessLookupError):
-                    os.kill(int(pidfile.read_text()), signal.SIGKILL)
+        self.addCleanup(reap_the_holder)
 
-        self.addCleanup(clear_the_holder)
         deadline = time.monotonic() + 10
         while not pidfile.exists() and time.monotonic() < deadline:
             time.sleep(0.05)
@@ -3616,6 +3686,7 @@ class CellTimeoutTest(unittest.TestCase):
         # cell is in the state a kill leaves. It is the cache that is at issue, not the row.
         seen = []
         pidfile = self.dir / "successful_leftover.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         cell = self.python(
             "import json, subprocess, sys\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
@@ -3669,6 +3740,7 @@ class CellTimeoutTest(unittest.TestCase):
         # compiler worker or a probe's framework helper -- and those hold the GPU while the sweep
         # measures against them (gh-ocannl-760 review).
         pidfile = self.dir / "supporting_leftover.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         build = self.python(
             "import subprocess, sys\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
