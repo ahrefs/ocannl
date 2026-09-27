@@ -45,7 +45,7 @@ on_error() {
     native_of_dxg dxg_of_native native_collection native_unit_linux native_unit_wsl \
     native_unit_cpu native_abort_run native_other_abort hold_lock_ok \
     contract_alias contract_box contract_lock_path contract_scope contract_unchecked \
-    lane_lock_linux lane_lock_wsl res_measured res_windows res_windows_unmapped res_local res_local_other res_between \
+    lane_lock_linux lane_lock_wsl res_measured res_windows res_windows_unmapped res_tuf_wsl res_local res_local_other res_between \
     res_unreadable res_garbled res_off res_absent \
     tuf_asleep tuf_no_wake_lab tuf_up tuf_unreachable tuf_inhibited tuf_sleep_fails \
     tuf_unguarded tuf_unguarded_prep tuf_unguarded_wsl tuf_self_refusal tuf_cancelled \
@@ -2079,6 +2079,15 @@ res_windows_unmapped=$(SWEEP_TEST_ENDPOINT_MAP=none SWEEP_TEST_REGISTRY=$res_win
 grep -q '^lab locks: NOT CHECKED' <<<"$res_windows_unmapped"
 grep -qF '  rog-nv/cuda: skip (box rog under an exclusive measurement: wave-3-rog-win-1 (launching on rog-nv-win))' \
   <<<"$res_windows_unmapped"
+# ...including a boot the sweep never addresses: tuf is single-boot in the sweep's table, but the
+# lab's map lists its `-win` and `-wsl` too, and a measurement booked on either holds the box.
+res_tuf_wsl_registry=$tmp/registry-tuf-wsl.json
+printf '%s\n' '[{"request_id": "wave-6-tuf-1", "state": "running",' \
+  ' "request": {"kind": "measurement", "execution_host": "tuf-amd-wsl"}}]' >"$res_tuf_wsl_registry"
+res_tuf_wsl=$(SWEEP_TEST_ENDPOINT_MAP=none SWEEP_TEST_TUF_STATUS=up \
+  SWEEP_TEST_REGISTRY=$res_tuf_wsl_registry run_sweep_args --only hip --target reservation-tuf-wsl-probe)
+grep -qF '  tuf/hip: skip (box tuf under an exclusive measurement: wave-6-tuf-1 (running on tuf-amd-wsl))' \
+  <<<"$res_tuf_wsl"
 # The local lane's name is the one the probe gives this host, not the history's `m4-max`: a
 # measurement there skips the local unit before it builds anything...
 res_local_registry=$tmp/registry-local.json

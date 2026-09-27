@@ -326,6 +326,21 @@ lab_lock_holder() { # box
 # without the script has no destroyer to disagree with, and the lane lock needs no wake-lab.sh to
 # be taken (above). A wake-lab.sh that has no endpoint map to give (one from before ludics-lite#395)
 # is NOT CHECKED too, loudly, rather than a lost day of every backend's coverage.
+# A startup question's answer, into the variable named first. Through run_capped and a file, never a
+# command substitution: bash defers a trap while it waits on a substitution, so a TERM aimed at this
+# pid would otherwise wait out the question's whole cap, with its supervisor never published in
+# UNIT_PID for the relay to reap.
+ask_capped() { # var budget command...
+  local ask_var=$1 ask_out ask_rc
+  shift
+  ask_out=$(mktemp "${TMPDIR:-/tmp}/ocannl-sweep-ask.XXXXXX") || return 1
+  run_capped "$@" >"$ask_out" 2>/dev/null </dev/null
+  ask_rc=$?
+  printf -v "$ask_var" '%s' "$(cat "$ask_out")"
+  rm -f "$ask_out"
+  return "$ask_rc"
+}
+
 LAB_MAP=      # wake-lab.sh endpoint-map's answer: a box name, then its ssh aliases, per line
 LAB_CONTRACT= # the header's verdict
 LAB_LANE_BOXES= # `<unit-table box>=<destination>` for each selected remote lane, set with LAB_DESTS
@@ -336,7 +351,7 @@ lab_contract_check() { # -- sets LAB_MAP and LAB_CONTRACT; refuses the run on a 
     LAB_CONTRACT="NOT CHECKED -- no wake-lab.sh at $WAKE_LAB, so nothing on this host consults the lane locks"
     return 0
   fi
-  LAB_MAP=$(capped 60 "$WAKE_LAB" endpoint-map 2>/dev/null </dev/null) || LAB_MAP=
+  ask_capped LAB_MAP 60 "$WAKE_LAB" endpoint-map || LAB_MAP=
   if [ -z "$LAB_MAP" ]; then
     LAB_CONTRACT="NOT CHECKED -- $WAKE_LAB endpoint-map gave no map (a wake-lab.sh from before ludics-lite#395?)"
     return 0
@@ -362,7 +377,7 @@ lab_contract_check() { # -- sets LAB_MAP and LAB_CONTRACT; refuses the run on a 
       esac
     done
     want=$LAB_LOCK_DIR/$box.lock
-    path=$(capped 60 "$WAKE_LAB" lock-path "$box" 2>/dev/null </dev/null) || path=
+    ask_capped path 60 "$WAKE_LAB" lock-path "$box" || path=
     [ "$path" = "$want" ] ||
       broken="$broken; lock-path $box answers '$path' where a lane locks $want"
   done
@@ -402,7 +417,8 @@ lab_contract_check() { # -- sets LAB_MAP and LAB_CONTRACT; refuses the run on a 
 # booked on a dual-boot box's Windows side, for a verification reboot, holds the box as surely as
 # one on its Linux). Where that map could not be read the names are derived from lab_dest_of's own
 # aliases by the rule wake-lab.sh enforces on every row (check_endpoints): a box's `-linux`,
-# `-win` and `-wsl` aliases share one stem, and its LAN route is `<box>-lan`. The local
+# `-win` and `-wsl` aliases share one stem, and its LAN route is `<box>-lan` -- all three siblings,
+# since the map lists boots the sweep never addresses (tuf's `-win` and `-wsl`). The local
 # lane's name is the one `execution slot --probe` gives this host -- the fleet's `mac-studio`, not
 # the `m4-max` measurement-box ID the history rows carry.
 #
@@ -421,7 +437,7 @@ fleet_probe() {
   local fw probe tag box tokens
   while IFS= read -r fw; do
     [ -x "$fw" ] || continue
-    probe=$(capped 30 "$fw" execution slot --probe 2>/dev/null </dev/null) || continue
+    ask_capped probe 30 "$fw" execution slot --probe || continue
     read -r tag _ _ box _ tokens _ <<<"$probe"
     if [ "$tag" = EXECUTION ] && [ -n "$box" ] && [ -n "$tokens" ]; then
       FLEET_FW=$fw
@@ -453,7 +469,7 @@ lane_fleet_names() { # ssh-destination (empty for the local lane)
       [ "${pair#*=}" = "$dest" ] || continue
       for kind in linux wsl; do
         alias=$(lab_dest_of "${pair%%=*}" "$kind") || continue
-        names="$names $alias ${alias%-*}-win"
+        names="$names ${alias%-*}-linux ${alias%-*}-win ${alias%-*}-wsl"
       done
     done
   fi
