@@ -1583,6 +1583,13 @@ case $REPEAT_TEST_MODE in
   usage_option)
     printf "dune: unknown option '--frobnicate'.\nUsage: dune build [OPTION]… [TARGET]…\nTry 'dune build --help' or 'dune --help' for more information.\n" >&2
     exit 1 ;;
+  # A program that ran, printing a `test-run: ` line of its own and then a
+  # nested refusal: output, not the launcher's prelude (Codex review round 2
+  # on PR #832).
+  prefixed_refusal)
+    printf "test-run: a program's own line\n" >&2
+    printf "dune: unknown option '--frobnicate'.\nUsage: dune build [OPTION]… [TARGET]…\n" >&2
+    exit 1 ;;
   usage_command)
     printf "dune: unknown command 'frobnicate', must be one of 'build', 'clean', 'exec', 'runtest' or 'test'.\nUsage: dune COMMAND …\nTry 'dune --help' for more information.\n" >&2
     exit 1 ;;
@@ -2743,10 +2750,52 @@ if [ -z "$plan_stop_detail" ]; then
   plan_hang_took=$((SECONDS - plan_hang_start))
   [ "$plan_hang_took" -lt 20 ] ||
     plan_stop_detail="a hung reader held the launch ${plan_hang_took}s under --cap 3"
-  [ -n "$plan_stop_detail" ] || [ "$argv_calls" = "build -j 2 @cheap" ] ||
-    plan_stop_detail="a hung reader: calls: ${argv_calls:-<none>} (want build -j 2 @cheap, the unread answer's width)"
-  [ -n "$plan_stop_detail" ] || grep -q "its backends are unread" "$argv_dir/log" ||
-    plan_stop_detail="a hung reader: the log does not say the backends are unread: $(cat "$argv_dir/log" 2>/dev/null)"
+  # The resolution spent the whole cap, so the verdict is the cap's and dune
+  # never starts on a fresh budget (Codex review round 2 on PR #832).
+  [ -n "$plan_stop_detail" ] || { [ "$argv_rc" = 142 ] && [ -z "$argv_calls" ] &&
+    grep -q "verdict: TIMEOUT" <<<"$argv_out"; } ||
+    plan_stop_detail="a hung reader spending the cap: exit $argv_rc (want 142); calls: ${argv_calls:-<none>}; stdout: $argv_out"
+  [ -n "$plan_stop_detail" ] || { grep -q "its backends are unread" "$argv_dir/log" &&
+    grep -q "dune was not started" "$argv_dir/log" && [ "$(cat "$argv_dir/exit" 2>/dev/null)" = 142 ]; } ||
+    plan_stop_detail="a hung reader: the log or the verdict does not say so: $(cat "$argv_dir/log" 2>/dev/null)"
+fi
+# A signal to the launcher alone -- not the terminal's group, not a stop --
+# ends the resolution at once: the reader is waited on in the background, so
+# the trap runs and ends it (Codex review round 2 on PR #832).
+if [ -z "$plan_stop_detail" ]; then
+  plan_sig_runs=$TMP/argv-runs-plan-sig
+  mkdir -p "$plan_sig_runs"
+  : >"$TMP/plan-sig.counter"
+  : >"$TMP/plan-sig.calls"
+  plan_sig_start=$SECONDS
+  FAKE_REACH_SLEEP=30 \
+  REPEAT_TEST_MODE=stable REPEAT_TEST_COUNTER=$TMP/plan-sig.counter REPEAT_TEST_CALLS=$TMP/plan-sig.calls \
+  REPEAT_TEST_WAIT_PREFIX= REPEAT_TEST_WAIT_AT= REPEAT_TEST_ORPHAN_PID= REPEAT_TEST_ORPHAN_REAPED= \
+  REPEAT_TEST_DIFF_WAIT_PREFIX= REPEAT_TEST_REAL_DIFF="$(command -v diff)" \
+  OCANNL_TOOL_TEST_RUNS=$plan_sig_runs OCANNL_TOOL_DXG_DEVICE=$dxg_present OCANNL_BACKEND=cuda \
+  OCANNL_TOOL_KFD_TOPOLOGY=$kfd_absent OCANNL_TOOL_NVIDIA_DEVICE=$nv_absent PATH=$repeat_bin:$PATH \
+    "$repeat_root/tools/test-run.sh" run build @cheap >"$TMP/plan-sig.out" 2>"$TMP/plan-sig.err" &
+  plan_sig_pid=$!
+  plan_sig_marker=
+  for _ in $(seq 1 100); do
+    plan_sig_marker=$(ls "$plan_sig_runs"/2*/planning 2>/dev/null | head -n 1)
+    [ -z "$plan_sig_marker" ] || break
+    sleep 0.1
+  done
+  if [ -z "$plan_sig_marker" ]; then
+    plan_stop_detail="the signalled launch never marked its planning window: $(cat "$TMP/plan-sig.err")"
+    kill -TERM "$plan_sig_pid" 2>/dev/null
+    wait "$plan_sig_pid" 2>/dev/null
+  else
+    sleep 0.5
+    kill -TERM "$plan_sig_pid"
+    wait "$plan_sig_pid"
+    plan_sig_rc=$?
+    plan_sig_took=$((SECONDS - plan_sig_start))
+    { [ "$plan_sig_rc" = 143 ] && [ "$plan_sig_took" -lt 15 ] && [ ! -s "$TMP/plan-sig.calls" ] &&
+      [ ! -e "$(dirname "$plan_sig_marker")" ]; } ||
+      plan_stop_detail="a TERM to the launcher alone: exit $plan_sig_rc (want 143) after ${plan_sig_took}s; calls: $(cat "$TMP/plan-sig.calls"); stderr: $(cat "$TMP/plan-sig.err")"
+  fi
 fi
 if [ -z "$plan_stop_detail" ]; then
   report 0 "plan: a stop in the planning window withdraws the launch, and the worktree is idle"
@@ -2860,6 +2909,16 @@ if [ -z "$refused_detail" ]; then
   { [ "$argv_rc" = 2 ] && grep -qF "$refused_verdict" <<<"$argv_out" &&
     grep -q '^test-run: batch: ' "$argv_dir/log" && grep -q '^test-run: capping dune at -j 2' "$argv_dir/log"; } ||
     refused_detail="under the launch prelude: exit $argv_rc (want 2): $argv_out"
+fi
+# ...but only the launcher's prelude, found by the offset it recorded: a
+# program's own `test-run: ` line before a nested refusal is output, and the
+# run is an ordinary red one.
+if [ -z "$refused_detail" ]; then
+  argv_mode=prefixed_refusal
+  dxg_probe refused-prefixed "$dxg_present" cuda run build @cheap
+  argv_mode=
+  { [ "$argv_rc" = 1 ] && grep -q "verdict: FAIL" <<<"$argv_out"; } ||
+    refused_detail="a program's own test-run: line: exit $argv_rc (want 1, FAIL): $argv_out"
 fi
 if [ -z "$refused_detail" ]; then
   report 0 "$refused_label"

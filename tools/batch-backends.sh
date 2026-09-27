@@ -102,32 +102,58 @@ batch_box_has_hazard() {
 # Runs a command under what is left of the resolution's <cap> seconds (0:
 # unbounded), so the readers' build and every reader run share one budget:
 # a hung reader answers "unread" -- every backend -- instead of stranding the
-# launch (Codex review round 1 on PR #832). Uses batch_resolve's locals.
+# launch (Codex review round 1 on PR #832). Uses batch_resolve's locals; with
+# `-C <dir>` the command runs in <dir>.
 #
 # The command runs in a process group of its own, and the deadline kills the
-# whole group: a reader's child that outlives it would otherwise hold the
-# command substitution's pipe open to its own end. INT, TERM and HUP are
-# relayed to the group, since leaving the terminal's group takes a Ctrl-C's
-# reach with it.
-batch_bounded() { # command...
-  local left
-  [ "$bcap" -ne 0 ] || { "$@"; return; }
-  left=$((bcap - (SECONDS - bstart)))
-  [ "$left" -gt 0 ] || return 124
+# whole group: a reader's child that outlives it would otherwise hold a pipe
+# open to its own end. INT, TERM and HUP reaching the perl runner are relayed
+# to the group. And the runner is waited on in the BACKGROUND, because bash
+# defers a trap until a foreground command completes: this way a signal to
+# the launcher alone runs its trap at once, and batch_cancel_hook (the
+# launcher's) decides whether to end the runner (Codex review round 2).
+batch_child=   # the runner in flight, for batch_abort
+batch_bounded() { # [-C dir] command...
+  local left=0 dir=. rc
+  if [ "${1:-}" = -C ]; then dir=$2; shift 2; fi
+  if [ "$bcap" -ne 0 ]; then
+    left=$((bcap - (SECONDS - bstart)))
+    [ "$left" -gt 0 ] || return 124
+  fi
   perl -e '
-    my $left = shift;
+    my ($left, $dir) = splice(@ARGV, 0, 2);
     defined(my $pid = fork) or exit 127;
-    if (!$pid) { setpgrp(0, 0); exec @ARGV or exit 127 }
+    if (!$pid) { setpgrp(0, 0); chdir $dir or exit 127; exec @ARGV or exit 127 }
     setpgrp($pid, $pid);
     my $end = sub { kill $_[0], -$pid; kill $_[0], $pid; exit $_[1] };
     $SIG{ALRM} = sub { $end->("KILL", 124) };
     $SIG{INT} = sub { $end->("INT", 130) };
     $SIG{TERM} = sub { $end->("TERM", 143) };
     $SIG{HUP} = sub { $end->("TERM", 129) };
-    alarm $left;
+    alarm $left if $left > 0;
     waitpid($pid, 0);
     exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
-  ' "$left" "$@"
+  ' "$left" "$dir" "$@" &
+  batch_child=$!
+  while :; do
+    wait "$batch_child"
+    rc=$?
+    # A trapped signal returns from `wait` early, with the runner still there.
+    kill -0 "$batch_child" 2>/dev/null || break
+    ! batch_cancel_hook || kill -TERM "$batch_child" 2>/dev/null
+  done
+  batch_child=
+  return "$rc"
+}
+
+# Whether a signal the launcher trapped means the resolution must end: the
+# launcher redefines it; standalone, nothing cancels.
+batch_cancel_hook() { return 1; }
+
+# Ends a runner in flight (for a trap that exits at once).
+batch_abort() {
+  [ -z "$batch_child" ] || kill -TERM "$batch_child" 2>/dev/null
+  return 0
 }
 
 # Resolves the batch's backends into batch_holds / batch_unknown, and says what
@@ -172,7 +198,9 @@ batch_resolve() { # <dune> <log> <cap> dune-argv...
     fi
   fi
   if [ -z "$batch_unknown" ]; then
-    out=$(batch_bounded "$reach" "$@" 2>/dev/null)
+    batch_bounded "$reach" "$@" >"$log.reach" 2>/dev/null
+    out=$(cat "$log.reach" 2>/dev/null)
+    rm -f "$log.reach"
     while IFS= read -r line; do
       [ -z "$ended" ] || { batch_unknown="ocannl_slot_kind answered past its end: '$line'"; break; }
       case $line in
@@ -193,10 +221,13 @@ batch_resolve() { # <dune> <log> <cap> dune-argv...
   fi
   if [ -z "$batch_unknown" ]; then
     for d in $BATCH_CONFIG_DIRS; do
-      if ! b=$(cd "$d" && batch_bounded "$reader" --read=backend --output=stdout 2>/dev/null); then
+      if ! batch_bounded -C "$d" "$reader" --read=backend --output=stdout >"$log.read" 2>/dev/null; then
+        rm -f "$log.read"
         batch_unknown="the backend $d resolves is unreadable"
         break
       fi
+      b=$(cat "$log.read" 2>/dev/null)
+      rm -f "$log.read"
       if [ -z "$b" ]; then
         for v in metal cuda hip; do
           batch_add "$v" "$d resolves no backend, so Context.auto tries the GPUs first"

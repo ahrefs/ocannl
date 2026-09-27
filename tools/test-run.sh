@@ -1366,15 +1366,16 @@ resolve_run() {
 # complaint (the lines before `Usage:`), 0 iff FILE is such a refusal.
 #
 # "First" means first after the launch's own prelude, which the log carries
-# before dune starts: this script's `test-run: ` lines with their indented
-# continuations (the batch's backends, the width, the slot) and the fleet
-# slot's `EXECUTION SLOT ` admission line. Anything else before the complaint
-# still disqualifies it (Codex review round 1 on PR #832).
-dune_refusal() { # FILE
-  head -c 20000 "$1" 2>/dev/null | awk '
-    !started && /^test-run: / { cont = 1; next }
-    !started && cont && /^  / { next }
-    !started && /^EXECUTION SLOT / { cont = 0; next }
+# before dune starts: what the launcher wrote there (the batch's backends, the
+# width, the slot) ends at the byte offset it records in `prelude` just before
+# the supervisor starts, and is skipped by position, never by pattern -- a
+# program's own `test-run: ` line is output like any other. The fleet slot's
+# `EXECUTION SLOT ` admission lines, written by fleet-worker.sh between the
+# supervisor's start and dune's, are the one prelude read by pattern (Codex
+# review rounds 1-2 on PR #832).
+dune_refusal() { # FILE [PRELUDE BYTES]
+  tail -c +$(( ${2:-0} + 1 )) "$1" 2>/dev/null | head -c 20000 | awk '
+    !started && /^EXECUTION SLOT / { next }
     !started { started = 1; if ($0 !~ /^dune: /) exit 1 }
     { n++ }
     !found && /^Usage: dune/ { found = 1; next }
@@ -1409,14 +1410,15 @@ slot_refusal() { # <run dir>; 0 iff the slot was refused and dune never ran
 
 digest_rc=
 digest() {
-  local dir=$1 rc verdict fp complaint= refusal_src
+  local dir=$1 rc verdict fp complaint= refusal_src prelude_bytes
   rc=$(cat "$dir/exit" 2>/dev/null) || die "no verdict recorded in $dir"
   digest_rc=$rc
   # Where dune's stderr opens: the run log for `run`/`start`; for a repeat the
   # log opens with the iteration banner, and the refusal (if any) is the first
   # iteration's own stderr, which is also the only iteration a refusal leaves.
-  refusal_src=$dir/log
-  [ "$(cat "$dir/mode" 2>/dev/null)" = repeat ] && refusal_src=$dir/iteration-1/stderr
+  refusal_src=$dir/log prelude_bytes=$(cat "$dir/prelude" 2>/dev/null)
+  case $prelude_bytes in '' | *[!0-9]*) prelude_bytes=0 ;; esac
+  [ "$(cat "$dir/mode" 2>/dev/null)" = repeat ] && refusal_src=$dir/iteration-1/stderr prelude_bytes=0
   # 142 is the ONLY code the cap produces (the supervisor's SIGALRM exit), so
   # only it may say "timeout". 137 is a SIGKILL -- an OOM kill or a forced
   # external kill -- and labeling it a timeout would send triage hunting a
@@ -1429,7 +1431,7 @@ digest() {
       if slot_refusal "$dir"; then
         verdict="SLOT REFUSED (the fleet's run-time slot was not taken; nothing ran)"
         digest_rc=75
-      elif [ "$rc" = 1 ] && complaint=$(dune_refusal "$refusal_src"); then
+      elif [ "$rc" = 1 ] && complaint=$(dune_refusal "$refusal_src" "$prelude_bytes"); then
         verdict="INVOCATION REFUSED (dune rejected the arguments; nothing ran)"
         digest_rc=2
       else
@@ -1909,8 +1911,8 @@ case $sub in
     [ $# -gt 0 ] || set -- runtest
     select_dune
     plan_slot
-    trap 'rm -rf "$run_dir"; exit 130' INT
-    trap 'rm -rf "$run_dir"; exit 143' TERM HUP
+    trap 'batch_abort; rm -rf "$run_dir"; exit 130' INT
+    trap 'batch_abort; rm -rf "$run_dir"; exit 143' TERM HUP
     new_run "$@"
     take_lock
     : >"$run_dir/planning" 2>/dev/null
@@ -1988,6 +1990,9 @@ case $sub in
       esac
     }
     fwd_sig() { cancelled=$1; forward_cancel; }
+    # While the batch's backends resolve, a trapped signal ends the reader in
+    # flight at once (tools/batch-backends.sh waits on it in the background).
+    batch_cancel_hook() { [ -n "$cancelled" ]; }
     trap 'fwd_sig INT' INT
     trap 'fwd_sig TERM' TERM
     trap 'fwd_sig HUP' HUP
@@ -2008,10 +2013,14 @@ case $sub in
     # so the suite gets what is left, and the slot's wait at most half of that:
     # launch plus suite stay within the one wall-clock cap the caller gave
     # (Codex review round 1 on PR #832). The recorded `cap` stays the caller's.
+    cap_spent=
     if [ "$cap" -gt 0 ]; then
       cap=$((cap - (SECONDS - plan_start)))
-      [ "$cap" -ge 1 ] || cap=1
-      [ -z "$slot_wait" ] || [ "$slot_wait" -le $((cap / 2)) ] || slot_wait=$((cap / 2))
+      if [ "$cap" -le 0 ]; then
+        cap_spent=1
+      else
+        [ -z "$slot_wait" ] || [ "$slot_wait" -le $((cap / 2)) ] || slot_wait=$((cap / 2))
+      fi
     fi
     if [ -n "$cancelled" ]; then
       # Signalled while the readers built -- by the caller, or by a `stop`
@@ -2035,6 +2044,18 @@ case $sub in
     # On stderr and into the run's own log, so the cap is in the artifact
     # triage reads rather than only in the launching terminal's scrollback.
     say_width_plan
+    if [ -n "$cap_spent" ]; then
+      # The resolution used the whole cap: the run is over before dune starts,
+      # and its verdict is the cap's, 142, published like any other rather
+      # than a fresh budget for dune (Codex review round 2 on PR #832).
+      printf 'test-run: the cap expired while the batch'"'"'s backends resolved; dune was not started\n' |
+        tee -a "$run_dir/log" >&2
+      publish_run || { rm -rf "$run_dir"; die "cannot publish $run_dir"; }
+      finish_run 142
+      trap - INT TERM HUP
+      digest "$run_dir"
+      exit "$digest_rc"
+    fi
     plan_slot_kind
     [ -z "$slot_announce" ] || printf 'test-run: %s\n' "$slot_announce" >&2
     publish_run || { rm -rf "$run_dir"; die "cannot publish $run_dir"; }
@@ -2055,6 +2076,8 @@ case $sub in
       printf '%s\n' "$slot_fw" >"$run_dir/slot" 2>/dev/null || :
       sup_cmd=("$slot_fw" execution slot --wait "$slot_wait" "--$slot_kind" -- "$DUNE" "$@")
     fi
+    # Where the launcher's own prelude in the log ends (dune_refusal).
+    wc -c <"$run_dir/log" | tr -d ' ' >"$run_dir/prelude" 2>/dev/null || :
     OCANNL_TOOL_TESTRUN_BG=1 OCANNL_TOOL_TESTRUN_RD=$run_dir OCANNL_TOOL_TESTRUN_OWN=$run_dir \
       perl -e "$supervisor_perl" -- "$cap" "${sup_cmd[@]}" </dev/null >>"$run_dir/log" 2>&1 &
     sup=$!
