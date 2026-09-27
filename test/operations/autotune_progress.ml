@@ -146,9 +146,14 @@ let () =
       && Option.equal Int.equal (int_field f "timed") (Some r.candidates_timed));
   let candidates s = List.filter s ~f:(fun (ev, _) -> String.equal ev "candidate") in
   (* With a 0 s interval every attempt prints. *)
+  (* A search that died counts the fatal attempt, which gets no line: its [search_done] is written
+     from inside it. *)
   p_all "each search printed one candidate line per attempt it reports" searches ~f:(fun s ->
       let _, done_fields = List.last_exn s in
-      Option.equal Int.equal (int_field done_fields "attempts") (Some (List.length (candidates s))));
+      let died = Option.equal String.equal (field done_fields "outcome") (Some "search-died") in
+      Option.equal Int.equal
+        (int_field done_fields "attempts")
+        (Some (List.length (candidates s) + if died then 1 else 0)));
   p_all "each search's candidate compile and timing seconds fit within its elapsed time" dones
     ~f:(fun (_, f) ->
       match (float_field f "compile_s", float_field f "timing_s", float_field f "elapsed_s") with

@@ -4331,9 +4331,11 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                      (progress_costs ()) (progress_best ())))
           in
           let try_spec spec =
-            let result = try_spec spec in
+            (* Counted before the attempt: a fatal candidate emits [search_done] from inside it and
+               raises, and that closing record must count the attempt its time is in. *)
             Int.incr progress_attempts;
             Int.incr progress_tried;
+            let result = try_spec spec in
             if progress_due () then progress_line "candidate" (progress_where ());
             result
           in

@@ -943,7 +943,9 @@ val no_search_report : timing:timing_mode -> report
 
     [elapsed_s] is seconds since that search (or arm) started; [compile_s] and [timing_s] are the
     parts of it spent in candidate compiles and in candidate timing windows, [attempts] the
-    candidates attempted so far (bound-pruned, declined, deduplicated and timed alike). *)
+    candidates attempted so far (bound-pruned, declined, deduplicated and timed alike), counting one
+    whose fatal failure ended the search -- that attempt gets no [candidate] line, since the
+    search's [search_done] is written from inside it. *)
 
 val progress_enabled : unit -> bool
 (** Whether config [autotune_progress] turns the progress lines on. *)
