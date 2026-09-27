@@ -104,8 +104,7 @@ let phase2 () =
   Utils.settings.fixed_state_for_init <- Some 42;
   Tensor.unsafe_reinitialize ();
   (* Matmul-plus-relu: the matmul intermediate is policy-virtual (it inlines into the pointwise
-     consumer), so the decision surface reports at least one [`Materialize] flip candidate (as in
-     inline_flip_tune.ml). *)
+     consumer), so the decision surface reports at least one [`Materialize] flip candidate. *)
   let n = 8 in
   let mav =
     Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:7 ~offset:0. ~stride:0.5)

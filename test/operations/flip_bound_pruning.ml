@@ -9,8 +9,9 @@
    the number of [`Inline] candidates the surface reports, and the shipped routine still computes
    correct values (it is the plain A/B winner or an inline refinement of it).
 
-   The control for "the same flips are measured when pruning is off" is the existing
-   inline_flip_tune test, which runs the same driver without the gate. *)
+   The control for "the flips are measured when pruning is off" is the existing inline_flip_tune
+   test, which runs the same driver without the gate (on a pointwise intermediate, to keep it off
+   the matmul sketch family). *)
 
 open Base
 open Ocannl
