@@ -32,6 +32,18 @@
 #   placement arms) under autotune_timing=<mode> on a COLD schedule cache (OUT/cache-<mode>, wiped
 #   first), with BENCH_TIMING_TRACE=1 splitting the wall between candidate timing and the rest.
 #   compile_s in the result line is the whole search's wall.
+#   Cold also means the backend's own compiled-code caches, which outlive the process: in
+#   gh-ocannl-834's CUDA pair the isolated session ran first and the driver's PTX ComputeCache
+#   served the queued one warm (406 s vs 64 s of compile and bookkeeping outside timing). On cuda
+#   each session therefore gets its own empty CUDA_CACHE_PATH=OUT/nvcache-<mode>, recorded in
+#   driver.log (with its final size) and removed after the step -- on every exit path -- so OUT
+#   archives only results; it overrides any the caller exported. Other backends keep caches this
+#   script cannot redirect (HIP's comgr cache, macOS's Metal shader cache), and a fresh OUT does not
+#   reset them: the first session ever run warms every later one, the next invocation's included.
+#   There, bring every measured session to the same cache state -- a discarded warm-up session first
+#   (or the cache cleared by hand before each session) -- then run the modes ABBA (session-isolated
+#   session-queued in one invocation, the reverse in a second on a fresh OUT) and compare each
+#   mode's pair, so order effects cancel.
 set -u
 # Hermetic against ambient configuration, as gh612_cells.sh is: every treatment is pinned on the
 # command line, so an exported OCANNL_* or BENCH_* could only contaminate every cell consistently.
@@ -60,7 +72,9 @@ out=$(cd "$out" && pwd -P) && case $out in /?*) ;; *) false ;; esac ||
 # the whole log is replayed to the caller's stdout on exit. Follow a live run with tail -f.
 exec 3>&1
 exec >>"$out/driver.log" 2>&1 || exit 2
-trap 'cat "$out/driver.log" >&3' EXIT
+# A session's CUDA driver cache (below) is scratch: whatever path ends the run -- an interrupt, a
+# survivor of the cap, a usage error mid-list -- leaves none of it in OUT.
+trap 'rm -rf "$out"/nvcache-*; cat "$out/driver.log" >&3' EXIT
 root=$(cd "$(dirname "$0")/.." && pwd -P)
 # The runners read the nearest ocannl_config; benchmarks/ has the suite's own.
 cd "$root/benchmarks" || exit 2
@@ -290,7 +304,16 @@ for s in "$@"; do
     need_build "$s"
     mode=${s#session-}
     rm -rf "$out/cache-$mode"
-    if step "$s" env BENCH_FIXTURE="$fixture" BENCH_TUNE=1 BENCH_TIMING_TRACE=1 \
+    # A cold driver-side code cache per session (see the header): only CUDA's is redirectable.
+    # The ${a[@]+...} form keeps an empty array legal under set -u on macOS's bash 3.2.
+    nvcache=()
+    if [ "$backend" = cuda ]; then
+      rm -rf "$out/nvcache-$mode" && mkdir "$out/nvcache-$mode" || exit 2
+      nvcache=(CUDA_CACHE_PATH="$out/nvcache-$mode")
+      echo "env CUDA_CACHE_PATH=$out/nvcache-$mode (empty, for $s)"
+    fi
+    if step "$s" env ${nvcache[@]+"${nvcache[@]}"} BENCH_FIXTURE="$fixture" BENCH_TUNE=1 \
+      BENCH_TIMING_TRACE=1 \
       ../_build/default/benchmarks/runners/ocannl/bench_gpt.exe --ocannl_backend="$backend" \
       --ocannl_autotune_timing="$mode" --ocannl_autotune_cache_dir="$out/cache-$mode" \
       --ocannl_autotune_log=false --ocannl_log_config_sourcing=true; then
@@ -317,6 +340,11 @@ for s in "$@"; do
           echo "== step $s: capped outside its search (before it began or after it ended); not a lower bound"
         status=1
       fi
+    fi
+    # The session's driver cache is scratch, not evidence: record its size, then drop it.
+    if [ "$backend" = cuda ]; then
+      echo "nvcache-$mode $(du -sk "$out/nvcache-$mode" | cut -f1) KiB after $s; removed"
+      rm -rf "$out/nvcache-$mode"
     fi
     # The result line (compile_s is the search wall) and the trace's last word: the summary on a
     # completed run, the running totals of the last timing call on a capped one.
