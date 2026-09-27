@@ -47,8 +47,9 @@ a converging calibration still reaches its affine target depth: true
 a 64 ms candidate's depth-2 confirmation stops at three minima: true
 a slow candidate's superlinear first pair fits within the wall-relative tolerance: true
 a resolved calibration never settles on a batch whose launch work exceeds the target: true
+a refitted crossing never settles past the batches it was checked against: true
 a kernel with a queue threshold below its provisional depth is rescued, timed within the target: true
-a refusal no rescue could lift carries its own reason, not contention: true
+a refusal no rescue could lift carries its own reason, apart from the contention verdict: true
 
 == autotune_timing spelling ==
 "queued" selects the queued objective: true

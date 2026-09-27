@@ -823,6 +823,13 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
                     ~probe_ms:upper_ms
                 in
                 if confirmed_depth = depth then (calibration_dispatches, depth, measured.ms)
+                else if Float.is_finite confirmed_wall_ms && confirmed_depth > upper_depth then
+                  (* A resolved fit can project past the upper batch: a fixed-dominated pair targets
+                     a batch of marginal work, far deeper than either point (Codex P1, round 2 on PR
+                     #847). That depth is unmeasured and beyond every measured one, where a queue
+                     cost may jump, and nothing would check it -- neither the wall budget nor the
+                     fallback. Stay with the measured upper batch instead. *)
+                  (calibration_dispatches, upper_depth, upper_ms)
                 else if Float.is_finite confirmed_wall_ms then
                   (calibration_dispatches, confirmed_depth, confirmed_wall_ms)
                 else if Float.(upper_ms >= queued_batch_ms && upper_ms >= measured.ms) then
@@ -986,9 +993,11 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
                its provisional depth is timed there rather than refused on every search, since its
                refusal made it permanently uncacheable. A probe that also reads over the target
                leaves the call refused, not ranked, not cached, retried by a later search -- under a
-               reason of its own ([unbatched]), so a report does not read it as a loaded host. Any
-               settle at depth 1 counts, not only the unresolved one: a resolved fit that puts the
-               crossing at one launch contradicts the singles just the same. *)
+               reason of its own ([unbatched]): not a diagnosis, since host load stalling every
+               batched probe reads the same, but what the calibration measured, which a threshold
+               repeats on every rerun and a stall does not. Any settle at depth 1 counts, not only
+               the unresolved one: a resolved fit that puts the crossing at one launch contradicts
+               the singles just the same. *)
             let calibration_dispatches, depth, estimated_batch_wall_ms =
               if depth = 1 && provisional_depth > 1 then
                 match rescue_depth ~observed:!observed with
@@ -4029,8 +4038,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               !on_candidate_timed b.routine.Context.name ~timed_so_far:!n_timed);
         let n_timings_contended = ref (if !baseline_contended then 1 else 0) in
         (* The subset of those windows refused because queued calibration measured no batch within
-           its target (gh-ocannl-1098), so a persistently refused queue-threshold kernel does not
-           read as a loaded host. *)
+           its target (gh-ocannl-1098). Not a diagnosis (a stall on every probe reads the same), but
+           a count that persists across idle reruns is a queue threshold's signature. *)
         let n_timings_unbatched = ref (if !baseline_unbatched then 1 else 0) in
         (* [n_timings_contended] counts WINDOWS, which is the right shape for "was this search's
            measurement set complete?" but the wrong one for any claim about WHICH candidate went

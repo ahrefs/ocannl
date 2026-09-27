@@ -718,7 +718,12 @@ files.
   target there, so a genuine queue threshold below the provisional depth is timed and cacheable),
   and is REFUSED only if that also reads over — as `unbatched`, not `contended`, counted in
   `report.timings_unbatched` (a subset of `timings_contended`, so every cache and completeness
-  gate is unchanged), because its depth-1 reading would be the isolated objective. Do not replace
+  gate is unchanged), because its depth-1 reading would be the isolated objective. `unbatched`
+  names what was measured, not a cause: host load stalling every batched probe reads the same, so
+  consumers (the benchmark JSON's per-arm `timings_unbatched`, `gh834_cells.sh`) keep treating it
+  as an incomplete measurement; one that repeats on an idle rerun is the threshold. A sampled
+  shallower crossing is refitted against the batch above it and never settles past that batch: a
+  fixed-dominated refit projects far deeper, unmeasured, where a queue cost may jump. Do not replace
   this with a bound
   extrapolated through a per-launch cost (least `wall / depth`): the readings that leave the fits
   unresolved cannot tell a host stall from a cost that jumps past a queue threshold, and two review

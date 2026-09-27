@@ -612,8 +612,11 @@ type timing_result = {
           single launch owed it one (gh-ocannl-1096), even at the rescue probe below its shallowest
           over-target batch (gh-ocannl-1098): only an isolated depth-1 reading was left, and the
           readings cannot tell a stall from a queue threshold, so the reading is refused exactly as
-          a contended one is -- but under its own reason, so a report does not present it as host
-          load. A refusal like [contended]: {!admitted_timing_ms} admits neither. *)
+          a contended one is. The flag names what calibration MEASURED, not a diagnosis: host load
+          stalling every batched probe reads the same. It is kept apart from [contended] because the
+          two call for different follow-ups -- a no-batch refusal that persists across idle reruns
+          is a threshold's signature, which a count mixed into the contention verdict hides. A
+          refusal like [contended]: {!admitted_timing_ms} admits neither. *)
   samples : int;
       (** The number of samples behind [ms] and [contended], for diagnostics and exact dispatch
           accounting. *)
@@ -665,9 +668,11 @@ type report = {
           [timings_unbatched] windows. *)
   timings_unbatched : int;
       (** Of [timings_contended], the windows refused because queued calibration measured no batch
-          within its target ({!field-unbatched}, gh-ocannl-1098) rather than for host contention or
-          a degenerate clock. A kernel with a queue threshold the rescue probe could not get under
-          is refused on every search; this count is what tells that apart from a loaded host. *)
+          within its target ({!field-unbatched}, gh-ocannl-1098) rather than for dispersion or a
+          degenerate clock. Not a diagnosis -- a stall on every batched probe reads the same as a
+          queue threshold the rescue probe could not get under -- but a count that persists across
+          idle reruns is the threshold's signature, which the contention count alone hides. Every
+          refusal still makes the measurement set incomplete. *)
   candidates_contended : int;
       (** Distinct candidate digests whose timing window was refused and which no later equivalent
           seed managed to time — the population [timings_contended] over-counts (Codex P2 on PR

@@ -593,6 +593,23 @@ let () =
     device "16 ms a launch, its depth-2 probe reading low" ~launch_ms:16. (fun d ->
         if d = 2 then 15. else dip_clean d)
   in
+  (* Codex P1, round 2 on PR #847: a crossing sampled below two over-target batches is refitted
+     against the upper one, and a fixed-dominated refit projects a batch of marginal work far past
+     both. Singles at 12 ms, a low depth-2 probe (11 ms) and a pair (4, 40) / (8, 48) whose fixed
+     term fills the target: the crossing samples depth 5 at 47 ms, and the refit (5, 47) / (8, 48)
+     wants depth 30 -- past which this device's queue cost jumps. *)
+  let jump_clean d =
+    match d with
+    | 1 -> 12.
+    | 2 -> 11.
+    | 4 -> 40.
+    | 5 -> 47.
+    | d when d <= 8 -> 48.
+    | d -> 400. *. Float.of_int d
+  in
+  let jump =
+    device "fixed-dominated, its queue cost jumping past depth 8" ~launch_ms:12. jump_clean
+  in
   let converging =
     device "fast, clean" ~fixed_ms:fast_fixed_ms ~launch_ms:fast_launch_ms (fun d ->
         fast_fixed_ms +. fast_launch_work d)
@@ -614,6 +631,7 @@ let () =
       ("64 ms a launch", linear);
       ("61 ms a launch, superlinear", superlinear);
       ("16 ms a launch, low depth-2 probe", dip);
+      ("fixed-dominated, jumping past depth 8", jump);
       ("fast, clean", converging);
     ]
   in
@@ -666,13 +684,21 @@ let () =
         Stdio.eprintf "  %s: depth %d carries %g ms of launch work\n%!" what c.settled_depth
           (launch_work c.settled_depth);
       ok);
+  (* The escaped depth is unmeasured and beyond every depth the calibration measured: neither the
+     wall budget nor the fallback would ever check it. *)
+  p "a refitted crossing never settles past the batches it was checked against"
+    (let deepest = List.fold jump.probes ~init:1 ~f:(fun m (d, _) -> Int.max m d) in
+     if jump.settled_depth > deepest then
+       Stdio.eprintf "  fixed-dominated: settled %d past the deepest probe %d\n%!"
+         jump.settled_depth deepest;
+     jump.settled_depth <= deepest && jump.settled_depth > 1);
   p
     "a kernel with a queue threshold below its provisional depth is rescued, timed within the \
      target"
     (threshold.settled_depth > 1
     && Float.(threshold_clean threshold.settled_depth <= Autotune.queued_batch_ms)
     && Option.is_some (Autotune.admitted_timing_ms threshold.reading));
-  p "a refusal no rescue could lift carries its own reason, not contention"
+  p "a refusal no rescue could lift carries its own reason, apart from the contention verdict"
     (stalled.reading.unbatched && not stalled.reading.contended)
 
 (* {1 The setting's spelling} *)

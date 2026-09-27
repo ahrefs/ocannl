@@ -59,9 +59,10 @@ let string s =
     their samples (gh-ocannl-855). A nonzero count means the finite winner, if any, came from an
     incomplete candidate set and was deliberately not written to the schedule cache.
     [timings_unbatched] is the part of that count refused for a different reason (gh-ocannl-1098):
-    queued calibration measured no batch within its target, even at its rescue probe -- a property
-    of the candidate on this device (a queue threshold), not host load, so a rerun on an idle host
-    does not clear it.
+    queued calibration measured no batch within its target, even at its rescue probe. That is what
+    was measured, not a diagnosis: a queue threshold and host load stalling every batched probe read
+    the same, and either leaves the measurement set incomplete. A count that persists across idle
+    reruns is the threshold's signature.
 
     [tensorized] and [tensorization] are the two halves of the honesty of a tensorized timing
     (gh-ocannl-626). [tensorized] says the crowned SCHEDULE carries a [Tensorize]; [tensorization]

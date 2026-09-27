@@ -232,8 +232,8 @@ let () =
       | _ -> false);
   p "a contention-affected arm preserves its refusal count"
     (Yojson.Safe.equal (member "timings_contended" (arm "D")) (`Int 2));
-  (* gh-ocannl-1098: of those, the no-batch refusals a rerun cannot clear, so a reader can tell a
-     queue-threshold candidate from host load. *)
+  (* gh-ocannl-1098: of those, the ones refused because calibration measured no batch within the
+     target, which a queue threshold repeats on every rerun and a stall does not. *)
   p "an arm's no-batch refusals reach the wire apart from its contention count"
     (Yojson.Safe.equal (member "timings_unbatched" (arm "D")) (`Int 1));
   p_all "an arm with no crowned candidate reports a null tensorization, not a label" [ "A"; "C" ]

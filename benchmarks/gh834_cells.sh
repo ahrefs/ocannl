@@ -220,18 +220,20 @@ require_complete_session() {
     echo "== step $1: INCOMPLETE SESSION: the trace summary is missing raised timing calls"
     status=1
   fi
-  # Per arm, [timings_contended] counts every refused window, [timings_unbatched] the ones refused
-  # because queued calibration measured no batch within its target (gh-ocannl-1098): a property of
-  # the candidate on this device, which a rerun on an idle host does not clear, so it is reported
-  # and does not fail the session. The two fields are adjacent on each arm.
+  # Per arm, [timings_contended] counts every refused window and [timings_unbatched] the ones refused
+  # because queued calibration measured no batch within its target (gh-ocannl-1098). Either leaves
+  # the session incomplete. They are named apart because the readings behind a no-batch refusal
+  # cannot tell a queue threshold from a stall on every probe: one that repeats on an idle rerun is
+  # the threshold. The two fields are adjacent on each arm.
   refusals=$(printf '%s' "$line" | grep -o '"timings_contended":[0-9]*,"timings_unbatched":[0-9]*')
   if printf '%s\n' "$refusals" | awk -F'[:,]' 'NF && $2 > $4 { f = 1 } END { exit !f }'; then
     echo "== step $1: CONTENDED SESSION: timing windows were refused for host contention"
     status=1
   fi
   if printf '%s\n' "$refusals" | awk -F'[:,]' 'NF && $4 > 0 { f = 1 } END { exit !f }'; then
-    echo "== step $1: UNBATCHED: a candidate measured no queued batch within the target (not host" \
-      "contention; not a session failure)"
+    echo "== step $1: UNBATCHED SESSION: queued calibration measured no batch within the target" \
+      "(a queue threshold if it repeats on an idle rerun, else a stall)"
+    status=1
   fi
 }
 
