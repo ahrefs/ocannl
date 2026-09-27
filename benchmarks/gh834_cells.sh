@@ -88,7 +88,23 @@ capped() {
     my ($got, $st);
     do { $got = waitpid($pid, 0); $st = $? } until $got == $pid || ($got == -1 && !$!{EINTR});
     alarm 0;
-    my $alive = sub { waitpid($pid, POSIX::WNOHANG()); kill 0, -$pid };
+    # A member counts only if it can still run: a zombie (an orphan a slow PID 1 has not reaped)
+    # answers kill 0 but consumes nothing and cannot be killed, and must not read as a survivor.
+    # Unreadable ps output counts as alive, the conservative side.
+    my $alive = sub {
+      waitpid($pid, POSIX::WNOHANG());
+      return 0 unless kill 0, -$pid;
+      open(my $ps, "-|", "ps", "-A", "-o", "pgid=,stat=") or return 1;
+      my ($live, $rows) = (0, 0);
+      while (<$ps>) {
+        my ($g, $st) = split;
+        next unless defined $st;
+        $rows++;
+        $live = 1 if $g == $pid && $st !~ /^Z/;
+      }
+      close $ps;
+      return $rows ? $live : 1;
+    };
     if ($alive->()) {
       kill "TERM", -$pid;
       for (1 .. 10) { last unless $alive->(); sleep 1 }
