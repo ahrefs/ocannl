@@ -7909,9 +7909,18 @@ let post_virtualization_pipeline plc traced_store ~input_scopes ~static_indices 
    the setter statement itself; the loops above a capture point are its [enclosing] context, a guard
    above it makes it [guarded], a scan [in_scan]. Each capture then passes the same
    {!capture_rejection} a store would, so a nest the store refuses is refused here with the store's
-   code. Newest first, like the table. *)
-let rederive_computations ~static_indices (self : Tn.t) (virtualized : t) :
+   code. A packed-uniform producer's captures are taken from [raw], the routine's code before the
+   walk, as the store takes them. Newest first, like the table. *)
+let rederive_computations ~static_indices ?raw (self : Tn.t) (virtualized : t) :
     ((Indexing.axis_index array option * t) list, string) Result.t =
+  (* The store's one exception, by its own predicate: a packed-uniform producer is stored RAW (see
+     [proc_contains_set_from_vec]) — the lane-extract builder needs its argument as the plain
+     counter read the walk would have rewritten — so its computations come from the raw code. *)
+  let virtualized =
+    match raw with
+    | Some raw when proc_contains_set_from_vec self virtualized -> raw
+    | _ -> virtualized
+  in
   let rec writes_self (c : t) =
     match c with
     | Seq (a, b) -> writes_self a || writes_self b
@@ -8060,8 +8069,14 @@ let instantiate_at_synthetic_read ~(placements : Tn.Placements.t) ~static_indice
    this module, so it registers the pricer at initialization; until then (or in a program linking no
    cost model) the traced proxy prices every candidate. *)
 let recompute_pricer :
-    (optimize_ctx -> static_indices:Indexing.static_symbol list -> t -> Tnode.t -> int option) ref =
-  ref (fun _ctx ~static_indices:_ _virtualized _tn -> None)
+    (optimize_ctx ->
+    static_indices:Indexing.static_symbol list ->
+    raw:t ->
+    t ->
+    Tnode.t ->
+    int option)
+    ref =
+  ref (fun _ctx ~static_indices:_ ~raw:_ _virtualized _tn -> None)
 
 let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : optimized =
   let static_indices = an.an_static_indices in
@@ -8104,7 +8119,7 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
      ([default_to_most_local]) has not yet rewritten the cap provenances. *)
   let flip_candidates =
     let plc = input_ctx.placements in
-    let price = !recompute_pricer input_ctx ~static_indices virtual_llc_result in
+    let price = !recompute_pricer input_ctx ~static_indices ~raw:an.an_llc virtual_llc_result in
     Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:traced acc ->
         let one_hot = traced.prefers_virtual_one_hot && not traced.has_non_one_hot_setter in
         (* gh-ocannl-616: a node an earlier routine left virtual and this specialization

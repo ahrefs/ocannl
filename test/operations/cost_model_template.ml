@@ -443,6 +443,49 @@ let () =
   p "capped: a node the code never sets has no producer cost"
     (Option.is_none (CM.producer_cost ~self:a o.LL.llc))
 
+(* The store's one raw exception, reproduced by the re-derivation (review round 1): a packed-uniform
+   producer is stored RAW, because the lane-extract builder needs its argument as the plain counter
+   read — which the walk rewrites into the counter's scope when the counter is virtual at that point
+   and materialized later. Re-deriving from the virtualized setter alone finds the rewritten
+   argument and refuses (140); given the routine's raw code, it captures the setter as the store
+   would. *)
+let () =
+  Stdio.printf "== a packed-uniform producer re-derived from the raw code ==\n";
+  let v = mk "Vr" and u = mk "Ur" and w = mk "Wr" in
+  let i = sym () in
+  let setter arg =
+    loop_n i 1
+      (LL.Set_from_vec
+         {
+           tn = v;
+           idcs = [| aff [ (4, i) ] 0 |];
+           length = 4;
+           vec_unop = Ops.Uint4x32_to_prec_uniform;
+           arg = (arg, single);
+           debug = "";
+         })
+  in
+  let raw = setter (get u [| iter i |]) in
+  let virtualized =
+    let id = LL.get_scope u in
+    setter
+      (LL.Local_scope
+         {
+           id;
+           body = LL.Set_local (id, get w [| iter i |]);
+           orig_indices = [| iter i |];
+           mint = LL.Inlined_computation;
+         })
+  in
+  let without_raw = CM.producer_cost ~self:v virtualized in
+  let with_raw = CM.producer_cost ~raw ~self:v virtualized in
+  show_opt "virtualized setter only" without_raw;
+  show_opt "raw setter, as the store keeps it" with_raw;
+  p "packed-uniform: the rewritten argument cannot serve the lane-extract form"
+    (Option.is_none without_raw);
+  p "packed-uniform: from the raw code it prices as the lane-extract form the store's read gives"
+    (same_cost with_raw (CM.instantiation_cost ~self:v [ (Some [| aff [ (4, i) ] 0 |], raw) ]))
+
 (* An [`Inline] flip the store itself refuses: a scalar reduction S[0] = sum_i A[i] over i < 20 (the
    cap materializes it). Captured at its setter, the read of A escapes the reduction loop the
    capture leaves outside, so [virtual_llc] refuses the node however it is preferred — and the

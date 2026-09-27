@@ -56,6 +56,11 @@ capped: preferred inline, R is inlined at the reader: true
   R inlined, emitted read                        flops=20 (exact) bytes=80 (exact)
 capped: the Inline flip is modeled and prices the emitted read's ops (multiplicity 1): true
 capped: a node the code never sets has no producer cost: true
+== a packed-uniform producer re-derived from the raw code ==
+  virtualized setter only                        refused
+  raw setter, as the store keeps it              flops=3 (exact) bytes=16 (bound)
+packed-uniform: the rewritten argument cannot serve the lane-extract form: true
+packed-uniform: from the raw code it prices as the lane-extract form the store's read gives: true
 == an Inline flip the store refuses ==
   re-derivation refused: 9:sibling-escaping-read-index
 refused flip: offered, and priced by the proxy rather than modeled: true

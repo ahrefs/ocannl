@@ -954,14 +954,20 @@ type flip_candidate = {
     reproduces the materialized placement. *)
 
 val recompute_pricer :
-  (optimize_ctx -> static_indices:Indexing.static_symbol list -> t -> Tnode.t -> int option) ref
+  (optimize_ctx ->
+  static_indices:Indexing.static_symbol list ->
+  raw:t ->
+  t ->
+  Tnode.t ->
+  int option)
+  ref
 (** gh-ocannl-637, gh-ocannl-1011: the seam through which the cost model prices {!flip_candidate}s'
-    alternatives — given the lineage, the routine's static indices and the routine's VIRTUALIZED
-    code (the walk's output, before {!post_virtualization_pipeline}), the exact op count of ONE read
-    of a candidate ([None] when the model's count is only a bound, or the node has no computation
-    the inliner can replay). Every reading prices the same instantiation — a node's stored
-    computations, or for a node a heuristic cap materialized the ones {!rederive_computations}
-    recovers from its setters — replayed by the inliner at a synthetic read
+    alternatives — given the lineage, the routine's static indices, its code before the walk ([raw])
+    and its VIRTUALIZED code (the walk's output, before {!post_virtualization_pipeline}), the exact
+    op count of ONE read of a candidate ([None] when the model's count is only a bound, or the node
+    has no computation the inliner can replay). Every reading prices the same instantiation — a
+    node's stored computations, or for a node a heuristic cap materialized the ones
+    {!rederive_computations} recovers from its setters — replayed by the inliner at a synthetic read
     ({!instantiate_at_synthetic_read}), so the guards it emits, its binding choices and the
     pipeline's rewrites are in the priced code. Exact for the most general in-bounds reader; what a
     particular reader folds away (a constant substituted for an index, a sub-image collapsing a
@@ -988,6 +994,7 @@ val post_virtualization_pipeline :
 
 val rederive_computations :
   static_indices:Indexing.static_symbol list ->
+  ?raw:t ->
   Tnode.t ->
   t ->
   ((Indexing.axis_index array option * t) list, string) Result.t
@@ -996,8 +1003,10 @@ val rederive_computations :
     stored — re-derived from the virtualized code holding its setters: captured where the walk
     captures (the outermost loop its write indices mention, with a shared loop's siblings, or the
     setter statement itself) and put through the store's own refusals, whose code [Error] carries
-    ([12:no-setter] when the code sets the node nowhere). Newest first, like
-    {!optimize_ctx.computations}. *)
+    ([12:no-setter] when the code sets the node nowhere). A packed-uniform producer ([Set_from_vec]
+    setter) is captured from [raw] — the routine's code before the walk — as the store keeps it raw
+    for the lane-extract form; without [raw] it is captured from the virtualized code like any
+    other. Newest first, like {!optimize_ctx.computations}. *)
 
 val instantiate_at_synthetic_read :
   placements:Tnode.Placements.t ->

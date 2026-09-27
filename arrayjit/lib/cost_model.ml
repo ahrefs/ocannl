@@ -590,17 +590,17 @@ let instantiation_cost ?(static_indices = []) ?(placements = Tn.Placements.creat
   | Error _ -> None
   | Ok code -> Some (cost_of_self ~self (analyze code))
 
-let producer_cost ?static_indices ?placements ~(self : Tn.t) (code : Low_level.t) : recompute option
-    =
+let producer_cost ?static_indices ?placements ?raw ~(self : Tn.t) (code : Low_level.t) :
+    recompute option =
   match
     Low_level.rederive_computations
       ~static_indices:(Option.value static_indices ~default:[])
-      self code
+      ?raw self code
   with
   | Error _ -> None
   | Ok computations -> instantiation_cost ?static_indices ?placements ~self computations
 
-let recompute_cost ?(static_indices = []) ?virtualized (ctx : Low_level.optimize_ctx) :
+let recompute_cost ?(static_indices = []) ?raw ?virtualized (ctx : Low_level.optimize_ctx) :
     Tn.t -> recompute option =
   let memo = Hashtbl.create (module Tn) in
   fun tn ->
@@ -610,11 +610,11 @@ let recompute_cost ?(static_indices = []) ?virtualized (ctx : Low_level.optimize
             instantiation_cost ~static_indices ~placements:ctx.placements ~self:tn computations
         | None ->
             Option.bind virtualized ~f:(fun code ->
-                producer_cost ~static_indices ~placements:ctx.placements ~self:tn code))
+                producer_cost ~static_indices ~placements:ctx.placements ?raw ~self:tn code))
 
-let modeled_recompute_flops (ctx : Low_level.optimize_ctx) ~static_indices
+let modeled_recompute_flops (ctx : Low_level.optimize_ctx) ~static_indices ~raw
     (virtualized : Low_level.t) : Tn.t -> int option =
-  let price = recompute_cost ~static_indices ~virtualized ctx in
+  let price = recompute_cost ~static_indices ~raw ~virtualized ctx in
   fun tn ->
     (* The seam prices operations, so only the op count's exactness gates it: a guarded read's bytes
        are a bound (at most one arm's reads execute) while its op count can be exact. *)
