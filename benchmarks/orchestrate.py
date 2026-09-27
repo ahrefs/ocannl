@@ -3,7 +3,8 @@
 
 For each fixture in fixtures/, runs every (framework, backend, variant, precision) cell,
 collects the JSON result lines, enforces the loss-trajectory parity gate against the PyTorch
-CPU reference, and writes results/results.jsonl plus a markdown report.
+CPU reference, and writes results/results.jsonl plus a markdown report (BENCH_RESULTS_DIR
+moves results/ elsewhere).
 
 Scheduling (`default` / `materialized` / `tuned`) and storage precision (`f32` / `bf16` /
 `f16`) are INDEPENDENT axes of an OCANNL cell, and the matrix is their product
@@ -48,6 +49,22 @@ VENV_PY = bench_venv.venv_python(HERE)
 CELL_LOG_DIR = (
     Path(os.environ["BENCH_CELL_LOG_DIR"]) if os.environ.get("BENCH_CELL_LOG_DIR") else None
 )
+
+
+def results_dir(env):
+    """Where a sweep writes results.jsonl, report.md and its partial checkpoints.
+
+    BENCH_RESULTS_DIR names the directory; unset or empty, it is `results/` beside this file. A
+    relative value is taken against the directory the sweep was launched from, once, at import. The
+    point of the override is a sweep run in a throwaway checkout -- machine-verify's detached
+    worktree, which it removes on exit -- whose results must outlive that checkout without the
+    driver copying them out first (gh-ocannl-719).
+    """
+    value = env.get("BENCH_RESULTS_DIR")
+    return Path(value).resolve() if value else HERE / "results"
+
+
+RESULTS_DIR = results_dir(os.environ)
 PARITY_TOL = 2e-3
 # Per-cell wall-clock cap (gh-ocannl-760). tinygrad's parallel beam search deadlocks
 # intermittently — a candidate-compile worker dying between `imap_unordered` chunks leaves the
@@ -2218,14 +2235,14 @@ def main():
     # Cells left out of the sweep on purpose, by SKIP_CELLS or --skip-cell: reported beside the
     # failures, so an absent row says why it is absent.
     skipped = []
-    partial = HERE / "results" / "partial.jsonl"
+    partial = RESULTS_DIR / "partial.jsonl"
     partial.parent.mkdir(parents=True, exist_ok=True)
     partial.write_text("")  # fresh run
     # Failures stream too, beside the results (gh-ocannl-760 review). A sweep that is interrupted,
     # terminated or crashed before `report()` otherwise leaves an artifact in which the cell that
     # WEDGED is indistinguishable from one that never ran — losing the cap, the survivor and the
     # quarantine record, which for an unattended run is the whole finding.
-    partial_failures = HERE / "results" / "partial-failures.jsonl"
+    partial_failures = RESULTS_DIR / "partial-failures.jsonl"
     partial_failures.write_text("")
 
     # What OCANNL configuration the operator's shell was already carrying when the sweep started
@@ -2430,7 +2447,7 @@ def main():
     provenance_violations = provenance_check(results)
     tensorization_mismatches = tensorization_check(results)
     regime_mismatches = regime_check(results)
-    report(results, HERE / "results", unavailable, failures, ambient=ambient, skipped=skipped)
+    report(results, RESULTS_DIR, unavailable, failures, ambient=ambient, skipped=skipped)
     ok = True
     if unavailable:
         # Not a failure: these cells were requested but the workload cannot express them. Saying so

@@ -254,7 +254,10 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   the pool respawns them forever, and the search hangs rather than failing (gh-ocannl-675).
 - `orchestrate.py` — runs the matrix (dispatching the OCANNL executable on the fixture's
   `model`), enforces the parity gate, writes `results/results.jsonl` and
-  `results/report.md`. Flags: `--workloads mlp_small ...`, `--tuned`, `--materialized`,
+  `results/report.md` (`BENCH_RESULTS_DIR=<dir>` writes them, and the `partial*.jsonl`
+  checkpoints, there instead -- for a sweep in a checkout that will not outlive it, such as
+  `tools/machine-verify.sh`'s worktree; the OCANNL cells' `autotune_cache/` moves with
+  `OCANNL_AUTOTUNE_CACHE_DIR`). Flags: `--workloads mlp_small ...`, `--tuned`, `--materialized`,
   `--precision bf16 f16 f16-static f16-gatedN`, `--profile exact approximate` (the numerics
   regimes to run the matrix in, see below), `--nojit` (tinygrad nojit), `--torch-compile`
   (pytorch compiled variant), `--beam N`
