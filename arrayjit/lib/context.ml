@@ -1034,3 +1034,9 @@ let decide_reading ctx (reading : Ir.Low_level.reading) tns =
   | `Materialize -> decide_materialized ctx tns
   | `Inline -> decide_inline ctx tns
   | `Footprint -> decide_footprint ctx tns
+
+let decide_readings ?(skip_empty = true) ctx (materialized, inline, footprint) =
+  List.fold
+    [ (`Materialize, materialized); (`Inline, inline); (`Footprint, footprint) ]
+    ~init:ctx
+    ~f:(fun c (r, tns) -> if skip_empty && List.is_empty tns then c else decide_reading c r tns)
