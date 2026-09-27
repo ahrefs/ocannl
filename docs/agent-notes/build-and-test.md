@@ -401,7 +401,8 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   `(not part of the golden)`; add an entry only for a number that is no quantity of the repository. Its first
   catch was the `FAILED: n checks` teardown total in `config_usage_scan_control`: a negative
   control whose failures ARE its golden ends through `Verdict.exit_negative_control`, which exits 1
-  without that line.
+  without that line. A one-digit count sits below the number boundary, so the scan also refuses the
+  teardown line itself, `FAILED: <n> check(s) did not hold.` as a whole line, whatever its count.
 
 ### Pinning the relationship
 
