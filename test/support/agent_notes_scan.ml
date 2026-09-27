@@ -1204,11 +1204,14 @@ let backticked cell =
     UNDERSCORES KEPT, which is the half that matters here. The headings a note would anchor are
     identifiers (`ident_blacklist`, `promote_prec`), and GitHub anchors those as `#ident_blacklist`;
     rewriting the underscore rejected the correct anchor and accepted the wrong one (Codex P2, round
-    1). Hyphens are likewise kept as themselves rather than re-derived. *)
+    1). Hyphens are likewise kept as themselves rather than re-derived, and so are non-ASCII bytes,
+    since GitHub keeps a heading's Unicode letters (its dropping of Unicode punctuation is not
+    modelled: a pointer at such a heading is refused, loudly). *)
 let slug heading =
   String.lowercase heading |> String.to_list
   |> List.filter_map ~f:(fun c ->
-      if Char.is_alphanum c || Char.equal c '_' || Char.equal c '-' then Some c
+      if Char.is_alphanum c || Char.equal c '_' || Char.equal c '-' || Char.to_int c >= 128 then
+        Some c
       else if Char.equal c ' ' then Some '-'
       else None)
   |> String.of_list
@@ -1643,133 +1646,52 @@ let check_citations ~file contents =
 (* Rule 7: the agent guide's anchored pointers resolve *)
 (* ------------------------------------------------------------------ *)
 
-type pointer = {
-  pointer_line : int;
-  path : string;  (** The path characters before the [#], as written. *)
-  anchor : string;  (** The slug after the [#], possibly empty. *)
-  canonical : bool;
-      (** Whether the pointer is written [<path>.md#<slug>] in one piece: a nonempty slug, and
-          nothing touching the path or the slug but what {!plain_before} and {!plain_after} allow.
-      *)
-}
-(** One pointer-shaped occurrence in the guide: a [#] after a path ending [.md], or a [#] followed
-    by slug characters whose path side something other than plain text touches. *)
+type pointer = { pointer_line : int; path : string; anchor : string }
+(** One [<path>.md#<anchor>] in the guide, as written: [path] includes the [.md]. *)
 
 let path_char c = Char.is_alphanum c || List.mem [ '_'; '-'; '.'; '/' ] c ~equal:Char.equal
-let anchor_char c = Char.is_alphanum c || Char.equal c '_' || Char.equal c '-'
 
-(** What may stand just outside a pointer -- before its path, or after its slug -- without changing
-    what renders around it: whitespace and ordinary prose punctuation, the brackets a link wraps it
-    in, and a backtick (see {!guide_pointers} for when a backtick glues instead). This is an
-    ALLOWLIST on purpose. Refusing named hazards one by one grew a case per review round -- an
-    escaped hash, a comment splitting the pointer, a Unicode slug, a hazard inside the extension, a
-    character reference in the path, then a closing tag (Codex P2, rounds 2-7 on
-    lukstafi/ocannl-staging#811) -- each a construct that renders a pointer the reader failed to
-    see. Anything not listed here that touches a pointer is refused, loudly, naming the one spelling
-    that is read, so the next construct lands on the refusal rather than in the gap. *)
-let plain_before c =
-  Char.is_whitespace c || List.mem [ '('; '['; '"'; '\''; ','; ';'; ':' ] c ~equal:Char.equal
+(** A slug character: what {!slug} keeps. Non-ASCII bytes count, since GitHub keeps a heading's
+    Unicode letters in its id (Codex P2, round 3 on lukstafi/ocannl-staging#811). *)
+let anchor_char c =
+  Char.is_alphanum c || Char.equal c '_' || Char.equal c '-' || Char.to_int c >= 128
 
-let plain_after c =
-  Char.is_whitespace c
-  || List.mem [ ')'; ']'; '"'; '\''; '.'; ','; ';'; ':'; '!'; '?' ] c ~equal:Char.equal
+(** Every [<path>.md#<anchor>] in [contents] as the SOURCE spells it, code spans and fenced blocks
+    included: a pointer set in backticks is still a pointer. The path is the maximal run of path
+    characters before [.md#] and the anchor the maximal run of slug characters after it; a
+    placeholder such as [<note>.md#<slug>] has an empty one and is not a pointer.
 
-(** The HTML character reference starting at [i], if there is one: its end, and the code point it
-    names when that is known here -- numeric references (decimal or hex, any case, any leading
-    zeros) and [&num;], the one named reference for [#]. Other named references are recognized, so
-    that the [#] inside [&#36;] is not read as a separator, but carry no value. *)
-let char_reference_at line i =
-  let n = String.length line in
-  if i >= n || not (Char.equal line.[i] '&') then None
-  else
-    match String.index_from line i ';' with
-    | None -> None
-    | Some semi -> (
-        let body = String.lowercase (String.sub line ~pos:(i + 1) ~len:(semi - i - 1)) in
-        let digits ~f d = (not (String.is_empty d)) && String.for_all d ~f in
-        match (String.chop_prefix body ~prefix:"#x", String.chop_prefix body ~prefix:"#") with
-        | Some hex, _ when digits ~f:Char.is_hex_digit hex ->
-            Some (semi + 1, Int.of_string_opt ("0x" ^ hex))
-        | _, Some dec when digits ~f:Char.is_digit dec -> Some (semi + 1, Int.of_string_opt dec)
-        | _ when digits ~f:Char.is_alphanum body && Char.is_alpha body.[0] ->
-            Some (semi + 1, if String.equal body "num" then Some 35 else None)
-        | _ -> None)
-
-(** Every pointer-shaped occurrence in [contents] that a reader sees, code spans and fenced blocks
-    included: a pointer set in backticks is still a pointer. Discovery is anchored on the [#], which
-    every rendered pointer contains, rather than on [.md], which markup can split. In CommonMark a
-    [#] reaches rendered text only as source text (escaped or not) or through a character reference
-    ({!char_reference_at}), and both are separators here, so discovery misses none. A [#] inside an
-    HTML comment renders nowhere and is not read -- neither checked nor counted toward the live
-    scan's floor (Codex P2, round 1 on lukstafi/ocannl-staging#811).
-
-    For each visible [#], the path is the maximal run of path characters before it and the slug the
-    maximal run of slug characters after it. When something other than plain text touches the path
-    from the left (or the [#], for an empty path) and a slug follows, the occurrence is a
-    non-canonical pointer whatever its path says -- an escaped [.md], markup inside the name, an
-    escaped [#]. Otherwise it is a pointer when its path ends [.md] after a nonempty name, and
-    canonical when its slug is nonempty and only plain text follows it. Anything else --
-    [staging#413], a placeholder such as [<note>.md#<slug>] -- is not a pointer. *)
+    The subject is the source text, not a rendering of it, because that is what the guide's reader
+    has: AGENTS.md reaches every session raw, imported through CLAUDE.md, and an agent follows a
+    pointer by grepping the note for the heading the source names. So the one rendering-only
+    distinction kept is the one that decides whether a pointer is there at all: a [.md#] inside an
+    HTML comment is commentary, and is neither checked nor counted toward the live scan's floor
+    (Codex P2, round 1 on lukstafi/ocannl-staging#811). Spellings that only a renderer would
+    assemble into a pointer -- an entity for the hash, markup or an escape inside the name -- are
+    not pointers to that reader and are not read. Rounds 2-8 of that review explored reading them:
+    each construct refused or decoded exposed the next one, in both directions (a false refusal of
+    [LOG_FILTER=#debug], a decoded entity inside a code span), so the machinery was removed in
+    favour of this contract. *)
 let guide_pointers contents =
   let comments = (inert_by_line contents).comment_ranges in
   List.concat_map (lines contents) ~f:(fun (lineno, line) ->
       let n = String.length line in
       let hidden = spans_at comments lineno in
-      let visible i = not (in_any_span hidden i) in
-      (* Separators: a literal [#], or a character reference that renders as one (Codex P2, round 5
-         on lukstafi/ocannl-staging#811). Each is [(start, stop, literal)]; a literal [#] inside any
-         reference belongs to the reference. *)
-      let references =
-        String.substr_index_all line ~may_overlap:false ~pattern:"&"
-        |> List.filter ~f:visible
-        |> List.filter_map ~f:(fun i ->
-            Option.map (char_reference_at line i) ~f:(fun (e, value) -> (i, e, value)))
-      in
-      (* Whether what stands at [j], just outside a path (going left) or a slug (going right),
-         touches it: a comment, any character reference -- its trailing [;] included, which is what
-         a path run stops at after [a&period;md] (Codex P2, round 6) -- or a byte not on the plain
-         list. A backtick run is plain unless the text continues through it ([a.m`d`#x] renders
-         [a.md#x]), which is how a code span can split a pointer. The line's edge is plain. *)
-      let in_reference j = List.exists references ~f:(fun (a, e, _) -> a <= j && j < e) in
-      let touched ~left j =
-        if j < 0 || j >= n then false
-        else if in_any_span hidden j || in_reference j then true
-        else if Char.equal line.[j] '`' then (
-          let k = ref j in
-          while !k >= 0 && !k < n && Char.equal line.[!k] '`' do
-            if left then Int.decr k else Int.incr k
-          done;
-          !k >= 0 && !k < n && if left then path_char line.[!k] else anchor_char line.[!k])
-        else not ((if left then plain_before else plain_after) line.[j])
-      in
-      let entities =
-        List.filter_map references ~f:(fun (i, e, value) ->
-            match value with Some 35 -> Some (i, e, false) | _ -> None)
-      in
-      let literals =
-        String.substr_index_all line ~may_overlap:false ~pattern:"#"
-        |> List.filter ~f:(fun i ->
-            visible i && not (List.exists references ~f:(fun (a, e, _) -> a <= i && i < e)))
-        |> List.map ~f:(fun i -> (i, i + 1, true))
-      in
-      List.sort (entities @ literals) ~compare:(fun (a, _, _) (b, _, _) -> Int.compare a b)
-      |> List.filter_map ~f:(fun (i, after, literal) ->
+      String.substr_index_all line ~may_overlap:false ~pattern:".md#"
+      |> List.filter ~f:(fun i -> not (in_any_span hidden i))
+      |> List.filter_map ~f:(fun i ->
           let start = ref i in
           while !start > 0 && path_char line.[!start - 1] do
             Int.decr start
           done;
-          let stop = ref after in
+          let stop = ref (i + 4) in
           while !stop < n && anchor_char line.[!stop] do
             Int.incr stop
           done;
-          let path = String.sub line ~pos:!start ~len:(i - !start) in
-          let anchor = String.sub line ~pos:after ~len:(!stop - after) in
-          let pointer canonical = Some { pointer_line = lineno; path; anchor; canonical } in
-          if ((not literal) || touched ~left:true (!start - 1)) && not (String.is_empty anchor) then
-            pointer false
-          else if String.is_suffix path ~suffix:".md" && String.length path > 3 then
-            pointer ((not (String.is_empty anchor)) && not (touched ~left:false !stop))
-          else None))
+          let path = String.sub line ~pos:!start ~len:(i + 3 - !start) in
+          let anchor = String.sub line ~pos:(i + 4) ~len:(!stop - i - 4) in
+          if String.equal path ".md" || String.is_empty anchor then None
+          else Some { pointer_line = lineno; path; anchor }))
 
 (** The notes file a guide pointer names, keyed as {!check_index} keys [files], or [None] when the
     path points outside the notes. A bare basename is a note, which is how the guide spells them; a
@@ -1799,14 +1721,6 @@ let check_guide ~guide_file ~guide_contents ~index_file ~index_contents
       in
       match pointer_target p.path with
       | None -> None
-      | Some _ when not p.canonical ->
-          report
-            (Printf.sprintf
-               "the pointer-shaped %s#%s is written so that what renders may differ from the \
-                source (an escape, comment, tag, entity, percent-escape or non-ASCII byte touching \
-                its path or slug, or no slug at all): write it in one piece as <note>.md#<slug>, \
-                the one spelling this scan reads -- the notes' headings are ASCII"
-               p.path p.anchor)
       | Some target -> (
           match List.Assoc.find known target ~equal:String.equal with
           | None ->

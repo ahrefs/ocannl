@@ -201,24 +201,11 @@ ok: guide -- two pointers on one line are each checked
 ok: guide -- a pointer inside an HTML comment is not read
 ok: guide -- a pointer at the second of two same-titled headings
 ok: guide -- a pointer at a third that does not exist
-ok: guide -- an escaped hash is refused
-ok: guide -- an escape inside the slug is refused
-ok: guide -- a comment splitting a pointer is refused
-ok: guide -- a Unicode slug is refused
-ok: guide -- a pointer with no slug is refused
-ok: guide -- a comment inside the extension is refused
-ok: guide -- an escaped extension is refused
-ok: guide -- an entity for the hash is refused
-ok: guide -- a named reference for the hash is refused
-ok: guide -- a hex reference for the hash is refused
-ok: guide -- a reference inside the path is refused
-ok: guide -- a reference right after the slug is refused
-ok: guide -- an empty tag inside the extension is refused
-ok: guide -- a code span inside the extension is refused
-ok: guide -- emphasis inside the extension is refused
-ok: guide -- a link glued to the slug is refused
+ok: guide -- spellings only a renderer assembles are not source pointers
+ok: guide -- a hash with no slug after it is not a pointer
 ok: guide -- pointers in ordinary surroundings are read
-ok: guide -- a reference to another character is not a separator
+ok: guide -- a Unicode slug naming a Unicode heading
+ok: guide -- a Unicode slug naming no heading
 ok: guide -- hashes that are no pointer
 ok: guide -- plain mentions of a note are not pointers
 ok: unnamed rule -- a finding the list does not name survives the report, last

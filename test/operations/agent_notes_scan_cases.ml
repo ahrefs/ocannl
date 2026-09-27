@@ -822,7 +822,12 @@ let index_cases =
 let guide_notes =
   [
     ("agent-notes/a.md", file "## The Widget seam\n\n- A fact about `Widget`.\n");
-    ("agent-notes/b.md", file "## The Gadget seam\n\n- A fact about `Gadget`.\n");
+    ( "agent-notes/b.md",
+      file
+        "## The Gadget seam\n\n\
+         - A fact about `Gadget`.\n\n\
+         ## \xe8\xae\xad\xe7\xbb\x83\n\n\
+         - A fact about training.\n" );
     ( "agent-notes/c.md",
       file
         "## The Widget seam\n\n\
@@ -878,56 +883,16 @@ let guide_cases =
     ( "a pointer at a third that does not exist",
       guide "- A rule; the mechanism: c.md#the-widget-seam-2.",
       [ "guide-anchors @ AGENTS.md:3" ] );
-    (* A spelling whose rendering could differ from its source is refused, not interpreted: an
-       escaped hash, a comment splitting the pointer, a Unicode slug -- valid target or not. *)
-    ( "an escaped hash is refused",
-      guide "- A rule; the mechanism: a.md\\#the-widget-seam.",
-      [ "guide-anchors @ AGENTS.md:3" ] );
-    ( "an escape inside the slug is refused",
-      guide "- A rule; the mechanism: a.md#the-widget\\-seam.",
-      [ "guide-anchors @ AGENTS.md:3" ] );
-    ( "a comment splitting a pointer is refused",
-      guide "- A rule; the mechanism: a.md<!-- old -->#the-widget-seam.",
-      [ "guide-anchors @ AGENTS.md:3" ] );
-    ( "a Unicode slug is refused",
-      guide "- A rule; the mechanism: a.md#\xe8\xae\xad\xe7\xbb\x83.",
-      [ "guide-anchors @ AGENTS.md:3" ] );
-    ( "a pointer with no slug is refused",
-      guide "- A rule; the mechanism: a.md#.",
-      [ "guide-anchors @ AGENTS.md:3" ] );
-    ( "a comment inside the extension is refused",
-      guide "- A rule; the mechanism: a.m<!-- old -->d#the-widget-seam.",
-      [ "guide-anchors @ AGENTS.md:3" ] );
-    ( "an escaped extension is refused",
-      guide "- A rule; the mechanism: a\\.md#the-widget-seam.",
-      [ "guide-anchors @ AGENTS.md:3" ] );
-    ( "an entity for the hash is refused",
-      guide "- A rule; the mechanism: a.md&#35;the-widget-seam.",
-      [ "guide-anchors @ AGENTS.md:3" ] );
-    ( "a named reference for the hash is refused",
-      guide "- A rule; the mechanism: a.md&num;the-widget-seam.",
-      [ "guide-anchors @ AGENTS.md:3" ] );
-    ( "a hex reference for the hash is refused",
-      guide "- A rule; the mechanism: a.md&#X0023;the-widget-seam.",
-      [ "guide-anchors @ AGENTS.md:3" ] );
-    ( "a reference inside the path is refused",
-      guide "- A rule; the mechanism: a&period;md#the-sprocket-seam.",
-      [ "guide-anchors @ AGENTS.md:3" ] );
-    ( "a reference right after the slug is refused",
-      guide "- A rule; the mechanism: a.md#the-widget&#45;seam.",
-      [ "guide-anchors @ AGENTS.md:3" ] );
-    ( "an empty tag inside the extension is refused",
-      guide "- A rule; the mechanism: a.m<span></span>d#the-sprocket-seam.",
-      [ "guide-anchors @ AGENTS.md:3" ] );
-    ( "a code span inside the extension is refused",
-      guide "- A rule; the mechanism: a.m`d`#the-sprocket-seam.",
-      [ "guide-anchors @ AGENTS.md:3" ] );
-    ( "emphasis inside the extension is refused",
-      guide "- A rule; the mechanism: a.m*d*#the-sprocket-seam.",
-      [ "guide-anchors @ AGENTS.md:3" ] );
-    ( "a link glued to the slug is refused",
-      guide "- A rule; the mechanism: a.md#the-widget[-seam](x).",
-      [ "guide-anchors @ AGENTS.md:3" ] );
+    (* The subject is the source spelling (see [Agent_notes_scan.guide_pointers]): what only a
+       renderer would assemble into a pointer is not one to the agent reading the raw guide. These
+       pin that boundary, aimed at a missing heading so that a reader which DID take them for
+       pointers would fail here. *)
+    ( "spellings only a renderer assembles are not source pointers",
+      guide
+        "- a.md&num;the-sprocket-seam, a.m<span></span>d#the-sprocket-seam, \
+         a.md\\#the-sprocket-seam.",
+      [] );
+    ("a hash with no slug after it is not a pointer", guide "- A rule; the mechanism: a.md#.", []);
     (* Aimed at a missing heading, so each one READ is a finding: silence here would mean the plain
        surroundings hid them. *)
     ( "pointers in ordinary surroundings are read",
@@ -935,11 +900,17 @@ let guide_cases =
         "- Plain: (a.md#the-sprocket-seam), [a.md#the-sprocket-seam](x), `a.md#the-sprocket-seam`, \
          \"a.md#the-sprocket-seam\"; a.md#the-sprocket-seam!",
       List.init 5 ~f:(fun _ -> "guide-anchors @ AGENTS.md:3") );
-    ( "a reference to another character is not a separator",
-      guide "- A rule, a.md&amp;b.md; and a.md&#36;x.",
+    (* GitHub keeps a heading's Unicode letters in its id, and so does the slug here. *)
+    ( "a Unicode slug naming a Unicode heading",
+      guide "- A rule; the mechanism: b.md#\xe8\xae\xad\xe7\xbb\x83.",
       [] );
+    ( "a Unicode slug naming no heading",
+      guide "- A rule; the mechanism: b.md#\xe8\xae\xad.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
     ( "hashes that are no pointer",
-      guide "- Cited as staging#413 and ahrefs/ocannl#1044; `#ident_blacklist`; C# too.",
+      guide
+        "- Cited as staging#413 and ahrefs/ocannl#1044; `#ident_blacklist`; `LOG_FILTER=#debug`; \
+         C# too.",
       [] );
     ( "plain mentions of a note are not pointers",
       guide "- See a.md, (a.md) and `a.md`; a [link](a.md) too.",
