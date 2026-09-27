@@ -9,12 +9,12 @@
     blessed failure is indistinguishable from a designed one: the boolean form is the worst of it,
     since a promoted [false] reads exactly like an intentionally recorded negative fact.
 
-    So verdicts go through here. Each check records its outcome; a run with any failure exits 1 from
-    a teardown registered once, whatever the checks are and however many of them there are — so a
-    test built on this module gets the exit-status gate by construction, without an end-of-file call
-    it could forget. The failures are also echoed to stderr, because dune never writes the
-    redirected stdout of a process that exits nonzero: stderr is the channel on which the message
-    survives to be read.
+    So verdicts go through here. Each check records its outcome; a run with any failure exits
+    nonzero from a teardown registered once, whatever the checks are and however many of them there
+    are — so a test built on this module gets the exit-status gate by construction, without an
+    end-of-file call it could forget. The failures are also echoed to stderr, because dune never
+    writes the redirected stdout of a process that exits nonzero: stderr is the channel on which the
+    message survives to be read.
 
     Assertions belong here; descriptive output does not. Printing a fact the golden pins ("losses:
     [1.0; 0.5]", "producer inlined: true" where the point is to record what happened) stays a plain
@@ -23,6 +23,11 @@
 open Base
 
 let failures = ref 0
+
+(* What the teardown at the end of this file raises out of [at_exit] once a check has failed; see
+   there. Declared up here because {!case} must let it through. *)
+exception Checks_failed
+
 let passed_label_history = ref []
 
 (** The labels of claims this process actually evaluated successfully, in evaluation order.
@@ -360,6 +365,32 @@ let pass_fail_all2 ?min ?detail label got want ~f =
       in
       pass_fail ~detail label false
 
+(** [case label f] runs one case of a test -- a group of claims that share a setup -- and turns an
+    exception escaping it into a failed claim,
+    [<label>: the case ran to completion (raised <exception>): false], so that the cases after it
+    still run (gh-ocannl-1067). It prints nothing of its own when [f] returns, so wrapping a case is
+    golden-neutral.
+
+    Without it an exception ends the run at the case that raised. The teardown then says so
+    ([STOPPED EARLY] on stderr, and the exception itself), but the rows after that case are never
+    evaluated: a negative control that made one case raise learns nothing about the others. With it,
+    each case is its own verdict, which is what a test of many independent rows wants.
+
+    The exception's text goes on the claim line (echoed to stderr like every failure), and the
+    backtrace, when one is recorded, to stderr. What an explicit [exit] raises is let through, not
+    recorded: that is the process ending, not a case failing. *)
+let case label f =
+  match f () with
+  | () -> ()
+  | exception (Checks_failed as e) -> raise e
+  | exception e ->
+      let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+      let text = String.map (Stdlib.Printexc.to_string e) ~f:(function '\n' -> ' ' | c -> c) in
+      short_fail (label ^ ": the case ran to completion") ("raised " ^ text);
+      if Stdlib.Printexc.raw_backtrace_length backtrace > 0 then (
+        Stdlib.Printexc.print_raw_backtrace Stdlib.stderr backtrace;
+        Stdlib.flush Stdlib.stderr)
+
 (** Whether any check has failed so far. For a test that wants to say something extra about a bad
     run; the exit status is taken care of without it. *)
 let any_failed () = !failures > 0
@@ -399,17 +430,56 @@ module Claims = struct
   let gated = gated
   let pass_fail = pass_fail
   let pass_fail_all2 = pass_fail_all2
+  let case = case
 end
 
-(* Registered at module initialization, so it covers every test that links this module — including
-   one whose checks are all in the middle of the file, or that ends by raising. Calling [exit] from
-   an [at_exit] handler is defined: each registered function runs at most once, so the nested
-   [do_at_exit] skips this one and proceeds to the rest (stdout's flush among them). *)
+(* The teardown (gh-ocannl-1067). Every path out of the process runs [at_exit], so this is where a
+   failed check turns into a nonzero status whatever the test's last line was. It must not do that
+   by calling [exit] itself, which is what it used to do: the runtime runs [at_exit] BEFORE it
+   prints an uncaught exception, so an [exit 1] from here ended the process before the exception was
+   ever reported. A test whose later case raised showed its earlier [FAIL:] lines and nothing else,
+   and every row after the raise silently never ran -- gh-ocannl-1016's negative control read such a
+   run as "six rows failed, the rest passed". Nothing at this point can tell a normal end from an
+   escaping exception, so the handler does not decide: it RAISES [Checks_failed], and the
+   uncaught-exception handler below, which does see the exception, says what happened.
+
+   At a normal end, or an explicit [exit], [Checks_failed] is the one uncaught exception, and the
+   handler reports the failures and exits 1, as before. When an exception escapes the test, the
+   runtime swallows the one raised from [at_exit] and hands the handler the ORIGINAL exception,
+   which it reports as a run that stopped early and prints as the runtime would have, exiting with
+   the runtime's status, 2.
+
+   Raising out of [at_exit] skips the handlers registered before this module's, so the handler ends
+   through [Stdlib.exit], which runs them, and [settling] keeps this teardown from raising again on
+   that pass. Until then the teardown re-registers itself before it raises: an explicit [exit] now
+   raises out of the call, and a test whose catch-all swallowed that would otherwise end on a
+   consumed teardown and exit 0. *)
+let settling = ref false
+
+let rec teardown () =
+  if !failures > 0 && not !settling then (
+    Stdio.Out_channel.flush Stdio.stdout;
+    Stdlib.at_exit teardown;
+    raise Checks_failed)
+
+let report_failures () =
+  Stdio.Out_channel.flush Stdio.stdout;
+  Stdio.eprintf "FAILED: %d check%s did not hold.\n" !failures (if !failures = 1 then "" else "s");
+  Stdio.Out_channel.flush Stdio.stderr
+
 let () =
-  Stdlib.at_exit (fun () ->
-      if !failures > 0 then (
-        Stdio.Out_channel.flush Stdio.stdout;
-        Stdio.eprintf "FAILED: %d check%s did not hold.\n" !failures
-          (if !failures = 1 then "" else "s");
-        Stdio.Out_channel.flush Stdio.stderr;
-        Stdlib.exit 1))
+  Stdlib.Printexc.set_uncaught_exception_handler (fun exn backtrace ->
+      match exn with
+      | Checks_failed ->
+          settling := true;
+          report_failures ();
+          Stdlib.exit 1
+      | _ when !failures > 0 ->
+          settling := true;
+          report_failures ();
+          Stdio.eprintf
+            "STOPPED EARLY: an uncaught exception ended the run, so no check after it ran:\n%!";
+          Stdlib.Printexc.default_uncaught_exception_handler exn backtrace;
+          Stdlib.exit 2
+      | _ -> Stdlib.Printexc.default_uncaught_exception_handler exn backtrace);
+  Stdlib.at_exit teardown

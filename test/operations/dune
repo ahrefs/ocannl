@@ -5117,6 +5117,19 @@
    (run ./verdict_quantified.exe holds)
    (run ./verdict_quantified.exe refusals))))
 
+; How a run that links Verdict ends once a check has failed (gh-ocannl-1067): a normal end, an
+; explicit `exit`, an exception escaping after the failure, and `Verdict.case`. Every path under
+; test fails, so each runs as a child whose streams the parent captures, as `verdict_quantified`
+; does; the golden is the parent's claims about them.
+
+(test
+ ; ocannl-backend: none -- links `arrayjit.verdict` and `unix` alone: what is under test is the status and streams a failing child ends with.
+ (name verdict_teardown)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules verdict_teardown)
+ (libraries base stdio unix arrayjit.verdict))
+
 ; The uint4x32 FFI stubs read four lanes out of an [int array], a type that carries no length, so
 ; the C helper has to check the arity rather than assume it (gh-ocannl-688). Links arrayjit.ir
 ; alone and calls the stubs directly -- no compilation, no device.
