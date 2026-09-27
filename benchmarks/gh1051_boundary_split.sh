@@ -11,9 +11,13 @@
 # in-process drift controls, and the driver PROVES they are: one untimed run per revision writes the
 # generated HIP, and those three variants' sources must be byte-identical across revisions, while
 # the mma sources must differ (before: __mma_dstage; after: ocannl_wmma_rc16) -- else it stops.
-# Exit statuses are validated as in gh1051_bf16_ab.sh: 1 only with the bench's WRONG RESULT verdict
-# and no FAILED variant. Hermetic: OCANNL_* unset, treatments on argv, run from benchmarks/.
+# Every cell is validated by benchmarks/gh1051_cells.py (shared with gh1051_bf16_ab.sh): its exit
+# status, and its whole-output checksums -- identical across rounds, bitwise identical across the
+# two revisions (the change touches only how the wide d boundary is addressed, with the same
+# conversions), and the mma cells within a structural bound of the same run's serial wide one.
+# Hermetic: OCANNL_* unset, treatments on argv, run from benchmarks/.
 set -u
+HERE=$(cd "$(dirname "$0")" && pwd)
 [ $# -ge 3 ] || { echo "usage: $0 <root-before> <root-after> <memory-label> [rounds] [sizes...]"; exit 2; }
 BEFORE=$(cd "$1" && pwd) || exit 2
 AFTER=$(cd "$2" && pwd) || exit 2
@@ -42,18 +46,10 @@ bench() { # rev size log [extra...]
     >"$log" 2>"$log.err"
 }
 FAIL=0
-check() { # log status
-  if grep -q "FAILED" "$1"; then echo "  FAILED variant in $1"; FAIL=1
-  elif (($2 != 0)) && ! { (($2 == 1)) && grep -q "^WRONG RESULT" "$1"; }; then echo "  unexpected exit $2"; FAIL=1; fi
-  for v in parallel smem regtile mma_pd1 mma_pd2; do
-    grep -q "^$v  *[0-9.]* ms" "$1" || { echo "  MISSING timing for $v in $1"; FAIL=1; }
-  done
-}
 for rev in before after; do
   prefix="gh1051_split_$$_$rev"
   bench "$rev" "${SIZES[0]}" "$OUT/identity_$rev.log" \
     --ocannl_output_debug_files_in_build_directory=true --ocannl_build_files_prefix="$prefix"
-  check "$OUT/identity_$rev.log" $?
   mkdir -p "$OUT/identity_$rev"
   cp "${ROOT[$rev]}"/benchmarks/build_files/"$prefix"/*.hip "$OUT/identity_$rev/" 2>/dev/null
   rm -rf "${ROOT[$rev]}"/benchmarks/build_files/"$prefix" "${ROOT[$rev]}"/benchmarks/log_files/"$prefix"
@@ -78,31 +74,10 @@ for size in "${SIZES[@]}"; do
       log="$OUT/n${size}_r${r}_${rev}.log"
       bench "$rev" "$size" "$log"
       st=$?
+      echo "$st" >"$log.status"
       echo "n=$size round=$r rev=$rev exit=$st"
-      check "$log" $st
     done
   done
 done
-python3 - "$OUT" "$LABEL" <<'PY' || { echo "SUMMARY FAILED"; FAIL=1; }
-import glob, os, re, statistics, sys
-out, label = sys.argv[1], sys.argv[2]
-cells = {}
-for f in glob.glob(os.path.join(out, "n*_r*_*.log")):
-    m = re.match(r"n(\d+)_r(\d+)_(before|after)\.log$", os.path.basename(f))
-    if not m: continue
-    size, rev = int(m.group(1)), m.group(3)
-    for line in open(f):
-        t = re.match(r"^(\w+)\s+([0-9.]+) ms\s+([0-9.]+) GFLOP/s.*\[(.*)\]\s*$", line)
-        if t:
-            cells.setdefault((size, t.group(1), rev), []).append((float(t.group(2)), t.group(4)))
-fmt = lambda xs: f"{statistics.median(x for x, _ in xs):.3f} ({min(x for x, _ in xs):.3f}-{max(x for x, _ in xs):.3f})"
-med = lambda xs: statistics.median(x for x, _ in xs)
-print("\n| memory | n | variant | role | before ms (median, min-max) | after ms (median, min-max) | after/before | census (after) |")
-print("| --- | --- | --- | --- | --- | --- | --- | --- |")
-for size in sorted({k[0] for k in cells}):
-    for v in ["mma_pd1", "mma_pd2", "parallel", "smem", "regtile"]:
-        b, a = cells[(size, v, "before")], cells[(size, v, "after")]
-        role = "treatment" if v.startswith("mma") else "control"
-        print(f"| {label} | {size} | {v} | {role} | {fmt(b)} | {fmt(a)} | {med(a) / med(b):.3f} | {a[0][1]} |")
-PY
+python3 "$HERE/gh1051_cells.py" split "$OUT" "$LABEL" || FAIL=1
 exit $FAIL

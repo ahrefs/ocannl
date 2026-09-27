@@ -1,36 +1,41 @@
 #!/bin/bash
-# gh-ocannl-1051: GEMM throughput A/B of bf16_arithmetic=false (Bf16_wide, f32 accumulators) against
-# bf16_arithmetic=auto on one HIP box, the measurement that decides whether auto resolves wide on
-# HIP.
+# gh-ocannl-1051: GEMM throughput A/B of HIP's two bf16 accumulator arms: bf16_arithmetic=false
+# (Bf16_wide, f32 accumulators) against bf16_arithmetic=true (Bf16_narrow: gfx11's bf16-accumulate
+# WMMA and storage-width serial accumulators) -- the measurement behind resolving auto wide on HIP.
+# The narrow arm is named `true`, not `auto`: before gh-ocannl-1051 auto resolved narrow on HIP and
+# since then it resolves wide, while `true` names the narrow arm on both sides of that change, so
+# this reproduces the measurement at any revision.
 #
 # Usage: gh1051_bf16_ab.sh <repo-root> <memory-label> [rounds] [sizes...]
 #   e.g. gh1051_bf16_ab.sh ~/ocannl "unified (gfx1151)" 6 1024 2048
 #
 # [rounds] must be even and positive (default 6): round r runs the arms in the order
-# (false, auto) for even r and (auto, false) for odd r, so only complete ABBA blocks give each arm
+# (false, true) for even r and (true, false) for odd r, so only complete ABBA blocks give each arm
 # every position equally often.
 #
 # Each treatment cell is bin/schedule_bench at m = n = k = <size> with bf16 operands and output. All
 # five variants are the treatment, not only the tensorized mma_pd1/mma_pd2: the policy also moves
-# the serial legs' accumulator (HIP's accum_prec), and the flip moves both. No schedule cache is
-# involved: every variant is a hand-written schedule compiled through [~lowered_transform].
+# the serial legs' accumulator (HIP's accum_prec). No schedule cache is involved: every variant is
+# a hand-written schedule compiled through [~lowered_transform].
 #
 # DRIFT CONTROL (the A/B protocol in docs/agent-notes/training-and-performance.md): next to every
 # treatment cell runs a CONTROL cell, the same bench at f32 under the same arm's bf16_arithmetic
 # flag. The bf16 policy cannot reach an f32 kernel, and before any timing the driver PROVES it: one
 # untimed control run per arm writes its generated HIP source, and the two sources must be
-# byte-identical or the driver stops. The control's wide/auto ratio is then the session drift the
+# byte-identical or the driver stops. The control's wide/narrow ratio is then the session drift the
 # treatment ratios are read against.
 #
-# Exit statuses are validated per cell, not merely printed. schedule_bench exits 1 on a result that
-# differs from its unscheduled oracle; its operands are exact in f32, tf32 and f16 but a k-term bf16
-# accumulation is not, so a bf16 cell may exit 1 on rounding -- accepted only when the log carries
-# the bench's "WRONG RESULT" verdict and no FAILED variant. Any other nonzero status, or a
-# nonzero f32 control, fails the run, as does a missing timing line or a summarizer failure.
+# VALIDATION: a timing counts only from a cell whose output is validated, which the bench's exit
+# status cannot do for bf16 (its partial sums round, and the narrow tensorized arm's error is gross
+# by design). benchmarks/gh1051_cells.py, shared with gh1051_boundary_split.sh, checks every
+# cell's status and whole-output checksums (determinism across rounds, a structural bound against
+# the exact f32 control, bitwise agreement of the narrow arm's two tensorized pipelinings) and
+# prints the table; any failure fails the run.
 #
 # Hermetic like gh514_cells.sh: every OCANNL_* variable is unset, every treatment is on argv, and the
 # bench runs from benchmarks/, whose ocannl_config is the nearest on the upward search.
 set -u
+HERE=$(cd "$(dirname "$0")" && pwd)
 [ $# -ge 2 ] || { echo "usage: $0 <repo-root> <memory-label> [rounds] [sizes...]"; exit 2; }
 ROOT=$(cd "$1" && pwd) || { echo "no such repo root: $1"; exit 2; }
 LABEL=$2
@@ -60,7 +65,7 @@ bench() { # size arm prec log [extra args...]
     --ocannl_bf16_arithmetic="$arm" "$@" >"$log" 2>"$log.err"
 }
 # The control's identity proof, untimed: generated HIP source per arm, byte-compared.
-for arm in false auto; do
+for arm in false true; do
   prefix="gh1051_ctl_$$_$arm"
   bench "${SIZES[0]}" "$arm" single "$OUT/identity_$arm.log" \
     --ocannl_output_debug_files_in_build_directory=true --ocannl_build_files_prefix="$prefix" ||
@@ -70,53 +75,24 @@ for arm in false auto; do
   rm -rf build_files/"$prefix" log_files/"$prefix"
 done
 n_src=$(find "$OUT/identity_false" -name '*.hip' | wc -l)
-if [ "$n_src" -eq 0 ] || ! diff -r "$OUT/identity_false" "$OUT/identity_auto" >/dev/null; then
+if [ "$n_src" -eq 0 ] || ! diff -r "$OUT/identity_false" "$OUT/identity_true" >/dev/null; then
   echo "DRIFT CONTROL INVALID: the f32 control's generated HIP differs across arms (or none was written: $n_src files)"
   exit 1
 fi
 echo "drift control: $n_src generated f32 kernels byte-identical across arms"
 for size in "${SIZES[@]}"; do
   for ((r = 0; r < ROUNDS; r++)); do
-    if ((r % 2 == 0)); then order=(false auto); else order=(auto false); fi
+    if ((r % 2 == 0)); then order=(false true); else order=(true false); fi
     for arm in "${order[@]}"; do
       for prec in bfloat16 single; do
         log="$OUT/n${size}_r${r}_${arm}_${prec}.log"
         bench "$size" "$arm" "$prec" "$log"
         st=$?
+        echo "$st" >"$log.status"
         echo "n=$size round=$r arm=$arm prec=$prec exit=$st"
-        if grep -q "FAILED" "$log"; then
-          echo "  FAILED variant in $log"; FAIL=1
-        elif ((st != 0)) && ! { [ "$prec" = bfloat16 ] && ((st == 1)) && grep -q "^WRONG RESULT" "$log"; }; then
-          echo "  unexpected exit $st"; FAIL=1
-        fi
-        for v in parallel smem regtile mma_pd1 mma_pd2; do
-          grep -q "^$v  *[0-9.]* ms" "$log" || { echo "  MISSING timing for $v"; FAIL=1; }
-        done
       done
     done
   done
 done
-python3 - "$OUT" "$LABEL" <<'PY' || { echo "SUMMARY FAILED"; FAIL=1; }
-import glob, os, re, statistics, sys
-out, label = sys.argv[1], sys.argv[2]
-cells = {}
-for f in glob.glob(os.path.join(out, "n*_r*_*_*.log")):
-    m = re.match(r"n(\d+)_r(\d+)_(\w+?)_(bfloat16|single)\.log$", os.path.basename(f))
-    size, arm, prec = int(m.group(1)), m.group(3), m.group(4)
-    for line in open(f):
-        t = re.match(r"^(\w+)\s+([0-9.]+) ms\s+([0-9.]+) GFLOP/s.*\[(.*)\]\s*$", line)
-        if t:
-            cells.setdefault((size, t.group(1), prec, arm), []).append((float(t.group(2)), t.group(4)))
-variants = ["parallel", "smem", "regtile", "mma_pd1", "mma_pd2"]
-fmt = lambda xs: f"{statistics.median(x for x, _ in xs):.3f} ({min(x for x, _ in xs):.3f}-{max(x for x, _ in xs):.3f})"
-med = lambda xs: statistics.median(x for x, _ in xs)
-print("\n| memory | n | variant | auto ms (median, min-max) | wide ms (median, min-max) | wide/auto | f32 control wide/auto | census (wide) |")
-print("| --- | --- | --- | --- | --- | --- | --- | --- |")
-for size in sorted({k[0] for k in cells}):
-    for v in variants:
-        a, w = cells[(size, v, "bfloat16", "auto")], cells[(size, v, "bfloat16", "false")]
-        ca, cw = cells[(size, v, "single", "auto")], cells[(size, v, "single", "false")]
-        print(f"| {label} | {size} | {v} | {fmt(a)} | {fmt(w)} | {med(w) / med(a):.3f} | "
-              f"{med(cw) / med(ca):.3f} | {w[0][1]} |")
-PY
+python3 "$HERE/gh1051_cells.py" ab "$OUT" "$LABEL" || FAIL=1
 exit $FAIL
