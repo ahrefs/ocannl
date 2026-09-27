@@ -7927,9 +7927,14 @@ let rec writes_node (self : Tn.t) (c : t) =
    computation the routine's walk stored instead of gaining a second copy. So the walk decides
    everything a flip to inlining changes about the node's own computation — where it is captured,
    which refusals apply, the raw storage of a packed-uniform producer, and a footprint read its
-   setter no longer hosts retracting to inlining or to the producer's materialization — and returns
-   the scratch placements with the stored computations, the world a read of the flipped node is
-   instantiated in. [Error] carries the store's rejection code. *)
+   setter no longer hosts retracting to inlining or to the producer's materialization — then checks
+   that every read site the routine has for the node is one the inliner can serve, and returns the
+   scratch placements with the stored computations, the world a read of the flipped node is
+   instantiated in. [Error] carries the store's rejection code. The scratch lineage already holds
+   this routine's own templates, which the re-walk's entry snapshot takes for inherited ones; that
+   changes nothing it prices — the reads of them it replays are ones the routine's walk already
+   served — beyond turning a merge-reading template into a refusal, whose inlined merge read would
+   have made the count opaque anyway. *)
 let walked_computations ~(ctx : optimize_ctx) ~placements ~traced_store ~reverse_node_map
     ~footprint_scoped ~static_indices ~raw (self : Tn.t) :
     (Tn.Placements.t * (Indexing.axis_index array option * t) list, string) Result.t =
@@ -7950,7 +7955,24 @@ let walked_computations ~(ctx : optimize_ctx) ~placements ~traced_store ~reverse
             : t * Tnode.t Hash_set.t);
         match Hashtbl.find scratch.computations self with
         | Some computations when not (Tn.Placements.known_non_virtual plc self) ->
-            Ok (plc, computations)
+            (* The flip replays at every read the routine has of [self] — outside its own setters,
+               whose self-reads the store turned into the scope local — and the first read the
+               inliner cannot serve commits the node materialized (a consumption-time rejection, 13
+               and the like), so each is instantiated here at its own indices. *)
+            let reads =
+              List.concat_map (flat_lines [ raw ]) ~f:(fun stmt ->
+                  if writes_node self stmt then []
+                  else
+                    List.filter (affine_accesses stmt) ~f:(fun (a : Tn.t Affine.access) ->
+                        Tn.equal a.a_tn self && (not a.a_write) && Affine.loops_live a.a_loops))
+            in
+            if List.exists reads ~f:(fun a -> a.Affine.a_dynamic) then Error "dynamic-gather-read"
+            else
+              List.fold_result reads ~init:() ~f:(fun () (a : Tn.t Affine.access) ->
+                  Result.map ~f:ignore
+                    (instantiate_computations ~fresh_symbol:pricing_symbol ~placements:plc
+                       ~id:(pricing_scope self) self computations static_indices a.a_map))
+              |> Result.map ~f:(fun () -> (plc, computations))
         | _ -> (
             match Tn.Placements.get plc self with
             | Some (_, Site code) -> Error code
@@ -8054,6 +8076,7 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
   (* gh-ocannl-681: taken BEFORE virtualization, so cleanup can tell the scopes this pass was handed
      from the ones it mints and only retracts its own. *)
   let input_scopes = input_scope_ids llc in
+
   let virtual_llc_result, spliced_reads =
     virtual_llc input_ctx traced_store an.an_reverse_node_map static_indices ~footprint_scoped
       ~footprint_retracted llc

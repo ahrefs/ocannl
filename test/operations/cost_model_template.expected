@@ -74,6 +74,11 @@ footprint: by default the consumer reads the producer through a scratch: true
 == pricing is invisible to the generated code's numbering ==
 numbering: the priced compile did price a candidate: true
 numbering: pricing draws no symbol and no scope id: true
+== an Inline flip a read site refuses ==
+reader-refused flip: a cap materialized the node: true
+reader-refused flip: offered, and priced by the proxy rather than modeled: true
+  preferred inline, the virtualizer's verdict: 13:call-site-index-mismatch
+reader-refused flip: preferred inline, the virtualizer refuses it all the same: true
 == an Inline flip the store refuses ==
 refused flip: offered, and priced by the proxy rather than modeled: true
   preferred inline, the virtualizer's verdict: 9:sibling-escaping-read-index

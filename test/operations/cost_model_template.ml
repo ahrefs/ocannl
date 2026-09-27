@@ -572,6 +572,39 @@ let () =
   p "numbering: pricing draws no symbol and no scope id"
     (symbols = symbols_off && scopes = scopes_off)
 
+(* An [`Inline] flip a READER refuses (review round 4): over a zeroed F, F[0] = 2 X[0], read at F[0]
+   and at F[1] by every cell of out[x] (the visit cap materializes F). The synthetic read at the
+   written slice would be served, but replaying the flip meets the read at F[1], which the inliner
+   cannot serve (13): the pricer instantiates at every read site the routine has, and prices the
+   flip by the proxy. *)
+let () =
+  Stdio.printf "== an Inline flip a read site refuses ==\n";
+  let f = mk ~dims:[| 2 |] "Fr" and x = mk ~dims:[| 1 |] "Xr" and out = mk ~dims:[| 2 |] "outF" in
+  let j = sym () in
+  let llc =
+    seq (zero f)
+      (seq
+         (set f [| fixed 0 |] (mul (get x [| fixed 0 |]) (c 2.)))
+         (loop_n j 2 (set out [| iter j |] (add (get f [| fixed 0 |]) (get f [| fixed 1 |])))))
+  in
+  let o = optimize ~materialized:[ x; out ] ~name:"cmt_reader_refused" llc in
+  p "reader-refused flip: a cap materialized the node" (known_non_virtual o f);
+  let inline_flip =
+    List.find_map o.LL.flip_candidates ~f:(fun fc ->
+        if Tn.equal fc.LL.fc_tn f then
+          List.find fc.LL.fc_alternatives ~f:(fun fa -> LL.equal_reading fa.LL.fa_flip `Inline)
+        else None)
+  in
+  p "reader-refused flip: offered, and priced by the proxy rather than modeled"
+    (match inline_flip with Some fa -> not fa.LL.fa_modeled | None -> false);
+  let ctx = LL.empty_optimize_ctx () in
+  LL.prefer_inline ctx [ f ];
+  let o_pref = optimize_in ctx ~materialized:[ x; out ] ~name:"cmt_reader_refused_pref" llc in
+  Stdio.printf "  preferred inline, the virtualizer's verdict: %s\n"
+    (Option.value_map (rejection_code o_pref f) ~default:"none" ~f:Tn.provenance_to_string);
+  p "reader-refused flip: preferred inline, the virtualizer refuses it all the same"
+    (known_non_virtual o_pref f)
+
 (* An [`Inline] flip the store itself refuses: a scalar reduction S[0] = sum_i A[i] over i < 20 (the
    cap materializes it). Captured at its setter, the read of A escapes the reduction loop the
    capture leaves outside, so [virtual_llc] refuses the node however it is preferred — and so does
