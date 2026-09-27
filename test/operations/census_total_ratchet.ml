@@ -101,6 +101,16 @@ let allowed =
         "a per-root source floor or a per-file exemption cap, hand-written constants of the scan";
     };
     {
+      golden = Golden "test/operations/nonvirtual_code_inventory.expected";
+      pattern = {|^  [0-9]+:[a-z0-9-]+$|};
+      reason = "a rejection code's tag as the library mints it; its digits name the code";
+    };
+    {
+      golden = Golden "test/operations/nonvirtual_code_inventory.expected";
+      pattern = {|^[^ ]+ --\( [0-9]+\)+$|};
+      reason = "the codes a listed file names, each an identifier rather than a quantity";
+    };
+    {
       golden = Golden "test/operations/operand_key_ratchet.expected";
       pattern = {|^Source floor: [^ ]+ >= [0-9]+$|};
       reason = "a per-root source floor, a hand-written constant of the scan";

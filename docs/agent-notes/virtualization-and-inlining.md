@@ -176,25 +176,28 @@ files.
   `Non_virtual 147` (gh-ocannl-674); width-1 loops stay exempt, since replaying one iteration once
   is exact. Two arms hide most of this shape and neither is a guarantee: an array reduction
   `x[0] += a[s]` is rejected because the sibling read escapes (`Non_virtual 9`), and an accumulator
-  read more than `virtualize_max_visits` times is capped (`Non_virtual 1`) — a flippable policy
+  read more than `virtualize_max_visits` times is capped (`1:visit-cap`) — a flippable policy
   prior, decided in `decide_placements` before any legality question is asked.
 - **Where a virtualization candidate is refused is readable off its placement PROVENANCE, and four
   phases write into the same table** (gh-ocannl-658, pinned row by row in
   `test/operations/virtual_rejection_boundary.ml`): `decide_placements` applies the heuristic caps
   (`Visit_cap` / uncovered read, `Inline_reduction_cap`, `Inline_fanin_cap`) BEFORE any legality
   question, so a shape capped there may be perfectly inlineable; `check_and_store_virtual` rejects
-  at store time (codes 4, 5, 7, 8, 9, 10, 11, 12, 19, 51, 52, 141, 142, 143, 144, 147, 148);
-  `inline_computation` rejects at consumption time (13, 14, 140, 145, 146), which is why two setters
-  with different index maps as separate statements store fine as components and only fail once a
-  read site cannot be served; and `cleanup_virtual_llc` commits a surviving read as
-  `Surviving_read`, which is the absence of a rejection rather than one.
+  at store time and `inline_computation` at consumption time — which codes each one mints is
+  derived, not listed: `test/operations/nonvirtual_code_inventory.expected` groups them by function
+  (`148:scan-recurrence` is under both, the second a backstop) — which is why two setters with
+  different index maps as separate statements store fine as components and only fail once a read
+  site cannot be served; and `cleanup_virtual_llc` commits a surviving read as `Surviving_read`,
+  which is the absence of a rejection rather than one.
   Two properties of the store-time set are worth knowing before you chase one, and BOTH are read
   off pipeline order rather than off the arm. First, some of those arms cannot fire: nothing emits
-  `Staged_compilation` (8) today, and the passes minting barriers (141), cooperative tiles (143) and
-  dynamic scatters (144 — `rewrite_one_hot_reductions`) all run after `virtual_llc`. Do not group
-  arms by what they match on to predict this — `Scan_loop` (148) and `If` (142) are refused by
-  constructor exactly as those are, and both fire on ordinary code.
-  Second, **19 is live, and a note or comment telling you otherwise is stale.**
+  `Staged_compilation` (`Non_virtual 8`) today, and the passes minting barriers
+  (`Non_virtual 141`), cooperative tiles (`Non_virtual 143`) and dynamic scatters
+  (`Non_virtual 144` — `rewrite_one_hot_reductions`) all run after `virtual_llc`. Do not group arms
+  by what they match on to predict this — `Scan_loop` (`Non_virtual 148`) and `If`
+  (`Non_virtual 142`) are refused by constructor exactly as those are, and both fire on ordinary
+  code.
+  Second, **`Non_virtual 19` is live, and a note or comment telling you otherwise is stale.**
   `Assignments.lower` runs the algebraic rewrite tier — `Rewrites.apply`, gh-ocannl-483 — BEFORE
   `Low_level.optimize`, and its member `online_softmax` declares its cached probability cell as a
   `Declare_local` (`Online_softmax.hoist`, the consumer-side read hoist), so with that key on the
@@ -211,10 +214,15 @@ files.
   caller can report it (`~guarded` / `~in_scan`, decided before the walk starts), or it sits
   INSIDE and the walk's own arm finds it. Same verdict either way — for 148 that one verdict also
   covers a scan the candidate merely reads from or sits beside (gh-ocannl-696).
-  Do not infer the boundary from the `Non_virtual` comments at the raise sites: several describe
-  reachability that has since changed, and 52 is enforced earlier still (`trace_node_facts` raises
-  `invalid_arg` on a `Concat` index, so the virtualizer's arm never sees one). The tags themselves,
-  and how they compose, are the TAG entry below.
+  Pipeline order is what falsified 19's "cannot fire", and nothing tied the claim's copies
+  together. So before moving a pass across `virtual_llc`, or adding one ahead of
+  `Low_level.optimize`, read the golden of `dune build
+  @test/operations/runtest-nonvirtual_code_inventory`: it lists every file that names a code — the
+  raise-site comments, `docs/lowering_and_inlining.md`, this note, the tests — which is the
+  checklist that change lacked (gh-ocannl-1015). Cite a code as `Non_virtual N` or by its tag, the
+  two spellings the inventory reads. `Non_virtual 52` is enforced earlier still (`trace_node_facts`
+  raises `invalid_arg` on a `Concat` write index, so the virtualizer's arm never sees one). The
+  tags themselves, and how they compose, are the TAG entry below.
 - **A placement provenance is a TAG, and which kind it is tells you whether code reads it**
   (gh-ocannl-609): `Tnode.provenance` splits two ways. A decision nothing interrogates is a
   `Site "<code>:<kebab-reason>"` explaining itself — some sixty of those, minted across nine modules
