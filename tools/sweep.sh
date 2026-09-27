@@ -415,11 +415,11 @@ lab_contract_check() { # -- sets LAB_MAP and LAB_CONTRACT; refuses the run on a 
 # A record names its box by an ssh identity, and a box has one per endpoint. A remote lane's names
 # are every alias on its box's row of wake-lab.sh's endpoint map, read once above (a measurement
 # booked on a dual-boot box's Windows side, for a verification reboot, holds the box as surely as
-# one on its Linux). Where that map could not be read the names are derived from lab_dest_of's own
-# aliases by the rule wake-lab.sh enforces on every row (check_endpoints): a box's `-linux`,
-# `-win` and `-wsl` aliases share one stem, and its LAN route is `<box>-lan` -- all three siblings,
-# since the map lists boots the sweep never addresses (tuf's `-win` and `-wsl`). The local
-# lane's name is the one `execution slot --probe` gives this host -- the fleet's `mac-studio`, not
+# one on its Linux), united with names derived from lab_dest_of's own aliases -- all there is when
+# that map could not be read, and a floor under a row that lists fewer -- by the rule wake-lab.sh
+# enforces on every row (check_endpoints): a box's `-linux`, `-win` and `-wsl` aliases share one
+# stem, and its LAN route is `<box>-lan`. All three siblings, since the map lists boots the sweep
+# never addresses (tuf's `-win` and `-wsl`). The local lane's name is the one `execution slot --probe` gives this host -- the fleet's `mac-studio`, not
 # the `m4-max` measurement-box ID the history rows carry.
 #
 # The reader is the registry's own, `fleet-worker.sh execution list --active --compact` -- the
@@ -462,17 +462,14 @@ lane_fleet_names() { # ssh-destination (empty for the local lane)
   fi
   box=$(lab_box_of "$dest")
   row=$(awk -v b="$box" '$1 == b { $1 = ""; print; exit }' <<<"$LAB_MAP")
-  names="$dest $row"
-  if [ -z "$row" ]; then
-    names="$names $box-lan"
-    for pair in $LAB_LANE_BOXES; do
-      [ "${pair#*=}" = "$dest" ] || continue
-      for kind in linux wsl; do
-        alias=$(lab_dest_of "${pair%%=*}" "$kind") || continue
-        names="$names ${alias%-*}-linux ${alias%-*}-win ${alias%-*}-wsl"
-      done
+  names="$dest $row $box-lan"
+  for pair in $LAB_LANE_BOXES; do
+    [ "${pair#*=}" = "$dest" ] || continue
+    for kind in linux wsl; do
+      alias=$(lab_dest_of "${pair%%=*}" "$kind") || continue
+      names="$names ${alias%-*}-linux ${alias%-*}-win ${alias%-*}-wsl"
     done
-  fi
+  done
   printf '%s' "$names"
 }
 
@@ -483,7 +480,10 @@ unit_under_measurement() { # names...
   local out rc
   MEASUREMENT_HOLDERS=
   REGISTRY_REASON=
-  out=$LANE_DIR/registry.$$.$RANDOM
+  out=$(mktemp "$LANE_DIR/registry.XXXXXX") || {
+    REGISTRY_REASON="cannot create a scratch file under $LANE_DIR"
+    return 2
+  }
   run_capped 120 "$FLEET_FW" execution list --active --compact >"$out" 2>"$out.err" </dev/null
   rc=$?
   if [ "$rc" -ne 0 ]; then
