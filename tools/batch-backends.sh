@@ -99,11 +99,43 @@ batch_box_has_hazard() {
   return 1
 }
 
+# Runs a command under what is left of the resolution's <cap> seconds (0:
+# unbounded), so the readers' build and every reader run share one budget:
+# a hung reader answers "unread" -- every backend -- instead of stranding the
+# launch (Codex review round 1 on PR #832). Uses batch_resolve's locals.
+#
+# The command runs in a process group of its own, and the deadline kills the
+# whole group: a reader's child that outlives it would otherwise hold the
+# command substitution's pipe open to its own end. INT, TERM and HUP are
+# relayed to the group, since leaving the terminal's group takes a Ctrl-C's
+# reach with it.
+batch_bounded() { # command...
+  local left
+  [ "$bcap" -ne 0 ] || { "$@"; return; }
+  left=$((bcap - (SECONDS - bstart)))
+  [ "$left" -gt 0 ] || return 124
+  perl -e '
+    my $left = shift;
+    defined(my $pid = fork) or exit 127;
+    if (!$pid) { setpgrp(0, 0); exec @ARGV or exit 127 }
+    setpgrp($pid, $pid);
+    my $end = sub { kill $_[0], -$pid; kill $_[0], $pid; exit $_[1] };
+    $SIG{ALRM} = sub { $end->("KILL", 124) };
+    $SIG{INT} = sub { $end->("INT", 130) };
+    $SIG{TERM} = sub { $end->("TERM", 143) };
+    $SIG{HUP} = sub { $end->("TERM", 129) };
+    alarm $left;
+    waitpid($pid, 0);
+    exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
+  ' "$left" "$@"
+}
+
 # Resolves the batch's backends into batch_holds / batch_unknown, and says what
-# it found. <dune> builds the readers, bounded by <cap> seconds (0: unbounded)
-# with its output appended to <log>.
+# it found. <dune> builds the readers; the build and the readers together are
+# bounded by <cap> seconds (0: unbounded), and dune's output is appended to
+# <log>.
 batch_resolve() { # <dune> <log> <cap> dune-argv...
-  local dune=$1 log=$2 bcap=$3 a v reader reach out line rest b ended= d
+  local dune=$1 log=$2 bcap=$3 bstart=$SECONDS a v reader reach out line rest b ended= d
   shift 3
   batch_holds= batch_unknown= batch_resolved=1
   if [ "${1:-}" = exec ]; then
@@ -125,7 +157,7 @@ batch_resolve() { # <dune> <log> <cap> dune-argv...
   if [ -z "$batch_unknown" ]; then
     if [ -n "${OCANNL_TOOL_READ_CONFIG:-}" ] && [ -n "${OCANNL_TOOL_SLOT_KIND:-}" ]; then
       reader=$OCANNL_TOOL_READ_CONFIG reach=$OCANNL_TOOL_SLOT_KIND
-    elif perl -e 'alarm shift; exec @ARGV or exit 127' "$bcap" \
+    elif batch_bounded \
            "$dune" build ./test/config/ocannl_read_config.exe ./test/config/ocannl_slot_kind.exe \
            </dev/null >>"$log" 2>&1; then
       # Where dune just put them: DUNE_BUILD_DIR moves the build tree (as
@@ -140,7 +172,7 @@ batch_resolve() { # <dune> <log> <cap> dune-argv...
     fi
   fi
   if [ -z "$batch_unknown" ]; then
-    out=$("$reach" "$@" 2>/dev/null)
+    out=$(batch_bounded "$reach" "$@" 2>/dev/null)
     while IFS= read -r line; do
       [ -z "$ended" ] || { batch_unknown="ocannl_slot_kind answered past its end: '$line'"; break; }
       case $line in
@@ -161,7 +193,7 @@ batch_resolve() { # <dune> <log> <cap> dune-argv...
   fi
   if [ -z "$batch_unknown" ]; then
     for d in $BATCH_CONFIG_DIRS; do
-      if ! b=$(cd "$d" && "$reader" --read=backend --output=stdout 2>/dev/null); then
+      if ! b=$(cd "$d" && batch_bounded "$reader" --read=backend --output=stdout 2>/dev/null); then
         batch_unknown="the backend $d resolves is unreadable"
         break
       fi

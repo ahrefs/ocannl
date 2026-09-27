@@ -1364,11 +1364,21 @@ resolve_run() {
 # printing a nested dune usage error and then failing, say), and the log is
 # then an ordinary red run whose fingerprint the digest must show. Prints the
 # complaint (the lines before `Usage:`), 0 iff FILE is such a refusal.
+#
+# "First" means first after the launch's own prelude, which the log carries
+# before dune starts: this script's `test-run: ` lines with their indented
+# continuations (the batch's backends, the width, the slot) and the fleet
+# slot's `EXECUTION SLOT ` admission line. Anything else before the complaint
+# still disqualifies it (Codex review round 1 on PR #832).
 dune_refusal() { # FILE
   head -c 20000 "$1" 2>/dev/null | awk '
-    NR == 1 && $0 !~ /^dune: / { exit 1 }
+    !started && /^test-run: / { cont = 1; next }
+    !started && cont && /^  / { next }
+    !started && /^EXECUTION SLOT / { cont = 0; next }
+    !started { started = 1; if ($0 !~ /^dune: /) exit 1 }
+    { n++ }
     !found && /^Usage: dune/ { found = 1; next }
-    !found && NR > 20 { exit 1 }
+    !found && n > 20 { exit 1 }
     !found { print; next }
     /^Try \047.*--help/ || /^exit: [0-9]+$/ || /^$/ { next }
     { found = 0; exit 1 }
@@ -1881,9 +1891,11 @@ case $sub in
   plan)
     # What `run` would do with this argv, without running it: the batch's
     # resolved backends and why, the width it would inject, and the fleet slot
-    # it would take. The only thing it runs is the readers' build, so it
-    # refuses while a run holds this worktree (that run's dune owns _build),
-    # and its --cap bounds that build as it would a run's.
+    # it would take. The only thing it runs is the readers' build, which is a
+    # dune run in this worktree, so it holds the worktree lock throughout like
+    # a launch does (a run started meanwhile is refused, not raced; Codex review
+    # round 1 on PR #832) -- under a run directory that is never published and
+    # is removed at the end -- and its --cap bounds the build as a run's would.
     cap=${OCANNL_TOOL_TEST_CAP:-3600}
     while [ $# -gt 0 ]; do
       case $1 in
@@ -1897,13 +1909,12 @@ case $sub in
     [ $# -gt 0 ] || set -- runtest
     select_dune
     plan_slot
-    probe_locks "$LOCK" "$PWD/.test-run.lock"
-    case $? in
-      0) ;;
-      3) die "a test-run holds this worktree ($LOCK); plan once it is done" ;;
-      *) die "cannot inspect the worktree lock: $LOCK" ;;
-    esac
-    plan_log=$(mktemp "${TMPDIR:-/tmp}/test-run-plan.XXXXXX") || die "cannot create a scratch file"
+    trap 'rm -rf "$run_dir"; exit 130' INT
+    trap 'rm -rf "$run_dir"; exit 143' TERM HUP
+    new_run "$@"
+    take_lock
+    : >"$run_dir/planning" 2>/dev/null
+    plan_log=$run_dir/log
     # Resolved whatever this box is: the backends are what was asked for.
     batch_resolve "$DUNE" "$plan_log" "$cap" "$@"
     plan_width_cap "$@"
@@ -1915,12 +1926,17 @@ case $sub in
     fi
     echo "command: dune $*"
     echo "backends: $(batch_summary)"
-    sed 's/^test-run: batch: /  /' "$plan_log"
-    rm -f "$plan_log"
+    sed -n 's/^test-run: batch: /  /p' "$plan_log"
+    rm -rf "$run_dir"
+    trap - INT TERM HUP
     if [ -n "$width_cap" ]; then
       echo "width: -j $width_cap, injected ($batch_width_hazard hazard, for $batch_width_backend)"
-    elif [ -n "$width_announce" ]; then
-      echo "width: the caller's (a -j $batch_width_cap cap applies here, for $batch_width_backend)"
+    elif explicit_jobs "$@"; then
+      if [ -n "$batch_width_cap" ]; then
+        echo "width: the caller's (a -j $batch_width_cap cap applies here, for $batch_width_backend)"
+      else
+        echo "width: the caller's (no backend of the batch meets a cap on this box)"
+      fi
     else
       echo "width: dune's default (no backend of the batch meets a cap on this box)"
     fi
@@ -1985,8 +2001,18 @@ case $sub in
     # target is, and always before dune's own `--`.
     # `planning` marks the window for `stop`, which finds no supervisor yet.
     : >"$run_dir/planning" 2>/dev/null
+    plan_start=$SECONDS
     plan_batch "$run_dir/log" "$@"
     rm -f "$run_dir/planning"
+    # The resolution spent part of the cap (it is bounded by the same budget),
+    # so the suite gets what is left, and the slot's wait at most half of that:
+    # launch plus suite stay within the one wall-clock cap the caller gave
+    # (Codex review round 1 on PR #832). The recorded `cap` stays the caller's.
+    if [ "$cap" -gt 0 ]; then
+      cap=$((cap - (SECONDS - plan_start)))
+      [ "$cap" -ge 1 ] || cap=1
+      [ -z "$slot_wait" ] || [ "$slot_wait" -le $((cap / 2)) ] || slot_wait=$((cap / 2))
+    fi
     if [ -n "$cancelled" ]; then
       # Signalled while the readers built -- by the caller, or by a `stop`
       # of this run, which reaps the lock's holders: nothing was published,

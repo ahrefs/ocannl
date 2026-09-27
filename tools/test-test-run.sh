@@ -79,7 +79,8 @@
 #  35. an invocation dune's own parser refuses -- unknown option, unknown
 #      subcommand, malformed operand -- digests as INVOCATION REFUSED quoting
 #      dune's complaint: `run`/`wait` exit 2 over a RECORDED exit 1, `status`
-#      keeps its publication 0, and dune was invoked exactly once.
+#      keeps its publication 0, and dune was invoked exactly once; the
+#      launch's own prelude in the log (backends, width) does not hide it.
 #  36. controls: a red run (`Error:`/`File` lines, exit 1) still digests as
 #      FAIL with exit 1 -- including one whose output opens with a `dune:`
 #      line, and one that prints a complete nested dune refusal and then
@@ -117,11 +118,11 @@
 #      budget over its slot count, and the numbers are the measured ones.
 #  64-65 sit between legs 51 and 52: `plan`, and the planning window
 #      (gh-ocannl-1066).
-#  64. `plan` prints the resolved backends, the width and the slot, and runs
-#      no dune and records no run.
+#  64. `plan` prints the resolved backends, the width (a caller's too) and
+#      the slot, runs no dune, leaves no run, and is refused under a held lock.
 #  65. a `stop` while the launcher resolves the backends (under the lock,
 #      before publication) withdraws the launch: exit 143, nothing run or
-#      published, the worktree idle.
+#      published, the worktree idle; a hung reader is cut off by the cap.
 #  53-58 sit at the end: the fleet's run-time slot, taken by the runner
 #      (gh-ocannl-1004), against a fake fleet-worker.sh and the fake readers
 #      every leg runs with.
@@ -2642,6 +2643,41 @@ for line in "command: dune build -j 4 @cheap" "backends: hip, cc" "holds hip: te
   [ -z "$native_detail" ] || break
   grep -qF -- "$line" <<<"$argv_out" || native_detail="no '$line' in: $argv_out"
 done
+# A width the caller named is reported as the caller's, with or without a cap
+# on the box (Codex review round 1 on PR #832).
+for probe in "$kfd_small|hip|width: the caller's (a -j 4 cap applies here, for hip)" \
+             "$kfd_absent|cc|width: the caller's (no backend of the batch meets a cap on this box)"; do
+  [ -z "$native_detail" ] || break
+  IFS='|' read -r kfd bt want <<<"$probe"
+  export FAKE_BACKEND_TEST=$bt
+  native_probe native-plan-explicit "$dxg_absent" "$kfd" "$nv_absent" "" plan build -j 16 @cheap
+  unset FAKE_BACKEND_TEST
+  { [ "$argv_rc" = 0 ] && [ -z "$argv_calls" ] && grep -qF -- "$want" <<<"$argv_out" &&
+    grep -qF -- "command: dune build -j 16 @cheap" <<<"$argv_out"; } ||
+    native_detail="explicit width ($bt): exit $argv_rc; stdout: $argv_out"
+done
+# It holds the worktree lock like a launch, under a run directory it never
+# publishes and removes: none is left behind, and a plan while a run holds
+# the worktree is refused.
+if [ -z "$native_detail" ]; then
+  ls -d "$TMP/argv-runs-native-plan"/2*Z-* >/dev/null 2>&1 &&
+    native_detail="plan left a run directory: $(ls -d "$TMP/argv-runs-native-plan"/2*Z-*)"
+fi
+if [ -z "$native_detail" ]; then
+  plan_lock_runs=$TMP/argv-runs-plan-locked
+  mkdir -p "$plan_lock_runs"
+  plan_lock=$(OCANNL_TOOL_TEST_RUNS=$plan_lock_runs "$repeat_root/tools/test-run.sh" paths lock)
+  perl -e 'use Fcntl ":flock"; open(my $fh, ">>", $ARGV[0]) or exit 1; flock($fh, LOCK_EX) or exit 1;
+           open(my $r, ">", $ARGV[1]); close $r; sleep 20' "$plan_lock" "$TMP/plan-lock.ready" &
+  plan_lock_pid=$!
+  for _ in $(seq 1 50); do [ -e "$TMP/plan-lock.ready" ] && break; sleep 0.1; done
+  argv_runs=$plan_lock_runs native_probe native-plan-locked "$dxg_absent" "$kfd_small" "$nv_absent" "" plan build @cheap
+  argv_runs=
+  kill "$plan_lock_pid" 2>/dev/null
+  wait "$plan_lock_pid" 2>/dev/null
+  { [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] && grep -q "another test-run is active" <<<"$argv_err"; } ||
+    native_detail="plan under a held lock: exit $argv_rc; stderr: $argv_err; stdout: $argv_out"
+fi
 if [ -z "$native_detail" ]; then
   report 0 "plan: prints the resolved backends, the width and the slot, and runs nothing"
 else
@@ -2694,6 +2730,23 @@ else
   [ -n "$plan_stop_detail" ] ||
     OCANNL_TOOL_TEST_RUNS=$plan_stop_runs "$repeat_root/tools/test-run.sh" idle 2>/dev/null ||
     plan_stop_detail="the worktree is not idle after the stop"
+fi
+# The resolution shares the run's cap: a reader that hangs is cut off, the
+# batch reads as unread (every backend, so the dxg cap), and the launch goes
+# on instead of stranding (Codex review round 1 on PR #832). The suite's own
+# verdict under what is left of a 3-second cap is not the point here.
+if [ -z "$plan_stop_detail" ]; then
+  plan_hang_start=$SECONDS
+  export FAKE_REACH_SLEEP=30
+  dxg_probe plan-hang "$dxg_present" cc run --cap 3 build @cheap
+  unset FAKE_REACH_SLEEP
+  plan_hang_took=$((SECONDS - plan_hang_start))
+  [ "$plan_hang_took" -lt 20 ] ||
+    plan_stop_detail="a hung reader held the launch ${plan_hang_took}s under --cap 3"
+  [ -n "$plan_stop_detail" ] || [ "$argv_calls" = "build -j 2 @cheap" ] ||
+    plan_stop_detail="a hung reader: calls: ${argv_calls:-<none>} (want build -j 2 @cheap, the unread answer's width)"
+  [ -n "$plan_stop_detail" ] || grep -q "its backends are unread" "$argv_dir/log" ||
+    plan_stop_detail="a hung reader: the log does not say the backends are unread: $(cat "$argv_dir/log" 2>/dev/null)"
 fi
 if [ -z "$plan_stop_detail" ]; then
   report 0 "plan: a stop in the planning window withdraws the launch, and the worktree is idle"
@@ -2797,6 +2850,17 @@ for probe in "usage_option|build @cheap --frobnicate" \
   esac
 done
 argv_mode= argv_runs=
+# The launch's own prelude -- the batch's backends, the width announcement and
+# the fleet slot's admission line, all in the log before dune starts -- does
+# not hide the refusal (Codex review round 1 on PR #832).
+if [ -z "$refused_detail" ]; then
+  argv_mode=usage_option
+  dxg_probe refused-prelude "$dxg_present" cuda run build @cheap --frobnicate
+  argv_mode=
+  { [ "$argv_rc" = 2 ] && grep -qF "$refused_verdict" <<<"$argv_out" &&
+    grep -q '^test-run: batch: ' "$argv_dir/log" && grep -q '^test-run: capping dune at -j 2' "$argv_dir/log"; } ||
+    refused_detail="under the launch prelude: exit $argv_rc (want 2): $argv_out"
+fi
 if [ -z "$refused_detail" ]; then
   report 0 "$refused_label"
 else
