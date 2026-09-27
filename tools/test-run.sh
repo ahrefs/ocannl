@@ -22,6 +22,7 @@
 # Usage:
 #   tools/test-run.sh run   [--cap N] [DUNE ARGS...]   # foreground; digest; dune's status (2: refused)
 #   tools/test-run.sh start [--cap N] [DUNE ARGS...]   # detached; survives the session
+#   tools/test-run.sh plan  [--cap N] [DUNE ARGS...]   # what `run` would inject and take; runs nothing
 #   tools/test-run.sh repeat [--cap N] [--alone] N [DUNE ARGS...]
 #                                                      # compare N isolated runs
 #   tools/test-run.sh status [RUN|last]                # one-shot, never blocks
@@ -1487,7 +1488,7 @@ finish_run() { # rc -> append sentinel, record verdict
 }
 
 sub=${1:-}
-[ -n "$sub" ] || die "usage: tools/test-run.sh run|start|repeat|status|wait|stop|list|idle|paths|lock-status ... (see header)"
+[ -n "$sub" ] || die "usage: tools/test-run.sh run|start|plan|repeat|status|wait|stop|list|idle|paths|lock-status ... (see header)"
 shift
 
 case $sub in
@@ -1876,6 +1877,60 @@ case $sub in
     # repeat_exit keeps cancellation deferred through cleanup/comparison and
     # publishes the atomic verdict while signals are ignored.
     exit "$final_rc"
+    ;;
+  plan)
+    # What `run` would do with this argv, without running it: the batch's
+    # resolved backends and why, the width it would inject, and the fleet slot
+    # it would take. The only thing it runs is the readers' build, so it
+    # refuses while a run holds this worktree (that run's dune owns _build),
+    # and its --cap bounds that build as it would a run's.
+    cap=${OCANNL_TOOL_TEST_CAP:-3600}
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --cap) [ $# -ge 2 ] || die "--cap requires a value"; cap=$2; shift 2 ;;
+        --) shift; break ;;
+        *) break ;;
+      esac
+    done
+    normalize_cap
+    reject_misplaced_options "$@"
+    [ $# -gt 0 ] || set -- runtest
+    select_dune
+    plan_slot
+    probe_locks "$LOCK" "$PWD/.test-run.lock"
+    case $? in
+      0) ;;
+      3) die "a test-run holds this worktree ($LOCK); plan once it is done" ;;
+      *) die "cannot inspect the worktree lock: $LOCK" ;;
+    esac
+    plan_log=$(mktemp "${TMPDIR:-/tmp}/test-run-plan.XXXXXX") || die "cannot create a scratch file"
+    # Resolved whatever this box is: the backends are what was asked for.
+    batch_resolve "$DUNE" "$plan_log" "$cap" "$@"
+    plan_width_cap "$@"
+    plan_slot_kind
+    if [ -n "$width_cap" ]; then
+      width_sub=$1
+      shift
+      set -- "$width_sub" -j "$width_cap" "$@"
+    fi
+    echo "command: dune $*"
+    echo "backends: $(batch_summary)"
+    sed 's/^test-run: batch: /  /' "$plan_log"
+    rm -f "$plan_log"
+    if [ -n "$width_cap" ]; then
+      echo "width: -j $width_cap, injected ($batch_width_hazard hazard, for $batch_width_backend)"
+    elif [ -n "$width_announce" ]; then
+      echo "width: the caller's (a -j $batch_width_cap cap applies here, for $batch_width_backend)"
+    else
+      echo "width: dune's default (no backend of the batch meets a cap on this box)"
+    fi
+    [ -z "$width_announce" ] || printf '  %s\n' "$width_announce"
+    if [ -n "$slot_fw" ]; then
+      echo "slot: --$slot_kind"
+      printf '  %s\n' "$slot_announce"
+    else
+      echo "slot: none (not a fleet box, or the slot is turned off)"
+    fi
     ;;
   run | start)
     cap=${OCANNL_TOOL_TEST_CAP:-3600}
@@ -2395,5 +2450,5 @@ case $sub in
     done
     [ "$found" = 1 ] || echo "no recorded runs in $RUNS"
     ;;
-  *) die "unknown subcommand: $sub (run|start|repeat|status|wait|stop|list|idle)" ;;
+  *) die "unknown subcommand: $sub (run|start|plan|repeat|status|wait|stop|list|idle)" ;;
 esac

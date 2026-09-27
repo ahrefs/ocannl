@@ -2297,7 +2297,9 @@ that they earn a lookup rather than always-loaded space.
   can hold several backends takes the tightest width any of them meets (hip and cc beside a small
   pool on rog: hip's `-j 4`). No stanza names hip today, so `runtest test/operations` with the
   stock cc configuration holds no HIP process on minix and stays uncapped; with hip as the backend
-  `test/config/ocannl_config` sets, it gets `-j 4` like `OCANNL_BACKEND=hip`. A batch there that holds no GPU must take its fleet slot
+  `test/config/ocannl_config` sets, it gets `-j 4` like `OCANNL_BACKEND=hip`. `tools/test-run.sh plan
+  <dune args>` prints the resolved backends and why, the width and the slot, and runs nothing but
+  the readers' build. A batch there that holds no GPU must take its fleet slot
   as `execution slot --cpu`: the slot is fail-closed, so an undeclared cc batch waits on one of
   the two GPU tokens and rog runs at two batches, not four — which `tools/test-run.sh` now does
   itself (next bullet). Measuring a slot count: the

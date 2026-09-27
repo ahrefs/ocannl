@@ -115,7 +115,10 @@
 #      width; hip and cc beside a small pool on rog take the tighter.
 #  52. the native widths derive from one place: each hip cap is its measured
 #      budget over its slot count, and the numbers are the measured ones.
-#  65 sits between legs 51 and 52: the planning window (gh-ocannl-1066).
+#  64-65 sit between legs 51 and 52: `plan`, and the planning window
+#      (gh-ocannl-1066).
+#  64. `plan` prints the resolved backends, the width and the slot, and runs
+#      no dune and records no run.
 #  65. a `stop` while the launcher resolves the backends (under the lock,
 #      before publication) withdraws the launch: exit 143, nothing run or
 #      published, the worktree idle.
@@ -2622,6 +2625,27 @@ if [ -z "$native_detail" ]; then
   report 0 "native: with OCANNL_BACKEND unset the width follows the batch's resolved backends, the tightest of them"
 else
   report 1 "native: with OCANNL_BACKEND unset the width follows the batch's resolved backends, the tightest of them" "$native_detail"
+fi
+
+# Leg 64: `plan` prints what `run` would do with an argv -- the resolved
+# backends and why, the width, the slot -- and runs nothing: no dune call, no
+# run recorded. Driven on the minix shape of leg 51 (a configuration naming
+# hip on a small SDMA pool).
+native_detail=
+export FAKE_BACKEND_TEST=hip
+native_probe native-plan "$dxg_absent" "$kfd_small" "$nv_absent" "" plan build @cheap
+unset FAKE_BACKEND_TEST
+{ [ "$argv_rc" = 0 ] && [ -z "$argv_calls" ] && [ -z "$argv_dir" ]; } ||
+  native_detail="exit $argv_rc; dune calls: ${argv_calls:-<none>}; run: ${argv_dir:-<none>}; stderr: $argv_err"
+for line in "command: dune build -j 4 @cheap" "backends: hip, cc" "holds hip: test/config resolves backend=hip" \
+            "width: -j 4, injected (sdma hazard, for hip)" "slot: none"; do
+  [ -z "$native_detail" ] || break
+  grep -qF -- "$line" <<<"$argv_out" || native_detail="no '$line' in: $argv_out"
+done
+if [ -z "$native_detail" ]; then
+  report 0 "plan: prints the resolved backends, the width and the slot, and runs nothing"
+else
+  report 1 "plan: prints the resolved backends, the width and the slot, and runs nothing" "$native_detail"
 fi
 
 # Leg 65: the planning window. The backends resolve under the worktree lock
