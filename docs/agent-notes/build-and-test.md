@@ -1811,7 +1811,17 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   boundary Dune can build the parent checkout while this script reports the detached commit.
   `--expect-lib cudajit|hipjit|metal` asserts all three
   pieces of optional-backend provenance above (positive `.cmi`, vendor `select` arm, and the other
-  two GPU backends' absent `.cmi` -- each fleet box carries one vendor package). A test, probe or
+  two GPU backends' absent `.cmi` -- each fleet box carries one vendor package), then runs
+  `bin/device_props` under the pinned backend and puts the tile-MMA capability it reports on the
+  verdict line as its `tile_mma` field, a tile such as `16x16x16` or `none` (gh-ocannl-1070). A compiled, selected
+  hipjit said nothing about what it EMITS: with `HIP_PATH` unset -- which is every hermetic leg --
+  the backend searched no distro `/usr` tree, found no rocWMMA headers, and every WMMA test ran the
+  scalar fallback green. For hipjit the capability is asserted from two halves no box list
+  restates: the backend's own per-device `tile_mma_eligible` (its gate's device predicate, surfaced
+  in HIP's `static_properties`) and a header probe kept independent of the backend's search, the
+  tree `hipconfig --path` names holding `rocwmma.hpp` and `rocwmma/internal/types.hpp`. Both present
+  and no capability fails the trip; either absent prints `NONE -- ... scalar fallback` with the
+  reason and passes, since that box cannot tensorize. A test, probe or
   `--record-golden` trip also requires a backend and
   asserts `_build/default/test/config/ocannl_backend.txt`; an unrestricted test alias is reported
   only as passing under that configuration, since the alias may be backend-independent, while a

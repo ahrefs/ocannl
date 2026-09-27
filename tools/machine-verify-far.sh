@@ -372,11 +372,71 @@ assert_optional_library() {
   echo "machine-verify: other-backend negative control: PASS absent:$absent"
 }
 
+# The optional library being compiled and selected does not say what the
+# backend will emit: HIP advertises tile-MMA only when the device is RDNA3+
+# wave32 AND the host has a complete rocWMMA header tree, and without it every
+# Tile_mma renders the lane-0 scalar fallback while each WMMA test stays green.
+# A hermetic environment is exactly where the header half went missing: with
+# HIP_PATH unset the backend searched no distro /usr tree (gh-ocannl-1070). So
+# the probe states the capability the backend reports, bin/device_props being
+# the supported readback of it, and the verdict line carries it.
+#
+# For hipjit it is also asserted where the box can be seen to have it, from
+# two halves no box list restates: the backend's own per-device
+# `tile_mma_eligible` (the predicate it gates on), and a header probe
+# deliberately independent of the backend's search -- the tree `hipconfig
+# --path` names, holding rocwmma.hpp AND rocwmma/internal/types.hpp (the
+# distro librocwmma-dev ships the umbrella headers without internal/, a tree
+# the backend rightly refuses; gh-ocannl-1032). Both halves present and no
+# capability advertised is a failure. Either half absent is reported loudly as
+# scalar-only, not failed: that box cannot tensorize, and says why.
+tile_mma=
+report_tile_mma() {
+  [ -n "$expect_lib" ] || return 0
+  dune_build bin/device_props.exe || exit $?
+  props=$(opam_exec env "OCANNL_BACKEND=$backend" _build/default/bin/device_props.exe </dev/null) ||
+    fail "the device probe _build/default/bin/device_props.exe failed"
+  echo "=== machine-verify device probe (bin/device_props; backend=$backend) ==="
+  printf '%s\n' "$props"
+  echo "=== end device probe ==="
+  probed_backend=$(printf '%s\n' "$props" | sed -n 's/^backend = //p')
+  [ "$probed_backend" = "$backend" ] ||
+    fail "the device probe ran on backend '$probed_backend', not $backend"
+  mma_tile=$(printf '%s\n' "$props" | sed -n 's/^limits\.mma\.mma_tile = //p' | tr ' ' x)
+  if [ -n "$mma_tile" ]; then tile_mma=$mma_tile; else tile_mma=none; fi
+  if [ "$expect_lib" != hipjit ]; then
+    echo "machine-verify: tile-MMA capability ($backend): $tile_mma (reported, not asserted for $expect_lib)"
+    return 0
+  fi
+  eligibility=$(printf '%s\n' "$props" | sed -n 's/^static\.device\[[0-9]*\]\.tile_mma_eligible = //p')
+  [ -n "$eligibility" ] ||
+    fail "the device probe reported no per-device tile_mma_eligible; the tile-MMA check would be vacuous"
+  if printf '%s\n' "$eligibility" | grep -qvx true; then
+    why="a device is not tile-MMA eligible (RDNA3+ wave32)"
+  elif ! hip_root=$(capped hipconfig --path 2>/dev/null) || [ -z "$hip_root" ]; then
+    why="hipconfig --path gave no HIP tree to probe for rocWMMA headers"
+  elif [ ! -f "$hip_root/include/rocwmma/rocwmma.hpp" ] ||
+    [ ! -f "$hip_root/include/rocwmma/internal/types.hpp" ]; then
+    why="no complete rocWMMA header tree under hipconfig --path=$hip_root"
+  else
+    [ "$tile_mma" != none ] ||
+      fail "tile-MMA capability missing: every device is eligible and $hip_root/include holds rocWMMA, but the backend advertises none -- WMMA tests would exercise only the scalar fallback"
+    echo "machine-verify: tile-MMA capability: PASS $tile_mma (devices eligible; rocWMMA under $hip_root/include)"
+    return 0
+  fi
+  if [ "$tile_mma" = none ]; then
+    echo "machine-verify: tile-MMA capability: NONE -- every Tile_mma renders the scalar fallback here ($why)"
+  else
+    echo "machine-verify: tile-MMA capability: $tile_mma, not expected ($why); the backend found headers elsewhere"
+  fi
+}
+
 echo "machine-verify: build: opam exec --switch=$opam_switch -- dune build -j $jobs @check"
 dune_build @check || exit $?
 echo "machine-verify: @check: PASS (compilation only; no backend execution claimed)"
 assert_backend
 assert_optional_library
+report_tile_mma
 assert_source_state "after @check and provenance checks"
 
 while [ $# -gt 0 ]; do
@@ -462,5 +522,5 @@ while [ $# -gt 0 ]; do
 done
 
 assert_source_state "before final certification"
-echo "machine-verify: verified box=$actual_box commit=$full_sha backend=${backend:-not-run}"
+echo "machine-verify: verified box=$actual_box commit=$full_sha backend=${backend:-not-run}${tile_mma:+ tile_mma=$tile_mma}"
 exit 0

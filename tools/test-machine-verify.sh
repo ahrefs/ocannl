@@ -106,6 +106,26 @@ if [ "$1" = build ]; then
               mkdir -p "$lib/.hip_backend.objs/byte" && touch "$lib/.hip_backend.objs/byte/hip_backend.cmi"
             fi ;;
         esac ;;
+      bin/device_props.exe)
+        # The backend's own capability readback, as each mode's backend would
+        # print it: the backend is the one it observes pinned, and a HIP device
+        # carries the per-device eligibility the tile-MMA check reads.
+        mkdir -p _build/default/bin
+        eligible=true mma=advertised
+        case $MODE in
+          lib-mma-none | lib-no-rocwmma) mma=none ;;
+          lib-ineligible) eligible=false mma=none ;;
+          lib-no-eligibility) eligible= ;;
+        esac
+        { printf '#!/usr/bin/env bash\n'
+          printf '[ "${OCANNL_BACKEND:-}" = %q ] || { echo "fixture: probe backend not pinned" >&2; exit 94; }\n' "$WANT_BACKEND"
+          printf 'echo "backend = $OCANNL_BACKEND"\n'
+          [ "$WANT_BACKEND" != hip ] || [ -z "$eligible" ] ||
+            printf 'echo "static.device[0].tile_mma_eligible = %s"\n' "$eligible"
+          [ "$mma" != advertised ] || printf 'echo "limits.mma.mma_tile = 16 16 16"\n'
+          [ "$mma" = advertised ] || printf 'echo "limits.mma = ()"\n'
+        } >_build/default/bin/device_props.exe
+        chmod +x _build/default/bin/device_props.exe ;;
       test/config/ocannl_backend.txt)
         if [ "$MODE" = backend-mismatch ]; then echo hip; else echo "$WANT_BACKEND"; fi >_build/default/test/config/ocannl_backend.txt ;;
       @golden)
@@ -128,7 +148,18 @@ elif [ "$1" = promotion ]; then
 else exit 99
 fi
 SH
-chmod +x "$TMP/bin/ssh" "$TMP/bin/opam" "$TMP/bin/dune"
+# The ROCm tool's own answer to "where is HIP", which the tile-MMA check reads
+# its header expectation from; the trees below stand for a complete rocWMMA
+# install and the distro's umbrella-only one (gh-ocannl-1032).
+cat >"$TMP/bin/hipconfig" <<'SH'
+#!/usr/bin/env bash
+[ "$1" = --path ] || exit 98
+printf '%s\n' "$FIXTURE_HIP_ROOT"
+SH
+mkdir -p "$TMP/hip-complete/include/rocwmma/internal" "$TMP/hip-partial/include/rocwmma"
+touch "$TMP/hip-complete/include/rocwmma/rocwmma.hpp" "$TMP/hip-complete/include/rocwmma/internal/types.hpp" \
+  "$TMP/hip-partial/include/rocwmma/rocwmma.hpp"
+chmod +x "$TMP/bin/ssh" "$TMP/bin/opam" "$TMP/bin/dune" "$TMP/bin/hipconfig"
 # A private Git wrapper is only for deterministic transport/cleanup failures;
 # every other operation is the real executable, including source assertions.
 cat >"$TMP/bin/git" <<'SH'
@@ -148,7 +179,7 @@ chmod +x "$TMP/bin/git"
 # The fakes read their controls from a file rather than the environment: the
 # local transport clears the environment exactly as an SSH session starts
 # without the caller's, so only a file reaches a fake on both transports.
-for fake in ssh opam dune git; do
+for fake in ssh opam dune git hipconfig; do
   { sed -n 1p "$TMP/bin/$fake"; printf '. %q\n' "$TMP/fixture.env"; sed 1d "$TMP/bin/$fake"; } >"$TMP/fake" &&
     cat "$TMP/fake" >"$TMP/bin/$fake" || exit 2
 done
@@ -156,7 +187,7 @@ rm -f "$TMP/fake"
 
 # Placement of the fixture BOX, read by the fake `ssh -G`, and the transport a
 # case expects. A case overrides them with a prefix assignment on its call.
-ENDPOINT=192.0.2.1 ENDPOINT_PORT=22 ENDPOINT_PROXY= TRANSPORT=ssh BACKEND=cc
+ENDPOINT=192.0.2.1 ENDPOINT_PORT=22 ENDPOINT_PROXY= TRANSPORT=ssh BACKEND=cc HIP_TREE=hip-complete
 
 run_case() { # SUBJECT NAME MODE [verifier args]
   local subject=$1 name=$2 mode=$3
@@ -178,7 +209,7 @@ run_case() { # SUBJECT NAME MODE [verifier args]
   for var in GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$GIT_CONFIG_GLOBAL" REAL_GIT="$REAL_GIT" \
     FIXTURE_PUSHED="$TMP/pushed.git" MODE="$mode" FIXTURE_REPO="$run/repo" FIXTURE_SHA="$SHA" \
     AUDIT="$run/audit" SSH_LOG="$run/ssh-log" ENDPOINT="$ENDPOINT" ENDPOINT_PORT="$ENDPOINT_PORT" \
-    ENDPOINT_PROXY="$ENDPOINT_PROXY" WANT_BACKEND="$BACKEND"; do
+    ENDPOINT_PROXY="$ENDPOINT_PROXY" WANT_BACKEND="$BACKEND" FIXTURE_HIP_ROOT="$TMP/$HIP_TREE"; do
     printf 'export %s=%q\n' "${var%%=*}" "${var#*=}"
   done >"$TMP/fixture.env"
   # OPAMSWITCH and DUNE_BUILD_DIR stand for the caller's session: an SSH
@@ -318,6 +349,32 @@ BACKEND=metal check_case lib-stub-arm lib-stub 2 'metal_backend_impl.ml selected
 BACKEND=metal check_case lib-missing lib-absent 2 'metal evidence missing: .*metal_backend.cmi' --expect-lib metal
 BACKEND=metal check_case lib-other-present lib-other 2 "negative control failed: another backend's artifact exists at .*hip_backend.cmi" \
   --expect-lib metal
+# The tile-MMA capability (gh-ocannl-1070): stated for every optional library,
+# asserted for hipjit where the device is eligible and hipconfig's tree holds a
+# complete rocWMMA install, reported as scalar-only where either half is absent.
+if grep -q '^machine-verify: tile-MMA capability (metal): 16x16x16 (reported, not asserted for metal)$' \
+  "$TMP/runs/lib-metal/stdout" &&
+  grep -q "^machine-verify: verified .*backend=metal tile_mma=16x16x16$" "$TMP/runs/lib-metal/stdout"; then
+  report 0 'metal: tile-MMA capability stated and carried on the verdict'
+else report 1 'metal: tile-MMA capability stated and carried on the verdict' "$TMP/runs/lib-metal"; fi
+BACKEND=hip check_case lib-hipjit lib-ok 0 \
+  "^machine-verify: tile-MMA capability: PASS 16x16x16 \\(devices eligible; rocWMMA under $TMP/hip-complete/include\\)$" \
+  --expect-lib hipjit
+grep -q '^machine-verify: verified .*backend=hip tile_mma=16x16x16$' "$TMP/runs/lib-hipjit/stdout"
+report $? 'hipjit: the verdict carries the asserted capability' "$TMP/runs/lib-hipjit"
+BACKEND=hip check_case lib-mma-missing lib-mma-none 2 \
+  'tile-MMA capability missing: every device is eligible and .*/hip-complete/include holds rocWMMA, but the backend advertises none' \
+  --expect-lib hipjit
+BACKEND=hip check_case lib-ineligible lib-ineligible 0 \
+  'tile-MMA capability: NONE -- every Tile_mma renders the scalar fallback here \(a device is not tile-MMA eligible' \
+  --expect-lib hipjit
+BACKEND=hip HIP_TREE=hip-partial check_case lib-partial-rocwmma lib-no-rocwmma 0 \
+  'tile-MMA capability: NONE -- .*\(no complete rocWMMA header tree under hipconfig --path=.*/hip-partial\)$' \
+  --expect-lib hipjit
+grep -q '^machine-verify: verified .*backend=hip tile_mma=none$' "$TMP/runs/lib-partial-rocwmma/stdout"
+report $? 'hipjit: a scalar-only box says so on the verdict' "$TMP/runs/lib-partial-rocwmma"
+BACKEND=hip check_case lib-no-eligibility lib-no-eligibility 2 \
+  'reported no per-device tile_mma_eligible; the tile-MMA check would be vacuous' --expect-lib hipjit
 BACKEND=cc check_refusal lib-backend-conflict '^machine-verify: --expect-lib metal conflicts with --backend cc$' --expect-lib metal
 
 # The deprecated name forwards every argument and says so on stderr.
@@ -364,6 +421,16 @@ golden_mutation_oracle() {
 }
 mutated=$(mutant_pair no-golden-scope far '/^assert_only_promoted_goldens\(\) \{/ { print; print "  return 0"; next } { print }') || exit 2
 expect_rejected 'golden scope removed' "$mutated" golden_mutation_oracle '^machine-verify: verified '
+# The capability assertion dropped: an eligible device beside a complete
+# rocWMMA tree certifies a scalar-only backend, the gh-ocannl-1070 blind spot.
+tile_mma_oracle() {
+  local subject=$1 name=$2
+  BACKEND=hip run_case "$subject" "$name" lib-mma-none --expect-lib hipjit || return 1
+  [ "$(cat "$TMP/runs/$name/rc")" = 2 ] &&
+    grep -q 'tile-MMA capability missing' "$TMP/runs/$name/stdout"
+}
+mutated=$(mutant_pair no-tile-mma-assertion far '/^    \[ "\$tile_mma" != none \] \|\|$/ { getline; next } { print }') || exit 2
+expect_rejected 'tile-MMA assertion removed' "$mutated" tile_mma_oracle '^machine-verify: verified .*tile_mma=none$'
 # Every address counted as this machine's: --local then runs on the wrong box.
 mismatch_oracle() {
   local subject=$1 name=$2
