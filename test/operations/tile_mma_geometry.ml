@@ -341,9 +341,9 @@ let () =
    whole vectors plus one PARTIAL vector whose lanes past its width read as zero and are not
    stored. A 6 x 19 site divides neither way at every width the fleet renders (19 is 3 mod 4, 8 and
    16; 6 is 2 mod 4): the header names the tails, no scalar accumulator is emitted, the partial
-   column is a zeroed register filled at exactly its width — a three-element copy at f32, the
-   narrow bridges called at width 3 for bf16 (widened to f32) and half — and the values match the
-   serial twin bitwise. *)
+   column is a zeroed register filled at exactly its width — a three-lane initializer and three lane
+   stores at f32 (gh-ocannl-1071), the narrow bridges called at width 3 for bf16 (widened to f32)
+   and half — and the values match the serial twin bitwise. *)
 let () =
   let m, nt, k = (6, 19, 5) in
   let names tag =
@@ -372,7 +372,7 @@ let () =
        twin. *)
     let av = Ll_test.cycle ~dims:[| m; k |] ~modulus:7 ~offset:(-3.) ~stride:0.5 in
     let bv = Ll_test.cycle ~dims:[| k; nt |] ~modulus:7 ~offset:(-3.) ~stride:0.5 in
-    let leg ~tag ~prec ~tile ~fill =
+    let leg ~tag ~prec ~tile ~partial =
       let a = NTDSL.init ~l:("tmt_a_" ^ tag) ~prec ~i:[ k ] ~o:[ m ] ~f:av () in
       let b = NTDSL.init ~l:("tmt_b_" ^ tag) ~prec ~i:[ nt ] ~o:[ k ] ~f:bv () in
       let%op serial = a * b in
@@ -393,20 +393,27 @@ let () =
           p n_tiled (register_tiled census);
           p n_header (has "; column tail 3 in 1 vector; row tail 2)");
           p n_scalar (not (has "tmma_acc__"));
-          p n_partial (has "tmma_c_0_0__ = {0};" && has fill);
+          p n_partial (partial has);
           p_all2 n_parity got want ~f:Float.equal
       | _ -> assert false
     in
     (* A 16-column width at the file's widest f32 lanes: [4x1] of 16, [4x2] of 8, [4x4] of 4 —
        within every budget, and 19 - 16 = 3 leftover columns. *)
+    let lane l = Printf.sprintf "(&tmma_d__[(tmma_i__ + 0) * %d + 16 + 0])[%d]" nt l in
     leg ~tag:"f32" ~prec:Ir.Ops.single
       ~tile:(Some { RT.rm = 4; rn = 16 / lanes; lanes })
-      ~fill:(Printf.sprintf ", %d);" (3 * elt_bytes));
+      ~partial:(fun has ->
+        has ("tmma_c_0_0__ = {" ^ lane 0)
+        && has (lane 2 ^ "};")
+        && has (lane 2 ^ " = tmma_c_0_0__[2];")
+        && not (has (lane 3)));
     (* The narrow legs leave the geometry to the renderer (the lane count follows the COMPUTE
        precision, f32 for bf16 and — under the default policy — for half too); the bridge macro's
        lane argument is the valid width. *)
-    leg ~tag:"bf16" ~prec:Ir.Ops.bfloat16 ~tile:None ~fill:"u32, 3, tmma_c_0_0__";
-    leg ~tag:"half" ~prec:Ir.Ops.half ~tile:None ~fill:"h, 3, tmma_c_0_0__"
+    leg ~tag:"bf16" ~prec:Ir.Ops.bfloat16 ~tile:None ~partial:(fun has ->
+        has "tmma_c_0_0__ = {0};" && has "u32, 3, tmma_c_0_0__");
+    leg ~tag:"half" ~prec:Ir.Ops.half ~tile:None ~partial:(fun has ->
+        has "tmma_c_0_0__ = {0};" && has "h, 3, tmma_c_0_0__")
   end
 
 (* === The seeding === *)

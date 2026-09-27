@@ -248,10 +248,11 @@ type kernel_loop = {
           loop carried the anchor". That is what made CI's macos-latest leg red across all three
           widths and both optimization levels (gh-ocannl-752), and clang folding a plain load into
           its use does the same to the f32 tile's [tmma_as_0__ = tmma_a__[...]] under some
-          [-march]es. The B-row load survives both: it is a macro (or a [__builtin_memcpy]) whose
-          instructions no inliner can move to another line. Listing both keeps the anchor working
-          where either does, and every pattern of one loop must still name only that loop's lines --
-          which is a claim of its own below. *)
+          [-march]es. The B-row load survives both: it is a macro (or a [__builtin_memcpy], or at a
+          partial width a lane initializer whose every line names the row) whose instructions no
+          inliner can move to another line. Listing both keeps the anchor working where either does,
+          and every pattern of one loop must still name only that loop's lines -- which is a claim
+          of its own below. *)
   op_class : Census.op_class;
   kind : loop_kind;
   what : string;  (** how the census table names the row *)
@@ -1826,19 +1827,22 @@ let () =
       (* {b The known defects, pinned as classes.} The first gcc run of these rows (gh-ocannl-948)
          found two constructs whose k-loop touches the stack although the pass fits, on every x86
          column with an FMA -- defects in the EMISSION, reported here rather than fixed, since each
-         is codegen work with its own inventory:
-
-         - the partial-vector column tail: [vtyp x = {0}; __builtin_memcpy(&x, p, <width>)], which
-         gcc lowers through a stack slot on every k step (8 references in a one-column tail whose
-         whole-vector twins at [n = 512] hold none). Clang lowers the same load in registers, so the
-         classes are asked of the column's COMPILER, from its predefined macros, as well as of its
-         target: on a clang x86 column these rows stay under the strict claim; - the narrow-storage
-         widening bridges ([vec_bridge]'s arms for a storage precision narrower than the compute
-         one), which gcc routes through general-purpose registers ([movq]/[shrq]) and the stack: the
-         (fp16, f32) tile at 12 to 35 references on gcc 15, and on CI's gcc 13 the bf16 tile at
+         is codegen work with its own inventory. The one left is the narrow-storage widening bridges
+         ([vec_bridge]'s arms for a storage precision narrower than the compute one), which gcc
+         routes through general-purpose registers ([movq]/[shrq]) and the stack: the (fp16, f32)
+         tile at 12 to 35 references on gcc 15, and on CI's gcc 13 the bf16 tile at
          [-march=sapphirerapids] too (2 references, none on gcc 15). That is why the class is the
          bridge FAMILY and not one format: a class drawn around the format one compiler happened to
-         show is a row list by another name.
+         show is a row list by another name. Clang lowers the same bridges in registers, so a class
+         is asked of the column's COMPILER, from its predefined macros, as well as of its target: on
+         a clang x86 column these rows stay under the strict claim.
+
+         The other was the partial-vector column tail, [vtyp x = {0}; __builtin_memcpy(&x, p,
+         <width>)], which gcc lowered through a stack slot on every k step (6 to 8 references in a
+         one-column tail whose whole-vector twins at [n = 512] hold none). gh-ocannl-1071 fixed it
+         in the emission -- a partial vector now crosses lane by lane -- and this list's second
+         claim is what made its deletion necessary: the class stopped reproducing on every column.
+         Its rows are under the strict claim now.
 
          They are pinned as CLASSES, not as a list of rows: which widths and targets show them is a
          fact about the gcc version as much as about the emission (gh-ocannl-752's lesson), and a
@@ -1848,10 +1852,6 @@ let () =
          the class leaves this list. The list can only shrink. *)
       let known_defects =
         [
-          ( "the gcc partial-vector tail load",
-            fun (r, (g : tile_geometry)) ->
-              r.caps.gcc && r.caps.x86 && g.partial
-              && match g.pass with Tail -> true | Full -> false );
           ( "the gcc narrow-storage widening bridges",
             fun (r, _) -> r.caps.gcc && r.caps.x86 && not (String.equal r.loop.store r.loop.comp) );
         ]
@@ -1860,8 +1860,7 @@ let () =
       let spills (r, _) = match counts r with Some c -> c.Census.stack_refs > 0 | None -> true in
       let resident_claim =
         "no register-tile k-loop references the stack where its pass fits the target's vector \
-         registers, outside the known defects (gcc partial-vector tail load, gcc narrow-storage \
-         bridges)"
+         registers, outside the known defects (gcc narrow-storage bridges)"
       in
       let unexcused = List.filter resident_rows ~f:(fun rg -> not (known rg)) in
       if List.is_empty unexcused then

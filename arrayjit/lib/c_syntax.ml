@@ -2762,8 +2762,8 @@ module C_syntax (B : C_syntax_config) = struct
      and give back the traffic win.
 
      [vec_bridge] returns the [load]/[store] statement builders for one (storage, compute) pair. It
-     is the identity memcpy when they coincide (the pre-gh-517 f32/f64 path, unchanged byte for
-     byte), and otherwise:
+     is the identity memcpy when they coincide (the pre-gh-517 f32/f64 path, unchanged byte for byte
+     at full width; a partial vector crosses lane by lane, gh-ocannl-1071), and otherwise:
 
      - bf16 is the top 16 bits of an f32, so widening is a zero-extend and a shift, and narrowing is
      [single_to_bfloat16]'s round-to-nearest-even done with vector arithmetic — bitwise what the
@@ -2794,10 +2794,10 @@ module C_syntax (B : C_syntax_config) = struct
     let base mem = string "&" ^^ mem in
     let call fn args = string (fn ^ "(") ^^ separate (string ", ") args ^^ string ");" in
     (* [~width] is the number of VALID lanes, [lanes] for a whole vector. A PARTIAL vector -- the
-       register tiling's last column group, gh-ocannl-620 -- is declared zeroed, so its lanes past
-       [width] hold 0 rather than whatever the register held, and only [width] elements cross the
-       memory boundary in either direction: nothing past the extent is read or written. At full
-       width every spelling below is the pre-gh-620 one, byte for byte. *)
+       register tiling's last column group, gh-ocannl-620 -- is zeroed, so its lanes past [width]
+       hold 0 rather than whatever the register held, and only [width] elements cross the memory
+       boundary in either direction: nothing past the extent is read or written. At full width every
+       spelling below is the pre-gh-620 one, byte for byte. *)
     let declare ~width dst =
       string (if width < lanes then vtyp ^ " " ^ dst ^ " = {0};" else vtyp ^ " " ^ dst ^ ";")
     in
@@ -2819,18 +2819,34 @@ module C_syntax (B : C_syntax_config) = struct
       ^^ string post ^^ semi
     in
     if Ops.equal_prec store_prec prec then
-      let bytes ~width v =
-        if width < lanes then Int.to_string (width * Ops.prec_in_bytes prec)
-        else "sizeof(" ^ v ^ ")"
-      in
+      (* A partial vector crosses lane by lane: an initializer naming its [width] elements (the
+         lanes it omits are zero, as C specifies for an aggregate initializer) and one element store
+         per lane. The whole-vector [__builtin_memcpy] at a byte count short of the vector
+         (gh-ocannl-1071) made gcc materialize the zeroed register in a stack slot and copy the row
+         into it, on every k step of the register tile's column tail; and a vector whose address
+         [memcpy] takes lives in memory for the whole k-loop, so the width-counted store of a
+         partial accumulator kept its register on the stack too. gcc builds the lane initializer
+         with loads and inserts, and the per-lane stores with extracts, in registers; clang lowers
+         either form in registers. *)
+      let lane ~mem l = parens (base mem) ^^ string (Printf.sprintf "[%d]" l) in
       ( (fun ~width ~dst ~mem ->
-          declare ~width dst ^^ hardline
-          ^^ string ("__builtin_memcpy(&" ^ dst ^ ", &")
-          ^^ mem
-          ^^ string (", " ^ bytes ~width dst ^ ");")),
+          if width < lanes then
+            string (vtyp ^ " " ^ dst ^ " = {")
+            ^^ nest 2 (flow (comma ^^ break 1) (List.init width ~f:(fun l -> lane ~mem l)))
+            ^^ string "};"
+          else
+            declare ~width dst ^^ hardline
+            ^^ string ("__builtin_memcpy(&" ^ dst ^ ", &")
+            ^^ mem
+            ^^ string (", sizeof(" ^ dst ^ "));")),
         fun ~width ~src ~mem ->
-          string "__builtin_memcpy(&" ^^ mem
-          ^^ string (Printf.sprintf ", &%s, %s);" src (bytes ~width src)) )
+          if width < lanes then
+            separate hardline
+              (List.init width ~f:(fun l ->
+                   lane ~mem l ^^ string (Printf.sprintf " = %s[%d];" src l)))
+          else
+            string "__builtin_memcpy(&" ^^ mem
+            ^^ string (Printf.sprintf ", &%s, sizeof(%s));" src src) )
     else
       match store_prec with
       | Ops.Bfloat16_prec _ ->
