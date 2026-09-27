@@ -57,12 +57,14 @@ let rec head = function Longident.Lident s -> s | Ldot (p, _) | Lapply (p, _) ->
       ([Local], or the harness's own top-level definitions with their class), or the values of a
       harness module an [open]/[include] brought in. Every binding form scopes its names — [let]
       (and [let rec] over its own right-hand sides), function parameters in order, match and [try]
-      cases, [for] indices, binding operators — and a later structure item sees the earlier ones.
+      cases, [for] indices, binding operators, [external]s, class parameters and [let]s, an object's
+      self and instance variables — and a later structure item sees the earlier ones.
     - a module name resolves through [modules]: the harness modules by their exact names, aliases of
-      them ([module L = Ll_test], [let module L = Ll_test in]), and aliases of [Ir]. A later binding
-      of the name to anything else removes it, and a nested structure's bindings die with it. Only
-      an exact path counts: [Outer.Ll_test.seq] is a module named [Ll_test] inside [Outer], not the
-      harness.
+      them ([module L = Ll_test], [let module L = Ll_test in], through a signature constraint), and
+      aliases of [Ir]. A later binding of the name to anything else removes it — a module, a
+      recursive module, a functor parameter in its body, a [(module B)] unpack — and a nested
+      structure's bindings die with it. Only an exact path counts: [Outer.Ll_test.seq] is a module
+      named [Ll_test] inside [Outer], not the harness.
 
     One boundary is deliberate. An [open] of a module the scan cannot read ([Base],
     [Verdict.Claims]) is opaque: its exported names are not modeled, so a later such open is not
@@ -102,10 +104,35 @@ let bind_values env names denotes =
       in
       { env with frames = frame :: env.frames }
 
+let pattern_unpacks patterns =
+  let found = ref [] in
+  let collector =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! pattern p =
+        (match p.ppat_desc with
+        | Ppat_unpack { txt = Some name; _ } -> found := name :: !found
+        | _ -> ());
+        super#pattern p
+    end
+  in
+  List.iter patterns ~f:collector#pattern;
+  !found
+
+let forget_modules env names =
+  { env with modules = List.fold names ~init:env.modules ~f:Map.remove }
+
+(** A pattern's value variables enter scope as the source's own, and the modules it unpacks
+    ([(module B : S)]) shadow whatever those names denoted. *)
+let bind_patterns env patterns =
+  forget_modules (bind_values env (pattern_vars patterns) Local) (pattern_unpacks patterns)
+
 let lookup env name = List.find_map env.frames ~f:(fun frame -> Map.find frame name)
 
-let module_of env module_expr =
+let rec module_of env module_expr =
   match module_expr.pmod_desc with
+  | Pmod_constraint (inner, _) -> module_of env inner
   | Pmod_ident { txt = Lident name; _ } -> Map.find env.modules name
   | Pmod_ident { txt; _ } -> (
       match Map.find env.modules (head txt) with Some Ir_root -> Some Ir_root | _ -> None)
@@ -173,15 +200,15 @@ class virtual scoped (surface : surface) =
       l
 
     method bindings env rec_flag bindings =
-      let names = pattern_vars (List.map bindings ~f:(fun b -> b.pvb_pat)) in
+      let patterns = List.map bindings ~f:(fun b -> b.pvb_pat) in
       let inner =
-        match rec_flag with Recursive -> bind_values env names Local | Nonrecursive -> env
+        match rec_flag with Recursive -> bind_patterns env patterns | Nonrecursive -> env
       in
       List.iter bindings ~f:(fun b -> ignore (self#value_binding inner b : value_binding));
-      names
+      bind_patterns env patterns
 
     method! case env c =
-      let inner = bind_values env (pattern_vars [ c.pc_lhs ]) Local in
+      let inner = bind_patterns env [ c.pc_lhs ] in
       ignore (self#pattern env c.pc_lhs : pattern);
       Option.iter c.pc_guard ~f:(fun g -> ignore (self#expression inner g : expression));
       ignore (self#expression inner c.pc_rhs : expression);
@@ -194,10 +221,10 @@ class virtual scoped (surface : surface) =
         List.fold items ~init:env ~f:(fun env item ->
             match item.pstr_desc with
             | Pstr_value (rec_flag, bindings) ->
-                let names = pattern_vars (List.map bindings ~f:(fun b -> b.pvb_pat)) in
+                let patterns = List.map bindings ~f:(fun b -> b.pvb_pat) in
                 let inner =
                   match rec_flag with
-                  | Recursive -> bind_values env names Local
+                  | Recursive -> bind_patterns env patterns
                   | Nonrecursive -> env
                 in
                 let classes =
@@ -206,8 +233,18 @@ class virtual scoped (surface : surface) =
                 in
                 List.fold2_exn
                   (List.map bindings ~f:(fun b -> pattern_vars [ b.pvb_pat ]))
-                  classes ~init:env
+                  classes
+                  ~init:(forget_modules env (pattern_unpacks patterns))
                   ~f:(fun env names denotes -> bind_values env names denotes)
+            | Pstr_primitive { pval_name = { txt = name; _ }; _ } ->
+                ignore (self#structure_item env item : structure_item);
+                bind_values env [ name ] Local
+            | Pstr_recmodule declarations ->
+                let env =
+                  forget_modules env (List.filter_map declarations ~f:(fun d -> d.pmb_name.txt))
+                in
+                ignore (self#structure_item env item : structure_item);
+                env
             | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } ->
                 ignore (self#structure_item env item : structure_item);
                 bind_module env name pmb_expr
@@ -231,8 +268,7 @@ class virtual scoped (surface : surface) =
           self#use (resolve surface env txt);
           super#expression env e
       | Pexp_let (rec_flag, bindings, body) ->
-          let names = self#bindings env rec_flag bindings in
-          ignore (self#expression (bind_values env names Local) body : expression);
+          ignore (self#expression (self#bindings env rec_flag bindings) body : expression);
           e
       | Pexp_function (params, constraint_, body) ->
           let env =
@@ -241,7 +277,7 @@ class virtual scoped (surface : surface) =
                 | Pparam_val (_, default, pattern) ->
                     Option.iter default ~f:(fun d -> ignore (self#expression env d : expression));
                     ignore (self#pattern env pattern : pattern);
-                    bind_values env (pattern_vars [ pattern ]) Local
+                    bind_patterns env [ pattern ]
                 | Pparam_newtype _ -> env)
           in
           Option.iter constraint_ ~f:(fun c ->
@@ -258,14 +294,13 @@ class virtual scoped (surface : surface) =
       | Pexp_for (pattern, low, high, _, body) ->
           ignore (self#expression env low : expression);
           ignore (self#expression env high : expression);
-          ignore
-            (self#expression (bind_values env (pattern_vars [ pattern ]) Local) body : expression);
+          ignore (self#expression (bind_patterns env [ pattern ]) body : expression);
           e
       | Pexp_letop { let_; ands; body } ->
           let operands = let_ :: ands in
           List.iter operands ~f:(fun b -> ignore (self#expression env b.pbop_exp : expression));
-          let names = pattern_vars (List.map operands ~f:(fun b -> b.pbop_pat)) in
-          ignore (self#expression (bind_values env names Local) body : expression);
+          let inner = bind_patterns env (List.map operands ~f:(fun b -> b.pbop_pat)) in
+          ignore (self#expression inner body : expression);
           e
       | Pexp_open ({ popen_expr; _ }, body) ->
           ignore (self#module_expr env popen_expr : module_expr);
@@ -276,6 +311,37 @@ class virtual scoped (surface : surface) =
           ignore (self#expression (bind_module env name module_expr) body : expression);
           e
       | _ -> super#expression env e
+
+    (* A functor's parameter shadows whatever its name denoted, in the functor's body. *)
+    method! module_expr env me =
+      match me.pmod_desc with
+      | Pmod_functor (Named ({ txt = Some name; _ }, parameter_type), body) ->
+          ignore (self#module_type env parameter_type : module_type);
+          ignore (self#module_expr (forget_modules env [ name ]) body : module_expr);
+          me
+      | _ -> super#module_expr env me
+
+    method! class_expr env ce =
+      match ce.pcl_desc with
+      | Pcl_fun (_, default, pattern, body) ->
+          Option.iter default ~f:(fun d -> ignore (self#expression env d : expression));
+          ignore (self#class_expr (bind_patterns env [ pattern ]) body : class_expr);
+          ce
+      | Pcl_let (rec_flag, bindings, body) ->
+          ignore (self#class_expr (self#bindings env rec_flag bindings) body : class_expr);
+          ce
+      | _ -> super#class_expr env ce
+
+    (* An object's self and its instance variables are in scope in every field. *)
+    method! class_structure env cs =
+      let vals =
+        List.filter_map cs.pcstr_fields ~f:(fun field ->
+            match field.pcf_desc with Pcf_val ({ txt; _ }, _, _) -> Some txt | _ -> None)
+      in
+      let inner = bind_values (bind_patterns env [ cs.pcstr_self ]) vals Local in
+      List.iter cs.pcstr_fields ~f:(fun field ->
+          ignore (self#class_field inner field : class_field));
+      cs
   end
 
 let root_env (surface : surface) =

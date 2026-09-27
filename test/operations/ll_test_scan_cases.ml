@@ -131,6 +131,15 @@ let () =
     (uses "open Ll_test\nlet f x = let y = seq x x in let seq = 1 in y + seq"
     && uses "let seq = 1\nopen Ll_test\nlet _ = seq"
     && not (uses "open Ll_test\nlet seq = 1\nlet _ = seq"));
+  p "a constrained alias of the harness is still the harness"
+    (uses "module B : S = Ll_builders\nlet _ = B.seq"
+    && uses "module B = (Ll_builders : S)\nlet _ = B.seq");
+  p "functor parameters, unpacked modules, externals and instance variables shadow the harness"
+    ((not (uses "module B = Ll_builders\nmodule F (B : S) = struct let _ = B.seq end"))
+    && (not (uses "module B = Ll_builders\nlet f (module B : S) = B.seq"))
+    && (not (uses "open Ll_test\nexternal seq : int -> int = \"x\"\nlet _ = seq"))
+    && (not (uses "open Ll_test\nlet o = object val seq = 1 method m = seq end"))
+    && not (uses "open Ll_test\nclass c seq = object method m = seq end"));
   (* The deliberate boundary: an open the scan cannot read is not taken to shadow the harness, as
      the tree's [open Ll_test] then [open Verdict.Claims] requires. *)
   p "an unreadable open after the harness's does not hide its builders"
