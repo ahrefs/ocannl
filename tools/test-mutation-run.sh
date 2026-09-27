@@ -26,16 +26,41 @@ done < <(sed -n 's/^\. \([A-Za-z0-9_./-]*\)$/\1/p' "$root/tools/test-run.sh")
 cat > "$fixture/bin/dune" <<'DUNE'
 #!/usr/bin/env bash
 set -eu
-[ "$*" = 'build -j 4 @probe' ]
+[ "$*" = 'build -j 4 @runtest-probe' ]
 printf '%s\n' invoked >> "$PROBE_HOME/invocations"
 case "$(cat module.ml)" in *MUTATED*) ;; *) exit 99 ;; esac
 cp module.ml "$PROBE_HOME/observed"
+# The test's stdout, where dune leaves it even when the test exits nonzero; the
+# golden, probe.expected, has three rows.
+out=${DUNE_BUILD_DIR:-_build}/default
+mkdir -p "$out"
+rows() { rm -f "$out/probe.exe.output"; printf "$1" > "$out/probe.exe.output"; }
 case "$PROBE_MODE" in
   fail)
+    rows 'first: false\nnested: label: false\nlast: true\n'
     printf 'FAIL: first: false\nFAIL: nested: label: false\nFAIL: first: false\n'
     printf 'prefix FAIL: decoy: false\nFAIL: true claim: true\nFAIL: suffix: false extra\n'
     exit 1 ;;
-  pass) exit 0 ;;
+  pass) rows 'first: true\nnested: label: true\nlast: true' ; exit 0 ;;
+  # A raise after a failed claim, as Verdict reports it (gh-ocannl-1067): one
+  # row printed of three, the other two never evaluated.
+  raise)
+    rows 'first: false\n'
+    printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'
+    printf 'STOPPED EARLY: an uncaught exception ended the run, so no check after it ran:\n'
+    printf 'Fatal error: exception Failure("injected")\n'
+    exit 1 ;;
+  # Each signal alone: rows short with no Verdict line, Verdict's line with every row.
+  short) rows 'first: false\nnested: label: true\n'; printf 'FAIL: first: false\n'; exit 1 ;;
+  stopped) rows 'first: false\nnested: label: true\nlast: true\n'
+    printf 'FAIL: first: false\nSTOPPED EARLY: an uncaught exception ended the run\n'; exit 1 ;;
+  more) rows 'first: false\nFAIL: extra\nnested: label: true\nlast: true\n'
+    printf 'FAIL: first: false\n'; exit 1 ;;
+  # The test never ran this time: the output a previous run left must not count.
+  stale) printf 'FAIL: first: false\n'; exit 1 ;;
+  reused) exit 0 ;;
+  both) rows 'first: false\nnested: label: true\nlast: true\n'
+    cp "$out/probe.exe.output" "$out/probe.actual"; printf 'FAIL: first: false\n'; exit 1 ;;
   compile) echo 'Error: injected compile failure'; exit 1 ;;
   refused) printf 'dune: unknown option\nUsage: dune build [OPTION]…\n'; exit 1 ;;
   restore_error) rm module.ml; mkdir module.ml; exit 1 ;;
@@ -53,6 +78,7 @@ export PATH="$fixture/bin:$PATH" PROBE_HOME="$fixture" OCANNL_TOOL_TEST_RUNS="$f
 export OCANNL_TOOL_FLEET_WORKER=none OCANNL_TOOL_DXG_DEVICE="$fixture/no-such-dxg" \
   OCANNL_TOOL_KFD_TOPOLOGY="$fixture/no-such-kfd" OCANNL_TOOL_NVIDIA_DEVICE="$fixture/no-such-nvidia"
 cd "$fixture/repo"
+printf 'first: true\nnested: label: true\nlast: true\n' > probe.expected
 printf 'prefix\r\nANCHOR\r\nsuffix without newline' > module.ml
 chmod 640 module.ml
 cp module.ml "$fixture/pristine"
@@ -61,7 +87,7 @@ run_case() {
   expected=$1
   shift
   set +e
-  tools/mutation-run.sh module.ml patch @probe > "$fixture/result" 2>&1
+  tools/mutation-run.sh module.ml patch "${PROBE_ALIAS:-@runtest-probe}" > "$fixture/result" 2>&1
   actual=$?
   set -e
   if [ "$actual" != "$expected" ]; then cat "$fixture/result"; echo "wrong exit: $actual != $expected"; exit 1; fi
@@ -74,23 +100,79 @@ run_case() {
 }
 export PROBE_MODE=fail
 run_case 1
-sed -n '/^false claims:$/,/^restored:/{ /^false claims:$/d; /^restored:/d; p; }' "$fixture/result" > "$fixture/claims"
+sed -n '/^false claims:$/,/^rows:/{ /^false claims:$/d; /^rows:/d; p; }' "$fixture/result" > "$fixture/claims"
 printf 'FAIL: first: false\nFAIL: nested: label: false\nFAIL: first: false\n' > "$fixture/expected"
 cmp "$fixture/claims" "$fixture/expected"
 grep -q '^run: ' "$fixture/result"
+grep -q '^rows: 3 printed of 3 in probe.expected$' "$fixture/result"
+reached() {
+  if grep -Eq '^(STOPPED EARLY|NEVER RAN|NOT COUNTED): ' "$fixture/result"; then
+    cat "$fixture/result"; echo "a run that reached its last row was flagged"; exit 1
+  fi
+}
+reached
 grep -q '^restored: byte-identical (cmp)$' "$fixture/result"
 printf 'PASS exact claims and red verdict, CRLF/no-final-newline restoration\n'
+# A run that did not reach its last row is no evidence: exit 4, never 1's "caught"
+# or 0's "survived" (gh-ocannl-1083). Each line names why; `stale` follows runs
+# that left a full three-row output behind, which it must not count.
+flagged() {
+  grep -q "^$1$" "$fixture/result" || { cat "$fixture/result"; echo "missing: $1"; exit 1; }
+  grep -q '^(not evidence: the mutant was neither caught nor survived)$' "$fixture/result"
+}
+for mode in raise short stopped stale reused both; do
+  export PROBE_MODE=$mode
+  run_case 4
+  case $mode in
+    raise)
+      grep -q '^rows: 1 printed of 3 in probe.expected$' "$fixture/result"
+      flagged 'STOPPED EARLY: Verdict reported an uncaught exception; no row after it ran' ;;
+    short)
+      grep -q '^FAIL: first: false$' "$fixture/result"
+      flagged "STOPPED EARLY: the mutated run printed 2 of the golden's 3 rows" ;;
+    stopped)
+      grep -q '^rows: 3 printed of 3 in probe.expected$' "$fixture/result"
+      flagged 'STOPPED EARLY: Verdict reported an uncaught exception; no row after it ran' ;;
+    stale|reused)
+      grep -q '^rows: not counted$' "$fixture/result"
+      flagged 'NEVER RAN: this run wrote no stdout of probe (a build failure, or an executable the mutation left unchanged, so dune reused its result)' ;;
+    both)
+      rm "$fixture/repo/_build/default/probe.actual"
+      flagged "NOT COUNTED: this run rewrote more than one candidate stdout of probe, so none is known to be the mutant's" ;;
+  esac
+done
+export PROBE_MODE=more
+run_case 1
+grep -q '^rows: 4 printed of 3 in probe.expected$' "$fixture/result"
+reached
+# DUNE_BUILD_DIR moves the tree the output is read from; _build keeps a full stale output.
+export PROBE_MODE=raise DUNE_BUILD_DIR="$fixture/build-elsewhere"
+run_case 4
+grep -q '^rows: 1 printed of 3 in probe.expected$' "$fixture/result"
+unset DUNE_BUILD_DIR
+printf 'PASS stopped early, never ran and unattributable runs exit 4 and say why\n'
 for mode in pass compile refused; do
   export PROBE_MODE=$mode
-  case $mode in pass) rc=0 ;; compile) rc=1 ;; refused) rc=2 ;; esac
+  case $mode in pass) rc=0 ;; compile) rc=4 ;; refused) rc=2 ;; esac
   run_case "$rc"
   grep -q '^(none)$' "$fixture/result"
 done
-printf 'PASS surviving mutation, compile failure, invocation refusal preserve verdict\n'
+printf 'PASS surviving mutation, compile failure (never ran), invocation refusal\n'
 count=$(wc -l < "$fixture/invocations")
 for patch_text in 'MISSING@@@x' 'ANCHOR' '@@@x' 'ANCHOR@@@x@@@y' 'ANCHOR@@@ANCHOR'; do
   printf '%s' "$patch_text" > patch
   run_case 2
+done
+printf 'ANCHOR@@@MUTATED' > patch
+# An alias naming no single test, or one with no golden, has no rows to count against.
+for alias in @probe @runtest @runtest-missing @../runtest-probe @./runtest-probe; do
+  PROBE_ALIAS=$alias run_case 2
+  case $alias in
+    @runtest-missing) reason='no golden missing.expected to count' ;;
+    @../*|@./*) reason='the alias directory must not contain . or ..' ;;
+    *) reason='the alias must name one test' ;;
+  esac
+  grep -q "^mutation-run: $reason" "$fixture/result" || { cat "$fixture/result"; exit 1; }
 done
 printf 'prefix@@@x' > patch
 printf 'prefix prefix' > module.ml
@@ -101,7 +183,7 @@ cp module.ml "$fixture/pristine"
 printf 'aa@@@x' > patch
 run_case 2
 [ "$(wc -l < "$fixture/invocations")" = "$count" ]
-printf 'PASS missing, ambiguous, overlapping, malformed and unchanged anchors refuse before launch\n'
+printf 'PASS missing, ambiguous, overlapping, malformed and unchanged anchors, and aliases without a golden, refuse before launch\n'
 printf 'ANCHOR' > module.ml
 cp module.ml "$fixture/pristine"
 printf 'ANCHOR@@@MUTATED' > patch
@@ -126,7 +208,7 @@ print $s;
 PERL
 inode_before=$(perl -e 'print((stat($ARGV[0]))[1])' module.ml)
 set +e
-bash tools/mutation-open-failure.sh module.ml patch @probe > "$fixture/result" 2>&1
+bash tools/mutation-open-failure.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1
 actual=$?
 set -e
 [ "$actual" = 2 ]
@@ -173,7 +255,7 @@ die $! unless defined $pid;
 if (!$pid) {
     open STDOUT, '>', "$dir/result" or die $!;
     open STDERR, '>&', \*STDOUT or die $!;
-    exec $ENV{PROBE_RUNNER}, 'module.ml', 'patch', '@probe';
+    exec $ENV{PROBE_RUNNER}, 'module.ml', 'patch', '@runtest-probe';
     die $!;
 }
 my $ready = 0;
@@ -196,7 +278,7 @@ unset OCANNL_TOOL_TEST_CAP
 printf 'PASS test-run cap expiry preserves status and restores\n'
 export OCANNL_TOOL_TEST_CAP=1
 perl -e '
-    open my $pipe, "-|", "tools/mutation-run.sh", "module.ml", "patch", q{@probe} or die $!;
+    open my $pipe, "-|", "tools/mutation-run.sh", "module.ml", "patch", q{@runtest-probe} or die $!;
     my $first = <$pipe>;
     die "missing recovery announcement" unless $first =~ /^recovery: /;
     close $pipe;
@@ -219,7 +301,7 @@ printf 'ANCHOR@@@MUTATED' > patch
 # Fault-inject exec failure into a scratch copy: only the parent restores.
 sed "s/exec('bash',/exec('\/no-such-mutation-run-shell',/" tools/mutation-run.sh > tools/mutation-no-shell.sh
 set +e
-bash tools/mutation-no-shell.sh module.ml patch @probe > "$fixture/result" 2>&1
+bash tools/mutation-no-shell.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1
 actual=$?
 set -e
 [ "$actual" = 127 ]
@@ -234,7 +316,7 @@ CMP
 chmod +x "$fixture/bin/cmp"
 export PROBE_MODE=pass
 set +e
-tools/mutation-run.sh module.ml patch @probe > "$fixture/result" 2>&1
+tools/mutation-run.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1
 actual=$?
 set -e
 [ "$actual" = 3 ]
@@ -248,7 +330,7 @@ printf 'PASS failed comparison retains byte-identical recovery copy and exits 3\
 # Failure to publish the restoration also leaves the recovery bytes available.
 export PROBE_MODE=restore_error
 set +e
-tools/mutation-run.sh module.ml patch @probe > "$fixture/result" 2>&1
+tools/mutation-run.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1
 actual=$?
 set -e
 [ "$actual" = 3 ]
@@ -272,7 +354,7 @@ die $! unless defined $pid;
 if (!$pid) {
     open STDOUT, '>', "$dir/result" or die $!;
     open STDERR, '>&', \*STDOUT or die $!;
-    exec 'tools/mutation-run.sh', 'module.ml', 'patch', '@probe';
+    exec 'tools/mutation-run.sh', 'module.ml', 'patch', '@runtest-probe';
     die $!;
 }
 my $ready = 0;
@@ -313,7 +395,7 @@ PERL
   cp module.ml "$fixture/mutant"
   printf 'MUTATED@@@SECOND' > second.patch
   set +e
-  tools/mutation-run.sh module.ml second.patch @probe > "$fixture/busy" 2>&1
+  tools/mutation-run.sh module.ml second.patch @runtest-probe > "$fixture/busy" 2>&1
   actual=$?
   set -e
   [ "$actual" = 2 ]

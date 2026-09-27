@@ -4,7 +4,17 @@
 # Patch bytes are OLD@@@NEW (exactly one delimiter; no newline is stripped).
 # OLD must occur exactly once, including overlapping occurrences. NEW may be empty.
 # Use an otherwise idle, isolated worktree; do not edit the module during the run.
-# Exit: test-run's status, 2 for refusal, 3 for deferred/failed restoration; signals 128+N.
+# The alias names ONE test -- @<dir>/runtest-<name>, slow-<name> or train-<name>
+# -- whose golden is <dir>/<name>.expected: a mutated run counts as evidence only
+# once it has REACHED ITS LAST ROW (gh-ocannl-1083). The stdout this run wrote
+# (<name>.exe.output, .actual or .output under the build tree) must print as
+# many rows as the golden, and Verdict must not have printed STOPPED EARLY. A run
+# that stopped early, or never ran (a build failure; an executable the mutation
+# left unchanged, so dune reused its result), prints STOPPED EARLY or NEVER RAN
+# (NOT COUNTED when two candidates changed) and exits 4 in place of test-run's
+# 1 ("caught") or 0 ("survived").
+# Exit: test-run's status, 2 for refusal, 3 for deferred/failed restoration,
+# 4 for a run that is no evidence (above); signals 128+N.
 # A surviving test-run lock prevents automatic restoration; stop the surviving
 # workers before manually recovering from the retained copy.
 # INT/TERM/HUP cancel and reap test-run before restoration. SIGKILL cannot be
@@ -18,6 +28,7 @@ use File::Basename qw(dirname basename);
 use File::Temp qw(tempdir tempfile);
 use File::Copy qw(copy);
 use Errno qw(EINTR);
+use Time::HiRes ();
 
 my $script = shift;
 $SIG{__DIE__} = sub { if (!$^S) { print STDERR @_; exit 2; } };
@@ -45,6 +56,35 @@ my $at = index($original, $old);
 $at >= 0 or refuse('missing anchor');
 index($original, $old, $at + 1) < 0 or refuse('ambiguous anchor');
 $old ne $new or refuse('mutation does not change the module');
+# The one test the alias runs, and its golden: the row count a complete run reaches.
+my ($dir, $name) = $alias =~ m{^\@\@?((?:[A-Za-z0-9_.-]+/)*)(?:runtest|slow|train)-([A-Za-z0-9_]+)$}
+    or refuse('the alias must name one test (@<dir>/runtest-<name>, slow-<name> or train-<name>): '
+        . "a negative control counts the mutated run's rows against <name>.expected");
+grep({ $_ eq '.' || $_ eq '..' } split m{/}, $dir) and refuse('the alias directory must not contain . or ..');
+my $golden = "$dir$name.expected";
+-f "$root/$golden" && !-l "$root/$golden"
+    or refuse("no golden $golden to count the mutated run's rows against");
+my $build = $ENV{DUNE_BUILD_DIR} // '_build';
+$build = "$root/$build" unless $build =~ m{^/};
+my @outputs = map { "$build/default/$dir$name$_" } qw(.exe.output .actual .output);
+# What each candidate stdout file is BEFORE the run: an output this run did not
+# rewrite is a previous run's, and counting it would read "never ran" as caught.
+sub signature {
+    my @s = Time::HiRes::lstat($_[0]);
+    return @s ? join(':', @s[0, 1, 7, 9, 10]) : 'absent';
+}
+my %before = map { $_ => signature($_) } @outputs;
+sub rows {
+    open my $f, '<:raw', $_[0] or refuse("read $_[0]: $!");
+    my ($n, $last, $chunk) = (0, "\n");
+    while (read($f, $chunk, 65536)) {
+        $n += ($chunk =~ tr/\n//);
+        $last = substr($chunk, -1);
+    }
+    close $f or refuse("close $_[0]: $!");
+    return $n + ($last ne "\n");
+}
+my $golden_rows = rows("$root/$golden");
 my $mutated = $original;
 substr($mutated, $at, length($old), $new);
 system('bash', "$root/tools/test-run.sh", 'idle') == 0
@@ -142,15 +182,42 @@ my $reported = eval {
     if (defined $log) {
         print 'run: ', basename(dirname($log)), "\nfalse claims:\n";
         open my $claims, '<:raw', $log or refuse("read $log: $!");
-        my $found = 0;
+        my ($found, $stopped) = (0, 0);
         while (my $line = <$claims>) {
             if ($line =~ /^(FAIL: .*: false)\r?\n?$/) {
                 print "$1\n";
                 $found = 1;
             }
+            # Verdict's uncaught-exception handler (gh-ocannl-1067).
+            $stopped = 1 if $line =~ /^STOPPED EARLY: /;
         }
         close $claims or refuse("close $log: $!");
         print "(none)\n" unless $found;
+        # Whether the run reached its last row. Only then is 1 "caught" and 0 "survived".
+        my @fresh = grep { -f $_ && !-l $_ && signature($_) ne $before{$_} } @outputs;
+        my $verdict;
+        if (@fresh == 1) {
+            my $printed = rows($fresh[0]);
+            print "rows: $printed printed of $golden_rows in $golden\n";
+            if ($stopped) {
+                $verdict = 'STOPPED EARLY: Verdict reported an uncaught exception; no row after it ran';
+            } elsif ($printed < $golden_rows) {
+                $verdict = "STOPPED EARLY: the mutated run printed $printed of the golden's $golden_rows rows";
+            }
+        } elsif (@fresh) {
+            print "rows: not counted\n";
+            $verdict = 'NOT COUNTED: this run rewrote more than one candidate stdout of '
+                . "$name, so none is known to be the mutant's";
+        } else {
+            print "rows: not counted\n";
+            $verdict = "NEVER RAN: this run wrote no stdout of $name (a build failure, or an "
+                . 'executable the mutation left unchanged, so dune reused its result)';
+        }
+        if (defined $verdict) {
+            print "$verdict\n",
+                "(not evidence: the mutant was neither caught nor survived)\n";
+            $code = 4 if $code == 0 || $code == 1;
+        }
     } else {
         print "run: unavailable (test-run produced no digest)\n";
         $code = 2 unless $code;

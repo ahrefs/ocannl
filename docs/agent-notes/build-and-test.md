@@ -1091,9 +1091,11 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
 - A negative control confirms the run REACHED its last row, not only that `FAIL:` lines appeared
   (gh-ocannl-1067): the claims it printed, passed plus failed, number the golden's lines, or the
   rows run under `Verdict.case`. A raise ends a run at the case that raised, and the rows after it
-  are absent, not failed. gh-ocannl-1016's control read six FAILs as "the rest pass" while a raise
-  had cut the run two rows short, invisibly: Verdict's teardown called `exit 1` from `at_exit`,
-  which the runtime runs before printing the exception. The teardown now raises instead, and
+  are absent, not failed. `tools/mutation-run.sh` checks it (gh-ocannl-1083; its bullet below): a
+  mutated run that stopped early or never ran exits 4 under `STOPPED EARLY` or `NEVER RAN`, not
+  with the 1 that reads as "caught". gh-ocannl-1016's control read six FAILs as "the rest pass"
+  while a raise had cut the run two rows short, invisibly: Verdict's teardown called `exit 1` from
+  `at_exit`, which the runtime runs before printing the exception. The teardown now raises instead, and
   Verdict's uncaught-exception handler prints `STOPPED EARLY` and the exception (status 2).
   `Verdict.case label f` turns a raise into `<label>: the case ran to completion (raised …): false`
   and runs the next case, printing nothing when `f` returns, so wrapping is golden-neutral
@@ -1219,9 +1221,20 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   `OLD@@@NEW`, with exactly one delimiter, a nonempty OLD occurring exactly once (overlapping
   occurrences count), and no implicit newline trimming; NEW can be empty. The runner invokes
   `tools/test-run.sh`, prints its actual verdict and run id, and extracts every complete
-  `FAIL: ...: false` line from that run's full log, preserving order and duplicates. Exit status
-  remains test-run's, so a killed mutant normally exits 1; a build failure with no false claims
-  is not evidence for a manifest row. A passing mutation still exits 0 and needs investigation.
+  `FAIL: ...: false` line from that run's full log, preserving order and duplicates. The alias
+  names ONE test (`@<dir>/runtest-<name>`, `slow-<name>`, `train-<name>`) with a golden
+  `<dir>/<name>.expected`, refused otherwise, because 1 means "caught" and 0 "survived" only for a
+  run that reached its last row (gh-ocannl-1083). The runner snapshots the test's stdout
+  candidates (`<name>.exe.output`, `.actual`, `.output` under `${DUNE_BUILD_DIR:-_build}/default`,
+  where dune leaves them even when the test exits nonzero) before launch, counts the rows of the
+  one this run rewrote against the golden's (`rows: N printed of M`), and exits 4 in place of 0 or
+  1 when the run is no evidence: `STOPPED EARLY` for fewer rows or Verdict's own `STOPPED EARLY`
+  line in the log, `NEVER RAN` when no candidate changed (a build failure, or a mutation that left
+  the executable byte-identical so dune reused the old result -- a previous run's output is never
+  counted), `NOT COUNTED` when two did. A test that echoes a child's stderr (`verdict_teardown`)
+  can carry a child's `STOPPED EARLY` line; read the rows line before discarding such a run.
+  Otherwise the exit status remains test-run's, so a killed mutant normally exits 1, and a
+  passing mutation exits 0 and needs investigation.
   INT, TERM and HUP cancel and reap the run before restoring; restoration is confirmed by `cmp`
   against the backup, including CRLF and a missing final newline. `tools/test-run.sh idle`
   probes its existing worktree flock (0 idle, 3 held, 2 unreadable); this is a point-in-time
