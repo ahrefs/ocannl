@@ -1,11 +1,14 @@
 (* gh-555: smoke test for the greedy inlining-flip refinement of [Train.tune_placements].
 
-   A matmul-plus-relu routine has a policy-virtual intermediate (the matmul result inlines into the
-   pointwise consumer), so the default-policy arm's compile reports at least one [`Materialize] flip
-   candidate. With [~inline_flips:2] the driver runs the placement A/B, captures the decision
-   surface, and searches the top flips. The public [?report] keeps its positional contract (exactly
-   the two placement arms, in order); the refinement probes are observed through [?flip_report]. The
-   shipped routine must compute the same values as a plain compile.
+   A pointwise product feeding a relu has a policy-virtual intermediate (the product inlines into
+   the relu), so the default-policy arm's compile reports at least one [`Materialize] flip
+   candidate. The intermediate is deliberately pointwise, not a matmul: materializing a matmul
+   result gives the materialize-all arm and the flip probe a standalone matmul nest, whose ~70-seed
+   sketch family took the test from ~7 s to ~90 s on cc without touching any claim below. With
+   [~inline_flips:2] the driver runs the placement A/B, captures the decision surface, and searches
+   the top flips. The public [?report] keeps its positional contract (exactly the two placement
+   arms, in order); the refinement probes are observed through [?flip_report]. The shipped routine
+   must compute the same values as a plain compile.
 
    Printed facts are booleans so the expected output stays backend-stable. *)
 
@@ -26,7 +29,7 @@ let () =
   in
   let ma = TDSL.ndarray mav ~label:[ "ma" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
   let mb = TDSL.ndarray mbv ~label:[ "mb" ] ~input_dims:[ n ] ~output_dims:[ n ] () in
-  let%op mc = ma * mb in
+  let%op mc = ma *. mb in
   let%op t2 = relu mc in
   ignore mc;
   let comp = Train.forward t2 in
