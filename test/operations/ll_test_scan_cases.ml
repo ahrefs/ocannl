@@ -81,6 +81,21 @@ let () =
   p "a qualified call into the builder tier puts a harness helper in the IR surface"
     (Scan.is_ir (harness "let twice x = Ll_builders.seq x x\n") "Ll_test" "twice"
     && Scan.is_ir (harness "module B = Ll_builders\nlet twice x = B.seq x x\n") "Ll_test" "twice");
+  p "a rebound Ir alias no longer marks what uses it"
+    (not
+       (Scan.is_ir
+          (harness "module LL = Ir.Low_level\nmodule LL = Other\nlet helper = LL.value\n")
+          "Ll_test" "helper"));
+  p "each binding of a non-recursive group is classified on its own"
+    (let group = harness "include Ll_builders\nlet builder x = seq x x and cycle x = x + 1\n" in
+     Scan.is_ir group "Ll_test" "builder" && not (Scan.is_ir group "Ll_test" "cycle"));
+  p "a local binding shadows a builder only where it is in scope"
+    (Scan.is_ir
+       (harness
+          "include Ll_builders\nlet helper x = let built = seq x x in let seq n = n in built\n")
+       "Ll_test" "helper"
+    && not (Scan.is_ir (harness "include Ll_builders\nlet helper seq = seq 1\n") "Ll_test" "helper")
+    );
   let redefined =
     harness ~builders:"module LL = Ir.Low_level\nlet flat (x : LL.t) = x\n"
       "include Ll_builders\nlet flat ~dims i = i + dims\n"
@@ -108,6 +123,18 @@ let () =
     (uses "let _ = Ll_test.(seq)" && not (uses "let _ = Ll_test.(cycle)\nlet _ = seq"));
   p "a name the file binds for itself is not taken for the builder under an open"
     (not (uses "open Ll_test\nlet f seq = seq"));
+  p "only an exact harness path is the harness, not a same-named nested module"
+    ((not (uses "let _ = Outer.Ll_test.seq"))
+    && (not (uses "module L = Outer.Ll_test\nlet _ = L.seq"))
+    && not (uses "open Outer.Ll_test\nlet _ = seq"));
+  p "a test's own binding shadows an open only where it is in scope, and a later open shadows it"
+    (uses "open Ll_test\nlet f x = let y = seq x x in let seq = 1 in y + seq"
+    && uses "let seq = 1\nopen Ll_test\nlet _ = seq"
+    && not (uses "open Ll_test\nlet seq = 1\nlet _ = seq"));
+  (* The deliberate boundary: an open the scan cannot read is not taken to shadow the harness, as
+     the tree's [open Ll_test] then [open Verdict.Claims] requires. *)
+  p "an unreadable open after the harness's does not hide its builders"
+    (uses "open Ll_test\nopen Verdict.Claims\nlet _ = seq");
   p "an alias counts only where it is in scope and not rebound"
     ((not (uses "module L = Other\nlet _ = L.seq\nmodule L = Ll_test\nlet _ = L.cycle"))
     && (not (uses "module L = Ll_test\nmodule L = Other\nlet _ = L.seq"))

@@ -2735,12 +2735,14 @@ that they earn a lookup rather than always-loaded space.
   operand helper (`Ll_test.cycle`) had retired rows whose hand-built IR never moved, which is the
   general trap of a ratchet whose adoption test is a proxy — the proxy spreads for other reasons. The
   surface is DERIVED, per harness module, from `ll_builders.ml`/`ll_test.ml`: a value whose
-  definition mentions an `Ir`-rooted path (or an alias of one, its own or included), or calls an IR
-  value — unqualified as the definition in scope there, or through a harness module — is IR; a later
-  definition replaces an included one's class. The rest (`cycle`, `weighted`, `blank`, ...) is
-  printed in the golden, so a new helper's class shows in review. A use is a call through a harness
-  module or an alias of one in lexical scope, or an unqualified one under an `open`/`include` in its
-  scope, judged by that module's class for the name, minus names the file binds itself. A linked
+  definition mentions an `Ir`-rooted path (or an alias of one, its own or included), or calls what
+  resolves to an IR value, is IR; each binding is classified on its own, a later definition
+  replaces an included one's class. The rest (`cycle`, `weighted`, `blank`, ...) is printed in the
+  golden, so a new helper's class shows in review. Both halves resolve names through one lexical
+  scope model (`Ll_test_scan.scoped`): every value binding form scopes its names, module aliases
+  are rebound by later bindings and die with their structure, and only an exact harness path is the
+  harness. Its one deliberate gap: an `open` of a module the scan cannot read is not taken to shadow
+  a harness open before it, since the tree writes `open Ll_test` then `open Verdict.Claims`. A linked
   source that calls nothing of it gets its own refusal and still needs a migration row.
 
 - Pure IR node, index, statement and scalar builders live in public `arrayjit.ll_builders`

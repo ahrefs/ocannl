@@ -26,204 +26,348 @@ type adoption = Unlinked | Linked_unused | Adopted
 let harness_sources =
   [ ("Ll_builders", "test/support/ll_builders.ml"); ("Ll_test", "test/support/ll_test.ml") ]
 
-type surface = bool Map.M(String).t Map.M(String).t
-(** Per harness module, every value it exports mapped to whether it belongs to the IR surface. Kept
-    per module because the two can disagree on a name: [Ll_test] includes [Ll_builders] and may
-    redefine what it included, and the later definition is the one [Ll_test.name] calls. *)
+type harness_module = { values : bool Map.M(String).t; ir_aliases : string list }
+(** One harness module as classified: every value it exports mapped to whether it belongs to the IR
+    surface, and the module aliases of [Ir] it exports ([LL] in [Ll_builders]), which an [include]
+    or [open] of it brings into scope. Kept per module because the two can disagree on a name:
+    [Ll_test] includes [Ll_builders] and may redefine what it included, and the later definition is
+    the one [Ll_test.name] calls. *)
+
+type surface = harness_module Map.M(String).t
 
 (** [members surface module_name ~ir] is the sorted names [module_name] exports inside ([~ir:true])
     or outside the IR surface. *)
 let members (surface : surface) module_name ~ir =
-  Option.value_map (Map.find surface module_name) ~default:[] ~f:(fun values ->
-      Map.keys (Map.filter values ~f:(Bool.equal ir)))
+  Option.value_map (Map.find surface module_name) ~default:[] ~f:(fun m ->
+      Map.keys (Map.filter m.values ~f:(Bool.equal ir)))
 
 let is_ir (surface : surface) module_name name =
   Option.value ~default:false
-    (Option.bind (Map.find surface module_name) ~f:(fun values -> Map.find values name))
+    (Option.bind (Map.find surface module_name) ~f:(fun m -> Map.find m.values name))
 
 let rec head = function Longident.Lident s -> s | Ldot (p, _) | Lapply (p, _) -> head p
 
-let vars_in iterate =
-  let found = Hash_set.create (module String) in
+(** {2 Lexical scope}
+
+    Both halves of the adoption check — classifying the harness's own values and crediting a test's
+    calls — resolve names the way OCaml does, over one scope model, so the class a use is judged by
+    is the class of the binding it actually reaches:
+
+    - a value name resolves through [frames], innermost first: a binding the source makes itself
+      ([Local], or the harness's own top-level definitions with their class), or the values of a
+      harness module an [open]/[include] brought in. Every binding form scopes its names — [let]
+      (and [let rec] over its own right-hand sides), function parameters in order, match and [try]
+      cases, [for] indices, binding operators — and a later structure item sees the earlier ones.
+    - a module name resolves through [modules]: the harness modules by their exact names, aliases of
+      them ([module L = Ll_test], [let module L = Ll_test in]), and aliases of [Ir]. A later binding
+      of the name to anything else removes it, and a nested structure's bindings die with it. Only
+      an exact path counts: [Outer.Ll_test.seq] is a module named [Ll_test] inside [Outer], not the
+      harness.
+
+    One boundary is deliberate. An [open] of a module the scan cannot read ([Base],
+    [Verdict.Claims]) is opaque: its exported names are not modeled, so a later such open is not
+    taken to shadow a harness name opened before it. Taking it to would refuse every adopted test in
+    the tree, which writes [open Ll_test] then [open Verdict.Claims]; shadowing a builder needs a
+    module exporting a value of the builder's name, which no module those tests open does. *)
+
+type denotes = Local | Harness of bool
+type module_denotes = Harness_module of string | Ir_root
+type env = { frames : denotes Map.M(String).t list; modules : module_denotes Map.M(String).t }
+
+let pattern_vars patterns =
+  let found = ref [] in
   let collector =
     object
       inherit Ast_traverse.iter as super
 
       method! pattern p =
-        (match p.ppat_desc with Ppat_var { txt; _ } -> Hash_set.add found txt | _ -> ());
+        (match p.ppat_desc with
+        | Ppat_var { txt; _ } | Ppat_alias (_, { txt; _ }) -> found := txt :: !found
+        | _ -> ());
         super#pattern p
     end
   in
-  iterate collector;
-  found
+  List.iter patterns ~f:collector#pattern;
+  !found
+
+let bind_values env names denotes =
+  match names with
+  | [] -> env
+  | _ ->
+      let frame =
+        Map.of_alist_reduce
+          (module String)
+          (List.map names ~f:(fun name -> (name, denotes)))
+          ~f:(fun _ later -> later)
+      in
+      { env with frames = frame :: env.frames }
+
+let lookup env name = List.find_map env.frames ~f:(fun frame -> Map.find frame name)
+
+let module_of env module_expr =
+  match module_expr.pmod_desc with
+  | Pmod_ident { txt = Lident name; _ } -> Map.find env.modules name
+  | Pmod_ident { txt; _ } -> (
+      match Map.find env.modules (head txt) with Some Ir_root -> Some Ir_root | _ -> None)
+  | _ -> None
+
+let bind_module env name module_expr =
+  {
+    env with
+    modules =
+      (match module_of env module_expr with
+      | Some denotes -> Map.set env.modules ~key:name ~data:denotes
+      | None -> Map.remove env.modules name);
+  }
+
+let open_module (surface : surface) env module_expr =
+  match module_of env module_expr with
+  | Some (Harness_module h) ->
+      let m = Map.find_exn surface h in
+      {
+        frames = Map.map m.values ~f:(fun ir -> Harness ir) :: env.frames;
+        modules =
+          List.fold m.ir_aliases ~init:env.modules ~f:(fun modules alias ->
+              Map.set modules ~key:alias ~data:Ir_root);
+      }
+  | Some Ir_root | None -> env
+
+(** What a value identifier reaches: [Some (Harness ir)] for a harness value, [Some Local] for the
+    source's own binding, [None] for anything the scope model does not know. *)
+let resolve (surface : surface) env = function
+  | Longident.Lident name -> lookup env name
+  | Ldot (Lident qualifier, name) -> (
+      match Map.find env.modules qualifier with
+      | Some (Harness_module h) -> Some (Harness (is_ir surface h name))
+      | _ -> None)
+  | _ -> None
+
+(** Walks a structure under {!env}, calling [use] on every value identifier with what it resolves to
+    and [mentions_ir] on every path rooted at an [Ir] alias. [define] decides how a top-level
+    binding group enters scope for the items after it: it walks the group itself, through [walk],
+    and returns what each of its names denotes. *)
+class virtual scoped (surface : surface) =
+  object (self)
+    inherit [env] Ast_traverse.map_with_context as super
+    method virtual use : denotes option -> unit
+    method virtual mentions_ir : unit
+
+    method virtual define
+        : top:bool ->
+          env ->
+          rec_flag ->
+          value_binding list ->
+          walk:(env -> value_binding -> unit) ->
+          denotes list
+
+    method included (_ : string) = ()
+    (** Called for each top-level [include] of a harness module, in order with {!define}. *)
+
+    method finished (_ : env) = ()
+    (** Called with the scope at the end of the top-level structure. *)
+
+    val mutable depth = 0
+
+    method! longident env l =
+      (match Map.find env.modules (head l) with Some Ir_root -> self#mentions_ir | _ -> ());
+      l
+
+    method bindings env rec_flag bindings =
+      let names = pattern_vars (List.map bindings ~f:(fun b -> b.pvb_pat)) in
+      let inner =
+        match rec_flag with Recursive -> bind_values env names Local | Nonrecursive -> env
+      in
+      List.iter bindings ~f:(fun b -> ignore (self#value_binding inner b : value_binding));
+      names
+
+    method! case env c =
+      let inner = bind_values env (pattern_vars [ c.pc_lhs ]) Local in
+      ignore (self#pattern env c.pc_lhs : pattern);
+      Option.iter c.pc_guard ~f:(fun g -> ignore (self#expression inner g : expression));
+      ignore (self#expression inner c.pc_rhs : expression);
+      c
+
+    method! structure env items =
+      depth <- depth + 1;
+      let top = depth = 1 in
+      let final =
+        List.fold items ~init:env ~f:(fun env item ->
+            match item.pstr_desc with
+            | Pstr_value (rec_flag, bindings) ->
+                let names = pattern_vars (List.map bindings ~f:(fun b -> b.pvb_pat)) in
+                let inner =
+                  match rec_flag with
+                  | Recursive -> bind_values env names Local
+                  | Nonrecursive -> env
+                in
+                let classes =
+                  self#define ~top env rec_flag bindings ~walk:(fun _ b ->
+                      ignore (self#value_binding inner b : value_binding))
+                in
+                List.fold2_exn
+                  (List.map bindings ~f:(fun b -> pattern_vars [ b.pvb_pat ]))
+                  classes ~init:env
+                  ~f:(fun env names denotes -> bind_values env names denotes)
+            | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } ->
+                ignore (self#structure_item env item : structure_item);
+                bind_module env name pmb_expr
+            | Pstr_open { popen_expr = m; _ } | Pstr_include { pincl_mod = m; _ } ->
+                ignore (self#structure_item env item : structure_item);
+                (match (item.pstr_desc, module_of env m) with
+                | Pstr_include _, Some (Harness_module h) when top -> self#included h
+                | _ -> ());
+                open_module surface env m
+            | _ ->
+                ignore (self#structure_item env item : structure_item);
+                env)
+      in
+      if top then self#finished final;
+      depth <- depth - 1;
+      items
+
+    method! expression env e =
+      match e.pexp_desc with
+      | Pexp_ident { txt; _ } ->
+          self#use (resolve surface env txt);
+          super#expression env e
+      | Pexp_let (rec_flag, bindings, body) ->
+          let names = self#bindings env rec_flag bindings in
+          ignore (self#expression (bind_values env names Local) body : expression);
+          e
+      | Pexp_function (params, constraint_, body) ->
+          let env =
+            List.fold params ~init:env ~f:(fun env param ->
+                match param.pparam_desc with
+                | Pparam_val (_, default, pattern) ->
+                    Option.iter default ~f:(fun d -> ignore (self#expression env d : expression));
+                    ignore (self#pattern env pattern : pattern);
+                    bind_values env (pattern_vars [ pattern ]) Local
+                | Pparam_newtype _ -> env)
+          in
+          Option.iter constraint_ ~f:(fun c ->
+              ignore (self#type_constraint env c : type_constraint));
+          (match body with
+          | Pfunction_body b -> ignore (self#expression env b : expression)
+          | Pfunction_cases (cases, _, _) ->
+              List.iter cases ~f:(fun c -> ignore (self#case env c : case)));
+          e
+      | Pexp_match (scrutinee, cases) | Pexp_try (scrutinee, cases) ->
+          ignore (self#expression env scrutinee : expression);
+          List.iter cases ~f:(fun c -> ignore (self#case env c : case));
+          e
+      | Pexp_for (pattern, low, high, _, body) ->
+          ignore (self#expression env low : expression);
+          ignore (self#expression env high : expression);
+          ignore
+            (self#expression (bind_values env (pattern_vars [ pattern ]) Local) body : expression);
+          e
+      | Pexp_letop { let_; ands; body } ->
+          let operands = let_ :: ands in
+          List.iter operands ~f:(fun b -> ignore (self#expression env b.pbop_exp : expression));
+          let names = pattern_vars (List.map operands ~f:(fun b -> b.pbop_pat)) in
+          ignore (self#expression (bind_values env names Local) body : expression);
+          e
+      | Pexp_open ({ popen_expr; _ }, body) ->
+          ignore (self#module_expr env popen_expr : module_expr);
+          ignore (self#expression (open_module surface env popen_expr) body : expression);
+          e
+      | Pexp_letmodule ({ txt = Some name; _ }, module_expr, body) ->
+          ignore (self#module_expr env module_expr : module_expr);
+          ignore (self#expression (bind_module env name module_expr) body : expression);
+          e
+      | _ -> super#expression env e
+  end
+
+let root_env (surface : surface) =
+  {
+    frames = [];
+    modules =
+      Map.of_alist_exn
+        (module String)
+        (("Ir", Ir_root) :: List.map (Map.keys surface) ~f:(fun h -> (h, Harness_module h)));
+  }
 
 (** [surface sources] classifies each harness module's top-level values, DERIVED from their
     definitions rather than listed, so the next helper added to [Ll_test] lands in the right class
-    without anyone deciding it: a value is IR when its definition mentions a module path rooted at
-    [Ir] (or an alias of one, [module LL = Ir.Low_level]) anywhere — body, type annotation, record
-    field — or calls an IR value: unqualified, as the definition in scope at that point (the
-    module's own earlier definitions, and what it [include]d or [open]ed from a harness module
-    before), unless a local binding shadows it ([cycle_flat]'s [show set]); or qualified through a
-    harness module classified before it, or an alias of one ([Ll_builders.seq]). That puts every
-    builder, traversal and pipeline helper in the surface ([tick] only through [add]/[c]/[embed]),
-    and leaves the operand-data helpers ([cycle], [cycle_flat], [weighted], [drift], [flat]) and the
-    value checks ([blank], [close], [same]) outside: integer and float arithmetic with no IR in it.
-    A later definition of a name replaces the earlier one's class, as it replaces its meaning. A
-    group of recursive bindings is classified together. *)
+    without anyone deciding it: a value is IR when its definition mentions a path rooted at [Ir] or
+    an alias of it ([module LL = Ir.Low_level], its own or one an [include] brought in) — body, type
+    annotation, record field — or calls a value that resolves, in {!env}, to an IR value of a
+    harness module or of this one. That puts every builder, traversal and pipeline helper in the
+    surface ([tick] only through [add]/[c]/[embed]), and leaves the operand-data helpers ([cycle],
+    [cycle_flat], [weighted], [drift], [flat]) and the value checks ([blank], [close], [same])
+    outside: integer and float arithmetic with no IR in it. Each binding of a group is classified on
+    its own; a [let rec] group, whose members can reach each other, together. *)
 let surface sources : surface =
-  (* Each module's [Ir] aliases travel with it: [Ll_test] reads [LL] through [include
-     Ll_builders]. *)
-  let ir_aliases = Hashtbl.create (module String) in
   List.fold sources
     ~init:(Map.empty (module String))
     ~f:(fun (classified : surface) (module_name, source) ->
-      let ir_modules = Hash_set.of_list (module String) [ "Ir" ] in
-      let harness_alias = Hashtbl.create (module String) in
-      Map.iter_keys classified ~f:(fun m -> Hashtbl.set harness_alias ~key:m ~data:m);
-      let harness_of module_expr =
-        Option.bind (Text.module_source_name module_expr) ~f:(Hashtbl.find harness_alias)
+      let reaches = ref false in
+      let exported = ref (Map.empty (module String)) and ir_aliases = ref [] in
+      let classifier =
+        object
+          inherit scoped classified
+          method use = function Some (Harness true) -> reaches := true | _ -> ()
+          method mentions_ir = reaches := true
+
+          (* A nested definition's evidence also counts for the top-level binding containing it. *)
+          method define ~top env rec_flag bindings ~walk =
+            let classify group =
+              let outer = !reaches in
+              reaches := false;
+              List.iter group ~f:(walk env);
+              let ir = !reaches in
+              reaches := outer || ir;
+              ir
+            in
+            let classes =
+              match rec_flag with
+              | Recursive ->
+                  let ir = classify bindings in
+                  List.map bindings ~f:(fun _ -> ir)
+              | Nonrecursive -> List.map bindings ~f:(fun b -> classify [ b ])
+            in
+            if top then
+              List.iter2_exn bindings classes ~f:(fun b ir ->
+                  List.iter (pattern_vars [ b.pvb_pat ]) ~f:(fun name ->
+                      exported := Map.set !exported ~key:name ~data:ir));
+            List.map classes ~f:(fun ir -> Harness ir)
+
+          (* An include re-exports what it brings in, over what was defined before it. *)
+          method! included h =
+            exported :=
+              Map.merge_skewed !exported (Map.find_exn classified h).values
+                ~combine:(fun ~key:_ _ included -> included)
+
+          method! finished env =
+            ir_aliases :=
+              Map.fold env.modules ~init:[] ~f:(fun ~key ~data acc ->
+                  match data with
+                  | Ir_root when not (String.equal key "Ir") -> key :: acc
+                  | _ -> acc)
+        end
       in
-      let exported = ref (Map.empty (module String))
-      and visible = ref (Map.empty (module String)) in
-      let bring_in ?(export = true) module_expr =
-        Option.iter (harness_of module_expr) ~f:(fun h ->
-            List.iter (Hashtbl.find_multi ir_aliases h) ~f:(Hash_set.add ir_modules);
-            let values = Map.find_exn classified h in
-            let over into = Map.merge_skewed into values ~combine:(fun ~key:_ _ later -> later) in
-            visible := over !visible;
-            if export then exported := over !exported)
-      in
-      List.iter (Text.structure_of source) ~f:(fun item ->
-          match item.pstr_desc with
-          | Pstr_module { pmb_name = { txt = Some alias; _ }; pmb_expr; _ } -> (
-              (match pmb_expr.pmod_desc with
-              | Pmod_ident { txt; _ } when Hash_set.mem ir_modules (head txt) ->
-                  Hash_set.add ir_modules alias
-              | _ -> ());
-              match harness_of pmb_expr with
-              | Some h -> Hashtbl.set harness_alias ~key:alias ~data:h
-              | None -> Hashtbl.remove harness_alias alias)
-          | Pstr_include { pincl_mod; _ } -> bring_in pincl_mod
-          | Pstr_open { popen_expr; _ } -> bring_in ~export:false popen_expr
-          | Pstr_value (_, bindings) ->
-              let names = vars_in (fun c -> List.iter bindings ~f:(fun b -> c#pattern b.pvb_pat)) in
-              let local =
-                vars_in (fun c -> List.iter bindings ~f:(fun b -> c#expression b.pvb_expr))
-              in
-              let reaches = ref false in
-              let walker =
-                object
-                  inherit Ast_traverse.iter as super
-                  method! longident l = if Hash_set.mem ir_modules (head l) then reaches := true
+      ignore (classifier#structure (root_env classified) (Text.structure_of source) : structure);
+      Map.set classified ~key:module_name ~data:{ values = !exported; ir_aliases = !ir_aliases })
 
-                  method! expression e =
-                    (match e.pexp_desc with
-                    | Pexp_ident { txt = Lident name; _ } ->
-                        if
-                          (not (Hash_set.mem local name))
-                          && Option.value ~default:false (Map.find !visible name)
-                        then reaches := true
-                    | Pexp_ident { txt = Ldot (qualifier, name); _ } -> (
-                        match Hashtbl.find harness_alias (Longident.last_exn qualifier) with
-                        | Some h when is_ir classified h name -> reaches := true
-                        | _ -> ())
-                    | _ -> ());
-                    super#expression e
-                end
-              in
-              List.iter bindings ~f:walker#value_binding;
-              Hash_set.iter names ~f:(fun name ->
-                  exported := Map.set !exported ~key:name ~data:!reaches;
-                  visible := Map.set !visible ~key:name ~data:!reaches)
-          | _ -> ());
-      Hash_set.iter ir_modules ~f:(fun alias ->
-          Hashtbl.add_multi ir_aliases ~key:module_name ~data:alias);
-      Map.set classified ~key:module_name ~data:!exported)
-
-type scope = { modules : string Map.M(String).t; opened : string list }
-(** What names a harness module in the lexical scope the walk is at: every local module name
-    denoting one (the harness's own names to begin with, then aliases, each shadowed by a later
-    binding of the same name to anything else), and the harness modules opened or included,
-    innermost first. *)
-
-(** [uses_surface ~surface source]: whether the test calls an IR value of the harness — through a
-    qualifier naming a harness module or an alias of one ([Ll_test.set], [module B = Ll_builders]
-    then [B.loop_n]), or unqualified within the scope of an [open]/[include] of one, judged by the
-    class that module gives the name. Scoped the way the language scopes it: a structure-level
-    alias, open or include governs the items after it, an expression-level one its body, a nested
-    structure's die with it, and a later [module L = ...] rebinds [L]. An unqualified name the file
-    binds anywhere for itself is not credited, so a local [set] under an [open Ll_test] is not taken
-    for the builder — erring toward reporting debt, the direction the ratchet exists to keep honest.
-*)
+(** [uses_surface ~surface source]: whether the test calls an IR value of the harness — a call that
+    resolves, in {!env}, to one: qualified by a harness module or an alias of one ([Ll_test.set],
+    [module B = Ll_builders] then [B.loop_n]), or unqualified under an [open]/[include] of one, by
+    the class that module gives the name. A name the test binds for itself, where that binding is in
+    scope, is its own and not the builder's. *)
 let uses_surface ~(surface : surface) source =
-  let structure = Text.structure_of source in
-  let bound = Text.names_bound_anywhere structure in
   let found = ref false in
-  let harness_of scope module_expr =
-    Option.bind (Text.module_source_name module_expr) ~f:(Map.find scope.modules)
-  in
-  let bind scope name module_expr =
-    {
-      scope with
-      modules =
-        (match harness_of scope module_expr with
-        | Some h -> Map.set scope.modules ~key:name ~data:h
-        | None -> Map.remove scope.modules name);
-    }
-  in
-  let opening scope module_expr =
-    Option.map (harness_of scope module_expr) ~f:(fun h ->
-        { scope with opened = h :: scope.opened })
-  in
-  let exports h name =
-    Option.value_map (Map.find surface h) ~default:false ~f:(fun values -> Map.mem values name)
-  in
-  let walker =
-    object (self)
-      inherit [scope] Ast_traverse.map_with_context as super
+  let consumer =
+    object
+      inherit scoped surface
+      method use = function Some (Harness true) -> found := true | _ -> ()
+      method mentions_ir = ()
 
-      method! structure scope items =
-        ignore
-          (List.fold items ~init:scope ~f:(fun scope item ->
-               ignore (self#structure_item scope item : structure_item);
-               match item.pstr_desc with
-               | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } ->
-                   bind scope name pmb_expr
-               | Pstr_open { popen_expr = m; _ } | Pstr_include { pincl_mod = m; _ } ->
-                   Option.value (opening scope m) ~default:scope
-               | _ -> scope));
-        items
-
-      method! expression scope e =
-        match e.pexp_desc with
-        | Pexp_open ({ popen_expr; _ }, body) -> (
-            match opening scope popen_expr with
-            | Some inner ->
-                ignore (self#expression inner body : expression);
-                e
-            | None -> super#expression scope e)
-        | Pexp_letmodule ({ txt = Some name; _ }, module_expr, body) ->
-            ignore (self#module_expr scope module_expr : module_expr);
-            ignore (self#expression (bind scope name module_expr) body : expression);
-            e
-        | Pexp_ident { txt = Lident name; _ } ->
-            (if not (Set.mem bound name) then
-               match List.find scope.opened ~f:(fun h -> exports h name) with
-               | Some h when is_ir surface h name -> found := true
-               | _ -> ());
-            e
-        | Pexp_ident { txt = Ldot (qualifier, name); _ } ->
-            (match Map.find scope.modules (Longident.last_exn qualifier) with
-            | Some h when is_ir surface h name -> found := true
-            | _ -> ());
-            e
-        | _ -> super#expression scope e
+      method define ~top:_ env _ bindings ~walk =
+        List.iter bindings ~f:(walk env);
+        List.map bindings ~f:(fun _ -> Local)
     end
   in
-  let modules =
-    Map.of_alist_exn (module String) (List.map (Map.keys surface) ~f:(fun m -> (m, m)))
-  in
-  ignore (walker#structure { modules; opened = [] } structure : structure);
+  ignore (consumer#structure (root_env surface) (Text.structure_of source) : structure);
   !found
 
 let constructors source =
