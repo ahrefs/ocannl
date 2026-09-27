@@ -440,7 +440,7 @@
 # depth-1 timed loop. End to end, that is the larger cost: one gpt2_mini tuned search (both
 # placement arms, cold cache; benchmarks/gh834_cells.sh with BENCH_TIMING_TRACE=1, gh-ocannl-834)
 # on gfx1151 (unified memory), 2026-09-27, took 794 s isolated and 1370 s queued (1.73x), with 320
-# candidate compiles and 220 timing calls in both. The timed loops cost about the same (218 vs
+# candidates attempted and 220 timing calls in both. The timed loops cost about the same (218 vs
 # 227 s); warmup plus calibration took 14 s vs 587 s (a median 2.6 s per call), and 215 of the 220
 # queued calls settled at depth 1, where the reading is the isolated one. On cc a queued gpt2_mini
 # search exceeded 2 h (gh-ocannl-719, rog-nv) with no isolated run to compare. The exact worst-case

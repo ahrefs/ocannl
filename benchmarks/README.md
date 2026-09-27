@@ -221,8 +221,10 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   `BENCH_TIMING_TRACE=1` (all three runners) splits a searching process's wall between candidate
   timing and the rest (gh-ocannl-834): one stderr line per `Autotune.time_routine` call (the batch
   depth it settled on, its launches, its warmup-plus-calibration and timed-loop walls, and running
-  totals, so a cell killed at its cap still leaves a lower bound) and one per candidate compile,
-  plus a closing summary with the depth histogram. It only observes the tuner's seams, so the
+  totals, so a cell killed at its cap still leaves a lower bound) and one per candidate attempt
+  (a compile, unless `autotune_bound_pruning` prunes it first), plus a closing summary with the
+  depth histogram. An untagged call (the untuned control `autotune_log=true` times) has its warmup
+  and calibration counted as unattributed rather than as zero. It only observes the tuner's seams, so the
   searched schedules are the ones an untraced run crowns.
 - `runners/pytorch/run.py` — flags: `--device cpu|mps|cuda`, `--regime exact|approximate`
   (exact, the default and the parity reference: `highest` matmul precision, cudnn tf32 off,

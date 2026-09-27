@@ -57,20 +57,31 @@ echo "config benchmarks/ocannl_config sha256 $(shasum -a 256 ocannl_config | cut
 # would load every later cell. The runner leads its own group; at the cap the group gets SIGTERM,
 # then SIGKILL after 10 s, and the step waits until no member is left before the next one starts
 # (exit 124; 125 if a member survives even SIGKILL, and the driver stops rather than measure beside
-# it). A member left behind by a runner that exited on its own is reaped the same way. SIGTERM
-# ends an OCaml runner without at_exit -- which is why the trace carries running totals.
+# it). A member left behind by a runner that exited on its own is reaped the same way. An INT,
+# TERM or HUP reaching the supervisor (the driver below forwards its own) takes the group down the
+# same way, and the supervisor then exits 128+signal. SIGTERM ends an OCaml runner without at_exit
+# -- which is why the trace carries running totals.
+# Always started as a job (`capped ... &`): the exec makes the job's pid the supervisor itself, so
+# a signal the driver forwards to that pid reaches the process that owns the group -- a function
+# run as a job is otherwise a subshell, whose death would orphan the supervisor and its group.
 capped() {
-  perl -e '
+  exec perl -e '
     use POSIX ();
     my $cap = shift;
     my $pid = fork // die "gh834: fork: $!\n";
     if ($pid == 0) { setpgrp(0, 0); exec @ARGV or POSIX::_exit(127) }
     setpgrp($pid, $pid);
     my $timed_out = 0;
-    # TERM at the cap, KILL 10 s later if the leader is still not reaped.
-    $SIG{ALRM} = sub {
-      if ($timed_out++) { kill "KILL", -$pid } else { kill "TERM", -$pid; alarm 10 }
+    # TERM at the cap or on an external signal, KILL 10 s later if the leader is still not reaped.
+    my ($stage, $external) = (0, 0);
+    my $escalate = sub {
+      if ($stage++) { kill "KILL", -$pid } else { kill "TERM", -$pid; alarm 10 }
     };
+    $SIG{ALRM} = sub { $timed_out = 1 unless $external; $escalate->() };
+    my %num = (INT => 2, HUP => 1, TERM => 15);
+    for my $sig (keys %num) {
+      $SIG{$sig} = sub { $external ||= $num{$sig}; $escalate->() if $stage == 0 };
+    }
     alarm $cap;
     my ($got, $st);
     do { $got = waitpid($pid, 0); $st = $? } until $got == $pid || ($got == -1 && !$!{EINTR});
@@ -83,6 +94,7 @@ capped() {
       for (1 .. 10) { last unless $alive->(); sleep 1 }
       if ($alive->()) { print STDERR "gh834: process group $pid survived SIGKILL\n"; exit 125 }
     }
+    exit 128 + $external if $external;
     exit 124 if $timed_out;
     exit($st & 127 ? 128 + ($st & 127) : $st >> 8);
   ' "$cap" "$@"
@@ -104,8 +116,16 @@ step() {
   device_state
   local t0 t1 rc
   t0=$(date +%s)
-  capped "$@" >"$out/$name.out" 2>"$out/$name.err"
+  # The supervisor runs as a job the shell waits on, so a signal to the driver is forwarded to it
+  # (and through it to the group) instead of ending the shell with the step still running.
+  capped "$@" >"$out/$name.out" 2>"$out/$name.err" &
+  local sup=$! interrupted=
+  trap 'interrupted=1; kill -TERM "$sup" 2>/dev/null' INT TERM HUP
+  while kill -0 "$sup" 2>/dev/null; do wait "$sup"; done
+  wait "$sup"
   rc=$?
+  trap - INT TERM HUP
+  [ -n "$interrupted" ] && { echo "== step $name: interrupted (exit $rc); stopping"; exit 130; }
   [ "$rc" -eq 125 ] && { echo "== step $name: a process survived the cap; stopping"; exit 125; }
   t1=$(date +%s)
   echo "== step $name: exit $rc, wall $((t1 - t0)) s"
@@ -130,13 +150,24 @@ for s in "$@"; do
     ;;
   provenance)
     echo "host $(hostname) sha $(git -C "$root" rev-parse HEAD) backend $backend cap ${cap}s"
+    # The device identity and the fixture digest are what the results are labelled by: a probe
+    # that yields nothing fails the run instead of archiving an unidentified measurement.
     case $backend in
-    hip) rocminfo 2>/dev/null | grep -E "Marketing|gfx" | sort -u | head -4 ;;
-    cuda) nvidia-smi -L ;;
-    metal) system_profiler SPDisplaysDataType 2>/dev/null | grep -E "Chipset|Cores" ;;
-    cc) lscpu 2>/dev/null | grep -E "Model name|^CPU\(s\)" || sysctl -n machdep.cpu.brand_string ;;
+    hip) ident=$(rocminfo 2>/dev/null | grep -E "Marketing|gfx" | sort -u | head -4) ;;
+    cuda) ident=$(nvidia-smi -L 2>/dev/null) ;;
+    metal) ident=$(system_profiler SPDisplaysDataType 2>/dev/null | grep -E "Chipset|Cores") ;;
+    cc) ident=$(lscpu 2>/dev/null | grep -E "Model name|^CPU\(s\)" || sysctl -n machdep.cpu.brand_string 2>/dev/null) ;;
     esac
-    [ -r "$fixture" ] && echo "fixture $fixture sha256 $(shasum -a 256 "$fixture" | cut -d' ' -f1)"
+    if [ -n "$ident" ]; then echo "$ident"; else
+      echo "== provenance: MISSING EVIDENCE: no device identity for $backend"
+      status=1
+    fi
+    if [ -r "$fixture" ]; then
+      echo "fixture $fixture sha256 $(shasum -a 256 "$fixture" | cut -d' ' -f1)"
+    else
+      echo "== provenance: MISSING EVIDENCE: fixture $fixture is not readable"
+      status=1
+    fi
     ;;
   crown-fwd | crown-rev)
     if step "$s" ../_build/default/bin/projection_shape_bench.exe 200 8 d "${s#crown-}" seeds \

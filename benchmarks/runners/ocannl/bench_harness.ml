@@ -217,10 +217,14 @@ let percentile sorted p =
     per timed batch), and the wall of its warmup plus calibration (from the pre-dispatch validation
     to the depth decision) and of its timed loop. Every line also carries the running totals, so the
     last line of a run killed at a cell cap is still a lower bound on the whole — an [at_exit]
-    summary would never print there. Each candidate compile prints an [attempt] line with the
-    elapsed wall, which is how far a killed search got. What is not counted: the cc backend's
-    in-kernel fork/joins per launch are a property of each candidate's rendering, so a launch count
-    bounds them only together with the candidate's parallel-region count. *)
+    summary would never print there. Each candidate the tuner attempts prints an [attempt] line with
+    the elapsed wall, which is how far a killed search got; an attempt is a compile unless
+    [autotune_bound_pruning] prunes it first. A call made without failure tagging — the untuned
+    control [autotune_log=true] times after a search — fires no pre-dispatch seam, so its warmup and
+    calibration are reported as unattributed and counted apart rather than as zero. What is not
+    counted: the cc backend's in-kernel fork/joins per launch are a property of each candidate's
+    rendering, so a launch count bounds them only together with the candidate's parallel-region
+    count. *)
 
 let install_timing_trace () =
   if env_flag "BENCH_TIMING_TRACE" then begin
@@ -228,7 +232,7 @@ let install_timing_trace () =
        wall-clock step inside it would skew every interval the trace reports. *)
     let now () = Mtime.Span.to_float_ns (Mtime_clock.elapsed ()) /. 1e9 in
     let t0 = now () in
-    let calls = ref 0 and attempts = ref 0 and launches = ref 0 in
+    let calls = ref 0 and attempts = ref 0 and launches = ref 0 and untagged = ref 0 in
     let calib_s = ref 0. and timed_s = ref 0. in
     let depths = Hashtbl.create (module Int) in
     let preflight_at = ref None and depth_at = ref None in
@@ -258,22 +262,28 @@ let install_timing_trace () =
          (match !depth_at with
          | None -> pr "timing-trace: a timed window without a depth decision\n"
          | Some (at, depth, calibration) ->
-             (* No preflight time means an untagged call, which the tuner never makes: its warmup
-                and calibration are then unattributed rather than guessed. *)
-             let calib = Option.value_map !preflight_at ~default:0. ~f:(fun p -> at -. p) in
+             (* No preflight time means an untagged call: its warmup and calibration are counted
+                apart as unattributed, never as zero. *)
+             let calib =
+               match !preflight_at with
+               | Some p -> Printf.sprintf "calib %.1f ms" ((at -. p) *. 1e3)
+               | None ->
+                   Int.incr untagged;
+                   "calib unattributed (untagged call)"
+             in
+             Option.iter !preflight_at ~f:(fun p -> calib_s := !calib_s +. (at -. p));
              let n = 1 + calibration + (depth * samples) in
              Int.incr calls;
              launches := !launches + n;
-             calib_s := !calib_s +. calib;
              timed_s := !timed_s +. (now -. at);
              Hashtbl.update depths depth ~f:(fun c -> 1 + Option.value c ~default:0);
              pr
-               "timing-trace: call %d at %.1fs: depth %d, %d batches, %d launches, calib %.1f ms, \
-                timed %.1f ms (median batch %.3f ms) | totals: %d calls, %d launches, calib %.2f \
-                s, timed %.2f s\n"
-               !calls (now -. t0) depth samples n (calib *. 1e3)
+               "timing-trace: call %d at %.1fs: depth %d, %d batches, %d launches, %s, timed %.1f \
+                ms (median batch %.3f ms) | totals: %d calls, %d launches, calib %.2f s (%d calls \
+                unattributed), timed %.2f s\n"
+               !calls (now -. t0) depth samples n calib
                ((now -. at) *. 1e3)
-               median_wall_ms !calls !launches !calib_s !timed_s);
+               median_wall_ms !calls !launches !calib_s !untagged !timed_s);
          preflight_at := None;
          depth_at := None;
          prev_window ~samples ~wall_ms ~median_wall_ms);
@@ -286,9 +296,9 @@ let install_timing_trace () =
         in
         pr
           "timing-trace: summary: %.1fs wall, %d candidate attempts, %d timing calls, %d launches, \
-           calib %.2f s, timed %.2f s; depth histogram (calls x depth): %s\n"
+           calib %.2f s (%d calls unattributed), timed %.2f s; depth histogram (calls x depth): %s\n"
           (now () -. t0)
-          !attempts !calls !launches !calib_s !timed_s hist)
+          !attempts !calls !launches !calib_s !untagged !timed_s hist)
   end
 
 (** {1 Placement A/B arms in the emitted result (gh-ocannl-546)}
