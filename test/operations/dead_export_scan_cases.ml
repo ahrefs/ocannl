@@ -274,6 +274,9 @@ type derived = D [@@deriving equal]
 type derived_sexp = S [@@deriving sexp_of]
 type in_extension = E
 type in_with = W
+type in_package = Pk
+type by_fields = { fields_label : int } [@@deriving fields]
+type fields_module = { module_label : int } [@@deriving fields]
 type extensible = ..
 type _private = X
 let own_use (x : annotated) = x
@@ -298,12 +301,15 @@ let () =
        [
          "Sample.annotated";
          "Sample.by_constructor";
+         "Sample.by_fields";
          "Sample.by_label";
          "Sample.derived";
          "Sample.derived_sexp";
          "Sample.example_train_result";
          "Sample.extensible";
+         "Sample.fields_module";
          "Sample.in_extension";
+         "Sample.in_package";
          "Sample.in_with";
          "Sample.interfaced";
          "Sample.prose";
@@ -322,7 +328,10 @@ let () =
          let x = Sample.sexp_of_derived_sexp\n\
          let f = [%compare: Sample.in_extension]\n\
          module type S = sig type t end with type t = Sample.in_with\n\
-         type Sample.extensible += More\n" );
+         type Sample.extensible += More\n\
+         let p (module M : S with type in_package = int) = ()\n\
+         let g x = (x.Other.fields_label, fields_label x, { Other.fields_label = 1 })\n\
+         let n = Sample.Fields_of_fields_module.names\n" );
     ]
   in
   let counts =
@@ -341,6 +350,24 @@ let () =
     ~f:(fun name -> mentions counts name > 0);
   Verdict.p_all "extension payloads, with-constraints, and type extensions mention the type"
     [ "in_extension"; "in_with"; "extensible" ] ~f:(fun name -> mentions counts name > 0);
+  Verdict.p "a first-class module's package constraint mentions the type"
+    (mentions counts "in_package" > 0);
+  Verdict.p "a fields deriving is credited by its module, never by a same-named label or value"
+    (mentions counts "fields_module" > 0 && mentions counts "by_fields" = 0);
+  let deriving_payload =
+    Scan.type_exports_of_source ~source:"arrayjit/lib/payload.ml" "type t = T [@@deriving equal]"
+  in
+  let payload_counts =
+    Scan.type_mention_counts ~type_exports:deriving_payload
+      ~implementations:
+        [
+          ("arrayjit/lib/payload.ml", "type t = T [@@deriving equal]");
+          ("elsewhere.ml", "type u = U [@@deriving equal, compare]\n");
+        ]
+      ~interfaces:[]
+  in
+  Verdict.p "a deriving payload naming a deriver is not a spelling of the derived value"
+    (Hashtbl.find_exn payload_counts "Payload.t" = 0);
   let unqualified =
     type_counts [ ("opened.ml", "open Sample\nlet f (x : example_train_result) = x\n") ]
   in

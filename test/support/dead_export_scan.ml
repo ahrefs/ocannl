@@ -393,15 +393,19 @@ let counts ~(exports : export list) references =
     last component of any type path ([foo], [M.foo], [N.foo] all credit every censused [foo], so a
     same-named type elsewhere hides a dead one), in implementations and interfaces alike, including
     the defining source (a type its own module uses is live, if not public), but excluding the
-    declaration's own span, so a recursive type does not credit itself. A type whose deriving
-    generates values is also mentioned by a spelling of one of those values, since a caller can use
-    the type through its converter alone. Comments, docstrings and string literals never parse into
-    a path, so prose cannot keep a type alive.
+    declaration's own span, so a recursive type does not credit itself. Package constraints
+    ([(module S with type foo = int)]), [with type] constraints and type extensions are type paths
+    too. A type whose deriving generates values or modules is also mentioned by a spelling of one of
+    them in a value or module path -- never in a label path, and never inside a [[@@deriving]]
+    payload, which names derivers rather than using their output -- since a caller can use the type
+    through its converter alone. Comments, docstrings and string literals never parse into a path,
+    so prose cannot keep a type alive.
 
     Out of scope, by design: the constructors and record labels of a type are not resolved to it (a
-    record built only by its labels, never annotated, reads as unmentioned); nor are values,
-    exceptions, module types or classes; nor anything a PPX other than the modelled derivings
-    generates. *)
+    record built only by its labels, never annotated, reads as unmentioned), and neither are the
+    label-named accessors [[@@deriving fields]] generates -- crediting a label's name would let any
+    same-named label elsewhere keep a dead record alive; nor are values, exceptions, module types or
+    classes; nor anything a PPX other than the modelled derivings generates. *)
 
 type type_export = {
   module_name : string;
@@ -415,8 +419,8 @@ type type_export = {
 let type_export_key ({ module_name; type_name; _ } : type_export) = module_name ^ "." ^ type_name
 
 (** The values and modules a deriving generates for [type_name], any spelling of which mentions the
-    type. [labels] are the record labels, which [fields] turns into accessor functions. *)
-let deriving_mentions ~derivers ~labels type_name =
+    type. The label-named accessors of [fields] are left out, by the label boundary above. *)
+let deriving_mentions ~derivers type_name =
   let named ~t ~prefix ~suffix =
     if String.equal type_name "t" then t else prefix ^ type_name ^ suffix
   in
@@ -428,7 +432,7 @@ let deriving_mentions ~derivers ~labels type_name =
     | "hash" -> [ "hash_fold_" ^ type_name; named ~t:"hash" ~prefix:"hash_" ~suffix:"" ]
     | "enumerate" -> [ named ~t:"all" ~prefix:"all_of_" ~suffix:"" ]
     | "variants" -> [ named ~t:"Variants" ~prefix:"Variants_of_" ~suffix:"" ]
-    | "fields" -> named ~t:"Fields" ~prefix:"Fields_of_" ~suffix:"" :: labels
+    | "fields" -> [ named ~t:"Fields" ~prefix:"Fields_of_" ~suffix:"" ]
     | _ -> [])
   |> List.dedup_and_sort ~compare:String.compare
 
@@ -445,11 +449,6 @@ let type_exports_of_source ~source contents =
                 let type_name = declaration.ptype_name.txt in
                 if String.is_prefix type_name ~prefix:"_" then acc
                 else
-                  let labels =
-                    match declaration.ptype_kind with
-                    | Ptype_record labels -> List.map labels ~f:(fun label -> label.pld_name.txt)
-                    | Ptype_abstract | Ptype_variant _ | Ptype_open -> []
-                  in
                   let loc = declaration.ptype_loc in
                   {
                     module_name;
@@ -457,7 +456,7 @@ let type_exports_of_source ~source contents =
                     source;
                     line = loc.loc_start.pos_lnum;
                     span = (loc.loc_start.pos_cnum, loc.loc_end.pos_cnum);
-                    mentioned_by = deriving_mentions ~derivers ~labels type_name;
+                    mentioned_by = deriving_mentions ~derivers type_name;
                   }
                   :: acc)
         | Pstr_extension ((_, PStr nested), _) -> items acc nested
@@ -492,20 +491,24 @@ let type_mention_counts ~(type_exports : type_export list) ~implementations ~int
       (module String)
       (List.concat_map type_exports ~f:(fun export -> export.mentioned_by))
   in
-  (* Type-position mentions carry their place, to be told apart from the declaration's own span;
-     derived-value spellings never occur inside a declaration, so a name count suffices. *)
+  (* Every mention carries its place, to be told apart from the declaration's own span. *)
   let type_mentions = Hashtbl.create (module String) in
   let derived_mentions = Hashtbl.create (module String) in
   let walk ~source =
     let record_type_path (path : Ppxlib.longident_loc) =
-      let loc = path.loc in
-      match flattened_longident path.txt with
-      | Some path -> (
-          match path_last path with
-          | Some name when Set.mem type_names name ->
-              Hashtbl.add_multi type_mentions ~key:name ~data:(source, loc.loc_start.pos_cnum)
-          | Some _ | None -> ())
-      | None -> ()
+      match Option.bind (flattened_longident path.txt) ~f:path_last with
+      | Some name when Set.mem type_names name ->
+          Hashtbl.add_multi type_mentions ~key:name ~data:(source, path.loc.loc_start.pos_cnum)
+      | Some _ | None -> ()
+    in
+    (* A derived value or module is spelled as a whole value or module path, or as a qualifier in
+       one ([Fields_of_foo.names]). Label paths are not read at all. *)
+    let record_derived_path (path : Ppxlib.longident_loc) =
+      Option.iter (flattened_longident path.txt) ~f:(fun components ->
+          List.iter components ~f:(fun name ->
+              if Set.mem derived_names name then
+                Hashtbl.add_multi derived_mentions ~key:name
+                  ~data:(source, path.loc.loc_start.pos_cnum)))
     in
     object
       inherit Ast_traverse.iter as super
@@ -513,6 +516,8 @@ let type_mention_counts ~(type_exports : type_export list) ~implementations ~int
       method! core_type core_type =
         (match core_type.ptyp_desc with
         | Ptyp_constr (path, _) | Ptyp_class (path, _) -> record_type_path path
+        | Ptyp_package (_, constraints) ->
+            List.iter constraints ~f:(fun (path, _) -> record_type_path path)
         | _ -> ());
         super#core_type core_type
 
@@ -526,13 +531,18 @@ let type_mention_counts ~(type_exports : type_export list) ~implementations ~int
         record_type_path extension.ptyext_path;
         super#type_extension extension
 
-      method! longident_loc path =
-        (match flattened_longident path.txt with
-        | Some components ->
-            List.iter components ~f:(fun name ->
-                if Set.mem derived_names name then Hashtbl.incr derived_mentions name)
-        | None -> ());
-        super#longident_loc path
+      method! expression expression =
+        (match expression.pexp_desc with Pexp_ident path -> record_derived_path path | _ -> ());
+        super#expression expression
+
+      method! module_expr module_expr =
+        (match module_expr.pmod_desc with Pmod_ident path -> record_derived_path path | _ -> ());
+        super#module_expr module_expr
+
+      (* A deriving payload names the derivers ([equal], [compare], [hash]), which for a type [t]
+         are exactly its derived names; it uses nothing. *)
+      method! attribute attribute =
+        if String.equal attribute.attr_name.txt "deriving" then () else super#attribute attribute
     end
   in
   List.iter implementations ~f:(fun (source, contents) ->
@@ -552,7 +562,8 @@ let type_mention_counts ~(type_exports : type_export list) ~implementations ~int
         List.sum
           (module Int)
           export.mentioned_by
-          ~f:(fun name -> Option.value (Hashtbl.find derived_mentions name) ~default:0)
+          ~f:(fun name ->
+            Hashtbl.find_multi derived_mentions name |> List.count ~f:outside_declaration)
       in
       Hashtbl.update table (type_export_key export) ~f:(fun previous ->
           Option.value previous ~default:0 + by_type + by_derived));

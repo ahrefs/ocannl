@@ -519,8 +519,10 @@ that they earn a lookup rather than always-loaded space.
   removing the value, or giving it a detected caller requires deleting its exemption.
   Top-level TYPE declarations in the same modules (gh-ocannl-1009) are a coarser census: a type
   whose name appears in no type path anywhere in the tree (`.mli` signatures included) outside its
-  own declaration, and in no spelling of a value its deriving generates, is reported. It is a name
-  count, never a resolution: labels and constructors are not resolved to their type, so a type
+  own declaration, and in no value or module path spelling what its deriving generates (a
+  `[@@deriving]` payload names derivers and credits nothing), is reported. It is a name
+  count, never a resolution: labels and constructors — `fields`' label-named accessors
+  included — are not resolved to their type, so a type
   built and matched only through them is a false refusal exempted with that reason, while any
   same-named type path elsewhere credits it. Crediting label or constructor names instead fails on
   the motivating record: `Train.example_train_result`'s labels include `inputs` and
