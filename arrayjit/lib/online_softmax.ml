@@ -71,22 +71,22 @@ let nest_of (stmt : LL.t) : nest option =
   in
   go [] stmt
 
-(* Whether a statement holds code the write census cannot see, or that the rewrite must not move a
-   write across: a query over the statement's effect rows (gh-ocannl-1016), the one view of what
-   runs beside its accesses. *)
-let has_opaque (stmt : LL.t) =
-  List.exists (LL.statement_effects stmt) ~f:(fun (e : Tn.t Affine.statement_effect) ->
-      match e.e_kind with
-      | Affine.Staged | Affine.Barrier -> true
-      | Affine.Mma ->
-          (* A code-motion barrier as a construct, whatever its scalar fallback spells (gh-1001). *)
-          true
-      | Affine.Scope_body ->
-          (* Raw lowering emits no scopes; a body's purity is checked only by the optimizer,
-             downstream of the tier, and the write census ([LL.writes_of_stmt]) does not enter one
-             -- so a scope in the span is code the census cannot see. *)
-          true
-      | Affine.Local_write | Affine.Local_declare | Affine.Merge_read _ -> false)
+(* Whether a statement holds code the census cannot see, or that the rewrite must not move a write
+   across: a query over the statement's effect rows (gh-ocannl-1016), the one view of what runs
+   beside its accesses. *)
+let opaque_effect (e : Tn.t Affine.statement_effect) =
+  match e.e_kind with
+  | Affine.Staged | Affine.Barrier -> true
+  | Affine.Mma ->
+      (* A code-motion barrier as a construct, whatever its scalar fallback spells (gh-1001). *)
+      true
+  | Affine.Scope_body ->
+      (* The census is the same relations, which descend into a scope body at its use site: what a
+         body reads or writes -- an impure one included, whose purity only the optimizer checks,
+         downstream of the tier -- is counted at the top-level statement holding it, where it runs
+         (gh-ocannl-1050). A body's staged code or barrier is a row of its own. *)
+      false
+  | Affine.Local_write _ | Affine.Local_read _ | Affine.Local_declare | Affine.Merge_read _ -> false
 
 let wrap loops body =
   List.fold_right loops ~init:body ~f:(fun { index; from_; to_ } body ->
@@ -246,22 +246,46 @@ let max_reduce (n : nest) =
       | _ -> None)
   | _ -> None
 
-(* The rewrite's view of a routine: its top-level statements, their nests, and who writes what. *)
+(* The rewrite's view of a routine: its top-level statements, their nests, and the census -- who
+   writes what, what each statement reads, and which statements hold code the census cannot see --
+   read off each statement's relations (gh-ocannl-1050), which enter loop, scan, guard and scope
+   bodies alike. A merge-buffer read counts as a read of its source node, conservatively. *)
 type routine = {
   stmts : LL.t array;
   nests : nest option array;
   writers : (Tn.t, int list) Hashtbl.t;
+  reads : Set.M(Tn).t array;
+  opaque : bool array;
 }
 
 let routine_of (llc : LL.t) : routine =
   let stmts = Array.of_list (LL.flat_lines [ llc ]) in
   let writers = Hashtbl.create (module Tn) in
-  Array.iteri stmts ~f:(fun pos stmt ->
-      Set.iter (LL.writes_of_stmt stmt) ~f:(fun tn -> Hashtbl.add_multi writers ~key:tn ~data:pos));
-  { stmts; nests = Array.map stmts ~f:nest_of; writers }
+  let census =
+    Array.mapi stmts ~f:(fun pos stmt ->
+        let accs, effs = LL.affine_relations stmt in
+        let nodes l = Set.of_list (module Tn) l in
+        let writes, reads = List.partition_tf accs ~f:(fun (a : Tn.t Affine.access) -> a.a_write) in
+        Set.iter
+          (nodes (List.map writes ~f:(fun a -> a.a_tn)))
+          ~f:(fun tn -> Hashtbl.add_multi writers ~key:tn ~data:pos);
+        let merge_reads =
+          List.filter_map effs ~f:(fun (e : Tn.t Affine.statement_effect) ->
+              match e.e_kind with Affine.Merge_read tn -> Some tn | _ -> None)
+        in
+        ( nodes (merge_reads @ List.map reads ~f:(fun a -> a.a_tn)),
+          List.exists effs ~f:opaque_effect ))
+  in
+  {
+    stmts;
+    nests = Array.map stmts ~f:nest_of;
+    writers;
+    reads = Array.map census ~f:fst;
+    opaque = Array.map census ~f:snd;
+  }
 
 let writers r tn = Hashtbl.find_multi r.writers tn |> List.sort ~compare:Int.compare
-let reads_at r pos = LL.reads_of_body r.stmts.(pos)
+let reads_at r pos = r.reads.(pos)
 
 (* The one pointwise nest defining [tn], if it is defined exactly once and elementwise. *)
 let definition r tn =
@@ -373,17 +397,16 @@ let find_normalizer r (a : int) : normalizer option =
        between: a definition outside that span consumed a stale [m] or a stale [n] in the original,
        which the scan would not reproduce. Between its initialization and the max, [l] holds its
        zero and [m] its neutral fill, and the scan deletes both fills -- so nothing may read either
-       there, and nothing may redefine [x] once the max has read it. Staged code and barriers are
-       invisible to the write census, so none may sit in the span the rewrite reorders. *)
+       there, and nothing may redefine [x] once the max has read it. Staged code is invisible to the
+       census, and barriers and tensor-core statements are fences code motion must not cross, so
+       none may sit in the span the rewrite reorders. *)
     let untouched =
       a < n_pos && n_pos < e_pos && e_pos < c
       && List.for_all (writers r x) ~f:(fun w -> w < a)
       && (not (reads_between (Int.min a c_init) c l))
       && (not (reads_between a_init a m))
       && not
-           (List.exists
-              (List.range (Int.min a_init c_init) (c + 1))
-              ~f:(fun pos -> has_opaque r.stmts.(pos)))
+           (List.exists (List.range (Int.min a_init c_init) (c + 1)) ~f:(fun pos -> r.opaque.(pos)))
     in
     let* () = Option.some_if untouched () in
     let rows = List.filter an.loops ~f:(fun lp -> not (Idx.equal_symbol lp.index t.index)) in

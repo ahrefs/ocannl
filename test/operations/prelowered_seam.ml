@@ -247,12 +247,12 @@ let phase4 () =
 (* gh-ocannl-584 review round 2: purity alone does not make the hoist sound. A body's INPUTS include
    the scope locals it reads, and [hoist_cross_statement_cse] evaluates a body shared by sibling
    statements ONCE ahead of the first user — so a [Set_local] of a local the body reads, sitting
-   between two users, leaves the later user reading a stale value. The hazard check saw only tensor
-   nodes ([reads_of_body] ignores [Get_local], [writes_of_stmt] ignores [Set_local]), so it could
-   not see that dependency at all. Bodies reading a local declared outside them are ordinary
-   pipeline output, not a hand-built curiosity: [eliminate_common_subexpressions] and this very pass
-   create them (a strict "a body may only read locals it owns" rule was tried and rejects
-   layer_norm_divided_mean's own lowering).
+   between two users, leaves the later user reading a stale value. A hazard check over tensor nodes
+   alone cannot see that dependency; the check matches the body's [Local_read] rows against the
+   lifted-over statements' [Local_write] rows (gh-ocannl-1050). Bodies reading a local declared
+   outside them are ordinary pipeline output, not a hand-built curiosity:
+   [eliminate_common_subexpressions] and this very pass create them (a strict "a body may only read
+   locals it owns" rule was tried and rejects layer_norm_divided_mean's own lowering).
 
    [ext := 1; Y[0] = S{2*ext}; ext := 2; Y[1] = S'{2*ext}] with [S] and [S'] alpha-equivalent.
    Correct is [Y = [2; 4]]; hoisting [S] above the mutation gives [Y = [2; 2]].

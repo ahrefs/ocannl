@@ -115,9 +115,8 @@ let () =
 
   (* ===================================================================== *)
   (* Scenario D (hoist hazard, Bug 2): two alpha-equivalent Local_scopes reading [src] separated by
-     a sibling For_loop that WRITES [src] must NOT be hoisted above the loop. With the old
-     non-recursive writes_of_stmt the For_loop reported no writes and the hoist fired (unsound);
-     with the recursive version the write to src is seen and the hoist is blocked. *)
+     a sibling For_loop that WRITES [src] must NOT be hoisted above the loop: the hazard check must
+     see writes inside a lifted-over statement's loop body, not only its top level. *)
   Stdio.printf "=== Scenario D: For_loop write hazard blocks hoist (must NOT merge) ===\n";
   let d_scope0 = make_scope ~tn_src { tn = tn_src; scope_id = 500 } [||] in
   let d_scope2 = make_scope ~tn_src { tn = tn_src; scope_id = 600 } [||] in
@@ -203,3 +202,27 @@ let () =
   PPrint.ToChannel.pretty 0.9 110 Stdio.stdout
     (Syntax.compile_main (Syntax.create_render_ctx ~name:"cross_cse" optimized) result);
   Stdio.printf "\n%!"
+
+(* Scenario E (gh-ocannl-1050): the hazard check is a query over each lifted-over statement's
+   relations, and [Staged_compilation] is the one row whose accesses the relations do not enumerate
+   -- code it cannot see through, so the hoist declines to move a body's reads across it. The
+   positive control lifts the same body over a statement writing a node the body does not read. *)
+let () =
+  let tn_src = make_tn ~id:11 ~label:"src" ~dim:4 in
+  let tn_out1 = make_tn ~id:12 ~label:"out1" ~dim:1 in
+  let tn_out2 = make_tn ~id:13 ~label:"out2" ~dim:1 in
+  let tn_other = make_tn ~id:14 ~label:"other" ~dim:1 in
+  let program between =
+    LL.unflat_lines
+      [
+        make_set ~tn_out:tn_out1 (make_scope ~tn_src { tn = tn_src; scope_id = 900 } [||]);
+        between;
+        make_set ~tn_out:tn_out2 (make_scope ~tn_src { tn = tn_src; scope_id = 1000 } [||]);
+      ]
+  in
+  Stdio.printf "\n=== Scenario E: opaque code between the users blocks the hoist ===\n";
+  report "E.unrelated-write" ~hoisted_expected:true
+    (LL.hoist_cross_statement_cse (program (make_set ~tn_out:tn_other (LL.Constant 2.0))));
+  report "E.staged-between" ~hoisted_expected:false
+    (LL.hoist_cross_statement_cse
+       (program (LL.Staged_compilation (fun () -> PPrint.string "/* opaque */"))))

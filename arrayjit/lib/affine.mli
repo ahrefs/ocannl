@@ -268,10 +268,17 @@ type 'tn access = {
     an access, everything else that can make code motion observable is a row here. A consumer
     classifies the kinds with an exhaustive match, so a new kind forces each consumer's decision. *)
 
+type 'tn local = { local_tn : 'tn; local_id : int } [@@deriving sexp_of]
+(** A scope local's identity, as [Low_level.scope_id] spells it: the node naming the local and its
+    scope id. Two locals are the same local only when both agree. *)
+
 type 'tn effect_kind =
-  | Local_write
+  | Local_write of 'tn local
       (** A [Set_local], or a [Scan_loop]'s carried-state initialization or per-iteration rotation:
-          a scope local changes value. *)
+          the scope local changes value. *)
+  | Local_read of 'tn local
+      (** A [Get_local], or a [Scan_loop]'s per-iteration rotation reading the carried [next]
+          (gh-ocannl-1050): the half of a scope body's inputs no tensor-node access carries. *)
   | Local_declare  (** A [Declare_local]: a statement-level local comes into scope. *)
   | Scope_body
       (** A [Local_scope] occurrence: its body's statements run at this position, hoisted ahead of
@@ -296,14 +303,15 @@ type 'tn statement_effect = {
       (** Enclosing loops, outermost first, as {!field-a_loops}. *)
   e_guarded : bool;  (** Under an [If] guard, as {!field-a_guarded}. *)
   e_gated : bool;
-      (** Under a scalar gate, as {!field-a_gated}: only a [Merge_read] can be; a [Scope_body] is
-          not, its body being hoisted out of the gate. *)
+      (** Under a scalar gate, as {!field-a_gated}: only a [Merge_read] or a [Local_read] can be; a
+          [Scope_body] is not, its body being hoisted out of the gate. *)
   e_path : path_comp list;
       (** The program position, in the components of {!field-a_path}: a statement-shaped effect
-          (every kind but [Scope_body] and [Merge_read]) sits at its statement's [Write] — a
-          [Set_local]'s right-hand-side reads at the same statement's [Rhs] order before it; a
-          [Merge_read] at its reading expression's position, like a read access; a [Scope_body] at
-          the base its body's rows extend (the [Arg] component). *)
+          (every kind but [Scope_body], [Merge_read] and [Local_read]) sits at its statement's
+          [Write] — a [Set_local]'s right-hand-side reads at the same statement's [Rhs] order before
+          it; a [Merge_read] or [Local_read] at its reading expression's position, like a read
+          access (a scan rotation's read of [next] at the rotation's [Rhs]); a [Scope_body] at the
+          base its body's rows extend (the [Arg] component). *)
 }
 [@@deriving sexp_of]
 
