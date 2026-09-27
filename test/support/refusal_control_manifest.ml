@@ -119,6 +119,7 @@ let raw_entries =
       [
         "[scanner-refusal:6d5b4fe654d3592b327d32a16ca1fa2a] checked-in file this";
         "[scanner-refusal:571968c7f074e29e60dddf8d93d23f34] number the allow-list";
+        "[scanner-refusal:dd9968e0cfe551a1ba6ee712eef44de8] Verdict's FAILED teardown";
         "[scanner-refusal:f55e77a26cf5f2dde03b8170ef403db6] every allow-list entry";
         "[scanner-refusal:1e1b0223d539c60bc27afd05f8f10482] every allow-list entry";
         "[scanner-refusal:fbdcd3ff3601bf6c0f3343712bb10500] synthetic golden line";
@@ -129,6 +130,7 @@ let raw_entries =
         "[scanner-refusal:b9df30c8c746f670678c71fa8a13e42a] total followed by";
         "[scanner-refusal:b018f905e59688b7aa91c2ca39f76c38] digit run continuing";
         "[scanner-refusal:ad85758e7d6a2b46d81c3d7e6b921d71] outside the boundary";
+        "[scanner-refusal:a0e95a750efaba5e8577d41dae60ceaf] one-digit teardown total";
         "[scanner-refusal:4166c0bca69640c175777244011fc4e2] that allows nothing";
         "[scanner-refusal:5aac880a61d2880852d33a0856daa83f] behind a member's";
         "[scanner-refusal:396ecaa5128a1569c6279921019721c1] directory the action";

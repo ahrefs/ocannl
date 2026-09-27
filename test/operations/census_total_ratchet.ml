@@ -12,7 +12,7 @@
 
     {1 Boundary}
 
-    This is a LINE-SHAPED scan over text, and these three rules are all it reads.
+    This is a LINE-SHAPED scan over text, and these four rules are all it reads.
 
     - WHICH GOLDENS. Every checked-in [dune] file is parsed ([Dune_stanza_scan.stanzas]), its
       [(subdir …)] forms applied. In every directory that defines an [(alias (name scans) …)], the
@@ -36,7 +36,11 @@
       number's line at or before it, ends at or after it -- so a match must span the WHOLE run, and
       a total sharing a line with an allowed citation is still refused. An entry that allows nothing
       is stale and fails, which is also this scan's signal that it did not go blind: a scan that
-      read no goldens leaves every entry stale. *)
+      read no goldens leaves every entry stale.
+    - THE TEARDOWN TOTAL. A whole line [FAILED: <n> check(s) did not hold.] -- the line
+      [Verdict.report_failures] writes -- is refused whatever its digit count, so the one-digit
+      count the number rule does not read cannot carry it in: a negative control whose failures are
+      its golden ends through [Verdict.exit_negative_control] instead. *)
 
 open Base
 open Stdio
@@ -234,6 +238,16 @@ let refused ~entries numbers =
 let stale ~entries numbers =
   List.filter entries ~f:(fun entry -> not (List.exists numbers ~f:(allows entry)))
 
+(** Verdict's teardown line ([Verdict.report_failures]) totals the failure lines above it, so it is
+    a census total whatever its digit count -- and a one-digit count is below the number boundary
+    above. It is matched as a whole line instead. *)
+let teardown_total = Str.regexp {|^FAILED: [0-9]+ checks? did not hold\.$|}
+
+let teardown_totals ~golden content =
+  String.split_lines content
+  |> List.filter_mapi ~f:(fun index line ->
+      if Str.string_match teardown_total line 0 then Some (golden, index + 1, line) else None)
+
 let render number =
   Printf.sprintf "%s:%d: %s in: %s" number.in_golden number.line_no
     (String.sub number.line ~pos:number.start ~len:(number.stop - number.start))
@@ -256,12 +270,13 @@ let scan root generated =
      (gh-ocannl-1056). The goldens read and every refused number go to stderr.\n\n";
   p_all ~min:golden_floor "every golden the scans family diffs is a checked-in file this scan read"
     goldens ~f:(Inventory.mem inventory);
-  let numbers =
+  let contents =
     List.concat_map goldens ~f:(fun golden ->
         List.find inventory ~f:(fun (file : Inventory.file) -> String.equal file.path golden)
         |> Option.value_map ~default:[] ~f:(fun (file : Inventory.file) ->
-            numbers_of ~golden (In_channel.read_all file.on_disk)))
+            [ (golden, In_channel.read_all file.on_disk) ]))
   in
+  let numbers = List.concat_map contents ~f:(fun (golden, content) -> numbers_of ~golden content) in
   eprintf "census_total_ratchet: %d numbers read (not part of the golden)\n" (List.length numbers);
   let refusals = refused ~entries:allowed numbers in
   List.iter refusals ~f:(fun number ->
@@ -269,6 +284,16 @@ let scan root generated =
   p_empty ~min:number_floor
     "no golden of the scans family carries a number the allow-list does not name" ~over:numbers
     refusals;
+  let teardowns =
+    List.concat_map contents ~f:(fun (golden, content) -> teardown_totals ~golden content)
+  in
+  List.iter teardowns ~f:(fun (golden, line_no, line) ->
+      eprintf
+        "census_total_ratchet: %s:%d: Verdict's teardown total %S; end the negative control \
+         through Verdict.exit_negative_control, which exits 1 without it\n"
+        golden line_no line);
+  p_empty "no golden of the scans family carries Verdict's FAILED teardown line, whatever its count"
+    ~over:contents teardowns;
   let stale_entries = stale ~entries:allowed numbers in
   List.iter stale_entries ~f:(fun entry ->
       eprintf "census_total_ratchet: entry %S allows no number in its golden; delete it\n"
@@ -308,6 +333,25 @@ let controls () =
   p "a digit run continuing a name is not a number"
     (at [ 41 ] (line "bf16_arithmetic m16n8k16 gh514_cells.sh: 170 lines"));
   p "a single digit is outside the boundary" (at [ 11 ] (line "7 tests of 170"));
+  (* Only the two-digit count is a number the boundary reads; the teardown rule refuses both whole
+     lines, and not the line that merely begins like one. The lines are Verdict's own, so a reworded
+     teardown fails this control rather than leaving the matcher blind. *)
+  let teardown_golden =
+    String.concat_lines
+      [
+        "FAIL: a";
+        Verdict.teardown_line 3;
+        Verdict.teardown_line 12;
+        Verdict.teardown_line 1 ^ " (not a teardown)";
+      ]
+  in
+  p "a one-digit teardown total is refused as a line, though no number the boundary reads"
+    (List.equal Int.equal
+       (List.map (teardown_totals ~golden:"x/a.expected" teardown_golden) ~f:(fun (_, n, _) -> n))
+       [ 2; 3 ]
+    && List.equal Int.equal
+         (List.map (line teardown_golden) ~f:(fun number -> number.line_no))
+         [ 3 ]);
   p "an entry that allows nothing is stale"
     (List.length (stale ~entries:[ citation ] (line "Scanned 170 tests.")) = 1);
   let dune =
