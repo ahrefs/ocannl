@@ -1,0 +1,15 @@
+a failed check ends a run that reaches its end with status 1: true
+the handlers registered before Verdict's still run at a failing end: true
+an exception escaping after a failed check is still reported: true
+a run an exception ended says it stopped early: true
+a run an exception ended still counts its failed checks: true
+a run an exception ended exits with the runtime's status 2: true
+the handlers registered before Verdict's still run when it stops early: true
+nothing after the escaping exception ran: true
+an exception in a run with no failed check is reported as the runtime reports it: true
+an explicit exit 0 after a failed check exits 1: true
+a catch-all that swallows the exit still ends the run with status 1: true
+a case that raises is a failed claim naming the case and the exception: true
+the case after a raising case still runs: true
+an exit inside a case ends the run rather than failing the case: true
+a case that returns prints only what its claims print: true
