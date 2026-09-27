@@ -181,14 +181,94 @@ sys.path.insert(0, str(HERE / "runners"))
 from bench_common import read_st_metadata  # noqa: E402
 
 
-def cell_skipped(workload, backend, variant, precision):
-    """Whether a cell is in SKIP_CELLS, honouring the None-precision wildcard."""
-    return (workload, backend, variant, precision) in SKIP_CELLS or (
+def cell_skipped(workload, backend, variant, precision, skips=None):
+    """Whether a cell is in `skips` (default SKIP_CELLS), honouring the None-precision wildcard."""
+    skips = SKIP_CELLS if skips is None else skips
+    return (workload, backend, variant, precision) in skips or (
         workload,
         backend,
         variant,
         None,
-    ) in SKIP_CELLS
+    ) in skips
+
+
+def skip_reason(workload, backend, variant, precision, operator_skips, no_skip_cells):
+    """Why the sweep leaves this OCANNL cell out, or None when it runs it.
+
+    `--skip-cell` wins over `--no-skip-cells`: that flag retests the checked-in pathologies, and an
+    operator who names a cell on the same command line still means it to stay out.
+    """
+    if cell_skipped(workload, backend, variant, precision, operator_skips):
+        return "--skip-cell (the operator left it out of this sweep)"
+    if cell_skipped(workload, backend, variant, precision) and not no_skip_cells:
+        return "SKIP_CELLS (known pathological; --no-skip-cells runs it)"
+    return None
+
+
+# The OCANNL scheduling variants a sweep can dispatch, and the backends it can dispatch them on:
+# what a `--skip-cell` entry is checked against, so a misspelt one is refused at parse time rather
+# than skipping nothing -- an uncapped tuned search it was meant to keep out of the sweep then runs
+# for hours.
+SWEEP_VARIANTS = ("default", "materialized", "tuned")
+SWEEP_BACKENDS = ("cc",) + tuple(sorted({d[0] for d in GPU_DEVICES.values() if d[0]}))
+
+
+def skip_cell_arg(text):
+    """`--skip-cell WORKLOAD/BACKEND/VARIANT[/PRECISION]` as a SKIP_CELLS-shaped entry.
+
+    No PRECISION means every precision, exactly as a None precision does in SKIP_CELLS. The
+    backend, variant and precision are checked here; the workload can only be checked against the
+    selected fixtures, which `unmatched_skips` does before the first cell is dispatched.
+    """
+    parts = text.split("/")
+    if len(parts) not in (3, 4) or not all(parts):
+        raise argparse.ArgumentTypeError(
+            f"--skip-cell takes WORKLOAD/BACKEND/VARIANT[/PRECISION] (got {text!r})"
+        )
+    workload, backend, variant = parts[:3]
+    if backend not in SWEEP_BACKENDS:
+        raise argparse.ArgumentTypeError(
+            f"--skip-cell backend must be one of {', '.join(SWEEP_BACKENDS)} (got {backend!r})"
+        )
+    if variant not in SWEEP_VARIANTS:
+        raise argparse.ArgumentTypeError(
+            f"--skip-cell variant must be one of {', '.join(SWEEP_VARIANTS)} (got {variant!r})"
+        )
+    precision = None
+    if len(parts) == 4:
+        precision = parts[3] if parts[3] == "f32" else precision_spec(parts[3])
+    return (workload, backend, variant, precision)
+
+
+def selected_variants(args):
+    """The OCANNL scheduling variants the sweep's flags select, in dispatch order."""
+    return (
+        ["default"]
+        + (["materialized"] if args.materialized else [])
+        + (["tuned"] if args.tuned else [])
+    )
+
+
+def swept_backends(gpu_ocannl):
+    """The OCANNL backends the sweep dispatches on, in order: cc, then the GPU column if any."""
+    return ["cc"] + ([gpu_ocannl] if gpu_ocannl else [])
+
+
+def unmatched_skips(skips, workloads, backends, variants, precisions):
+    """The `--skip-cell` entries that name no cell this sweep would dispatch.
+
+    Such an entry is a typo or a stale command line, and it is refused rather than ignored: the
+    operator asked for a cell to stay out, and a sweep that silently runs it anyway is what the
+    flag exists to prevent.
+    """
+    return [
+        entry
+        for entry in skips
+        if entry[0] not in workloads
+        or entry[1] not in backends
+        or entry[2] not in variants
+        or (entry[3] is not None and entry[3] not in precisions)
+    ]
 
 
 def cell_name(variant, precision):
@@ -1511,7 +1591,9 @@ def ambient_env_line(results, ambient=None):
     return "ambient OCANNL_* environment: " + json.dumps(ambient, sort_keys=True)
 
 
-def report(results, out_dir, unavailable=(), failures=(), digests_path=None, ambient=None):
+def report(
+    results, out_dir, unavailable=(), failures=(), digests_path=None, ambient=None, skipped=()
+):
     out_dir.mkdir(parents=True, exist_ok=True)
     digests_path = digests_path or HERE / "fixtures" / fixture_digest.DIGEST_FILE
     digest_entries = fixture_digest.read_digests(digests_path)
@@ -1770,6 +1852,18 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None, amb
         lines.append("|---|---|---|")
         for workload, precision, reason in unavailable:
             lines.append(f"| {workload} | {precision} | {reason} |")
+    if skipped:
+        # A skipped cell is as absent from the tables as a failed one, and once the run log is gone
+        # only this says it was left out on purpose -- and by whom.
+        lines.append("\n## Cells skipped\n")
+        lines.append(
+            "Cells this sweep did not run. Their absence above is a choice, not a measurement and "
+            "not a failure.\n"
+        )
+        lines.append("| cell | why |")
+        lines.append("|---|---|")
+        for label, why in skipped:
+            lines.append(f"| {label} | {why} |")
     if failures:
         # A cell that produced no result is absent from every table above, and an absent row and a
         # failed one read identically once the report outlives the run log — which is the whole
@@ -1905,6 +1999,18 @@ def build_arg_parser():
         "machine/backend/OS; use this to retest whether the entry still applies here",
     )
     ap.add_argument(
+        "--skip-cell",
+        action="append",
+        default=[],
+        type=skip_cell_arg,
+        metavar="WORKLOAD/BACKEND/VARIANT[/PRECISION]",
+        help="leave one OCANNL cell out of this sweep, in every regime (repeatable; no PRECISION "
+        "means every precision), e.g. `gpt2_mini/cc/tuned` to measure a GPU tuned row without "
+        "first sitting through an uncapped CPU search. The cell is listed under the report's "
+        "skipped cells, so its absence reads as a choice rather than a failure; an entry naming "
+        "no cell of the sweep is refused. --no-skip-cells does not override it",
+    )
+    ap.add_argument(
         "--only",
         nargs="*",
         default=["ocannl", "pytorch", "tinygrad"],
@@ -1940,6 +2046,19 @@ def main():
         fixtures = [f for f in fixtures if f.stem in args.workloads]
     if not fixtures:
         sys.exit("no fixtures found — run gen_fixtures.py first")
+    operator_skips = set(args.skip_cell)
+    unmatched = unmatched_skips(
+        operator_skips,
+        workloads={f.stem for f in fixtures},
+        backends=swept_backends(gpu_ocannl) if "ocannl" in args.only else [],
+        variants=selected_variants(args),
+        precisions=["f32", *args.precision],
+    )
+    if unmatched:
+        sys.exit(
+            "--skip-cell names no cell of this sweep: "
+            + ", ".join("/".join(p for p in entry if p) for entry in unmatched)
+        )
 
     digests_path = HERE / "fixtures" / fixture_digest.DIGEST_FILE
     digest_entries = fixture_digest.read_digests(digests_path)
@@ -1959,6 +2078,9 @@ def main():
     results = []
     failures = []
     unavailable = []
+    # Cells left out of the sweep on purpose, by SKIP_CELLS or --skip-cell: reported beside the
+    # failures, so an absent row says why it is absent.
+    skipped = []
     partial = HERE / "results" / "partial.jsonl"
     partial.parent.mkdir(parents=True, exist_ok=True)
     partial.write_text("")  # fresh run
@@ -2029,11 +2151,7 @@ def main():
             fixture_result_stamp(fx, sha, origin, digest_entries, measurement_boxes)
         )
         if "ocannl" in args.only:
-            variants = ["default"]
-            if args.materialized:
-                variants.append("materialized")
-            if args.tuned:
-                variants.append("tuned")
+            variants = selected_variants(args)
             # Both training runners implement the mixed-precision recipe (master weights, storage
             # policy, f16 loss scaling and its gate-cost legs); the forward-only gpt fixture takes
             # BENCH_PRECISION as load-time weight conversion instead (gh-ocannl-492 task 4). Every
@@ -2048,13 +2166,19 @@ def main():
                     print(f"--- {name} ocannl/*/{precision}: NOT APPLICABLE ({reason})")
                 else:
                     precisions.append(precision)
-            for backend in ["cc"] + ([gpu_ocannl] if gpu_ocannl else []):
+            for backend in swept_backends(gpu_ocannl):
                 for precision in precisions:
                     for variant in variants:
                         cell = cell_name(variant, precision)
-                        if cell_skipped(name, backend, variant, precision) and not args.no_skip_cells:
-                            print(f"--- {name} ocannl/{backend}/{cell}: SKIPPED (SKIP_CELLS; "
-                                  "--no-skip-cells to run it anyway)")
+                        why = skip_reason(
+                            name, backend, variant, precision, operator_skips, args.no_skip_cells
+                        )
+                        if why:
+                            print(f"--- {name} ocannl/{backend}/{cell}: SKIPPED ({why})")
+                            for regime in args.profile:
+                                skipped.append(
+                                    (f"{name} ocannl/{backend}/{cell}{regime_label(regime)}", why)
+                                )
                             continue
                         env = cell_env(os.environ, fx, variant, precision)
                         for regime in args.profile:
@@ -2173,7 +2297,7 @@ def main():
     provenance_violations = provenance_check(results)
     tensorization_mismatches = tensorization_check(results)
     regime_mismatches = regime_check(results)
-    report(results, HERE / "results", unavailable, failures, ambient=ambient)
+    report(results, HERE / "results", unavailable, failures, ambient=ambient, skipped=skipped)
     ok = True
     if unavailable:
         # Not a failure: these cells were requested but the workload cannot express them. Saying so
@@ -2181,6 +2305,13 @@ def main():
         print(
             f"NOT APPLICABLE: {len(unavailable)} requested cell(s) the workload cannot express: "
             + ", ".join(f"{w}/{p}" for w, p, _ in unavailable),
+            flush=True,
+        )
+    if skipped:
+        # Not a failure either, and said for the same reason as NOT APPLICABLE above.
+        print(
+            f"SKIPPED: {len(skipped)} cell(s) left out of this sweep: "
+            + ", ".join(label for label, _ in skipped),
             flush=True,
         )
     if failures:
