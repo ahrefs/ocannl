@@ -2704,8 +2704,14 @@
  (libraries
   base
   stdio
+  ppx_compare
   ppx_compare.expander
+  ppx_enumerate
+  ppx_fields_conv
+  ppx_hash.expander
+  ppx_sexp_conv
   ppx_sexp_conv.expander
+  ppx_variants_conv
   test_utils
   arrayjit.verdict))
 

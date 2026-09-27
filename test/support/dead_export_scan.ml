@@ -97,13 +97,10 @@ let is_polymorphic_variant declaration =
   | Some { ptyp_desc = Ptyp_variant _; _ } -> true
   | Some _ | None -> false
 
-let of_sexp_names_of_name type_name =
-  let public = type_name ^ "_of_sexp" in
-  [ public; "__" ^ public ^ "__" ]
-
 let of_sexp_names declaration =
-  let names = of_sexp_names_of_name declaration.ptype_name.txt in
-  if is_polymorphic_variant declaration then names else [ List.hd_exn names ]
+  let type_name = declaration.ptype_name.txt in
+  let public = type_name ^ "_of_sexp" in
+  if is_polymorphic_variant declaration then [ public; "__" ^ public ^ "__" ] else [ public ]
 
 let derived_names ~derivers declaration =
   let type_name = declaration.ptype_name.txt in
@@ -418,21 +415,25 @@ type type_export = {
 
 let type_export_key ({ module_name; type_name; _ } : type_export) = module_name ^ "." ^ type_name
 
-(** The values and modules a deriving generates for [type_name], any spelling of which mentions the
-    type. The label-named accessors of [fields] are left out, by the label boundary above. *)
-let deriving_mentions ~derivers type_name =
-  let named ~t ~prefix ~suffix =
-    if String.equal type_name "t" then t else prefix ^ type_name ^ suffix
-  in
-  List.concat_map derivers ~f:(function
-    | "sexp" -> ("sexp_of_" ^ type_name) :: of_sexp_names_of_name type_name
-    | "sexp_of" -> [ "sexp_of_" ^ type_name ]
-    | "of_sexp" -> of_sexp_names_of_name type_name
-    | ("compare" | "equal") as deriver -> [ comparison_name deriver type_name ]
-    | "hash" -> [ "hash_fold_" ^ type_name; named ~t:"hash" ~prefix:"hash_" ~suffix:"" ]
-    | "enumerate" -> [ named ~t:"all" ~prefix:"all_of_" ~suffix:"" ]
-    | "variants" -> [ named ~t:"Variants" ~prefix:"Variants_of_" ~suffix:"" ]
-    | "fields" -> [ named ~t:"Fields" ~prefix:"Fields_of_" ~suffix:"" ]
+(** The values and modules a deriving generates for [declaration], any spelling of which mentions
+    the type: the value census's {!derived_names}, plus what that census leaves out -- the [sexp_of]
+    converters and the [hash], [enumerate], [variants] and [fields] outputs. The label-named
+    accessors of [fields] are left out, by the label boundary above. The synthetic cases hold this
+    set equal to the derivers' own expansion. *)
+let deriving_mentions ~derivers declaration =
+  let type_name = declaration.ptype_name.txt in
+  let named ~t ~prefix = if String.equal type_name "t" then t else prefix ^ type_name in
+  derived_names ~derivers declaration
+  @ List.concat_map derivers ~f:(function
+    | "sexp" | "sexp_of" -> [ "sexp_of_" ^ type_name ]
+    | "hash" ->
+        (* The [hash_<type>] shorthand exists only for a type without parameters. *)
+        ("hash_fold_" ^ type_name)
+        ::
+        (if List.is_empty declaration.ptype_params then [ named ~t:"hash" ~prefix:"hash_" ] else [])
+    | "enumerate" -> [ named ~t:"all" ~prefix:"all_of_" ]
+    | "variants" -> [ named ~t:"Variants" ~prefix:"Variants_of_" ]
+    | "fields" -> [ named ~t:"Fields" ~prefix:"Fields_of_" ]
     | _ -> [])
   |> List.dedup_and_sort ~compare:String.compare
 
@@ -456,7 +457,7 @@ let type_exports_of_source ~source contents =
                     source;
                     line = loc.loc_start.pos_lnum;
                     span = (loc.loc_start.pos_cnum, loc.loc_end.pos_cnum);
-                    mentioned_by = deriving_mentions ~derivers type_name;
+                    mentioned_by = deriving_mentions ~derivers declaration;
                   }
                   :: acc)
         | Pstr_extension ((_, PStr nested), _) -> items acc nested

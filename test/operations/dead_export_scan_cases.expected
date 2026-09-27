@@ -41,3 +41,4 @@ a deriving payload naming a deriver is not a spelling of the derived value: true
 an unqualified mention under an open counts: true
 a same-named type elsewhere credits by name, conservatively: true
 dune's preprocessed interface beside its source is not an interface source: true
+a type's derived mentions are exactly what its derivers generate, members aside: true

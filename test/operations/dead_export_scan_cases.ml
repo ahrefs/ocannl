@@ -385,3 +385,78 @@ let () =
     (List.equal String.equal
        (Scan.interfaces_among [ "a.mli"; "a.pp.mli"; "b.pp.mli"; "c.ml" ])
        [ "a.mli"; "b.pp.mli" ])
+
+(* The derived half of a type's mentions, held equal to the derivers' own expansion rather than to a
+   restatement of their naming rules. Referencing each registration links it, so [Driver] expands
+   the fixture with the real derivers; [hash] registers nothing a program can reference, so its
+   expander is called directly. *)
+let _registered =
+  ( Ppx_sexp_conv.sexp,
+    Ppx_compare.compare,
+    Ppx_enumerate.enumerate,
+    Ppx_variants_conv.variants,
+    Ppx_fields_conv.fields )
+
+let generated_names structure =
+  let rec items structure = List.concat_map structure ~f:item
+  and item structure_item =
+    match structure_item.pstr_desc with
+    | Pstr_value (_, bindings) ->
+        List.concat_map bindings ~f:(fun binding -> Scan.pattern_names binding.pvb_pat)
+    | Pstr_module { pmb_name = { txt = Some name; _ }; _ } -> [ name ]
+    | Pstr_include { pincl_mod = { pmod_desc = Pmod_structure nested; _ }; _ } -> items nested
+    | _ -> []
+  in
+  items structure |> List.dedup_and_sort ~compare:String.compare
+
+let () =
+  let fixtures =
+    [
+      "type t = A | B of int [@@deriving sexp, compare, equal, hash, enumerate, variants]";
+      "type named = A | B of int [@@deriving sexp, compare, equal, hash, enumerate, variants]";
+      "type t = { label_a : int; label_b : string } [@@deriving sexp_of, of_sexp, fields]";
+      "type record = { label_a : int; mutable label_b : string } [@@deriving fields, hash]";
+      "type poly = [ `One | `Two ] [@@deriving sexp, compare]";
+      "type ('a, 'b) param = 'a * 'b [@@deriving sexp_of, equal, hash]";
+    ]
+  in
+  Verdict.p_all "a type's derived mentions are exactly what its derivers generate, members aside"
+    fixtures ~f:(fun source ->
+      let _, declaration = single_type_declaration source in
+      let members =
+        match declaration.ptype_kind with
+        | Ptype_record labels -> List.map labels ~f:(fun label -> label.pld_name.txt)
+        | Ptype_variant constructors ->
+            List.map constructors ~f:(fun constructor ->
+                String.uncapitalize constructor.pcd_name.txt)
+        | Ptype_abstract | Ptype_open -> []
+      in
+      let structure = Test_utils.Config_key_scan.structure_of source in
+      let hashed =
+        if String.is_substring source ~substring:"hash" then
+          let rec_flag, _ = single_type_declaration source in
+          Ppx_hash_expander.str_type_decl ~loc:declaration.ptype_loc ~path:"Fixture"
+            (rec_flag, [ declaration ])
+        else []
+      in
+      let expanded =
+        generated_names (Ppxlib.Driver.map_structure structure @ hashed)
+        |> List.filter ~f:(fun name ->
+            (* What [fields] names after a label and [variants] after a constructor falls under the
+               member boundary: crediting it would credit the member's name. *)
+            not
+              (List.exists members ~f:(fun member ->
+                   List.mem
+                     [ member; "set_" ^ member; "is_" ^ member; member ^ "_val" ]
+                     name ~equal:String.equal)))
+      in
+      let mentions =
+        match Scan.type_exports_of_source ~source:"arrayjit/lib/fixture.ml" source with
+        | [ export ] -> export.mentioned_by
+        | _ -> []
+      in
+      let equal = List.equal String.equal expanded mentions in
+      if not equal then
+        Stdio.eprintf "%s\n  expansion: %s\n  mentions:  %s\n" source
+          (String.concat ~sep:" " expanded) (String.concat ~sep:" " mentions);
+      equal)
