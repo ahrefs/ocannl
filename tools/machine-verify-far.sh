@@ -403,7 +403,15 @@ report_tile_mma() {
   [ "$probed_backend" = "$backend" ] ||
     fail "the device probe ran on backend '$probed_backend', not $backend"
   mma_tile=$(printf '%s\n' "$props" | sed -n 's/^limits\.mma\.mma_tile = //p' | tr ' ' x)
-  if [ -n "$mma_tile" ]; then tile_mma=$mma_tile; else tile_mma=none; fi
+  # Absence is stated, never inferred: [None] prints as `limits.mma = ()`, so a
+  # probe that printed neither line is garbled, not scalar-only.
+  if [ -n "$mma_tile" ]; then
+    tile_mma=$mma_tile
+  elif printf '%s\n' "$props" | grep -qx 'limits\.mma = ()'; then
+    tile_mma=none
+  else
+    fail "the device probe printed neither a limits.mma.mma_tile line nor limits.mma = (); the tile-MMA capability is unreadable, not none"
+  fi
   if [ "$expect_lib" != hipjit ]; then
     echo "machine-verify: tile-MMA capability ($backend): $tile_mma (reported, not asserted for $expect_lib)"
     return 0

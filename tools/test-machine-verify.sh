@@ -116,6 +116,7 @@ if [ "$1" = build ]; then
           lib-mma-none | lib-no-rocwmma) mma=none ;;
           lib-ineligible) eligible=false mma=none ;;
           lib-no-eligibility) eligible= ;;
+          lib-mma-unparsed) mma=garbled ;;
         esac
         { printf '#!/usr/bin/env bash\n'
           printf '[ "${OCANNL_BACKEND:-}" = %q ] || { echo "fixture: probe backend not pinned" >&2; exit 94; }\n' "$WANT_BACKEND"
@@ -123,7 +124,8 @@ if [ "$1" = build ]; then
           [ "$WANT_BACKEND" != hip ] || [ -z "$eligible" ] ||
             printf 'echo "static.device[0].tile_mma_eligible = %s"\n' "$eligible"
           [ "$mma" != advertised ] || printf 'echo "limits.mma.mma_tile = 16 16 16"\n'
-          [ "$mma" = advertised ] || printf 'echo "limits.mma = ()"\n'
+          [ "$mma" != none ] || printf 'echo "limits.mma = ()"\n'
+          [ "$mma" != garbled ] || printf 'echo "limits.mma.mma_tile: 16 16 16"\n'
         } >_build/default/bin/device_props.exe
         chmod +x _build/default/bin/device_props.exe ;;
       test/config/ocannl_backend.txt)
@@ -375,6 +377,11 @@ grep -q '^machine-verify: verified .*backend=hip tile_mma=none$' "$TMP/runs/lib-
 report $? 'hipjit: a scalar-only box says so on the verdict' "$TMP/runs/lib-partial-rocwmma"
 BACKEND=hip check_case lib-no-eligibility lib-no-eligibility 2 \
   'reported no per-device tile_mma_eligible; the tile-MMA check would be vacuous' --expect-lib hipjit
+# A probe that states neither the tile nor its absence fails rather than
+# reading as scalar-only, for a reported library as much as an asserted one.
+BACKEND=metal check_case lib-mma-unparsed lib-mma-unparsed 2 \
+  'printed neither a limits\.mma\.mma_tile line nor limits\.mma = \(\); the tile-MMA capability is unreadable, not none$' \
+  --expect-lib metal
 BACKEND=cc check_refusal lib-backend-conflict '^machine-verify: --expect-lib metal conflicts with --backend cc$' --expect-lib metal
 
 # The deprecated name forwards every argument and says so on stderr.
