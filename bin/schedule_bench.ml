@@ -191,7 +191,9 @@ let () =
      ([test/operations/bench_checksum_discrimination] prints the table). The finer levels stay exact
      in binary — a multiple of 1/16 below 3 needs six significant bits, which f32, tf32 (11) and f16
      (11) all hold — so no leg's reduction rounds, and the CUDA mma variants were re-run to confirm
-     it rather than argued into it: see the [tf32_matmuls] note at the top of this file.
+     it rather than argued into it: see the [tf32_matmuls] note at the top of this file. That covers
+     the OPERANDS; whether the reduction's partial sums and output stay exact depends on the width
+     they are held at and on k, which [exact_reduction] below derives.
 
      ma drops the zero from its set ([Bench_checksum.positive_level] mints [1..levels] rather than
      [0..levels]), which the flat form did not need and the mixed one does: ma's row spans the
@@ -204,13 +206,46 @@ let () =
      positivity and not granularity. mb keeps its zero: with ma strictly positive no output row is
      systematically zero, and mb's near-mean-zero set is what keeps the partial sums random-walking
      rather than growing with k. *)
+  let a_levels, a_step = (48, 16) in
+  let b_max = 8 in
   let mav =
     Array.init (m * k)
-      ~f:(Bench_checksum.positive_level ~salt:0x5A17 ~row_stride:k ~levels:48 ~scale:0.0625)
+      ~f:
+        (Bench_checksum.positive_level ~salt:0x5A17 ~row_stride:k ~levels:a_levels
+           ~scale:(1. /. Float.of_int a_step))
   in
   let mbv =
     Array.init (k * n) ~f:(fun t ->
-        Float.of_int (Bench_checksum.residue ~salt:0x3C6E ~row_stride:n ~modulus:17 t) -. 8.)
+        Float.of_int
+          (Bench_checksum.residue ~salt:0x3C6E ~row_stride:n ~modulus:((2 * b_max) + 1) t - b_max))
+  in
+  (* Whether the reduction is exact at this run's precision and extents, so that a cell departing
+     from the reference can only be a wrong result. Derived, not listed: every partial sum is a
+     multiple of 1/a_step bounded in magnitude by k * max|a| * max|b|, so it — and the output, which
+     is stored at the operands' precision ([--ocannl_default_prec]) — is exact wherever that bound
+     times a_step fits the precision's significand; an accumulator is never narrower than its
+     storage. f32 holds it to k = 43690 and f64 always. f16's 11 bits hold it only to k = 5: at k =
+     256 on cc the f16 output rounds at 1/8 above 128, so every schedule that sums in a different
+     order DIFFERS from the reference in its last bit (it failed as a WRONG RESULT before this was
+     derived). bf16's 8 bits cannot hold even one product, and its A/B (gh-ocannl-1051) had every
+     tensorized leg exit 1 for it. Where the bound fails, DIFFERS lines still print — with how many
+     cells and how far — but they are not a verdict; a SIZE mismatch, which no rounding explains,
+     stays one. The tf32 rounding of the mma legs' operands is the other half of the argument, and
+     it is argued at the top of this file. *)
+  let operand_prec = !Tensor.default_value_prec in
+  let exact_reduction =
+    let significand_bits =
+      match operand_prec with
+      | Ir.Ops.Double_prec _ -> 53
+      | Ir.Ops.Single_prec _ -> 24
+      | Ir.Ops.Half_prec _ -> 11
+      | Ir.Ops.Bfloat16_prec _ -> 8
+      | Ir.Ops.Fp8_prec _ -> 4
+      | _ -> 0
+    in
+    (* Integers up to 2^bits are exact; the bound, in units of 1/a_step. *)
+    let bound = Float.of_int k *. Float.of_int (a_levels * b_max) in
+    Float.(bound <= 2. ** Float.of_int significand_bits)
   in
   let ma = TDSL.ndarray mav ~label:[ "ma" ] ~input_dims:[ k ] ~output_dims:[ m ] () in
   let mb = TDSL.ndarray mbv ~label:[ "mb" ] ~input_dims:[ n ] ~output_dims:[ k ] () in
@@ -552,6 +587,8 @@ let () =
      oracle and no extra run happens. *)
   let reference = ref None in
   let disagreements = ref 0 in
+  (* Variants whose cells departed from the reference where [exact_reduction] does not hold. *)
+  let rounded = ref 0 in
   let unscheduled_output () =
     (* Announced like any other work that can make the reader wait: this runs only when the naive
        leg was skipped, and a run that has just been told the leg is skipped should not then sit
@@ -680,8 +717,26 @@ let () =
       if phys_equal r values then "reference"
       else begin
         let d = Bench_checksum.first_difference ~reference:r values in
-        if Option.is_some d then Int.incr disagreements;
-        Bench_checksum.render_agreement ~name:"reference" d
+        match d with
+        | Some (Bench_checksum.Cell _) when not exact_reduction ->
+            Int.incr rounded;
+            (* How far and how widely, relative to the largest reference magnitude, so a reader can
+               tell rounding (a few ulps of the output scale) from a misplaced row (the scale
+               itself) without the verdict doing it for them. *)
+            let differing = ref 0 and max_diff = ref 0. and magnitude = ref 0. in
+            Array.iteri values ~f:(fun t v ->
+                let d = Float.abs (v -. r.(t)) in
+                if Float.(d > 0.) then Int.incr differing;
+                max_diff := Float.max !max_diff d;
+                magnitude := Float.max !magnitude (Float.abs r.(t)));
+            Printf.sprintf
+              "%s — %s rounding expected: %d of %d cells, max |diff| %.4g (%.2g of max |ref|)"
+              (Bench_checksum.render_agreement ~name:"reference" d)
+              (Ir.Ops.prec_string operand_prec) !differing (Array.length values) !max_diff
+              (if Float.(!magnitude > 0.) then !max_diff /. !magnitude else Float.nan)
+        | _ ->
+            if Option.is_some d then Int.incr disagreements;
+            Bench_checksum.render_agreement ~name:"reference" d
       end
     in
     let spot = Int.min (n + 1) (Array.length values - 1) in
@@ -848,16 +903,26 @@ let () =
      a fast timing is exactly what a report carries forward. So it EXITS NONZERO, after every
      variant has been reported — a guard that only prints leaves an automated run free to keep the
      speedup of a kernel already known to be wrong, which is the same hazard `Verdict` exists for on
-     the test side. There is no rounding to excuse it: ma and mb are exact in binary with at most
-     six and four significant bits respectively, so every product is exact (in tf32 and f16 as well
-     as f32 — both carry an 11-bit significand) and every leg's reduction is exact whatever order it
-     sums in, at any extent this bench runs. *)
+     the test side. Where [exact_reduction] holds there is no rounding to excuse it: every product
+     and partial sum fits the significand, so every leg's reduction is exact whatever order it sums
+     in. Where it does not (bf16 always, f16 past k = 5), a cell difference is reported and counted
+     but does not fail the run. *)
   if !disagreements > 0 then
     p
       "WRONG RESULT: %d variant(s) did not reproduce the reference output cell for cell — the \
-       DIFFERS lines above name the first cell and both values. At these operands every variant's \
-       reduction is exact whatever order it sums in, so this is not rounding.\n"
-      !disagreements;
+       DIFFERS/SIZE lines above name the first cell and both values. %s\n"
+      !disagreements
+      (if exact_reduction then
+         "At these operands and k every variant's reduction is exact whatever order it sums in, so \
+          this is not rounding."
+       else "A size mismatch is not rounding at any precision.");
+  if !rounded > 0 then
+    p
+      "NOTE: %d variant(s) differ from the reference cell for cell at %s operands — not a verdict: \
+       k-term partial sums round, so a different summation order legitimately moves low bits. \
+       Compare the max |diff| on the DIFFERS lines against the output scale; exactness is checked \
+       only where k * %d <= 2^significand.\n"
+      !rounded (Ir.Ops.prec_string operand_prec) (a_levels * b_max);
   if !failures > 0 then
     p "%d variant(s) failed at m=%d n=%d k=%d — see the FAILED lines above.\n" !failures m n k;
   (* The requested geometry's own verdict, on the same footing as a wrong result: a degenerate
