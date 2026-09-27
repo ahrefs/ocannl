@@ -2111,8 +2111,9 @@ let () =
      before the reduction body, stored after it, and no [d] traffic inside it), and that both equal
      an exact host-computed product. The storage precisions of each triple are the members of
      [Ir.Ops.float_precs] whose site resolves to it ([Autotune.mma_format_triples]) — the seeding
-     relation itself, not a second format table. Only CUDA advertises a layout today; an empty list
-     (pre-sm_80, or any other backend) is the ordinary backend skip. --- *)
+     relation itself, not a second format table. Only CUDA advertises a layout today, and the leg is
+     CUDA's: an empty list (pre-sm_80, or a backend advertising none) is the ordinary backend skip,
+     and a non-empty one on another backend fails until that backend's evidence is added. --- *)
   let claim_twin_census =
     "staged twins per advertised swizzled layout: the censuses agree apart from ldmatrix, which \
      only the swizzled twin uses"
@@ -2127,12 +2128,29 @@ let () =
   let claim_twin_distinct =
     "staged twins per advertised swizzled layout: every row and column of each operand is distinct"
   in
-  (* Read on every backend, not through [cuda_mma]: a staged layout another backend advertises is
-     covered the same way, and only the dialect-specific pins below ([ldmatrix], the mma.sync
-     register scope) are CUDA's. *)
+  let twin_claims =
+    [ claim_twin_census; claim_twin_resident; claim_twin_values; claim_twin_distinct ]
+  in
+  (* Read on every backend, not through [cuda_mma], so that a staged layout another backend starts
+     advertising is not skipped in silence: the pins below are CUDA's dialect ([ldmatrix], the
+     mma.sync register scope, the 32-lane warp), and another backend's layout needs its own. *)
   (match (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.mma with
+  | Some mma when (not (List.is_empty mma.Ir.Backend_intf.mma_staged_layouts)) && not on_cuda ->
+      Stdio.eprintf
+        "staged twins: %s advertises staged layouts, but this leg pins only CUDA's rendering of \
+         them; extend it with that backend's load and residency evidence\n\
+         %!"
+        backend_name;
+      List.iter twin_claims ~f:(fun claim -> p claim false)
   | Some mma when not (List.is_empty mma.Ir.Backend_intf.mma_staged_layouts) ->
       let module BI = Ir.Backend_intf in
+      (* The twins' lane loop and cooperative staging are [simd_width] wide, and the output's column
+         extent is that lane loop. *)
+      if mma.BI.mma_simd_width <> simd_width || n <> simd_width then
+        failwith
+          (Printf.sprintf
+             "staged twins: the leg's %d-lane geometry does not match the warp width %d" simd_width
+             mma.BI.mma_simd_width);
       let format_tag f =
         String.chop_prefix_if_exists ~prefix:"mma_"
           (String.lowercase (Sexp.to_string (BI.sexp_of_mma_input_format f)))
@@ -2289,24 +2307,19 @@ let () =
             (* The layout must actually reach the loads: a swizzle the pipeline dropped would leave
                two identical plain renderings, which every other claim here accepts. On CUDA the
                swizzled tile is readable only through [ldmatrix]. *)
-            && ((not on_cuda)
-               || List.exists swizzled
-                    ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics_ldmatrix)
-                  && not
-                       (List.exists plain
-                          ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics_ldmatrix))
-               )
+            && List.exists swizzled
+                 ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics_ldmatrix)
+            && not
+                 (List.exists plain
+                    ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics_ldmatrix))
           in
           if not agree then
             Stdio.eprintf "staged twins %s: plain census %s, swizzled census %s\n%!" tag
               (Sexp.to_string (List.sexp_of_t Ir.C_syntax.sexp_of_mma_rendering plain))
               (Sexp.to_string (List.sexp_of_t Ir.C_syntax.sexp_of_mma_rendering swizzled));
           agree);
-      if on_cuda then
-        p_all claim_twin_resident twins
-          ~f:(fun (_, (_, _, src_plain), (_, _, src_swizzled), _, _) ->
-            register_resident src_plain && register_resident src_swizzled)
-      else skipped claim_twin_resident;
+      p_all claim_twin_resident twins ~f:(fun (_, (_, _, src_plain), (_, _, src_swizzled), _, _) ->
+          register_resident src_plain && register_resident src_swizzled);
       (* An independent oracle, not the twins against each other: a defect both paths share (a
          staging index, the fragment mapping) would leave two equal wrong arrays. *)
       p_all claim_twin_values twins
@@ -2314,11 +2327,7 @@ let () =
           Array.equal Float.equal got_plain reference
           && Array.equal Float.equal got_swizzled reference);
       p_all claim_twin_distinct twins ~f:(fun (_, _, _, _, distinct) -> distinct)
-  | _ ->
-      skipped claim_twin_census;
-      skipped claim_twin_resident;
-      skipped claim_twin_values;
-      skipped claim_twin_distinct);
+  | _ -> List.iter twin_claims ~f:skipped);
 
   (* --- Transposed operand layouts (the gradient-GEMM access patterns): [d[i,j] += at[k,i] *
      b[k,j]] (a stored transposed) and [d[i,j] += a[i,k] * bt[j,k]] (b stored transposed). Tensorize
