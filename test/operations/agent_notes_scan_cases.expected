@@ -146,6 +146,9 @@ ok: index -- a link to a file that is not there
 ok: index -- link text that does not name its file
 ok: index -- a first cell that is not a link
 ok: index -- an anchor the file has a heading for
+ok: index -- an anchor on the second of two same-titled headings
+ok: index -- an anchor past a heading whose own title holds the suffix
+ok: index -- an anchor past the last suffix allocated
 ok: index -- an anchor the file has no heading for
 ok: index -- a wrapped row takes the rest of the index out of the table
 ok: index -- an anchor on an identifier heading, which GitHub keeps underscored
@@ -185,6 +188,35 @@ ok: index -- the same bullet in two files
 ok: index -- the same bullet re-wrapped
 ok: index -- two bullets opening alike and diverging
 ok: index -- two bullets that merely start with the same few words
+ok: guide -- a pointer to a heading its note has
+ok: guide -- a pointer to a heading its note lacks
+ok: guide -- a pointer to a heading only another note has
+ok: guide -- a pointer spelled through docs/agent-notes/
+ok: guide -- a pointer into the index itself
+ok: guide -- a bare basename that is no note
+ok: guide -- a path outside the notes is not a pointer into them
+ok: guide -- a pointer set in a code span is still a pointer
+ok: guide -- a placeholder names no anchor
+ok: guide -- two pointers on one line are each checked
+ok: guide -- a pointer inside an HTML comment is not read
+ok: guide -- a pointer at the second of two same-titled headings
+ok: guide -- a pointer at a third that does not exist
+ok: guide -- spellings only a renderer assembles are not source pointers
+ok: guide -- a hash with no slug after it is not a pointer
+ok: guide -- pointers in ordinary surroundings are read
+ok: guide -- a Unicode slug is refused
+ok: guide -- a Unicode file name is refused
+ok: guide -- a slug running into a Unicode letter is refused
+ok: guide -- a file name with a character outside the path alphabet is refused
+ok: guide -- a slug running into a character outside the slug alphabet is refused
+ok: guide -- a directory path cut on the left is out of scope
+ok: guide -- a cut inside the notes tree is refused
+ok: guide -- dot segments resolve into the notes
+ok: guide -- dot segments resolving to a real heading
+ok: guide -- an external path with a Unicode slug is not read
+ok: guide -- a pointer in bold is read
+ok: guide -- hashes that are no pointer
+ok: guide -- plain mentions of a note are not pointers
 ok: unnamed rule -- a finding the list does not name survives the report, last
 ok: unnamed rule -- the census reports it, and not the named one beside it
 ok: unnamed rule -- a named finding leaves the census empty

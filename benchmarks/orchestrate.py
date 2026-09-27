@@ -29,6 +29,7 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -41,7 +42,9 @@ ROOT = HERE.parent
 # BENCH_VENV_PY overrides the venv interpreter; bench_venv owns the rule so drivers cannot drift.
 VENV_PY = bench_venv.venv_python(HERE)
 # BENCH_CELL_LOG_DIR: keep every cell's raw combined output under this directory, one file per
-# cell label. Unset (the default) discards a successful cell's output as before.
+# cell label, written AS THE CELL RUNS (gh-ocannl-1061), so a cell killed at its cap -- or a sweep
+# that is itself killed -- leaves everything the cell printed up to then. Unset (the default), the
+# output goes to a temporary file that is deleted once the cell is done.
 CELL_LOG_DIR = (
     Path(os.environ["BENCH_CELL_LOG_DIR"]) if os.environ.get("BENCH_CELL_LOG_DIR") else None
 )
@@ -178,14 +181,106 @@ sys.path.insert(0, str(HERE / "runners"))
 from bench_common import read_st_metadata  # noqa: E402
 
 
-def cell_skipped(workload, backend, variant, precision):
-    """Whether a cell is in SKIP_CELLS, honouring the None-precision wildcard."""
-    return (workload, backend, variant, precision) in SKIP_CELLS or (
+def cell_skipped(workload, backend, variant, precision, skips=None):
+    """Whether a cell is in `skips` (default SKIP_CELLS), honouring the None-precision wildcard."""
+    skips = SKIP_CELLS if skips is None else skips
+    return (workload, backend, variant, precision) in skips or (
         workload,
         backend,
         variant,
         None,
-    ) in SKIP_CELLS
+    ) in skips
+
+
+def skip_reason(workload, backend, variant, precision, operator_skips, no_skip_cells):
+    """Why the sweep leaves this OCANNL cell out, or None when it runs it.
+
+    `--skip-cell` wins over `--no-skip-cells`: that flag retests the checked-in pathologies, and an
+    operator who names a cell on the same command line still means it to stay out.
+    """
+    if cell_skipped(workload, backend, variant, precision, operator_skips):
+        return "--skip-cell (the operator left it out of this sweep)"
+    if cell_skipped(workload, backend, variant, precision) and not no_skip_cells:
+        return "SKIP_CELLS (known pathological; --no-skip-cells runs it)"
+    return None
+
+
+# The OCANNL scheduling variants a sweep can dispatch, and the backends it can dispatch them on:
+# what a `--skip-cell` entry is checked against, so a misspelt one is refused at parse time rather
+# than skipping nothing -- an uncapped tuned search it was meant to keep out of the sweep then runs
+# for hours.
+SWEEP_VARIANTS = ("default", "materialized", "tuned")
+SWEEP_BACKENDS = ("cc",) + tuple(sorted({d[0] for d in GPU_DEVICES.values() if d[0]}))
+
+
+def skip_cell_arg(text):
+    """`--skip-cell WORKLOAD/BACKEND/VARIANT[/PRECISION]` as a SKIP_CELLS-shaped entry.
+
+    No PRECISION means every precision, exactly as a None precision does in SKIP_CELLS. The
+    backend, variant and precision are checked here; the workload can only be checked against the
+    selected fixtures, which `unmatched_skips` does before the first cell is dispatched.
+    """
+    parts = text.split("/")
+    if len(parts) not in (3, 4) or not all(parts):
+        raise argparse.ArgumentTypeError(
+            f"--skip-cell takes WORKLOAD/BACKEND/VARIANT[/PRECISION] (got {text!r})"
+        )
+    workload, backend, variant = parts[:3]
+    if backend not in SWEEP_BACKENDS:
+        raise argparse.ArgumentTypeError(
+            f"--skip-cell backend must be one of {', '.join(SWEEP_BACKENDS)} (got {backend!r})"
+        )
+    if variant not in SWEEP_VARIANTS:
+        raise argparse.ArgumentTypeError(
+            f"--skip-cell variant must be one of {', '.join(SWEEP_VARIANTS)} (got {variant!r})"
+        )
+    precision = None
+    if len(parts) == 4:
+        precision = parts[3] if parts[3] == "f32" else precision_spec(parts[3])
+    return (workload, backend, variant, precision)
+
+
+def selected_variants(args):
+    """The OCANNL scheduling variants the sweep's flags select, in dispatch order."""
+    return (
+        ["default"]
+        + (["materialized"] if args.materialized else [])
+        + (["tuned"] if args.tuned else [])
+    )
+
+
+def swept_backends(gpu_ocannl):
+    """The OCANNL backends the sweep dispatches on, in order: cc, then the GPU column if any."""
+    return ["cc"] + ([gpu_ocannl] if gpu_ocannl else [])
+
+
+def dispatchable_cells(precisions_by_workload, backends, variants):
+    """Every (workload, backend, variant, precision) OCANNL cell the sweep would dispatch, before
+    skips: `precisions_by_workload` is `available_precisions`' first half per workload, so a
+    precision the workload cannot express is not a cell."""
+    return {
+        (workload, backend, variant, precision)
+        for workload, precisions in precisions_by_workload.items()
+        for backend in backends
+        for variant in variants
+        for precision in precisions
+    }
+
+
+def unmatched_skips(skips, cells):
+    """The `--skip-cell` entries that name none of `cells` (see `dispatchable_cells`).
+
+    Such an entry is a typo, a stale command line, or a precision the workload cannot express, and
+    it is refused rather than ignored: the operator asked for a cell to stay out, and a sweep that
+    runs a different, possibly expensive, cell instead is what the flag exists to prevent.
+    """
+    return [
+        entry
+        for entry in skips
+        if not any(
+            cell[:3] == entry[:3] and (entry[3] is None or entry[3] == cell[3]) for cell in cells
+        )
+    ]
 
 
 def cell_name(variant, precision):
@@ -260,6 +355,19 @@ def ocannl_regime_args(regime):
     and the environment, which is what lets the same process tree run both regimes.
     """
     return [] if regime == "exact" else [f"--ocannl_profile={regime}"]
+
+
+def ocannl_variant_args(variant):
+    """The flags an OCANNL cell is dispatched with for its variant.
+
+    A tuned cell writes the tuner's progress lines (`autotune_progress`, gh-ocannl-1061): a search
+    pass can run for hours, and one killed at the cap otherwise leaves no record of how far it got
+    or where its time went -- the arms and flips it finished, the candidates tried of each phase's
+    total, compile against timing seconds. They are cheap (unlike `autotune_log`, they add no work
+    to the search, so the pass's `compile_s` is unaffected) and go to stderr, which the cell log
+    keeps as the cell runs. The replay pass carries the flag too; its lines say it replayed.
+    """
+    return ["--ocannl_autotune_progress=true"] if variant == "tuned" else []
 
 
 def torch_regime_args(regime):
@@ -421,6 +529,19 @@ def cell_env(base, fixture, variant, precision):
     # and dict() rejects duplicate keywords.
     env.update(precision_env(precision))
     return env
+
+
+def available_precisions(model, mode, requested):
+    """The precisions a workload's OCANNL cells run at (f32 first, then each requested one it can
+    express), and `(precision, reason)` for each requested one it cannot."""
+    precisions, unavailable = ["f32"], []
+    for precision in requested:
+        reason = precision_unavailable(model, mode, precision)
+        if reason:
+            unavailable.append((precision, reason))
+        else:
+            precisions.append(precision)
+    return precisions, unavailable
 
 
 def precision_unavailable(model, mode, precision):
@@ -599,27 +720,85 @@ def run_cell(label, cmd, env=None, cwd=None, timeout=None, on_incomplete=None):
         return _run_cell(label, cmd, env, cwd, timeout, on_incomplete)
 
 
+def cell_log_name(label):
+    """The file name a cell's log gets under BENCH_CELL_LOG_DIR."""
+    return "".join(c if c.isalnum() or c in "-._" else "_" for c in label) + ".log"
+
+
+def open_cell_log(label):
+    """Where a cell's combined output is written as it runs: `(file, path, temporary)`.
+
+    The cell writes to the file directly -- no pipe, no reader in the sweep -- so what it printed
+    is on disk the moment it was printed, and survives a kill of the cell, of the sweep, or of both
+    (gh-ocannl-1061: three tuned search passes over a 7200 s cap left 0-byte logs, because the log
+    was written from the captured pipe only once the cell was over). A tuned OCANNL cell's progress
+    lines (`autotune_progress`) land here, which is what makes a timed-out search's cost readable.
+    It also removes a failure mode: a descendant that escapes the kill while holding the output
+    can no longer leave the sweep blocked reading a pipe.
+
+    Under BENCH_CELL_LOG_DIR the file is the cell's log; otherwise a temporary file that
+    `close_cell_log` deletes. An unwritable log directory is a lost convenience, not a lost sweep:
+    the cell runs over a temporary file and the sweep says so.
+    """
+    if CELL_LOG_DIR:
+        try:
+            CELL_LOG_DIR.mkdir(parents=True, exist_ok=True)
+            path = CELL_LOG_DIR / cell_log_name(label)
+            return open(path, "wb"), path, False
+        except OSError as exc:
+            print(f"!!! {label}: could not write the cell log ({exc})", flush=True)
+    fd, name = tempfile.mkstemp(prefix="orchestrate-cell-", suffix=".log")
+    return os.fdopen(fd, "wb"), Path(name), True
+
+
+def read_cell_log(path):
+    """The cell's output so far, as text: read through a handle of its own, so the read shares
+    no file offset with a writer that might still be alive."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError as exc:
+        return f"(the cell's output could not be read back from {path}: {exc})\n"
+
+
 def _run_cell(label, cmd, env, cwd, timeout, on_incomplete):
     print(f"--- {label}", flush=True)
+    log, log_path, temporary = open_cell_log(label)
+    try:
+        return _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, log, log_path)
+    finally:
+        # Idempotent: the spawn path closes the sweep's copy as soon as the child has its own.
+        log.close()
+        if temporary:
+            # A survivor of the kill can still hold the file open, which Windows refuses to delete
+            # under; a leftover temporary file is not worth failing a cell over.
+            with contextlib.suppress(OSError):
+                log_path.unlink()
+
+
+def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, log, log_path):
     timed_out = False
     remaining = cell_group.GONE
     cache_note = ""
     proc = None
     try:
-        proc = cell_group.spawn(
-            cmd,
-            env=env,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        try:
+            proc = cell_group.spawn(
+                cmd,
+                env=env,
+                cwd=cwd,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
+        finally:
+            # The child holds its own descriptor; the sweep's copy has nothing more to do.
+            log.close()
         with _cancellation.cancellable():
             # The wait a cancellation is FOR: here, and only here, a signal should raise at once.
-            stdout, _ = proc.communicate(timeout=timeout or None)
+            proc.wait(timeout=timeout or None)
     except subprocess.TimeoutExpired:
         timed_out = True
-        stdout, remaining = kill_cell_group(proc)
+        _, remaining = kill_cell_group(proc)
         # Before anything fallible: the kill is what tore the cache, so undoing it must not be
         # reachable only through code that can raise first (the optional cell log below writes
         # to an operator-supplied directory, which can be unwritable or full). Losing the sweep to
@@ -649,7 +828,7 @@ def _run_cell(label, cmd, env, cwd, timeout, on_incomplete):
         if cleanup_failure is not None:
             raise cleanup_failure
         raise
-    stdout = stdout or ""
+    stdout = read_cell_log(log_path)
     leftovers = ""
     stuck = cell_group.GONE
     initial = _group_observation(proc)
@@ -669,19 +848,6 @@ def _run_cell(label, cmd, env, cwd, timeout, on_incomplete):
         print(f"!!! {label}: {leftovers}", flush=True)
     elif not timed_out:
         proc.close()
-    if CELL_LOG_DIR:
-        # A cell's own output is otherwise discarded on success, which throws away exactly the
-        # evidence a measurement sweep is asked to report: with autotune_log=true the search
-        # pass's candidate lines (seeded vs timed, FAILED, dedup, split-reduce evictions) live
-        # here and nowhere else, and re-running the searches to recover them costs as much as the
-        # sweep. Off unless BENCH_CELL_LOG_DIR is set, so the default run is unchanged.
-        try:
-            CELL_LOG_DIR.mkdir(parents=True, exist_ok=True)
-            safe = "".join(c if c.isalnum() or c in "-._" else "_" for c in label)
-            (CELL_LOG_DIR / f"{safe}.log").write_text(stdout)
-        except OSError as exc:
-            # An unwritable log directory is a lost convenience, not a lost sweep.
-            print(f"!!! {label}: could not write the cell log ({exc})", flush=True)
     line = next((l for l in reversed(stdout.splitlines()) if l.startswith("{")), None)
     if timed_out:
         # A cell over the cap is a FAILURE, not a slow measurement: whatever it was doing, it was
@@ -1338,6 +1504,65 @@ def peak_memory_mib(result):
     return f"{bytes_ / MIB:,.1f} {counter}" if counter else f"{bytes_ / MIB:,.1f}"
 
 
+# gh-ocannl-1006: the %-of-peak column's no-value cases, each said in the cell rather than left to a
+# dash -- a dash is reserved for a cell that did not run the instrument at all.
+DOMINANT_KERNEL_MARK = {
+    "approximate": "approx",
+    "opaque": "opaque",
+    "no-ceiling": "no ceiling",
+    "no-kernel": "no kernel",
+}
+
+
+def dominant_kernel_cell(result):
+    """The %-of-peak column's cell for one row.
+
+    `41.3% f32 memory · k3/12 0.412 ms w1.grad`: the attainment, the ceiling it was scored against
+    and the roofline leg that binds, then which kernel it is -- its launch position among the
+    kernels the cell shipped, its own measured time and the nodes it writes. The number is printed
+    only for an `exact` verdict; every other verdict prints its mark in its place, keeping the
+    kernel's identity beside it so a reader can still see which kernel dominated. A cell whose
+    runner did not run the instrument -- every Python row, and an OCANNL row under
+    BENCH_DOMINANT_KERNEL=0 -- is an em dash.
+    """
+    k = result.get("dominant_kernel")
+    if not k:
+        return "\u2014"
+    verdict = k.get("verdict")
+    if verdict == "exact" and finite(k.get("pct_of_peak")):
+        head = f"{k['pct_of_peak']:.1f}% {k.get('ceiling')} {k.get('bound')}"
+    else:
+        head = DOMINANT_KERNEL_MARK.get(verdict, f"**UNKNOWN VERDICT {verdict}**")
+    if k.get("segment") is None:
+        return head
+    where = f"k{k['segment']}/{k['segments']} {num(k.get('seg_ms'), '.3f')} ms"
+    if k.get("writes"):
+        where += f" {k['writes']}"
+    if k.get("declined"):
+        where += f" (+{k['declined']} untimed)"
+    return f"{head} \u00b7 {where}"
+
+
+def dominant_kernel_ceilings(rows):
+    """The distinct ceilings this section's rows were scored against, first-seen, as the legend's
+    `(tag, source, FLOP/s, bytes/s)` entries -- so the header names every ceiling a number in the
+    column is a percentage OF, with the constants and whose they are."""
+    seen = []
+    for r in rows:
+        k = r.get("dominant_kernel") or {}
+        if k.get("ceiling") is None:
+            continue
+        entry = (
+            k["ceiling"],
+            k.get("ceiling_source"),
+            k.get("ceiling_flops"),
+            k.get("ceiling_bandwidth"),
+        )
+        if entry not in seen:
+            seen.append(entry)
+    return seen
+
+
 def failure_line(failure):
     """One `(label, note)` runner failure, as the run log and the report name it."""
     label, note = failure
@@ -1450,7 +1675,9 @@ def ambient_env_line(results, ambient=None):
     return "ambient OCANNL_* environment: " + json.dumps(ambient, sort_keys=True)
 
 
-def report(results, out_dir, unavailable=(), failures=(), digests_path=None, ambient=None):
+def report(
+    results, out_dir, unavailable=(), failures=(), digests_path=None, ambient=None, skipped=()
+):
     out_dir.mkdir(parents=True, exist_ok=True)
     digests_path = digests_path or HERE / "fixtures" / fixture_digest.DIGEST_FILE
     digest_entries = fixture_digest.read_digests(digests_path)
@@ -1614,6 +1841,49 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None, amb
                 "NOT the device-wide figure a driver reports -- so rank rows within a counter, and "
                 "read across counters only as the orders of magnitude they are.\n"
             )
+        # gh-ocannl-1006: the %-of-peak column appears once any row ran the instrument; the
+        # Python rows, which have no per-kernel counts, print a dash beside it.
+        with_dominant_kernel = any(r.get("dominant_kernel") for r in rows)
+        if with_dominant_kernel:
+            ceilings = dominant_kernel_ceilings(rows)
+            lines.append(
+                "`kernel %peak` is the attainment of the cell's DOMINANT KERNEL (gh-ocannl-1006): "
+                "of the kernels the cell shipped -- a tuned cell's searched winner included -- the "
+                "one that takes longest when each is timed on its own (min of 20 runs, launch and "
+                "device sync included, after the timed steps; chosen by measured time, not by the "
+                "cost model's own bound, which the column exists partly to check). `kN/M` is its "
+                "launch position among M kernels, then its time and the nodes it writes. The "
+                "number is its roofline lower bound over that time -- max(ops / peak FLOP/s, "
+                "bytes / peak bandwidth) on the cost model's counts -- and `compute` / `memory` "
+                "names the leg that binds. Ceilings, matched to the kernel's precision and mma "
+                "status: "
+                + (
+                    "; ".join(
+                        f"`{tag}` = {source}: {num(flops, '.3g')} FLOP/s, "
+                        f"{num(bandwidth, '.3g')} B/s"
+                        for tag, source, flops, bandwidth in ceilings
+                    )
+                    if ceilings
+                    else "none in this section"
+                )
+                + ". `f32` is the backend's single-precision scalar constant (FMA counted as two); "
+                "`f16-native` is twice it, for a kernel whose arithmetic is all 16-bit on a target "
+                "where that is native. These are CLASS constants (or a machine's `model_peak_*` "
+                "override), not this device's measured peak: the column ranks before/after on one "
+                "box and certifies nothing about the device -- a number above 100% says the "
+                "constant is below this card, not that the kernel beat physics. A small kernel's "
+                "launch overhead counts against it. Printed only on an exact count: `approx` is a "
+                "kernel whose BINDING leg's op or byte count is an upper bound (the calibration "
+                "fit's per-leg rule; an upper bound on the leg that does not bind cannot overtake "
+                "the exact one, so it leaves the number exact), "
+                "`opaque` one with code the cost model cannot see, `no ceiling` one with nothing "
+                "to score against (a C backend without `model_peak_*`, or a GPU tensor-core kernel "
+                "-- no class constant exists for the mma unit, and the scalar f32 peak would read "
+                "above 100%), `no kernel` a cell none of whose kernels could be timed alone; `+N "
+                "untimed` counts kernels that could not, so the dominant one is dominant among the "
+                "rest. `\u2014` is a cell that did not run the instrument: the Python frameworks "
+                "expose no per-kernel counts to score.\n"
+            )
         # gh-ocannl-626: only cells that tuned something have an emission census to report.
         with_tensorization = any(r.get("tensorization") for r in rows)
         if with_tensorization:
@@ -1636,6 +1906,9 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None, amb
         rule += "---|---|---|---|---|"
         if with_peak_memory:
             header += " peak MiB |"
+            rule += "---|"
+        if with_dominant_kernel:
+            header += " kernel %peak |"
             rule += "---|"
         if with_provenance:
             header += " pass |"
@@ -1677,6 +1950,8 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None, amb
             compile_s = num(r["compile_s"], ".2f")
             compile_s += COMPILE_S_NOTE.get(r.get("search_pass"), "")
             peak_memory = f" {peak_memory_mib(r)} |" if with_peak_memory else ""
+            if with_dominant_kernel:
+                peak_memory += f" {dominant_kernel_cell(r)} |"
             provenance = ""
             if with_provenance:
                 provenance = " %s |" % PROVENANCE_MARK.get(r.get("provenance"), "—")
@@ -1709,6 +1984,18 @@ def report(results, out_dir, unavailable=(), failures=(), digests_path=None, amb
         lines.append("|---|---|---|")
         for workload, precision, reason in unavailable:
             lines.append(f"| {workload} | {precision} | {reason} |")
+    if skipped:
+        # A skipped cell is as absent from the tables as a failed one, and once the run log is gone
+        # only this says it was left out on purpose -- and by whom.
+        lines.append("\n## Cells skipped\n")
+        lines.append(
+            "Cells this sweep did not run. Their absence above is a choice, not a measurement and "
+            "not a failure.\n"
+        )
+        lines.append("| cell | why |")
+        lines.append("|---|---|")
+        for label, why in skipped:
+            lines.append(f"| {label} | {why} |")
     if failures:
         # A cell that produced no result is absent from every table above, and an absent row and a
         # failed one read identically once the report outlives the run log — which is the whole
@@ -1844,6 +2131,18 @@ def build_arg_parser():
         "machine/backend/OS; use this to retest whether the entry still applies here",
     )
     ap.add_argument(
+        "--skip-cell",
+        action="append",
+        default=[],
+        type=skip_cell_arg,
+        metavar="WORKLOAD/BACKEND/VARIANT[/PRECISION]",
+        help="leave one OCANNL cell out of this sweep, in every regime (repeatable; no PRECISION "
+        "means every precision), e.g. `gpt2_mini/cc/tuned` to measure a GPU tuned row without "
+        "first sitting through an uncapped CPU search. The cell is listed under the report's "
+        "skipped cells, so its absence reads as a choice rather than a failure; an entry naming "
+        "no cell of the sweep is refused. --no-skip-cells does not override it",
+    )
+    ap.add_argument(
         "--only",
         nargs="*",
         default=["ocannl", "pytorch", "tinygrad"],
@@ -1879,7 +2178,6 @@ def main():
         fixtures = [f for f in fixtures if f.stem in args.workloads]
     if not fixtures:
         sys.exit("no fixtures found — run gen_fixtures.py first")
-
     digests_path = HERE / "fixtures" / fixture_digest.DIGEST_FILE
     digest_entries = fixture_digest.read_digests(digests_path)
     measurement_boxes = fixture_digest.measurement_boxes(digests_path)
@@ -1889,6 +2187,25 @@ def main():
 
     metas = {fx: read_st_metadata(fx) for fx in fixtures}
     models = {fx: metas[fx].get("model", "mlp") for fx in fixtures}
+    operator_skips = set(args.skip_cell)
+    unmatched = unmatched_skips(
+        operator_skips,
+        dispatchable_cells(
+            {
+                fx.stem: available_precisions(
+                    models[fx], metas[fx].get("mode", "train"), args.precision
+                )[0]
+                for fx in fixtures
+            },
+            swept_backends(gpu_ocannl) if "ocannl" in args.only else [],
+            selected_variants(args),
+        ),
+    )
+    if unmatched:
+        sys.exit(
+            "--skip-cell names no cell of this sweep: "
+            + ", ".join("/".join(p for p in entry if p) for entry in unmatched)
+        )
     if "ocannl" in args.only and not args.skip_build:
         targets = sorted(
             {f"benchmarks/runners/ocannl/bench_{m}.exe" for m in models.values()}
@@ -1898,6 +2215,9 @@ def main():
     results = []
     failures = []
     unavailable = []
+    # Cells left out of the sweep on purpose, by SKIP_CELLS or --skip-cell: reported beside the
+    # failures, so an absent row says why it is absent.
+    skipped = []
     partial = HERE / "results" / "partial.jsonl"
     partial.parent.mkdir(parents=True, exist_ok=True)
     partial.write_text("")  # fresh run
@@ -1968,32 +2288,30 @@ def main():
             fixture_result_stamp(fx, sha, origin, digest_entries, measurement_boxes)
         )
         if "ocannl" in args.only:
-            variants = ["default"]
-            if args.materialized:
-                variants.append("materialized")
-            if args.tuned:
-                variants.append("tuned")
+            variants = selected_variants(args)
             # Both training runners implement the mixed-precision recipe (master weights, storage
             # policy, f16 loss scaling and its gate-cost legs); the forward-only gpt fixture takes
             # BENCH_PRECISION as load-time weight conversion instead (gh-ocannl-492 task 4). Every
             # scheduling variant composes with every precision (gh-ocannl-529 lifted the
             # runner-side guard), so the OCANNL cells of a backend are the product of the two axes.
             mode = metas[fx].get("mode", "train")
-            precisions = ["f32"]
-            for precision in args.precision:
-                reason = precision_unavailable(model, mode, precision)
-                if reason:
-                    unavailable.append((name, precision, reason))
-                    print(f"--- {name} ocannl/*/{precision}: NOT APPLICABLE ({reason})")
-                else:
-                    precisions.append(precision)
-            for backend in ["cc"] + ([gpu_ocannl] if gpu_ocannl else []):
+            precisions, not_applicable = available_precisions(model, mode, args.precision)
+            for precision, reason in not_applicable:
+                unavailable.append((name, precision, reason))
+                print(f"--- {name} ocannl/*/{precision}: NOT APPLICABLE ({reason})")
+            for backend in swept_backends(gpu_ocannl):
                 for precision in precisions:
                     for variant in variants:
                         cell = cell_name(variant, precision)
-                        if cell_skipped(name, backend, variant, precision) and not args.no_skip_cells:
-                            print(f"--- {name} ocannl/{backend}/{cell}: SKIPPED (SKIP_CELLS; "
-                                  "--no-skip-cells to run it anyway)")
+                        why = skip_reason(
+                            name, backend, variant, precision, operator_skips, args.no_skip_cells
+                        )
+                        if why:
+                            print(f"--- {name} ocannl/{backend}/{cell}: SKIPPED ({why})")
+                            for regime in args.profile:
+                                skipped.append(
+                                    (f"{name} ocannl/{backend}/{cell}{regime_label(regime)}", why)
+                                )
                             continue
                         env = cell_env(os.environ, fx, variant, precision)
                         for regime in args.profile:
@@ -2004,6 +2322,7 @@ def main():
                                 str(ocannl_exe(model)),
                                 f"--ocannl_backend={backend}",
                                 *ocannl_regime_args(regime),
+                                *ocannl_variant_args(variant),
                             ]
                             label = f"{name} ocannl/{backend}/{cell}{regime_label(regime)}"
                             # The cell's identity is what was dispatched, not what the runner chose
@@ -2111,7 +2430,7 @@ def main():
     provenance_violations = provenance_check(results)
     tensorization_mismatches = tensorization_check(results)
     regime_mismatches = regime_check(results)
-    report(results, HERE / "results", unavailable, failures, ambient=ambient)
+    report(results, HERE / "results", unavailable, failures, ambient=ambient, skipped=skipped)
     ok = True
     if unavailable:
         # Not a failure: these cells were requested but the workload cannot express them. Saying so
@@ -2119,6 +2438,13 @@ def main():
         print(
             f"NOT APPLICABLE: {len(unavailable)} requested cell(s) the workload cannot express: "
             + ", ".join(f"{w}/{p}" for w, p, _ in unavailable),
+            flush=True,
+        )
+    if skipped:
+        # Not a failure either, and said for the same reason as NOT APPLICABLE above.
+        print(
+            f"SKIPPED: {len(skipped)} cell(s) left out of this sweep: "
+            + ", ".join(label for label, _ in skipped),
             flush=True,
         )
     if failures:

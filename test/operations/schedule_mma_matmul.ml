@@ -162,12 +162,13 @@ let residency_holds src ~frag_load ~body_begin ~body_end ~frag_store ~barrier =
    destination pointer first.
 
    [converted_d] names the wide-f16 arms (HIP: gh-ocannl-789; Metal: gh-ocannl-837; CUDA:
-   gh-ocannl-925), where the accumulator array's element type is not the destination's. On HIP and
-   Metal the intrinsic loads a STAGING fragment and populates the accumulator array by an
-   elementwise copy, so the "populated once before the body" anchor is that copy rather than a
-   fragment load naming the accumulator array; the staging fragment is stored to [__mma_dp] once,
-   after the body. CUDA has no staging fragment: each element crosses the boundary at the coordinate
-   the [ocannl_wmma_rc16] table names, widened on the way in and narrowed on the way out. *)
+   gh-ocannl-925), where the accumulator array's element type is not the destination's. On Metal the
+   intrinsic loads a STAGING fragment and populates the accumulator array by an elementwise copy, so
+   the "populated once before the body" anchor is that copy rather than a fragment load naming the
+   accumulator array; the staging fragment is stored to [__mma_dp] once, after the body. CUDA and
+   HIP (since gh-ocannl-1064) have no staging fragment: each element crosses the boundary at the
+   coordinate the [ocannl_wmma_rc16] table names, widened on the way in and narrowed on the way
+   out. *)
 let staged_half_resident ?(converted_d = false) src =
   if on_metal then
     residency_holds src
@@ -182,11 +183,12 @@ let staged_half_resident ?(converted_d = false) src =
   else if on_hip then
     residency_holds src
       ~frag_load:
-        (if converted_d then ".x[__ei] = (float)__mma_dstage"
+        (if converted_d then ".x[__ei] = (float)__mma_dp["
          else "rocwmma::load_matrix_sync(__mma_fragment_")
       ~body_begin:"/* rocwmma fragment reduction body begins */"
       ~body_end:"/* rocwmma fragment reduction body ends */"
-      ~frag_store:"rocwmma::store_matrix_sync(__mma_dp" ~barrier:"__syncthreads();"
+      ~frag_store:(if converted_d then "] = (rocwmma::" else "rocwmma::store_matrix_sync(__mma_dp")
+      ~barrier:"__syncthreads();"
   else
     residency_holds src
       ~frag_load:
@@ -198,6 +200,23 @@ let staged_half_resident ?(converted_d = false) src =
         (if converted_d then "= __float2half(__mma_fragment_"
          else "nvcuda::wmma::store_matrix_sync(__mma_dp")
       ~barrier:"__syncthreads();"
+
+(* HIP's converted [d] boundary (gh-ocannl-1064): the [float] accumulator array [acc] crosses the
+   boundary only through the [ocannl_wmma_rc16] coordinate table, and the gh-ocannl-789 element copy
+   through a destination-typed staging fragment is GONE — no 16-bit accumulator fragment is declared
+   at all, and neither [acc] nor any fragment is loaded from or stored to [__mma_dp] by rocWMMA.
+   That copy assumed two accumulator types share an element-to-coordinate mapping, which rocWMMA
+   documents it does not promise. *)
+let hip_table_boundary ~acc src =
+  let has s = String.is_substring src ~substring:s in
+  has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>"
+  && has "rocwmma::load_matrix_sync(__mma_rc, ocannl_wmma_rc16, 16"
+  && has "__device__ __align__(32) float ocannl_wmma_rc16[256]"
+  && (not (has "__mma_dstage"))
+  && (not (has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, rocwmma::float16_t>"))
+  && (not (has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, rocwmma::bfloat16_t>"))
+  && (not (has ("rocwmma::load_matrix_sync(" ^ acc)))
+  && not (has "rocwmma::store_matrix_sync(__mma_dp")
 
 (* The CUDA wmma f32 accumulator-fragment declaration, the element type every f16 -> f32 and wide
    uniform-f16 wmma leg below pins (gh-ocannl-925). *)
@@ -536,7 +555,7 @@ let () =
             the DEFAULT policy the accumulator fragment is itself f16, so no [d]-boundary conversion
             is emitted — the complement of the [Fp16_wide] leg below, which is what keeps the two
             arms from being told apart only by a claim that would pass on either (gh-ocannl-789). *)
-         has "rocwmma::mma_sync" && (not (has "__mma_dstage")) && not (has "== 0)")
+         has "rocwmma::mma_sync" && (not (has "ocannl_wmma_rc16")) && not (has "== 0)")
        else
          (* No advertised tile-MMA (gh-ocannl-1032): the deliberate decline is the lane-0 scalar
             fallback, and NOTHING rocWMMA — an emission that named the intrinsic here would not
@@ -727,16 +746,12 @@ let () =
      else if on_hip then
        if Lazy.force hip_mma then
          (* HIP: the rocWMMA uniform-f16 arm swapped to an f32 accumulator fragment over the same
-            f16 STORAGE destination, converting elementwise at the [d] boundary (gh-ocannl-789).
-            Both halves are pinned, because either alone would also match the f16-accumulate arm
-            this replaces: that one declares [accumulator, 16, 16, 16, rocwmma::float16_t]
-            throughout and has no staging fragment, so the [float] accumulator declaration AND
-            [__mma_dstage] are what say the accumulation is wide. The default-policy leg above
-            asserts the complement. *)
-         intrinsics
-         && has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>"
-         && has "__mma_dstage"
-         && not (has "== 0)")
+            f16 STORAGE destination, converting elementwise at the [d] boundary (gh-ocannl-789)
+            through the coordinate table (gh-ocannl-1064). The [float] accumulator declaration AND
+            the table are what say the accumulation is wide: the f16-accumulate arm this replaces
+            declares [accumulator, 16, 16, 16, rocwmma::float16_t] throughout and converts nothing.
+            The default-policy leg above asserts the complement. *)
+         intrinsics && hip_table_boundary ~acc:"__mma_acc" src && not (has "== 0)")
        else
          (* No advertised tile-MMA (gh-ocannl-1032): the recorded scalar fallback, the same shape
             the CUDA arm below requires of a device under its own floor. *)
@@ -1097,14 +1112,10 @@ let () =
        && not (has "== 0)")
      else if on_hip then
        if Lazy.force hip_mma then
-         (* The [float] accumulator declaration AND the staging fragment: the bf16-accumulate arm
-            this replaces declares [accumulator, 16, 16, 16, rocwmma::bfloat16_t] and stages
-            nothing. *)
-         intrinsics
-         && has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>"
-         && has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, rocwmma::bfloat16_t>"
-         && has "__mma_dstage"
-         && not (has "== 0)")
+         (* The [float] accumulator declaration AND the table-addressed boundary: the
+            bf16-accumulate arm this replaces declares [accumulator, 16, 16, 16,
+            rocwmma::bfloat16_t] and converts nothing (gh-ocannl-1064). *)
+         intrinsics && hip_table_boundary ~acc:"__mma_acc" src && not (has "== 0)")
        else fallback && (not (has "rocwmma")) && has "== 0)"
      else if on_gpu then
        if bf16_wide_advertised Ir.Backend_intf.Mma_per_statement then
@@ -1473,7 +1484,7 @@ let () =
      the serial twin; the C backends cannot express shared placement and must reject cleanly (same
      pinning as the SMEM matmul test). --- *)
   let%op mc3 = ma * mb in
-  let staged_schedule ~out ~src_a ~src_b (opt : LL.optimized) : Sched.schedule =
+  let staged_schedule ?swizzle ~out ~src_a ~src_b (opt : LL.optimized) : Sched.schedule =
     let paths = nest_paths opt.LL.llc in
     let i, j, k =
       match List.find_exn paths ~f:(fun p -> List.length p = 3) with
@@ -1502,7 +1513,7 @@ let () =
           shared = true;
           cooperative = Some simd_width;
           hoisted = false;
-          swizzle = None;
+          swizzle;
           pad_stride = None;
           pipeline_depth = 1;
           tile_prec = None;
@@ -1514,7 +1525,7 @@ let () =
           shared = true;
           cooperative = Some simd_width;
           hoisted = false;
-          swizzle = None;
+          swizzle;
           pad_stride = None;
           pipeline_depth = 1;
           tile_prec = None;
@@ -1766,9 +1777,7 @@ let () =
       if on_metal then
         has "simdgroup_float8x8" && has "simdgroup_half8x8" && has "thread_elements()"
         && has "__mma_dstage"
-      else if on_hip then
-        has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>"
-        && has ".x[__ei]" && has "__mma_dstage"
+      else if on_hip then hip_table_boundary ~acc:"__mma_fragment_" src
       else
         (* The f32 fragment array, the half operand fragments, and the table-addressed boundary —
            which must also be the only [d] traffic: no fragment load or store of [__mma_dp] (that
@@ -1926,37 +1935,73 @@ let () =
      discriminator at bf16, executing the converted [d] boundary in the FRAGMENT scope. bf16's
      spacing at 256 is 2, so each later block's +1 is lost to any narrowing between blocks (257 ties
      back to the even 256) while an f32 fragment resident across all nine blocks reaches 264
-     exactly. The negative control renders the same composition under the default policy — the
-     bf16-accumulate fragment — and must NOT reach 264 (it narrows per step, whichever way gfx11
-     rounds the ties). HIP and Metal (whose wide uniform-bf16 arm landed with gh-ocannl-923); CUDA
-     has no fragment-scope uniform-bf16 arm, and the lane-0 fallback of a staged schedule narrows at
-     every [k_o] boundary by construction. --- *)
+     exactly. Both readings are derived rather than restated: [bws_narrow] and [bws_wide] fold the
+     same per-block sums through the framework's own bf16 codec, narrowing after every block resp.
+     once, and must differ — so a device reading of [bws_wide] is evidence of residency, not a
+     property of easy inputs. The same composition under the default policy narrows between blocks
+     exactly where the backend's bf16 [accum_prec] is bf16 — HIP and Metal (whose wide uniform-bf16
+     arm landed with gh-ocannl-923) — and on CUDA, whose bf16 accumulators are f32 under every
+     policy, it reads [bws_wide] too: a two-sided pin of [Bf16_auto]'s CURRENT resolution per
+     backend, not a contract.
+
+     CUDA (gh-ocannl-1063): uniform bf16 has no wmma combination, so before this the fragment scope
+     declined and the staged schedule took the per-[k_o] inline-PTX rendering, narrowing at every
+     block boundary under every policy. Now the scope holds that arm's per-lane f32 registers across
+     the outer reduction; its structure claim pins that the reduction body stores nothing narrowed,
+     and a SWIZZLED staged twin — the [ldmatrix]-fed one the autotuner seeds beside the plain one,
+     which wmma could not have read — runs the same claims, so the two twins cannot differ in width.
+     --- *)
   let claim_bw_value =
     "staged+tensorized Bf16_wide matmul equals the once-narrowed wide reference bitwise"
   in
   let claim_bw_struct = "staged+tensorized Bf16_wide fragment residency converts d once" in
   let claim_bw_control =
-    "staged+tensorized default-policy uniform-bf16 matmul narrows between blocks (the \
-     discriminator discriminates)"
+    "staged+tensorized default-policy uniform-bf16 matmul narrows between blocks exactly where the \
+     backend keeps bf16 storage residency"
   in
-  if on_metal || (on_hip && Lazy.force hip_mma) then (
-    let kw = 144 in
-    let bwsa =
-      NTDSL.init ~l:"bwsa" ~prec:Ir.Ops.bfloat16 ~i:[ kw ] ~o:[ n ]
-        ~f:(fun idcs -> if idcs.(1) % bm = 0 then 1. else 0.)
-        ()
-    in
-    let bwsb =
-      NTDSL.init ~l:"bwsb" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ kw ]
-        ~f:(fun idcs -> if idcs.(0) % bm <> 0 then 0. else if idcs.(0) = 0 then 256. else 1.)
-        ()
-    in
-    let run_staged ~name =
+  let claim_bw_discriminates =
+    "the k-split inputs discriminate: narrowing per block and once give different bf16 values"
+  in
+  let claim_bw_swz_value =
+    "swizzled staged twin under Bf16_wide and the default policy equals the once-narrowed wide \
+     reference bitwise"
+  in
+  let claim_bw_swz_struct =
+    "swizzled staged twin keeps the same register fragment, fed through ldmatrix"
+  in
+  let cuda_bf16_wide_fragment =
+    match cuda_mma () with
+    | Some m ->
+        List.mem m.Ir.Backend_intf.mma_bf16_wide_acc_scopes Ir.Backend_intf.Mma_fragment_scope
+          ~equal:Ir.Backend_intf.equal_mma_emission_scope
+    | None -> false
+  in
+  let kw = 144 in
+  let bws_a idcs = if idcs.(1) % bm = 0 then 1. else 0. in
+  let bws_b idcs = if idcs.(0) % bm <> 0 then 0. else if idcs.(0) = 0 then 256. else 1. in
+  (* Every cell of the product reads the same per-block sums: [bws_a] does not vary with the row,
+     nor [bws_b] with the column. *)
+  let bws_block_sums =
+    List.init (kw / bm) ~f:(fun blk ->
+        List.sum
+          (module Float)
+          (List.range (blk * bm) ((blk + 1) * bm))
+          ~f:(fun k -> bws_a [| 0; k |] *. bws_b [| k; 0 |]))
+  in
+  let to_bf16 x = Ir.Ops.bfloat16_to_single (Ir.Ops.single_to_bfloat16 x) in
+  let bws_narrow = List.fold bws_block_sums ~init:0. ~f:(fun acc s -> to_bf16 (acc +. s)) in
+  let bws_wide = to_bf16 (List.fold bws_block_sums ~init:0. ~f:( +. )) in
+  p claim_bw_discriminates Float.(bws_narrow <> bws_wide);
+  if on_metal || (on_hip && Lazy.force hip_mma) || cuda_bf16_wide_fragment then (
+    let bwsa = NTDSL.init ~l:"bwsa" ~prec:Ir.Ops.bfloat16 ~i:[ kw ] ~o:[ n ] ~f:bws_a () in
+    let bwsb = NTDSL.init ~l:"bwsb" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ kw ] ~f:bws_b () in
+    let run_staged ?swizzle ~name () =
       let%op t = bwsa * bwsb in
       Tn.update_prec t.Tensor.value Ir.Ops.bfloat16;
       let transform opt =
         Sched.apply
-          (staged_schedule ~out:t.Tensor.value ~src_a:bwsa.Tensor.value ~src_b:bwsb.Tensor.value opt)
+          (staged_schedule ?swizzle ~out:t.Tensor.value ~src_a:bwsa.Tensor.value
+             ~src_b:bwsb.Tensor.value opt)
           opt
       in
       let ctx, routine =
@@ -1966,36 +2011,96 @@ let () =
           (named name (Train.forward t))
           Ir.Indexing.Empty
       in
+      let census = List.map routine.Context.mma.Ir.C_syntax.renderings ~f:snd in
       let ctx = Context.run ctx routine in
-      Context.get_values ctx t.Tensor.value
+      (Array.to_list (Context.get_values ctx t.Tensor.value), census)
     in
     Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_auto };
-    let got_default = run_staged ~name:"mm_bu_staged_mma" in
+    let default_bf16_narrow =
+      Ir.Ops.equal_prec
+        ((Context.codegen_capabilities (Context.auto ())).Ir.Backend_intf.accum_prec Ir.Ops.bfloat16)
+        Ir.Ops.bfloat16
+    in
+    let got_default, _ = run_staged ~name:"mm_bu_staged_mma" () in
     Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_wide };
-    let got_bw = run_staged ~name:"mm_buw_staged_mma" in
+    let got_bw, census_bw = run_staged ~name:"mm_buw_staged_mma" () in
     Numerics.set_policy saved_policy;
     Stdio.eprintf
-      "schedule_mma_matmul: staged uniform-bf16 k-split cell 0: Bf16_wide %g, default policy %g \
-       (not part of the golden)\n\
+      "schedule_mma_matmul: staged uniform-bf16 k-split cell 0: Bf16_wide %g, default policy %g; \
+       references: wide %g, narrowed per block %g (not part of the golden)\n\
        %!"
-      got_bw.(0) got_default.(0);
-    p_all claim_bw_value (Array.to_list got_bw) ~f:(Float.equal 264.);
-    p_all claim_bw_control (Array.to_list got_default) ~f:(fun v -> not (Float.equal v 264.));
+      (List.hd_exn got_bw) (List.hd_exn got_default) bws_wide bws_narrow;
+    p_all claim_bw_value got_bw ~f:(Float.equal bws_wide);
+    if default_bf16_narrow then p_none claim_bw_control got_default ~f:(Float.equal bws_wide)
+    else p_all claim_bw_control got_default ~f:(Float.equal bws_wide);
     let src = Generated.read "mm_buw_staged_mma" in
     let has s = String.is_substring src ~substring:s in
+    (* CUDA's register fragment: loaded once before the reduction body and stored once after it,
+       with nothing narrowed to bf16 in between — the per-[k_o] rendering this replaces stores
+       [__float2bfloat16(__mma_d0)] inside the body, at every block. *)
+    let cuda_register_resident src =
+      let register_body_begin = "/* mma.sync fragment reduction body begins */" in
+      let register_body_end = "/* mma.sync fragment reduction body ends */" in
+      residency_holds src ~frag_load:"[0] = __bfloat162float(__mma_dr0[0]);"
+        ~body_begin:register_body_begin ~body_end:register_body_end
+        ~frag_store:"__mma_dr0[0] = __float2bfloat16(__mma_fragment_" ~barrier:"__syncthreads();"
+      &&
+      match
+        ( String.substr_index src ~pattern:register_body_begin,
+          String.substr_index src ~pattern:register_body_end )
+      with
+      | Some beg, Some fin ->
+          not
+            (String.is_substring
+               (String.sub src ~pos:beg ~len:(fin - beg))
+               ~substring:"__float2bfloat16")
+      | _ -> false
+    in
+    let all_are rendering census =
+      (not (List.is_empty census))
+      && List.for_all census ~f:(Ir.C_syntax.equal_mma_rendering rendering)
+    in
     p claim_bw_struct
-      (staged_half_resident ~converted_d:true src
-      && (if on_metal then
-            has "simdgroup_float8x8 __mma_fragment_"
-            && has "simdgroup_bfloat8x8" && has "thread_elements()"
-          else has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>" && has ".x[__ei]")
-      && has "__mma_dstage"))
+      (if on_cuda then
+         all_are Ir.C_syntax.Mma_intrinsics census_bw
+         && cuda_register_resident src && has "float __mma_fragment_" && has "(mma-bf16)"
+         && has "mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32"
+         && not (has "== 0)")
+       else
+         staged_half_resident ~converted_d:true src
+         &&
+         if on_metal then
+           has "simdgroup_float8x8 __mma_fragment_"
+           && has "simdgroup_bfloat8x8" && has "thread_elements()" && has "__mma_dstage"
+         else hip_table_boundary ~acc:"__mma_fragment_" src);
+    (* The swizzled twin exists only where an [ldmatrix] arm reads it: Metal and HIP decline the
+       layout to the scalar fallback, which is width-correct by construction and not this leg's
+       subject. *)
+    if on_cuda then (
+      let swizzle = LL.Swizzle_b128 in
+      let got_swz_default, _ = run_staged ~swizzle ~name:"mm_bu_swz_staged_mma" () in
+      Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_wide };
+      let got_swz, census_swz = run_staged ~swizzle ~name:"mm_buw_swz_staged_mma" () in
+      Numerics.set_policy saved_policy;
+      p_all claim_bw_swz_value (got_swz @ got_swz_default) ~f:(Float.equal bws_wide);
+      let src = Generated.read "mm_buw_swz_staged_mma" in
+      let has s = String.is_substring src ~substring:s in
+      p claim_bw_swz_struct
+        (all_are Ir.C_syntax.Mma_intrinsics_ldmatrix census_swz
+        && cuda_register_resident src && has "(mma-bf16) ldmatrix a,b"
+        && has "ldmatrix.sync.aligned.m8n8"
+        && not (has "== 0)")))
+    else (
+      skipped claim_bw_swz_value;
+      skipped claim_bw_swz_struct))
   else (
     (* Where the tensor unit is absent this leg has no fragment to convert (see the Fp16_wide leg's
        skip above for why this is the ordinary backend skip). *)
     skipped claim_bw_value;
     skipped claim_bw_control;
-    skipped claim_bw_struct);
+    skipped claim_bw_struct;
+    skipped claim_bw_swz_value;
+    skipped claim_bw_swz_struct);
 
   (* --- Transposed operand layouts (the gradient-GEMM access patterns): [d[i,j] += at[k,i] *
      b[k,j]] (a stored transposed) and [d[i,j] += a[i,k] * bt[j,k]] (b stored transposed). Tensorize

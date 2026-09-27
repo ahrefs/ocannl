@@ -250,11 +250,20 @@ files.
   in the ordering as the code after 0x7BFF, so the overflow threshold is the tie at 65520, not a
   saturation — and bit-for-bit against the native `_Float16` cast where the compiler has one (NaNs
   up to payload), and widens all 65536 codes against the format's exact values. The C it compiles
-  is the table's own text: `gen_half_emulated` emits the converters' dependency closure from a copy
+  is the table's own text: `gen_codec_header` emits the converters' dependency closure from a copy
   of `builtins_cc.ml` with only `HAS_NATIVE_FLOAT16` forced to 0. Reintroducing the
   gh-ocannl-981 cutoff (`total_shift >= 24`) fails it with exactly 16 777 214 misroundings and as
   many native disagreements. Emulated widening returns a POSITIVE NaN for a negative NaN code, as
   `fp8_to_single` does; the sweep asks only for "a NaN" there, matching the fp8 contract.
+- **bf16 narrowing is live on every box, and its rounding add must not see a NaN** (gh-ocannl-1069).
+  `single_to_bfloat16` (host stubs, every cc kernel, lane-wise in the vector narrowing bridge) rounded
+  with the bit-add `f32 + 0x7FFF + lsb`, which carried 131072 NaNs out of the class (low-half payload
+  truncated to ±inf, an all-ones top payload carried into the sign: ±0). Both spellings now quiet and
+  truncate a NaN first, `(bits >> 16) | 0x0040` — what clang's `__bf16` cast gives on AArch64, bit
+  for bit. `@test/operations/slow-bf16_codec_exhaustive` sweeps all 2^32 inputs with the pre-fix
+  arithmetic as negative control (exactly 131072 escapes, identical elsewhere — hence no digest bump:
+  `numerics_tag` fingerprints the policy). GPU backends narrow through vendor code only. A sweep's
+  "agrees with the native cast up to NaN payload" must require BOTH sides NaN, or NaN-to-inf passes.
 - **fp16 is the one narrow format a CPU can compute in natively** (gh-ocannl-516), and whether it
   can is a C-preprocessor fact the OCaml renderer cannot see. `cc` probes the configured compiler
   once per process and reports three states — no `_Float16`, `_Float16` with arithmetic *promoted*
@@ -600,27 +609,50 @@ files.
   gh-ocannl-789, CUDA's by gh-ocannl-925 (sm_120: the staged k=144 leg reads 2056, and 2048 with the
   wmma arm disabled).
 - **A wmma fragment's element order is not a contract, so a converted `d` boundary reads it from
-  the fragment type itself** (gh-ocannl-925, `Cuda_backend.wmma_d_boundary_lines`). HIP and Metal
-  convert by copying `x[i]` between an f32 and an f16 fragment, which assumes the two types place
-  element `i` at the same coordinate; for `nvcuda::wmma` the programming guide calls the mapping
-  unspecified and subject to change, so a copy that validates on one GPU proves nothing about the
-  next. Instead each lane `load_matrix_sync`s the builtin table `ocannl_wmma_rc16` (entry
+  the fragment type itself** (gh-ocannl-925, `Cuda_backend.wmma_d_boundary_lines`; HIP's twin
+  `Hip_backend`'s `mma_d_boundary_lines`, gh-ocannl-1064). Copying `x[i]` between an f32 and an f16
+  fragment assumes the two types place element `i` at the same coordinate; for `nvcuda::wmma` the
+  programming guide calls the mapping unspecified and subject to change, so a copy that validates on
+  one GPU proves nothing about the next. rocWMMA says the same: its `fragment` class carries "vector
+  elements have no guaranteed order or locality", and the accumulator's register layout is a
+  template of `DataT` (`MmaAcc<MmaDim, DataT, ...>` in `rocwmma/internal/io_layout.hpp`). MSL 4.1
+  §2.4: "The mapping of matrix elements to threads in the SIMD-group is unspecified", and
+  `thread_elements()` is not in the spec at all — so Metal's gh-ocannl-837 `thread_elements()` copy
+  still rests on an undocumented coincidence (verified only on an M4 Max). Instead each lane `load_matrix_sync`s the builtin table `ocannl_wmma_rc16` (entry
   `16*row+col` holds that number) into a fragment of the accumulator's own type, then moves each
   element to or from `d[row][col]` with a scalar conversion. That relies only on `load_matrix_sync`'s
   contract and on the position being fixed per type and lane, which `mma_sync` needs anyway. The
   f32 `d` does not need the trick: it loads the float fragment directly. Pair the value claim with a
   structure claim (no `load_matrix_sync(__mma_fragment_`, no `store_matrix_sync(__mma_dp`, no
   `mma.sync.aligned`), because a per-`k_o` PTX rendering also computes in f32 within each block.
-  The bf16 twin (`mma_bf16_wide_acc_scopes`' fragment scope, over wmma's bf16 -> f32 fragments) is
-  the same boundary with `__bfloat162float`/`__float2bfloat16` and has not been written.
+  HIP's port (gh-ocannl-1064) serves both of its wide arms with C casts; `schedule_mma_matmul`'s
+  `hip_table_boundary` pins that no 16-bit accumulator fragment is declared and nothing crosses
+  `__mma_dp` through rocWMMA's own load/store on those arms. CUDA's bf16 twin went another way
+  (next bullet).
+- **CUDA's uniform-bf16 fragment scope is the inline-PTX arm's own registers, not wmma**
+  (gh-ocannl-1063, `Cuda_backend.mma16_register_scope`). A wmma bf16 -> f32 scope behind this
+  boundary would have served only PLAIN staged operands: the autotuner also seeds a `Swizzle_b128`
+  twin for exactly this triple (`mma_staged_layouts`), which only `ldmatrix` reads, so that twin
+  would have kept the per-`k_o` inline-PTX rendering — narrowing at every block while its plain
+  sibling stayed f32, making the crowned twin decide the numerics. Holding `float frag[m/16][n/8][4]`
+  in the architected m16n8k16 accumulator layout across the reduction serves both twins with one
+  instruction sequence (`mma16_d_boundary_lines` converts once per end; no coordinate table, the
+  PTX layout is specified). Before it, every staged uniform-bf16 schedule on CUDA narrowed per block
+  under EVERY policy although `accum_prec` said f32 — a staged k-split discriminator (256 + 1 per
+  later block) read 256, now 264. Before extending a fragment scope, list the staged twins the
+  seeding mints for that triple and check each one reaches the new scope. No config key: it is a
+  backend-resolution change, and the schedule cache's `codegen` component hashes the whole
+  `hardware_limits` record, whose `mma_bf16_wide_acc_scopes` changed on exactly the sm_80+ devices
+  whose rendering did, so old winners do not replay.
 - **bf16 residency is the ternary `bf16_arithmetic` policy's question** (gh-ocannl-838), the same
   shape as `fp16_arithmetic`: `Numerics.bf16_mode`, `Numerics.bf16_accum_wide`, and a per-format
   capability list `mma_bf16_wide_acc_scopes` read by the same seeding gate
   (`Sketch_families.wide_acc_withholds`, which names the withholding policy in its witness).
-  `Bf16_auto` keeps the gh-ocannl-663 table (f32 on CPU and CUDA, storage width on HIP/Metal);
+  `Bf16_auto` keeps the gh-ocannl-663 table (f32 on CPU and CUDA — on CUDA in every emission scope
+  only since gh-ocannl-1063 — storage width on HIP/Metal);
   `Bf16_wide` (`false`) widens every backend's `accum_prec`, swaps HIP's uniform-bf16 rocWMMA arm to
   a `float` accumulator fragment through the gh-ocannl-789 converted `d` boundary (both scopes),
-  leaves CUDA's inline-PTX arm alone (f32 in hardware; per-statement scope only, as for f16), and
+  leaves CUDA's inline-PTX arm alone (f32 in hardware, both scopes since gh-ocannl-1063), and
   swaps Metal's `simdgroup_bfloat8x8` arm to a `simdgroup_float8x8` accumulator behind the
   gh-ocannl-837 `thread_elements()` boundary (both scopes, gh-ocannl-923; before it that arm
   declined and the scope list was empty).
@@ -669,20 +701,17 @@ files.
   artifact rather than silently part of the measurement; it is a fact about the sweep, so the
   report states it even when every cell failed, and rows that disagree on it are refused rather
   than rendered as two unattributable header lines.
-- **rocWMMA fragments are opaque for LAYOUT but not for ELEMENTS, and that is what wires HIP's
-  wide-f16 d boundary** (gh-ocannl-789, `arrayjit/lib/hip_backend.ml`'s `mma_d_boundary`). Under
-  `Fp16_wide` the uniform-f16 arm pairs a `float` accumulator fragment with the unchanged f16
-  STORAGE destination; neither `load_matrix_sync` nor `store_matrix_sync` is type-correct across
-  that mismatch, so the boundary stages through a destination-typed accumulator fragment rocWMMA
-  does load and store, and copies element-for-element via `num_elements` / `x[]` — the surface the
-  header documents as "compatibility with nvcuda::wmma". The copy never assumes WHICH matrix cell
-  an element index names, only that two accumulator fragments of the same 16x16x16 shape name the
-  same cell at the same index; that holds because rocWMMA derives the accumulator's IO layout from
-  the fragment shape and wave size, not from `DataT`, and an emitted `static_assert` on the two
-  `num_elements` fails the kernel compile if a release ever packs them differently. Measured on
-  gfx1151: both fragments report 8 elements and dump identical per-`(lane, index)` values from the
-  same 16x16 tile of distinct values. No LDS traffic — the warp-staged float tile that was the
-  fallback design is not needed. The combination table and fragment-type spelling are now shared
+- **HIP's wide-f16/bf16 d boundary reads coordinates from the accumulator type, not from a
+  second fragment type** (gh-ocannl-789, rewired by gh-ocannl-1064; `arrayjit/lib/hip_backend.ml`'s
+  `mma_d_boundary_lines`). Under `Fp16_wide`/`Bf16_wide` the uniform arm pairs a `float` accumulator
+  fragment with the unchanged 16-bit STORAGE destination; neither `load_matrix_sync` nor
+  `store_matrix_sync` is type-correct across that mismatch. gh-ocannl-789 staged through a
+  destination-typed accumulator fragment and copied `x[i]` across, on the belief that rocWMMA
+  derives the accumulator layout from shape and wave size only — wrong per the headers (see the
+  coordinate-table bullet above), though right in practice on gfx1151/gfx1102, where both fragments
+  dump identical per-`(lane, index)` values. The boundary now loads `ocannl_wmma_rc16` into a
+  `float` accumulator fragment and converts each element at its named cell with a C cast (same
+  rounding as the old cast), one table load per boundary; no LDS traffic. The combination table and fragment-type spelling are now shared
   by `mma_syntax` and `mma_fragment_syntax` (they were duplicated verbatim, and the two hooks are
   required to accept together), so an arm added to one reaches both.
 - **Metal's `simdgroup_matrix` surface also permits a wide-f16 accumulator despite the uniform

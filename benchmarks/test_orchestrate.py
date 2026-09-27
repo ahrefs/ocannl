@@ -1,5 +1,6 @@
 import argparse
 import contextlib
+import inspect
 import io
 import json
 import os
@@ -902,6 +903,140 @@ class PeakMemoryTest(unittest.TestCase):
         self.assertIsNone(bench_common.torch_peak_memory(torch, "mps"))
 
 
+class DominantKernelTest(unittest.TestCase):
+    """gh-ocannl-1006: the report's %-of-peak column for the dominant kernel.
+
+    What makes the column misleadable is pinned here, against the OCaml emitter's own objects
+    where it matters: the number is printed only on an exact count, every no-value verdict says
+    which one it is in the cell, the ceiling a number is a percentage OF is named in the section
+    header with its constants and whose they are, and the header says the constants are class
+    constants that certify nothing about the device.
+    """
+
+    GOLDEN = HERE.parent / "test/operations/bench_result_line.expected"
+    PREFIX = "dominant_kernel "
+
+    def emitted(self):
+        """The OCaml emitter's fabricated objects, one per verdict, by name."""
+        out = {}
+        for line in self.GOLDEN.read_text().splitlines():
+            if line.startswith(self.PREFIX):
+                name, _, obj = line[len(self.PREFIX):].partition(": ")
+                out[name] = strict_loads(obj)
+        return out
+
+    def row(self, framework, backend, kernel, p50=1.0):
+        r = cell(framework, backend, "default", [2.3, 2.2, 2.1], p50=p50)
+        r["dominant_kernel"] = kernel
+        return r
+
+    def rendered(self, rows):
+        orchestrate.parity_check(rows)
+        out = Path(tempfile.mkdtemp())
+        orchestrate.report(rows, out)
+        return (out / "report.md").read_text()
+
+    def test_the_emitter_offers_every_verdict(self):
+        # The fabricated set is what the rendering tests below stand on; a verdict missing from it
+        # would be a verdict whose cell nobody has looked at.
+        verdicts = {k["verdict"] for k in self.emitted().values()}
+        self.assertEqual(
+            verdicts, {"exact", "approximate", "opaque", "no-ceiling", "no-kernel"}
+        )
+
+    def test_every_emitted_verdict_renders_as_a_named_cell(self):
+        for name, k in self.emitted().items():
+            with self.subTest(name=name):
+                text = orchestrate.dominant_kernel_cell({"dominant_kernel": k})
+                self.assertNotIn("UNKNOWN", text)
+                self.assertNotEqual(text, "\u2014")
+                if k["verdict"] == "exact":
+                    self.assertIn("%", text)
+                else:
+                    # No number on an inexact count, a missing ceiling or no kernel at all.
+                    self.assertNotIn("%", text)
+                    self.assertIn(orchestrate.DOMINANT_KERNEL_MARK[k["verdict"]], text)
+
+    def test_an_exact_cell_names_its_ceiling_leg_and_kernel(self):
+        k = self.emitted()["exact"]
+
+        self.assertEqual(
+            orchestrate.dominant_kernel_cell({"dominant_kernel": k}),
+            "25.0% f32 memory \u00b7 k3/12 4.000 ms w1.grad 'b1'",
+        )
+
+    def test_an_inexact_cell_keeps_the_kernels_identity_but_prints_no_number(self):
+        k = self.emitted()["approximate"]
+
+        self.assertEqual(
+            orchestrate.dominant_kernel_cell({"dominant_kernel": k}),
+            "approx \u00b7 k3/12 4.000 ms w1.grad 'b1'",
+        )
+
+    def test_untimed_kernels_are_counted_in_the_cell(self):
+        # The dominant kernel is dominant among the kernels that could be timed alone; the cell
+        # says how many could not.
+        k = dict(self.emitted()["exact"], declined=2)
+
+        self.assertIn("(+2 untimed)", orchestrate.dominant_kernel_cell({"dominant_kernel": k}))
+
+    def test_a_row_without_the_instrument_is_a_dash_beside_one_with_it(self):
+        text = self.rendered(
+            [
+                self.row("ocannl", "metal", self.emitted()["exact"], p50=1.0),
+                self.row("pytorch", "mps", None, p50=2.0),
+            ]
+        )
+
+        self.assertIn(" kernel %peak |", text)
+        self.assertIn("| 25.0% f32 memory \u00b7 k3/12 4.000 ms w1.grad 'b1' |", text)
+        pytorch_row = next(l for l in text.splitlines() if l.startswith("| pytorch"))
+        self.assertIn("| \u2014 |", pytorch_row)
+
+    def test_a_section_where_no_row_ran_the_instrument_carries_no_column(self):
+        text = self.rendered([self.row("pytorch", "cpu", None)])
+
+        self.assertNotIn("kernel %peak", text)
+
+    def test_the_header_names_each_ceiling_with_its_constants_and_whose_they_are(self):
+        emitted = self.emitted()
+        rows = [
+            self.row("ocannl", "metal", emitted["exact"], p50=1.0),
+            self.row("ocannl", "cc", emitted["exact f16-native"], p50=2.0),
+        ]
+
+        self.assertEqual(
+            orchestrate.dominant_kernel_ceilings(rows),
+            [
+                ("f32", "fab class constant", 5e12, 1e12),
+                ("f16-native", "fab class constant", 1e13, 1e12),
+            ],
+        )
+        text = self.rendered(rows)
+        self.assertIn("`f32` = fab class constant: 5e+12 FLOP/s, 1e+12 B/s", text)
+        self.assertIn("`f16-native` = fab class constant: 1e+13 FLOP/s, 1e+12 B/s", text)
+        # The recorded decision (gh-ocannl-1006): what the constants are, said where they are read.
+        self.assertIn("certifies nothing about the device", text)
+        self.assertIn("ranks before/after on one box", text)
+
+    def test_a_section_with_no_scored_row_says_so_rather_than_listing_nothing(self):
+        text = self.rendered([self.row("ocannl", "cc", self.emitted()["no-ceiling (no constants)"])])
+
+        self.assertIn("none in this section", text)
+        self.assertIn("| no ceiling \u00b7 k3/12", text)
+
+    def test_the_result_line_carries_the_object_through_the_report_unchanged(self):
+        # results.jsonl is what a later re-render reads: the object must survive serialization.
+        k = self.emitted()["exact"]
+        out = Path(tempfile.mkdtemp())
+        rows = [self.row("ocannl", "metal", k)]
+        orchestrate.parity_check(rows)
+        orchestrate.report(rows, out)
+        (saved,) = [strict_loads(l) for l in (out / "results.jsonl").read_text().splitlines()]
+
+        self.assertEqual(saved["dominant_kernel"], k)
+
+
 class MeasurementProtocolTest(unittest.TestCase):
     """gh-ocannl-1008: the one measurement loop both Python runners call, pinned as a trace.
 
@@ -996,9 +1131,12 @@ class MeasurementProtocolTest(unittest.TestCase):
             {k: v for k, v in result.items() if k.startswith("peak_memory")},
             bench_common.peak_memory_fields(None),
         )
+        # gh-ocannl-1006: no per-kernel counts to score, so the %-of-peak column's key is null --
+        # present, so the report can tell "not measured" from a runner that predates the column.
+        self.assertIsNone(result["dominant_kernel"])
         self.assertEqual(
             set(result),
-            {"compile_s", "step_ms", "queued_step_ms", "timed_steps", "losses"}
+            {"compile_s", "step_ms", "queued_step_ms", "timed_steps", "losses", "dominant_kernel"}
             | set(bench_common.peak_memory_fields(None)),
         )
 
@@ -2716,6 +2854,68 @@ class CellTimeoutTest(unittest.TestCase):
             time.sleep(0.05)
         return not self.alive(pid)
 
+    def kill_the_group_on_cleanup(self, pidfile):
+        """Register a cleanup that SIGKILLs whatever is left of the group of the pid in `pidfile`.
+
+        Every fixture here that publishes a pid parks a process in `time.sleep(300)`, and it is
+        the test's own assertions that establish the code under test killed it. When one of them
+        fails, nothing else will: the two tests that cancel a sweep DRIVER clean up by SIGKILLing
+        the driver, which runs no handler and leaves its cell -- in a session of its own by design
+        -- orphaned for the full 300 s (gh-ocannl-1054: a forced failure left three such processes
+        behind, and on a shared box or a CI runner they hold whatever a later timing test measures
+        against). So the kill is owed on every path; registered after `setUp`, it runs before the
+        directory holding the pidfile is removed.
+
+        It kills the GROUP, not the pid: where the published pid is a grandchild, its sleeping
+        parent -- the cell -- is the same leak, and `cell_group.spawn` keeps both in the cell's
+        group. The pid is read at cleanup time, when the process it named may be long gone and
+        the number reused, so the group is killed only while it is still shaped like a cell's --
+        the whole of a session, which `cell_group.spawn` gives every child it starts -- and never
+        when it is this process's own. On Windows there is no group to kill and no need: every
+        spawn there sits in a kill-on-close Job.
+        """
+        if os.name != "posix":
+            return
+
+        def kill_what_is_left():
+            if not pidfile.exists():
+                return
+            pid = int(pidfile.read_text())
+            # ProcessLookupError: everything is gone (on macOS a zombie already answers so);
+            # PermissionError: the number was reused by a process that is not ours to signal.
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                group = os.getpgid(pid)
+                if group == os.getsid(pid) and group != os.getpgrp():
+                    os.killpg(group, signal.SIGKILL)
+
+        self.addCleanup(kill_what_is_left)
+
+    def test_every_published_pid_is_killed_on_cleanup(self):
+        # Fixtures here are written by copying a neighbour, and one that drops the registration
+        # passes every green run: the leak shows only when an assertion fails (gh-ocannl-1054).
+        # (The two needles are split so that this test's own source matches neither.)
+        publishes, registers = "publish" "_pid(", "self.kill_the_group" "_on_cleanup(pidfile)"
+        fixtures, offenders = [], []
+        for case in vars(sys.modules[__name__]).values():
+            if not (
+                isinstance(case, type)
+                and issubclass(case, unittest.TestCase)
+                and case.__module__ == __name__
+            ):
+                continue
+            for name in dir(case):
+                if name.startswith("test"):
+                    source = inspect.getsource(getattr(case, name))
+                    if publishes in source:
+                        fixtures.append(name)
+                        if registers not in source:
+                            offenders.append(f"{case.__name__}.{name}")
+        # Two-sided: the scan reaches the two tests the leak was found in, so it cannot pass by
+        # finding no fixture at all.
+        self.assertIn("test_a_sigterm_to_the_sweep_takes_the_running_cell_with_it", fixtures)
+        self.assertIn("test_a_cancellation_during_the_kill_does_not_abandon_the_group", fixtures)
+        self.assertEqual(offenders, [], "pid-publishing fixtures with no kill on cleanup")
+
     def test_a_held_termination_is_delivered_during_exceptional_unwinding(self):
         # Code after a contextmanager's finally is skipped when the body raises.  The old
         # deferral put delivery there, so a SIGTERM held while spawn/cleanup also raised stayed
@@ -2757,6 +2957,7 @@ class CellTimeoutTest(unittest.TestCase):
         package.mkdir()
         (package / "__init__.py").write_text("")
         pidfile = self.dir / "probe-helper.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         cachedb = self.dir / "cache.db"
         (package / "helpers.py").write_text(
             "import os, subprocess, sys\n"
@@ -2842,6 +3043,7 @@ class CellTimeoutTest(unittest.TestCase):
         # does not go away. So the assertion is both halves: the grandchild dies, and the call
         # returns promptly rather than waiting on the inherited pipe.
         pidfile = self.dir / "grandchild.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         cell = self.python(
             "import subprocess, sys, time\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])\n"
@@ -2869,6 +3071,7 @@ class CellTimeoutTest(unittest.TestCase):
         # it. So the SIGKILL has to be owed to the GROUP still having members (gh-ocannl-760
         # review).
         pidfile = self.dir / "stubborn.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         cell = self.python(
             "import signal, subprocess, sys, time\n"
             "kid = subprocess.Popen([sys.executable, '-c',\n"
@@ -2950,6 +3153,7 @@ class CellTimeoutTest(unittest.TestCase):
         # in its own session precisely so the sweep's signals do NOT reach it (gh-ocannl-760
         # review).
         pidfile = self.dir / "orphan.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         cell_source = (
             "import subprocess, sys, time\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])\n"
@@ -3095,6 +3299,7 @@ class CellTimeoutTest(unittest.TestCase):
         # about a worker that redirected its own output -- and that worker still holds the GPU, so
         # every later cell of the sweep would be measured against it (gh-ocannl-760 review).
         pidfile = self.dir / "leftover.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         cell = self.python(
             "import subprocess, sys\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
@@ -3145,6 +3350,7 @@ class CellTimeoutTest(unittest.TestCase):
         # the group outlives the sweep (gh-ocannl-760 review). The cell here holds the grace open
         # by ignoring SIGTERM, and the sweep is cancelled while it does.
         pidfile = self.dir / "mid_kill.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         termfile = self.dir / "mid_kill.termed"
         # The cell RECORDS the SIGTERM instead of `SIG_IGN`-ing it -- it still does not die of one,
         # which is all the test needs of it, and the marker is the moment the grace loop opened.
@@ -3271,6 +3477,7 @@ class CellTimeoutTest(unittest.TestCase):
         # state the kill path quarantines, whatever the leader's own exit said.
         seen = []
         pidfile = self.dir / "leftover_killed.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         cell = self.python(
             "import subprocess, sys\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
@@ -3326,6 +3533,7 @@ class CellTimeoutTest(unittest.TestCase):
         # as a cell: `subprocess.run` kills its direct child on an exception but knows nothing of
         # that child's children, and `dune build` forks compilers (gh-ocannl-760 review).
         pidfile = self.dir / "build_worker.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         build = self.python(
             "import subprocess, sys, time\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
@@ -3379,6 +3587,7 @@ class CellTimeoutTest(unittest.TestCase):
         # which reproduces the property that matters here: every `communicate` in the kill loop
         # times out, so the output can only come off the exception.
         pidfile = self.dir / "pipe_holder.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         cell = self.python(
             "import subprocess, sys, time\n"
             "print('the evidence', flush=True)\n"
@@ -3389,12 +3598,6 @@ class CellTimeoutTest(unittest.TestCase):
             pidfile,
         )
 
-        def clear_the_holder():
-            if pidfile.exists():
-                with contextlib.suppress(ProcessLookupError):
-                    os.kill(int(pidfile.read_text()), signal.SIGKILL)
-
-        self.addCleanup(clear_the_holder)
         with unittest.mock.patch.object(orchestrate, "CELL_KILL_GRACE_S", 1.0):
             _, note, log = self.run_cell("wedged behind a held pipe", cell, timeout=1.5)
 
@@ -3411,6 +3614,7 @@ class CellTimeoutTest(unittest.TestCase):
         # ESCAPES the group into its own session while still holding the stdout it inherited,
         # which is what makes every reap in the loop time out.
         pidfile = self.dir / "unreapable.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         holder = cell_group.spawn(
             self.python(
                 "import subprocess, sys, time\n"
@@ -3424,15 +3628,18 @@ class CellTimeoutTest(unittest.TestCase):
             stderr=subprocess.STDOUT,
             text=True,
         )
-        # The kill loop cannot reap this leader (that is the point), so the test reaps it.
-        self.addCleanup(holder.wait)
+        # The kill loop cannot reap this leader (that is the point), so the test reaps it -- killing
+        # it first when the test failed before the kill loop did, or the wait would sit out the
+        # leader's whole 300 s sleep. The escaped survivor's cleanup cannot stand in for that: it
+        # kills another session. The kill is asked of an UNREAPED leader only (`poll()` is None),
+        # which is when its group id cannot yet belong to anything else.
+        def reap_the_holder():
+            if holder.poll() is None:
+                holder.signal(force=True)
+            holder.wait()
 
-        def clear_the_holder():
-            if pidfile.exists():
-                with contextlib.suppress(ProcessLookupError):
-                    os.kill(int(pidfile.read_text()), signal.SIGKILL)
+        self.addCleanup(reap_the_holder)
 
-        self.addCleanup(clear_the_holder)
         deadline = time.monotonic() + 10
         while not pidfile.exists() and time.monotonic() < deadline:
             time.sleep(0.05)
@@ -3479,6 +3686,7 @@ class CellTimeoutTest(unittest.TestCase):
         # cell is in the state a kill leaves. It is the cache that is at issue, not the row.
         seen = []
         pidfile = self.dir / "successful_leftover.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         cell = self.python(
             "import json, subprocess, sys\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
@@ -3532,6 +3740,7 @@ class CellTimeoutTest(unittest.TestCase):
         # compiler worker or a probe's framework helper -- and those hold the GPU while the sweep
         # measures against them (gh-ocannl-760 review).
         pidfile = self.dir / "supporting_leftover.pid"
+        self.kill_the_group_on_cleanup(pidfile)
         build = self.python(
             "import subprocess, sys\n"
             "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
@@ -3656,6 +3865,72 @@ class CellTimeoutTest(unittest.TestCase):
         # be moved aside at all.
         self.assertEqual(called, [("killed", True)])
         self.assertIn("quarantined the cache", note)
+
+    def test_a_killed_cell_leaves_a_log_of_what_it_printed(self):
+        # gh-ocannl-1061: three tuned search passes over a 7200 s cap left 0-byte cell logs, so a
+        # search's progress up to the kill was unreadable. The log is written as the cell runs;
+        # what the cell printed before the cap is on disk after the kill.
+        logs = self.dir / "cells"
+        cell = self.python(
+            "import sys, time\n"
+            "print('autotune-progress: event=arm_start arm=\"A\"', flush=True)\n"
+            "sys.stderr.write('stderr evidence\\n'); sys.stderr.flush()\n"
+            "time.sleep(300)\n"
+        )
+        with unittest.mock.patch.object(orchestrate, "CELL_LOG_DIR", logs):
+            result, note, _ = self.run_cell("gpt2 ocannl/cc/tuned (search pass)", cell, timeout=2.0)
+
+        self.assertIsNone(result)
+        self.assertIn("TIMED OUT", note)
+        log = (logs / orchestrate.cell_log_name("gpt2 ocannl/cc/tuned (search pass)")).read_text()
+        self.assertIn("event=arm_start", log)
+        self.assertIn("stderr evidence", log)
+
+    def test_the_cell_log_grows_while_the_cell_runs(self):
+        # Streaming, not written at the end: the cell reads its own log back mid-run and reports
+        # whether its first line was already there.
+        logs = self.dir / "cells"
+        path = logs / orchestrate.cell_log_name("streaming")
+        cell = self.python(
+            "import json, sys, time\n"
+            "print('first line', flush=True)\n"
+            "time.sleep(0.2)\n"
+            "seen = 'first line' in open(sys.argv[1]).read()\n"
+            "print(json.dumps({'workload': 'w', 'step_ms': {'p50': 1.0}, 'compile_s': 0.5,"
+            " 'seen_mid_run': seen}))\n",
+            path,
+        )
+        with unittest.mock.patch.object(orchestrate, "CELL_LOG_DIR", logs):
+            result, note, _ = self.run_cell("streaming", cell, timeout=60)
+
+        self.assertIsNone(note)
+        self.assertTrue(result["seen_mid_run"], "the log was not on disk while the cell ran")
+        self.assertIn("first line", path.read_text())
+
+    def test_without_a_log_dir_the_output_is_still_read_and_then_removed(self):
+        made = []
+        real_mkstemp = tempfile.mkstemp
+
+        def recording_mkstemp(*args, **kwargs):
+            fd, name = real_mkstemp(*args, dir=self.dir, **kwargs)
+            made.append(Path(name))
+            return fd, name
+
+        cell = self.python(
+            "import json; print('chatter'); print(json.dumps("
+            "{'workload': 'tmp', 'step_ms': {'p50': 1.0}, 'compile_s': 0.5}))"
+        )
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(unittest.mock.patch.object(orchestrate, "CELL_LOG_DIR", None))
+            stack.enter_context(
+                unittest.mock.patch.object(orchestrate.tempfile, "mkstemp", recording_mkstemp)
+            )
+            result, note, _ = self.run_cell("no log dir", cell, timeout=60)
+
+        self.assertIsNone(note)
+        self.assertEqual(result["workload"], "tmp")
+        self.assertEqual(len(made), 1)
+        self.assertFalse(made[0].exists(), "the temporary cell output outlived the cell")
 
     def test_a_killed_beam_cell_quarantines_the_cache_it_was_writing(self):
         # The contaminated-cache consequence recorded on the issue's HIP leg: the search writes
@@ -3850,6 +4125,12 @@ class RegimeTest(unittest.TestCase):
         self.assertEqual(
             orchestrate.ocannl_regime_args("approximate"), ["--ocannl_profile=approximate"]
         )
+        # gh-ocannl-1061: a tuned cell writes the tuner's progress lines; no other variant tunes.
+        self.assertEqual(
+            orchestrate.ocannl_variant_args("tuned"), ["--ocannl_autotune_progress=true"]
+        )
+        for variant in ("default", "materialized"):
+            self.assertEqual(orchestrate.ocannl_variant_args(variant), [])
         self.assertEqual(orchestrate.torch_regime_args("exact"), [])
         self.assertEqual(orchestrate.torch_regime_args("approximate"), ["--regime", "approximate"])
         # Exact labels are unchanged; a non-exact cell says so in its label.
@@ -4438,6 +4719,142 @@ class CommandLineTest(unittest.TestCase):
         args = orchestrate.build_arg_parser().parse_args(["--cell-timeout", "900"])
 
         self.assertEqual(args.cell_timeout, 900.0)
+
+
+
+class SkipCellTest(unittest.TestCase):
+    """`--skip-cell`: an operator leaving one OCANNL cell out of a sweep (gh-ocannl-719).
+
+    The case it exists for is a GPU tuned acceptance row behind an uncapped CPU search that runs
+    first and for hours; what matters is that a misspelt entry is refused rather than skipping
+    nothing, and that a skipped cell's absence is reported as a choice.
+    """
+
+    def parse(self, *argv):
+        return orchestrate.build_arg_parser().parse_args(list(argv))
+
+    def test_no_entries_by_default(self):
+        self.assertEqual(self.parse().skip_cell, [])
+
+    def test_an_entry_without_precision_is_a_precision_wildcard(self):
+        args = self.parse("--skip-cell", "gpt2_mini/cc/tuned", "--skip-cell", "mlp/cuda/default/bf16")
+
+        self.assertEqual(
+            args.skip_cell,
+            [("gpt2_mini", "cc", "tuned", None), ("mlp", "cuda", "default", "bf16")],
+        )
+        skips = set(args.skip_cell)
+        for precision in ("f32", "bf16", "f16"):
+            self.assertTrue(
+                orchestrate.cell_skipped("gpt2_mini", "cc", "tuned", precision, skips), precision
+            )
+        self.assertFalse(orchestrate.cell_skipped("gpt2_mini", "cuda", "tuned", "f32", skips))
+        self.assertFalse(orchestrate.cell_skipped("mlp", "cuda", "default", "f32", skips))
+
+    def test_a_misspelt_entry_is_refused_at_parse_time(self):
+        for bad in (
+            "gpt2_mini/cc",
+            "gpt2_mini/cc/tuned/f32/x",
+            "gpt2_mini//tuned",
+            "gpt2_mini/cpu/tuned",
+            "gpt2_mini/cc/tune",
+            "gpt2_mini/cc/tuned/f64",
+        ):
+            with self.subTest(bad=bad), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.parse("--skip-cell", bad)
+
+    def test_the_accepted_names_are_the_ones_the_sweep_dispatches(self):
+        # Derived, not restated: every variant the flags can select and every backend a --gpu
+        # choice dispatches on is a name an entry may use, and nothing else is.
+        args = self.parse("--materialized", "--tuned")
+        self.assertEqual(orchestrate.selected_variants(args), list(orchestrate.SWEEP_VARIANTS))
+        backends = {
+            b for gpu in orchestrate.GPU_DEVICES.values() for b in orchestrate.swept_backends(gpu[0])
+        }
+        self.assertEqual(backends, set(orchestrate.SWEEP_BACKENDS))
+
+    def test_an_entry_naming_no_cell_of_the_sweep_is_unmatched(self):
+        args = self.parse("--tuned", "--precision", "bf16")
+        cells = orchestrate.dispatchable_cells(
+            {"gpt2_mini": ["f32", "bf16"]},
+            orchestrate.swept_backends("cuda"),
+            orchestrate.selected_variants(args),
+        )
+        good = ("gpt2_mini", "cc", "tuned", None)
+        self.assertEqual(orchestrate.unmatched_skips([good], cells), [])
+        self.assertEqual(
+            orchestrate.unmatched_skips([("gpt2_mini", "cuda", "tuned", "bf16")], cells), []
+        )
+        for bad in (
+            ("gpt2_small", "cc", "tuned", None),  # workload not selected
+            ("gpt2_mini", "hip", "tuned", None),  # backend not swept under --gpu cuda
+            ("gpt2_mini", "cc", "materialized", None),  # variant not requested
+            ("gpt2_mini", "cc", "tuned", "f16"),  # precision not requested
+        ):
+            with self.subTest(bad=bad):
+                self.assertEqual(orchestrate.unmatched_skips([good, bad], cells), [bad])
+
+    def test_a_precision_the_workload_cannot_express_is_no_cell(self):
+        # Review round 1: `--precision bf16` is requested sweep-wide, but a conv workload cannot
+        # express it, so a skip naming its bf16 tuned cell skips nothing -- and must be refused
+        # rather than let the f32 cell beside it run in the operator's belief it was skipped.
+        # The precisions come from `available_precisions`, the dispatch loop's own filter.
+        precisions, unavailable = orchestrate.available_precisions("conv", "train", ["bf16"])
+        self.assertEqual(precisions, ["f32"])
+        self.assertEqual([p for p, _ in unavailable], ["bf16"])
+        cells = orchestrate.dispatchable_cells(
+            {"lenet": precisions}, orchestrate.swept_backends("cuda"), ["default", "tuned"]
+        )
+        bad = ("lenet", "cc", "tuned", "bf16")
+
+        self.assertEqual(orchestrate.unmatched_skips([bad], cells), [bad])
+        self.assertEqual(
+            orchestrate.unmatched_skips([("lenet", "cc", "tuned", None)], cells), []
+        )
+
+    def test_an_operator_skip_beats_no_skip_cells(self):
+        skips = {("gpt2_mini", "cc", "tuned", None)}
+        why = orchestrate.skip_reason("gpt2_mini", "cc", "tuned", "f32", skips, no_skip_cells=True)
+
+        self.assertIn("--skip-cell", why)
+        self.assertIsNone(
+            orchestrate.skip_reason("gpt2_mini", "cuda", "tuned", "f32", skips, no_skip_cells=True)
+        )
+
+    def test_a_checked_in_skip_still_yields_to_no_skip_cells(self):
+        entry = ("some_workload", "metal", "tuned", None)
+        orchestrate.SKIP_CELLS.add(entry)
+        try:
+            why = orchestrate.skip_reason("some_workload", "metal", "tuned", "f32", set(), False)
+            self.assertIn("SKIP_CELLS", why)
+            self.assertIsNone(
+                orchestrate.skip_reason("some_workload", "metal", "tuned", "f32", set(), True)
+            )
+        finally:
+            orchestrate.SKIP_CELLS.discard(entry)
+
+    def test_a_skipped_cell_is_named_in_the_report(self):
+        out = Path(tempfile.mkdtemp())
+        cells = [cell("pytorch", "cpu", "eager", [2.3, 2.2, 2.1])]
+        orchestrate.parity_check(cells)
+        skipped = [("gpt2_mini ocannl/cc/tuned [approximate]", "--skip-cell (operator)")]
+
+        orchestrate.report(cells, out, skipped=skipped)
+
+        text = (out / "report.md").read_text()
+        self.assertIn("Cells skipped", text)
+        self.assertIn("| gpt2_mini ocannl/cc/tuned [approximate] | --skip-cell (operator) |", text)
+        self.assertNotIn("Runner failures", text)
+
+    def test_a_run_with_no_skips_says_nothing_about_them(self):
+        out = Path(tempfile.mkdtemp())
+        cells = [cell("pytorch", "cpu", "eager", [2.3, 2.2, 2.1])]
+        orchestrate.parity_check(cells)
+
+        orchestrate.report(cells, out)
+
+        self.assertNotIn("Cells skipped", (out / "report.md").read_text())
 
 
 if __name__ == "__main__":

@@ -71,10 +71,10 @@ let exempt_sites =
     ( "arrayjit/lib:gen_builtins/generate.exe",
       "the builtin header generator links only the OCaml stdlib and a pure C definition table; it \
        reads no OCANNL configuration" );
-    ( "test/operations:gen_half_emulated.exe",
-      "the emulated-fp16 header generator for half_codec_exhaustive (gh-ocannl-985) links only the \
-       OCaml stdlib and a copy of the same pure C definition table; it reads no OCANNL \
-       configuration" );
+    ( "test/operations:gen_codec_header.exe",
+      "the codec header generator for half_codec_exhaustive and bf16_codec_exhaustive \
+       (gh-ocannl-985, gh-ocannl-1069) links only the OCaml stdlib and a copy of the same pure C \
+       definition table; it reads no OCANNL configuration" );
     ( "test/ppx:pp.exe",
       "the ppx driver, run to expand a source file and diff the expansion: `ppx_ocannl` links \
        base, ppxlib, str and einsum_parser -- no configuration reader -- so no `ocannl_config` can \

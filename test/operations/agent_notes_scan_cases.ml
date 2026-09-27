@@ -2,7 +2,7 @@
 
     The live-tree scan next door ([agent_notes_structure]) is green whenever the notes are intact,
     which is most days — and a check that is green because it sees nothing looks exactly like a
-    check that is green because everything holds. So each of the five rules is exercised here on
+    check that is green because everything holds. So each of the rules is exercised here on
     synthetic notes: a violation the rule must flag, and beside it the nearest legitimate text it
     must NOT, since a rule that fires on ordinary prose gets turned off rather than obeyed.
 
@@ -476,6 +476,30 @@ let index_cases =
       index [ "| [a.md](agent-notes/a.md#the-widget-seam) | the `Widget` seam |" ],
       [ ("agent-notes/a.md", file "## The Widget seam\n\n- A fact about `Widget`.\n") ],
       [] );
+    ( "an anchor on the second of two same-titled headings",
+      index [ "| [a.md](agent-notes/a.md#the-widget-seam-1) | the `Widget` seam |" ],
+      [
+        ( "agent-notes/a.md",
+          file "## The Widget seam\n\n- A fact about `Widget`.\n\n## The Widget seam\n\n- More.\n"
+        );
+      ],
+      [] );
+    (* github-slugger allocates against every id already taken: the third heading's [-1] is held by
+       the second heading's own title, so it becomes [-2]. *)
+    ( "an anchor past a heading whose own title holds the suffix",
+      index [ "| [a.md](agent-notes/a.md#foo-2) | the `Widget` seam |" ],
+      [
+        ( "agent-notes/a.md",
+          file "## Foo\n\n- The `Widget` seam.\n\n## Foo-1\n\n- One.\n\n## Foo\n\n- Two.\n" );
+      ],
+      [] );
+    ( "an anchor past the last suffix allocated",
+      index [ "| [a.md](agent-notes/a.md#foo-3) | the `Widget` seam |" ],
+      [
+        ( "agent-notes/a.md",
+          file "## Foo\n\n- The `Widget` seam.\n\n## Foo-1\n\n- One.\n\n## Foo\n\n- Two.\n" );
+      ],
+      [ "index-agreement @ agent-notes.md:7" ] );
     ( "an anchor the file has no heading for",
       index [ "| [a.md](agent-notes/a.md#the-gadget-seam) | the `Widget` seam |" ],
       [ ("agent-notes/a.md", file "## The Widget seam\n\n- A fact about `Widget`.\n") ],
@@ -791,6 +815,143 @@ let index_cases =
       [] );
   ]
 
+(* Rule 7: the agent guide's anchored pointers into the notes (gh-ocannl-1044). Every case runs the
+   whole scan over one index, two clean notes and a guide, so a finding from any other rule would
+   show up too. The heading the pointers aim at lives in [a.md] only, and [b.md] has one of its own:
+   a reader that accepted a heading from ANY note would pass the "wrong note" case. *)
+let guide_notes =
+  [
+    ("agent-notes/a.md", file "## The Widget seam\n\n- A fact about `Widget`.\n");
+    ( "agent-notes/b.md",
+      file
+        "## The Gadget seam\n\n\
+         - A fact about `Gadget`.\n\n\
+         ## \xe8\xae\xad\xe7\xbb\x83\n\n\
+         - A fact about training.\n" );
+    ( "agent-notes/c.md",
+      file
+        "## The Widget seam\n\n\
+         - A first fact about `Sprocket`.\n\n\
+         ## The Widget seam\n\n\
+         - A second fact about `Sprocket`.\n" );
+  ]
+
+let guide_index =
+  index
+    [ row "a.md" "the `Widget` seam"; row "b.md" "the `Gadget` seam"; row "c.md" "the `Sprocket`" ]
+
+let guide line = "# OCANNL Agent Guide\n\n" ^ line ^ "\n"
+
+let guide_cases =
+  [
+    ( "a pointer to a heading its note has",
+      guide "- A rule; the mechanism: a.md#the-widget-seam.",
+      [] );
+    ( "a pointer to a heading its note lacks",
+      guide "- A rule; the mechanism: a.md#the-sprocket-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a pointer to a heading only another note has",
+      guide "- A rule; the mechanism: a.md#the-gadget-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a pointer spelled through docs/agent-notes/",
+      guide "- A rule (docs/agent-notes/b.md#the-gadget-seam).",
+      [] );
+    ("a pointer into the index itself", guide "- A rule (docs/agent-notes.md#agent-notes).", []);
+    ( "a bare basename that is no note",
+      guide "- A rule; the mechanism: d.md#the-widget-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a path outside the notes is not a pointer into them",
+      guide "- A rule; see docs/proposals/x.md#anything and ./CHANGES.md#unreleased.",
+      [] );
+    ( "a pointer set in a code span is still a pointer",
+      guide "- A rule; the mechanism: `a.md#the-sprocket-seam`.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ("a placeholder names no anchor", guide "- Pointers read `<note>.md#<anchor>`.", []);
+    ( "two pointers on one line are each checked",
+      guide "- Both a.md#the-widget-seam and b.md#the-widget-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    (* A comment renders nowhere, so a stale pointer inside one is not a pointer; the same pointer
+       beside the comment on the next line still is. *)
+    ( "a pointer inside an HTML comment is not read",
+      guide "- A rule. <!-- was a.md#the-sprocket-seam -->\n- Another; a.md#the-sprocket-seam.",
+      [ "guide-anchors @ AGENTS.md:4" ] );
+    (* GitHub suffixes a repeated heading's anchor: the second "The Widget seam" in [c.md] is
+       [#the-widget-seam-1], and there is no third. *)
+    ( "a pointer at the second of two same-titled headings",
+      guide "- A rule; the mechanism: c.md#the-widget-seam-1.",
+      [] );
+    ( "a pointer at a third that does not exist",
+      guide "- A rule; the mechanism: c.md#the-widget-seam-2.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    (* The subject is the source spelling (see [Agent_notes_scan.guide_pointers]): what only a
+       renderer would assemble into a pointer is not one to the agent reading the raw guide. These
+       pin that boundary, aimed at a missing heading so that a reader which DID take them for
+       pointers would fail here. *)
+    ( "spellings only a renderer assembles are not source pointers",
+      guide
+        "- a.md&num;the-sprocket-seam, a.m<span></span>d#the-sprocket-seam, \
+         a.md\\#the-sprocket-seam.",
+      [] );
+    ("a hash with no slug after it is not a pointer", guide "- A rule; the mechanism: a.md#.", []);
+    (* Aimed at a missing heading, so each one READ is a finding: silence here would mean the plain
+       surroundings hid them. *)
+    ( "pointers in ordinary surroundings are read",
+      guide
+        "- Plain: (a.md#the-sprocket-seam), [a.md#the-sprocket-seam](x), `a.md#the-sprocket-seam`, \
+         \"a.md#the-sprocket-seam\"; a.md#the-sprocket-seam!",
+      List.init 5 ~f:(fun _ -> "guide-anchors @ AGENTS.md:3") );
+    (* The notes are ASCII, and a pointer touching non-ASCII text is refused rather than read cut
+       short -- a Unicode slug (whether or not a Unicode heading exists), a Unicode file name, a
+       cased letter GitHub would fold. *)
+    ( "a Unicode slug is refused",
+      guide "- A rule; the mechanism: b.md#\xe8\xae\xad\xe7\xbb\x83.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a Unicode file name is refused",
+      guide "- A rule; the mechanism: \xe8\xae\xad.md#setup.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a slug running into a Unicode letter is refused",
+      guide "- A rule; the mechanism: a.md#the-widget-seam\xc3\xa9.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    (* A pointer is a token the source delimits; a run stopping at anything else was cut short, and
+       could name a different file or heading than the one written. [b.md] HAS the heading, so
+       reading [a+b.md#...] as [b.md#...] would pass. *)
+    ( "a file name with a character outside the path alphabet is refused",
+      guide "- A rule; the mechanism: a+b.md#the-gadget-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a slug running into a character outside the slug alphabet is refused",
+      guide "- A rule; the mechanism: b.md#the-gadget-seam+more.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    (* A path outside the notes is out of scope whatever its slug says. *)
+    ( "a directory path cut on the left is out of scope",
+      guide "- Set URL=docs/syntax_extensions.md#operators, or URL=docs/agent-notes/a.md#nope.",
+      [] );
+    ( "a cut inside the notes tree is refused",
+      guide "- A rule; the mechanism: docs/agent-notes/team+ci/setup.md#missing.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "dot segments resolve into the notes",
+      guide
+        "- Both docs/./agent-notes/a.md#the-sprocket-seam and \
+         docs/proposals/../agent-notes/a.md#the-sprocket-seam.",
+      [ "guide-anchors @ AGENTS.md:3"; "guide-anchors @ AGENTS.md:3" ] );
+    ( "dot segments resolving to a real heading",
+      guide "- A rule (docs/./agent-notes/a.md#the-widget-seam).",
+      [] );
+    ( "an external path with a Unicode slug is not read",
+      guide "- See docs/syntax_extensions.md#\xc3\xa9criture.",
+      [] );
+    ( "a pointer in bold is read",
+      guide "- A rule; the mechanism: **a.md#the-sprocket-seam**.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "hashes that are no pointer",
+      guide
+        "- Cited as staging#413 and ahrefs/ocannl#1044; `#ident_blacklist`; `LOG_FILTER=#debug`; \
+         C# too.",
+      [] );
+    ( "plain mentions of a note are not pointers",
+      guide "- See a.md, (a.md) and `a.md`; a [link](a.md) too.",
+      [] );
+  ]
+
 (* The LEXICAL layer, tested directly rather than only through the rules above it.
 
    Round 3 was six findings and three of them were here -- code-span pairing, backslash parity, ATX
@@ -969,8 +1130,14 @@ let () =
       check ("citations -- " ^ name) expected
         (List.map (Notes.check_citations ~file:"f.md" body) ~f:render));
   List.iter index_cases ~f:(fun (name, index_contents, files, expected) ->
-      let _, found = Notes.check_all ~index_file:"agent-notes.md" ~index_contents ~files in
+      let _, found = Notes.check_all ~index_file:"agent-notes.md" ~index_contents ~files () in
       check ("index -- " ^ name) expected (List.map found ~f:render));
+  List.iter guide_cases ~f:(fun (name, guide_contents, expected) ->
+      let _, found =
+        Notes.check_all ~guide:("AGENTS.md", guide_contents) ~index_file:"agent-notes.md"
+          ~index_contents:guide_index ~files:guide_notes ()
+      in
+      check ("guide -- " ^ name) expected (List.map found ~f:render));
   (* gh-ocannl-706. A finding whose rule [Notes.rules] does not name -- a sixth rule written and not
      added to the list -- used to be dropped where the report is grouped by that list: the rule
      fired and nothing showed it. Put to the rule synthetically, since no fixture here can produce
@@ -997,6 +1164,7 @@ let () =
     @ List.concat_map table_cases ~f:(fun (_, _, e) -> e)
     @ List.concat_map index_cases ~f:(fun (_, _, _, e) -> e)
     @ List.concat_map citation_cases ~f:(fun (_, _, e) -> e)
+    @ List.concat_map guide_cases ~f:(fun (_, _, e) -> e)
     |> List.map ~f:rule_of_expectation
     |> List.dedup_and_sort ~compare:String.compare
   in

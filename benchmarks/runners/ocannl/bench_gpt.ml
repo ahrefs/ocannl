@@ -288,7 +288,10 @@ let () =
             report column and composes the two axes itself (gh-ocannl-539), so a reduced-precision
             cell is distinguished by the precision field rather than by overloading this one. *)
          (if tune then "tuned" else if materialize then "materialized" else "default")
-       ~precision:leg.H.label ~compile_s ~tokens_per_step:(batch_size * seq) ~tune:arms ~run_step
+       ~precision:leg.H.label ~compile_s ~tokens_per_step:(batch_size * seq) ~tune:arms
+       ~dominant_kernel:(fun () ->
+         H.dominant_kernel ~ctx:!ctx_ref ~bindings (H.step_routines routines))
+       ~run_step
        ~read_loss:(fun () -> (!ctx_ref, batch_loss).@[0])
        ~sync:(fun () -> Context.sync !ctx_ref)
        ()

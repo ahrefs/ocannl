@@ -6,7 +6,13 @@ Part of the agent notes; the [index](../agent-notes.md) carries the scope discip
 files.
 
 AGENTS.md holds the workflow rules; these are the dune/OCaml mechanics behind them, narrow enough
-that they earn a lookup rather than always-loaded space.
+that they earn a lookup rather than always-loaded space. The file is far too long to read whole, so
+it is sectioned by topic: `grep -n '^##'` lists the sections with their line numbers, and AGENTS.md
+points into them by anchor, as `build-and-test.md#<heading-slug>`. Append a new bullet at the end
+of the section it belongs to rather than at the end of the file, and open a section when none fits.
+A renamed heading breaks every pointer to it, which `agent_notes_structure` reports.
+
+## Repository scans
 
 - A repository-wide scanning check (`config_dep_completeness`, `env_var_deps`, `cache_dir_ignores`)
   is only as good as the distance between what it asserts and what it claims, and a proxy that
@@ -38,7 +44,9 @@ that they earn a lookup rather than always-loaded space.
   split that created the files, each caught by a human reading carefully. What it costs when you
   append here: end the bullet with punctuation, indent continuations exactly two spaces past their
   bullet, keep one nesting level, keep every index row on one physical line, and give a new file its
-  index row the day it appears.
+  index row the day it appears. It also reads AGENTS.md for its pointers into these files: every
+  `<note>.md#<anchor>` there must name a notes file and a heading that file has, since a rule whose
+  pointer lands nowhere has lost its mechanism (gh-ocannl-1044).
 - A scan over a tree that is USUALLY CLEAN needs synthetic negative controls more than one over a
   tree full of findings does, because green-because-intact and green-because-blind are the same
   output. So the rules live in `test/support/agent_notes_scan.ml` as pure functions over strings and
@@ -65,6 +73,9 @@ that they earn a lookup rather than always-loaded space.
   `optional_arg_scan_cases.expected` ratchets the violating discard forms plus their nearest honest
   counterparts so losing a control is itself a golden change (gh-ocannl-811). Optimizer
   forwarders still need executed oracles — syntactic use proves only that the value was forwarded.
+
+### Bringing the base in
+
 - GitHub builds a pull request's MERGE COMMIT, so a repository-wide scan that is green on your
   branch is not evidence about the tree CI will scan. `agent_notes_structure` (gh-ocannl-691,
   staging#413) survived nine review rounds, `dune build @check`, its targeted aliases and a
@@ -116,6 +127,9 @@ that they earn a lookup rather than always-loaded space.
   contain is the one most in need of a fixture, since nothing in the tree will contradict the
   implementation's guess about it; a survey reporting zero of something is a hole in the fixtures,
   not permission to leave that case undefined.
+
+### Scan corpora, goldens and floors
+
 - Repository scans derive source membership through `Test_utils.Source_inventory` (gh-ocannl-871):
   the Dune rule declares `(sandbox always)` plus `(source_tree ../..)`, then calls
   `of_dune_sandbox ~workspace_root ~generated` with its executable, redirected target, and copied
@@ -384,6 +398,9 @@ that they earn a lookup rather than always-loaded space.
   catch was the `FAILED: n checks` teardown total in `config_usage_scan_control`: a negative
   control whose failures ARE its golden ends through `Verdict.exit_negative_control`, which exits 1
   without that line.
+
+### Pinning the relationship
+
 - PIN THE RELATIONSHIP, NOT THE RESTATEMENT: where a check needs a set that some other part of the
   system owns, relate the two rather than writing the set down again and asserting that the copy
   still says what it says (gh-ocannl-706, after gh-ocannl-591 and gh-ocannl-689 turned out to be the
@@ -416,6 +433,9 @@ that they earn a lookup rather than always-loaded space.
   unknown word already FAILS is pinned by its own closedness, which is why `config_dep_completeness`
   can print dune's stanza kinds and action heads into its golden. Leave each of those written down
   with its reason next to it, which is what the habit asks of a list that stays.
+
+### In-place markers
+
 - Where a check needs an EXEMPTION per site, prefer an in-place marker comment to a central list,
   and give it a grammar rigid enough to be wrong out loud (gh-ocannl-659, the XOR between
   `(env_var OCANNL_BACKEND)` and `; ocannl-backend: <word> -- <reason>`). Two reasons, and the
@@ -471,6 +491,9 @@ that they earn a lookup rather than always-loaded space.
   Spell one canary in a form only the real reader can see (a string literal broken over a line
   continuation, whose decoded value spans no single line of the file): it fails a scan that has
   quietly regressed to matching text, which the plain spelling would not.
+
+### Parsing sources in a scan
+
 - Scan OCaml sources through **ppxlib's** parse tree (`Ppxlib.Parse.implementation`,
   `Ppxlib.Ast_traverse.iter`), never `compiler-libs`'. The compiler's `Parsetree` moves between
   releases, and the breakage lands in the scanner as a compile error rather than in anything it
@@ -537,6 +560,9 @@ that they earn a lookup rather than always-loaded space.
   ones. All of this verified against `git check-ignore`
   rather than read off the documentation — which is the cheaper move whenever the question is what
   git actually does.
+
+## The harness, shells and processes
+
 - `tools/test-run.sh` is the one way to run `dune runtest` / `dune build @slow` from a session;
   its header documents usage. It exists because every hand-rolled alternative has failed in
   practice, each differently: piping dune to `tail` reports tail's status (no pipefail), so
@@ -734,6 +760,28 @@ that they earn a lookup rather than always-loaded space.
   itself running work. It was deleted in gh-ocannl-832; the surviving-processes sentence now warns
   that the group may hold only unreaped exits, and the harness pins that combined wording without a
   copy of the shipping script whose predicate is artificially forced.
+- In an errexit shell test, `! cmd` is not an assertion. Bash exempts a command whose value is being
+  inverted, so `! grep -q 'must not appear' "$out"` runs, returns 1 and the script carries on — the
+  negative half of a test can be entirely inert while reading as covered. Spell it as a function
+  whose body uses `if`, so the command errexit weighs is the CALL and the ERR trap names its line,
+  and have it print what matched: `$BASH_COMMAND` from inside a function names the body, not the
+  pattern. Same shape as the `p_all`/`p_none` rule for `Verdict` claims — a check that cannot fail is
+  worse than a missing one, because the golden and the roster both count it. Its sibling is a bare
+  `[ A ] && [ B ]`: errexit exempts every operand of an `&&` list but the last, so the pair checks
+  only `B` and is silent exactly when `A` — usually the point of the assertion — fails
+  (gh-ocannl-1023, `cancel_sweep`'s readiness check). One predicate per statement, or end the list
+  with `|| die …` / `|| return 1` (`|| rc=$?` to capture it; a `rc=$?` on the next line is refused). `shell_scripts_parse` refuses both shapes in errexit scripts; its
+  module headers state the line-shaped boundary each scan reads, and a function's final pair — not
+  inert, its status is the return value — is refused too, since the scan cannot see function ends.
+- A child that publishes a value for its parent to poll — a pid, above all — writes a sibling and
+  renames it into place: `open(path, 'w')` creates the name EMPTY before the write lands, so a
+  parent polling `exists()` reads `''` (gh-ocannl-1041, a per-PR-matrix flake). The benchmarks'
+  Python tests go through `publish_pid` (`benchmarks/test/test_cell_group.py`), and a test there
+  fails any pid written in place. The shell harnesses poll with `[ -s file ]` instead, which holds
+  only because a pid lands in one `write`.
+
+## Promotion and formatting
+
 - **Promote through `tools/promote.sh` during a merge, on every platform.** Promotion writes the
   WORKING TREE; `git commit` during a merge takes the INDEX. So a golden promoted after its `git
   add` is committed with its PRE-promotion content, and nothing local objects — every later `dune
@@ -783,6 +831,9 @@ that they earn a lookup rather than always-loaded space.
   whenever such a file was edited, and formatting adds nothing to it. The sweep's commits remain
   listed in `.git-blame-ignore-revs`. Because master is always clean, `dune fmt` from a branch
   rewrites only the author's own files.
+
+## Windows portability
+
 - Two Windows C-runtime formatting differences make hand-formatted floats non-portable in goldens:
   it prints 3-digit exponents (`e+018` where Linux prints `e+18`), and it rounds representable
   decimal ties away from zero where glibc rounds to even (`%.1f` of `2.25` prints `2.3` there,
@@ -853,56 +904,15 @@ that they earn a lookup rather than always-loaded space.
   `benchmarks/cell_group.process_is_alive` is the portable form — a zero-timeout wait on a process
   handle, where `WAIT_TIMEOUT` means "still running". `signal.SIGKILL` does not exist there either;
   `os.kill` with any other signal is `TerminateProcess`.
-- A child that publishes a value for its parent to poll — a pid, above all — writes a sibling and
-  renames it into place: `open(path, 'w')` creates the name EMPTY before the write lands, so a
-  parent polling `exists()` reads `''` (gh-ocannl-1041, a per-PR-matrix flake). The benchmarks'
-  Python tests go through `publish_pid` (`benchmarks/test/test_cell_group.py`), and a test there
-  fails any pid written in place. The shell harnesses poll with `[ -s file ]` instead, which holds
-  only because a pid lands in one `write`.
+
+## Dune mechanics
+
 - `(copy_files ...)` creates PASSIVE rules: they do not fire just because you build a sibling target
   in the same directory — only when listed in that target's `(deps ...)` or requested explicitly. A
   rule consuming copy_files output must therefore declare it. And validate a `(mode promote)` target
   from a clean state (`dune clean && dune build @alias`): stale `_build/` intermediates can satisfy
   an undeclared dep, so an incomplete build passes while the artifact is wrong. Assert content
   (size, object counts), not mere existence.
-- A test asserting on generated code must establish that the artifact it reads is the one THIS run
-  emitted; `Test_utils.Generated` is how (gh-ocannl-655). `build_files/<exe>/<routine>.<ext>` is a
-  side effect of a compile, not a value the test holds, and two things detach it from the compile it
-  describes: `test/config/ocannl_config` keeps `clean_up_build_files_on_startup=false`, so an
-  artifact outlives its run indefinitely, and a second compile under the same routine name overwrites
-  it within a run. Either way the assertion outlives the kernel it asserts on — it keeps passing, and
-  keeps counting as coverage, after that kernel stopped being emitted at all (folded to a constant,
-  erased by precision inference, fissioned into a differently-named routine). `Generated.init
-  ~backend_name`, called before the first compile, empties this executable's own subdirectory, so
-  existence IS freshness — no mtime, no clock granularity. What licenses that sweep is narrower than
-  "the directory is scoped": only the DEFAULT, executable-derived subdirectory is inherently
-  process-private, since dune runs one process per executable. Any configured `build_files_prefix`
-  is refused outright — a second executable can be given the same prefix, so deleting there is
-  unsafe, and without deletion a deterministic compile's re-emitted identical kernel is
-  indistinguishable from a stale one (deletion is the only write signal that does not depend on
-  timestamp granularity). Tests that assert on generated code therefore leave the prefix at its
-  default. `Generated.read` fails through `Verdict` on a
-  missing artifact instead of answering `None` — the arm that some call sites recorded as `false` and
-  others forgot. `Generated.arm` deletes one routine's artifact before a candidate's compile, which
-  is what a loop reusing a routine name needs in order to attribute what it reads; reading one
-  routine twice across changed contents is otherwise reported as an unattributed overwrite. Corollary
-  for a leg this backend cannot evaluate: gate it and report `Verdict.skipped` rather than letting it
-  reach the read, because an absent artifact is a failure here by design.
-  The dune side of that: `init` READS `build_files_prefix`, so the stanza dune runs the test under
-  must declare `(env_var OCANNL_BUILD_FILES_PREFIX)` — otherwise dune serves the previous run's
-  result when the variable changes, which is gh-ocannl-628's hole one key over. `env_var_deps`
-  requires it of every stanza whose `(modules …)` name a source that calls the initializer, and
-  reports a declaration with no caller behind it as well (gh-ocannl-723). Where the declaration goes
-  is dune's semantics and not one rule: a `(test)` runs under its own `(deps …)`, an inline-test
-  library under `(inline_tests (deps …))`, and an `(executable)` has no `deps` field at all, so it is
-  the rule that RUNS it that carries the declaration — the same placement as the `ocannl_config` dep
-  and the backend marker, and checked as such (a declaration on a NEIGHBOUR of that rule reruns the
-  neighbour, so it does not count). One name of an `(executables (names a b) …)` is one program, and
-  attribution follows dune's main-module rule: `a` is built from module `a`, a module that is no
-  name's main module is linked into all of them, and `(public_names …)` pairs positionally — so
-  `b.exe`'s rule answers for `b` alone, and only a shared module puts the requirement on every runner
-  (gh-ocannl-747; combining them reported `a` undeclared over a rule linking neither its main module
-  nor its initializer).
 - **An ambient-environment GUARD needs its keys declared, or it never runs.** A test that refuses to
   run when an OCANNL variable that would rewrite its golden is set — `startup_streams`,
   `profile_precedence`, `config_profiles` — reads those keys through `Utils.read_env_var`, the one
@@ -934,6 +944,136 @@ that they earn a lookup rather than always-loaded space.
   can always put its keys behind an abstraction — and the module header says so. If that trade stops
   holding, the answer is a structural contract for how a guard spells its keys, matched rather than
   inferred, not another name in its tables.
+- Dune roots at the OUTERMOST ancestor holding a `dune-workspace` (failing that, a `dune-project`)
+  and ignores dot-directories, so from a worktree under `.claude/worktrees/` the main checkout wins
+  and the worktree is invisible to dune: targeted commands fail with `Don't know about directory
+  .claude/worktrees/...`, while a bare `dune build`/`dune runtest` quietly builds and tests the
+  PARENT branch. `scripts/setup-ocaml-env.sh` writes a one-line `dune-workspace` at the worktree
+  root, restoring it as the root with its own `_build`. The step tests the ancestor DIRECTORIES
+  rather than git topology, since a checkout can nest inside another checkout that is itself a
+  linked worktree living anywhere, and `--git-common-dir` then names the primary checkout, not the
+  one dune would root at. That file is generated per worktree and gitignored, never committed —
+  being the outermost, a tracked copy at the repo root would shadow every worktree's and pin them
+  all back to the parent (the script reports `FAIL` for a `dune-workspace` in any ancestor, which
+  it cannot override from below).
+  With it in place, `--root .` and `dune promotion apply` are no longer needed from a worktree;
+  `tools/promote.sh` remains the Windows path, for the CRLF stripping, and the path for ANY platform
+  mid-merge, for the staging guard above. Worktrees placed outside the
+  repo need none of this, but see no `ocannl_config` on their ancestor path.
+  The same hook also fetches `origin master` (bounded, best-effort: offline prints `skip`) and
+  prints a `WARNING` with the commit count and the recovery (`git merge --ff-only
+  refs/remotes/origin/master`, or a rebase when there are local commits) whenever HEAD is behind it — because a worktree is
+  created from the MAIN checkout's HEAD, whose `master` only moves when someone fast-forwards it
+  after a merge, so a new worktree can start dozens of commits stale (79 on 2026-08-22) and a
+  full suite run then tests old code. Read the checklist before the first build.
+  That section has a hand-runnable harness, `scripts/test-setup-ocaml-env.sh` — run it after
+  editing the section; it is on no dune alias, since its `bounded` legs sit out watchdog timeouts,
+  and CI runs it only in the pre-toolchain Ubuntu step alongside `tools/test-test-run.sh`
+  (the `group_alive` bullet above has the SKIP contract the two share).
+  It copies the WORKING-TREE hook into throwaway clones under a `mktemp -d` (never touching this
+  repository's refs or config) and covers the watchdog (TERM at the bound, KILL 5s later, the
+  process GROUP, rc preservation, no orphans), the counting wording and its two recovery commands,
+  the offline `skip` with the count taken as of the last successful fetch, a branch and a tag both
+  named `origin/master` not displacing the tracking ref, `FETCH_HEAD` left byte-identical, and
+  which SSH launcher git ends up invoking with or without the appended OpenSSH options. Both
+  harness bugs it exists to prevent were live during staging#430's review rounds: a throwaway clone
+  that silently tested the COMMITTED script, and a `run` helper that executed its label as a
+  command. When adding a leg, add the negative control too — mutate the hook and check that leg,
+  and only that leg, goes red. The harness found one bug on its first outing: `bounded` decided
+  whether to wait for its watchdog with a `kill -0` on the command's process group, and `kill -0`
+  counts a ZOMBIE as present — git's ssh child is one, reparented when git exits and not yet
+  reaped — so a fetch that had already failed in milliseconds read as still running and sat out the
+  whole 30s bound, on every session start with an unreachable ssh remote. Emptiness is therefore
+  not a signal question: `group_alive` (the shared `scripts/process-group.sh`) reads process
+  STATES, from `/proc` where there is one and from `ps -A -o pgid=,stat=` otherwise, and only a
+  non-zombie member counts as work. Where the
+  reaper is a PID 1 that does not reap — the ordinary container case — the zombie is PERMANENT, so
+  the first attempt at this, a short retry loop around the same `kill -0`, would not have helped;
+  that is the shape to keep in mind before reaching for a timing fix here again.
+- Dune tracks an environment variable only where a stanza declares it, and the tracking reaches
+  further than the stanza: `dune rules test/operations/<name>.exe.output` shows the `(Env
+  OCANNL_BACKEND)` dependency travelling from the `(test)` stanza's `(deps ...)` into the
+  `.exe.output` rule dune generates from it, so `OCANNL_BACKEND=cuda dune build …exe.output`
+  really does re-run the test on cuda. What it does NOT do is tell you it ran there: a
+  backend-uniform golden (GPU legs announcing themselves on stderr while printing the same
+  `<claim>: true` on stdout) makes the cuda `.exe.output` byte-identical to the cc one, which is
+  how gh-ocannl-622 came to read a cc-looking file as proof the recipe was broken. It was the
+  inference that was broken; the recipe holds for DECLARED variables, and gh-ocannl-628 is the
+  hole that was real — the lowercase spelling `read_env_var` consulted first was declared nowhere,
+  so `ocannl_backend=metal` decided the backend while invalidating nothing. gh-ocannl-652 closed it
+  from the other end: the environment has ONE spelling, `OCANNL_<KEY>`, and setting a lowercase or
+  dashed spelling of a known key aborts the run with a message naming the spelling that works, so
+  the variable cannot quietly decide nothing either — on case-sensitive environments, that is:
+  native Windows's case-insensitive environment makes the lowercase spelling the SAME variable,
+  read normally (`Utils.env_names_case_insensitive`; `test/operations/config_var_spellings` pins
+  both readings on every host), while a dashed spelling differs on every platform and stays fatal.
+- `env_spelling_gate` is one gate per DIRECTORY because dune aliases are per directory, and it
+  depends on `(universe)` so it reruns on every invocation — no suite comes back green with a
+  rejected lowercase spelling ambient. `runtest` and `slow` are gated separately; a gate in a file
+  that serializes on `ocannl_training_test` must take the lock, since an unlocked action in a
+  locked file is what the next training test gets copied from (the gate starts no pool). Hand-written
+  per-test aliases depend on the gate explicitly, while dune's GENERATED `runtest-<name>` aliases do
+  not — a targeted run of a `(test)` stanza can be served stale under a rejected spelling — and
+  `env_var_deps` checks that every alias with test actions in a directory carries that directory's
+  gate.
+- Deleting a file target out from under dune is not a way to force it to re-run: `dune build
+  <that target>` afterwards exits 0 having produced nothing (observed on dune 3.23.1 with
+  `test/operations/<name>.exe.output`), and `-f/--force` does not rescue it — `--force` only
+  re-runs actions attached to ALIASES. Either force the alias (`dune build --force
+  @<dir>/runtest`), or run the built exe directly with its cwd set to `_build/default/<dir>`, which
+  is exactly the environment dune gives it — the same cwd, hence the same `ocannl_config` search
+  root, that makes `dune exec` unusable: the config search walks up from the invoking cwd, where
+  the root `ocannl_config` is gitignored, so the program finds no config or `Context.auto` silently
+  picks a GPU. The cause is that dune trusts its own digest
+  database and never stats a rule's targets, so a hand-deleted one is recorded as built forever;
+  that also rules out the two other reflexes, since touching a source changes no CONTENT digest and
+  deleting `_build/.digest-db` does not restore the memo either. Every golden-diff rule now has an
+  alias to force (`dune build --force @<dir>/runtest-<name>`, see below), though for a `(test)`
+  stanza that only re-runs the diff, not the executable (next bullet); for a target with no alias
+  at all the recovery is `dune build --sandbox=copy <that target>`: sandboxing changes
+  how the rule executes, which invalidates the memo and re-runs it. `dune clean` works too and buys
+  a full rebuild, which on macOS means every fresh executable queueing behind XProtect again. Worth
+  knowing before it bites, because the failure is silent in the dangerous direction: the missing
+  target leaves whatever `.actual` was there before, so a probe that only diffs the file reads
+  green while nothing has run. The same probe has a second stale-reading trap: discarding the
+  build's stderr (`2>/dev/null`) without checking its exit status — a FAILED build (say, a
+  warning-as-error from a temporary edit) leaves the previous `.exe.output` untouched, and the
+  stale file reads as a green probe; that turned a negative control into a false positive during
+  gh-ocannl-554.
+- **To genuinely re-execute an unchanged `.expected` test N times, use the harness's repeat
+  mode**: `tools/test-run.sh repeat N build @<dir>/runtest-<name>` runs every iteration in its own
+  freshly cleaned, cache-disabled build directory, keeps each stdout/stderr and exit status, and
+  diffs the pairs (about 45 s per iteration for a 35 s test on an M4 Max, the rebuild included).
+  For a single extra run there is a lighter move: change the content of the `ocannl_config` the
+  stanza depends on — append a comment line, `dune build @<dir>/runtest-<name>`, delete the line
+  when done (the file is tracked; `git checkout` it only when it carries no other local edits,
+  since AGENTS.md also sends one-off configuration changes there). The rule's memo holds the
+  content of the last BUILD, not of the file, so the appended value must be one that build never
+  saw: deleting `# rerun 1` without building and appending `# rerun 1` again is served stale
+  (verified), while a timestamp, or a counter that never restarts, is not. For the directories
+  that `copy_files` it in (`test/operations`, `test/einsum`, `test/ppx`, `test/training`,
+  `test/gpt2`) that file is `test/config/ocannl_config`; `arrayjit/test`,
+  `test/operations/profiles` and `test/operations/startup_streams` depend on their own tracked
+  `ocannl_config`, and an edit to the shared one leaves their rules untouched. Each new content is
+  a new digest for the `<name>.exe.output` rule, so the executable runs again with no
+  recompilation. This is what sampling a timing-dependent test needs (a
+  re-roll-or-skip decision needed it, gh-ocannl-staging#764), and every other reflex
+  fails silently in the green direction, verified on dune 3.24.2: `dune build --force
+  @<dir>/runtest-<name>` re-runs only the alias's diff action, while the content-keyed
+  `<name>.exe.output` rule that runs the executable is served from the memo; a comment appended to the test's `.ml` rebuilds it, but
+  the compiled objects are byte-identical, so early cutoff serves the same `.exe.output` again;
+  appending to the copied `test/operations/ocannl_config` instead fails with "Multiple rules
+  generated" (it is a `copy_files` target, `test/operations/dune` line 2) and leaves an untracked
+  file to `rm`. `dune build --sandbox=copy @<dir>/runtest-<name>` does re-execute, but once per
+  toggle of the sandbox mode, and each toggle re-runs every rule the alias reaches (over a minute
+  for one 35 s test). Deleting `_build/default/<dir>/<name>.exe.output`, with or without
+  `--cache=disabled`, is worse than useless: the rule stays recorded as built (previous bullet), the
+  test's `diff?` then sees no output and every later build of the alias fails with "File
+  `<name>.expected` should be deleted" until some real dep changes — the config append is also the
+  recovery.
+
+## Verdict claims
+
 - A negative control confirms the run REACHED its last row, not only that `FAIL:` lines appeared
   (gh-ocannl-1067): the claims it printed, passed plus failed, number the golden's lines, or the
   rows run under `Verdict.case`. A raise ends a run at the case that raised, and the rows after it
@@ -1093,6 +1233,9 @@ that they earn a lookup rather than always-loaded space.
   makes). The second half of that test is the one that makes a wide sweep safe: it runs `p` and
   `p_all` in two children and requires their stdout to be equal, which is the property "converting
   a site does not move its golden" stated as a check rather than as a hope.
+
+## Hand-built IR tests
+
 - `Ll_test`'s traversal is the one place a new `Ir.Low_level` constructor is handled, and it now
   carries the queries the hand-built-IR tests used to write for themselves. `walk` takes a record of
   hooks: the construct-specific ones, a generic `?on_stmt`/`?on_scalar` for a counter that names its
@@ -1165,137 +1308,52 @@ that they earn a lookup rather than always-loaded space.
   trailing run of the length's factors (unflattening), a key computed outside the closure, and
   mixers other than a remainder. A converted site keeps its values, so a golden moves only where
   the guard fires; the conversion found one blind term, `schedule_mma_matmul`'s tf32 perturbation
-  at modulus 3 over a `k = 24` row, which took `~radix:2`. Converting links `ll_test`, which
-  retires that file's `ll_test_ratchet` migration row in the same change. `operand_key_scan_cases`
-  puts each spelling beside its nearest legitimate text and drives the shipping scanner over a
-  synthetic tree holding the blind fixture it must refuse.
-- Dune roots at the OUTERMOST ancestor holding a `dune-workspace` (failing that, a `dune-project`)
-  and ignores dot-directories, so from a worktree under `.claude/worktrees/` the main checkout wins
-  and the worktree is invisible to dune: targeted commands fail with `Don't know about directory
-  .claude/worktrees/...`, while a bare `dune build`/`dune runtest` quietly builds and tests the
-  PARENT branch. `scripts/setup-ocaml-env.sh` writes a one-line `dune-workspace` at the worktree
-  root, restoring it as the root with its own `_build`. The step tests the ancestor DIRECTORIES
-  rather than git topology, since a checkout can nest inside another checkout that is itself a
-  linked worktree living anywhere, and `--git-common-dir` then names the primary checkout, not the
-  one dune would root at. That file is generated per worktree and gitignored, never committed —
-  being the outermost, a tracked copy at the repo root would shadow every worktree's and pin them
-  all back to the parent (the script reports `FAIL` for a `dune-workspace` in any ancestor, which
-  it cannot override from below).
-  With it in place, `--root .` and `dune promotion apply` are no longer needed from a worktree;
-  `tools/promote.sh` remains the Windows path, for the CRLF stripping, and the path for ANY platform
-  mid-merge, for the staging guard above. Worktrees placed outside the
-  repo need none of this, but see no `ocannl_config` on their ancestor path.
-  The same hook also fetches `origin master` (bounded, best-effort: offline prints `skip`) and
-  prints a `WARNING` with the commit count and the recovery (`git merge --ff-only
-  refs/remotes/origin/master`, or a rebase when there are local commits) whenever HEAD is behind it — because a worktree is
-  created from the MAIN checkout's HEAD, whose `master` only moves when someone fast-forwards it
-  after a merge, so a new worktree can start dozens of commits stale (79 on 2026-08-22) and a
-  full suite run then tests old code. Read the checklist before the first build.
-  That section has a hand-runnable harness, `scripts/test-setup-ocaml-env.sh` — run it after
-  editing the section; it is on no dune alias, since its `bounded` legs sit out watchdog timeouts,
-  and CI runs it only in the pre-toolchain Ubuntu step alongside `tools/test-test-run.sh`
-  (the `group_alive` bullet above has the SKIP contract the two share).
-  It copies the WORKING-TREE hook into throwaway clones under a `mktemp -d` (never touching this
-  repository's refs or config) and covers the watchdog (TERM at the bound, KILL 5s later, the
-  process GROUP, rc preservation, no orphans), the counting wording and its two recovery commands,
-  the offline `skip` with the count taken as of the last successful fetch, a branch and a tag both
-  named `origin/master` not displacing the tracking ref, `FETCH_HEAD` left byte-identical, and
-  which SSH launcher git ends up invoking with or without the appended OpenSSH options. Both
-  harness bugs it exists to prevent were live during staging#430's review rounds: a throwaway clone
-  that silently tested the COMMITTED script, and a `run` helper that executed its label as a
-  command. When adding a leg, add the negative control too — mutate the hook and check that leg,
-  and only that leg, goes red. The harness found one bug on its first outing: `bounded` decided
-  whether to wait for its watchdog with a `kill -0` on the command's process group, and `kill -0`
-  counts a ZOMBIE as present — git's ssh child is one, reparented when git exits and not yet
-  reaped — so a fetch that had already failed in milliseconds read as still running and sat out the
-  whole 30s bound, on every session start with an unreachable ssh remote. Emptiness is therefore
-  not a signal question: `group_alive` (the shared `scripts/process-group.sh`) reads process
-  STATES, from `/proc` where there is one and from `ps -A -o pgid=,stat=` otherwise, and only a
-  non-zombie member counts as work. Where the
-  reaper is a PID 1 that does not reap — the ordinary container case — the zombie is PERMANENT, so
-  the first attempt at this, a short retry loop around the same `kill -0`, would not have helped;
-  that is the shape to keep in mind before reaching for a timing fix here again.
-- Dune tracks an environment variable only where a stanza declares it, and the tracking reaches
-  further than the stanza: `dune rules test/operations/<name>.exe.output` shows the `(Env
-  OCANNL_BACKEND)` dependency travelling from the `(test)` stanza's `(deps ...)` into the
-  `.exe.output` rule dune generates from it, so `OCANNL_BACKEND=cuda dune build …exe.output`
-  really does re-run the test on cuda. What it does NOT do is tell you it ran there: a
-  backend-uniform golden (GPU legs announcing themselves on stderr while printing the same
-  `<claim>: true` on stdout) makes the cuda `.exe.output` byte-identical to the cc one, which is
-  how gh-ocannl-622 came to read a cc-looking file as proof the recipe was broken. It was the
-  inference that was broken; the recipe holds for DECLARED variables, and gh-ocannl-628 is the
-  hole that was real — the lowercase spelling `read_env_var` consulted first was declared nowhere,
-  so `ocannl_backend=metal` decided the backend while invalidating nothing. gh-ocannl-652 closed it
-  from the other end: the environment has ONE spelling, `OCANNL_<KEY>`, and setting a lowercase or
-  dashed spelling of a known key aborts the run with a message naming the spelling that works, so
-  the variable cannot quietly decide nothing either — on case-sensitive environments, that is:
-  native Windows's case-insensitive environment makes the lowercase spelling the SAME variable,
-  read normally (`Utils.env_names_case_insensitive`; `test/operations/config_var_spellings` pins
-  both readings on every host), while a dashed spelling differs on every platform and stays fatal.
-- `env_spelling_gate` is one gate per DIRECTORY because dune aliases are per directory, and it
-  depends on `(universe)` so it reruns on every invocation — no suite comes back green with a
-  rejected lowercase spelling ambient. `runtest` and `slow` are gated separately; a gate in a file
-  that serializes on `ocannl_training_test` must take the lock, since an unlocked action in a
-  locked file is what the next training test gets copied from (the gate starts no pool). Hand-written
-  per-test aliases depend on the gate explicitly, while dune's GENERATED `runtest-<name>` aliases do
-  not — a targeted run of a `(test)` stanza can be served stale under a rejected spelling — and
-  `env_var_deps` checks that every alias with test actions in a directory carries that directory's
-  gate.
-- Deleting a file target out from under dune is not a way to force it to re-run: `dune build
-  <that target>` afterwards exits 0 having produced nothing (observed on dune 3.23.1 with
-  `test/operations/<name>.exe.output`), and `-f/--force` does not rescue it — `--force` only
-  re-runs actions attached to ALIASES. Either force the alias (`dune build --force
-  @<dir>/runtest`), or run the built exe directly with its cwd set to `_build/default/<dir>`, which
-  is exactly the environment dune gives it — the same cwd, hence the same `ocannl_config` search
-  root, that makes `dune exec` unusable: the config search walks up from the invoking cwd, where
-  the root `ocannl_config` is gitignored, so the program finds no config or `Context.auto` silently
-  picks a GPU. The cause is that dune trusts its own digest
-  database and never stats a rule's targets, so a hand-deleted one is recorded as built forever;
-  that also rules out the two other reflexes, since touching a source changes no CONTENT digest and
-  deleting `_build/.digest-db` does not restore the memo either. Every golden-diff rule now has an
-  alias to force (`dune build --force @<dir>/runtest-<name>`, see below), though for a `(test)`
-  stanza that only re-runs the diff, not the executable (next bullet); for a target with no alias
-  at all the recovery is `dune build --sandbox=copy <that target>`: sandboxing changes
-  how the rule executes, which invalidates the memo and re-runs it. `dune clean` works too and buys
-  a full rebuild, which on macOS means every fresh executable queueing behind XProtect again. Worth
-  knowing before it bites, because the failure is silent in the dangerous direction: the missing
-  target leaves whatever `.actual` was there before, so a probe that only diffs the file reads
-  green while nothing has run. The same probe has a second stale-reading trap: discarding the
-  build's stderr (`2>/dev/null`) without checking its exit status — a FAILED build (say, a
-  warning-as-error from a temporary edit) leaves the previous `.exe.output` untouched, and the
-  stale file reads as a green probe; that turned a negative control into a false positive during
-  gh-ocannl-554.
-- **To genuinely re-execute an unchanged `.expected` test N times, use the harness's repeat
-  mode**: `tools/test-run.sh repeat N build @<dir>/runtest-<name>` runs every iteration in its own
-  freshly cleaned, cache-disabled build directory, keeps each stdout/stderr and exit status, and
-  diffs the pairs (about 45 s per iteration for a 35 s test on an M4 Max, the rebuild included).
-  For a single extra run there is a lighter move: change the content of the `ocannl_config` the
-  stanza depends on — append a comment line, `dune build @<dir>/runtest-<name>`, delete the line
-  when done (the file is tracked; `git checkout` it only when it carries no other local edits,
-  since AGENTS.md also sends one-off configuration changes there). The rule's memo holds the
-  content of the last BUILD, not of the file, so the appended value must be one that build never
-  saw: deleting `# rerun 1` without building and appending `# rerun 1` again is served stale
-  (verified), while a timestamp, or a counter that never restarts, is not. For the directories
-  that `copy_files` it in (`test/operations`, `test/einsum`, `test/ppx`, `test/training`,
-  `test/gpt2`) that file is `test/config/ocannl_config`; `arrayjit/test`,
-  `test/operations/profiles` and `test/operations/startup_streams` depend on their own tracked
-  `ocannl_config`, and an edit to the shared one leaves their rules untouched. Each new content is
-  a new digest for the `<name>.exe.output` rule, so the executable runs again with no
-  recompilation. This is what sampling a timing-dependent test needs (a
-  re-roll-or-skip decision needed it, gh-ocannl-staging#764), and every other reflex
-  fails silently in the green direction, verified on dune 3.24.2: `dune build --force
-  @<dir>/runtest-<name>` re-runs only the alias's diff action, while the content-keyed
-  `<name>.exe.output` rule that runs the executable is served from the memo; a comment appended to the test's `.ml` rebuilds it, but
-  the compiled objects are byte-identical, so early cutoff serves the same `.exe.output` again;
-  appending to the copied `test/operations/ocannl_config` instead fails with "Multiple rules
-  generated" (it is a `copy_files` target, `test/operations/dune` line 2) and leaves an untracked
-  file to `rm`. `dune build --sandbox=copy @<dir>/runtest-<name>` does re-execute, but once per
-  toggle of the sandbox mode, and each toggle re-runs every rule the alias reaches (over a minute
-  for one 35 s test). Deleting `_build/default/<dir>/<name>.exe.output`, with or without
-  `--cache=disabled`, is worse than useless: the rule stays recorded as built (previous bullet), the
-  test's `diff?` then sees no output and every later build of the alias fails with "File
-  `<name>.expected` should be deleted" until some real dep changes — the config append is also the
-  recovery.
+  at modulus 3 over a `k = 24` row, which took `~radix:2`. Converting links `ll_test`, which does
+  NOT retire an `ll_test_ratchet` row: linking for an operand helper is not adoption
+  (gh-ocannl-1052). `operand_key_scan_cases` puts each spelling beside its nearest legitimate
+  text and drives the shipping scanner over a synthetic tree holding the blind fixture it must
+  refuse.
+
+## Codegen text inventory
+
+- A test asserting on generated code must establish that the artifact it reads is the one THIS run
+  emitted; `Test_utils.Generated` is how (gh-ocannl-655). `build_files/<exe>/<routine>.<ext>` is a
+  side effect of a compile, not a value the test holds, and two things detach it from the compile it
+  describes: `test/config/ocannl_config` keeps `clean_up_build_files_on_startup=false`, so an
+  artifact outlives its run indefinitely, and a second compile under the same routine name overwrites
+  it within a run. Either way the assertion outlives the kernel it asserts on — it keeps passing, and
+  keeps counting as coverage, after that kernel stopped being emitted at all (folded to a constant,
+  erased by precision inference, fissioned into a differently-named routine). `Generated.init
+  ~backend_name`, called before the first compile, empties this executable's own subdirectory, so
+  existence IS freshness — no mtime, no clock granularity. What licenses that sweep is narrower than
+  "the directory is scoped": only the DEFAULT, executable-derived subdirectory is inherently
+  process-private, since dune runs one process per executable. Any configured `build_files_prefix`
+  is refused outright — a second executable can be given the same prefix, so deleting there is
+  unsafe, and without deletion a deterministic compile's re-emitted identical kernel is
+  indistinguishable from a stale one (deletion is the only write signal that does not depend on
+  timestamp granularity). Tests that assert on generated code therefore leave the prefix at its
+  default. `Generated.read` fails through `Verdict` on a
+  missing artifact instead of answering `None` — the arm that some call sites recorded as `false` and
+  others forgot. `Generated.arm` deletes one routine's artifact before a candidate's compile, which
+  is what a loop reusing a routine name needs in order to attribute what it reads; reading one
+  routine twice across changed contents is otherwise reported as an unattributed overwrite. Corollary
+  for a leg this backend cannot evaluate: gate it and report `Verdict.skipped` rather than letting it
+  reach the read, because an absent artifact is a failure here by design.
+  The dune side of that: `init` READS `build_files_prefix`, so the stanza dune runs the test under
+  must declare `(env_var OCANNL_BUILD_FILES_PREFIX)` — otherwise dune serves the previous run's
+  result when the variable changes, which is gh-ocannl-628's hole one key over. `env_var_deps`
+  requires it of every stanza whose `(modules …)` name a source that calls the initializer, and
+  reports a declaration with no caller behind it as well (gh-ocannl-723). Where the declaration goes
+  is dune's semantics and not one rule: a `(test)` runs under its own `(deps …)`, an inline-test
+  library under `(inline_tests (deps …))`, and an `(executable)` has no `deps` field at all, so it is
+  the rule that RUNS it that carries the declaration — the same placement as the `ocannl_config` dep
+  and the backend marker, and checked as such (a declaration on a NEIGHBOUR of that rule reruns the
+  neighbour, so it does not count). One name of an `(executables (names a b) …)` is one program, and
+  attribution follows dune's main-module rule: `a` is built from module `a`, a module that is no
+  name's main module is linked into all of them, and `(public_names …)` pairs positionally — so
+  `b.exe`'s rule answers for `b` alone, and only a shared module puts the requirement on every runner
+  (gh-ocannl-747; combining them reported `a` undeclared over a rule linking neither its main module
+  nor its initializer).
 - **Before changing code generation, read the inventory**: `dune build
   @test/operations/runtest-codegen_text_inventory` prints, as its golden, every file in the tree
   that pins the TEXT of emitted code (gh-ocannl-712). Two populations, and no single search finds
@@ -1408,6 +1466,9 @@ that they earn a lookup rather than always-loaded space.
   AND its golden holds something other than that test's own verdicts. That last condition is what
   keeps the rule useful rather than noisy: a boolean column does not move when codegen does, so a
   schedule test's all-`true` golden stays out while its source stays in.
+
+## Aliases and goldens
+
 - Every rule that diffs a golden — the repo-wide scans, the codegen snapshots, the config-precedence
   rules, the ppx-output diffs — carries its own `runtest-<name>` alias (gh-ocannl-726), so
   `dune build @test/operations/runtest-verdict_ratchet` runs that one test, applies its diff and is
@@ -1554,6 +1615,8 @@ that they earn a lookup rather than always-loaded space.
   disambiguates longer identifiers). Budget the resulting promote as expected work, in its own
   commit, after diff-confirming the delta is rename-only.
 
+## OCaml and dune traps
+
 - `dune build @check` type-checks; it does NOT link executables. A "rebuilt" test or benchmark exe
   after a library change is therefore the STALE binary — this has produced a false verdict three
   separate times (a timing rerun, a negative control, a guard "verified" against the old code). Build
@@ -1588,7 +1651,7 @@ that they earn a lookup rather than always-loaded space.
   LAST-defined type, silently mistyping `x.a.b` (which is why the scheduler's event field is
   `dev_state`); and `Base.Float.max_value` is INFINITY — the finite maximum is `max_finite_value`.
 
-### What CI actually covers
+## What CI actually covers
 
 - `dune build @bin-smoke` runs every `bin/` executable sequentially on deliberately tiny workloads
   with the `cc` backend pinned (gh-ocannl-858), plus one macOS-only contribution outside `bin/`:
@@ -1748,7 +1811,17 @@ that they earn a lookup rather than always-loaded space.
   boundary Dune can build the parent checkout while this script reports the detached commit.
   `--expect-lib cudajit|hipjit|metal` asserts all three
   pieces of optional-backend provenance above (positive `.cmi`, vendor `select` arm, and the other
-  two GPU backends' absent `.cmi` -- each fleet box carries one vendor package). A test, probe or
+  two GPU backends' absent `.cmi` -- each fleet box carries one vendor package), then runs
+  `bin/device_props` under the pinned backend and puts the tile-MMA capability it reports on the
+  verdict line as its `tile_mma` field, a tile such as `16x16x16` or `none` (gh-ocannl-1070). A compiled, selected
+  hipjit said nothing about what it EMITS: with `HIP_PATH` unset -- which is every hermetic leg --
+  the backend searched no distro `/usr` tree, found no rocWMMA headers, and every WMMA test ran the
+  scalar fallback green. For hipjit the capability is asserted from two halves no box list
+  restates: the backend's own per-device `tile_mma_eligible` (its gate's device predicate, surfaced
+  in HIP's `static_properties`) and a header probe kept independent of the backend's search, the
+  tree `hipconfig --path` names holding `rocwmma.hpp` and `rocwmma/internal/types.hpp`. Both present
+  and no capability fails the trip; either absent prints `NONE -- ... scalar fallback` with the
+  reason and passes, since that box cannot tensorize. A test, probe or
   `--record-golden` trip also requires a backend and
   asserts `_build/default/test/config/ocannl_backend.txt`; an unrestricted test alias is reported
   only as passing under that configuration, since the alias may be backend-independent, while a
@@ -1838,6 +1911,9 @@ that they earn a lookup rather than always-loaded space.
   serialized lock chain (what remains of it) against an otherwise idle runner after every file
   target finished, and the quotes are for PowerShell on the Windows leg, which splats unquoted
   `@` tokens to nothing.
+
+### opam and caches in CI
+
 - **Nothing in this repository pins the opam version.** `ocaml/setup-ocaml@v3` is a moving tag,
   and the action resolves the latest STABLE opam release under its own upper bound at run time, so
   a release reaches CI as soon as that bound admits it and no commit here marks the change: opam
@@ -1968,6 +2044,9 @@ that they earn a lookup rather than always-loaded space.
   and cache topology without publishing. Publishing pushes share `gh-pages-deploy` with the other
   Pages workflow, so the two deploys cannot race over the same branch (gh-ocannl-808,
   gh-ocannl-825).
+
+### Windows CI
+
 - Windows CI runs independently on the twice-weekly schedule, together with an ubuntu job
   on the OCaml floor the opam files claim (`>= 5.3.0`, against 5.5 everywhere else).
   PR, push and ordinary `workflow_dispatch` runs use the Linux/macOS matrix.
@@ -2053,6 +2132,9 @@ that they earn a lookup rather than always-loaded space.
   `test-run.sh` now points `last` with a plain file holding the path (written through a temporary
   and renamed, so still atomic), which needs no symlink privilege on any platform. Reach for a
   pointer file, not a symlink, in anything that must work from Git Bash.
+
+## The cross-machine sweep
+
 - `tools/sweep.sh` is the coverage for every backend CI does not run: cc and metal locally
   (the macOS host), cuda on rog, hip and then multidev_cc on minix, and hip again on tuf, all pinned
   to ONE resolved commit so a mid-sweep merge cannot leave the machines testing different trees.
@@ -2204,6 +2286,9 @@ that they earn a lookup rather than always-loaded space.
   default 90 minutes).
   When the execution column was introduced, existing `pass` rows became `legacy-pass` with
   `execution=unknown`; old incremental evidence is retained, but cannot masquerade as a forced run.
+
+### GPU boxes: job caps and runtime refusals
+
 - **On a WSL boot, the hip unit runs its tests under `dune -j 2`, and a red minix/hip whose
   failures are all `HIP_ERROR_INVALID_DEVICE` at `hip_init`, `HIP_ERROR_NO_BINARY_FOR_GPU` at
   module load, or failed stream creation is the WSL2 dxg bridge overflowing, not the backend.**
@@ -2383,7 +2468,6 @@ that they earn a lookup rather than always-loaded space.
 | `cu_device_primary_ctx_retain` | `Cu.Context.get_primary`, backend `get_device` | rog-nv, 2026-09-13: `CUDA_ERROR_OUT_OF_MEMORY` (1) — the only one of the box's three bursts to reach a stanza |
 | `cu_module_load_data_ex` | `Cu.Module.load_data_ex` | analogue, not yet observed |
 | `cu_stream_create_with_priority` | `Cu.Stream.create` | analogue, not yet observed |
-
 - **A name is no longer the only trigger: the kernel's own evidence in the unit's window is the
   other** (gh-ocannl-979). A remote `cuda` or `hip` unit records its UTC window and, at the end,
   appends the kernel's lines from it to its log and fingerprint; a counted refusal in that window
@@ -2468,6 +2552,9 @@ that they earn a lookup rather than always-loaded space.
   was refused, so no fingerprint could have shown it — only rerunning the 27 red stanzas at
   `-j 1` on the box did, 4 of them staying red. The harness pins the call shape, all three
   verdict channels, and that a red without a signature gets no second run.
+
+### Skip coverage
+
 - A forced full-suite sweep also intersects the backend-scoped `Verdict.skipped`
   executable-and-claim keys from every successful unit through `tools/aggregate-skips.sh`
   (gh-ocannl-792), writing
@@ -2512,6 +2599,9 @@ that they earn a lookup rather than always-loaded space.
   remain, but neither sweep intersection claims ownership. This is deliberately narrow: the
   `cc_backend_trace_name` claim is executed by the Ubuntu compiler-trace CI leg at trace level 3,
   while the ordinary sweep's default configuration cannot execute it (gh-ocannl-885).
+
+### Sweep units and verdicts
+
 - Every test action a sweep unit runs inherits `OCANNL_BACKEND=<that unit's backend>`. The unit is
   spelled `OCANNL_BACKEND=<backend> opam exec -- dune build @runtest @train`, and Dune hands its own
   environment to the actions it runs whether or not a stanza declares the variable — `(env_var …)`
@@ -2525,19 +2615,6 @@ that they earn a lookup rather than always-loaded space.
   aggregation is re-run with a hostile ambient backend so the neutralization cannot lapse unnoticed.
   Reproduce the condition on any alias with `OCANNL_BACKEND=<backend> dune build --force @<alias>`;
   a plain local run never sets it, which is what makes this class of failure look like flakiness.
-- In an errexit shell test, `! cmd` is not an assertion. Bash exempts a command whose value is being
-  inverted, so `! grep -q 'must not appear' "$out"` runs, returns 1 and the script carries on — the
-  negative half of a test can be entirely inert while reading as covered. Spell it as a function
-  whose body uses `if`, so the command errexit weighs is the CALL and the ERR trap names its line,
-  and have it print what matched: `$BASH_COMMAND` from inside a function names the body, not the
-  pattern. Same shape as the `p_all`/`p_none` rule for `Verdict` claims — a check that cannot fail is
-  worse than a missing one, because the golden and the roster both count it. Its sibling is a bare
-  `[ A ] && [ B ]`: errexit exempts every operand of an `&&` list but the last, so the pair checks
-  only `B` and is silent exactly when `A` — usually the point of the assertion — fails
-  (gh-ocannl-1023, `cancel_sweep`'s readiness check). One predicate per statement, or end the list
-  with `|| die …` / `|| return 1` (`|| rc=$?` to capture it; a `rc=$?` on the next line is refused). `shell_scripts_parse` refuses both shapes in errexit scripts; its
-  module headers state the line-shaped boundary each scan reads, and a function's final pair — not
-  inert, its status is the return value — is refused too, since the scan cannot see function ends.
 - An unreachable machine records `skip (unreachable)`, and a sweep of skips is not a failure. It is
   not the expected steady state either: both GPU boxes are cabled and Wake-on-LAN armed, and wake
   over Ethernet from sleep and from full shutdown alike, so a run that is meant to cover CUDA or HIP
@@ -2612,6 +2689,9 @@ that they earn a lookup rather than always-loaded space.
   existing `_build` — seconds rather than minutes when little changed. That is what makes a daily
   cadence affordable. `--force` is the explicit from-scratch unit; a fresh CI run is the other
   path to a clean compilation check.
+
+## Floats and measurements in goldens
+
 - A golden line printed at a FIXED decimal precision is not made portable by lowering the
   precision: it only moves the boundary. `cifar_conv`'s epoch-30 mean loss sat at ~1.05, so its
   `%.1f` print — introduced to absorb reduction-order drift — read `1.0` on cc and `1.1` on cuda at
@@ -2732,6 +2812,8 @@ that they earn a lookup rather than always-loaded space.
   dune interleaves it with whatever else runs in parallel — in the 09-03 sweep it landed directly
   above an unrelated test's failure and read as its cause.
 
+## Test support and placement
+
 - `ll_test_ratchet` (gh-ocannl-964) derives test sources from `Source_inventory`, harness membership
   from owning Dune stanza groups (including parent `subdir` blocks and `select` target-to-arm
   relationships), and constructor names from
@@ -2756,6 +2838,20 @@ that they earn a lookup rather than always-loaded space.
   globs/dynamic inputs and inputs outside the declared test corpus are refused explicitly. Documented
   `test/ppx/*_expected.ml` goldens are not implementation modules and are excluded; arbitrary unowned
   sources remain checked. The `scans` aggregate runs the shipping scanner and its control suite.
+  Adoption is linking the harness AND calling its IR surface (gh-ocannl-1052): a link made for an
+  operand helper (`Ll_test.cycle`) had retired rows whose hand-built IR never moved, which is the
+  general trap of a ratchet whose adoption test is a proxy — the proxy spreads for other reasons. The
+  surface is DERIVED, per harness module, from `ll_builders.ml`/`ll_test.ml`: a value whose
+  definition mentions an `Ir`-rooted path (or an alias of one, its own or included), or calls what
+  resolves to an IR value, is IR; each binding is classified on its own, a later definition
+  replaces an included one's class. The rest (`cycle`, `weighted`, `blank`, ...) is printed in the
+  golden, so a new helper's class shows in review. Both halves resolve names through one lexical
+  scope model (`Ll_test_scan.scoped`): every value binding form scopes its names (externals and
+  instance variables included), module aliases (constrained ones too) are shadowed by later
+  bindings, functor parameters and unpacks and die with their structure, and only an exact harness
+  path is the harness. Its one deliberate gap: an `open` of a module the scan cannot read is not taken to shadow
+  a harness open before it, since the tree writes `open Ll_test` then `open Verdict.Claims`. A linked
+  source that calls nothing of it gets its own refusal and still needs a migration row.
 
 - Pure IR node, index, statement and scalar builders live in public `arrayjit.ll_builders`
   (gh-ocannl-954), re-exported unchanged by `Ll_test`. Every Dune consumer spells the public name,

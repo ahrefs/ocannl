@@ -9,14 +9,14 @@
     below it out of the index. Each was caught by a human reading carefully. A note that corrupts
     silently is worse than one that is missing, because every later session inherits it as fact.
 
-    The six rules, and what each is for, are stated in {!Test_utils.Agent_notes_scan}, which is
+    The seven rules, and what each is for, are stated in {!Test_utils.Agent_notes_scan}, which is
     where they are decided — pure functions over strings, so the negative controls in
     [agent_notes_scan_cases.ml] exercise the same code this runs over the repository. This file is
     the live-tree half: it opens what dune hands it and reports one verdict per rule.
 
     {1 What the golden holds}
 
-    The six claims, and nothing that counts. A tally ("12 notes files", "177 bullets") moves on
+    The seven claims, and nothing that counts. A tally ("12 notes files", "177 bullets") moves on
     every correct addition, so every contributor promotes a file they did not touch and the promote
     is indistinguishable from blessing a regression (gh-ocannl-665, and the notes' own entry on it).
     The exact numbers go to stderr. What the counts were there for — the assurance that a scan
@@ -51,6 +51,20 @@ let docs_relative path =
 let () =
   let args = Array.to_list Stdlib.Sys.argv |> List.tl_exn in
   let md = List.filter args ~f:(String.is_suffix ~suffix:".md") in
+  (* The agent guide is read for its pointers into the notes (rule 7), and is not a note itself. *)
+  let guide_paths, md =
+    List.partition_tf md ~f:(fun p ->
+        String.equal (Stdlib.Filename.basename (docs_relative p)) "AGENTS.md")
+  in
+  let guide_path =
+    match guide_paths with
+    | [ p ] -> p
+    | ps ->
+        eprintf "FAILED: expected exactly one AGENTS.md among the arguments, got %d\n"
+          (List.length ps);
+        Stdlib.exit 1
+  in
+  let guide_contents = read guide_path in
   let index_path, file_paths =
     List.partition_tf md ~f:(fun p -> String.equal (docs_relative p) "agent-notes.md")
   in
@@ -67,9 +81,15 @@ let () =
     List.map file_paths ~f:(fun p -> (docs_relative p, read p))
     |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
   in
-  let bullets, findings = Notes.check_all ~index_file ~index_contents ~files in
-  eprintf "Scanned %d notes files plus the index, %d bullets, %d findings.\n" (List.length files)
-    (List.length bullets) (List.length findings);
+  let bullets, findings =
+    Notes.check_all ~guide:("AGENTS.md", guide_contents) ~index_file ~index_contents ~files ()
+  in
+  let pointers =
+    List.filter (Notes.guide_pointers guide_contents) ~f:(fun p ->
+        Option.is_some (Notes.pointer_scope p))
+  in
+  eprintf "Scanned %d notes files plus the index, %d bullets, %d AGENTS.md pointers, %d findings.\n"
+    (List.length files) (List.length bullets) (List.length pointers) (List.length findings);
   (* The floors. Neither moves when a note is edited, a bullet added or a file split; both fail the
      moment the scan is handed nothing, which is the one way its silence would be a lie. *)
   Verdict.claim "the scan was handed the notes files" (List.length files >= 10);
@@ -97,25 +117,31 @@ let () =
      message survives to be read. Keeping them off stdout also keeps them out of the golden, so a
      real defect cannot be `dune promote`d into the expected output. *)
   let reported = ref [] in
-  let report rule claim =
+  let report_over ?min ~over rule claim =
     reported := rule :: !reported;
     let found = of_rule rule in
     List.iter found ~f:(fun f ->
         eprintf "  %s: %s: %s\n" f.Notes.rule f.Notes.where f.Notes.message);
-    Verdict.p_empty claim ~over:files found
+    Verdict.p_empty ?min claim ~over found
   in
+  let report rule claim = report_over ~over:files rule claim in
   report Notes.rule_bullet_integrity "every bullet is whole and every list parses as one reading";
   report Notes.rule_index_agreement "every index row names a file that carries what it claims";
   report Notes.rule_table_shape "every table is a table, row by row";
   report Notes.rule_reachability "every notes file is reachable from the index, and links back";
   report Notes.rule_no_repetition "no bullet is repeated across the notes";
   report Notes.rule_qualified_citations "no numeric GitHub citation uses an unqualified bare hash";
-  (* The relationship the six calls above rest on, and nothing used to state (gh-ocannl-706): a rule
-     this file does not report is a rule whose findings the live tree never shows, and the omission
-     is silent -- the scan computes them, [of_rule] is never asked for them, and the golden is six
-     green lines either way. Sorted lists rather than sets, so a rule reported twice (two verdicts
-     over one set of findings, one of them dead) is a mismatch as well; a bare boolean, so the
-     golden stays fixed as rules come and go and only the stderr line moves. *)
+  (* Over the pointers rather than the files, with a floor: AGENTS.md anchors about ten rules into
+     build-and-test.md, so a reader that finds fewer than five has stopped reading them, and an
+     empty finding list over nothing would pass by default. *)
+  report_over ~min:5 ~over:pointers Notes.rule_guide_anchors
+    "every note anchor AGENTS.md points at is a heading its note has";
+  (* The relationship the seven calls above rest on, and nothing used to state (gh-ocannl-706): a
+     rule this file does not report is a rule whose findings the live tree never shows, and the
+     omission is silent -- the scan computes them, [of_rule] is never asked for them, and the golden
+     is seven green lines either way. Sorted lists rather than sets, so a rule reported twice (two
+     verdicts over one set of findings, one of them dead) is a mismatch as well; a bare boolean, so
+     the golden stays fixed as rules come and go and only the stderr line moves. *)
   let sorted l = List.sort l ~compare:String.compare in
   let reported = sorted !reported and named = sorted Notes.rules in
   let all_reported = List.equal String.equal reported named in
