@@ -916,6 +916,25 @@ let guide_cases =
     ( "a reference right after the slug is refused",
       guide "- A rule; the mechanism: a.md#the-widget&#45;seam.",
       [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "an empty tag inside the extension is refused",
+      guide "- A rule; the mechanism: a.m<span></span>d#the-sprocket-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a code span inside the extension is refused",
+      guide "- A rule; the mechanism: a.m`d`#the-sprocket-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "emphasis inside the extension is refused",
+      guide "- A rule; the mechanism: a.m*d*#the-sprocket-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a link glued to the slug is refused",
+      guide "- A rule; the mechanism: a.md#the-widget[-seam](x).",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    (* Aimed at a missing heading, so each one READ is a finding: silence here would mean the plain
+       surroundings hid them. *)
+    ( "pointers in ordinary surroundings are read",
+      guide
+        "- Plain: (a.md#the-sprocket-seam), [a.md#the-sprocket-seam](x), `a.md#the-sprocket-seam`, \
+         \"a.md#the-sprocket-seam\"; a.md#the-sprocket-seam!",
+      List.init 5 ~f:(fun _ -> "guide-anchors @ AGENTS.md:3") );
     ( "a reference to another character is not a separator",
       guide "- A rule, a.md&amp;b.md; and a.md&#36;x.",
       [] );

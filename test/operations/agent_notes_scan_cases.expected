@@ -213,6 +213,11 @@ ok: guide -- a named reference for the hash is refused
 ok: guide -- a hex reference for the hash is refused
 ok: guide -- a reference inside the path is refused
 ok: guide -- a reference right after the slug is refused
+ok: guide -- an empty tag inside the extension is refused
+ok: guide -- a code span inside the extension is refused
+ok: guide -- emphasis inside the extension is refused
+ok: guide -- a link glued to the slug is refused
+ok: guide -- pointers in ordinary surroundings are read
 ok: guide -- a reference to another character is not a separator
 ok: guide -- hashes that are no pointer
 ok: guide -- plain mentions of a note are not pointers

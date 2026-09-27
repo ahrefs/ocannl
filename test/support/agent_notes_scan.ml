@@ -1648,25 +1648,31 @@ type pointer = {
   path : string;  (** The path characters before the [#], as written. *)
   anchor : string;  (** The slug after the [#], possibly empty. *)
   canonical : bool;
-      (** Whether the pointer is written [<path>.md#<slug>] in one piece: a nonempty slug, and no
-          rendering hazard (see {!rendering_hazard}) touching the path or the slug. *)
+      (** Whether the pointer is written [<path>.md#<slug>] in one piece: a nonempty slug, and
+          nothing touching the path or the slug but what {!plain_before} and {!plain_after} allow.
+      *)
 }
 (** One pointer-shaped occurrence in the guide: a [#] after a path ending [.md], or a [#] followed
-    by slug characters whose path side touches a rendering hazard. *)
+    by slug characters whose path side something other than plain text touches. *)
 
 let path_char c = Char.is_alphanum c || List.mem [ '_'; '-'; '.'; '/' ] c ~equal:Char.equal
 let anchor_char c = Char.is_alphanum c || Char.equal c '_' || Char.equal c '-'
 
-(** A byte that can make what a reader sees differ from the source when it touches a pointer: an
-    escape, an HTML tag, an entity, a percent-escape, or the start of a non-ASCII character. (An
-    HTML comment is recognized from the lexer's ranges, not from this.) Emulating the renderer
-    around these grew one case per review round -- an escaped hash, a comment splitting the pointer,
-    a Unicode slug, then a hazard inside the extension that hid the pointer from discovery itself
-    (Codex P2, rounds 2-4 on lukstafi/ocannl-staging#811), each a pointer the reader silently failed
-    to see. So they are not interpreted at all: a pointer they touch is refused, loudly, naming the
-    one spelling that is read. *)
-let rendering_hazard c =
-  List.mem [ '\\'; '<'; '&'; '%' ] c ~equal:Char.equal || Char.to_int c >= 128
+(** What may stand just outside a pointer -- before its path, or after its slug -- without changing
+    what renders around it: whitespace and ordinary prose punctuation, the brackets a link wraps it
+    in, and a backtick (see {!guide_pointers} for when a backtick glues instead). This is an
+    ALLOWLIST on purpose. Refusing named hazards one by one grew a case per review round -- an
+    escaped hash, a comment splitting the pointer, a Unicode slug, a hazard inside the extension, a
+    character reference in the path, then a closing tag (Codex P2, rounds 2-7 on
+    lukstafi/ocannl-staging#811) -- each a construct that renders a pointer the reader failed to
+    see. Anything not listed here that touches a pointer is refused, loudly, naming the one spelling
+    that is read, so the next construct lands on the refusal rather than in the gap. *)
+let plain_before c =
+  Char.is_whitespace c || List.mem [ '('; '['; '"'; '\''; ','; ';'; ':' ] c ~equal:Char.equal
+
+let plain_after c =
+  Char.is_whitespace c
+  || List.mem [ ')'; ']'; '"'; '\''; '.'; ','; ';'; ':'; '!'; '?' ] c ~equal:Char.equal
 
 (** The HTML character reference starting at [i], if there is one: its end, and the code point it
     names when that is known here -- numeric references (decimal or hex, any case, any leading
@@ -1691,19 +1697,19 @@ let char_reference_at line i =
 
 (** Every pointer-shaped occurrence in [contents] that a reader sees, code spans and fenced blocks
     included: a pointer set in backticks is still a pointer. Discovery is anchored on the [#], which
-    every rendered pointer contains, rather than on [.md], which a hazard can split. In CommonMark a
+    every rendered pointer contains, rather than on [.md], which markup can split. In CommonMark a
     [#] reaches rendered text only as source text (escaped or not) or through a character reference
     ({!char_reference_at}), and both are separators here, so discovery misses none. A [#] inside an
     HTML comment renders nowhere and is not read -- neither checked nor counted toward the live
     scan's floor (Codex P2, round 1 on lukstafi/ocannl-staging#811).
 
     For each visible [#], the path is the maximal run of path characters before it and the slug the
-    maximal run of slug characters after it. When the byte before the path (or before the [#], for
-    an empty path) is a {!rendering_hazard} or lies in a comment, and a slug follows, the occurrence
-    is a non-canonical pointer whatever its path says -- an escaped [.md], a comment inside the
-    name, an escaped [#]. Otherwise it is a pointer when its path ends [.md] after a nonempty name,
-    and canonical when its slug is nonempty and not followed by a hazard or a comment. Anything else
-    -- [staging#413], a placeholder such as [<note>.md#<slug>] -- is not a pointer. *)
+    maximal run of slug characters after it. When something other than plain text touches the path
+    from the left (or the [#], for an empty path) and a slug follows, the occurrence is a
+    non-canonical pointer whatever its path says -- an escaped [.md], markup inside the name, an
+    escaped [#]. Otherwise it is a pointer when its path ends [.md] after a nonempty name, and
+    canonical when its slug is nonempty and only plain text follows it. Anything else --
+    [staging#413], a placeholder such as [<note>.md#<slug>] -- is not a pointer. *)
 let guide_pointers contents =
   let comments = (inert_by_line contents).comment_ranges in
   List.concat_map (lines contents) ~f:(fun (lineno, line) ->
@@ -1719,14 +1725,22 @@ let guide_pointers contents =
         |> List.filter_map ~f:(fun i ->
             Option.map (char_reference_at line i) ~f:(fun (e, value) -> (i, e, value)))
       in
-      (* What touches a pointer's path or slug from outside it: a hazard byte, a comment, or any
-         character reference -- its trailing [;] included, which is what a path run stops at after
-         [a&period;md] (Codex P2, round 6 on lukstafi/ocannl-staging#811). *)
-      let hazard_at j =
-        j >= 0 && j < n
-        && (rendering_hazard line.[j]
-           || in_any_span hidden j
-           || List.exists references ~f:(fun (a, e, _) -> a <= j && j < e))
+      (* Whether what stands at [j], just outside a path (going left) or a slug (going right),
+         touches it: a comment, any character reference -- its trailing [;] included, which is what
+         a path run stops at after [a&period;md] (Codex P2, round 6) -- or a byte not on the plain
+         list. A backtick run is plain unless the text continues through it ([a.m`d`#x] renders
+         [a.md#x]), which is how a code span can split a pointer. The line's edge is plain. *)
+      let in_reference j = List.exists references ~f:(fun (a, e, _) -> a <= j && j < e) in
+      let touched ~left j =
+        if j < 0 || j >= n then false
+        else if in_any_span hidden j || in_reference j then true
+        else if Char.equal line.[j] '`' then (
+          let k = ref j in
+          while !k >= 0 && !k < n && Char.equal line.[!k] '`' do
+            if left then Int.decr k else Int.incr k
+          done;
+          !k >= 0 && !k < n && if left then path_char line.[!k] else anchor_char line.[!k])
+        else not ((if left then plain_before else plain_after) line.[j])
       in
       let entities =
         List.filter_map references ~f:(fun (i, e, value) ->
@@ -1751,10 +1765,10 @@ let guide_pointers contents =
           let path = String.sub line ~pos:!start ~len:(i - !start) in
           let anchor = String.sub line ~pos:after ~len:(!stop - after) in
           let pointer canonical = Some { pointer_line = lineno; path; anchor; canonical } in
-          if ((not literal) || hazard_at (!start - 1)) && not (String.is_empty anchor) then
+          if ((not literal) || touched ~left:true (!start - 1)) && not (String.is_empty anchor) then
             pointer false
           else if String.is_suffix path ~suffix:".md" && String.length path > 3 then
-            pointer ((not (String.is_empty anchor)) && not (hazard_at !stop))
+            pointer ((not (String.is_empty anchor)) && not (touched ~left:false !stop))
           else None))
 
 (** The notes file a guide pointer names, keyed as {!check_index} keys [files], or [None] when the
