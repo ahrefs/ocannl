@@ -76,7 +76,7 @@ type direction = [ `Inline | `Footprint ]
 let direction_of (r : LL.reading) : direction option =
   match r with `Footprint -> Some `Footprint | `Inline -> Some `Inline | `Materialize -> None
 
-let direction_name (d : direction) = match d with `Inline -> "inline" | `Footprint -> "footprint"
+let direction_name (d : direction) = LL.reading_to_string (d :> LL.reading)
 
 let split (decs : (Tn.t * direction) list) =
   let pick d = List.filter_map decs ~f:(fun (tn, d') -> Option.some_if (Poly.equal d d') tn) in
@@ -316,8 +316,12 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
             bp_final.LL.fp_total (List.length !flips)
             (if bp_within_budget then "within budget" else "STILL OVER BUDGET"));
       let inline, footprint = split !accepted in
-      let ctx = if List.is_empty inline then ctx else Context.decide_inline ctx inline in
-      let ctx = if List.is_empty footprint then ctx else Context.decide_footprint ctx footprint in
+      let ctx =
+        List.fold
+          [ (`Inline, inline); (`Footprint, footprint) ]
+          ~init:ctx
+          ~f:(fun c (r, tns) -> if List.is_empty tns then c else Context.decide_reading c r tns)
+      in
       ( ctx,
         {
           bp_baseline;

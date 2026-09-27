@@ -364,8 +364,7 @@ val lookup : dir:string -> key:string option -> entry option
     would be circular); this store is the other half of the persistence the schedule cache gives
     schedules. *)
 
-type placement_flip = { node : int; flip : [ `Materialize | `Inline | `Footprint ] }
-[@@deriving sexp, compare, equal]
+type placement_flip = { node : int; flip : Low_level.reading } [@@deriving sexp, compare, equal]
 (** One accepted flip of the greedy inline refinement: the node by its {!canonicalize_source} index,
     and the direction ({!Context.decide_materialized} / {!Context.decide_inline} /
     {!Context.decide_footprint}). *)

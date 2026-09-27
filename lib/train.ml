@@ -1142,10 +1142,10 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      placement-aware digest is the entry's guard ({!decision_lowering_digest}). *)
   let decisions_of problem = placement_decision_lists ~embedded problem in
   let apply (mat, inl, fp) c =
-    let decide f c = function [] -> c | tns -> f c tns in
-    decide Context.decide_footprint
-      (decide Context.decide_inline (decide Context.decide_materialized c mat) inl)
-      fp
+    List.fold
+      [ (`Materialize, mat); (`Inline, inl); (`Footprint, fp) ]
+      ~init:c
+      ~f:(fun c (r, tns) -> if List.is_empty tns then c else Context.decide_reading c r tns)
   in
   let outcome_digest decisions =
     decision_lowering_digest ?name ?timing_ctx ctx comp bindings decisions
@@ -1558,10 +1558,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                 let try_alternative (fa : LL.flip_alternative) =
                   let arm =
                     Printf.sprintf "flip %s %s (cost %d%s)"
-                      (match fa.LL.fa_flip with
-                      | `Inline -> "inline"
-                      | `Materialize -> "materialize"
-                      | `Footprint -> "footprint")
+                      (LL.reading_to_string fa.LL.fa_flip)
                       (Tn.debug_name tn) fa.LL.fa_recompute_cost
                       (if Set.mem surface.Autotune.ps_enablement tn then ", enablement" else "")
                   in
@@ -1580,12 +1577,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                       logf "%s bound-pruned: floor %.4f ms >= incumbent %.4f ms" arm fl chain_ms;
                       None
                   | _ ->
-                      let apply c =
-                        match fa.LL.fa_flip with
-                        | `Materialize -> Context.decide_materialized c [ tn ]
-                        | `Inline -> Context.decide_inline c [ tn ]
-                        | `Footprint -> Context.decide_footprint c [ tn ]
-                      in
+                      let apply c = Context.decide_reading c fa.LL.fa_flip [ tn ] in
                       let ctx' = apply base_ctx in
                       let timing' = Option.map base_timing ~f:apply in
                       let r, ms, rep =
@@ -1608,10 +1600,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                     accepted := (tn, bfa.LL.fa_flip) :: !accepted;
                     if List.length fc.LL.fc_alternatives > 1 then
                       logf "flip group %s: %s wins at %.4f ms" (Tn.debug_name tn)
-                        (match bfa.LL.fa_flip with
-                        | `Inline -> "inline"
-                        | `Materialize -> "materialize"
-                        | `Footprint -> "footprint")
+                        (LL.reading_to_string bfa.LL.fa_flip)
                         ms;
                     match bfa.LL.fa_flip with
                     | `Materialize -> certain_mat := tn :: !certain_mat

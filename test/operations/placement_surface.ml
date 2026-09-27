@@ -29,12 +29,6 @@ open Ocannl.Operation.DSL_modules
 module LL = Ir.Low_level
 module Tn = Ir.Tnode
 module Asgns = Ir.Assignments
-
-let reading_name : LL.reading -> string = function
-  | `Materialize -> "materialize"
-  | `Inline -> "inline"
-  | `Footprint -> "footprint"
-
 open Verdict.Claims
 
 let named name (comp : Asgns.comp) : Asgns.comp =
@@ -108,10 +102,12 @@ let () =
     let ranked = Autotune.rank_flip_candidates ~ordering ~enablement ~disablement candidates in
     List.iter ranked ~f:(fun fc ->
         Stdio.printf "  %-12s %-11s -> %s%s\n" (Tn.debug_name fc.LL.fc_tn)
-          (reading_name fc.LL.fc_default)
+          (LL.reading_to_string fc.LL.fc_default)
           (String.concat ~sep:", "
              (List.map fc.LL.fc_alternatives ~f:(fun fa ->
-                  Printf.sprintf "%s cost %d" (reading_name fa.LL.fa_flip) fa.LL.fa_recompute_cost)))
+                  Printf.sprintf "%s cost %d"
+                    (LL.reading_to_string fa.LL.fa_flip)
+                    fa.LL.fa_recompute_cost)))
           (if Set.mem enablement fc.LL.fc_tn then "  [enablement]" else ""));
     ranked
   in

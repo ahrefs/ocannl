@@ -804,8 +804,7 @@ let lookup ~dir ~key =
 
 (** {2 The placement-decision store} *)
 
-type placement_flip = { node : int; flip : [ `Materialize | `Inline | `Footprint ] }
-[@@deriving sexp, compare, equal]
+type placement_flip = { node : int; flip : Low_level.reading } [@@deriving sexp, compare, equal]
 
 type placement_decision = Default | Materialize_all | Refined of placement_flip list
 [@@deriving sexp, compare, equal]

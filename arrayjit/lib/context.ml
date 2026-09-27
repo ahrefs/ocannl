@@ -1028,3 +1028,9 @@ let decide_footprint ctx tns =
       }
   in
   derive ctx wrapped
+
+let decide_reading ctx (reading : Ir.Low_level.reading) tns =
+  match reading with
+  | `Materialize -> decide_materialized ctx tns
+  | `Inline -> decide_inline ctx tns
+  | `Footprint -> decide_footprint ctx tns
