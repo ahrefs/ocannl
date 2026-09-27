@@ -2607,12 +2607,13 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   whole suite (no `--force`), which runs exactly the actions that never completed — the dependents
   a red prerequisite held back, which rerunning the red stanzas alone does not reach. Every action
   has then completed into the same log, so its records are complete, and the report names the
-  unit on a `red units counted after a clean serial rerun:` line. Both attempts stay in the
-  evidence: a first-attempt skip the clean retry executed cannot be told from another stanza's
-  genuine skip of the same executable (one executable often runs under several aliases), and
-  dropping the latter would clear a claim silently. Kept, a stale record errs loud — adding a log
-  only shrinks the intersection, so a counted red can at most escalate a claim a dropped one
-  already reported as `POTENTIAL`.
+  unit on a `red units counted after a clean serial rerun:` line. The retry must also confirm
+  the first attempt: every skip a re-run executable announced before its failure must be announced
+  again by the retry, or the unit is not counted (`serial rerun: first attempt disagrees:`). A
+  record the retry dropped is either stale (the retry executed the claim — a capability probe the
+  refused device answered `no`) or another stanza's genuine skip of the same executable (one
+  executable often runs under several aliases); the log cannot attribute a record to its action,
+  so filtering by executable name would clear the genuine one silently.
   Dropping those lost minix/hip's evaluations on 2026-09-27 (red only from a ROCr scratch
   assertion at parallel width) and reported its hip-only claims as skipped on every box. An
   intersection over only the completed backends is a loud `POTENTIAL` report; it becomes `FAIL`

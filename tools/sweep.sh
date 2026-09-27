@@ -1932,6 +1932,41 @@ suite_completion_cmd() { # backend wt
   printf 'exit 0'
 }
 
+# The executables whose first attempt disagrees with their serial retry, one per
+# line: a skip record the first attempt announced for an executable the rerun
+# re-ran, which the retry did not announce again. Such a record is stale (the
+# retry executed the claim) or another stanza's genuine skip of the same
+# executable (test_cse.exe runs under two aliases), and the log cannot tell
+# which, so a disagreeing unit is not counted. Agreement makes every
+# first-attempt record of a re-run executable one the retry confirmed. A
+# re-run executable is one its rerun block announced a record for, or the one
+# its alias names (`<family>-<name>[-<variant>]`, gh-ocannl-726; executable
+# names hold no `-`); a retry that announced nothing under an unmapped alias
+# goes unchecked, which can only keep a skip, never hide one.
+first_attempt_disagreement() { # log
+  awk '
+    function exe_of(record, f) { split(record, f, "\t"); return f[3] }
+    /^=== serial rerun: [0-9]+ stanzas at -j 1 ===$/ { after = 1; next }
+    !after && index($0, "OCANNL_TOOL_VERDICT_SKIP\t") == 1 { first[$0] = 1; next }
+    index($0, "=== serial rerun @") == 1 && $0 !~ /: exit [0-9]+ ===$/ {
+      block = 1
+      name = substr($0, length("=== serial rerun ") + 1)
+      sub(/ ===$/, "", name); sub(/.*\//, "", name)
+      if (split(name, part, "-") >= 2 && part[2] != "") rerun[part[2] ".exe"] = 1
+      next
+    }
+    index($0, "=== serial rerun @") == 1 { block = 0; next }
+    block && index($0, "OCANNL_TOOL_VERDICT_SKIP\t") == 1 {
+      retry[$0] = 1; rerun[exe_of($0)] = 1
+    }
+    END {
+      for (record in first)
+        if ((exe_of(record) in rerun) && !(record in retry)) bad[exe_of(record)] = 1
+      for (exe in bad) print exe
+    }
+  ' "$1" | LC_ALL=C sort
+}
+
 # Run a post-unit shell command where the unit's worktree lives, under its lock
 # and the unit's CAP, appending to the log (the serial rerun's legs).
 run_on_unit_host() { # host wt cmd log path_prefix
@@ -1960,6 +1995,7 @@ run_on_unit_host() { # host wt cmd log path_prefix
 serial_rerun() { # backend host wt log label [path_prefix]
   local backend=$1 host=$2 wt=$3 log=$4 label=$5 path_prefix=${6:-}
   local line cmd started rc a entry site stanza_count inline_count fallback_suffix=s completion
+  local disagreeing
   local aliases=() fallback_aliases=() inline_entries=() inline_sites=()
   local unmapped=() red=() unjudged=()
   environment_red "$log" || return 0
@@ -2010,7 +2046,12 @@ serial_rerun() { # backend host wt log label [path_prefix]
     line=$(grep -hF -- '=== suite completion: exit ' "$log" | tail -1)
     case $line in
       "") completion='serial rerun: suite completion unjudged' ;;
-      *": exit 0 ==="*) completion='serial rerun: suite completed' ;;
+      *": exit 0 ==="*)
+        completion='serial rerun: suite completed'
+        disagreeing=$(first_attempt_disagreement "$log" | tr '\n' ' ')
+        [ -z "$disagreeing" ] ||
+          completion="$completion"$'\n'"serial rerun: first attempt disagrees: ${disagreeing% }"
+        ;;
       *) completion="serial rerun: suite completion red (${line#=== suite completion: }"
          completion="${completion% ===})" ;;
     esac
@@ -2052,7 +2093,8 @@ serial_rerun() { # backend host wt log label [path_prefix]
 
 # Whether serial_rerun cleared every failure of the log's unit AND proved the
 # rest of the suite complete: `all clean`, `suite completed`, and no verdict
-# line that leaves a site unjudged, unmapped or red. A directory fallback is
+# line that leaves a site unjudged, unmapped or red, or a first attempt the
+# retry disagreed with. A directory fallback is
 # judged inside `all clean`, so it does not disqualify.
 rerun_cleared() { # log
   local line clean= completed=
@@ -2498,10 +2540,9 @@ run_unit() { # machine backend host
   # A red the serial rerun wholly cleared, and whose completion pass then ran
   # every action the red had held back, is skip evidence like a pass: every
   # action completed in the suite, the rerun or the completion pass, all of
-  # which write the same log. The whole log: a re-run executable's first-attempt
-  # records stay, since another stanza running the same executable may hold a
-  # genuine skip the log cannot tell from a stale one -- kept, a stale record
-  # can only report a skip, never hide one. Dropping it lost minix/hip's evaluations on
+  # which write the same log -- provided each re-run executable's retry
+  # confirmed its first attempt's skips (first_attempt_disagreement), so no
+  # record in the log is one the retry made stale. Dropping it lost minix/hip's evaluations on
   # 2026-09-27 and reported its hip-only claims as skipped on every box.
   if [ "$outcome" = fail ] && [ -z "$TARGET" ] && rerun_cleared "$log"; then
     printf '%s\n' "$log" >"$LANE_DIR/skip-run.$machine.$backend" &&
