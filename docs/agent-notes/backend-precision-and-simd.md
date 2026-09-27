@@ -1023,6 +1023,23 @@ files.
   accumulator libm claims: `Asm_census.Smallest_outer_anchor_carrier` selects the smallest loop
   containing its nested per-lane codec, rather than letting that codec answer for the combine
   (gh-ocannl-845); a synthetic libm-bearing combine is the negative control.
+- **The census covers every register-tile geometry the tuner can time** (gh-ocannl-948). Beside
+  its default-geometry tile, `cc_march_census` emits one kernel per (site, geometry): the
+  `Register_tile.default` (requested as `None`) and every `Register_tile.alternatives` seed at
+  `n = 512` (gh-614's site) and `n = 99` (a 3-lane partial-vector tail at every f32 width), each
+  pass anchored on its B-row load. Three traps it hit. (1) An FMA COUNT cannot tell an unrolled loop
+  from a split vector: clang at `-march=x86-64-v4` prefers 256-bit vectors, legalizes a 64-byte
+  tile as `ymm` halves and spills, with exactly the FMA count of an unroll by two;
+  `Asm_census.counts.vector_fma_bytes` (the summed register widths) is what separates them. gcc
+  keeps the tile in `zmm`. (2) The vector-majority inequality is unsound on a one-column tail pass:
+  its `rm` A broadcasts are scalar-classified on x86 (`vbroadcastss`), against as few as `rm` FMAs.
+  (3) `Register_tile.budget` is keyed on the vector WIDTH, so at 16 bytes it assumes NEON's 32
+  registers: on x86 (16 registers) the default 4x6 tile needs 29 and spills (gcc: 32 stack
+  references per k step). Two gcc emission defects are pinned as classes rather than fixed, with a
+  claim that fails when either stops reproducing: the partial-vector tail load goes through a stack
+  slot every k step, and the narrow-storage widening bridges go through general-purpose registers
+  and the stack (fp16 on gcc 15; bf16 at `sapphirerapids` too on gcc 13, so the class is the
+  bridge family, not the format one compiler showed).
 - **A census reading is a fact about the emission AND about the compiler, and CI runs two of them**
   (gh-ocannl-752). The extended fixture passed on a gcc 15.2 box and was red on BOTH CI legs, in two
   unrelated ways, neither reachable from a gcc-only host. (a) **Line attribution.** A row is found
