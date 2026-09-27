@@ -1,20 +1,28 @@
-(* gh-ocannl-637 Part 2: [Ir.Cost_model]'s account of ONE inlined computation, the recompute cost
-   the virtualizer used to price with a traced proxy (reduction extent × read multiplicity ×
-   transitive fan-in).
+(* gh-ocannl-637 Part 2, gh-ocannl-1011: [Ir.Cost_model]'s account of ONE read of a node — the
+   recompute cost the virtualizer used to price with a traced proxy (reduction extent × read
+   multiplicity × transitive fan-in). Since gh-ocannl-1011 the priced code is the inliner's own
+   instantiation at a synthetic read site, after the pipeline the emitted code receives
+   ([Low_level.instantiate_at_synthetic_read]), so the relationship this test pins is PRICE =
+   EMITTED READ: the price equals [Cost_model.analyze] over the reader statement the optimizer
+   actually emits when the node is inlined at a reader spanning its axes — counts and per-leg
+   exactness alike.
 
-   - [template_cost] on hand-built templates, checked against the counts of the same body analyzed
-   as a kernel: a reduction body (the projected loop collapses, the reduction loop is the trip
-   count), a [Where] body whose arm is a hoisted scope (exact, per Part 1), and a shared-loop body
-   whose sibling setter instantiation drops. - [recompute_cost] through a real [optimize]: a
-   two-link chain prices transitively, and the [`Materialize] flip candidates carry the modeled cost
-   ([fa_modeled]). - The ordering witness: two virtual nodes the proxy and the model rank in
-   opposite orders — a three-operand sum (fan-in 3, two ops) against a four-deep unary chain (fan-in
-   1, four ops). - [producer_cost] on the setter nest of a node the fan-in cap materialized (the
-   [`Inline] flip), where no template was stored: the chain prefix's adds per cell, and the sum over
-   the setters of a multi-component node. - The bounds (review rounds 1-3): an affine or repeated
-   index position whose binding depends on the reader, a packed-uniform producer, a scope local
-   without its hoisted definition, the simplifier and CSE a stored template has yet to receive, a
-   broadcast operand read by every cell. *)
+   - Hand-built computations through [instantiation_cost]: a reduction, a [Where] whose arm is a
+   hoisted scope (exact), an arm the simplifier collapses (a bound), a shared-loop sibling the
+   inliner filters, the CSE of two alpha-equivalent scopes, a broadcast operand read by every cell,
+   and the lane-extract form of a packed-uniform producer. - The guard-emitting shapes the hand
+   rewrite could only mark as bounds (review rounds 1-4 of staging#744): an affine write position, a
+   diagonal producer, a two-component concat — guards now priced, each checked against the emitted
+   read: the diagonal's op count EXACT, the range-guarded ones a bound only by [analyze]'s own
+   short-circuit rule for the guard's [&&], exactly as the emitted read is. - [recompute_cost]
+   through a real [optimize]: a two-link chain, the [`Materialize] flip's modeled price, and the
+   proxy-vs-model ordering witness. - The [`Inline] flip of a node a heuristic cap materialized,
+   through the production seam: priced from the computation the virtualizer's own walk stores once
+   the node is not materialized, checked against the read emitted after [prefer_inline] — for a
+   reduction, a packed-uniform producer over a virtual counter, and a consumer whose default setter
+   hosts a footprint scratch. - Pricing is invisible: the lineage's placements and the numbering of
+   symbols and scope ids generated code prints are untouched. - A flip the store refuses prices by
+   the proxy. *)
 
 open Base
 open Ocannl.Operation.DSL_modules
@@ -29,35 +37,75 @@ module CM = Ir.Cost_model
 let mk = node_factory ~first_id:990_000_000 ~dims:[| 4 |] ()
 
 let show name (r : CM.recompute) =
-  Stdio.printf "  %-44s flops=%d bytes=%d%s%s\n" name r.CM.rc_flops r.CM.rc_bytes
-    (if r.CM.rc_approx then " approx" else " exact")
+  Stdio.printf "  %-46s flops=%d%s bytes=%d%s%s\n" name r.CM.rc_flops
+    (if r.CM.rc_flops_approx then " (bound)" else " (exact)")
+    r.CM.rc_bytes
+    (if r.CM.rc_bytes_approx then " (bound)" else " (exact)")
     (if r.CM.rc_opaque then " OPAQUE" else "")
 
+let show_opt name = function None -> Stdio.printf "  %-46s refused\n" name | Some r -> show name r
+
+let price ?static_indices ~self computations =
+  CM.instantiation_cost ?static_indices ~self computations
+
+(* The read the optimizer EMITS: the reader's setter statement in the optimized code, analyzed on
+   its own — its loop index free, as the synthetic read's is — with the reader's and the inlined
+   node's own traffic excluded, as [Cost_model] excludes the node's. *)
+let emitted_read (o : LL.optimized) ~reader ~self : CM.recompute option =
+  let found = ref None in
+  walk o.LL.llc ~on_stmt:(function
+    | LL.Set { tn; _ } as stmt when Tn.equal tn reader && Option.is_none !found ->
+        found := Some stmt
+    | _ -> ());
+  Option.map !found ~f:(fun stmt ->
+      let s = CM.analyze stmt in
+      let others =
+        List.filter s.CM.per_node ~f:(fun (tn, _) -> not (Tn.equal tn self || Tn.equal tn reader))
+      in
+      {
+        CM.rc_flops = s.CM.flops;
+        rc_bytes = List.sum (module Int) others ~f:(fun (_, fp) -> fp.CM.fp_read_bytes);
+        rc_flops_approx = s.CM.flops_approx;
+        rc_bytes_approx = List.exists others ~f:(fun (_, fp) -> fp.CM.fp_approx);
+        rc_opaque = s.CM.opaque;
+      })
+
+let same_cost (a : CM.recompute option) (b : CM.recompute option) =
+  match (a, b) with
+  | Some a, Some b ->
+      a.CM.rc_flops = b.CM.rc_flops && a.CM.rc_bytes = b.CM.rc_bytes
+      && Bool.equal a.CM.rc_flops_approx b.CM.rc_flops_approx
+      && Bool.equal a.CM.rc_bytes_approx b.CM.rc_bytes_approx
+      && Bool.equal a.CM.rc_opaque b.CM.rc_opaque
+  | _ -> false
+
+let flops_exact = function Some r -> not r.CM.rc_flops_approx | None -> false
+
 let () =
-  Stdio.printf "== template_cost on hand-built templates ==\n";
+  Stdio.printf "== instantiation_cost on hand-built computations ==\n";
   let i = sym () and k = sym () in
   (* Reduction template as [virtual_llc] stores it — the loop over the projected symbol i is the
      root, the reduction loop over k inside: for i: for k: S[i] = S[i] + A[i][k]. As a kernel: 20
-     adds, A rd 80 B, S rd/wr 16 B. As one instantiation at i: the i loop collapses, 5 adds, A rd 20
-     B, S's own traffic excluded. *)
+     adds. One read at a fresh index: the i loop binds away, 5 adds, A's row read (20 B), S's own
+     traffic a scope local. *)
   let s = mk "S" and a = mk ~dims:[| 4; 5 |] "A" in
   let reduction =
     loop_n i 4
       (loop_n k 5 (set s [| iter i |] (add (get s [| iter i |]) (get a [| iter i; iter k |]))))
   in
   let kernel = CM.analyze reduction in
-  let one = CM.template_cost ~self:s ~at:[| iter i |] reduction in
-  show "reduction body, one instantiation" one;
-  p "reduction: kernel flops = instantiation flops x projected extent"
-    (kernel.CM.flops = 4 * one.CM.rc_flops && one.CM.rc_flops = 5);
-  p "reduction: bytes are the operand's cells of one instantiation, self excluded"
-    (one.CM.rc_bytes = 20 && not one.CM.rc_approx);
-  (* Without [~at] nothing collapses: the whole nest is the instantiation. *)
-  let whole = CM.template_cost ~self:s reduction in
-  p "reduction: no index vector, no collapse" (whole.CM.rc_flops = kernel.CM.flops);
+  let one = price ~self:s [ (Some [| iter i |], reduction) ] in
+  show_opt "reduction, one read" one;
+  p "reduction: kernel flops = read flops x projected extent, 20 bytes, exact"
+    (match one with
+    | Some r ->
+        kernel.CM.flops = 4 * r.CM.rc_flops
+        && r.CM.rc_flops = 5 && r.CM.rc_bytes = 20 && (not r.CM.rc_flops_approx)
+        && not r.CM.rc_bytes_approx
+    | None -> false);
   (* Where body with a hoisted scope arm: W[i] = where(K[i], { lv := 0; for k: lv += A[i][k] }, 0).
-     Exact by Part 1 — the reduction body stays hoisted through the simplifier: select + 5 adds per
-     instantiation, A's row read. *)
+     The reduction body stays hoisted through the simplifier: select + 5 adds per read, A's row and
+     K's cell read — exact, per gh-ocannl-637 Part 1. *)
   let w = mk "W" and kk = mk "K" and a4 = mk "A4" and lv = mk ~dims:[||] "lv" in
   virtualize lv;
   let scope_with ?(id = LL.get_scope lv) body =
@@ -75,13 +123,14 @@ let () =
   let where_body =
     loop_n i 4 (set w [| iter i |] (where_ (get kk [| iter i |]) (reduction_scope ()) (c 0.)))
   in
-  let where_one = CM.template_cost ~self:w ~at:[| iter i |] where_body in
-  show "where body, hoisted reduction arm" where_one;
-  p "where: exact, 6 ops and 24 bytes per instantiation"
-    ((not where_one.CM.rc_approx) && where_one.CM.rc_flops = 6 && where_one.CM.rc_bytes = 24);
-  (* Review round 2: a single-assignment scope under the arm is what the simplifier collapses into
-     the arm's expression, where it IS conditional — the template prices as the emitted code does, a
-     bound. *)
+  let where_one = price ~self:w [ (Some [| iter i |], where_body) ] in
+  show_opt "where, hoisted reduction arm" where_one;
+  p "where: exact, 6 ops and 24 bytes per read"
+    (match where_one with
+    | Some r -> flops_exact where_one && r.CM.rc_flops = 6 && r.CM.rc_bytes = 24
+    | None -> false);
+  (* A single-assignment scope under the arm is what the simplifier collapses into the arm's
+     expression, where it IS conditional: the op count is a guards-taken bound. *)
   let where_collapsed =
     let id = LL.get_scope lv in
     loop_n i 4
@@ -92,11 +141,12 @@ let () =
             (scope_with ~id (LL.Set_local (id, mul (get a4 [| iter i |]) (c 2.))))
             (c 0.)))
   in
-  let collapsed = CM.template_cost ~self:w ~at:[| iter i |] where_collapsed in
-  show "where body, arm the simplifier inlines (bound)" collapsed;
-  p "where: a collapsible arm prices as the simplified, conditional form" collapsed.CM.rc_approx;
-  (* A shared-loop template carries a sibling setter that instantiation filters out: for i: (S[i] =
-     A[i][0] * 3; T[i] = A[i][1] + A[i][2] + A[i][3]) priced for S is one multiply. *)
+  let collapsed = price ~self:w [ (Some [| iter i |], where_collapsed) ] in
+  show_opt "where, arm the simplifier collapses" collapsed;
+  p "where: a collapsible arm prices as the simplified, conditional form"
+    (match collapsed with Some r -> r.CM.rc_flops_approx | None -> false);
+  (* A shared-loop template carries a sibling setter the inliner filters out: for i: (S[i] := 3
+     A[i][0]; T[i] := A[i][1] + A[i][2] + A[i][3]) read as S is one multiply. *)
   let t = mk "T" in
   let shared =
     loop_n i 4
@@ -108,31 +158,34 @@ let () =
                (add (get a [| iter i; fixed 1 |]) (get a [| iter i; fixed 2 |]))
                (get a [| iter i; fixed 3 |]))))
   in
-  let s_only = CM.template_cost ~self:s ~at:[| iter i |] shared in
-  show "shared-loop body priced for S (sibling dropped)" s_only;
+  let s_only = price ~self:s [ (Some [| iter i |], shared) ] in
+  show_opt "shared loop read as S (sibling filtered)" s_only;
   p "shared loop: the sibling's ops and reads do not price"
-    (s_only.CM.rc_flops = 1 && s_only.CM.rc_bytes = 4);
-  (* Review round 1: an affine index position binds its symbols only according to the reader's index
-     (structural match binds both, unit solving binds one and keeps the other's loop,
-     range-guarded), which the query cannot see — so for oh(2) x wh(2): T2[2*oh + wh] = A[oh][wh] *
-     2 neither loop collapses and the price is a bound, where the bare-iterator vector [oh; wh]
-     collapses both exactly. *)
-  let t2 = mk "T2" and oh = sym () and wh = sym () in
-  let affine_body =
-    loop_n oh 2
-      (loop_n wh 2
-         (set t2 [| aff [ (2, oh); (1, wh) ] 0 |] (mul (get a [| iter oh; iter wh |]) (c 2.))))
+    (match s_only with Some r -> r.CM.rc_flops = 1 && r.CM.rc_bytes = 4 | None -> false);
+  (* The scalar CSE the emitted code receives: a consumer of [x + x] with a virtual [x] carries two
+     alpha-equivalent scope bodies that execute once — one row sum and one add, A's row read
+     once. *)
+  let y = mk "Y" in
+  let twice = loop_n i 4 (set y [| iter i |] (add (reduction_scope ()) (reduction_scope ()))) in
+  let cse = price ~self:y [ (Some [| iter i |], twice) ] in
+  show_opt "two alpha-equivalent scopes (CSE'd)" cse;
+  p "alpha-equivalent scope bodies price once"
+    (flops_exact cse && match cse with Some r -> r.CM.rc_flops = 6 | None -> false);
+  (* An operand read at a fixed position is read by every read's instantiation: B[i] = P[0] + Q[0]
+     is one add and both operands' cells per read. *)
+  let b = mk "B" and pp = mk "P" and q = mk "Q" in
+  let broadcast =
+    loop_n i 4 (set b [| iter i |] (add (get pp [| fixed 0 |]) (get q [| fixed 0 |])))
   in
-  let affine_at = CM.template_cost ~self:t2 ~at:[| aff [ (2, oh); (1, wh) ] 0 |] affine_body in
-  let bare_at = CM.template_cost ~self:t2 ~at:[| iter oh; iter wh |] affine_body in
-  show "affine index position (loops kept, bound)" affine_at;
-  show "bare iterator positions (collapsed, exact)" bare_at;
-  p "affine position: the loops stay and the count is a bound"
-    (affine_at.CM.rc_approx && affine_at.CM.rc_flops = 4);
-  p "bare positions: both loops collapse, exact"
-    ((not bare_at.CM.rc_approx) && bare_at.CM.rc_flops = 1);
-  (* Review round 1: a packed-uniform producer inlines as the lane-extract form, not its vector
-     store, so its template prices only as a bound. *)
+  let bc = price ~self:b [ (Some [| iter i |], broadcast) ] in
+  show_opt "broadcast operands, per read" bc;
+  p "broadcast operands: one add and both cells per read, exact"
+    (match bc with
+    | Some r -> r.CM.rc_flops = 1 && r.CM.rc_bytes = 8 && flops_exact bc && not r.CM.rc_bytes_approx
+    | None -> false);
+  (* A packed-uniform producer inlines as the lane-extract form (gh-509 task 4), not its vector
+     store: the counter's block read at a runtime index (a dynamic read, whose bytes are the whole
+     node's bound) and the lane select — its op count, index arithmetic included, is exact. *)
   let v = mk "V" and u = mk "U" in
   let vec_body =
     loop_n i 1
@@ -146,28 +199,84 @@ let () =
            debug = "";
          })
   in
-  let vec = CM.template_cost ~self:v ~at:[| aff [ (4, i) ] 0 |] vec_body in
-  show "packed-uniform producer (bound)" vec;
-  p "packed-uniform producer prices as a bound" vec.CM.rc_approx;
-  (* Review round 1: a stored template predates the scalar CSE the emitted code receives, so a
-     consumer of [x + x] with a virtual [x] carries two alpha-equivalent scope bodies that execute
-     once: Y[i] = { lv := sum_k A[i][k] } + { lv' := sum_k A[i][k] } prices one row sum and one add
-     (6 ops), with A's row read once — exact. *)
-  let y = mk "Y" in
-  let twice = loop_n i 4 (set y [| iter i |] (add (reduction_scope ()) (reduction_scope ()))) in
-  let cse = CM.template_cost ~self:y ~at:[| iter i |] twice in
-  show "two alpha-equivalent scopes (CSE'd)" cse;
-  p "alpha-equivalent scope bodies price once" ((not cse.CM.rc_approx) && cse.CM.rc_flops = 6);
-  (* Review round 2: a bare symbol repeated across positions (a diagonal producer) binds once and
-     guards the other occurrences against the reader's arguments — substitution-dependent. *)
-  let d = mk ~dims:[| 4; 4 |] "D" and j = sym () in
-  let diag = loop_n j 4 (set d [| iter j; iter j |] (mul (get a4 [| iter j |]) (c 2.))) in
-  let diag_cost = CM.template_cost ~self:d ~at:[| iter j; iter j |] diag in
-  show "diagonal producer (bound)" diag_cost;
-  p "a repeated bare symbol prices as a bound" diag_cost.CM.rc_approx
+  let vec = price ~self:v [ (Some [| aff [ (4, i) ] 0 |], vec_body) ] in
+  show_opt "packed-uniform producer (lane extract)" vec;
+  p "packed-uniform producer: the lane-extract form, exact ops, dynamic-read bytes a bound"
+    (match vec with
+    | Some r -> (not r.CM.rc_flops_approx) && r.CM.rc_flops > 0 && r.CM.rc_bytes_approx
+    | None -> false)
+
+(* The shapes whose binding depends on the reader's index — the ones the hand rewrite marked as
+   bounds. Each is optimized with a virtual producer and an identity reader spanning its axes; the
+   price must be exactly what the reader statement the optimizer emits costs. *)
+let () =
+  Stdio.printf "== guard-emitting shapes: price = emitted read ==\n";
+  let case ~name ~self ~reader ~materialized llc =
+    let o = optimize ~materialized ~name llc in
+    let priced = CM.recompute_cost o.LL.optimize_ctx self in
+    let emitted = emitted_read o ~reader ~self in
+    show_opt (name ^ ", priced") priced;
+    show_opt (name ^ ", emitted") emitted;
+    p (name ^ ": the producer is inlined at the reader") (known_virtual o self);
+    p (name ^ ": the price is the emitted read, counts and exactness") (same_cost priced emitted);
+    priced
+  in
+  (* Affine write position: T2[2*oh + wh] = A[oh][wh] for oh, wh < 2, read at out[x]. Unit solving
+     binds wh := x - 2*oh', keeps the oh loop and range-guards it. The arm only reads, so every op
+     priced is the guard's; the count stays a bound through the guard's own short-circuiting [&&]
+     (its upper comparison runs only when the lower one holds) — [analyze]'s rule for any gated
+     operand, which the emitted read gets too, not a pricer predicate. *)
+  let t2 = mk "T2" and a = mk ~dims:[| 2; 2 |] "Aff" and out = mk "outA" in
+  let oh = sym () and wh = sym () and x = sym () in
+  let affine =
+    seq
+      (loop_n oh 2
+         (loop_n wh 2 (set t2 [| aff [ (2, oh); (1, wh) ] 0 |] (get a [| iter oh; iter wh |]))))
+      (loop_n x 4 (set out [| iter x |] (get t2 [| iter x |])))
+  in
+  let affine_price =
+    case ~name:"affine position" ~self:t2 ~reader:out ~materialized:[ a; out ] affine
+  in
+  p "affine position: the kept loop's range guard is priced (the arm itself has no op)"
+    (match affine_price with Some r -> r.CM.rc_flops > 0 | None -> false);
+  (* Diagonal producer: D[j, j] = A4[j] over a zeroed D, read at out[x, y]. The first occurrence of
+     j binds, the second turns into the consistency guard x = y. *)
+  let d = mk ~dims:[| 4; 4 |] "D" and a4 = mk "A4d" and out2 = mk ~dims:[| 4; 4 |] "outD" in
+  let j = sym () and x2 = sym () and y2 = sym () in
+  let diag =
+    seq (zero d)
+      (seq
+         (loop_n j 4 (set d [| iter j; iter j |] (get a4 [| iter j |])))
+         (loop_n x2 4
+            (loop_n y2 4 (set out2 [| iter x2; iter y2 |] (get d [| iter x2; iter y2 |])))))
+  in
+  let diag_price =
+    case ~name:"diagonal producer" ~self:d ~reader:out2 ~materialized:[ a4; out2 ] diag
+  in
+  p "diagonal producer: the consistency guard is counted, the op count exact"
+    (flops_exact diag_price && match diag_price with Some r -> r.CM.rc_flops > 0 | None -> false);
+  (* Two-component concat: B[i] = P[i] for i < 2, B[2 + i] = Q[i] for i < 2, read at out[x]. Every
+     component replays at the read, each under its range guard and select — what the hand rewrite
+     summed without (the raw setters have no op at all). A bound, like the affine case, through a
+     range guard's short-circuiting [&&] where the reader's interval does not fold it away. *)
+  let bc = mk "Bc" and pp = mk ~dims:[| 2 |] "Pc" and q = mk ~dims:[| 2 |] "Qc" in
+  let out3 = mk "outC" in
+  let i1 = sym () and i2 = sym () and x3 = sym () in
+  let concat =
+    seq
+      (loop_n i1 2 (set bc [| iter i1 |] (get pp [| iter i1 |])))
+      (seq
+         (loop_n i2 2 (set bc [| aff [ (1, i2) ] 2 |] (get q [| iter i2 |])))
+         (loop_n x3 4 (set out3 [| iter x3 |] (get bc [| iter x3 |]))))
+  in
+  let concat_price =
+    case ~name:"two-component concat" ~self:bc ~reader:out3 ~materialized:[ pp; q; out3 ] concat
+  in
+  p "two-component concat: the per-component guards and selects are priced (the arms have no op)"
+    (match concat_price with Some r -> r.CM.rc_flops > 0 | None -> false)
 
 (* A chain through a real optimization: x1 = x0 + w1 (virtual), x2 = sin(x1) (virtual), out = x2 *
-   x2. [recompute_cost] of x2 expands x1's template: 1 + 1 ops, x0 and w1 read. *)
+   x2. x2's stored computation already carries x1 inlined as a nested scope: 1 + 1 ops. *)
 let () =
   Stdio.printf "== recompute_cost through optimize ==\n";
   let x0 = mk "x0" and w1 = mk "w1" and x1 = mk "x1" and x2 = mk "x2" and out = mk "out" in
@@ -183,18 +292,14 @@ let () =
   let o = optimize ~name:"cmt_chain" llc in
   p "chain: both links virtual" (known_virtual o x1 && known_virtual o x2);
   let cost = CM.recompute_cost o.LL.optimize_ctx in
-  let show_opt name = function
-    | None -> Stdio.printf "  %-44s none\n" name
-    | Some r -> show name r
-  in
   let c1 = cost x1 and c2 = cost x2 in
   show_opt "x1 = x0 + w1" c1;
-  show_opt "x2 = sin(x1), x1 expanded" c2;
+  show_opt "x2 = sin(x1), x1 nested" c2;
   p "chain: x2's recompute is transitive (2 ops, x0 and w1's cells)"
     (match c2 with
-    | Some r -> r.CM.rc_flops = 2 && r.CM.rc_bytes = 8 && not r.CM.rc_approx
+    | Some r -> r.CM.rc_flops = 2 && r.CM.rc_bytes = 8 && flops_exact c2 && not r.CM.rc_bytes_approx
     | None -> false);
-  p "chain: a materialized leaf has no template cost" (Option.is_none (cost x0));
+  p "chain: a materialized leaf has no stored computation to price" (Option.is_none (cost x0));
   Stdio.printf "  flip candidates:\n";
   let reading_name : LL.reading -> string = function
     | `Materialize -> "materialize"
@@ -215,7 +320,17 @@ let () =
   p "chain: x2's Materialize flip is priced by the model (2 ops x multiplicity 1, one reader)"
     (match find x2 `Materialize with
     | Some fa -> fa.LL.fa_modeled && fa.LL.fa_recompute_cost = 2
-    | None -> false)
+    | None -> false);
+  (* Pricing is side-effect free: the lineage's placements are untouched, and no symbol is drawn
+     from the counter generated code is numbered by. *)
+  let placements_before = Sexp.to_string (Tn.Placements.sexp_of_t o.LL.optimize_ctx.placements) in
+  let (Idx.Symbol before) = Idx.get_symbol () in
+  ignore (CM.recompute_cost o.LL.optimize_ctx x2 : CM.recompute option);
+  let (Idx.Symbol after) = Idx.get_symbol () in
+  p "pricing draws no symbol from the global counter" (after = before + 1);
+  p "pricing leaves the lineage's placements untouched"
+    (String.equal placements_before
+       (Sexp.to_string (Tn.Placements.sexp_of_t o.LL.optimize_ctx.placements)))
 
 (* The ordering witness: a = p + q + r (fan-in 3, two adds) and b = sin(sin(sin(sin(p)))) (fan-in 1,
    four ops), both consumed once. The proxy ranks a above b (3 > 1), the model b above a (4 > 2). *)
@@ -276,86 +391,250 @@ let () =
   in
   p "witness: executed values match the reference" (same got [ expected ])
 
-(* [producer_cost]: the setter nest of a materialized node in optimized code, per written cell. The
-   chain x1..x3 with x3 consumed: materializing x3 by declaration keeps x1, x2 inlined into its
-   setter, so its per-cell cost is the three adds of the prefix. *)
-let () =
-  Stdio.printf "== producer_cost on a materialized setter nest ==\n";
-  let x0 = mk "y0" and w1 = mk "v1" and w2 = mk "v2" and w3 = mk "v3" in
-  let x1 = mk "y1" and x2 = mk "y2" and x3 = mk "y3" and out = mk "out3" in
-  List.iter [ x0; w1; w2; w3; x3; out ] ~f:materialize;
-  let syms = Array.init 4 ~f:(fun _ -> sym ()) in
-  let link tn prev w s =
-    loop_n s 4 (set tn [| iter s |] (add (get prev [| iter s |]) (get w [| iter s |])))
+(* The [`Inline] flip of a node a heuristic cap materialized. Its computation was never stored (the
+   cap fires before the virtualizer's walk), so the pricer re-runs that walk over the node's raw
+   setter statements in a scratch copy of the lineage with the node undecided, and instantiates what
+   it stores in the world that re-run leaves. The oracle is the read the optimizer emits once the
+   node is preferred inline: the modeled flip cost must be that read's op count times the node's
+   read multiplicity. *)
+let inline_flip_vs_emitted ~name ~self ~reader ~materialized ~mult ?(prior = fun _ -> ()) llc =
+  let ctx = LL.empty_optimize_ctx () in
+  prior ctx;
+  let o = optimize_in ctx ~materialized ~name llc in
+  p (name ^ ": a heuristic cap materialized the node") (known_non_virtual o self);
+  let inline_flip =
+    List.find_map o.LL.flip_candidates ~f:(fun fc ->
+        if Tn.equal fc.LL.fc_tn self then
+          List.find fc.LL.fc_alternatives ~f:(fun fa -> LL.equal_reading fa.LL.fa_flip `Inline)
+        else None)
   in
+  (match inline_flip with
+  | Some fa ->
+      Stdio.printf "  %-46s cost %d %s\n" (name ^ ", Inline flip") fa.LL.fa_recompute_cost
+        (if fa.LL.fa_modeled then "(modeled)" else "(proxy)")
+  | None -> Stdio.printf "  %-46s no Inline flip\n" name);
+  let ctx_pref = LL.empty_optimize_ctx () in
+  prior ctx_pref;
+  LL.prefer_inline ctx_pref [ self ];
+  let o_pref = optimize_in ctx_pref ~materialized ~name:(name ^ "_pref") llc in
+  p (name ^ ": preferred inline, the node is inlined at the reader") (known_virtual o_pref self);
+  let emitted = emitted_read o_pref ~reader ~self in
+  show_opt (name ^ ", emitted read once inlined") emitted;
+  p
+    (name ^ ": the Inline flip is modeled and prices the emitted read's ops per instantiation")
+    (match (inline_flip, emitted) with
+    | Some fa, Some e ->
+        fa.LL.fa_modeled && (not e.CM.rc_flops_approx)
+        && fa.LL.fa_recompute_cost = mult * e.CM.rc_flops
+    | _ -> false);
+  o
+
+let () =
+  Stdio.printf "== the Inline flip of a cap-materialized node ==\n";
+  (* R[i] = sum_k A[i][k] over k < 20: the inline-reduction cap (16) materializes it. *)
+  let rr = mk "R" and a = mk ~dims:[| 4; 20 |] "Ar" and out = mk "outR" in
+  let i = sym () and k = sym () and x = sym () in
+  let llc =
+    seq (zero rr)
+      (seq
+         (loop_n i 4
+            (loop_n k 20
+               (set rr [| iter i |] (add (get rr [| iter i |]) (get a [| iter i; iter k |])))))
+         (loop_n x 4 (set out [| iter x |] (get rr [| iter x |]))))
+  in
+  ignore
+    (inline_flip_vs_emitted ~name:"reduction cap" ~self:rr ~reader:out ~materialized:[ a; out ]
+       ~mult:1 llc
+      : LL.optimized);
+  (* A packed-uniform producer read twice per cell (the visit cap materializes it) whose counter is
+     a virtual producer: materialized, V's setter inlines the counter, and cleanup commits the
+     counter virtual — yet once V is inlined, the lane-extract form reads the counter as a buffer
+     and commits it materialized (review round 2). The walk re-run stores V's setter raw, as the
+     store does, and the read is instantiated against the placements the walk left, where the
+     counter is still undecided. *)
+  let v = mk "Vp" and u = mk ~dims:[| 1 |] "Up" and wp = mk ~dims:[| 1 |] "Wp" in
+  let o = mk ~dims:[| 4; 2 |] "op" in
+  let i = sym () and j = sym () and x = sym () and y = sym () in
   let llc =
     seq
-      (link x1 x0 w1 syms.(0))
+      (loop_n j 1 (set u [| iter j |] (add (get wp [| iter j |]) (c 1.))))
       (seq
-         (link x2 x1 w2 syms.(1))
-         (seq
-            (link x3 x2 w3 syms.(2))
-            (loop_n syms.(3) 4 (set out [| iter syms.(3) |] (get x3 [| iter syms.(3) |])))))
+         (loop_n i 1
+            (LL.Set_from_vec
+               {
+                 tn = v;
+                 idcs = [| aff [ (4, i) ] 0 |];
+                 length = 4;
+                 vec_unop = Ops.Uint4x32_to_prec_uniform;
+                 arg = (get u [| iter i |], single);
+                 debug = "";
+               }))
+         (loop_n x 4 (loop_n y 2 (set o [| iter x; iter y |] (get v [| iter x |])))))
   in
-  let o = optimize ~name:"cmt_producer" llc in
-  p "producer: x1 and x2 inlined into x3's setter" (known_virtual o x1 && known_virtual o x2);
-  (match CM.producer_cost ~self:x3 o.LL.llc with
-  | None -> Stdio.printf "  none\n"
-  | Some r -> show "x3's setter nest, per cell" r);
-  p "producer: three adds and four leaf cells per written cell"
-    (match CM.producer_cost ~self:x3 o.LL.llc with
-    | Some r -> r.CM.rc_flops = 3 && r.CM.rc_bytes = 16 && not r.CM.rc_approx
-    | None -> false);
-  p "producer: a node the code never sets has no producer cost"
-    (Option.is_none (CM.producer_cost ~self:x1 o.LL.llc));
-  (* Review round 1: a node with several setters (block/concat components) replays every component
-     at a read site, so the per-read cost sums the setters' per-cell costs rather than averaging the
-     node's work over its cells: B[i] = P[i] * 2 for i < 2 and B[2 + i] = Q[i] * 3 price two ops per
-     read, not one — and only as a bound (round 4): the inliner's per-component range guards and
-     selects are work the setters do not carry. *)
-  let b = mk "B" and pp = mk "P" and q = mk "Q" and i1 = sym () and i2 = sym () in
-  let two_setters =
-    seq
-      (loop_n i1 2 (set b [| iter i1 |] (mul (get pp [| iter i1 |]) (c 2.))))
-      (loop_n i2 2 (set b [| aff [ (1, i2) ] 2 |] (mul (get q [| iter i2 |]) (c 3.))))
-  in
-  (match CM.producer_cost ~self:b two_setters with
-  | None -> Stdio.printf "  none\n"
-  | Some r -> show "two-component producer, per read" r);
-  p "two-component producer: components sum (2 ops, 8 bytes per read), a bound"
-    (match CM.producer_cost ~self:b two_setters with
-    | Some r -> r.CM.rc_flops = 2 && r.CM.rc_bytes = 8 && r.CM.rc_approx
-    | None -> false);
-  (* Review round 4: a setter writing through an affine map is substitution-dependent like a
-     template's affine position — the replay may keep a loop and range-guard it. *)
-  let shifted = loop_n i2 2 (set b [| aff [ (1, i2) ] 2 |] (mul (get q [| iter i2 |]) (c 3.))) in
-  p "an affine setter map prices as a bound"
-    (match CM.producer_cost ~self:b shifted with Some r -> r.CM.rc_approx | None -> false);
-  (* Review round 2: cross-statement hoisting can leave a setter reading a scope local whose
-     definition sits in a preceding statement the pruning drops; the shared body is work a
-     re-inlining executes, so such a setter prices as a bound. *)
-  let hv = mk ~dims:[||] "hv" in
-  virtualize hv;
-  let hid = LL.get_scope hv in
-  let hoisted =
-    seq
+  ignore
+    (inline_flip_vs_emitted ~name:"packed-uniform, virtual counter" ~self:v ~reader:o
+       ~materialized:[ wp; o ] ~mult:2 llc
+      : LL.optimized);
+  (* A cap-materialized node sharing its captured loop with a virtual sibling it reads: for i: (P[i]
+     = 2 A[i]; for k < 20: R[i] += P[i] B[i][k]). The walk re-run stores only the priced node — the
+     sibling keeps the computation the routine's walk stored, so a read of R inlines one copy of P,
+     as the preferred-inline routine does (review round 3). *)
+  let ps = mk "Ps" and rs = mk "Rs" and a_s = mk "As2" and bs = mk ~dims:[| 4; 20 |] "Bs" in
+  let os = mk "os" in
+  let i = sym () and k = sym () and x = sym () in
+  let llc =
+    seq (zero rs)
       (seq
-         (LL.Declare_local { id = hid; needs_init = false })
-         (LL.Set_local (hid, mul (get pp [| fixed 0 |]) (c 2.))))
-      (loop_n i1 2 (set b [| iter i1 |] (add (LL.Get_local hid) (get q [| iter i1 |]))))
+         (loop_n i 4
+            (seq
+               (set ps [| iter i |] (mul (get a_s [| iter i |]) (c 2.)))
+               (loop_n k 20
+                  (set rs
+                     [| iter i |]
+                     (add
+                        (get rs [| iter i |])
+                        (mul (get ps [| iter i |]) (get bs [| iter i; iter k |])))))))
+         (loop_n x 4 (set os [| iter x |] (get rs [| iter x |]))))
   in
-  p "a setter reading a hoisted local it does not define prices as a bound"
-    (match CM.producer_cost ~self:b hoisted with Some r -> r.CM.rc_approx | None -> false);
-  (* Review round 3: an operand read at a fixed position is read by every cell's computation — B[i]
-     = P[0] + Q[0] costs one add and both operands' cells per read, which an aggregate footprint
-     averaged over the written cells would report as a fraction. *)
-  let broadcast =
-    loop_n i1 4 (set b [| iter i1 |] (add (get pp [| fixed 0 |]) (get q [| fixed 0 |])))
+  ignore
+    (inline_flip_vs_emitted ~name:"shared loop with a virtual sibling" ~self:rs ~reader:os
+       ~materialized:[ a_s; bs; os ] ~mult:1 llc
+      : LL.optimized);
+  (* A consumer read twice per cell (the visit cap materializes it), reading an inherited virtual
+     producer diagonally: by default the consumer's setter hosts the producer's footprint scratch.
+     Once the consumer is inlined its setter is no longer a materialized one, the footprint decision
+     retracts to ordinary inlining, and the producer's reduction is part of every read (review round
+     2). *)
+  let ai = mk ~dims:[| 4; 4 |] "Ai" and cc = mk "Ci" and xi = mk "Xi" in
+  let oi = mk ~dims:[| 4; 2 |] "oi" in
+  let producer =
+    let i = sym () and j = sym () and k = sym () in
+    seq (zero ai)
+      (loop_n i 4
+         (loop_n j 4
+            (loop_n k 20
+               (set ai
+                  [| iter i; iter j |]
+                  (add (get ai [| iter i; iter j |]) (add (tag i j) (embed k)))))))
   in
-  (match CM.producer_cost ~self:b broadcast with
-  | None -> Stdio.printf "  none\n"
-  | Some r -> show "broadcast operands, per read" r);
-  p "broadcast operands: one add and both cells per read, exact"
-    (match CM.producer_cost ~self:b broadcast with
-    | Some r -> r.CM.rc_flops = 1 && r.CM.rc_bytes = 8 && not r.CM.rc_approx
-    | None -> false)
+  let prior ctx =
+    let o = optimize_in ctx ~name:"cmt_inherited_producer" producer in
+    p "footprint: the producer routine leaves the node virtual" (known_virtual o ai)
+  in
+  let i = sym () and x = sym () and y = sym () in
+  let llc =
+    seq
+      (loop_n i 4 (set cc [| iter i |] (mul (get ai [| iter i; iter i |]) (get xi [| iter i |]))))
+      (loop_n x 4 (loop_n y 2 (set oi [| iter x; iter y |] (get cc [| iter x |]))))
+  in
+  let o =
+    inline_flip_vs_emitted ~name:"consumer of a footprint-scoped producer" ~self:cc ~reader:oi
+      ~materialized:[ xi; oi ] ~mult:2 ~prior llc
+  in
+  p "footprint: by default the consumer reads the producer through a scratch"
+    (Hashtbl.existsi o.LL.traced_store ~f:(fun ~key ~data:_ ->
+         String.equal key.Tn.namespace LL.footprint_namespace))
+
+(* The flip pricer draws nothing from the counters generated code is numbered by, however it prices
+   — including the walk it re-runs for a cap-materialized node: optimizing a program with such a
+   candidate consumes exactly as many symbols and scope ids as optimizing it with the pricer off. *)
+let () =
+  Stdio.printf "== pricing is invisible to the generated code's numbering ==\n";
+  let rr = mk "Rn" and a = mk ~dims:[| 4; 20 |] "An" and out = mk "outN" and lvn = mk "lvn" in
+  let i = sym () and k = sym () and x = sym () in
+  let llc =
+    seq (zero rr)
+      (seq
+         (loop_n i 4
+            (loop_n k 20
+               (set rr [| iter i |] (add (get rr [| iter i |]) (get a [| iter i; iter k |])))))
+         (loop_n x 4 (set out [| iter x |] (get rr [| iter x |]))))
+  in
+  let consumed () =
+    (* Both runs analyze from scratch: a cache hit would skip the analysis' own minting. *)
+    LL.clear_analysis_cache ();
+    let (Idx.Symbol s0) = Idx.get_symbol () and { LL.scope_id = c0; _ } = LL.get_scope lvn in
+    let o = optimize ~materialized:[ a; out ] ~name:"cmt_numbering" llc in
+    let (Idx.Symbol s1) = Idx.get_symbol () and { LL.scope_id = c1; _ } = LL.get_scope lvn in
+    (o, s1 - s0, c1 - c0)
+  in
+  let o, symbols, scopes = consumed () in
+  let modeled =
+    List.exists o.LL.flip_candidates ~f:(fun fc ->
+        List.exists fc.LL.fc_alternatives ~f:(fun fa -> fa.LL.fa_modeled))
+  in
+  let pricer = !LL.recompute_pricer in
+  (LL.recompute_pricer := fun ~static_indices:_ _ _ -> None);
+  let _, symbols_off, scopes_off =
+    Exn.protect ~f:consumed ~finally:(fun () -> LL.recompute_pricer := pricer)
+  in
+  p "numbering: the priced compile did price a candidate" modeled;
+  p "numbering: pricing draws no symbol and no scope id"
+    (symbols = symbols_off && scopes = scopes_off)
+
+(* An [`Inline] flip a READER refuses (review round 4): over a zeroed F, F[0] = 2 X[0], read at F[0]
+   and at F[1] by every cell of out[x] (the visit cap materializes F). The synthetic read at the
+   written slice would be served, but replaying the flip meets the read at F[1], which the inliner
+   cannot serve (13): the pricer instantiates at every read site the routine has, and prices the
+   flip by the proxy. *)
+let () =
+  Stdio.printf "== an Inline flip a read site refuses ==\n";
+  let f = mk ~dims:[| 2 |] "Fr" and x = mk ~dims:[| 1 |] "Xr" and out = mk ~dims:[| 2 |] "outF" in
+  let j = sym () in
+  let llc =
+    seq (zero f)
+      (seq
+         (set f [| fixed 0 |] (mul (get x [| fixed 0 |]) (c 2.)))
+         (loop_n j 2 (set out [| iter j |] (add (get f [| fixed 0 |]) (get f [| fixed 1 |])))))
+  in
+  let o = optimize ~materialized:[ x; out ] ~name:"cmt_reader_refused" llc in
+  p "reader-refused flip: a cap materialized the node" (known_non_virtual o f);
+  let inline_flip =
+    List.find_map o.LL.flip_candidates ~f:(fun fc ->
+        if Tn.equal fc.LL.fc_tn f then
+          List.find fc.LL.fc_alternatives ~f:(fun fa -> LL.equal_reading fa.LL.fa_flip `Inline)
+        else None)
+  in
+  p "reader-refused flip: offered, and priced by the proxy rather than modeled"
+    (match inline_flip with Some fa -> not fa.LL.fa_modeled | None -> false);
+  let ctx = LL.empty_optimize_ctx () in
+  LL.prefer_inline ctx [ f ];
+  let o_pref = optimize_in ctx ~materialized:[ x; out ] ~name:"cmt_reader_refused_pref" llc in
+  Stdio.printf "  preferred inline, the virtualizer's verdict: %s\n"
+    (Option.value_map (rejection_code o_pref f) ~default:"none" ~f:Tn.provenance_to_string);
+  p "reader-refused flip: preferred inline, the virtualizer refuses it all the same"
+    (known_non_virtual o_pref f)
+
+(* An [`Inline] flip the store itself refuses: a scalar reduction S[0] = sum_i A[i] over i < 20 (the
+   cap materializes it). Captured at its setter, the read of A escapes the reduction loop the
+   capture leaves outside, so [virtual_llc] refuses the node however it is preferred — and so does
+   the walk the pricer re-runs, which prices the flip by the proxy instead of modeling a reading
+   that cannot happen (the hand rewrite priced such a flip as the whole nest per read). *)
+let () =
+  Stdio.printf "== an Inline flip the store refuses ==\n";
+  let s = mk ~dims:[| 1 |] "Ssum"
+  and a = mk ~dims:[| 20 |] "As"
+  and out = mk ~dims:[| 1 |] "outS" in
+  let i = sym () in
+  let llc =
+    seq (zero s)
+      (seq
+         (loop_n i 20 (set s [| fixed 0 |] (add (get s [| fixed 0 |]) (get a [| iter i |]))))
+         (set out [| fixed 0 |] (get s [| fixed 0 |])))
+  in
+  let o = optimize ~materialized:[ a; out ] ~name:"cmt_refused" llc in
+  let inline_flip =
+    List.find_map o.LL.flip_candidates ~f:(fun fc ->
+        if Tn.equal fc.LL.fc_tn s then
+          List.find fc.LL.fc_alternatives ~f:(fun fa -> LL.equal_reading fa.LL.fa_flip `Inline)
+        else None)
+  in
+  p "refused flip: offered, and priced by the proxy rather than modeled"
+    (match inline_flip with Some fa -> not fa.LL.fa_modeled | None -> false);
+  let ctx = LL.empty_optimize_ctx () in
+  LL.prefer_inline ctx [ s ];
+  let o_pref = optimize_in ctx ~materialized:[ a; out ] ~name:"cmt_refused_pref" llc in
+  Stdio.printf "  preferred inline, the virtualizer's verdict: %s\n"
+    (Option.value_map (rejection_code o_pref s) ~default:"none" ~f:Tn.provenance_to_string);
+  p "refused flip: preferred inline, the virtualizer refuses it all the same"
+    (known_non_virtual o_pref s)

@@ -17,7 +17,7 @@ arrayjit/lib/low_level.ml, check_and_store_virtual:
   144:dynamic-write
   147:enclosing-repetition-loop
   148:scan-recurrence
-arrayjit/lib/low_level.ml, inline_computation:
+arrayjit/lib/low_level.ml, instantiate_computations:
   13:call-site-index-mismatch
   14:empty-inlined-body
   140:vector-setter-unsupported
@@ -26,13 +26,14 @@ arrayjit/lib/low_level.ml, inline_computation:
   149:scan-at-inline
 The phase table in test/operations/virtual_rejection_boundary.ml is held to those functions:
   Store -- check_and_store_virtual
-  Consumption -- inline_computation
+  Consumption -- instantiate_computations
 Files naming a code, as `Non_virtual N` or by its tag -- the checklist for a change to where a code can fire:
 arrayjit/lib/low_level.ml -- 4 5 7 8 9 10 11 12 13 14 19 51 52 140 141 142 143 144 145 146 147 148 149
 arrayjit/lib/low_level.mli -- 148
 arrayjit/lib/tnode.ml -- 13
 docs/agent-notes/virtualization-and-inlining.md -- 8 9 13 19 52 141 142 143 144 147 148 149
 docs/lowering_and_inlining.md -- 4 5 7 8 9 10 11 12 13 14 19 51 52 140 141 142 143 144 145 146 147 148 149
+test/operations/cost_model_template.expected -- 9 13
 test/operations/footprint_materialization.ml -- 13
 test/operations/scan_loop.expected -- 148
 test/operations/scan_loop.ml -- 148

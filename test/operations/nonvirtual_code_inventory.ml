@@ -37,7 +37,8 @@ let own_golden = "test/operations/nonvirtual_code_inventory.expected"
 (* The boundary test's phase constructors, and the function whose codes each one names. The cap
    phase is absent on purpose: the test derives it from [Low_level.is_cap_provenance], and caps are
    provenance constructors rather than codes. *)
-let phases = [ ("Store", "check_and_store_virtual"); ("Consumption", "inline_computation") ]
+(* Consumption is [inline_computation]'s instantiation core, which mints its codes (gh-ocannl-1011). *)
+let phases = [ ("Store", "check_and_store_virtual"); ("Consumption", "instantiate_computations") ]
 
 (* Read, but not part of the checklist: text that describes the code as it stood on a date, and that
    a later change does not revise. A prefix no file lives under is stale and fails. *)

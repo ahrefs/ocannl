@@ -954,24 +954,61 @@ type flip_candidate = {
     reproduces the materialized placement. *)
 
 val recompute_pricer :
-  (optimize_ctx ->
-  static_indices:Indexing.static_symbol list ->
-  t ->
+  (static_indices:Indexing.static_symbol list ->
+  (Tnode.t -> (Tnode.Placements.t * (Indexing.axis_index array option * t) list, string) Result.t) ->
   Tnode.t ->
-  reading ->
   int option)
   ref
-(** gh-ocannl-637: the seam through which the cost model prices {!flip_candidate}s' alternatives —
-    given the lineage, the routine's static indices (the interval environment the emitted code was
-    simplified under) and the optimized code, the exact per-instantiation op count of a candidate's
-    recompute ([None] when the model's count is only a bound, or the node has no priceable
-    computation). Exact for ONE instantiation as the stored computation stands under a generic point
-    read: what a particular reader folds away (a constant substituted for an index, a sub-image
-    collapsing a loop) or shares (sibling readers whose instantiations [hoist_cross_statement_cse]
-    merges) only lowers what executes, so the product with the per-cell read multiplicity is a bound
-    in the same sense the traced proxy's is. [Cost_model] registers it at module initialization; the
-    default prices nothing, so every candidate carries the traced proxy. A pricer must be pure:
-    [specialize_proc] consults it once per candidate of a compile. *)
+(** gh-ocannl-637, gh-ocannl-1011: the seam through which the cost model prices {!flip_candidate}s'
+    alternatives — given the routine's static indices and, per node, the WORLD a read of it is
+    instantiated in (placements and the node's computations), the exact op count of ONE read of a
+    candidate ([None] when the model's count is only a bound, or the inliner cannot serve the read).
+    [specialize_proc] supplies the world: a node's stored computations under the placements as the
+    routine's walk left them (before cleanup commits its own reading), or, for a node a heuristic
+    cap materialized before the walk, the computations the walk itself stores when it is not
+    materialized — the walk re-run over the node's raw setter statements in a scratch copy of the
+    lineage — with the placements that re-run left. Every reading prices that one instantiation,
+    replayed by the inliner at a synthetic read ({!instantiate_at_synthetic_read}), so the guards it
+    emits, its binding choices and the pipeline's rewrites are in the priced code. Exact for the
+    most general in-bounds reader; what a particular reader folds away (a constant substituted for
+    an index, a sub-image collapsing a loop) or shares (sibling readers whose instantiations
+    [hoist_cross_statement_cse] merges) only lowers what executes, so the product with the per-cell
+    read multiplicity is a bound in the same sense the traced proxy's is. [Cost_model] registers it
+    at module initialization; the default prices nothing, so every candidate carries the traced
+    proxy. A pricer must be pure: [specialize_proc] consults it once per alternative of a compile.
+*)
+
+val post_virtualization_pipeline :
+  Tnode.Placements.t ->
+  traced_store ->
+  input_scopes:Set.M(Scope_id).t ->
+  static_indices:Indexing.static_symbol list ->
+  t ->
+  t
+(** gh-ocannl-1011: the passes virtualized code receives in [specialize_proc], in order —
+    [cleanup_virtual_llc] (placement commitments; a scope over a node committed non-virtual after
+    the scope was minted retracts to a read), {!simplify_llc} under the static indices' interval
+    environment, the hosted-constant link-time conversion, {!rewrite_one_hot_reductions},
+    {!eliminate_common_subexpressions} and {!hoist_cross_statement_cse}. One function, so the
+    routine and the flip-candidate pricer's synthetic instantiation cannot receive different
+    pipelines. Commits placements in the given table. *)
+
+val instantiate_at_synthetic_read :
+  placements:Tnode.Placements.t ->
+  static_indices:Indexing.static_symbol list ->
+  Tnode.t ->
+  (Indexing.axis_index array option * t) list ->
+  (t, string) Result.t
+(** gh-ocannl-1011: the code ONE read of the node executes — the given computations (a stored
+    template list, newest first) instantiated by [inline_computation]'s own core at a synthetic read
+    site, wrapped as the scope a reader's statement carries ([Set_local] of it), and put through
+    {!post_virtualization_pipeline}, all on a copy of [placements] in which the node is virtual. The
+    read site is the most general in-bounds reader: a fresh symbol per axis, ranging over the axis,
+    except where every value-carrying computation writes the same position free of non-static
+    symbols (a fixed slice, a static index — the only position such a component can serve).
+    Side-effect free: nothing is committed, and the symbols and scope ids it mints are negative,
+    never from the counters generated code is numbered by. [Error] carries the inliner's rejection
+    code (or the pipeline's message) where the read cannot be served. *)
 
 type pipelined_tile = { pt_depth : int; pt_rotor : Indexing.symbol } [@@deriving sexp_of]
 (** gh-487: a software-pipelined (double-buffered) staged tile — codegen allocates [pt_depth]

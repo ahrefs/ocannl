@@ -222,7 +222,7 @@ let () =
   List.iter [ "arrayjit"; "arrayjit/lib"; "test"; "test/operations"; "docs" ] ~f:(fun dir ->
       Unix.mkdir (Stdlib.Filename.concat root dir) 0o700);
   write "arrayjit/lib/low_level.ml"
-    (library_with ~store:"check_and_store_virtual" ~consume:"inline_computation");
+    (library_with ~store:"check_and_store_virtual" ~consume:"instantiate_computations");
   let boundary = "test/operations/virtual_rejection_boundary.ml" in
   write boundary table;
   write "docs/page.md"
@@ -248,14 +248,15 @@ let () =
   check "shipping inventory lists a page citing a code both ways" ~exit:0
     ~message:"docs/page.md -- 7 9" (run ());
   check "shipping inventory groups the codes under the function minting them" ~exit:0
-    ~message:"arrayjit/lib/low_level.ml, inline_computation:\n  4:fixture-consume\n" (run ());
+    ~message:"arrayjit/lib/low_level.ml, instantiate_computations:\n  4:fixture-consume\n" (run ());
   write "docs/page.md" ("A candidate is refused as `" ^ nv ^ " 3`.\n");
   check "shipping inventory refuses a citation of a code no raise site mints" ~exit:1
     ~message:"docs/page.md: `Non" (run ());
   write "docs/page.md" "";
   write boundary "let phase_table = [ (\"4:fixture-consume\", Store) ]\n";
   check "shipping inventory refuses a phase table placing a code in the wrong phase" ~exit:1
-    ~message:"puts 4:fixture-consume at Store, but it is minted in inline_computation" (run ());
+    ~message:"puts 4:fixture-consume at Store, but it is minted in instantiate_computations"
+    (run ());
   let rec remove path =
     if Stdlib.Sys.is_directory path then (
       Array.iter (Stdlib.Sys.readdir path) ~f:(fun name ->

@@ -1,6 +1,6 @@
 decision surface:
-  n4       materialize -> inline cost 192
-  n3       materialize -> inline cost 128
+  n3       materialize -> inline cost 64
+  n4       materialize -> inline cost 64
   relu_s1  inline      -> materialize cost 2
   exp_y    inline      -> materialize cost 1
 model_default with placement levels returns a routine with correct values: true

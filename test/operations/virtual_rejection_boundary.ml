@@ -79,8 +79,8 @@ type verdict = Rejected of phase * Ir.Tnode.provenance | Accepted
    literals at their raise sites, in two functions of [low_level.ml] -- and held to those raise
    sites from outside: test/operations/nonvirtual_code_inventory reads this binding and refuses an
    entry whose phase's function does not mint its tag (Store is [check_and_store_virtual],
-   Consumption is [inline_computation]), as it refuses a tag minted in both. Keep it a list of
-   literal pairs, which is what that reader accepts.
+   Consumption is [instantiate_computations], [inline_computation]'s core), as it refuses a tag
+   minted in both. Keep it a list of literal pairs, which is what that reader accepts.
 
    An entry no row exercises is refused below, so the table cannot double as documentation of the
    codes this test does not reach: the header lists those, and the inventory's golden lists every

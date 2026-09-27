@@ -2041,40 +2041,23 @@ let computation_reads_merge ~self code =
       | Affine.Barrier | Affine.Staged | Affine.Mma ->
           false)
 
-let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
-    (optim_ctx : optimize_ctx) (traced : traced_array)
+(* The instantiation half of [inline_computation] (gh-ocannl-1011): [computations] (a
+   stored-template list, newest first) replayed at [call_args] as the body of the scope [id], or the
+   rejection code of the read site. Loop symbols it keeps come from [fresh_symbol]; the lane-extract
+   form commits its counter [Never_virtual] in [placements]. Given a copy of the lineage's
+   placements and a [fresh_symbol] that does not draw on [Indexing.get_symbol], it touches nothing
+   the lineage or the generated code's numbering can observe — what [instantiate_at_synthetic_read]
+   relies on. *)
+let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
+    ~(placements : Tn.Placements.t) ~id (self : Tn.t)
+    (computations : (Indexing.axis_index array option * t) list)
     (static_indices : Indexing.static_symbol list) (call_args : Indexing.axis_index array) :
-    t option =
+    (t, string) Result.t =
   let exception Non_virtual of string in
   let static_indices =
     Set.of_list (module Indexing.Symbol)
     @@ List.map ~f:(fun s -> s.Indexing.static_symbol) static_indices
   in
-  let computations =
-    Hashtbl.find optim_ctx.computations traced.tn
-    |> Option.value_or_thunk ~default:(fun () ->
-        raise
-        @@ Utils.User_error
-             [%string
-               "Stale optimize_ctx: No computations found for #%{traced.tn.Tn.id#Int}: \
-                %{Tn.debug_name traced.tn}"])
-  in
-  (* Review round 2 of the gh-610/611 PR: a computation INHERITED from an earlier routine of the
-     lineage that reads a merge buffer must not be consumed here — merge-buffer contents are
-     transient to the routine receiving the transfer, and this routine declaring the SAME merge
-     source does not rescue the splice: the deferred read would observe this routine's transfer, not
-     the one it was written against. Detection is at consumption time because only the entry-time
-     snapshot (taken in [virtual_llc]) can tell inherited components from ones stored during this
-     routine's own walk; a post-hoc scan of the final code cannot. *)
-  if Hash_set.mem inherited_merge_tainted traced.tn then
-    raise
-    @@ Utils.User_error
-         [%string
-           "the deferred computation of %{Tn.debug_name traced.tn} was stored by an earlier \
-            routine of this compilation lineage and reads a merge buffer: merge-buffer contents \
-            are transient to the routine receiving the transfer, so the computation cannot be \
-            consumed across routines. Mark %{Tn.debug_name traced.tn} as materialized (e.g. via \
-            Train.set_materialized) in the routine that computes it."];
   (* gh-509 task 4: a packed-uniform producer ([Set_from_vec]) is inlined via the lane-extract
      scalar form [vec_convert(counter[flat / lanes]).v[flat mod lanes]], where [flat] is the read
      cell's flat offset -- bitwise-identical to the vectorized stores (the lane builtins index the
@@ -2086,7 +2069,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
     List.find_map computations ~f:(fun (_, def) ->
         let rec find = function
           | Set_from_vec { tn; idcs; length = _; vec_unop; arg = arg_scalar, _; debug = _ }
-            when Tn.equal tn traced.tn ->
+            when Tn.equal tn self ->
               Some (idcs, vec_unop, arg_scalar)
           | For_loop { body; _ } -> find body
           | Seq (a, b) -> ( match find a with Some _ as r -> r | None -> find b)
@@ -2097,13 +2080,13 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
   let lane_extract_body (idcs, vec_unop, arg_scalar) : t =
     (* [Set_from_vec] assumes an unpadded dense target; lowering rejects padded targets, re-check
        defensively (the flat-offset arithmetic below would be wrong under padding). *)
-    (match Tn.get_padding traced.tn with
+    (match Tn.get_padding self with
     | None -> ()
     | Some (pads, _) when Array.for_all pads ~f:(fun p -> p.Ops.left = 0 && p.Ops.right = 0) -> ()
     | Some _ -> raise @@ Non_virtual "145:lane-extract-layout");
-    let prec = Lazy.force traced.tn.Tn.storage_prec in
+    let prec = Lazy.force self.Tn.storage_prec in
     let lanes = Ops.vec_unop_lanes prec in
-    let dims = Lazy.force traced.tn.Tn.dims in
+    let dims = Lazy.force self.Tn.dims in
     (* Flat row-major offset of an index vector over [dims], as affine terms plus a constant. *)
     let flat_of arr =
       if Array.length arr <> Array.length dims then raise @@ Non_virtual "145:lane-extract-layout";
@@ -2150,7 +2133,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
           (* The counter is about to gain a dynamically-indexed read, which recomputation cannot
              serve: it must stay materialized. Bail out (keeping the uniform result materialized, as
              before gh-509 task 4) if the counter's placement is already committed the other way. *)
-          (match Tn.Placements.get optim_ctx.placements ctr with
+          (match Tn.Placements.get placements ctr with
           | Some ((Virtual | Effectively_constant), _) ->
               raise @@ Non_virtual "146:lane-extract-counter"
           | _ -> ());
@@ -2182,8 +2165,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
                 let block_sc = Binop (Ops.Div, (flat_sc, iprec), (lanes_sc, iprec)) in
                 Get_dynamic { tn = ctr; idcs = idcs'; dyn_axis; dyn_value = (block_sc, iprec) }
           in
-          Tn.Placements.update optim_ctx.placements ctr Never_virtual
-            (Site "146:lane-extract-counter");
+          Tn.Placements.update placements ctr Never_virtual (Site "146:lane-extract-counter");
           ctr_read
       | _ ->
           (* Argument is not a plain counter read (e.g. the counter chain was materialized away or
@@ -2206,7 +2188,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
      reads fall back to materialization via [Non_virtual 13] below, preserving prior behavior. *)
   let has_zero_init =
     let rec contains = function
-      | Zero_out tn -> Tn.equal tn traced.tn
+      | Zero_out tn -> Tn.equal tn self
       | Seq (a, b) -> contains a || contains b
       | For_loop { body; _ } | Scan_loop { body; _ } -> contains body
       | _ -> false
@@ -2295,7 +2277,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
       failwith
         [%string
           "inline_computation: call_args too short, maybe stale optimization context? Tnode: \
-           %{Tn.debug_name traced.tn} #%{traced.tn.Tn.id#Int} n: %{n#Int}"];
+           %{Tn.debug_name self} #%{self.Tn.id#Int} n: %{n#Int}"];
     (* [bound_pos.(i)] marks positions that DEFINE bindings (no consistency guard for them).
        [range_guards] collects [(solved_symbol, range)] pairs whose value must fall in [0,
        range). *)
@@ -2445,7 +2427,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
           Some Noop
       | For_loop { index; from_; to_; body; axis } ->
           (* Freshen the binding. *)
-          let fresh = Indexing.get_symbol () in
+          let fresh = fresh_symbol () in
           let env = Map.add_exn ~key:index ~data:(Indexing.Iterator fresh) env in
           Option.map ~f:(fun body : t -> For_loop { index = fresh; from_; to_; body; axis })
           @@ loop env body
@@ -2459,11 +2441,11 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
              ever lapse, a node refused here reads as a consumption-time refusal
              (gh-ocannl-1015). *)
           raise @@ Non_virtual "149:scan-at-inline"
-      | Zero_out tn when Tn.equal tn traced.tn -> Some (Set_local (id, Constant 0.0))
-      | Set { tn; idcs; llsc; debug = _ } when Tn.equal tn traced.tn ->
+      | Zero_out tn when Tn.equal tn self -> Some (Set_local (id, Constant 0.0))
+      | Set { tn; idcs; llsc; debug = _ } when Tn.equal tn self ->
           assert ([%equal: Indexing.axis_index array option] (Some idcs) def_args);
           let inlined = loop_scalar env llsc in
-          let value_prec = Lazy.force traced.tn.Tn.storage_prec in
+          let value_prec = Lazy.force self.Tn.storage_prec in
           let index_prec = Ops.index_prec () in
           (* gh-133 Stage A: consistency (equality) guards for repeated / covered single-symbol
              affine positions -- the substituted producer index must equal the call-site index.
@@ -2525,7 +2507,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
           in
           Some (Set_local (id, guarded))
       | Set_from_vec { tn; idcs; length = _; vec_unop = _; arg = _; debug = _ }
-        when Tn.equal tn traced.tn ->
+        when Tn.equal tn self ->
           assert ([%equal: Indexing.axis_index array option] (Some idcs) def_args);
           (* Unreachable since gh-509 task 4: computations containing a [Set_from_vec] setter of
              this node are diverted to [lane_extract_body] before the generic path. *)
@@ -2543,7 +2525,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
     and loop_scalar env llsc : scalar_t =
       match llsc with
       | Constant _ | Constant_bits _ -> llsc
-      | Get (tn, indices) when Tn.equal tn traced.tn ->
+      | Get (tn, indices) when Tn.equal tn self ->
           assert ([%equal: Indexing.axis_index array option] (Some indices) def_args);
           Get_local id
       | Get (tn, indices) -> Get (tn, Array.map ~f:(subst env) indices)
@@ -2585,7 +2567,7 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
   in
   try
     match set_from_vec_def with
-    | Some def -> Some (lane_extract_body def)
+    | Some def -> Ok (lane_extract_body def)
     | None ->
         let body = List.rev_filter_map ~f:loop_proc computations in
         if List.is_empty body then raise @@ Non_virtual "14:empty-inlined-body"
@@ -2599,24 +2581,61 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
             if !global_needs_init && not has_zero_init then Set_local (id, Constant 0.0) :: body
             else body
           in
-          Some (unflat_lines body)
-  with Non_virtual i ->
-    (* Review round 11: an INHERITED computation has no materialization fallback — the deferring
-       routine already dropped the setters from its schedule, so committing [Never_virtual] here
-       would either conflict with the lineage's [Virtual] commitment (a cryptic provenance-collision
-       error) or commit the consumer to a buffer no routine writes. Fail actionably instead. *)
-    if Hash_set.mem inherited_tns traced.tn then
-      raise
-        (Utils.User_error
-           [%string
-             "the deferred computation of %{Tn.debug_name traced.tn}, stored by an earlier routine \
-              of this compilation lineage, could not be inlined at a read site of this routine \
-              (rejection %{i}: unsupported indexing or vector form for inlining): no routine \
-              writes the node's buffer, so the read cannot fall back to a materialized access. \
-              Mark %{Tn.debug_name traced.tn} as materialized (e.g. via Train.set_materialized) in \
-              the routine that computes it."]);
-    Tn.Placements.update optim_ctx.placements traced.tn Never_virtual (Site i);
-    None
+          Ok (unflat_lines body)
+  with Non_virtual i -> Error i
+
+let%track7_sexp inline_computation ?(fresh_symbol = Indexing.get_symbol) ~id
+    ~inherited_merge_tainted ~inherited_tns (optim_ctx : optimize_ctx) (traced : traced_array)
+    (static_indices : Indexing.static_symbol list) (call_args : Indexing.axis_index array) :
+    t option =
+  let computations =
+    Hashtbl.find optim_ctx.computations traced.tn
+    |> Option.value_or_thunk ~default:(fun () ->
+        raise
+        @@ Utils.User_error
+             [%string
+               "Stale optimize_ctx: No computations found for #%{traced.tn.Tn.id#Int}: \
+                %{Tn.debug_name traced.tn}"])
+  in
+  (* Review round 2 of the gh-610/611 PR: a computation INHERITED from an earlier routine of the
+     lineage that reads a merge buffer must not be consumed here — merge-buffer contents are
+     transient to the routine receiving the transfer, and this routine declaring the SAME merge
+     source does not rescue the splice: the deferred read would observe this routine's transfer, not
+     the one it was written against. Detection is at consumption time because only the entry-time
+     snapshot (taken in [virtual_llc]) can tell inherited components from ones stored during this
+     routine's own walk; a post-hoc scan of the final code cannot. *)
+  if Hash_set.mem inherited_merge_tainted traced.tn then
+    raise
+    @@ Utils.User_error
+         [%string
+           "the deferred computation of %{Tn.debug_name traced.tn} was stored by an earlier \
+            routine of this compilation lineage and reads a merge buffer: merge-buffer contents \
+            are transient to the routine receiving the transfer, so the computation cannot be \
+            consumed across routines. Mark %{Tn.debug_name traced.tn} as materialized (e.g. via \
+            Train.set_materialized) in the routine that computes it."];
+  match
+    instantiate_computations ~fresh_symbol ~placements:optim_ctx.placements ~id traced.tn
+      computations static_indices call_args
+  with
+  | Ok body -> Some body
+  | Error i ->
+      (* Review round 11: an INHERITED computation has no materialization fallback — the deferring
+         routine already dropped the setters from its schedule, so committing [Never_virtual] here
+         would either conflict with the lineage's [Virtual] commitment (a cryptic
+         provenance-collision error) or commit the consumer to a buffer no routine writes. Fail
+         actionably instead. *)
+      if Hash_set.mem inherited_tns traced.tn then
+        raise
+          (Utils.User_error
+             [%string
+               "the deferred computation of %{Tn.debug_name traced.tn}, stored by an earlier \
+                routine of this compilation lineage, could not be inlined at a read site of this \
+                routine (rejection %{i}: unsupported indexing or vector form for inlining): no \
+                routine writes the node's buffer, so the read cannot fall back to a materialized \
+                access. Mark %{Tn.debug_name traced.tn} as materialized (e.g. via \
+                Train.set_materialized) in the routine that computes it."]);
+      Tn.Placements.update optim_ctx.placements traced.tn Never_virtual (Site i);
+      None
 
 let optimize_integer_pow = ref true
 
@@ -2676,10 +2695,15 @@ let fresh_footprint_id =
     Int.incr c;
     !c
 
-let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_indices
+let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope) ?only_store
+    (optim_ctx : optimize_ctx) traced_store reverse_node_map static_indices
     ~(footprint_scoped : (Tn.t, Tn.provenance option) Hashtbl.t)
     ~(footprint_retracted : Tnode.t Hash_set.t) (llc : t) : t * Tnode.t Hash_set.t =
   let plc = optim_ctx.placements in
+  (* gh-ocannl-1011: a pricing re-walk ({!walked_computations}) stores only the node it prices;
+     every other node keeps the computation the routine's own walk stored, rather than gaining a
+     second copy of it. *)
+  let stores tn = match only_store with None -> true | Some self -> Tn.equal self tn in
   (* Every array read inside the inlined body of an INHERITED computation (present in the lineage
      table at routine entry — the snapshot above): cross-routine splicing introduces reads the raw
      analysis never saw, so the reconcile-time strict coverage verdicts apply exactly to these
@@ -2737,11 +2761,11 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
      the node was committed [Never_virtual] there; the read then stays a buffer read. *)
   let inline_get (traced : traced_array) indices : scalar_t =
     let tn = traced.tn in
-    let id = get_scope tn in
+    let id = fresh_scope tn in
     Option.value ~default:(Get (tn, indices))
     @@ Option.map
-         (inline_computation ~id ~inherited_merge_tainted ~inherited_tns optim_ctx traced
-            static_indices indices) ~f:(fun body ->
+         (inline_computation ~fresh_symbol ~id ~inherited_merge_tainted ~inherited_tns optim_ctx
+            traced static_indices indices) ~f:(fun body ->
            if Hash_set.mem inherited_tns tn then record_spliced_reads body;
            Local_scope { id; body; orig_indices = indices; mint = Inlined_computation })
   in
@@ -2794,7 +2818,7 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
            || List.exists loops ~f:(fun (_, (from_, _)) -> from_ <> 0) ->
         `Unsupported
     | Some placement -> (
-        let fresh = List.map loops ~f:(fun (s, (_, to_)) -> (s, Indexing.get_symbol (), to_)) in
+        let fresh = List.map loops ~f:(fun (s, (_, to_)) -> (s, fresh_symbol (), to_)) in
         let env =
           Map.of_alist_exn (module Indexing.Symbol) (List.map fresh ~f:(fun (s, f, _) -> (s, f)))
         in
@@ -2810,10 +2834,10 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
           | Indexing.Fixed_idx _ | Indexing.Sub_axis | Indexing.Concat _ -> idx
         in
         let call_args = Array.map indices ~f:substitute in
-        let id = get_scope tn in
+        let id = fresh_scope tn in
         match
-          inline_computation ~id ~inherited_merge_tainted ~inherited_tns optim_ctx traced
-            static_indices call_args
+          inline_computation ~fresh_symbol ~id ~inherited_merge_tainted ~inherited_tns optim_ctx
+            traced static_indices call_args
         with
         | None -> `Rejected
         | Some body ->
@@ -2995,25 +3019,28 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
                  [check_and_store]/[inline_computation] filter the stored body to [k]'s own setters,
                  so the irrelevant sibling setters left un-rewritten here are dropped. *)
               List.iteri candidates ~f:(fun k tn ->
-                  let node : traced_array = get_node traced_store tn in
-                  let store_pf = List.fold (List.drop candidates k) ~init:process_for ~f:Set.add in
-                  let stored =
-                    (* gh-509 task 4: vector-store producers are stored raw, see
-                       [proc_contains_set_from_vec]. *)
-                    if proc_contains_set_from_vec tn body then For_loop { for_config with body }
-                    else
-                      For_loop
-                        {
-                          for_config with
-                          body =
-                            loop_proc ~process_for:store_pf ~owned:owned' ~in_storage_pass:true
-                              ~guarded ~in_scan ~enclosing:enclosing' body;
-                        }
-                  in
-                  (* The stored subtree is rooted AT this loop, so [enclosing] (not [enclosing']) is
-                     what it fails to contain. *)
-                  check_and_store_virtual optim_ctx ~guarded ~in_scan ~enclosing node static_indices
-                    stored);
+                  if stores tn then
+                    let node : traced_array = get_node traced_store tn in
+                    let store_pf =
+                      List.fold (List.drop candidates k) ~init:process_for ~f:Set.add
+                    in
+                    let stored =
+                      (* gh-509 task 4: vector-store producers are stored raw, see
+                         [proc_contains_set_from_vec]. *)
+                      if proc_contains_set_from_vec tn body then For_loop { for_config with body }
+                      else
+                        For_loop
+                          {
+                            for_config with
+                            body =
+                              loop_proc ~process_for:store_pf ~owned:owned' ~in_storage_pass:true
+                                ~guarded ~in_scan ~enclosing:enclosing' body;
+                          }
+                    in
+                    (* The stored subtree is rooted AT this loop, so [enclosing] (not [enclosing'])
+                       is what it fails to contain. *)
+                    check_and_store_virtual optim_ctx ~guarded ~in_scan ~enclosing node
+                      static_indices stored);
               (* Phase 2 -- emit. Candidates are NOT in [process_for], so surviving readers
                  (materialized siblings, and later virtual siblings, all now stored) inline the
                  provider; [owned'] still suppresses candidate auto-store; each candidate setter
@@ -3032,6 +3059,7 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
           (not @@ Set.mem process_for tn)
           && (not @@ Set.mem owned tn)
           && (not @@ Tn.Placements.known_non_virtual plc traced.tn)
+          && stores tn
         then
           check_and_store_virtual optim_ctx ~guarded ~in_scan ~enclosing traced static_indices llc;
         llc
@@ -3063,6 +3091,7 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
           (not @@ Set.mem process_for tn)
           && (not @@ Set.mem owned tn)
           && (not @@ Tn.Placements.known_non_virtual plc traced.tn)
+          && stores tn
         then
           check_and_store_virtual optim_ctx ~guarded ~in_scan ~enclosing traced static_indices
             result;
@@ -3093,6 +3122,7 @@ let virtual_llc (optim_ctx : optimize_ctx) traced_store reverse_node_map static_
           (not @@ Set.mem process_for tn)
           && (not @@ Set.mem owned tn)
           && (not @@ Tn.Placements.known_non_virtual plc traced.tn)
+          && stores tn
         then
           (* gh-509 task 4: store the raw statement (argument not rewritten), see
              [proc_contains_set_from_vec]. The emitted statement remains [result]. *)
@@ -7856,21 +7886,179 @@ let hosted_constant_inits_to_link_time (plc : Tn.Placements.t) (traced_store : t
             traced.read_only <- true);
     llc
 
-(* gh-ocannl-637: the modeled per-instantiation op count of a flip candidate's recompute — the cost
-   model's account of one inlined computation ([Cost_model.recompute_cost] over the stored templates
-   for a [`Materialize] flip, [Cost_model.producer_cost] over the setter nest for an [`Inline] one),
-   [None] where the count is not exact. [Cost_model] sits above this module, so it registers the
-   pricer at initialization; until then (or in a program linking no cost model) the traced proxy
-   prices every candidate. *)
+(* gh-ocannl-1011: the passes virtualized code receives on its way to being the routine's schedule —
+   cleanup's commitments and retractions, simplification under the routine's interval environment,
+   the hosted-constant link-time conversion, the one-hot reduction rewrite, then the scalar and the
+   cross-statement CSE — as one function, so the flip-candidate pricer's synthetic instantiation
+   ({!instantiate_at_synthetic_read}) receives exactly the pipeline the emitted code does rather
+   than a remembered subset of it. *)
+let post_virtualization_pipeline plc traced_store ~input_scopes ~static_indices (llc : t) : t =
+  hoist_cross_statement_cse @@ eliminate_common_subexpressions
+  @@ rewrite_one_hot_reductions ~static_indices
+  @@ hosted_constant_inits_to_link_time plc traced_store
+  @@ simplify_llc static_indices
+  @@ cleanup_virtual_llc plc ~input_scopes ~static_indices llc
+
+(* gh-ocannl-1011: the symbols and scope ids pricing mints. Negative, so never one the counters
+   generated code is numbered by ([Indexing.get_symbol], [get_scope]) hands out, and never reset, so
+   no two pricing instantiations share one. *)
+let pricing_counter = ref 0
+
+let pricing_symbol () =
+  Int.decr pricing_counter;
+  Indexing.Symbol !pricing_counter
+
+let pricing_scope tn =
+  Int.decr pricing_counter;
+  { tn; scope_id = !pricing_counter }
+
+let rec writes_node (self : Tn.t) (c : t) =
+  match c with
+  | Seq (a, b) -> writes_node self a || writes_node self b
+  | For_loop { body; _ } | Scan_loop { body; _ } | If { body; _ } -> writes_node self body
+  | Set { tn; _ } | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } | Zero_out tn -> Tn.equal tn self
+  | Tile_mma { d = tn, _; _ } -> Tn.equal tn self
+  | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Set_local _ ->
+      false
+
+(* gh-ocannl-1011: the computations the virtualizer stores for [self] when it is NOT materialized —
+   for a node a heuristic cap materialized before the walk, whose computation the routine's walk
+   therefore never stored — obtained by running that walk ({!virtual_llc}) over the routine's raw
+   statements writing [self], in a scratch world: copies of the lineage ([ctx]), of the placements
+   as the routine's walk left them ([placements]) with [self] undecided, of the traced store and of
+   the footprint decisions — storing only [self] ([~only_store]), so every other node keeps the
+   computation the routine's walk stored instead of gaining a second copy. So the walk decides
+   everything a flip to inlining changes about the node's own computation — where it is captured,
+   which refusals apply, the raw storage of a packed-uniform producer, and a footprint read its
+   setter no longer hosts retracting to inlining or to the producer's materialization — then checks
+   that every read site the routine has for the node is one the inliner can serve, and returns the
+   scratch placements with the stored computations, the world a read of the flipped node is
+   instantiated in. [Error] carries the store's rejection code. The scratch lineage already holds
+   this routine's own templates, which the re-walk's entry snapshot takes for inherited ones; that
+   changes nothing it prices — the reads of them it replays are ones the routine's walk already
+   served — beyond turning a merge-reading template into a refusal, whose inlined merge read would
+   have made the count opaque anyway. *)
+let walked_computations ~(ctx : optimize_ctx) ~placements ~traced_store ~reverse_node_map
+    ~footprint_scoped ~static_indices ~raw (self : Tn.t) :
+    (Tn.Placements.t * (Indexing.axis_index array option * t) list, string) Result.t =
+  match List.filter (flat_lines [ raw ]) ~f:(writes_node self) with
+  | [] -> Error "12:no-setter"
+  | stmts -> (
+      let plc = Tn.Placements.copy placements in
+      Tn.Placements.unsafe_restore plc self None;
+      let scratch = { (copy_optimize_ctx ctx) with placements = plc } in
+      Hashtbl.remove scratch.computations self;
+      try
+        ignore
+          (virtual_llc ~fresh_symbol:pricing_symbol ~fresh_scope:pricing_scope ~only_store:self
+             scratch (copy_traced_store traced_store) reverse_node_map static_indices
+             ~footprint_scoped:(Hashtbl.copy footprint_scoped)
+             ~footprint_retracted:(Hash_set.create (module Tnode))
+             (unflat_lines stmts)
+            : t * Tnode.t Hash_set.t);
+        match Hashtbl.find scratch.computations self with
+        | Some computations when not (Tn.Placements.known_non_virtual plc self) ->
+            (* The flip replays at every read the routine has of [self] — outside its own setters,
+               whose self-reads the store turned into the scope local — and the first read the
+               inliner cannot serve commits the node materialized (a consumption-time rejection, 13
+               and the like), so each is instantiated here at its own indices. *)
+            let reads =
+              List.concat_map (flat_lines [ raw ]) ~f:(fun stmt ->
+                  if writes_node self stmt then []
+                  else
+                    List.filter (affine_accesses stmt) ~f:(fun (a : Tn.t Affine.access) ->
+                        Tn.equal a.a_tn self && (not a.a_write) && Affine.loops_live a.a_loops))
+            in
+            if List.exists reads ~f:(fun a -> a.Affine.a_dynamic) then Error "dynamic-gather-read"
+            else
+              List.fold_result reads ~init:() ~f:(fun () (a : Tn.t Affine.access) ->
+                  Result.map ~f:ignore
+                    (instantiate_computations ~fresh_symbol:pricing_symbol ~placements:plc
+                       ~id:(pricing_scope self) self computations static_indices a.a_map))
+              |> Result.map ~f:(fun () -> (plc, computations))
+        | _ -> (
+            match Tn.Placements.get plc self with
+            | Some (_, Site code) -> Error code
+            | Some (_, prov) -> Error (Tn.provenance_to_string prov)
+            | None -> Error "12:no-setter")
+      with Utils.User_error m | Invalid_argument m | Failure m -> Error m)
+
+(* gh-ocannl-1011: what ONE read of [self] executes, as code — [computations] instantiated by the
+   inliner itself ({!instantiate_computations}, the core of [inline_computation]) at a synthetic
+   read site, wrapped as the scope a reader's statement would carry, and put through
+   {!post_virtualization_pipeline}. The read site is the most general in-bounds reader: per axis, a
+   fresh symbol ranging over the axis (so the interval folds any reader spanning the axis gets are
+   taken, and none a narrower reader would add), except where every value-carrying computation
+   writes the same position free of non-static symbols (a fixed slice, a static index), which is the
+   only position a reader can be served at. Side-effect free: everything is decided on a copy of
+   [placements] in which [self] is virtual — the reading being priced — and the symbols and scope
+   ids are {!pricing_symbol}'s and {!pricing_scope}'s. [Error] carries the rejection code where the
+   inliner or the pipeline refuses the read. *)
+let instantiate_at_synthetic_read ~(placements : Tn.Placements.t) ~static_indices (self : Tn.t)
+    (computations : (Indexing.axis_index array option * t) list) : (t, string) Result.t =
+  let statics =
+    Set.of_list (module Indexing.Symbol)
+    @@ List.map static_indices ~f:(fun s -> s.Indexing.static_symbol)
+  in
+  let nonstatic = function
+    | Indexing.Iterator s -> not (Set.mem statics s)
+    | Indexing.Affine { symbols; _ } ->
+        List.exists symbols ~f:(fun (_, s) -> not (Set.mem statics s))
+    | Indexing.Concat _ -> true
+    | Indexing.Fixed_idx _ | Indexing.Sub_axis -> false
+  in
+  let ats = List.filter_map computations ~f:fst in
+  let rank = List.fold ats ~init:0 ~f:(fun m at -> max m (Array.length at)) in
+  let dims = Lazy.force self.Tn.dims in
+  let reader = ref [] in
+  let call_args =
+    Array.init rank ~f:(fun a ->
+        match List.filter_map ats ~f:(fun at -> Option.some_if (a < Array.length at) at.(a)) with
+        | p :: rest when (not (nonstatic p)) && List.for_all rest ~f:(Indexing.equal_axis_index p)
+          ->
+            p
+        | _ ->
+            let s = pricing_symbol () in
+            let static_range = Option.some_if (a < Array.length dims && dims.(a) > 0) dims.(a) in
+            reader :=
+              {
+                Indexing.static_symbol = s;
+                static_range;
+                used_as_extent = false;
+                used_as_slice = false;
+              }
+              :: !reader;
+            Indexing.Iterator s)
+  in
+  let plc = Tn.Placements.copy placements in
+  Tn.Placements.unsafe_restore plc self (Some (Virtual, Site "1011:synthetic-read"));
+  let id = pricing_scope self and sink = pricing_scope self in
+  try
+    Result.map
+      (instantiate_computations ~fresh_symbol:pricing_symbol ~placements:plc ~id self computations
+         static_indices call_args) ~f:(fun body ->
+        post_virtualization_pipeline plc
+          (Hashtbl.create (module Tnode))
+          ~input_scopes:(Set.empty (module Scope_id))
+          ~static_indices:(static_indices @ List.rev !reader)
+          (Set_local
+             (sink, Local_scope { id; body; orig_indices = call_args; mint = Inlined_computation })))
+  with Utils.User_error m | Invalid_argument m | Failure m -> Error m
+
+(* gh-ocannl-637, gh-ocannl-1011: the modeled op count of one read of a flip candidate — the cost
+   model's account ([Cost_model.modeled_recompute_flops]) of the node's computations instantiated at
+   a synthetic read, in the world [specialize_proc] hands it per node (the stored computations under
+   the placements the walk left, or {!walked_computations} for a node the walk never stored), [None]
+   where the count is not exact. [Cost_model] sits above this module, so it registers the pricer at
+   initialization; until then (or in a program linking no cost model) the traced proxy prices every
+   candidate. *)
 let recompute_pricer :
-    (optimize_ctx ->
-    static_indices:Indexing.static_symbol list ->
-    t ->
+    (static_indices:Indexing.static_symbol list ->
+    (Tnode.t -> (Tnode.Placements.t * (Indexing.axis_index array option * t) list, string) Result.t) ->
     Tnode.t ->
-    reading ->
     int option)
     ref =
-  ref (fun _ctx ~static_indices:_ _llc _tn _flip -> None)
+  ref (fun ~static_indices:_ _world _tn -> None)
 
 let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : optimized =
   let static_indices = an.an_static_indices in
@@ -7891,18 +8079,19 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
   (* gh-ocannl-681: taken BEFORE virtualization, so cleanup can tell the scopes this pass was handed
      from the ones it mints and only retracts its own. *)
   let input_scopes = input_scope_ids llc in
+
   let virtual_llc_result, spliced_reads =
     virtual_llc input_ctx traced_store an.an_reverse_node_map static_indices ~footprint_scoped
       ~footprint_retracted llc
   in
+  (* gh-ocannl-1011: the placements as the walk left them, before cleanup commits its own reading of
+     the surviving candidates — the state a read is instantiated against, in the routine and in the
+     flip-candidate pricer's synthetic read alike. *)
+  let walked_placements = Tn.Placements.copy input_ctx.placements in
   validate_virtualization_decision_coverage input_ctx.placements virtual_llc_result;
   let llc =
-    hoist_cross_statement_cse @@ eliminate_common_subexpressions
-    @@ rewrite_one_hot_reductions ~static_indices
-    @@ hosted_constant_inits_to_link_time input_ctx.placements traced_store
-    @@ simplify_llc static_indices
-    @@ cleanup_virtual_llc input_ctx.placements ~input_scopes ~static_indices
-    @@ virtual_llc_result
+    post_virtualization_pipeline input_ctx.placements traced_store ~input_scopes ~static_indices
+      virtual_llc_result
   in
   let cap_inline_flips = Hash_set.create (module Tnode) in
   let uses_merge, spliced_rbw =
@@ -7917,7 +8106,15 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
      ([default_to_most_local]) has not yet rewritten the cap provenances. *)
   let flip_candidates =
     let plc = input_ctx.placements in
-    let price = !recompute_pricer input_ctx ~static_indices llc in
+    let price =
+      !recompute_pricer ~static_indices (fun tn ->
+          match Hashtbl.find input_ctx.computations tn with
+          | Some computations -> Ok (walked_placements, computations)
+          | None ->
+              walked_computations ~ctx:input_ctx ~placements:walked_placements ~traced_store
+                ~reverse_node_map:an.an_reverse_node_map ~footprint_scoped ~static_indices
+                ~raw:an.an_llc tn)
+    in
     Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:traced acc ->
         let one_hot = traced.prefers_virtual_one_hot && not traced.has_non_one_hot_setter in
         (* gh-ocannl-616: a node an earlier routine left virtual and this specialization
@@ -7999,7 +8196,7 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
                 (* gh-ocannl-637: the modeled op count of one recompute, times the instantiations;
                    the traced proxy (reduction extent × instantiations × transitive fan-in) where
                    the model's count is not exact. *)
-                let modeled = price tn fa_flip in
+                let modeled = price tn in
                 let fa_recompute_cost =
                   match modeled with
                   | Some flops -> flops * instantiations
