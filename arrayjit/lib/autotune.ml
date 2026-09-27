@@ -44,7 +44,9 @@ type outcome =
    instrument. See the tables in gh-ocannl-755. Re-measured there on 2026-09-27 (gh-ocannl-833) the
    offset had shrunk to 0-6 us (at most 1.08x), and the crown still moved in 3 of 4 site-runs
    against 0 of 4 for [Queued]: the offset's variation between candidates, not its size, reorders a
-   close pair.
+   close pair. The same site-runs on M4 Max Metal (offset 42-143 us) moved the isolated crown in 3
+   of 4 too, and on CUDA sm_120 (a uniform 3.8-5.6 us against a 10-18% gap between the top two) in 0
+   of 4; [Queued] crowned the batched winner in every site-run on all three backends.
 
    [Queued] is the default because it is the objective the workload presents: a training step queues
    every kernel of a layer into one stream and synchronizes at the end, so no kernel in it pays a
