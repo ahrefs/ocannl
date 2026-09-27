@@ -52,7 +52,8 @@ if [ -e "$out" ] && [ -n "$(ls -A "$out" 2>/dev/null)" ]; then
   exit 2
 fi
 mkdir -p "$out" || exit 2
-out=$(cd "$out" && pwd -P)
+out=$(cd "$out" && pwd -P) && case $out in /?*) ;; *) false ;; esac ||
+  { echo "gh834: OUT did not resolve to an absolute directory" >&2; exit 2; }
 # Everything printed from here on is written to OUT/driver.log synchronously -- an asynchronous tee
 # could still be writing when the caller archives OUT, and its failures would go unobserved -- and
 # the whole log is replayed to the caller's stdout on exit. Follow a live run with tail -f.
@@ -196,7 +197,17 @@ require_complete_session() {
     *"\"arm\":\"$arm\",\"state\":\"searched\""*) ;;
     *) echo "== step $1: INCOMPLETE SESSION: arm $arm did not complete a search"; status=1 ;;
     esac
+    # A search can complete having timed nothing (every candidate declined; the GPU serial baseline
+    # is never dispatched): such an arm holds no evidence about timing cost.
+    case $(printf '%s' "$line" | sed -n "s/.*\"arm\":\"$arm\"[^}]*\"best_ms\":\([^,}]*\).*/\1/p") in
+    '' | null) echo "== step $1: INCOMPLETE SESSION: arm $arm timed no candidate"; status=1 ;;
+    esac
   done
+  if ! grep -q '^timing-trace: summary: [0-9.]*s wall, [0-9]* candidate attempts, [1-9][0-9]* timing calls' \
+    "$out/$1.err"; then
+    echo "== step $1: INCOMPLETE SESSION: the trace recorded no timing call"
+    status=1
+  fi
   # Whatever shape a terminal failure takes, it is not null; and every contention count is zero.
   if [ "$(printf '%s' "$line" | grep -o '"terminal_failure":' | wc -l)" -ne \
     "$(printf '%s' "$line" | grep -o '"terminal_failure":null' | wc -l)" ]; then
@@ -225,7 +236,7 @@ for s in "$@"; do
   case $s in
   build)
     step build sh -c "cd '$root' && dune build bin/projection_shape_bench.exe \
-      benchmarks/runners/ocannl/bench_gpt.exe" || { rc=$?; cat "$out/build.err"; exit "$rc"; }
+      benchmarks/runners/ocannl/bench_gpt.exe" || { cat "$out/build.err"; exit 1; }
     built=1
     ;;
   provenance)
@@ -283,7 +294,8 @@ for s in "$@"; do
       # A capped session is a lower bound only if the search had begun under the pinned treatment;
       # a cap spent loading the fixture or building the graph measured no search at all.
       if [ "$rc" -eq 124 ] && grep -q '^timing-trace: attempt ' "$out/$s.err" &&
-        grep -q "^Found $backend, commandline --ocannl_backend=$backend\$" "$out/$s.err"; then
+        grep -q "^Found $backend, commandline --ocannl_backend=$backend\$" "$out/$s.err" &&
+        grep -q "^Found $mode, commandline --ocannl_autotune_timing=$mode\$" "$out/$s.err"; then
         capped_any=1
       else
         [ "$rc" -eq 124 ] && echo "== step $s: capped before its search began; not a lower bound"
