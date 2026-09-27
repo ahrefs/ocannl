@@ -166,7 +166,10 @@ static void sweep_narrow(uint64_t base, uint64_t count, int64_t *out)
 #if SWEEP_HAS_NATIVE
     {
       unsigned int n = native_narrow(x);
-      int agree = isnan(d) ? (is_nan_code(n) && (n & 0x8000u) == (h & 0x8000u)) : n == h;
+      /* Both sides must be NaNs: a NaN the emulation narrowed to infinity agrees with the native
+         cast's NaN in sign, and that alone is no agreement. */
+      int agree = isnan(d) ? (is_nan_code(n) && is_nan_code(h) && (n & 0x8000u) == (h & 0x8000u))
+                           : n == h;
       if (!agree)
       {
         out[OUT_NATIVE]++;
