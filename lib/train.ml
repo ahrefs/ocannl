@@ -950,7 +950,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      the default exception printer when it swallows it, and that printer shows string fields
      only. *)
   let exception Report_callback_failed of string * exn * Stdlib.Printexc.raw_backtrace in
-  let tune ?to_report arm ctx timing_ctx =
+  let tune ?to_report ?(progress_note = "") arm ctx timing_ctx =
     let to_report = Option.value to_report ~default:report in
     let capture r =
       last := Some r;
@@ -969,6 +969,9 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                    (Exn.to_string exn, exn, Stdlib.Printexc.get_raw_backtrace ())))
     in
     logf "arm %s search:" arm;
+    (* gh-ocannl-1061: the arm-level cost record, on {!Autotune.progressf}'s stream. *)
+    let stopwatch = Autotune.progress_stopwatch () in
+    Autotune.progressf "event=arm_start arm=%S%s" arm progress_note;
     last := None;
     let result =
       match
@@ -996,6 +999,10 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
       | Error _ -> Float.infinity
       | Ok _ -> Option.value_map r ~default:Float.infinity ~f:(fun r -> r.Autotune.best_ms)
     in
+    Autotune.progressf "event=arm_done arm=%S%s result=%s best_ms=%s elapsed_s=%.1f" arm
+      progress_note
+      (match result with Ok _ -> "ok" | Error _ -> "failed")
+      (Autotune.progress_ms best_ms) (stopwatch ());
     (match result with
     | Error (exn, _) ->
         logf "arm %s FAILED, it loses the comparison (%s): %s" arm
@@ -1070,8 +1077,8 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      — so results already collected would be abandoned rooted. Every call after the first goes
      through this (gh-ocannl-550, round-four review); the first needs nothing, since [produced] is
      still empty. *)
-  let tune_or_release ?to_report arm c t =
-    match tune ?to_report arm c t with
+  let tune_or_release ?to_report ?progress_note arm c t =
+    match tune ?to_report ?progress_note arm c t with
     | r -> r
     | exception exn ->
         let backtrace = Stdlib.Printexc.get_raw_backtrace () in
@@ -1110,7 +1117,10 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
     logf "placement store bypassed (tune_placement_store=false): the arms are compared afresh";
   let store =
     if forced || (not placement_store) || String.is_empty cache_dir then None
-    else
+    else (
+      (* gh-ocannl-1061: the store's problem is a lowering, and a replay check another -- steps that
+         can block, so a line names them first, as {!Autotune.tune} does its own. *)
+      Autotune.progressf "event=stage stage=placement_store";
       match
         let problem = placement_problem ?name ?timing_ctx ctx loss comp bindings in
         if SC.complete problem then
@@ -1125,7 +1135,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
       | store -> store
       | exception exn when not (must_propagate exn) ->
           logf "placement store not consulted: %s" (Exn.to_string exn);
-          None
+          None)
   in
   (* A decision as the three lists the context API takes ({!placement_decision_lists}); the context
      it yields; and, at replay, the lowering it produces in the search lineage, whose
@@ -1472,6 +1482,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
       let surface =
         (* Outside the tuner's failure containment; a lowering failure (the A/B searches above can
            still have crowned a winner) must skip the refinement, not fail the tune. *)
+        Autotune.progressf "event=stage stage=flip_surface";
         match Autotune.placement_surface ?name ~evidence ctx comp bindings with
         | s -> Some s
         (* This containment is for a lowering that declined, and for nothing else. A malformed
@@ -1508,6 +1519,8 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
              | None -> name ^ " (configured unconditionally, so no profitability evidence was read)")
             inline_flips
             (if bound_pruning then ", bound pruning on" else "");
+          Autotune.progressf "event=flips_start candidates=%d budget=%d" (List.length candidates)
+            inline_flips;
           (* The incumbent: its result, time, contexts, and the report of the search that produced
              it -- what a refined decision's recording reads its outcome digest from
              (gh-ocannl-1022). *)
@@ -1575,7 +1588,11 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                       in
                       let ctx' = apply base_ctx in
                       let timing' = Option.map base_timing ~f:apply in
-                      let r, ms, rep = tune_or_release ~to_report:flip_report arm ctx' timing' in
+                      let r, ms, rep =
+                        tune_or_release ~to_report:flip_report
+                          ~progress_note:(Printf.sprintf " flip=%d/%d" (!measured + 1) inline_flips)
+                          arm ctx' timing'
+                      in
                       record r;
                       Int.incr measured;
                       Some (fa, r, ms, ctx', timing', rep)
@@ -1614,6 +1631,11 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
           if !pruned > 0 then
             logf "flip refinement: %d flip(s) bound-pruned, %d measured" !pruned !measured;
           let chain_result, chain_ms, _, _, chain_report = !chain in
+          Autotune.progressf
+            "event=flips_done candidates=%d budget=%d measured=%d pruned=%d improved=%b best_ms=%s"
+            (List.length candidates) inline_flips !measured !pruned
+            Float.(chain_ms < winner_ms)
+            (Autotune.progress_ms (Float.min chain_ms winner_ms));
           if Float.(chain_ms < winner_ms) then (
             logf "flip refinement ships: %.4f ms (the placement A/B winner was %.4f ms)" chain_ms
               winner_ms;

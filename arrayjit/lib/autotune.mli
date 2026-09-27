@@ -919,6 +919,67 @@ val no_search_report : timing:timing_mode -> report
     to unwrap. A caller synthesizing a report — a test building a search outcome to feed
     {!family_profit_of_reports}, say — passes whichever objective its scenario is about. *)
 
+(** {2 Progress lines (gh-ocannl-1061)}
+
+    A search's cost record, for a search that may be killed before it reports: with config
+    [autotune_progress=true] (default [false]), {!tune} and {!Train.tune_placements} write single
+    lines to stderr, each flushed as it is written, of the form
+
+    {v autotune-progress: wall_s=<s> event=<event> <key>=<value> ... v}
+
+    [wall_s] is seconds since the process started (this module's initialization); string values are
+    OCaml-quoted ([%S]), so a line splits on spaces outside quotes, and a time that was never
+    measured prints as [none]. The events, with the keys each carries beyond [wall_s] and [event]:
+
+    - [search_start] ({!tune}): [routine], [elapsed_s], [backend], [device], [search], [beam],
+      [rounds].
+    - [phase] ({!tune}, one per phase with a known size): [routine], [elapsed_s], [phase] ([seeds]
+      or [round<k>]), [candidates] (the phase's total), [timed], [attempts], [compile_s],
+      [timing_s], [best_ms], [best].
+    - [candidate] ({!tune}, as EVERY candidate attempt starts): [routine], [elapsed_s], [phase]
+      ([seeds], [recombine] or [round<k>]), [tried=<k>/<total>] (the ordinal of the attempt starting
+      within its phase; [?] when the phase's total is not known up front), [timed], [attempts] (this
+      one included), [compile_s], [timing_s], [best_ms], [best] (all as of the attempt's start), and
+      [attempt], the starting candidate's label. A search killed inside a candidate is therefore
+      inside the one its last [candidate] line names. The rate is bounded by the attempts
+      themselves, not by a clock: a time bound would leave a window in which the candidate being
+      worked on is unnamed.
+    - [stage] ({!tune}): [routine], [elapsed_s], [stage], [attempts], [compile_s], [timing_s],
+      written BEFORE each step outside the candidates that can block for long: [base_compile],
+      [cache_replay], [baseline_timing], [seed_enumeration] (the lowerings the seeds are derived
+      from), [winner_compile], [untuned_default_compile], [untuned_control] (under [autotune_log]
+      only). From {!Train.tune_placements}, [stage] alone: [placement_store] (the decision problem's
+      lowering and replay check) and [flip_surface]. Together with [candidate] and [arm_start] this
+      is the rule the stream keeps: every step that can block is named by a line written before it,
+      so a killed search is inside the step its last line names.
+    - [search_done] ({!tune}, exactly once per call, with its report): [routine], [elapsed_s],
+      [outcome] ({!outcome_name}), [timed], [contended], [failed], [rounds], [attempts],
+      [compile_s], [timing_s], [best_ms], [best].
+    - [arm_start] / [arm_done] ({!Train.tune_placements}, around each arm's, flip's or replayed
+      placement's search): [arm]; a flip's carry [flip=<k>/<budget>]; [arm_done] adds [result] ([ok]
+      or [failed]), [best_ms] and [elapsed_s].
+    - [flips_start] / [flips_done] ({!Train.tune_placements}): [candidates] and [budget];
+      [flips_done] adds [measured], [pruned], [improved] (whether the chain beat the A/B winner) and
+      [best_ms].
+
+    [elapsed_s] is seconds since that search (or arm) started; [compile_s] and [timing_s] are the
+    parts of it spent in candidate compiles and in candidate timing windows, [attempts] the
+    candidates attempted so far (bound-pruned, declined, deduplicated and timed alike), counting one
+    whose fatal failure ended the search. *)
+
+val progress_enabled : unit -> bool
+(** Whether config [autotune_progress] turns the progress lines on. *)
+
+val progressf : ('a, unit, string, unit) format4 -> 'a
+(** Writes one progress line (prefix and [wall_s] added) when {!progress_enabled}; the format
+    supplies [event=...] and the rest. *)
+
+val progress_ms : float -> string
+(** A time in milliseconds as progress lines print it: [%.4f], or [none] when not finite. *)
+
+val progress_stopwatch : unit -> unit -> float
+(** Starts a clock; the returned function reads the seconds since. *)
+
 val outcome_name : outcome -> string
 (** The stable one-word name of an outcome state — ["searched"], ["search-died"], ["cache-replay"],
     ["search-disabled"], ["pre-search-failure"] — for logs, JSON records and test goldens. *)
