@@ -21,6 +21,10 @@ out_proj: the blocktiled kernel stages operands through workgroup-shared tiles: 
 out_proj: the CPU seeds include the register-tiled packed pipelines: true
 out_proj: every CPU seed compiles and runs: true
 out_proj: every CPU candidate matches the serial reference bitwise: true
+out_proj f32: the multi-axis site seeds a pipelined-staged tensorized candidate: true
+out_proj f32: the pipelined-staged candidate compiles and runs: true
+out_proj f32: the pipelined-staged candidate matches the serial twin bitwise: true
+out_proj f32: the pipelined-staged candidate renders the tensor-core intrinsic: true
 out_proj: the CPU k gate refutes on the site whose innermost extent it does not divide: true
 out_proj: a refuted k-extent names the innermost contraction extent, not the site's whole K: true
 single-axis: the same refuted k-extent keeps the bare k= witness: true
@@ -57,15 +61,13 @@ three_axis_companion: the CPU seeds include the register-tiled packed pipelines:
 three_axis_companion: every CPU seed compiles and runs: true
 three_axis_companion: every CPU candidate matches the serial reference bitwise: true
 out_proj bf16: the multi-axis site seeds the backend's advertised tile: true
+out_proj bf16: no pipelined twin is seeded below the async arms' 4-byte element floor: true
 out_proj bf16: the unstaged candidate compiles and runs: true
 out_proj bf16: the unstaged candidate agrees with the serial twin: true
 out_proj bf16: the unstaged candidate renders the tensor-core intrinsic: true
 out_proj bf16: the staged candidate compiles and runs: true
 out_proj bf16: the staged candidate agrees with the serial twin: true
 out_proj bf16: the staged candidate renders the tensor-core intrinsic: true
-out_proj bf16: the pipelined-staged candidate compiles and runs: true
-out_proj bf16: the pipelined-staged candidate agrees with the serial twin: true
-out_proj bf16: the pipelined-staged candidate renders the tensor-core intrinsic: true
 out_proj bf16: the batch-grid candidate compiles and runs: true
 out_proj bf16: the batch-grid candidate agrees with the serial twin: true
 out_proj bf16: the batch-grid candidate renders the tensor-core intrinsic: true
