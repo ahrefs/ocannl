@@ -4566,23 +4566,43 @@ class SkipCellTest(unittest.TestCase):
         self.assertEqual(backends, set(orchestrate.SWEEP_BACKENDS))
 
     def test_an_entry_naming_no_cell_of_the_sweep_is_unmatched(self):
-        args = self.parse("--tuned")
-        kw = dict(
-            workloads={"gpt2_mini"},
-            backends=orchestrate.swept_backends("cuda"),
-            variants=orchestrate.selected_variants(args),
-            precisions=["f32"],
+        args = self.parse("--tuned", "--precision", "bf16")
+        cells = orchestrate.dispatchable_cells(
+            {"gpt2_mini": ["f32", "bf16"]},
+            orchestrate.swept_backends("cuda"),
+            orchestrate.selected_variants(args),
         )
         good = ("gpt2_mini", "cc", "tuned", None)
-        self.assertEqual(orchestrate.unmatched_skips([good], **kw), [])
+        self.assertEqual(orchestrate.unmatched_skips([good], cells), [])
+        self.assertEqual(
+            orchestrate.unmatched_skips([("gpt2_mini", "cuda", "tuned", "bf16")], cells), []
+        )
         for bad in (
             ("gpt2_small", "cc", "tuned", None),  # workload not selected
             ("gpt2_mini", "hip", "tuned", None),  # backend not swept under --gpu cuda
             ("gpt2_mini", "cc", "materialized", None),  # variant not requested
-            ("gpt2_mini", "cc", "tuned", "bf16"),  # precision not requested
+            ("gpt2_mini", "cc", "tuned", "f16"),  # precision not requested
         ):
             with self.subTest(bad=bad):
-                self.assertEqual(orchestrate.unmatched_skips([good, bad], **kw), [bad])
+                self.assertEqual(orchestrate.unmatched_skips([good, bad], cells), [bad])
+
+    def test_a_precision_the_workload_cannot_express_is_no_cell(self):
+        # Review round 1: `--precision bf16` is requested sweep-wide, but a conv workload cannot
+        # express it, so a skip naming its bf16 tuned cell skips nothing -- and must be refused
+        # rather than let the f32 cell beside it run in the operator's belief it was skipped.
+        # The precisions come from `available_precisions`, the dispatch loop's own filter.
+        precisions, unavailable = orchestrate.available_precisions("conv", "train", ["bf16"])
+        self.assertEqual(precisions, ["f32"])
+        self.assertEqual([p for p, _ in unavailable], ["bf16"])
+        cells = orchestrate.dispatchable_cells(
+            {"lenet": precisions}, orchestrate.swept_backends("cuda"), ["default", "tuned"]
+        )
+        bad = ("lenet", "cc", "tuned", "bf16")
+
+        self.assertEqual(orchestrate.unmatched_skips([bad], cells), [bad])
+        self.assertEqual(
+            orchestrate.unmatched_skips([("lenet", "cc", "tuned", None)], cells), []
+        )
 
     def test_an_operator_skip_beats_no_skip_cells(self):
         skips = {("gpt2_mini", "cc", "tuned", None)}

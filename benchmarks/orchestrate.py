@@ -254,20 +254,32 @@ def swept_backends(gpu_ocannl):
     return ["cc"] + ([gpu_ocannl] if gpu_ocannl else [])
 
 
-def unmatched_skips(skips, workloads, backends, variants, precisions):
-    """The `--skip-cell` entries that name no cell this sweep would dispatch.
+def dispatchable_cells(precisions_by_workload, backends, variants):
+    """Every (workload, backend, variant, precision) OCANNL cell the sweep would dispatch, before
+    skips: `precisions_by_workload` is `available_precisions`' first half per workload, so a
+    precision the workload cannot express is not a cell."""
+    return {
+        (workload, backend, variant, precision)
+        for workload, precisions in precisions_by_workload.items()
+        for backend in backends
+        for variant in variants
+        for precision in precisions
+    }
 
-    Such an entry is a typo or a stale command line, and it is refused rather than ignored: the
-    operator asked for a cell to stay out, and a sweep that silently runs it anyway is what the
-    flag exists to prevent.
+
+def unmatched_skips(skips, cells):
+    """The `--skip-cell` entries that name none of `cells` (see `dispatchable_cells`).
+
+    Such an entry is a typo, a stale command line, or a precision the workload cannot express, and
+    it is refused rather than ignored: the operator asked for a cell to stay out, and a sweep that
+    runs a different, possibly expensive, cell instead is what the flag exists to prevent.
     """
     return [
         entry
         for entry in skips
-        if entry[0] not in workloads
-        or entry[1] not in backends
-        or entry[2] not in variants
-        or (entry[3] is not None and entry[3] not in precisions)
+        if not any(
+            cell[:3] == entry[:3] and (entry[3] is None or entry[3] == cell[3]) for cell in cells
+        )
     ]
 
 
@@ -517,6 +529,19 @@ def cell_env(base, fixture, variant, precision):
     # and dict() rejects duplicate keywords.
     env.update(precision_env(precision))
     return env
+
+
+def available_precisions(model, mode, requested):
+    """The precisions a workload's OCANNL cells run at (f32 first, then each requested one it can
+    express), and `(precision, reason)` for each requested one it cannot."""
+    precisions, unavailable = ["f32"], []
+    for precision in requested:
+        reason = precision_unavailable(model, mode, precision)
+        if reason:
+            unavailable.append((precision, reason))
+        else:
+            precisions.append(precision)
+    return precisions, unavailable
 
 
 def precision_unavailable(model, mode, precision):
@@ -2046,20 +2071,6 @@ def main():
         fixtures = [f for f in fixtures if f.stem in args.workloads]
     if not fixtures:
         sys.exit("no fixtures found — run gen_fixtures.py first")
-    operator_skips = set(args.skip_cell)
-    unmatched = unmatched_skips(
-        operator_skips,
-        workloads={f.stem for f in fixtures},
-        backends=swept_backends(gpu_ocannl) if "ocannl" in args.only else [],
-        variants=selected_variants(args),
-        precisions=["f32", *args.precision],
-    )
-    if unmatched:
-        sys.exit(
-            "--skip-cell names no cell of this sweep: "
-            + ", ".join("/".join(p for p in entry if p) for entry in unmatched)
-        )
-
     digests_path = HERE / "fixtures" / fixture_digest.DIGEST_FILE
     digest_entries = fixture_digest.read_digests(digests_path)
     measurement_boxes = fixture_digest.measurement_boxes(digests_path)
@@ -2069,6 +2080,25 @@ def main():
 
     metas = {fx: read_st_metadata(fx) for fx in fixtures}
     models = {fx: metas[fx].get("model", "mlp") for fx in fixtures}
+    operator_skips = set(args.skip_cell)
+    unmatched = unmatched_skips(
+        operator_skips,
+        dispatchable_cells(
+            {
+                fx.stem: available_precisions(
+                    models[fx], metas[fx].get("mode", "train"), args.precision
+                )[0]
+                for fx in fixtures
+            },
+            swept_backends(gpu_ocannl) if "ocannl" in args.only else [],
+            selected_variants(args),
+        ),
+    )
+    if unmatched:
+        sys.exit(
+            "--skip-cell names no cell of this sweep: "
+            + ", ".join("/".join(p for p in entry if p) for entry in unmatched)
+        )
     if "ocannl" in args.only and not args.skip_build:
         targets = sorted(
             {f"benchmarks/runners/ocannl/bench_{m}.exe" for m in models.values()}
@@ -2158,14 +2188,10 @@ def main():
             # scheduling variant composes with every precision (gh-ocannl-529 lifted the
             # runner-side guard), so the OCANNL cells of a backend are the product of the two axes.
             mode = metas[fx].get("mode", "train")
-            precisions = ["f32"]
-            for precision in args.precision:
-                reason = precision_unavailable(model, mode, precision)
-                if reason:
-                    unavailable.append((name, precision, reason))
-                    print(f"--- {name} ocannl/*/{precision}: NOT APPLICABLE ({reason})")
-                else:
-                    precisions.append(precision)
+            precisions, not_applicable = available_precisions(model, mode, args.precision)
+            for precision, reason in not_applicable:
+                unavailable.append((name, precision, reason))
+                print(f"--- {name} ocannl/*/{precision}: NOT APPLICABLE ({reason})")
             for backend in swept_backends(gpu_ocannl):
                 for precision in precisions:
                     for variant in variants:
