@@ -56,14 +56,15 @@ fail() {
 }
 
 # A commit's containment is read from the remote's branch heads fetched into a
-# private namespace, so the checkout's own remote-tracking refs never move;
-# the namespace is dropped once read, and again by finish().
+# private namespace, so the checkout's own remote-tracking refs never move.
+# Emptying it is idempotent: before the fetch (a verifier killed past finish()
+# leaves its namespace behind, and a later one with the same PID must not read
+# a deleted branch's head from it), once read, and again by finish().
 drop_heads() {
   [ -n "$heads_ns" ] || return 0
   git -C "$repo" for-each-ref --format='delete %(refname)' "$heads_ns/" |
     git -C "$repo" update-ref --stdin || return 1
-  [ -z "$(git -C "$repo" for-each-ref "$heads_ns/")" ] || return 1
-  heads_ns=
+  [ -z "$(git -C "$repo" for-each-ref "$heads_ns/")" ]
 }
 
 finish() {
@@ -72,8 +73,8 @@ finish() {
   finished=1
   trap - EXIT HUP INT TERM
   cleanup_rc=0
-  cleanup_ns=$heads_ns
-  drop_heads || cleanup_rc=1
+  cleanup_ns=
+  drop_heads || { cleanup_rc=1; cleanup_ns=$heads_ns; }
 
   if [ -n "$wt" ]; then
     if [ "$wt_registered" -eq 1 ]; then
@@ -250,6 +251,7 @@ else
   # unpushed local commit, or one the remote holds unreachable. What certifies
   # it is a branch head fetched NOW that contains it.
   heads_ns=refs/machine-verify/heads-$$
+  drop_heads || fail "cannot clear leftover refs under $heads_ns"
   capped git -C "$repo" fetch -q --no-write-fetch-head --no-tags "$staging_remote" \
     "+refs/heads/*:$heads_ns/*" ||
     fail "cannot fetch the branch heads of $staging_remote"

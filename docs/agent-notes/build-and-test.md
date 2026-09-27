@@ -1843,7 +1843,8 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   unreachable -- so the procedure fetches the remote's branch heads now, into a private
   `refs/machine-verify/heads-<pid>` namespace (the checkout's remote-tracking refs never move),
   requires one to contain the commit, names it in the provenance (`reachable from:`, preferring
-  master) and drops the namespace, again in cleanup. For a sweep inside that worktree,
+  master) and empties the namespace -- before the fetch too, since a verifier killed past its cleanup
+  leaves one behind that a later run drawing the same PID would otherwise read a deleted branch from. For a sweep inside that worktree,
   `BENCH_RESULTS_DIR` points `benchmarks/orchestrate.py`'s `results/` outside it, and
   `OCANNL_AUTOTUNE_CACHE_DIR` the autotune cache, so nothing needs copying out before the worktree
   is removed. The procedure derives the remote pointing to the staging
@@ -1896,8 +1897,8 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   controls from a file because the local transport clears the environment. It checks actual
   checkout/environment observations, failure reasons, timeout statuses, which transport carried the
   trip (observed at the fake ssh), placement refusals, cleanup ownership and golden restoration;
-  source-assertion, commit-containment, golden-scope, local-address and environment-clearing
-  mutants must fail the same oracles.
+  source-assertion, commit-containment, namespace-clearing, golden-scope, local-address and
+  environment-clearing mutants must fail the same oracles.
 - `tools/ci-compiler-test.sh` is the cheap local proxy for a compiler-sensitive Ubuntu CI failure
   (gh-ocannl-846): it downloads the GCC 13 packages with `apt-get download`, extracts them into a
   scratch prefix with `dpkg-deb -x`, and runs exactly one named `runtest-` alias in a fresh Dune

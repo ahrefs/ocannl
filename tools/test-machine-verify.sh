@@ -181,6 +181,16 @@ for arg in "$@"; do
   args+=("$arg")
   if [ "$MODE" = fetch-fail ] && [ "$arg" = fetch ]; then exit 44; fi
   if [ "$MODE" = cleanup-fail ] && [ "$arg" = remove ]; then exit 45; fi
+  # What a verifier killed past its cleanup leaves for a later one that draws
+  # the same PID: its heads namespace, holding a branch since deleted. Planted
+  # at the first read of the namespace, before anything could have emptied it.
+  case $MODE:$arg in
+    stale-heads:refs/machine-verify/heads-*/)
+      [ -e "$SSH_LOG.stale" ] || {
+        : >"$SSH_LOG.stale"
+        "$REAL_GIT" -C "$FIXTURE_REPO" update-ref "${arg}deleted-branch" "$FIXTURE_UNPUSHED" || exit 46
+      } ;;
+  esac
 done
 exec "$REAL_GIT" "${args[@]}"
 SH
@@ -222,13 +232,14 @@ run_case() { # SUBJECT NAME MODE [verifier args]
   case $mode in
     wrong-remote) "$REAL_GIT" -C "$run/repo" remote set-url origin https://example.invalid/wrong.git ;;
     nested) touch "$run/dune-project" ;;
-    unpushed) "$REAL_GIT" -C "$run/repo" fetch -q --no-write-fetch-head "$TMP/seed" unpushed:refs/heads/unpushed ;;
+    unpushed | stale-heads) "$REAL_GIT" -C "$run/repo" fetch -q --no-write-fetch-head "$TMP/seed" unpushed:refs/heads/unpushed ;;
   esac
   local var
   for var in GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$GIT_CONFIG_GLOBAL" REAL_GIT="$REAL_GIT" \
     FIXTURE_PUSHED="$TMP/pushed.git" MODE="$mode" FIXTURE_REPO="$run/repo" FIXTURE_SHA="$WANT_SHA" \
     AUDIT="$run/audit" SSH_LOG="$run/ssh-log" ENDPOINT="$ENDPOINT" ENDPOINT_PORT="$ENDPOINT_PORT" \
-    ENDPOINT_PROXY="$ENDPOINT_PROXY" WANT_BACKEND="$BACKEND" FIXTURE_HIP_ROOT="$TMP/$HIP_TREE"; do
+    ENDPOINT_PROXY="$ENDPOINT_PROXY" WANT_BACKEND="$BACKEND" FIXTURE_HIP_ROOT="$TMP/$HIP_TREE" \
+    FIXTURE_UNPUSHED="$UNPUSHED"; do
     printf 'export %s=%q\n' "${var%%=*}" "${var#*=}"
   done >"$TMP/fixture.env"
   # OPAMSWITCH and DUNE_BUILD_DIR stand for the caller's session: an SSH
@@ -333,6 +344,10 @@ REF=$UNPUSHED check_case commit-dangling success 2 \
   "commit $UNPUSHED is not reachable from any branch of origin"
 REF=$UNPUSHED check_case commit-unpushed unpushed 2 \
   "commit $UNPUSHED is not reachable from any branch of origin"
+REF=$UNPUSHED check_case commit-stale-namespace stale-heads 2 \
+  "commit $UNPUSHED is not reachable from any branch of origin"
+[ -e "$TMP/runs/commit-stale-namespace/ssh-log.stale" ]
+report $? 'commit: a leftover heads namespace was planted and did not certify' "$TMP/runs/commit-stale-namespace"
 REF=$SHA check_case commit-failed-fetch fetch-fail 2 'cannot fetch the branch heads of origin'
 REF=$SHA ENDPOINT=127.0.0.1 TRANSPORT=local check_case local-commit success 0 \
   "verified .*commit=$SHA backend=cc" --test @fixture
@@ -473,6 +488,16 @@ containment_oracle() {
 }
 mutated=$(mutant_pair no-containment far '/^  \[ -n "\$containing" \] \|\|$/ { getline; next } { print }') || exit 2
 expect_rejected 'commit containment removed' "$mutated" containment_oracle "^machine-verify: verified .*commit=$UNPUSHED "
+# The namespace not emptied before the fetch: a leftover head from a killed
+# verifier with the same PID certifies a commit no live branch contains.
+stale_heads_oracle() {
+  local subject=$1 name=$2
+  REF=$UNPUSHED WANT_SHA=$UNPUSHED run_case "$subject" "$name" stale-heads || return 1
+  [ "$(cat "$TMP/runs/$name/rc")" = 2 ] &&
+    grep -q 'is not reachable from any branch of origin' "$TMP/runs/$name/stdout"
+}
+mutated=$(mutant_pair no-namespace-clear far '/^  drop_heads \|\| fail "cannot clear leftover refs/ { next } { print }') || exit 2
+expect_rejected 'leftover heads namespace kept' "$mutated" stale_heads_oracle "^machine-verify: verified .*commit=$UNPUSHED "
 mutated=$(mutant_pair no-golden-scope far '/^assert_only_promoted_goldens\(\) \{/ { print; print "  return 0"; next } { print }') || exit 2
 expect_rejected 'golden scope removed' "$mutated" golden_mutation_oracle '^machine-verify: verified '
 # The capability assertion dropped: an eligible device beside a complete
