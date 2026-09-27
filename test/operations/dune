@@ -3995,6 +3995,16 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; ocannl-backend: cc -- every execution context is an explicit Context.cpu (); the tile under test is the cc renderer's, pinned to 16-byte vectors in-process.
+ (name tile_bf16_row_groups)
+ (package neural_nets_lib)
+ (deps
+  (env_var OCANNL_BUILD_FILES_PREFIX)
+  ocannl_config)
+ (modules tile_bf16_row_groups)
+ (libraries base unix arrayjit.verdict test_utils ll_test))
+
+(test
  (name mma_tensorization_label)
  (package neural_nets_lib)
  (deps

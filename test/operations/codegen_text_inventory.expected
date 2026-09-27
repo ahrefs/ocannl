@@ -444,6 +444,10 @@ test/operations/test_uniform_virtual_lane.ml
     "Main logic"
     "_uniform_lane("
     "_uniform_vec("
+test/operations/tile_bf16_row_groups.ml
+    "4-lane float"
+    "row tail 3"
+    ... ^ "("
 test/operations/tile_mma_declines.ml
     "#pragma omp parallel for"
     "dispatch_apply"

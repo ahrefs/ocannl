@@ -1111,6 +1111,24 @@ files.
   named by `C_syntax.vec_widen_macro` and falling back to the portable macro under
   `__has_builtin` -- clang has no `__builtin_ia32_pmovzxwd*` (its intrinsics use `convertvector`,
   which clang lowers well). Check CI's gcc 13 side with the recipe in the next entry.
+- **aarch64 gcc spills the bf16 tile's A column at `-O3` only: the pre-RA scheduler, not the
+  widening.** Neither CI nor rog has an aarch64 cross gcc, so the census's aarch64 columns went
+  uncompiled until minix got one; the first run found the 4x6 bf16 tile at 16 bytes spilling two
+  accumulators (4 stack references per k step) on both aarch64 targets. The B bridge was already one
+  `shll` per vector. The cause is `-fschedule-insns`, which aarch64 gcc 15 enables at `-O3` but not
+  `-O2` (adding it alone to `-O2` reproduces). It hoists the four rows' scalar A widenings
+  (`ldrh`/`fmov`/`shl`) above the FMAs, and 24 + 6 + 4 live vectors exceed 32. Respelling that
+  scalar did not help (GPR shift, `ld1r`+`shll` splat, a memcpy'd `uint32_t`), and packing the
+  column into one vector for every target cost x86 a shuffle per row, plus stack references at
+  w32/w64. The fix keys it on the ISA: at 4 lanes of f32 the emission calls
+  `OCANNL_VEC_WIDEN_BFLOAT16_ROWS_X4` and `OCANNL_VEC_WIDENED_ROW_X4` (`C_syntax.vec_widen_rows_macros`).
+  On aarch64 they widen four rows with one `shll`, read back by NEON's by-lane `fmla ..., v.s[r]`:
+  45 instructions and no stack on gcc -O2/-O3, 49 -> 43 on clang. Elsewhere they preprocess to the
+  per-row text exactly, so x86 codegen is unchanged. `tile_bf16_row_groups` executes every bf16 code
+  through the tile against its serial twin; on an arm64 host (the Mac) that runs the packed arm. To
+  bisect a flag like this, first cut the tile into a standalone `.c` and count stack references in
+  its innermost `fmla` loop: the loop's label moves with the flags, so the census's own `.L` names
+  do not carry over.
 - **A census reading is a fact about the emission AND about the compiler, and CI runs two of them**
   (gh-ocannl-752). The extended fixture passed on a gcc 15.2 box and was red on BOTH CI legs, in two
   unrelated ways, neither reachable from a gcc-only host. (a) **Line attribution.** A row is found

@@ -1,0 +1,3 @@
+the tile renders at 4 lanes, widening its A column by row groups, with a partial last group: true
+the tiled widening of every bf16 code is bitwise identical to the serial twin: true
+the tiled widening returns every code's exact value, and a NaN for a NaN code: true

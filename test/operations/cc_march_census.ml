@@ -443,7 +443,9 @@ let build (emit_dir : string) =
      carries the storage precision's scalar [convert_precision] spelling, which is what tells two
      tiles in one kernel apart; and the binding name is what keeps a scalar peel, which reads the
      same array through the same conversion into [tmma_acc__], from being the smaller loop the
-     census would prefer. *)
+     census would prefer. Where the tile widens its A column a group of rows at a time
+     ({!Ir.C_syntax.vec_widen_rows_macros}), the binding reads the group's row macro and carries the
+     conversion as that macro's last argument, so the anchor names the macro instead. *)
   let tile_mma ?tile ?(n = mma_n) ~tag ~prec ~rows () =
     let d = mk ~prec ~dims:[| mma_m; n |] ("mmad_" ^ tag) in
     let a = mk ~prec ~dims:[| mma_m; mma_k |] ("mmaa_" ^ tag) in
@@ -495,6 +497,24 @@ let build (emit_dir : string) =
      so they are emitted once, by the native-fp16 child, rather than compiled twice in eight
      columns. *)
   let native_fp16 = Ir.Ops.equal_prec (comp_prec Ir.Ops.half) Ir.Ops.half in
+  (* The head of the bf16 tile's A-splat binding at the lane count its default geometry renders: the
+     row macro where the renderer widens the A column by row groups, the scalar conversion
+     otherwise. *)
+  let bf16_a_binding =
+    let comp = comp_prec Ir.Ops.bfloat16 in
+    let lanes =
+      Option.map
+        (Ir.Register_tile.default ~vector_bytes ~elt_bytes:(Ir.Ops.prec_in_bytes comp) ~m:mma_m
+           ~n:mma_n)
+        ~f:(fun t -> t.Ir.Register_tile.lanes)
+    in
+    match
+      Option.bind lanes ~f:(fun lanes ->
+          Ir.C_syntax.vec_widen_rows_macros ~store_prec:Ir.Ops.bfloat16 ~prec:comp ~lanes)
+    with
+    | Some (_, row) -> row ^ "("
+    | None -> "bfloat16_to_single("
+  in
   let reduction_groups, tiles =
     if native_fp16 then
       ( [
@@ -513,7 +533,7 @@ let build (emit_dir : string) =
              the C tile cross through [vec_bridge]'s bf16 arms. *)
           ( "bf16",
             Ir.Ops.bfloat16,
-            [ "tmma_as_0__ = bfloat16_to_single("; ", tmma_b_0__, &tmma_b__[" ] );
+            [ "tmma_as_0__ = " ^ bf16_a_binding; ", tmma_b_0__, &tmma_b__[" ] );
         ] )
     else
       ( [ ("f16w", Ir.Ops.half) ],
@@ -1883,6 +1903,15 @@ let () =
          lowered as a split whose temporaries spilled a 31-register tile. gh-ocannl-1072 fixed it in
          the emission: a bridge at an x86 register's width calls one packed instruction
          ([Builtins_cc]'s [OCANNL_VEC_WIDEN_*_X<lanes>]).
+
+         The first run that compiled the aarch64 columns found a third construct, which no class had
+         covered because none had been compiled: the bf16 tile at 16 bytes and [-O3], 4 references
+         on both aarch64 targets. The widening itself was vector; gcc's pre-RA scheduler, on at
+         [-O3] only on aarch64, hoisted the four rows' scalar A widenings ([ldrh]/[fmov]/[shl])
+         above the FMAs, and 24 accumulators + 6 B vectors + 4 A registers are 34 of 32, so two
+         accumulators went to the stack. The emission now widens the A column four rows at a time
+         there ({!Ir.C_syntax.vec_widen_rows_macros}): one register, which NEON's by-lane [fmla]
+         reads each row from.
 
          A defect found here again is a failure of this claim, which is the point: fix it, or
          reinstate the class list and its reproduction claim with the defect named. *)
