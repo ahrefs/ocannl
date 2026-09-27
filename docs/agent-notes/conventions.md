@@ -235,16 +235,12 @@ files.
   framing churn). The failure mode review is actually there to catch runs in both directions — quoting
   whichever control flatters the story — so a report shows ALL matched contrasts side by side rather
   than the decisive one.
-- A timestamp is an instant of ONE clock, and the controller's is not the box's (a WSL VM
-  resynchronises after a host resume; gh-ocannl-979 hit this three ways): read both bounds of a
-  window with `date +%s` ON the box that produces the artifact — never a controller mtime, never a
-  locally measured duration — and keep instants and elapsed times in separate fields. Whole seconds:
-  `journalctl --since "@<epoch>.<frac>"` returns ZERO lines, not an error, and `-k` is
-  `_TRANSPORT=kernel` plus an implied `-b`, silently cut at a reboot (measured in
-  `tools/kernel-window.sh`). Floor the start and ceil the end; round inward only across a gap the
-  producer is idle in, as `tools/sweep.sh` does. Still exposed: benchmark stamps are box-local with
-  no zone (`ts` in `benchmarks/gh675_cells.py`), and `tools/machine-verify.sh` reads no far-side
-  clock, so a trip's only record is the controller's capture.
+- A timestamp is an instant of ONE clock, and the controller's is not the box's (gh-ocannl-979):
+  read both bounds of a window with `date +%s` ON the box that produces the artifact, never from a
+  controller mtime or a local duration; floor the start, ceil the end, and take the end before
+  anything else touches the resource. `journalctl -k` implies `-b`, and on both sweep boxes a
+  fractional `--since` returns ZERO lines (`tools/kernel-window.sh`). Still exposed: `ts` in
+  `benchmarks/gh675_cells.py` (no zone), and `tools/machine-verify.sh` reads no far-side clock.
 - When the next review finding is "leg X missed guard Y", look for the unfactored duplication instead
   of patching leg X. In `tools/sweep.sh`'s nine rounds every point-wise guard had a leg, a path or a
   machine it had not been applied to, and the fixes that actually closed a class REMOVED or UNIFIED
