@@ -1,0 +1,37 @@
+Numbers in the goldens of the @scans family, each allowed by a named entry with its reason
+(gh-ocannl-1056). The goldens read and every refused number go to stderr.
+
+every golden the scans family diffs is a checked-in file this scan read: true
+no golden of the scans family carries a number the allow-list does not name: true
+every allow-list entry still allows a number in its golden: true
+every allow-list entry gives its reason in words: true
+
+Synthetic controls:
+a census total on a synthetic golden line is refused: true
+a number the whole of one match spans is allowed: true
+a match spanning only part of a number does not allow it: true
+a total sharing its line with an allowed citation is still refused: true
+an entry for another golden does not reach this one: true
+a total followed by its unit is still a number: true
+a digit run continuing a name is not a number: true
+a single digit is outside the boundary: true
+an entry that allows nothing is stale: true
+the family is a test's golden, a rule's diff, one behind a member's own deps, and a subdir's: true
+a test outside the family, or with no golden checked in, contributes nothing: true
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:6d5b4fe654d3592b327d32a16ca1fa2a] checked-in file this
+  [scanner-refusal:571968c7f074e29e60dddf8d93d23f34] number the allow-list
+  [scanner-refusal:f55e77a26cf5f2dde03b8170ef403db6] every allow-list entry
+  [scanner-refusal:1e1b0223d539c60bc27afd05f8f10482] every allow-list entry
+  [scanner-refusal:fbdcd3ff3601bf6c0f3343712bb10500] synthetic golden line
+  [scanner-refusal:9e6321d212778b4b229a787856591c50] number the whole
+  [scanner-refusal:b7bc91dc2932fa2c119166434ffa3815] match spanning only
+  [scanner-refusal:9c6e0e6756b498a6378e94ef25883e4c] an allowed citation
+  [scanner-refusal:f2e0b112265b43aa87718095fdd6dd94] another golden does
+  [scanner-refusal:b9df30c8c746f670678c71fa8a13e42a] total followed by
+  [scanner-refusal:b018f905e59688b7aa91c2ca39f76c38] digit run continuing
+  [scanner-refusal:ad85758e7d6a2b46d81c3d7e6b921d71] outside the boundary
+  [scanner-refusal:4166c0bca69640c175777244011fc4e2] that allows nothing
+  [scanner-refusal:5aac880a61d2880852d33a0856daa83f] behind a member's
+  [scanner-refusal:22c73fdc7f08c48d003aabefe9f59d17] checked in contributes

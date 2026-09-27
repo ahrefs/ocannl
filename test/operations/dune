@@ -133,6 +133,7 @@
   (alias runtest-ll_test_scan_cases)
   (alias runtest-operand_key_ratchet)
   (alias runtest-operand_key_scan_cases)
+  (alias runtest-census_total_ratchet)
   (alias runtest-workflow_job_timeouts)
   (alias runtest-shell_scripts_parse)
   (alias runtest-refusal_control_scan_cases)
@@ -251,6 +252,7 @@
   (alias runtest-ocamlformat_ignore_scan)
   (alias runtest-ll_test_ratchet)
   (alias runtest-operand_key_ratchet)
+  (alias runtest-census_total_ratchet)
   (alias runtest-workflow_job_timeouts)
   (alias runtest-shell_scripts_parse)
   (alias runtest-optional_arg_inventory)
@@ -2265,6 +2267,8 @@
   cache_dir_scan_cases.expected
   cache_dir_ignores.expected
   cache_dir_ignores_control.expected
+  census_total_ratchet.ml
+  census_total_ratchet.expected
   codegen_text_inventory.ml
   codegen_text_scan_cases.expected
   codegen_text_inventory_control.expected
@@ -2319,6 +2323,8 @@
    changelog_unreleased_scan.expected
    cache_dir_ignores.ml
    cache_dir_scan_cases.expected,cache_dir_ignores.expected,cache_dir_ignores_control.expected
+   census_total_ratchet.ml
+   census_total_ratchet.expected
    codegen_text_inventory.ml
    codegen_text_scan_cases.expected,codegen_text_inventory_control.expected,codegen_text_inventory.expected
    config_dep_completeness.ml
@@ -5796,6 +5802,42 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff operand_key_ratchet.expected operand_key_ratchet.actual)))
+
+; gh-ocannl-1056: a census total printed in a repository-scan golden -- hand-fixed three times
+; (gh-ocannl-665, gh-ocannl-701, gh-ocannl-1046) -- is refused on the PR that adds it. The scanner
+; derives the goldens from the `scans` alias above and allows a number only through a named entry
+; with its reason; its header states the boundary. Same arrangement as ll_test_ratchet.
+
+(executable
+ (name census_total_ratchet)
+ (modules census_total_ratchet)
+ (libraries base stdio str test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- reads dune files and golden text without running a backend.
+ (target census_total_ratchet.actual)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (sandbox always)
+  (source_tree ../..))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:census_total_ratchet.exe}
+    %{workspace_root}
+    %{dep:census_total_ratchet.exe}
+    %{target}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-census_total_ratchet)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff census_total_ratchet.expected census_total_ratchet.actual)))
 
 (test
  ; ocannl-backend: none -- synthetic source cases and child scanner invocations.

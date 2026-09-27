@@ -373,6 +373,17 @@ that they earn a lookup rather than always-loaded space.
   `codegen_text_inventory`: pass it the root table, and get the census-by-root, the itemised
   diagnostic and the stderr report. Each scan keeps its own table, since which roots it globs and
   how far each may fall are facts about that scan.
+- The tally rule above is a refusal now, not a review finding: after three hand fixes
+  (gh-ocannl-665, gh-ocannl-701, gh-ocannl-1046), `census_total_ratchet` (gh-ocannl-1056) reads
+  every golden of the `@scans` family — derived from each directory's `scans` alias, never listed —
+  and refuses a run of two or more digits, not continuing a name, that no match of a named `allowed`
+  entry spans whole. Entries are floors and caps, fixture locations, text quoted from a source and
+  citations, each with its reason, and one that allows nothing is stale; the header states the
+  line-shaped boundary. When it refuses a line you added, move the count to stderr tagged
+  `(not part of the golden)`; add an entry only for a number that is no quantity of the repository. Its first
+  catch was the `FAILED: n checks` teardown total in `config_usage_scan_control`: a negative
+  control whose failures ARE its golden ends through `Verdict.exit_negative_control`, which exits 1
+  without that line.
 - PIN THE RELATIONSHIP, NOT THE RESTATEMENT: where a check needs a set that some other part of the
   system owns, relate the two rather than writing the set down again and asserting that the copy
   still says what it says (gh-ocannl-706, after gh-ocannl-591 and gh-ocannl-689 turned out to be the

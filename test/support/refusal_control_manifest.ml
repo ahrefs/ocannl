@@ -114,6 +114,24 @@ let raw_entries =
         "[scanner-refusal:298f6bafdca761627eb0f4dfecddf6d3] the built-in default";
         "[scanner-refusal:50ad95ff66f64313a7ce58dadb8aeda9] the cache directory";
       ] );
+    ( "census_total_ratchet.ml",
+      [
+        "[scanner-refusal:6d5b4fe654d3592b327d32a16ca1fa2a] checked-in file this";
+        "[scanner-refusal:571968c7f074e29e60dddf8d93d23f34] number the allow-list";
+        "[scanner-refusal:f55e77a26cf5f2dde03b8170ef403db6] every allow-list entry";
+        "[scanner-refusal:1e1b0223d539c60bc27afd05f8f10482] every allow-list entry";
+        "[scanner-refusal:fbdcd3ff3601bf6c0f3343712bb10500] synthetic golden line";
+        "[scanner-refusal:9e6321d212778b4b229a787856591c50] number the whole";
+        "[scanner-refusal:b7bc91dc2932fa2c119166434ffa3815] match spanning only";
+        "[scanner-refusal:9c6e0e6756b498a6378e94ef25883e4c] an allowed citation";
+        "[scanner-refusal:f2e0b112265b43aa87718095fdd6dd94] another golden does";
+        "[scanner-refusal:b9df30c8c746f670678c71fa8a13e42a] total followed by";
+        "[scanner-refusal:b018f905e59688b7aa91c2ca39f76c38] digit run continuing";
+        "[scanner-refusal:ad85758e7d6a2b46d81c3d7e6b921d71] outside the boundary";
+        "[scanner-refusal:4166c0bca69640c175777244011fc4e2] that allows nothing";
+        "[scanner-refusal:5aac880a61d2880852d33a0856daa83f] behind a member's";
+        "[scanner-refusal:22c73fdc7f08c48d003aabefe9f59d17] checked in contributes";
+      ] );
     ( "codegen_text_inventory.ml",
       [
         "[scanner-refusal:83dfdd0395c402128515f27b2f3b1b1c] the exclusion for";
