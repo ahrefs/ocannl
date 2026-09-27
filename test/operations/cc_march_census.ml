@@ -58,8 +58,8 @@
    bridge and the GEBP grid's A splats -- are argued at the claim); - no such loop carries scalar FP
    work AT ALL, which is the same claim sharpened, held over the rows whose storage bridge this
    TOOLCHAIN lowers whole-vector. The two are separate because the sharp reading is not purely a
-   fact about the emission: gcc 13.4 lowers the fp16 widening bridge one lane at a time on
-   [-march=sapphirerapids] where gcc 15.2 lowers it packed, from identical emission, and a golden
+   fact about the emission: gcc 13.4 lowered the portable fp16 widening bridge one lane at a time on
+   [-march=sapphirerapids] where gcc 15.2 lowered it packed, from identical emission, and a golden
    holding the sharp claim over those rows would be pinning a compiler version. Which rows those are
    is asked of the compiler ({!packed_half_widen}), not assumed; - every register-tiled [Tile_mma]
    k-loop does more vector than scalar work where the ISA has an FMA (over its full passes); - and,
@@ -710,13 +710,10 @@ type caps = {
   fp16_convert : bool;
       (** packed fp16 <-> f32 CONVERSION, which is a different ISA question from arithmetic and the
           one a narrow-fp16-storage loop asks: [OCANNL_VEC_WIDEN_HALF]'s [__builtin_convertvector]
-          arm needs an instruction to convert with, and where there is none gcc widens lane by lane.
-          x86 gets it with F16C (from [x86-64-v3]), aarch64 has it at the armv8-a baseline. *)
+          arm and its x86 per-width arms need an instruction to convert with, and where there is
+          none gcc widens lane by lane. x86 gets it with F16C (from [x86-64-v3]), aarch64 has it at
+          the armv8-a baseline. *)
   named : bool;  (** a column whose [-march] this test chose, as opposed to the host's default *)
-  x86 : bool;  (** an x86-64 target *)
-  gcc : bool;
-      (** the column's compiler is gcc (defines [__GNUC__] and not [__clang__], which defines both):
-          the known register-tile defects are gcc's lowering, not the target's *)
 }
 
 (* Read off the compiler's own predefined macros rather than pattern-matched from the label: what
@@ -729,8 +726,6 @@ let caps_of t =
     vector_bytes =
       (if has "__AVX512F__" then 64 else if has "__AVX2__" || has "__AVX__" then 32 else 16);
     vector_registers = (if has "__aarch64__" || has "__AVX512F__" then 32 else 16);
-    x86 = has "__x86_64__";
-    gcc = has "__GNUC__" && not (has "__clang__");
     has_fma = has "__FMA__" || has "__ARM_FEATURE_FMA";
     fp16_vector = has "__AVX512FP16__" || has "__ARM_FEATURE_FP16_VECTOR_ARITHMETIC";
     fp16_convert = has "__F16C__" || has "__AVX512FP16__" || has "__ARM_FP16_FORMAT_IEEE";
@@ -772,24 +767,64 @@ let isa_has ~caps ~(loop : kernel_loop) ~width =
    loop carries no scalar FP at all is, on those rows, a claim about the compiler's version. That is
    what turned CI's ubuntu-latest leg red on 18 rows this box reported clean (gh-ocannl-752).
 
-   So the toolchain is ASKED, the way it is asked which [-march]es it accepts: compile the arm
-   {!C_syntax.vec_bridge} emits for (fp16 storage, f32 compute) -- a memcpy into a [_Float16] vector
-   and a [__builtin_convertvector] out of it, which is [OCANNL_VEC_WIDEN_HALF]'s body -- and census
-   the result. Any scalar FP instruction in a function whose whole content is one whole-vector
-   conversion means this compiler lowers that conversion per lane. A version test would be a second
-   copy of gcc's changelog; this is the property itself. *)
+   So the toolchain is ASKED, the way it is asked which [-march]es it accepts: compile the bridge
+   {!C_syntax.vec_bridge} emits for (fp16 storage, f32 compute) -- the macro
+   {!Ir.C_syntax.vec_widen_macro} names at this lane count, with the definitions the cc builtins
+   table gives it ({!Ir.C_syntax.builtin_definitions}, the closure a kernel's prelude is built by)
+   -- and census the probe function. Any scalar FP instruction in a function whose whole content is
+   one whole-vector conversion means this compiler lowers that conversion per lane. A version test
+   would be a second copy of gcc's changelog; this is the property itself.
+
+   The probe compiles the macro rather than a copy of its body because the two stopped being one
+   thing: since gh-ocannl-1072 the macro at an x86 register's width is one [vcvtph2ps] wherever F16C
+   is, so gcc 13.4 lowers the EMITTED bridge packed on [-march=sapphirerapids] although its
+   [__builtin_convertvector] arm is still per lane there. A probe of the arm would exclude rows
+   whose bridge is packed. *)
 
 let half_widen_probe_source ~lanes =
-  Printf.sprintf
-    {|typedef _Float16 ocannl_probe_h __attribute__((vector_size(%d)));
+  let macro =
+    Option.value_exn
+      (Ir.C_syntax.vec_widen_macro ~store_prec:Ir.Ops.half ~prec:Ir.Ops.single ~lanes)
+  in
+  String.concat ~sep:"\n"
+    (Context.Builtins_cc.includes
+     :: Ir.C_syntax.builtin_definitions Context.Builtins_cc.builtins ~keys:[ "HALF_T"; macro ]
+    @ [
+        Printf.sprintf
+          {|#if HAS_NATIVE_FLOAT16
+typedef _Float16 ocannl_probe_h __attribute__((vector_size(%d)));
+#endif
 typedef float ocannl_probe_f __attribute__((vector_size(%d)));
-void ocannl_probe_widen(ocannl_probe_f *dst, const ocannl_probe_h *src) {
-  ocannl_probe_h nh;
-  __builtin_memcpy(&nh, src, sizeof(nh));
-  *dst = __builtin_convertvector(nh, ocannl_probe_f);
+void ocannl_probe_widen(ocannl_probe_f *dst, const HALF_T *src) {
+  ocannl_probe_f d;
+  %s(ocannl_probe_f, ocannl_probe_h, %d, d, src);
+  *dst = d;
 }
 |}
-    (lanes * 2) (lanes * 4)
+          (lanes * 2) (lanes * 4) macro lanes;
+      ])
+
+(* The probe function's own instructions: the prelude it compiles with defines functions of its own
+   (the software fp16 codec a portable arm falls back to), which would read as scalar FP work of the
+   probe. They are defined above it, and compilers emit functions in definition order, so the probe
+   runs from its label to the end of its frame description. *)
+let probe_function_asm asm =
+  let lines = String.split_lines asm in
+  let is_label l =
+    (not (String.is_empty l))
+    && (not (Char.is_whitespace l.[0]))
+    && String.is_suffix (String.rstrip l) ~suffix:"ocannl_probe_widen:"
+  in
+  match List.drop_while lines ~f:(fun l -> not (is_label l)) with
+  | [] -> None
+  | body ->
+      let rec until_end acc = function
+        | [] -> List.rev acc
+        | l :: rest ->
+            if String.is_substring l ~substring:".cfi_endproc" then List.rev (l :: acc)
+            else until_end (l :: acc) rest
+      in
+      Some (String.concat ~sep:"\n" (until_end [] body))
 
 (* {2 Persistent compile cache (gh-ocannl-847)}
 
@@ -1210,9 +1245,12 @@ let packed_half_widen t ~width ~opt_level =
               String.is_substring asm ~substring:"ocannl_probe_widen")
         with
         | Error _ -> false
-        | Ok () ->
-            let p = Census.profile_all Census.Fma ~asm:(Stdio.In_channel.read_all asm) in
-            p.Census.scalar_fp_ops = 0
+        | Ok () -> (
+            match probe_function_asm (Stdio.In_channel.read_all asm) with
+            | None -> false
+            | Some asm ->
+                let p = Census.profile_all Census.Fma ~asm in
+                p.Census.scalar_fp_ops = 0)
       in
       (try Stdlib.Sys.remove src with _ -> ());
       (try Stdlib.Sys.remove asm with _ -> ());
@@ -1698,16 +1736,17 @@ let () =
           ~backend:"no named -march target accepted by this host's toolchain" wholly_scalar_claim
       else claim_none wholly_scalar_claim whole_vector_population ~f:wholly_scalar;
       (* {b And the half that is.} [scalar_fp_ops = 0] additionally asks that the loop's storage
-         BRIDGE compiled whole-vector, and for (fp16 storage, f32 compute) that is the compiler's
-         choice rather than the target's -- gcc 13.4 lowers the emitted [__builtin_convertvector]
-         per lane on [-march=sapphirerapids] where gcc 15.2 lowers it packed, over identical
-         emission (see {!packed_half_widen}). Those rows are excluded HERE, on the toolchain's own
-         answer to a probe of that one conversion, rather than the claim being lowered for every row
-         to what the older compiler can do: on a toolchain that lowers the bridge packed -- which is
-         every column of this box's gcc 15.2, and every non-fp16 column of gcc 13.4 -- the strict
-         claim still covers them. The excluded rows are named on stderr; they keep the wholly-scalar
-         claim above, and their bridge is still pinned by the codec-coverage claims, which are about
-         the source and so are compiler-independent. *)
+         BRIDGE compiled whole-vector, and for (fp16 storage, f32 compute) that can be the
+         compiler's choice rather than the target's -- gcc 13.4 lowers the portable
+         [__builtin_convertvector] per lane on [-march=sapphirerapids] where gcc 15.2 lowers it
+         packed, over identical emission (see {!packed_half_widen}, which asks it of the macro the
+         emission calls). Those rows are excluded HERE, on the toolchain's own answer to a probe of
+         that one conversion, rather than the claim being lowered for every row to what the older
+         compiler can do: on a toolchain that lowers the bridge packed -- which since the x86
+         bridges became one F16C instruction (gh-ocannl-1072) is every x86 column with F16C, on
+         either gcc -- the strict claim still covers them. The excluded rows are named on stderr;
+         they keep the wholly-scalar claim above, and their bridge is still pinned by the
+         codec-coverage claims, which are about the source and so are compiler-independent. *)
       let scalarization_population =
         List.filter whole_vector_population ~f:(fun r -> r.bridge_packed)
       in
@@ -1824,64 +1863,36 @@ let () =
             Stdio.eprintf "    %s needs %d of %d -> %s\n" (describe r) (resident_floor g)
               r.caps.vector_registers
               (match r.profile with Some p -> Census.to_line p | None -> "no loop")));
-      (* {b The known defects, pinned as classes.} The first gcc run of these rows (gh-ocannl-948)
-         found two constructs whose k-loop touches the stack although the pass fits, on every x86
-         column with an FMA -- defects in the EMISSION, reported here rather than fixed, since each
-         is codegen work with its own inventory. The one left is the narrow-storage widening bridges
-         ([vec_bridge]'s arms for a storage precision narrower than the compute one), which gcc
-         routes through general-purpose registers ([movq]/[shrq]) and the stack: the (fp16, f32)
-         tile at 12 to 35 references on gcc 15, and on CI's gcc 13 the bf16 tile at
-         [-march=sapphirerapids] too (2 references, none on gcc 15). That is why the class is the
-         bridge FAMILY and not one format: a class drawn around the format one compiler happened to
-         show is a row list by another name. Clang lowers the same bridges in registers, so a class
-         is asked of the column's COMPILER, from its predefined macros, as well as of its target: on
-         a clang x86 column these rows stay under the strict claim.
+      (* {b No known defects.} The first gcc run of these rows (gh-ocannl-948) found two constructs
+         whose k-loop touches the stack although the pass fits, on every x86 column with an FMA --
+         defects in the EMISSION, which this claim pinned as CLASSES (a predicate over rows, asked
+         of the column's compiler as well as its target) rather than as a list of rows, since which
+         widths and targets show them is a fact about the gcc version as much as about the emission
+         (gh-ocannl-752's lesson), and a row list would pin CI's compiler. A second claim held that
+         each class still reproduced somewhere, so that a fix failed the golden and the class had to
+         leave the list: it could only shrink, and it is empty now.
 
-         The other was the partial-vector column tail, [vtyp x = {0}; __builtin_memcpy(&x, p,
-         <width>)], which gcc lowered through a stack slot on every k step (6 to 8 references in a
-         one-column tail whose whole-vector twins at [n = 512] hold none). gh-ocannl-1071 fixed it
-         in the emission -- a partial vector now crosses lane by lane -- and this list's second
-         claim is what made its deletion necessary: the class stopped reproducing on every column.
-         Its rows are under the strict claim now.
+         - The partial-vector column tail, [vtyp x = {0}; __builtin_memcpy(&x, p, <width>)], went
+         through a stack slot on every k step (6 to 8 references in a one-column tail).
+         gh-ocannl-1071 fixed it in the emission: a partial vector crosses lane by lane. - The
+         narrow-storage widening bridges ([vec_bridge]'s arms for a storage precision narrower than
+         the compute one) went through general-purpose registers ([movq]/[shrq]) and the stack: the
+         (fp16, f32) tile at 12 to 35 references on gcc 15, where [__builtin_convertvector] from
+         [_Float16] has no packed lowering without AVX512-FP16, and on CI's gcc 13 the bf16 tile at
+         [-march=sapphirerapids] (2 references), where the zero-extension of an 8-byte vector
+         lowered as a split whose temporaries spilled a 31-register tile. gh-ocannl-1072 fixed it in
+         the emission: a bridge at an x86 register's width calls one packed instruction
+         ([Builtins_cc]'s [OCANNL_VEC_WIDEN_*_X<lanes>]).
 
-         They are pinned as CLASSES, not as a list of rows: which widths and targets show them is a
-         fact about the gcc version as much as about the emission (gh-ocannl-752's lesson), and a
-         row list would pin CI's compiler. The two claims below flip in both directions that matter:
-         stack traffic OUTSIDE the classes -- a new regression -- fails the first, and a class that
-         stops reproducing anywhere -- a fix -- fails the second, so the golden has to change and
-         the class leaves this list. The list can only shrink. *)
-      let known_defects =
-        [
-          ( "the gcc narrow-storage widening bridges",
-            fun (r, _) -> r.caps.gcc && r.caps.x86 && not (String.equal r.loop.store r.loop.comp) );
-        ]
-      in
-      let known rg = List.exists known_defects ~f:(fun (_, is) -> is rg) in
-      let spills (r, _) = match counts r with Some c -> c.Census.stack_refs > 0 | None -> true in
+         A defect found here again is a failure of this claim, which is the point: fix it, or
+         reinstate the class list and its reproduction claim with the defect named. *)
+      let spills r = match counts r with Some c -> c.Census.stack_refs > 0 | None -> true in
       let resident_claim =
         "no register-tile k-loop references the stack where its pass fits the target's vector \
-         registers, outside the known defects (gcc narrow-storage bridges)"
+         registers"
       in
-      let unexcused = List.filter resident_rows ~f:(fun rg -> not (known rg)) in
-      if List.is_empty unexcused then
+      if List.is_empty resident_rows then
         Verdict.skipped ~aggregation:`Environment
           ~backend:"no accepted target holds a register-tile pass in its vector registers"
           resident_claim
-      else claim_none resident_claim (List.map unexcused ~f:fst) ~f:(fun r -> spills (r, ()));
-      let excused = List.filter resident_rows ~f:known in
-      if not (List.is_empty excused) then (
-        Stdio.eprintf "  %d known-defect register-tile row(s) (not part of the golden):\n"
-          (List.length excused);
-        List.iter excused ~f:(fun (r, _) ->
-            Stdio.eprintf "    %s -> %s\n" (describe r)
-              (match r.profile with Some p -> Census.to_line p | None -> "no loop")));
-      let reproduces_claim =
-        "each known register-tile defect still references the stack on some gcc x86 column with a \
-         fused multiply-add"
-      in
-      if not (List.exists resident_rows ~f:(fun (r, _) -> r.caps.gcc && r.caps.x86)) then
-        Verdict.skipped ~aggregation:`Environment
-          ~backend:"no accepted gcc x86 target serves the register-tile rows" reproduces_claim
-      else
-        Verdict.p_all reproduces_claim known_defects ~f:(fun (_, is) ->
-            List.exists resident_rows ~f:(fun rg -> is rg && spills rg))
+      else claim_none resident_claim (List.map resident_rows ~f:fst) ~f:spills

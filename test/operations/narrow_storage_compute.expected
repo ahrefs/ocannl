@@ -3,6 +3,10 @@ wide-compute relative error within one bf16 ulp: true
 per-operator relative error exceeds it: true
 bf16 vectorized rendering is bitwise identical to the serial twin: true
 half vectorized rendering is bitwise identical to the serial twin: true
+bf16 vectorized widening of every code is bitwise identical to the serial twin: true
+bf16 serial widening returns every code's exact value, and a NaN for a NaN code: true
+half vectorized widening of every code is bitwise identical to the serial twin: true
+half serial widening returns every code's exact value, and a NaN for a NaN code: true
 native-fp16 vectorized rendering is bitwise identical to the serial twin: true
 native-fp16 relative error stays within a few half ulps: true
 f32 compute over half storage keeps the intermediate finite: true
@@ -10,6 +14,7 @@ fp16 compute applies fp16's ceiling to the intermediate: true
 per-operator half FMA computes 1.5 * 2 + 1.5: true
 the shared half FMA converts rather than bit-casting: true
 bf16 loop vectorizes with a converting load/store: true
+the every-code sweep loads through the widening bridge: true
 no operator narrows only to be widened again: true
 arithmetic is f32: true
 fp16 policy is honored exactly where the target reports the capability: true

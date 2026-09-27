@@ -150,6 +150,67 @@ let () =
         (name ^ " vectorized rendering is bitwise identical to the serial twin")
         vec twin ~f:Float.equal);
 
+  (* --- 2a. Every code through the widening bridge (gh-ocannl-1072). --- The chain above loads a
+     few dozen distinct values, and the bridge's x86 arms ([OCANNL_VEC_WIDEN_*_X<lanes>], one
+     [vcvtph2ps] or [vpmovzxwd] each) are the machine's conversion, not the scalar path's text. So
+     every 16-bit code is widened into an f32 node by the vectorized rendering and by its serial
+     twin, and the two must agree BIT for bit -- [Float.equal] would take -0 for +0 -- while the
+     twin must return each code's exact value, which is read off the format here rather than asked
+     of either converter. A NaN code is fed as a NaN (the host init goes through the scalar
+     narrowing, which quiets it), and must widen to a NaN. [x *. 1] is exact on every input, so the
+     multiplication hides nothing a copy would show. Which arm runs is the host's: the x86 arm at
+     the native width here, the portable one elsewhere. *)
+  Ir.Numerics.set_policy
+    {
+      base with
+      narrow_compute_f32 = true;
+      fp16_arithmetic = Fp16_auto;
+      bf16_arithmetic = Bf16_auto;
+    };
+  let bits x = Int64.bits_of_float x in
+  let same_bits a b = Int64.equal (bits a) (bits b) in
+  let bf16_value c =
+    if c land 0x7F80 = 0x7F80 && c land 0x7F <> 0 then Float.nan
+    else Int32.float_of_bits (Int32.of_int_trunc (c lsl 16))
+  in
+  let half_value c =
+    let sign = if c land 0x8000 <> 0 then -1. else 1. in
+    let e = (c lsr 10) land 0x1F and m = c land 0x3FF in
+    if e = 0x1F then if m = 0 then sign *. Float.infinity else Float.nan
+    else if e = 0 then sign *. Float.ldexp (Float.of_int m) (-24)
+    else sign *. Float.ldexp (Float.of_int (1024 + m)) (e - 25)
+  in
+  List.iter
+    [ ("bf16", Ir.Ops.bfloat16, bf16_value); ("half", Ir.Ops.half, half_value) ]
+    ~f:(fun (name, prec, value) ->
+      let codes = Array.init 65536 ~f:value in
+      let widen ~transform ~label =
+        let x =
+          NTDSL.init ~l:(label ^ "x") ~prec ~o:[ 65536 ]
+            ~f:(function [| i |] -> codes.(i) | _ -> assert false)
+            ()
+        in
+        let%op y = x *. 1. in
+        Tn.update_prec y.Tensor.value Ir.Ops.single;
+        let ctx = Context.auto () in
+        let ctx, routine =
+          Context.compile
+            ~lowered_transform:(fun o -> [ transform o ])
+            ctx
+            (named ("nsc_" ^ label) (Train.forward y))
+            Ir.Indexing.Empty
+        in
+        Context.get_values (Context.run ctx routine) y.Tensor.value
+      in
+      let twin = widen ~transform:serial ~label:("wtwin_" ^ name) in
+      let vec = widen ~transform:vectorize ~label:("wvec_" ^ name) in
+      p_all2
+        (name ^ " vectorized widening of every code is bitwise identical to the serial twin")
+        vec twin ~f:same_bits;
+      p_all2 (name ^ " serial widening returns every code's exact value, and a NaN for a NaN code")
+        twin codes ~f:(fun got want ->
+          if Float.is_nan want then Float.is_nan got else same_bits got want));
+
   (* --- 2b. Native fp16 arithmetic (gh-ocannl-516): same parity obligation, one precision up. ---
      Where the target has genuine 16-bit arithmetic the half legs compute *in* half at twice f32's
      lane count, so the vector rendering is a different kernel from the one checked above -- and
@@ -255,6 +316,12 @@ let () =
     || src_has vec_source "vector_size"
        && src_has vec_source "OCANNL_VEC_WIDEN_BFLOAT16"
        && src_has vec_source "OCANNL_VEC_NARROW_BFLOAT16");
+  (* Section 2a's sweep is about the bridge, so its vectorized kernels must have taken it: an input
+     the rendering folded or converted per lane would pass the parity vacuously. *)
+  p "the every-code sweep loads through the widening bridge"
+    ((not on_cpu)
+    || src_has (read_on_cpu "nsc_wvec_bf16") "OCANNL_VEC_WIDEN_BFLOAT16"
+       && src_has (read_on_cpu "nsc_wvec_half") "OCANNL_VEC_WIDEN_HALF");
   (* [narrow(op(...))] immediately re-widened is the signature of per-operator rounding; the seam
      makes it unspellable, in the vector body and in the serial remainder alike. *)
   p "no operator narrows only to be widened again"

@@ -1269,6 +1269,41 @@ let operand_conditionality_violations ~ternop_syntax ~binop_syntax =
     never calls it. *)
 let builtin_idents builtins = List.map builtins ~f:(fun (key, _, _) -> key)
 
+(** The definitions a use of [keys] needs from a [(name, definition, dependencies)] builtins table:
+    the entries for [keys] and, recursively, their dependencies, in TABLE order -- which is the
+    order the table's definitions rely on (a macro's guard names the macros above it). How
+    {!C_syntax.filter_and_prepend_builtins} assembles a kernel's prelude, and how a probe outside
+    the backend compiles a builtin the way a kernel does. *)
+let builtin_definitions builtins ~keys =
+  let rec add needed key =
+    if Set.mem needed key then needed
+    else
+      let needed = Set.add needed key in
+      match List.find builtins ~f:(fun (k, _, _) -> String.equal k key) with
+      | Some (_, _, deps) -> List.fold deps ~init:needed ~f:add
+      | None -> needed
+  in
+  let needed = List.fold keys ~init:(Set.empty (module String)) ~f:add in
+  List.filter_map builtins ~f:(fun (key, definition, _) ->
+      if Set.mem needed key then Some definition else None)
+
+(** The cc builtin a whole-vector widening bridge from 16-bit storage [store_prec] (bf16 or fp16) to
+    [lanes] lanes of [prec] calls, [None] for any other storage precision. An f32 bridge at 4, 8 or
+    16 lanes -- the widths an x86 register holds -- names its width's macro, whose arm is one packed
+    instruction where the target has it (gh-ocannl-1072); any other bridge names the portable macro,
+    which the width-specific ones fall back to. [C_syntax.vec_bridge] renders the call and
+    [test/operations/cc_march_census] compiles the macro this names, so the two cannot disagree. *)
+let vec_widen_macro ~store_prec ~prec ~lanes =
+  let widen format =
+    match (prec, lanes) with
+    | Ops.Single_prec _, (4 | 8 | 16) -> Printf.sprintf "OCANNL_VEC_WIDEN_%s_X%d" format lanes
+    | _ -> "OCANNL_VEC_WIDEN_" ^ format
+  in
+  match store_prec with
+  | Ops.Bfloat16_prec _ -> Some (widen "BFLOAT16")
+  | Ops.Half_prec _ -> Some (widen "HALF")
+  | _ -> None
+
 (** The words the C language itself reserves, plus the scaffolding names this module's rendering
     emits unconditionally. Shared by every C-family backend through {!Pure_C_config}, and by
     {!C_syntax.kernel_ident}: a routine and a tensor node are both plain identifiers in the emitted
@@ -2623,28 +2658,15 @@ module C_syntax (B : C_syntax_config) = struct
        cannot concatenate across them. *)
     let tokens = Source_tokens.scan doc_string in
     let mentions_token key = Source_tokens.mentions tokens key in
-    let needed_keys = ref (Set.empty (module String)) in
-    List.iter builtins ~f:(fun (key, _, _) ->
-        if (not (List.mem routine_names key ~equal:String.equal)) && mentions_token key then
-          needed_keys := Set.add !needed_keys key);
-
-    (* Add dependencies recursively *)
-    let processed_keys = ref (Set.empty (module String)) in
-    let rec add_dependencies key =
-      if not (Set.mem !processed_keys key) then (
-        processed_keys := Set.add !processed_keys key;
-        needed_keys := Set.add !needed_keys key;
-        match List.find builtins ~f:(fun (k, _, _) -> String.equal k key) with
-        | Some (_, _, deps) -> List.iter deps ~f:add_dependencies
-        | None -> ())
+    let used =
+      List.filter_map builtins ~f:(fun (key, _, _) ->
+          if (not (List.mem routine_names key ~equal:String.equal)) && mentions_token key then
+            Some key
+          else None)
     in
-    Set.iter !needed_keys ~f:add_dependencies;
-
-    (* Add the builtins in order *)
-    List.iter builtins ~f:(fun (key, definition, _) ->
-        if Set.mem !needed_keys key then (
-          Buffer.add_string result_buffer definition;
-          Buffer.add_string result_buffer "\n"));
+    List.iter (builtin_definitions builtins ~keys:used) ~f:(fun definition ->
+        Buffer.add_string result_buffer definition;
+        Buffer.add_string result_buffer "\n");
     Buffer.add_string result_buffer doc_string;
     prepend_conditional_includes ~conditional_includes (Buffer.contents result_buffer)
 
@@ -2788,11 +2810,14 @@ module C_syntax (B : C_syntax_config) = struct
   (* [mem] is an element access document ([x[offset]]); [&x[offset]] is the base of the narrow run
      it starts. The conversions themselves are backend builtins ([OCANNL_VEC_WIDEN_BFLOAT16] and
      friends in {!Builtins_cc}) rather than inline preprocessor arms, so a kernel body stays one
-     line per load. *)
+     line per load. A widening at an x86 register's width calls that width's macro
+     ({!vec_widen_macro}, gh-ocannl-1072): gcc lowers the portable [__builtin_convertvector]
+     spelling through general-purpose registers and the stack inside the register tile's k-loop. *)
   let vec_bridge ~store_prec ~prec ~lanes ~vtyp ~need_typedef ~fresh:_ =
     let open PPrint in
     let base mem = string "&" ^^ mem in
     let call fn args = string (fn ^ "(") ^^ separate (string ", ") args ^^ string ");" in
+    let widen_macro () = Option.value_exn (vec_widen_macro ~store_prec ~prec ~lanes) in
     (* [~width] is the number of VALID lanes, [lanes] for a whole vector. A PARTIAL vector -- the
        register tiling's last column group, gh-ocannl-620 -- is zeroed, so its lanes past [width]
        hold 0 rather than whatever the register held, and only [width] elements cross the memory
@@ -2857,7 +2882,7 @@ module C_syntax (B : C_syntax_config) = struct
           let args ~width = [ string u16; string u32; OCaml.int width ] in
           ( (fun ~width ~dst ~mem ->
               declare ~width dst ^^ hardline
-              ^^ call "OCANNL_VEC_WIDEN_BFLOAT16" (args ~width @ [ string dst; base mem ])),
+              ^^ call (widen_macro ()) (args ~width @ [ string dst; base mem ])),
             fun ~width ~src ~mem ->
               call "OCANNL_VEC_NARROW_BFLOAT16" (args ~width @ [ base mem; string src ]) )
       | Ops.Half_prec _ ->
@@ -2870,7 +2895,7 @@ module C_syntax (B : C_syntax_config) = struct
             ^^ hardline ^^ string "#endif");
           ( (fun ~width ~dst ~mem ->
               declare ~width dst ^^ hardline
-              ^^ call "OCANNL_VEC_WIDEN_HALF"
+              ^^ call (widen_macro ())
                    [ string vtyp; string h; OCaml.int width; string dst; base mem ]),
             fun ~width ~src ~mem ->
               call "OCANNL_VEC_NARROW_HALF" [ string h; OCaml.int width; base mem; string src ] )

@@ -1081,14 +1081,23 @@ files.
   (3) `Register_tile.budget` is keyed on the vector WIDTH, so at 16 bytes it assumes NEON's 32
   registers: on x86 (16 registers) the default 4x6 tile needs 29 and spills (gcc: 32 stack
   references per k step). Two gcc emission defects were pinned as classes rather than fixed, with a
-  claim that fails when one stops reproducing. The narrow-storage widening bridges still go through
-  general-purpose registers and the stack (fp16 on gcc 15; bf16 at `sapphirerapids` too on gcc 13,
-  so the class is the bridge family, not the format one compiler showed). The partial-vector tail
-  (`vtyp x = {0}; __builtin_memcpy(&x, p, width*elt)`) went through a stack slot every k step; its
-  fix (gh-ocannl-1071) is the lane-by-lane crossing below, and the claim's failure is what forced
-  the class out. Keep the store side in view in such a fix: a vector whose address a `memcpy`
+  claim that fails when one stops reproducing; both are fixed and the list is gone, so the resident
+  claim is strict again. The partial-vector tail (`vtyp x = {0}; __builtin_memcpy(&x, p,
+  width*elt)`) went through a stack slot every k step; its fix (gh-ocannl-1071) is the lane-by-lane
+  crossing below. Keep the store side in view in such a fix: a vector whose address a `memcpy`
   takes stays in memory for the whole loop, so the width-counted STORE after the k-loop kept the
-  partial accumulators on the stack too.
+  partial accumulators on the stack too. The narrow-storage widening bridges went through
+  general-purpose registers and the stack (fp16 on gcc 15; bf16 at `sapphirerapids` on gcc 13 only).
+  Two different gcc lowerings: `__builtin_convertvector` from a `_Float16` vector has no packed
+  pattern without AVX512-FP16, so gcc widens each lane through `movq`/`shrq`/`vpinsrw` and a scalar
+  `vcvtph2ps`; and gcc 13 zero-extends an 8-byte `unsigned short` vector as a split (two
+  `vpmovzxwd`, a `vpunpcklqdq`) whose temporaries spill a 31-register tile. No portable spelling won
+  everywhere (a lane initializer beat `convertvector` at 4 lanes and lost at 16 on `sapphirerapids`,
+  whose 256-bit preference assembles a `zmm` from `ymm` halves), so the fix (gh-ocannl-1072) is one
+  x86 builtin per width, `OCANNL_VEC_WIDEN_{HALF,BFLOAT16}_X{4,8,16}` (`vcvtph2ps`, `vpmovzxwd`),
+  named by `C_syntax.vec_widen_macro` and falling back to the portable macro under
+  `__has_builtin` -- clang has no `__builtin_ia32_pmovzxwd*` (its intrinsics use `convertvector`,
+  which clang lowers well). Check CI's gcc 13 side with the recipe in the next entry.
 - **A census reading is a fact about the emission AND about the compiler, and CI runs two of them**
   (gh-ocannl-752). The extended fixture passed on a gcc 15.2 box and was red on BOTH CI legs, in two
   unrelated ways, neither reachable from a gcc-only host. (a) **Line attribution.** A row is found
@@ -1112,7 +1121,9 @@ files.
   loop is scalarized" on a claim that was really about the compiler's version. So the claim is now
   two: `vector_ops = 0` (wholly scalar — the gh-621 class, stable across both compilers) over every
   row, and `scalar_fp_ops = 0` over the rows whose bridge THIS toolchain lowers packed, asked by
-  compiling that one conversion and censusing it rather than by testing a version. Reproduce with
+  compiling that one conversion and censusing it rather than by testing a version. The probe
+  compiles the macro the emission calls, from the builtins table (`C_syntax.builtin_definitions`),
+  not a copy of its body: since gh-ocannl-1072 the x86 bridge is `vcvtph2ps`, packed on gcc 13 too. Reproduce with
   `apt-get download gcc-13-x86-64-linux-gnu cpp-13-x86-64-linux-gnu libgcc-13-dev` and
   `OCANNL_CC_BACKEND_COMPILER_COMMAND=<prefix>/usr/bin/gcc-13` on the census exe. Neither compiler
   substitutes for the other here. A row first asks for its exact tensor-derived source lines, then
