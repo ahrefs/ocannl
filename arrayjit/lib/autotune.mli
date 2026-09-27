@@ -1293,8 +1293,8 @@ val refine_queued_batch_depth : single_ms:float -> probe_depth:int -> probe_ms:f
     overshoots is interpolated back inside the measured bracket. An unresolved pair requests a
     doubled retry and returns [nan] for the wall rather than jumping to the cap or labeling the
     shallow probe as a cap-wall estimate; repeated unresolved batch pairs eventually reach the
-    2048-launch memory cap, which {!calibrate_and_time} then bounds by the measured walls
-    (gh-ocannl-1096). Exposed as the deterministic policy seam for tests. *)
+    2048-launch memory cap, which {!calibrate_and_time} then bounds by the deepest depth measured
+    within the target (gh-ocannl-1096). Exposed as the deterministic policy seam for tests. *)
 
 val refine_queued_batch_depth_between :
   base_depth:int -> base_ms:float -> probe_depth:int -> probe_ms:float -> int * float
@@ -1368,23 +1368,22 @@ val time_routine :
     confirmed at a 25% deeper depth (clamped to and measured at the cap) and retained only when the
     pair's inferred fixed component is below the target. A confirmation over 2x its supported base
     is retried once before an unresolved pair selects the cap. Such a no-verdict fallback is then
-    wall-bounded (gh-ocannl-1096): the least [wall / depth] any calibration measurement read bounds
-    a depth-independent per-launch cost from above, and the fallback depth is shortened until that
-    bound times the depth fits the ~10 ms target; a batch measured over the target at or below that
-    depth refutes the depth-independence, and the fallback then takes the deepest depth measured
-    within the target, or 1. So a slow candidate whose fits never resolve is timed at depth 1, not
-    in 2048-launch batches, while a fast one still batches deeply. An unresolved single/probe pair
-    retries at double depth, and the next affine fit uses the two batch observations so an inflated
-    single window cannot force the cap. If the bounded loop first reaches the target on its last
-    probe, the interpolated target depth is still sampled and checked against the measured
-    overshoot. A non-monotone confirmation scales from the deeper measured batch, never the earlier
-    suspect crossing. When a clean pair's fixed component already fills the target, its marginal
-    slope selects a depth carrying ~10 ms of launch work instead of accepting a shallow stalled
-    window or jumping to the cap. After four noisy but resolved underestimates, calibration keeps
-    the latest affine projection rather than jumping to a 20--30 ms cap batch that would blunt the
-    2x contention threshold. A CUDA/HIP routine slower than the target is confirmed by a depth-2
-    probe, stays at depth 1, and is measured identically in both modes. Whenever a queued call
-    settles at depth 1 its timed window resumes the calibration's synchronized singles
+    wall-bounded (gh-ocannl-1096): it never goes deeper than the deepest depth any calibration batch
+    was measured at within the ~10 ms target, and is depth 1 when none was -- the only bound sound
+    for any cost that grows with depth, since the readings that left the fits unresolved cannot tell
+    a host stall from a queue threshold. So a slow candidate whose fits never resolve is timed at
+    depth 1, not in 2048-launch batches, while a fast one whose deeper probes stalled still batches.
+    An unresolved single/probe pair retries at double depth, and the next affine fit uses the two
+    batch observations so an inflated single window cannot force the cap. If the bounded loop first
+    reaches the target on its last probe, the interpolated target depth is still sampled and checked
+    against the measured overshoot. A non-monotone confirmation scales from the deeper measured
+    batch, never the earlier suspect crossing. When a clean pair's fixed component already fills the
+    target, its marginal slope selects a depth carrying ~10 ms of launch work instead of accepting a
+    shallow stalled window or jumping to the cap. After four noisy but resolved underestimates,
+    calibration keeps the latest affine projection rather than jumping to a 20--30 ms cap batch that
+    would blunt the 2x contention threshold. A CUDA/HIP routine slower than the target is confirmed
+    by a depth-2 probe, stays at depth 1, and is measured identically in both modes. Whenever a
+    queued call settles at depth 1 its timed window resumes the calibration's synchronized singles
     ({!sample_window}'s [prior]) rather than timing a fresh one (gh-ocannl-1074): at depth 1 they
     are samples of the very quantity the window measures, taken under the same stopping rule, so the
     loop dispatches only what the caller's [repeats] floor asks beyond the calibration's sixteen.

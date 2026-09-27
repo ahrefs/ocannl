@@ -452,10 +452,9 @@
 # 2.31 s instead of 57 and 3.16 s (-27%), at an unchanged ~56 ms per launch, with its timed wall at 0.
 # Whole-session totals from that pair are not comparable: one after-run candidate hit the
 # no-verdict fallback to the 2048 depth cap and spent ~2016 s in its timed window. Since
-# gh-ocannl-1096 that fallback is wall-bounded: when the batch probes never fit, the depth is
-# shortened until its launch work, bounded by the least measured wall per launch, fits the 10 ms
-# target -- depth 1 for a candidate slower than the target -- and never past a depth measured over
-# that target.
+# gh-ocannl-1096 that fallback is wall-bounded: when the batch probes never fit, the depth goes no
+# deeper than the deepest batch measured within the 10 ms target -- depth 1 for a candidate slower
+# than the target.
 # On cc a queued gpt2_mini search exceeded 2 h (gh-ocannl-719, rog-nv) with no isolated run to
 # compare. The exact worst-case dispatch-count bounds are documented on Autotune.time_routine.
 # The objective is part of the schedule disk-cache key (the "timing" component), so entries do not

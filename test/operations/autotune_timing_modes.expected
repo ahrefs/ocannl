@@ -37,7 +37,7 @@ a batching depth reuses nothing and dispatches its whole window: true
 an unresolved calibration never settles on a batch whose launch work exceeds the target: true
 a slow candidate whose fits never resolve is timed at depth 1, as isolated times it: true
 a slow candidate's unresolved calibration costs no more than its probes: true
-a fast candidate's unresolved calibration still batches deeply: true
+a fast candidate's unresolved calibration still batches: true
 
 == autotune_timing spelling ==
 "queued" selects the queued objective: true

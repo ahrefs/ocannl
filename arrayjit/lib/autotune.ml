@@ -552,43 +552,30 @@ let depth_from_batch_wall_with_cap ~max_depth ~depth ~wall_ms =
    returns is a bet that the per-launch cost is negligible against a fixed synchronization cost the
    fits could not separate. The cap bounds that bet in launches, not in wall: a ~61 ms gfx1151
    candidate whose superlinear batches never fit settled at 2048 and spent 126 s per batch, 2016 s
-   on one timing call. [observed] is every finite positive [(depth, wall)] the calibration measured,
-   the synchronized singles as depth 1, and it bounds the bet in two steps.
+   on one timing call.
 
-   While the marginal launch cost does not depend on depth, every batch wall is at least its depth
-   times that cost (the fixed term is non-negative and noise only adds time), so the least [wall /
-   depth] is an upper bound on it, and the depth whose launch work under that bound fits the batch
-   target is safe: a slow candidate falls back to depth 1 -- measured exactly as [Isolated] measures
-   it -- while a fast one, whose deep probes bound its launch cost to microseconds, still batches
-   deeply. A batch measured over the target at or below that depth refutes the premise on this
-   candidate (Codex P1, round 1 on PR #846: a kernel cheap at shallow depth whose wall jumps past a
-   queue threshold keeps its cheap single-launch ratio as the least one), and then only a depth
-   measured within the target is safe: the true wall grows with depth and a measured wall bounds the
-   true one, so the deepest such depth, and depth 1 when there is none. A stall landing on a probe
-   can only push this toward the shallower answer.
+   [observed] is every finite positive [(depth, wall)] minimum the calibration measured, the
+   synchronized singles as depth 1. The fallback never goes deeper than the deepest depth measured
+   within the batch target, and is depth 1 when none was. That is sound for any cost that grows with
+   depth -- the true wall is monotone in depth and a measured wall bounds the true one -- and it is
+   the only bound that is. The readings that left the fits unresolved cannot tell a host stall from
+   a cost growing faster than linearly past a queue threshold, so any bound extrapolated past the
+   measured depths through a per-launch cost is defeated by the second (Codex P1, rounds 1 and 2 on
+   PR #846: the least [wall / depth] kept a threshold kernel's cheap single-launch ratio, and
+   restricting its refutation to depths at or below its own was dodged by an over-target probe one
+   rounding step above, at ~600 ms). A slow candidate therefore falls back to depth 1 -- measured
+   exactly as [Isolated] measures it -- and a fast one whose deeper probes stalled keeps the deepest
+   batch it measured within the target, still batching rather than turning isolated.
 
    Only ever shortens the depth; with no finite positive reading at all (a clock that resolved
-   nothing) there is no bound and the depth stands, as [queued_batch_depth] batches such estimates
-   at the cap. *)
+   nothing) there is no evidence and the depth stands, as [queued_batch_depth] batches such
+   estimates at the cap. *)
 let wall_bounded_fallback_depth ~observed depth =
-  let launch_ms_bound =
-    List.fold observed ~init:Float.infinity ~f:(fun bound (d, wall_ms) ->
-        Float.min bound (wall_ms /. Float.of_int d))
-  in
-  if not (Float.is_finite launch_ms_bound) then depth
+  if List.is_empty observed then depth
   else
-    let fits = queued_batch_ms /. launch_ms_bound in
-    let linear_depth =
-      if Float.(fits >= of_int depth) then depth else Int.max 1 (Float.iround_down_exn fits)
-    in
-    let refuted =
-      List.exists observed ~f:(fun (d, wall_ms) ->
-          d <= linear_depth && Float.(wall_ms > queued_batch_ms))
-    in
-    if not refuted then linear_depth
-    else
-      List.fold observed ~init:1 ~f:(fun best (d, wall_ms) ->
-          if Float.(wall_ms <= queued_batch_ms) && d <= linear_depth then Int.max best d else best)
+    Int.min depth
+    @@ List.fold observed ~init:1 ~f:(fun deepest (d, wall_ms) ->
+        if Float.(wall_ms <= queued_batch_ms) then Int.max deepest d else deepest)
 
 (* Sibling fault-injection seam to [on_candidate_attempt], at a timing run's pre-dispatch validation
    rather than at a candidate's compile (gh-ocannl-564). Default no-op, no config key selects it.

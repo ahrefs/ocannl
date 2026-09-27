@@ -706,18 +706,19 @@ files.
   cap, so one transient stall cannot inflate both the timed batch and its later refusal threshold.
   **Every unresolved outcome is then wall-bounded** (gh-ocannl-1096): the cap bounds launches, not
   wall, and a ~61 ms gfx1151 candidate whose slightly superlinear batches never fit (the 2.5 ms fit
-  tolerance is under 1% of a slow batch) was timed in 126 s batches, 2016 s for one call. Every
-  measured `wall / depth` bounds the marginal launch cost from above, so `calibrate_and_time`
-  shortens a NaN-wall outcome until depth times the least such bound fits the target: slow
-  candidates fall back to depth 1, fast ones keep a deep batch. That bound assumes a
-  depth-independent launch cost; a batch measured over the target at or below the depth it picks
-  refutes it (a cheap kernel whose wall jumps past a queue threshold keeps its cheap single-launch
-  ratio as the least one), and the fallback then takes the deepest depth measured within the
-  target, or 1. The fallback bound does not bound the validation probes themselves: on such a
-  threshold device the doubling retries spend minutes before reaching it. The objective is unchanged (the
-  depth picks the scale, and an entry timed at the old fallback is an accurate, merely expensive,
-  reading), so no cache-key generation bump. `autotune_timing_modes` reproduces the minix call on
-  the injected clock to the launch (760 calibration + 16 x 2048).
+  tolerance is under 1% of a slow batch) was timed in 126 s batches, 2016 s for one call. A
+  NaN-wall outcome of `calibrate_and_time` now settles no deeper than the deepest depth it MEASURED
+  within the target (depth 1 when none): slow candidates fall back to the isolated reading, a fast
+  one whose deeper probes stalled keeps its deepest clean batch. Do not replace this with a bound
+  extrapolated through a per-launch cost (least `wall / depth`): the readings that leave the fits
+  unresolved cannot tell a host stall from a cost that jumps past a queue threshold, and two review
+  rounds on staging#846 each built a threshold device that defeated such a bound (400 and 600 ms
+  timed batches); monotonicity of wall in depth is the only premise that survives both. The
+  fallback bound does not bound the validation probes themselves: on a threshold device the
+  doubling retries spend minutes before reaching it. The objective is unchanged (the depth picks
+  the scale; an entry timed at the old fallback is an accurate, merely expensive, reading), so no
+  cache-key generation bump. `autotune_timing_modes` reproduces the minix call on the injected
+  clock to the launch (760 calibration + 16 x 2048).
   An unresolved first pair retries at double depth, and the next fit uses the two batch observations so an
   inflated synchronized-single window cannot force the cap. If the last bounded probe first reaches
   the target, the interpolated target depth is still sampled and checked against the measured

@@ -407,7 +407,7 @@ let () =
    not choose. That fallback used to be the 2048 cap unconditionally: a bet that the per-launch cost
    is negligible, which the cap bounds in launches but not in wall. On gfx1151 a ~61 ms gpt2_mini
    candidate lost that bet: 126 s batches, 33,529 launches and 2016 s on one timing call. The
-   synthetic devices below reproduce both sides of the bet, and the claim is the wall bound itself,
+   synthetic devices below reproduce the ways to lose it, and the claim is the wall bound itself,
    read off each device's own clean cost model rather than off the policy: the launch work of the
    settled batch fits the 10 ms target, or the batch is a single launch.
 
@@ -415,52 +415,59 @@ let () =
    4, 12.5% at depth 32), and whose depth-2 probe reads non-monotone. Drift proportional to the wall
    is all it takes: the fit's 2.5 ms noise tolerance is under 1% of a slow candidate's batch, so
    every depth-separated pair reads as an impossible negative fixed term, and each unresolved pair
-   doubles the depth until the validation loop runs out. The fast device is the negative control: a
-   ~8 us launch behind a 62.5 us round trip whose validation and confirmation batches, the ones
-   deeper than its provisional probe, are stalled to a flat 40 ms, which also leaves the fits
-   unresolved. Its measured batches bound its launch cost far below the target's share, so its
-   fallback must still batch deeply -- a fix that returned depth 1 on every unresolved calibration
-   would turn its queued reading back into an isolated one.
+   doubles the depth until the validation loop runs out.
 
-   The threshold device is the case a per-launch bound alone gets wrong (Codex P1, round 1 on PR
-   #846): cheap at shallow depth (0.125 ms, so its provisional depth is 80), but from depth 80 its
-   batch wall grows quadratically -- 400 ms at the provisional depth itself. Its cheapest measured
-   [wall / depth] is the single launch's, which would put the fallback right back at 80; the batch
-   actually measured there refutes the linear cost the bound assumes. *)
+   The two threshold devices are the cases a bound extrapolated through a per-launch cost gets wrong
+   (Codex P1, rounds 1 and 2 on PR #846). Each is cheap at shallow depth and then grows
+   quadratically from depth 80. The first reaches the threshold at its provisional depth (400 ms
+   there), so its cheapest [wall / depth] is the single launch's and would put the fallback right
+   back at 80. The second has a 0.1 ms fixed term, so its clean provisional probe (depth 50, 5.1 ms)
+   projects a target depth one rounding step above where such a bound would land, and that
+   validation reads ~600 ms.
+
+   The fast device is the negative control: a ~8 us launch behind a 62.5 us round trip whose
+   validation and confirmation batches, the ones deeper than its provisional probe, are stalled to a
+   flat 40 ms, which also leaves the fits unresolved. A stall and a queue threshold read the same,
+   so its fallback cannot go past what it measured within the target either -- but it must still
+   batch: a fix that returned depth 1 on every unresolved calibration would turn its queued reading
+   back into an isolated one. *)
 let () =
   Stdio.printf "\n== the no-verdict fallback is wall-bounded ==\n";
   let gpu_cap = Autotune.queue_depth_cap_for_backend "hip" in
-  let slow_launch_ms = 64. in
-  let slow_clean d = (slow_launch_ms *. Float.of_int d) +. (Float.of_int (d * d) /. 4.) in
-  let slow =
-    synthetic_call ~timing:Autotune.Queued ~cap:gpu_cap ~fixed_ms:0. ~launch_ms:slow_launch_ms
-      ~walls:(fun _nth d -> if d = 2 then 60. else slow_clean d)
-      ()
+  let unresolved what ?(fixed_ms = 0.) ~launch_ms clean =
+    let c =
+      synthetic_call ~timing:Autotune.Queued ~cap:gpu_cap ~fixed_ms ~launch_ms
+        ~walls:(fun _nth d -> clean d)
+        ()
+    in
+    describe (what ^ ", unresolved fits") c;
+    c
   in
-  describe "slow, unresolved fits" slow;
-  let fast_fixed_ms = 0.0625 and fast_launch_ms = 0.0078125 in
-  let fast_clean d = fast_fixed_ms +. (fast_launch_ms *. Float.of_int d) in
-  let fast =
-    synthetic_call ~timing:Autotune.Queued ~cap:gpu_cap ~fixed_ms:fast_fixed_ms
-      ~launch_ms:fast_launch_ms
-      ~walls:(fun _nth d -> if d >= 1272 then 40. else fast_clean d)
-      ()
-  in
-  describe "fast, unresolved fits" fast;
+  let slow_clean d = (64. *. Float.of_int d) +. (Float.of_int (d * d) /. 4.) in
+  let slow = unresolved "slow" ~launch_ms:64. (fun d -> if d = 2 then 60. else slow_clean d) in
   let threshold_clean d =
     if d < 80 then 0.125 *. Float.of_int d else 0.0625 *. Float.of_int (d * d)
   in
-  let threshold =
-    synthetic_call ~timing:Autotune.Queued ~cap:gpu_cap ~fixed_ms:0. ~launch_ms:0.125
-      ~walls:(fun _nth d -> threshold_clean d)
-      ()
+  let threshold = unresolved "queue threshold" ~launch_ms:0.125 threshold_clean in
+  let offset_launch_work d =
+    if d < 80 then 0.1 *. Float.of_int d else 0.0625 *. Float.of_int (d * d)
   in
-  describe "queue threshold, unresolved fits" threshold;
+  let offset =
+    unresolved "queue threshold above a fixed term" ~fixed_ms:0.1 ~launch_ms:0.1 (fun d ->
+        if d < 80 then 0.1 +. offset_launch_work d else offset_launch_work d)
+  in
+  let fast_fixed_ms = 0.0625 and fast_launch_ms = 0.0078125 in
+  let fast_launch_work d = fast_launch_ms *. Float.of_int d in
+  let fast =
+    unresolved "fast, stalled validation" ~fixed_ms:fast_fixed_ms ~launch_ms:fast_launch_ms
+      (fun d -> if d >= 1272 then 40. else fast_fixed_ms +. fast_launch_work d)
+  in
   let cases =
     [
       ("slow", slow, slow_clean);
-      ("fast", fast, fun d -> fast_clean d -. fast_fixed_ms);
       ("queue threshold", threshold, threshold_clean);
+      ("queue threshold above a fixed term", offset, offset_launch_work);
+      ("fast", fast, fast_launch_work);
     ]
   in
   Verdict.p_all
@@ -482,7 +489,7 @@ let () =
     (slow.fresh_launches = 0
     && slow.all_launches = slow.calibration_launches
     && slow.all_launches <= 16 + (12 * (2 + 4 + 8 + 16 + 32)));
-  p "a fast candidate's unresolved calibration still batches deeply" (fast.settled_depth > 1000)
+  p "a fast candidate's unresolved calibration still batches" (fast.settled_depth > 1)
 
 (* {1 The setting's spelling} *)
 
