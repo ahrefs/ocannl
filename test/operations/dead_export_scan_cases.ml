@@ -284,6 +284,7 @@ type in_extension = E
 type in_with = W
 type in_package = Pk
 type in_pattern = [ `Ip ]
+type in_functor_path = Fp
 type by_fields = { fields_label : int } [@@deriving fields]
 type fields_module = { module_label : int } [@@deriving fields]
 type fields_alias = { alias_label : int } [@@deriving fields]
@@ -324,6 +325,7 @@ let () =
          "Sample.fields_alias";
          "Sample.fields_module";
          "Sample.in_extension";
+         "Sample.in_functor_path";
          "Sample.in_include";
          "Sample.in_package";
          "Sample.in_pattern";
@@ -349,6 +351,7 @@ let () =
          type Sample.extensible += More\n\
          let p (module M : S with type in_package = int) = ()\n\
          let q = function #Sample.in_pattern -> true | _ -> false\n\
+         let r (x : F(X).in_functor_path) = x\n\
          let g x = (x.Other.fields_label, fields_label x, { Other.fields_label = 1 })\n\
          let n = Sample.Fields_of_fields_module.names\n" );
     ]
@@ -385,6 +388,8 @@ let () =
     (mentions counts "in_package" > 0);
   Verdict.p "a #type pattern mentions the polymorphic variant it names"
     (mentions counts "in_pattern" > 0);
+  Verdict.p "a type path through a functor application mentions its last component"
+    (mentions counts "in_functor_path" > 0);
   Verdict.p "a fields deriving is credited by its module, never by a same-named label or value"
     (mentions counts "fields_module" > 0 && mentions counts "by_fields" = 0);
   let deriving_payload =

@@ -404,7 +404,9 @@ let counts ~(exports : export list) references =
     can use the type through its converter alone. Comments, docstrings and string literals never
     parse into a path, so prose cannot keep a type alive. A type named with a leading [_] is not
     censused, as it is not for OCaml's own unused-type warning (34): its author marked it
-    deliberately unused, the convention the value census follows for [let].
+    deliberately unused, the convention the value census follows for [let]. Unlike the value census,
+    an [include M] credits none of [M]'s types: the count is blind to qualifiers, so a use through
+    the including module ([N.foo]) is already a mention, and a re-export nobody spells is not a use.
 
     Out of scope, by design: the constructors and record labels of a type are not resolved to it (a
     record built only by its labels, never annotated, reads as unmentioned), and neither are the
@@ -507,8 +509,17 @@ let type_mention_counts ~(type_exports : type_export list) ~implementations ~int
   let type_mentions = Hashtbl.create (module String) in
   let derived_mentions = Hashtbl.create (module String) in
   let walk ~source =
+    (* Read through functor applications: [F(X).foo] names [foo] and spells [F] and [X]. *)
+    let rec components : Ppxlib.longident -> string list = function
+      | Lident name -> [ name ]
+      | Ldot (prefix, name) -> components prefix @ [ name ]
+      | Lapply (functor_, argument) -> components functor_ @ components argument
+    in
     let record_type_path (path : Ppxlib.longident_loc) =
-      match Option.bind (flattened_longident path.txt) ~f:path_last with
+      let last =
+        match path.txt with Lident name | Ldot (_, name) -> Some name | Lapply _ -> None
+      in
+      match last with
       | Some name when Set.mem type_names name ->
           Hashtbl.add_multi type_mentions ~key:name ~data:(source, path.loc.loc_start.pos_cnum)
       | Some _ | None -> ()
@@ -516,11 +527,9 @@ let type_mention_counts ~(type_exports : type_export list) ~implementations ~int
     (* A derived value or module is spelled as a whole value or module path, or as a qualifier in
        one ([Fields_of_foo.names]). Label paths are not read at all. *)
     let record_derived_path (path : Ppxlib.longident_loc) =
-      Option.iter (flattened_longident path.txt) ~f:(fun components ->
-          List.iter components ~f:(fun name ->
-              if Set.mem derived_names name then
-                Hashtbl.add_multi derived_mentions ~key:name
-                  ~data:(source, path.loc.loc_start.pos_cnum)))
+      List.iter (components path.txt) ~f:(fun name ->
+          if Set.mem derived_names name then
+            Hashtbl.add_multi derived_mentions ~key:name ~data:(source, path.loc.loc_start.pos_cnum))
     in
     object
       inherit Ast_traverse.iter as super
