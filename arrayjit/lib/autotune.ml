@@ -547,6 +547,36 @@ let depth_from_batch_wall_with_cap ~max_depth ~depth ~wall_ms =
     in
     (depth', wall_ms *. Float.of_int depth' /. Float.of_int depth)
 
+(* The wall bound on a depth the affine fits did not choose (gh-ocannl-1096). When calibration ends
+   unresolved -- every fit refused, or the cap taken without a measurement there -- the depth it
+   returns is a bet that the per-launch cost is negligible against a fixed synchronization cost the
+   fits could not separate. The cap bounds that bet in launches, not in wall: a ~61 ms gfx1151
+   candidate whose superlinear batches never fit settled at 2048 and spent 126 s per batch, 2016 s
+   on one timing call.
+
+   [observed] is every finite positive [(depth, wall)] minimum the calibration measured, the
+   synchronized singles as depth 1. The fallback never goes deeper than the deepest depth measured
+   within the batch target, and is depth 1 when none was. That is sound for any cost that grows with
+   depth -- the true wall is monotone in depth and a measured wall bounds the true one -- and it is
+   the only bound that is. The readings that left the fits unresolved cannot tell a host stall from
+   a cost growing faster than linearly past a queue threshold, so any bound extrapolated past the
+   measured depths through a per-launch cost is defeated by the second (Codex P1, rounds 1 and 2 on
+   PR #846: the least [wall / depth] kept a threshold kernel's cheap single-launch ratio, and
+   restricting its refutation to depths at or below its own was dodged by an over-target probe one
+   rounding step above, at ~600 ms). A slow candidate therefore falls back to depth 1 -- measured
+   exactly as [Isolated] measures it -- and a fast one whose deeper probes stalled keeps the deepest
+   batch it measured within the target, still batching rather than turning isolated.
+
+   Only ever shortens the depth; with no finite positive reading at all (a clock that resolved
+   nothing) there is no evidence and the depth stands, as [queued_batch_depth] batches such
+   estimates at the cap. *)
+let wall_bounded_fallback_depth ~observed depth =
+  if List.is_empty observed then depth
+  else
+    Int.min depth
+    @@ List.fold observed ~init:1 ~f:(fun deepest (d, wall_ms) ->
+        if Float.(wall_ms <= queued_batch_ms) then Int.max deepest d else deepest)
+
 (* Sibling fault-injection seam to [on_candidate_attempt], at a timing run's pre-dispatch validation
    rather than at a candidate's compile (gh-ocannl-564). Default no-op, no config key selects it.
    Needed because the causes this phase contains — an unsatisfied dependency, an out-of-range
@@ -632,11 +662,19 @@ let on_timed_window :
    policy -- which depth a call settles on, which window it times, how many launches each costs --
    on an injected clock, with no device and no machine-dependent routine (gh-ocannl-1074). *)
 let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
+  (* Every finite positive batch minimum the calibration measured, as [(depth, wall)]: the evidence
+     that bounds an unresolved calibration's fallback depth. *)
+  let observed = ref [] and no_supported_batch = ref false in
+  let observe ~depth wall_ms =
+    if Float.is_finite wall_ms && Float.is_positive wall_ms then
+      observed := (depth, wall_ms) :: !observed
+  in
   let probe_batch depth =
     let best_ms = ref Float.infinity in
     for _ = 1 to queue_batch_probe_runs do
       best_ms := Float.min !best_ms (batch depth)
     done;
+    observe ~depth !best_ms;
     { ms = !best_ms; contended = false; samples = queue_batch_probe_runs }
   in
   (* [singles] is the calibration's window of synchronized single launches, kept rather than reduced
@@ -654,6 +692,7 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
             ()
         in
         let single_estimate = window_result singles in
+        observe ~depth:1 single_estimate.ms;
         let calibration_dispatches, depth, estimated_batch_wall_ms =
           if queue_depth_cap <> max_queue_depth then
             (* The affine refinement repairs the CUDA/HIP dispatch-scale defect in gh-ocannl-892.
@@ -815,6 +854,21 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
                 validate_depth max_depth_validation_probes calibration_dispatches probe_depth
                   probe.ms depth estimated_batch_wall_ms
             in
+            (* An unresolved outcome is the only one whose depth no measured wall or fit supports;
+               every resolved one carries its own wall estimate. *)
+            let depth =
+              if Float.is_nan estimated_batch_wall_ms then
+                wall_bounded_fallback_depth ~observed:!observed depth
+              else depth
+            in
+            (* A candidate whose single launch owed it a batch, but whose every batched probe read
+               over the target, has no depth this calibration can time as [Queued]: the fallback
+               leaves only depth 1, whose reading is the isolated objective, and timing it would
+               crown under the wrong objective silently (Codex P1, round 3 on PR #846). The readings
+               cannot tell that from a stall, so it is refused exactly as a stalled window is: not
+               ranked, not cached, retried by a later search. *)
+            if Float.is_nan estimated_batch_wall_ms && depth = 1 && provisional_depth > 1 then
+              no_supported_batch := true;
             (calibration_dispatches, depth, Some estimated_batch_wall_ms)
         in
         (calibration_dispatches, depth, estimated_batch_wall_ms, singles)
@@ -882,7 +936,13 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
   in
   !on_timed_window ~samples:!timed_batches ~reused:(List.length reused) ~wall_ms:!timed_wall_ms
     ~median_wall_ms;
-  result
+  if !no_supported_batch then (
+    logf
+      "queued timing refused: every batched calibration probe read over the %.1f ms target, so \
+       only an isolated depth-1 reading was left"
+      queued_batch_ms;
+    { result with contended = true })
+  else result
 
 (* [routine.bindings] exposes the routine's live binding refs — restore them after timing (Codex P2
    on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)

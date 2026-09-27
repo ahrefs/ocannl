@@ -33,6 +33,13 @@ a caller floor above the calibration's is topped up with exactly the missing lau
 a reused window is judged for contention whole: true
 a batching depth reuses nothing and dispatches its whole window: true
 
+== the no-verdict fallback is wall-bounded ==
+an unresolved calibration never settles on a batch whose launch work exceeds the target: true
+a slow candidate whose fits never resolve is timed at depth 1, as isolated times it: true
+a candidate owed a batch that measured none within the target is refused, not timed isolated: true
+a fallback that kept a batch measured within the target is admitted: true
+a slow candidate's unresolved calibration costs no more than its probes: true
+
 == autotune_timing spelling ==
 "queued" selects the queued objective: true
 "isolated" selects the isolated objective: true
