@@ -258,9 +258,9 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   printed up to then. A successful cell's output is otherwise discarded, which throws away the
   candidate-level evidence a measurement sweep has to report. Tuned OCANNL cells run with
   `--ocannl_autotune_progress=true`: the tuner writes `autotune-progress:` lines (search and
-  phase starts, the arms and flips of the placement search, a candidate line at most every 30 s
-  with candidates tried of the phase's total, compile vs timing seconds and the best time so
-  far; format at `Autotune.progressf` in `arrayjit/lib/autotune.mli`), which is how a search
+  phase starts, the arms and flips of the placement search, and a line as each candidate attempt
+  starts naming it, with its ordinal of the phase's total, compile vs timing seconds so far and
+  the best time so far; format at `Autotune.progressf` in `arrayjit/lib/autotune.mli`), which is how a search
   pass that timed out still states its cost. Combined with
   `OCANNL_AUTOTUNE_LOG=true` it makes the seeded-vs-timed mma and split-reduce counts, the
   `FAILED` blocker breakdown and the split-reduce evictions fall out of the sweep's own search

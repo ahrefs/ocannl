@@ -73,33 +73,20 @@ let logf fmt =
 
 (* gh-ocannl-1061: the search's cost record, gated by config [autotune_progress]. A search can run
    for hours and be killed by a cap before it reports anything, and [autotune_log] is no substitute:
-   it is a line per candidate, and it pays for an extra untuned-default control compile, so it moves
-   the cost it would be recording. These lines are cheap (a clock read per candidate) and few (the
-   per-candidate line is rate-bounded; the phase, arm and flip lines are bounded by the search's own
-   structure), and each is flushed as it is written, so a kill keeps everything up to it. The format
+   it pays for an extra untuned-default control compile, so it moves the cost it would be recording.
+   These lines cost a clock read per candidate, and each is flushed as it is written, so a kill
+   keeps everything up to it.
+
+   The per-candidate line is written at EVERY attempt's start, not at a time-bounded rate: the
+   candidate a cap kills the search inside is the one the record most needs to name, and without a
+   thread beside the blocking compile or timing call only the line written before it can name it. A
+   time bound always leaves a window after the previous line (review rounds 2-3 on PR #817). The
+   rate is bounded by the attempts themselves -- each is a candidate compile, a timing window or a
+   pruning decision -- and the phase, arm and flip lines by the search's own structure. The format
    is the interface's contract; see {!progressf}. *)
-let progress_default_interval_s = 30.
-
-let progress_interval_s =
-  lazy
-    (let raw = String.strip (Utils.get_global_arg ~arg_name:"autotune_progress" ~default:"false") in
-     match String.lowercase raw with
-     | "" | "false" -> None
-     | "true" -> Some progress_default_interval_s
-     | _ -> (
-         match Float.of_string_opt raw with
-         | Some s when Float.is_finite s && Float.(s >= 0.) -> Some s
-         | _ ->
-             (* A diagnostic's bad value is not worth failing a search over; the caller asked for
-                progress, so it gets progress at the default rate -- and is told. *)
-             Stdio.eprintf
-               "autotune: autotune_progress should be false, true or a non-negative number of \
-                seconds; found %S, using %g s\n\
-                %!"
-               raw progress_default_interval_s;
-             Some progress_default_interval_s))
-
-let progress_enabled () = Option.is_some (Lazy.force progress_interval_s)
+let progress_enabled =
+  let on = lazy (Utils.get_global_flag ~default:false ~arg_name:"autotune_progress") in
+  fun () -> Lazy.force on
 
 (* Taken when this module is initialized, i.e. at program start: [wall_s] places a line within the
    process, which for a benchmark cell is within the cell's own wall clock. *)
@@ -3175,20 +3162,13 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
      accumulate the candidates' compiles and timing windows, so [elapsed_s] minus the two is what
      the search spent elsewhere (the base compile, analyses, replays, the winner's recompile). *)
   let progress_clock = Mtime_clock.counter () in
-  let progress_last_s = ref 0. in
   let progress_compile_s = ref 0. and progress_timing_s = ref 0. in
   let progress_attempts = ref 0 in
   let progress_line event fields =
-    if progress_enabled () then (
+    if progress_enabled () then
       let elapsed = seconds_since progress_clock in
-      progress_last_s := elapsed;
       progressf "event=%s routine=%S elapsed_s=%.1f %s" event (Lazy.force routine_name) elapsed
-        fields)
-  in
-  let progress_due () =
-    match Lazy.force progress_interval_s with
-    | None -> false
-    | Some interval -> Float.(seconds_since progress_clock -. !progress_last_s >= interval)
+        fields
   in
   let progress_costs () =
     Printf.sprintf "attempts=%d compile_s=%.1f timing_s=%.1f" !progress_attempts !progress_compile_s
@@ -4331,14 +4311,15 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                      (progress_costs ()) (progress_best ())))
           in
           (* Written as an attempt STARTS, naming it: a search killed inside a long candidate then
-             leaves the candidate it was in (or, under the rate bound, the one it was in started
-             within an interval of the last line), and the costs of everything before it. Counted
-             before the attempt too, so a fatal candidate -- which writes [search_done] from inside
-             itself and raises -- is in the closing record's [attempts]. *)
+             leaves the candidate it was in, and the costs of everything before it. Counted before
+             the attempt too, so a fatal candidate -- which writes [search_done] from inside itself
+             and raises -- is in the closing record's [attempts]. *)
           let try_spec spec =
             Int.incr progress_attempts;
             Int.incr progress_tried;
-            if progress_due () then
+            (* Guarded here, not only inside [progress_line]: its arguments render a label and read
+               the best-so-far table on every attempt of a search that prints nothing. *)
+            if progress_enabled () then
               progress_line "candidate"
                 (Printf.sprintf "%s attempt=%S" (progress_where ()) (spec_label spec));
             try_spec spec

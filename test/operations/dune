@@ -4542,7 +4542,7 @@
  (preprocess
   (pps ppx_here ppx_ocannl))
  (action
-  (run %{test} "--ocannl_autotune_progress=0")))
+  (run %{test} "--ocannl_autotune_progress=true")))
 
 (test
  (name inline_flip_tune)

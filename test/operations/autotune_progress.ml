@@ -1,7 +1,7 @@
 (* gh-ocannl-1061: the tuner's progress lines, the cost record a killed search leaves behind.
 
    Runs [Train.tune_placements] (both arms, one beam round each, a one-flip refinement budget) with
-   [--ocannl_autotune_progress=0] -- a candidate line as every candidate attempt starts -- while
+   [--ocannl_autotune_progress=true] -- a candidate line as every candidate attempt starts -- while
    stderr is routed into a file, then reads the [autotune-progress:] lines back and checks them
    against what the search reported through its callbacks: the format every line keeps, one
    [search_start]/[search_done] pair per report and in the same order, the outcome and timed count
@@ -145,7 +145,6 @@ let () =
       Option.equal String.equal (field f "outcome") (Some (Autotune.outcome_name r.outcome))
       && Option.equal Int.equal (int_field f "timed") (Some r.candidates_timed));
   let candidates s = List.filter s ~f:(fun (ev, _) -> String.equal ev "candidate") in
-  (* With a 0 s interval every attempt prints. *)
   p_all "each search printed one candidate line per attempt it reports" searches ~f:(fun s ->
       let _, done_fields = List.last_exn s in
       Option.equal Int.equal (int_field done_fields "attempts") (Some (List.length (candidates s))));

@@ -487,15 +487,15 @@
 #autotune_log=false
 
 # gh-ocannl-1061: a tuning search's cost record, for a search that may be killed before it
-# reports (a benchmark cell over its cap). If on, `Autotune.tune` and `Train.tune_placements`
+# reports (a benchmark cell over its cap). If true, `Autotune.tune` and `Train.tune_placements`
 # write `autotune-progress:` lines to stderr, each flushed as written: one per search start and
-# end, per phase (the seed pass, each beam round), per placement arm and per tried flip, and a
-# rate-bounded one as a candidate attempt starts, naming the candidate, the phase and the
-# attempt's ordinal out of its total, the elapsed time and how much of it went to candidate
-# compiles and to timing windows, and the best time so far. `true` bounds the candidate line to one per 30 s; a non-negative number of
-# seconds sets that interval (0: at every candidate). Unlike autotune_log it adds no work to
-# the search. The line format is documented at `Autotune.progressf` (arrayjit/lib/autotune.mli).
-# benchmarks/orchestrate.py turns it on for its tuned cells.
+# end, per phase (the seed pass, each beam round), per placement arm and per tried flip, and one
+# as each candidate attempt starts, naming the candidate, the phase and the attempt's ordinal out
+# of its total, the elapsed time and how much of it went to candidate compiles and to timing
+# windows, and the best time so far -- so a search killed inside a candidate names it. Unlike
+# autotune_log it adds no work to the search. The line format is documented at
+# `Autotune.progressf` (arrayjit/lib/autotune.mli). benchmarks/orchestrate.py turns it on for its
+# tuned cells.
 #autotune_progress=false
 
 # gh-555: budget for the greedy per-node inlining refinement of `Train.tune_placements` — after

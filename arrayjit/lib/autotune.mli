@@ -911,10 +911,8 @@ val no_search_report : timing:timing_mode -> report
 (** {2 Progress lines (gh-ocannl-1061)}
 
     A search's cost record, for a search that may be killed before it reports: with config
-    [autotune_progress] on ([true] for a candidate line at most every 30 s, or a non-negative number
-    of seconds for that interval, [0] meaning at every candidate; [false], the default, prints
-    nothing), {!tune} and {!Train.tune_placements} write single lines to stderr, each flushed as it
-    is written, of the form
+    [autotune_progress=true] (default [false]), {!tune} and {!Train.tune_placements} write single
+    lines to stderr, each flushed as it is written, of the form
 
     {v autotune-progress: wall_s=<s> event=<event> <key>=<value> ... v}
 
@@ -927,14 +925,14 @@ val no_search_report : timing:timing_mode -> report
     - [phase] ({!tune}, one per phase with a known size): [routine], [elapsed_s], [phase] ([seeds]
       or [round<k>]), [candidates] (the phase's total), [timed], [attempts], [compile_s],
       [timing_s], [best_ms], [best].
-    - [candidate] ({!tune}, as a candidate attempt starts, at most once per interval): [routine],
-      [elapsed_s], [phase] ([seeds], [recombine] or [round<k>]), [tried=<k>/<total>] (the ordinal of
-      the attempt starting within its phase; [?] when the phase's total is not known up front),
-      [timed], [attempts] (this one included), [compile_s], [timing_s], [best_ms], [best] (all as of
-      the attempt's start), and [attempt], the starting candidate's label. A search killed inside a
-      candidate is therefore inside the one its last [candidate] line names, or -- under a nonzero
-      interval -- one that started within an interval of the search's last line of any kind (a
-      phase's first candidate starts right after its [phase] line).
+    - [candidate] ({!tune}, as EVERY candidate attempt starts): [routine], [elapsed_s], [phase]
+      ([seeds], [recombine] or [round<k>]), [tried=<k>/<total>] (the ordinal of the attempt starting
+      within its phase; [?] when the phase's total is not known up front), [timed], [attempts] (this
+      one included), [compile_s], [timing_s], [best_ms], [best] (all as of the attempt's start), and
+      [attempt], the starting candidate's label. A search killed inside a candidate is therefore
+      inside the one its last [candidate] line names. The rate is bounded by the attempts
+      themselves, not by a clock: a time bound would leave a window in which the candidate being
+      worked on is unnamed.
     - [search_done] ({!tune}, exactly once per call, with its report): [routine], [elapsed_s],
       [outcome] ({!outcome_name}), [timed], [contended], [failed], [rounds], [attempts],
       [compile_s], [timing_s], [best_ms], [best].
