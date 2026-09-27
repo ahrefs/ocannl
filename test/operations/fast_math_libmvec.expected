@@ -1,0 +1,5 @@
+backend: cc
+cc_backend_fast_math is on: true
+kernel loaded and computed exp to 1e-5 relative: true
+libmvec unmapped before the kernel loaded: true
+libmvec mapped after the kernel loaded (the vector variant was reached): true
