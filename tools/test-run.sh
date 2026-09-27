@@ -120,7 +120,8 @@
 # clean). Both are optional -- absent outside a Git checkout -- and neither
 # says anything about an edit made after the launch, or about ignored files and
 # the environment, which are configuration rather than source (see
-# record_checkout).
+# record_checkout). The digest prints them as its `source:` line: the commit,
+# then `(clean)` or `+ N uncommitted paths`.
 #
 # Windows: run it from Git Bash, whose MSYS perl carries the flock and the cap.
 # Best-effort even there -- process-group kills may only reach dune itself, not
@@ -1446,6 +1447,25 @@ digest() {
   echo "command: dune $(cat "$dir/cmd")"
   echo "verdict: $verdict (exit $digest_rc)"
   echo "log:     $dir/log"
+  # The source the run tested, from the launch-time record (record_checkout),
+  # so a digest quoted as evidence carries its revision. Nothing is printed
+  # for a run that recorded none (outside Git, or launched before the record).
+  if [ -s "$dir/head" ]; then
+    local src_head src_n
+    src_head=$(sed -n 1p "$dir/head")
+    if [ ! -f "$dir/dirty" ]; then
+      echo "source:  $src_head (uncommitted state not recorded)"
+    elif [ ! -s "$dir/dirty" ]; then
+      echo "source:  $src_head (clean)"
+    else
+      src_n=$(grep -c '' "$dir/dirty")
+      if [ "$src_n" = 1 ]; then
+        echo "source:  $src_head + 1 uncommitted path"
+      else
+        echo "source:  $src_head + $src_n uncommitted paths"
+      fi
+    fi
+  fi
   if [ "$digest_rc" = 2 ]; then
     # dune's own words name the fix; nothing below (promotion diffs, the
     # fingerprint, a log tail) could apply to a run in which no rule ran.
@@ -1458,9 +1478,21 @@ digest() {
   # Digest sits on `wait`'s deadline path, so it examines at most the last
   # 10MB of the log rather than scaling with an arbitrarily noisy run.
   scan_log() { tail -c 10000000 "$dir/log" 2>/dev/null; }
-  if scan_log | grep -qE '^File "[^"]*\.expected"|\.corrected'; then
+  # Promotion is offered only on a diff dune actually printed: a `--- ` header
+  # line directly followed by a `+++ ` one (git diff and diff -u alike; color
+  # escapes stripped first). Merely NAMING a `.expected` or `.corrected` file
+  # is not one -- dune quotes the failing stanza, `(diff? x.ml x.ml.corrected)`
+  # included, for a rule whose action failed before any diff ran, and sending
+  # that reader to `dune promote` hides the real failure (gh-ocannl-1055).
+  if scan_log | awk 'BEGIN { esc = sprintf("%c", 27) }
+                     { gsub(esc "\\[[0-9;]*m", "") }
+                     prev ~ /^--- / && /^\+\+\+ / { found = 1; exit }
+                     { prev = $0 }
+                     END { exit found ? 0 : 1 }'; then
     echo "promotion diffs present -- inspect the log, accept with \`dune promote\`" \
          "(tools/promote.sh on Windows)"
+  elif [ "$verdict" = FAIL ]; then
+    echo "action failed (no diff) -- nothing to promote; read the failure below"
   fi
   if [ "$rc" != 0 ]; then
     fp=$({ scan_log | grep -oE '^File "[^"]+", lines? [0-9]+(-[0-9]+)?'
