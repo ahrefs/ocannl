@@ -44,6 +44,8 @@ on_error() {
     dxg_many dxg_bounds dxg_no_trigger native_quiet_block native_red_a native_red_b \
     native_of_dxg dxg_of_native native_collection native_unit_linux native_unit_wsl \
     native_unit_cpu native_abort_run native_other_abort hold_lock_ok \
+    contract_alias contract_box contract_lock_path contract_scope contract_unchecked \
+    lane_lock_linux lane_lock_wsl \
     tuf_asleep tuf_no_wake_lab tuf_up tuf_unreachable tuf_inhibited tuf_sleep_fails \
     tuf_unguarded tuf_unguarded_prep tuf_unguarded_wsl tuf_self_refusal tuf_cancelled \
     guard_held guard_refused guard_stalled \
@@ -86,7 +88,7 @@ unset SWEEP_TEST_CALLS SWEEP_TEST_WAIT_PREFIX SWEEP_TEST_OPAM_RC \
   SWEEP_TEST_HOSTS SWEEP_TEST_DEST_ROG SWEEP_TEST_DEST_MINIX \
   SWEEP_TEST_KERNEL_LINES SWEEP_TEST_BOOT_ID SWEEP_TEST_DEST_TUF SWEEP_TEST_WAKE_LAB \
   SWEEP_TEST_WAKE_LAB_CALLS SWEEP_TEST_TUF_STATUS SWEEP_TEST_TUF_SLEEP SWEEP_TEST_HOLD_DENIED \
-  SWEEP_TEST_PREP_OK
+  SWEEP_TEST_PREP_OK SWEEP_TEST_ENDPOINT_MAP SWEEP_TEST_LOCK_PATH_DIR SWEEP_TEST_LAB_LOCK_WAIT
 
 sweep=$1
 aggregate=$2
@@ -317,8 +319,35 @@ chmod +x "$fake_bin/ssh"
 # and is refused while another holder has it. So a lane that asked for its own box's sleep while
 # still holding its reservation is refused by itself here, exactly as it would be in the lab. The
 # sleep's other outcomes are the real script's lines: done, refused by a block inhibitor, failed.
+#
+# It also answers the two verbs the sweep's startup contract check asks (gh-ocannl-1025), which
+# need no site table: `endpoint-map`, the lab's map as the real script prints it on 2026-09-27 --
+# SWEEP_TEST_ENDPOINT_MAP replaces it, and `none` is a wake-lab.sh from before the verb -- and
+# `lock-path <box>`, the real script's `<dir>/<box>.lock` over WAKE_LAB_LOCK_DIR, which
+# SWEEP_TEST_LOCK_PATH_DIR moves. Those two are logged apart, in `<calls>.contract`, so the power
+# verbs' log still holds exactly what a gated lane asked.
 cat >"$fake_bin/wake-lab.sh" <<'EOF'
 #!/bin/sh
+case $1 in
+  endpoint-map)
+    printf '%s\n' "$*" >>"$SWEEP_TEST_WAKE_LAB_CALLS.contract"
+    case ${SWEEP_TEST_ENDPOINT_MAP:-} in
+      none) echo 'wake-lab.sh: no ssh endpoints for endpoint-map' >&2; exit 1 ;;
+      '')
+        echo 'rog rog-nv-linux rog-nv-win rog-nv-wsl rog-lan'
+        echo 'minix minix-amd-linux minix-amd-win minix-amd-wsl minix-lan'
+        echo 'tuf tuf-amd-linux tuf-amd-win tuf-amd-wsl'
+        ;;
+      *) printf '%s\n' "$SWEEP_TEST_ENDPOINT_MAP" ;;
+    esac
+    exit 0
+    ;;
+  lock-path)
+    printf '%s\n' "$*" >>"$SWEEP_TEST_WAKE_LAB_CALLS.contract"
+    printf '%s/%s.lock\n' "${SWEEP_TEST_LOCK_PATH_DIR:-$WAKE_LAB_LOCK_DIR}" "$2"
+    exit 0
+    ;;
+esac
 printf '%s\n' "$*" >>"$SWEEP_TEST_WAKE_LAB_CALLS"
 case $1 in
   status)
@@ -419,8 +448,9 @@ run_sweep_args() {
   # `skip (unreachable)` rows the cases assert. $HOME above already covers the DEFAULT path, but an
   # ambient WAKE_LAB_LOCK_DIR -- the supported way to move that directory, and what the ludics-lite
   # suite sets -- overrides the default and would be inherited straight through. Its wait budget is
-  # unset for the reason the caps above are: an ambient one would rewrite a budget these cases
-  # depend on.
+  # pinned for the reason the caps above are unset: an ambient one would rewrite a budget these
+  # cases depend on. The script's own default, unless a case that holds a lane lock on purpose
+  # names SWEEP_TEST_LAB_LOCK_WAIT so its refusal is prompt.
   #
   # Quoted, unlike the assignment prefix this replaces: these are `env`'s
   # ARGUMENTS now, so the multi-line fixture logs would otherwise be split into
@@ -431,7 +461,10 @@ run_sweep_args() {
   # supported knobs -- would otherwise decide which alias the fake remote lanes are asked for, and
   # the destination cases below assert exactly that.
   local environment=(-u OCANNL_BACKEND -u OCANNL_TOOL_SWEEP_CAP -u OCANNL_TOOL_SWEEP_CONTEXT_CAP \
-    -u OCANNL_TOOL_SWEEP_LOCAL_BOX -u OCANNL_TOOL_SWEEP_LAB_LOCK_WAIT \
+    -u OCANNL_TOOL_SWEEP_LOCAL_BOX \
+    "OCANNL_TOOL_SWEEP_LAB_LOCK_WAIT=${SWEEP_TEST_LAB_LOCK_WAIT:-300}" \
+    "SWEEP_TEST_ENDPOINT_MAP=${SWEEP_TEST_ENDPOINT_MAP:-}" \
+    "SWEEP_TEST_LOCK_PATH_DIR=${SWEEP_TEST_LOCK_PATH_DIR:-}" \
     "HOME=$tmp/home" \
     "WAKE_LAB_LOCK_DIR=$tmp/lab-locks" \
     "WAKE_LAB_HOSTS=${SWEEP_TEST_HOSTS:-$tmp/hosts-linux.sh}" \
@@ -1297,8 +1330,13 @@ absent -- '-linux' "$ssh_calls"
 # the files' presence afterwards is this run's evidence.
 : >"$ssh_calls"
 rm -f "$tmp/lab-locks/rog.lock" "$tmp/lab-locks/minix.lock"
+rm -f "$wake_lab_calls.contract"
 dest_linux=$(run_sweep_args --only cuda --only hip --only multidev_cc --target dest-linux-probe)
 grep -q '^destinations: rog-nv=rog-nv-linux minix=minix-amd-linux tuf=tuf-amd-linux$' <<<"$dest_linux"
+# ...and wake-lab.sh agreed on every one of those boxes' locks, asked once per box (gh-ocannl-1025).
+grep -qF "lab locks: agree with $fake_bin/wake-lab.sh for rog minix tuf" <<<"$dest_linux"
+[ "$(cat "$wake_lab_calls.contract")" = \
+  "$(printf '%s\n' endpoint-map 'lock-path rog' 'lock-path minix' 'lock-path tuf')" ]
 grep -q '^  rog-nv/cuda: skip (unreachable)$' <<<"$dest_linux"
 grep -q '^  minix/hip: skip (unreachable)$' <<<"$dest_linux"
 grep -q '^  minix/multidev_cc: skip (unreachable)$' <<<"$dest_linux"
@@ -1345,6 +1383,7 @@ grep -q '^sweep: no ssh destination for rog-nv/cuda; refusing to guess one$' <<<
 dest_local_only=$(SWEEP_TEST_HOSTS=$tmp/no-such-hosts.sh run_sweep_args --target dest-local-probe)
 grep -q '^  m4-max/cc: incremental-pass ' <<<"$dest_local_only"
 absent '^destinations:' <<<"$dest_local_only"
+absent '^lab locks:' <<<"$dest_local_only"
 [ ! -s "$ssh_calls" ]
 # A kind the sweep has no alias for.
 set +e
@@ -1862,6 +1901,83 @@ absent 'reserved by' <<<"$hold_lock_ok"
 [ -e "$hold_locks/rog.lock" ]
 [ -e "$hold_locks/minix.lock" ]
 exec 6>&- 5>&-
+
+# The lab lock contract, checked at startup against the wake-lab.sh the run will meet
+# (gh-ocannl-1025). Both sides' spellings are read from code -- the sweep's lab_dest_of/lab_box_of,
+# the fake's endpoint map, which is the real one's rows -- and a disagreement refuses the RUN before
+# any lane starts: the dest_refused shape, with a line naming what moved. Each case breaks ONE fact
+# the real wake-lab.sh holds today. The first breaks the boot this run does NOT address, rog's WSL
+# alias under the native table: every boot of the box is checked, not only today's, because the
+# next reboot into the other one must not find the contract already broken.
+lab_map_row_minix='minix minix-amd-linux minix-amd-win minix-amd-wsl minix-lan'
+lab_map_row_tuf='tuf tuf-amd-linux tuf-amd-win tuf-amd-wsl'
+: >"$ssh_calls"
+set +e
+contract_alias=$(SWEEP_TEST_ENDPOINT_MAP="$(printf '%s\n' \
+  'rog rog-nv-linux rog-nv-win rognv-wsl rog-lan' "$lab_map_row_minix" "$lab_map_row_tuf")" \
+  run_sweep_args --only cuda --target contract-alias-probe 2>&1)
+contract_alias_rc=$?
+set -e
+dest_refused "$contract_alias_rc" "$contract_alias" contract-alias-probe
+grep -qF "sweep: the lab lock contract with $fake_bin/wake-lab.sh is broken: rog-nv-wsl is not an endpoint on rog's row (rog-nv-linux rog-nv-win rognv-wsl rog-lan); a lane would reserve a box no destroyer checks, so fix the side that moved" \
+  <<<"$contract_alias"
+# A box renamed on wake-lab's side: its lock is now `<new name>.lock`, and a lane would take the old.
+set +e
+contract_box=$(SWEEP_TEST_ENDPOINT_MAP="$(printf '%s\n' \
+  'rognv rog-nv-linux rog-nv-win rog-nv-wsl rog-lan' "$lab_map_row_minix" "$lab_map_row_tuf")" \
+  run_sweep_args --only cuda --target contract-box-probe 2>&1)
+contract_box_rc=$?
+set -e
+dest_refused "$contract_box_rc" "$contract_box" contract-box-probe
+grep -qF 'is broken: its endpoint map has no row for rog, the box a lane to rog-nv-linux reserves;' \
+  <<<"$contract_box"
+# A lock directory the two sides no longer share.
+set +e
+contract_lock_path=$(SWEEP_TEST_LOCK_PATH_DIR=$tmp/elsewhere-locks \
+  run_sweep_args --only cuda --target contract-lock-path-probe 2>&1)
+contract_lock_path_rc=$?
+set -e
+dest_refused "$contract_lock_path_rc" "$contract_lock_path" contract-lock-path-probe
+grep -qF "is broken: lock-path rog answers '$tmp/elsewhere-locks/rog.lock' where a lane locks $tmp/lab-locks/rog.lock;" \
+  <<<"$contract_lock_path"
+# Only the boxes a SELECTED lane reserves are checked: the same renamed rog does not refuse a run
+# that never reserves it, and the header names the boxes it did check.
+contract_scope=$(SWEEP_TEST_ENDPOINT_MAP="$(printf '%s\n' \
+  'rognv rog-nv-linux rog-nv-win rog-nv-wsl rog-lan' "$lab_map_row_minix" "$lab_map_row_tuf")" \
+  run_sweep_args --only hip --target contract-scope-probe)
+grep -qF "lab locks: agree with $fake_bin/wake-lab.sh for minix tuf" <<<"$contract_scope"
+grep -q '^  minix/hip: skip (unreachable)$' <<<"$contract_scope"
+# A wake-lab.sh with no endpoint map to give -- one from before the verb -- cannot be checked, and
+# says so in the header; the lanes still run, since the lane lock needs no wake-lab.sh to be taken.
+contract_unchecked=$(SWEEP_TEST_ENDPOINT_MAP=none \
+  run_sweep_args --only cuda --target contract-unchecked-probe)
+grep -qF "lab locks: NOT CHECKED -- $fake_bin/wake-lab.sh endpoint-map gave no map (a wake-lab.sh from before ludics-lite#395?)" \
+  <<<"$contract_unchecked"
+grep -q '^  rog-nv/cuda: skip (unreachable)$' <<<"$contract_unchecked"
+
+# The lane's call site, which the ludics-lite side cannot see (it calls take_lab_lock as a
+# function): under EITHER boot, the lane reserves the file `wake-lab.sh lock-path` answers for the
+# box its destination belongs to. That file held, the lane refuses at once (a zero wait) with the
+# holder named, and never dials the box. With the startup check above tying lock-path to the file
+# a lane opens, this closes the chain from a destination to the lock every destroyer takes.
+lane_lock_at=$(SWEEP_TEST_WAKE_LAB_CALLS=$wake_lab_calls WAKE_LAB_LOCK_DIR=$tmp/lab-locks \
+  "$fake_bin/wake-lab.sh" lock-path rog)
+mkdir -p "$(dirname "$lane_lock_at")"
+printf 'another lane (pid 1)\n' >"$lane_lock_at"
+exec 6>>"$lane_lock_at"
+perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 1)' <&6
+: >"$ssh_calls"
+lane_lock_linux=$(SWEEP_TEST_LAB_LOCK_WAIT=0 \
+  run_sweep_args --only cuda --target lane-lock-linux-probe)
+grep -q '^destinations: rog-nv=rog-nv-linux$' <<<"$lane_lock_linux"
+grep -q '^  rog-nv/cuda: skip (box rog reserved by another lane (pid 1))$' <<<"$lane_lock_linux"
+lane_lock_wsl=$(SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh SWEEP_TEST_LAB_LOCK_WAIT=0 \
+  run_sweep_args --only cuda --target lane-lock-wsl-probe)
+grep -q '^destinations: rog-nv=rog-nv-wsl$' <<<"$lane_lock_wsl"
+grep -q '^  rog-nv/cuda: skip (box rog reserved by another lane (pid 1))$' <<<"$lane_lock_wsl"
+absent rog-nv "$ssh_calls"
+exec 6>&-
+rm -f "$lane_lock_at"
 
 # The rows are those of a serial run in everything but their order: one per
 # unit, each under its own machine.
@@ -2439,6 +2555,8 @@ tuf_asleep_record=$(sed -n 's/^run:  *//p' <<<"$tuf_asleep")
 tuf_no_wake_lab=$(SWEEP_TEST_WAKE_LAB=$tmp/no-such-wake-lab.sh run_sweep_args --only hip \
   --target tuf-asleep-probe)
 grep -qF "  tuf/hip: gate (tuf not asked: no wake-lab.sh at $tmp/no-such-wake-lab.sh)" \
+  <<<"$tuf_no_wake_lab"
+grep -qF "lab locks: NOT CHECKED -- no wake-lab.sh at $tmp/no-such-wake-lab.sh, so nothing on this host consults the lane locks" \
   <<<"$tuf_no_wake_lab"
 [ ! -s "$wake_lab_calls" ]
 

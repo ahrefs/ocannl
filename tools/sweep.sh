@@ -44,7 +44,8 @@
 #                                      # name a GPU box's ssh destination (also _MINIX),
 #                                      # instead of reading its kind from WAKE_LAB_HOSTS
 #   OCANNL_TOOL_SWEEP_WAKE_LAB=~/bin/wake-lab.sh  # the lab's power script (the default): asked
-#                                      # whether tuf is up before its lane, and to sleep it after
+#                                      # whether tuf is up before its lane, and to sleep it after;
+#                                      # its endpoint map and lock paths are checked at startup
 
 set -uo pipefail
 
@@ -88,9 +89,10 @@ AGGREGATE_SKIPS=$SWEEP_TOOLS/aggregate-skips.sh
 #
 # So a remote lane RESERVES its box for as long as it is using it, and wake-lab.sh refuses to
 # destroy a VM whose box is reserved. The contract between the two tools is deliberately just a
-# directory, a filename and a one-line description -- this sweep takes its own flock and never
-# calls wake-lab.sh, so a checkout on a box that has no ~/bin/wake-lab.sh still reserves correctly.
-# `wake-lab.sh lock-path <box>` answers the same path for anyone who would rather ask than derive.
+# directory, a filename and a one-line description -- this sweep takes its own flock without
+# calling wake-lab.sh, so a checkout on a box that has no ~/bin/wake-lab.sh still reserves correctly.
+# `wake-lab.sh lock-path <box>` answers the same path for anyone who would rather ask than derive,
+# and the sweep asks it only to check, once per run, that the two still agree (lab_contract_check).
 #
 # There are TWO lock files per box on the wake-lab side, and this is the one a lane takes:
 #
@@ -188,8 +190,9 @@ lab_box_gated() { # box
   case $1 in tuf) return 0 ;; *) return 1 ;; esac
 }
 
-# The lab's power script, for exactly those two acts. Nothing else in this file calls it: the lab
-# lock contract below is deliberately a directory, not a command.
+# The lab's power script, for exactly those two acts -- and, at startup, for the two read-only
+# answers the lab lock contract check compares against (lab_contract_check). The lock itself is
+# still deliberately a directory, not a command: no lane calls this to take one.
 WAKE_LAB=${OCANNL_TOOL_SWEEP_WAKE_LAB:-$HOME/bin/wake-lab.sh}
 
 # Prints the box's destination, or says on stderr why there is none and returns 1. The table is
@@ -283,6 +286,78 @@ lab_lock_holder() { # box
   local line
   line=$(head -1 "$LAB_LOCK_DIR/$1.lock" 2>/dev/null | tr -d '\000-\037')
   printf '%s' "${line:-an unnamed holder}"
+}
+
+# ------------------------------------------------------------ the lab lock contract, checked
+# The contract above is four facts held in common with a script in another repository: the
+# directory, the `<box>.lock` name, which box each ssh alias belongs to, and that a lane never takes
+# or honours `<box>.hold.lock`. ludics-lite's suite checks them from its side (scripts/test-wake-lab.sh
+# runs this file's take_lab_lock against wake-lab.sh, ludics-lite#170), but it reads a staging
+# checkout it never fetches, and it calls the function, not the lane. Two gaps close only here, in
+# the revision about to run, against the wake-lab.sh it will actually meet (gh-ocannl-1025): an
+# upstream push neither suite has seen yet, and the step from a lane's destination to the box whose
+# lock it takes. So once per run, for every box a selected remote lane reserves, this asks
+# wake-lab.sh the two things it answers without a site table -- `endpoint-map` and `lock-path` --
+# and requires that
+#   - its endpoint map has a row for the box lab_box_of names for the lane's destination,
+#   - every boot of that box lab_dest_of can address (all four of rog's and minix's aliases, both
+#     boots, whichever one today's run uses) is an endpoint on that row and maps back to that same
+#     box through lab_box_of, and
+#   - `lock-path <box>` answers the file take_lab_lock opens.
+# Both sides' spellings are read from code -- lab_dest_of and lab_box_of here, ENDPOINT_MAP there --
+# so a rename on either side fails this rather than a list restating them. The negative clause is
+# behaviour, not a name, and the harness pins it (a held hold lock, and a lane that still runs).
+#
+# A broken contract refuses the run at startup, as an unreadable boot kind does (lab_dest): a lane
+# reserving a file no destroyer consults is the 2026-09-16 loss waiting to recur, invisible until it
+# does, and the repair is a one-line table edit on one side. No wake-lab.sh at all is reported in
+# the header as NOT CHECKED and the run goes on: the lab locks are files on THIS host, so a host
+# without the script has no destroyer to disagree with, and the lane lock needs no wake-lab.sh to
+# be taken (above). A wake-lab.sh that has no endpoint map to give (one from before ludics-lite#395)
+# is NOT CHECKED too, loudly, rather than a lost day of every backend's coverage.
+LAB_MAP=      # wake-lab.sh endpoint-map's answer: a box name, then its ssh aliases, per line
+LAB_CONTRACT= # the header's verdict
+LAB_LANE_BOXES= # `<unit-table box>=<destination>` for each selected remote lane, set with LAB_DESTS
+lab_contract_check() { # -- sets LAB_MAP and LAB_CONTRACT; refuses the run on a broken contract
+  local pair placed dest box row kind alias path want broken= checked=
+  [ -n "$LAB_LANE_BOXES" ] || return 0
+  if [ ! -x "$WAKE_LAB" ]; then
+    LAB_CONTRACT="NOT CHECKED -- no wake-lab.sh at $WAKE_LAB, so nothing on this host consults the lane locks"
+    return 0
+  fi
+  LAB_MAP=$(capped 60 "$WAKE_LAB" endpoint-map 2>/dev/null </dev/null) || LAB_MAP=
+  if [ -z "$LAB_MAP" ]; then
+    LAB_CONTRACT="NOT CHECKED -- $WAKE_LAB endpoint-map gave no map (a wake-lab.sh from before ludics-lite#395?)"
+    return 0
+  fi
+  for pair in $LAB_LANE_BOXES; do
+    placed=${pair%%=*}
+    dest=${pair#*=}
+    box=$(lab_box_of "$dest")
+    case " $checked " in *" $box "*) continue ;; esac
+    checked="$checked $box"
+    row=$(awk -v b="$box" '$1 == b { $1 = ""; print; exit }' <<<"$LAB_MAP")
+    if [ -z "$row" ]; then
+      broken="$broken; its endpoint map has no row for $box, the box a lane to $dest reserves"
+      continue
+    fi
+    for kind in linux wsl; do
+      alias=$(lab_dest_of "$placed" "$kind") || continue
+      [ "$(lab_box_of "$alias")" = "$box" ] ||
+        broken="$broken; $alias would reserve $(lab_box_of "$alias") where $dest reserves $box, but the two boots of one box share one lock"
+      case " $row " in
+        *" $alias "*) ;;
+        *) broken="$broken; $alias is not an endpoint on $box's row (${row# })" ;;
+      esac
+    done
+    want=$LAB_LOCK_DIR/$box.lock
+    path=$(capped 60 "$WAKE_LAB" lock-path "$box" 2>/dev/null </dev/null) || path=
+    [ "$path" = "$want" ] ||
+      broken="$broken; lock-path $box answers '$path' where a lane locks $want"
+  done
+  [ -z "$broken" ] ||
+    die "the lab lock contract with $WAKE_LAB is broken${broken/#;/:}; a lane would reserve a box no destroyer checks, so fix the side that moved"
+  LAB_CONTRACT="agree with $WAKE_LAB for${checked}"
 }
 
 REF=origin/master
@@ -572,6 +647,10 @@ for ((i = 0; i < ${#UNITS[@]}; i++)); do
   dest=$(lab_dest "${host#@}") || die "no ssh destination for $machine/$backend; refusing to guess one"
   UNITS[$i]=$machine:$backend:$dest
   case " $LAB_DESTS " in *" $machine=$dest "*) ;; *) LAB_DESTS="$LAB_DESTS $machine=$dest" ;; esac
+  case " $LAB_LANE_BOXES " in
+    *" ${host#@}=$dest "*) ;;
+    *) LAB_LANE_BOXES="$LAB_LANE_BOXES ${host#@}=$dest" ;;
+  esac
 done
 
 # One sweep at a time. Every local unit reuses a single fixed worktree, so an
@@ -2777,6 +2856,11 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
   exit 0
 }
 
+# Whether wake-lab.sh still agrees on the lab lock contract, asked from THIS host before any lane
+# starts (a broken one refuses the run here, with no record). Here rather than beside the
+# destination resolution because it runs under `capped`, defined above.
+lab_contract_check
+
 # Lanes, in first-appearance order of the table's machine column: a new box or
 # a second backend on an existing box lands in the right lane with no other edit.
 LANES=()
@@ -2809,6 +2893,7 @@ echo "sweep $stamp  ref=$REF ($run_sha)  slow=$SLOW  target=${TARGET:-<all>}  ex
 echo "lanes:$lanes_summary"
 # Only when a remote unit is selected: which boot of each GPU box this run addresses.
 [ -z "$LAB_DESTS" ] || echo "destinations:$LAB_DESTS"
+[ -z "$LAB_CONTRACT" ] || echo "lab locks: $LAB_CONTRACT"
 echo
 
 # Registration is atomic with respect to the relay: a signal arriving between a

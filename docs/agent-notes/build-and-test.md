@@ -2257,6 +2257,19 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   `sweep-hold: WARNING` into the log and the unit's summary line says `ran WITHOUT a sleep guard`.
   The harness runs the extracted supervisor against fake inhibitors (held for exactly the unit's
   lifetime, refused, absent, not asked). Residual: the seconds BETWEEN legs are unguarded.
+- **A lane coordinates with the lab through a lock it does not own**: wake-lab's lab locks
+  (lukstafi/ludics-lite). A remote lane holds the box's
+  LANE lock (`$WAKE_LAB_LOCK_DIR/<box>.lock`, never `<box>.hold.lock`; the comment above
+  `LAB_LOCK_DIR` in `tools/sweep.sh` says why each) for its whole length, so wake-lab's destroyers
+  (`restart-wsl`, `sleep`, the boot verbs) refuse the box under it. That contract is four facts
+  shared across two repositories, so every run checks it at startup against the wake-lab.sh it
+  will meet (gh-ocannl-1025): for each box a selected remote lane reserves, `wake-lab.sh
+  endpoint-map` must list every boot `lab_dest_of` can address on that box's row and `lab_box_of`
+  must map each back to it, and `wake-lab.sh lock-path <box>` must answer the file the lane opens.
+  A disagreement refuses the run (startup exit 2, no record) naming what moved; no wake-lab.sh, or
+  one without `endpoint-map`, prints `lab locks: NOT CHECKED` in the header and runs. ludics-lite's
+  `scripts/test-wake-lab.sh` checks the same contract from its side, against a staging checkout it
+  never fetches.
 - **The per-run record `~/.ocannl-sweep/logs/<stamp>-run.tsv` is what a consumer reads; the stdout
   summary is for humans** (gh-ocannl-977). Its absence is itself a verdict: a run that refused at
   startup swept nothing and writes no record, which is what distinguishes that exit 2 from a
