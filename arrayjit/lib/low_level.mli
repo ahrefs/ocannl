@@ -973,6 +973,21 @@ val recompute_pricer :
     default prices nothing, so every candidate carries the traced proxy. A pricer must be pure:
     [specialize_proc] consults it once per candidate of a compile. *)
 
+val post_virtualization_pipeline :
+  Tnode.Placements.t ->
+  traced_store ->
+  input_scopes:Set.M(Scope_id).t ->
+  static_indices:Indexing.static_symbol list ->
+  t ->
+  t
+(** gh-ocannl-1011: the passes virtualized code receives in [specialize_proc], in order —
+    [cleanup_virtual_llc] (placement commitments; a scope over a node committed non-virtual after
+    the scope was minted retracts to a read), {!simplify_llc} under the static indices' interval
+    environment, the hosted-constant link-time conversion, {!rewrite_one_hot_reductions},
+    {!eliminate_common_subexpressions} and {!hoist_cross_statement_cse}. One function, so every
+    consumer of virtualized code receives the same pipeline. Commits placements in the given
+    table. *)
+
 type pipelined_tile = { pt_depth : int; pt_rotor : Indexing.symbol } [@@deriving sexp_of]
 (** gh-487: a software-pipelined (double-buffered) staged tile — codegen allocates [pt_depth]
     rotating copies of the tile and renders every access with a buffer-selection term rotated by the
