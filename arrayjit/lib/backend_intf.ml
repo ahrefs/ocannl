@@ -111,8 +111,9 @@ type mma_capability = {
           uniform-bf16 arm holds the accumulator in f32 and converts once at that scope's [d]
           boundary, as {!Numerics.Bf16_wide} requires (gh-ocannl-838). HIP advertises both scopes
           (rocWMMA's [(bf16, bf16, f32)] fragments behind the same converted boundary as the wide
-          f16 arm); CUDA sm_80+ only {!Mma_per_statement} (its inline-PTX [m16n8k16] arm, whose
-          accumulate is f32 in hardware); Metal both (a [simdgroup_float8x8] accumulator over bfloat
+          f16 arm); CUDA sm_80+ both (its inline-PTX [m16n8k16] arm, whose accumulate is f32 in
+          hardware, per statement, and since gh-ocannl-1063 that arm's per-lane registers held
+          across the outer reduction); Metal both (a [simdgroup_float8x8] accumulator over bfloat
           operand fragments behind the wide-f16 arm's [thread_elements()] boundary, gh-ocannl-923).
       *)
   mma_staged_layouts :

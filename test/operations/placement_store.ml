@@ -24,6 +24,15 @@
    under a timing context that lowers the program differently from the caller's lineage, both the
    digest and the replay guard are the timing lineage's.
 
+   - the identity holds across a process boundary (gh-ocannl-1021): this executable, re-run in a
+   role, records in one child process; a second child builds the same computation from other
+   tensors, after other nodes have taken the uids the recorder's graph held, and tunes it against
+   that directory: it poses the same problem digest and replays the recorded decision -- one search,
+   a schedule-cache replay of the recorded lowering, the recorded label and placement, the right
+   values -- while a control child whose lineage inherits a decision poses a different problem and
+   replays nothing. Either leaves the recorded entry untouched. The leg runs first, while this
+   process holds no device.
+
    Times never enter the golden; the claims that involve one are waived by the load's own evidence
    (contention-refused windows), as autotune_arm_containment.ml does. *)
 
@@ -45,10 +54,10 @@ let clean_cache dir =
 
 (* The placement entries in the directory, by key (the filename without its extension is the key:
    [Schedule_cache.cache_file] sanitizes a key that is already filename-safe). *)
-let placement_keys () =
-  if not (Stdlib.Sys.file_exists cache_dir) then []
+let placement_keys ?(dir = cache_dir) () =
+  if not (Stdlib.Sys.file_exists dir) then []
   else
-    Stdlib.Sys.readdir cache_dir |> Array.to_list
+    Stdlib.Sys.readdir dir |> Array.to_list
     |> List.filter_map ~f:(fun f ->
         if String.is_prefix f ~prefix:"placements-" then String.chop_suffix f ~suffix:".sexp"
         else None)
@@ -79,6 +88,241 @@ let graph ~label =
 
 let problem_digest ctx loss comp =
   SC.digest (Train.placement_problem ctx loss comp Ir.Indexing.Empty)
+
+(* One placement tune of [graph]'s routine from [ctx] (a fresh [Context.auto ()] by default) with
+   [cache_dir] as the cache directory, run and read back: the arm and flip reports in order, what
+   shipped, whether the intermediate shipped materialized, and the values. *)
+let tune_in ?ship_arm ?placement_store ?timing_ctx ?ctx ~cache_dir (mc, t2, comp) =
+  let ctx = match ctx with Some ctx -> ctx | None -> Context.auto () in
+  let arms = ref [] and flips = ref [] and shipped = ref None in
+  let ctx_t, routine_t =
+    Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir ~inline_flips:2
+      ~report:(fun r -> arms := r :: !arms)
+      ~flip_report:(fun r -> flips := r :: !flips)
+      ~on_ship:(fun what -> shipped := Some what)
+      ?ship_arm ?placement_store ?timing_ctx ctx t2 comp Ir.Indexing.Empty
+  in
+  let ctx_t = Context.run ctx_t routine_t in
+  let got = Context.get_values ctx_t t2.Tensor.value in
+  let materialized =
+    Tn.Placements.is_materialized_peek (Context.placements ctx_t) mc.Tensor.value
+  in
+  (List.rev !arms, List.rev !flips, Option.value_exn !shipped, materialized, got)
+
+(* --- The cross-process leg's children (gh-ocannl-1021). The test re-runs this executable in a
+   role, one child at a time: the recorder tunes cold into [xproc_cache_dir] after a plain compile
+   of the same routine (its reference values), the replayer tunes the same computation against that
+   directory, and the control tunes another problem against it. Each prints what it observed as
+   [xproc <field> <value>] lines on its stdout, a pipe the parent reads; no child claims anything,
+   so every verdict is the parent's, in the golden's order.
+
+   Nothing but the directory crosses between them. The replayer builds a throwaway graph first, so
+   the graph it tunes -- built from other tensors under another label -- holds other uids than the
+   recorder's (the parent checks that, as the leg's precondition). The control tunes from a lineage
+   that has already decided the intermediate materialized: another problem, which must replay
+   nothing recorded.
+
+   Every device this leg touches is a child's, and the children run one after another while the
+   parent does nothing but read files and pipes: the leg runs before the parent's own in-process
+   runs initialize a backend, so a GPU run of this test never holds two device contexts at once (the
+   width caps of AGENTS.md count one test action as one GPU process). --- *)
+
+let xproc_cache_dir = "autotune_cache_placement_store_xproc"
+
+type role = Record | Replay | Control
+
+let role_flag = function
+  | Record -> "--placement-store-record-child"
+  | Replay -> "--placement-store-replay-child"
+  | Control -> "--placement-store-control-child"
+
+let child role =
+  (match role with Replay -> ignore (graph ~label:"xpad" : _ * _ * _) | Record | Control -> ());
+  let ((mc, t2, comp) as g) = graph ~label:(match role with Record -> "xr" | _ -> "xp") in
+  let reference =
+    match role with
+    | Record ->
+        let ctx, routine = Context.compile (Context.auto ()) comp Ir.Indexing.Empty in
+        Context.get_values (Context.run ctx routine) t2.Tensor.value
+    | Replay | Control -> [||]
+  in
+  let ctx () =
+    match role with
+    | Control -> Context.decide_materialized (Context.auto ()) [ mc.Tensor.value ]
+    | Record | Replay -> Context.auto ()
+  in
+  let digest = problem_digest (ctx ()) t2 comp in
+  let arms, flips, shipped, materialized, got =
+    tune_in ~ctx:(ctx ()) ~cache_dir:xproc_cache_dir g
+  in
+  let floats a = String.concat_array ~sep:" " (Array.map a ~f:(Printf.sprintf "%h")) in
+  let out field value = Stdio.printf "xproc %s %s\n" field value in
+  out "uid" (Int.to_string t2.Tensor.value.Tn.id);
+  out "digest" digest;
+  out "arms" (Int.to_string (List.length arms));
+  out "flips" (Int.to_string (List.length flips));
+  out "shipped" shipped;
+  out "materialized" (Bool.to_string materialized);
+  out "clean"
+    (Bool.to_string
+       (List.for_all (arms @ flips) ~f:(fun r ->
+            completed r && uncontended r && Float.is_finite r.Autotune.best_ms)));
+  out "replayed" (Bool.to_string (match arms with [ r ] -> replayed r | _ -> false));
+  out "source" (match arms with [ r ] -> source_digest r | _ -> "-");
+  out "values" (floats got);
+  out "reference" (floats reference);
+  Stdio.Out_channel.flush Stdio.stdout;
+  Stdlib.exit 0
+
+let () =
+  match Array.to_list Stdlib.Sys.argv with
+  | _ :: flag :: _ -> (
+      match List.find [ Record; Replay; Control ] ~f:(fun r -> String.equal flag (role_flag r)) with
+      | Some role -> child role
+      | None -> ())
+  | _ -> ()
+
+type child_report = {
+  uid : int;
+  digest : string;
+  arms : int;
+  flips : int;
+  shipped : string;
+  materialized : bool;
+  clean : bool;
+  replayed : bool;
+  source : string;
+  values : float array;
+  reference : float array;
+}
+
+(* Runs this executable in [role] -- forwarding this process's own [--ocannl_*] flags, so the child
+   is configured as the parent is (the environment and [ocannl_config] it inherits) -- waits for it,
+   and reads its report. [None] when the child did not exit 0 or did not report every field. *)
+let spawn_child role =
+  let exe = Stdlib.Sys.executable_name in
+  let forwarded = Array.filter Stdlib.Sys.argv ~f:(String.is_prefix ~prefix:"--ocannl_") in
+  let ic = Unix.open_process_args_in exe (Array.append [| exe; role_flag role |] forwarded) in
+  let lines = Stdio.In_channel.input_lines ic in
+  let status = Unix.close_process_in ic in
+  let fields =
+    List.filter_map lines ~f:(fun l ->
+        Option.bind (String.chop_prefix l ~prefix:"xproc ") ~f:(String.lsplit2 ~on:' '))
+  in
+  let field k = List.Assoc.find_exn fields k ~equal:String.equal in
+  let floats k =
+    String.split (field k) ~on:' '
+    |> List.filter ~f:(Fn.non String.is_empty)
+    |> List.map ~f:Float.of_string |> Array.of_list
+  in
+  match status with
+  | Unix.WEXITED 0 ->
+      Option.try_with (fun () ->
+          {
+            uid = Int.of_string (field "uid");
+            digest = field "digest";
+            arms = Int.of_string (field "arms");
+            flips = Int.of_string (field "flips");
+            shipped = field "shipped";
+            materialized = Bool.of_string (field "materialized");
+            clean = Bool.of_string (field "clean");
+            replayed = Bool.of_string (field "replayed");
+            source = field "source";
+            values = floats "values";
+            reference = floats "reference";
+          })
+  | Unix.WEXITED _ | Unix.WSIGNALED _ | Unix.WSTOPPED _ -> None
+
+(* --- Run 7 (gh-ocannl-1021): across a process boundary, ahead of everything that would give this
+   process a device. The recorder child tunes cold into a fresh directory; the replaying child must
+   pose the same problem and replay its decision; the control child poses another problem against
+   the same directory. The replay claims are waived exactly where run 2's are: when the recorder
+   recorded nothing (its evidence was unclean, or the store is unavailable -- gh-ocannl-1040's
+   Windows symptom, which this leg therefore cannot turn red a second time), and the schedule-cache
+   replay also when its evidence was contended. --- *)
+let () =
+  clean_cache xproc_cache_dir;
+  (* The one placement entry the directory holds, with its rendering; [None] for none or several. *)
+  let held () =
+    match placement_keys ~dir:xproc_cache_dir () with
+    | [ k ] ->
+        Option.map (SC.lookup_placements ~dir:xproc_cache_dir ~key:(Some k)) ~f:(fun e ->
+            (k, e, SC.sexp_of_placement_entry e))
+    | _ -> None
+  in
+  let untouched held =
+    match held with
+    | None -> true
+    | Some (k, _, rendered) ->
+        Option.equal Sexp.equal (Some rendered)
+          (Option.map
+             (SC.lookup_placements ~dir:xproc_cache_dir ~key:(Some k))
+             ~f:SC.sexp_of_placement_entry)
+  in
+  let record = spawn_child Record in
+  p "the recording process runs to completion and reports what it observed" (Option.is_some record);
+  let on_record f = Option.value_map record ~default:false ~f in
+  let reference = Option.value_map record ~default:[||] ~f:(fun c -> c.reference) in
+  p_all2 "the recording process's tuned routine computes its plain compile's values"
+    (Option.value_map record ~default:[||] ~f:(fun c -> c.values))
+    reference ~f:approx;
+  let recorded = held () in
+  let entry = Option.map recorded ~f:(fun (_, e, _) -> e) in
+  let recorder_clean = on_record (fun c -> c.clean) in
+  Stdio.eprintf "run 7 (not part of the golden): recorder shipped %s, clean %b, stored %b\n%!"
+    (Option.value_map record ~default:"nothing" ~f:(fun c -> c.shipped))
+    recorder_clean (Option.is_some entry);
+  let replay = spawn_child Replay in
+  let on_replay f = Option.value_map replay ~default:false ~f in
+  p "the replaying process runs to completion and reports what it observed" (Option.is_some replay);
+  p "the replaying process numbers the graph's tensor nodes differently"
+    (on_record (fun r -> on_replay (fun c -> c.uid <> r.uid)));
+  p "the replaying process poses the recording process's problem digest"
+    (on_record (fun r -> on_replay (fun c -> String.equal c.digest r.digest)));
+  p_all2 "the replaying process's routine computes the right values"
+    (Option.value_map replay ~default:[||] ~f:(fun c -> c.values))
+    reference ~f:approx;
+  p
+    "across processes, the replay is exact when the recording process recorded a decision: one \
+     search, no flips"
+    (on_replay (fun c -> if Option.is_some entry then c.arms = 1 && c.flips = 0 else c.arms = 2));
+  p "a cross-process replay ships the recorded label"
+    (on_replay (fun c ->
+         match entry with
+         | None -> true
+         | Some e -> String.equal c.shipped (SC.shipped_label e.SC.decision)));
+  p "a cross-process replay ships the recorded placement of the intermediate"
+    (on_replay (fun c ->
+         Option.is_none entry || on_record (fun r -> Bool.equal c.materialized r.materialized)));
+  p "a cross-process replay's one search is a schedule-cache replay"
+    (on_replay (fun c -> Option.is_none entry || (not recorder_clean) || c.replayed));
+  p "a cross-process replay's one search tunes the lowering the recorded decision was measured on"
+    (on_replay (fun c ->
+         match entry with None -> true | Some e -> String.equal c.source e.SC.outcome_digest));
+  (* Waived when the recorder recorded nothing: the replaying child's tune is then a cold one of its
+     own, free to record what its evidence allows. *)
+  p "a cross-process replay leaves the recorded decision untouched, and records nothing beside it"
+    (Option.is_none recorded
+    || (untouched recorded && List.length (placement_keys ~dir:xproc_cache_dir ()) = 1));
+  (* The control: a too-coarse identity -- one blind to what the lineage decided -- would hand it
+     the entry the store now holds for the recorded problem (the recorder's, or, when the recorder's
+     evidence was unclean, the replaying child's re-tune): one search where the arms belong. With no
+     entry at all the claim cannot discriminate, which stderr says. *)
+  let held_before_control = held () in
+  Stdio.eprintf "control (not part of the golden): the store holds %s for the recorded problem\n%!"
+    (if Option.is_some held_before_control then "an entry" else "no entry");
+  let control = spawn_child Control in
+  let on_control f = Option.value_map control ~default:false ~f in
+  p "the control process runs to completion and reports what it observed" (Option.is_some control);
+  p "the control process, whose lineage inherits a decision, poses a different problem digest"
+    (on_record (fun r -> on_control (fun c -> not (String.equal c.digest r.digest))));
+  p_all2 "the control process's routine computes the right values"
+    (Option.value_map control ~default:[||] ~f:(fun c -> c.values))
+    reference ~f:approx;
+  p "the control process replays nothing recorded: both arms report"
+    (on_control (fun c -> c.arms = 2));
+  p "the control process leaves the entry recorded for the other problem untouched"
+    (untouched held_before_control)
 
 let () =
   clean_cache cache_dir;
@@ -113,20 +357,7 @@ let () =
              (Train.placement_problem ~timing_ctx (Context.auto ()) t2 comp Ir.Indexing.Empty))));
   (* --- The runs. --- *)
   let run ?ship_arm ?placement_store ?timing_ctx () =
-    let arms = ref [] and flips = ref [] and shipped = ref None in
-    let ctx_t, routine_t =
-      Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir ~inline_flips:2
-        ~report:(fun r -> arms := r :: !arms)
-        ~flip_report:(fun r -> flips := r :: !flips)
-        ~on_ship:(fun what -> shipped := Some what)
-        ?ship_arm ?placement_store ?timing_ctx (Context.auto ()) t2 comp Ir.Indexing.Empty
-    in
-    let ctx_t = Context.run ctx_t routine_t in
-    let got = Context.get_values ctx_t t2.Tensor.value in
-    let materialized =
-      Tn.Placements.is_materialized_peek (Context.placements ctx_t) mc.Tensor.value
-    in
-    (List.rev !arms, List.rev !flips, Option.value_exn !shipped, materialized, got)
+    tune_in ?ship_arm ?placement_store ?timing_ctx ~cache_dir (mc, t2, comp)
   in
   (* --- Run 1: cold. --- *)
   let arms1, flips1, shipped1, materialized1, got1 = run () in

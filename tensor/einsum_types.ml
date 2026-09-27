@@ -58,7 +58,6 @@ module AxisKey = struct
   include Comparator.Make (T)
 end
 
-type axis_key = AxisKey.t [@@deriving equal, compare, sexp]
 type 'a axis_map = 'a Map.M(AxisKey).t [@@deriving compare, sexp]
 
 type parsed_axis_labels = {

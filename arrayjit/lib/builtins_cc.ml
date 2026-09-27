@@ -547,7 +547,9 @@ float bfloat16_to_single(uint16_t bf16)
   /* BFloat16 format: 1 sign bit, 8 exponent bits, 7 mantissa bits
      To convert to float32, we shift left by 16 bits */
   uint32_t f32 = ((uint32_t)bf16) << 16;
-  return *((float *)&f32);
+  float f;
+  memcpy(&f, &f32, sizeof(f));
+  return f;
 }
 |},
       [] );
@@ -556,10 +558,17 @@ float bfloat16_to_single(uint16_t bf16)
 /* Float to BFloat16 conversion (C function) */
 uint16_t single_to_bfloat16(float f)
 {
-  uint32_t f32 = *((uint32_t *)&f);
+  uint32_t f32;
+  uint32_t rounded;
+  memcpy(&f32, &f, sizeof(f32));
+
+  /* A NaN is quieted and truncated, keeping its sign and the top of its payload (gh-ocannl-1069).
+     The rounding add below would carry a NaN's payload out of the NaN class: 0x7F800001 truncates
+     to 0x7F80 (+inf), and 0x7FFF8000 carries into the sign bit (-0) -- 131072 of the f32 NaNs. */
+  if ((f32 & 0x7FFFFFFFu) > 0x7F800000u) return (uint16_t)((f32 >> 16) | 0x0040u);
 
   /* Round to nearest even */
-  uint32_t rounded = f32 + 0x7FFF + ((f32 >> 16) & 1);
+  rounded = f32 + 0x7FFFu + ((f32 >> 16) & 1u);
   return (uint16_t)(rounded >> 16);
 }
 |},
@@ -600,11 +609,15 @@ uint16_t single_to_bfloat16(float f)
       [ "OCANNL_HAS_CONVERTVECTOR"; "bfloat16_to_single" ] );
     ( "OCANNL_VEC_NARROW_BFLOAT16",
       {|
-/* single_to_bfloat16's round-to-nearest-even, lane-wise. */
+/* single_to_bfloat16's round-to-nearest-even, lane-wise, NaN guard included: a NaN lane takes the
+   quieted, truncated form instead of the rounding add. The comparison yields 0 or all-ones per lane
+   (as a signed vector, hence the cast), which selects between the two. */
 #if OCANNL_HAS_CONVERTVECTOR
   #define OCANNL_VEC_NARROW_BFLOAT16(U16V, U32V, LANES, dst, src) do { \
     U32V ocannl_nb__; __builtin_memcpy(&ocannl_nb__, &(src), sizeof(ocannl_nb__)); \
-    U32V ocannl_nr__ = ocannl_nb__ + 0x7FFFu + ((ocannl_nb__ >> 16) & 1u); \
+    U32V ocannl_nq__ = (U32V)((ocannl_nb__ & 0x7FFFFFFFu) > 0x7F800000u); \
+    U32V ocannl_nr__ = (ocannl_nq__ & (ocannl_nb__ | 0x00400000u)) \
+      | (~ocannl_nq__ & (ocannl_nb__ + 0x7FFFu + ((ocannl_nb__ >> 16) & 1u))); \
     U16V ocannl_nn__ = __builtin_convertvector(ocannl_nr__ >> 16, U16V); \
     __builtin_memcpy((dst), &ocannl_nn__, (LANES) * 2); \
   } while (0)

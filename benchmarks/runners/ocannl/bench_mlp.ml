@@ -56,6 +56,7 @@ let () =
     Stdlib.exit 0);
   let fixture = Stdlib.Sys.getenv "BENCH_FIXTURE" in
   let tune = H.env_flag "BENCH_TUNE" in
+  H.install_timing_trace ();
   let st = St.read fixture in
   let leg = H.precision_leg ~runner:"bench_mlp" ~training:(H.is_training st) ~st () in
   let mp_prec = leg.H.prec in
@@ -303,6 +304,7 @@ let () =
      or a timing_ctx replay fallback ships something no arm report describes. *)
   H.collect_shipped arms routines;
   let compile_s = Unix.gettimeofday () -. t0 in
+  H.trace_search_done ~compile_s;
   (* The scaled step threads the context (Loss_scaler.update overwrites the scale tensors). *)
   let ctx_ref = ref ctx in
   let batch_ref =
@@ -337,7 +339,10 @@ let () =
             (gh-ocannl-539). They are independent axes, and folding a reduced precision into the
             variant made a tuned bf16 cell unnameable. *)
          (if tune then "tuned" else if materialize then "materialized" else "default")
-       ~precision:leg.H.label ~compile_s ~tune:arms ~run_step
+       ~precision:leg.H.label ~compile_s ~tune:arms
+       ~dominant_kernel:(fun () ->
+         H.dominant_kernel ~ctx:!ctx_ref ~bindings (H.step_routines routines))
+       ~run_step
        ~read_loss:(fun () -> (!ctx_ref, batch_loss).@[0])
        ~sync:(fun () -> Context.sync !ctx_ref)
        ()

@@ -22,7 +22,7 @@
     in [test/operations/agent_notes_scan_cases.ml] exercise the same functions the live-tree scan in
     [test/operations/agent_notes_structure.ml] runs over the repository.
 
-    {1 The six rules}
+    {1 The seven rules}
 
     Each is stated as the thing that must be TRUE, and each finding names the rule that failed.
 
@@ -56,6 +56,12 @@
       silently resolves against whichever repository renders the note; [staging#NNN],
       [gh-ocannl-NNN] and [ahrefs/ocannl#NNN] do not. Inline code, fenced blocks, comments and
       identifier-attached hashes are inert to this rule.
+    - {b guide-anchors}: every [<note>.md#<anchor>] pointer in the agent guide ([AGENTS.md]) names a
+      notes file and a heading that file has. The guide keeps a rule and points at its mechanism; a
+      note long enough to need sections is useless to a pointer naming only the file, and a heading
+      renamed under an anchored pointer strands every rule pointing at it (gh-ocannl-1044). A bare
+      basename is a notes file; a path through [docs/agent-notes/] is resolved the same way, and a
+      path anywhere else is not a pointer into the notes and is not read.
 
     {1 What it deliberately does not read}
 
@@ -102,8 +108,9 @@ let rule_table_shape = "table-shape"
 let rule_reachability = "reachability"
 let rule_no_repetition = "no-repetition"
 let rule_qualified_citations = "qualified-citations"
+let rule_guide_anchors = "guide-anchors"
 
-(** All six, in the order the live-tree scan reports them.
+(** All seven, in the order the live-tree scan reports them.
 
     This list stands in for a protocol -- "the rules this scan has" -- that nothing else states, so
     the two ways it can part from the rules are both checked rather than assumed (gh-ocannl-706).
@@ -118,6 +125,7 @@ let rules =
     rule_reachability;
     rule_no_repetition;
     rule_qualified_citations;
+    rule_guide_anchors;
   ]
 
 let names_a_rule r = List.mem rules r ~equal:String.equal
@@ -1196,7 +1204,9 @@ let backticked cell =
     UNDERSCORES KEPT, which is the half that matters here. The headings a note would anchor are
     identifiers (`ident_blacklist`, `promote_prec`), and GitHub anchors those as `#ident_blacklist`;
     rewriting the underscore rejected the correct anchor and accepted the wrong one (Codex P2, round
-    1). Hyphens are likewise kept as themselves rather than re-derived. *)
+    1). Hyphens are likewise kept as themselves rather than re-derived. Only ASCII is modelled:
+    GitHub's Unicode handling (letters kept and case-folded, punctuation dropped) is not, and a
+    guide pointer touching non-ASCII text is refused instead (see {!guide_pointers}). *)
 let slug heading =
   String.lowercase heading |> String.to_list
   |> List.filter_map ~f:(fun c ->
@@ -1204,6 +1214,29 @@ let slug heading =
       else if Char.equal c ' ' then Some '-'
       else None)
   |> String.of_list
+
+(** The anchor ids GitHub gives a file's headings, in document order — github-slugger's allocation:
+    a heading takes its {!slug} unless an EARLIER id already holds it, and then the first
+    [<slug>-<k>] no earlier id holds, [k] counting up from where that slug's last suffix left off.
+    Comparing an anchor to each heading's bare slug rejected a valid pointer at the later of two
+    same-titled sections (Codex P2, round 1 on lukstafi/ocannl-staging#811); counting only the bare
+    slug's repeats then collided with a heading whose own title is [Foo-1] (round 2), so every
+    candidate is checked against every id already emitted. *)
+let heading_ids contents =
+  let taken = Hashtbl.create (module String) in
+  let last_suffix = Hashtbl.create (module String) in
+  List.map (headings contents) ~f:(fun h ->
+      let base = slug h in
+      let rec allocate candidate =
+        if not (Hashtbl.mem taken candidate) then candidate
+        else
+          let k = Option.value (Hashtbl.find last_suffix base) ~default:0 + 1 in
+          Hashtbl.set last_suffix ~key:base ~data:k;
+          allocate (Printf.sprintf "%s-%d" base k)
+      in
+      let id = allocate base in
+      Hashtbl.set taken ~key:id ~data:();
+      id)
 
 (** A link's DESTINATION, separated from its optional title. [(../agent-notes.md "Agent notes")] is
     a perfectly ordinary link, and comparing the whole parenthesised text against the index filename
@@ -1438,8 +1471,7 @@ let check_index ~index_file ~index_contents ~(files : (string * string) list) =
                   match row.anchor with
                   | None -> []
                   | Some a ->
-                      if List.exists (headings contents) ~f:(fun h -> String.equal (slug h) a) then
-                        []
+                      if List.mem (heading_ids contents) a ~equal:String.equal then []
                       else
                         [
                           report
@@ -1610,6 +1642,184 @@ let check_citations ~file contents =
       find 0 [])
 
 (* ------------------------------------------------------------------ *)
+(* Rule 7: the agent guide's anchored pointers resolve *)
+(* ------------------------------------------------------------------ *)
+
+type pointer = {
+  pointer_line : int;
+  path : string;  (** As written, including the [.md]. *)
+  anchor : string;
+  cut_left : bool;
+      (** Whether the path run stopped at something other than a delimiter ({!plain_before}): the
+          name goes on past what was read -- [a+b.md], a Unicode name -- so which file it names is
+          unknown. *)
+  token : string;
+      (** The whole name as written, back to the delimiter the path run did not reach: equal to
+          [path] unless [cut_left]. *)
+  cut_right : bool;
+      (** Whether the slug run stopped at something other than a delimiter ({!plain_after}): the
+          slug goes on past what was read. *)
+}
+(** One [<path>.md#<anchor>] in the guide, as written. *)
+
+let path_char c = Char.is_alphanum c || List.mem [ '_'; '-'; '.'; '/' ] c ~equal:Char.equal
+let anchor_char c = Char.is_alphanum c || Char.equal c '_' || Char.equal c '-'
+
+(** What may delimit a pointer token in the source: before its path, and after its slug. Anything
+    else where a run stopped means the token goes on -- a file name with a [+] in it, a non-ASCII
+    name or slug -- and a pointer read cut short there could resolve to a different file or heading
+    than the one written (Codex P2, rounds 9-10 on lukstafi/ocannl-staging#811). The lists are
+    closed on purpose, so an unforeseen character refuses rather than truncates. *)
+let plain_before c =
+  Char.is_whitespace c || List.mem [ '('; '['; '"'; '\''; '`'; '<'; '*'; ':' ] c ~equal:Char.equal
+
+let plain_after c =
+  Char.is_whitespace c
+  || List.mem
+       [ ')'; ']'; '"'; '\''; '`'; '>'; '*'; '.'; ','; ';'; ':'; '!'; '?' ]
+       c ~equal:Char.equal
+
+(** Every [<path>.md#<anchor>] in [contents] as the SOURCE spells it, code spans and fenced blocks
+    included: a pointer set in backticks is still a pointer. The path is the maximal run of path
+    characters before [.md#] and the anchor the maximal run of slug characters after it; a
+    placeholder such as [<note>.md#<slug>] has an empty one and is not a pointer.
+
+    The subject is the source text, not a rendering of it, because that is what the guide's reader
+    has: AGENTS.md reaches every session raw, imported through CLAUDE.md, and an agent follows a
+    pointer by grepping the note for the heading the source names. So the one rendering-only
+    distinction kept is the one that decides whether a pointer is there at all: a [.md#] inside an
+    HTML comment is commentary, and is neither checked nor counted toward the live scan's floor
+    (Codex P2, round 1 on lukstafi/ocannl-staging#811). Spellings that only a renderer would
+    assemble into a pointer -- an entity for the hash, markup or an escape inside the name -- are
+    not pointers to that reader and are not read. Rounds 2-8 of that review explored reading them:
+    each construct refused or decoded exposed the next one, in both directions (a false refusal of
+    [LOG_FILTER=#debug], a decoded entity inside a code span), so the machinery was removed in
+    favour of this contract.
+
+    The notes are ASCII -- their file names and their headings -- and a pointer is a token the
+    source delimits: a path run or slug run that stopped at anything other than a delimiter
+    ({!plain_before}, {!plain_after}) marks the pointer cut, and it is refused rather than read cut
+    short. A non-ASCII byte is one such stop, so GitHub's Unicode ids (letters kept and case-folded,
+    punctuation dropped) never need modelling; rounds 3, 8 and 9 of that review found one gap after
+    another in byte-level approximations of them. *)
+let guide_pointers contents =
+  let comments = (inert_by_line contents).comment_ranges in
+  List.concat_map (lines contents) ~f:(fun (lineno, line) ->
+      let n = String.length line in
+      let hidden = spans_at comments lineno in
+      String.substr_index_all line ~may_overlap:false ~pattern:".md#"
+      |> List.filter ~f:(fun i -> not (in_any_span hidden i))
+      |> List.filter_map ~f:(fun i ->
+          let start = ref i in
+          while !start > 0 && path_char line.[!start - 1] do
+            Int.decr start
+          done;
+          let stop = ref (i + 4) in
+          while !stop < n && anchor_char line.[!stop] do
+            Int.incr stop
+          done;
+          let path = String.sub line ~pos:!start ~len:(i + 3 - !start) in
+          let anchor = String.sub line ~pos:(i + 4) ~len:(!stop - i - 4) in
+          let cut_left = !start > 0 && not (plain_before line.[!start - 1]) in
+          let token_start = ref !start in
+          while !token_start > 0 && not (plain_before line.[!token_start - 1]) do
+            Int.decr token_start
+          done;
+          let token = String.sub line ~pos:!token_start ~len:(i + 3 - !token_start) in
+          let cut_right = !stop < n && not (plain_after line.[!stop]) in
+          let pointer = Some { pointer_line = lineno; path; anchor; cut_left; token; cut_right } in
+          let nameless = String.equal path ".md" in
+          if nameless && String.is_empty anchor then None (* a placeholder: <note>.md#<slug> *)
+          else if cut_left then pointer
+          else if nameless || (String.is_empty anchor && not cut_right) then None
+          else pointer))
+
+(** The notes file a guide pointer names, keyed as {!check_index} keys [files], or [None] when the
+    path points outside the notes. A bare basename is a note, which is how the guide spells them; a
+    path is read relative to the repository root, where [docs/agent-notes/] holds the notes and
+    [docs/agent-notes.md] is the index. A leading [./] makes a path of a bare name, which is how a
+    root file such as [./CHANGES.md#…] is spelled. *)
+let pointer_target path =
+  (* [.] and [..] segments resolved first, so [docs/./agent-notes/a.md] and
+     [docs/proposals/../agent-notes/a.md] are the note they name (Codex P2, round 12 on
+     lukstafi/ocannl-staging#811). A [..] above the root stays, and matches nothing. *)
+  let normalize path =
+    String.split path ~on:'/'
+    |> List.fold ~init:[] ~f:(fun acc seg ->
+        match (seg, acc) with
+        | ("" | "."), _ -> acc
+        | "..", prev :: rest when not (String.equal prev "..") -> rest
+        | _ -> seg :: acc)
+    |> List.rev |> String.concat ~sep:"/"
+  in
+  let from_root path =
+    match String.chop_prefix (normalize path) ~prefix:"docs/" with
+    | Some rest when String.is_prefix rest ~prefix:"agent-notes/" -> Some rest
+    | Some rest when String.equal rest "agent-notes.md" -> Some rest
+    | _ -> None
+  in
+  match String.chop_prefix path ~prefix:"./" with
+  | Some rest -> from_root rest
+  | None -> if String.mem path '/' then from_root path else Some ("agent-notes/" ^ path)
+
+(** The notes file a pointer is classified as naming, if any: by the whole name as written when the
+    path run was cut on the left ([token]), else by the path read. The one classification both
+    {!check_guide} and the live scan's pointer floor use, so the floor cannot count a pointer the
+    rule treats as out of scope (Codex P2, round 13 on lukstafi/ocannl-staging#811). *)
+let pointer_scope p = pointer_target (if p.cut_left then p.token else p.path)
+
+(** Rule 7 over the agent guide. [files] is keyed as {!check_index} describes; the index is looked
+    up beside them, so a pointer at [docs/agent-notes.md#…] is checked against the index's headings.
+*)
+let check_guide ~guide_file ~guide_contents ~index_file ~index_contents
+    ~(files : (string * string) list) =
+  let known = (index_file, index_contents) :: files in
+  List.filter_map (guide_pointers guide_contents) ~f:(fun p ->
+      let report msg =
+        Some (finding ~file:guide_file ~line:p.pointer_line ~rule:rule_guide_anchors msg)
+      in
+      (* A left cut is classified by the whole name as written, [token], not by the suffix the path
+         run read: [URL=docs/syntax_extensions.md] is out of scope (round 11), while
+         [docs/agent-notes/team+ci/setup.md] is a notes path whatever was cut inside it (round 12 on
+         lukstafi/ocannl-staging#811). In scope, which note it names is unknown, so it is
+         refused. *)
+      match pointer_scope p with
+      | None -> None
+      | Some _ when p.cut_left ->
+          report
+            (Printf.sprintf
+               "a pointer whose name runs on past what this scan reads (read as %s#%s): a note's \
+                file name is ASCII letters, digits, _ - . and /, and a pointer starts after a \
+                space or an opening bracket, quote, backtick or * -- which file this names is \
+                unknown"
+               p.path p.anchor)
+      | Some _ when p.cut_right || String.is_empty p.anchor ->
+          report
+            (Printf.sprintf
+               "a pointer whose slug runs on past what this scan reads (read as %s#%s): a heading \
+                id here is ASCII letters, digits, _ and -, ended by a space or closing punctuation \
+                -- write the heading and the pointer in that alphabet"
+               p.path p.anchor)
+      | Some target -> (
+          match List.Assoc.find known target ~equal:String.equal with
+          | None ->
+              report
+                (Printf.sprintf
+                   "%s#%s names %s, which is not a notes file: a bare basename is read as a note \
+                    under docs/agent-notes/, so spell any other file with its directory, ./ for \
+                    one at the root"
+                   p.path p.anchor ("docs/" ^ target))
+          | Some contents ->
+              if List.mem (heading_ids contents) p.anchor ~equal:String.equal then None
+              else
+                report
+                  (Printf.sprintf
+                     "%s#%s names a heading %s does not have: the rule pointing here has lost its \
+                      mechanism -- restore the heading or re-point the rule (grep -n '^#' %s lists \
+                      them)"
+                     p.path p.anchor ("docs/" ^ target) ("docs/" ^ target))))
+
+(* ------------------------------------------------------------------ *)
 (* The whole scan *)
 (* ------------------------------------------------------------------ *)
 
@@ -1628,10 +1838,11 @@ let in_rule_order found =
   List.concat_map rules ~f:(fun r -> List.filter named ~f:(fun f -> String.equal f.rule r))
   @ unnamed
 
-(** Every rule, over an index and the files it indexes. Findings come back in {!in_rule_order} --
+(** Every rule, over an index and the files it indexes, and over the agent guide's pointers into
+    them when [guide] — [(name, contents)] — is given. Findings come back in {!in_rule_order} --
     grouped by rule in {!rules} order, and within a rule in file and line order, with any finding
     carrying an unnamed rule last. [files] is keyed as {!check_index} describes. *)
-let check_all ~index_file ~index_contents ~(files : (string * string) list) =
+let check_all ?guide ~index_file ~index_contents ~(files : (string * string) list) () =
   let all = (index_file, index_contents) :: files in
   let structure = List.concat_map all ~f:(fun (file, c) -> check_structure ~file c) in
   let table = List.concat_map all ~f:(fun (file, c) -> check_tables ~file c) in
@@ -1639,5 +1850,9 @@ let check_all ~index_file ~index_contents ~(files : (string * string) list) =
   let bullets = List.concat_map all ~f:(fun (file, c) -> bullets ~file c) in
   let repetition = check_repetition bullets in
   let citations = List.concat_map all ~f:(fun (file, c) -> check_citations ~file c) in
-  let found = structure @ table @ index @ repetition @ citations in
+  let guide =
+    Option.value_map guide ~default:[] ~f:(fun (guide_file, guide_contents) ->
+        check_guide ~guide_file ~guide_contents ~index_file ~index_contents ~files)
+  in
+  let found = structure @ table @ index @ repetition @ citations @ guide in
   (bullets, in_rule_order found)

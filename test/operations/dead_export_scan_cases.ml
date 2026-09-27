@@ -15,6 +15,10 @@ let%trace _extended = 4
 let pair, alias = (2, 3)
 let (!@) x = x
 let%trace extended = 4
+include struct
+  let included = 7
+end
+include (struct let constrained = 8 end : sig val constrained : int end)
 external primitive : int -> int = "fixture_primitive"
 let sexp_of_handwritten () = Sexplib0.Sexp.List []
 type t = Root [@@deriving sexp_of, compare, equal]
@@ -74,7 +78,7 @@ let expanded_names deriver source =
   (declaration, generated_value_names expansion)
 
 let () =
-  Verdict.p "top-level lets, patterns, extensions, and externals are exports"
+  Verdict.p "top-level lets, patterns, extensions, include structs, and externals are exports"
     (List.equal String.equal (export_keys fixture_exports)
        [
          "Sample.!@";
@@ -87,6 +91,7 @@ let () =
          "Sample.equal_group_b";
          "Sample.equal_named";
          "Sample.extended";
+         "Sample.included";
          "Sample.named_of_sexp";
          "Sample.outer";
          "Sample.pair";
@@ -96,6 +101,9 @@ let () =
          "Sample.public_pair";
          "Sample.x";
        ]);
+  Verdict.p_none "a constrained include publishes through its own signature and is not censused"
+    [ "Sample.constrained" ] ~f:(fun key ->
+      List.mem (export_keys fixture_exports) key ~equal:String.equal);
   Verdict.p_none "underscore-prefixed lets, patterns, and extensions are private by policy"
     [ "Sample._x"; "Sample._pair"; "Sample._extended" ] ~f:(fun key ->
       List.mem (export_keys fixture_exports) key ~equal:String.equal);
@@ -258,3 +266,235 @@ let () =
   let extension_counts = Scan.counts ~exports:fixture_exports extensions in
   Verdict.p "an export referenced only through an extension point is not reported dead"
     (Hashtbl.find_exn extension_counts "Sample.equal_named" > 0)
+
+(* gh-ocannl-1009: the type census. The fixture's [example_train_result] is the record that
+   motivated it -- live-looking labels, no mention of its name anywhere. *)
+let type_fixture =
+  {|
+type example_train_result = { inputs : int; outputs : int }
+type tree = Leaf | Node of tree list
+type annotated = A
+type interfaced = I
+type prose = P
+type by_label = { only_label : int }
+type by_constructor = Only_constructor
+type derived = D [@@deriving equal]
+type derived_sexp = S [@@deriving sexp_of]
+type in_extension = E
+type in_with = W
+type in_package = Pk
+type in_pattern = [ `Ip ]
+type in_functor_path = Fp
+type by_fields = { fields_label : int } [@@deriving fields]
+type fields_module = { module_label : int } [@@deriving fields]
+type fields_alias = { alias_label : int } [@@deriving fields]
+type variants_open = Vo [@@deriving variants]
+include struct
+  type in_include = Ii
+end
+type extensible = ..
+type _private = X
+let own_use (x : annotated) = x
+module Nested = struct
+  type nested_only = N
+end
+|}
+
+let type_exports = Scan.type_exports_of_source ~source:"arrayjit/lib/sample.ml" type_fixture
+
+let type_counts ?(interfaces = []) sources =
+  Scan.type_mention_counts ~type_exports
+    ~implementations:(("arrayjit/lib/sample.ml", type_fixture) :: sources)
+    ~interfaces
+
+let mentions counts name = Hashtbl.find_exn counts ("Sample." ^ name)
+
+let () =
+  Verdict.p "top-level types are censused; underscore-prefixed and nested ones are not"
+    (List.equal String.equal
+       (List.map type_exports ~f:Scan.type_export_key)
+       [
+         "Sample.annotated";
+         "Sample.by_constructor";
+         "Sample.by_fields";
+         "Sample.by_label";
+         "Sample.derived";
+         "Sample.derived_sexp";
+         "Sample.example_train_result";
+         "Sample.extensible";
+         "Sample.fields_alias";
+         "Sample.fields_module";
+         "Sample.in_extension";
+         "Sample.in_functor_path";
+         "Sample.in_include";
+         "Sample.in_package";
+         "Sample.in_pattern";
+         "Sample.in_with";
+         "Sample.interfaced";
+         "Sample.prose";
+         "Sample.tree";
+         "Sample.variants_open";
+       ]);
+  let consumers =
+    [
+      ( "consumer.ml",
+        "(* A comment naming Sample.prose and example_train_result. *)\n\
+         (** A docstring naming [prose]. *)\n\
+         let s = \"prose example_train_result\"\n\
+         let r = { Other.inputs = 1; outputs = 2 }\n\
+         let l = { Sample.only_label = 1 }\n\
+         let c = Sample.Only_constructor\n\
+         let e = Sample.equal_derived\n\
+         let x = Sample.sexp_of_derived_sexp\n\
+         let f = [%compare: Sample.in_extension]\n\
+         module type S = sig type t end with type t = Sample.in_with\n\
+         type Sample.extensible += More\n\
+         let p (module M : S with type in_package = int) = ()\n\
+         let q = function #Sample.in_pattern -> true | _ -> false\n\
+         let r (x : F(X).in_functor_path) = x\n\
+         let g x = (x.Other.fields_label, fields_label x, { Other.fields_label = 1 })\n\
+         let n = Sample.Fields_of_fields_module.names\n" );
+    ]
+  in
+  let counts =
+    type_counts
+      ~interfaces:
+        [
+          ( "other.mli",
+            "val f : Sample.interfaced -> unit\n\
+             module F = Sample.Fields_of_fields_alias\n\
+             open Sample.Variants_of_variants_open\n" );
+        ]
+      consumers
+  in
+  Verdict.p "the dead record is detected though another record shares its label names"
+    (mentions counts "example_train_result" = 0);
+  Verdict.p "a recursive type does not credit itself" (mentions counts "tree" = 0);
+  Verdict.p "comments, docstrings, and strings do not mention a type" (mentions counts "prose" = 0);
+  Verdict.p "labels and constructors are not resolved to their type, by stated boundary"
+    (mentions counts "by_label" = 0 && mentions counts "by_constructor" = 0);
+  Verdict.p "an annotation in the defining source mentions the type"
+    (mentions counts "annotated" > 0);
+  Verdict.p "an interface signature mentions the type" (mentions counts "interfaced" > 0);
+  Verdict.p_all "a spelled derived value mentions its type" [ "derived"; "derived_sexp" ]
+    ~f:(fun name -> mentions counts name > 0);
+  Verdict.p_all "extension payloads, with-constraints, and type extensions mention the type"
+    [ "in_extension"; "in_with"; "extensible" ] ~f:(fun name -> mentions counts name > 0);
+  Verdict.p "a type declared inside a top-level include struct is censused and can be unmentioned"
+    (mentions counts "in_include" = 0);
+  Verdict.p_all "a derived module mentions its type from an interface's alias or open"
+    [ "fields_alias"; "variants_open" ] ~f:(fun name -> mentions counts name > 0);
+  Verdict.p "a first-class module's package constraint mentions the type"
+    (mentions counts "in_package" > 0);
+  Verdict.p "a #type pattern mentions the polymorphic variant it names"
+    (mentions counts "in_pattern" > 0);
+  Verdict.p "a type path through a functor application mentions its last component"
+    (mentions counts "in_functor_path" > 0);
+  Verdict.p "a fields deriving is credited by its module, never by a same-named label or value"
+    (mentions counts "fields_module" > 0 && mentions counts "by_fields" = 0);
+  let deriving_payload =
+    Scan.type_exports_of_source ~source:"arrayjit/lib/payload.ml" "type t = T [@@deriving equal]"
+  in
+  let payload_counts =
+    Scan.type_mention_counts ~type_exports:deriving_payload
+      ~implementations:
+        [
+          ("arrayjit/lib/payload.ml", "type t = T [@@deriving equal]");
+          ("elsewhere.ml", "type u = U [@@deriving equal, compare]\n");
+        ]
+      ~interfaces:[]
+  in
+  Verdict.p "a deriving payload naming a deriver is not a spelling of the derived value"
+    (Hashtbl.find_exn payload_counts "Payload.t" = 0);
+  let unqualified =
+    type_counts [ ("opened.ml", "open Sample\nlet f (x : example_train_result) = x\n") ]
+  in
+  Verdict.p "an unqualified mention under an open counts"
+    (mentions unqualified "example_train_result" > 0);
+  let same_name =
+    type_counts
+      [
+        ("elsewhere.ml", "type example_train_result = int\nlet f (x : example_train_result) = x\n");
+      ]
+  in
+  Verdict.p "a same-named type elsewhere credits by name, conservatively"
+    (mentions same_name "example_train_result" > 0);
+  Verdict.p "dune's preprocessed interface beside its source is not an interface source"
+    (List.equal String.equal
+       (Scan.interfaces_among [ "a.mli"; "a.pp.mli"; "b.pp.mli"; "c.ml" ])
+       [ "a.mli"; "b.pp.mli" ])
+
+(* The derived half of a type's mentions, held equal to the derivers' own expansion rather than to a
+   restatement of their naming rules. Referencing each registration links it, so [Driver] expands
+   the fixture with the real derivers; [hash] registers nothing a program can reference, so its
+   expander is called directly. *)
+let _registered =
+  ( Ppx_sexp_conv.sexp,
+    Ppx_compare.compare,
+    Ppx_enumerate.enumerate,
+    Ppx_variants_conv.variants,
+    Ppx_fields_conv.fields )
+
+let generated_names structure =
+  let rec items structure = List.concat_map structure ~f:item
+  and item structure_item =
+    match structure_item.pstr_desc with
+    | Pstr_value (_, bindings) ->
+        List.concat_map bindings ~f:(fun binding -> Scan.pattern_names binding.pvb_pat)
+    | Pstr_module { pmb_name = { txt = Some name; _ }; _ } -> [ name ]
+    | Pstr_include { pincl_mod = { pmod_desc = Pmod_structure nested; _ }; _ } -> items nested
+    | _ -> []
+  in
+  items structure |> List.dedup_and_sort ~compare:String.compare
+
+let () =
+  let fixtures =
+    [
+      "type t = A | B of int [@@deriving sexp, compare, equal, hash, enumerate, variants]";
+      "type named = A | B of int [@@deriving sexp, compare, equal, hash, enumerate, variants]";
+      "type t = { label_a : int; label_b : string } [@@deriving sexp_of, of_sexp, fields]";
+      "type record = { label_a : int; mutable label_b : string } [@@deriving fields, hash]";
+      "type poly = [ `One | `Two ] [@@deriving sexp, compare]";
+      "type ('a, 'b) param = 'a * 'b [@@deriving sexp_of, equal, hash]";
+    ]
+  in
+  Verdict.p_all "a type's derived mentions are exactly what its derivers generate, members aside"
+    fixtures ~f:(fun source ->
+      let _, declaration = single_type_declaration source in
+      let members =
+        match declaration.ptype_kind with
+        | Ptype_record labels -> List.map labels ~f:(fun label -> label.pld_name.txt)
+        | Ptype_variant constructors ->
+            List.map constructors ~f:(fun constructor ->
+                String.uncapitalize constructor.pcd_name.txt)
+        | Ptype_abstract | Ptype_open -> []
+      in
+      let structure = Test_utils.Config_key_scan.structure_of source in
+      let hashed =
+        if String.is_substring source ~substring:"hash" then
+          let rec_flag, _ = single_type_declaration source in
+          Ppx_hash_expander.str_type_decl ~loc:declaration.ptype_loc ~path:"Fixture"
+            (rec_flag, [ declaration ])
+        else []
+      in
+      let expanded =
+        generated_names (Ppxlib.Driver.map_structure structure @ hashed)
+        |> List.filter ~f:(fun name ->
+            (* What [fields] names after a label and [variants] after a constructor falls under the
+               member boundary: crediting it would credit the member's name. *)
+            not
+              (List.exists members ~f:(fun member ->
+                   List.mem
+                     [ member; "set_" ^ member; "is_" ^ member; member ^ "_val" ]
+                     name ~equal:String.equal)))
+      in
+      let mentions =
+        match Scan.type_exports_of_source ~source:"arrayjit/lib/fixture.ml" source with
+        | [ export ] -> export.mentioned_by
+        | _ -> []
+      in
+      let equal = List.equal String.equal expanded mentions in
+      if not equal then
+        Stdio.eprintf "%s\n  expansion: %s\n  mentions:  %s\n" source
+          (String.concat ~sep:" " expanded) (String.concat ~sep:" " mentions);
+      equal)

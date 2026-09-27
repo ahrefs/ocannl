@@ -570,6 +570,9 @@ let non_config_environment_mentions =
     ("ocannl_config.reference", "print", 2);
     ("test/operations/dune", "dashed_only_key", 4);
     ("test/operations/dune", "demo_key", 6);
+    ("test/operations/dune", "vec_widen_bfloat16", 1);
+    ("test/operations/dune", "vec_narrow_bfloat16", 2);
+    ("test/operations/bf16_codec_exhaustive.ml", "vec_narrow_bfloat16", 2);
     ("test/operations/cc_march_census.ml", "vec_widen_half", 2);
     ("test/operations/cc_march_census.ml", "vec_widen_bfloat16", 1);
     ("test/operations/cc_march_census.ml", "vec_", 1);

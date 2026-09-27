@@ -889,29 +889,33 @@ let case_inherited_reader_writes_local () =
   p "inherited-local: executed values see the local as the reader updated it"
     (same got [ expected ])
 
+(* Each row runs through [case], so a row that raises is a failed claim naming it, and the rows
+   after it still run: a negative control that makes one row's executed leg raise (as
+   gh-ocannl-1016's did, through [Low_level.validate_scope_bodies]) still hears from every other row
+   (gh-ocannl-1067). *)
 let () =
-  case_diagonal_reduction ();
-  case_visit_cap ();
-  case_full_reader ();
-  case_guarded_reader ();
-  case_preference ();
-  case_inherited ();
-  case_single_cell ();
-  case_two_readers ();
-  case_candidate_consumer ();
-  case_shared_loop ();
-  case_key_off ();
-  case_intervening_write ();
-  case_reader_between_setters ();
-  case_inherited_recurrence ();
-  case_inherited_operand ();
-  case_producer_statement_writes_input ();
-  case_input_written_between_setters ();
-  case_rejection_after_footprint ();
-  case_local_written_between_setters ();
-  case_preference_ineligible ();
-  case_dead_loop_writer ();
-  case_local_in_producer_statement ();
-  case_gated_read ();
-  case_inherited_reader_writes_local ();
+  case "diagonal" case_diagonal_reduction;
+  case "visit-cap" case_visit_cap;
+  case "full" case_full_reader;
+  case "guarded" case_guarded_reader;
+  case "preference" case_preference;
+  case "inherited" case_inherited;
+  case "single-cell" case_single_cell;
+  case "two-readers" case_two_readers;
+  case "candidate-consumer" case_candidate_consumer;
+  case "shared-loop" case_shared_loop;
+  case "key-off" case_key_off;
+  case "intervening" case_intervening_write;
+  case "between-setters" case_reader_between_setters;
+  case "recurrence" case_inherited_recurrence;
+  case "inherited-operand" case_inherited_operand;
+  case "shared-producer" case_producer_statement_writes_input;
+  case "between-components" case_input_written_between_setters;
+  case "rejection" case_rejection_after_footprint;
+  case "local-between" case_local_written_between_setters;
+  case "preference-ineligible" case_preference_ineligible;
+  case "dead-writer" case_dead_loop_writer;
+  case "local-in-producer" case_local_in_producer_statement;
+  case "gated-read" case_gated_read;
+  case "inherited-local" case_inherited_reader_writes_local;
   Stdio.printf "%!"

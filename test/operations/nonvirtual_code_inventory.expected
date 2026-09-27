@@ -1,0 +1,51 @@
+Codes, derived: each tag literal in the scope of a local `Non_virtual` exception, under the function declaring it.
+arrayjit/lib/low_level.ml, check_and_store_virtual:
+  4:lhs-idcs-differ
+  5:index-not-groundable
+  7:sibling-escaping-write-index
+  8:staged-compilation
+  9:sibling-escaping-read-index
+  10:escaping-index-symbol
+  11:already-non-virtual
+  12:no-setter
+  19:declare-local
+  51:affine-not-injective
+  52:concat-index
+  141:workgroup-barrier
+  142:guarded-computation
+  143:tile-mma
+  144:dynamic-write
+  147:enclosing-repetition-loop
+  148:scan-recurrence
+arrayjit/lib/low_level.ml, instantiate_computations:
+  13:call-site-index-mismatch
+  14:empty-inlined-body
+  140:vector-setter-unsupported
+  145:lane-extract-layout
+  146:lane-extract-counter
+  149:scan-at-inline
+The phase table in test/operations/virtual_rejection_boundary.ml is held to those functions:
+  Store -- check_and_store_virtual
+  Consumption -- instantiate_computations
+Files naming a code, as `Non_virtual N` or by its tag -- the checklist for a change to where a code can fire:
+arrayjit/lib/low_level.ml -- 4 5 7 8 9 10 11 12 13 14 19 51 52 140 141 142 143 144 145 146 147 148 149
+arrayjit/lib/low_level.mli -- 148
+arrayjit/lib/tnode.ml -- 13
+docs/agent-notes/virtualization-and-inlining.md -- 8 9 13 19 52 141 142 143 144 147 148 149
+docs/lowering_and_inlining.md -- 4 5 7 8 9 10 11 12 13 14 19 51 52 140 141 142 143 144 145 146 147 148 149
+test/operations/cost_model_template.expected -- 9 13
+test/operations/footprint_materialization.ml -- 13
+test/operations/scan_loop.expected -- 148
+test/operations/scan_loop.ml -- 148
+test/operations/scope_over_materialized.ml -- 13 142
+test/operations/splice_semantics.ml -- 51
+test/operations/virtual_chain_fanin.ml -- 13
+test/operations/virtual_diagonal.ml -- 13 52
+test/operations/virtual_guarded_setter.ml -- 142
+test/operations/virtual_rejection_boundary.expected -- 4 7 9 10 13 19 51 142 147 148
+test/operations/virtual_rejection_boundary.ml -- 4 5 7 8 9 10 11 12 13 14 19 51 52 140 141 142 143 144 145 146 147 148 149
+test/operations/virtual_uncaptured_loop.expected -- 147
+test/operations/virtual_uncaptured_loop.ml -- 9 147
+Read, not part of the checklist:
+  docs/proposals/ -- design proposals, each describing the code as it stood when written
+  docs/in-progress/ -- links into docs/proposals/, the proposals currently being worked on

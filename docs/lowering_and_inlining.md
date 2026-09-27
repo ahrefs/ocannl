@@ -290,8 +290,9 @@ This function validates that the computation can be safely inlined, via these ch
      on the same LHS position (otherwise fold contributions would be lost). A multi-symbol affine
      position in a non-injective map fails with `Non_virtual 51`.
 
-   `Concat` indices are not eliminated by this point only by mistake — they must have been lowered
-   away — so encountering one here fails with `Non_virtual 52`.
+   `Concat` indices must have been lowered away by this point, so encountering one here fails with
+   `Non_virtual 52`. The arm is a backstop: on a write index `trace_node_facts` has already raised
+   `invalid_arg`, so the virtualizer does not see one there.
 
 4. **No Escaping Variables**: Dynamic symbols used in nested computations must be bound within the
    computation's scope (or be static indices). Escaping symbols are rejected with `Non_virtual 7`
@@ -314,7 +315,10 @@ falls back to materialization via `Non_virtual 13` if a particular site cannot b
 When validation fails, `check_and_store_virtual` (or `inline_computation`) raises `Non_virtual i`,
 and the handler commits the tensor to `Never_virtual i` (the provenance `i` records *why*), so a
 refusal is self-describing wherever it is printed. What a provenance is, and how provenances
-compose, is under Memory Mode Management below. The exit codes:
+compose, is under Memory Mode Management below. Which function mints each code is derived rather
+than described: `test/operations/nonvirtual_code_inventory.expected` groups the codes by the
+function raising them, and lists every file that names one — the checklist for a change to pipeline
+order, which is what decides whether a code can fire. The exit codes:
 
 - `4:lhs-idcs-differ` — Inconsistent index patterns between accesses.
 - `5:index-not-groundable` — Symbol coverage/groundability failure (a non-static symbol is neither
@@ -344,6 +348,8 @@ compose, is under Memory Mode Management below. The exit codes:
 - `147:enclosing-repetition-loop` — An enclosing loop the captured subtree does not mention in its
   index map.
 - `148:scan-recurrence` — A `Scan_loop` encloses, or is contained in, the captured computation.
+- `149:scan-at-inline` — A `Scan_loop` met while inlining a stored computation: the
+  consumption-time backstop behind 148, unreachable while storage refuses a scan first.
 
 `Non_virtual 19` was a defensive arm and is one no longer. The reasoning that made it defensive
 still holds *within* the pipeline: `hoist_cross_statement_cse` is the only phase here that produces

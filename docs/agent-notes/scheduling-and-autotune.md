@@ -766,6 +766,14 @@ files.
   template every report starts from, `Autotune.no_search_report`, therefore takes `~timing` — it is
   a function of the objective rather than a constant, which is the only reason the field can be
   plain (the option it briefly had existed solely to let that constant exist).
+- **Queued timing's search cost is dominated by candidates SLOWER than the batch target, not fast
+  ones** (gh-ocannl-834). A gpt2_mini tuned search on gfx1151 took 794 s isolated against 1370 s
+  queued: equal timed loops, but 587 s of calibration against 14 s, because 215 of 220 calls settle
+  at depth 1 after ~40 calibration launches (sixteen singles plus the depth-2 confirmation) and
+  then time exactly what `isolated` would. `BENCH_TIMING_TRACE=1` in the benchmark runners splits a
+  session's wall this way; `benchmarks/gh834_cells.sh` is the per-box driver. The gh-755 offset
+  had shrunk to 0-6 us on the same site by 2026-09-27, yet the isolated crown still moved in 3 of 4
+  site-runs (gh-ocannl-833).
 - **A batched per-launch reading is not comparable to a synchronized round trip, on any constant**
   (gh-ocannl-994). `autotune_timing_modes` bracketed its `Queued` reading from below at
   `floor_ms / 16`, where `floor_ms` is a minimum over one-launch-plus-one-sync round trips. Those
@@ -911,4 +919,18 @@ files.
   `rocwmma/internal/types.hpp` beside `rocwmma/rocwmma.hpp`: Ubuntu's librocwmma-dev 7.1.0 installs
   the umbrella headers without `rocwmma/internal/`, so a one-file probe accepts a tree on which
   every tensorized kernel then fails inside hiprtc — the capability decline exists precisely to
-  keep that unreachable.
+  keep that unreachable. The header half searches `hip_sdk_include_dir`'s tree too, which probes
+  `HIP_PATH`, then `/opt/rocm`, then the distro `/usr` (gh-ocannl-1070): before `/usr` joined, a
+  native box reached its headers only through the login shell's `HIP_PATH=/usr`, so a hermetic
+  environment (machine-verify, a bare ssh command) silently lost the capability. Each HIP device's
+  `static_properties` entry carries `tile_mma_eligible`, the device half read through the gate's
+  own predicate, so a readback (`bin/device_props`) can tell the two halves apart without
+  restating it.
+- A search's COST is read from `autotune_progress` lines, not `autotune_log` (gh-ocannl-1061):
+  the latter is per-candidate and times an extra untuned-default control, so it moves the cost it
+  would record; the former adds a clock read per candidate, is flushed line by line (a search
+  killed at a benchmark cap keeps its record), and splits a search's `elapsed_s` into candidate
+  `compile_s` and `timing_s`. First reading, gpt2_mini cc on mac-studio: 79 s before the first
+  seed (base compile, analyses, the ~2 s baseline's timing window), then timing windows dominate
+  compiles about 9:1 on second-scale candidates — so on cc a candidate's cost is its sample count
+  times its step, not its compile. The format is the interface's (`Autotune.progressf`).

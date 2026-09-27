@@ -418,20 +418,33 @@
 #               kernel plus one round trip. What every schedule crowned before gh-ocannl-755 was
 #               ranked by, and the right objective for a workload that really does dispatch one
 #               kernel and wait for it.
-# The two are different objectives and they do not crown the same candidate. On gfx1151 the round
-# trip is ~50-60 us while the fastest candidates at the gpt2_mini out-projection shape run in
-# 60-70 us, so "isolated" reads about 2x the steady-state cost there -- and the offset varies from
-# candidate to candidate with the block count and the per-launch queue work, which is what lets two
-# candidates 10% apart in steady state swap places. A best_ms measured under "isolated" is
-# therefore not a throughput number and must not be compared against a batched per-kernel figure.
-# The ~25 ms top-up budget accumulates PER-LAUNCH samples in both modes, not queued-batch wall. A
-# fast queued candidate can therefore take all 64 timed batches (about 640 ms when calibration hits
-# the 10 ms target). On CUDA/HIP, before those, one provisional, up to four validating batch probes,
-# and a final confirmation take twelve samples each; one confirmation outlier over 2x its supported
-# base is retried once, so seven near-target probes can cost about another 840 ms per candidate.
-# cc/Metal retain the historical single-estimate calibration. These are
-# workload-dependent costs, not a shared wall-time ceiling; the exact worst-case dispatch-count
-# bounds are documented on Autotune.time_routine.
+# The two are different objectives and they need not crown the same candidate: the isolated offset
+# varies from candidate to candidate with the block count and the per-launch queue work, so two
+# candidates a few percent apart in steady state can swap places. At the gpt2_mini out-projection
+# shape on gfx1151 (unified memory; bin/projection_shape_bench 200 8 d, fwd and rev orders,
+# gh-ocannl-833, 2026-09-27) the two fastest seeds run in ~59 and ~61 us, "isolated" reads them
+# 1.5-5.0 us high (at most 1.08x; gh-ocannl-755's run there had read a ~50-60 us round trip), and
+# that is still enough to move the crown in 3 of the 4 site-runs, while "queued" crowned the
+# batched-throughput winner in all 4. CUDA and Metal are not yet measured. A best_ms measured under
+# "isolated" is therefore not a throughput number and must not be compared against a batched
+# per-kernel figure.
+# What queued timing costs a search. The ~25 ms top-up budget accumulates PER-LAUNCH samples in
+# both modes, not queued-batch wall. A fast queued candidate can therefore take all 64 timed batches
+# (about 640 ms when calibration hits the 10 ms target). On CUDA/HIP, before those, one
+# provisional, up to four validating batch probes, and a final confirmation take twelve samples
+# each; one confirmation outlier over 2x its supported base is retried once, so seven near-target
+# probes can cost about another 840 ms per candidate. cc/Metal retain the historical
+# single-estimate calibration. A candidate SLOWER than the target costs more too, although it ends
+# up measured exactly as "isolated" measures it: its depth is settled first -- on CUDA/HIP sixteen
+# synchronized singles and a twelve-batch depth-2 confirmation, 40 launches -- before the same
+# depth-1 timed loop. End to end, that is the larger cost: one gpt2_mini tuned search (both
+# placement arms, cold cache; benchmarks/gh834_cells.sh with BENCH_TIMING_TRACE=1, gh-ocannl-834)
+# on gfx1151 (unified memory), 2026-09-27, took 794 s isolated and 1370 s queued (1.73x), with 320
+# candidates attempted and 220 timing calls in both. The timed loops cost about the same (218 vs
+# 227 s); warmup plus calibration took 14 s vs 587 s (a median 2.6 s per call), and 215 of the 220
+# queued calls settled at depth 1, where the reading is the isolated one. On cc a queued gpt2_mini
+# search exceeded 2 h (gh-ocannl-719, rog-nv) with no isolated run to compare. The exact worst-case
+# dispatch-count bounds are documented on Autotune.time_routine.
 # The objective is part of the schedule disk-cache key (the "timing" component), so entries do not
 # transfer between the two modes and entries written before gh-ocannl-755 are not replayed: an entry
 # crowned under one objective is not the answer to a search asking the other, and the times it
@@ -496,6 +509,18 @@
 # search's memory growth can be attributed to an allocation class rather than sampled from outside
 # the process.
 #autotune_log=false
+
+# gh-ocannl-1061: a tuning search's cost record, for a search that may be killed before it
+# reports (a benchmark cell over its cap). If true, `Autotune.tune` and `Train.tune_placements`
+# write `autotune-progress:` lines to stderr, each flushed as written: one per search start and
+# end, per phase (the seed pass, each beam round), per placement arm and per tried flip, and one
+# as each candidate attempt starts, naming the candidate, the phase and the attempt's ordinal out
+# of its total, the elapsed time and how much of it went to candidate compiles and to timing
+# windows, and the best time so far -- so a search killed inside a candidate names it. Unlike
+# autotune_log it adds no work to the search. The line format is documented at
+# `Autotune.progressf` (arrayjit/lib/autotune.mli). benchmarks/orchestrate.py turns it on for its
+# tuned cells.
+#autotune_progress=false
 
 # gh-555: budget for the greedy per-node inlining refinement of `Train.tune_placements` — after
 # the placement A/B, try flipping up to this many of the winning arm's most expensive inlining

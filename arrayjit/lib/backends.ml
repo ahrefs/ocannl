@@ -184,6 +184,35 @@ let maybe_sink_zeros (lowered : Low_level.optimized) : Low_level.optimized =
     { lowered with Low_level.llc = Low_level.sink_zero_outs lowered.Low_level.llc }
   else lowered
 
+(* gh-ocannl-1006: the kernel segments a compile SHIPPED, recorded where they are decided and read
+   back by [Context.compile_outcome], which brackets every compile with {!with_segments_census} and
+   stores the result on the routine. The same bracket pattern as [C_syntax.with_census], for the
+   same reason: which kernels a routine runs is a property of the compiled routine, and it cannot be
+   recovered from outside -- a tuned routine's segments come out of a [lowered_transform] only the
+   search saw, so re-lowering its computation reproduces the default pipeline instead. Domain-local,
+   like the codegen censuses: backends are process-wide singletons, and two domains compiling at
+   once must not read or restore each other's segment lists. *)
+let segments_census =
+  let key : Low_level.optimized list option ref Stdlib.Domain.DLS.key =
+    Stdlib.Domain.DLS.new_key (fun () -> ref None)
+  in
+  fun () -> Stdlib.Domain.DLS.get key
+
+let record_segments segments = segments_census () := Some segments
+
+let with_segments_census f =
+  let cell = segments_census () in
+  let saved = !cell in
+  cell := None;
+  match f () with
+  | result ->
+      let recorded = !cell in
+      cell := saved;
+      (result, Option.value recorded ~default:[])
+  | exception exn ->
+      cell := saved;
+      raise exn
+
 (* Schedule ops applied per segment can CREATE tnodes the pre-fission store has never seen -- a
    hoisted [Stage] registers its packed-constant tile in the segment's filtered store (its placement
    lands in the shared lineage fork, but the allocator enumerates the traced store) -- so fold
@@ -886,6 +915,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
               Schedule.maybe_default_schedules ~backend_name:Device.name ~limits
                 ~static_indices:(Indexing.bound_symbols bindings) lowered)
     in
+    record_segments lowereds;
     (* Per-compile launch-geometry trace (config [schedule_log_launches]): one line per segment with
        its grid/block dims — for diffing what two compiles of nominally identical code actually emit
        (PR #140 round 6). *)

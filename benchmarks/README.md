@@ -222,6 +222,16 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   `flip_candidates` list, which is how "this node is not a searchable decision" is told apart from
   "it ranked below `tune_inline_flips`" (gh-ocannl-558,
   [report-gh558-hip-flips.md](report-gh558-hip-flips.md)).
+  `BENCH_TIMING_TRACE=1` (all three runners) splits a searching process's wall between candidate
+  timing and the rest (gh-ocannl-834): one stderr line per `Autotune.time_routine` call (the batch
+  depth it settled on, its launches, its warmup-plus-calibration and timed-loop walls, and running
+  totals, so a cell killed at its cap still leaves a lower bound) and one per candidate attempt
+  (a compile, unless `autotune_bound_pruning` prunes it first), plus a closing summary with the
+  depth histogram. An untagged call (the untuned control `autotune_log=true` times) has its warmup
+  and calibration counted as unattributed rather than as zero. A `timing-trace: search done` line
+  marks where the measured compile (`compile_s`) ended, so a cell cut off later is not read as a
+  search still running. It only observes the tuner's seams, so the
+  searched schedules are the ones an untraced run crowns.
 - `runners/pytorch/run.py` — flags: `--device cpu|mps|cuda`, `--regime exact|approximate`
   (exact, the default and the parity reference: `highest` matmul precision, cudnn tf32 off,
   hand-composed attention; approximate: torch's own defaults — `high` matmul precision,
@@ -251,14 +261,25 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   `--only ocannl pytorch tinygrad`, `--skip-build`, `--no-skip-cells` (run the `SKIP_CELLS`
   entries too — each was observed pathological on a single machine/backend/OS, so use this to
   retest whether an entry still applies in your environment),
+  `--skip-cell WORKLOAD/BACKEND/VARIANT[/PRECISION]` (repeatable: leave one OCANNL cell out in
+  every regime, e.g. `gpt2_mini/cc/tuned` to reach a GPU tuned row without first sitting through
+  an uncapped CPU search; the report lists it under "Cells skipped", and an entry naming no cell
+  of the sweep is refused),
   `--gpu metal|cuda|hip|none` (the GPU column of the matrix — OCANNL backend, PyTorch device,
   tinygrad device together; defaults to metal on macOS and cuda elsewhere, `none` runs a
   CPU-only matrix), `--no-fixture-digest-check` (measure fixtures that do not match
   `fixtures/DIGESTS.txt`),
   `--cell-timeout SECONDS` / `--beam-parallel N` / `--no-cache-quarantine` (the wedged-cell
   mitigations below). Env: `BENCH_CELL_LOG_DIR=<dir>` keeps every cell's raw combined
-  output, one file per cell label — a successful cell's output is otherwise discarded, which throws away the
-  candidate-level evidence a measurement sweep has to report. Combined with
+  output, one file per cell label, written as the cell runs (gh-ocannl-1061) — so it can be
+  tailed live, and a cell killed at its cap, or a sweep that is itself killed, leaves everything
+  printed up to then. A successful cell's output is otherwise discarded, which throws away the
+  candidate-level evidence a measurement sweep has to report. Tuned OCANNL cells run with
+  `--ocannl_autotune_progress=true`: the tuner writes `autotune-progress:` lines (search and
+  phase starts, the arms and flips of the placement search, and a line as each candidate attempt
+  starts naming it, with its ordinal of the phase's total, compile vs timing seconds so far and
+  the best time so far; format at `Autotune.progressf` in `arrayjit/lib/autotune.mli`), which is how a search
+  pass that timed out still states its cost. Combined with
   `OCANNL_AUTOTUNE_LOG=true` it makes the seeded-vs-timed mma and split-reduce counts, the
   `FAILED` blocker breakdown and the split-reduce evictions fall out of the sweep's own search
   passes instead of costing a second round of searches (it does inflate a tuned cell's reported
@@ -402,7 +423,10 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   the three-instrument discipline (per-kernel profile 0.08–1.6%, untuned-default 0.2–0.7%, shipped
   tuned p50 2.6–19.1%) that a tuned-cell A/B on that box needs),
   [report-cifar-cuda.md](report-cifar-cuda.md) (Linux/CUDA, the cifar-scale conv baseline
-  for gh-ocannl-500/502 with a per-layer breakdown) and
+  for gh-ocannl-500/502 with a per-layer breakdown),
+  [report-gh1006-kernel-peak.md](report-gh1006-kernel-peak.md) (the `kernel %peak` column
+  populated on Metal, cc and CUDA, its no-value cases in place — a rendering exhibit on a smoke
+  fixture, not a measurement) and
   [report-gh537-metal.md](report-gh537-metal.md) (macOS/Metal, the paired before/after A/B of
   gh-ocannl-537's `Swap` ∘ `Split_reduce` seeding — the Metal leg of the CUDA measurement in
   `report-gh537-cuda.md`, replicating it),
@@ -597,6 +621,45 @@ than the driver (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` at module load), run it wi
     rows do carry a number, because the shared allocator seam counts a `cc` pool exactly as it
     counts a CUDA one; what it covers is that seam's coverage, so a device's reserved merge-buffer
     slab, the loaded code modules and the host-side `Ndarray` arrays are outside it.
+- **The dominant kernel's %-of-peak column** (gh-ocannl-1006, what gh-ocannl-620/627 close against;
+  its definition shares the envelope constants gh-ocannl-636 settled). `kernel %peak` scores ONE
+  kernel per cell: after the timed steps (so none of it is in the step times or the memory
+  column), `Bench_harness.dominant_kernel` compiles every kernel the step **shipped** — the
+  routine's own `Context.routine.segments`, so a tuned cell's searched winner is what gets timed,
+  not the default pipeline a re-lowering would produce — as a routine of its own through the
+  `?prelowered` seam, times each min-of-20 with a device sync per run, and takes the slowest. The
+  cell reads `41.3% f32 memory · k3/12 0.412 ms w1.grad`: the attainment, its ceiling, the roofline
+  leg that binds, then the kernel's launch position, its own time and the nodes it writes. Four
+  decisions, each stated in the section header where the numbers are read:
+  - *Which kernel.* By **measured** time, not by the cost model's own roofline bound — the column
+    exists partly to check the model's counts, and choosing by its prediction would be circular.
+    A kernel the backend refuses to compile on its own (the gh-ocannl-533 scratch validator on a
+    hermetic segment) is counted as `+N untimed`, and the dominant one is dominant among the rest.
+  - *What number.* The roofline lower bound over the measured time — `max(ops / peak FLOP/s, bytes
+    / peak bandwidth)` on `Ir.Cost_model.analyze`'s counts — so a memory-bound kernel is scored
+    against bandwidth and a compute-bound one against arithmetic. Printed **only on an exact
+    count**, per leg as the calibration fit reads exactness: `approx` when the leg that binds has
+    an upper-bound count (`flops_approx` / `footprint_approximate`), `opaque` for code the model
+    cannot see. An upper bound on the leg that does *not* bind is harmless — it can only shrink,
+    so it cannot overtake the exact leg — and the number stays exact.
+  - *Which ceiling.* Matched to the kernel: `f32` is the backend's single-precision scalar
+    `peak_flops` with `peak_memory_bandwidth`; `f16-native` doubles the flops leg for a kernel whose
+    arithmetic is all 16-bit on a target where that is native (gh-ocannl-575). A **GPU tensor-core
+    kernel has none** — `no ceiling` — because `peak_flops` is scalar f32 and no class constant for
+    the mma unit exists, so scoring against it would read above 100% on exactly the rows this
+    column is for. The C backends' `Tile_mma` register tile runs on the SIMD units `peak_flops`
+    describes and keeps the scalar ceiling. Both legs or nothing: the C backends carry no class
+    constant, so a `cc` row prints `no ceiling` unless `model_peak_flops` and
+    `model_peak_memory_bandwidth` are set (fit them with `tools/fit_envelope.exe` /
+    `tools/calibrate_bandwidth.exe`); the envelope is `Autotune.envelope_legs`, the one the model
+    ranks with, and the header names each ceiling's constants and whose they are.
+  - *Whose ceiling.* These are CLASS constants (or one machine's override), not this device's
+    peak: the column ranks before/after on one box and certifies nothing about the hardware. A
+    number above 100% says the constant is below this card. A small kernel's launch overhead counts
+    against it, since the kernel is timed with its launch.
+  The Python runners carry `"dominant_kernel": null` (they expose no per-kernel counts), printed
+  `—`. `BENCH_DOMINANT_KERNEL=0` turns the instrument off for an OCANNL cell — it costs one compile
+  per kernel of the step — and its row then prints `—` too.
 - Losses are recorded per step *before* that step's SGD update (forward runs first in every
   framework's step). The first step doubles as the compile probe in the Python runners; for
   OCANNL, `compile_s` wraps `Context.compile` (or `Autotune.tune`).

@@ -175,6 +175,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-model_default_fallback
   test/operations/dune                     @runtest-model_default_placements
   test/operations/dune                     @runtest-n3_fwd_with_prec-unoptimized
+  test/operations/dune                     @runtest-nonvirtual_code_inventory
   test/operations/dune                     @runtest-ocamlformat_ignore_scan
   test/operations/dune                     @runtest-online_softmax_fast_math
   test/operations/dune                     @runtest-operand_key_ratchet
@@ -203,6 +204,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @slow-autotune_batched_companion
   test/operations/dune                     @slow-autotune_fission_sketch
   test/operations/dune                     @slow-autotune_mma_companion
+  test/operations/dune                     @slow-bf16_codec_exhaustive
   test/operations/dune                     @slow-env_spelling_gate
   test/operations/dune                     @slow-fp8_codec_exhaustive
   test/operations/dune                     @slow-half_codec_exhaustive

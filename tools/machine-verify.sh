@@ -10,7 +10,11 @@
 #   --backend NAME           Pin and prove the resolved backend configuration.
 #   --expect-lib LIB         Prove cudajit, hipjit or metal was compiled and
 #                            selected. This implies backend cuda, hip or metal
-#                            respectively.
+#                            respectively. Also runs bin/device_props and
+#                            states the backend's tile-MMA capability on the
+#                            verdict line; for hipjit it is asserted where the
+#                            device is eligible and `hipconfig --path` holds
+#                            a complete rocWMMA tree.
 #   --test ALIAS             Build one named test alias (repeatable).
 #   --run 'COMMAND'          Run an OCANNL probe under opam and the pinned
 #                            backend (repeatable).

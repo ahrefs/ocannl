@@ -41,7 +41,10 @@ type outcome =
    single run it spans up to 45 us across candidates that are 5-8 us apart in steady state. Two such
    candidates therefore swap places once each has its own round trip added to it, and at that site
    they do -- in 2 of 8 measured runs, against 0 of 8 for [Queued] against an independent batched
-   instrument. See the tables in gh-ocannl-755.
+   instrument. See the tables in gh-ocannl-755. Re-measured there on 2026-09-27 (gh-ocannl-833) the
+   offset had shrunk to 0-6 us (at most 1.08x), and the crown still moved in 3 of 4 site-runs
+   against 0 of 4 for [Queued]: the offset's variation between candidates, not its size, reorders a
+   close pair.
 
    [Queued] is the default because it is the objective the workload presents: a training step queues
    every kernel of a layer into one stream and synchronizes at the end, so no kernel in it pays a
@@ -70,6 +73,41 @@ let log_enabled =
 
 let logf fmt =
   Printf.ksprintf (fun s -> if Lazy.force log_enabled then Stdio.eprintf "autotune: %s\n%!" s) fmt
+
+(* gh-ocannl-1061: the search's cost record, gated by config [autotune_progress]. A search can run
+   for hours and be killed by a cap before it reports anything, and [autotune_log] is no substitute:
+   it pays for an extra untuned-default control compile, so it moves the cost it would be recording.
+   These lines cost a clock read per candidate, and each is flushed as it is written, so a kill
+   keeps everything up to it.
+
+   The per-candidate line is written at EVERY attempt's start, not at a time-bounded rate: the
+   candidate a cap kills the search inside is the one the record most needs to name, and without a
+   thread beside the blocking compile or timing call only the line written before it can name it. A
+   time bound always leaves a window after the previous line (review rounds 2-3 on PR #817). The
+   rate is bounded by the attempts themselves -- each is a candidate compile, a timing window or a
+   pruning decision -- and the phase, arm and flip lines by the search's own structure. The format
+   is the interface's contract; see {!progressf}. *)
+let progress_enabled =
+  let on = lazy (Utils.get_global_flag ~default:false ~arg_name:"autotune_progress") in
+  fun () -> Lazy.force on
+
+(* Taken when this module is initialized, i.e. at program start: [wall_s] places a line within the
+   process, which for a benchmark cell is within the cell's own wall clock. *)
+let process_clock = Mtime_clock.counter ()
+let seconds_since counter = Mtime.Span.to_float_ns (Mtime_clock.count counter) /. 1e9
+
+let progressf fmt =
+  Printf.ksprintf
+    (fun s ->
+      if progress_enabled () then
+        Stdio.eprintf "autotune-progress: wall_s=%.1f %s\n%!" (seconds_since process_clock) s)
+    fmt
+
+let progress_ms ms = if Float.is_finite ms then Printf.sprintf "%.4f" ms else "none"
+
+let progress_stopwatch () =
+  let c = Mtime_clock.counter () in
+  fun () -> seconds_since c
 
 (* The one admission gate for a timing verdict, for the consumers that RANK: candidate selection,
    the calibration rows, the roofline consistency check, cache attribution. Keeping it next to the
@@ -1219,11 +1257,20 @@ let peak_flops_override =
 let peak_bandwidth_override =
   peak_override (fun () -> Utils.get_global_arg ~arg_name:"model_peak_memory_bandwidth" ~default:"")
 
-let envelope ~(limits : Ir.Backend_intf.hardware_limits) =
-  ( Option.first_some (Lazy.force peak_flops_override) limits.Ir.Backend_intf.peak_flops,
-    Option.first_some
-      (Lazy.force peak_bandwidth_override)
-      limits.Ir.Backend_intf.peak_memory_bandwidth )
+let envelope_legs ~(limits : Ir.Backend_intf.hardware_limits) =
+  let leg override advisory =
+    match Lazy.force override with
+    | Some v -> Some (v, `Config)
+    | None -> Option.map advisory ~f:(fun v -> (v, `Backend))
+  in
+  ( leg peak_flops_override limits.Ir.Backend_intf.peak_flops,
+    leg peak_bandwidth_override limits.Ir.Backend_intf.peak_memory_bandwidth )
+
+(* The same constants without their provenance: one resolution, so the report's column and the model
+   cannot read different envelopes. *)
+let envelope ~limits =
+  let flops, bandwidth = envelope_legs ~limits in
+  (Option.map flops ~f:fst, Option.map bandwidth ~f:fst)
 
 (* The roofline lower bound summed over a candidate's kernels; [None] — no model coverage — when any
    kernel is opaque (its counts may UNDER-estimate, so ranking on them could prune the true winner)
@@ -3116,7 +3163,45 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
            | derived -> derived
            | exception Invalid_argument _ -> ""))
   in
-  let emit_report r = Option.iter report ~f:(fun f -> f r) in
+  (* gh-ocannl-1061: this call's progress state. [progress_compile_s] and [progress_timing_s]
+     accumulate the candidates' compiles and timing windows, so [elapsed_s] minus the two is what
+     the search spent elsewhere (the base compile, analyses, replays, the winner's recompile). *)
+  let progress_clock = Mtime_clock.counter () in
+  let progress_compile_s = ref 0. and progress_timing_s = ref 0. in
+  let progress_attempts = ref 0 in
+  let progress_line event fields =
+    if progress_enabled () then
+      let elapsed = seconds_since progress_clock in
+      progressf "event=%s routine=%S elapsed_s=%.1f %s" event (Lazy.force routine_name) elapsed
+        fields
+  in
+  let progress_costs () =
+    Printf.sprintf "attempts=%d compile_s=%.1f timing_s=%.1f" !progress_attempts !progress_compile_s
+      !progress_timing_s
+  in
+  (* A line BEFORE every step outside the candidates that can block for long -- the base compile, a
+     cache replay, the baseline's timing window, the seed enumeration's lowerings, the winner's
+     recompile, an untuned fallback -- for the same reason a candidate's line precedes it: a search
+     killed inside the step is inside the one its last line names. *)
+  let progress_stage stage =
+    progress_line "stage" (Printf.sprintf "stage=%s %s" stage (progress_costs ()))
+  in
+  let timed_into acc f =
+    let c = Mtime_clock.counter () in
+    Exn.protect ~f ~finally:(fun () -> acc := !acc +. seconds_since c)
+  in
+  progress_line "search_start"
+    (Printf.sprintf "backend=%s device=%d search=%b beam=%d rounds=%d" backend device search
+       beam_width rounds);
+  (* Every report goes through here, exactly once per call on every path (gh-ocannl-550), so this is
+     where a search's closing progress line is written: before the callback, which may raise. *)
+  let emit_report (r : report) =
+    progress_line "search_done"
+      (Printf.sprintf "outcome=%s timed=%d contended=%d failed=%d rounds=%d %s best_ms=%s best=%S"
+         (outcome_name r.outcome) r.candidates_timed r.timings_contended r.candidates_failed
+         r.rounds_run (progress_costs ()) (progress_ms r.best_ms) r.best_label);
+    Option.iter report ~f:(fun f -> f r)
+  in
   (* [tune] reports exactly once per call, on every path (gh-ocannl-550). The failures that happen
      before (or instead of) the search proper — the base compile failing before its lowering is
      captured, a fatal baseline link, a fatal cache replay, a baseline timing failure, and either
@@ -3179,6 +3264,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
      reports the phase it carries. [Context.compile] is exactly this plus [raise_failure], which is
      what [raise_pre_search] ends with, so the caller sees the same exception either way. *)
   let compile_untuned_default ?base () =
+    progress_stage "untuned_default_compile";
     match
       Context.compile_outcome ?name ~provenance:Ir.Schedule_outcome.User_schedule ctx comp bindings
     with
@@ -3261,6 +3347,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
        default?" reference by [report.default_ms] — the [config_thresholds] seed's measurement, not
        a new baseline. *)
     let base_capture = ref None in
+    progress_stage "base_compile";
     let base_outcome =
       Context.compile_outcome ?name
         ~lowered_transform:(fun opt ->
@@ -3397,6 +3484,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                        })
               | None -> Whole (W_saved entry.SC.saved)
             in
+            progress_stage "cache_replay";
             match compile_spec_real Outcome.Cache_replay spec with
             | Ok c when not (dispatchable ~is_gpu c.all_opts) ->
                 (* An entry written before the gh-ocannl-532 rule can name the serial baseline as
@@ -3605,6 +3693,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                    and never reaches it (gh-ocannl-569). *)
                 Outcome.tag Outcome.Preflight (fun () ->
                     Context.check_lineage_runnable b.cctx b.routine);
+                progress_stage "baseline_timing";
                 time_routine ~tag_failures:true ~timing ~repeats b.cctx b.routine
               with
               | timing_result -> (
@@ -3923,6 +4012,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
            which for a link failure is simply wrong. The exception the caller sees is unchanged:
            [emit_partial_and_raise] ends in [raise_failure], exactly as [Context.compile] does. *)
         let untuned_default_or_raise () =
+          progress_stage "untuned_default_compile";
           match
             Context.compile_outcome ?name ~provenance:Ir.Schedule_outcome.User_schedule ctx comp
               bindings
@@ -3934,6 +4024,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                 (Outcome.fatal_of_classified ~candidate:"untuned default fallback" classified)
         in
         let search () =
+          progress_stage "seed_enumeration";
           (* gh-ocannl-521: tensorized candidates are counted where they are TIMED, not where they
              are enumerated — a family can be seeded in bulk and rejected in bulk at candidate
              compile, and the enumerated count alone reads as coverage it does not have. Both
@@ -3965,7 +4056,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                 | Fiss (F_sketch _) -> Int.incr n_fiss_mma_proposed
                 | Whole _ | Fiss (F_preset _ | F_saved _ | F_split _ | F_split_saved _) -> ()
               end;
-              match compile_spec spec with
+              match timed_into progress_compile_s (fun () -> compile_spec spec) with
               | Error (Outcome.Classified classified) ->
                   record_decline declines classified;
                   logf "%s: FAILED at %s %s" (spec_label spec) (phase_label classified.phase)
@@ -4034,7 +4125,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                       Outcome.protect ~classify_backend:(Context.failure_classifier c.cctx)
                         ~provenance:Outcome.Candidate ~phase:Outcome.Launch
                         ~candidate:(spec_label spec) (fun () ->
-                          time_routine ~tag_failures:true ~timing ~repeats c.cctx c.routine)
+                          timed_into progress_timing_s (fun () ->
+                              time_routine ~tag_failures:true ~timing ~repeats c.cctx c.routine))
                       (* Outside the boundary: the seam is not a candidate failure to classify. *)
                       |> Result.map
                            ~f:
@@ -4206,6 +4298,49 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                 (Ir.Alloc_census.to_string (Ir.Alloc_census.snapshot ()))
                 (Float.of_int (Context.get_used_memory search_ctx) /. 1048576.);
             result
+          in
+          (* gh-ocannl-1061: where the search is, on the [autotune_progress] stream. A phase is the
+             seed pass, the recombination composites that follow it, or one beam round; its
+             candidate total is known up front except for the composites'. *)
+          let progress_phase = ref "seeds" and progress_total = ref None in
+          let progress_tried = ref 0 in
+          let progress_best () =
+            let best_c, best_ms = !best_so_far in
+            let label =
+              match best_c with
+              | None -> if Float.is_finite best_ms then "baseline" else ""
+              | Some c ->
+                  Option.value (Hashtbl.find label_by_digest c.digest_after) ~default:"baseline"
+            in
+            Printf.sprintf "best_ms=%s best=%S" (progress_ms best_ms) label
+          in
+          let progress_where () =
+            Printf.sprintf "phase=%s tried=%d/%s timed=%d %s %s" !progress_phase !progress_tried
+              (Option.value_map !progress_total ~default:"?" ~f:Int.to_string)
+              !n_timed (progress_costs ()) (progress_best ())
+          in
+          let progress_phase_begin phase total =
+            progress_phase := phase;
+            progress_total := total;
+            progress_tried := 0;
+            Option.iter total ~f:(fun n ->
+                progress_line "phase"
+                  (Printf.sprintf "phase=%s candidates=%d timed=%d %s %s" phase n !n_timed
+                     (progress_costs ()) (progress_best ())))
+          in
+          (* Written as an attempt STARTS, naming it: a search killed inside a long candidate then
+             leaves the candidate it was in, and the costs of everything before it. Counted before
+             the attempt too, so a fatal candidate -- which writes [search_done] from inside itself
+             and raises -- is in the closing record's [attempts]. *)
+          let try_spec spec =
+            Int.incr progress_attempts;
+            Int.incr progress_tried;
+            (* Guarded here, not only inside [progress_line]: its arguments render a label and read
+               the best-so-far table on every attempt of a search that prints nothing. *)
+            if progress_enabled () then
+              progress_line "candidate"
+                (Printf.sprintf "%s attempt=%S" (progress_where ()) (spec_label spec));
+            try_spec spec
           in
           let block_size_presets mk =
             mk None
@@ -4397,6 +4532,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
             @ fiss_sketch_specs @ sr_specs
           in
           let fiss_single_results = ref [] in
+          progress_phase_begin "seeds" (Some (List.length seed_specs));
           List.iter seed_specs ~f:(fun spec ->
               let result = try_spec spec in
               (match (spec, result) with
@@ -4404,6 +4540,9 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                   fiss_single_results := (key, fine, (p, ms)) :: !fiss_single_results
               | _ -> ());
               Option.iter result ~f:admit);
+          (* At most three composites, each proposed only if its singles justify it: no total to
+             announce, so no phase line either; a composite's attempt still counts and can print. *)
+          progress_phase_begin "recombine" None;
           (match default_ms () with
           | Some ms -> logf "untuned-default pipeline: %.4f ms (gh-ocannl-552 reference)" ms
           | None ->
@@ -4528,6 +4667,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               pending := None;
               List.iter evicted ~f:(fun (c, _) -> release_candidate c)
             in
+            progress_phase_begin (Printf.sprintf "round%d" !rounds_run) (Some (List.length cands));
             List.iter cands ~f:(fun spec -> Option.iter (try_spec spec) ~f:round_admit);
             match !round with
             | [] -> continue_ := false
@@ -4605,7 +4745,10 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
              program yet a separately-run untuned process measures faster (PR #140 round 6: same
              digest, 3.4x runtime difference across processes on cuda). *)
           (if Lazy.force log_enabled then
-             match Context.compile ?name search_ctx comp bindings with
+             match
+               progress_stage "untuned_control";
+               Context.compile ?name search_ctx comp bindings
+             with
              | cctx, croutine ->
                  (match time_routine ~timing ~repeats cctx croutine with
                  | timing_result -> (
@@ -4700,6 +4843,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                    schedule — so the whole beam goes before the compile that reproduces it
                    (gh-ocannl-550). *)
                 release_all_candidates ~keep:[] ();
+                progress_stage "winner_compile";
                 match compile_spec_real Outcome.Candidate spec with
                 | Ok c when not (dispatchable ~is_gpu c.all_opts) ->
                     (* Completes the invariant rather than fixing an observed bug: the winner was

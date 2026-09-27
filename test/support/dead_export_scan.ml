@@ -6,7 +6,8 @@
     already marked them deliberately unused, matching OCaml warning 32. This also covers patterns
     and extension payloads; externals and inferred deriving names retain their existing census
     policy, including polymorphic-variant parser helpers. We enumerate those declarations in
-    [arrayjit/lib/] and [tensor/], then count references from every other OCaml source.
+    [arrayjit/lib/], [tensor/] and [lib/], then count references from every other OCaml source.
+    Top-level type declarations are a second, coarser census with its own section below.
 
     A reference is conservative: a direct qualified path ([M.v]), a path through a module alias, or
     an unqualified identifier inside the lexical range of [open M]. Alias scopes are deliberately
@@ -21,8 +22,11 @@
     annotations, which expand to converter calls this source-level census cannot see, as through
     spelled references. A [sexp_of] with no caller costs nothing and cannot drift from its type,
     while removing it to satisfy a ratchet only takes the converter away from the next debugging
-    session. Values introduced by other PPX expansions or by an [include] inside the defining module
-    remain outside this source-level census. *)
+    session. Values introduced by other PPX expansions or by an [include] of another module inside
+    the defining module remain outside this source-level census. A bare [include struct ... end]
+    declares into the module and is read like top-level items; a constrained
+    [include (struct ... end : S)] carries its own interface, which publishes deliberately, so like
+    a module with an [.mli] it is not censused. *)
 
 open Base
 open Ppxlib.Parsetree
@@ -146,6 +150,9 @@ let exports_of_source ~source contents =
            still a source-declared top-level value, so unwrap structure payloads at this level but
            never descend into a nested module. *)
         | Pstr_extension ((_, PStr nested), _) -> items acc nested
+        (* [include struct ... end] declares into the enclosing module as much as a bare item. *)
+        | Pstr_include { pincl_mod = { pmod_desc = Pmod_structure nested; _ }; _ } ->
+            items acc nested
         | _ -> acc
       in
       items [] (Read.structure_of contents)
@@ -380,4 +387,226 @@ let counts ~(exports : export list) references =
       Hashtbl.update table
         (reference.module_name ^ "." ^ reference.value)
         ~f:(fun count -> 1 + Option.value count ~default:0));
+  table
+
+(** {1 Type declarations}
+
+    The type census answers one conservative question: does a top-level type's NAME occur anywhere
+    in the tree beyond its own declaration? It is a name count, not a resolution. A mention is the
+    last component of any type path ([foo], [M.foo], [N.foo] all credit every censused [foo], so a
+    same-named type elsewhere hides a dead one), in implementations and interfaces alike, including
+    the defining source (a type its own module uses is live, if not public), but excluding the
+    declaration's own span, so a recursive type does not credit itself. Package constraints
+    ([(module S with type foo = int)]), [with type] constraints, type extensions and [#foo] patterns
+    are type paths too. A type whose deriving generates values or modules is also mentioned by a
+    spelling of one of them in a value or module path -- never in a label path, and never inside a
+    [[@@deriving]] payload, which names derivers rather than using their output -- since a caller
+    can use the type through its converter alone. Comments, docstrings and string literals never
+    parse into a path, so prose cannot keep a type alive. A type named with a leading [_] is not
+    censused, as it is not for OCaml's own unused-type warning (34): its author marked it
+    deliberately unused, the convention the value census follows for [let]. Unlike the value census,
+    an [include M] credits none of [M]'s types: the count is blind to qualifiers, so a use through
+    the including module ([N.foo]) is already a mention, and a re-export nobody spells is not a use.
+
+    Out of scope, by design: the constructors and record labels of a type are not resolved to it (a
+    record built only by its labels, never annotated, reads as unmentioned), and neither are the
+    label-named accessors [[@@deriving fields]] generates -- crediting a label's name would let any
+    same-named label elsewhere keep a dead record alive; nor are values, exceptions, module types or
+    classes; nor anything a PPX other than the modelled derivings generates. *)
+
+type type_export = {
+  module_name : string;
+  type_name : string;
+  source : string;
+  line : int;
+  span : int * int;
+  mentioned_by : string list;
+}
+
+let type_export_key ({ module_name; type_name; _ } : type_export) = module_name ^ "." ^ type_name
+
+(** The values and modules a deriving generates for [declaration], any spelling of which mentions
+    the type: the value census's {!derived_names}, plus what that census leaves out -- the [sexp_of]
+    converters and the [hash], [enumerate], [variants] and [fields] outputs. The label-named
+    accessors of [fields] are left out, by the label boundary above. The synthetic cases hold this
+    set equal to the derivers' own expansion. *)
+let deriving_mentions ~derivers declaration =
+  let type_name = declaration.ptype_name.txt in
+  let named ~t ~prefix = if String.equal type_name "t" then t else prefix ^ type_name in
+  derived_names ~derivers declaration
+  @ List.concat_map derivers ~f:(function
+    | "sexp" | "sexp_of" -> [ "sexp_of_" ^ type_name ]
+    | "hash" ->
+        (* The [hash_<type>] shorthand exists only for a type without parameters. *)
+        ("hash_fold_" ^ type_name)
+        ::
+        (if List.is_empty declaration.ptype_params then [ named ~t:"hash" ~prefix:"hash_" ] else [])
+    | "enumerate" -> [ named ~t:"all" ~prefix:"all_of_" ]
+    | "variants" -> [ named ~t:"Variants" ~prefix:"Variants_of_" ]
+    | "fields" -> [ named ~t:"Fields" ~prefix:"Fields_of_" ]
+    | _ -> [])
+  |> List.dedup_and_sort ~compare:String.compare
+
+let type_exports_of_source ~source contents =
+  match module_name_of_source source with
+  | None -> []
+  | Some module_name ->
+      let rec items acc structure = List.fold structure ~init:acc ~f:item
+      and item acc structure_item =
+        match structure_item.pstr_desc with
+        | Pstr_type (_, declarations) ->
+            let derivers = List.concat_map declarations ~f:derivers_of_type_declaration in
+            List.fold declarations ~init:acc ~f:(fun acc declaration ->
+                let type_name = declaration.ptype_name.txt in
+                if String.is_prefix type_name ~prefix:"_" then acc
+                else
+                  let loc = declaration.ptype_loc in
+                  {
+                    module_name;
+                    type_name;
+                    source;
+                    line = loc.loc_start.pos_lnum;
+                    span = (loc.loc_start.pos_cnum, loc.loc_end.pos_cnum);
+                    mentioned_by = deriving_mentions ~derivers declaration;
+                  }
+                  :: acc)
+        | Pstr_extension ((_, PStr nested), _) -> items acc nested
+        (* [include struct ... end] declares into the enclosing module as much as a bare item. *)
+        | Pstr_include { pincl_mod = { pmod_desc = Pmod_structure nested; _ }; _ } ->
+            items acc nested
+        | _ -> acc
+      in
+      items [] (Read.structure_of contents)
+      |> List.sort ~compare:(fun (a : type_export) (b : type_export) ->
+          String.compare (type_export_key a) (type_export_key b))
+
+(** The interface sources among [paths], the [*.mli] counterpart of [Config_key_scan.sources_among]:
+    dune's [X.pp.mli] is a preprocessed binary AST beside the [X.mli] it came from, not a source. *)
+let interfaces_among paths =
+  let interfaces =
+    List.filter paths ~f:(String.is_suffix ~suffix:".mli")
+    |> List.dedup_and_sort ~compare:String.compare
+  in
+  let present = Set.of_list (module String) interfaces in
+  List.filter interfaces ~f:(fun path ->
+      match String.chop_suffix path ~suffix:".pp.mli" with
+      | Some stem -> not (Set.mem present (stem ^ ".mli"))
+      | None -> true)
+
+(** How many mentions each of [type_exports] has, keyed by {!type_export_key}. [implementations] and
+    [interfaces] are [(repository-relative path, contents)]; an interface parses as a signature.
+    Raises if a source does not parse. *)
+let type_mention_counts ~(type_exports : type_export list) ~implementations ~interfaces =
+  let type_names =
+    Set.of_list (module String) (List.map type_exports ~f:(fun export -> export.type_name))
+  in
+  let derived_names =
+    Set.of_list
+      (module String)
+      (List.concat_map type_exports ~f:(fun export -> export.mentioned_by))
+  in
+  (* Every mention carries its place, to be told apart from the declaration's own span. *)
+  let type_mentions = Hashtbl.create (module String) in
+  let derived_mentions = Hashtbl.create (module String) in
+  let walk ~source =
+    (* Read through functor applications: [F(X).foo] names [foo] and spells [F] and [X]. *)
+    let rec components : Ppxlib.longident -> string list = function
+      | Lident name -> [ name ]
+      | Ldot (prefix, name) -> components prefix @ [ name ]
+      | Lapply (functor_, argument) -> components functor_ @ components argument
+    in
+    let record_type_path (path : Ppxlib.longident_loc) =
+      let last =
+        match path.txt with Lident name | Ldot (_, name) -> Some name | Lapply _ -> None
+      in
+      match last with
+      | Some name when Set.mem type_names name ->
+          Hashtbl.add_multi type_mentions ~key:name ~data:(source, path.loc.loc_start.pos_cnum)
+      | Some _ | None -> ()
+    in
+    (* A derived value or module is spelled as a whole value or module path, or as a qualifier in
+       one ([Fields_of_foo.names]). Label paths are not read at all. *)
+    let record_derived_path (path : Ppxlib.longident_loc) =
+      List.iter (components path.txt) ~f:(fun name ->
+          if Set.mem derived_names name then
+            Hashtbl.add_multi derived_mentions ~key:name ~data:(source, path.loc.loc_start.pos_cnum))
+    in
+    object
+      inherit Ast_traverse.iter as super
+
+      method! core_type core_type =
+        (match core_type.ptyp_desc with
+        | Ptyp_constr (path, _) | Ptyp_class (path, _) -> record_type_path path
+        | Ptyp_package (_, constraints) ->
+            List.iter constraints ~f:(fun (path, _) -> record_type_path path)
+        | _ -> ());
+        super#core_type core_type
+
+      (* [#foo] in a pattern matches the rows of the polymorphic variant [foo]. *)
+      method! pattern pattern =
+        (match pattern.ppat_desc with Ppat_type path -> record_type_path path | _ -> ());
+        super#pattern pattern
+
+      method! with_constraint constraint_ =
+        (match constraint_ with
+        | Pwith_type (path, _) | Pwith_typesubst (path, _) -> record_type_path path
+        | Pwith_module (_, path) | Pwith_modsubst (_, path) -> record_derived_path path
+        | Pwith_modtype _ | Pwith_modtypesubst _ -> ());
+        super#with_constraint constraint_
+
+      method! type_extension extension =
+        record_type_path extension.ptyext_path;
+        super#type_extension extension
+
+      method! expression expression =
+        (match expression.pexp_desc with Pexp_ident path -> record_derived_path path | _ -> ());
+        super#expression expression
+
+      method! module_expr module_expr =
+        (match module_expr.pmod_desc with Pmod_ident path -> record_derived_path path | _ -> ());
+        super#module_expr module_expr
+
+      (* The signature-side module paths: an alias ([module F = M.Fields_of_foo]) and a module type
+         path, an [open], and a module substitution. *)
+      method! module_type module_type =
+        (match module_type.pmty_desc with
+        | Pmty_alias path | Pmty_ident path -> record_derived_path path
+        | _ -> ());
+        super#module_type module_type
+
+      method! signature_item item =
+        (match item.psig_desc with
+        | Psig_open { popen_expr = path; _ } -> record_derived_path path
+        | Psig_modsubst { pms_manifest = path; _ } -> record_derived_path path
+        | _ -> ());
+        super#signature_item item
+
+      (* A deriving payload names the derivers ([equal], [compare], [hash]), which for a type [t]
+         are exactly its derived names; it uses nothing. *)
+      method! attribute attribute =
+        if String.equal attribute.attr_name.txt "deriving" then () else super#attribute attribute
+    end
+  in
+  List.iter implementations ~f:(fun (source, contents) ->
+      (walk ~source)#structure (Read.structure_of contents));
+  List.iter interfaces ~f:(fun (source, contents) ->
+      (walk ~source)#signature (Ppxlib.Parse.interface (Lexing.from_string contents)));
+  let table = Hashtbl.create (module String) in
+  List.iter type_exports ~f:(fun export ->
+      let start, stop = export.span in
+      let outside_declaration (source, position) =
+        not (String.equal source export.source && start <= position && position < stop)
+      in
+      let by_type =
+        Hashtbl.find_multi type_mentions export.type_name |> List.count ~f:outside_declaration
+      in
+      let by_derived =
+        List.sum
+          (module Int)
+          export.mentioned_by
+          ~f:(fun name ->
+            Hashtbl.find_multi derived_mentions name |> List.count ~f:outside_declaration)
+      in
+      Hashtbl.update table (type_export_key export) ~f:(fun previous ->
+          Option.value previous ~default:0 + by_type + by_derived));
   table

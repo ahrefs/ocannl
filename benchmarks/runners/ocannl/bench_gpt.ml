@@ -59,6 +59,7 @@ let with_master_weights_except_ln ~prec f =
 let () =
   let fixture = Stdlib.Sys.getenv "BENCH_FIXTURE" in
   let tune = H.env_flag "BENCH_TUNE" in
+  H.install_timing_trace ();
   let materialize = H.env_flag "BENCH_MATERIALIZE" in
   let debug = H.env_flag "BENCH_DEBUG" in
   let st = St.read fixture in
@@ -269,6 +270,7 @@ let () =
      or a timing_ctx replay fallback ships something no arm report describes. *)
   H.collect_shipped arms routines;
   let compile_s = Unix.gettimeofday () -. t0 in
+  H.trace_search_done ~compile_s;
   let ctx = if tune then H.inject ctx st batch_loss mapping else ctx in
   (* The scaled training legs thread the context (Loss_scaler.update overwrites the scale tensors),
      hence the reference. *)
@@ -288,7 +290,10 @@ let () =
             report column and composes the two axes itself (gh-ocannl-539), so a reduced-precision
             cell is distinguished by the precision field rather than by overloading this one. *)
          (if tune then "tuned" else if materialize then "materialized" else "default")
-       ~precision:leg.H.label ~compile_s ~tokens_per_step:(batch_size * seq) ~tune:arms ~run_step
+       ~precision:leg.H.label ~compile_s ~tokens_per_step:(batch_size * seq) ~tune:arms
+       ~dominant_kernel:(fun () ->
+         H.dominant_kernel ~ctx:!ctx_ref ~bindings (H.step_routines routines))
+       ~run_step
        ~read_loss:(fun () -> (!ctx_ref, batch_loss).@[0])
        ~sync:(fun () -> Context.sync !ctx_ref)
        ()

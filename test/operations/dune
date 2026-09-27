@@ -86,6 +86,7 @@
   (alias slow-tune_ship_arm)
   (alias slow-fp8_codec_exhaustive)
   (alias slow-half_codec_exhaustive)
+  (alias slow-bf16_codec_exhaustive)
   (alias slow-hip_scratch_budget)
   (alias slow-hip_scratch_tune_survives)))
 
@@ -139,7 +140,9 @@
   (alias runtest-shell_scripts_parse)
   (alias runtest-refusal_control_scan_cases)
   (alias runtest-optional_arg_inventory)
-  (alias runtest-optional_arg_inventory_control)))
+  (alias runtest-optional_arg_inventory_control)
+  (alias runtest-nonvirtual_code_inventory)
+  (alias runtest-nonvirtual_code_scan_cases)))
 
 ; Two focused aggregates beyond `scans` (gh-ocannl-783). Same arrangement and same completeness
 ; check, a different question: `scans` collects the tests that read the REPOSITORY, these collect
@@ -254,6 +257,7 @@
   (alias runtest-ocamlformat_ignore_scan)
   (alias runtest-ll_test_ratchet)
   (alias runtest-operand_key_ratchet)
+  (alias runtest-nonvirtual_code_inventory)
   (alias runtest-census_total_ratchet)
   (alias runtest-workflow_job_timeouts)
   (alias runtest-shell_scripts_parse)
@@ -2330,6 +2334,9 @@
   operand_key_ratchet.ml
   operand_key_ratchet.expected
   operand_key_scan_cases.expected
+  nonvirtual_code_inventory.ml
+  nonvirtual_code_inventory.expected
+  nonvirtual_code_scan_cases.expected
   ocamlformat_ignore_scan.ml
   ocamlformat_ignore_scan.expected
   optional_arg_inventory.ml
@@ -2377,6 +2384,8 @@
    ll_test_ratchet.expected,ll_test_scan_cases.expected
    operand_key_ratchet.ml
    operand_key_ratchet.expected,operand_key_scan_cases.expected
+   nonvirtual_code_inventory.ml
+   nonvirtual_code_inventory.expected,nonvirtual_code_scan_cases.expected
    ocamlformat_ignore_scan.ml
    ocamlformat_ignore_scan.expected
    optional_arg_inventory.ml
@@ -2689,8 +2698,9 @@
    atomic_file_rename_scan_control.actual)))
 
 ; gh-ocannl-806: modules without interfaces implicitly export every top-level binding. The live
-; scan ratchets every source-declared value in direct modules under arrayjit/lib and tensor against
-; external qualified, aliased, opened, or included references. The matching policy is pure in
+; scan ratchets every source-declared value in direct modules under arrayjit/lib, tensor and lib
+; against external qualified, aliased, opened, or included references, and (gh-ocannl-1009) every
+; top-level type declaration against a mention of its name anywhere but its own declaration. The matching policy is pure in
 ; test/support/dead_export_scan.ml, so these cases exercise it against synthetic violations and
 ; near misses rather than trusting today's usually-clean repository as its own control.
 
@@ -2703,8 +2713,14 @@
  (libraries
   base
   stdio
+  ppx_compare
   ppx_compare.expander
+  ppx_enumerate
+  ppx_fields_conv
+  ppx_hash.expander
+  ppx_sexp_conv
   ppx_sexp_conv.expander
+  ppx_variants_conv
   test_utils
   arrayjit.verdict))
 
@@ -2748,7 +2764,7 @@
   (diff dead_export_scan.expected dead_export_scan.actual)))
 
 (rule
- ; ocannl-backend: none -- runs the scanner's three synthetic direct-refusal branches.
+ ; ocannl-backend: none -- runs the scanner's four synthetic direct-refusal branches.
  (target dead_export_scan_control.actual)
  (package neural_nets_lib)
  (deps ocannl_config dead_export_scan.ml)
@@ -4586,6 +4602,20 @@
     (diff tune_ship_arm.expected tune_ship_arm.actual)))))
 
 (test
+ ; gh-ocannl-1061: the tuner's progress lines, with a candidate line at every attempt.
+ (name autotune_progress)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules autotune_progress)
+ (libraries base ocannl stdio unix arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl))
+ (action
+  (run %{test} "--ocannl_autotune_progress=true")))
+
+(test
  (name inline_flip_tune)
  (package neural_nets_lib)
  (deps
@@ -4603,7 +4633,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules placement_store)
- (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -5117,6 +5147,19 @@
    (run ./verdict_quantified.exe holds)
    (run ./verdict_quantified.exe refusals))))
 
+; How a run that links Verdict ends once a check has failed (gh-ocannl-1067): a normal end, an
+; explicit `exit`, an exception escaping after the failure, and `Verdict.case`. Every path under
+; test fails, so each runs as a child whose streams the parent captures, as `verdict_quantified`
+; does; the golden is the parent's claims about them.
+
+(test
+ ; ocannl-backend: none -- links `arrayjit.verdict` and `unix` alone: what is under test is the status and streams a failing child ends with.
+ (name verdict_teardown)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules verdict_teardown)
+ (libraries base stdio unix arrayjit.verdict))
+
 ; The uint4x32 FFI stubs read four lanes out of an [int array], a type that carries no length, so
 ; the C helper has to check the arity rather than assume it (gh-ocannl-688). Links arrayjit.ir
 ; alone and calls the stubs directly -- no compilation, no device.
@@ -5161,6 +5204,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  ../../AGENTS.md
   ../../docs/agent-notes.md
   (glob_files_rec ../../docs/agent-notes/*.md))
  (action
@@ -5360,18 +5404,18 @@
 ; preprocesses away (all have _Float16) and which a curated corpus had let a whole rounding interval
 ; slip through (gh-ocannl-981). `float_to_half_emulated` over all 2^32 f32 bit patterns against the
 ; rounding oracle and, where the compiler has _Float16, the native cast; `half_to_float_emulated`
-; over all 65536 codes. The converters are the definition table's own text: gen_half_emulated emits
+; over all 65536 codes. The converters are the definition table's own text: gen_codec_header emits
 ; them into half_emulated.h with the native switch forced off, from a copy of builtins_cc.ml the way
 ; arrayjit/lib/gen_builtins reads it.
 
 (rule
- (target half_builtins_table.ml)
+ (target codec_builtins_table.ml)
  (action
   (copy %{project_root}/arrayjit/lib/builtins_cc.ml %{target})))
 
 (executable
- (name gen_half_emulated)
- (modules gen_half_emulated half_builtins_table))
+ (name gen_codec_header)
+ (modules gen_codec_header codec_builtins_table))
 
 (rule
  ; ocannl-backend: none -- stdlib-only header generator; no configuration or backend selection.
@@ -5379,7 +5423,14 @@
  (action
   (with-stdout-to
    %{target}
-   (run %{exe:gen_half_emulated.exe}))))
+   (run
+    %{exe:gen_codec_header.exe}
+    --guard
+    HALF_CODEC_EMULATED_H
+    --force-off
+    HAS_NATIVE_FLOAT16
+    half_to_float_emulated
+    float_to_half_emulated))))
 
 (executable
  (name half_codec_exhaustive)
@@ -5407,6 +5458,55 @@
      half_codec_exhaustive.actual
      (run %{dep:half_codec_exhaustive.exe}))
     (diff half_codec_exhaustive.expected half_codec_exhaustive.actual)))))
+
+; gh-ocannl-1069: the bf16 converters, which unlike the emulated fp16 ones are live on every box --
+; the host stubs and every cc kernel storing a bf16 node. `single_to_bfloat16` and the vector
+; `OCANNL_VEC_NARROW_BFLOAT16` over all 2^32 f32 bit patterns against a rounding oracle read off the
+; format, NaNs held to their quieted, sign-keeping image; `bfloat16_to_single` over all 65536 codes.
+; The C is the table's own text, emitted by gen_codec_header with no switch forced; the sweep also
+; runs the pre-gh-1069 rounding arithmetic as its negative control.
+
+(rule
+ ; ocannl-backend: none -- stdlib-only header generator; no configuration or backend selection.
+ (target bf16_codec.h)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{exe:gen_codec_header.exe}
+    --guard
+    BF16_CODEC_H
+    bfloat16_to_single
+    single_to_bfloat16
+    OCANNL_VEC_WIDEN_BFLOAT16
+    OCANNL_VEC_NARROW_BFLOAT16))))
+
+(executable
+ (name bf16_codec_exhaustive)
+ (modules bf16_codec_exhaustive)
+ (libraries base stdio unix arrayjit.verdict test_utils)
+ (foreign_stubs
+  (language c)
+  (names bf16_codec_exhaustive_stubs)
+  (extra_deps bf16_codec.h)))
+
+(rule
+ ; ocannl-backend: none -- links no backend; the stubs compile the bf16 converters' C text and call
+ ; them directly, with no kernel compiled and no device opened.
+ (alias slow-bf16_codec_exhaustive)
+ (package neural_nets_lib)
+ (locks ocannl_training_test)
+ (deps
+  (alias slow-env_spelling_gate)
+  bf16_codec_exhaustive.expected
+  ocannl_config)
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     bf16_codec_exhaustive.actual
+     (run %{dep:bf16_codec_exhaustive.exe}))
+    (diff bf16_codec_exhaustive.expected bf16_codec_exhaustive.actual)))))
 
 ; gh-ocannl-438 follow-up: the repository's shell scripts parse. Neither `dune build @check` nor
 ; `dune runtest` looks at shell otherwise, while `scripts/setup-ocaml-env.sh` is the SessionStart
@@ -5938,6 +6038,53 @@
  (deps ocannl_config operand_key_ratchet.exe)
  (action
   (run %{test} %{dep:operand_key_ratchet.exe})))
+
+; gh-ocannl-1015: every file naming one of the virtualizer's rejection codes, the checklist a change
+; to pipeline order reads -- whether a code can fire is decided by the passes ahead of its raise
+; site, and a stale "cannot fire" once had six copies nobody could list. The codes are derived from
+; the library sources; the boundary test's phase table is held to the functions minting them.
+; Same arrangement as ll_test_ratchet.
+
+(executable
+ (name nonvirtual_code_inventory)
+ (modules nonvirtual_code_inventory)
+ (libraries base stdio test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- reads library sources, docs and tests without running a backend.
+ (target nonvirtual_code_inventory.actual)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (sandbox always)
+  (source_tree ../..))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:nonvirtual_code_inventory.exe}
+    %{workspace_root}
+    %{dep:nonvirtual_code_inventory.exe}
+    %{target}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-nonvirtual_code_inventory)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff nonvirtual_code_inventory.expected nonvirtual_code_inventory.actual)))
+
+(test
+ ; ocannl-backend: none -- synthetic source cases and child scanner invocations.
+ (name nonvirtual_code_scan_cases)
+ (package neural_nets_lib)
+ (modules nonvirtual_code_scan_cases)
+ (libraries base stdio unix test_utils arrayjit.verdict)
+ (deps ocannl_config nonvirtual_code_inventory.exe)
+ (action
+  (run %{test} %{dep:nonvirtual_code_inventory.exe})))
 
 (test
  ; ocannl-backend: none -- synthetic source/Dune cases and child scanner invocations.

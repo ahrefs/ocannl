@@ -174,12 +174,16 @@ config_usage_scan.ml: [scanner-refusal:13b4153d0202d6c0c37807c3b9149ec9] ocannl_
 config_usage_scan.ml: [scanner-refusal:e457cc60db51565a141d184de6993035] ocannl_config.reference (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:e325a76c47f652bc02203717ce08c44a] checked-in debug config (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 dead_export_scan.ml has exactly the explicitly assigned refusal controls: true
-dead_export_scan.ml: [scanner-refusal:ab97825eb17bf92bf92973b99e0849ff] mli-less implementation modules (direct failure) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
+dead_export_scan.ml: [scanner-refusal:0379aebd6902dcef1b8a879a586303c6] mli-less implementation modules (direct failure) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
 dead_export_scan.ml: [scanner-refusal:20f449385ebca8a7a25b2d306c8e0f44] scan cannot vouch (direct failure) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
+dead_export_scan.ml: [scanner-refusal:a2a944c677a0439ea6a8b98ef3decc70] its mention counts (direct failure) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
 dead_export_scan.ml: [scanner-refusal:085de8c521f251df70b65fc6454dfdad] OCaml source does (direct failure) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
 dead_export_scan.ml: [scanner-refusal:e8c85fd2a3138c8fe3283ab67595826c] zero-reference implicit export (claim) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
 dead_export_scan.ml: [scanner-refusal:8e094223fc3e55912db0c3f53c9fcaca] named dead-export exemptions (claim) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
 dead_export_scan.ml: [scanner-refusal:e32dfff95d976581bde669214a7e6415] dead-export exemption remains (claim) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
+dead_export_scan.ml: [scanner-refusal:648c21e86192530edfa91eb57a98cf3c] every type mentioned (claim) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
+dead_export_scan.ml: [scanner-refusal:1196acbcd8267dcdc62af2676f1a223e] named unmentioned-type exemptions (claim) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
+dead_export_scan.ml: [scanner-refusal:2bb5b26c546587c6cb8afce38d28f8b4] unmentioned-type exemption remains (claim) is catalogued beside dead_export_scan.expected, dead_export_scan_control.expected: true
 digest_completeness.ml has exactly the explicitly assigned refusal controls: true
 digest_completeness.ml: [scanner-refusal:7cab0a5763f4811f331a4aab327c6784] which the codegen-stage (direct failure) is catalogued beside config_scan_lexing.expected, digest_completeness.expected: true
 digest_completeness.ml: [scanner-refusal:fc3ef3788212f2d1f5a9d9a46be3ca38] keys classified more (direct failure) is catalogued beside config_scan_lexing.expected, digest_completeness.expected: true
@@ -342,6 +346,7 @@ env_var_deps.ml: [scanner-refusal:775f43c0a7dca22c07a091f603457c7a] another is r
 env_var_deps.ml: [scanner-refusal:87104dd3758037b44d4f5c8979a42039] per-module alias listed (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 ll_test_ratchet.ml has exactly the explicitly assigned refusal controls: true
 operand_key_ratchet.ml has exactly the explicitly assigned refusal controls: true
+nonvirtual_code_inventory.ml has exactly the explicitly assigned refusal controls: true
 ocamlformat_ignore_scan.ml has exactly the explicitly assigned refusal controls: true
 ocamlformat_ignore_scan.ml: [scanner-refusal:e1f2fc5fc55abe7d73725c939c81a516] ocamlformat-ignore ends in (claim) is catalogued beside ocamlformat_ignore_scan.expected: true
 ocamlformat_ignore_scan.ml: [scanner-refusal:d936cdade68aaf6cb4f1a8a0bfc17655] ocamlformat-ignore line contains (claim) is catalogued beside ocamlformat_ignore_scan.expected: true

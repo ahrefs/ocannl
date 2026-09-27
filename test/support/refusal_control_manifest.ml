@@ -16,6 +16,7 @@ let raw_entries =
   [
     ("ll_test_ratchet.ml", []);
     ("operand_key_ratchet.ml", []);
+    ("nonvirtual_code_inventory.ml", []);
     ( "atomic_file_rename_scan.ml",
       [
         "[scanner-refusal:7191f5e19a3640926ad61aeb2d7a349e] source-generation input has";
@@ -207,12 +208,16 @@ let raw_entries =
       ] );
     ( "dead_export_scan.ml",
       [
-        "[scanner-refusal:ab97825eb17bf92bf92973b99e0849ff] mli-less implementation modules";
+        "[scanner-refusal:0379aebd6902dcef1b8a879a586303c6] mli-less implementation modules";
         "[scanner-refusal:20f449385ebca8a7a25b2d306c8e0f44] scan cannot vouch";
+        "[scanner-refusal:a2a944c677a0439ea6a8b98ef3decc70] its mention counts";
         "[scanner-refusal:085de8c521f251df70b65fc6454dfdad] OCaml source does";
         "[scanner-refusal:e8c85fd2a3138c8fe3283ab67595826c] zero-reference implicit export";
         "[scanner-refusal:8e094223fc3e55912db0c3f53c9fcaca] named dead-export exemptions";
         "[scanner-refusal:e32dfff95d976581bde669214a7e6415] dead-export exemption remains";
+        "[scanner-refusal:648c21e86192530edfa91eb57a98cf3c] every type mentioned";
+        "[scanner-refusal:1196acbcd8267dcdc62af2676f1a223e] named unmentioned-type exemptions";
+        "[scanner-refusal:2bb5b26c546587c6cb8afce38d28f8b4] unmentioned-type exemption remains";
       ] );
     ( "digest_completeness.ml",
       [

@@ -71,9 +71,12 @@ f16->f16 k-split under Fp16_auto, direct scope: no cell reaches 2056 (the discri
 f16->f16 k-split under Fp16_auto, fragment scope: no cell reaches 2056 (the discriminator discriminates): true
 f16->f32 k-split, direct scope: the mixed intrinsic loads and stores d unconverted: true
 f16->f32 k-split, fragment scope: the f32 fragment stays resident with d unconverted: true
+the k-split inputs discriminate: narrowing per block and once give different bf16 values: true
 staged+tensorized Bf16_wide matmul equals the once-narrowed wide reference bitwise: true
-staged+tensorized default-policy uniform-bf16 matmul narrows between blocks (the discriminator discriminates): true
+staged+tensorized default-policy uniform-bf16 matmul narrows between blocks exactly where the backend keeps bf16 storage residency: true
 staged+tensorized Bf16_wide fragment residency converts d once: true
+swizzled staged twin under Bf16_wide and the default policy equals the once-narrowed wide reference bitwise: true
+swizzled staged twin keeps the same register fragment, fed through ldmatrix: true
 ta tensorized matmul matches the serial twin: true
 ta C-backend fallback matches bitwise: true
 ta tensorized structure as expected: true
