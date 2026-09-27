@@ -94,6 +94,15 @@ type routine = private {
           from the backend's name. On a backend that requests no workaround the accumulator sites
           are still reported, as {!Ir.C_syntax.Plain_accumulator}, with
           {!Ir.C_syntax.volatility_summary.requested} [= false]. *)
+  segments : Ir.Low_level.optimized list;
+      (** The kernel segments this compile shipped, one per kernel in launch order — the scheduled
+          code each kernel was generated from (gh-ocannl-1006). A field of the routine, beside
+          {!mma}, because it cannot be recovered from outside: a tuned routine's segments came out
+          of a [lowered_transform] that only the search saw, and re-lowering the computation yields
+          the default pipeline instead. What reads it is per-kernel attribution — the benchmark
+          report times each segment hermetically to find the kernel that dominates a step. Treat the
+          records as read-only: they are the routine's own IR, and a caller that compiles one again
+          copies it first. *)
 }
 (** A compiled computational routine ready for execution. The record is [private]: only {!compile}
     constructs routines — the ledger's identity and dependency tracking rely on that — while every
