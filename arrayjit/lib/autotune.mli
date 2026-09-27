@@ -1375,6 +1375,13 @@ val refine_queued_batch_depth_between :
     submit/sync overhead. Otherwise an unresolved pair requests a deeper retry and reports a [nan]
     wall. Exposed as the deterministic validation-policy seam for tests. *)
 
+val rescue_depth : observed:(int * float) list -> int option
+(** The depth of the one rescue probe a CUDA/HIP calibration makes before refusing a candidate whose
+    single launch owed it a batch but whose calibration settled at depth 1 (gh-ocannl-1098), from
+    every [(depth, minimum wall)] it measured: the shallowest batch over the target, projected
+    linearly down to the target, at least 2 and strictly shallower than that batch; [None] when no
+    depth lies between. Exposed so a test can tell the rescue from the probes before it. *)
+
 val sample_min : repeats:int -> sample:(unit -> timing_sample) -> timing_result
 (** Pure sampling-policy seam used by calibration and the timed loop (gh-ocannl-855). Takes at least
     [max 16 repeats] samples; after that floor is met, tops up until their accumulated

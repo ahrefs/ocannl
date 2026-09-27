@@ -50,6 +50,8 @@ a resolved calibration never settles on a batch whose launch work exceeds the ta
 a refitted crossing never settles past the batches it was checked against: true
 a kernel with a queue threshold below its provisional depth is rescued, timed within the target: true
 a refusal no rescue could lift carries its own reason, apart from the contention verdict: true
+the longest calibration path dispatches queue_calibration_max_probes probes: true
+the longest calibration path's last probe is the rescue, and it times the candidate: true
 every synthetic device's dispatches stay within time_routine's documented maximum: true
 
 == autotune_timing spelling ==

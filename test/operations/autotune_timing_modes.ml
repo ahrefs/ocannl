@@ -623,12 +623,55 @@ let () =
     device "fast, clean" ~fixed_ms:fast_fixed_ms ~launch_ms:fast_launch_ms (fun d ->
         fast_fixed_ms +. fast_launch_work d)
   in
+  (* The longest path [queue_calibration_max_probes] counts, walked by one device: the provisional
+     probe, four validations, a confirmation, its stall retry, a sampled shallower crossing, and the
+     rescue. Singles at 2.5 ms give provisional depth 4. Its probe (7 ms) and three validations read
+     under the target on a concave curve, so each fit projects one step deeper (6, 8, 10, 14). Past
+     depth 10 the cost jumps to a flat ~10.1 ms, so the fourth validation brackets the target at its
+     own depth and hands 14 to [confirm_or_scale]. The confirmation at 17 lands in a twelve-batch
+     stall over twice that base, so it is retried. The clean retry's fit puts the crossing at 12,
+     which is sampled there. Against 14 that sample fits a fixed term just under the target, a
+     crossing of one launch, and a settle at depth 1 the singles contradict. The rescue below the
+     shallowest over-target batch (12) reads within the target at 11. Every batch is under two
+     target-sized batches, so every probe takes all twelve minima, and the seven probes before the
+     sampled crossing spend ~898 ms: the wall budget ends nothing early. *)
+  let longest_clean d =
+    match d with
+    | 1 -> 2.5
+    | 4 -> 7.
+    | 6 -> 8.5
+    | 8 -> 9.25
+    | 10 -> 9.5
+    | 11 -> 9.75
+    | 12 -> 10.0859375
+    | 14 -> 10.1015625
+    | 17 -> 10.2421875
+    | d -> 16. *. Float.of_int d
+  in
+  let longest =
+    let stalled_batches = ref Autotune.queue_batch_probe_runs in
+    device "the longest calibration path" ~launch_ms:2.5 (fun d ->
+        if d = 17 && !stalled_batches > 0 then (
+          Int.decr stalled_batches;
+          20.25)
+        else longest_clean d)
+  in
   (* Consecutive batches at one depth are one probe, as [(depth, batches, wall)]. A stall retry at
      the confirmation depth merges with the confirmation it repeats, which can only hide a late
      start, never invent one. *)
   let probes c =
     List.group c.probes ~break:(fun (d, _) (d', _) -> d <> d')
     |> List.map ~f:(fun g -> (fst (List.hd_exn g), List.length g, List.sum (module Float) g ~f:snd))
+  in
+  (* The probes one at a time, as [(depth, minimum)]: a run at one depth split into chunks of
+     [queue_batch_probe_runs] batches. No probe takes more, so this never counts more probes than
+     started, and it separates a stall retry from the confirmation it repeats when both took all
+     their minima. *)
+  let probe_minima c =
+    List.group c.probes ~break:(fun (d, _) (d', _) -> d <> d')
+    |> List.concat_map ~f:(List.chunks_of ~length:Autotune.queue_batch_probe_runs)
+    |> List.map ~f:(fun g ->
+        (fst (List.hd_exn g), List.fold g ~init:Float.infinity ~f:(fun m (_, w) -> Float.min m w)))
   in
   let every_device =
     [
@@ -642,6 +685,7 @@ let () =
       ("16 ms a launch, low depth-2 probe", dip);
       ("fixed-dominated, jumping past depth 8", jump);
       ("fast, clean", converging);
+      ("the longest calibration path", longest);
     ]
   in
   (* The last probe is exempt: it may be the rescue, which is charged to no budget because its depth
@@ -709,6 +753,22 @@ let () =
     && Option.is_some (Autotune.admitted_timing_ms threshold.reading));
   p "a refusal no rescue could lift carries its own reason, apart from the contention verdict"
     (stalled.reading.unbatched && not stalled.reading.contended);
+  (* The bound is reached, not exceeded: the control flow's longest path is exactly
+     [queue_calibration_max_probes] long, so enforcing the count cuts no path short. *)
+  let longest_probes = probe_minima longest in
+  if List.length longest_probes <> Autotune.queue_calibration_max_probes then
+    Stdio.eprintf "  the longest calibration path: %d probes at depths %s\n%!"
+      (List.length longest_probes)
+      (String.concat ~sep:", " (List.map longest_probes ~f:(fun (d, _) -> Int.to_string d)));
+  p "the longest calibration path dispatches queue_calibration_max_probes probes"
+    (List.length longest_probes = Autotune.queue_calibration_max_probes);
+  p "the longest calibration path's last probe is the rescue, and it times the candidate"
+    (match List.split_n longest_probes (List.length longest_probes - 1) with
+    | earlier, [ (last_depth, _) ] ->
+        Option.equal Int.equal (Autotune.rescue_depth ~observed:earlier) (Some last_depth)
+        && longest.settled_depth = last_depth
+        && Option.is_some (Autotune.admitted_timing_ms longest.reading)
+    | _ -> false);
   (* [time_routine]'s documented queued maximum, over every synthetic device in this file: a warmup
      and at most 64 synchronized singles, at most [queue_calibration_max_probes] probes of at most
      [queue_batch_probe_runs] batches, and a timed window of at most [max 64 repeats] batches, every
@@ -725,7 +785,7 @@ let () =
     "  (not part of the golden) most dispatches of any synthetic device: %d, probes %d\n%!"
     (List.fold !synthetic_calls ~init:0 ~f:(fun m (_, c) -> Int.max m c.all_launches))
     (List.fold !synthetic_calls ~init:0 ~f:(fun m (_, c) ->
-         Int.max m (List.length (List.group c.probes ~break:(fun (d, _) (d', _) -> d <> d')))))
+         Int.max m (List.length (probe_minima c))))
 
 (* {1 The setting's spelling} *)
 
