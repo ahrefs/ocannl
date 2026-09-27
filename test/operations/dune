@@ -4531,7 +4531,7 @@
     (diff tune_ship_arm.expected tune_ship_arm.actual)))))
 
 (test
- ; gh-ocannl-1061: the tuner's progress lines, with a candidate line after every attempt.
+ ; gh-ocannl-1061: the tuner's progress lines, with a candidate line at every attempt.
  (name autotune_progress)
  (package neural_nets_lib)
  (deps

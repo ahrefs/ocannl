@@ -4330,14 +4330,18 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                   (Printf.sprintf "phase=%s candidates=%d timed=%d %s %s" phase n !n_timed
                      (progress_costs ()) (progress_best ())))
           in
+          (* Written as an attempt STARTS, naming it: a search killed inside a long candidate then
+             leaves the candidate it was in (or, under the rate bound, the one it was in started
+             within an interval of the last line), and the costs of everything before it. Counted
+             before the attempt too, so a fatal candidate -- which writes [search_done] from inside
+             itself and raises -- is in the closing record's [attempts]. *)
           let try_spec spec =
-            (* Counted before the attempt: a fatal candidate emits [search_done] from inside it and
-               raises, and that closing record must count the attempt its time is in. *)
             Int.incr progress_attempts;
             Int.incr progress_tried;
-            let result = try_spec spec in
-            if progress_due () then progress_line "candidate" (progress_where ());
-            result
+            if progress_due () then
+              progress_line "candidate"
+                (Printf.sprintf "%s attempt=%S" (progress_where ()) (spec_label spec));
+            try_spec spec
           in
           let block_size_presets mk =
             mk None

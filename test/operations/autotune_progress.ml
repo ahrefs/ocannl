@@ -1,9 +1,9 @@
 (* gh-ocannl-1061: the tuner's progress lines, the cost record a killed search leaves behind.
 
    Runs [Train.tune_placements] (both arms, one beam round each, a one-flip refinement budget) with
-   [--ocannl_autotune_progress=0] -- a candidate line after every candidate attempt -- while stderr
-   is routed into a file, then reads the [autotune-progress:] lines back and checks them against
-   what the search reported through its callbacks: the format every line keeps, one
+   [--ocannl_autotune_progress=0] -- a candidate line as every candidate attempt starts -- while
+   stderr is routed into a file, then reads the [autotune-progress:] lines back and checks them
+   against what the search reported through its callbacks: the format every line keeps, one
    [search_start]/[search_done] pair per report and in the same order, the outcome and timed count
    of each [search_done] equal to its report's, one candidate line per attempt, each phase's last
    candidate line at [tried=N/N], and the arm and flip framing around the searches. Timings vary run
@@ -146,14 +146,11 @@ let () =
       && Option.equal Int.equal (int_field f "timed") (Some r.candidates_timed));
   let candidates s = List.filter s ~f:(fun (ev, _) -> String.equal ev "candidate") in
   (* With a 0 s interval every attempt prints. *)
-  (* A search that died counts the fatal attempt, which gets no line: its [search_done] is written
-     from inside it. *)
   p_all "each search printed one candidate line per attempt it reports" searches ~f:(fun s ->
       let _, done_fields = List.last_exn s in
-      let died = Option.equal String.equal (field done_fields "outcome") (Some "search-died") in
-      Option.equal Int.equal
-        (int_field done_fields "attempts")
-        (Some (List.length (candidates s) + if died then 1 else 0)));
+      Option.equal Int.equal (int_field done_fields "attempts") (Some (List.length (candidates s))));
+  p_all "every candidate line names the attempt it starts" (List.concat_map searches ~f:candidates)
+    ~f:(fun (_, f) -> Option.exists (field f "attempt") ~f:(Fn.non String.is_empty));
   p_all "each search's candidate compile and timing seconds fit within its elapsed time" dones
     ~f:(fun (_, f) ->
       match (float_field f "compile_s", float_field f "timing_s", float_field f "elapsed_s") with

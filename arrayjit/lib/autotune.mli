@@ -912,7 +912,7 @@ val no_search_report : timing:timing_mode -> report
 
     A search's cost record, for a search that may be killed before it reports: with config
     [autotune_progress] on ([true] for a candidate line at most every 30 s, or a non-negative number
-    of seconds for that interval, [0] meaning after every candidate; [false], the default, prints
+    of seconds for that interval, [0] meaning at every candidate; [false], the default, prints
     nothing), {!tune} and {!Train.tune_placements} write single lines to stderr, each flushed as it
     is written, of the form
 
@@ -927,10 +927,14 @@ val no_search_report : timing:timing_mode -> report
     - [phase] ({!tune}, one per phase with a known size): [routine], [elapsed_s], [phase] ([seeds]
       or [round<k>]), [candidates] (the phase's total), [timed], [attempts], [compile_s],
       [timing_s], [best_ms], [best].
-    - [candidate] ({!tune}, after a candidate attempt, at most once per interval): [routine],
-      [elapsed_s], [phase] ([seeds], [recombine] or [round<k>]), [tried=<done>/<total>] ([?] when
-      the phase's total is not known up front), [timed], [attempts], [compile_s], [timing_s],
-      [best_ms], [best].
+    - [candidate] ({!tune}, as a candidate attempt starts, at most once per interval): [routine],
+      [elapsed_s], [phase] ([seeds], [recombine] or [round<k>]), [tried=<k>/<total>] (the ordinal of
+      the attempt starting within its phase; [?] when the phase's total is not known up front),
+      [timed], [attempts] (this one included), [compile_s], [timing_s], [best_ms], [best] (all as of
+      the attempt's start), and [attempt], the starting candidate's label. A search killed inside a
+      candidate is therefore inside the one its last [candidate] line names, or -- under a nonzero
+      interval -- one that started within an interval of the search's last line of any kind (a
+      phase's first candidate starts right after its [phase] line).
     - [search_done] ({!tune}, exactly once per call, with its report): [routine], [elapsed_s],
       [outcome] ({!outcome_name}), [timed], [contended], [failed], [rounds], [attempts],
       [compile_s], [timing_s], [best_ms], [best].
@@ -944,8 +948,7 @@ val no_search_report : timing:timing_mode -> report
     [elapsed_s] is seconds since that search (or arm) started; [compile_s] and [timing_s] are the
     parts of it spent in candidate compiles and in candidate timing windows, [attempts] the
     candidates attempted so far (bound-pruned, declined, deduplicated and timed alike), counting one
-    whose fatal failure ended the search -- that attempt gets no [candidate] line, since the
-    search's [search_done] is written from inside it. *)
+    whose fatal failure ended the search. *)
 
 val progress_enabled : unit -> bool
 (** Whether config [autotune_progress] turns the progress lines on. *)
