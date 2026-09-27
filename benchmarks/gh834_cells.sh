@@ -6,20 +6,22 @@
 #   benchmarks/gh834_cells.sh BACKEND OUT FIXTURE CAP STEP...
 #
 #   BACKEND  cc | hip | cuda | metal, pinned on every command line (out-ranks every other source).
-#   OUT      results directory, created, and refused unless empty. OUT/driver.log records everything
-#            this script prints
-#            (provenance, the device state around each step, each step's exit and wall); each
-#            measurement step also writes OUT/<step>.out and OUT/<step>.err.
+#   OUT      results directory, created, and refused unless empty. OUT/driver.log records
+#            everything this script prints (provenance, the device state around each step, each
+#            step's exit and wall); each measurement step also writes OUT/<step>.out and .err.
 #   FIXTURE  absolute path of a gpt2_mini.safetensors (only the session steps read it).
 #   CAP      wall cap in seconds for the build and for each measurement step; a capped step's
-#            whole process group is terminated (exit 124) and its trace lines stand
-#            as a lower bound.
+#            whole process group is terminated.
 #   STEP     build | provenance | crown-fwd | crown-rev | session-isolated | session-queued
 #            A measurement step needs `build` and `provenance` earlier in the same invocation:
 #            _build/ is ignored, so the clean-tree check cannot vouch for binaries an earlier checkout
 #            left there, and a measurement is only evidence beside the identity it was taken on.
-# Exit: 0 all steps complete; 1 a step failed or lacked its evidence; 124 no failure but a step
-# hit CAP (its record is a lower bound); 125 a process outlived its step; 130 interrupted; 2 usage.
+# Exit: 0 all steps complete; 1 a step failed or lacked its evidence; 124 no failure but a SESSION
+# hit CAP after its search had begun (its record is a lower bound); 125 a process outlived its step;
+# 130 interrupted; 2 usage. A crown or build that hits CAP, or a session capped before its first
+# candidate attempt, is a failure: none of them leaves a partial measurement.
+# The environment is cleared of OCANNL_*, BENCH_* and the OpenMP controls (OMP_*, GOMP_*, KMP_*);
+# device-selection variables (CUDA_*, HIP_*, ROCR_*, HSA_*, ...) are kept and recorded.
 #
 # crown-{fwd,rev}: gh-ocannl-833's instrument, bin/projection_shape_bench.exe 200 8 d <order>
 #   seeds -- the out-projection sites (group d), every seeded candidate ranked by the batched
@@ -34,8 +36,11 @@ set -u
 # command line, so an exported OCANNL_* or BENCH_* could only contaminate every cell consistently.
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(OCANNL_[A-Z0-9_]*\)=.*/\1/p')
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(BENCH_[A-Z0-9_]*\)=.*/\1/p')
+# The CPU backend's OpenMP controls are treatment too (OMP_NUM_THREADS=1 turns the cc machine
+# serial, and cc_backend keys the schedule cache on them), so the cells run the backend's defaults.
+while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(\(OMP\|GOMP\|KMP\)_[A-Z0-9_]*\)=.*/\1/p')
 
-[ $# -ge 5 ] || { sed -n '5,13p' "$0" >&2; exit 2; }
+[ $# -ge 5 ] || { sed -n '/^# Usage/,/^# crown-/p' "$0" | sed '$d' >&2; exit 2; }
 backend=$1 out=$2 fixture=$3 cap=$4
 shift 4
 case $backend in cc | hip | cuda | metal) ;; *) echo "gh834: unknown backend $backend" >&2; exit 2 ;; esac
@@ -48,8 +53,12 @@ if [ -e "$out" ] && [ -n "$(ls -A "$out" 2>/dev/null)" ]; then
 fi
 mkdir -p "$out" || exit 2
 out=$(cd "$out" && pwd -P)
-# Everything printed from here on is also kept with the results it describes.
-exec > >(tee -a "$out/driver.log") 2>&1
+# Everything printed from here on is written to OUT/driver.log synchronously -- an asynchronous tee
+# could still be writing when the caller archives OUT, and its failures would go unobserved -- and
+# the whole log is replayed to the caller's stdout on exit. Follow a live run with tail -f.
+exec 3>&1
+exec >>"$out/driver.log" 2>&1 || exit 2
+trap 'cat "$out/driver.log" >&3' EXIT
 root=$(cd "$(dirname "$0")/.." && pwd -P)
 # The runners read the nearest ocannl_config; benchmarks/ has the suite's own.
 cd "$root/benchmarks" || exit 2
@@ -62,6 +71,8 @@ if [ -n "$dirty" ]; then
   echo "$dirty" >&2
   exit 2
 fi
+# Device selection is left to the caller, and recorded, so the archive says which device was visible.
+env | grep -E '^(CUDA|HIP|ROCR|HSA|GPU_DEVICE|MTL|METAL)[A-Z0-9_]*=' | sed 's/^/env /'
 echo "config benchmarks/ocannl_config sha256 $(shasum -a 256 ocannl_config | cut -d' ' -f1):" \
   "$(grep -v '^#' ocannl_config | grep -v '^$' | tr '\n' ' ')"
 
@@ -166,8 +177,6 @@ step() {
 }
 
 status=0 capped_any=
-# A step's nonzero exit is a failure unless it is the cap's 124, which keeps its lower bound.
-record_rc() { if [ "$1" -eq 124 ]; then capped_any=1; else status=1; fi; }
 # A step that exited 0 without a line its conclusion rests on fails the run rather than publishing
 # an incomplete record (a regressed hook, a config source that did not take).
 require() {
@@ -249,7 +258,7 @@ for s in "$@"; do
       require "$s" out '^== gh-ocannl-755: candidate ranking'
       require "$s" out '^   crown: '
       require "$s" err "^Found $backend, commandline --ocannl_backend=$backend\$"
-    else record_rc $?; fi
+    else status=1; fi
     # The ranking table and the crown verdicts, which are the gh-ocannl-833 deliverable.
     sed -n '/== gh-ocannl-755/,$p' "$out/$s.out"
     grep 'Found .*--ocannl_backend=' "$out/$s.err" | sort -u
@@ -269,7 +278,18 @@ for s in "$@"; do
       require "$s" err "^Found $backend, commandline --ocannl_backend=$backend\$"
       require "$s" err "^Found $mode, commandline --ocannl_autotune_timing=$mode\$"
       require_complete_session "$s"
-    else record_rc $?; fi
+    else
+      rc=$?
+      # A capped session is a lower bound only if the search had begun under the pinned treatment;
+      # a cap spent loading the fixture or building the graph measured no search at all.
+      if [ "$rc" -eq 124 ] && grep -q '^timing-trace: attempt ' "$out/$s.err" &&
+        grep -q "^Found $backend, commandline --ocannl_backend=$backend\$" "$out/$s.err"; then
+        capped_any=1
+      else
+        [ "$rc" -eq 124 ] && echo "== step $s: capped before its search began; not a lower bound"
+        status=1
+      fi
+    fi
     # The result line (compile_s is the search wall) and the trace's last word: the summary on a
     # completed run, the running totals of the last timing call on a capped one.
     cat "$out/$s.out"
