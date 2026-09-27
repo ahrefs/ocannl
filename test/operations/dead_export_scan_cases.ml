@@ -258,3 +258,103 @@ let () =
   let extension_counts = Scan.counts ~exports:fixture_exports extensions in
   Verdict.p "an export referenced only through an extension point is not reported dead"
     (Hashtbl.find_exn extension_counts "Sample.equal_named" > 0)
+
+(* gh-ocannl-1009: the type census. The fixture's [example_train_result] is the record that
+   motivated it -- live-looking labels, no mention of its name anywhere. *)
+let type_fixture =
+  {|
+type example_train_result = { inputs : int; outputs : int }
+type tree = Leaf | Node of tree list
+type annotated = A
+type interfaced = I
+type prose = P
+type by_label = { only_label : int }
+type by_constructor = Only_constructor
+type derived = D [@@deriving equal]
+type derived_sexp = S [@@deriving sexp_of]
+type in_extension = E
+type in_with = W
+type extensible = ..
+type _private = X
+let own_use (x : annotated) = x
+module Nested = struct
+  type nested_only = N
+end
+|}
+
+let type_exports = Scan.type_exports_of_source ~source:"arrayjit/lib/sample.ml" type_fixture
+
+let type_counts ?(interfaces = []) sources =
+  Scan.type_mention_counts ~type_exports
+    ~implementations:(("arrayjit/lib/sample.ml", type_fixture) :: sources)
+    ~interfaces
+
+let mentions counts name = Hashtbl.find_exn counts ("Sample." ^ name)
+
+let () =
+  Verdict.p "top-level types are censused; underscore-prefixed and nested ones are not"
+    (List.equal String.equal
+       (List.map type_exports ~f:Scan.type_export_key)
+       [
+         "Sample.annotated";
+         "Sample.by_constructor";
+         "Sample.by_label";
+         "Sample.derived";
+         "Sample.derived_sexp";
+         "Sample.example_train_result";
+         "Sample.extensible";
+         "Sample.in_extension";
+         "Sample.in_with";
+         "Sample.interfaced";
+         "Sample.prose";
+         "Sample.tree";
+       ]);
+  let consumers =
+    [
+      ( "consumer.ml",
+        "(* A comment naming Sample.prose and example_train_result. *)\n\
+         (** A docstring naming [prose]. *)\n\
+         let s = \"prose example_train_result\"\n\
+         let r = { Other.inputs = 1; outputs = 2 }\n\
+         let l = { Sample.only_label = 1 }\n\
+         let c = Sample.Only_constructor\n\
+         let e = Sample.equal_derived\n\
+         let x = Sample.sexp_of_derived_sexp\n\
+         let f = [%compare: Sample.in_extension]\n\
+         module type S = sig type t end with type t = Sample.in_with\n\
+         type Sample.extensible += More\n" );
+    ]
+  in
+  let counts =
+    type_counts ~interfaces:[ ("other.mli", "val f : Sample.interfaced -> unit\n") ] consumers
+  in
+  Verdict.p "the dead record is detected though another record shares its label names"
+    (mentions counts "example_train_result" = 0);
+  Verdict.p "a recursive type does not credit itself" (mentions counts "tree" = 0);
+  Verdict.p "comments, docstrings, and strings do not mention a type" (mentions counts "prose" = 0);
+  Verdict.p "labels and constructors are not resolved to their type, by stated boundary"
+    (mentions counts "by_label" = 0 && mentions counts "by_constructor" = 0);
+  Verdict.p "an annotation in the defining source mentions the type"
+    (mentions counts "annotated" > 0);
+  Verdict.p "an interface signature mentions the type" (mentions counts "interfaced" > 0);
+  Verdict.p_all "a spelled derived value mentions its type" [ "derived"; "derived_sexp" ]
+    ~f:(fun name -> mentions counts name > 0);
+  Verdict.p_all "extension payloads, with-constraints, and type extensions mention the type"
+    [ "in_extension"; "in_with"; "extensible" ] ~f:(fun name -> mentions counts name > 0);
+  let unqualified =
+    type_counts [ ("opened.ml", "open Sample\nlet f (x : example_train_result) = x\n") ]
+  in
+  Verdict.p "an unqualified mention under an open counts"
+    (mentions unqualified "example_train_result" > 0);
+  let same_name =
+    type_counts
+      [
+        ("elsewhere.ml", "type example_train_result = int\nlet f (x : example_train_result) = x\n");
+      ]
+  in
+  Verdict.p "a same-named type elsewhere credits by name, conservatively"
+    (mentions same_name "example_train_result" > 0);
+  Verdict.p "dune's preprocessed interface beside its source is not an interface source"
+    (List.equal String.equal
+       (Scan.interfaces_among [ "a.mli"; "a.pp.mli"; "b.pp.mli"; "c.ml" ])
+       [ "a.mli"; "b.pp.mli" ])

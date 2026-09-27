@@ -2690,7 +2690,8 @@
 
 ; gh-ocannl-806: modules without interfaces implicitly export every top-level binding. The live
 ; scan ratchets every source-declared value in direct modules under arrayjit/lib, tensor and lib
-; against external qualified, aliased, opened, or included references. The matching policy is pure in
+; against external qualified, aliased, opened, or included references, and (gh-ocannl-1009) every
+; top-level type declaration against a mention of its name anywhere but its own declaration. The matching policy is pure in
 ; test/support/dead_export_scan.ml, so these cases exercise it against synthetic violations and
 ; near misses rather than trusting today's usually-clean repository as its own control.
 
@@ -2748,7 +2749,7 @@
   (diff dead_export_scan.expected dead_export_scan.actual)))
 
 (rule
- ; ocannl-backend: none -- runs the scanner's three synthetic direct-refusal branches.
+ ; ocannl-backend: none -- runs the scanner's four synthetic direct-refusal branches.
  (target dead_export_scan_control.actual)
  (package neural_nets_lib)
  (deps ocannl_config dead_export_scan.ml)

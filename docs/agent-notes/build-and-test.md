@@ -517,6 +517,14 @@ that they earn a lookup rather than always-loaded space.
   by other PPX expansions or brought into the defining module by `include` are outside this first
   cut. Every current zero-reference export is an exact stale-checked exemption: adding an `.mli`,
   removing the value, or giving it a detected caller requires deleting its exemption.
+  Top-level TYPE declarations in the same modules (gh-ocannl-1009) are a coarser census: a type
+  whose name appears in no type path anywhere in the tree (`.mli` signatures included) outside its
+  own declaration, and in no spelling of a value its deriving generates, is reported. It is a name
+  count, never a resolution: labels and constructors are not resolved to their type, so a type
+  built and matched only through them is a false refusal exempted with that reason, while any
+  same-named type path elsewhere credits it. Crediting label or constructor names instead fails on
+  the motivating record: `Train.example_train_result`'s labels include `inputs` and
+  `used_memory`, names the tree spells hundreds of times, so it would have been credited and missed.
 - A documentation comment survives into the parse tree as an `[@@@ocaml.doc "…"]` attribute holding
   a STRING, so an iterator hands it to an expression hook exactly like code would (verified by
   removing the guard — the prose cases flip to findings). Any scan over string literals must

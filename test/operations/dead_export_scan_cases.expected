@@ -26,3 +26,15 @@ include counts as a reference to every re-exported value: true
 a synthetic zero-reference export is detected: true
 a synthetic zero-reference derived export is detected: true
 an export referenced only through an extension point is not reported dead: true
+top-level types are censused; underscore-prefixed and nested ones are not: true
+the dead record is detected though another record shares its label names: true
+a recursive type does not credit itself: true
+comments, docstrings, and strings do not mention a type: true
+labels and constructors are not resolved to their type, by stated boundary: true
+an annotation in the defining source mentions the type: true
+an interface signature mentions the type: true
+a spelled derived value mentions its type: true
+extension payloads, with-constraints, and type extensions mention the type: true
+an unqualified mention under an open counts: true
+a same-named type elsewhere credits by name, conservatively: true
+dune's preprocessed interface beside its source is not an interface source: true

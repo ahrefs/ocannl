@@ -16,8 +16,19 @@
    invisibly to a source-level census. Other PPX-generated values and values brought into the
    defining module by [include] are outside this source-level census.
 
-   Every pre-existing zero-reference value is an exact [Module.value] exemption below. A new
-   implicit export fails rather than silently extending that baseline; an exemption that gains a
+   Types (gh-ocannl-1009) are censused by one conservative rule: a top-level type declaration in the
+   same modules whose NAME is mentioned nowhere in the tree but its own declaration -- in no type
+   path of any implementation or interface, and in no spelled value its deriving generates -- is
+   reported. That is how [Train.example_train_result] would have been caught: it shipped for a year
+   with its name in two proposals' prose and nowhere else. The rule's boundary is stated, not
+   accidental. It is a name count, not a resolution: a record label or variant constructor is never
+   resolved to its type, so a type used only through them reads as unmentioned (a loud false
+   refusal, exempted with that reason), and any same-named type path anywhere credits it (a quiet
+   false negative). Prose never mentions a type, so a stale doc comment cannot keep one alive.
+
+   Every pre-existing zero-reference value is an exact [Module.value] exemption below, and every
+   pre-existing unmentioned type an exact [Module.type_name] one. A new implicit export or
+   unmentioned type fails rather than silently extending that baseline; an exemption that gains a
    reference also fails stale, so cleanup cannot leave a permanent hole. *)
 
 open Base
@@ -398,6 +409,31 @@ let exempt_zero_reference_exports =
     "Train.run_once";
   ]
 
+(* gh-ocannl-1009: the type census, filled from its first run. Every entry is a live type the
+   name-occurs-once rule cannot see live: its values are built and taken apart through its
+   constructors or record labels alone -- rank-2 wrappers such as [Ndarray.apply_as_bigarray]
+   destructured as [{ f }], variants matched by constructor -- and the census does not resolve a
+   constructor or label to its type (the support module's header says why). Annotating a use site
+   with the type's name would take the entry off this list. *)
+let exempt_unmentioned_types =
+  [
+    "Mixed_prec.twin_placement";
+    "Ndarray.apply2_as_bigarray";
+    "Ndarray.apply_as_bigarray";
+    "Ndarray.apply_with_prec";
+    "Nn_blocks.position_embedding";
+    "Ops.apply_prec";
+    "Ops.prec_family";
+    "Parallel.handle";
+    "Parallel.reduction";
+    "Train.placement_arm";
+    "Utils.config_source";
+    "Utils.config_token";
+    "Utils.env_var_class";
+    "Utils.requirement";
+    "Utils.settings";
+  ]
+
 let in_scan_root path =
   let directory = Stdlib.Filename.dirname path in
   List.mem [ "arrayjit/lib"; "tensor"; "lib" ] directory ~equal:String.equal
@@ -416,6 +452,16 @@ let exports_or_refusal ~fail ~source contents =
         (Printf.sprintf "%s does not parse as OCaml, so this scan cannot vouch for it: %s" source
            (Exn.to_string exn));
       []
+
+let type_counts_or_refusal ~fail ~type_exports ~implementations ~interfaces =
+  match Scan.type_mention_counts ~type_exports ~implementations ~interfaces with
+  | counts -> counts
+  | exception exn ->
+      fail
+        (Printf.sprintf
+           "a source of the type census does not parse, so its mention counts are unknown: %s"
+           (Exn.to_string exn));
+      Hashtbl.create (module String)
 
 let references_or_refusal ~fail ~exports ~sources =
   match Scan.references ~exports ~sources with
@@ -449,6 +495,14 @@ let refusal_control () =
       ignore
         (references_or_refusal ~fail ~exports ~sources:[ ("consumer.ml", "let =") ]
           : Scan.reference list));
+  let type_exports = Scan.type_exports_of_source ~source:"arrayjit/lib/sample.ml" "type t = T" in
+  case "an invalid interface reaches the type-census refusal"
+    ~format:"a source of the type census does not parse, so its mention counts are unknown: %s"
+    (fun fail ->
+      ignore
+        (type_counts_or_refusal ~fail ~type_exports ~implementations:[]
+           ~interfaces:[ ("consumer.mli", "val") ]
+          : (string, int) Hashtbl.t));
   Test_utils.Refusal_control_manifest.print source
 
 let () =
@@ -514,4 +568,45 @@ let () =
     (Set.length exemptions = List.length exempt_zero_reference_exports);
   Verdict.p_empty "every named dead-export exemption remains necessary"
     ~over:exempt_zero_reference_exports stale;
+  let type_exports =
+    List.concat_map implementations ~f:(fun (source, contents) ->
+        Scan.type_exports_of_source ~source contents)
+  in
+  let interface_sources =
+    Scan.interfaces_among (List.map arguments ~f:fst)
+    |> List.map ~f:(fun source -> (source, In_channel.read_all (Map.find_exn on_disk source)))
+  in
+  let type_counts =
+    type_counts_or_refusal ~fail:Verdict.fail ~type_exports ~implementations:sources
+      ~interfaces:interface_sources
+  in
+  let type_exemptions = Set.of_list (module String) exempt_unmentioned_types in
+  let type_offenders =
+    List.filter type_exports ~f:(fun export ->
+        let key = Scan.type_export_key export in
+        Option.value_map (Hashtbl.find type_counts key) ~default:false ~f:(( = ) 0)
+        && not (Set.mem type_exemptions key))
+  in
+  let type_stale =
+    List.filter exempt_unmentioned_types ~f:(fun key ->
+        match Hashtbl.find type_counts key with Some 0 -> false | Some _ | None -> true)
+  in
+  List.iter type_offenders ~f:(fun (export : Scan.type_export) ->
+      eprintf
+        "%s:%d: type %s is mentioned nowhere but its own declaration; add an .mli that hides or \
+         deliberately publishes it, remove it, or add the exact name to exempt_unmentioned_types \
+         with a reasoned decision\n"
+        export.source export.line (Scan.type_export_key export));
+  List.iter type_stale ~f:(fun key ->
+      eprintf
+        "%s is a stale unmentioned-type exemption: the type is now mentioned or no longer declared\n"
+        key);
+  eprintf "Censused %d top-level type declarations in the same modules.\n"
+    (List.length type_exports);
+  Verdict.p_empty "every type mentioned only by its own declaration is named" ~over:type_exports
+    type_offenders;
+  Verdict.p "named unmentioned-type exemptions are unique"
+    (Set.length type_exemptions = List.length exempt_unmentioned_types);
+  Verdict.p_empty "every named unmentioned-type exemption remains necessary"
+    ~over:exempt_unmentioned_types type_stale;
   Test_utils.Refusal_control_manifest.print "dead_export_scan.ml"
