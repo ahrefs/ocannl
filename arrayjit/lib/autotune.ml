@@ -3214,16 +3214,8 @@ let model_default ?name ?report ctx comp bindings =
                                 (lazy (build ((fc.LL.fc_tn, fa.LL.fa_flip) :: vector) rest)) ));
                     }
             in
-            let decisions vector =
-              List.fold (List.rev vector) ~init:([], [], [])
-                ~f:(fun (mat, inl, fp) ((tn : Ir.Tnode.t), (r : LL.reading)) ->
-                  match r with
-                  | `Materialize -> (tn :: mat, inl, fp)
-                  | `Inline -> (mat, tn :: inl, fp)
-                  | `Footprint -> (mat, inl, tn :: fp))
-            in
             let score vector =
-              let mat, inl, fp = decisions vector in
+              let mat, inl, fp = LL.partition_readings vector in
               match
                 Context.lowered_for_decisions ?name ~materialized:mat ~inline:inl ~footprint:fp ctx
                   comp bindings
@@ -3258,7 +3250,7 @@ let model_default ?name ?report ctx comp bindings =
               stats.Sspace.st_unscored stats.Sspace.st_fathomed;
             match best with
             | Some (vector, s) when not (List.is_empty vector) ->
-                let mat, inl, fp = decisions vector in
+                let mat, inl, fp = LL.partition_readings vector in
                 let names tns = String.concat ~sep:"," (List.map tns ~f:Ir.Tnode.debug_name) in
                 logf
                   "model_default: placement pick: materialize [%s], inline [%s], footprint [%s] \

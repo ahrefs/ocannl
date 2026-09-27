@@ -946,6 +946,13 @@ let reading_to_string : reading -> string = function
   | `Inline -> "inline"
   | `Footprint -> "footprint"
 
+let partition_readings readings =
+  List.fold_right readings ~init:([], [], []) ~f:(fun (tn, (r : reading)) (mat, inl, fp) ->
+      match r with
+      | `Materialize -> (tn :: mat, inl, fp)
+      | `Inline -> (mat, tn :: inl, fp)
+      | `Footprint -> (mat, inl, tn :: fp))
+
 type flip_alternative = { fa_flip : reading; fa_recompute_cost : int; fa_modeled : bool }
 [@@deriving sexp_of]
 (** One reading a search can flip a node to, with the recompute-cost bound of the recompute reading

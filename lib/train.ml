@@ -691,13 +691,9 @@ let placement_decision_lists ~embedded problem = function
   | Ir.Schedule_cache.Default -> ([], [], [])
   | Materialize_all -> (embedded, [], [])
   | Refined flips ->
-      List.fold_right flips ~init:([], [], [])
-        ~f:(fun { Ir.Schedule_cache.node; flip } (mat, inl, fp) ->
-          let tn = Ir.Schedule_cache.tn_of_ref problem node in
-          match flip with
-          | `Materialize -> (tn :: mat, inl, fp)
-          | `Inline -> (mat, tn :: inl, fp)
-          | `Footprint -> (mat, inl, tn :: fp))
+      Ir.Low_level.partition_readings
+        (List.map flips ~f:(fun { Ir.Schedule_cache.node; flip } ->
+             (Ir.Schedule_cache.tn_of_ref problem node, flip)))
 
 (** The placement-aware digest ({!Ir.Schedule_cache.canonicalize}) of the lowering the decision
     lists produce in the lineage the arms are searched in — [timing_ctx] when given, else [ctx] —
