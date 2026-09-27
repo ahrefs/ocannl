@@ -9,7 +9,7 @@ let () =
   let shared =
     List.filter
       (fun (key, _, _) -> not (String.starts_with ~prefix:"OCANNL_" key))
-      Builtins_definitions.builtins
+      Builtins_cc.builtins
   in
   let keys = List.map (fun (key, _, _) -> key) shared in
   List.iter

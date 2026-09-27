@@ -551,15 +551,15 @@ let config_file_occurrences ?(include_commented = false) ~path content =
 (* The cc prelude's [OCANNL_]-prefixed C macros share the environment namespace, and [Builtins_cc]
    owns that vocabulary, so the scan DERIVES it instead of listing its mentions: every macro the
    prelude [#define]s (its platform-detection block included) and every [OCANNL_]-prefixed key of
-   its [builtins] table. [Builtins_cc_table] is a build-time copy of [arrayjit/lib/builtins_cc.ml]
-   (the [gen_builtins] precedent), so the scan links no backend. A mention is a macro only in the C
+   its [builtins] table. [Builtins_cc] is the stdlib-only [arrayjit.builtins_cc] library (which
+   [gen_builtins] links too), so the scan links no backend. A mention is a macro only in the C
    spelling ([OCANNL_] then the upper-case name) outside a config file; a trailing-underscore family
    stem such as the one [cc_march_census] filters by names a macro when some derived macro extends
    it. A registered config key colliding with a macro is refused below, so the derivation can never
    absorb a real key. *)
 let builtin_macro_keys =
   let defined =
-    String.split_lines Builtins_cc_table.source
+    String.split_lines Builtins_cc.source
     |> List.filter_map ~f:(fun line ->
         Option.bind
           (String.chop_prefix (String.lstrip line) ~prefix:"#define ")
@@ -572,7 +572,7 @@ let builtin_macro_keys =
             String.chop_prefix (String.prefix name stop) ~prefix:"OCANNL_"))
   in
   let tabled =
-    List.filter_map Builtins_cc_table.builtins ~f:(fun (key, _, _) ->
+    List.filter_map Builtins_cc.builtins ~f:(fun (key, _, _) ->
         String.chop_prefix key ~prefix:"OCANNL_")
   in
   Set.of_list (module String) (List.map (defined @ tabled) ~f:String.lowercase)

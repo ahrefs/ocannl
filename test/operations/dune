@@ -5405,17 +5405,13 @@
 ; slip through (gh-ocannl-981). `float_to_half_emulated` over all 2^32 f32 bit patterns against the
 ; rounding oracle and, where the compiler has _Float16, the native cast; `half_to_float_emulated`
 ; over all 65536 codes. The converters are the definition table's own text: gen_codec_header emits
-; them into half_emulated.h with the native switch forced off, from a copy of builtins_cc.ml the way
-; arrayjit/lib/gen_builtins reads it.
-
-(rule
- (target codec_builtins_table.ml)
- (action
-  (copy %{project_root}/arrayjit/lib/builtins_cc.ml %{target})))
+; them into half_emulated.h with the native switch forced off, from the stdlib-only
+; arrayjit.builtins_cc library that arrayjit/lib/gen_builtins links too.
 
 (executable
  (name gen_codec_header)
- (modules gen_codec_header codec_builtins_table))
+ (modules gen_codec_header)
+ (libraries arrayjit.builtins_cc))
 
 (rule
  ; ocannl-backend: none -- stdlib-only header generator; no configuration or backend selection.
@@ -5596,19 +5592,20 @@
 ; The checked-in fixture carries one unknown key in every accepted syntax, and the control requires
 ; refusal with exit 1.
 
+; gh-ocannl-1080: the scan derives the cc prelude's OCANNL_-prefixed C macro names from the
+; stdlib-only builtin definition table itself, the arrayjit.builtins_cc library, so the scanner
+; keeps linking no backend.
+
 (executable
  (name config_usage_scan)
- (modules config_usage_scan builtins_cc_table)
- (libraries base stdio arrayjit.utils test_utils arrayjit.verdict))
-
-; gh-ocannl-1080: the scan derives the cc prelude's OCANNL_-prefixed C macro names from the
-; stdlib-only builtin definition table itself, copied here as arrayjit/lib/gen_builtins does, so
-; the scanner keeps linking no backend.
-
-(rule
- (target builtins_cc_table.ml)
- (action
-  (copy ../../arrayjit/lib/builtins_cc.ml %{target})))
+ (modules config_usage_scan)
+ (libraries
+  base
+  stdio
+  arrayjit.utils
+  arrayjit.builtins_cc
+  test_utils
+  arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads shell scripts and Markdown as text.

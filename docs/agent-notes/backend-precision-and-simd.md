@@ -250,8 +250,8 @@ files.
   in the ordering as the code after 0x7BFF, so the overflow threshold is the tie at 65520, not a
   saturation — and bit-for-bit against the native `_Float16` cast where the compiler has one (NaNs
   up to payload), and widens all 65536 codes against the format's exact values. The C it compiles
-  is the table's own text: `gen_codec_header` emits the converters' dependency closure from a copy
-  of `builtins_cc.ml` with only `HAS_NATIVE_FLOAT16` forced to 0. Reintroducing the
+  is the table's own text: `gen_codec_header` emits the converters' dependency closure from the
+  `arrayjit.builtins_cc` table with only `HAS_NATIVE_FLOAT16` forced to 0. Reintroducing the
   gh-ocannl-981 cutoff (`total_shift >= 24`) fails it with exactly 16 777 214 misroundings and as
   many native disagreements. Emulated widening returns a POSITIVE NaN for a negative NaN code, as
   `fp8_to_single` does; the sweep asks only for "a NaN" there, matching the fp8 contract.
@@ -1539,8 +1539,9 @@ files.
   and bf16 128-lane collisions remain executable witnesses beside the discriminating mod11 cases.
 
 - Shared host/kernel C builtins live in `builtins_cc.ml` (gh-ocannl-656). The stdlib-only
-  `arrayjit/lib/gen_builtins` generator compiles a Dune copy of that table and emits the header
-  included by `builtins.c`; the `OCANNL_` SIMD namespace and platform includes remain cc-only.
+  table is its own dependency-free library, `arrayjit.builtins_cc` (re-exported as
+  `Context.Builtins_cc`), so the `arrayjit/lib/gen_builtins` generator links it without `context`
+  (ir's stubs need the header first) and emits the header included by `builtins.c`; the `OCANNL_` SIMD namespace and platform includes remain cc-only.
   The shared half RNG function returns `HALF_T`, while its OCaml wrapper explicitly extracts bits
   with `HALF_TO_UINT16`. `test_shared_builtins` executes separately compiled default and emulated
   half variants against the shipped stubs, with inlining disabled to exercise the C ABI.

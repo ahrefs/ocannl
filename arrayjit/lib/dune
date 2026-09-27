@@ -167,6 +167,15 @@
    ppx_variants_conv
    ppx_minidebug)))
 
+; The C builtin definition table (gh-ocannl-656) is stdlib-only and a library of its own, so the
+; stdlib-only consumers -- gen_builtins, whose header ir's C stubs need before context can build,
+; and the test-side scanners and header generators -- link it without linking a backend.
+
+(library
+ (name builtins_cc)
+ (public_name arrayjit.builtins_cc)
+ (modules builtins_cc))
+
 (library
  (name context)
  (public_name arrayjit.context)
@@ -185,6 +194,7 @@
   ctypes.foreign
   utils
   ir
+  builtins_cc
   (select
    cuda_backend_impl.ml
    from
@@ -214,7 +224,6 @@
    ppx_minidebug))
  (modules
   cc_backend
-  builtins_cc
   cuda_backend_impl
   hip_backend_impl
   metal_backend_impl

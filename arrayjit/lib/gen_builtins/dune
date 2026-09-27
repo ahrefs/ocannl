@@ -1,11 +1,7 @@
-; Compile the pure definition table independently of context: ir's C stubs need the header
-; before context (which depends on ir) can be built. No C parser or bootstrapping cycle.
-
-(rule
- (target builtins_definitions.ml)
- (action
-  (copy ../builtins_cc.ml %{target})))
+; Links only the stdlib-only definition table, not context: ir's C stubs need the header before
+; context (which depends on ir) can be built. No C parser or bootstrapping cycle.
 
 (executable
  (name generate)
- (modules generate builtins_definitions))
+ (modules generate)
+ (libraries builtins_cc))
