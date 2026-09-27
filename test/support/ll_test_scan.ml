@@ -147,8 +147,11 @@ let bind_module env name module_expr =
       | None -> Map.remove env.modules name);
   }
 
-let open_module (surface : surface) env module_expr =
-  match module_of env module_expr with
+let rec open_module (surface : surface) env module_expr =
+  open_denoted surface env (module_of env module_expr)
+
+and open_denoted (surface : surface) env denoted =
+  match denoted with
   | Some (Harness_module h) ->
       let m = Map.find_exn surface h in
       {
@@ -186,6 +189,9 @@ class virtual scoped (surface : surface) =
           value_binding list ->
           walk:(env -> value_binding -> unit) ->
           denotes list
+
+    method virtual declare : top:bool -> env -> value_description -> denotes
+    (** What an [external] declares, as {!define} for a binding group. *)
 
     method included (_ : string) = ()
     (** Called for each top-level [include] of a harness module, in order with {!define}. *)
@@ -236,9 +242,8 @@ class virtual scoped (surface : surface) =
                   classes
                   ~init:(forget_modules env (pattern_unpacks patterns))
                   ~f:(fun env names denotes -> bind_values env names denotes)
-            | Pstr_primitive { pval_name = { txt = name; _ }; _ } ->
-                ignore (self#structure_item env item : structure_item);
-                bind_values env [ name ] Local
+            | Pstr_primitive ({ pval_name = { txt = name; _ }; _ } as declaration) ->
+                bind_values env [ name ] (self#declare ~top env declaration)
             | Pstr_recmodule declarations ->
                 let env =
                   forget_modules env (List.filter_map declarations ~f:(fun d -> d.pmb_name.txt))
@@ -330,6 +335,10 @@ class virtual scoped (surface : surface) =
       | Pcl_let (rec_flag, bindings, body) ->
           ignore (self#class_expr (self#bindings env rec_flag bindings) body : class_expr);
           ce
+      | Pcl_open ({ popen_expr = { txt = path; _ }; _ }, body) ->
+          let denoted = match path with Lident name -> Map.find env.modules name | _ -> None in
+          ignore (self#class_expr (open_denoted surface env denoted) body : class_expr);
+          ce
       | _ -> super#class_expr env ce
 
     (* An object's self and its instance variables are in scope in every field. *)
@@ -362,7 +371,8 @@ let root_env (surface : surface) =
     surface ([tick] only through [add]/[c]/[embed]), and leaves the operand-data helpers ([cycle],
     [cycle_flat], [weighted], [drift], [flat]) and the value checks ([blank], [close], [same])
     outside: integer and float arithmetic with no IR in it. Each binding of a group is classified on
-    its own; a [let rec] group, whose members can reach each other, together. *)
+    its own; a [let rec] group, whose members can reach each other, together; a pattern binding
+    several names credits none of them. An [external] is classified by its declared type. *)
 let surface sources : surface =
   List.fold sources
     ~init:(Map.empty (module String))
@@ -370,7 +380,7 @@ let surface sources : surface =
       let reaches = ref false in
       let exported = ref (Map.empty (module String)) and ir_aliases = ref [] in
       let classifier =
-        object
+        object (self)
           inherit scoped classified
           method use = function Some (Harness true) -> reaches := true | _ -> ()
           method mentions_ir = reaches := true
@@ -392,11 +402,26 @@ let surface sources : surface =
                   List.map bindings ~f:(fun _ -> ir)
               | Nonrecursive -> List.map bindings ~f:(fun b -> classify [ b ])
             in
+            (* A pattern binding several names ([let a, b = ...]) gets one piece of evidence for all
+               of them, so none is credited: the class would be a guess for each component. *)
+            let classes =
+              List.map2_exn bindings classes ~f:(fun b ir ->
+                  ir && List.length (pattern_vars [ b.pvb_pat ]) <= 1)
+            in
             if top then
               List.iter2_exn bindings classes ~f:(fun b ir ->
                   List.iter (pattern_vars [ b.pvb_pat ]) ~f:(fun name ->
                       exported := Map.set !exported ~key:name ~data:ir));
             List.map classes ~f:(fun ir -> Harness ir)
+
+          method declare ~top env declaration =
+            let outer = !reaches in
+            reaches := false;
+            ignore (self#value_description env declaration : value_description);
+            let ir = !reaches in
+            reaches := outer || ir;
+            if top then exported := Map.set !exported ~key:declaration.pval_name.txt ~data:ir;
+            Harness ir
 
           (* An include re-exports what it brings in, over what was defined before it. *)
           method! included h =
@@ -431,6 +456,8 @@ let uses_surface ~(surface : surface) source =
       method define ~top:_ env _ bindings ~walk =
         List.iter bindings ~f:(walk env);
         List.map bindings ~f:(fun _ -> Local)
+
+      method declare ~top:_ _ _ = Local
     end
   in
   ignore (consumer#structure (root_env surface) (Text.structure_of source) : structure);

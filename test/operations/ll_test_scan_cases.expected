@@ -15,6 +15,8 @@ a type annotation through an Ir alias, its own or included, puts a value in the 
 a qualified call into the builder tier puts a harness helper in the IR surface: true
 a rebound Ir alias no longer marks what uses it: true
 each binding of a non-recursive group is classified on its own: true
+a pattern binding several names credits none of them: true
+a harness external is classified by its declared type: true
 a local binding shadows a builder only where it is in scope: true
 a harness redefinition of an included builder takes the class of its own definition: true
 each qualifier and open reads the class its own module gives a name: true
@@ -29,6 +31,7 @@ only an exact harness path is the harness, not a same-named nested module: true
 a test's own binding shadows an open only where it is in scope, and a later open shadows it: true
 a constrained alias of the harness is still the harness: true
 functor parameters, unpacked modules, externals and instance variables shadow the harness: true
+a class-expression open of the harness reaches its builders: true
 an unreadable open after the harness's does not hide its builders: true
 an alias counts only where it is in scope and not rebound: true
 a sibling stanza's harness does not cover this module: true

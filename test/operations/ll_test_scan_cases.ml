@@ -89,6 +89,22 @@ let () =
   p "each binding of a non-recursive group is classified on its own"
     (let group = harness "include Ll_builders\nlet builder x = seq x x and cycle x = x + 1\n" in
      Scan.is_ir group "Ll_test" "builder" && not (Scan.is_ir group "Ll_test" "cycle"));
+  p "a pattern binding several names credits none of them"
+    (let destructured =
+       harness "let seq, cycle = (Ll_builders.seq, fun x -> x + 1)\nlet solo = Ll_builders.seq\n"
+     in
+     (not (Scan.is_ir destructured "Ll_test" "cycle"))
+     && (not (Scan.is_ir destructured "Ll_test" "seq"))
+     && Scan.is_ir destructured "Ll_test" "solo");
+  p "a harness external is classified by its declared type"
+    (let externals =
+       harness
+         "include Ll_builders\n\
+          external id : LL.t -> LL.t = \"%identity\"\n\
+          external raw : int -> int = \"%identity\"\n"
+     in
+     Scan.is_ir externals "Ll_test" "id"
+     && List.mem (Scan.members externals "Ll_test" ~ir:false) "raw" ~equal:String.equal);
   p "a local binding shadows a builder only where it is in scope"
     (Scan.is_ir
        (harness
@@ -140,6 +156,8 @@ let () =
     && (not (uses "open Ll_test\nexternal seq : int -> int = \"x\"\nlet _ = seq"))
     && (not (uses "open Ll_test\nlet o = object val seq = 1 method m = seq end"))
     && not (uses "open Ll_test\nclass c seq = object method m = seq end"));
+  p "a class-expression open of the harness reaches its builders"
+    (uses "class c = let open Ll_test in object method m = seq end");
   (* The deliberate boundary: an open the scan cannot read is not taken to shadow the harness, as
      the tree's [open Ll_test] then [open Verdict.Claims] requires. *)
   p "an unreadable open after the harness's does not hide its builders"
