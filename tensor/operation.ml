@@ -937,7 +937,8 @@ let centered_uniform1_param_init ?(scale = 0.5) () ?label ?top_down_prec ?batch_
   pointmul ~grad_spec:Prohibit_grad (number scale) centered ?label ?top_down_prec ?batch_dims
     ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes ?deduced ()
 
-(** DEPRECATED (gh-ocannl-509): use {!default_uniform_param_init}. *)
+(** DEPRECATED (gh-ocannl-509): use {!default_uniform_param_init}. Kept for reproducing pre-0.9
+    random streams, as the value to assign to [TDSL.default_param_init]. *)
 let default_uniform1_param_init = centered_uniform1_param_init ?scale:None
 
 (** A wasteful variant of {!uniform_at} that produces a single value from each 4x32 random bits. The
