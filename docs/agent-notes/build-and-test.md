@@ -1308,10 +1308,11 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   trailing run of the length's factors (unflattening), a key computed outside the closure, and
   mixers other than a remainder. A converted site keeps its values, so a golden moves only where
   the guard fires; the conversion found one blind term, `schedule_mma_matmul`'s tf32 perturbation
-  at modulus 3 over a `k = 24` row, which took `~radix:2`. Converting links `ll_test`, which
-  retires that file's `ll_test_ratchet` migration row in the same change. `operand_key_scan_cases`
-  puts each spelling beside its nearest legitimate text and drives the shipping scanner over a
-  synthetic tree holding the blind fixture it must refuse.
+  at modulus 3 over a `k = 24` row, which took `~radix:2`. Converting links `ll_test`, which does
+  NOT retire an `ll_test_ratchet` row: linking for an operand helper is not adoption
+  (gh-ocannl-1052). `operand_key_scan_cases` puts each spelling beside its nearest legitimate
+  text and drives the shipping scanner over a synthetic tree holding the blind fixture it must
+  refuse.
 
 ## Codegen text inventory
 
@@ -2822,6 +2823,20 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   globs/dynamic inputs and inputs outside the declared test corpus are refused explicitly. Documented
   `test/ppx/*_expected.ml` goldens are not implementation modules and are excluded; arbitrary unowned
   sources remain checked. The `scans` aggregate runs the shipping scanner and its control suite.
+  Adoption is linking the harness AND calling its IR surface (gh-ocannl-1052): a link made for an
+  operand helper (`Ll_test.cycle`) had retired rows whose hand-built IR never moved, which is the
+  general trap of a ratchet whose adoption test is a proxy — the proxy spreads for other reasons. The
+  surface is DERIVED, per harness module, from `ll_builders.ml`/`ll_test.ml`: a value whose
+  definition mentions an `Ir`-rooted path (or an alias of one, its own or included), or calls what
+  resolves to an IR value, is IR; each binding is classified on its own, a later definition
+  replaces an included one's class. The rest (`cycle`, `weighted`, `blank`, ...) is printed in the
+  golden, so a new helper's class shows in review. Both halves resolve names through one lexical
+  scope model (`Ll_test_scan.scoped`): every value binding form scopes its names (externals and
+  instance variables included), module aliases (constrained ones too) are shadowed by later
+  bindings, functor parameters and unpacks and die with their structure, and only an exact harness
+  path is the harness. Its one deliberate gap: an `open` of a module the scan cannot read is not taken to shadow
+  a harness open before it, since the tree writes `open Ll_test` then `open Verdict.Claims`. A linked
+  source that calls nothing of it gets its own refusal and still needs a migration row.
 
 - Pure IR node, index, statement and scalar builders live in public `arrayjit.ll_builders`
   (gh-ocannl-954), re-exported unchanged by `Ll_test`. Every Dune consumer spells the public name,

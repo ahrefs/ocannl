@@ -29,6 +29,7 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -41,7 +42,9 @@ ROOT = HERE.parent
 # BENCH_VENV_PY overrides the venv interpreter; bench_venv owns the rule so drivers cannot drift.
 VENV_PY = bench_venv.venv_python(HERE)
 # BENCH_CELL_LOG_DIR: keep every cell's raw combined output under this directory, one file per
-# cell label. Unset (the default) discards a successful cell's output as before.
+# cell label, written AS THE CELL RUNS (gh-ocannl-1061), so a cell killed at its cap -- or a sweep
+# that is itself killed -- leaves everything the cell printed up to then. Unset (the default), the
+# output goes to a temporary file that is deleted once the cell is done.
 CELL_LOG_DIR = (
     Path(os.environ["BENCH_CELL_LOG_DIR"]) if os.environ.get("BENCH_CELL_LOG_DIR") else None
 )
@@ -260,6 +263,19 @@ def ocannl_regime_args(regime):
     and the environment, which is what lets the same process tree run both regimes.
     """
     return [] if regime == "exact" else [f"--ocannl_profile={regime}"]
+
+
+def ocannl_variant_args(variant):
+    """The flags an OCANNL cell is dispatched with for its variant.
+
+    A tuned cell writes the tuner's progress lines (`autotune_progress`, gh-ocannl-1061): a search
+    pass can run for hours, and one killed at the cap otherwise leaves no record of how far it got
+    or where its time went -- the arms and flips it finished, the candidates tried of each phase's
+    total, compile against timing seconds. They are cheap (unlike `autotune_log`, they add no work
+    to the search, so the pass's `compile_s` is unaffected) and go to stderr, which the cell log
+    keeps as the cell runs. The replay pass carries the flag too; its lines say it replayed.
+    """
+    return ["--ocannl_autotune_progress=true"] if variant == "tuned" else []
 
 
 def torch_regime_args(regime):
@@ -599,27 +615,85 @@ def run_cell(label, cmd, env=None, cwd=None, timeout=None, on_incomplete=None):
         return _run_cell(label, cmd, env, cwd, timeout, on_incomplete)
 
 
+def cell_log_name(label):
+    """The file name a cell's log gets under BENCH_CELL_LOG_DIR."""
+    return "".join(c if c.isalnum() or c in "-._" else "_" for c in label) + ".log"
+
+
+def open_cell_log(label):
+    """Where a cell's combined output is written as it runs: `(file, path, temporary)`.
+
+    The cell writes to the file directly -- no pipe, no reader in the sweep -- so what it printed
+    is on disk the moment it was printed, and survives a kill of the cell, of the sweep, or of both
+    (gh-ocannl-1061: three tuned search passes over a 7200 s cap left 0-byte logs, because the log
+    was written from the captured pipe only once the cell was over). A tuned OCANNL cell's progress
+    lines (`autotune_progress`) land here, which is what makes a timed-out search's cost readable.
+    It also removes a failure mode: a descendant that escapes the kill while holding the output
+    can no longer leave the sweep blocked reading a pipe.
+
+    Under BENCH_CELL_LOG_DIR the file is the cell's log; otherwise a temporary file that
+    `close_cell_log` deletes. An unwritable log directory is a lost convenience, not a lost sweep:
+    the cell runs over a temporary file and the sweep says so.
+    """
+    if CELL_LOG_DIR:
+        try:
+            CELL_LOG_DIR.mkdir(parents=True, exist_ok=True)
+            path = CELL_LOG_DIR / cell_log_name(label)
+            return open(path, "wb"), path, False
+        except OSError as exc:
+            print(f"!!! {label}: could not write the cell log ({exc})", flush=True)
+    fd, name = tempfile.mkstemp(prefix="orchestrate-cell-", suffix=".log")
+    return os.fdopen(fd, "wb"), Path(name), True
+
+
+def read_cell_log(path):
+    """The cell's output so far, as text: read through a handle of its own, so the read shares
+    no file offset with a writer that might still be alive."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError as exc:
+        return f"(the cell's output could not be read back from {path}: {exc})\n"
+
+
 def _run_cell(label, cmd, env, cwd, timeout, on_incomplete):
     print(f"--- {label}", flush=True)
+    log, log_path, temporary = open_cell_log(label)
+    try:
+        return _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, log, log_path)
+    finally:
+        # Idempotent: the spawn path closes the sweep's copy as soon as the child has its own.
+        log.close()
+        if temporary:
+            # A survivor of the kill can still hold the file open, which Windows refuses to delete
+            # under; a leftover temporary file is not worth failing a cell over.
+            with contextlib.suppress(OSError):
+                log_path.unlink()
+
+
+def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, log, log_path):
     timed_out = False
     remaining = cell_group.GONE
     cache_note = ""
     proc = None
     try:
-        proc = cell_group.spawn(
-            cmd,
-            env=env,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        try:
+            proc = cell_group.spawn(
+                cmd,
+                env=env,
+                cwd=cwd,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
+        finally:
+            # The child holds its own descriptor; the sweep's copy has nothing more to do.
+            log.close()
         with _cancellation.cancellable():
             # The wait a cancellation is FOR: here, and only here, a signal should raise at once.
-            stdout, _ = proc.communicate(timeout=timeout or None)
+            proc.wait(timeout=timeout or None)
     except subprocess.TimeoutExpired:
         timed_out = True
-        stdout, remaining = kill_cell_group(proc)
+        _, remaining = kill_cell_group(proc)
         # Before anything fallible: the kill is what tore the cache, so undoing it must not be
         # reachable only through code that can raise first (the optional cell log below writes
         # to an operator-supplied directory, which can be unwritable or full). Losing the sweep to
@@ -649,7 +723,7 @@ def _run_cell(label, cmd, env, cwd, timeout, on_incomplete):
         if cleanup_failure is not None:
             raise cleanup_failure
         raise
-    stdout = stdout or ""
+    stdout = read_cell_log(log_path)
     leftovers = ""
     stuck = cell_group.GONE
     initial = _group_observation(proc)
@@ -669,19 +743,6 @@ def _run_cell(label, cmd, env, cwd, timeout, on_incomplete):
         print(f"!!! {label}: {leftovers}", flush=True)
     elif not timed_out:
         proc.close()
-    if CELL_LOG_DIR:
-        # A cell's own output is otherwise discarded on success, which throws away exactly the
-        # evidence a measurement sweep is asked to report: with autotune_log=true the search
-        # pass's candidate lines (seeded vs timed, FAILED, dedup, split-reduce evictions) live
-        # here and nowhere else, and re-running the searches to recover them costs as much as the
-        # sweep. Off unless BENCH_CELL_LOG_DIR is set, so the default run is unchanged.
-        try:
-            CELL_LOG_DIR.mkdir(parents=True, exist_ok=True)
-            safe = "".join(c if c.isalnum() or c in "-._" else "_" for c in label)
-            (CELL_LOG_DIR / f"{safe}.log").write_text(stdout)
-        except OSError as exc:
-            # An unwritable log directory is a lost convenience, not a lost sweep.
-            print(f"!!! {label}: could not write the cell log ({exc})", flush=True)
     line = next((l for l in reversed(stdout.splitlines()) if l.startswith("{")), None)
     if timed_out:
         # A cell over the cap is a FAILURE, not a slow measurement: whatever it was doing, it was
@@ -2004,6 +2065,7 @@ def main():
                                 str(ocannl_exe(model)),
                                 f"--ocannl_backend={backend}",
                                 *ocannl_regime_args(regime),
+                                *ocannl_variant_args(variant),
                             ]
                             label = f"{name} ocannl/{backend}/{cell}{regime_label(regime)}"
                             # The cell's identity is what was dispatched, not what the runner chose

@@ -4586,6 +4586,20 @@
     (diff tune_ship_arm.expected tune_ship_arm.actual)))))
 
 (test
+ ; gh-ocannl-1061: the tuner's progress lines, with a candidate line at every attempt.
+ (name autotune_progress)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules autotune_progress)
+ (libraries base ocannl stdio unix arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl))
+ (action
+  (run %{test} "--ocannl_autotune_progress=true")))
+
+(test
  (name inline_flip_tune)
  (package neural_nets_lib)
  (deps

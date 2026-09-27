@@ -600,11 +600,16 @@ files.
   gh-ocannl-789, CUDA's by gh-ocannl-925 (sm_120: the staged k=144 leg reads 2056, and 2048 with the
   wmma arm disabled).
 - **A wmma fragment's element order is not a contract, so a converted `d` boundary reads it from
-  the fragment type itself** (gh-ocannl-925, `Cuda_backend.wmma_d_boundary_lines`). HIP and Metal
-  convert by copying `x[i]` between an f32 and an f16 fragment, which assumes the two types place
-  element `i` at the same coordinate; for `nvcuda::wmma` the programming guide calls the mapping
-  unspecified and subject to change, so a copy that validates on one GPU proves nothing about the
-  next. Instead each lane `load_matrix_sync`s the builtin table `ocannl_wmma_rc16` (entry
+  the fragment type itself** (gh-ocannl-925, `Cuda_backend.wmma_d_boundary_lines`; HIP's twin
+  `Hip_backend`'s `mma_d_boundary_lines`, gh-ocannl-1064). Copying `x[i]` between an f32 and an f16
+  fragment assumes the two types place element `i` at the same coordinate; for `nvcuda::wmma` the
+  programming guide calls the mapping unspecified and subject to change, so a copy that validates on
+  one GPU proves nothing about the next. rocWMMA says the same: its `fragment` class carries "vector
+  elements have no guaranteed order or locality", and the accumulator's register layout is a
+  template of `DataT` (`MmaAcc<MmaDim, DataT, ...>` in `rocwmma/internal/io_layout.hpp`). MSL 4.1
+  §2.4: "The mapping of matrix elements to threads in the SIMD-group is unspecified", and
+  `thread_elements()` is not in the spec at all — so Metal's gh-ocannl-837 `thread_elements()` copy
+  still rests on an undocumented coincidence (verified only on an M4 Max). Instead each lane `load_matrix_sync`s the builtin table `ocannl_wmma_rc16` (entry
   `16*row+col` holds that number) into a fragment of the accumulator's own type, then moves each
   element to or from `d[row][col]` with a scalar conversion. That relies only on `load_matrix_sync`'s
   contract and on the position being fixed per type and lane, which `mma_sync` needs anyway. The
@@ -612,7 +617,10 @@ files.
   structure claim (no `load_matrix_sync(__mma_fragment_`, no `store_matrix_sync(__mma_dp`, no
   `mma.sync.aligned`), because a per-`k_o` PTX rendering also computes in f32 within each block.
   The bf16 twin (`mma_bf16_wide_acc_scopes`' fragment scope, over wmma's bf16 -> f32 fragments) is
-  the same boundary with `__bfloat162float`/`__float2bfloat16` and has not been written.
+  the same boundary with `__bfloat162float`/`__float2bfloat16` and has not been written. HIP's port
+  (gh-ocannl-1064) serves both of its wide arms with C casts; `schedule_mma_matmul`'s
+  `hip_table_boundary` pins that no 16-bit accumulator fragment is declared and nothing crosses
+  `__mma_dp` through rocWMMA's own load/store on those arms.
 - **bf16 residency is the ternary `bf16_arithmetic` policy's question** (gh-ocannl-838), the same
   shape as `fp16_arithmetic`: `Numerics.bf16_mode`, `Numerics.bf16_accum_wide`, and a per-format
   capability list `mma_bf16_wide_acc_scopes` read by the same seeding gate
@@ -669,20 +677,17 @@ files.
   artifact rather than silently part of the measurement; it is a fact about the sweep, so the
   report states it even when every cell failed, and rows that disagree on it are refused rather
   than rendered as two unattributable header lines.
-- **rocWMMA fragments are opaque for LAYOUT but not for ELEMENTS, and that is what wires HIP's
-  wide-f16 d boundary** (gh-ocannl-789, `arrayjit/lib/hip_backend.ml`'s `mma_d_boundary`). Under
-  `Fp16_wide` the uniform-f16 arm pairs a `float` accumulator fragment with the unchanged f16
-  STORAGE destination; neither `load_matrix_sync` nor `store_matrix_sync` is type-correct across
-  that mismatch, so the boundary stages through a destination-typed accumulator fragment rocWMMA
-  does load and store, and copies element-for-element via `num_elements` / `x[]` — the surface the
-  header documents as "compatibility with nvcuda::wmma". The copy never assumes WHICH matrix cell
-  an element index names, only that two accumulator fragments of the same 16x16x16 shape name the
-  same cell at the same index; that holds because rocWMMA derives the accumulator's IO layout from
-  the fragment shape and wave size, not from `DataT`, and an emitted `static_assert` on the two
-  `num_elements` fails the kernel compile if a release ever packs them differently. Measured on
-  gfx1151: both fragments report 8 elements and dump identical per-`(lane, index)` values from the
-  same 16x16 tile of distinct values. No LDS traffic — the warp-staged float tile that was the
-  fallback design is not needed. The combination table and fragment-type spelling are now shared
+- **HIP's wide-f16/bf16 d boundary reads coordinates from the accumulator type, not from a
+  second fragment type** (gh-ocannl-789, rewired by gh-ocannl-1064; `arrayjit/lib/hip_backend.ml`'s
+  `mma_d_boundary_lines`). Under `Fp16_wide`/`Bf16_wide` the uniform arm pairs a `float` accumulator
+  fragment with the unchanged 16-bit STORAGE destination; neither `load_matrix_sync` nor
+  `store_matrix_sync` is type-correct across that mismatch. gh-ocannl-789 staged through a
+  destination-typed accumulator fragment and copied `x[i]` across, on the belief that rocWMMA
+  derives the accumulator layout from shape and wave size only — wrong per the headers (see the
+  coordinate-table bullet above), though right in practice on gfx1151/gfx1102, where both fragments
+  dump identical per-`(lane, index)` values. The boundary now loads `ocannl_wmma_rc16` into a
+  `float` accumulator fragment and converts each element at its named cell with a C cast (same
+  rounding as the old cast), one table load per boundary; no LDS traffic. The combination table and fragment-type spelling are now shared
   by `mma_syntax` and `mma_fragment_syntax` (they were duplicated verbatim, and the two hooks are
   required to accept together), so an arm added to one reaches both.
 - **Metal's `simdgroup_matrix` surface also permits a wide-f16 accumulator despite the uniform

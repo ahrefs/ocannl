@@ -577,7 +577,8 @@ end = struct
        [rocwmma::bfloat16_t] / [float] need not be textually identical to the node's own C type
        ([__half] / [__hip_bfloat16]), so the operand pointers are [reinterpret_cast] to them at each
        call site. The accumulator and the destination storage types coincide on every arm but the
-       wide-f16 and wide-bf16 ones; where they differ, [mma_d_boundary] carries the conversion. *)
+       wide-f16 and wide-bf16 ones; where they differ, [mma_d_boundary_lines] carries the
+       conversion. *)
     let mma_combo ~a_prec ~b_prec ~d_prec ~d_layout ~a_layout ~b_layout =
       (* rocWMMA fragments are opaque like [nvcuda::wmma]'s: there is no swizzle-aware fragment load
          here, so a swizzled operand layout declines to the caller's scalar fallback (gh-ocannl-481
@@ -592,7 +593,7 @@ end = struct
            mutually exclusive by construction. Under [Fp16_auto]/[Fp16_narrow] the accumulator
            fragment is itself f16, so the [d] boundary is rocWMMA's own load/store. Under
            [Fp16_wide] (gh-ocannl-789) the accumulator is [float] against the same f16 STORAGE, and
-           [mma_d_boundary] converts once at each end -- which is what lets
+           [mma_d_boundary_lines] converts once at each end -- which is what lets
            [mma_f16_wide_acc_scopes] advertise both scopes and the uniform-f16 seeds survive the
            wide policy on this backend. *)
         | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ when Numerics.fp16_accum_wide () ->
@@ -602,9 +603,9 @@ end = struct
         | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Single_prec _ ->
             Some ("rocwmma::bfloat16_t", "float", "float", 8, 4)
         (* The uniform-bf16 twin of the wide-f16 arm (gh-ocannl-838): under [Bf16_wide] a [float]
-           accumulator against the bf16 STORAGE destination, converted by [mma_d_boundary]. gfx11's
-           bf16-accumulate WMMA is not exactly rounded (about a bf16 ulp at the partial-sum scale,
-           see schedule_mma_matmul's table), so this leaves only the narrowing rounding. *)
+           accumulator against the bf16 STORAGE destination, converted by [mma_d_boundary_lines].
+           gfx11's bf16-accumulate WMMA is not exactly rounded (about a bf16 ulp at the partial-sum
+           scale, see schedule_mma_matmul's table), so this leaves only the narrowing rounding. *)
         | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _
           when Numerics.bf16_accum_wide () ->
             Some ("rocwmma::bfloat16_t", "float", "rocwmma::bfloat16_t", 8, 8)
@@ -612,63 +613,74 @@ end = struct
             Some ("rocwmma::bfloat16_t", "rocwmma::bfloat16_t", "rocwmma::bfloat16_t", 8, 8)
         | _ -> None
 
-    (* One 16x16 block of the [d] boundary: [`Load] brings the destination block into the
-       accumulator fragment [acc], [`Store] writes it back. Where the accumulator element type is
-       the destination's storage type this is rocWMMA's own load/store, exactly as before
-       gh-ocannl-789.
+    (* The [d] boundary of the [mt] x [nt] accumulator-fragment array [acc]: [`Load] brings the
+       destination's 16x16 blocks at [__mma_dp] into [acc[__mi][__ni]], [`Store] writes them back.
+       Where the accumulator element type is the destination's storage type this is rocWMMA's own
+       load/store per block, exactly as before gh-ocannl-789.
 
        Where they differ -- the wide-f16 and wide-bf16 arms, a [float] accumulator over a 16-bit
-       storage destination -- neither rocWMMA call is type-correct, so the conversion stages through
-       a DESTINATION-TYPED accumulator fragment that rocWMMA does load and store, and copies
-       element-for-element with [num_elements] / [x[]], the surface rocWMMA documents as
-       "compatibility with nvcuda::wmma". This is legitimate despite fragments being opaque, because
-       it never assumes WHICH matrix cell an element index names: it only assumes that two
-       accumulator fragments of the same 16x16x16 shape name the SAME cell at the same index,
-       whatever that cell is. That holds by rocWMMA's construction (the accumulator's IO layout is
-       derived from the fragment shape and the wave size, not from its element type) and is verified
-       on gfx1151: loading a 16x16 tile of distinct values through a [float] and a [float16_t]
-       accumulator fragment and dumping every lane's elements gives identical per-(lane, index)
-       values, 8 elements each; the [bfloat16_t] staging of the wide-bf16 arm is pinned end to end
-       by schedule_mma_matmul's [Bf16_wide] legs on the same device (gh-ocannl-838). Deliberately
-       not the warp-staged float tile in LDS that was the fallback design (gh-ocannl-789): this adds
-       no memory traffic at all.
+       storage destination -- neither rocWMMA call is type-correct, so each element crosses the
+       boundary with a scalar conversion at the coordinate the ACCUMULATOR FRAGMENT TYPE ITSELF
+       names (gh-ocannl-1064, the port of CUDA's gh-ocannl-925 [wmma_d_boundary_lines]): each lane
+       [load_matrix_sync]s the row-major table [ocannl_wmma_rc16] (entry [16 * row + col] holds that
+       very number, exact in f32) into a fragment of exactly [acc]'s type, after which [x[i]] of
+       that fragment names the (row, col) that [x[i]] of every fragment of that type holds. This
+       relies only on [load_matrix_sync]'s contract and on the position being a property of the type
+       and lane, not of the data -- which [mma_sync] itself requires.
 
-       [acc] and [ptr] are C expressions for one block ([__mma_acc[__mi][__ni]] and the block's base
-       pointer), so the caller keeps ownership of the block indexing. *)
-    let mma_d_boundary ~dir ~acc_typ ~d_typ ~acc ~ptr ~ldd =
-      let load frag =
-        Printf.sprintf "rocwmma::load_matrix_sync(%s, %s, %d, rocwmma::mem_row_major);" frag ptr ldd
-      in
-      let store frag =
-        Printf.sprintf "rocwmma::store_matrix_sync(%s, %s, %d, rocwmma::mem_row_major);" ptr frag
-          ldd
+       NOT the element copy through a destination-typed staging fragment that gh-ocannl-789 shipped.
+       That copy assumed the [float] and 16-bit accumulator fragments place [x[i]] at the same
+       coordinate, and rocWMMA says the opposite: its [fragment] class is documented with "vector
+       elements have no guaranteed order or locality", and the accumulator's register layout is a
+       template of the element type ([MmaDimSelector<BlockDim, DataT>] and
+       [RegisterLayout::MmaAcc<MmaDim, DataT, ...>] in [rocwmma/internal/io_layout.hpp]). The copy
+       happened to be right on gfx1151 and gfx1102 (gh-ocannl-838's k-split discriminators read the
+       wide values bitwise), which is evidence about that rocWMMA release on those devices only. The
+       table costs one cached fragment load per boundary, twice per fragment scope. *)
+    let mma_d_boundary_lines ~dir ~acc_typ ~d_typ ~acc ~ldd ~mt ~nt =
+      let nest body =
+        [
+          Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
+          Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
+        ]
+        @ List.map ~f:(fun l -> "    " ^ l) body
+        @ [ "  }"; "}" ]
       in
       if String.equal acc_typ d_typ then
-        [ (match dir with `Load -> load acc | `Store -> store acc) ]
+        let ptr = Printf.sprintf "__mma_dp + __mi * %d * %d + __ni * %d" mma_tile ldd mma_tile in
+        let blk = acc ^ "[__mi][__ni]" in
+        nest
+          [
+            (match dir with
+            | `Load ->
+                Printf.sprintf "rocwmma::load_matrix_sync(%s, %s, %d, rocwmma::mem_row_major);" blk
+                  ptr ldd
+            | `Store ->
+                Printf.sprintf "rocwmma::store_matrix_sync(%s, %s, %d, rocwmma::mem_row_major);" ptr
+                  blk ldd);
+          ]
       else
-        let stage = mma_frag_typ "accumulator" d_typ None in
-        (* The element-count agreement the copy relies on, checked by the C++ compiler rather than
-           assumed: a rocWMMA release that packed the two accumulator types differently would fail
-           the kernel compile here instead of silently converting a prefix. *)
-        let guard =
-          Printf.sprintf
-            "  static_assert(%s::num_elements == %s::num_elements, \"rocwmma accumulator element \
-             counts must agree at the d boundary\");"
-            stage
-            (mma_frag_typ "accumulator" acc_typ None)
+        let cell =
+          Printf.sprintf "__mma_dp[(__mi * %d + (__rc >> 4)) * %d + __ni * %d + (__rc & 15)]"
+            mma_tile ldd mma_tile
         in
-        let copy ~src ~dst ~cast =
-          Printf.sprintf
-            "  for (int __ei = 0; __ei < (int)%s.num_elements; ++__ei) %s.x[__ei] = (%s)%s.x[__ei];"
-            src dst cast src
-        in
-        "{"
-        :: Printf.sprintf "  %s __mma_dstage;" stage
-        :: guard
-        ::
-        (match dir with
-        | `Load -> [ "  " ^ load "__mma_dstage"; copy ~src:"__mma_dstage" ~dst:acc ~cast:acc_typ ]
-        | `Store -> [ copy ~src:acc ~dst:"__mma_dstage" ~cast:d_typ; "  " ^ store "__mma_dstage" ])
+        let elt = Printf.sprintf "%s[__mi][__ni].x[__ei]" acc in
+        [
+          "{ /* rocwmma converted d boundary: coordinates from ocannl_wmma_rc16 */";
+          Printf.sprintf "  %s __mma_rc;" (mma_frag_typ "accumulator" acc_typ None);
+          "  rocwmma::load_matrix_sync(__mma_rc, ocannl_wmma_rc16, 16, rocwmma::mem_row_major);";
+        ]
+        @ List.map
+            ~f:(fun l -> "  " ^ l)
+            (nest
+               [
+                 "for (int __ei = 0; __ei < (int)__mma_rc.num_elements; ++__ei) {";
+                 "  const int __rc = (int)__mma_rc.x[__ei];";
+                 (match dir with
+                 | `Load -> Printf.sprintf "  %s = (%s)%s;" elt acc_typ cell
+                 | `Store -> Printf.sprintf "  %s = (%s)%s;" cell d_typ elt);
+                 "}";
+               ])
         @ [ "}" ]
 
     (* DRAFT (tensorize-mma T3, HIP counterpart of the CUDA wmma draft): cooperative tile-MMA
@@ -826,17 +838,9 @@ end = struct
                     [
                       barrier;
                       Printf.sprintf "%s __mma_acc[%d][%d];" (frag "accumulator" acc_typ None) mt nt;
-                      Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-                      Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
                     ]
-                    @ List.map
-                        ~f:(fun l -> "  " ^ l)
-                        (mma_d_boundary ~dir:`Load ~acc_typ ~d_typ ~acc:"__mma_acc[__mi][__ni]" ~ldd
-                           ~ptr:
-                             (Printf.sprintf "__mma_dp + __mi * %d * %d + __ni * %d" tile ldd tile))
+                    @ mma_d_boundary_lines ~dir:`Load ~acc_typ ~d_typ ~acc:"__mma_acc" ~ldd ~mt ~nt
                     @ [
-                        "  }";
-                        "}";
                         Printf.sprintf "for (int __ki = 0; __ki < %d; ++__ki) {" kt;
                         Printf.sprintf "  %s __mma_bf[%d];"
                           (frag "matrix_b" ab_typ (Some b_layout))
@@ -874,16 +878,9 @@ end = struct
                         "    }";
                         "  }";
                         "}";
-                        Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-                        Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
                       ]
-                    @ List.map
-                        ~f:(fun l -> "  " ^ l)
-                        (mma_d_boundary ~dir:`Store ~acc_typ ~d_typ ~acc:"__mma_acc[__mi][__ni]"
-                           ~ldd
-                           ~ptr:
-                             (Printf.sprintf "__mma_dp + __mi * %d * %d + __ni * %d" tile ldd tile))
-                    @ [ "  }"; "}"; barrier ]
+                    @ mma_d_boundary_lines ~dir:`Store ~acc_typ ~d_typ ~acc:"__mma_acc" ~ldd ~mt ~nt
+                    @ [ barrier ]
                   in
                   let body ~a_ptr ~b_ptr =
                     ptr_decl "__mma_dp" d_typ d_ptr ^^ hardline
@@ -946,27 +943,14 @@ end = struct
                 [
                   barrier;
                   Printf.sprintf "%s %s[%d][%d];" (frag "accumulator" acc_typ None) fragment mt nt;
-                  Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-                  Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
                 ]
-                @ List.map
-                    ~f:(fun l -> "  " ^ l)
-                    (mma_d_boundary ~dir:`Load ~acc_typ ~d_typ ~acc:(fragment ^ "[__mi][__ni]") ~ldd
-                       ~ptr:(Printf.sprintf "__mma_dp + __mi * %d * %d + __ni * %d" tile ldd tile))
-                @ [ "  }"; "}"; "/* rocwmma fragment reduction body begins */" ]
+                @ mma_d_boundary_lines ~dir:`Load ~acc_typ ~d_typ ~acc:fragment ~ldd ~mt ~nt
+                @ [ "/* rocwmma fragment reduction body begins */" ]
               in
               let lines_after =
-                [
-                  "/* rocwmma fragment reduction body ends */";
-                  Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-                  Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                ]
-                @ List.map
-                    ~f:(fun l -> "  " ^ l)
-                    (mma_d_boundary ~dir:`Store ~acc_typ ~d_typ ~acc:(fragment ^ "[__mi][__ni]")
-                       ~ldd
-                       ~ptr:(Printf.sprintf "__mma_dp + __mi * %d * %d + __ni * %d" tile ldd tile))
-                @ [ "  }"; "}"; barrier ]
+                "/* rocwmma fragment reduction body ends */"
+                :: mma_d_boundary_lines ~dir:`Store ~acc_typ ~d_typ ~acc:fragment ~ldd ~mt ~nt
+                @ [ barrier ]
               in
               let d_decl = ptr_decl "__mma_dp" d_typ d_ptr in
               Some
@@ -1539,9 +1523,9 @@ end = struct
                       ];
                     (* gh-ocannl-789: rocWMMA's [(f16, f16, f32)] fragments now carry the
                        uniform-f16 arm under [Numerics.Fp16_wide] too — [mma_combo] pairs a [float]
-                       accumulator with the f16 STORAGE destination and [mma_d_boundary] converts
-                       elementwise at each end — so the wide policy no longer costs this backend its
-                       f16 tensor-unit legs (gh-ocannl-680's stated remainder). *)
+                       accumulator with the f16 STORAGE destination and [mma_d_boundary_lines]
+                       converts elementwise at each end — so the wide policy no longer costs this
+                       backend its f16 tensor-unit legs (gh-ocannl-680's stated remainder). *)
                     mma_f16_wide_acc_scopes =
                       [ Backend_intf.Mma_per_statement; Backend_intf.Mma_fragment_scope ];
                     (* gh-ocannl-838: the uniform-bf16 arm swaps the same way under
