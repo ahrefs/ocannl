@@ -25,20 +25,6 @@ let mref_add mref ~key ~data ~or_ =
 let mref_add_missing mref key ~f =
   if Map.mem !mref key then () else mref := Map.add_exn !mref ~key ~data:(f ())
 
-(** A mutable linked list structure. *)
-type 'a mutable_list = Empty | Cons of { hd : 'a; mutable tl : 'a mutable_list }
-[@@deriving equal, sexp, variants]
-
-let insert ~next = function
-  | Empty -> Cons { hd = next; tl = Empty }
-  | Cons cons ->
-      cons.tl <- Cons { hd = next; tl = cons.tl };
-      cons.tl
-
-let tl_exn = function
-  | Empty -> raise @@ Not_found_s (Sexp.Atom "mutable_list.tl_exn")
-  | Cons { tl; _ } -> tl
-
 type 'a weak_dynarray = 'a Stdlib.Weak.t ref
 (** A dynamic array of weak references. *)
 

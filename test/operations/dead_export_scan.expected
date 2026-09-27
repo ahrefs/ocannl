@@ -1,8 +1,14 @@
 every zero-reference implicit export is named: true
 named dead-export exemptions are unique: true
 every named dead-export exemption remains necessary: true
+every type mentioned only by its own declaration is named: true
+named unmentioned-type exemptions are unique: true
+every named unmentioned-type exemption remains necessary: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:e8c85fd2a3138c8fe3283ab67595826c] zero-reference implicit export
   [scanner-refusal:8e094223fc3e55912db0c3f53c9fcaca] named dead-export exemptions
   [scanner-refusal:e32dfff95d976581bde669214a7e6415] dead-export exemption remains
+  [scanner-refusal:648c21e86192530edfa91eb57a98cf3c] every type mentioned
+  [scanner-refusal:1196acbcd8267dcdc62af2676f1a223e] named unmentioned-type exemptions
+  [scanner-refusal:2bb5b26c546587c6cb8afce38d28f8b4] unmentioned-type exemption remains
