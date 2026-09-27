@@ -500,6 +500,10 @@ strands its inner call on the fallback. The fp8 `mma.sync` path declines residen
 accumulator is per-lane f32 registers in the m16n8k32 layout, not a wmma fragment; persisting
 those registers across `k_o` is the natural extension. The half-precision staged leg of
 `schedule_mma_matmul.ml` pins the CUDA rendering the same way the f32 staged leg pins Metal's.
+That extension landed for the 16-bit inline-PTX arm (gh-ocannl-1063): uniform bf16, which has no
+wmma combination, holds the m16n8k16 arm's per-lane f32 registers (`float frag[m/16][n/8][4]`) across
+`k_o`, loaded and stored through the architected accumulator layout and fed by gathers or
+`ldmatrix` alike (`Cuda_backend.mma16_register_scope`).
 
 Landed scope matched the estimate: ~100 lines in `apply_stage` plus the `cooperative` field; no
 IR changes; no `validate_parallel` changes. One addition the sketch missed: the staging-point

@@ -625,19 +625,34 @@ files.
   f32 `d` does not need the trick: it loads the float fragment directly. Pair the value claim with a
   structure claim (no `load_matrix_sync(__mma_fragment_`, no `store_matrix_sync(__mma_dp`, no
   `mma.sync.aligned`), because a per-`k_o` PTX rendering also computes in f32 within each block.
-  The bf16 twin (`mma_bf16_wide_acc_scopes`' fragment scope, over wmma's bf16 -> f32 fragments) is
-  the same boundary with `__bfloat162float`/`__float2bfloat16` and has not been written. HIP's port
-  (gh-ocannl-1064) serves both of its wide arms with C casts; `schedule_mma_matmul`'s
+  HIP's port (gh-ocannl-1064) serves both of its wide arms with C casts; `schedule_mma_matmul`'s
   `hip_table_boundary` pins that no 16-bit accumulator fragment is declared and nothing crosses
-  `__mma_dp` through rocWMMA's own load/store on those arms.
+  `__mma_dp` through rocWMMA's own load/store on those arms. CUDA's bf16 twin went another way
+  (next bullet).
+- **CUDA's uniform-bf16 fragment scope is the inline-PTX arm's own registers, not wmma**
+  (gh-ocannl-1063, `Cuda_backend.mma16_register_scope`). A wmma bf16 -> f32 scope behind this
+  boundary would have served only PLAIN staged operands: the autotuner also seeds a `Swizzle_b128`
+  twin for exactly this triple (`mma_staged_layouts`), which only `ldmatrix` reads, so that twin
+  would have kept the per-`k_o` inline-PTX rendering — narrowing at every block while its plain
+  sibling stayed f32, making the crowned twin decide the numerics. Holding `float frag[m/16][n/8][4]`
+  in the architected m16n8k16 accumulator layout across the reduction serves both twins with one
+  instruction sequence (`mma16_d_boundary_lines` converts once per end; no coordinate table, the
+  PTX layout is specified). Before it, every staged uniform-bf16 schedule on CUDA narrowed per block
+  under EVERY policy although `accum_prec` said f32 — a staged k-split discriminator (256 + 1 per
+  later block) read 256, now 264. Before extending a fragment scope, list the staged twins the
+  seeding mints for that triple and check each one reaches the new scope. No config key: it is a
+  backend-resolution change, and the schedule cache's `codegen` component hashes the whole
+  `hardware_limits` record, whose `mma_bf16_wide_acc_scopes` changed on exactly the sm_80+ devices
+  whose rendering did, so old winners do not replay.
 - **bf16 residency is the ternary `bf16_arithmetic` policy's question** (gh-ocannl-838), the same
   shape as `fp16_arithmetic`: `Numerics.bf16_mode`, `Numerics.bf16_accum_wide`, and a per-format
   capability list `mma_bf16_wide_acc_scopes` read by the same seeding gate
   (`Sketch_families.wide_acc_withholds`, which names the withholding policy in its witness).
-  `Bf16_auto` keeps the gh-ocannl-663 table (f32 on CPU and CUDA, storage width on HIP/Metal);
+  `Bf16_auto` keeps the gh-ocannl-663 table (f32 on CPU and CUDA — on CUDA in every emission scope
+  only since gh-ocannl-1063 — storage width on HIP/Metal);
   `Bf16_wide` (`false`) widens every backend's `accum_prec`, swaps HIP's uniform-bf16 rocWMMA arm to
   a `float` accumulator fragment through the gh-ocannl-789 converted `d` boundary (both scopes),
-  leaves CUDA's inline-PTX arm alone (f32 in hardware; per-statement scope only, as for f16), and
+  leaves CUDA's inline-PTX arm alone (f32 in hardware, both scopes since gh-ocannl-1063), and
   swaps Metal's `simdgroup_bfloat8x8` arm to a `simdgroup_float8x8` accumulator behind the
   gh-ocannl-837 `thread_elements()` boundary (both scopes, gh-ocannl-923; before it that arm
   declined and the scope list was empty).
