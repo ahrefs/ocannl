@@ -304,6 +304,7 @@ class virtual scoped (surface : surface) =
       | Pexp_letop { let_; ands; body } ->
           let operands = let_ :: ands in
           List.iter operands ~f:(fun b ->
+              self#use (lookup env b.pbop_op.txt);
               ignore (self#expression env b.pbop_exp : expression);
               ignore (self#pattern env b.pbop_pat : pattern));
           let inner = bind_patterns env (List.map operands ~f:(fun b -> b.pbop_pat)) in

@@ -163,6 +163,14 @@ let () =
     && not (uses "open Ll_test\nclass c = object inherit p as seq method m = seq#x end"));
   p "a class-expression open of the harness reaches its builders"
     (uses "class c = let open Ll_test in object method m = seq end");
+  p "a binding operator the harness defines is a call into it"
+    (Scan.uses_surface
+       ~surface:(harness "include Ll_builders\nlet ( let* ) m f : LL.t = f m\n")
+       "open Ll_test\nlet _ = let* x = 1 in x"
+    && not
+         (Scan.uses_surface
+            ~surface:(harness "let ( let* ) m f = f m\n")
+            "open Ll_test\nlet _ = let* x = 1 in x"));
   (* The deliberate boundary: an open the scan cannot read is not taken to shadow the harness, as
      the tree's [open Ll_test] then [open Verdict.Claims] requires. *)
   p "an unreadable open after the harness's does not hide its builders"
