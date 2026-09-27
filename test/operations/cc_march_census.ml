@@ -40,8 +40,9 @@
    {1 What the claims are, and what they are not}
 
    Census counts are host-toolchain facts -- they move with the compiler version and the [-march] --
-   so the table goes to stderr and NOT into the golden. What the golden holds are inequalities that
-   a misclassified move instruction cannot flip:
+   so the table goes to [cc_march_census_kernels/rows.txt] (stderr carries its path and a row count
+   per column) and NOT into the golden. What the golden holds are inequalities that a misclassified
+   move instruction cannot flip:
 
    - every kernel compiles clean under every accepted target at [-O2] and at [-O3]; - every loop is
    FOUND: a census that answers "no loop carried the anchor" is a failure, because scoring only the
@@ -1540,8 +1541,23 @@ let () =
           String.is_substring e.source ~substring:(tile_header g.tile));
       let all = toolchains () in
       let available = List.filter all ~f:Census.accepts in
-      Stdio.eprintf "\n=== cc kernel census (not part of the golden) ===\n";
-      Stdio.eprintf "host toolchain: %s\n" (Cc_backend.compiler_command ());
+      (* The per-row table goes to a file beside the kernels it describes, not to stderr: dune cuts
+         a long stderr down to its head and tail with [...TRUNCATED BY DUNE...], and the rows it
+         cuts are whichever happen to sit in the middle -- which hid rows during the staging#865
+         triage. Stderr keeps the table's path, a row count per column, and the violator lists
+         below. Each row is flushed as it is censused, so a run killed or raising partway through
+         the matrix still leaves every row it finished -- which is where such a run stopped. *)
+      let table_path = Stdlib.Filename.concat root "rows.txt" in
+      let table = Stdio.Out_channel.create table_path in
+      let row fmt =
+        Printf.ksprintf
+          (fun line ->
+            Stdio.Out_channel.output_string table line;
+            Stdio.Out_channel.flush table)
+          fmt
+      in
+      row "=== cc kernel census ===\n";
+      row "host toolchain: %s\n" (Cc_backend.compiler_command ());
       let failed_compiles = ref [] in
       let edges = ref [] in
       let rows =
@@ -1593,11 +1609,10 @@ let () =
                             let c = census_loop parsed e loop in
                             (match c with
                             | Some c ->
-                                Stdio.eprintf "  %-24s %-11s -O%d %-11s %s\n" t.Census.label kernel
-                                  opt loop.what (Census.to_line c)
+                                row "  %-24s %-11s -O%d %-11s %s\n" t.Census.label kernel opt
+                                  loop.what (Census.to_line c)
                             | None ->
-                                Stdio.eprintf
-                                  "  %-24s %-11s -O%d %-11s NO LOOP CARRIED THE ANCHOR\n"
+                                row "  %-24s %-11s -O%d %-11s NO LOOP CARRIED THE ANCHOR\n"
                                   t.Census.label kernel opt loop.what);
                             {
                               toolchain = t.Census.label;
@@ -1613,6 +1628,16 @@ let () =
                               profile = c;
                             }))))
       in
+      row "=== end census ===\n";
+      Stdio.Out_channel.close table;
+      Stdio.eprintf "\n=== cc kernel census (not part of the golden) ===\n";
+      Stdio.eprintf "host toolchain: %s\n" (Cc_backend.compiler_command ());
+      Stdio.eprintf "per-row table: %s\n" table_path;
+      List.iter available ~f:(fun t ->
+          let mine = List.filter rows ~f:(fun r -> String.equal r.toolchain t.Census.label) in
+          Stdio.eprintf "  %-24s %d row(s), %d with no loop carrying the anchor\n" t.Census.label
+            (List.length mine)
+            (List.count mine ~f:(fun r -> Option.is_none r.profile)));
       Stdio.eprintf "=== end census ===\n\n";
       if !cache_active then
         Option.iter (Lazy.force cache_dir) ~f:(fun cache -> prune_cache cache.path);
