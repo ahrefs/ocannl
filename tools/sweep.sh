@@ -44,7 +44,11 @@
 #                                      # name a GPU box's ssh destination (also _MINIX),
 #                                      # instead of reading its kind from WAKE_LAB_HOSTS
 #   OCANNL_TOOL_SWEEP_WAKE_LAB=~/bin/wake-lab.sh  # the lab's power script (the default): asked
-#                                      # whether tuf is up before its lane, and to sleep it after
+#                                      # whether tuf is up before its lane, and to sleep it after;
+#                                      # its endpoint map and lock paths are checked at startup
+#   OCANNL_TOOL_FLEET_WORKER=none tools/sweep.sh  # do not consult the fleet's execution registry,
+#                                      # which otherwise skips a unit whose box is under an
+#                                      # exclusive measurement (unit_under_measurement)
 
 set -uo pipefail
 
@@ -75,6 +79,14 @@ AGGREGATE_SKIPS=$SWEEP_TOOLS/aggregate-skips.sh
 }
 # shellcheck source=kernel-window.sh
 . "$SWEEP_TOOLS/kernel-window.sh"
+# Where this host's fleet-worker.sh might be, shared with tools/test-run.sh: the reader of the
+# fleet's execution registry, which a lane asks before each unit (see unit_under_measurement).
+[ -r "$SWEEP_TOOLS/fleet-worker-candidates.sh" ] || {
+  echo "sweep: cannot read $SWEEP_TOOLS/fleet-worker-candidates.sh" >&2
+  exit 2
+}
+# shellcheck source=fleet-worker-candidates.sh
+. "$SWEEP_TOOLS/fleet-worker-candidates.sh"
 
 # ---------------------------------------------------------------- the lab lock
 # The WSL boxes are shared, and `wsl.exe --shutdown` on one of them is HOST-GLOBAL: it destroys the
@@ -88,9 +100,10 @@ AGGREGATE_SKIPS=$SWEEP_TOOLS/aggregate-skips.sh
 #
 # So a remote lane RESERVES its box for as long as it is using it, and wake-lab.sh refuses to
 # destroy a VM whose box is reserved. The contract between the two tools is deliberately just a
-# directory, a filename and a one-line description -- this sweep takes its own flock and never
-# calls wake-lab.sh, so a checkout on a box that has no ~/bin/wake-lab.sh still reserves correctly.
-# `wake-lab.sh lock-path <box>` answers the same path for anyone who would rather ask than derive.
+# directory, a filename and a one-line description -- this sweep takes its own flock without
+# calling wake-lab.sh, so a checkout on a box that has no ~/bin/wake-lab.sh still reserves correctly.
+# `wake-lab.sh lock-path <box>` answers the same path for anyone who would rather ask than derive,
+# and the sweep asks it only to check, once per run, that the two still agree (lab_contract_check).
 #
 # There are TWO lock files per box on the wake-lab side, and this is the one a lane takes:
 #
@@ -188,8 +201,9 @@ lab_box_gated() { # box
   case $1 in tuf) return 0 ;; *) return 1 ;; esac
 }
 
-# The lab's power script, for exactly those two acts. Nothing else in this file calls it: the lab
-# lock contract below is deliberately a directory, not a command.
+# The lab's power script, for exactly those two acts -- and, at startup, for the two read-only
+# answers the lab lock contract check compares against (lab_contract_check). The lock itself is
+# still deliberately a directory, not a command: no lane calls this to take one.
 WAKE_LAB=${OCANNL_TOOL_SWEEP_WAKE_LAB:-$HOME/bin/wake-lab.sh}
 
 # Prints the box's destination, or says on stderr why there is none and returns 1. The table is
@@ -283,6 +297,221 @@ lab_lock_holder() { # box
   local line
   line=$(head -1 "$LAB_LOCK_DIR/$1.lock" 2>/dev/null | tr -d '\000-\037')
   printf '%s' "${line:-an unnamed holder}"
+}
+
+# ------------------------------------------------------------ the lab lock contract, checked
+# The contract above is four facts held in common with a script in another repository: the
+# directory, the `<box>.lock` name, which box each ssh alias belongs to, and that a lane never takes
+# or honours `<box>.hold.lock`. ludics-lite's suite checks them from its side (scripts/test-wake-lab.sh
+# runs this file's take_lab_lock against wake-lab.sh, ludics-lite#170), but it reads a staging
+# checkout it never fetches, and it calls the function, not the lane. Two gaps close only here, in
+# the revision about to run, against the wake-lab.sh it will actually meet (gh-ocannl-1025): an
+# upstream push neither suite has seen yet, and the step from a lane's destination to the box whose
+# lock it takes. So once per run, for every box a selected remote lane reserves, this asks
+# wake-lab.sh the two things it answers without a site table -- `endpoint-map` and `lock-path` --
+# and requires that
+#   - its endpoint map has a row for the box lab_box_of names for the lane's destination,
+#   - every boot of that box lab_dest_of can address (all four of rog's and minix's aliases, both
+#     boots, whichever one today's run uses) is an endpoint on that row and maps back to that same
+#     box through lab_box_of, and
+#   - `lock-path <box>` answers the file take_lab_lock opens.
+# Both sides' spellings are read from code -- lab_dest_of and lab_box_of here, ENDPOINT_MAP there --
+# so a rename on either side fails this rather than a list restating them. The negative clause is
+# behaviour, not a name, and the harness pins it (a held hold lock, and a lane that still runs).
+#
+# A broken contract refuses the run at startup, as an unreadable boot kind does (lab_dest): a lane
+# reserving a file no destroyer consults is the 2026-09-16 loss waiting to recur, invisible until it
+# does, and the repair is a one-line table edit on one side. No wake-lab.sh at all is reported in
+# the header as NOT CHECKED and the run goes on: the lab locks are files on THIS host, so a host
+# without the script has no destroyer to disagree with, and the lane lock needs no wake-lab.sh to
+# be taken (above). A wake-lab.sh that has no endpoint map to give (one from before ludics-lite#395)
+# is NOT CHECKED too, loudly, rather than a lost day of every backend's coverage.
+# A startup question's answer, into the variable named first. Through run_capped and a file, never a
+# command substitution: bash defers a trap while it waits on a substitution, so a TERM aimed at this
+# pid would otherwise wait out the question's whole cap, with its supervisor never published in
+# UNIT_PID for the relay to reap.
+ask_capped() { # var budget command...
+  local ask_var=$1 ask_out ask_rc
+  shift
+  ask_out=$(mktemp "${TMPDIR:-/tmp}/ocannl-sweep-ask.XXXXXX") || return 1
+  run_capped "$@" >"$ask_out" 2>/dev/null </dev/null
+  ask_rc=$?
+  printf -v "$ask_var" '%s' "$(cat "$ask_out")"
+  rm -f "$ask_out"
+  return "$ask_rc"
+}
+
+LAB_MAP=      # wake-lab.sh endpoint-map's answer: a box name, then its ssh aliases, per line
+LAB_CONTRACT= # the header's verdict
+LAB_LANE_BOXES= # `<unit-table box>=<destination>` for each selected remote lane, set with LAB_DESTS
+lab_contract_check() { # -- sets LAB_MAP and LAB_CONTRACT; refuses the run on a broken contract
+  local pair placed dest box row kind alias path want broken= checked=
+  [ -n "$LAB_LANE_BOXES" ] || return 0
+  if [ ! -x "$WAKE_LAB" ]; then
+    LAB_CONTRACT="NOT CHECKED -- no wake-lab.sh at $WAKE_LAB, so nothing on this host consults the lane locks"
+    return 0
+  fi
+  ask_capped LAB_MAP 60 "$WAKE_LAB" endpoint-map || LAB_MAP=
+  if [ -z "$LAB_MAP" ]; then
+    LAB_CONTRACT="NOT CHECKED -- $WAKE_LAB endpoint-map gave no map (a wake-lab.sh from before ludics-lite#395?)"
+    return 0
+  fi
+  for pair in $LAB_LANE_BOXES; do
+    placed=${pair%%=*}
+    dest=${pair#*=}
+    box=$(lab_box_of "$dest")
+    case " $checked " in *" $box "*) continue ;; esac
+    checked="$checked $box"
+    row=$(awk -v b="$box" '$1 == b { $1 = ""; print; exit }' <<<"$LAB_MAP")
+    if [ -z "$row" ]; then
+      broken="$broken; its endpoint map has no row for $box, the box a lane to $dest reserves"
+      continue
+    fi
+    for kind in linux wsl; do
+      alias=$(lab_dest_of "$placed" "$kind") || continue
+      [ "$(lab_box_of "$alias")" = "$box" ] ||
+        broken="$broken; $alias would reserve $(lab_box_of "$alias") where $dest reserves $box, but the two boots of one box share one lock"
+      case " $row " in
+        *" $alias "*) ;;
+        *) broken="$broken; $alias is not an endpoint on $box's row (${row# })" ;;
+      esac
+    done
+    want=$LAB_LOCK_DIR/$box.lock
+    ask_capped path 60 "$WAKE_LAB" lock-path "$box" || path=
+    [ "$path" = "$want" ] ||
+      broken="$broken; lock-path $box answers '$path' where a lane locks $want"
+  done
+  [ -z "$broken" ] ||
+    die "the lab lock contract with $WAKE_LAB is broken${broken/#;/:}; a lane would reserve a box no destroyer checks, so fix the side that moved"
+  LAB_CONTRACT="agree with $WAKE_LAB for${checked}"
+}
+
+# ------------------------------------------------------ the fleet's execution reservations
+# The lab locks say "a lane runs on this box" and "keep this VM alive"; neither says "this box is
+# timing something". That is the fleet's execution registry (lukstafi/ludics-lite's issue-wave
+# skill, references/executions.md): a coordinator RESERVES a box for a run, and a `measurement`
+# reservation is exclusive -- the registry refuses every other reservation on its host while one is
+# outstanding, and every correctness slot there refuses with it. The sweep takes neither, so an
+# exclusive measurement was invisible to it: on 2026-09-27 the rog lane ran `dune clean` and a cuda
+# `@slow` suite into the middle of a 4-7 h tuned measurement there (gh-ocannl-1097), the search froze
+# on its next candidate, and every timing it took from then on was contaminated.
+#
+# So before EACH unit, not just a lane's first (minix's second unit starts long after its first,
+# and a measurement reserved in between is no less exclusive), the lane asks the registry whether
+# an outstanding `measurement` names its box, and on one records `skip (box <box> under an exclusive
+# measurement: <request_id> (<state> on <host>))` instead of running. A skip, like a box another
+# lane holds: nothing was tested and nothing failed, and the run record's skip coverage is already
+# the channel for a backend that went untested. A correctness reservation defers nothing: the
+# fleet's policy lets correctness runs share a box (its run-time slots bound them), and a standing
+# one lasts a worker's whole life, so a sweep that stood aside for those would rarely run at all.
+#
+# One direction only. The check is a read before the unit, and the sweep owns no registry record,
+# so a measurement reserved WHILE a unit runs is not refused by anything and the unit runs on under
+# it. Closing that needs the registry to see the sweep -- a record per unit, or a measurement
+# reservation that refuses a box whose lab lane lock is held -- which is fleet machinery, not this
+# script's (lukstafi/ludics-lite#445; the fleet's measurement guidance meanwhile has the owner inspect
+# the box's activity, where `wake-lab.sh status` shows the lane lock, before timing).
+#
+# A record names its box by an ssh identity, and a box has one per endpoint. A remote lane's names
+# are every alias on its box's row of wake-lab.sh's endpoint map, read once above (a measurement
+# booked on a dual-boot box's Windows side, for a verification reboot, holds the box as surely as
+# one on its Linux), united with names derived from lab_dest_of's own aliases -- all there is when
+# that map could not be read, and a floor under a row that lists fewer -- by the rule wake-lab.sh
+# enforces on every row (check_endpoints): a box's `-linux`, `-win` and `-wsl` aliases share one
+# stem, and its LAN route is `<box>-lan`. All three siblings, since the map lists boots the sweep
+# never addresses (tuf's `-win` and `-wsl`). The local lane's name is the one `execution slot --probe` gives this host -- the fleet's `mac-studio`, not
+# the `m4-max` measurement-box ID the history rows carry.
+#
+# The reader is the registry's own, `fleet-worker.sh execution list --active --compact` -- the
+# supervision read executions.md documents, which asks the anchor over ssh from anywhere else --
+# through the first fleet-worker candidate that answers the probe, as tools/test-run.sh chooses the
+# one it takes its slot through. No candidate answering means this host is outside the fleet, and
+# the header says the registry was NOT CONSULTED. A registry that cannot be read for one unit fails
+# OPEN and loud: the unit runs, under a WARNING line. An outage must not cost a day of the only
+# coverage five backends have; a measurement overlapped by a sweep can be run again, and the
+# fleet's measurement guidance already has its owner check the box's activity before timing.
+FLEET_FW=         # the fleet-worker.sh that answered the probe, empty for none
+FLEET_LOCAL_BOX=  # this host's name in the fleet, as that probe gave it
+FLEET_STATUS=     # the header's line
+fleet_probe() {
+  local fw probe tag box tokens
+  while IFS= read -r fw; do
+    [ -x "$fw" ] || continue
+    ask_capped probe 30 "$fw" execution slot --probe || continue
+    read -r tag _ _ box _ tokens _ <<<"$probe"
+    if [ "$tag" = EXECUTION ] && [ -n "$box" ] && [ -n "$tokens" ]; then
+      FLEET_FW=$fw
+      FLEET_LOCAL_BOX=$box
+      FLEET_STATUS="consulted before each unit through $fw (this host is $box)"
+      return 0
+    fi
+  done < <(fleet_worker_candidates)
+  if [ "${OCANNL_TOOL_FLEET_WORKER-}" = none ]; then
+    FLEET_STATUS="NOT CONSULTED -- OCANNL_TOOL_FLEET_WORKER=none"
+  else
+    FLEET_STATUS="NOT CONSULTED -- no fleet-worker.sh answered 'execution slot --probe' ($(fleet_worker_candidates | tr '\n' ' ' | sed 's/ $//'))"
+  fi
+}
+
+# The registry names that are this lane's box, space-separated; empty when there is nothing to ask.
+lane_fleet_names() { # ssh-destination (empty for the local lane)
+  local dest=$1 box row pair kind alias names=
+  if [ -z "$dest" ]; then
+    printf '%s' "$FLEET_LOCAL_BOX"
+    return
+  fi
+  box=$(lab_box_of "$dest")
+  row=$(awk -v b="$box" '$1 == b { $1 = ""; print; exit }' <<<"$LAB_MAP")
+  names="$dest $row $box-lan"
+  for pair in $LAB_LANE_BOXES; do
+    [ "${pair#*=}" = "$dest" ] || continue
+    for kind in linux wsl; do
+      alias=$(lab_dest_of "${pair%%=*}" "$kind") || continue
+      names="$names ${alias%-*}-linux ${alias%-*}-win ${alias%-*}-wsl"
+    done
+  done
+  printf '%s' "$names"
+}
+
+# 0 with MEASUREMENT_HOLDERS set when an outstanding measurement names one of the names; 1 when none
+# does; 2 with REGISTRY_REASON set when the registry could not be read. Through run_capped and a
+# file, not a command substitution, so a cancellation reaches the reader (see remote_guest_id).
+unit_under_measurement() { # names...
+  local out rc
+  MEASUREMENT_HOLDERS=
+  REGISTRY_REASON=
+  out=$(mktemp "$LANE_DIR/registry.XXXXXX") || {
+    REGISTRY_REASON="cannot create a scratch file under $LANE_DIR"
+    return 2
+  }
+  run_capped 120 "$FLEET_FW" execution list --active --compact >"$out" 2>"$out.err" </dev/null
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    REGISTRY_REASON="execution list exited $rc: $(tail -1 "$out.err" 2>/dev/null | tr -d '\000-\037' | cut -c1-200)"
+    rm -f "$out" "$out.err"
+    return 2
+  fi
+  MEASUREMENT_HOLDERS=$(perl -MJSON::PP -e '
+    my %names = map { $_ => 1 } @ARGV;
+    local $/;
+    my $list = eval { JSON::PP->new->decode(<STDIN>) };
+    exit 3 unless ref $list eq "ARRAY";
+    my @held;
+    for my $r (@$list) {
+      exit 3 unless ref $r eq "HASH" && ref $r->{request} eq "HASH";
+      my $q = $r->{request};
+      next unless ($q->{kind} // "") eq "measurement" && $names{$q->{execution_host} // ""};
+      push @held, sprintf("%s (%s on %s)", $r->{request_id} // "?", $r->{state} // "?",
+        $q->{execution_host});
+    }
+    print join("; ", @held);' "$@" <"$out")
+  rc=$?
+  rm -f "$out" "$out.err"
+  if [ "$rc" -ne 0 ]; then
+    REGISTRY_REASON="execution list printed no registry this could read"
+    return 2
+  fi
+  [ -n "$MEASUREMENT_HOLDERS" ]
 }
 
 REF=origin/master
@@ -572,6 +801,10 @@ for ((i = 0; i < ${#UNITS[@]}; i++)); do
   dest=$(lab_dest "${host#@}") || die "no ssh destination for $machine/$backend; refusing to guess one"
   UNITS[$i]=$machine:$backend:$dest
   case " $LAB_DESTS " in *" $machine=$dest "*) ;; *) LAB_DESTS="$LAB_DESTS $machine=$dest" ;; esac
+  case " $LAB_LANE_BOXES " in
+    *" ${host#@}=$dest "*) ;;
+    *) LAB_LANE_BOXES="$LAB_LANE_BOXES ${host#@}=$dest" ;;
+  esac
 done
 
 # One sweep at a time. Every local unit reuses a single fixed worktree, so an
@@ -2684,7 +2917,7 @@ sleep_gated_box() { # box
 # could not be written -- and that fails only its lane; the top level lets the
 # others finish recording and then exits 2.
 run_lane() { # machine -- only ever as a background job: it ends in `exit`
-  local lane=$1 unit machine backend host lane_host= lab_box lab_lock_rc
+  local lane=$1 unit machine backend host lane_host= lab_box= lab_lock_rc lane_names
   LANE_PIDS=
   LANE_REACHED=0
   LANE_DIALLING=0
@@ -2750,10 +2983,32 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
       exit 0
     fi
   fi
+  # The fleet's execution registry is asked before every unit, under the lane's reservation: a unit
+  # an exclusive measurement holds the box against is skipped, not run (see unit_under_measurement).
+  lane_names=
+  [ -z "$FLEET_FW" ] || lane_names=$(lane_fleet_names "$lane_host")
   for unit in "${UNITS[@]}"; do
     IFS=: read -r machine backend host <<<"$unit"
     [ "$machine" = "$lane" ] || continue
     wanted "$backend" || continue
+    if [ -n "$lane_names" ]; then
+      # Unquoted on purpose: the names are ssh aliases and a fleet box name, which never hold a space
+      # or a glob character, and each must reach the reader as its own argument.
+      # shellcheck disable=SC2086
+      unit_under_measurement $lane_names
+      case $? in
+        0)
+          say "  $machine/$backend: skip (box ${lab_box:-$FLEET_LOCAL_BOX} under an exclusive measurement: $MEASUREMENT_HOLDERS)"
+          record "$machine" "$backend" skip 0
+          update_unit_state "$machine" "$backend" skip
+          flush_lane_output || die "cannot publish the $machine/$backend summary to stdout"
+          continue
+          ;;
+        2)
+          say "  $machine/$backend: WARNING -- the fleet's execution registry could not be read ($REGISTRY_REASON); running without knowing whether a measurement holds the box"
+          ;;
+      esac
+    fi
     run_unit "$machine" "$backend" "$host"
     flush_lane_output || die "cannot publish the $machine/$backend summary to stdout"
   done
@@ -2776,6 +3031,14 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
   : >"$LANE_DIR/lane-done.$lane" || die "cannot mark the $lane lane finished"
   exit 0
 }
+
+# The two questions this run asks the fleet's own scripts before any lane starts, both answered
+# from THIS host and neither touching a box: whether wake-lab.sh still agrees on the lab lock
+# contract (a broken one refuses the run here, with no record), and which fleet-worker.sh reads the
+# execution registry the lanes consult before each unit. Here rather than beside the destination
+# resolution because both run under `capped`, defined above.
+lab_contract_check
+fleet_probe
 
 # Lanes, in first-appearance order of the table's machine column: a new box or
 # a second backend on an existing box lands in the right lane with no other edit.
@@ -2809,6 +3072,8 @@ echo "sweep $stamp  ref=$REF ($run_sha)  slow=$SLOW  target=${TARGET:-<all>}  ex
 echo "lanes:$lanes_summary"
 # Only when a remote unit is selected: which boot of each GPU box this run addresses.
 [ -z "$LAB_DESTS" ] || echo "destinations:$LAB_DESTS"
+[ -z "$LAB_CONTRACT" ] || echo "lab locks: $LAB_CONTRACT"
+echo "reservations: $FLEET_STATUS"
 echo
 
 # Registration is atomic with respect to the relay: a signal arriving between a
