@@ -1668,9 +1668,32 @@ let anchor_char c = Char.is_alphanum c || Char.equal c '_' || Char.equal c '-'
 let rendering_hazard c =
   List.mem [ '\\'; '<'; '&'; '%' ] c ~equal:Char.equal || Char.to_int c >= 128
 
+(** The HTML character reference starting at [i], if there is one: its end, and the code point it
+    names when that is known here -- numeric references (decimal or hex, any case, any leading
+    zeros) and [&num;], the one named reference for [#]. Other named references are recognized, so
+    that the [#] inside [&#36;] is not read as a separator, but carry no value. *)
+let char_reference_at line i =
+  let n = String.length line in
+  if i >= n || not (Char.equal line.[i] '&') then None
+  else
+    match String.index_from line i ';' with
+    | None -> None
+    | Some semi -> (
+        let body = String.lowercase (String.sub line ~pos:(i + 1) ~len:(semi - i - 1)) in
+        let digits ~f d = (not (String.is_empty d)) && String.for_all d ~f in
+        match (String.chop_prefix body ~prefix:"#x", String.chop_prefix body ~prefix:"#") with
+        | Some hex, _ when digits ~f:Char.is_hex_digit hex ->
+            Some (semi + 1, Int.of_string_opt ("0x" ^ hex))
+        | _, Some dec when digits ~f:Char.is_digit dec -> Some (semi + 1, Int.of_string_opt dec)
+        | _ when digits ~f:Char.is_alphanum body && Char.is_alpha body.[0] ->
+            Some (semi + 1, if String.equal body "num" then Some 35 else None)
+        | _ -> None)
+
 (** Every pointer-shaped occurrence in [contents] that a reader sees, code spans and fenced blocks
     included: a pointer set in backticks is still a pointer. Discovery is anchored on the [#], which
-    every rendered pointer contains, rather than on [.md], which a hazard can split. A [#] inside an
+    every rendered pointer contains, rather than on [.md], which a hazard can split. In CommonMark a
+    [#] reaches rendered text only as source text (escaped or not) or through a character reference
+    ({!char_reference_at}), and both are separators here, so discovery misses none. A [#] inside an
     HTML comment renders nowhere and is not read -- neither checked nor counted toward the live
     scan's floor (Codex P2, round 1 on lukstafi/ocannl-staging#811).
 
@@ -1687,21 +1710,41 @@ let guide_pointers contents =
       let n = String.length line in
       let hidden = spans_at comments lineno in
       let hazard_at j = j >= 0 && j < n && (rendering_hazard line.[j] || in_any_span hidden j) in
-      String.substr_index_all line ~may_overlap:false ~pattern:"#"
-      |> List.filter ~f:(fun i -> not (in_any_span hidden i))
-      |> List.filter_map ~f:(fun i ->
+      let visible i = not (in_any_span hidden i) in
+      (* Separators: a literal [#], or a character reference that renders as one (Codex P2, round 5
+         on lukstafi/ocannl-staging#811). Each is [(start, stop, literal)]; a literal [#] inside any
+         reference belongs to the reference. *)
+      let references =
+        String.substr_index_all line ~may_overlap:false ~pattern:"&"
+        |> List.filter ~f:visible
+        |> List.filter_map ~f:(fun i ->
+            Option.map (char_reference_at line i) ~f:(fun (e, value) -> (i, e, value)))
+      in
+      let entities =
+        List.filter_map references ~f:(fun (i, e, value) ->
+            match value with Some 35 -> Some (i, e, false) | _ -> None)
+      in
+      let literals =
+        String.substr_index_all line ~may_overlap:false ~pattern:"#"
+        |> List.filter ~f:(fun i ->
+            visible i && not (List.exists references ~f:(fun (a, e, _) -> a <= i && i < e)))
+        |> List.map ~f:(fun i -> (i, i + 1, true))
+      in
+      List.sort (entities @ literals) ~compare:(fun (a, _, _) (b, _, _) -> Int.compare a b)
+      |> List.filter_map ~f:(fun (i, after, literal) ->
           let start = ref i in
           while !start > 0 && path_char line.[!start - 1] do
             Int.decr start
           done;
-          let stop = ref (i + 1) in
+          let stop = ref after in
           while !stop < n && anchor_char line.[!stop] do
             Int.incr stop
           done;
           let path = String.sub line ~pos:!start ~len:(i - !start) in
-          let anchor = String.sub line ~pos:(i + 1) ~len:(!stop - i - 1) in
+          let anchor = String.sub line ~pos:after ~len:(!stop - after) in
           let pointer canonical = Some { pointer_line = lineno; path; anchor; canonical } in
-          if hazard_at (!start - 1) && not (String.is_empty anchor) then pointer false
+          if ((not literal) || hazard_at (!start - 1)) && not (String.is_empty anchor) then
+            pointer false
           else if String.is_suffix path ~suffix:".md" && String.length path > 3 then
             pointer ((not (String.is_empty anchor)) && not (hazard_at !stop))
           else None))

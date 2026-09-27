@@ -904,6 +904,15 @@ let guide_cases =
     ( "an entity for the hash is refused",
       guide "- A rule; the mechanism: a.md&#35;the-widget-seam.",
       [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a named reference for the hash is refused",
+      guide "- A rule; the mechanism: a.md&num;the-widget-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a hex reference for the hash is refused",
+      guide "- A rule; the mechanism: a.md&#X0023;the-widget-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a reference to another character is not a separator",
+      guide "- A rule, a.md&amp;b.md; and a.md&#36;x.",
+      [] );
     ( "hashes that are no pointer",
       guide "- Cited as staging#413 and ahrefs/ocannl#1044; `#ident_blacklist`; C# too.",
       [] );
