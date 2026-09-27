@@ -23,16 +23,16 @@ arrayjit/lib/low_level.ml, inline_computation:
   140:vector-setter-unsupported
   145:lane-extract-layout
   146:lane-extract-counter
-  148:scan-recurrence
+  149:scan-at-inline
 The phase table in test/operations/virtual_rejection_boundary.ml is held to those functions:
   Store -- check_and_store_virtual
   Consumption -- inline_computation
 Files naming a code, as `Non_virtual N` or by its tag -- the checklist for a change to where a code can fire:
-arrayjit/lib/low_level.ml -- 4 5 7 8 9 10 11 12 13 14 19 51 52 140 141 142 143 144 145 146 147 148
+arrayjit/lib/low_level.ml -- 4 5 7 8 9 10 11 12 13 14 19 51 52 140 141 142 143 144 145 146 147 148 149
 arrayjit/lib/low_level.mli -- 148
 arrayjit/lib/tnode.ml -- 13
-docs/agent-notes/virtualization-and-inlining.md -- 8 9 13 19 52 141 142 143 144 147 148
-docs/lowering_and_inlining.md -- 4 5 7 8 9 10 11 12 13 14 19 51 52 140 141 142 143 144 145 146 147 148
+docs/agent-notes/virtualization-and-inlining.md -- 8 9 13 19 52 141 142 143 144 147 148 149
+docs/lowering_and_inlining.md -- 4 5 7 8 9 10 11 12 13 14 19 51 52 140 141 142 143 144 145 146 147 148 149
 test/operations/footprint_materialization.ml -- 13
 test/operations/scan_loop.expected -- 148
 test/operations/scan_loop.ml -- 148
@@ -42,7 +42,7 @@ test/operations/virtual_chain_fanin.ml -- 13
 test/operations/virtual_diagonal.ml -- 13 52
 test/operations/virtual_guarded_setter.ml -- 142
 test/operations/virtual_rejection_boundary.expected -- 4 7 9 10 13 19 51 142 147 148
-test/operations/virtual_rejection_boundary.ml -- 4 5 7 8 9 10 11 12 13 14 19 51 52 140 141 142 143 144 145 146 147 148
+test/operations/virtual_rejection_boundary.ml -- 4 5 7 8 9 10 11 12 13 14 19 51 52 140 141 142 143 144 145 146 147 148 149
 test/operations/virtual_uncaptured_loop.expected -- 147
 test/operations/virtual_uncaptured_loop.ml -- 9 147
 Read, not part of the checklist:

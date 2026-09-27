@@ -14,12 +14,14 @@
     holds the minted codes by function, then every file naming one with the codes it names. A new
     code, a new file citing one, or a file that stops citing one each moves a line.
 
-    Three refusals ride along, each on stderr and a nonzero exit. A citation of a code no raise site
+    Four refusals ride along, each on stderr and a nonzero exit. A citation of a code no raise site
     mints is stale (a retired code, or a tag of another family spelled as one). A number minted
-    under two tags makes every numeric citation ambiguous. And the boundary test's phase table --
-    the one place the phase of a code is written down -- must place each tag in the phase whose
-    function mints it, which is what makes that table a restatement under test rather than beside
-    the source. [phases] below is the bridge between the test's vocabulary and the functions. *)
+    under two tags makes every numeric citation ambiguous; a tag minted in two functions makes the
+    provenance a node records unable to say which phase refused it. And the boundary test's phase
+    table -- the one place the phase of a code is written down -- must place each tag in the phase
+    whose function mints it, which is what makes that table a restatement under test rather than
+    beside the source. [phases] below is the bridge between the test's vocabulary and the functions.
+*)
 
 open Base
 open Stdio

@@ -184,8 +184,9 @@ files.
   (`Visit_cap` / uncovered read, `Inline_reduction_cap`, `Inline_fanin_cap`) BEFORE any legality
   question, so a shape capped there may be perfectly inlineable; `check_and_store_virtual` rejects
   at store time and `inline_computation` at consumption time — which codes each one mints is
-  derived, not listed: `test/operations/nonvirtual_code_inventory.expected` groups them by function
-  (`148:scan-recurrence` is under both, the second a backstop) — which is why two setters with
+  derived, not listed: `test/operations/nonvirtual_code_inventory.expected` groups them by function,
+  and refuses a tag minted in two (the consumption-time backstop behind `148:scan-recurrence` is
+  `149:scan-at-inline`, so the provenance says which phase spoke) — which is why two setters with
   different index maps as separate statements store fine as components and only fail once a read
   site cannot be served; and `cleanup_virtual_llc` commits a surviving read as `Surviving_read`,
   which is the absence of a rejection rather than one.

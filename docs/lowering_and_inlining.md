@@ -348,6 +348,8 @@ order, which is what decides whether a code can fire. The exit codes:
 - `147:enclosing-repetition-loop` — An enclosing loop the captured subtree does not mention in its
   index map.
 - `148:scan-recurrence` — A `Scan_loop` encloses, or is contained in, the captured computation.
+- `149:scan-at-inline` — A `Scan_loop` met while inlining a stored computation: the
+  consumption-time backstop behind 148, unreachable while storage refuses a scan first.
 
 `Non_virtual 19` was a defensive arm and is one no longer. The reasoning that made it defensive
 still holds *within* the pipeline: `hoist_cross_statement_cse` is the only phase here that produces

@@ -75,6 +75,25 @@ let () =
   p_none "a tag outside every exception scope, or inside a comment, is not a code" minted
     ~f:(fun (c : Scan.code) ->
       List.mem [ "6:fixture-elsewhere"; "5:fixture-in-a-comment" ] c.tag ~equal:String.equal);
+  (let nested =
+     String.concat ~sep:"\n"
+       [
+         "let outer x =";
+         "  let exception " ^ nv ^ " of string in";
+         "  let check () = if x then raise @@ " ^ nv ^ " \"2:fixture-in-helper\" in";
+         "  let inner () =";
+         "    let exception " ^ nv ^ " of string in";
+         "    raise (" ^ nv ^ " \"3:fixture-inner\")";
+         "  in";
+         "  check (); inner (); raise (" ^ nv ^ " \"7:fixture-store\")";
+       ]
+   in
+   p "a helper inside a scope mints for the scope, and a scope declared anew inside it is its own"
+     (List.equal String.equal
+        (List.map
+           (Scan.merge (Scan.minted ~source:"n.ml" nested))
+           ~f:(fun (c : Scan.code) -> c.tag ^ " " ^ c.minter))
+        [ "2:fixture-in-helper outer"; "3:fixture-inner inner"; "7:fixture-store outer" ]));
   p "a function declaring no such exception adds no code to a source that does"
     (List.equal String.equal
        (tags
@@ -153,6 +172,23 @@ let () =
                    };
                  ]))
           ~table:(Scan.phase_table "let phase_table = []")
+          ()));
+  p "a tag minted in two functions is refused: its provenance cannot name the phase"
+    (has
+       ~substring:
+         "7:fixture-store is minted in lib/fixture.ml consume and lib/fixture.ml store_check"
+       (violations
+          ~codes:
+            (Scan.merge
+               (minted
+               @ [
+                   {
+                     Scan.number = 7;
+                     tag = "7:fixture-store";
+                     source = "lib/fixture.ml";
+                     minter = "consume";
+                   };
+                 ]))
           ()));
   p "a stale citation is refused with its file"
     (has ~substring:"doc.md: `Non"

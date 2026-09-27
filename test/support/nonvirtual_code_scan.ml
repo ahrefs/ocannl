@@ -15,8 +15,11 @@
     ([let exception Non_virtual of string in ...]). That covers the literal at a [raise], the one
     handed to a helper that raises it ([~code:"..."]), and the one a handler records directly
     without raising, all of which are the same tag. The function a code is minted in is the
-    innermost value binding enclosing the exception's declaration, which is what decides its PHASE:
-    the store-time check, or the consumption-time inliner. A tag computed at run time is not read.
+    innermost value binding enclosing the exception's declaration -- a [Non_virtual] declared anew
+    inside that scope opens its own -- which is what decides its PHASE: the store-time check, or the
+    consumption-time inliner. So a tag is minted in ONE function, or the provenance a node records
+    cannot say which phase refused it, and the inventory refuses it. A tag computed at run time is
+    not read.
 
     {1 What naming a code is}
 
@@ -27,6 +30,12 @@
       there -- and the decimal code, which is how a comment or a Markdown page cites one. Such a
       spelling whose number no raise site mints is a STALE reference and is refused: a retired code,
       or a tag of another family (a heuristic cap is not one of these codes).
+
+    A tag spelled out is recognized only while some raise site still mints it: nothing tells a
+    retired [N:reason] from a tag of another family, of which the library and its tests mint many.
+    So a retired code's tag citations are not refused; they drop out of the golden, whose diff on
+    the change that retires the code names every file that cited it -- the checklist, read at the
+    moment it is needed.
 
     Bare numerals are not read: a paragraph that says "refused as 148 first" is found only through
     another spelling in the same file. The checklist is therefore a list of FILES; the codes beside
@@ -64,27 +73,15 @@ let binding_name (vb : value_binding) =
 *)
 let minted ~source content =
   let found = ref [] in
-  let literals ~minter e =
-    let collect =
-      object
-        inherit Ast_traverse.iter as super
-
-        method! expression e =
-          (match e.pexp_desc with
-          | Pexp_constant (Pconst_string (s, _, _)) -> (
-              match tag_number s with
-              | Some number -> found := { number; tag = s; source; minter } :: !found
-              | None -> ())
-          | _ -> ());
-          super#expression e
-      end
-    in
-    collect#expression e
-  in
   let walker =
-    object
+    object (self)
       inherit Ast_traverse.iter as super
       val mutable enclosing = "(top level)"
+
+      (* The minter of the innermost [Non_virtual] scope the walk is in. A helper bound inside that
+         scope raises the enclosing exception, so it does not move this; a [Non_virtual] declared
+         anew inside the scope shadows it, and does. *)
+      val mutable scope = None
 
       method! value_binding vb =
         let saved = enclosing in
@@ -94,9 +91,17 @@ let minted ~source content =
 
       method! expression e =
         match e.pexp_desc with
-        | Pexp_letexception ({ pext_name = { txt; _ }; _ }, body) when String.equal txt constructor
-          ->
-            literals ~minter:enclosing body
+        | Pexp_letexception (({ pext_name = { txt; _ }; _ } as ext), body)
+          when String.equal txt constructor ->
+            let saved = scope in
+            self#extension_constructor ext;
+            scope <- Some enclosing;
+            self#expression body;
+            scope <- saved
+        | Pexp_constant (Pconst_string (s, _, _)) -> (
+            match (scope, tag_number s) with
+            | Some minter, Some number -> found := { number; tag = s; source; minter } :: !found
+            | _ -> ())
         | _ -> super#expression e
     end
   in
@@ -209,6 +214,23 @@ let violations ~codes ~table_source ~table ~phases ~files =
                  (List.hd_exn group).number (String.concat ~sep:" and " tags))
         | _ -> None)
   in
+  let two_phases =
+    List.sort codes ~compare:(fun a b -> String.compare a.tag b.tag)
+    |> List.group ~break:(fun a b -> not (String.equal a.tag b.tag))
+    |> List.filter_map ~f:(fun group ->
+        match
+          List.dedup_and_sort ~compare:String.compare
+            (List.map group ~f:(fun c -> c.source ^ " " ^ c.minter))
+        with
+        | _ :: _ :: _ as minters ->
+            Some
+              (Printf.sprintf
+                 "%s is minted in %s: the recorded provenance can no longer say which phase \
+                  refused a node -- give each its own tag"
+                 (List.hd_exn group).tag
+                 (String.concat ~sep:" and " minters))
+        | _ -> None)
+  in
   let stale =
     List.concat_map files ~f:(fun (path, _, unknown) ->
         List.map unknown ~f:(fun n ->
@@ -249,8 +271,6 @@ let violations ~codes ~table_source ~table ~phases ~files =
                     (Printf.sprintf "%s: phase table entry %s names phase %s, which has no minter"
                        table_source tag phase)
               | minted, Some minter ->
-                  (* A tag may be minted in both phases -- a consumption-time backstop repeating a
-                     store-time verdict -- and a row pins the phase it reaches it through. *)
                   if List.exists minted ~f:(fun c -> String.equal c.minter minter) then None
                   else
                     Some
@@ -267,7 +287,7 @@ let violations ~codes ~table_source ~table ~phases ~files =
         in
         per_entry @ stale_phases
   in
-  no_codes @ ambiguous @ stale @ blind @ table_problems
+  no_codes @ ambiguous @ two_phases @ stale @ blind @ table_problems
 
 (** The [(prefix, reason)] exclusions no path in [paths] lives under. *)
 let stale_records ~records paths =

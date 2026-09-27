@@ -2454,8 +2454,11 @@ let%track7_sexp inline_computation ~id ~inherited_merge_tainted ~inherited_tns
              ([check_and_store_virtual]'s [Non_virtual 148] on the scan itself), so this arm is a
              consumption-time backstop with the same verdict, never a silent drop: the filter cannot
              keep a scan without re-minting its carried locals per replay, and dropping one that
-             feeds the value through a scope local would return the pre-scan value. *)
-          raise @@ Non_virtual "148:scan-recurrence"
+             feeds the value through a scope local would return the pre-scan value. Its own tag, not
+             148's: the provenance is what says which phase spoke, so should the store-time refusal
+             ever lapse, a node refused here reads as a consumption-time refusal
+             (gh-ocannl-1015). *)
+          raise @@ Non_virtual "149:scan-at-inline"
       | Zero_out tn when Tn.equal tn traced.tn -> Some (Set_local (id, Constant 0.0))
       | Set { tn; idcs; llsc; debug = _ } when Tn.equal tn traced.tn ->
           assert ([%equal: Indexing.axis_index array option] (Some idcs) def_args);

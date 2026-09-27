@@ -1,6 +1,7 @@
 every tag literal in an exception's scope is a code, a helper's argument and a record included: true
 a code belongs to the function declaring its exception: true
 a tag outside every exception scope, or inside a comment, is not a code: true
+a helper inside a scope mints for the scope, and a scope declared anew inside it is its own: true
 a function declaring no such exception adds no code to a source that does: true
 the constructor with the number names the code: true
 a citation wrapped at the line break still names it: true
@@ -21,6 +22,7 @@ a table entry naming a phase with no minter is refused: true
 an unreadable table is refused rather than skipped: true
 a phase whose function mints nothing is stale: true
 a number minted under two tags is ambiguous: true
+a tag minted in two functions is refused: its provenance cannot name the phase: true
 a stale citation is refused with its file: true
 no code at all is the reader gone blind: true
 a minting source whose codes the mention reader misses is the reader gone blind: true
