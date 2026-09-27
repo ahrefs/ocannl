@@ -236,6 +236,19 @@ files.
   mechanism: one `flock` replacing a directory-plus-pid-file dance with its reclaim races and
   `kill -0` pid-reuse hole, one `run_capped` replacing three hand-rolled background-and-publish-pid
   call sites.
+- The same holds for prose, these notes and `docs/` included: a fact has ONE owning entry, and an
+  entry that needs it points there instead of restating it. The tell is a second consecutive round
+  rewriting the same sentence; the fix is deleting the restatement, not correcting it. The
+  gh-ocannl-658 entry in `virtualization-and-inlining.md` restated the placement-provenance
+  representation the gh-ocannl-609 TAG entry owns, went stale in consecutive PRs (staging#740, then
+  staging#743) and was patched at the sentence both times; staging#746 cut it to the phase facts it
+  alone owns plus a pointer. A fact only the deferring entry held MOVES to the owner rather than
+  being dropped, and entries answering different questions stay separate: deferring is not
+  merging. The sharpest case is prose listing a set the CODE owns (which constructors an arm
+  matches, which codes form a category) — state the property instead of the membership, or cite
+  where the set is pinned. staging#748 found "produced only by `hoist_cross_statement_cse`" stale
+  in six copies once gh-ocannl-483 added a second emitter, and the taxonomy it first coined for a
+  sibling sentence drew a finding in each of three rounds until it was deleted.
 - Any file OCANNL publishes for a later process to read — a schedule-cache entry, a checkpoint, the
   cc probe cache — goes through `Utils.Atomic_file` (`arrayjit/lib/atomic_file.mli`), never through
   a hand-rolled `<path>.tmp`. Three parts, and a hand-rolled copy usually has one or two: a unique

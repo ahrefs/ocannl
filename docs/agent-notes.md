@@ -16,7 +16,8 @@ timed, shipped or released, never from the transform or branch that intended to 
 looking one trap up costs one file rather than all of them. Read the line below that matches what
 you are about to touch, then open that file. When promoting new knowledge, append to the matching
 file (2–6 lines, with file pointers) rather than here — the index only needs a new line if a file
-grows a topic its hooks do not already name. The structure below is checked, by
+grows a topic its hooks do not already name. A fact another entry already owns gets a pointer to
+it, not a second statement (the one-owner rule, in conventions.md). The structure below is checked, by
 `agent_notes_structure` (gh-ocannl-691): a bullet ends in punctuation and its continuations sit two
 spaces in, every row of the table is one physical line, every backticked hook occurs in the file its
 row links, and every file under `docs/agent-notes/` is linked from exactly one row — so a new file
@@ -45,4 +46,4 @@ dialect.
 | [backend-dialects-and-idents.md](agent-notes/backend-dialects-and-idents.md) | Per-dialect hazards (MSL `select`, `bfloat` builtins, untyped literals, CUDA/HIP half literals and overloads), the Metal RMW miscompile and pooled binding, the macOS `dispatch_apply` trap behind pool-backed `Grid` rendering, the `ident_blacklist`, and `C_syntax_config`'s include-time binding. |
 | [training-and-performance.md](agent-notes/training-and-performance.md) | `params` vs `trainable_params`, training-loop utilities, the Metal training recipe, cost-model calibration and envelope fitting, the cross-framework benchmark suite, and A/B measurement protocol. |
 | [build-and-test.md](agent-notes/build-and-test.md) | Dune mechanics behind the workflow rules: the `@fmt` gate and the format-test-promote order, scanning checks, `PIN THE RELATIONSHIP, NOT THE RESTATEMENT`, `agent_notes_structure` over these very files, `tools/test-run.sh`, `copy_files` and env-var tracking, `@check` not linking, worktree roots, plus what CI actually covers. |
-| [conventions.md](agent-notes/conventions.md) | Release tags, `ocannl_config.reference` and configuration spellings, `bin/` argument parsing, stdout-belongs-to-the-program, git worktree and `gh pr merge` mechanics, stacked-PR retargeting, atomic file publication through `Utils.Atomic_file`, and the honesty rules for skipped legs, references and reports. |
+| [conventions.md](agent-notes/conventions.md) | Release tags, `ocannl_config.reference` and configuration spellings, `bin/` argument parsing, stdout-belongs-to-the-program, git worktree and `gh pr merge` mechanics, stacked-PR retargeting, atomic file publication through `Utils.Atomic_file`, one owner per fact in code and in prose, and the honesty rules for skipped legs, references and reports. |
