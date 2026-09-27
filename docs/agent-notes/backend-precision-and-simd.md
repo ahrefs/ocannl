@@ -1080,11 +1080,15 @@ files.
   its `rm` A broadcasts are scalar-classified on x86 (`vbroadcastss`), against as few as `rm` FMAs.
   (3) `Register_tile.budget` is keyed on the vector WIDTH, so at 16 bytes it assumes NEON's 32
   registers: on x86 (16 registers) the default 4x6 tile needs 29 and spills (gcc: 32 stack
-  references per k step). Two gcc emission defects are pinned as classes rather than fixed, with a
-  claim that fails when either stops reproducing: the partial-vector tail load goes through a stack
-  slot every k step, and the narrow-storage widening bridges go through general-purpose registers
-  and the stack (fp16 on gcc 15; bf16 at `sapphirerapids` too on gcc 13, so the class is the
-  bridge family, not the format one compiler showed).
+  references per k step). Two gcc emission defects were pinned as classes rather than fixed, with a
+  claim that fails when one stops reproducing. The narrow-storage widening bridges still go through
+  general-purpose registers and the stack (fp16 on gcc 15; bf16 at `sapphirerapids` too on gcc 13,
+  so the class is the bridge family, not the format one compiler showed). The partial-vector tail
+  (`vtyp x = {0}; __builtin_memcpy(&x, p, width*elt)`) went through a stack slot every k step; its
+  fix (gh-ocannl-1071) is the lane-by-lane crossing below, and the claim's failure is what forced
+  the class out. Keep the store side in view in such a fix: a vector whose address a `memcpy`
+  takes stays in memory for the whole loop, so the width-counted STORE after the k-loop kept the
+  partial accumulators on the stack too.
 - **A census reading is a fact about the emission AND about the compiler, and CI runs two of them**
   (gh-ocannl-752). The extended fixture passed on a gcc 15.2 box and was red on BOTH CI legs, in two
   unrelated ways, neither reachable from a gcc-only host. (a) **Line attribution.** A row is found
@@ -1390,9 +1394,9 @@ files.
   a fitted peel weight (gh-575). Now `Register_tile.coverage` decomposes the site — the full
   passes, a column tail of whole vectors plus one PARTIAL vector, a row band of `m mod rm` rows —
   and the emitter renders each piece as the same C-tile pass at a smaller grid (four pass bodies at
-  most). A partial vector is declared `= {0}` and crosses the memory boundary at exactly its width
-  (`vec_bridge ~width`: a byte-counted memcpy, or the narrow bridge macros with `LANES` = the valid
-  lanes — they zero-init their temporary and copy `LANES * 2` bytes, which is what makes them
+  most). A partial vector is zeroed and crosses the memory boundary at exactly its width
+  (`vec_bridge ~width`: a lane initializer and per-lane stores, or the narrow bridge macros with
+  `LANES` = the valid lanes — they zero-init their temporary and copy `LANES * 2` bytes, which is what makes them
   partial-safe), so nothing past the extent is read or written, and every element's k-chain is the
   same fused serial chain: parity with the scalar fallback stays bitwise, narrow storage included
   (`tile_mma_geometry`'s 6x19 legs at f32, bf16 and half pin the header, the zeroed register, the
