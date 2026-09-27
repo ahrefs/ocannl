@@ -915,6 +915,10 @@ val reading_to_string : reading -> string
 (** The reading's lowercase name — ["materialize"], ["inline"] or ["footprint"] — for logs, arm
     labels and test output. *)
 
+val partition_readings : (Tnode.t * reading) list -> Tnode.t list * Tnode.t list * Tnode.t list
+(** Splits decided readings into the [(materialized, inline, footprint)] lists that
+    [Context.lowered_for_decisions] takes, keeping the input order within each list. *)
+
 type flip_alternative = {
   fa_flip : reading;  (** The reading the flip moves the node to. *)
   fa_recompute_cost : int;
