@@ -153,11 +153,16 @@ type disagreement =
     to cancel and no weights to collide. The digest stays worth printing — one number per line
     fingerprints a run and travels into a report — but it is not what decides.
 
-    Exact equality is the right comparison for these benches: their operands are exact in binary and
-    their products are small multiples of a negative power of two, so every variant's reduction is
-    exact whatever order it sums in. A bench whose legs may legitimately round differently (a
-    narrow-storage run past the extent where its block partials stay exact) should say so where it
-    reports, as it already must for the checksum.
+    Exact equality is a verdict only where the bench has established that every partial sum AND the
+    output are exact at its precision and extents — whatever order a variant sums in. Exact operands
+    are not enough: whether the reduction rounds depends on k and on the widths the partials and the
+    output are held at (at f16, [schedule_bench 256 2 256 256 1] rounds its output at 1/8 above 128,
+    so a reordered sum differs in its last bit without being wrong). Each bench derives this for
+    itself and reports a difference outside it as expected rather than wrong: [schedule_bench]'s
+    [exact_reduction] bounds k times the operands' magnitudes against the operand precision's
+    significand, and [narrow_gebp_bench] splits its comparisons into required ones and the
+    naive-vs-packed one its [naive_comparable] gates. A new bench calling this owes the same
+    derivation.
 
     Outside the timed region, like the checksum. *)
 let first_difference ~reference values =
