@@ -194,6 +194,11 @@ require_complete_session() {
     echo "== step $1: INCOMPLETE SESSION: an arm carries a terminal failure"
     status=1
   fi
+  # A timing call that raised is in none of the trace's totals, so its cost split is not the session's.
+  if grep -q '^timing-trace: summary: .*INCOMPLETE' "$out/$1.err"; then
+    echo "== step $1: INCOMPLETE SESSION: the trace summary is missing raised timing calls"
+    status=1
+  fi
   if printf '%s' "$line" | grep -o '"timings_contended":[0-9]*' | grep -qv ':0$'; then
     echo "== step $1: CONTENDED SESSION: timing windows were refused for host contention"
     status=1
