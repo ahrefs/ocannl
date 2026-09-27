@@ -562,11 +562,13 @@ end = struct
 
     (* gh-ocannl-663: serial-rendered reduction accumulators mirror the mma legs' residency. Unlike
        CUDA, RDNA WMMA has genuine bf16 (and f16) accumulator variants and the uniform 16-bit
-       triples are seeded, so narrow 16-bit accumulators keep their storage residency — widening the
-       serial legs here would re-introduce the serial-vs-mma width dependence gh-ocannl-639 removes.
-       fp8 has an accumulator format on no backend (its serial arithmetic already bridges through
-       float per operator), so it follows the CPU policy: f32 residency, one narrowing per nest,
-       governed by the same [narrow_compute_f32] knob.
+       triples are seeded, so wherever the policy keeps the narrow ARM a 16-bit accumulator keeps
+       its storage residency too — widening only the serial legs would re-introduce the
+       serial-vs-mma width dependence gh-ocannl-639 removes. Which arm the policy picks is the
+       residency: f16 is narrow unless [Fp16_wide]; bf16 is WIDE unless [Bf16_narrow]
+       (gh-ocannl-1051, below). fp8 has an accumulator format on no backend (its serial arithmetic
+       already bridges through float per operator), so it follows the CPU policy: f32 residency, one
+       narrowing per nest, governed by the same [narrow_compute_f32] knob.
 
        Under [Numerics.Fp16_wide] (gh-ocannl-680) f16 accumulators reside in f32 here too, and the
        mma legs follow — not by being withheld, but by swapping arms: [mma_combo] renders the

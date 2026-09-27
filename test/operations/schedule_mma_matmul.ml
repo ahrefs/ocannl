@@ -985,10 +985,12 @@ let () =
      half a bf16 ulp (plus one f32 ulp of slack at the scale of the sum for gfx11's WMMA, whose f32
      accumulate is not exactly rounded either) — and it is two-sided: the same bound over the same
      inputs, rendered under the default policy, must FAIL wherever the backend keeps bf16 storage
-     residency (HIP's bf16-accumulate WMMA, or its narrow serial fallback), which is what makes
-     passing it evidence rather than a property of easy inputs. Metal's side of the negative control
-     executes since gh-ocannl-923: its default-policy [simdgroup_bfloat8x8] accumulate exceeds the
-     bound (by 0.0937 on an M4 Max, against -0.0234 under [Bf16_wide]). --- *)
+     residency, which is what makes passing it evidence rather than a property of easy inputs. On
+     HIP that is no longer the default (its [Bf16_auto] resolves wide since gh-ocannl-1051), so its
+     negative control is the [Bf16_narrow] twin below: gfx11's bf16-accumulate WMMA, or its narrow
+     serial fallback, which the approximate profile still ships. Metal's side of the negative
+     control executes since gh-ocannl-923: its default-policy [simdgroup_bfloat8x8] accumulate
+     exceeds the bound (by 0.0937 on an M4 Max, against -0.0234 under [Bf16_wide]). --- *)
   let bwa = NTDSL.init ~l:"bwa" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fwa () in
   let bwb = NTDSL.init ~l:"bwb" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fwb () in
   let exact_bw =
@@ -1958,10 +1960,11 @@ let () =
      same per-block sums through the framework's own bf16 codec, narrowing after every block resp.
      once, and must differ — so a device reading of [bws_wide] is evidence of residency, not a
      property of easy inputs. The same composition under the default policy narrows between blocks
-     exactly where the backend's bf16 [accum_prec] is bf16 — HIP and Metal (whose wide uniform-bf16
-     arm landed with gh-ocannl-923) — and on CUDA, whose bf16 accumulators are f32 under every
-     policy, it reads [bws_wide] too: a two-sided pin of [Bf16_auto]'s CURRENT resolution per
-     backend, not a contract.
+     exactly where the backend's bf16 [accum_prec] is bf16 — Metal (whose wide uniform-bf16 arm
+     landed with gh-ocannl-923), and HIP only under the [Bf16_narrow] twin since gh-ocannl-1051 —
+     and on CUDA, whose bf16 accumulators are f32 under every policy, and HIP's default, it reads
+     [bws_wide] too: a two-sided pin of [Bf16_auto]'s CURRENT resolution per backend, not a
+     contract.
 
      CUDA (gh-ocannl-1063): uniform bf16 has no wmma combination, so before this the fragment scope
      declined and the staged schedule took the per-[k_o] inline-PTX rendering, narrowing at every
