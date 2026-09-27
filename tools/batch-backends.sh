@@ -99,32 +99,18 @@ batch_box_has_hazard() {
   return 1
 }
 
-# Runs a command under what is left of the resolution's <cap> seconds (0:
-# unbounded), so the readers' build and every reader run share one budget:
-# a hung reader answers "unread" -- every backend -- instead of stranding the
-# launch (Codex review round 1 on PR #832). Uses batch_resolve's locals; with
-# `-C <dir>` the command runs in <dir>.
-#
-# The command runs in a process group of its own, and the deadline kills the
-# whole group: a reader's child that outlives it would otherwise hold a pipe
-# open to its own end. INT, TERM and HUP reaching the perl runner are relayed
-# to the group, which gets five seconds to act on them before it is KILLed. And the runner is waited on in the BACKGROUND, because bash
-# defers a trap until a foreground command completes: this way a signal to
-# the launcher alone runs its trap at once, and batch_cancel_hook (the
-# launcher's) decides whether to end the runner (Codex review round 2).
-batch_child=   # the runner in flight, for batch_abort
-batch_bounded() { # [-C dir] command...
-  local left=0 dir=. rc
-  if [ "${1:-}" = -C ]; then dir=$2; shift 2; fi
-  # A cancellation the launcher trapped before this reader started (in
-  # new_run, take_lock, or an earlier reader) starts nothing more (Codex
-  # review round 4 on PR #832).
-  ! batch_cancel_hook || return 143
-  if [ "$bcap" -ne 0 ]; then
-    left=$((bcap - (SECONDS - bstart)))
-    [ "$left" -gt 0 ] || return 124
-  fi
-  perl -e '
+# Runs a command in <dir>, in a process group of its own, under a deadline of
+# <seconds> (0: none) that kills the whole group: a child that outlives the
+# command would otherwise hold a pipe open to its own end. INT, TERM and HUP
+# reaching the runner are relayed to the group, which gets five seconds to act
+# before it is KILLed; and a group left behind by a command that exited is
+# KILLed too, since it could hold the worktree lock with nothing over it
+# (Codex review rounds 1-6 on PR #832). Exits with the command's status, 124
+# on the deadline. Shared by the backends' readers and the fleet-slot probe:
+# `perl -e "$BATCH_GROUP_RUNNER" <seconds> <dir> command...`, run directly so
+# that `$!` of a backgrounded one is the runner itself.
+# shellcheck disable=SC2016  # perl, not shell, expands these
+BATCH_GROUP_RUNNER='
     use POSIX ":sys_wait_h";
     my ($left, $dir) = splice(@ARGV, 0, 2);
     defined(my $pid = fork) or exit 127;
@@ -159,7 +145,30 @@ batch_bounded() { # [-C dir] command...
     alarm 0;
     kill "KILL", -$pid;
     exit(($st & 127) ? 128 + ($st & 127) : $st >> 8);
-  ' "$left" "$dir" "$@" &
+  '
+
+# Runs a command under what is left of the resolution's <cap> seconds (0:
+# unbounded), so the readers' build and every reader run share one budget:
+# a hung reader answers "unread" -- every backend -- instead of stranding the
+# launch (Codex review round 1 on PR #832). Uses batch_resolve's locals; with
+# `-C <dir>` the command runs in <dir>, under BATCH_GROUP_RUNNER. The runner is
+# waited on in the BACKGROUND, because bash
+# defers a trap until a foreground command completes: this way a signal to
+# the launcher alone runs its trap at once, and batch_cancel_hook (the
+# launcher's) decides whether to end the runner (Codex review round 2).
+batch_child=   # the runner in flight, for batch_abort
+batch_bounded() { # [-C dir] command...
+  local left=0 dir=. rc
+  if [ "${1:-}" = -C ]; then dir=$2; shift 2; fi
+  # A cancellation the launcher trapped before this reader started (in
+  # new_run, take_lock, or an earlier reader) starts nothing more (Codex
+  # review round 4 on PR #832).
+  ! batch_cancel_hook || return 143
+  if [ "$bcap" -ne 0 ]; then
+    left=$((bcap - (SECONDS - bstart)))
+    [ "$left" -gt 0 ] || return 124
+  fi
+  perl -e "$BATCH_GROUP_RUNNER" "$left" "$dir" "$@" &
   batch_child=$!
   while :; do
     wait "$batch_child"
@@ -198,12 +207,16 @@ batch_resolve() { # <dune> <log> <cap> dune-argv...
   if [ "${1:-}" = exec ]; then
     batch_unknown="dune exec runs a program that may pick its own backend"
   fi
+  # The argv the reachability tool reads: the caller's, less the backend
+  # flags read here, which its closed grammar would take as unmodelled
+  # (Codex review round 6 on PR #832).
+  local -a reach_argv=()
   for a; do
     [ -z "$batch_unknown" ] || break
     case $a in
       --ocannl[_-]backend=*) v=${a#*=} ;;
       *ocannl[_-]backend*) v= ;;
-      *) continue ;;
+      *) reach_argv+=("$a"); continue ;;
     esac
     if batch_known_backend "$v"; then
       batch_add "$v" "the command line names it ($a)"
@@ -229,7 +242,7 @@ batch_resolve() { # <dune> <log> <cap> dune-argv...
     fi
   fi
   if [ -z "$batch_unknown" ]; then
-    if batch_bounded "$reach" "$@" >"$log.reach" 2>/dev/null; then
+    if batch_bounded "$reach" ${reach_argv[@]+"${reach_argv[@]}"} >"$log.reach" 2>/dev/null; then
       out=$(cat "$log.reach" 2>/dev/null)
     else
       # A failed read is not an answer, however complete what it printed

@@ -402,9 +402,10 @@ plan_slot() {
   # outside the fleet.
   while IFS= read -r fw; do
     [ -x "$fw" ] || continue
-    # Bounded: a wedged fleet-worker.sh must not hang a launch or a plan
-    # before any cap applies (Codex review round 5 on PR #832).
-    probe=$(perl -e 'alarm shift; exec @ARGV or exit 127' 30 "$fw" execution slot --probe 2>/dev/null) || continue
+    # Bounded, its whole process group with it: a wedged fleet-worker.sh
+    # must not hang a launch or a plan before any cap applies (Codex review
+    # rounds 5-6 on PR #832).
+    probe=$(perl -e "$BATCH_GROUP_RUNNER" 30 . "$fw" execution slot --probe 2>/dev/null) || continue
     read -r tag _ _ box slots tokens _ <<<"$probe"
     [ "$tag" = EXECUTION ] && [ -n "$tokens" ] && { slot_fw=$fw; break; }
   done < <(fleet_worker_candidates)

@@ -3824,6 +3824,10 @@ if [ -z "$slot_detail" ]; then
   slot_probe slot-argv-cpu-flag hold cc cc run build @cheap --ocannl_backend=cc
   [ "$slot_calls" = "execution slot --wait 600 --cpu -- dune build @cheap --ocannl_backend=cc" ] ||
     slot_detail="a command-line CPU backend: slot call: ${slot_calls:-<none>} (want --cpu)"
+  # ...and the reachability tool is asked without the flag the argv scan
+  # already read (Codex review round 6 on PR #832).
+  [ -n "$slot_detail" ] || [ "$(cat "$TMP/slot-argv-cpu-flag.reach")" = "build @cheap" ] ||
+    slot_detail="a command-line CPU backend: reachability asked about: $(cat "$TMP/slot-argv-cpu-flag.reach")"
 fi
 if [ -z "$slot_detail" ]; then
   # At most half the cap, so a refusal returns before the cap's alarm.
