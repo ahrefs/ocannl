@@ -36,12 +36,12 @@
 #   gh-ocannl-834's CUDA pair the isolated session ran first and the driver's PTX ComputeCache
 #   served the queued one warm (406 s vs 64 s of compile and bookkeeping outside timing). On cuda
 #   each session therefore gets its own empty CUDA_CACHE_PATH=OUT/nvcache-<mode>, recorded in
-#   driver.log (with its final size) and removed after the step so OUT archives only results; it
-#   overrides any the caller exported. Other backends keep caches this script cannot redirect
-#   (HIP's comgr cache, macOS's Metal shader cache), and a fresh OUT does not reset them: the first
-#   session ever run warms every later one, the next invocation's included. There, bring every
-#   measured session to the same cache state -- a discarded warm-up session first (or the cache
-#   cleared by hand before each session) -- then run the modes ABBA (session-isolated
+#   driver.log (with its final size) and removed after the step -- on every exit path -- so OUT
+#   archives only results; it overrides any the caller exported. Other backends keep caches this
+#   script cannot redirect (HIP's comgr cache, macOS's Metal shader cache), and a fresh OUT does not
+#   reset them: the first session ever run warms every later one, the next invocation's included.
+#   There, bring every measured session to the same cache state -- a discarded warm-up session first
+#   (or the cache cleared by hand before each session) -- then run the modes ABBA (session-isolated
 #   session-queued in one invocation, the reverse in a second on a fresh OUT) and compare each
 #   mode's pair, so order effects cancel.
 set -u
@@ -72,7 +72,9 @@ out=$(cd "$out" && pwd -P) && case $out in /?*) ;; *) false ;; esac ||
 # the whole log is replayed to the caller's stdout on exit. Follow a live run with tail -f.
 exec 3>&1
 exec >>"$out/driver.log" 2>&1 || exit 2
-trap 'cat "$out/driver.log" >&3' EXIT
+# A session's CUDA driver cache (below) is scratch: whatever path ends the run -- an interrupt, a
+# survivor of the cap, a usage error mid-list -- leaves none of it in OUT.
+trap 'rm -rf "$out"/nvcache-*; cat "$out/driver.log" >&3' EXIT
 root=$(cd "$(dirname "$0")/.." && pwd -P)
 # The runners read the nearest ocannl_config; benchmarks/ has the suite's own.
 cd "$root/benchmarks" || exit 2
