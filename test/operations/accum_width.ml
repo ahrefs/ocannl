@@ -20,13 +20,14 @@
    The value claims are policy claims and run wherever the backend's accumulator resolution widens
    bf16 (gh-ocannl-663): the CPU backends ([Numerics.cpu_compute_prec]) and CUDA, whose mma legs
    hold f32 per-lane registers across the whole k extent — the hardware has no bf16 accumulate — so
-   its serial legs must match. On HIP and Metal the tensor units accumulate in bf16 fragments and
-   the serial legs deliberately keep bf16 storage residency (width-uniform with their mma legs), so
-   the bf16 widened claims are false there BY DESIGN (under the default [Bf16_auto]; the universal
-   legs at the end run them under [Bf16_wide], gh-ocannl-838) and skipped — while the fp8 claim,
-   which holds universally, executes on every backend. The structural claims grep cc's generated C
-   and the SIMD/Workgroup_reduce-serialization legs exercise CPU-only renderings; they stay cc-only
-   and print their passing golden line as skipped elsewhere. *)
+   its serial legs must match — and HIP, whose [Bf16_auto] resolves wide since gh-ocannl-1051. On
+   Metal the tensor unit accumulates in bf16 fragments and the serial legs deliberately keep bf16
+   storage residency (width-uniform with its mma legs), so the bf16 widened claims are false there
+   BY DESIGN (under the default [Bf16_auto]; the universal legs at the end run them under
+   [Bf16_wide], gh-ocannl-838) and skipped — while the fp8 claim, which holds universally, executes
+   on every backend. The structural claims grep cc's generated C and the
+   SIMD/Workgroup_reduce-serialization legs exercise CPU-only renderings; they stay cc-only and
+   print their passing golden line as skipped elsewhere. *)
 
 open Base
 open Ocannl
@@ -60,8 +61,10 @@ let render_rivals { initial; increment; terms; narrow } =
 (* [Bf16_auto], the default bf16 mode, which the gated bf16 block below states its claims for (the
    universal legs at the end name [Bf16_wide]). The stanza declares OCANNL_BF16_ARITHMETIC, so the
    gate and the block both pin it rather than inheriting the ambient mode: under an ambient
-   [Bf16_wide] the gate opens on HIP and Metal and the narrow_compute_f32 negative controls stay
-   wide (gh-ocannl-1078). *)
+   [Bf16_wide] the gate opens on Metal and the narrow_compute_f32 negative controls stay wide
+   (gh-ocannl-1078). On HIP [Bf16_auto] itself opens the gate since gh-ocannl-1051; the controls
+   that execute there are the fp8 one, whose HIP residency [narrow_compute_f32] still governs, and
+   the cc-only bf16 ones skip. *)
 let bf16_auto pol = { pol with Numerics.bf16_arithmetic = Numerics.Bf16_auto }
 
 (* Read the same per-backend policy code generation applies, rather than reconstructing it from the

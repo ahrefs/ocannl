@@ -1176,8 +1176,9 @@
 # GPU backends compute narrow arithmetic natively and their pointwise numerics are unaffected
 # either way; their reduction-accumulator width follows the tensor-unit formats (gh-ocannl-663):
 # serial bf16 reductions on CUDA and fp8 reductions everywhere accumulate in f32 and narrow once
-# per nest, mirroring the mma legs, while bf16 on HIP/Metal (whose tiles accumulate in
-# storage-width fragments) keeps storage residency under bf16_arithmetic=auto; f16 residency is
+# per nest, mirroring the mma legs (bf16 on HIP too since gh-ocannl-1051), while bf16 on Metal
+# (whose tiles accumulate in storage-width fragments) keeps storage residency under
+# bf16_arithmetic=auto; f16 residency is
 # fp16_arithmetic's question and wide bf16 residency bf16_arithmetic's, not this knob's
 # (gh-ocannl-680, gh-ocannl-838). This knob reaches the GPU accumulators only
 # where per-step narrowing can be restored SCHEDULE-UNIFORMLY, which is fp8 on CUDA and HIP (no
@@ -1215,12 +1216,12 @@
 # Numerics policy: how bf16 accumulates (gh-ocannl-838), the same three-way shape as
 # fp16_arithmetic. bf16 compute needs no knob of its own: no target has native bf16 arithmetic,
 # so narrow_compute_f32 decides it.
-# - "auto" (the default): each backend's structural residency -- f32 on the CPU backends (under
-#   narrow_compute_f32) and on CUDA (whose bf16 mma accumulates f32 in hardware), storage-width
-#   bf16 on HIP and Metal, mirroring their uniform-bf16 tensor-unit triples. On HIP that
-#   triple is gfx11's bf16-accumulate WMMA, which is not exactly rounded and loses close to a
-#   bf16 ulp at the partial-sum scale. Like fp16_arithmetic=auto the resolution retains latitude
-#   per backend.
+# - "auto" (the default): each backend's own resolution -- f32 on the CPU backends (under
+#   narrow_compute_f32), on CUDA (whose bf16 mma accumulates f32 in hardware) and on HIP
+#   (gh-ocannl-1051, as "false": gfx11's bf16-accumulate WMMA is not exactly rounded, and over a
+#   2048-term reduction it read 93 where the exact-width answer is 536; the f32 arm costs at most
+#   ~8% on tensorized GEMM cells); storage-width bf16 on Metal, mirroring its uniform-bf16
+#   tensor-unit triple. Like fp16_arithmetic=auto the resolution retains latitude per backend.
 # - "false": bf16 reduction accumulators reside in f32 on every backend, narrowing once per nest,
 #   so the error is the narrowing rounding alone. HIP keeps its uniform-bf16 mma legs tensorized
 #   through an f32 accumulator fragment converted at the destination boundary (both emission
@@ -1228,8 +1229,9 @@
 #   multi-block uniform-bf16 seeds are withheld; Metal swaps its uniform-bf16 simdgroup_matrix
 #   arm to an f32 accumulator the same way HIP does (both emission scopes).
 # - "true": the narrow side of the trade wherever a backend offers one. It resolves as "auto" on
-#   every backend today; the `approximate` profile names it so that regime does not depend on
-#   how "auto" later resolves.
+#   every backend except HIP, where it keeps the bf16-accumulate WMMA arm and storage-width serial
+#   accumulators; the `approximate` profile names it, which is how that regime kept the narrow
+#   side when HIP's "auto" went wide.
 # Programmatic override: `Ir.Numerics.set_policy`.
 #bf16_arithmetic=auto
 
@@ -1395,8 +1397,8 @@
 # # a tf32 tile shape (CUDA sm_80+); a no-op elsewhere.
 # tf32_matmuls=true
 # # The narrow side of the bf16 accumulator trade (gh-ocannl-838), symmetric with fp16_arithmetic
-# # above: never the strict f32 residency `false` requests. It resolves as auto on every backend
-# # today; naming it keeps this regime's bf16 numerics independent of how auto later resolves.
+# # above: never the strict f32 residency `false` requests. It resolves as auto everywhere except
+# # HIP, where auto went wide (gh-ocannl-1051) and this keeps gfx11's bf16-accumulate WMMA.
 # bf16_arithmetic=true
 # # The online-softmax attention rewrite (gh-ocannl-483): the softmax normalizer's summation is
 # # reassociated into a per-row scan, and the probabilities are never materialized.

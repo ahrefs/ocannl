@@ -152,6 +152,21 @@ let fp8_guard_source () =
               ^ " -- Builtins_hip and this list have drifted apart"))
   |> String.concat ~sep:"\n"
 
+(* Whether bf16 reduction accumulators reside in f32 on this backend: under [Numerics.Bf16_wide],
+   and since gh-ocannl-1051 under [Bf16_auto] too -- only [Bf16_narrow] (the [approximate] profile's
+   pin) keeps gfx11's bf16-accumulate WMMA and storage-width serial accumulators. The trade,
+   measured on gfx1151 (unified) and gfx1102 (discrete) under a drift-controlled A/B: the narrow
+   tensorized arm is not exactly rounded, and a 2048-term staged GEMM cell read 93 against the
+   unscheduled reference's 536, where the wide arm's first difference was 34.25 against 34.5; wide
+   costs up to ~8% on some tensorized cells (intrinsic to the f32-accumulate path, not the
+   gh-ocannl-1064 boundary) and speeds the serial legs up 5-21%. The one predicate behind
+   [accum_prec], [mma_combo] and [codegen_tag], so emission, residency and the cache key cannot
+   disagree. *)
+let bf16_accum_wide () =
+  match (Numerics.get ()).Numerics.bf16_arithmetic with
+  | Numerics.Bf16_auto | Numerics.Bf16_wide -> true
+  | Numerics.Bf16_narrow -> false
+
 (* [initialized_devices] never forgets its entries. *)
 let initialized_devices = Hash_set.create (module Int)
 let initialized = ref false
@@ -547,11 +562,13 @@ end = struct
 
     (* gh-ocannl-663: serial-rendered reduction accumulators mirror the mma legs' residency. Unlike
        CUDA, RDNA WMMA has genuine bf16 (and f16) accumulator variants and the uniform 16-bit
-       triples are seeded, so narrow 16-bit accumulators keep their storage residency — widening the
-       serial legs here would re-introduce the serial-vs-mma width dependence gh-ocannl-639 removes.
-       fp8 has an accumulator format on no backend (its serial arithmetic already bridges through
-       float per operator), so it follows the CPU policy: f32 residency, one narrowing per nest,
-       governed by the same [narrow_compute_f32] knob.
+       triples are seeded, so wherever the policy keeps the narrow ARM a 16-bit accumulator keeps
+       its storage residency too — widening only the serial legs would re-introduce the
+       serial-vs-mma width dependence gh-ocannl-639 removes. Which arm the policy picks is the
+       residency: f16 is narrow unless [Fp16_wide]; bf16 is WIDE unless [Bf16_narrow]
+       (gh-ocannl-1051, below). fp8 has an accumulator format on no backend (its serial arithmetic
+       already bridges through float per operator), so it follows the CPU policy: f32 residency, one
+       narrowing per nest, governed by the same [narrow_compute_f32] knob.
 
        Under [Numerics.Fp16_wide] (gh-ocannl-680) f16 accumulators reside in f32 here too, and the
        mma legs follow — not by being withheld, but by swapping arms: [mma_combo] renders the
@@ -560,11 +577,13 @@ end = struct
        against it, and [mma_f16_wide_acc_scopes] advertises both emission scopes.
        [Numerics.Bf16_wide] does the same for bf16 (gh-ocannl-838) — the uniform-bf16 arm swaps to
        an f32 accumulator fragment — which is what takes the uniform-bf16 legs off gfx11's
-       bf16-accumulate WMMA, whose result is not exactly rounded. *)
+       bf16-accumulate WMMA, whose result is not exactly rounded. Since gh-ocannl-1051 [Bf16_auto]
+       resolves wide here too ([bf16_accum_wide] above); only [Bf16_narrow] keeps bf16 storage
+       residency. *)
     let accum_prec prec =
       match prec with
       | Ops.Half_prec _ when Numerics.fp16_accum_wide () -> Ops.single
-      | Ops.Bfloat16_prec _ when Numerics.bf16_accum_wide () -> Ops.single
+      | Ops.Bfloat16_prec _ when bf16_accum_wide () -> Ops.single
       | Ops.Fp8_prec _ when (Numerics.get ()).Numerics.narrow_compute_f32 -> Ops.single
       | _ -> prec
 
@@ -609,13 +628,14 @@ end = struct
             Some ("rocwmma::float16_t", "rocwmma::float16_t", "rocwmma::float16_t", 8, 8)
         | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Single_prec _ ->
             Some ("rocwmma::bfloat16_t", "float", "float", 8, 4)
-        (* The uniform-bf16 twin of the wide-f16 arm (gh-ocannl-838): under [Bf16_wide] a [float]
-           accumulator against the bf16 STORAGE destination, converted by [mma_d_boundary_lines].
-           gfx11's bf16-accumulate WMMA is not exactly rounded (about a bf16 ulp at the partial-sum
-           scale, see schedule_mma_matmul's table), so this leaves only the narrowing rounding. *)
-        | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _
-          when Numerics.bf16_accum_wide () ->
+        (* The uniform-bf16 twin of the wide-f16 arm (gh-ocannl-838): under [Bf16_wide], and since
+           gh-ocannl-1051 under the default [Bf16_auto], a [float] accumulator against the bf16
+           STORAGE destination, converted by [mma_d_boundary_lines]. gfx11's bf16-accumulate WMMA is
+           not exactly rounded (about a bf16 ulp at the partial-sum scale, see schedule_mma_matmul's
+           table; grossly more over long reductions), so this leaves only the narrowing rounding. *)
+        | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ when bf16_accum_wide () ->
             Some ("rocwmma::bfloat16_t", "float", "rocwmma::bfloat16_t", 8, 8)
+        (* [Bf16_narrow] only: the bf16-accumulate arm. *)
         | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ ->
             Some ("rocwmma::bfloat16_t", "rocwmma::bfloat16_t", "rocwmma::bfloat16_t", 8, 8)
         | _ -> None
@@ -1587,7 +1607,12 @@ end = struct
          configurable, so the two regimes needed distinct cache entries; it is now unconditional,
          and a constant contributes nothing to a tag. Restore a component here if the guard ever
          becomes conditional again — say on a ROCm version predicate, once upstream fixes it. *)
-      ^ if Utils.with_runtime_debug () then "/device-debug" else "/no-device-debug"
+      ^ (if Utils.with_runtime_debug () then "/device-debug" else "/no-device-debug")
+      (* gh-ocannl-1051: [Bf16_auto] now resolves to f32 bf16 residency here, but the numerics
+         fingerprint hashes the configured MODE, which did not change -- so without this component a
+         winner tuned when auto meant the bf16-accumulate arm would replay under the wide one. Named
+         only when wide, so [Bf16_narrow]'s key (the old auto rendering) is unchanged. *)
+      ^ if bf16_accum_wide () then "/bf16-acc-wide" else ""
     in
     fun () -> { (Lazy.force limits) with Backend_intf.codegen_tag = Some (codegen_tag ()) }
 

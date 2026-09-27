@@ -985,10 +985,12 @@ let () =
      half a bf16 ulp (plus one f32 ulp of slack at the scale of the sum for gfx11's WMMA, whose f32
      accumulate is not exactly rounded either) — and it is two-sided: the same bound over the same
      inputs, rendered under the default policy, must FAIL wherever the backend keeps bf16 storage
-     residency (HIP's bf16-accumulate WMMA, or its narrow serial fallback), which is what makes
-     passing it evidence rather than a property of easy inputs. Metal's side of the negative control
-     executes since gh-ocannl-923: its default-policy [simdgroup_bfloat8x8] accumulate exceeds the
-     bound (by 0.0937 on an M4 Max, against -0.0234 under [Bf16_wide]). --- *)
+     residency, which is what makes passing it evidence rather than a property of easy inputs. On
+     HIP that is no longer the default (its [Bf16_auto] resolves wide since gh-ocannl-1051), so its
+     negative control is the [Bf16_narrow] twin below: gfx11's bf16-accumulate WMMA, or its narrow
+     serial fallback, which the approximate profile still ships. Metal's side of the negative
+     control executes since gh-ocannl-923: its default-policy [simdgroup_bfloat8x8] accumulate
+     exceeds the bound (by 0.0937 on an M4 Max, against -0.0234 under [Bf16_wide]). --- *)
   let bwa = NTDSL.init ~l:"bwa" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fwa () in
   let bwb = NTDSL.init ~l:"bwb" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fwb () in
   let exact_bw =
@@ -1032,6 +1034,19 @@ let () =
       Ir.Ops.bfloat16
   in
   let got_bw_default, _ = compile_mma_with_census ~name:"mm_bw_default_mma" (bf16_uniform_mma ()) in
+  (* The [Bf16_narrow] twin (gh-ocannl-1051): since HIP's [Bf16_auto] resolves wide, the default
+     policy no longer reaches its bf16-accumulate arm anywhere, but the [approximate] profile still
+     ships it — so the negative control that keeps the inputs honest runs under the mode that does
+     reach it, with its expectation read the same way. *)
+  Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_narrow };
+  let narrow_bf16_narrow =
+    Ir.Ops.equal_prec
+      ((Context.codegen_capabilities (Context.auto ())).Ir.Backend_intf.accum_prec Ir.Ops.bfloat16)
+      Ir.Ops.bfloat16
+  in
+  let got_bw_narrow, census_bw_narrow =
+    compile_mma_with_census ~name:"mm_bw_narrow_mma" (bf16_uniform_mma ())
+  in
   Numerics.set_policy saved_policy;
   Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_wide };
   let want_bw = compile_serial ~name:"mm_bw_wide_serial" (bf16_uniform_mma ()) in
@@ -1050,9 +1065,9 @@ let () =
   Numerics.set_policy saved_policy;
   Stdio.eprintf
     "schedule_mma_matmul: uniform-bf16 worst excess over the narrowing bound on %s: Bf16_wide \
-     %.3g, default policy %.3g (not part of the golden)\n\
+     %.3g, default policy %.3g, Bf16_narrow %.3g (not part of the golden)\n\
      %!"
-    backend_name (worst_excess got_bw) (worst_excess got_bw_default);
+    backend_name (worst_excess got_bw) (worst_excess got_bw_default) (worst_excess got_bw_narrow);
   p_all2 "Bf16_wide bf16 serial rendering equals the once-narrowed wide reference bitwise" want_bw
     wide_ref_bw ~f:Float.equal;
   p "Bf16_wide uniform-bf16 tensorized matmul errs by the narrowing rounding alone"
@@ -1062,6 +1077,21 @@ let () =
       backend keeps bf16 storage residency (the inputs discriminate)"
    in
    p claim (Bool.equal Float.(worst_excess got_bw_default > 0.) default_bf16_narrow));
+  (let claim =
+     "the Bf16_narrow uniform-bf16 matmul exceeds the narrowing rounding exactly where that mode \
+      keeps bf16 storage residency"
+   in
+   p claim (Bool.equal Float.(worst_excess got_bw_narrow > 0.) narrow_bf16_narrow));
+  (* The twin's value claims hold for a scalar fallback too (it also accumulates at bf16), so on HIP
+     — where [Bf16_narrow] is the approximate profile's TENSORIZED arm — the census must say the
+     bf16-accumulate rocWMMA arm actually rendered. *)
+  (let claim = "on HIP with tile MMA, the Bf16_narrow uniform-bf16 twin tensorizes" in
+   if on_hip && Lazy.force hip_mma then
+     p claim
+       ((not (List.is_empty census_bw_narrow))
+       && List.for_all census_bw_narrow
+            ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics))
+   else skipped claim);
   let bf16_wide_scopes =
     match (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.mma with
     | Some m -> m.Ir.Backend_intf.mma_bf16_wide_acc_scopes
@@ -1930,10 +1960,11 @@ let () =
      same per-block sums through the framework's own bf16 codec, narrowing after every block resp.
      once, and must differ — so a device reading of [bws_wide] is evidence of residency, not a
      property of easy inputs. The same composition under the default policy narrows between blocks
-     exactly where the backend's bf16 [accum_prec] is bf16 — HIP and Metal (whose wide uniform-bf16
-     arm landed with gh-ocannl-923) — and on CUDA, whose bf16 accumulators are f32 under every
-     policy, it reads [bws_wide] too: a two-sided pin of [Bf16_auto]'s CURRENT resolution per
-     backend, not a contract.
+     exactly where the backend's bf16 [accum_prec] is bf16 — Metal (whose wide uniform-bf16 arm
+     landed with gh-ocannl-923), and HIP only under the [Bf16_narrow] twin since gh-ocannl-1051 —
+     and on CUDA, whose bf16 accumulators are f32 under every policy, and HIP's default, it reads
+     [bws_wide] too: a two-sided pin of [Bf16_auto]'s CURRENT resolution per backend, not a
+     contract.
 
      CUDA (gh-ocannl-1063): uniform bf16 has no wmma combination, so before this the fragment scope
      declined and the staged schedule took the per-[k_o] inline-PTX rendering, narrowing at every
@@ -1949,6 +1980,17 @@ let () =
   let claim_bw_control =
     "staged+tensorized default-policy uniform-bf16 matmul narrows between blocks exactly where the \
      backend keeps bf16 storage residency"
+  in
+  let claim_bw_narrow_control =
+    "staged+tensorized Bf16_narrow uniform-bf16 matmul narrows between blocks exactly where that \
+     mode keeps bf16 storage residency"
+  in
+  let claim_bw_narrow_envelope =
+    "staged+tensorized Bf16_narrow k-split lies between the per-block-narrowed value and one bf16 \
+     ulp more per later block (a known-answer envelope a zeroed output fails)"
+  in
+  let claim_bw_narrow_tensorizes =
+    "on HIP, the staged Bf16_narrow twin tensorizes (the approximate profile's arm)"
   in
   let claim_bw_discriminates =
     "the k-split inputs discriminate: narrowing per block and once give different bf16 values"
@@ -2013,17 +2055,47 @@ let () =
         Ir.Ops.bfloat16
     in
     let got_default, _ = run_staged ~name:"mm_bu_staged_mma" () in
+    (* The [Bf16_narrow] twin, as for the per-statement leg above (gh-ocannl-1051): HIP's narrow
+       fragment arm is reached only under this mode now. *)
+    Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_narrow };
+    let narrow_bf16_narrow =
+      Ir.Ops.equal_prec
+        ((Context.codegen_capabilities (Context.auto ())).Ir.Backend_intf.accum_prec Ir.Ops.bfloat16)
+        Ir.Ops.bfloat16
+    in
+    let got_narrow, census_narrow = run_staged ~name:"mm_bun_staged_mma" () in
     Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_wide };
     let got_bw, census_bw = run_staged ~name:"mm_buw_staged_mma" () in
     Numerics.set_policy saved_policy;
     Stdio.eprintf
-      "schedule_mma_matmul: staged uniform-bf16 k-split cell 0: Bf16_wide %g, default policy %g; \
-       references: wide %g, narrowed per block %g (not part of the golden)\n\
+      "schedule_mma_matmul: staged uniform-bf16 k-split cell 0: Bf16_wide %g, default policy %g, \
+       Bf16_narrow %g; references: wide %g, narrowed per block %g (not part of the golden)\n\
        %!"
-      (List.hd_exn got_bw) (List.hd_exn got_default) bws_wide bws_narrow;
+      (List.hd_exn got_bw) (List.hd_exn got_default) (List.hd_exn got_narrow) bws_wide bws_narrow;
     p_all claim_bw_value got_bw ~f:(Float.equal bws_wide);
     if default_bf16_narrow then p_none claim_bw_control got_default ~f:(Float.equal bws_wide)
     else p_all claim_bw_control got_default ~f:(Float.equal bws_wide);
+    if narrow_bf16_narrow then p_none claim_bw_narrow_control got_narrow ~f:(Float.equal bws_wide)
+    else p_all claim_bw_narrow_control got_narrow ~f:(Float.equal bws_wide);
+    (* A known answer for the narrow arm, whose rounding the claims above deliberately do not pin
+       (gfx11's bf16-accumulate is not exactly rounded): adding a positive +1 per later block to a
+       bf16 partial can round it down to where it was or up by one ulp, never lower and never more,
+       so any narrowing between blocks lands in [bws_narrow, bws_narrow + ulp * later blocks] — and
+       a wide reading ([bws_wide]) lies inside it too, so the claim is universal. The gh1051 A/B
+       drivers cite this as where the narrow arm's values are pinned. *)
+    (let ulp =
+       let _, e = Float.frexp bws_narrow in
+       Float.ldexp 1. (e - 8)
+     in
+     let hi = bws_narrow +. (ulp *. Float.of_int (List.length bws_block_sums - 1)) in
+     p_all claim_bw_narrow_envelope got_narrow ~f:(fun v -> Float.(v >= bws_narrow && v <= hi)));
+    (let claim = claim_bw_narrow_tensorizes in
+     if on_hip then
+       p claim
+         ((not (List.is_empty census_narrow))
+         && List.for_all census_narrow
+              ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics))
+     else skipped claim);
     let src = Generated.read "mm_buw_staged_mma" in
     let has s = String.is_substring src ~substring:s in
     (* CUDA's register fragment: loaded once before the reduction body and stored once after it,
@@ -2089,6 +2161,9 @@ let () =
        skip above for why this is the ordinary backend skip). *)
     skipped claim_bw_value;
     skipped claim_bw_control;
+    skipped claim_bw_narrow_control;
+    skipped claim_bw_narrow_envelope;
+    skipped claim_bw_narrow_tensorizes;
     skipped claim_bw_struct;
     skipped claim_bw_swz_value;
     skipped claim_bw_swz_struct);
