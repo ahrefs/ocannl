@@ -32,13 +32,18 @@ files.
   closest precedent for surface nobody calls. None of it went through a compatibility window, and
   the tree carries no `[@@deprecated]` attribute at all (`grep -rn '@@deprecated' lib/ tensor/
   arrayjit/lib/` is empty). Removal is the default, not a rule: surface is retained where keeping
-  it costs nothing or serves something other than caller convenience — `lib/ocannl.ml`'s
+  it costs nothing or serves something other than caller convenience, and the retained item's own
+  doc comment says why — examples at the time of writing: `lib/ocannl.ml`'s
   backward-compatibility module re-exports, `Parallel.handle.sync_params_to_host` after
   gh-ocannl-333 removed the copying it did, `Operation.centered_uniform1_param_init` and its
-  default, which exist to reproduce pre-0.9 random streams. Version depth is no argument against removal either: it tracks release
-  scope, not semver (README's Milestones, ROADMAP.md's August 26, 2026 renumbering). The exception
-  is a STRING a user typed rather than a name a compiler resolves — `big_models` for `large_models`
-  (`arrayjit/lib/utils.ml`), `sync_cc` / `multicore_cc` for `cc` / `multidev_cc`
+  default, which exist to reproduce pre-0.9 random streams. The README's paragraph deliberately
+  names none of them (gh-ocannl-1013): a user-facing list is a second copy nothing checks, and it
+  would keep calling an item retained after this very policy removed it. When you retain surface
+  on purpose, write the reason into its doc comment — that is where the README sends users — and
+  do not add it to the README. Version depth is no argument against removal either: it tracks
+  release scope, not semver (README's Milestones, ROADMAP.md's August 26, 2026 renumbering). The
+  exception is a STRING a user typed rather than a name a compiler resolves — `big_models` for
+  `large_models` (`arrayjit/lib/utils.ml`), `sync_cc` / `multicore_cc` for `cc` / `multidev_cc`
   (`arrayjit/lib/backends.ml`) — kept as runtime aliases as a matter of course, because a renamed
   key in a stale `ocannl_config` draws `OCANNL warning: unknown config key` and the run CONTINUES
   on the default (`Utils.config_file_args`, quoted in `ocannl_config.reference`), silently changing
