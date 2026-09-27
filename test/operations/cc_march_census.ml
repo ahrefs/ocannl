@@ -1545,10 +1545,17 @@ let () =
          a long stderr down to its head and tail with [...TRUNCATED BY DUNE...], and the rows it
          cuts are whichever happen to sit in the middle -- which hid rows during the staging#865
          triage. Stderr keeps the table's path, a row count per column, and the violator lists
-         below. *)
+         below. Each row is flushed as it is censused, so a run killed or raising partway through
+         the matrix still leaves every row it finished -- which is where such a run stopped. *)
       let table_path = Stdlib.Filename.concat root "rows.txt" in
-      let table = Buffer.create 65536 in
-      let row fmt = Printf.bprintf table fmt in
+      let table = Stdio.Out_channel.create table_path in
+      let row fmt =
+        Printf.ksprintf
+          (fun line ->
+            Stdio.Out_channel.output_string table line;
+            Stdio.Out_channel.flush table)
+          fmt
+      in
       row "=== cc kernel census ===\n";
       row "host toolchain: %s\n" (Cc_backend.compiler_command ());
       let failed_compiles = ref [] in
@@ -1622,7 +1629,7 @@ let () =
                             }))))
       in
       row "=== end census ===\n";
-      Stdio.Out_channel.write_all table_path ~data:(Buffer.contents table);
+      Stdio.Out_channel.close table;
       Stdio.eprintf "\n=== cc kernel census (not part of the golden) ===\n";
       Stdio.eprintf "host toolchain: %s\n" (Cc_backend.compiler_command ());
       Stdio.eprintf "per-row table: %s\n" table_path;
