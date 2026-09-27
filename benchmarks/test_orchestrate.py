@@ -3491,8 +3491,17 @@ class CellTimeoutTest(unittest.TestCase):
             stderr=subprocess.STDOUT,
             text=True,
         )
-        # The kill loop cannot reap this leader (that is the point), so the test reaps it.
-        self.addCleanup(holder.wait)
+        # The kill loop cannot reap this leader (that is the point), so the test reaps it -- killing
+        # it first when the test failed before the kill loop did, or the wait would sit out the
+        # leader's whole 300 s sleep. The escaped survivor's cleanup cannot stand in for that: it
+        # kills another session. The kill is asked of an UNREAPED leader only (`poll()` is None),
+        # which is when its group id cannot yet belong to anything else.
+        def reap_the_holder():
+            if holder.poll() is None:
+                holder.signal(force=True)
+            holder.wait()
+
+        self.addCleanup(reap_the_holder)
 
         deadline = time.monotonic() + 10
         while not pidfile.exists() and time.monotonic() < deadline:
