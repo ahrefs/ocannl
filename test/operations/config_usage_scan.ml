@@ -548,38 +548,52 @@ let config_file_occurrences ?(include_commented = false) ~path content =
                 ambiguous_bare = false;
               }))
 
-(* Standalone environment names are unambiguous enough to scan throughout command-like text, but
-   OCANNL-prefixed C feature macros and synthetic parser-test variables deliberately share the
-   namespace. Pin those judgments by file/key/count so the exception cannot absorb a second site. *)
+(* The cc prelude's [OCANNL_]-prefixed C macros share the environment namespace, and [Builtins_cc]
+   owns that vocabulary, so the scan DERIVES it instead of listing its mentions: every macro the
+   prelude [#define]s (its platform-detection block included) and every [OCANNL_]-prefixed key of
+   its [builtins] table. [Builtins_cc_table] is a build-time copy of [arrayjit/lib/builtins_cc.ml]
+   (the [gen_builtins] precedent), so the scan links no backend. A mention is a macro only in the C
+   spelling ([OCANNL_] then the upper-case name) outside a config file; a trailing-underscore family
+   stem such as the one [cc_march_census] filters by names a macro when some derived macro extends
+   it. A registered config key colliding with a macro is refused below, so the derivation can never
+   absorb a real key. *)
+let builtin_macro_keys =
+  let defined =
+    String.split_lines Builtins_cc_table.source
+    |> List.filter_map ~f:(fun line ->
+        Option.bind
+          (String.chop_prefix (String.lstrip line) ~prefix:"#define ")
+          ~f:(fun rest ->
+            let name = String.lstrip rest in
+            let stop =
+              Option.value ~default:(String.length name)
+                (String.lfindi name ~f:(fun _ c -> not (Char.is_alphanum c || Char.equal c '_')))
+            in
+            String.chop_prefix (String.prefix name stop) ~prefix:"OCANNL_"))
+  in
+  let tabled =
+    List.filter_map Builtins_cc_table.builtins ~f:(fun (key, _, _) ->
+        String.chop_prefix key ~prefix:"OCANNL_")
+  in
+  Set.of_list (module String) (List.map (defined @ tabled) ~f:String.lowercase)
+
+let builtin_macro_mention occurrence =
+  (not (Poly.equal occurrence.kind Config_file_assignment))
+  && String.is_prefix occurrence.spelling ~prefix:"OCANNL_"
+  && (Set.mem builtin_macro_keys occurrence.key
+     || String.is_suffix occurrence.key ~suffix:"_"
+        && Set.exists builtin_macro_keys ~f:(fun macro ->
+            String.is_prefix macro ~prefix:occurrence.key))
+
+(* Synthetic parser-test variables and prose fragments also share the namespace; they are judgments
+   no other part of the system owns. Pin them by file/key/count so the exception cannot absorb a
+   second site. *)
 let non_config_environment_mentions =
   [
     ("benchmarks/report-gh550-cuda.md", "550_no_release", 1);
-    ("docs/agent-notes/backend-precision-and-simd.md", "half_fma", 3);
-    ("docs/agent-notes/backend-precision-and-simd.md", "vec_widen_", 1);
-    ("docs/agent-notes/backend-precision-and-simd.md", "vec_narrow_", 1);
-    ("docs/agent-notes/backend-precision-and-simd.md", "vec_widen_half", 1);
-    ("docs/agent-notes/backend-precision-and-simd.md", "has_elementwise_fma", 3);
-    ("docs/proposals/gh-ocannl-163.md", "has_avx2", 1);
-    ("docs/proposals/gh-ocannl-163.md", "has_neon", 1);
-    ("docs/proposals/gh-ocannl-164.md", "has_avx2", 6);
-    ("docs/proposals/gh-ocannl-164.md", "has_neon", 6);
-    ("docs/proposals/gh-ocannl-575-narrow-register-tiling.md", "half_fma", 4);
-    ("docs/research/ggml-lessons.md", "has_elementwise_fma", 1);
-    ("docs/research/ggml-lessons.md", "has_avx2", 2);
-    ("docs/research/ggml-lessons.md", "has_neon", 1);
     ("ocannl_config.reference", "print", 2);
     ("test/operations/dune", "dashed_only_key", 4);
     ("test/operations/dune", "demo_key", 6);
-    ("test/operations/dune", "vec_widen_bfloat16", 1);
-    ("test/operations/dune", "vec_narrow_bfloat16", 2);
-    ("test/operations/bf16_codec_exhaustive.ml", "vec_narrow_bfloat16", 2);
-    ("test/operations/cc_march_census.ml", "vec_widen_half", 2);
-    ("test/operations/cc_march_census.ml", "vec_widen_bfloat16", 1);
-    ("test/operations/cc_march_census.ml", "vec_", 1);
-    ("test/operations/cc_march_census.ml", "vec_widen_", 1);
-    ("test/operations/cc_march_census.ml", "vec_narrow_", 1);
-    ("test/operations/codegen_text_scan_cases.ml", "vec_widen_bfloat16", 2);
-    ("test/operations/codegen_text_scan_cases.ml", "half_fma", 2);
     ("test/operations/config_var_spellings.ml", "demo_key", 1);
     ("test/operations/config_var_spellings.ml", "print", 1);
     ("test/operations/config_var_spellings.ml", "backedn", 1);
@@ -588,33 +602,7 @@ let non_config_environment_mentions =
     ("test/operations/env_var_deps.ml", "dashed_only_key", 1);
     ("test/operations/env_var_deps.ml", "x", 1);
     ("test/operations/env_var_deps.ml", "not_a_config_key", 1);
-    ("test/operations/narrow_storage_compute.ml", "half_fma", 2);
-    ("test/operations/narrow_storage_compute.ml", "vec_widen_bfloat16", 1);
-    ("test/operations/narrow_storage_compute.ml", "vec_narrow_bfloat16", 1);
-    ("test/operations/narrow_storage_compute.ml", "vec_widen_half", 2);
     ("test/operations/scope_over_materialized.ml", "virtualize_", 1);
-    ("test/operations/tile_mma_narrow.ml", "vec_widen_bfloat16", 1);
-    ("test/operations/tile_mma_narrow.ml", "vec_narrow_bfloat16", 1);
-    ("test/operations/tile_mma_narrow.ml", "vec_widen_half", 1);
-    ("test/operations/tile_mma_narrow.ml", "vec_narrow_half", 1);
-    ("test/operations/tile_mma_narrow.ml", "half_fma", 1);
-    ("arrayjit/lib/builtins_cc.ml", "has_avx2", 2);
-    ("arrayjit/lib/builtins_cc.ml", "has_neon", 2);
-    ("arrayjit/lib/builtins_cc.ml", "has_elementwise_fma", 3);
-    ("arrayjit/lib/builtins_cc.ml", "has_convertvector", 11);
-    ("arrayjit/lib/builtins_cc.ml", "vec_widen_bfloat16", 3);
-    ("arrayjit/lib/builtins_cc.ml", "vec_narrow_bfloat16", 3);
-    ("arrayjit/lib/builtins_cc.ml", "half_fma", 4);
-    ("arrayjit/lib/builtins_cc.ml", "vec_widen_half", 3);
-    ("arrayjit/lib/builtins_cc.ml", "vec_narrow_half", 3);
-    ("arrayjit/lib/c_syntax.ml", "vec_widen_bfloat16", 2);
-    ("arrayjit/lib/c_syntax.ml", "vec_narrow_bfloat16", 1);
-    ("arrayjit/lib/c_syntax.ml", "vec_widen_half", 1);
-    ("arrayjit/lib/c_syntax.ml", "vec_narrow_half", 1);
-    ("arrayjit/lib/c_syntax.ml", "half_fma", 2);
-    ("arrayjit/lib/c_syntax.ml", "has_elementwise_fma", 1);
-    ("arrayjit/lib/cc_backend.ml", "half_fma", 1);
-    ("arrayjit/lib/context.mli", "vec_widen_bfloat16", 1);
     ("arrayjit/lib/utils.ml", "not_a_key", 2);
     ("arrayjit/lib/utils.ml", "backedn", 2);
     ("arrayjit/lib/utils.ml", "print", 1);
@@ -690,6 +678,12 @@ let check ?(fail = Verdict.fail) ?(known_keys = Utils.known_config_keys)
   let seen_ambiguous_bare_config = Hashtbl.create (module String) in
   let seen_prefix_free = Hashtbl.create (module String) in
   let seen_ambiguous_cli_value = Hashtbl.create (module String) in
+  let macro_collisions = Set.inter known_keys builtin_macro_keys in
+  if not (Set.is_empty macro_collisions) then
+    fail
+      (Printf.sprintf
+         "registered config keys collide with Builtins_cc OCANNL_ C macro names -- rename: %s"
+         (String.concat ~sep:", " (Set.to_list macro_collisions)));
   List.iter occurrences ~f:(fun occurrence ->
       let ambiguous_site =
         ambiguous_cli_value_site occurrence.path occurrence.spelling occurrence.key
@@ -724,7 +718,7 @@ let check ?(fail = Verdict.fail) ?(known_keys = Utils.known_config_keys)
                   prefix_free_config_mentions"
                  occurrence.path occurrence.line occurrence.spelling)
       | _ -> ());
-      if Set.mem known_keys occurrence.key then ()
+      if Set.mem known_keys occurrence.key || builtin_macro_mention occurrence then ()
       else if Set.mem non_config_environment_sites (mention_site occurrence.path occurrence.key)
       then Hashtbl.incr seen_non_config_environment (mention_site occurrence.path occurrence.key)
       else if Set.mem non_config_assignment_sites (mention_site occurrence.path occurrence.key) then
@@ -856,6 +850,7 @@ let direct_refusal_formats =
     "%s:%d: prefix-free config flag `%s` lacks a file/key/count entry in \
      prefix_free_config_mentions";
     "%s:%d: %s `%s` names `%s`, absent from Utils.known_config_keys";
+    "registered config keys collide with Builtins_cc OCANNL_ C macro names -- rename: %s";
     "%s:%d: ambiguous command-line value `%s` for `%s` lacks a file/token/key/count entry in \
      ambiguous_cli_value_mentions";
     "non-config environment exemptions now name registered config keys -- remove: %s";
@@ -889,10 +884,47 @@ let refusal_control grammar_fixture =
     Utils.known_config_keys
     |> add_first_key non_config_environment_mentions
     |> add_first_key non_config_assignment_mentions
+    |> Fn.flip Set.add (Set.min_elt_exn builtin_macro_keys)
   in
   let occurrence ?(ambiguous_bare = false) ~path ~key ~spelling ~kind () =
     { path; line = 1; key; spelling; kind; ambiguous_bare }
   in
+  (* The derived macro exemption covers the C spelling only: the same name as a command-line flag or
+     a config-file key, a sibling no macro defines, and a family stem no macro extends are still
+     unregistered configuration and must refuse against the real registry. *)
+  let macro = Set.min_elt_exn builtin_macro_keys in
+  let c_spelling key = "OCANNL_" ^ String.uppercase key in
+  Verdict.p_all ~min:6
+    "a derived C macro name passes only in its C spelling; unregistered keys beside it refuse"
+    [
+      ( occurrence ~path:"macro.md" ~key:macro ~spelling:(c_spelling macro)
+          ~kind:Standalone_environment_mention (),
+        0 );
+      ( occurrence ~path:"macro.sh" ~key:macro
+          ~spelling:(c_spelling macro ^ "=")
+          ~kind:Environment_assignment (),
+        0 );
+      ( occurrence ~path:"macro.sh" ~key:macro
+          ~spelling:("--ocannl_" ^ macro ^ "=1")
+          ~kind:Cli_flag (),
+        1 );
+      ( occurrence ~path:"ocannl_config" ~key:macro
+          ~spelling:(c_spelling macro ^ "=")
+          ~kind:Config_file_assignment (),
+        1 );
+      ( occurrence ~path:"macro.md" ~key:(macro ^ "_typo")
+          ~spelling:(c_spelling (macro ^ "_typo"))
+          ~kind:Standalone_environment_mention (),
+        1 );
+      ( occurrence ~path:"macro.md" ~key:"definitely_unregistered_"
+          ~spelling:(c_spelling "definitely_unregistered_")
+          ~kind:Standalone_environment_mention (),
+        1 );
+    ]
+    ~f:(fun (probe, expected_refusals) ->
+      let refusals = ref 0 in
+      check ~fail:(fun _ -> Int.incr refusals) ~repository_census:false [ probe ];
+      Int.equal !refusals expected_refusals);
   Verdict.p "a runtime value separator is resolved before equals inside its value"
     (Option.equal String.equal
        (cli_key_of_token ~path:"docs/agent-notes/build-and-test.md"
@@ -983,7 +1015,7 @@ let refusal_control grammar_fixture =
       occurrence ~ambiguous_bare:true ~path:"new-one-word.md" ~key:"backend"
         ~spelling:"backend=metal" ~kind:Markdown_assignment ();
     ];
-  Verdict.p_all ~min:11 "every config-usage direct refusal format is observed"
+  Verdict.p_all ~min:13 "every config-usage direct refusal format is observed"
     direct_refusal_formats ~f:(Hash_set.mem observed);
   Verdict.p_empty "the config-usage refusal control emits no unexpected diagnostic"
     ~over:(Hash_set.to_list observed) !unexpected;

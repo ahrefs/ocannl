@@ -169,6 +169,7 @@ let raw_entries =
       ] );
     ( "config_usage_scan.ml",
       [
+        "[scanner-refusal:3b2d3f635929bbf3953b407c49ee91fd] Builtins_cc";
         "[scanner-refusal:7f7db667dc63d73faefa570451cf5f2b] ambiguous command-line value";
         "[scanner-refusal:7a3d690e9ef5541a1c754952c6cf6877] ambiguous bare config";
         "[scanner-refusal:200477f5fecf3e08ff5055af77a00298] prefix-free config flag";
@@ -182,6 +183,7 @@ let raw_entries =
         "[scanner-refusal:6d76bc1e86b8d630263d70bd7c30e50b] config-mention occurrence counts";
         "[scanner-refusal:8c14e661ffe9cdf859b5111394d557a8] prefix-free config-mention occurrence";
         "[scanner-refusal:7c5c4cc0bd161e76fe99e9983d2db70f] command-line value occurrence";
+        "[scanner-refusal:1b21aa78af1c8c8d33b55c395590e92a] spelling unregistered keys";
         "[scanner-refusal:e592c4ffcb391edf546553bd50accc7a] runtime value separator";
         "[scanner-refusal:cb1b0916f3d396c6fb100a6cf2ba4a2e] scanner command-line prefix";
         "[scanner-refusal:319310c8c133f76c009e4954fa7fc7de] runtime-generated command-line \

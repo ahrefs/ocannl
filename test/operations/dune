@@ -5598,8 +5598,17 @@
 
 (executable
  (name config_usage_scan)
- (modules config_usage_scan)
+ (modules config_usage_scan builtins_cc_table)
  (libraries base stdio arrayjit.utils test_utils arrayjit.verdict))
+
+; gh-ocannl-1080: the scan derives the cc prelude's OCANNL_-prefixed C macro names from the
+; stdlib-only builtin definition table itself, copied here as arrayjit/lib/gen_builtins does, so
+; the scanner keeps linking no backend.
+
+(rule
+ (target builtins_cc_table.ml)
+ (action
+  (copy ../../arrayjit/lib/builtins_cc.ml %{target})))
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads shell scripts and Markdown as text.
