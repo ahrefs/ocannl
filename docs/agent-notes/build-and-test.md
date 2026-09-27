@@ -437,6 +437,9 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   unknown word already FAILS is pinned by its own closedness, which is why `config_dep_completeness`
   can print dune's stanza kinds and action heads into its golden. Leave each of those written down
   with its reason next to it, which is what the habit asks of a list that stays.
+- The same rule for prose — these notes and `docs/` — lives in
+  [conventions.md](conventions.md), in the bullet after the "unfactored duplication" one
+  (staging#837): a fact has one owning entry, and the others point there.
 
 ### In-place markers
 
@@ -1085,6 +1088,9 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   test's `diff?` then sees no output and every later build of the alias fails with "File
   `<name>.expected` should be deleted" until some real dep changes — the config append is also the
   recovery.
+- Dune truncates a long stderr of a `(test)` stanza's run (`...TRUNCATED BY DUNE...`). To read a
+  long per-row table, run the executable yourself inside `_build/default/<dir>`, where the rule
+  left `ocannl_config`, under the fleet's `execution slot` when on a fleet box.
 
 ## Verdict claims
 
@@ -1493,6 +1499,15 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   AND its golden holds something other than that test's own verdicts. That last condition is what
   keeps the rule useful rather than noisy: a boolean column does not move when codegen does, so a
   schedule test's all-`true` golden stays out while its source stays in.
+- `codegen_text_inventory` is one of a family of **checklist inventories**: a scan whose golden
+  lists every file a given kind of change must revisit, derived rather than hand-kept.
+  `nonvirtual_code_inventory` (gh-ocannl-1015, staging#836) is the other, listing every file that
+  names a `Non_virtual` rejection code, for a change to pipeline order. The trap they share: a text
+  inventory reads the whole tree, its own cases file and golden included, so a fixture spelling
+  the very text it matches becomes a member (or a refusal) of the real run. Spell fixtures in
+  pieces, as `nonvirtual_code_scan_cases` spells the constructor, and exclude the scan's own
+  golden, as `codegen_text_inventory`'s `excluded` list does — else a promote takes two rounds to
+  converge.
 
 ## Aliases and goldens
 
