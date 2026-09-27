@@ -22,8 +22,11 @@
     annotations, which expand to converter calls this source-level census cannot see, as through
     spelled references. A [sexp_of] with no caller costs nothing and cannot drift from its type,
     while removing it to satisfy a ratchet only takes the converter away from the next debugging
-    session. Values introduced by other PPX expansions or by an [include] inside the defining module
-    remain outside this source-level census. *)
+    session. Values introduced by other PPX expansions or by an [include] of another module inside
+    the defining module remain outside this source-level census. A bare [include struct ... end]
+    declares into the module and is read like top-level items; a constrained
+    [include (struct ... end : S)] carries its own interface, which publishes deliberately, so like
+    a module with an [.mli] it is not censused. *)
 
 open Base
 open Ppxlib.Parsetree
@@ -394,14 +397,14 @@ let counts ~(exports : export list) references =
     same-named type elsewhere hides a dead one), in implementations and interfaces alike, including
     the defining source (a type its own module uses is live, if not public), but excluding the
     declaration's own span, so a recursive type does not credit itself. Package constraints
-    ([(module S with type foo = int)]), [with type] constraints and type extensions are type paths
-    too. A type whose deriving generates values or modules is also mentioned by a spelling of one of
-    them in a value or module path -- never in a label path, and never inside a [[@@deriving]]
-    payload, which names derivers rather than using their output -- since a caller can use the type
-    through its converter alone. Comments, docstrings and string literals never parse into a path,
-    so prose cannot keep a type alive. A type named with a leading [_] is not censused, as it is not
-    for OCaml's own unused-type warning (34): its author marked it deliberately unused, the
-    convention the value census follows for [let].
+    ([(module S with type foo = int)]), [with type] constraints, type extensions and [#foo] patterns
+    are type paths too. A type whose deriving generates values or modules is also mentioned by a
+    spelling of one of them in a value or module path -- never in a label path, and never inside a
+    [[@@deriving]] payload, which names derivers rather than using their output -- since a caller
+    can use the type through its converter alone. Comments, docstrings and string literals never
+    parse into a path, so prose cannot keep a type alive. A type named with a leading [_] is not
+    censused, as it is not for OCaml's own unused-type warning (34): its author marked it
+    deliberately unused, the convention the value census follows for [let].
 
     Out of scope, by design: the constructors and record labels of a type are not resolved to it (a
     record built only by its labels, never annotated, reads as unmentioned), and neither are the
@@ -529,6 +532,11 @@ let type_mention_counts ~(type_exports : type_export list) ~implementations ~int
             List.iter constraints ~f:(fun (path, _) -> record_type_path path)
         | _ -> ());
         super#core_type core_type
+
+      (* [#foo] in a pattern matches the rows of the polymorphic variant [foo]. *)
+      method! pattern pattern =
+        (match pattern.ppat_desc with Ppat_type path -> record_type_path path | _ -> ());
+        super#pattern pattern
 
       method! with_constraint constraint_ =
         (match constraint_ with

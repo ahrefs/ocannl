@@ -18,6 +18,7 @@ let%trace extended = 4
 include struct
   let included = 7
 end
+include (struct let constrained = 8 end : sig val constrained : int end)
 external primitive : int -> int = "fixture_primitive"
 let sexp_of_handwritten () = Sexplib0.Sexp.List []
 type t = Root [@@deriving sexp_of, compare, equal]
@@ -100,6 +101,9 @@ let () =
          "Sample.public_pair";
          "Sample.x";
        ]);
+  Verdict.p_none "a constrained include publishes through its own signature and is not censused"
+    [ "Sample.constrained" ] ~f:(fun key ->
+      List.mem (export_keys fixture_exports) key ~equal:String.equal);
   Verdict.p_none "underscore-prefixed lets, patterns, and extensions are private by policy"
     [ "Sample._x"; "Sample._pair"; "Sample._extended" ] ~f:(fun key ->
       List.mem (export_keys fixture_exports) key ~equal:String.equal);
@@ -279,6 +283,7 @@ type derived_sexp = S [@@deriving sexp_of]
 type in_extension = E
 type in_with = W
 type in_package = Pk
+type in_pattern = [ `Ip ]
 type by_fields = { fields_label : int } [@@deriving fields]
 type fields_module = { module_label : int } [@@deriving fields]
 type fields_alias = { alias_label : int } [@@deriving fields]
@@ -321,6 +326,7 @@ let () =
          "Sample.in_extension";
          "Sample.in_include";
          "Sample.in_package";
+         "Sample.in_pattern";
          "Sample.in_with";
          "Sample.interfaced";
          "Sample.prose";
@@ -342,6 +348,7 @@ let () =
          module type S = sig type t end with type t = Sample.in_with\n\
          type Sample.extensible += More\n\
          let p (module M : S with type in_package = int) = ()\n\
+         let q = function #Sample.in_pattern -> true | _ -> false\n\
          let g x = (x.Other.fields_label, fields_label x, { Other.fields_label = 1 })\n\
          let n = Sample.Fields_of_fields_module.names\n" );
     ]
@@ -376,6 +383,8 @@ let () =
     [ "fields_alias"; "variants_open" ] ~f:(fun name -> mentions counts name > 0);
   Verdict.p "a first-class module's package constraint mentions the type"
     (mentions counts "in_package" > 0);
+  Verdict.p "a #type pattern mentions the polymorphic variant it names"
+    (mentions counts "in_pattern" > 0);
   Verdict.p "a fields deriving is credited by its module, never by a same-named label or value"
     (mentions counts "fields_module" > 0 && mentions counts "by_fields" = 0);
   let deriving_payload =

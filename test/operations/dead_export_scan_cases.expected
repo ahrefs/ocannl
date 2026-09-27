@@ -1,4 +1,5 @@
 top-level lets, patterns, extensions, include structs, and externals are exports: true
+a constrained include publishes through its own signature and is not censused: true
 underscore-prefixed lets, patterns, and extensions are private by policy: true
 the opposing unprefixed value remains a detected zero-reference export: true
 derived and hand-written sexp_of converters are excluded from the census by policy: true
@@ -38,6 +39,7 @@ extension payloads, with-constraints, and type extensions mention the type: true
 a type declared inside a top-level include struct is censused and can be unmentioned: true
 a derived module mentions its type from an interface's alias or open: true
 a first-class module's package constraint mentions the type: true
+a #type pattern mentions the polymorphic variant it names: true
 a fields deriving is credited by its module, never by a same-named label or value: true
 a deriving payload naming a deriver is not a spelling of the derived value: true
 an unqualified mention under an open counts: true
