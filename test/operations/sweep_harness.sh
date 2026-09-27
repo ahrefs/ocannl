@@ -33,6 +33,7 @@ on_error() {
   for name in incremental forced slow_forced coverage hostile complete_fail \
     environment_executed partial_matrix singleton_fail repeated_backend_fail \
     repeated_backend_pass mixed_scope_fail mixed_scope_cleared historical_matrix \
+    undeclared_cleared undeclared_skipped undeclared_only rerun_cleared rerun_red \
     local_identity_error unsafe_identity_error only_typo_error matrix_error state_first state_same \
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
     capped capped_target remote_opt_in dest_wsl dest_linux dest_missing dest_local_only \
@@ -163,6 +164,10 @@ case " $* " in
       *) exit 0 ;;
     esac
     ;;
+  # A forced unit's `dune clean` precondition succeeds whatever the suite's
+  # fixture status: a failing clean is harness non-coverage (`error`), and the
+  # forced red units below need the suite itself to be what fails.
+  *" dune clean "*) exit 0 ;;
 esac
 # Stands in for what a test run writes to the unit's log. The common output
 # drives failure-fingerprint coverage; the per-backend outputs let the skip
@@ -858,6 +863,47 @@ singleton_pass=$("$aggregate" \
 grep -q '^environment result: PASS -- no claim was skipped on every declared box$' \
   <<<"$singleton_pass"
 
+# A box outside the declared matrix is evidence without obligation. The
+# 2026-09-27 shape: tuf ran hip beside the declared boxes and executed the
+# environment-gated leg, so the leg was not skipped on every box.
+for backend in cc cuda multidev_cc; do
+  "$verdict_probe" "$backend" >"$tmp/undeclared-$backend.log" 2>&1
+done
+"$verdict_probe" hip execute-environment >"$tmp/undeclared-tuf.log" 2>&1
+undeclared_matrix=(--known cc --known multidev_cc --known cuda --known hip
+  --known-box m4-max --known-box minix --known-box rog-nv
+  --run cc m4-max "$tmp/undeclared-cc.log"
+  --run multidev_cc minix "$tmp/undeclared-multidev_cc.log"
+  --run cuda rog-nv "$tmp/undeclared-cuda.log")
+set +e
+undeclared_cleared=$("$aggregate" "${undeclared_matrix[@]}" \
+  --run hip tuf "$tmp/undeclared-tuf.log" 2>&1)
+set -e
+grep -q '^environment status: complete (3 of 3 declared boxes completed)$' \
+  <<<"$undeclared_cleared"
+grep -q '^undeclared boxes (their executions count, their absence does not): tuf$' \
+  <<<"$undeclared_cleared"
+grep -q '^environment result: PASS -- no claim was skipped on every declared box$' \
+  <<<"$undeclared_cleared"
+# ...while its skips add nothing: skipped there too, the complete matrix FAILs.
+"$verdict_probe" hip >"$tmp/undeclared-tuf.log" 2>&1
+set +e
+undeclared_skipped=$("$aggregate" "${undeclared_matrix[@]}" \
+  --run hip tuf "$tmp/undeclared-tuf.log" 2>&1)
+set -e
+grep -q '^FAIL: skipped on every declared box: verdict_skip_probe.exe: common environment-gated claim$' \
+  <<<"$undeclared_skipped"
+# ...and it never stands in for a declared box: with minix and rog-nv absent,
+# m4-max plus tuf is one declared box, too few to aggregate.
+set +e
+undeclared_only=$("$aggregate" --known cc --known hip \
+  --known-box m4-max --known-box minix --known-box rog-nv \
+  --run cc m4-max "$tmp/undeclared-cc.log" --run hip tuf "$tmp/undeclared-tuf.log" 2>&1)
+set -e
+grep -q '^missing boxes: minix, rog-nv$' <<<"$undeclared_only"
+grep -q '^environment status: insufficient (1 of 3 declared boxes completed; need at least 2 unless the matrix is complete)$' \
+  <<<"$undeclared_only"
+
 # Equal human labels in two DIFFERENT executables are different test legs. Copy
 # the real probe under another basename so this control reaches the production
 # identity emission rather than restating its record format in the fixture.
@@ -1474,6 +1520,40 @@ grep -q '^serial rerun: nothing to rerun -- no site names a stanza$' "$many_inli
 grep -q '^serial rerun: unmapped: \[File "test/compile_error.ml", line 1\] \[File "test/inline_one.ml", line 1\] \[File "test/inline_three.ml", line 1\] \[File "test/inline_two.ml", line 1\]$' \
   "$many_inline_log"
 absent '^serial rerun: directory fallback' "$many_inline_log"
+
+# A red unit whose every failure the serial rerun cleared is skip evidence like
+# a pass: its failing stanzas ran again into the same log. The 2026-09-27 sweep
+# dropped minix/hip that way -- red only from a ROCr scratch assertion at
+# parallel width, `all clean` at -j 1 -- and reported its hip-only claims as
+# skipped on every declared box. Both units here fail with a runtime-refusal
+# signature and clear serially (one through the inline site's directory
+# fallback), so the intersection is the two-unit one of the clean coverage run.
+rerun_cleared=$(SWEEP_TEST_OPAM_RC=1 \
+  SWEEP_TEST_OPAM_OUT_CC=$environment_failure$'\n'$cc_unit_log \
+  SWEEP_TEST_OPAM_OUT_METAL=$environment_failure$'\n'$metal_unit_log \
+  run_sweep_args --force --only cc --only metal)
+grep -q 'm4-max/cc: serial rerun: all clean$' <<<"$rerun_cleared"
+grep -q 'm4-max/metal: serial rerun: all clean$' <<<"$rerun_cleared"
+rerun_cleared_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$rerun_cleared" | tail -1)
+[ -f "$rerun_cleared_report" ]
+grep -q '^red units counted after a clean serial rerun: m4-max/cc m4-max/metal$' \
+  "$rerun_cleared_report"
+grep -q '^status: partial (2 of 5 known backends completed)$' "$rerun_cleared_report"
+[ "$(grep -E '^  (result|FAIL|POTENTIAL): ' <<<"$rerun_cleared")" = "$coverage_findings" ]
+
+# The opposing controls, in one run: a red whose serial rerun stays red, and a
+# red with no refusal signature (never rerun), both remain excluded.
+rerun_red=$(SWEEP_TEST_OPAM_RC=1 \
+  SWEEP_TEST_OPAM_SERIAL_RED='@test/runtest-serial-probe' \
+  SWEEP_TEST_OPAM_OUT_CC=$environment_failure$'\n'$cc_unit_log \
+  SWEEP_TEST_OPAM_OUT_METAL=$'Error: a test-logic failure\n'$metal_unit_log \
+  run_sweep_args --force --only cc --only metal)
+grep -q 'm4-max/cc: serial rerun: still red: @test/runtest-serial-probe$' <<<"$rerun_red"
+absent 'm4-max/metal: environment-red' <<<"$rerun_red"
+rerun_red_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$rerun_red" | tail -1)
+[ -f "$rerun_red_report" ]
+grep -q '^completed backends: <none>$' "$rerun_red_report"
+absent 'counted after a clean serial rerun' "$rerun_red_report"
 
 # The dxg window filter (gh-ocannl-979), driven directly: tools/kernel-window.sh is
 # sourced by the sweep and by this harness for exactly that reason (after

@@ -483,12 +483,14 @@ environment_red() { # log
 # Successful forced full-suite units are the only logs from which absence of a
 # skip announcement means execution. Incremental Dune runs may serve a cached
 # test without replaying its stderr, and a red or interrupted unit may not have
-# reached every test. Keep the qualifying evidence from THIS invocation rather
+# reached every test -- unless the serial rerun re-ran every failing stanza
+# clean into the same log (rerun_cleared), which the report names. Keep the qualifying evidence from THIS invocation rather
 # than recovering it by timestamp from history (two invocations can begin in
 # the same second in the integration harness).
 SKIP_RUN_BACKENDS=()
 SKIP_RUN_BOXES=()
 SKIP_RUN_LOGS=()
+SKIP_RERUN_CLEARED=()
 
 contains() {
   local wanted=$1 item
@@ -2007,6 +2009,21 @@ serial_rerun() { # backend host wt log label [path_prefix]
   return 0
 }
 
+# Whether serial_rerun cleared every failure of the log's unit: `all clean` and
+# no verdict line that leaves a site unjudged, unmapped or red. A directory
+# fallback is judged inside `all clean`, so it does not disqualify.
+rerun_cleared() { # log
+  local line clean=
+  while IFS= read -r line; do
+    case $line in
+      'serial rerun: all clean') clean=1 ;;
+      'serial rerun: directory fallback '*) ;;
+      *) return 1 ;;
+    esac
+  done < <(grep -h '^serial rerun: ' "$1" 2>/dev/null)
+  [ -n "$clean" ]
+}
+
 # An outcome that is not a pass, with nothing extractable from its log, is its
 # own condition -- not a fingerprint of zero failures. The consumer diffs this
 # file against the previous non-pass run's, and an empty file compares equal to
@@ -2435,6 +2452,15 @@ run_unit() { # machine backend host
   case $outcome in
     fail) serial_rerun "$backend" "$host" "$wt" "$log" "$machine/$backend" "${path_prefix:-}" ;;
   esac
+  # A red the serial rerun wholly cleared is skip evidence like a pass: every
+  # stanza ran to completion in the suite or again in the rerun, whose records
+  # land in the same log. Dropping it lost minix/hip's evaluations on
+  # 2026-09-27 and reported its hip-only claims as skipped on every box.
+  if [ "$outcome" = fail ] && [ -z "$TARGET" ] && rerun_cleared "$log"; then
+    printf '%s\n' "$log" >"$LANE_DIR/skip-run.$machine.$backend" &&
+      : >"$LANE_DIR/skip-cleared.$machine.$backend" ||
+      die "cannot stage skip evidence for $machine/$backend"
+  fi
   case $outcome in
     fail | timeout | error) write_fingerprint "$log" "$machine/$backend" ;;
   esac
@@ -2766,6 +2792,8 @@ for unit in "${UNITS[@]}"; do
   SKIP_RUN_BACKENDS+=("$backend")
   SKIP_RUN_BOXES+=("$machine")
   SKIP_RUN_LOGS+=("$(cat "$evidence")")
+  [ -f "$LANE_DIR/skip-cleared.$machine.$backend" ] &&
+    SKIP_RERUN_CLEARED+=("$machine/$backend")
 done
 
 echo
@@ -2789,6 +2817,8 @@ if [ "$FORCE" = 1 ] && [ -z "$TARGET" ]; then
   [ "$SLOW" = 1 ] && scope="$scope + @slow"
   {
     echo "skip coverage for $run_sha ($scope; forced execution)"
+    [ ${#SKIP_RERUN_CLEARED[@]} -eq 0 ] ||
+      echo "red units counted after a clean serial rerun: ${SKIP_RERUN_CLEARED[*]}"
     "$AGGREGATE_SKIPS" "${aggregate_args[@]}"
   } >"$report_stage"
   aggregate_rc=$?

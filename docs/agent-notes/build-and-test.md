@@ -2602,10 +2602,15 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   (gh-ocannl-792), writing
   `logs/<stamp>-skip-coverage.txt`. Incremental logs are refused because a cached Dune action does
   not replay its stderr, and failed or interrupted units are refused because they may not have
-  reached every test. An intersection over only the completed backends is a loud `POTENTIAL` report;
-  it becomes `FAIL` only when every backend in the sweep's own unit vocabulary completed, while the
-  sweep itself still exits zero so later units and their history rows are never suppressed. A
-  `--ref` predating the machine record is refused when its human skip lines have no paired records.
+  reached every test — except a red whose serial rerun reported `all clean` with nothing
+  unjudged or unmapped: every failing stanza then ran again into the same log, so its records are
+  complete, and the report names it on a `red units counted after a clean serial rerun:` line.
+  Dropping those lost minix/hip's evaluations on 2026-09-27 (red only from a ROCr scratch
+  assertion at parallel width) and reported its hip-only claims as skipped on every box. An
+  intersection over only the completed backends is a loud `POTENTIAL` report; it becomes `FAIL`
+  only when every backend in the sweep's own unit vocabulary completed, while the sweep itself
+  still exits zero so later units and their history rows are never suppressed. A `--ref`
+  predating the machine record is refused when its human skip lines have no paired records.
   A skip caused by a host or configuration capability rather than the selected backend (a compiler
   target, preprocessing flag or filesystem feature) uses
   ``Verdict.skipped ~aggregation:`Environment``: its human stderr line stays visible, while the
@@ -2629,12 +2634,14 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   completed declared-box log becomes `FAIL` only when every declared box contributed; with missing
   boxes it is `POTENTIAL`, and a pre-declaration historical ref is left explicitly unaggregated. A
   claim may be backend-gated in one run and environment-gated in another (the default-policy
-  `autotune_mma_companion` leg is the exemplar). An environment record in any declared-box log
+  `autotune_mma_companion` leg is the exemplar). An environment record in any log
   assigns that executable-and-claim key to the environment dimension; backend or environment skip
   records for the same key then both mean their box did not execute it. This ownership-before-
-  intersection order prevents a different scope from masquerading as execution. A current unit
-  absent from a historical target's declaration contributes backend evidence and is ignored for
-  that target's environment matrix; in the other direction, a declared box with no runnable unit
+  intersection order prevents a different scope from masquerading as execution. A unit on a box
+  outside the declaration (tuf, or a current box a historical target predates) is evidence without
+  obligation: its execution clears an environment claim, but its absence never makes the matrix
+  incomplete and it never stands in for a declared box; the report lists it on an
+  `undeclared boxes` line. In the other direction, a declared box with no runnable unit
   is a harness refusal rather than permanent silent non-coverage.
   A configuration matrix that runs outside the fleet sweep uses
   ``Verdict.skipped ~aggregation:`Outside_sweep``: the announcement and machine-record validation
