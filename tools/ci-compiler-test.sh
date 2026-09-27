@@ -12,8 +12,10 @@
 #                     invoke this cross compiler as well as the host compiler.
 #   --dry-run         Validate arguments, create the scratch layout, and print
 #                     every fetch/extract/test step without fetching or running.
-#   --keep            Keep the scratch directory (otherwise cleanup precedes
-#                     the exit sentinel).
+#   --keep            Keep the scratch directory even on success (a failing
+#                     run always keeps it, so the build tree's diagnostics --
+#                     e.g. cc_march_census_kernels/rows.txt -- survive it;
+#                     otherwise cleanup precedes the exit sentinel).
 #   --cap SECONDS     Named-test wall-clock cap; 0 disables it (default: 3600).
 #   -j, --jobs N      Dune concurrency, 1..4 (default: 4).
 #
@@ -123,7 +125,7 @@ finish() {
   finished=1
   trap - EXIT HUP INT TERM
   cleanup_rc=0
-  if [ "$keep" -eq 1 ]; then
+  if [ "$keep" -eq 1 ] || [ "$main_rc" -ne 0 ]; then
     echo "ci-compiler-test: scratch kept: $scratch"
   elif [ -n "$scratch" ] && [ -d "$scratch" ] && [ "$scratch" != / ]; then
     rm -rf -- "$scratch" || cleanup_rc=1

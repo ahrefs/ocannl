@@ -410,7 +410,7 @@ jobs:
       if: ${{ failure() }}
       uses: actions/upload-artifact@v4
       with:
-        name: cc-march-census-rows-${{ matrix.os }}-${{ matrix.ocaml-compiler }}-${{ matrix.suite }}
+        name: cc-march-census-rows-${{ matrix.os }}-${{ matrix.ocaml-compiler }}-${{ matrix.suite }}-attempt${{ github.run_attempt }}
         path: _build/default/test/operations/cc_march_census_kernels/rows.txt
         if-no-files-found: ignore
     # `tools/test-run.sh` carries branches that ONLY execute under MSYS: it
