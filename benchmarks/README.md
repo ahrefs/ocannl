@@ -614,8 +614,10 @@ than the driver (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` at module load), run it wi
   - *What number.* The roofline lower bound over the measured time — `max(ops / peak FLOP/s, bytes
     / peak bandwidth)` on `Ir.Cost_model.analyze`'s counts — so a memory-bound kernel is scored
     against bandwidth and a compute-bound one against arithmetic. Printed **only on an exact
-    count**: `approx` for an op or byte count that is an upper bound (`Cost_model.approximate`,
-    the per-leg rule the calibration fit follows), `opaque` for code the model cannot see.
+    count**, per leg as the calibration fit reads exactness: `approx` when the leg that binds has
+    an upper-bound count (`flops_approx` / `footprint_approximate`), `opaque` for code the model
+    cannot see. An upper bound on the leg that does *not* bind is harmless — it can only shrink,
+    so it cannot overtake the exact leg — and the number stays exact.
   - *Which ceiling.* Matched to the kernel: `f32` is the backend's single-precision scalar
     `peak_flops` with `peak_memory_bandwidth`; `f16-native` doubles the flops leg for a kernel whose
     arithmetic is all 16-bit on a target where that is native (gh-ocannl-575). A **GPU tensor-core

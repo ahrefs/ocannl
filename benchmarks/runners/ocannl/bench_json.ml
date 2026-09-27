@@ -213,10 +213,12 @@ type kernel = {
 
     - ["no-kernel"]: nothing was timed ([kernel] is [None]; [note] says why).
     - ["opaque"]: the kernel has code the cost model cannot see, so its counts may under-count.
-    - ["approximate"]: a count is an upper bound rather than exact ([Cost_model.approximate]). The
-      same per-leg exactness rule the calibration fit follows, so this column and the fit agree on
-      what counts as evidence; a number derived from a guards-taken count is not one.
-    - ["no-ceiling"]: exact counts, nothing to score them against ({!choose_ceiling}'s reason).
+    - ["no-ceiling"]: nothing to score the counts against ({!choose_ceiling}'s reason).
+    - ["approximate"]: the roofline leg that binds has an upper-bound count rather than an exact one
+      ([Cost_model]'s [flops_approx] / [footprint_approximate]) — the same per-leg exactness rule
+      the calibration fit follows, so this column and the fit agree on what counts as evidence. An
+      inexact count on the leg that does NOT bind is harmless: it can only shrink, so it cannot
+      overtake the exact leg, and the attainment stays exact.
     - ["exact"]: [pct_of_peak] and [bound] are set.
 
     The counts ride on the line whatever the verdict, so a reader can redo the arithmetic under
@@ -228,24 +230,28 @@ let dominant_kernel_object ?note ~ceiling (kernel : kernel option) =
     match kernel with
     | None -> ("no-kernel", None, None, Option.value note ~default:"no kernel was timed")
     | Some k when k.opaque -> ("opaque", None, None, "the cost model cannot see all of its code")
-    | Some k when not (k.flops_exact && k.bytes_exact) ->
-        ( "approximate",
-          None,
-          None,
-          if k.flops_exact then "byte count is an upper bound"
-          else if k.bytes_exact then "op count is an upper bound"
-          else "op and byte counts are upper bounds" )
     | Some k -> (
         match ceiling with
         | Error reason -> ("no-ceiling", None, None, reason)
         | Ok c ->
             let compute_s = Float.of_int k.flops /. c.ceiling_flops
             and memory_s = Float.of_int k.bytes /. c.ceiling_bandwidth in
-            let roofline_s = Float.max compute_s memory_s in
-            ( "exact",
-              Some (100. *. roofline_s /. (k.seg_ms /. 1000.)),
-              Some (if Float.(compute_s >= memory_s) then "compute" else "memory"),
-              "" ))
+            let compute_binds = Float.(compute_s >= memory_s) in
+            (* Per leg, as the calibration fit reads exactness: an inexact count is an upper bound,
+               so its leg's time can only shrink. When the EXACT leg binds against that bound it
+               binds against the truth too, and the attainment is exact; when the inexact leg binds,
+               the number is only an upper bound on the attainment. *)
+            if (compute_binds && k.flops_exact) || ((not compute_binds) && k.bytes_exact) then
+              ( "exact",
+                Some (100. *. Float.max compute_s memory_s /. (k.seg_ms /. 1000.)),
+                Some (if compute_binds then "compute" else "memory"),
+                "" )
+            else
+              ( "approximate",
+                None,
+                None,
+                if compute_binds then "the binding op count is an upper bound"
+                else "the binding byte count is an upper bound" ))
   in
   let ceiling_fields =
     match ceiling with

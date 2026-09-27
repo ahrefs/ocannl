@@ -105,7 +105,7 @@ let kernel ?(flops = 1_000_000_000) ?(bytes = 1_000_000_000) ?(flops_exact = tru
     (* A label with the characters that would invalidate the record, as a node name can carry. *)
     writes = "w1.grad \"b1\"";
     seg_ms;
-    segments_ms = 10.;
+    segments_ms = 20.;
     tensorization;
     flops;
     bytes;
@@ -123,8 +123,14 @@ let dominant_kernels =
         ~ceiling:(ceiling ~gpu:false ~narrow_native:true ())
         (Some (kernel ~flops:40_000_000_000 ~seg_ms:8. ())) );
     ( "approximate",
+      (* The memory leg binds, and its byte count is only an upper bound. *)
       Bench_json.dominant_kernel_object ~ceiling:(ceiling ()) (Some (kernel ~bytes_exact:false ()))
     );
+    ( "exact over an inexact leg",
+      (* 4e10 ops at 5e12 is 8 ms against at most 1 ms of bytes: the exact leg binds, so the
+         upper-bound byte count cannot matter and 16 ms is exactly 50%. *)
+      Bench_json.dominant_kernel_object ~ceiling:(ceiling ())
+        (Some (kernel ~flops:40_000_000_000 ~bytes_exact:false ~seg_ms:16. ())) );
     ( "opaque",
       Bench_json.dominant_kernel_object ~ceiling:(ceiling ()) (Some (kernel ~opaque:true ())) );
     ( "no-ceiling (no constants)",
@@ -289,6 +295,12 @@ let () =
       Yojson.Safe.equal (verdict name) (`String v)
       && Yojson.Safe.equal (member "pct_of_peak" (dk name)) `Null
       && Yojson.Safe.equal (member "bytes" (dk name)) (`Int 1_000_000_000));
+  p "an inexact count on the leg that does not bind leaves the attainment exact"
+    (let o = dk "exact over an inexact leg" in
+     Yojson.Safe.equal (member "verdict" o) (`String "exact")
+     && Yojson.Safe.equal (member "bound" o) (`String "compute")
+     && Yojson.Safe.equal (member "pct_of_peak" o) (`Int 50)
+     && Yojson.Safe.equal (member "bytes_exact" o) (`Bool false));
   p "one missing envelope leg is no ceiling, naming the missing leg"
     (Yojson.Safe.equal (verdict "no-ceiling (no constants)") (`String "no-ceiling")
     && Yojson.Safe.equal (member "pct_of_peak" (dk "no-ceiling (no constants)")) `Null
