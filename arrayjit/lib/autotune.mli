@@ -283,6 +283,19 @@ val sketch_seed_params :
     list {e is} {!Ir.Schedule_space.leaves} of {!matmul_sketch_tree}, epilogue twins included.
     Exposed for tests. *)
 
+val mma_tile_for_precisions :
+  Ir.Backend_intf.mma_capability ->
+  a_prec:Ir.Ops.prec ->
+  b_prec:Ir.Ops.prec ->
+  d_prec:Ir.Ops.prec ->
+  (int * int * int) option
+(** The advertised intrinsic tile a matmul site with these operand and destination storage
+    precisions resolves to under the current {!Ir.Numerics} policy (f32 operands resolve to TF32
+    first when [tf32_matmuls] is on), or [None] when the capability advertises no matching format
+    triple — the resolution {!sketch_seed_params} gates its tensorized seeds on. Exposed so a test
+    can gate a tensorized leg on the seeder's own format resolution rather than on the seeds under
+    test. *)
+
 module Family_decision : sig
   (** {1 What a commitment on the matmul family tree is (gh-ocannl-591)}
 

@@ -302,10 +302,15 @@ let leg ~tag ~ko_extents ~nk ?(companion = false) ~build () =
 (* The tensorized pipelines through the real mma hook: an out projection at bf16 -- the one operand
    format the wmma backends and Metal all advertise in the uniform combination -- seeded against
    [Context.hardware_limits], executing one candidate per tensorized shape this site seeds
-   (unstaged, staged, pipelined-staged, batch-grid) under the 5% tolerance schedule_batched_mma uses
-   for gfx1151's not-exactly-rounded WMMA, and checking that the emitted source reaches the
-   backend's intrinsic rather than the scalar fallback. Where the device advertises no such tile
-   (cc; an f32-only capability) the leg is reported skipped. *)
+   (unstaged, staged, batch-grid) under the 5% tolerance schedule_batched_mma uses for gfx1151's
+   not-exactly-rounded WMMA, and checking that the emitted source reaches the backend's intrinsic
+   rather than the scalar fallback. Where the device advertises no such tile (cc; an f32-only
+   capability) the leg is reported skipped.
+
+   No pipelined-staged shape here: depth twins are seeded only for staged operands of at least 4
+   bytes -- the async arms' element floor ([Autotune.sketch_params.sk_depth]) -- so a bf16 site
+   never carries one on any backend, which the leg pins instead. [pipelined_leg] executes that shape
+   on the f32 site. *)
 let bf16_leg ~tag ~build =
   let real_limits = Context.hardware_limits (Context.auto ()) in
   let has_uniform_bf16_tile =
@@ -317,7 +322,6 @@ let bf16_leg ~tag ~build =
       ("unstaged", fun q -> q.Autotune.sk_bk = 0);
       ( "staged",
         fun q -> q.Autotune.sk_bk > 0 && q.Autotune.sk_depth = 1 && not q.Autotune.sk_batch_grid );
-      ("pipelined-staged", fun q -> q.Autotune.sk_depth = 2);
       ("batch-grid", fun q -> q.Autotune.sk_batch_grid && q.Autotune.sk_depth = 1);
     ]
   in
@@ -331,6 +335,7 @@ let bf16_leg ~tag ~build =
       "%s: %s advertises no uniform-bf16 mma tile -- the tensorized execution leg is skipped\n" tag
       backend_name;
     skipped (tag ^ " bf16: the multi-axis site seeds the backend's advertised tile");
+    skipped (tag ^ " bf16: no pipelined twin is seeded below the async arms' 4-byte element floor");
     List.iter shapes ~f:(fun (what, _) -> skip_shape what)
   end
   else begin
@@ -351,6 +356,8 @@ let bf16_leg ~tag ~build =
     p
       (tag ^ " bf16: the multi-axis site seeds the backend's advertised tile")
       (not (List.is_empty seeds));
+    p_none (tag ^ " bf16: no pipelined twin is seeded below the async arms' 4-byte element floor")
+      seeds ~f:(fun q -> q.Autotune.sk_depth > 1);
     List.iter shapes ~f:(fun (what, pick) ->
         match List.find seeds ~f:pick with
         | None ->
@@ -372,6 +379,78 @@ let bf16_leg ~tag ~build =
               (tag ^ " bf16: the " ^ what ^ " candidate renders the tensor-core intrinsic")
               (n_ran = 1 && !tensorized))
   end
+
+(* The pipelined-staged tensorized shape (gh-ocannl-487) through the real mma hook, on the f32 out
+   projection: its staged operands clear the async arms' 4-byte element floor the bf16 leg sits
+   below. Metal advertises a uniform-f32 tile; CUDA sm_80+ tensorizes f32 operands only as tf32, so
+   the leg runs under [tf32_matmuls] -- scoped to the leg, since the policy is process-wide. The
+   inputs (half-integers against quarter steps, sums far below 2^24) are exact in tf32 and in f32 in
+   any order, so the candidate must match the serial twin bitwise. The gate is the seeder's own
+   format resolution against the device's advertised depths, never the seed list under test; HIP
+   advertises no pipeline depth, so the leg is skipped there and on the CPU backends. *)
+let pipelined_leg ~tag ~build =
+  let claims =
+    [
+      tag ^ ": the pipelined-staged candidate compiles and runs";
+      tag ^ ": the pipelined-staged candidate matches the serial twin bitwise";
+      tag ^ ": the pipelined-staged candidate renders the tensor-core intrinsic";
+    ]
+  in
+  let saved = Ir.Numerics.get () in
+  Ir.Numerics.set_policy { saved with tf32_matmuls = true };
+  Exn.protect
+    ~finally:(fun () -> Ir.Numerics.set_policy saved)
+    ~f:(fun () ->
+      let real_limits = Context.hardware_limits (Context.auto ()) in
+      let seedable =
+        match real_limits.Ir.Backend_intf.mma with
+        | Some mma ->
+            List.mem mma.Ir.Backend_intf.mma_pipeline_depths 2 ~equal:Int.equal
+            && Option.is_some
+                 (Autotune.mma_tile_for_precisions mma ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single
+                    ~d_prec:Ir.Ops.single)
+        | None -> false
+      in
+      if not (on_gpu && seedable) then begin
+        Stdio.eprintf
+          "%s: %s advertises no depth-2 pipeline over an f32 mma tile -- the pipelined leg is \
+           skipped\n"
+          tag backend_name;
+        skipped (tag ^ ": the multi-axis site seeds a pipelined-staged tensorized candidate");
+        List.iter claims ~f:skipped
+      end
+      else begin
+        let ref_t = build () in
+        let want =
+          List.hd_exn (run_serial ~name:(tag ^ "_serial") (Train.forward ref_t) [ ref_t ])
+          |> nonzero (tag ^ "_serial")
+        in
+        let cand = build () in
+        let routine = tag ^ "_mma" in
+        let fwd = named routine (Train.forward cand) in
+        let opt = capture fwd in
+        let pipelined =
+          Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits:real_limits opt
+          |> List.filter ~f:(fun q ->
+              q.Autotune.sk_mma && (not q.Autotune.sk_epilogue) && q.Autotune.sk_depth = 2)
+        in
+        p
+          (tag ^ ": the multi-axis site seeds a pipelined-staged tensorized candidate")
+          (not (List.is_empty pipelined));
+        match pipelined with
+        | [] -> List.iter claims ~f:(fun c -> p c false)
+        | q :: _ ->
+            let tensorized = ref false in
+            let n_ran, n_match =
+              execute_seeds
+                ~on_routine:(fun r ->
+                  tensorized :=
+                    Ir.C_syntax.equal_tensorization r.mma.Ir.C_syntax.tensorization
+                      Ir.C_syntax.Tensorized)
+                ~tag ~routine ~fwd ~outs:[ cand ] ~wants:[ want ] ~close:Float.equal [ q ]
+            in
+            List.iter2_exn claims [ n_ran = 1; n_match = 1; n_ran = 1 && !tensorized ] ~f:p
+      end)
 
 (* What a tile-geometry refutation calls the extent it judged (gh-ocannl-683). The divisibility
    gates compare a tile's k-extent against the INNERMOST contraction loop's extent [m_nk] alone --
@@ -476,6 +555,10 @@ let () =
       let%op out = wv * av in
       (out, out))
     ();
+  pipelined_leg ~tag:"out_proj f32" ~build:(fun () ->
+      let wv = w () and av = att () in
+      let%op out = wv * av in
+      out);
 
   (* The same out projection at a head_dim the blocktile menu's k-extents do not divide, so the [bk]
      gate actually refutes, plus a single-axis control contracting over the same 12. *)
