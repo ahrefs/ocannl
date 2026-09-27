@@ -1,7 +1,7 @@
-(* Emits a C header of converters taken from the definition table every C consumer reads
-   (builtins_cc.ml, copied here as [Codec_builtins_table] the way arrayjit/lib/gen_builtins copies
-   it), so an exhaustive codec sweep compiles the very text cc kernels and the host stubs compile --
-   not a transcription of it. Two users:
+(* Emits a C header of converters taken from the definition table every C consumer reads (the
+   stdlib-only [arrayjit.builtins_cc] library, which arrayjit/lib/gen_builtins links too), so an
+   exhaustive codec sweep compiles the very text cc kernels and the host stubs compile -- not a
+   transcription of it. Two users:
 
    - half_emulated.h for half_codec_exhaustive_stubs.c (gh-ocannl-985): the emulated fp16
    converters. On every machine the fleet runs, [HAS_NATIVE_FLOAT16] is 1 and the table's emulated
@@ -28,7 +28,7 @@ let () =
     match guard with Some g -> g | None -> failwith "gen_codec_header: --guard NAME is required"
   in
   if roots = [] then failwith "gen_codec_header: no converter named";
-  let table = Codec_builtins_table.builtins in
+  let table = Builtins_cc.builtins in
   let find key =
     match List.find_opt (fun (k, _, _) -> String.equal k key) table with
     | Some entry -> entry
