@@ -664,7 +664,7 @@ let on_timed_window :
 let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
   (* Every finite positive batch minimum the calibration measured, as [(depth, wall)]: the evidence
      that bounds an unresolved calibration's fallback depth. *)
-  let observed = ref [] in
+  let observed = ref [] and no_supported_batch = ref false in
   let observe ~depth wall_ms =
     if Float.is_finite wall_ms && Float.is_positive wall_ms then
       observed := (depth, wall_ms) :: !observed
@@ -861,6 +861,14 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
                 wall_bounded_fallback_depth ~observed:!observed depth
               else depth
             in
+            (* A candidate whose single launch owed it a batch, but whose every batched probe read
+               over the target, has no depth this calibration can time as [Queued]: the fallback
+               leaves only depth 1, whose reading is the isolated objective, and timing it would
+               crown under the wrong objective silently (Codex P1, round 3 on PR #846). The readings
+               cannot tell that from a stall, so it is refused exactly as a stalled window is: not
+               ranked, not cached, retried by a later search. *)
+            if Float.is_nan estimated_batch_wall_ms && depth = 1 && provisional_depth > 1 then
+              no_supported_batch := true;
             (calibration_dispatches, depth, Some estimated_batch_wall_ms)
         in
         (calibration_dispatches, depth, estimated_batch_wall_ms, singles)
@@ -928,7 +936,13 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
   in
   !on_timed_window ~samples:!timed_batches ~reused:(List.length reused) ~wall_ms:!timed_wall_ms
     ~median_wall_ms;
-  result
+  if !no_supported_batch then (
+    logf
+      "queued timing refused: every batched calibration probe read over the %.1f ms target, so \
+       only an isolated depth-1 reading was left"
+      queued_batch_ms;
+    { result with contended = true })
+  else result
 
 (* [routine.bindings] exposes the routine's live binding refs — restore them after timing (Codex P2
    on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)

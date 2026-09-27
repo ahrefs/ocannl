@@ -709,7 +709,11 @@ files.
   tolerance is under 1% of a slow batch) was timed in 126 s batches, 2016 s for one call. A
   NaN-wall outcome of `calibrate_and_time` now settles no deeper than the deepest depth it MEASURED
   within the target (depth 1 when none): slow candidates fall back to the isolated reading, a fast
-  one whose deeper probes stalled keeps its deepest clean batch. Do not replace this with a bound
+  one whose deeper probes stalled keeps its deepest clean batch, and one whose single launch owed
+  it a batch but that measured none within the target is REFUSED (`contended`), because its
+  depth-1 reading would be the isolated objective. A kernel with a genuine queue threshold below
+  its provisional depth is therefore refused on every search until calibration learns to probe
+  shallower (the probe-budget follow-up). Do not replace this with a bound
   extrapolated through a per-launch cost (least `wall / depth`): the readings that leave the fits
   unresolved cannot tell a host stall from a cost that jumps past a queue threshold, and two review
   rounds on staging#846 each built a threshold device that defeated such a bound (400 and 600 ms

@@ -430,7 +430,13 @@ let () =
    flat 40 ms, which also leaves the fits unresolved. A stall and a queue threshold read the same,
    so its fallback cannot go past what it measured within the target either -- but it must still
    batch: a fix that returned depth 1 on every unresolved calibration would turn its queued reading
-   back into an isolated one. *)
+   back into an isolated one.
+
+   Where no batch at all was measured within the target for a candidate whose single launch owed it
+   one -- the first threshold device, and a 0.1 ms kernel whose every batched probe is stalled to 40
+   ms (Codex P1, round 3 on PR #846) -- the depth-1 reading left would be the isolated objective.
+   Such a call is refused, not ranked, exactly as a stalled window is. A slow candidate, owed depth
+   1 by its own single launch, is not. *)
 let () =
   Stdio.printf "\n== the no-verdict fallback is wall-bounded ==\n";
   let gpu_cap = Autotune.queue_depth_cap_for_backend "hip" in
@@ -462,9 +468,12 @@ let () =
     unresolved "fast, stalled validation" ~fixed_ms:fast_fixed_ms ~launch_ms:fast_launch_ms
       (fun d -> if d >= 1272 then 40. else fast_fixed_ms +. fast_launch_work d)
   in
+  let stalled_clean d = if d = 1 then 0.1 else 40. in
+  let stalled = unresolved "every batch stalled" ~launch_ms:0.1 stalled_clean in
   let cases =
     [
       ("slow", slow, slow_clean);
+      ("every batch stalled", stalled, stalled_clean);
       ("queue threshold", threshold, threshold_clean);
       ("queue threshold above a fixed term", offset, offset_launch_work);
       ("fast", fast, fast_launch_work);
@@ -481,15 +490,34 @@ let () =
           (launch_work c.settled_depth);
       ok);
   p "a slow candidate whose fits never resolve is timed at depth 1, as isolated times it"
-    (slow.settled_depth = 1 && Float.equal slow.reading.ms (slow_clean 1));
+    (slow.settled_depth = 1
+    && Option.equal Float.equal (Autotune.admitted_timing_ms slow.reading) (Some (slow_clean 1)));
+  Verdict.p_all
+    "a candidate owed a batch that measured none within the target is refused, not timed isolated"
+    [ ("queue threshold", threshold); ("every batch stalled", stalled) ]
+    ~f:(fun (what, c) ->
+      let refused = Option.is_none (Autotune.admitted_timing_ms c.reading) in
+      if not refused then
+        Stdio.eprintf "  %s: depth %d reading %g ms was admitted\n%!" what c.settled_depth
+          c.reading.ms;
+      refused);
+  Verdict.p_all "a fallback that kept a batch measured within the target is admitted"
+    [ ("queue threshold above a fixed term", offset); ("fast", fast) ]
+    ~f:(fun (what, c) ->
+      let admitted =
+        c.settled_depth > 1 && Option.is_some (Autotune.admitted_timing_ms c.reading)
+      in
+      if not admitted then
+        Stdio.eprintf "  %s: depth %d reading %g ms%s\n%!" what c.settled_depth c.reading.ms
+          (if c.reading.contended then " (refused)" else "");
+      admitted);
   (* The cost the issue is about, in launches: sixteen singles, twelve probes at each of depths 2
      through 32, and a timed window that reuses the singles. The cap fallback spent 16 x 2048
      more. *)
   p "a slow candidate's unresolved calibration costs no more than its probes"
     (slow.fresh_launches = 0
     && slow.all_launches = slow.calibration_launches
-    && slow.all_launches <= 16 + (12 * (2 + 4 + 8 + 16 + 32)));
-  p "a fast candidate's unresolved calibration still batches" (fast.settled_depth > 1)
+    && slow.all_launches <= 16 + (12 * (2 + 4 + 8 + 16 + 32)))
 
 (* {1 The setting's spelling} *)
 
