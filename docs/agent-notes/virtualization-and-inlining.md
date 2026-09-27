@@ -273,28 +273,33 @@ files.
   `inline_computation`'s own core (`instantiate_computations`) at a synthetic read — a fresh symbol
   per axis ranging over the axis, a fixed or static position mirrored — then the SAME
   `post_virtualization_pipeline` `specialize_proc` runs (cleanup through the cross-statement CSE),
-  on a placement copy in which the node is virtual. Every reading prices that one instantiation: a
-  virtual node's stored computations, or for a cap-materialized node (never stored — the cap fires
-  before the walk) the ones `rederive_computations` recovers from its setters in the VIRTUALIZED
-  code (the pricer is handed `virtual_llc`'s output, not the final code) at the walk's capture
-  points, through the store's own refusals (`capture_rejection`, split out of
-  `check_and_store_virtual`). No nested expansion: a stored template already carries the producers
-  inlined when it was stored, and a read that stayed a read is a read in the emitted code too. Three
-  traps: (a) pricing must not touch `Indexing.get_symbol` or `get_scope` — generated code prints
-  those counters, so a pricer that drew from them would renumber every later routine's goldens (the
-  synthetic read uses negative symbols and scope ids `0`/`-1`); (b) exactness is per leg
-  (`rc_flops_approx` / `rc_bytes_approx`) and the seam gates on the op count only — a read under a
-  guard's arm makes bytes a bound while ops stay exact (a diagonal producer's consistency guard),
-  whereas a range guard's short-circuiting `&&` keeps the op count a bound (affine write positions,
-  multi-setter components), exactly as for the emitted read; (c) a flip the store refuses (a scalar
-  reduction's operand read escapes the setter it would be captured at, `9:`) is re-derived as
-  refused and carries the proxy — the hand rewrite this replaced priced such readings as feasible.
-  The ordering is otherwise as before: `specialize_proc` multiplies the one-read count by the
-  instantiations (read multiplicity, or `per_cell` for a footprint reading) and falls back to the
-  proxy (reduction extent × multiplicity × transitive fan-in, `fa_modeled = false`) when the op
-  count is only a bound. A test that stages a "decoy" or a budget cut on cost ORDER must build the
-  order from modeled costs, not from fan-in counts. The relationship pinned is PRICE = EMITTED READ,
-  per shape, in `test/operations/cost_model_template.ml`, beside the proxy-vs-model ordering witness.
+  on a placement copy in which the node is virtual. `specialize_proc` hands the pricer a WORLD per
+  node: a virtual node's stored computations under the placements as the walk left them (snapshot
+  before cleanup — cleanup's commitments are the default reading's, and a flip re-makes them), or,
+  for a cap-materialized node (never stored — the cap fires before the walk), `walked_computations`:
+  the walk itself (`virtual_llc`) re-run over the node's RAW setter statements in a scratch copy of
+  the lineage with the node undecided. The re-run decides everything the flip changes about the
+  node's own computation — capture point, refusals, the raw storage of a packed-uniform producer, a
+  footprint read its setter no longer hosts retracting — so imitating any of those rules is the
+  wrong fix (an imitation of the capture rules missed both the raw storage and the retraction). No nested
+  expansion: a stored template already carries the producers inlined when it was stored. Three
+  traps: (a) pricing must not draw on `Indexing.get_symbol` or `get_scope` — generated code prints
+  those counters, so a pricer that drew from them would renumber every later routine's goldens;
+  `virtual_llc` and `inline_computation` take `?fresh_symbol`/`?fresh_scope`, and pricing passes the
+  negative `pricing_symbol`/`pricing_scope`; (b) exactness is per leg (`rc_flops_approx` /
+  `rc_bytes_approx`) and the seam gates on the op count only — a read under a guard's arm makes bytes
+  a bound while ops stay exact (a diagonal producer's consistency guard), whereas a range guard's
+  short-circuiting `&&` keeps the op count a bound (affine write positions, multi-setter
+  components), exactly as for the emitted read; (c) a flip the store refuses (a scalar reduction's
+  operand read escapes the setter it would be captured at, `9:`) is refused by the re-run walk and
+  carries the proxy. The ordering is otherwise as before: `specialize_proc` multiplies the one-read
+  count by the instantiations (read multiplicity, or `per_cell` for a footprint reading) and falls
+  back to the proxy (reduction extent × multiplicity × transitive fan-in, `fa_modeled = false`) when
+  the op count is only a bound. A test that stages a "decoy" or a budget cut on cost ORDER must build
+  the order from modeled costs, not from fan-in counts; and a test that wants the visit cap needs a
+  read off the reader's write position (a copy-position read is rmw-exempt, so two identity readers
+  do not trip it). The relationship pinned is PRICE = EMITTED READ, per shape and through the seam,
+  in `test/operations/cost_model_template.ml`.
 - **The three caps have a cheaper landing spot than `Never_virtual`: footprint-scoped
   materialization** (gh-ocannl-616, `virtualize_footprint_materialization`, default on). When a cap
   would materialize a node whole but every read of it is an affine sub-image read — a diagonal

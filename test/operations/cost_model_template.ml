@@ -3,26 +3,26 @@
    multiplicity × transitive fan-in). Since gh-ocannl-1011 the priced code is the inliner's own
    instantiation at a synthetic read site, after the pipeline the emitted code receives
    ([Low_level.instantiate_at_synthetic_read]), so the relationship this test pins is PRICE =
-   EMITTED READ: for each shape, the price equals [Cost_model.analyze] over the reader statement the
-   optimizer actually emits when the node is inlined at a reader spanning its axes — counts and
-   per-leg exactness alike.
+   EMITTED READ: the price equals [Cost_model.analyze] over the reader statement the optimizer
+   actually emits when the node is inlined at a reader spanning its axes — counts and per-leg
+   exactness alike.
 
-   - Hand-built computations through [instantiation_cost]: a reduction (the projected loop binds
-   away, the reduction loop is the trip count), a [Where] whose arm is a hoisted scope (exact), an
-   arm the simplifier collapses (a bound), a shared-loop sibling the inliner filters, the CSE of two
-   alpha-equivalent scopes, a broadcast operand read by every cell, and the lane-extract form of a
-   packed-uniform producer. - The guard-emitting shapes the hand rewrite could only mark as bounds
-   (review rounds 1-4 of staging#744): an affine write position (unit solving keeps a loop and
-   range-guards it), a diagonal producer (a consistency guard), a two-component concat
-   (per-component range guards and selects) — guards now priced, each checked against the emitted
+   - Hand-built computations through [instantiation_cost]: a reduction, a [Where] whose arm is a
+   hoisted scope (exact), an arm the simplifier collapses (a bound), a shared-loop sibling the
+   inliner filters, the CSE of two alpha-equivalent scopes, a broadcast operand read by every cell,
+   and the lane-extract form of a packed-uniform producer. - The guard-emitting shapes the hand
+   rewrite could only mark as bounds (review rounds 1-4 of staging#744): an affine write position, a
+   diagonal producer, a two-component concat — guards now priced, each checked against the emitted
    read: the diagonal's op count EXACT, the range-guarded ones a bound only by [analyze]'s own
    short-circuit rule for the guard's [&&], exactly as the emitted read is. - [recompute_cost]
    through a real [optimize]: a two-link chain, the [`Materialize] flip's modeled price, and the
-   proxy-vs-model ordering witness. - The [`Inline] flip of a node a heuristic cap materialized: its
-   computation was never stored, so it is re-derived from its setters ([producer_cost],
-   [Low_level.rederive_computations]) — checked against the read the optimizer emits once the node
-   is preferred inline. - Pricing is side-effect free: the lineage's placements and the symbol
-   numbering generated code prints are untouched. *)
+   proxy-vs-model ordering witness. - The [`Inline] flip of a node a heuristic cap materialized,
+   through the production seam: priced from the computation the virtualizer's own walk stores once
+   the node is not materialized, checked against the read emitted after [prefer_inline] — for a
+   reduction, a packed-uniform producer over a virtual counter, and a consumer whose default setter
+   hosts a footprint scratch. - Pricing is invisible: the lineage's placements and the numbering of
+   symbols and scope ids generated code prints are untouched. - A flip the store refuses prices by
+   the proxy. *)
 
 open Base
 open Ocannl.Operation.DSL_modules
@@ -273,14 +273,7 @@ let () =
     case ~name:"two-component concat" ~self:bc ~reader:out3 ~materialized:[ pp; q; out3 ] concat
   in
   p "two-component concat: the per-component guards and selects are priced (the arms have no op)"
-    (match concat_price with Some r -> r.CM.rc_flops > 0 | None -> false);
-  (* Its re-derivation twin: the same node materialized, its computation recovered from its setters
-     — the price must be the one its stored computations give. *)
-  let o_mat = optimize ~materialized:[ bc; pp; q; out3 ] ~name:"cmt_concat_mat" concat in
-  let rederived = CM.producer_cost ~self:bc o_mat.LL.llc in
-  show_opt "two-component concat, re-derived from setters" rederived;
-  p "re-derivation: the materialized node's setters price as its stored computations"
-    (known_non_virtual o_mat bc && same_cost rederived concat_price)
+    (match concat_price with Some r -> r.CM.rc_flops > 0 | None -> false)
 
 (* A chain through a real optimization: x1 = x0 + w1 (virtual), x2 = sin(x1) (virtual), out = x2 *
    x2. x2's stored computation already carries x1 inlined as a nested scope: 1 + 1 ops. *)
@@ -333,7 +326,6 @@ let () =
   let placements_before = Sexp.to_string (Tn.Placements.sexp_of_t o.LL.optimize_ctx.placements) in
   let (Idx.Symbol before) = Idx.get_symbol () in
   ignore (CM.recompute_cost o.LL.optimize_ctx x2 : CM.recompute option);
-  ignore (CM.producer_cost ~self:out o.LL.llc : CM.recompute option);
   let (Idx.Symbol after) = Idx.get_symbol () in
   p "pricing draws no symbol from the global counter" (after = before + 1);
   p "pricing leaves the lineage's placements untouched"
@@ -399,13 +391,47 @@ let () =
   in
   p "witness: executed values match the reference" (same got [ expected ])
 
-(* The [`Inline] flip of a node a heuristic cap materialized: R[i] = sum_k A[i][k] over k < 20
-   exceeds the inline-reduction cap (16), so R is materialized before the virtualizer's walk and its
-   computation is never stored. The flip is priced from the computation re-derived from its setters
-   in the virtualized code; the oracle is the read the optimizer emits once R is preferred
-   inline. *)
+(* The [`Inline] flip of a node a heuristic cap materialized. Its computation was never stored (the
+   cap fires before the virtualizer's walk), so the pricer re-runs that walk over the node's raw
+   setter statements in a scratch copy of the lineage with the node undecided, and instantiates what
+   it stores in the world that re-run leaves. The oracle is the read the optimizer emits once the
+   node is preferred inline: the modeled flip cost must be that read's op count times the node's
+   read multiplicity. *)
+let inline_flip_vs_emitted ~name ~self ~reader ~materialized ~mult ?(prior = fun _ -> ()) llc =
+  let ctx = LL.empty_optimize_ctx () in
+  prior ctx;
+  let o = optimize_in ctx ~materialized ~name llc in
+  p (name ^ ": a heuristic cap materialized the node") (known_non_virtual o self);
+  let inline_flip =
+    List.find_map o.LL.flip_candidates ~f:(fun fc ->
+        if Tn.equal fc.LL.fc_tn self then
+          List.find fc.LL.fc_alternatives ~f:(fun fa -> LL.equal_reading fa.LL.fa_flip `Inline)
+        else None)
+  in
+  (match inline_flip with
+  | Some fa ->
+      Stdio.printf "  %-46s cost %d %s\n" (name ^ ", Inline flip") fa.LL.fa_recompute_cost
+        (if fa.LL.fa_modeled then "(modeled)" else "(proxy)")
+  | None -> Stdio.printf "  %-46s no Inline flip\n" name);
+  let ctx_pref = LL.empty_optimize_ctx () in
+  prior ctx_pref;
+  LL.prefer_inline ctx_pref [ self ];
+  let o_pref = optimize_in ctx_pref ~materialized ~name:(name ^ "_pref") llc in
+  p (name ^ ": preferred inline, the node is inlined at the reader") (known_virtual o_pref self);
+  let emitted = emitted_read o_pref ~reader ~self in
+  show_opt (name ^ ", emitted read once inlined") emitted;
+  p
+    (name ^ ": the Inline flip is modeled and prices the emitted read's ops per instantiation")
+    (match (inline_flip, emitted) with
+    | Some fa, Some e ->
+        fa.LL.fa_modeled && (not e.CM.rc_flops_approx)
+        && fa.LL.fa_recompute_cost = mult * e.CM.rc_flops
+    | _ -> false);
+  o
+
 let () =
   Stdio.printf "== the Inline flip of a cap-materialized node ==\n";
+  (* R[i] = sum_k A[i][k] over k < 20: the inline-reduction cap (16) materializes it. *)
   let rr = mk "R" and a = mk ~dims:[| 4; 20 |] "Ar" and out = mk "outR" in
   let i = sym () and k = sym () and x = sym () in
   let llc =
@@ -416,81 +442,116 @@ let () =
                (set rr [| iter i |] (add (get rr [| iter i |]) (get a [| iter i; iter k |])))))
          (loop_n x 4 (set out [| iter x |] (get rr [| iter x |]))))
   in
-  let o = optimize ~materialized:[ a; out ] ~name:"cmt_capped" llc in
-  p "capped: the reduction cap materialized R" (known_non_virtual o rr);
-  let inline_flip =
-    List.find_map o.LL.flip_candidates ~f:(fun fc ->
-        if Tn.equal fc.LL.fc_tn rr then
-          List.find fc.LL.fc_alternatives ~f:(fun fa -> LL.equal_reading fa.LL.fa_flip `Inline)
-        else None)
+  ignore
+    (inline_flip_vs_emitted ~name:"reduction cap" ~self:rr ~reader:out ~materialized:[ a; out ]
+       ~mult:1 llc
+      : LL.optimized);
+  (* A packed-uniform producer read twice per cell (the visit cap materializes it) whose counter is
+     a virtual producer: materialized, V's setter inlines the counter, and cleanup commits the
+     counter virtual — yet once V is inlined, the lane-extract form reads the counter as a buffer
+     and commits it materialized (review round 2). The walk re-run stores V's setter raw, as the
+     store does, and the read is instantiated against the placements the walk left, where the
+     counter is still undecided. *)
+  let v = mk "Vp" and u = mk ~dims:[| 1 |] "Up" and wp = mk ~dims:[| 1 |] "Wp" in
+  let o = mk ~dims:[| 4; 2 |] "op" in
+  let i = sym () and j = sym () and x = sym () and y = sym () in
+  let llc =
+    seq
+      (loop_n j 1 (set u [| iter j |] (add (get wp [| iter j |]) (c 1.))))
+      (seq
+         (loop_n i 1
+            (LL.Set_from_vec
+               {
+                 tn = v;
+                 idcs = [| aff [ (4, i) ] 0 |];
+                 length = 4;
+                 vec_unop = Ops.Uint4x32_to_prec_uniform;
+                 arg = (get u [| iter i |], single);
+                 debug = "";
+               }))
+         (loop_n x 4 (loop_n y 2 (set o [| iter x; iter y |] (get v [| iter x |])))))
   in
-  (match inline_flip with
-  | Some fa ->
-      Stdio.printf "  R materialize -> inline cost %d %s\n" fa.LL.fa_recompute_cost
-        (if fa.LL.fa_modeled then "(modeled)" else "(proxy)")
-  | None -> Stdio.printf "  R offers no Inline flip\n");
-  let ctx = LL.empty_optimize_ctx () in
-  LL.prefer_inline ctx [ rr ];
-  let o_inline = optimize_in ctx ~materialized:[ a; out ] ~name:"cmt_capped_inline" llc in
-  p "capped: preferred inline, R is inlined at the reader" (known_virtual o_inline rr);
-  let emitted = emitted_read o_inline ~reader:out ~self:rr in
-  show_opt "R inlined, emitted read" emitted;
-  p "capped: the Inline flip is modeled and prices the emitted read's ops (multiplicity 1)"
-    (match (inline_flip, emitted) with
-    | Some fa, Some e ->
-        fa.LL.fa_modeled && (not e.CM.rc_flops_approx) && fa.LL.fa_recompute_cost = e.CM.rc_flops
-    | _ -> false);
-  p "capped: a node the code never sets has no producer cost"
-    (Option.is_none (CM.producer_cost ~self:a o.LL.llc))
+  ignore
+    (inline_flip_vs_emitted ~name:"packed-uniform, virtual counter" ~self:v ~reader:o
+       ~materialized:[ wp; o ] ~mult:2 llc
+      : LL.optimized);
+  (* A consumer read twice per cell (the visit cap materializes it), reading an inherited virtual
+     producer diagonally: by default the consumer's setter hosts the producer's footprint scratch.
+     Once the consumer is inlined its setter is no longer a materialized one, the footprint decision
+     retracts to ordinary inlining, and the producer's reduction is part of every read (review round
+     2). *)
+  let ai = mk ~dims:[| 4; 4 |] "Ai" and cc = mk "Ci" and xi = mk "Xi" in
+  let oi = mk ~dims:[| 4; 2 |] "oi" in
+  let producer =
+    let i = sym () and j = sym () and k = sym () in
+    seq (zero ai)
+      (loop_n i 4
+         (loop_n j 4
+            (loop_n k 20
+               (set ai
+                  [| iter i; iter j |]
+                  (add (get ai [| iter i; iter j |]) (add (tag i j) (embed k)))))))
+  in
+  let prior ctx =
+    let o = optimize_in ctx ~name:"cmt_inherited_producer" producer in
+    p "footprint: the producer routine leaves the node virtual" (known_virtual o ai)
+  in
+  let i = sym () and x = sym () and y = sym () in
+  let llc =
+    seq
+      (loop_n i 4 (set cc [| iter i |] (mul (get ai [| iter i; iter i |]) (get xi [| iter i |]))))
+      (loop_n x 4 (loop_n y 2 (set oi [| iter x; iter y |] (get cc [| iter x |]))))
+  in
+  let o =
+    inline_flip_vs_emitted ~name:"consumer of a footprint-scoped producer" ~self:cc ~reader:oi
+      ~materialized:[ xi; oi ] ~mult:2 ~prior llc
+  in
+  p "footprint: by default the consumer reads the producer through a scratch"
+    (Hashtbl.existsi o.LL.traced_store ~f:(fun ~key ~data:_ ->
+         String.equal key.Tn.namespace LL.footprint_namespace))
 
-(* The store's one raw exception, reproduced by the re-derivation (review round 1): a packed-uniform
-   producer is stored RAW, because the lane-extract builder needs its argument as the plain counter
-   read — which the walk rewrites into the counter's scope when the counter is virtual at that point
-   and materialized later. Re-deriving from the virtualized setter alone finds the rewritten
-   argument and refuses (140); given the routine's raw code, it captures the setter as the store
-   would. *)
+(* The flip pricer draws nothing from the counters generated code is numbered by, however it prices
+   — including the walk it re-runs for a cap-materialized node: optimizing a program with such a
+   candidate consumes exactly as many symbols and scope ids as optimizing it with the pricer off. *)
 let () =
-  Stdio.printf "== a packed-uniform producer re-derived from the raw code ==\n";
-  let v = mk "Vr" and u = mk "Ur" and w = mk "Wr" in
-  let i = sym () in
-  let setter arg =
-    loop_n i 1
-      (LL.Set_from_vec
-         {
-           tn = v;
-           idcs = [| aff [ (4, i) ] 0 |];
-           length = 4;
-           vec_unop = Ops.Uint4x32_to_prec_uniform;
-           arg = (arg, single);
-           debug = "";
-         })
+  Stdio.printf "== pricing is invisible to the generated code's numbering ==\n";
+  let rr = mk "Rn" and a = mk ~dims:[| 4; 20 |] "An" and out = mk "outN" and lvn = mk "lvn" in
+  let i = sym () and k = sym () and x = sym () in
+  let llc =
+    seq (zero rr)
+      (seq
+         (loop_n i 4
+            (loop_n k 20
+               (set rr [| iter i |] (add (get rr [| iter i |]) (get a [| iter i; iter k |])))))
+         (loop_n x 4 (set out [| iter x |] (get rr [| iter x |]))))
   in
-  let raw = setter (get u [| iter i |]) in
-  let virtualized =
-    let id = LL.get_scope u in
-    setter
-      (LL.Local_scope
-         {
-           id;
-           body = LL.Set_local (id, get w [| iter i |]);
-           orig_indices = [| iter i |];
-           mint = LL.Inlined_computation;
-         })
+  let consumed () =
+    (* Both runs analyze from scratch: a cache hit would skip the analysis' own minting. *)
+    LL.clear_analysis_cache ();
+    let (Idx.Symbol s0) = Idx.get_symbol () and { LL.scope_id = c0; _ } = LL.get_scope lvn in
+    let o = optimize ~materialized:[ a; out ] ~name:"cmt_numbering" llc in
+    let (Idx.Symbol s1) = Idx.get_symbol () and { LL.scope_id = c1; _ } = LL.get_scope lvn in
+    (o, s1 - s0, c1 - c0)
   in
-  let without_raw = CM.producer_cost ~self:v virtualized in
-  let with_raw = CM.producer_cost ~raw ~self:v virtualized in
-  show_opt "virtualized setter only" without_raw;
-  show_opt "raw setter, as the store keeps it" with_raw;
-  p "packed-uniform: the rewritten argument cannot serve the lane-extract form"
-    (Option.is_none without_raw);
-  p "packed-uniform: from the raw code it prices as the lane-extract form the store's read gives"
-    (same_cost with_raw (CM.instantiation_cost ~self:v [ (Some [| aff [ (4, i) ] 0 |], raw) ]))
+  let o, symbols, scopes = consumed () in
+  let modeled =
+    List.exists o.LL.flip_candidates ~f:(fun fc ->
+        List.exists fc.LL.fc_alternatives ~f:(fun fa -> fa.LL.fa_modeled))
+  in
+  let pricer = !LL.recompute_pricer in
+  (LL.recompute_pricer := fun ~static_indices:_ _ _ -> None);
+  let _, symbols_off, scopes_off =
+    Exn.protect ~f:consumed ~finally:(fun () -> LL.recompute_pricer := pricer)
+  in
+  p "numbering: the priced compile did price a candidate" modeled;
+  p "numbering: pricing draws no symbol and no scope id"
+    (symbols = symbols_off && scopes = scopes_off)
 
 (* An [`Inline] flip the store itself refuses: a scalar reduction S[0] = sum_i A[i] over i < 20 (the
    cap materializes it). Captured at its setter, the read of A escapes the reduction loop the
-   capture leaves outside, so [virtual_llc] refuses the node however it is preferred — and the
-   re-derivation refuses it with the same code, pricing the flip by the proxy instead of modeling a
-   reading that cannot happen (the hand rewrite priced such a flip as the whole nest per read). *)
+   capture leaves outside, so [virtual_llc] refuses the node however it is preferred — and so does
+   the walk the pricer re-runs, which prices the flip by the proxy instead of modeling a reading
+   that cannot happen (the hand rewrite priced such a flip as the whole nest per read). *)
 let () =
   Stdio.printf "== an Inline flip the store refuses ==\n";
   let s = mk ~dims:[| 1 |] "Ssum"
@@ -504,12 +565,6 @@ let () =
          (set out [| fixed 0 |] (get s [| fixed 0 |])))
   in
   let o = optimize ~materialized:[ a; out ] ~name:"cmt_refused" llc in
-  let refusal =
-    match LL.rederive_computations ~static_indices:[] s o.LL.llc with
-    | Error code -> Some code
-    | Ok _ -> None
-  in
-  Stdio.printf "  re-derivation refused: %s\n" (Option.value refusal ~default:"no");
   let inline_flip =
     List.find_map o.LL.flip_candidates ~f:(fun fc ->
         if Tn.equal fc.LL.fc_tn s then
@@ -521,9 +576,7 @@ let () =
   let ctx = LL.empty_optimize_ctx () in
   LL.prefer_inline ctx [ s ];
   let o_pref = optimize_in ctx ~materialized:[ a; out ] ~name:"cmt_refused_pref" llc in
-  p "refused flip: preferred inline, the virtualizer refuses it with the re-derivation's code"
-    (known_non_virtual o_pref s
-    &&
-    match (refusal, rejection_code o_pref s) with
-    | Some code, Some prov -> Tn.equal_provenance prov (Tn.Site code)
-    | _ -> false)
+  Stdio.printf "  preferred inline, the virtualizer's verdict: %s\n"
+    (Option.value_map (rejection_code o_pref s) ~default:"none" ~f:Tn.provenance_to_string);
+  p "refused flip: preferred inline, the virtualizer refuses it all the same"
+    (known_non_virtual o_pref s)

@@ -29,8 +29,6 @@ diagonal producer: the consistency guard is counted, the op count exact: true
 two-component concat: the producer is inlined at the reader: true
 two-component concat: the price is the emitted read, counts and exactness: true
 two-component concat: the per-component guards and selects are priced (the arms have no op): true
-  two-component concat, re-derived from setters  flops=6 (bound) bytes=8 (bound)
-re-derivation: the materialized node's setters price as its stored computations: true
 == recompute_cost through optimize ==
 chain: both links virtual: true
   x1 = x0 + w1                                   flops=1 (exact) bytes=8 (exact)
@@ -50,18 +48,28 @@ witness: the proxy ranks the wide sum above the deep chain: true
 witness: the model ranks the deep chain above the wide sum: true
 witness: executed values match the reference: true
 == the Inline flip of a cap-materialized node ==
-capped: the reduction cap materialized R: true
-  R materialize -> inline cost 20 (modeled)
-capped: preferred inline, R is inlined at the reader: true
-  R inlined, emitted read                        flops=20 (exact) bytes=80 (exact)
-capped: the Inline flip is modeled and prices the emitted read's ops (multiplicity 1): true
-capped: a node the code never sets has no producer cost: true
-== a packed-uniform producer re-derived from the raw code ==
-  virtualized setter only                        refused
-  raw setter, as the store keeps it              flops=3 (exact) bytes=16 (bound)
-packed-uniform: the rewritten argument cannot serve the lane-extract form: true
-packed-uniform: from the raw code it prices as the lane-extract form the store's read gives: true
+reduction cap: a heuristic cap materialized the node: true
+  reduction cap, Inline flip                     cost 20 (modeled)
+reduction cap: preferred inline, the node is inlined at the reader: true
+  reduction cap, emitted read once inlined       flops=20 (exact) bytes=80 (exact)
+reduction cap: the Inline flip is modeled and prices the emitted read's ops per instantiation: true
+packed-uniform, virtual counter: a heuristic cap materialized the node: true
+  packed-uniform, virtual counter, Inline flip   cost 6 (modeled)
+packed-uniform, virtual counter: preferred inline, the node is inlined at the reader: true
+  packed-uniform, virtual counter, emitted read once inlined flops=3 (exact) bytes=4 (bound)
+packed-uniform, virtual counter: the Inline flip is modeled and prices the emitted read's ops per instantiation: true
+footprint: the producer routine leaves the node virtual: true
+consumer of a footprint-scoped producer: a heuristic cap materialized the node: true
+  consumer of a footprint-scoped producer, Inline flip cost 202 (modeled)
+footprint: the producer routine leaves the node virtual: true
+consumer of a footprint-scoped producer: preferred inline, the node is inlined at the reader: true
+  consumer of a footprint-scoped producer, emitted read once inlined flops=101 (exact) bytes=4 (exact)
+consumer of a footprint-scoped producer: the Inline flip is modeled and prices the emitted read's ops per instantiation: true
+footprint: by default the consumer reads the producer through a scratch: true
+== pricing is invisible to the generated code's numbering ==
+numbering: the priced compile did price a candidate: true
+numbering: pricing draws no symbol and no scope id: true
 == an Inline flip the store refuses ==
-  re-derivation refused: 9:sibling-escaping-read-index
 refused flip: offered, and priced by the proxy rather than modeled: true
-refused flip: preferred inline, the virtualizer refuses it with the re-derivation's code: true
+  preferred inline, the virtualizer's verdict: 9:sibling-escaping-read-index
+refused flip: preferred inline, the virtualizer refuses it all the same: true

@@ -204,36 +204,19 @@ val instantiation_cost :
     producer's counter can serve the lane-extract form; [static_indices] are the routine's. [None]
     when the inliner refuses the read. *)
 
-val producer_cost :
-  ?static_indices:Indexing.static_symbol list ->
-  ?placements:Tnode.Placements.t ->
-  ?raw:Low_level.t ->
-  self:Tnode.t ->
-  Low_level.t ->
-  recompute option
-(** The twin of {!instantiation_cost} for a node whose computation was never stored — a node a
-    heuristic cap materialized before the virtualizer's walk: its computations re-derived from the
-    VIRTUALIZED code holding its setters ({!Low_level.rederive_computations}, the store's own
-    capture points and refusals — a packed-uniform producer taken from [raw], the routine's code
-    before the walk, as the store keeps it raw), then instantiated the same way. Re-inlining a
-    multi-setter node replays every component, guarded, so the sum is the inliner's, guards
-    included. [None] when the code sets the node nowhere or the store or the inliner would refuse
-    it. *)
-
 val recompute_cost :
   ?static_indices:Indexing.static_symbol list ->
-  ?raw:Low_level.t ->
-  ?virtualized:Low_level.t ->
   Low_level.optimize_ctx ->
   Tnode.t ->
   recompute option
-(** One read of the node in the lineage: its stored computations through {!instantiation_cost}, or,
-    when it has none, its setters in [virtualized] (the routine's code as the virtualizer's walk
-    left it) through {!producer_cost}, with [raw] (its code before the walk) for a packed-uniform
-    producer. Nested virtual producers need no expansion: a stored computation carries every
-    producer inlined when it was stored as a nested scope, exactly what a read replays, and a
-    producer read that stayed a read is a read in the emitted code too. Memoized per lineage:
-    partially apply to the context once per compile. *)
+(** One read of a node the lineage stored computations for, through {!instantiation_cost} under the
+    lineage's placements; [None] for a node with none. Nested virtual producers need no expansion: a
+    stored computation carries every producer inlined when it was stored as a nested scope, exactly
+    what a read replays, and a producer read that stayed a read is a read in the emitted code too.
+    The flip-candidate pricer ({!Low_level.recompute_pricer}) reaches the same instantiation through
+    the world [specialize_proc] hands it per node — including, for a node a heuristic cap
+    materialized, the computations the virtualizer's own walk stores once the node is not
+    materialized. Memoized per lineage: partially apply to the context once per compile. *)
 
 module Calibration : sig
   (** The calibration TSV schema (config [autotune_calibration_file], gh-ocannl-491 task 4) and the
