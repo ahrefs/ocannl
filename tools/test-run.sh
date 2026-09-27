@@ -344,6 +344,11 @@ deduct_planning() { # <SECONDS at the resolution's start>
   fi
 }
 
+mark_planning() {
+  ps_token "$$" >"$run_dir/planning.token" 2>/dev/null
+  printf '%s\n' "$$" >"$run_dir/planning" 2>/dev/null || :
+}
+
 # Resolves the batch's backends (tools/batch-backends.sh) where something reads
 # them: a box where a backend meets a width cap, or a fleet slot, whose kind is
 # the other reading. Elsewhere nothing is built and nothing is said. Called
@@ -2005,7 +2010,7 @@ case $sub in
     trap 'batch_abort; rm -rf "$run_dir"; exit 143' TERM HUP
     new_run "$@"
     take_lock
-    : >"$run_dir/planning" 2>/dev/null
+    mark_planning
     plan_log=$run_dir/log
     # Resolved whatever this box is: the backends are what was asked for.
     plan_start=$SECONDS
@@ -2098,11 +2103,13 @@ case $sub in
     # a decision the log alone remembers (gh-ocannl-1066). The width goes
     # immediately after dune's subcommand, where dune accepts it whatever the
     # target is, and always before dune's own `--`.
-    # `planning` marks the window for `stop`, which finds no supervisor yet.
-    : >"$run_dir/planning" 2>/dev/null
+    # `planning` marks the window for `stop`, which finds no supervisor yet,
+    # and names this launcher (pid, with its start token beside it), which
+    # `stop` TERMs: its trap then ends the reader in flight.
+    mark_planning
     plan_start=$SECONDS
     plan_batch "$run_dir/log" "$@"
-    rm -f "$run_dir/planning"
+    rm -f "$run_dir/planning" "$run_dir/planning.token"
     # The resolution spent part of the cap (it is bounded by the same budget),
     # so the suite gets what is left, and the slot's wait at most half of that:
     # launch plus suite stay within the one wall-clock cap the caller gave
@@ -2558,9 +2565,15 @@ case $sub in
     elif [ -f "$run_dir/planning" ] && [ ! -f "$run_dir/pid" ] && lock_still_owned "$run_dir"; then
       # Still no supervisor after the wait above, and the launcher marked the
       # window in which it resolves the batch's backends (plan_batch builds
-      # the readers before the run is published) -- or died in it. Reaping
-      # the lock's holders withdraws the launch either way.
-      report_reap "the launch had not started its supervisor (resolving the batch's backends?)"
+      # the readers before the run is published). The launcher it names takes
+      # the TERM: its trap ends the reader in flight and withdraws the launch.
+      # One that died there leaves only leftovers, which are reaped.
+      if proc_alive "$run_dir/planning" "$run_dir/planning.token"; then
+        kill -TERM "$(cat "$run_dir/planning")" 2>/dev/null
+        echo "sent TERM to the launcher, which was resolving the batch's backends; it withdraws the launch"
+      else
+        report_reap "the launch had not started its supervisor (resolving the batch's backends?)"
+      fi
     elif lock_still_owned "$run_dir"; then
       # Dead without a verdict, yet its leftovers still hold the worktree
       # lock (a setsid escapee outliving a killed supervisor) --

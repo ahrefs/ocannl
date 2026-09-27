@@ -2827,7 +2827,7 @@ else
   plan_stop_rc=$?
   [ "$plan_stop_rc" = 143 ] || plan_stop_detail="the launch exited $plan_stop_rc (want 143): $(cat "$TMP/plan-stop.err")"
   [ -n "$plan_stop_detail" ] || case $plan_stop_out in
-    *"resolving the batch's backends"*"reaped them"*) ;;
+    *"resolving the batch's backends"*"withdraws the launch"*) ;;
     *) plan_stop_detail="stop said: $plan_stop_out" ;;
   esac
   [ -n "$plan_stop_detail" ] || [ ! -e "$plan_stop_run" ] ||
