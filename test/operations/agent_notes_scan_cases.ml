@@ -910,6 +910,12 @@ let guide_cases =
     ( "a hex reference for the hash is refused",
       guide "- A rule; the mechanism: a.md&#X0023;the-widget-seam.",
       [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a reference inside the path is refused",
+      guide "- A rule; the mechanism: a&period;md#the-sprocket-seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a reference right after the slug is refused",
+      guide "- A rule; the mechanism: a.md#the-widget&#45;seam.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
     ( "a reference to another character is not a separator",
       guide "- A rule, a.md&amp;b.md; and a.md&#36;x.",
       [] );

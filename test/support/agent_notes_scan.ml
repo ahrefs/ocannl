@@ -1709,7 +1709,6 @@ let guide_pointers contents =
   List.concat_map (lines contents) ~f:(fun (lineno, line) ->
       let n = String.length line in
       let hidden = spans_at comments lineno in
-      let hazard_at j = j >= 0 && j < n && (rendering_hazard line.[j] || in_any_span hidden j) in
       let visible i = not (in_any_span hidden i) in
       (* Separators: a literal [#], or a character reference that renders as one (Codex P2, round 5
          on lukstafi/ocannl-staging#811). Each is [(start, stop, literal)]; a literal [#] inside any
@@ -1719,6 +1718,15 @@ let guide_pointers contents =
         |> List.filter ~f:visible
         |> List.filter_map ~f:(fun i ->
             Option.map (char_reference_at line i) ~f:(fun (e, value) -> (i, e, value)))
+      in
+      (* What touches a pointer's path or slug from outside it: a hazard byte, a comment, or any
+         character reference -- its trailing [;] included, which is what a path run stops at after
+         [a&period;md] (Codex P2, round 6 on lukstafi/ocannl-staging#811). *)
+      let hazard_at j =
+        j >= 0 && j < n
+        && (rendering_hazard line.[j]
+           || in_any_span hidden j
+           || List.exists references ~f:(fun (a, e, _) -> a <= j && j < e))
       in
       let entities =
         List.filter_map references ~f:(fun (i, e, value) ->
