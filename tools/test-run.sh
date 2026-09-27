@@ -989,7 +989,12 @@ new_run() {
     printf '%s\n' "$PWD" >"$run_dir/wt" &&
     printf '%s\n' "$RUNS" >"$run_dir/runs" &&
     record_checkout &&
+    { [ -z "${DUNE_DIFF_COMMAND:-}" ] ||
+      printf '%s\n' "$DUNE_DIFF_COMMAND" >"$run_dir/diff-command"; } &&
     : >"$run_dir/log"; } || die "cannot write run metadata in $run_dir"
+  # `diff-command` records a diff presentation chosen through dune's
+  # environment, which the digest must know about (see `digest`); one chosen
+  # on the command line is in `cmd` already.
   # `runs` is the state root this run's lock and pointers live under: `stop`
   # and retention read them from there, whichever OCANNL_TOOL_TEST_RUNS the
   # caller has -- and its absence marks a run of the version that kept them
@@ -1479,18 +1484,28 @@ digest() {
   # 10MB of the log rather than scaling with an arbitrarily noisy run.
   scan_log() { tail -c 10000000 "$dir/log" 2>/dev/null; }
   # Promotion is offered only on a diff dune actually printed: a `--- ` header
-  # line directly followed by a `+++ ` one (git diff and diff -u alike; color
-  # escapes stripped first). Merely NAMING a `.expected` or `.corrected` file
-  # is not one -- dune quotes the failing stanza, `(diff? x.ml x.ml.corrected)`
-  # included, for a rule whose action failed before any diff ran, and sending
-  # that reader to `dune promote` hides the real failure (gh-ocannl-1055).
+  # line directly followed by a `+++ ` one (git diff and diff -u; patdiff's
+  # `------ `/`++++++ ` too; color escapes stripped first). Merely NAMING a
+  # `.expected` or `.corrected` file is not one -- dune quotes the failing
+  # stanza, `(diff? x.ml x.ml.corrected)` included, for a rule whose action
+  # failed before any diff ran, and sending that reader to `dune promote`
+  # hides the real failure (gh-ocannl-1055). A run that chose its own diff
+  # presentation (`--diff-command`, or DUNE_DIFF_COMMAND at launch: `-` prints
+  # none at all) can hold a real promotion with no such headers, so there the
+  # log cannot tell the two apart: the digest says so, with the naming
+  # heuristic as the trigger.
   if scan_log | awk 'BEGIN { esc = sprintf("%c", 27) }
                      { gsub(esc "\\[[0-9;]*m", "") }
-                     prev ~ /^--- / && /^\+\+\+ / { found = 1; exit }
+                     prev ~ /^---+ / && /^\+\+\++ / { found = 1; exit }
                      { prev = $0 }
                      END { exit found ? 0 : 1 }'; then
     echo "promotion diffs present -- inspect the log, accept with \`dune promote\`" \
          "(tools/promote.sh on Windows)"
+  elif { [ -s "$dir/diff-command" ] ||
+         grep -Eq '(^| )--diff-command([= ]|$)' "$dir/cmd" 2>/dev/null; } &&
+       scan_log | grep -qE '^File "[^"]*\.expected"|\.corrected'; then
+    echo "promotion diffs possible -- the run chose its own diff command, whose" \
+         "output this digest cannot read; inspect the log before \`dune promote\`"
   elif [ "$verdict" = FAIL ]; then
     echo "action failed (no diff) -- nothing to promote; read the failure below"
   fi

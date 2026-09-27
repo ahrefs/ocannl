@@ -145,7 +145,10 @@
 #      file, digests as `action failed (no diff)` with its fingerprint, and is
 #      never sent to `dune promote`.
 #  65. a real diff hunk, plain or colored, still offers promotion; a green run
-#      offers neither.
+#      offers neither. A run that chose its own diff command (patdiff's
+#      doubled headers still count; `-`, on the command line or in
+#      DUNE_DIFF_COMMAND, prints none) is told promotion is possible, never
+#      "no diff".
 #  66 sits after leg 63: the digest's `source:` line reads the record -- the
 #      commit and `(clean)`, or `+ N uncommitted paths`; nothing unrecorded.
 
@@ -159,6 +162,10 @@ harness_args "$@"
 # the fixture runs below must neither hold nor wait for one. The slot legs
 # name their fake fleet-worker.sh explicitly.
 export OCANNL_TOOL_FLEET_WORKER=none
+# Hermetic against the caller's dune presentation: a DUNE_DIFF_COMMAND in the
+# environment is recorded by every launch and changes what the digest may
+# conclude from a log (gh-ocannl-1055); the legs that want one set it.
+unset DUNE_DIFF_COMMAND
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC="$HERE/test-run.sh"
@@ -1599,6 +1606,17 @@ case $REPEAT_TEST_MODE in
     printf '%s+++ b/_build/default/test/operations/fixture.exe.output%s\n' "$b" "$r" >&2
     printf '@@ -1 +1 @@\n-old line\n+new line\n' >&2
     exit 1 ;;
+  # The same mismatch through `--diff-command patdiff` (its doubled headers),
+  # and through `--diff-command -`, which prints the location and no diff.
+  patdiff_hunk)
+    printf 'File "test/operations/fixture.expected", line 1, characters 0-0:\n' >&2
+    printf -- '------ _build/default/test/operations/fixture.expected\n' >&2
+    printf '++++++ _build/default/test/operations/fixture.exe.output\n' >&2
+    printf '@|-1,1 +1,1 ====\n-|old line\n+|new line\n' >&2
+    exit 1 ;;
+  diff_suppressed)
+    printf 'File "test/operations/fixture.expected", line 1, characters 0-0:\n' >&2
+    exit 1 ;;
   *) echo "unknown repeat fixture mode: $REPEAT_TEST_MODE" >&2; exit 92 ;;
 esac
 EOF
@@ -2803,6 +2821,39 @@ if [ -z "$hunk_detail" ]; then
   report 0 "$hunk_label"
 else
   report 1 "$hunk_label" "$hunk_detail"
+fi
+# A run that chose its own diff presentation: patdiff's doubled headers are
+# still a hunk; `--diff-command -` (or DUNE_DIFF_COMMAND=- at launch) prints
+# none for a real promotion, and the digest says promotion is POSSIBLE rather
+# than "no diff" -- which the same log without the choice does say.
+custom_label="a run that chose its own diff command is never told 'no diff' over a pending promotion"
+custom_detail=
+for probe in "patdiff_hunk|present|build --diff-command patdiff @cheap" \
+             "diff_suppressed|possible|build --diff-command - @cheap" \
+             "diff_suppressed|possible|build --diff-command=- @cheap" \
+             "diff_suppressed|env|build @cheap" \
+             "diff_suppressed|nodiff|build @cheap"; do
+  mode=${probe%%|*}; rest=${probe#*|}; want=${rest%%|*}
+  if [ "$want" = env ]; then export DUNE_DIFF_COMMAND=-; want=possible; fi
+  # shellcheck disable=SC2086
+  argv_mode=$mode argv_probe "custom-$mode-$want" run ${rest#*|}
+  unset DUNE_DIFF_COMMAND
+  case $want:$argv_out in
+    present:*"promotion diffs present"*) ;;
+    possible:*"promotion diffs possible"*) ;;
+    nodiff:*"action failed (no diff)"*) ;;
+    *) custom_detail="$mode (${rest#*|}): want $want: $argv_out"; break ;;
+  esac
+  case $want:$argv_out in
+    possible:*"no diff)"* | present:*"no diff)"*)
+      custom_detail="$mode (${rest#*|}): also said no diff: $argv_out"; break ;;
+  esac
+done
+argv_mode=
+if [ -z "$custom_detail" ]; then
+  report 0 "$custom_label"
+else
+  report 1 "$custom_label" "$custom_detail"
 fi
 
 # The guard from leg 26 is not made redundant by the digest: it knows the
