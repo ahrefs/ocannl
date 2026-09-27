@@ -189,26 +189,24 @@ reject_misplaced_options() {
 # which hazard, if any, this box and backend meet (box_jobs_local_hazard) and
 # owns every number.
 #
-# So a `run`/`start` that expressed NO width at all, on such a box, with a GPU
-# backend selected (or on rog-nv, any backend), gets the cap injected and is told so -- loudly, because the
-# alternative reading of what follows is a backend regression. The "runs dune as
-# given" contract is untouched wherever the caller named a width: an explicit
-# `-j`/`--jobs` (in any of dune's spellings, and any abbreviation of the long
-# one) is always honored, and only says that the cap exists.
+# So a `run`/`start` that expressed NO width at all, on such a box, gets the
+# tightest cap any backend the batch can hold meets here injected, and is told
+# so -- loudly, because the alternative reading of what follows is a backend
+# regression. The "runs dune as given" contract is untouched wherever the
+# caller named a width: an explicit `-j`/`--jobs` (in any of dune's spellings,
+# and any abbreviation of the long one) is always honored, and only says that
+# the cap exists.
 #
-# The backend is read from the ENVIRONMENT, never from an `ocannl_config` file.
-# Resolving it properly means the ancestor-directory search, `--ocannl_backend`
-# flags and the profile precedence rules, i.e. reimplementing Utils' config
-# resolution in shell where a wrong answer would silently halve a legitimate
-# run's width, or inject nothing while claiming the box was checked. A launcher
-# that cannot read a value says so instead: where a hazard is present and
-# OCANNL_BACKEND is unset, the run is not capped and the caller is told what to
-# pass if the suite is in fact a GPU one. (The test directories' own configs
-# pin a CPU backend, so a GPU suite names OCANNL_BACKEND in practice.) The one
-# exception is a box where every backend it can run meets the same cap
-# (box_jobs_local_uniform_cap: the fleet's native rog-nv-linux), where the unread backend
-# cannot change the answer, so the cap is injected -- which is what reaches
-# the CPU batches there, whose backend is the config's.
+# The backends are RESOLVED, by tools/batch-backends.sh (gh-ocannl-1066): the
+# test configurations through the same Utils resolution a test run makes, the
+# stanzas the argv reaches that name a backend by marker, and the argv itself --
+# one resolution, which the fleet slot's --cpu/--gpu reads too. It used to be
+# OCANNL_BACKEND alone, on the ground that resolving a config file in shell
+# could silently halve a legitimate run's width; the resolution is OCaml now,
+# and an unreadable answer is every backend, which costs minutes of width, not
+# a red suite. Resolving means building the two readers, so it happens only
+# where something depends on it: a box where some backend meets a cap, or a
+# fleet box's slot (plan_batch).
 explicit_jobs() { # dune argv; 0 iff it names a width before dune's own `--`
   for arg do
     case $arg in
@@ -234,22 +232,22 @@ hazard_name() { # <hazard>; a noun phrase for the host, and the issue behind its
     nvidia-cpu) printf 'the fleet'"'"'s rog-nv-linux (gh-ocannl-1065)' ;;
   esac
 }
-hazard_found() { # <hazard> <backend>
+hazard_found() { # <hazard> <backend> <why the batch holds it>
   case $1 in
     dxg) printf 'This box reaches its GPU through the WSL2
-  %s bridge and OCANNL_BACKEND=%s holds that device' "$(box_jobs_dxg_device)" "$2" ;;
+  %s bridge, and this batch can hold %s, which holds that device (%s)' "$(box_jobs_dxg_device)" "$2" "$3" ;;
     sdma) printf 'This box'"'"'s GPU has a small SDMA (copy-engine)
   queue pool, %s allocatable queues for the whole device per its KFD topology
-  (%s), and every OCANNL_BACKEND=%s process that copies takes one' \
-      "$(box_jobs_sdma_pool)" "$(box_jobs_kfd_topology)" "$2" ;;
+  (%s), and this batch can hold %s (%s), whose every process that copies takes one' \
+      "$(box_jobs_sdma_pool)" "$(box_jobs_kfd_topology)" "$2" "$3" ;;
     wide-sdma) printf 'This box'"'"'s AMD GPU reports %s allocatable SDMA
-  queues per its KFD topology (%s), and OCANNL_BACKEND=%s holds it' \
-      "$(box_jobs_sdma_pool)" "$(box_jobs_kfd_topology)" "$2" ;;
+  queues per its KFD topology (%s), and this batch can hold %s (%s), which holds it' \
+      "$(box_jobs_sdma_pool)" "$(box_jobs_kfd_topology)" "$2" "$3" ;;
     nvidia) printf 'This is a native NVIDIA boot
-  (%s) and OCANNL_BACKEND=%s holds its GPU' "$(box_jobs_nvidia_device)" "$2" ;;
+  (%s), and this batch can hold %s (%s), which holds its GPU' "$(box_jobs_nvidia_device)" "$2" "$3" ;;
     nvidia-cpu) printf 'This is the fleet'"'"'s rog-nv-linux, natively booted
-  (%s), and OCANNL_BACKEND=%s shares its correctness slots with the batches
-  that hold the GPU' "$(box_jobs_nvidia_device)" "$2" ;;
+  (%s), and this batch can hold %s (%s), which shares its correctness slots with the
+  batches that hold the GPU' "$(box_jobs_nvidia_device)" "$2" "$3" ;;
   esac
 }
 hazard_why() { # <hazard>
@@ -286,8 +284,8 @@ hazard_why() { # <hazard>
   this box, %s of them GPU tokens (lukstafi/ludics-lite#391), and CPU batches
   there were only ever measured at -j %s; uncapped, %s of them would each run
   as many jobs as the box has cores (gh-ocannl-1065). This run takes its fleet
-  slot itself, as `execution slot --cpu` when every test configuration resolves
-  a CPU backend (gh-ocannl-1004). The cap lives in tools/box-jobs.sh; the evidence
+  slot itself, as `execution slot --cpu` when none of its backends holds a GPU
+  (gh-ocannl-1004). The cap lives in tools/box-jobs.sh; the evidence
   is in the native-boot bullets of docs/agent-notes/build-and-test.md.' \
       "$BOX_JOBS_NATIVE_NVIDIA_SLOTS" "$BOX_JOBS_NATIVE_CUDA_TOKENS" \
       "$BOX_JOBS_NATIVE_CPU_CAP" "$BOX_JOBS_NATIVE_NVIDIA_SLOTS" ;;
@@ -296,66 +294,43 @@ hazard_why() { # <hazard>
 
 width_cap=        # the width to inject, empty for none
 width_announce=   # what to say about it, on stderr and in the run's log
-plan_width_cap() { # dune argv
-  local backend=${OCANNL_BACKEND:-} cap hazard b advice=
+plan_width_cap() { # dune argv; after plan_batch
+  local cap hazard backend
   width_cap= width_announce=
-  if [ -z "$backend" ]; then
-    explicit_jobs "$@" && return 0
-    # Unreadable, so said rather than guessed: one advisory per GPU backend
-    # that would meet a hazard here. On a dxg host both do, and it is one
-    # sentence about the bridge.
-    if box_jobs_dxg_host; then
-      width_announce="this box reaches its GPU through the WSL2 $(box_jobs_dxg_device) bridge, where a
-  GPU suite must run at -j $BOX_JOBS_DXG_CAP (the cap is tools/box-jobs.sh; gh-ocannl-983).
-  OCANNL_BACKEND is unset here, so this run's backend comes from ocannl_config
-  or the stanza and cannot be read from a launcher: if it is cuda or hip, pass
-  -j $BOX_JOBS_DXG_CAP yourself, or the suite can come back red like a backend regression."
-      return 0
-    fi
-    cap=$(box_jobs_local_uniform_cap)
-    if [ -n "$cap" ]; then
-      width_cap=$cap
-      width_announce="capping dune at -j $cap. This is the fleet's rog-nv-linux, natively
-  booted ($(box_jobs_nvidia_device)), where cuda and the CPU backends alike run at -j $cap
-  (tools/box-jobs.sh; gh-ocannl-1033, gh-ocannl-1065). OCANNL_BACKEND is unset
-  here, so this run's backend comes from ocannl_config or the stanza and cannot
-  be read from a launcher, but whichever it is, this is its width. This run takes
-  its fleet slot itself, as \`execution slot --cpu\` when every test configuration
-  resolves a CPU backend (gh-ocannl-1004). Pass an explicit -j to run at a width
-  of your own."
-      return 0
-    fi
-    for b in cuda hip; do
-      hazard=$(box_jobs_local_hazard "$b")
-      [ -n "$hazard" ] || continue
-      advice="${advice:+$advice; }if it is $b, pass -j $(box_jobs_hazard_cap "$hazard") yourself"
-    done
-    [ -n "$advice" ] || return 0
-    width_announce="this box's GPU needs a capped width for a GPU suite (the caps are
-  tools/box-jobs.sh; gh-ocannl-1033). OCANNL_BACKEND is unset here, so this run's
-  backend comes from ocannl_config or the stanza and cannot be read from a
-  launcher: $advice, or the suite can come back red like a backend regression."
-    return 0
-  fi
-  hazard=$(box_jobs_local_hazard "$backend")
-  cap=$(box_jobs_hazard_cap "$hazard")
+  [ -n "$batch_resolved" ] || return 0
+  batch_width
+  cap=$batch_width_cap hazard=$batch_width_hazard backend=$batch_width_backend
   [ -n "$cap" ] || return 0
   if explicit_jobs "$@"; then
-    width_announce="$(hazard_name "$hazard") with OCANNL_BACKEND=$backend:
+    width_announce="$(hazard_name "$hazard"), and this batch can hold $backend:
   this command names its own dune width, so the -j $cap cap (tools/box-jobs.sh) was NOT injected."
     return 0
   fi
   width_cap=$cap
-  width_announce="capping dune at -j $cap. $(hazard_found "$hazard" "$backend"). $(hazard_why "$hazard") Pass an
+  width_announce="capping dune at -j $cap. $(hazard_found "$hazard" "$backend" "$(batch_why "$backend")"). $(hazard_why "$hazard") Pass an
   explicit -j to run at a width of your own."
+}
+
+# Resolves the batch's backends (tools/batch-backends.sh) where something reads
+# them: a box where a backend meets a width cap, or a fleet slot, whose kind is
+# the other reading. Elsewhere nothing is built and nothing is said. Called
+# under the worktree lock, once the run's log exists, so dune's output from
+# building the readers lands there.
+plan_batch() { # <log> dune argv
+  local log=$1
+  shift
+  batch_resolved=
+  [ -n "$slot_fw" ] || batch_box_has_hazard || return 0
+  batch_resolve "$DUNE" "$log" "$cap" "$@"
 }
 
 # The fleet's run-time correctness slot (gh-ocannl-1004). On a fleet box --
 # one whose deployed `fleet-worker.sh execution slot --probe` names it (the
 # lukstafi/ludics-lite issue-wave skill) -- a `run`/`start` takes one of the
-# box's correctness slots itself, through tools/fleet-slot-run.sh, which
-# resolves whether the batch holds a GPU (declaring `--cpu` only when every
-# test configuration resolves a CPU backend) and execs dune under the slot.
+# box's correctness slots itself: the supervisor runs dune under
+# `fleet-worker.sh execution slot --cpu|--gpu`, declaring `--cpu` only when
+# none of the batch's resolved backends holds a GPU (plan_batch, the same
+# resolution the width reads; tools/batch-backends.sh).
 # No brief has to name the wrapper and no worker can forget it, or forget
 # `--cpu` and hold a GPU token for a cc batch. A worker that still wraps the
 # runner is harmless: the fleet's nested-slot rule runs this batch inside the
@@ -401,20 +376,28 @@ plan_slot() {
   [ -n "$slot_fw" ] || return 0
   slot_wait=${OCANNL_TOOL_SLOT_WAIT:-600}
   case $slot_wait in '' | *[!0-9]*) slot_wait=600 ;; esac
-  # At most half the cap: the cap's alarm is already running while the
-  # helper builds its readers and the slot waits, and a busy slot must be
-  # able to refuse -- and be reported SLOT REFUSED -- before the alarm reports
-  # the run as a TIMEOUT instead (Codex review round 3 on PR #803).
+  # At most half the cap: the cap's alarm is already running while the slot
+  # waits, and a busy slot must be able to refuse -- and be reported SLOT
+  # REFUSED -- before the alarm reports the run as a TIMEOUT instead (Codex
+  # review round 3 on PR #803).
   [ "$cap" -eq 0 ] || [ "$slot_wait" -le $((cap / 2)) ] || slot_wait=$((cap / 2))
-  if [ "$tokens" -lt "$slots" ]; then
-    tokens="--cpu if every test configuration resolves a CPU backend, else one of its $tokens
-  GPU tokens (the kind is decided and logged at launch; tools/fleet-slot-run.sh)"
+  slot_box=$box slot_slots=$slots slot_tokens=$tokens
+}
+slot_box= slot_slots= slot_tokens=
+slot_kind=        # cpu or gpu, once plan_batch has resolved the batch
+plan_slot_kind() { # after plan_batch
+  local what
+  [ -n "$slot_fw" ] || return 0
+  slot_kind=$(batch_kind)
+  if [ "$slot_kind" = cpu ]; then
+    what="--cpu: none of its backends ($(batch_summary)) holds a GPU"
+  elif [ "$slot_tokens" -lt "$slot_slots" ]; then
+    what="--gpu, one of its $slot_tokens GPU tokens: it can hold $(batch_summary)"
   else
-    tokens="any slot may hold the GPU here, and the kind is still declared and logged at launch
-  (tools/fleet-slot-run.sh)"
+    what="--gpu (any slot may hold the GPU here): it can hold $(batch_summary)"
   fi
-  slot_announce="taking one of $box's $slots fleet correctness slots for this run (gh-ocannl-1004),
-  waiting up to ${slot_wait}s: $tokens."
+  slot_announce="taking one of $slot_box's $slot_slots fleet correctness slots for this run (gh-ocannl-1004),
+  waiting up to ${slot_wait}s, as $what."
 }
 
 width_said=       # stderr is said once, whichever call gets there first
@@ -466,6 +449,11 @@ cd -P "$(dirname "$0")/.." || die "cannot cd to repo root"
 [ -r tools/box-jobs.sh ] || die "cannot read tools/box-jobs.sh"
 # shellcheck source=box-jobs.sh
 . tools/box-jobs.sh
+# Which backends a batch holds -- the resolution the width and the fleet slot
+# both read (plan_batch).
+[ -r tools/batch-backends.sh ] || die "cannot read tools/batch-backends.sh"
+# shellcheck source=batch-backends.sh
+. tools/batch-backends.sh
 
 # perl is load-bearing rather than a convenience: the per-worktree flock, the
 # cap supervisor and the atomic rename behind the `last` pointer are all
@@ -1901,23 +1889,10 @@ case $sub in
     normalize_cap
     reject_misplaced_options "$@"
     [ $# -gt 0 ] || set -- runtest
-    # Before new_run, so the injected width is part of the RECORDED command and
-    # of every later digest -- not a decision the log alone remembers. The
-    # width goes immediately after dune's subcommand, where dune accepts it
-    # whatever the target is, and always before dune's own `--`.
-    plan_width_cap "$@"
-    if [ -n "$width_cap" ]; then
-      width_sub=$1
-      shift
-      set -- "$width_sub" -j "$width_cap" "$@"
-    fi
-    # Stderr first: it must be readable even if the launch itself fails below.
-    say_width_plan
     # Toolchain checks gate only launches: status/wait/stop/list remain usable
     # from a shell whose opam environment is no longer active.
     select_dune
     plan_slot
-    [ -z "$slot_announce" ] || printf 'test-run: %s\n' "$slot_announce" >&2
     # Cancellation is armed BEFORE the lock is taken, for BOTH modes: from
     # here on the launcher holds state a signal must not abandon halfway (the
     # lock, then a published run). For `run` the signal is forwarded to the
@@ -1946,10 +1921,41 @@ case $sub in
     trap 'fwd_sig TERM' TERM
     trap 'fwd_sig HUP' HUP
     new_run "$@"
-    # And into the run's own log, so the cap is in the artifact triage reads
-    # rather than only in the launching terminal's scrollback.
-    say_width_plan
     take_lock
+    # The batch's backends, resolved under the lock (building the readers is
+    # a dune run in this worktree) and before publication, so the width they
+    # decide is part of the RECORDED command and of every later digest -- not
+    # a decision the log alone remembers (gh-ocannl-1066). The width goes
+    # immediately after dune's subcommand, where dune accepts it whatever the
+    # target is, and always before dune's own `--`.
+    # `planning` marks the window for `stop`, which finds no supervisor yet.
+    : >"$run_dir/planning" 2>/dev/null
+    plan_batch "$run_dir/log" "$@"
+    rm -f "$run_dir/planning"
+    if [ -n "$cancelled" ]; then
+      # Signalled while the readers built -- by the caller, or by a `stop`
+      # of this run, which reaps the lock's holders: nothing was published,
+      # so the launch is withdrawn like a refused one, in both modes (what a
+      # `start` survives is its launcher's end once the run is published),
+      # and the lock goes with this shell.
+      rm -rf "$run_dir"
+      echo "test-run: cancelled ($cancelled) before the launch; nothing ran" >&2
+      case $cancelled in INT) exit 130 ;; *) exit 143 ;; esac
+    fi
+    plan_width_cap "$@"
+    if [ -n "$width_cap" ]; then
+      width_sub=$1
+      shift
+      set -- "$width_sub" -j "$width_cap" "$@"
+      { { printf '%q ' "$@"; echo; } >"$run_dir/cmd.tmp" &&
+        mv -f "$run_dir/cmd.tmp" "$run_dir/cmd"; } ||
+        { rm -rf "$run_dir"; die "cannot record the capped command in $run_dir"; }
+    fi
+    # On stderr and into the run's own log, so the cap is in the artifact
+    # triage reads rather than only in the launching terminal's scrollback.
+    say_width_plan
+    plan_slot_kind
+    [ -z "$slot_announce" ] || printf 'test-run: %s\n' "$slot_announce" >&2
     publish_run || { rm -rf "$run_dir"; die "cannot publish $run_dir"; }
     # The supervisor inherits lock fd 9 and owns the run from here: it records
     # its identity, runs dune under the cap, and publishes the verdict (see
@@ -1958,12 +1964,15 @@ case $sub in
     # verdict; `run` differs from `start` only in staying attached to wait
     # and digest.
     # What the supervisor runs, in an array of its own: "$@" stays the
-    # caller's dune argv, which `start` prints back.
+    # caller's dune argv, which `start` prints back. Under a fleet slot it is
+    # fleet-worker.sh, which takes the slot and execs dune in its place, so
+    # the pid the supervisor caps and signals ends up being dune's, and dune's
+    # status is the slot's.
     sup_cmd=("$DUNE" "$@")
     if [ -n "$slot_fw" ]; then
       printf 'test-run: %s\n' "$slot_announce" >>"$run_dir/log"
       printf '%s\n' "$slot_fw" >"$run_dir/slot" 2>/dev/null || :
-      sup_cmd=(/bin/bash tools/fleet-slot-run.sh "$slot_fw" "$slot_wait" "$DUNE" "$@")
+      sup_cmd=("$slot_fw" execution slot --wait "$slot_wait" "--$slot_kind" -- "$DUNE" "$@")
     fi
     OCANNL_TOOL_TESTRUN_BG=1 OCANNL_TOOL_TESTRUN_RD=$run_dir OCANNL_TOOL_TESTRUN_OWN=$run_dir \
       perl -e "$supervisor_perl" -- "$cap" "${sup_cmd[@]}" </dev/null >>"$run_dir/log" 2>&1 &
@@ -2356,6 +2365,12 @@ case $sub in
       else
         echo "sent TERM to the orphaned process group $pg; re-run stop to confirm"
       fi
+    elif [ -f "$run_dir/planning" ] && [ ! -f "$run_dir/pid" ] && lock_still_owned "$run_dir"; then
+      # Still no supervisor after the wait above, and the launcher marked the
+      # window in which it resolves the batch's backends (plan_batch builds
+      # the readers before the run is published) -- or died in it. Reaping
+      # the lock's holders withdraws the launch either way.
+      report_reap "the launch had not started its supervisor (resolving the batch's backends?)"
     elif lock_still_owned "$run_dir"; then
       # Dead without a verdict, yet its leftovers still hold the worktree
       # lock (a setsid escapee outliving a killed supervisor) --

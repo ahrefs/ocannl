@@ -3,8 +3,8 @@
 # WSL2 `/dev/dxg` bridge, and the native ones the three native GPU boxes'
 # measured correctness slots set -- sourced by tools/sweep.sh (whose
 # `unit_jobs` decides a sweep unit's width) and by tools/test-run.sh (which
-# injects the local one into a manual run that expressed no width at all).
-# Sourced, never executed.
+# injects the local one into a manual run that expressed no width at all, the
+# tightest any backend the batch can hold meets). Sourced, never executed.
 #
 # Why one file rather than a constant in each: the cap was sweep policy, written
 # into `unit_jobs` and a bullet of docs/agent-notes/build-and-test.md, and every
@@ -290,8 +290,8 @@ BOX_JOBS_NATIVE_CPU_CAP=8
 # only), `nvidia` (a native CUDA box's GPU tokens, cuda only) or `nvidia-cpu`
 # (rog-nv-linux's slots, for a CPU backend, where the fleet runs them). The bridge comes first: a WSL boot
 # keeps its own cap whatever else it reports, and a CPU batch there none.
-# The backend is read from the ENVIRONMENT only -- see the caller
-# (tools/test-run.sh) for why a config file is not consulted.
+# The caller asks once per backend the batch can hold (tools/batch-backends.sh
+# resolves them) and injects the tightest answer.
 box_jobs_local_hazard() { # <backend>; prints dxg, sdma, wide-sdma, nvidia, nvidia-cpu, or nothing
   if box_jobs_cpu_backend "${1:-}"; then
     box_jobs_dxg_host || ! box_jobs_fleet_rog_host || printf 'nvidia-cpu'
@@ -327,23 +327,4 @@ box_jobs_hazard_cap() { # <hazard>; prints its cap, or nothing
 
 box_jobs_local_cap() { # <backend>; prints the cap, or nothing
   box_jobs_hazard_cap "$(box_jobs_local_hazard "${1:-}")"
-}
-
-# The width every backend this box can run meets, where they all meet the same
-# one -- so that a caller who cannot read the backend (OCANNL_BACKEND unset)
-# still gets it, because then it is not a guess. Only the fleet's native
-# rog-nv-linux qualifies: it runs cuda and the CPU backends and caps both at
-# -j 8 -- and should an AMD GPU sit beside it, only while hip's width there
-# is the same one.
-# Elsewhere a CPU batch is uncapped while a GPU one is not, so the width
-# depends on the backend and is only advised.
-box_jobs_local_uniform_cap() { # prints that cap, or nothing
-  local gpu cpu hip
-  box_jobs_fleet_rog_host || return 0
-  gpu=$(box_jobs_local_cap cuda)
-  cpu=$(box_jobs_local_cap cc)
-  hip=$(box_jobs_local_cap hip)
-  [ -n "$gpu" ] && [ "$gpu" = "$cpu" ] || return 0
-  [ -z "$hip" ] || [ "$hip" = "$gpu" ] || return 0
-  printf '%s' "$gpu"
 }

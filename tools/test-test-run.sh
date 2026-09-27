@@ -67,8 +67,10 @@
 #      says so; one past dune's own `--` is the program's, so it still caps.
 #  31. a CPU backend, or a box with no bridge, is neither capped nor told
 #      anything.
-#  32. with OCANNL_BACKEND unset the backend is unreadable here: the run is not
-#      capped and the caller is told what to pass -- unless it named a width.
+#  32. with OCANNL_BACKEND unset the backend is resolved (gh-ocannl-1066): a
+#      batch the configurations pin to cc is silent; one whose configuration
+#      names hip, one reaching a stanza naming cuda, and an unreadable one are
+#      capped, saying why; a named width is only told.
 #  33. hip caps too, and the width is spliced after dune's subcommand.
 #  34. tools/sweep.sh's `unit_jobs` and the injected cap read one table, with
 #      the sweep's own override still winning; the sweep's width follows the
@@ -106,27 +108,33 @@
 #      one's hazard -- no cap, no word.
 #  50. a width the caller named is honored on every native hazard, and a dxg
 #      boot that also reports a small pool keeps its dxg cap.
-#  51. with OCANNL_BACKEND unset on a native AMD hazard, the run is not capped
-#      and the caller is told the backend's width; on the fleet's native rog,
-#      where every backend it runs meets one width, that width is injected
-#      (beside an AMD GPU only where hip's width is the same); on another
-#      NVIDIA box it is advised.
+#  51. with OCANNL_BACKEND unset on a native hazard the width follows the
+#      batch's resolved backends: cc is uncapped on the AMD boxes and an
+#      unfleeted NVIDIA one; a configuration naming hip, a reached hip stanza
+#      or an unread answer gets hip's width; cc on the fleet's rog gets the CPU
+#      width; hip and cc beside a small pool on rog take the tighter.
 #  52. the native widths derive from one place: each hip cap is its measured
 #      budget over its slot count, and the numbers are the measured ones.
+#  65 sits between legs 51 and 52: the planning window (gh-ocannl-1066).
+#  65. a `stop` while the launcher resolves the backends (under the lock,
+#      before publication) withdraws the launch: exit 143, nothing run or
+#      published, the worktree idle.
 #  53-58 sit at the end: the fleet's run-time slot, taken by the runner
-#      (gh-ocannl-1004), against a fake fleet-worker.sh and a fake
-#      ocannl_read_config.
-#  53. the kind: --cpu only when every test configuration resolves a CPU
-#      backend and the run reaches no stanza naming a GPU backend; a GPU,
-#      empty, unknown or unreadable one, `exec`, a command-line GPU backend, or
-#      a reachable GPU stanza is --gpu; the cap bounds the wait.
+#      (gh-ocannl-1004), against a fake fleet-worker.sh and the fake readers
+#      every leg runs with.
+#  53. the kind: --cpu only when none of the batch's resolved backends holds a
+#      GPU; a GPU, empty, unknown or unreadable configuration, `exec`, a
+#      command-line GPU backend, a reachable GPU stanza, or a reachability
+#      answer outside its grammar is --gpu; the cap bounds the wait.
 #  54. a refused or unreachable slot is SLOT REFUSED, exit 75, and dune never runs.
 #  55. a red suite under a held slot is still FAIL; `start` prints the caller's argv.
 #  56. no probe, OCANNL_TOOL_FLEET_WORKER=none, and repeat all run dune directly;
 #      a stale first skill tree does not hide a second that answers the probe.
-#  57. every tracked ocannl_config naming a backend is one the kind is read from.
-#  58. the readers fleet-slot-run.sh builds are test/config's: ocannl_read_config
-#      answers --read=backend, ocannl_slot_kind asks Test_utils.Slot_kind.
+#  57. every tracked ocannl_config naming a backend is one the backends are
+#      read from.
+#  58. the readers batch-backends.sh builds are test/config's: ocannl_read_config
+#      answers --read=backend, ocannl_slot_kind asks Test_utils.Slot_kind and
+#      prints the grammar batch_resolve parses.
 #  59-63 sit after leg 47: the source a run tested, recorded at launch
 #      (gh-ocannl-992), against a committed fixture checkout.
 #  59. a clean checkout records its HEAD as `head` and an empty `dirty`.
@@ -843,14 +851,8 @@ stage_sourced() { # <fixture root>
     mkdir -p "$dest/$(dirname "$rel")" || exit 2
     cp "$HERE/../$rel" "$dest/$rel" || { echo "cannot stage $rel into $dest" >&2; exit 2; }
     staged=$((staged + 1))
-  done < <(sed -n 's/^\. \([A-Za-z0-9_./-]*\)$/\1/p' "$SRC"
-           # and the helper the supervisor runs instead of dune under a slot
-           sed -n 's|.*/bin/bash \(tools/[A-Za-z0-9_.-]*\.sh\) .*|\1|p' "$SRC"
-           # and what that helper sources in turn
-           for h in $(sed -n 's|.*/bin/bash \(tools/[A-Za-z0-9_.-]*\.sh\) .*|\1|p' "$SRC"); do
-             sed -n 's/^\. \([A-Za-z0-9_./-]*\)\( ||.*\)\{0,1\}$/\1/p' "$HERE/../$h"
-           done)
-  [ "$staged" -ge 2 ] ||
+  done < <(sed -n 's/^\. \([A-Za-z0-9_./-]*\)$/\1/p' "$SRC")
+  [ "$staged" -ge 3 ] ||
     { echo "only $staged sourced file(s) found in $SRC; the scan is broken" >&2; exit 2; }
 }
 
@@ -860,6 +862,39 @@ mkdir -p "$repeat_root/tools" "$repeat_root/scripts" "$repeat_bin"
 cp "$SRC" "$repeat_root/tools/test-run.sh"
 stage_sourced "$repeat_root"
 chmod +x "$repeat_root/tools/test-run.sh"
+# The two readers tools/batch-backends.sh would build, faked for every leg
+# (gh-ocannl-1066): a run on a box where a backend meets a width cap, or under
+# a fleet slot, resolves the batch's backends, and a build through the fixture
+# dune would land in the calls every leg pins. The reader answers a test
+# configuration's backend from the directory it runs in, the environment
+# outranking the file as in the real resolution (FAKE_BACKEND_TEST and
+# FAKE_BACKEND_ARRAYJIT stand for the files, cc by default as the tracked ones
+# say; `fail` fails the read, `unset` resolves none). The reachability tool
+# records the argv it was asked about and prints FAKE_REACH (by default: no
+# stanza naming a backend).
+mkdir -p "$repeat_root/test/config" "$repeat_root/arrayjit/test"
+batch_reader=$TMP/fake-read-config.sh
+cat >"$batch_reader" <<'FAKE'
+#!/usr/bin/env bash
+case $PWD in
+  */test/config) v=${FAKE_BACKEND_TEST:-cc} ;;
+  */arrayjit/test) v=${FAKE_BACKEND_ARRAYJIT:-cc} ;;
+  *) exit 3 ;;
+esac
+[ "$v" = fail ] && exit 1
+[ -z "${OCANNL_BACKEND:-}" ] || v=$OCANNL_BACKEND
+[ "$v" = unset ] && v=
+printf '%s\n' "$v"
+FAKE
+batch_reach=$TMP/fake-slot-kind.sh
+cat >"$batch_reach" <<'FAKE'
+#!/usr/bin/env bash
+[ -z "${FAKE_REACH_CALLS:-}" ] || printf '%s\n' "$*" >>"$FAKE_REACH_CALLS"
+[ -z "${FAKE_REACH_SLEEP:-}" ] || sleep "$FAKE_REACH_SLEEP"
+printf '%b\n' "${FAKE_REACH:-end}"
+FAKE
+chmod +x "$batch_reader" "$batch_reach"
+export OCANNL_TOOL_READ_CONFIG=$batch_reader OCANNL_TOOL_SLOT_KIND=$batch_reach
 # Read-only query contract: no state store, no first run, and no lock file yet.
 # The fixture root (not the caller's cwd) owns all omitted-RUN queries.
 query_runs=$TMP/query-state/runs
@@ -2202,29 +2237,47 @@ else
   report 1 "dxg: no cap and no announcement for a CPU backend, or off a dxg host" "$dxg_detail"
 fi
 
-# The documented gap: the backend can also come from an ocannl_config file, and
-# this launcher deliberately does not resolve one (that is the config search,
-# the CLI flags and the profile precedence, in shell, where a wrong answer
-# halves a legitimate run's width). Unreadable is said, not guessed -- and only
-# where the caller named no width, since one who did needs no advice.
-dxg_probe cap-unset "$dxg_present" "" run build @cheap
+# The backend no longer has to be exported to be read (gh-ocannl-1066): it is
+# resolved, from the test configurations, the stanzas the argv reaches and the
+# argv. With OCANNL_BACKEND unset, a batch the configurations pin to cc and
+# that reaches no stanza naming a GPU is a CPU batch -- no cap, and silence;
+# one whose configuration names hip, one reaching a stanza that names cuda, and
+# one whose backends cannot be read are capped, with the announcement saying
+# which backend and why. A caller who named a width is only told.
 dxg_detail=
-[ "$argv_rc" = 0 ] && [ "$argv_calls" = "build @cheap" ] ||
-  dxg_detail="exit $argv_rc; calls: ${argv_calls:-<none>}"
-[ -n "$dxg_detail" ] || grep -q 'OCANNL_BACKEND is unset' <<<"$argv_err" ||
-  dxg_detail="no advisory: ${argv_err:-<nothing>}"
-[ -n "$dxg_detail" ] || grep -q -- '-j 2 yourself' <<<"$argv_err" ||
-  dxg_detail="the advisory does not say what to pass: $argv_err"
+dxg_probe cap-unset "$dxg_present" "" run build @cheap
+{ [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build @cheap" ] && ! grep -qi 'cap\|dxg' <<<"$argv_err"; } ||
+  dxg_detail="a cc batch: exit $argv_rc; calls: ${argv_calls:-<none>}; stderr: ${argv_err:-<none>}"
+[ -n "$dxg_detail" ] || { [ -n "$argv_dir" ] && grep -q '^test-run: batch: holds cc: test/config resolves backend=cc$' "$argv_dir/log"; } ||
+  dxg_detail="a cc batch: the log does not record what it holds: $(cat "$argv_dir/log" 2>/dev/null)"
+for probe in "config|hip|end|test/config resolves backend=hip" \
+             "reach|cc|names cuda: it reaches t_cuda in x, which names cuda\nend|it reaches t_cuda in x, which names cuda" \
+             "unread|fail|end|its backends are unread"; do
+  [ -z "$dxg_detail" ] || break
+  IFS='|' read -r tag bt reach what <<<"$probe"
+  export FAKE_BACKEND_TEST=$bt FAKE_REACH=$reach
+  dxg_probe "cap-unset-$tag" "$dxg_present" "" run build @cheap
+  unset FAKE_BACKEND_TEST FAKE_REACH
+  if [ "$argv_rc" != 0 ] || [ "$argv_calls" != "build -j 2 @cheap" ]; then
+    dxg_detail="$tag: exit $argv_rc; calls: ${argv_calls:-<none>} (want build -j 2 @cheap)"; break
+  fi
+  case $(tr '\n' ' ' <<<"$argv_err") in
+    *"capping dune at -j 2"*"$what"*) ;;
+    *) dxg_detail="$tag: the announcement does not say why: ${argv_err:-<nothing>}"; break ;;
+  esac
+done
 if [ -z "$dxg_detail" ]; then
+  export FAKE_BACKEND_TEST=hip
   dxg_probe cap-unset-explicit "$dxg_present" "" run build -j 8 @cheap
+  unset FAKE_BACKEND_TEST
   { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build -j 8 @cheap" ] &&
-    ! grep -qi 'cap\|dxg' <<<"$argv_err"; } ||
+    grep -q 'names its own dune width' <<<"$argv_err"; } ||
     dxg_detail="with a width named: exit $argv_rc; calls: ${argv_calls:-<none>}; stderr: ${argv_err:-<none>}"
 fi
 if [ -z "$dxg_detail" ]; then
-  report 0 "dxg: an unreadable backend is reported, never guessed, and never capped"
+  report 0 "dxg: with OCANNL_BACKEND unset the backend is resolved: a cc batch is silent, a GPU or unread one capped"
 else
-  report 1 "dxg: an unreadable backend is reported, never guessed, and never capped" "$dxg_detail"
+  report 1 "dxg: with OCANNL_BACKEND unset the backend is resolved: a cc batch is silent, a GPU or unread one capped" "$dxg_detail"
 fi
 
 # The other GPU backend, and the position the width is spliced at: immediately
@@ -2507,68 +2560,121 @@ else
   report 1 "native: a named width is honored on each native hazard; a dxg boot keeps its own cap" "$native_detail"
 fi
 
-# Leg 51: an unreadable backend on a native hazard is reported with the width
-# for the backend that meets it, never guessed and never capped; on the
-# fleet's native rog, where cuda and the CPU backends meet the same width, the
-# unread backend cannot change it, so it is injected (gh-ocannl-1065) -- but
-# not on an NVIDIA box that is not the fleet's rog, nor beside an AMD GPU,
-# whose hip would meet another; and a caller who named a width is told nothing.
+# Leg 51: the backend resolved on a native hazard (gh-ocannl-1066). With
+# OCANNL_BACKEND unset the width follows what the batch can hold: a batch the
+# configurations pin to cc is uncapped on the AMD boxes and on an NVIDIA box
+# that is not the fleet's rog; one whose configuration names hip -- the minix
+# shape the issue names, reached through the configuration rather than the
+# environment -- gets hip's width on either pool, as does one reaching a
+# stanza that names hip, and one whose backends cannot be read; on the fleet's
+# rog a cc batch gets the CPU width; and beside a small AMD pool there, a batch
+# that can hold both hip and cc takes the tighter of the two. The recorded
+# command carries the width, and a named width is honored and only told.
 native_detail=
-for probe in "sdma:$kfd_small:$nv_absent:$fleet_none:if it is hip, pass -j 4 yourself" \
-             "wide-sdma:$kfd_large:$nv_absent:$fleet_none:if it is hip, pass -j 8 yourself" \
-             "nvidia:$kfd_absent:$nv_present:$fleet_none:if it is cuda, pass -j 8 yourself" \
-             "nvidia-beside-small-amd:$kfd_small:$nv_present:$fleet_rog:if it is cuda, pass -j 8 yourself"; do
-  IFS=: read -r tag kfd nv native_fleet want <<<"$probe"
+for probe in "cc-on-sdma|$kfd_small|$nv_absent|$fleet_none|cc|end|build @cheap|" \
+             "cc-on-wide-sdma|$kfd_large|$nv_absent|$fleet_none|cc|end|build @cheap|" \
+             "cc-on-unfleeted-nvidia|$kfd_absent|$nv_present|$fleet_none|cc|end|build @cheap|" \
+             "hip-config-sdma|$kfd_small|$nv_absent|$fleet_none|hip|end|build -j 4 @cheap|SDMA*test/config resolves backend=hip" \
+             "hip-config-wide-sdma|$kfd_large|$nv_absent|$fleet_none|hip|end|build -j 8 @cheap|12 allocatable SDMA*test/config resolves backend=hip" \
+             "hip-reach-sdma|$kfd_small|$nv_absent|$fleet_none|cc|names hip: it reaches t_hip in x, which names hip\nend|build -j 4 @cheap|SDMA*it reaches t_hip in x" \
+             "unread-sdma|$kfd_small|$nv_absent|$fleet_none|fail|end|build -j 4 @cheap|SDMA*its backends are unread" \
+             "cc-on-rog|$kfd_absent|$nv_present|$fleet_rog|cc|end|build -j 8 @cheap|rog-nv-linux, natively booted*test/config resolves backend=cc*execution slot --cpu" \
+             "tightest-on-rog|$kfd_small|$nv_present|$fleet_rog|cc|names hip: it reaches t_hip in x, which names hip\nend|build -j 4 @cheap|SDMA*it reaches t_hip in x"; do
+  IFS='|' read -r tag kfd nv native_fleet bt reach want what <<<"$probe"
+  export FAKE_BACKEND_TEST=$bt FAKE_REACH=$reach
   native_probe "native-unset-$tag" "$dxg_absent" "$kfd" "$nv" "" run build @cheap
-  if [ "$argv_rc" != 0 ] || [ "$argv_calls" != "build @cheap" ]; then
-    native_detail="$tag: exit $argv_rc; calls: ${argv_calls:-<none>}"; break
+  unset FAKE_BACKEND_TEST FAKE_REACH
+  if [ "$argv_rc" != 0 ] || [ "$argv_calls" != "$want" ]; then
+    native_detail="$tag: exit $argv_rc; calls: ${argv_calls:-<none>} (want $want)"; break
   fi
-  case $argv_err in
-    *"OCANNL_BACKEND is unset"*"$want"*) ;;
-    *) native_detail="$tag: no advisory naming the width: ${argv_err:-<nothing>}"; break ;;
-  esac
-  native_probe "native-unset-explicit-$tag" "$dxg_absent" "$kfd" "$nv" "" run build -j 16 @cheap
-  if [ "$argv_rc" != 0 ] || [ "$argv_calls" != "build -j 16 @cheap" ] ||
-     grep -qi 'cap\|sdma\|nvidia' <<<"$argv_err"; then
-    native_detail="$tag with a width named: exit $argv_rc; calls: ${argv_calls:-<none>}; stderr: ${argv_err:-<none>}"; break
+  if [ -z "$what" ]; then
+    ! grep -qi 'cap\|sdma\|nvidia' <<<"$argv_err" ||
+      { native_detail="$tag: an uncapped batch was told something: $argv_err"; break; }
+  else
+    # shellcheck disable=SC2254  # the expected phrases are a glob by design
+    case $(tr '\n' ' ' <<<"$argv_err") in
+      *"capping dune at -j "*$what*) ;;
+      *) native_detail="$tag: the announcement does not say why: ${argv_err:-<nothing>}"; break ;;
+    esac
+    { [ -n "$argv_dir" ] && grep -q -- "${want% @cheap}" "$argv_dir/cmd"; } ||
+      { native_detail="$tag: the recorded command does not carry the cap: $(cat "$argv_dir/cmd" 2>/dev/null)"; break; }
   fi
 done
-native_fleet=$fleet_rog
-# Beside an AMD GPU whose hip width is the same 8 (tuf's wider pool), every
-# backend still meets one width, so the cap is injected there too.
-if [ -z "$native_detail" ]; then
-  native_probe native-unset-nvidia-beside-wide-amd "$dxg_absent" "$kfd_large" "$nv_present" "" run build @cheap
-  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build -j 8 @cheap" ]; } ||
-    native_detail="nvidia beside a wide pool: exit $argv_rc; calls: ${argv_calls:-<none>} (want build -j 8 @cheap)"
-fi
-if [ -z "$native_detail" ]; then
-  native_probe native-unset-nvidia "$dxg_absent" "$kfd_absent" "$nv_present" "" run build @cheap
-  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build -j 8 @cheap" ]; } ||
-    native_detail="nvidia: exit $argv_rc; calls: ${argv_calls:-<none>} (want build -j 8 @cheap)"
-  [ -n "$native_detail" ] || case $argv_err in
-    *"capping dune at -j 8"*"OCANNL_BACKEND is unset"*"whichever it is"*"execution slot --cpu"*) ;;
-    *) native_detail="nvidia: the announcement is not the uniform one: ${argv_err:-<nothing>}" ;;
-  esac
-  { [ -n "$native_detail" ] || { [ -n "$argv_dir" ] && grep -q -- "-j 8" "$argv_dir/cmd"; }; } ||
-    native_detail="nvidia: the recorded command does not carry the cap: $(cat "$argv_dir/cmd" 2>/dev/null)"
-fi
-if [ -z "$native_detail" ]; then
-  native_probe native-unset-explicit-nvidia "$dxg_absent" "$kfd_absent" "$nv_present" "" run build -j 16 @cheap
-  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build -j 16 @cheap" ] &&
-    ! grep -qi 'cap\|sdma\|nvidia' <<<"$argv_err"; } ||
-    native_detail="nvidia with a width named: exit $argv_rc; calls: ${argv_calls:-<none>}; stderr: ${argv_err:-<none>}"
-fi
+for probe in "hip-config-sdma|hip|names its own dune width" "cc-on-sdma|cc|"; do
+  [ -z "$native_detail" ] || break
+  IFS='|' read -r tag bt what <<<"$probe"
+  native_fleet=$fleet_none
+  export FAKE_BACKEND_TEST=$bt
+  native_probe "native-unset-explicit-$tag" "$dxg_absent" "$kfd_small" "$nv_absent" "" run build -j 16 @cheap
+  unset FAKE_BACKEND_TEST
+  if [ "$argv_rc" != 0 ] || [ "$argv_calls" != "build -j 16 @cheap" ]; then
+    native_detail="$tag with a width named: exit $argv_rc; calls: ${argv_calls:-<none>}"; break
+  fi
+  if [ -n "$what" ]; then
+    grep -q "$what" <<<"$argv_err" || { native_detail="$tag with a width named: not told: ${argv_err:-<nothing>}"; break; }
+  else
+    ! grep -qi 'cap\|sdma\|nvidia' <<<"$argv_err" ||
+      { native_detail="$tag with a width named: told something: $argv_err"; break; }
+  fi
+done
 native_fleet=$fleet_none
 if [ -z "$native_detail" ]; then
-  native_probe native-unset-none "$dxg_absent" "$kfd_absent" "$nv_absent" "" run build @cheap
-  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build @cheap" ] &&
-    ! grep -qi 'cap\|sdma\|nvidia' <<<"$argv_err"; } ||
-    native_detail="no hazard: exit $argv_rc; calls: ${argv_calls:-<none>}; stderr: ${argv_err:-<none>}"
-fi
-if [ -z "$native_detail" ]; then
-  report 0 "native: an unreadable backend is reported with its width, never guessed, and capped only where every backend meets one width"
+  report 0 "native: with OCANNL_BACKEND unset the width follows the batch's resolved backends, the tightest of them"
 else
-  report 1 "native: an unreadable backend is reported with its width, never guessed, and capped only where every backend meets one width" "$native_detail"
+  report 1 "native: with OCANNL_BACKEND unset the width follows the batch's resolved backends, the tightest of them" "$native_detail"
+fi
+
+# Leg 65: the planning window. The backends resolve under the worktree lock
+# before the run is published, with no supervisor on record yet, so a `stop`
+# of the run the lock's owner pointer names must still withdraw it: the
+# launcher and the reader it waits on are reaped, the launch exits 143 with
+# nothing run and nothing published, and the worktree is idle again. A reader
+# held asleep stands for a slow build.
+plan_stop_runs=$TMP/argv-runs-plan-stop
+plan_stop_detail=
+mkdir -p "$plan_stop_runs"
+: >"$TMP/plan-stop.counter"
+: >"$TMP/plan-stop.calls"
+FAKE_REACH_SLEEP=30 \
+REPEAT_TEST_MODE=stable REPEAT_TEST_COUNTER=$TMP/plan-stop.counter REPEAT_TEST_CALLS=$TMP/plan-stop.calls \
+REPEAT_TEST_WAIT_PREFIX= REPEAT_TEST_WAIT_AT= REPEAT_TEST_ORPHAN_PID= REPEAT_TEST_ORPHAN_REAPED= \
+REPEAT_TEST_DIFF_WAIT_PREFIX= REPEAT_TEST_REAL_DIFF="$(command -v diff)" \
+OCANNL_TOOL_TEST_RUNS=$plan_stop_runs OCANNL_TOOL_DXG_DEVICE=$dxg_present OCANNL_BACKEND=cuda \
+OCANNL_TOOL_KFD_TOPOLOGY=$kfd_absent OCANNL_TOOL_NVIDIA_DEVICE=$nv_absent PATH=$repeat_bin:$PATH \
+  "$repeat_root/tools/test-run.sh" run build @cheap >"$TMP/plan-stop.out" 2>"$TMP/plan-stop.err" &
+plan_stop_pid=$!
+plan_stop_marker=
+for _ in $(seq 1 100); do
+  plan_stop_marker=$(ls "$plan_stop_runs"/2*/planning 2>/dev/null | head -n 1)
+  [ -z "$plan_stop_marker" ] || break
+  sleep 0.1
+done
+if [ -z "$plan_stop_marker" ]; then
+  plan_stop_detail="the launch never marked its planning window: $(cat "$TMP/plan-stop.err")"
+  kill -TERM "$plan_stop_pid" 2>/dev/null
+  wait "$plan_stop_pid" 2>/dev/null
+else
+  plan_stop_run=$(dirname "$plan_stop_marker")
+  plan_stop_out=$(OCANNL_TOOL_TEST_RUNS=$plan_stop_runs "$repeat_root/tools/test-run.sh" stop "$plan_stop_run" 2>&1)
+  wait "$plan_stop_pid"
+  plan_stop_rc=$?
+  [ "$plan_stop_rc" = 143 ] || plan_stop_detail="the launch exited $plan_stop_rc (want 143): $(cat "$TMP/plan-stop.err")"
+  [ -n "$plan_stop_detail" ] || case $plan_stop_out in
+    *"resolving the batch's backends"*"reaped them"*) ;;
+    *) plan_stop_detail="stop said: $plan_stop_out" ;;
+  esac
+  [ -n "$plan_stop_detail" ] || [ ! -e "$plan_stop_run" ] ||
+    plan_stop_detail="the withdrawn run's directory is still there: $plan_stop_run"
+  [ -n "$plan_stop_detail" ] || [ ! -s "$TMP/plan-stop.calls" ] ||
+    plan_stop_detail="dune ran: $(cat "$TMP/plan-stop.calls")"
+  [ -n "$plan_stop_detail" ] ||
+    OCANNL_TOOL_TEST_RUNS=$plan_stop_runs "$repeat_root/tools/test-run.sh" idle 2>/dev/null ||
+    plan_stop_detail="the worktree is not idle after the stop"
+fi
+if [ -z "$plan_stop_detail" ]; then
+  report 0 "plan: a stop in the planning window withdraws the launch, and the worktree is idle"
+else
+  report 1 "plan: a stop in the planning window withdraws the launch, and the worktree is idle" "$plan_stop_detail"
 fi
 
 # Leg 52: one place for the numbers. A hip cap is not a literal of its own
@@ -3211,9 +3317,9 @@ fi
 # A fake fleet-worker.sh stands in for lukstafi/ludics-lite's: it answers the
 # probe (or, in `noprobe` mode, refuses it as a version without nested slots
 # would), records the slot call, and then refuses, cannot reach its registry,
-# or holds the slot and execs the command as the real one does. A fake
-# ocannl_read_config answers each test configuration's backend from the
-# directory it is run in, so the kind decision is driven without a build.
+# or holds the slot and execs the command as the real one does. The fake
+# readers every leg runs with (batch_reader, batch_reach) answer the batch's
+# backends, so the kind decision is driven without a build.
 slot_fake=$TMP/fake-fleet-worker.sh
 cat >"$slot_fake" <<'FAKE'
 #!/usr/bin/env bash
@@ -3233,26 +3339,7 @@ esac
 echo "EXECUTION SLOT fakebox: slot 1 of 4, GPU token 1 of 2 held for: $*" >&2
 exec "$@"
 FAKE
-slot_reader=$TMP/fake-read-config.sh
-cat >"$slot_reader" <<'FAKE'
-#!/usr/bin/env bash
-case $PWD in
-  */test/config) v=$FAKE_BACKEND_TEST ;;
-  */arrayjit/test) v=$FAKE_BACKEND_ARRAYJIT ;;
-  *) exit 3 ;;
-esac
-[ "$v" = fail ] && exit 1
-[ "$v" = unset ] && v=
-printf '%s\n' "$v"
-FAKE
-slot_reach=$TMP/fake-slot-kind.sh
-cat >"$slot_reach" <<'FAKE'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >>"$FAKE_REACH_CALLS"
-printf '%s\n' "${FAKE_REACH:-cpu}"
-FAKE
-chmod +x "$slot_fake" "$slot_reader" "$slot_reach"
-mkdir -p "$repeat_root/test/config" "$repeat_root/arrayjit/test"
+chmod +x "$slot_fake"
 slot_probe() { # tag mode test-backend arrayjit-backend subcommand [argv...]
   local tag=$1 mode=$2 bt=$3 ba=$4
   shift 4
@@ -3260,36 +3347,38 @@ slot_probe() { # tag mode test-backend arrayjit-backend subcommand [argv...]
   : >"$TMP/$tag.reach"
   FAKE_FW_CALLS=$TMP/$tag.fw FAKE_FW_MODE=$mode FAKE_BACKEND_TEST=$bt FAKE_BACKEND_ARRAYJIT=$ba \
   FAKE_REACH_CALLS=$TMP/$tag.reach \
-  OCANNL_TOOL_FLEET_WORKER=$slot_fake OCANNL_TOOL_READ_CONFIG=$slot_reader OCANNL_TOOL_SLOT_KIND=$slot_reach \
-    argv_probe "$tag" "$@"
+  OCANNL_TOOL_FLEET_WORKER=$slot_fake argv_probe "$tag" "$@"
   slot_calls=$(grep -v -- '--probe' "$TMP/$tag.fw")
 }
 slot_calls=
 
-# Leg 53: the kind. --cpu only when every test configuration resolves a CPU
-# backend; a GPU backend anywhere, none (Context.auto tries GPUs first), or an
-# unreadable one is --gpu -- the slot's fail-closed default -- and so is a dune
-# argv that can pick a backend the configurations do not show. The fake's
-# recorded call is the argv the runner handed the real slot, so it pins the
-# wait (the cap bounds it) and that dune's own argv passes through intact.
+# Leg 53: the kind. --cpu only when none of the batch's resolved backends
+# holds a GPU: a GPU backend in a configuration, none (Context.auto tries GPUs
+# first), an unreadable or unknown one, a reached stanza naming a GPU, an
+# answer the reachability tool cut short, and a dune argv that can pick a
+# backend the configurations do not show are each --gpu -- the slot's
+# fail-closed default. The fake's recorded call is the argv the runner handed
+# the real slot, so it pins the wait (the cap bounds it) and that dune's own
+# argv passes through intact.
 slot_detail=
 for probe in "cpu:cc:sync_cc:--cpu" "unset:unset:cc:--gpu" "multidev:multidev_cc:cc:--cpu" \
-             "gpu-test:cuda:cc:--gpu" "gpu-arrayjit:cc:hip:--gpu" "unknown:cc:metal:--gpu" \
-             "unreadable:cc:fail:--gpu"; do
+             "gpu-test:cuda:cc:--gpu" "gpu-arrayjit:cc:hip:--gpu" "metal:cc:metal:--gpu" \
+             "unknown:cc:vulkan:--gpu" "unreadable:cc:fail:--gpu"; do
   IFS=: read -r tag bt ba want <<<"$probe"
   slot_probe "slot-$tag" hold "$bt" "$ba" run build @cheap
   [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build @cheap" ] ||
     { slot_detail="$tag: exit $argv_rc; dune calls: ${argv_calls:-<none>}"; break; }
   [ "$slot_calls" = "execution slot --wait 600 $want -- dune build @cheap" ] ||
     { slot_detail="$tag: slot call: ${slot_calls:-<none>} (want $want)"; break; }
-  grep -q "fleet correctness slots" <<<"$argv_err" ||
-    { slot_detail="$tag: the slot was not announced: $argv_err"; break; }
-  { [ -n "$argv_dir" ] && grep -q -- "fleet slot: .*$want" "$argv_dir/log" &&
+  grep -q "fleet correctness slots.*as $want" <<<"$(tr '\n' ' ' <<<"$argv_err")" ||
+    { slot_detail="$tag: the slot and its kind were not announced: $argv_err"; break; }
+  { [ -n "$argv_dir" ] && grep -q -- "as $want" "$argv_dir/log" &&
+      grep -q "^test-run: batch: " "$argv_dir/log" &&
       grep -q "^EXECUTION SLOT fakebox: slot 1 of 4" "$argv_dir/log"; } ||
-    { slot_detail="$tag: the log does not record the decision and the slot: $(cat "$argv_dir/log" 2>/dev/null)"; break; }
+    { slot_detail="$tag: the log does not record the backends, the decision and the slot: $(cat "$argv_dir/log" 2>/dev/null)"; break; }
 done
 for probe in "exec:exec ./prog.exe" "flag-gpu:exec ./prog.exe -- --ocannl_backend=cuda" \
-             "flag-build:build @cheap --ocannl-backend=hip"; do
+             "flag-build:build @cheap --ocannl-backend=hip" "flag-bare:build @cheap --ocannl-backend"; do
   [ -z "$slot_detail" ] || break
   IFS=: read -r tag argv <<<"$probe"
   # shellcheck disable=SC2086  # the argv is word-split on purpose
@@ -3299,22 +3388,36 @@ for probe in "exec:exec ./prog.exe" "flag-gpu:exec ./prog.exe -- --ocannl_backen
 done
 # A run that reaches a stanza naming a GPU backend is --gpu however the
 # configurations resolve, and the reachability question is asked with the
-# caller's own dune argv (the width, if injected, included).
+# caller's own dune argv; one reaching only a stanza that names a CPU backend
+# stays --cpu.
 if [ -z "$slot_detail" ]; then
-  FAKE_REACH="gpu: it reaches test_cuda_pool_offset in test/operations, which names cuda" \
+  FAKE_REACH="names cuda: it reaches test_cuda_pool_offset in test/operations, which names cuda\nend" \
     slot_probe slot-reach-gpu hold cc cc run build @cheap
   [ "$slot_calls" = "execution slot --wait 600 --gpu -- dune build @cheap" ] ||
     slot_detail="reach: slot call: ${slot_calls:-<none>} (want --gpu)"
   [ -n "$slot_detail" ] || [ "$(cat "$TMP/slot-reach-gpu.reach")" = "build @cheap" ] ||
     slot_detail="reach: asked about: $(cat "$TMP/slot-reach-gpu.reach") (want build @cheap)"
-  [ -n "$slot_detail" ] || grep -q "fleet slot: it reaches test_cuda_pool_offset" "$argv_dir/log" ||
+  [ -n "$slot_detail" ] || grep -q "batch: holds cuda: it reaches test_cuda_pool_offset" "$argv_dir/log" ||
     slot_detail="reach: the log does not say why: $(cat "$argv_dir/log")"
 fi
 if [ -z "$slot_detail" ]; then
-  FAKE_REACH="garbled" slot_probe slot-reach-garbled hold cc cc run build @cheap
-  [ "$slot_calls" = "execution slot --wait 600 --gpu -- dune build @cheap" ] ||
-    slot_detail="an unreadable reachability answer: slot call: ${slot_calls:-<none>} (want --gpu)"
+  FAKE_REACH="names cc: it reaches cc_backend_trace_name in test/operations, which names cc\nend" \
+    slot_probe slot-reach-cpu hold cc cc run build @cheap
+  [ "$slot_calls" = "execution slot --wait 600 --cpu -- dune build @cheap" ] ||
+    slot_detail="reach of a CPU-named stanza: slot call: ${slot_calls:-<none>} (want --cpu)"
 fi
+# Every answer the grammar does not accept is every backend: garbled, cut
+# short of its `end`, running past it, naming what is not a backend, or the
+# tool's own unknown.
+for probe in "garbled:garbled" "cut-short:names cc: it reaches x in y, which names cc" \
+             "past-end:end\nnames cuda: it reaches x in y, which names cuda" \
+             "unknown-name:names vulkan: it reaches x in y, which names vulkan\nend" \
+             "unmodelled:unknown: it carries a word this does not model"; do
+  [ -z "$slot_detail" ] || break
+  FAKE_REACH=${probe#*:} slot_probe "slot-reach-${probe%%:*}" hold cc cc run build @cheap
+  [ "$slot_calls" = "execution slot --wait 600 --gpu -- dune build @cheap" ] ||
+    slot_detail="an unreadable reachability answer (${probe%%:*}): slot call: ${slot_calls:-<none>} (want --gpu)"
+done
 if [ -z "$slot_detail" ]; then
   slot_probe slot-argv-cpu-flag hold cc cc run build @cheap --ocannl_backend=cc
   [ "$slot_calls" = "execution slot --wait 600 --cpu -- dune build @cheap --ocannl_backend=cc" ] ||
@@ -3327,9 +3430,9 @@ if [ -z "$slot_detail" ]; then
     slot_detail="capped: the slot's wait is not half the cap: ${slot_calls:-<none>}"
 fi
 if [ -z "$slot_detail" ]; then
-  report 0 "slot: a fleet box's run takes its slot, --cpu only when every test configuration resolves a CPU backend"
+  report 0 "slot: a fleet box's run takes its slot, --cpu only when none of the batch's resolved backends holds a GPU"
 else
-  report 1 "slot: a fleet box's run takes its slot, --cpu only when every test configuration resolves a CPU backend" "$slot_detail"
+  report 1 "slot: a fleet box's run takes its slot, --cpu only when none of the batch's resolved backends holds a GPU" "$slot_detail"
 fi
 
 # Leg 54: a refused or unreachable slot is its own verdict, never a test one:
@@ -3353,7 +3456,7 @@ fi
 # Leg 55a: `start` prints the caller's dune command, not the supervisor's.
 slot_probe slot-start hold cc cc start build @cheap
 case $argv_out in
-  *"fleet-slot-run.sh"*) report 1 "slot: start prints the caller's command" "$argv_out" ;;
+  *"execution slot"* | *"fake-fleet-worker"*) report 1 "slot: start prints the caller's command" "$argv_out" ;;
   *"command: dune build @cheap"*) report 0 "slot: start prints the caller's command" ;;
   *) report 1 "slot: start prints the caller's command" "${argv_out:-<nothing>}" ;;
 esac
@@ -3392,8 +3495,8 @@ if [ -z "$slot_detail" ]; then
   chmod +x "$slot_home/.claude/skills/issue-wave/scripts/fleet-worker.sh" "$slot_home/.codex/skills/issue-wave/scripts/fleet-worker.sh"
   : >"$TMP/slot-second.fw"
   HOME=$slot_home FAKE_FW_CALLS=$TMP/slot-second.fw FAKE_FW_MODE=hold FAKE_BACKEND_TEST=cc FAKE_BACKEND_ARRAYJIT=cc \
-  FAKE_REACH_CALLS=$TMP/slot-second.reach OCANNL_TOOL_SLOT_KIND=$slot_reach \
-  OCANNL_TOOL_FLEET_WORKER= OCANNL_TOOL_READ_CONFIG=$slot_reader argv_probe slot-second run build @cheap
+  FAKE_REACH_CALLS=$TMP/slot-second.reach \
+  OCANNL_TOOL_FLEET_WORKER= argv_probe slot-second run build @cheap
   grep -q -- "execution slot --wait 600 --cpu -- dune build @cheap" "$TMP/slot-second.fw" ||
     slot_detail="second candidate: its slot was not taken: $(cat "$TMP/slot-second.fw")"
 fi
@@ -3408,51 +3511,53 @@ else
   report 1 "slot: no probe, the slot turned off, and repeat all run dune directly" "$slot_detail"
 fi
 
-# Leg 57: the configurations the kind is read from are the ones that set a
-# backend. Every tracked `ocannl_config` naming one must sit in one of
-# fleet-slot-run.sh's SLOT_CONFIG_DIRS (the test directories copy theirs from
+# Leg 57: the configurations the backends are read from are the ones that set
+# a backend. Every tracked `ocannl_config` naming one must sit in one of
+# batch-backends.sh's BATCH_CONFIG_DIRS (the test directories copy theirs from
 # test/config), so a new directory with a backend of its own fails here until
 # the runner reads it too.
 slot_detail=
-slot_dirs=$(sed -n 's/^SLOT_CONFIG_DIRS="\(.*\)"$/\1/p' "$HERE/fleet-slot-run.sh")
-[ -n "$slot_dirs" ] || slot_detail="SLOT_CONFIG_DIRS not found in fleet-slot-run.sh"
+slot_dirs=$(sed -n 's/^BATCH_CONFIG_DIRS="\(.*\)"$/\1/p' "$HERE/batch-backends.sh")
+[ -n "$slot_dirs" ] || slot_detail="BATCH_CONFIG_DIRS not found in batch-backends.sh"
 if [ -z "$slot_detail" ] && git -C "$HERE/.." rev-parse --git-dir >/dev/null 2>&1; then
   while IFS= read -r cfg; do
     grep -Eq '^[[:space:]]*backend[[:space:]]*=' "$HERE/../$cfg" || continue
     d=$(dirname "$cfg")
     case " $slot_dirs " in *" $d "*) continue ;; esac
-    slot_detail="$cfg names a backend but $d is not in SLOT_CONFIG_DIRS ($slot_dirs)"
+    slot_detail="$cfg names a backend but $d is not in BATCH_CONFIG_DIRS ($slot_dirs)"
     break
   done < <(git -C "$HERE/.." ls-files -- '*ocannl_config' 'ocannl_config')
 else
-  [ -n "$slot_detail" ] || { skip "slot: the backend-bearing configurations are the ones the kind is read from" "not a git checkout"; slot_detail=skipped; }
+  [ -n "$slot_detail" ] || { skip "batch: the backend-bearing configurations are the ones the backends are read from" "not a git checkout"; slot_detail=skipped; }
 fi
 if [ -z "$slot_detail" ]; then
-  report 0 "slot: the backend-bearing configurations are the ones the kind is read from"
+  report 0 "batch: the backend-bearing configurations are the ones the backends are read from"
 elif [ "$slot_detail" != skipped ]; then
-  report 1 "slot: the backend-bearing configurations are the ones the kind is read from" "$slot_detail"
+  report 1 "batch: the backend-bearing configurations are the ones the backends are read from" "$slot_detail"
 fi
 
-# Leg 58: the two readers the kind comes from are the ones test/config builds.
-# The legs above drive fakes, so a renamed executable, a dropped
+# Leg 58: the two readers the backends come from are the ones test/config
+# builds. The legs above drive fakes, so a renamed executable, a dropped
 # `--read=backend`, or a reachability tool no longer asking Slot_kind would
-# pass them while every real batch fell back to --gpu -- slower, and silent.
-# Pinned against the stanzas and the readers' own sources instead.
+# pass them while every real batch fell back to every backend -- a narrower
+# width and a GPU token, silently. Pinned against the stanzas and the readers'
+# own sources instead.
 slot_detail=
-slot_built=$(sed -n 's|.*"\$dune" build \(\./test/config/[A-Za-z0-9_.]* \./test/config/[A-Za-z0-9_.]*\) .*|\1|p' "$HERE/fleet-slot-run.sh")
-slot_reader_exe=$(sed -n 's|^ *reader=\$build_dir/default/\(test/config/[A-Za-z0-9_]*\)\.exe$|\1|p' "$HERE/fleet-slot-run.sh")
-slot_reach_exe=$(sed -n 's|^ *reach=\$build_dir/default/\(test/config/[A-Za-z0-9_]*\)\.exe$|\1|p' "$HERE/fleet-slot-run.sh")
+slot_src=$HERE/batch-backends.sh
+slot_built=$(sed -n 's|.*"\$dune" build \(\./test/config/[A-Za-z0-9_.]* \./test/config/[A-Za-z0-9_.]*\) .*|\1|p' "$slot_src")
+slot_reader_exe=$(sed -n 's|^ *reader=\$build_dir/default/\(test/config/[A-Za-z0-9_]*\)\.exe$|\1|p' "$slot_src")
+slot_reach_exe=$(sed -n 's|^ *reach=\$build_dir/default/\(test/config/[A-Za-z0-9_]*\)\.exe$|\1|p' "$slot_src")
 # ...and from the build tree dune was pointed at, not a fixed _build.
-grep -q '^ *local build_dir=\${DUNE_BUILD_DIR:-_build}$' "$HERE/fleet-slot-run.sh" ||
-  slot_detail="fleet-slot-run.sh does not run the readers from DUNE_BUILD_DIR's tree"
+grep -q '^ *local build_dir=\${DUNE_BUILD_DIR:-_build}$' "$slot_src" ||
+  slot_detail="batch-backends.sh does not run the readers from DUNE_BUILD_DIR's tree"
 if [ -n "$slot_detail" ]; then :
 elif [ -z "$slot_reader_exe" ] || [ -z "$slot_reach_exe" ]; then
-  slot_detail="fleet-slot-run.sh names no reader (${slot_reader_exe:-?}) or reachability tool (${slot_reach_exe:-?})"
+  slot_detail="batch-backends.sh names no reader (${slot_reader_exe:-?}) or reachability tool (${slot_reach_exe:-?})"
 else
   for exe in "$slot_reader_exe" "$slot_reach_exe"; do
     case " $slot_built " in
       *" ./$exe.exe "*) ;;
-      *) slot_detail="fleet-slot-run.sh runs $exe but builds only: ${slot_built:-nothing}"; break ;;
+      *) slot_detail="batch-backends.sh runs $exe but builds only: ${slot_built:-nothing}"; break ;;
     esac
     grep -q "^ (name $(basename "$exe"))$" "$HERE/../test/config/dune" ||
       { slot_detail="test/config/dune has no executable named $(basename "$exe")"; break; }
@@ -3460,12 +3565,19 @@ else
 fi
 [ -n "$slot_detail" ] || grep -q '| Some "backend" ->' "$HERE/../$slot_reader_exe.ml" ||
   slot_detail="$slot_reader_exe.ml does not answer --read=backend"
-[ -n "$slot_detail" ] || grep -q 'Test_utils.Slot_kind.verdict' "$HERE/../$slot_reach_exe.ml" ||
+[ -n "$slot_detail" ] || grep -q 'Test_utils.Slot_kind.answer' "$HERE/../$slot_reach_exe.ml" ||
   slot_detail="$slot_reach_exe.ml does not ask Test_utils.Slot_kind"
+# The reachability tool's grammar is the one batch_resolve parses: a `names
+# <backend>: <why>` line per backend, then `end`, or one `unknown: <why>`.
+for form in 'printf "names %s: %s\n"' 'printf "end\n"' 'printf "unknown: %s\n"'; do
+  [ -z "$slot_detail" ] || break
+  grep -qF "$form" "$HERE/../$slot_reach_exe.ml" ||
+    slot_detail="$slot_reach_exe.ml has no $form"
+done
 if [ -z "$slot_detail" ]; then
-  report 0 "slot: the readers fleet-slot-run.sh builds are test/config's, answering --read=backend and Slot_kind"
+  report 0 "batch: the readers batch-backends.sh builds are test/config's, answering --read=backend and Slot_kind in its grammar"
 else
-  report 1 "slot: the readers fleet-slot-run.sh builds are test/config's, answering --read=backend and Slot_kind" "$slot_detail"
+  report 1 "batch: the readers batch-backends.sh builds are test/config's, answering --read=backend and Slot_kind in its grammar" "$slot_detail"
 fi
 
 finish

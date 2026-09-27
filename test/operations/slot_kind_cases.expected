@@ -1,80 +1,86 @@
-build @a/runtest-t_cfg                   cpu
+build @a/runtest-t_cfg                   names nothing
 build @a/runtest-t_cfg reaches no GPU stanza: true
-build @a/runtest-t_cc                    cpu
+build @a/runtest-t_cc                    names cc
 build @a/runtest-t_cc reaches no GPU stanza: true
-build @a/runtest-t_cuda                  gpu: it reaches t_cuda in a, which names cuda
-build @a/runtest-t_cuda reaches a GPU stanza: true
-build @a/scans                           cpu
+build @a/runtest-t_cuda                  names cuda
+build @a/runtest-t_cuda can hold a GPU: true
+build @a/scans                           names cc
 build @a/scans reaches no GPU stanza: true
-build @a/gpuagg                          gpu: it reaches t_cuda in a, which names cuda
-build @a/gpuagg reaches a GPU stanza: true
-build @@c/runtest                        cpu
+build @a/gpuagg                          names cuda,cc
+build @a/gpuagg can hold a GPU: true
+build @@c/runtest                        names nothing
 build @@c/runtest reaches no GPU stanza: true
-build @c/runtest                         cpu
+build @c/runtest                         names nothing
 build @c/runtest reaches no GPU stanza: true
-build @@a/runtest                        gpu: it reaches t_cuda in a, which names cuda
-build @@a/runtest reaches a GPU stanza: true
-runtest a/sub                            gpu: it reaches t_hip in a/sub, which names hip
-runtest a/sub reaches a GPU stanza: true
-runtest a                                gpu: it reaches t_cuda in a, which names cuda
-runtest a reaches a GPU stanza: true
-runtest c                                cpu
+build @@a/runtest                        names cuda,cc
+build @@a/runtest can hold a GPU: true
+runtest a/sub                            names hip
+runtest a/sub can hold a GPU: true
+runtest a                                names cuda,cc,hip
+runtest a can hold a GPU: true
+runtest c                                names nothing
 runtest c reaches no GPU stanza: true
-build @b/runtest                         gpu: it reaches the rule on runtest-m in b, which names metal
-build @b/runtest reaches a GPU stanza: true
-build @b/runtest-m                       gpu: it reaches the rule on runtest-m in b, which names metal
-build @b/runtest-m reaches a GPU stanza: true
-runtest                                  gpu: it reaches t_cuda in a, which names cuda
-runtest reaches a GPU stanza: true
-build @runtest                           gpu: it reaches t_cuda in a, which names cuda
-build @runtest reaches a GPU stanza: true
-build @@runtest                          cpu
+build @b/runtest                         names cc,metal
+build @b/runtest can hold a GPU: true
+build @b/runtest-m                       names cc,metal
+build @b/runtest-m can hold a GPU: true
+runtest                                  names cuda,cc,hip,metal
+runtest can hold a GPU: true
+build @runtest                           names cuda,cc,hip,metal
+build @runtest can hold a GPU: true
+build @@runtest                          names nothing
 build @@runtest reaches no GPU stanza: true
-runtest .                                gpu: it carries `.`, which this does not model (it could change what is built)
-runtest . reaches a GPU stanza: true
-runtest ./c                              gpu: it carries `./c`, which this does not model (it could change what is built)
-runtest ./c reaches a GPU stanza: true
-runtest c/                               gpu: it carries `c/`, which this does not model (it could change what is built)
-runtest c/ reaches a GPU stanza: true
-runtest c/../a                           gpu: it carries `c/../a`, which this does not model (it could change what is built)
-runtest c/../a reaches a GPU stanza: true
-runtest /c                               gpu: it carries `/c`, which this does not model (it could change what is built)
-runtest /c reaches a GPU stanza: true
-build @./c/runtest                       gpu: it carries `@./c/runtest`, which this does not model (it could change what is built)
-build @./c/runtest reaches a GPU stanza: true
-build @c/runtest -- @a/runtest-t_cuda    gpu: it carries `--`, which this does not model (it could change what is built)
-build @c/runtest -- @a/runtest-t_cuda reaches a GPU stanza: true
-build --default-target=@runtest          gpu: it carries `--default-target=@runtest`, which this does not model (it could change what is built)
-build --default-target=@runtest reaches a GPU stanza: true
-build --alias-rec runtest-t_cfg          gpu: it carries `--alias-rec`, which this does not model (it could change what is built)
-build --alias-rec runtest-t_cfg reaches a GPU stanza: true
-build --alias c/runtest                  gpu: it carries `--alias`, which this does not model (it could change what is built)
-build --alias c/runtest reaches a GPU stanza: true
-build --root /elsewhere @c/runtest       gpu: it carries `--root`, which this does not model (it could change what is built)
-build --root /elsewhere @c/runtest reaches a GPU stanza: true
-build --workspace=other @c/runtest       gpu: it carries `--workspace=other`, which this does not model (it could change what is built)
-build --workspace=other @c/runtest reaches a GPU stanza: true
-build --frobnicate @c/runtest            gpu: it carries `--frobnicate`, which this does not model (it could change what is built)
-build --frobnicate @c/runtest reaches a GPU stanza: true
-runtest --root /elsewhere c              gpu: it carries `--root`, which this does not model (it could change what is built)
-runtest --root /elsewhere c reaches a GPU stanza: true
-build ./a/t_cfg.exe                      gpu: it carries `./a/t_cfg.exe`, which this does not model (it could change what is built)
-build ./a/t_cfg.exe reaches a GPU stanza: true
-build _build/default/c/t_only.exe        gpu: it carries `_build/default/c/t_only.exe`, which this does not model (it could change what is built)
-build _build/default/c/t_only.exe reaches a GPU stanza: true
-build -j 8 @a/runtest-t_cfg              cpu
+runtest .                                unknown: it carries `.`, which this does not model (it could change what is built)
+runtest . can hold a GPU: true
+runtest ./c                              unknown: it carries `./c`, which this does not model (it could change what is built)
+runtest ./c can hold a GPU: true
+runtest c/                               unknown: it carries `c/`, which this does not model (it could change what is built)
+runtest c/ can hold a GPU: true
+runtest c/../a                           unknown: it carries `c/../a`, which this does not model (it could change what is built)
+runtest c/../a can hold a GPU: true
+runtest /c                               unknown: it carries `/c`, which this does not model (it could change what is built)
+runtest /c can hold a GPU: true
+build @./c/runtest                       unknown: it carries `@./c/runtest`, which this does not model (it could change what is built)
+build @./c/runtest can hold a GPU: true
+build @c/runtest -- @a/runtest-t_cuda    unknown: it carries `--`, which this does not model (it could change what is built)
+build @c/runtest -- @a/runtest-t_cuda can hold a GPU: true
+build --default-target=@runtest          unknown: it carries `--default-target=@runtest`, which this does not model (it could change what is built)
+build --default-target=@runtest can hold a GPU: true
+build --alias-rec runtest-t_cfg          unknown: it carries `--alias-rec`, which this does not model (it could change what is built)
+build --alias-rec runtest-t_cfg can hold a GPU: true
+build --alias c/runtest                  unknown: it carries `--alias`, which this does not model (it could change what is built)
+build --alias c/runtest can hold a GPU: true
+build --root /elsewhere @c/runtest       unknown: it carries `--root`, which this does not model (it could change what is built)
+build --root /elsewhere @c/runtest can hold a GPU: true
+build --workspace=other @c/runtest       unknown: it carries `--workspace=other`, which this does not model (it could change what is built)
+build --workspace=other @c/runtest can hold a GPU: true
+build --frobnicate @c/runtest            unknown: it carries `--frobnicate`, which this does not model (it could change what is built)
+build --frobnicate @c/runtest can hold a GPU: true
+runtest --root /elsewhere c              unknown: it carries `--root`, which this does not model (it could change what is built)
+runtest --root /elsewhere c can hold a GPU: true
+build ./a/t_cfg.exe                      unknown: it carries `./a/t_cfg.exe`, which this does not model (it could change what is built)
+build ./a/t_cfg.exe can hold a GPU: true
+build _build/default/c/t_only.exe        unknown: it carries `_build/default/c/t_only.exe`, which this does not model (it could change what is built)
+build _build/default/c/t_only.exe can hold a GPU: true
+build -j 8 @a/runtest-t_cfg              names nothing
 build -j 8 @a/runtest-t_cfg reaches no GPU stanza: true
-build -j8 --force --profile=release @c/runtest cpu
+build -j8 --force --profile=release @c/runtest names nothing
 build -j8 --force --profile=release @c/runtest reaches no GPU stanza: true
-build --display short @c/runtest         cpu
+build --display short @c/runtest         names nothing
 build --display short @c/runtest reaches no GPU stanza: true
-runtest -j 4 c                           cpu
+runtest -j 4 c                           names nothing
 runtest -j 4 c reaches no GPU stanza: true
-build                                    gpu: it reaches t_cuda in a, which names cuda
-build reaches a GPU stanza: true
-promote                                  cpu
+build                                    names cuda,cc,hip,metal
+build can hold a GPU: true
+promote                                  names nothing
 promote reaches no GPU stanza: true
-clean                                    cpu
+clean                                    names nothing
 clean reaches no GPU stanza: true
-runtest d (malformed marker)             error: the dune file in d is unreadable here ((Failure "a backend marker the env_var_deps contract refuses"))
+runtest a reaches exactly names cuda,cc,hip: true
+runtest reaches exactly names cuda,cc,hip,metal: true
+build @b/runtest-m reaches exactly names cc,metal: true
+build @a/gpuagg reaches exactly names cuda,cc: true
+build @a/scans reaches exactly names cc: true
+runtest c reaches exactly names nothing: true
+runtest d (malformed marker)             unknown: the dune file in d is unreadable here ((Failure "a backend marker the env_var_deps contract refuses"))
 a malformed marker makes the tree unreadable, never CPU: true

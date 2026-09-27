@@ -15,8 +15,8 @@ module Config_key_scan = Config_key_scan
 
 module Dune_stanza_scan = Dune_stanza_scan
 
-(* Whether a dune argv can reach a stanza that names a GPU backend (gh-ocannl-1004): the
-   reachability half of tools/fleet-slot-run.sh's fleet-slot kind. *)
+(* Which backends a dune argv can reach a stanza naming (gh-ocannl-1004, gh-ocannl-1066): the
+   reachability half of tools/batch-backends.sh's resolution of a batch's backends. *)
 module Slot_kind = Slot_kind
 (** Reading dune files for the stanzas that run a test executable, and whether they declare the
     shared [ocannl_config]. *)

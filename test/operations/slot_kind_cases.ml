@@ -1,9 +1,10 @@
 (** What {!Test_utils.Slot_kind} says a dune argv reaches, on a fixture tree built to separate the
-    cases (gh-ocannl-1004): a stanza that NAMES a GPU backend holds it whatever the configuration
-    says, so tools/fleet-slot-run.sh declares a fleet slot [--cpu] only when the run cannot reach
-    one. Every verdict below is phrased so that [true] is the passing reading, and the golden
-    records what each argv was judged, so a change of answer shows as a diff as well as a failed
-    claim. *)
+    cases (gh-ocannl-1004, gh-ocannl-1066): a stanza that NAMES a backend holds it whatever the
+    configuration says, so tools/batch-backends.sh counts every backend a reachable marker names
+    among the batch's -- for the fleet slot ([--cpu] only when none is a GPU) and for the width (the
+    tightest any of them meets). Every verdict below is phrased so that [true] is the passing
+    reading, and the golden records the backends each argv was judged to reach, so a change of
+    answer shows as a diff as well as a failed claim. *)
 
 open Base
 open Stdio
@@ -69,10 +70,14 @@ let tree =
   ]
 
 let judge ?(dune_files = tree) argv =
-  match Slot_kind.verdict ~dune_files (String.split argv ~on:' ') with
-  | Ok None -> "cpu"
-  | Ok (Some why) -> "gpu: " ^ why
-  | Error why -> "error: " ^ why
+  let answer = Slot_kind.answer ~dune_files (String.split argv ~on:' ') in
+  let shown =
+    match answer with
+    | Names [] -> "names nothing"
+    | Names named -> "names " ^ String.concat ~sep:"," (List.map named ~f:fst)
+    | Unknown why -> "unknown: " ^ why
+  in
+  (answer, shown)
 
 let cases =
   [
@@ -125,17 +130,32 @@ let cases =
     ("clean", `Cpu);
   ]
 
+(* The whole set, where a GPU answer's backends matter to the width: a suite reaching stanzas that
+   name different GPUs holds each of them, and a marker naming several contributes each. *)
+let sets =
+  [
+    ("runtest a", "names cuda,cc,hip");
+    ("runtest", "names cuda,cc,hip,metal");
+    ("build @b/runtest-m", "names cc,metal");
+    ("build @a/gpuagg", "names cuda,cc");
+    ("build @a/scans", "names cc");
+    ("runtest c", "names nothing");
+  ]
+
 let () =
   List.iter cases ~f:(fun (argv, want) ->
-      let got = judge argv in
-      printf "%-40s %s\n" argv got;
-      let is_gpu = String.is_prefix got ~prefix:"gpu: " in
+      let answer, shown = judge argv in
+      printf "%-40s %s\n" argv shown;
+      let holds_gpu = Slot_kind.holds_gpu answer in
       match want with
-      | `Cpu -> p (Printf.sprintf "%s reaches no GPU stanza" argv) (String.equal got "cpu")
-      | `Gpu -> p (Printf.sprintf "%s reaches a GPU stanza" argv) is_gpu);
+      | `Cpu -> p (Printf.sprintf "%s reaches no GPU stanza" argv) (not holds_gpu)
+      | `Gpu -> p (Printf.sprintf "%s can hold a GPU" argv) holds_gpu);
+  List.iter sets ~f:(fun (argv, want) ->
+      let _, shown = judge argv in
+      p (Printf.sprintf "%s reaches exactly %s" argv want) (String.equal shown want));
   (* A marker the env_var_deps contract refuses is not read as no marker: the file is unreadable,
      which the caller takes as a GPU. *)
-  let malformed =
+  let _, malformed =
     judge
       ~dune_files:
         [ ("d", {dune|(test ; ocannl-backend: cuda
@@ -144,4 +164,4 @@ let () =
   in
   printf "%-40s %s\n" "runtest d (malformed marker)" malformed;
   p "a malformed marker makes the tree unreadable, never CPU"
-    (String.is_prefix malformed ~prefix:"error: ")
+    (String.is_prefix malformed ~prefix:"unknown: the dune file in d is unreadable")

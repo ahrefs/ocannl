@@ -2225,14 +2225,12 @@ that they earn a lookup rather than always-loaded space.
   failing stanzas clean serially, and the console-started one then ran a cold `-j 2`
   `@runtest @train` clean in 37 minutes, both adding no refusals. So a MANUAL hip run on minix
   (`OCANNL_BACKEND=hip tools/test-run.sh run build …`) needs the cap too — and gets it: since gh-ocannl-983 `tools/test-run.sh run`/`start` injects `-j 2` and
-  announces it on stderr and in the run's log whenever `/dev/dxg` is present, `OCANNL_BACKEND`
-  names a GPU backend (`cuda`, `hip`) and the dune arguments carry no width of their own. An
-  explicit `-j` is always honored, and only reported. The ONE case the launcher cannot decide is a
-  backend named in an `ocannl_config` file rather than the environment: resolving that means the
-  config search, the `--ocannl_backend` flags and the profile precedence, in shell, where a wrong
-  answer would halve a legitimate run's width — so the run is left uncapped and the caller is told
-  to pass `-j 2` if the suite is a GPU one. Export `OCANNL_BACKEND` on these boxes and the cap is
-  automatic. Under WSL2 `/dev/kfd` and `/dev/dri` are never present and `rocm-smi` always reports
+  announces it on stderr and in the run's log whenever `/dev/dxg` is present, the batch can hold
+  a GPU backend (`cuda`, `hip`) and the dune arguments carry no width of their own. An
+  explicit `-j` is always honored, and only reported. Which backends a batch can hold is
+  resolved, not read off `OCANNL_BACKEND` (gh-ocannl-1066; the fleet-slot bullet below says
+  how): a backend set in `test/config/ocannl_config`, or a reached stanza whose marker names one,
+  counts as much as the environment. Under WSL2 `/dev/kfd` and `/dev/dri` are never present and `rocm-smi` always reports
   the driver as uninitialized — neither is evidence of a lost passthrough; `hipGetDeviceCount` is.
   The cap itself is `tools/box-jobs.sh`, the single source `tools/sweep.sh`'s `unit_jobs` and
   `tools/test-run.sh` both read, so the sweep's width and a manual run's cannot drift
@@ -2295,10 +2293,11 @@ that they earn a lookup rather than always-loaded space.
   `FLEET_LOCAL_BOX`, else the hostname through `FLEET_HOSTNAME_MAP` (default: `rog-nv*`, `rog`),
   the rule fleet-worker.sh's `detect_local_box` applies — beside `/dev/nvidiactl`, never on the
   device alone: any other NVIDIA machine, and every other box, keeps
-  CPU batches uncapped. An explicit `-j` still wins, and only says the cap exists, and an unset
-  `OCANNL_BACKEND` is reported with the width to pass rather than guessed, as for dxg — except
-  on the fleet's native rog, where cuda and the CPU backends share one width, so the unread backend
-  cannot change it and it is injected. A batch there that holds no GPU must take its fleet slot
+  CPU batches uncapped. An explicit `-j` still wins, and only says the cap exists. A batch that
+  can hold several backends takes the tightest width any of them meets (hip and cc beside a small
+  pool on rog: hip's `-j 4`). No stanza names hip today, so `runtest test/operations` with the
+  stock cc configuration holds no HIP process on minix and stays uncapped; with hip as the backend
+  `test/config/ocannl_config` sets, it gets `-j 4` like `OCANNL_BACKEND=hip`. A batch there that holds no GPU must take its fleet slot
   as `execution slot --cpu`: the slot is fail-closed, so an undeclared cc batch waits on one of
   the two GPU tokens and rog runs at two batches, not four — which `tools/test-run.sh` now does
   itself (next bullet). Measuring a slot count: the
@@ -2309,29 +2308,33 @@ that they earn a lookup rather than always-loaded space.
   (`OCANNL_TOOL_NVIDIA_DEVICE`) and the fleet's name for the box (`FLEET_LOCAL_BOX`,
   `FLEET_HOSTNAME_MAP`) as it fakes the bridge.
 - **`tools/test-run.sh run`/`start` takes the fleet's run-time correctness slot itself**
-  (gh-ocannl-1004), through `tools/fleet-slot-run.sh`, on any box whose deployed
+  (gh-ocannl-1004), as `fleet-worker.sh execution slot --cpu|--gpu`, on any box whose deployed
   `fleet-worker.sh execution slot --probe` answers (lukstafi/ludics-lite's issue-wave skill; the
   probe also proves that version runs a nested slot inside an enclosing one, so a worker's own
-  `execution slot` wrapper around the runner costs one slot, not two). The kind asks two
-  questions. First, can the run reach a stanza that NAMES a GPU backend (`; ocannl-backend: cuda`
+  `execution slot` wrapper around the runner costs one slot, not two). The kind, and the width
+  above, read ONE resolution of the backends the batch can hold (`tools/batch-backends.sh`,
+  gh-ocannl-1066), made under the worktree lock before the run is published, so the injected
+  width is in the recorded command; a `stop` in that window withdraws the launch. `--cpu` means
+  none of them holds a GPU. It asks two
+  questions. First, which backends do the stanzas the run can reach NAME (`; ocannl-backend: cuda`
   and friends, which hold that backend whatever the configuration says): `ocannl_slot_kind`
   (`test/config`, over `Test_utils.Slot_kind`, reading the markers `env_var_deps` enforces and
   the aliases the argv reaches, their `deps` closure and dune's per-test `runtest-<name>`
   included, read from a closed set of argv shapes: `runtest` with plain relative directories, `build` with
   `@`/`@@` alias targets, options from a harmless list; any other word -- `.`, `./x`, `--`, a path
-  target, `--root`, an alias-naming or unknown option -- is a GPU answer) answers, so `runtest test/operations` is a GPU batch while
+  target, `--root`, an alias-naming or unknown option -- is every backend) answers, so `runtest test/operations` is a GPU batch while
   `@test/operations/runtest-<cpu test>` and `@test/operations/scans` are not; a Metal marker
   counts even on Linux, where its stanza compiles the stub. Second, for the stanzas that read the
-  configuration: the kind is resolved, not read off `OCANNL_BACKEND`, because an ordinary cc batch
+  configuration: resolved, not read off `OCANNL_BACKEND`, because an ordinary cc batch
   leaves it unset: `ocannl_read_config`
   (`test/config`, the same Utils resolution a test run makes) is built and asked from each
   directory whose `ocannl_config` sets a backend — `test/config` (copied by every `test/*`
-  directory and `bin/`) and `arrayjit/test` — and `--cpu` is declared only when every answer is
-  a CPU backend. No backend at all is not cc (`Context.auto` then tries metal, cuda and hip
-  first), and a dune argv can pick one the configs do not show (`exec`, whose program may choose
-  its own; a command-line `--ocannl_backend`, which outranks the files), so those are `--gpu`,
-  as is anything else — a build or read that fails included — the slot's own fail-closed
-  default. `tools/test-test-run.sh` leg 57 fails a new tracked
+  directory and `bin/`) and `arrayjit/test`. No backend at all is not cc (`Context.auto` then
+  tries metal, cuda and hip first), and a dune argv can pick one the configs do not show
+  (`exec`, whose program may choose its own, is every backend; a command-line
+  `--ocannl_backend` adds its name), and anything unreadable — a build or read that fails, an
+  answer outside the tool's grammar — is every backend: `--gpu`, the slot's fail-closed default,
+  and the tightest width. `tools/test-test-run.sh` leg 57 fails a new tracked
   `ocannl_config` naming a backend outside those directories. The slot's wait (600 s,
   `OCANNL_TOOL_SLOT_WAIT`, at most half of `--cap`, so a refusal returns before the cap's alarm)
   comes out of the cap; a refused or unreachable slot
