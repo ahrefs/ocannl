@@ -2603,8 +2603,11 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   `logs/<stamp>-skip-coverage.txt`. Incremental logs are refused because a cached Dune action does
   not replay its stderr, and failed or interrupted units are refused because they may not have
   reached every test — except a red whose serial rerun reported `all clean` with nothing
-  unjudged or unmapped: every failing stanza then ran again into the same log, so its records are
-  complete, and the report names it on a `red units counted after a clean serial rerun:` line.
+  unjudged or unmapped, followed by `suite completed`: an incremental `-j 1` pass over the unit's
+  whole suite (no `--force`), which runs exactly the actions that never completed — the dependents
+  a red prerequisite held back, which rerunning the red stanzas alone does not reach. Every action
+  has then completed into the same log, so its records are complete, and the report names the
+  unit on a `red units counted after a clean serial rerun:` line.
   Dropping those lost minix/hip's evaluations on 2026-09-27 (red only from a ROCr scratch
   assertion at parallel width) and reported its hip-only claims as skipped on every box. An
   intersection over only the completed backends is a loud `POTENTIAL` report; it becomes `FAIL`

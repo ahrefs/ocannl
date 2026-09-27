@@ -484,7 +484,8 @@ environment_red() { # log
 # skip announcement means execution. Incremental Dune runs may serve a cached
 # test without replaying its stderr, and a red or interrupted unit may not have
 # reached every test -- unless the serial rerun re-ran every failing stanza
-# clean into the same log (rerun_cleared), which the report names. Keep the qualifying evidence from THIS invocation rather
+# clean and its completion pass then ran whatever they had held back, all into
+# the same log (rerun_cleared), which the report names. Keep the qualifying evidence from THIS invocation rather
 # than recovering it by timestamp from history (two invocations can begin in
 # the same second in the integration harness).
 SKIP_RUN_BACKENDS=()
@@ -1914,6 +1915,38 @@ serial_rerun_cmd() { # backend wt alias...
   printf 'exit 0'
 }
 
+# The completion pass that follows a clean serial rerun on a forced full-suite
+# unit: the unit's own aliases again, at `-j 1` and WITHOUT --force, so Dune
+# runs exactly the actions that never completed -- the dependents a red
+# prerequisite held back, which rerunning the red stanzas alone does not reach
+# -- and replays nothing that already passed. Its exit 0 is the proof that
+# every action of the suite completed with its stderr in the log, which is what
+# lets rerun_cleared stage the unit as skip evidence.
+suite_completion_cmd() { # backend wt
+  local slow_alias=
+  [ "$SLOW" = 1 ] && slow_alias=' @slow'
+  printf 'cd "%s" || exit 127; ' "$2"
+  printf 'echo "=== suite completion ==="; '
+  printf 'OCANNL_BACKEND=%s opam exec -- dune build -j 1 @runtest @train%s; ' "$1" "$slow_alias"
+  printf 'echo "=== suite completion: exit $? ==="; '
+  printf 'exit 0'
+}
+
+# Run a post-unit shell command where the unit's worktree lives, under its lock
+# and the unit's CAP, appending to the log (the serial rerun's legs).
+run_on_unit_host() { # host wt cmd log path_prefix
+  local host=$1 wt=$2 cmd=$3 log=$4 path_prefix=$5
+  if [ -n "$host" ]; then
+    run_capped "$(( CAP + 300 ))" ssh -o BatchMode=yes -o ConnectTimeout=8 \
+      -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
+      "$host" "$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $cmd" \
+        "$(sleep_guard_why "$host" serial-rerun)")" \
+      >>"$log" 2>&1
+  else
+    run_capped "$CAP" /bin/sh -c "$cmd" >>"$log" 2>&1
+  fi
+}
+
 # Rerun an environment-red unit's failing stanzas one at a time, appending to
 # its log, then write the `serial rerun:` verdict lines that `fingerprint`
 # carries and the summary quotes. The shape is collect_rtc_context's: its own
@@ -1922,10 +1955,11 @@ serial_rerun_cmd() { # backend wt alias...
 # unit's own CAP rather than CONTEXT_CAP, because this is not a diagnostic of
 # fixed size but the suite's red stanzas run again -- 27 of them on the day this
 # was measured -- and a stanza the cap cut short is reported `unjudged`, never
-# folded into `all clean`.
+# folded into `all clean`. On a forced full-suite unit an `all clean` rerun is
+# followed by suite_completion_cmd, reported as `suite completed` or not.
 serial_rerun() { # backend host wt log label [path_prefix]
   local backend=$1 host=$2 wt=$3 log=$4 label=$5 path_prefix=${6:-}
-  local line cmd started rc a entry site stanza_count inline_count fallback_suffix=s
+  local line cmd started rc a entry site stanza_count inline_count fallback_suffix=s completion
   local aliases=() fallback_aliases=() inline_entries=() inline_sites=()
   local unmapped=() red=() unjudged=()
   environment_red "$log" || return 0
@@ -1954,15 +1988,7 @@ serial_rerun() { # backend host wt log label [path_prefix]
   if [ ${#aliases[@]} -gt 0 ]; then
     cmd=$(serial_rerun_cmd "$backend" "$wt" "${aliases[@]}")
     echo "=== serial rerun: ${#aliases[@]} stanzas at -j 1 ===" >>"$log"
-    if [ -n "$host" ]; then
-      run_capped "$(( CAP + 300 ))" ssh -o BatchMode=yes -o ConnectTimeout=8 \
-        -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
-        "$host" "$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $cmd" \
-          "$(sleep_guard_why "$host" serial-rerun)")" \
-        >>"$log" 2>&1
-    else
-      run_capped "$CAP" /bin/sh -c "$cmd" >>"$log" 2>&1
-    fi
+    run_on_unit_host "$host" "$wt" "$cmd" "$log" "$path_prefix"
     rc=$?
     for a in "${aliases[@]}"; do
       line=$(grep -hF -- "=== serial rerun $a: exit " "$log" | tail -1)
@@ -1974,6 +2000,20 @@ serial_rerun() { # backend host wt log label [path_prefix]
     done
   else
     rc=0
+  fi
+  # Only a clean rerun of a forced full-suite unit can become skip evidence, so
+  # only that one pays for the completion pass.
+  completion=
+  if [ ${#red[@]} -eq 0 ] && [ ${#unjudged[@]} -eq 0 ] && [ ${#aliases[@]} -gt 0 ] &&
+    [ ${#unmapped[@]} -eq 0 ] && [ "$FORCE" = 1 ] && [ -z "$TARGET" ]; then
+    run_on_unit_host "$host" "$wt" "$(suite_completion_cmd "$backend" "$wt")" "$log" "$path_prefix"
+    line=$(grep -hF -- '=== suite completion: exit ' "$log" | tail -1)
+    case $line in
+      "") completion='serial rerun: suite completion unjudged' ;;
+      *": exit 0 ==="*) completion='serial rerun: suite completed' ;;
+      *) completion="serial rerun: suite completion red (${line#=== suite completion: }"
+         completion="${completion% ===})" ;;
+    esac
   fi
   {
     if [ ${#red[@]} -gt 0 ]; then
@@ -2002,6 +2042,7 @@ serial_rerun() { # backend host wt log label [path_prefix]
       printf ' [%s]' "${unmapped[@]}"
       printf '\n'
     fi
+    [ -z "$completion" ] || printf '%s\n' "$completion"
   } >>"$log"
   [ ${#fallback_aliases[@]} -eq 1 ] && fallback_suffix=
   say "  $label: environment-red, $stanza_count stanzas and ${#fallback_aliases[@]} directory fallback$fallback_suffix rerun at -j 1 ($(( $(date +%s) - started ))s)"
@@ -2009,19 +2050,21 @@ serial_rerun() { # backend host wt log label [path_prefix]
   return 0
 }
 
-# Whether serial_rerun cleared every failure of the log's unit: `all clean` and
-# no verdict line that leaves a site unjudged, unmapped or red. A directory
-# fallback is judged inside `all clean`, so it does not disqualify.
+# Whether serial_rerun cleared every failure of the log's unit AND proved the
+# rest of the suite complete: `all clean`, `suite completed`, and no verdict
+# line that leaves a site unjudged, unmapped or red. A directory fallback is
+# judged inside `all clean`, so it does not disqualify.
 rerun_cleared() { # log
-  local line clean=
+  local line clean= completed=
   while IFS= read -r line; do
     case $line in
       'serial rerun: all clean') clean=1 ;;
+      'serial rerun: suite completed') completed=1 ;;
       'serial rerun: directory fallback '*) ;;
       *) return 1 ;;
     esac
   done < <(grep -h '^serial rerun: ' "$1" 2>/dev/null)
-  [ -n "$clean" ]
+  [ -n "$clean" ] && [ -n "$completed" ]
 }
 
 # An outcome that is not a pass, with nothing extractable from its log, is its
@@ -2452,9 +2495,10 @@ run_unit() { # machine backend host
   case $outcome in
     fail) serial_rerun "$backend" "$host" "$wt" "$log" "$machine/$backend" "${path_prefix:-}" ;;
   esac
-  # A red the serial rerun wholly cleared is skip evidence like a pass: every
-  # stanza ran to completion in the suite or again in the rerun, whose records
-  # land in the same log. Dropping it lost minix/hip's evaluations on
+  # A red the serial rerun wholly cleared, and whose completion pass then ran
+  # every action the red had held back, is skip evidence like a pass: every
+  # action completed in the suite, the rerun or the completion pass, all of
+  # which write the same log. Dropping it lost minix/hip's evaluations on
   # 2026-09-27 and reported its hip-only claims as skipped on every box.
   if [ "$outcome" = fail ] && [ -z "$TARGET" ] && rerun_cleared "$log"; then
     printf '%s\n' "$log" >"$LANE_DIR/skip-run.$machine.$backend" &&

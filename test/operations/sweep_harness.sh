@@ -33,7 +33,7 @@ on_error() {
   for name in incremental forced slow_forced coverage hostile complete_fail \
     environment_executed partial_matrix singleton_fail repeated_backend_fail \
     repeated_backend_pass mixed_scope_fail mixed_scope_cleared historical_matrix \
-    undeclared_cleared undeclared_skipped undeclared_only rerun_cleared rerun_red \
+    undeclared_cleared undeclared_skipped undeclared_only rerun_cleared rerun_red completion_red \
     local_identity_error unsafe_identity_error only_typo_error matrix_error state_first state_same \
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
     capped capped_target remote_opt_in dest_wsl dest_linux dest_missing dest_local_only \
@@ -1534,6 +1534,12 @@ rerun_cleared=$(SWEEP_TEST_OPAM_RC=1 \
   run_sweep_args --force --only cc --only metal)
 grep -q 'm4-max/cc: serial rerun: all clean$' <<<"$rerun_cleared"
 grep -q 'm4-max/metal: serial rerun: all clean$' <<<"$rerun_cleared"
+# A clean rerun of the red stanzas does not reach the actions a red
+# prerequisite held back, so each unit then completes its whole suite
+# incrementally (no --force: only what never completed runs) before counting.
+grep -q 'm4-max/cc: serial rerun: suite completed$' <<<"$rerun_cleared"
+grep -q 'm4-max/metal: serial rerun: suite completed$' <<<"$rerun_cleared"
+[ "$(grep -cx 'exec -- dune build -j 1 @runtest @train' "$calls")" -ge 2 ]
 rerun_cleared_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$rerun_cleared" | tail -1)
 [ -f "$rerun_cleared_report" ]
 grep -q '^red units counted after a clean serial rerun: m4-max/cc m4-max/metal$' \
@@ -1554,6 +1560,18 @@ rerun_red_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$rerun_red" | tail -
 [ -f "$rerun_red_report" ]
 grep -q '^completed backends: <none>$' "$rerun_red_report"
 absent 'counted after a clean serial rerun' "$rerun_red_report"
+absent 'suite completion' <<<"$rerun_red"
+
+# A clean rerun whose completion pass is red stays excluded: an action the red
+# had held back failed, so the suite is not known to have completed.
+completion_red=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_SERIAL_RED='@train' \
+  SWEEP_TEST_OPAM_OUT_CC=$two_inline_failure$'\n'$cc_unit_log \
+  run_sweep_args --force --only cc)
+grep -q 'm4-max/cc: serial rerun: all clean$' <<<"$completion_red"
+grep -q 'm4-max/cc: serial rerun: suite completion red (exit 1)$' <<<"$completion_red"
+completion_red_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$completion_red" | tail -1)
+[ -f "$completion_red_report" ]
+grep -q '^completed backends: <none>$' "$completion_red_report"
 
 # The dxg window filter (gh-ocannl-979), driven directly: tools/kernel-window.sh is
 # sourced by the sweep and by this harness for exactly that reason (after
