@@ -162,12 +162,13 @@ let residency_holds src ~frag_load ~body_begin ~body_end ~frag_store ~barrier =
    destination pointer first.
 
    [converted_d] names the wide-f16 arms (HIP: gh-ocannl-789; Metal: gh-ocannl-837; CUDA:
-   gh-ocannl-925), where the accumulator array's element type is not the destination's. On HIP and
-   Metal the intrinsic loads a STAGING fragment and populates the accumulator array by an
-   elementwise copy, so the "populated once before the body" anchor is that copy rather than a
-   fragment load naming the accumulator array; the staging fragment is stored to [__mma_dp] once,
-   after the body. CUDA has no staging fragment: each element crosses the boundary at the coordinate
-   the [ocannl_wmma_rc16] table names, widened on the way in and narrowed on the way out. *)
+   gh-ocannl-925), where the accumulator array's element type is not the destination's. On Metal the
+   intrinsic loads a STAGING fragment and populates the accumulator array by an elementwise copy, so
+   the "populated once before the body" anchor is that copy rather than a fragment load naming the
+   accumulator array; the staging fragment is stored to [__mma_dp] once, after the body. CUDA and
+   HIP (since gh-ocannl-1064) have no staging fragment: each element crosses the boundary at the
+   coordinate the [ocannl_wmma_rc16] table names, widened on the way in and narrowed on the way
+   out. *)
 let staged_half_resident ?(converted_d = false) src =
   if on_metal then
     residency_holds src
@@ -182,11 +183,12 @@ let staged_half_resident ?(converted_d = false) src =
   else if on_hip then
     residency_holds src
       ~frag_load:
-        (if converted_d then ".x[__ei] = (float)__mma_dstage"
+        (if converted_d then ".x[__ei] = (float)__mma_dp["
          else "rocwmma::load_matrix_sync(__mma_fragment_")
       ~body_begin:"/* rocwmma fragment reduction body begins */"
       ~body_end:"/* rocwmma fragment reduction body ends */"
-      ~frag_store:"rocwmma::store_matrix_sync(__mma_dp" ~barrier:"__syncthreads();"
+      ~frag_store:(if converted_d then "] = (rocwmma::" else "rocwmma::store_matrix_sync(__mma_dp")
+      ~barrier:"__syncthreads();"
   else
     residency_holds src
       ~frag_load:
@@ -198,6 +200,23 @@ let staged_half_resident ?(converted_d = false) src =
         (if converted_d then "= __float2half(__mma_fragment_"
          else "nvcuda::wmma::store_matrix_sync(__mma_dp")
       ~barrier:"__syncthreads();"
+
+(* HIP's converted [d] boundary (gh-ocannl-1064): the [float] accumulator array [acc] crosses the
+   boundary only through the [ocannl_wmma_rc16] coordinate table, and the gh-ocannl-789 element copy
+   through a destination-typed staging fragment is GONE — no 16-bit accumulator fragment is declared
+   at all, and neither [acc] nor any fragment is loaded from or stored to [__mma_dp] by rocWMMA.
+   That copy assumed two accumulator types share an element-to-coordinate mapping, which rocWMMA
+   documents it does not promise. *)
+let hip_table_boundary ~acc src =
+  let has s = String.is_substring src ~substring:s in
+  has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>"
+  && has "rocwmma::load_matrix_sync(__mma_rc, ocannl_wmma_rc16, 16"
+  && has "__device__ __align__(32) float ocannl_wmma_rc16[256]"
+  && (not (has "__mma_dstage"))
+  && (not (has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, rocwmma::float16_t>"))
+  && (not (has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, rocwmma::bfloat16_t>"))
+  && (not (has ("rocwmma::load_matrix_sync(" ^ acc)))
+  && not (has "rocwmma::store_matrix_sync(__mma_dp")
 
 (* The CUDA wmma f32 accumulator-fragment declaration, the element type every f16 -> f32 and wide
    uniform-f16 wmma leg below pins (gh-ocannl-925). *)
@@ -536,7 +555,7 @@ let () =
             the DEFAULT policy the accumulator fragment is itself f16, so no [d]-boundary conversion
             is emitted — the complement of the [Fp16_wide] leg below, which is what keeps the two
             arms from being told apart only by a claim that would pass on either (gh-ocannl-789). *)
-         has "rocwmma::mma_sync" && (not (has "__mma_dstage")) && not (has "== 0)")
+         has "rocwmma::mma_sync" && (not (has "ocannl_wmma_rc16")) && not (has "== 0)")
        else
          (* No advertised tile-MMA (gh-ocannl-1032): the deliberate decline is the lane-0 scalar
             fallback, and NOTHING rocWMMA — an emission that named the intrinsic here would not
@@ -727,16 +746,12 @@ let () =
      else if on_hip then
        if Lazy.force hip_mma then
          (* HIP: the rocWMMA uniform-f16 arm swapped to an f32 accumulator fragment over the same
-            f16 STORAGE destination, converting elementwise at the [d] boundary (gh-ocannl-789).
-            Both halves are pinned, because either alone would also match the f16-accumulate arm
-            this replaces: that one declares [accumulator, 16, 16, 16, rocwmma::float16_t]
-            throughout and has no staging fragment, so the [float] accumulator declaration AND
-            [__mma_dstage] are what say the accumulation is wide. The default-policy leg above
-            asserts the complement. *)
-         intrinsics
-         && has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>"
-         && has "__mma_dstage"
-         && not (has "== 0)")
+            f16 STORAGE destination, converting elementwise at the [d] boundary (gh-ocannl-789)
+            through the coordinate table (gh-ocannl-1064). The [float] accumulator declaration AND
+            the table are what say the accumulation is wide: the f16-accumulate arm this replaces
+            declares [accumulator, 16, 16, 16, rocwmma::float16_t] throughout and converts nothing.
+            The default-policy leg above asserts the complement. *)
+         intrinsics && hip_table_boundary ~acc:"__mma_acc" src && not (has "== 0)")
        else
          (* No advertised tile-MMA (gh-ocannl-1032): the recorded scalar fallback, the same shape
             the CUDA arm below requires of a device under its own floor. *)
@@ -1097,14 +1112,10 @@ let () =
        && not (has "== 0)")
      else if on_hip then
        if Lazy.force hip_mma then
-         (* The [float] accumulator declaration AND the staging fragment: the bf16-accumulate arm
-            this replaces declares [accumulator, 16, 16, 16, rocwmma::bfloat16_t] and stages
-            nothing. *)
-         intrinsics
-         && has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>"
-         && has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, rocwmma::bfloat16_t>"
-         && has "__mma_dstage"
-         && not (has "== 0)")
+         (* The [float] accumulator declaration AND the table-addressed boundary: the
+            bf16-accumulate arm this replaces declares [accumulator, 16, 16, 16,
+            rocwmma::bfloat16_t] and converts nothing (gh-ocannl-1064). *)
+         intrinsics && hip_table_boundary ~acc:"__mma_acc" src && not (has "== 0)")
        else fallback && (not (has "rocwmma")) && has "== 0)"
      else if on_gpu then
        if bf16_wide_advertised Ir.Backend_intf.Mma_per_statement then
@@ -1766,9 +1777,7 @@ let () =
       if on_metal then
         has "simdgroup_float8x8" && has "simdgroup_half8x8" && has "thread_elements()"
         && has "__mma_dstage"
-      else if on_hip then
-        has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>"
-        && has ".x[__ei]" && has "__mma_dstage"
+      else if on_hip then hip_table_boundary ~acc:"__mma_fragment_" src
       else
         (* The f32 fragment array, the half operand fragments, and the table-addressed boundary —
            which must also be the only [d] traffic: no fragment load or store of [__mma_dp] (that
@@ -1985,11 +1994,11 @@ let () =
     let has s = String.is_substring src ~substring:s in
     p claim_bw_struct
       (staged_half_resident ~converted_d:true src
-      && (if on_metal then
-            has "simdgroup_float8x8 __mma_fragment_"
-            && has "simdgroup_bfloat8x8" && has "thread_elements()"
-          else has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, float>" && has ".x[__ei]")
-      && has "__mma_dstage"))
+      &&
+      if on_metal then
+        has "simdgroup_float8x8 __mma_fragment_"
+        && has "simdgroup_bfloat8x8" && has "thread_elements()" && has "__mma_dstage"
+      else hip_table_boundary ~acc:"__mma_fragment_" src))
   else (
     (* Where the tensor unit is absent this leg has no fragment to convert (see the Fp16_wide leg's
        skip above for why this is the ordinary backend skip). *)
