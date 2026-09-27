@@ -245,6 +245,162 @@ let () =
           (Option.value_map want_wall ~default:"unresolved" ~f:Float.to_string);
       depth = want_depth && wall_matches)
 
+(* {1 A depth-1 settle reuses its calibration (gh-ocannl-1074)} *)
+
+(* The timed window is [sample_window] resumed from the calibration's singles, so the resumption
+   itself is pinned first, as the relationship it has to keep: over any sample sequence, a window
+   resumed after ANY prefix of an uninterrupted one is that uninterrupted window -- no sample more,
+   none fewer. A resumption that restarted the floor, or re-counted the budget from zero, differs
+   from it at some split. *)
+let () =
+  Stdio.printf "\n== a depth-1 settle reuses its calibration ==\n";
+  let per_launch (w : Autotune.timing_sample list) = List.map w ~f:(fun s -> s.per_launch_ms) in
+  let sequences =
+    [
+      ("slow", 3, List.init 80 ~f:(fun i -> 20. +. Float.of_int (i % 3)));
+      ("fast", 3, List.init 80 ~f:(fun i -> 0.5 +. Float.of_int (i % 5)));
+      ("slow, repeats above the floor", 20, List.init 80 ~f:(fun _ -> 20.));
+      ("stalled start", 3, List.init 80 ~f:(fun i -> if i < 12 then 30. else 0.25));
+    ]
+  in
+  let splits =
+    List.concat_map sequences ~f:(fun (what, repeats, seq) ->
+        let sample, _ = sample_from seq 1. in
+        let full = Autotune.sample_window ~repeats ~sample () in
+        List.init (List.length full + 1) ~f:(fun k -> (what, repeats, seq, full, k)))
+  in
+  Verdict.p_all "a window resumed after any prefix is the uninterrupted window" splits
+    ~f:(fun (what, repeats, seq, full, k) ->
+      let prior = List.take full k in
+      let sample, _ = sample_from (List.drop seq k) 1. in
+      let resumed = Autotune.sample_window ~prior ~repeats ~sample () in
+      let same = List.equal Float.equal (per_launch resumed) (per_launch full) in
+      if not same then
+        Stdio.eprintf "  %s, resumed after %d: %d samples, uninterrupted %d\n%!" what k
+          (List.length resumed) (List.length full);
+      same)
+
+(* The whole timing policy on a synthetic device: [batch d] dispatches [d] launches of [launch_ms]
+   behind [fixed_ms] of synchronization and counts them, so every launch a call makes is counted
+   exactly, and the launches after the depth decision -- the ones the timed loop dispatched itself
+   -- are read off the seams rather than inferred. Dyadic costs keep the arithmetic exact. *)
+type synthetic_call = {
+  settled_depth : int;
+  calibration_launches : int;
+  window_batches : int;
+  reused_batches : int;
+  fresh_launches : int;
+  all_launches : int;
+  reading : Autotune.timing_result;
+}
+
+let synthetic_call ?(repeats = 3) ?walls ~timing ~cap ~fixed_ms ~launch_ms () =
+  let launches = ref 0 and batches = ref 0 in
+  let batch d =
+    launches := !launches + d;
+    Int.incr batches;
+    match walls with Some f -> f !batches d | None -> fixed_ms +. (launch_ms *. Float.of_int d)
+  in
+  let decided = ref None and window = ref None in
+  let old_depth = !Autotune.on_batch_depth and old_window = !Autotune.on_timed_window in
+  Exn.protect
+    ~finally:(fun () ->
+      Autotune.on_batch_depth := old_depth;
+      Autotune.on_timed_window := old_window)
+    ~f:(fun () ->
+      (Autotune.on_batch_depth :=
+         fun d ~calibration_samples -> decided := Some (d, calibration_samples, !launches));
+      (Autotune.on_timed_window :=
+         fun ~samples ~reused ~wall_ms:_ ~median_wall_ms:_ ->
+           window := Some (samples, reused, !launches));
+      let reading = Autotune.calibrate_and_time ~timing ~repeats ~queue_depth_cap:cap ~batch in
+      let settled_depth, calibration_launches, at_decision = Option.value_exn !decided in
+      let window_batches, reused_batches, at_window = Option.value_exn !window in
+      {
+        settled_depth;
+        calibration_launches;
+        window_batches;
+        reused_batches;
+        fresh_launches = at_window - at_decision;
+        all_launches = !launches;
+        reading;
+      })
+
+let describe what c =
+  Stdio.eprintf
+    "  (not part of the golden) %s: depth %d, %d calibration launches, window %d batches (%d \
+     reused), %d fresh launches, %d in all, reading %g ms%s\n\
+     %!"
+    what c.settled_depth c.calibration_launches c.window_batches c.reused_batches c.fresh_launches
+    c.all_launches c.reading.ms
+    (if c.reading.contended then " (contended)" else "")
+
+let () =
+  let gpu_cap = Autotune.queue_depth_cap_for_backend "hip"
+  and cc_cap = Autotune.queue_depth_cap_for_backend "cc" in
+  (* 16 ms a launch: over the 10 ms batch target, so there is nothing to amortize. *)
+  let slow ?repeats ?walls timing cap =
+    synthetic_call ?repeats ?walls ~timing ~cap ~fixed_ms:0. ~launch_ms:16. ()
+  in
+  let slow_calls =
+    [
+      ("CUDA/HIP calibration", slow Autotune.Queued gpu_cap);
+      ("cc/Metal calibration", slow Autotune.Queued cc_cap);
+    ]
+  in
+  List.iter slow_calls ~f:(fun (what, c) -> describe ("slow, " ^ what) c);
+  p_all "a slow candidate settles at depth 1 under either calibration" slow_calls ~f:(fun (_, c) ->
+      c.settled_depth = 1);
+  p_all "a depth-1 settle times no fresh window: its window is the calibration's singles" slow_calls
+    ~f:(fun (_, c) ->
+      c.fresh_launches = 0 && c.reused_batches = 16 && c.window_batches = 16
+      && c.all_launches = c.calibration_launches);
+  p_all "a reused window's reading is the per-launch time" slow_calls ~f:(fun (_, c) ->
+      Float.equal c.reading.ms 16. && c.reading.samples = 16 && not c.reading.contended);
+  (* The negative control, on the same synthetic routine: [Isolated] has no calibration to reuse, so
+     the same instrument must count its whole 16-launch window after the depth decision. A counter
+     that never counted would pass the claim above and fail here. *)
+  let iso = slow Autotune.Isolated gpu_cap in
+  describe "slow, isolated" iso;
+  p "the instrument counts a fresh window where one is timed: isolated dispatches its 16"
+    (iso.settled_depth = 1 && iso.calibration_launches = 0 && iso.reused_batches = 0
+   && iso.fresh_launches = 16 && iso.window_batches = 16 && iso.all_launches = 16);
+  p_all "at depth 1 the queued reading is the isolated one" slow_calls ~f:(fun (_, c) ->
+      Float.equal c.reading.ms iso.reading.ms);
+  (* Topping up: a caller floor above the calibration's sixteen singles is met by fresh launches,
+     exactly as many as it asks beyond them. *)
+  let topped = slow ~repeats:20 Autotune.Queued gpu_cap in
+  describe "slow, repeats 20" topped;
+  p "a caller floor above the calibration's is topped up with exactly the missing launches"
+    (topped.settled_depth = 1 && topped.reused_batches = 16 && topped.window_batches = 20
+   && topped.fresh_launches = 4
+    && topped.all_launches = topped.calibration_launches + 4);
+  (* The reused window is judged for contention whole, as a fresh window would be: a majority of
+     stalled singles (9 of the 16 at 2.5x) refuses the reading rather than being dropped from the
+     verdict because calibration took them. The probe and every later batch are clean. *)
+  let stalled =
+    slow Autotune.Queued gpu_cap ~walls:(fun nth d ->
+        if nth <= 9 then 40. *. Float.of_int d else 16. *. Float.of_int d)
+  in
+  describe "slow, stalled singles" stalled;
+  p "a reused window is judged for contention whole"
+    (stalled.settled_depth = 1 && stalled.reused_batches = 16 && stalled.reading.contended);
+  (* Depth > 1 is unchanged: the singles are a different quantity from the batch and are left out,
+     so every one of the window's batches is dispatched by the loop at the settled depth. *)
+  let fast timing cap = synthetic_call ~timing ~cap ~fixed_ms:0.0625 ~launch_ms:0.0078125 () in
+  let fast_calls =
+    [
+      ("CUDA/HIP calibration", fast Autotune.Queued gpu_cap);
+      ("cc/Metal calibration", fast Autotune.Queued cc_cap);
+    ]
+  in
+  List.iter fast_calls ~f:(fun (what, c) -> describe ("fast, " ^ what) c);
+  p_all "a batching depth reuses nothing and dispatches its whole window" fast_calls
+    ~f:(fun (_, c) ->
+      c.settled_depth > 1 && c.reused_batches = 0
+      && c.fresh_launches = c.window_batches * c.settled_depth
+      && c.all_launches = c.calibration_launches + c.fresh_launches)
+
 (* {1 The setting's spelling} *)
 
 let () =
@@ -294,6 +450,7 @@ type reading = {
   timed_wall_ms : float;
   timed_median_ms : float;
   timed_batches : int;
+  reused : int;
 }
 
 (* Held so the cache-key section below asks about the SAME lowering the instrument measured, rather
@@ -319,9 +476,11 @@ let () =
      against THIS window rather than against the call the test wraps a clock around, whose wall also
      holds the warmup and the calibration's synchronized singles. *)
   let timed_wall_seen = ref 0. and timed_batches_seen = ref 0 and timed_median_seen = ref 0. in
+  let reused_seen = ref 0 in
   (Autotune.on_timed_window :=
-     fun ~samples ~wall_ms ~median_wall_ms ->
+     fun ~samples ~reused ~wall_ms ~median_wall_ms ->
        timed_batches_seen := samples;
+       reused_seen := reused;
        timed_wall_seen := wall_ms;
        timed_median_seen := median_wall_ms);
   let measure timing =
@@ -340,6 +499,7 @@ let () =
       timed_wall_ms = !timed_wall_seen;
       timed_median_ms = !timed_median_seen;
       timed_batches = !timed_batches_seen;
+      reused = !reused_seen;
     }
   in
   (* The anchor the low side of the per-launch envelope below is written against: one launch plus
@@ -393,11 +553,16 @@ let () =
   (* The seam's report is not taken on faith: past the warmup (1) and the calibration dispatches,
      the dispatch counter must decompose into whole batches of the reported depth, between the 16
      guaranteed timed samples and the 64-run top-up cap. A loop batching at some depth other than
-     the one it reported fails this on any count the reported depth does not divide. *)
+     the one it reported fails this on any count the reported depth does not divide. The batches a
+     depth-1 settle reused from the calibration (gh-ocannl-1074) are already in its count, and only
+     a depth-1 settle may reuse any. *)
   p "queued timing either refuses contention or dispatches whole batches at the reported depth"
     (que.contended
     || que.depth >= 1 && que.calibration_dispatches >= 16 && que.samples >= 16 && que.samples <= 64
-       && que.dispatches = 1 + que.calibration_dispatches + (que.samples * que.depth));
+       && (que.reused = 0 || que.depth = 1)
+       && que.dispatches = 1 + que.calibration_dispatches + ((que.samples - que.reused) * que.depth)
+    );
+  p "isolated timing reuses no calibration" (iso.reused = 0);
   (* Depth > 1 is what queued mode IS. Gated on the depth the queued call itself reported: on a
      machine where one dispatch already costs a whole batch target the claim is vacuously true, and
      a vacuous [true] must not read like a verified one. *)

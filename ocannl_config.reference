@@ -436,15 +436,24 @@
 # probes can cost about another 840 ms per candidate. cc/Metal retain the historical
 # single-estimate calibration. A candidate SLOWER than the target costs more too, although it ends
 # up measured exactly as "isolated" measures it: its depth is settled first -- on CUDA/HIP sixteen
-# synchronized singles and a twelve-batch depth-2 confirmation, 40 launches -- before the same
-# depth-1 timed loop. End to end, that is the larger cost: one gpt2_mini tuned search (both
-# placement arms, cold cache; benchmarks/gh834_cells.sh with BENCH_TIMING_TRACE=1, gh-ocannl-834)
-# on gfx1151 (unified memory), 2026-09-27, took 794 s isolated and 1370 s queued (1.73x), with 320
-# candidates attempted and 220 timing calls in both. The timed loops cost about the same (218 vs
-# 227 s); warmup plus calibration took 14 s vs 587 s (a median 2.6 s per call), and 215 of the 220
-# queued calls settled at depth 1, where the reading is the isolated one. On cc a queued gpt2_mini
-# search exceeded 2 h (gh-ocannl-719, rog-nv) with no isolated run to compare. The exact worst-case
-# dispatch-count bounds are documented on Autotune.time_routine.
+# synchronized singles and a twelve-batch depth-2 confirmation, 40 launches; on cc/Metal the
+# sixteen singles alone. Those singles then ARE its timed window (gh-ocannl-1074): at depth 1 they
+# sample the very quantity the window measures, so the timed loop dispatches only what
+# autotune_repeats asks beyond them -- nothing at the default. End to end, slow candidates are the
+# larger cost. Measured BEFORE that reuse, when every depth-1 call timed a fresh window on top: one
+# gpt2_mini tuned search (both placement arms, cold cache; benchmarks/gh834_cells.sh with
+# BENCH_TIMING_TRACE=1, gh-ocannl-834) on gfx1151 (unified memory), 2026-09-27, took 794 s isolated
+# and 1370 s queued (1.73x), with 320 candidates attempted and 220 timing calls in both. The timed
+# loops cost about the same (218 vs 227 s); warmup plus calibration took 14 s vs 587 s (a median
+# 2.6 s per call), and 215 of the 220 queued calls settled at depth 1, where the reading is the
+# isolated one -- so most of the queued timed loop re-measured what calibration had just measured.
+# Re-measured with the reuse on the same box (gh-ocannl-1074, 2026-09-27; base cd8851b vs the fix),
+# over the calls where both searches ran identical candidates: a depth-1 call took 41 launches and
+# 2.31 s instead of 57 and 3.16 s (-27%), at an unchanged ~56 ms per launch, with its timed wall at 0.
+# Whole-session totals from that pair are not comparable: one after-run candidate hit the
+# no-verdict fallback to the 2048 depth cap and spent ~2016 s in its timed window (gh-ocannl-1096).
+# On cc a queued gpt2_mini search exceeded 2 h (gh-ocannl-719, rog-nv) with no isolated run to
+# compare. The exact worst-case dispatch-count bounds are documented on Autotune.time_routine.
 # The objective is part of the schedule disk-cache key (the "timing" component), so entries do not
 # transfer between the two modes and entries written before gh-ocannl-755 are not replayed: an entry
 # crowned under one objective is not the answer to a search asking the other, and the times it
