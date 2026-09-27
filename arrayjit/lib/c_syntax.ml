@@ -1306,6 +1306,26 @@ let vec_widen_macro ~store_prec ~prec ~lanes =
   | Ops.Half_prec _ -> Some (widen "HALF")
   | _ -> None
 
+(** The cc builtins a register tile's A column widens its rows through, as [(pack, row)], where the
+    tile holds [lanes] lanes of [prec] over [store_prec] storage; [None] where each row widens its
+    own scalar. [pack] widens one k step's A elements of [lanes] consecutive rows into one vector
+    and [row] reads one row's widened scalar back out of it; see {!Builtins_cc} for their arms.
+
+    Only bf16 storage under 4 lanes of f32, i.e. the 16-byte vector NEON has. There the packed
+    column costs nothing: NEON's [fmla] takes its multiplier from a vector LANE ([v6.s[r]]), so the
+    rows' splats share one register. Per-row scalar widenings ([ldrh], [fmov], [shl]) are what
+    aarch64 gcc's -O3 pre-RA scheduler hoisted above the FMAs, holding all four live at once: a 4x6
+    tile's 24 accumulators, 6 B vectors and 4 widened A scalars are 34 of NEON's 32 registers, and
+    two accumulators spilled on every k step. x86 has no by-element FMA, so packing there adds a
+    shuffle per row (and a stack spill at some widths). The x86 arms of these builtins therefore
+    reduce to exactly the per-row rendering. fp16 storage widens with one [fcvt], which gcc
+    schedules without the spill, so it keeps the per-row form. *)
+let vec_widen_rows_macros ~store_prec ~prec ~lanes =
+  match (store_prec, prec, lanes) with
+  | Ops.Bfloat16_prec _, Ops.Single_prec _, 4 ->
+      Some ("OCANNL_VEC_WIDEN_BFLOAT16_ROWS_X4", "OCANNL_VEC_WIDENED_ROW_X4")
+  | _ -> None
+
 (** The words the C language itself reserves, plus the scaffolding names this module's rendering
     emits unconditionally. Shared by every C-family backend through {!Pure_C_config}, and by
     {!C_syntax.kernel_ident}: a routine and a tensor node are both plain identifiers in the emitted
@@ -2809,6 +2829,15 @@ module C_syntax (B : C_syntax_config) = struct
     |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
     |> List.map ~f:snd
 
+  (* The [lanes]-lane integer vectors a bf16 widening works in -- the storage bits, and the f32 bits
+     they shift into -- registered with the kernel's typedefs; their names, as [(u16, u32)]. *)
+  let bf16_bit_typedefs ~lanes ~need_typedef =
+    let u16 = Printf.sprintf "ocannl_vec%du16" lanes in
+    let u32 = Printf.sprintf "ocannl_vec%du32" lanes in
+    need_typedef u16 (vec_typedef_doc ~ctyp:"unsigned short" ~name:u16 ~bytes:(lanes * 2));
+    need_typedef u32 (vec_typedef_doc ~ctyp:"uint32_t" ~name:u32 ~bytes:(lanes * 4));
+    (u16, u32)
+
   (* [mem] is an element access document ([x[offset]]); [&x[offset]] is the base of the narrow run
      it starts. The conversions themselves are backend builtins ([OCANNL_VEC_WIDEN_BFLOAT16] and
      friends in {!Builtins_cc}) rather than inline preprocessor arms, so a kernel body stays one
@@ -2877,10 +2906,7 @@ module C_syntax (B : C_syntax_config) = struct
     else
       match store_prec with
       | Ops.Bfloat16_prec _ ->
-          let u16 = Printf.sprintf "ocannl_vec%du16" lanes in
-          let u32 = Printf.sprintf "ocannl_vec%du32" lanes in
-          need_typedef u16 (vec_typedef_doc ~ctyp:"unsigned short" ~name:u16 ~bytes:(lanes * 2));
-          need_typedef u32 (vec_typedef_doc ~ctyp:"uint32_t" ~name:u32 ~bytes:(lanes * 4));
+          let u16, u32 = bf16_bit_typedefs ~lanes ~need_typedef in
           let args ~width = [ string u16; string u32; OCaml.int width ] in
           ( (fun ~width ~dst ~mem ->
               declare ~width dst ^^ hardline
@@ -5078,18 +5104,50 @@ module C_syntax (B : C_syntax_config) = struct
           let _, (d_ptr, ldd, _, _) = operand ldd d in
           let _, (a_ptr, lda, _, _) = operand lda a in
           let _, (b_ptr, ldb, _, _) = operand ldb b in
-          (* The A element at (row expression, k expression), honoring [ta]'s storage order, through
-             the scalar memory-boundary conversion (empty when storage = compute): the same
-             [convert_precision] spelling the scalar fallback renders. *)
+          (* The A element at (row expression, k expression), honoring [ta]'s storage order: as
+             stored, and through the scalar memory-boundary conversion (empty when storage =
+             compute), the same [convert_precision] spelling the scalar fallback renders. *)
+          let a_raw ~row ~l =
+            if ta then Printf.sprintf "tmma_a__[%s * %d + %s]" l lda row
+            else Printf.sprintf "tmma_a__[%s * %d + %s]" row lda l
+          in
+          let row_expr ~i r = Printf.sprintf "(%s + %d)" i r in
           let a_elt ~row ~l =
             let pre, post = B.convert_precision ~from:a_store_prec ~to_:prec in
-            if ta then Printf.sprintf "%stmma_a__[%s * %d + %s]%s" pre l lda row post
-            else Printf.sprintf "%stmma_a__[%s * %d + %s]%s" pre row lda l post
+            pre ^ a_raw ~row ~l ^ post
           in
           (* Vector memory-boundary bridges: identity memcpys when storage = compute, the
              gh-ocannl-517 widen/narrow conversions otherwise. *)
           let extra_typedefs = Hashtbl.create (module String) in
           let need_typedef name doc = Hashtbl.set extra_typedefs ~key:name ~data:doc in
+          (* Where the A column widens a group of [lanes] rows at once ({!vec_widen_rows_macros}),
+             the group's pack call, emitted before its first row, and each row's scalar binding.
+             Rows past the pass's last one are padded with a zero element, which no row reads. *)
+          let a_rows =
+            Option.map (vec_widen_rows_macros ~store_prec:a_store_prec ~prec ~lanes)
+              ~f:(fun (pack, row) ->
+                let u16, u32 = bf16_bit_typedefs ~lanes ~need_typedef in
+                let packed r = Printf.sprintf "tmma_ap_%d__" (r / lanes) in
+                let pack_call ~i ~rows r =
+                  if r % lanes <> 0 then []
+                  else
+                    [
+                      string
+                        (Printf.sprintf "%s(%s);" pack
+                           (String.concat ~sep:", "
+                              ([ u16; u32; vtyp; packed r ]
+                              @ List.init lanes ~f:(fun l ->
+                                  if r + l < rows then
+                                    a_raw ~row:(row_expr ~i (r + l)) ~l:"tmma_l__"
+                                  else "0"))));
+                    ]
+                in
+                let binding ~i r =
+                  Printf.sprintf "%s(%s, %d, %s)" row (packed r) (r % lanes)
+                    (a_elt ~row:(row_expr ~i r) ~l:"tmma_l__")
+                in
+                (pack_call, binding))
+          in
           let fresh pfx = pfx ^ "__" in
           let d_load, d_store =
             vec_bridge ~store_prec:d_store_prec ~prec ~lanes ~vtyp ~need_typedef ~fresh
@@ -5123,17 +5181,22 @@ module C_syntax (B : C_syntax_config) = struct
                     ~mem:(string (Printf.sprintf "tmma_b__[tmma_l__ * %d + %s + %d]" ldb j off)))
               @ List.concat
                   (List.init rows ~f:(fun r ->
-                       (string
-                          (Printf.sprintf "%s tmma_as_%d__ = %s;" ctyp r
-                             (a_elt ~row:(Printf.sprintf "(%s + %d)" i r) ~l:"tmma_l__"))
-                       ^^ hardline
-                       ^^ string (Printf.sprintf "%s tmma_a_%d__ = " vtyp r)
-                       ^^ vec_splat ~vtyp ~lanes (Printf.sprintf "tmma_as_%d__" r)
-                       ^^ semi)
-                       :: List.mapi cols ~f:(fun c _ ->
-                           vec_acc_fma ~prec ~lanes
-                             ~dst:grid.(r).(c)
-                             ~a:(Printf.sprintf "tmma_a_%d__" r) ~b:(Printf.sprintf "tmma_b_%d__" c))))
+                       let pack, a_scalar =
+                         match a_rows with
+                         | Some (pack_call, binding) -> (pack_call ~i ~rows r, binding ~i r)
+                         | None -> ([], a_elt ~row:(row_expr ~i r) ~l:"tmma_l__")
+                       in
+                       pack
+                       @ (string (Printf.sprintf "%s tmma_as_%d__ = %s;" ctyp r a_scalar)
+                         ^^ hardline
+                         ^^ string (Printf.sprintf "%s tmma_a_%d__ = " vtyp r)
+                         ^^ vec_splat ~vtyp ~lanes (Printf.sprintf "tmma_as_%d__" r)
+                         ^^ semi)
+                         :: List.mapi cols ~f:(fun c _ ->
+                             vec_acc_fma ~prec ~lanes
+                               ~dst:grid.(r).(c)
+                               ~a:(Printf.sprintf "tmma_a_%d__" r)
+                               ~b:(Printf.sprintf "tmma_b_%d__" c))))
             in
             stmts
               (per_cell (fun r c (off, width) -> d_load ~width ~dst:grid.(r).(c) ~mem:(d_mem r off)))

@@ -821,6 +821,35 @@ uint16_t single_to_bfloat16(float f)
 #endif
 |},
       [ "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_WIDEN_HALF" ] );
+    (* A register tile's bf16 A column, widened a group of four rows at a time (named by
+       [C_syntax.vec_widen_rows_macros], which says why only there). [..._ROWS_X4] declares [dst]
+       and widens the four rows' storage elements [a0]..[a3] into it; [OCANNL_VEC_WIDENED_ROW_X4] is
+       row [lane]'s widened scalar, and [widened] is that row's per-element conversion.
+
+       On aarch64 the rows are packed: one [shll] per k step for the whole group, and each row's FMA
+       takes its multiplier from a lane of that one register ([fmla ..., v.s[lane]]), where four
+       per-row widenings would hold four registers. Elsewhere [..._ROWS_X4] is empty and a row is
+       its own [widened] conversion, so after preprocessing the tile is the per-row rendering, byte
+       for byte.
+
+       Parity: the zero-extend and shift is [bfloat16_to_single]'s, lane for lane, as in
+       [OCANNL_VEC_WIDEN_BFLOAT16]. *)
+    ( "OCANNL_VEC_WIDEN_BFLOAT16_ROWS_X4",
+      {|
+#if defined(__aarch64__) && OCANNL_HAS_CONVERTVECTOR
+  #define OCANNL_VEC_WIDEN_BFLOAT16_ROWS_X4(U16V, U32V, FV, dst, a0, a1, a2, a3) \
+    FV dst; do { \
+      U16V ocannl_rh__ = {(a0), (a1), (a2), (a3)}; \
+      U32V ocannl_rw__ = __builtin_convertvector(ocannl_rh__, U32V) << 16; \
+      __builtin_memcpy(&(dst), &ocannl_rw__, sizeof(dst)); \
+    } while (0)
+  #define OCANNL_VEC_WIDENED_ROW_X4(packed, lane, widened) ((packed)[lane])
+#else
+  #define OCANNL_VEC_WIDEN_BFLOAT16_ROWS_X4(U16V, U32V, FV, dst, a0, a1, a2, a3) do { } while (0)
+  #define OCANNL_VEC_WIDENED_ROW_X4(packed, lane, widened) (widened)
+#endif
+|},
+      [ "OCANNL_HAS_CONVERTVECTOR" ] );
     ( "half_to_single",
       {|
 /* Half (Float16) to Float conversion (C function) */
