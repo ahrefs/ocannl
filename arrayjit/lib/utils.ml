@@ -1171,8 +1171,8 @@ fp16_arithmetic=true
 # a tf32 tile shape (CUDA sm_80+); a no-op elsewhere.
 tf32_matmuls=true
 # The narrow side of the bf16 accumulator trade (gh-ocannl-838), symmetric with fp16_arithmetic
-# above: never the strict f32 residency `false` requests. It resolves as auto on every backend
-# today; naming it keeps this regime's bf16 numerics independent of how auto later resolves.
+# above: never the strict f32 residency `false` requests. It resolves as auto everywhere except
+# HIP, where auto went wide (gh-ocannl-1051) and this keeps gfx11's bf16-accumulate WMMA.
 bf16_arithmetic=true
 # The online-softmax attention rewrite (gh-ocannl-483): the softmax normalizer's summation is
 # reassociated into a per-row scan, and the probabilities are never materialized.

@@ -36,6 +36,7 @@ bfu_m2 tensorized structure as expected: true
 Bf16_wide bf16 serial rendering equals the once-narrowed wide reference bitwise: true
 Bf16_wide uniform-bf16 tensorized matmul errs by the narrowing rounding alone: true
 the default-policy uniform-bf16 matmul exceeds the narrowing rounding exactly where the backend keeps bf16 storage residency (the inputs discriminate): true
+the Bf16_narrow uniform-bf16 matmul exceeds the narrowing rounding exactly where that mode keeps bf16 storage residency: true
 Bf16_wide mma seeds match the backend's advertised emission scopes: true
 Bf16_wide uniform-bf16 tensorized structure as expected: true
 f8 tensorized matmul matches the serial twin bitwise: true
@@ -74,6 +75,7 @@ f16->f32 k-split, fragment scope: the f32 fragment stays resident with d unconve
 the k-split inputs discriminate: narrowing per block and once give different bf16 values: true
 staged+tensorized Bf16_wide matmul equals the once-narrowed wide reference bitwise: true
 staged+tensorized default-policy uniform-bf16 matmul narrows between blocks exactly where the backend keeps bf16 storage residency: true
+staged+tensorized Bf16_narrow uniform-bf16 matmul narrows between blocks exactly where that mode keeps bf16 storage residency: true
 staged+tensorized Bf16_wide fragment residency converts d once: true
 swizzled staged twin under Bf16_wide and the default policy equals the once-narrowed wide reference bitwise: true
 swizzled staged twin keeps the same register fragment, fed through ldmatrix: true
