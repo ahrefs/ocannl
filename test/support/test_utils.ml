@@ -112,3 +112,19 @@ module Operand_key_scan = Operand_key_scan
 module Nonvirtual_code_scan = Nonvirtual_code_scan
 (** Where the virtualizer's rejection codes are minted, which files name them, and the boundary
     test's phase table checked against the minting functions (gh-ocannl-1015). *)
+
+(** [with_policy adjust f] runs [f] under the numerics policy [adjust] makes of the ambient one, and
+    restores the ambient policy after, exceptions included. A leg claiming the behaviour of a named
+    policy — the default one included — pins it this way rather than inheriting it: a stanza that
+    declares [OCANNL_FP16_ARITHMETIC] or [OCANNL_BF16_ARITHMETIC] runs under whatever mode the
+    caller exported, and a default-labelled claim would then test another policy under the default's
+    name (gh-ocannl-1053, gh-ocannl-1078). The policy is read while compiling, so wrapping the
+    compile suffices. *)
+let with_policy adjust f =
+  let saved = Ir.Numerics.get () in
+  Ir.Numerics.set_policy (adjust saved);
+  Exn.protect ~f ~finally:(fun () -> Ir.Numerics.set_policy saved)
+
+(** [with_fp16_auto f] is [with_policy] pinning [Fp16_auto], the default fp16 mode. *)
+let with_fp16_auto f =
+  with_policy (fun p -> { p with Ir.Numerics.fp16_arithmetic = Ir.Numerics.Fp16_auto }) f

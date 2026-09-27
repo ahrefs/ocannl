@@ -412,7 +412,10 @@ let () =
      axis would race the accumulator. On the C backends [warp_size = 0] and the loop is simply
      serial, which is its correct meaning. This pins what [Fp16_auto] resolves to TODAY, not a
      contract that it always will (gh-ocannl-680 keeps latitude to resolve wide on hardware where
-     wide f16 accumulate is free); the wide policy's twin legs are at the end of this file. *)
+     wide f16 accumulate is free); the wide policy's twin legs are at the end of this file. The leg
+     pins [Fp16_auto] rather than inheriting it: the stanza declares OCANNL_FP16_ARITHMETIC, and
+     under an ambient [Fp16_wide] the GPU rendering would shuffle float and the refusal claimed of
+     the default policy would test the wide one instead (gh-ocannl-1078). *)
   let n = 32 in
   let hv = Array.init n ~f:(fun k -> Float.of_int (k % 5) *. 0.5) in
   let expected = Array.fold hv ~init:0. ~f:( +. ) in
@@ -427,17 +430,18 @@ let () =
                (L.get hs.Tensor.value [| f0 |], half),
                (L.get hx.Tensor.value [| it i |], half) )))
   in
-  if on_gpu then
-    match
-      try
-        ignore (run ~name:"f16_wshfl" ~transform hs : float);
-        None
-      with Invalid_argument msg -> Some msg
-    with
-    | Some msg ->
-        p claim_narrow_refused (String.is_substring msg ~substring:"accumulator residency")
-    | None -> p claim_narrow_refused false
-  else p claim_narrow_refused (approx (run ~name:"f16_wshfl" ~transform hs) expected)
+  Test_utils.with_fp16_auto (fun () ->
+      if on_gpu then
+        match
+          try
+            ignore (run ~name:"f16_wshfl" ~transform hs : float);
+            None
+          with Invalid_argument msg -> Some msg
+        with
+        | Some msg ->
+            p claim_narrow_refused (String.is_substring msg ~substring:"accumulator residency")
+        | None -> p claim_narrow_refused false
+      else p claim_narrow_refused (approx (run ~name:"f16_wshfl" ~transform hs) expected))
 
 (* gh-ocannl-682 (Codex review, P1): the widening is sound only where the SERIAL rendering widens
    too, and one class of body it never widens is an RNG-bearing accumulation. An RNG conversion
@@ -555,15 +559,13 @@ let claim_f16_wide_types =
    the residency type, never at half storage"
 
 let () =
-  let saved = Numerics.get () in
-  Exn.protect
-    ~finally:(fun () -> Numerics.set_policy saved)
-    ~f:(fun () ->
-      p_pairwise_distinct "the f16 single-warp rival-rendering values are pairwise distinct"
-        (values f16_1w_values) ~equal:Float.equal ~to_string:Float.to_string;
-      p_pairwise_distinct "the f16 four-warp rival-rendering values are pairwise distinct"
-        (values f16_4w_values) ~equal:Float.equal ~to_string:Float.to_string;
-      Numerics.set_policy { saved with fp16_arithmetic = Numerics.Fp16_wide };
+  p_pairwise_distinct "the f16 single-warp rival-rendering values are pairwise distinct"
+    (values f16_1w_values) ~equal:Float.equal ~to_string:Float.to_string;
+  p_pairwise_distinct "the f16 four-warp rival-rendering values are pairwise distinct"
+    (values f16_4w_values) ~equal:Float.equal ~to_string:Float.to_string;
+  Test_utils.with_policy
+    (fun pol -> { pol with Numerics.fp16_arithmetic = Numerics.Fp16_wide })
+    (fun () ->
       p claim_f16_wide_1w
         (Float.equal
            (f16_sum ~name:"f16_wide_1warp_wshfl" f16_1w_fixture)
