@@ -273,21 +273,22 @@ hazard_why() { # <hazard>
   width the bridge'"'"'s VM-bus ring overflows, and the suite comes back red in the
   same stanzas a real backend regression lands in (gh-ocannl-983). The cap lives
   in tools/box-jobs.sh, shared with tools/sweep.sh; the refusal signature and the
-  recovery are the dxg bullet of docs/agent-notes/build-and-test.md.' ;;
+  recovery are the dxg bullet of
+  docs/agent-notes/build-and-test.md#gpu-boxes-job-caps-and-runtime-refusals.' ;;
     sdma) printf 'At dune'"'"'s default width
   the pool can run out (kernel: `No more SDMA queue to allocate`), and a stanza
   aborts in ROCr like a backend regression (gh-ocannl-1029); -j %s keeps the
   fleet'"'"'s %s correctness slots on this box within the %s hip-width measured
   clean between them (lukstafi/ludics-lite#344). The cap lives in
   tools/box-jobs.sh; the signature is in the native-boot bullets of
-  docs/agent-notes/build-and-test.md.' \
+  docs/agent-notes/build-and-test.md#gpu-boxes-job-caps-and-runtime-refusals.' \
       "$BOX_JOBS_SDMA_SLOT_CAP" "$BOX_JOBS_SDMA_SLOTS" "$BOX_JOBS_SDMA_BUDGET" ;;
     wide-sdma) printf 'The fleet'"'"'s %s correctness
   slots on this box were measured at -j %s each, %s hip-width between them;
   uncapped, a batch here runs at dune'"'"'s default width, and that many at once
   were never measured (lukstafi/ludics-lite#344). The cap lives in
   tools/box-jobs.sh; the evidence is in the native-boot bullets of
-  docs/agent-notes/build-and-test.md.' \
+  docs/agent-notes/build-and-test.md#gpu-boxes-job-caps-and-runtime-refusals.' \
       "$BOX_JOBS_WIDE_SDMA_SLOTS" "$BOX_JOBS_WIDE_SDMA_SLOT_CAP" "$BOX_JOBS_WIDE_SDMA_BUDGET" ;;
     nvidia) printf 'The fleet runs %s GPU tokens of
   %s correctness slots on this box (lukstafi/ludics-lite#391): the %s cuda
@@ -295,7 +296,8 @@ hazard_why() { # <hazard>
   batches at once hit a CUDA_ERROR_OUT_OF_MEMORY (lukstafi/ludics-lite#316 and ludics-lite#344); two
   batches at dune'"'"'s default width were never measured (gh-ocannl-1033). The
   cap lives in tools/box-jobs.sh; the evidence is in the native-boot bullets of
-  docs/agent-notes/build-and-test.md.' "$BOX_JOBS_NATIVE_CUDA_TOKENS" \
+  docs/agent-notes/build-and-test.md#gpu-boxes-job-caps-and-runtime-refusals.' \
+      "$BOX_JOBS_NATIVE_CUDA_TOKENS" \
       "$BOX_JOBS_NATIVE_NVIDIA_SLOTS" "$BOX_JOBS_NATIVE_CUDA_TOKENS" "$BOX_JOBS_NATIVE_CUDA_CAP" ;;
     nvidia-cpu) printf 'The fleet runs %s correctness slots on
   this box, %s of them GPU tokens (lukstafi/ludics-lite#391), and CPU batches
@@ -303,7 +305,8 @@ hazard_why() { # <hazard>
   as many jobs as the box has cores (gh-ocannl-1065). This run takes its fleet
   slot itself, as `execution slot --cpu` when none of its backends holds a GPU
   (gh-ocannl-1004). The cap lives in tools/box-jobs.sh; the evidence
-  is in the native-boot bullets of docs/agent-notes/build-and-test.md.' \
+  is in the native-boot bullets of
+  docs/agent-notes/build-and-test.md#gpu-boxes-job-caps-and-runtime-refusals.' \
       "$BOX_JOBS_NATIVE_NVIDIA_SLOTS" "$BOX_JOBS_NATIVE_CUDA_TOKENS" \
       "$BOX_JOBS_NATIVE_CPU_CAP" "$BOX_JOBS_NATIVE_NVIDIA_SLOTS" ;;
   esac

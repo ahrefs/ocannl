@@ -7,20 +7,22 @@
 # tightest any backend the batch can hold meets). Sourced, never executed.
 #
 # Why one file rather than a constant in each: the cap was sweep policy, written
-# into `unit_jobs` and a bullet of docs/agent-notes/build-and-test.md, and every
-# other way into a GPU suite on such a box -- a manual run, a wave worker's
-# verification leg, a PR author validating a backend change -- ran at dune's
-# default width (32 jobs on minix) and came back red in the same stanzas a real
-# regression lands in. An hour of box time and a misleading bisect went into
-# rediscovering it (gh-ocannl-983). Two copies of a number nobody reads until it
-# is wrong is how that repeats.
+# into `unit_jobs` and a bullet of
+# docs/agent-notes/build-and-test.md#gpu-boxes-job-caps-and-runtime-refusals, and
+# every other way into a GPU suite on such a box -- a manual run, a wave
+# worker's verification leg, a PR author validating a backend change -- ran at
+# dune's default width (32 jobs on minix) and came back red in the same stanzas
+# a real regression lands in. An hour of box time and a misleading bisect went
+# into rediscovering it (gh-ocannl-983). Two copies of a number nobody reads
+# until it is wrong is how that repeats.
 #
 # The hazard: the GPU is reached over a Hyper-V VM-bus ring, and every
 # allocation and module load is a synchronous message on it. The ring overflows
 # when the suite's test executables hold the device at once, and the runtime
 # reports the lost messages as device/binary/stream-creation refusals -- see the
-# dxg bullet in docs/agent-notes/build-and-test.md for the signature, the kernel
-# evidence (`dmesg | grep 'misc dxg'`) and the recovery.
+# dxg bullet in docs/agent-notes/build-and-test.md#gpu-boxes-job-caps-and-runtime-refusals
+# for the signature, the kernel evidence (`dmesg | grep 'misc dxg'`) and the
+# recovery.
 
 # Measured on minix's degraded bridge, 2026-09-05: dune's default width lost 67
 # stanzas (356 kernel-side refusals), `-j 4` still lost 27 (120), and `-j 2` ran

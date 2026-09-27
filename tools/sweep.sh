@@ -417,9 +417,9 @@ unit_jobs() { # machine backend [ssh-destination]
 
 # The failure names that mean the ENVIRONMENT refused the run rather than a
 # test judging it. On minix the WSL2 dxg bridge (tools/box-jobs.sh, and the dxg
-# bullet in docs/agent-notes/build-and-test.md) surfaces its lost
-# messages as three HIP exceptions; rog-nv's CUDA reaches its GPU through the
-# same WSL2 bridge, so the cudajit checks at the same three call sites are
+# bullet in docs/agent-notes/build-and-test.md#gpu-boxes-job-caps-and-runtime-refusals)
+# surfaces its lost messages as three HIP exceptions; rog-nv's CUDA reaches its
+# GPU through the same WSL2 bridge, so the cudajit checks at the same three call sites are
 # listed by analogy, plus the primary-context retain every CUDA process makes
 # first -- where rog-nv's one lost bridge message was reported, as
 # CUDA_ERROR_OUT_OF_MEMORY on a device with VRAM to spare. A unit whose log
@@ -435,7 +435,8 @@ unit_jobs() { # machine backend [ssh-destination]
 # Keyed as dune prints an uncaught binding error, `Fatal error: exception
 # <name>:` with the status on the next line. The statuses each name has been
 # seen with, and how to read a rerun's verdict, are the signature table in
-# docs/agent-notes/build-and-test.md (the record half of gh-ocannl-927).
+# docs/agent-notes/build-and-test.md#gpu-boxes-job-caps-and-runtime-refusals
+# (the record half of gh-ocannl-927).
 ENVIRONMENT_REFUSALS='hip_init
 hip_module_load_data_ex
 hip_stream_create_with_priority
@@ -1579,7 +1580,7 @@ record() {
 # rather than one `--only` excluded; and one `backend` row per unit of the
 # table, selected or not, because staleness must be aged by rows from the box
 # that runs that backend today whether or not this run touched it. Columns are
-# documented in docs/agent-notes/build-and-test.md.
+# documented in docs/agent-notes/build-and-test.md#the-cross-machine-sweep.
 #
 # A unit's outcome comes from the HISTORY ROWS OF THIS RUN, read back under the
 # same lock that writes them -- not from a per-unit file staged beside them. That
