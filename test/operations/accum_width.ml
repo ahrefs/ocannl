@@ -57,13 +57,21 @@ let render_rivals { initial; increment; terms; narrow } =
   let per_step = List.fold increments ~init:initial ~f:(fun acc x -> narrow (acc +. x)) in
   { once_narrowed; per_step }
 
+(* [Bf16_auto], the default bf16 mode, which the gated bf16 block below states its claims for (the
+   universal legs at the end name [Bf16_wide]). The stanza declares OCANNL_BF16_ARITHMETIC, so the
+   gate and the block both pin it rather than inheriting the ambient mode: under an ambient
+   [Bf16_wide] the gate opens on HIP and Metal and the narrow_compute_f32 negative controls stay
+   wide (gh-ocannl-1078). *)
+let bf16_auto pol = { pol with Numerics.bf16_arithmetic = Numerics.Bf16_auto }
+
 (* Read the same per-backend policy code generation applies, rather than reconstructing it from the
    backend name (gh-ocannl-822). *)
 let widens_bf16 =
-  not
-    (Ir.Ops.equal_prec
-       (codegen_capabilities.Ir.Backend_intf.accum_prec Ir.Ops.bfloat16)
-       Ir.Ops.bfloat16)
+  Test_utils.with_policy bf16_auto (fun () ->
+      not
+        (Ir.Ops.equal_prec
+           (codegen_capabilities.Ir.Backend_intf.accum_prec Ir.Ops.bfloat16)
+           Ir.Ops.bfloat16))
 
 (* Runs the leg only on cc; elsewhere prints the golden line as skipped (the leg exercises a
    CPU-only rendering or greps cc's generated C). *)
@@ -512,7 +520,7 @@ let all_claims =
     claim_off_shape;
   ]
 
-let () =
+let default_bf16_block () =
   if not widens_bf16 then
     (* The fp8 claim holds on HIP and Metal too, so it executes rather than printing a green-by-skip
        line; every bf16-widening leg is skipped. *)
@@ -1104,6 +1112,8 @@ let () =
         let has s = String.is_substring src ~substring:s in
         p claim_off_shape (has "single_to_bfloat16(fmaf("))
   end
+
+let () = Test_utils.with_policy bf16_auto default_bf16_block
 
 (* === bf16 residency under the bf16_arithmetic policy (gh-ocannl-838) === *)
 (* Universal legs, executed on every backend: the widened bf16 claims the gate above skips on HIP

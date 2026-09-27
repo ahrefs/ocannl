@@ -2182,7 +2182,13 @@ let () =
    in
    let policies =
      [
-       ("default policy", "dflt", Fn.id);
+       (* Named, not inherited: the stanza declares OCANNL_FP16_ARITHMETIC and
+          OCANNL_BF16_ARITHMETIC, so the ambient modes may be the wide ones (gh-ocannl-1078). *)
+       ( "default policy",
+         "dflt",
+         fun (pol : Numerics.t) ->
+           { pol with fp16_arithmetic = Numerics.Fp16_auto; bf16_arithmetic = Numerics.Bf16_auto }
+       );
        ( "Fp16_wide/Bf16_wide",
          "wide",
          fun (pol : Numerics.t) ->

@@ -17,6 +17,19 @@ open Ocannl.Operation.DSL_modules
 module LL = Ir.Low_level
 module Asgns = Ir.Assignments
 
+(* Every section below is stated for the default fp16 and bf16 modes unless it names another, and
+   the golden records them so. The stanza declares OCANNL_FP16_ARITHMETIC and
+   OCANNL_BF16_ARITHMETIC, so the ambient modes are whatever the caller exported: pin the defaults
+   for the whole run, as the legs naming a mode derive it from this base (gh-ocannl-1078 — under an
+   ambient [Fp16_wide] the "default policy" f16 section withheld its mma seeds). *)
+let () =
+  Ir.Numerics.set_policy
+    {
+      (Ir.Numerics.get ()) with
+      fp16_arithmetic = Ir.Numerics.Fp16_auto;
+      bf16_arithmetic = Ir.Numerics.Bf16_auto;
+    }
+
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
@@ -533,8 +546,7 @@ let () =
         }
       opt_b
   in
-  (* Every leg names its bf16 mode explicitly: the stanza declares OCANNL_BF16_ARITHMETIC, so the
-     ambient policy may already be [Bf16_wide]. *)
+  (* Every leg names its bf16 mode explicitly rather than leaning on the file-level pin above. *)
   let bf16_auto = { saved_policy with bf16_arithmetic = Numerics.Bf16_auto } in
   Numerics.set_policy bf16_auto;
   let bf16_default = bf16_seeds ~wide_scopes:[] in
