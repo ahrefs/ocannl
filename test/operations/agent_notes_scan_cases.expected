@@ -204,8 +204,9 @@ ok: guide -- a pointer at a third that does not exist
 ok: guide -- spellings only a renderer assembles are not source pointers
 ok: guide -- a hash with no slug after it is not a pointer
 ok: guide -- pointers in ordinary surroundings are read
-ok: guide -- a Unicode slug naming a Unicode heading
-ok: guide -- a Unicode slug naming no heading
+ok: guide -- a Unicode slug is refused
+ok: guide -- a Unicode file name is refused
+ok: guide -- a slug running into a Unicode letter is refused
 ok: guide -- hashes that are no pointer
 ok: guide -- plain mentions of a note are not pointers
 ok: unnamed rule -- a finding the list does not name survives the report, last

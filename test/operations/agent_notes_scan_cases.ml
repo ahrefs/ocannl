@@ -900,12 +900,17 @@ let guide_cases =
         "- Plain: (a.md#the-sprocket-seam), [a.md#the-sprocket-seam](x), `a.md#the-sprocket-seam`, \
          \"a.md#the-sprocket-seam\"; a.md#the-sprocket-seam!",
       List.init 5 ~f:(fun _ -> "guide-anchors @ AGENTS.md:3") );
-    (* GitHub keeps a heading's Unicode letters in its id, and so does the slug here. *)
-    ( "a Unicode slug naming a Unicode heading",
+    (* The notes are ASCII, and a pointer touching non-ASCII text is refused rather than read cut
+       short -- a Unicode slug (whether or not a Unicode heading exists), a Unicode file name, a
+       cased letter GitHub would fold. *)
+    ( "a Unicode slug is refused",
       guide "- A rule; the mechanism: b.md#\xe8\xae\xad\xe7\xbb\x83.",
-      [] );
-    ( "a Unicode slug naming no heading",
-      guide "- A rule; the mechanism: b.md#\xe8\xae\xad.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a Unicode file name is refused",
+      guide "- A rule; the mechanism: \xe8\xae\xad.md#setup.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "a slug running into a Unicode letter is refused",
+      guide "- A rule; the mechanism: a.md#the-widget-seam\xc3\xa9.",
       [ "guide-anchors @ AGENTS.md:3" ] );
     ( "hashes that are no pointer",
       guide

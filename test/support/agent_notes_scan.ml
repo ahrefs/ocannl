@@ -1204,14 +1204,13 @@ let backticked cell =
     UNDERSCORES KEPT, which is the half that matters here. The headings a note would anchor are
     identifiers (`ident_blacklist`, `promote_prec`), and GitHub anchors those as `#ident_blacklist`;
     rewriting the underscore rejected the correct anchor and accepted the wrong one (Codex P2, round
-    1). Hyphens are likewise kept as themselves rather than re-derived, and so are non-ASCII bytes,
-    since GitHub keeps a heading's Unicode letters (its dropping of Unicode punctuation is not
-    modelled: a pointer at such a heading is refused, loudly). *)
+    1). Hyphens are likewise kept as themselves rather than re-derived. Only ASCII is modelled:
+    GitHub's Unicode handling (letters kept and case-folded, punctuation dropped) is not, and a
+    guide pointer touching non-ASCII text is refused instead (see {!guide_pointers}). *)
 let slug heading =
   String.lowercase heading |> String.to_list
   |> List.filter_map ~f:(fun c ->
-      if Char.is_alphanum c || Char.equal c '_' || Char.equal c '-' || Char.to_int c >= 128 then
-        Some c
+      if Char.is_alphanum c || Char.equal c '_' || Char.equal c '-' then Some c
       else if Char.equal c ' ' then Some '-'
       else None)
   |> String.of_list
@@ -1646,15 +1645,18 @@ let check_citations ~file contents =
 (* Rule 7: the agent guide's anchored pointers resolve *)
 (* ------------------------------------------------------------------ *)
 
-type pointer = { pointer_line : int; path : string; anchor : string }
-(** One [<path>.md#<anchor>] in the guide, as written: [path] includes the [.md]. *)
+type pointer = {
+  pointer_line : int;
+  path : string;  (** As written, including the [.md]. *)
+  anchor : string;
+  non_ascii : bool;
+      (** Whether a non-ASCII byte touches the path or the slug, in which case both may be cut short
+          where the ASCII runs stopped. *)
+}
+(** One [<path>.md#<anchor>] in the guide, as written. *)
 
 let path_char c = Char.is_alphanum c || List.mem [ '_'; '-'; '.'; '/' ] c ~equal:Char.equal
-
-(** A slug character: what {!slug} keeps. Non-ASCII bytes count, since GitHub keeps a heading's
-    Unicode letters in its id (Codex P2, round 3 on lukstafi/ocannl-staging#811). *)
-let anchor_char c =
-  Char.is_alphanum c || Char.equal c '_' || Char.equal c '-' || Char.to_int c >= 128
+let anchor_char c = Char.is_alphanum c || Char.equal c '_' || Char.equal c '-'
 
 (** Every [<path>.md#<anchor>] in [contents] as the SOURCE spells it, code spans and fenced blocks
     included: a pointer set in backticks is still a pointer. The path is the maximal run of path
@@ -1671,7 +1673,13 @@ let anchor_char c =
     not pointers to that reader and are not read. Rounds 2-8 of that review explored reading them:
     each construct refused or decoded exposed the next one, in both directions (a false refusal of
     [LOG_FILTER=#debug], a decoded entity inside a code span), so the machinery was removed in
-    favour of this contract. *)
+    favour of this contract.
+
+    The notes are ASCII -- their file names and their headings -- and so is what is read here: a
+    non-ASCII byte touching a pointer's path or slug marks it [non_ascii], and it is refused rather
+    than read cut short at the first such byte. Modelling GitHub's Unicode ids instead (letters kept
+    and case-folded, punctuation dropped) would need the slugger's tables; rounds 3, 8 and 9 of that
+    review found one gap after another in the byte-level approximations. *)
 let guide_pointers contents =
   let comments = (inert_by_line contents).comment_ranges in
   List.concat_map (lines contents) ~f:(fun (lineno, line) ->
@@ -1690,8 +1698,11 @@ let guide_pointers contents =
           done;
           let path = String.sub line ~pos:!start ~len:(i + 3 - !start) in
           let anchor = String.sub line ~pos:(i + 4) ~len:(!stop - i - 4) in
-          if String.equal path ".md" || String.is_empty anchor then None
-          else Some { pointer_line = lineno; path; anchor }))
+          let non_ascii_at j = j >= 0 && j < n && Char.to_int line.[j] >= 128 in
+          let non_ascii = non_ascii_at (!start - 1) || non_ascii_at !stop in
+          if non_ascii then Some { pointer_line = lineno; path; anchor; non_ascii }
+          else if String.equal path ".md" || String.is_empty anchor then None
+          else Some { pointer_line = lineno; path; anchor; non_ascii }))
 
 (** The notes file a guide pointer names, keyed as {!check_index} keys [files], or [None] when the
     path points outside the notes. A bare basename is a note, which is how the guide spells them; a
@@ -1720,6 +1731,13 @@ let check_guide ~guide_file ~guide_contents ~index_file ~index_contents
         Some (finding ~file:guide_file ~line:p.pointer_line ~rule:rule_guide_anchors msg)
       in
       match pointer_target p.path with
+      | _ when p.non_ascii ->
+          report
+            (Printf.sprintf
+               "a pointer touching non-ASCII text (read as %s#%s, cut where the ASCII ran out): \
+                the notes' file names and headings are ASCII, and this scan models only ASCII ids \
+                -- write the pointer, and the heading it names, in ASCII"
+               p.path p.anchor)
       | None -> None
       | Some target -> (
           match List.Assoc.find known target ~equal:String.equal with
