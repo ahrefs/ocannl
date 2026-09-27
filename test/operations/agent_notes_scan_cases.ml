@@ -925,6 +925,17 @@ let guide_cases =
     ( "a directory path cut on the left is out of scope",
       guide "- Set URL=docs/syntax_extensions.md#operators, or URL=docs/agent-notes/a.md#nope.",
       [] );
+    ( "a cut inside the notes tree is refused",
+      guide "- A rule; the mechanism: docs/agent-notes/team+ci/setup.md#missing.",
+      [ "guide-anchors @ AGENTS.md:3" ] );
+    ( "dot segments resolve into the notes",
+      guide
+        "- Both docs/./agent-notes/a.md#the-sprocket-seam and \
+         docs/proposals/../agent-notes/a.md#the-sprocket-seam.",
+      [ "guide-anchors @ AGENTS.md:3"; "guide-anchors @ AGENTS.md:3" ] );
+    ( "dot segments resolving to a real heading",
+      guide "- A rule (docs/./agent-notes/a.md#the-widget-seam).",
+      [] );
     ( "an external path with a Unicode slug is not read",
       guide "- See docs/syntax_extensions.md#\xc3\xa9criture.",
       [] );

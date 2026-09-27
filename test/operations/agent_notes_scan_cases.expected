@@ -210,6 +210,9 @@ ok: guide -- a slug running into a Unicode letter is refused
 ok: guide -- a file name with a character outside the path alphabet is refused
 ok: guide -- a slug running into a character outside the slug alphabet is refused
 ok: guide -- a directory path cut on the left is out of scope
+ok: guide -- a cut inside the notes tree is refused
+ok: guide -- dot segments resolve into the notes
+ok: guide -- dot segments resolving to a real heading
 ok: guide -- an external path with a Unicode slug is not read
 ok: guide -- a pointer in bold is read
 ok: guide -- hashes that are no pointer

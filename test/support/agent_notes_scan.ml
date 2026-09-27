@@ -1653,6 +1653,9 @@ type pointer = {
       (** Whether the path run stopped at something other than a delimiter ({!plain_before}): the
           name goes on past what was read -- [a+b.md], a Unicode name -- so which file it names is
           unknown. *)
+  token : string;
+      (** The whole name as written, back to the delimiter the path run did not reach: equal to
+          [path] unless [cut_left]. *)
   cut_right : bool;
       (** Whether the slug run stopped at something other than a delimiter ({!plain_after}): the
           slug goes on past what was read. *)
@@ -1718,8 +1721,13 @@ let guide_pointers contents =
           let path = String.sub line ~pos:!start ~len:(i + 3 - !start) in
           let anchor = String.sub line ~pos:(i + 4) ~len:(!stop - i - 4) in
           let cut_left = !start > 0 && not (plain_before line.[!start - 1]) in
+          let token_start = ref !start in
+          while !token_start > 0 && not (plain_before line.[!token_start - 1]) do
+            Int.decr token_start
+          done;
+          let token = String.sub line ~pos:!token_start ~len:(i + 3 - !token_start) in
           let cut_right = !stop < n && not (plain_after line.[!stop]) in
-          let pointer = Some { pointer_line = lineno; path; anchor; cut_left; cut_right } in
+          let pointer = Some { pointer_line = lineno; path; anchor; cut_left; token; cut_right } in
           let nameless = String.equal path ".md" in
           if nameless && String.is_empty anchor then None (* a placeholder: <note>.md#<slug> *)
           else if cut_left then pointer
@@ -1732,8 +1740,20 @@ let guide_pointers contents =
     [docs/agent-notes.md] is the index. A leading [./] makes a path of a bare name, which is how a
     root file such as [./CHANGES.md#…] is spelled. *)
 let pointer_target path =
+  (* [.] and [..] segments resolved first, so [docs/./agent-notes/a.md] and
+     [docs/proposals/../agent-notes/a.md] are the note they name (Codex P2, round 12 on
+     lukstafi/ocannl-staging#811). A [..] above the root stays, and matches nothing. *)
+  let normalize path =
+    String.split path ~on:'/'
+    |> List.fold ~init:[] ~f:(fun acc seg ->
+        match (seg, acc) with
+        | ("" | "."), _ -> acc
+        | "..", prev :: rest when not (String.equal prev "..") -> rest
+        | _ -> seg :: acc)
+    |> List.rev |> String.concat ~sep:"/"
+  in
   let from_root path =
-    match String.chop_prefix path ~prefix:"docs/" with
+    match String.chop_prefix (normalize path) ~prefix:"docs/" with
     | Some rest when String.is_prefix rest ~prefix:"agent-notes/" -> Some rest
     | Some rest when String.equal rest "agent-notes.md" -> Some rest
     | _ -> None
@@ -1752,13 +1772,14 @@ let check_guide ~guide_file ~guide_contents ~index_file ~index_contents
       let report msg =
         Some (finding ~file:guide_file ~line:p.pointer_line ~rule:rule_guide_anchors msg)
       in
-      match pointer_target p.path with
-      (* A left-cut path with a directory in it is out of scope either way: the name written is the
-         read path with something in front, so it cannot be [docs/agent-notes/...] or a bare
-         basename (Codex P2, round 11 on lukstafi/ocannl-staging#811). A left-cut bare name could be
-         a note's, so which note is unknown and it is refused. *)
-      | _ when p.cut_left && String.mem p.path '/' -> None
-      | _ when p.cut_left ->
+      (* A left cut is classified by the whole name as written, [token], not by the suffix the path
+         run read: [URL=docs/syntax_extensions.md] is out of scope (round 11), while
+         [docs/agent-notes/team+ci/setup.md] is a notes path whatever was cut inside it (round 12 on
+         lukstafi/ocannl-staging#811). In scope, which note it names is unknown, so it is
+         refused. *)
+      match pointer_target (if p.cut_left then p.token else p.path) with
+      | None -> None
+      | Some _ when p.cut_left ->
           report
             (Printf.sprintf
                "a pointer whose name runs on past what this scan reads (read as %s#%s): a note's \
@@ -1766,7 +1787,6 @@ let check_guide ~guide_file ~guide_contents ~index_file ~index_contents
                 space or an opening bracket, quote, backtick or * -- which file this names is \
                 unknown"
                p.path p.anchor)
-      | None -> None
       | Some _ when p.cut_right || String.is_empty p.anchor ->
           report
             (Printf.sprintf
