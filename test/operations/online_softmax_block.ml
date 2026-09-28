@@ -505,7 +505,44 @@ let () =
   in
   let r = rewrite plain in
   p "scores that are an input, not a contraction: no fold, the two-pass form"
-    (scans_of r = 1 && Set.is_empty (tiles r) && not (LL.equal r plain))
+    (scans_of r = 1 && Set.is_empty (tiles r) && not (LL.equal r plain));
+  (* The value pass writing a slice of its output -- [O] with an extra axis of 2, the pass at its
+     index 0: the fold would replace the whole-node zeroing and write the slice only, so it
+     declines, and the two-pass form keeps the zeroing. *)
+  let o = Option.value_exn (Set.find (written raw) ~f:(label_is "n76")) ~message:"O" in
+  let wide =
+    B.node_factory ~first_id:100600 ~dims:(Array.append (Lazy.force o.Tn.dims) [| 2 |]) () "o_wide"
+  in
+  B.materialize wide;
+  let slot idcs = Array.append idcs [| B.fixed 0 |] in
+  let rec widen (llc : LL.t) : LL.t =
+    match llc with
+    | LL.Seq (a, b) -> LL.Seq (widen a, widen b)
+    | LL.For_loop fl -> LL.For_loop { fl with body = widen fl.body }
+    | LL.Zero_out tn when Tn.equal tn o -> LL.Zero_out wide
+    | LL.Set s ->
+        let get tn i = if Tn.equal tn o then LL.Get (wide, slot i) else LL.Get (tn, i) in
+        let llsc = map_gets ~f:get s.llsc in
+        if Tn.equal s.tn o then LL.Set { s with tn = wide; idcs = slot s.idcs; llsc }
+        else LL.Set { s with llsc }
+    | other -> other
+  in
+  let r = rewrite (widen raw) in
+  p "a value pass into a slice of its output: no fold, the two-pass form keeps the zeroing"
+    (scans_of r = 1
+    && Set.is_empty (tiles r)
+    && Ll_test.count_stmt r ~f:(function LL.Zero_out tn -> Tn.equal tn wide | _ -> false) = 1);
+  (* Only the row max requested: the fold writes it, and nothing else of the row state -- the
+     shifted scores, exponentials and probabilities have no reader, so they go, and with them the
+     score chain; only a live definition would move behind the fold. *)
+  let max_vals = Option.value_exn (Set.find (written raw) ~f:(label_is "max_vals")) in
+  B.materialize max_vals;
+  let r = rewrite raw in
+  let w = written r in
+  p "the row max alone requested: the fold writes it and its tiles"
+    (Set.mem w max_vals && not (Set.is_empty (tiles r)));
+  p_none "the row max alone requested: no other row-state or score-chain node is written"
+    [ "softmax"; "exp_exp_vals"; "where"; "n67" ] ~f:(fun name -> Set.exists w ~f:(label_is name))
 
 (* --- Leg 7: training -- the fold forward under the composed backward and under the fused one.
    --- *)

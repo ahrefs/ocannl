@@ -1610,9 +1610,40 @@ let find_fold r (nz : normalizer) ~block : fold option =
   let* c_nodes, c_defs = closure [] [] in
   let c_defs = List.sort c_defs ~compare:Int.compare in
   let state = nz.m :: nz.l :: c_nodes in
-  let live =
-    List.exists state ~f:(fun tn ->
-        Tn.known_non_virtual tn || List.exists (readers r tn) ~f:(fun p -> p > f_at))
+  (* Liveness per node, from the downstream roots: a node of the row state is live when it was
+     requested, when a statement after the value pass reads it, or when a live definition reads it.
+     Only live definitions move; a dead one goes, so that it keeps nothing it reads -- the score
+     chain above all -- alive. *)
+  let target_of_def p = Option.map r.nests.(p) ~f:(fun n -> n.tn) in
+  let rooted tn = Tn.known_non_virtual tn || List.exists (readers r tn) ~f:(fun p -> p > f_at) in
+  let rec liveness live =
+    let more =
+      List.filter c_defs ~f:(fun p ->
+          Option.exists (target_of_def p) ~f:(fun tn -> List.mem live tn ~equal:Tn.equal))
+      |> List.concat_map ~f:(fun p ->
+          List.filter state ~f:(fun tn ->
+              Set.mem (reads_at r p) tn && not (List.mem live tn ~equal:Tn.equal)))
+      |> List.dedup_and_sort ~compare:Tn.compare
+    in
+    if List.is_empty more then live else liveness (live @ more)
+  in
+  let live_nodes = liveness (List.filter state ~f:rooted) in
+  let is_live tn = List.mem live_nodes tn ~equal:Tn.equal in
+  let live_defs = List.filter c_defs ~f:(fun p -> Option.exists (target_of_def p) ~f:is_live) in
+  let dead_defs = List.filter c_defs ~f:(fun p -> not (List.mem live_defs p ~equal:Int.equal)) in
+  (* [O] must be written whole: the fold replaces its zeroing, and writes the cells the value pass's
+     signature spans -- every role over its whole extent, a fixed index only on a unit axis. *)
+  let covers_node (tn : Tn.t) (sg : signature) =
+    let dims = Lazy.force tn.Tn.dims in
+    Array.length dims = Array.length sg
+    && Array.for_alli sg ~f:(fun a slot ->
+        match slot with
+        | Fixed k -> k = 0 && dims.(a) = 1
+        | Role role ->
+            Option.equal Int.equal
+              (List.Assoc.find vp.vp_voc.extents ~equal:equal_role role)
+              (Some (dims.(a) - 1)))
+    && not (List.contains_dup (roles_of sg) ~compare:compare_role)
   in
   let movable p =
     Set.for_all (reads_at r p) ~f:(fun tn ->
@@ -1630,7 +1661,7 @@ let find_fold r (nz : normalizer) ~block : fold option =
     && (not (List.exists inputs ~f:(List.mem state ~equal:Tn.equal)))
     (* Nothing reads [O] between its zeroing and the value pass. *)
     && List.for_all (readers r vp.o_tn) ~f:(fun p -> p <= z_o || p >= f_at)
-    && ((not live) || List.for_all c_defs ~f:movable)
+    && covers_node vp.o_tn vp.sig_o && List.for_all live_defs ~f:movable
     && not (List.exists (List.range span_lo (f_at + 1)) ~f:(fun pos -> r.opaque.(pos)))
   in
   let* () = Option.some_if contract () in
@@ -1728,12 +1759,12 @@ let find_fold r (nz : normalizer) ~block : fold option =
         |]
     in
     let state_writes =
-      if not live then []
-      else
-        [
-          set nz.m (idcs_at (role_idx ~j:none ~e:none) nz.sig_m) (Get_local m.next);
-          set nz.l (idcs_at (role_idx ~j:none ~e:none) nz.sig_l) (Get_local lf);
-        ]
+      (if is_live nz.m then
+         [ set nz.m (idcs_at (role_idx ~j:none ~e:none) nz.sig_m) (Get_local m.next) ]
+       else [])
+      @
+      if is_live nz.l then [ set nz.l (idcs_at (role_idx ~j:none ~e:none) nz.sig_l) (Get_local lf) ]
+      else []
     in
     let last =
       Binop
@@ -1806,12 +1837,12 @@ let find_fold r (nz : normalizer) ~block : fold option =
         { index = row_sym role; from_ = 0; to_ = lp.to_ })
   in
   let fold = wrap rows row in
-  let moved = if live then List.map c_defs ~f:(fun p -> r.stmts.(p)) else [] in
+  let moved = List.map live_defs ~f:(fun p -> r.stmts.(p)) in
   (* The score chain the fold no longer reads -- the reduction, its zeroing, the scale and the
      mask's [where] -- goes too once nothing else reads it: a node the recompute cap keeps would
      otherwise be computed into a [seq, seq] buffer for no reader. Removed only when every writer of
      the node is removed with it and nothing requested it. *)
-  let removed0 = consumed0 @ if live then [] else c_defs in
+  let removed0 = consumed0 @ dead_defs in
   let target_of pos =
     match (r.stmts.(pos), r.nests.(pos)) with
     | Zero_out tn, _ -> Some tn

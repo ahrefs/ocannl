@@ -23,7 +23,7 @@
 #                 one cell per fixture x treatment (min-of-20 per segment, a sync per run).
 #     cc          the no-regression leg on the CPU backend: gpt2_mini and gpt2_mini_s512 x the
 #                 treatments, two passes (forward, reversed).
-#     summary     OUT/summary.md from every result line in OUT: median p50 per cell, the p50 of each
+#     summary     OUT/summary.md from the numbered passes' result lines (not the dry cells): median p50 per cell, the p50 of each
 #                 repeat, the widest p90/p10 of the cell's repeats, the ratio to the same fixture's
 #                 composed cell and to its two-pass cell, the shipped mma census, and the losses'
 #                 agreement with the composed cell.
@@ -194,7 +194,8 @@ import json, os, re, statistics, sys
 out, treatments = sys.argv[1], sys.argv[2].split()
 cells = {}
 for name in sorted(os.listdir(out)):
-    m = re.fullmatch(r"(cc|metal)-(gpt2_mini\w*)-(composed|two-pass|fold-\d+)-(r\d+|dry)\.out", name)
+    # The dry cells are a smoke of the matrix, never a repeat: only the numbered passes enter.
+    m = re.fullmatch(r"(cc|metal)-(gpt2_mini\w*)-(composed|two-pass|fold-\d+)-(r\d+)\.out", name)
     if not m:
         continue
     rec = None
