@@ -22,6 +22,7 @@
    differ between backends. *)
 
 open Base
+open Ocannl.Operation.DSL_modules
 module BI = Ir.Backend_intf
 module SC = Ir.Schedule_cache
 module Numerics = Ir.Numerics
