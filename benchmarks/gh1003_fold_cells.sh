@@ -11,7 +11,7 @@
 #         OUT/<cell>.out and OUT/<cell>.err, and `summary` writes OUT/summary.md.
 #   CAP   wall cap in seconds per build and per cell; a capped cell's process group is terminated
 #         and the cell counts as failed.
-#   STEP  build | provenance | dry | metal | seg | cc | summary
+#   STEP  build | provenance | dry | metal | seg | cc | train | summary
 #     build       dune build of bench_gpt and bench_gpt_diag (the tree as checked out).
 #     provenance  the revision, a clean-tree check, the fixtures' digests against the m4-max
 #                 content-v1 rows of fixtures/DIGESTS.txt, and the host state.
@@ -23,6 +23,10 @@
 #                 one cell per fixture x treatment (min-of-20 per segment, a sync per run).
 #     cc          the no-regression leg on the CPU backend: gpt2_mini and gpt2_mini_s512 x the
 #                 treatments, two passes (forward, reversed).
+#     train       the training step on Metal (TRAIN_FIXTURES, default gpt2_mini_train_s512 and _s1024,
+#                 two passes forward/reversed): composed, two-pass-bwd (online forward, fused
+#                 backward: treatment D) and fold-B-bwd (the fold forward under the fused backward:
+#                 treatment F). Needs the gh-ocannl-1002 measurement's runner fix and workloads.
 #     summary     OUT/summary.md from the numbered passes' result lines (not the dry cells): median p50 per cell, the p50 of each
 #                 repeat, the widest p90/p10 of the cell's repeats, the ratio to the same fixture's
 #                 composed cell and to its two-pass cell, the shipped mma census, and the losses'
@@ -38,7 +42,8 @@
 #              scores stay one stored [seq, seq] buffer, read by the scan and the value pass)
 #   fold-B     --ocannl_online_softmax=true --ocannl_online_softmax_block=B, B in FOLD_BLOCKS
 # Environment knobs (the driver's own, recorded in driver.log): REPEATS (default 3), FOLD_BLOCKS
-# (default "8 16 32"), FIXTURE_DIR (default benchmarks/fixtures).
+# (default "8 16 32"), TRAIN_FIXTURES (the train step's), FIXTURE_DIR (default
+# benchmarks/fixtures).
 #
 # Exit: 0 all steps complete; 1 a cell or step failed; 2 usage; 130 interrupted.
 # The environment is cleared of OCANNL_*, BENCH_* and the OpenMP controls, as in gh834_cells.sh:
@@ -54,6 +59,7 @@ shift 2
 case $cap in '' | *[!0-9]* | 0*) echo "gh1003: CAP must be a positive decimal integer, got '$cap'" >&2; exit 2 ;; esac
 repeats=${REPEATS:-3}
 fold_blocks=${FOLD_BLOCKS:-"8 16 32"}
+train_fixtures=${TRAIN_FIXTURES:-"gpt2_mini_train_s512 gpt2_mini_train_s1024"}
 case $repeats in '' | *[!0-9]* | 0*) echo "gh1003: REPEATS must be a positive decimal integer, got '$repeats'" >&2; exit 2 ;; esac
 for b in $fold_blocks; do
   case $b in '' | *[!0-9]* | 0*) echo "gh1003: FOLD_BLOCKS must list positive decimal integers, got '$b'" >&2; exit 2 ;; esac
@@ -78,14 +84,22 @@ diag=$root/_build/default/benchmarks/runners/ocannl/bench_gpt_diag.exe
 fixtures="gpt2_mini gpt2_mini_s512 gpt2_mini_s1024"
 treatments="composed two-pass"
 for b in $fold_blocks; do treatments="$treatments fold-$b"; done
+# The training step's treatments (the record's A, D and F): composed, the two-pass forward under
+# the fused backward, and the fold forward under the fused backward.
+train_treatments="composed two-pass-bwd"
+for b in $fold_blocks; do train_treatments="$train_treatments fold-$b-bwd"; done
 echo "gh1003: $(date -u +%FT%TZ) root=$root out=$out cap=$cap repeats=$repeats"
-echo "gh1003: fold blocks: $fold_blocks; fixture dir: $fixture_dir; steps: $*"
+echo "gh1003: fold blocks: $fold_blocks; train fixtures: $train_fixtures; fixture dir: $fixture_dir; steps: $*"
 built=0 proven=0 failed=0
 
 flags_of() {
   case $1 in
     composed) ;;
     two-pass) echo "--ocannl_online_softmax=true" ;;
+    two-pass-bwd) echo "--ocannl_online_softmax=true --ocannl_online_softmax_backward=true" ;;
+    fold-*-bwd)
+      local b=${1#fold-}
+      echo "--ocannl_online_softmax=true --ocannl_online_softmax_backward=true --ocannl_online_softmax_block=${b%-bwd}" ;;
     fold-*) echo "--ocannl_online_softmax=true --ocannl_online_softmax_block=${1#fold-}" ;;
     *) echo "gh1003: unknown treatment $1" >&2; return 1 ;;
   esac
@@ -133,7 +147,7 @@ cell() {
 # The cell list in pass order: forward on odd passes, reversed on even ones.
 pass_cells() {
   local pass=$1 list="" f t
-  for f in $2; do for t in $treatments; do list="$list $f:$t"; done; done
+  for f in $2; do for t in ${3:-$treatments}; do list="$list $f:$t"; done; done
   # Reversed with awk: BSD tail -r does not exist on GNU hosts.
   if [ $((pass % 2)) -eq 0 ]; then echo "$list" | tr ' ' '\n' | sed '/^$/d' | awk '{ l[NR] = $0 } END { for (i = NR; i > 0; i--) print l[i] }'
   else echo "$list" | tr ' ' '\n' | sed '/^$/d'; fi
@@ -195,15 +209,33 @@ for step in "$@"; do
       for pass in 1 2; do
         for c in $(pass_cells "$pass" "gpt2_mini gpt2_mini_s512"); do cell cc "${c%%:*}" "${c#*:}" "r$pass"; done
       done ;;
+    train)
+      # The training step needs the Metal-linkable runner and the train_s512/_s1024 workloads of
+      # the gh-ocannl-1002 measurement (lukstafi/ocannl-staging, gh1002 measurement PR); the
+      # fixtures must match their m4-max records like the inference ones.
+      need_identity train || continue
+      ok=1
+      for f in $train_fixtures; do
+        [ -f "$fixture_dir/$f.safetensors" ] || { echo "gh1003: missing fixture $f"; ok=0; }
+      done
+      if [ "$ok" = 1 ] && python3 fixture_digest.py --check \
+        $(for f in $train_fixtures; do echo "$fixture_dir/$f.safetensors"; done) |
+        tee -a "$out/fixtures.txt" | grep -c "MATCH — m4-max's bytes" | grep -qx "$(echo $train_fixtures | wc -w | tr -d ' ')"; then
+        for pass in 1 2; do
+          for c in $(pass_cells "$pass" "$train_fixtures" "$train_treatments"); do cell metal "${c%%:*}" "${c#*:}" "r$pass"; done
+        done
+      else
+        echo "gh1003: training fixtures missing or not the m4-max records"; failed=1
+      fi ;;
     summary)
-      python3 - "$out" "$treatments" >"$out/summary.md" <<'PY' || failed=1
+      python3 - "$out" "$treatments $train_treatments" >"$out/summary.md" <<'PY' || failed=1
 import json, os, re, statistics, sys
 out, treatments = sys.argv[1], sys.argv[2].split()
 cells = {}
 missing = []
 for name in sorted(os.listdir(out)):
     # The dry cells are a smoke of the matrix, never a repeat: only the numbered passes enter.
-    m = re.fullmatch(r"(cc|metal)-(gpt2_mini\w*)-(composed|two-pass|fold-\d+)-(r\d+)\.out", name)
+    m = re.fullmatch(r"(cc|metal)-(gpt2_mini\w*)-(composed|two-pass(?:-bwd)?|fold-\d+(?:-bwd)?)-(r\d+)\.out", name)
     if not m:
         continue
     rec = None
@@ -231,7 +263,8 @@ for (backend, fixture, treatment), reps in sorted(cells.items(), key=lambda kv: 
     p50s = [r["step_ms"]["p50"] for _, r in reps]
     m = statistics.median(p50s)
     spread = max(r["step_ms"]["p90"] / r["step_ms"]["p10"] for _, r in reps)
-    comp, two = med((backend, fixture, "composed")), med((backend, fixture, "two-pass"))
+    comp = med((backend, fixture, "composed"))
+    two = med((backend, fixture, "two-pass")) or med((backend, fixture, "two-pass-bwd"))
     mma = (reps[0][1].get("tune") or {}).get("shipped_mma")
     loss = ""
     cref = cells.get((backend, fixture, "composed"))
