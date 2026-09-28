@@ -93,6 +93,7 @@ test/operations/micrograd_demo_logging-cc-0-0.log.expected [c ll routine-log] ma
 test/operations/micrograd_demo_logging-hip-0-0.log.expected [c ll routine-log] markers c-prec-cast ll-assign routine-log
 test/operations/micrograd_demo_logging-multidev_cc-0-0.log.expected [c ll routine-log] markers c-prec-cast c-restrict ll-assign routine-log
 test/operations/n3_fwd_with_prec-unoptimized.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end ll-loop
+test/operations/online_softmax_block_mma.expected [derived] beside test/operations/online_softmax_block_mma.ml
 test/operations/reduction_forms.expected [derived] beside test/operations/reduction_forms.ml
 test/operations/scan_loop.expected [ll] markers ll-assign
 test/operations/test_log_stmt_format.c.expected [c] extension .c.expected; markers c-decl-banner c-logic-banner c-prec-cast c-restrict ll-assign routine-log
@@ -206,6 +207,8 @@ test/operations/narrow_storage_compute.ml
     "fmaf("
     "fmaf((float)(a)"
     "vector_size"
+test/operations/online_softmax_block_mma.ml
+    "simdgroup_multiply_accumulate"
 test/operations/reduction_accumulator_residency.ml [also pins text this scan cannot name]
     " = "
     "["

@@ -1289,7 +1289,7 @@ let optop_can_bind_hardware (op : SC.saved_optop) =
   | SC.Retype { ty; _ } -> axis_type_is_hardware ty
   | SC.Swap _ | SC.Unroll _ -> false
   | SC.Tensorize _ | SC.Partition _ | SC.Pad _ | SC.Stage _ | SC.Privatize _ | SC.Expand_zero _
-  | SC.Fuse_epilogue _ | SC.Split_reduce _ ->
+  | SC.Fuse_epilogue _ | SC.Split_reduce _ | SC.Fold_mma _ ->
       true
 
 let optop_family (op : SC.saved_optop) =
@@ -1305,6 +1305,7 @@ let optop_family (op : SC.saved_optop) =
   | SC.Expand_zero _ -> "Expand_zero"
   | SC.Tensorize _ -> "Tensorize"
   | SC.Fuse_epilogue _ -> "Fuse_epilogue"
+  | SC.Fold_mma _ -> "Fold_mma"
   | SC.Split_reduce _ -> "Split_reduce"
 
 (** {2 The composed seed list} *)

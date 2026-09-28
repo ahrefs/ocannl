@@ -12,6 +12,8 @@ type mint_role =
   | Split_reduce_block
   | Split_reduce_inner
   | Split_reduce_combine of int
+  | Fold_mma_lane
+  | Fold_mma_block
 [@@deriving sexp, compare, equal, hash]
 
 type sym_ref = Base of int | Static of int | Minted of int * mint_role
@@ -59,6 +61,7 @@ type saved_optop =
     }
   | Fuse_epilogue of { target : int; shared : bool }
   | Split_reduce of { axis : sym_ref; target : int; num_blocks : int }
+  | Fold_mma of { query : sym_ref; width : int }
 [@@deriving sexp, compare, equal]
 
 type saved_schedule = saved_optop list [@@deriving sexp, compare, equal]
@@ -372,6 +375,10 @@ let to_saved r (sched : Schedule.schedule) : saved_schedule * registry =
               (record r lane (Minted (idx, Tensorize_lane)), saved)
           | Schedule.Fuse_epilogue { target; shared } ->
               (r, Fuse_epilogue { target = resolve_tn_exn r target; shared })
+          | Schedule.Fold_mma { query; lane; block; width } ->
+              let saved = Fold_mma { query = resolve_exn r query; width } in
+              let r = record r lane (Minted (idx, Fold_mma_lane)) in
+              (record r block (Minted (idx, Fold_mma_block)), saved)
           | Schedule.Split_reduce
               { axis; target; num_blocks; block_index; inner_index; combine_indices } ->
               let saved =
@@ -465,6 +472,10 @@ let of_saved canonical (saved : saved_schedule) : Schedule.schedule * registry =
               (record r lane (Minted (idx, Tensorize_lane)), op)
           | Fuse_epilogue { target; shared } ->
               (r, Schedule.Fuse_epilogue { target = tn_of_ref canonical target; shared })
+          | Fold_mma { query; width } ->
+              let op, lane, block = Schedule.fold_mma ~query:(unresolve_exn r query) ~width in
+              let r = record r lane (Minted (idx, Fold_mma_lane)) in
+              (record r block (Minted (idx, Fold_mma_block)), op)
           | Split_reduce { axis; target; num_blocks } ->
               let op, block_index, inner_index, combine_indices =
                 Schedule.split_reduce ~axis:(unresolve_exn r axis)

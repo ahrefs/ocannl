@@ -51,6 +51,12 @@ type optop =
       simd_width : int;
       tile : Register_tile.t option;
     }
+  | Fold_mma of {
+      query : Indexing.symbol;
+      lane : Indexing.symbol;
+      block : Indexing.symbol;
+      width : int;
+    }
   | Fuse_epilogue of { target : Tn.t; shared : bool }
   | Split_reduce of {
       axis : Indexing.symbol;  (** The Serial reduction loop to split, by its index symbol. *)
@@ -79,6 +85,10 @@ let partition ~axis ~breakpoints =
 let tensorize ?tile ~i ~j ~k ~simd_width () =
   let lane = Indexing.get_symbol () in
   (Tensorize { i; j; k; lane; simd_width; tile }, lane)
+
+let fold_mma ~query ~width =
+  let lane = Indexing.get_symbol () and block = Indexing.get_symbol () in
+  (Fold_mma { query; lane; block; width }, lane, block)
 
 let expand_zero ~tn =
   let rank = Array.length (Lazy.force tn.Tn.dims) in
@@ -733,7 +743,7 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
   let loop_ranges = lazy (Low_level.loop_bounds llc) in
   let open Low_level in
   match op with
-  | Stage _ | Privatize _ | Fuse_epilogue _ | Tensorize _ | Split_reduce _ ->
+  | Stage _ | Privatize _ | Fuse_epilogue _ | Tensorize _ | Split_reduce _ | Fold_mma _ ->
       assert false (* Handled by [apply_opt_op]: they need the whole [optimized]. *)
   | Split { axis; factor; outer; inner; outer_index; inner_index } ->
       rewrite_loop ~what:"Schedule.Split" ~sym:axis llc ~f:(fun fc ->
@@ -3930,6 +3940,472 @@ let fuse_epilogue_witness ~target (opt : Low_level.optimized) : string option =
 
 let can_fuse_epilogue ~target opt = Option.is_none (fuse_epilogue_witness ~target opt)
 
+(** {2 The online-softmax block fold on matrix units (gh-ocannl-1003)}
+
+    [Online_softmax]'s fold (under [online_softmax_block]) leaves one scan per query row over the
+    key blocks, with a per-row score tile [S[B]] and output numerator [U[d_v]] the scan body updates
+    in place. Its two contractions -- the block's scores [q . k] and the value update [P . V] -- are
+    each a row's slice of a block matmul, which only the query rows TOGETHER form, and a scan body
+    is out of [Tensorize]'s reach (the scan is opaque to [rewrite_loop]). {!apply_fold_mma}
+    therefore rewrites the fold whole: the query row loop is split by the SIMD width, its inner part
+    becomes the [Workgroup] lane loop -- one lane per query row, each running its row's scan in
+    lockstep with the others, the carried [(m, l)] per-lane scalars -- the tiles gain the block's
+    rows and move to workgroup-shared memory ([S[W, B]], [U[W, d_v]]), and in the body the score
+    slice becomes a per-row zeroing, a barrier, one [Tile_mma] [S += q . k^T] over the block, a
+    barrier and the per-row scale/mask chain; the value update becomes a barrier, one [Tile_mma]
+    [U += P . V_blk] (the store/reload path: [U] is loaded, updated and stored per key block) and a
+    barrier. Everything else stays per-row. The other row loops become [Grid] loops.
+
+    GPU-only: a [Workgroup] loop enclosing barriers has no serial rendering (cc would run lane 0's
+    whole scan before lane 1's while each [Tile_mma] reads every lane's row). The preset emits it
+    only for a kernel holding the fold alone, with the query count a multiple of the width, no key
+    tail (a guard around a barrier is divergent), f32 throughout (the probabilities are newly
+    computed f32 data: never narrowed to tensorize) and block extents the backend's f32 intrinsic
+    tile divides; a [Tile_mma] the renderer then declines takes its lane-0 scalar fallback, which
+    stays correct under the bracketing barriers. *)
+
+let ( let* ) x f = Option.bind x ~f
+
+type fold_site = {
+  fs_rows : floop list;  (** The perfectly nested row loops, outermost first. *)
+  fs_query : Indexing.symbol;  (** The query row loop: the lanes. *)
+  fs_s : Tn.t;  (** The per-row score tile. *)
+  fs_u : Tn.t;  (** The per-row numerator tile. *)
+  fs_body : Low_level.t list;  (** The row body: the tiles' inits, then the scan. *)
+}
+
+(* The two product operands of an accumulation into [tn] at [idcs], in either the FMA or the plain
+   add form. *)
+let accumulated_product ~tn ~idcs (llsc : Low_level.scalar_t) =
+  let open Low_level in
+  let is_acc = function
+    | Get (tn', idcs') -> Tn.equal tn tn' && Array.equal Indexing.equal_axis_index idcs idcs'
+    | _ -> false
+  in
+  let read = function Get (tn, idcs) -> Some (tn, idcs) | _ -> None in
+  let* x, y =
+    match llsc with
+    | Ternop (Ops.FMA, (x, _), (y, _), (acc, _)) when is_acc acc -> Some (x, y)
+    | Binop (Ops.Add, (acc, _), (Binop (Ops.Mul, (x, _), (y, _)), _)) when is_acc acc -> Some (x, y)
+    | Binop (Ops.Add, (Binop (Ops.Mul, (x, _), (y, _)), _), (acc, _)) when is_acc acc -> Some (x, y)
+    | _ -> None
+  in
+  Option.both (read x) (read y)
+
+let non_trivial stmts =
+  List.filter (Low_level.flat_lines stmts) ~f:(function
+    | Low_level.Noop | Low_level.Comment _ -> false
+    | _ -> true)
+
+let mentions_sym sym idcs = Array.exists idcs ~f:(Indexing.axis_index_mentions_symbol sym)
+
+(* The score nest of the fold's scan body: [for j { S[j] := 0; for d { S[j] += x * y }; S[j] :=
+   chain }], with its pieces. *)
+let fold_score_nest ~s_tile (stmt : Low_level.t) =
+  let open Low_level in
+  match stmt with
+  | For_loop { index = j; from_ = 0; to_; body; axis = Serial } -> (
+      let at = [| Indexing.Iterator j |] in
+      let is_cell tn idcs = Tn.equal tn s_tile && Array.equal Indexing.equal_axis_index idcs at in
+      match non_trivial [ body ] with
+      | [
+       Set { tn = z; idcs = zi; llsc = Constant 0.; _ };
+       For_loop { index = d; from_ = 0; to_ = d_to; body = acc; axis = Serial };
+       Set { tn = c; idcs = ci; llsc = chain; _ };
+      ]
+        when is_cell z zi && is_cell c ci -> (
+          match non_trivial [ acc ] with
+          | [ Set { tn; idcs; llsc; _ } ] when is_cell tn idcs ->
+              let* x, y = accumulated_product ~tn ~idcs llsc in
+              Some (j, to_, d, d_to, x, y, chain)
+          | _ -> None)
+      | _ -> None)
+  | _ -> None
+
+(* The value nest: [for e { for j { U[e] += S[j] * v } }]. *)
+let fold_value_nest ~s_tile ~u_tile (stmt : Low_level.t) =
+  let open Low_level in
+  match stmt with
+  | For_loop { index = e; from_ = 0; to_ = e_to; body; axis = Serial } -> (
+      match non_trivial [ body ] with
+      | [ For_loop { index = j; from_ = 0; to_ = j_to; body; axis = Serial } ] -> (
+          match non_trivial [ body ] with
+          | [ Set { tn; idcs = [| Indexing.Iterator e' |]; llsc; _ } ]
+            when Tn.equal tn u_tile && Indexing.equal_symbol e e' -> (
+              let* x, y = accumulated_product ~tn ~idcs:[| Indexing.Iterator e |] llsc in
+              let is_p (tn, idcs) =
+                Tn.equal tn s_tile
+                && Array.equal Indexing.equal_axis_index idcs [| Indexing.Iterator j |]
+              in
+              match (is_p x, is_p y) with
+              | true, false -> Some (e, e_to, j, j_to, y)
+              | false, true -> Some (e, e_to, j, j_to, x)
+              | _ -> None)
+          | _ -> None)
+      | _ -> None)
+  | _ -> None
+
+(* The fold nest a top-level statement is, if it is one. *)
+let find_fold_site (stmt : Low_level.t) : fold_site option =
+  let open Low_level in
+  let rec descend rows = function
+    | For_loop ({ axis = Serial; from_ = 0; _ } as fc) -> (
+        let fl =
+          { index = fc.index; from_ = fc.from_; to_ = fc.to_; body = fc.body; axis = fc.axis }
+        in
+        match non_trivial [ fc.body ] with
+        | [ (For_loop _ as inner) ] -> descend (fl :: rows) inner
+        | body -> Some (List.rev (fl :: rows), body))
+    | _ -> None
+  in
+  let* rows, body = descend [] stmt in
+  let init_of = function
+    | For_loop { index; from_ = 0; body; axis = Serial; _ } -> (
+        match non_trivial [ body ] with
+        | [ Set { tn; idcs = [| Indexing.Iterator i |]; llsc = Constant 0.; _ } ]
+          when Indexing.equal_symbol i index ->
+            Option.map (Online_softmax.fold_tile_role tn) ~f:(fun role -> (role, tn))
+        | _ -> None)
+    | _ -> None
+  in
+  match body with
+  | [ i1; i2; (Scan_loop sc as _scan) ] ->
+      let* r1 = init_of i1 in
+      let* r2 = init_of i2 in
+      let* s_tile, u_tile =
+        match (r1, r2) with
+        | (`Numerator, u), (`Scores, s) | (`Scores, s), (`Numerator, u) -> Some (s, u)
+        | _ -> None
+      in
+      let stmts = non_trivial [ sc.body ] in
+      let* _, _, _, _, x, y, _ = List.find_map stmts ~f:(fold_score_nest ~s_tile) in
+      (* The query row: the loop exactly one score operand indexes -- the one not reading the key
+         block. *)
+      let q_op, k_op =
+        if mentions_sym sc.index (snd y) && not (mentions_sym sc.index (snd x)) then (x, y)
+        else (y, x)
+      in
+      let* () =
+        Option.some_if
+          (mentions_sym sc.index (snd k_op) && not (mentions_sym sc.index (snd q_op)))
+          ()
+      in
+      let* query =
+        match
+          List.filter rows ~f:(fun r ->
+              mentions_sym r.index (snd q_op) && not (mentions_sym r.index (snd k_op)))
+        with
+        | [ r ] -> Some r.index
+        | _ -> None
+      in
+      let* () =
+        Option.some_if
+          (List.exists stmts ~f:(fun s -> Option.is_some (fold_value_nest ~s_tile ~u_tile s)))
+          ()
+      in
+      Some { fs_rows = rows; fs_query = query; fs_s = s_tile; fs_u = u_tile; fs_body = body }
+  | _ -> None
+
+(* [llc] with every access to [tile] (rank 1) redirected to [tile'] (rank 2) at row [lane]. *)
+let rec retile ~pairs (llc : Low_level.t) : Low_level.t =
+  let open Low_level in
+  let target tn idcs =
+    match List.Assoc.find pairs tn ~equal:Tn.equal with
+    | Some (tile', lane) -> (tile', Array.append [| Indexing.Iterator lane |] idcs)
+    | None -> (tn, idcs)
+  in
+  let rec sc (s : scalar_t) : scalar_t =
+    match s with
+    | Get (tn, idcs) ->
+        let tn, idcs = target tn idcs in
+        Get (tn, idcs)
+    | Local_scope ls -> Local_scope { ls with body = retile ~pairs ls.body }
+    | Ternop (op, (a, pa), (b, pb), (c, pc)) -> Ternop (op, (sc a, pa), (sc b, pb), (sc c, pc))
+    | Binop (op, (a, pa), (b, pb)) -> Binop (op, (sc a, pa), (sc b, pb))
+    | Unop (op, (a, pa)) -> Unop (op, (sc a, pa))
+    | Get_dynamic g -> Get_dynamic { g with dyn_value = (sc (fst g.dyn_value), snd g.dyn_value) }
+    | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> s
+  in
+  match llc with
+  | Seq (a, b) -> Seq (retile ~pairs a, retile ~pairs b)
+  | For_loop fc -> For_loop { fc with body = retile ~pairs fc.body }
+  | Scan_loop s ->
+      Scan_loop
+        {
+          s with
+          carried = List.map s.carried ~f:(fun c -> { c with init = sc c.init });
+          body = retile ~pairs s.body;
+        }
+  | If { cond = c, p; body } -> If { cond = (sc c, p); body = retile ~pairs body }
+  | Set s ->
+      let tn, idcs = target s.tn s.idcs in
+      Set { s with tn; idcs; llsc = sc s.llsc }
+  | Set_local (id, v) -> Set_local (id, sc v)
+  | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier -> llc
+  | Zero_out _ | Set_dynamic _ | Set_from_vec _ | Tile_mma _ ->
+      invalid_arg "Schedule.Fold_mma: unexpected statement in the fold's row body"
+
+let apply_fold_mma ~query ~lane ~block ~width (opt : Low_level.optimized) : Low_level.optimized =
+  let open Low_level in
+  let fail msg = invalid_arg ("Schedule.Fold_mma: " ^ msg) in
+  let stmts = non_trivial [ opt.llc ] in
+  let site =
+    match
+      List.filter_map stmts ~f:(fun stmt ->
+          Option.filter (find_fold_site stmt) ~f:(fun s -> Indexing.equal_symbol s.fs_query query))
+    with
+    | [ site ] -> site
+    | [] -> fail ("no online-softmax block fold with query loop " ^ Indexing.symbol_ident query)
+    | _ -> fail "more than one fold over one query loop"
+  in
+  let q_loop = List.find_exn site.fs_rows ~f:(fun r -> Indexing.equal_symbol r.index query) in
+  let sq = q_loop.to_ + 1 in
+  if width <= 0 || sq % width <> 0 then
+    fail (Printf.sprintf "the query count %d is not a multiple of the width %d" sq width);
+  let dims tn = Lazy.force tn.Tn.dims in
+  let bk = (dims site.fs_s).(0) and dv = (dims site.fs_u).(0) in
+  let mint ~label ~like d =
+    let tile =
+      Tn.create ~namespace:tile_namespace
+        (Tn.Specified (Lazy.force like.Tn.storage_prec))
+        ~id:(fresh_tile_id ()) ~label:(label :: like.Tn.label)
+        ~unpadded_dims:(lazy d)
+        ~padding:(lazy None)
+        ()
+    in
+    Tn.Placements.update opt.optimize_ctx.placements tile Tn.Local
+      (Site "1003:fold-mma-shared-tile");
+    ignore (get_node opt.traced_store tile : traced_array);
+    tile
+  in
+  let s2 = mint ~label:"shared" ~like:site.fs_s [| width; bk |] in
+  let u2 = mint ~label:"shared" ~like:site.fs_u [| width; dv |] in
+  let q_sub idx =
+    subst_axis_index ~sym:query ~by:{ terms = [ (width, block); (1, lane) ]; offset = 0 } idx
+  in
+  let pairs = [ (site.fs_s, (s2, lane)); (site.fs_u, (u2, lane)) ] in
+  let per_row llc = retile ~pairs (map_code ~fidx:q_sub llc) in
+  let sub_syms subs idx =
+    List.fold subs ~init:idx ~f:(fun idx (sym, by) -> subst_axis_index ~sym ~by idx)
+  in
+  let iter s = { terms = [ (1, s) ]; offset = 0 } in
+  let row_of s = { terms = [ (width, block); (1, s) ]; offset = 0 } in
+  (* One [Tile_mma] over the block, built by [tensorize_llc] from its scalar micro-kernel, whose
+     lane is the enclosing row loop. *)
+  let tile_mma ~i ~j ~k micro =
+    match
+      tensorize_llc ~zero_fringe:(fun _ -> false) ~i ~j ~k ~lane ~simd_width:width ~tile:None micro
+    with
+    | For_loop { body = Tile_mma _ as tm; _ }, [] -> tm
+    | _ -> fail "the block contraction did not tensorize to a single Tile_mma"
+  in
+  let body_stmt (stmt : t) : t list =
+    match
+      ( fold_score_nest ~s_tile:site.fs_s stmt,
+        fold_value_nest ~s_tile:site.fs_s ~u_tile:site.fs_u stmt )
+    with
+    | Some (j, j_to, d, d_to, (x_tn, x_idcs), (y_tn, y_idcs), chain), _ ->
+        let i' = Indexing.get_symbol () and j' = Indexing.get_symbol () in
+        let k' = Indexing.get_symbol () in
+        let subs = [ (query, row_of i'); (j, iter j'); (d, iter k') ] in
+        let at = [| Indexing.Iterator i'; Indexing.Iterator j' |] in
+        let micro =
+          for_loop
+            {
+              index = i';
+              from_ = 0;
+              to_ = width - 1;
+              axis = Serial;
+              body =
+                for_loop
+                  {
+                    index = j';
+                    from_ = 0;
+                    to_ = j_to;
+                    axis = Serial;
+                    body =
+                      for_loop
+                        {
+                          index = k';
+                          from_ = 0;
+                          to_ = d_to;
+                          axis = Serial;
+                          body =
+                            Set
+                              {
+                                tn = s2;
+                                idcs = at;
+                                llsc =
+                                  apply_op (Ops.Ternop Ops.FMA)
+                                    [|
+                                      Get (x_tn, Array.map x_idcs ~f:(sub_syms subs));
+                                      Get (y_tn, Array.map y_idcs ~f:(sub_syms subs));
+                                      Get (s2, at);
+                                    |];
+                                debug = "";
+                              };
+                        };
+                  };
+            }
+        in
+        let jz = Indexing.get_symbol () and jc = Indexing.get_symbol () in
+        let zero =
+          for_loop
+            {
+              index = jz;
+              from_ = 0;
+              to_ = j_to;
+              axis = Serial;
+              body =
+                Set
+                  {
+                    tn = s2;
+                    idcs = [| Indexing.Iterator lane; Indexing.Iterator jz |];
+                    llsc = Constant 0.;
+                    debug = "";
+                  };
+            }
+        in
+        let chained =
+          per_row
+            (For_loop
+               {
+                 index = jc;
+                 from_ = 0;
+                 to_ = j_to;
+                 axis = Serial;
+                 body =
+                   map_code
+                     ~fidx:(subst_axis_index ~sym:j ~by:(iter jc))
+                     (Set
+                        {
+                          tn = site.fs_s;
+                          idcs = [| Indexing.Iterator j |];
+                          llsc = chain;
+                          debug = "";
+                        });
+               })
+        in
+        [ zero; Workgroup_barrier; tile_mma ~i:i' ~j:j' ~k:k' micro; Workgroup_barrier; chained ]
+    | None, Some (e, e_to, j, j_to, (v_tn, v_idcs)) ->
+        let i' = Indexing.get_symbol () and e' = Indexing.get_symbol () in
+        let k' = Indexing.get_symbol () in
+        let subs = [ (query, row_of i'); (e, iter e'); (j, iter k') ] in
+        let at = [| Indexing.Iterator i'; Indexing.Iterator e' |] in
+        let micro =
+          for_loop
+            {
+              index = i';
+              from_ = 0;
+              to_ = width - 1;
+              axis = Serial;
+              body =
+                for_loop
+                  {
+                    index = e';
+                    from_ = 0;
+                    to_ = e_to;
+                    axis = Serial;
+                    body =
+                      for_loop
+                        {
+                          index = k';
+                          from_ = 0;
+                          to_ = j_to;
+                          axis = Serial;
+                          body =
+                            Set
+                              {
+                                tn = u2;
+                                idcs = at;
+                                llsc =
+                                  apply_op (Ops.Ternop Ops.FMA)
+                                    [|
+                                      Get (s2, [| Indexing.Iterator i'; Indexing.Iterator k' |]);
+                                      Get (v_tn, Array.map v_idcs ~f:(sub_syms subs));
+                                      Get (u2, at);
+                                    |];
+                                debug = "";
+                              };
+                        };
+                  };
+            }
+        in
+        [ Workgroup_barrier; tile_mma ~i:i' ~j:e' ~k:k' micro; Workgroup_barrier ]
+    | None, None -> [ per_row stmt ]
+  in
+  let row_body =
+    List.concat_map site.fs_body ~f:(function
+      | Scan_loop sc ->
+          [
+            Scan_loop
+              {
+                sc with
+                carried =
+                  List.map sc.carried ~f:(fun c -> { c with init = map_scalar ~fidx:q_sub c.init });
+                body = unflat_lines (List.concat_map (non_trivial [ sc.body ]) ~f:body_stmt);
+              };
+          ]
+      | stmt -> [ per_row stmt ])
+  in
+  let lanes =
+    for_loop
+      { index = lane; from_ = 0; to_ = width - 1; axis = Workgroup; body = unflat_lines row_body }
+  in
+  let nest =
+    List.fold_right site.fs_rows ~init:lanes ~f:(fun r body ->
+        if Indexing.equal_symbol r.index query then
+          for_loop { index = block; from_ = 0; to_ = (sq / width) - 1; axis = Grid; body }
+        else for_loop { r with axis = Grid; body })
+  in
+  let outer = (List.hd_exn site.fs_rows).index in
+  let llc = rewrite_loop ~what:"Schedule.Fold_mma" ~sym:outer opt.llc ~f:(fun _ -> nest) in
+  { opt with llc; workgroup_shared = Set.add (Set.add opt.workgroup_shared s2) u2 }
+
+(* The default GPU preset's cooperative fold: [Some] schedule when [opt] is one fold nest the
+   backend's MMA units can take (the conditions in the section comment above). *)
+let fold_mma_schedule ~(limits : Backend_intf.hardware_limits) (opt : Low_level.optimized) :
+    schedule option =
+  let* mma = limits.Backend_intf.mma in
+  let width = mma.Backend_intf.mma_simd_width in
+  let* tm, tn, tk =
+    List.Assoc.find mma.Backend_intf.mma_format_tiles
+      (Backend_intf.Mma_f32, Backend_intf.Mma_f32, Backend_intf.Mma_f32)
+      ~equal:Backend_intf.equal_mma_format_triple
+  in
+  let* site =
+    match non_trivial [ opt.Low_level.llc ] with [ stmt ] -> find_fold_site stmt | _ -> None
+  in
+  let q_loop =
+    List.find_exn site.fs_rows ~f:(fun r -> Indexing.equal_symbol r.index site.fs_query)
+  in
+  let f32 (tn : Tn.t) = Ops.equal_prec (Lazy.force tn.Tn.storage_prec) Ops.single in
+  let scan_stmts =
+    List.concat_map site.fs_body ~f:(function
+      | Low_level.Scan_loop sc -> non_trivial [ sc.body ]
+      | _ -> [])
+  in
+  let* _, j_to, _, d_to, (x_tn, _), (y_tn, _), _ =
+    List.find_map scan_stmts ~f:(fold_score_nest ~s_tile:site.fs_s)
+  in
+  let* _, e_to, _, _, (v_tn, _) =
+    List.find_map scan_stmts ~f:(fold_value_nest ~s_tile:site.fs_s ~u_tile:site.fs_u)
+  in
+  let bk = j_to + 1 and dq = d_to + 1 and dv = e_to + 1 in
+  let divides t n = n % t = 0 in
+  let shared_bytes = 4 * width * (bk + dv) in
+  let ok =
+    List.for_all [ x_tn; y_tn; v_tn; site.fs_s; site.fs_u ] ~f:f32
+    && (q_loop.to_ + 1) % width = 0
+    && divides tm width && divides tn bk && divides tk dq && divides tn dv && divides tk bk
+    && Option.for_all limits.Backend_intf.max_workgroup_memory_bytes ~f:(fun m -> shared_bytes <= m)
+  in
+  Option.some_if ok
+    [
+      (let op, _, _ = fold_mma ~query:site.fs_query ~width in
+       op);
+    ]
+
 let apply_opt_op (opt : Low_level.optimized) (op : optop) : Low_level.optimized =
   match op with
   | Stage
@@ -3948,6 +4424,7 @@ let apply_opt_op (opt : Low_level.optimized) (op : optop) : Low_level.optimized 
         ~pipeline_depth ~tile_prec opt
   | Privatize { target; over; acc_prec } -> apply_privatize ~target ~over ~acc_prec opt
   | Tensorize _ -> apply_tensorize op opt
+  | Fold_mma { query; lane; block; width } -> apply_fold_mma ~query ~lane ~block ~width opt
   | Fuse_epilogue { target; shared } -> apply_fuse_epilogue ~target ~shared opt
   | Split_reduce { axis; target; num_blocks; block_index; inner_index; combine_indices } -> (
       try
@@ -4594,7 +5071,7 @@ let op_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
       match apply_opt_op hermetic op with
       | exception Invalid_argument msg -> Op_illegal msg
       | (_ : Low_level.optimized) -> Op_legal)
-  | Privatize _ | Expand_zero _ | Fuse_epilogue _ ->
+  | Privatize _ | Expand_zero _ | Fuse_epilogue _ | Fold_mma _ ->
       Op_unknown "not modeled by the oracle (the op's own preconditions apply)"
 
 (** [schedule_legality opt sched]: per-op verdicts, each against the code with the preceding ops
@@ -5580,7 +6057,7 @@ let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_lim
                        in
                        [ op ]))))
 
-let default_gpu ?block_size ?min_parallel ?(limits = Backend_intf.no_hardware_limits)
+let default_gpu_presets ?block_size ?min_parallel ?(limits = Backend_intf.no_hardware_limits)
     (opt : Low_level.optimized) : schedule =
   let open Low_level in
   let block_size =
@@ -5682,6 +6159,14 @@ let default_gpu ?block_size ?min_parallel ?(limits = Backend_intf.no_hardware_li
   in
   Option.value ~default:standard
     (lane_geometry ~block_size ~min_parallel ~limits ~standard_threads opt)
+
+let default_gpu ?block_size ?min_parallel ?(limits = Backend_intf.no_hardware_limits)
+    (opt : Low_level.optimized) : schedule =
+  (* The block fold on matrix units comes first: its kernel is one fold nest the presets would give
+     scalar geometry. *)
+  match fold_mma_schedule ~limits opt with
+  | Some schedule -> schedule
+  | None -> default_gpu_presets ?block_size ?min_parallel ~limits opt
 
 let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
   let min_parallel =
@@ -6462,7 +6947,7 @@ let default_schedule_fingerprint ~backend_name =
         String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_min_parallel" ~default:"64")
       in
       [%string
-        "gpu:policy=small-leading-v1+lanes-v1:fission=%{fission#Bool}:block_size=%{bs}:min_parallel=%{mp}"]
+        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1:fission=%{fission#Bool}:block_size=%{bs}:min_parallel=%{mp}"]
     else
       let mp =
         String.strip (Utils.get_global_arg ~arg_name:"cpu_schedule_min_parallel" ~default:"16384")

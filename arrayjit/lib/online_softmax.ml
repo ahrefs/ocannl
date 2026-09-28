@@ -1419,9 +1419,10 @@ let find_backward r (nz : normalizer) : backward option =
    query rows are the max's own loops around the scan, so the carried state is one scalar pair per
    row, and the tiles are the row's own scratch: first written whole ahead of its scan, which is
    what lets a pool-parallel CPU rendering privatize them per chunk and a GPU thread keep them
-   private. A cooperative rendering of the two contractions on matrix units needs query blocks, and
-   the block's rows in the tiles, shared across the lanes that own the rows; that is a layout the
-   scheduling side would give them (splitting the query loop), not this pass.
+   private. The cooperative rendering of the two contractions on matrix units needs query blocks,
+   and the block's rows in the tiles, shared across the lanes that own the rows; the scheduling side
+   gives them that layout ([Schedule.Fold_mma], which recognizes the fold by its tiles:
+   {!fold_tile_role}), not this pass.
 
    The pass reassociates the value contraction ([sum (P / l) * V] becomes [(sum P * V) / l], block
    by block) on top of the normalizer's summation: the same numerics gate. Masked and special-valued
@@ -1447,6 +1448,17 @@ let block () =
    enclosing row loops repeat ([147]) -- which is the soundness argument for carrying it through
    memory, so the test pins that decision, not a request of ours. Memoized like the scope-local
    nodes, per shape: a session sweeping the block size mints one tile per size. *)
+let scores_label = "block_scores"
+let numerator_label = "block_numerator"
+
+let fold_tile_role (tn : Tn.t) =
+  if not (String.equal tn.Tn.namespace namespace) then None
+  else
+    match tn.Tn.label with
+    | l :: _ when String.equal l scores_label -> Some `Scores
+    | l :: _ when String.equal l numerator_label -> Some `Numerator
+    | _ -> None
+
 let tile_node ~label ~(like : Tn.t) ~dims prec =
   let key = label ^ ":" ^ String.concat_array ~sep:"x" (Array.map dims ~f:Int.to_string) in
   Hashtbl.find_or_add minted (like.Tn.uid, key) ~default:(fun () ->
@@ -1692,8 +1704,8 @@ let find_fold r (nz : normalizer) ~block : fold option =
     | (Ops.Double_prec _ as p), _ | _, (Ops.Double_prec _ as p) -> p
     | p, _ -> p
   in
-  let s_tile = tile_node ~label:"block_scores" ~like:nz.x ~dims:[| bk |] mp in
-  let u_tile = tile_node ~label:"block_numerator" ~like:vp.o_tn ~dims:[| dv |] prec in
+  let s_tile = tile_node ~label:scores_label ~like:nz.x ~dims:[| bk |] mp in
+  let u_tile = tile_node ~label:numerator_label ~like:vp.o_tn ~dims:[| dv |] prec in
   (* A tile past the stack threshold would resolve to an [On_device] buffer, one for every row the
      schedule runs in parallel: the rows would race on it. The fold needs thread-private tiles. *)
   let* () =

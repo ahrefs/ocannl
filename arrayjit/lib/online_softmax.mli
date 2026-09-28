@@ -60,8 +60,9 @@
       the composed or fused backward reads what it reads after the two-pass form. It declines -- the
       two-pass form applies -- on a value pass that does not read [e / l] directly (active dropout),
       a reader of the row state it cannot move, scores that are not a contraction of two reads, or
-      anything else the two-pass contract refuses. This is the scalar form: no [Tile_mma] is
-      emitted.
+      anything else the two-pass contract refuses. The pass emits the scalar form; on a GPU with f32
+      matrix units the default schedule renders its two contractions as block [Tile_mma]s, one lane
+      per query row ({!Schedule.optop.Fold_mma}).
 
     What stays as it was in the two-pass form: the score reduction [q * k^T] keeps its own placement
     decision -- the recompute cap [virtualize_max_inline_reduction] decides whether it is replayed
@@ -101,6 +102,11 @@ val block : unit -> int
 
 val set_block : int option -> unit
 (** Programmatic override of [online_softmax_block], like {!set_enabled}. *)
+
+val fold_tile_role : Tnode.t -> [ `Scores | `Numerator ] option
+(** Whether a node is one of the block fold's per-row tiles, and which: the score tile or the output
+    numerator. The scheduling side's cooperative rendering of the fold ({!Schedule.optop.Fold_mma})
+    recognizes the fold by them. *)
 
 val reset : unit -> unit
 (** Drops the memoized scope-local nodes (the tier's session-reset hook; also run ahead of an

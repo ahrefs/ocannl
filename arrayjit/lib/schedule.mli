@@ -328,6 +328,20 @@ type optop =
           is always semantics-preserving. Apply after [Split]s and [Stage]s; [Stage]/[Privatize]
           must come before it. Divisibility by the intrinsic tile (8 on Metal) is a per-call
           emission concern, not checked here. *)
+  | Fold_mma of {
+      query : Indexing.symbol;  (** The fold's query row loop, identified by its index symbol. *)
+      lane : Indexing.symbol;  (** Fresh: the lane loop, one lane per query row of a block. *)
+      block : Indexing.symbol;  (** Fresh: the query-block loop. *)
+      width : int;  (** The SIMD width: the query block, and the lane loop's extent. *)
+    }
+      (** The online-softmax block fold on matrix units (gh-ocannl-1003): rewrites the whole fold
+          nest [Online_softmax] emits under [online_softmax_block] -- the query loop split by
+          [width] into [block] ([Grid]) and [lane] ([Workgroup]), the other row loops [Grid], the
+          per-row tiles re-minted with the block's rows in workgroup-shared memory, the score and
+          value contractions in the scan body each one [Tile_mma] over the block between barriers,
+          everything else per lane. GPU-only (a [Workgroup] loop enclosing barriers has no serial
+          rendering); the query count must be a multiple of [width], and the fold must have no key
+          tail. Emitted by {!default_gpu}; see [apply_fold_mma]. *)
   | Fuse_epilogue of { target : Tn.t; shared : bool }
       (** Epilogue fusion (gh-ocannl-486): fold the sole-consumer, index-space-compatible
           elementwise tail that re-reads [target] — the typical bias add / activation / residual
@@ -452,6 +466,9 @@ val partition_breakpoints : axis:Indexing.symbol -> Low_level.t -> int list
     for the unrolled index, so one source guard's copies flip at different points and the result is
     their union (each copy filtered by its own range). Raises [Invalid_argument] when no loop binds
     [axis]. *)
+
+val fold_mma : query:Indexing.symbol -> width:int -> optop * Indexing.symbol * Indexing.symbol
+(** [fold_mma ~query ~width] mints the lane and block symbols of a {!constructor-Fold_mma}. *)
 
 val expand_zero : tn:Tn.t -> optop * Indexing.symbol list
 (** Builds an {!constructor-Expand_zero} with one fresh symbol per axis of [tn] (forcing [tn]'s

@@ -1,0 +1,28 @@
+--- leg 1: query counts a multiple of the SIMD width, key blocks the tile divides ---
+seq 64, head width 32, block 8: two Tile_mma statements, the score and the value contraction, both intrinsics: true
+seq 64, head width 32, block 8: the generated kernel emits the matrix-unit intrinsic: true
+seq 64, head width 32, block 8: without f32 MMA units the scalar fold ships, no Tile_mma emitted: true
+seq 64, head width 32, block 8: matches the composed output within 1e-4 relative: true
+seq 64, head width 32, block 16: two Tile_mma statements, the score and the value contraction, both intrinsics: true
+seq 64, head width 32, block 16: the generated kernel emits the matrix-unit intrinsic: true
+seq 64, head width 32, block 16: without f32 MMA units the scalar fold ships, no Tile_mma emitted: true
+seq 64, head width 32, block 16: matches the composed output within 1e-4 relative: true
+seq 64, head width 32, block 32: two Tile_mma statements, the score and the value contraction, both intrinsics: true
+seq 64, head width 32, block 32: the generated kernel emits the matrix-unit intrinsic: true
+seq 64, head width 32, block 32: without f32 MMA units the scalar fold ships, no Tile_mma emitted: true
+seq 64, head width 32, block 32: matches the composed output within 1e-4 relative: true
+seq 96, head width 16, block 32: two Tile_mma statements, the score and the value contraction, both intrinsics: true
+seq 96, head width 16, block 32: the generated kernel emits the matrix-unit intrinsic: true
+seq 96, head width 16, block 32: without f32 MMA units the scalar fold ships, no Tile_mma emitted: true
+seq 96, head width 16, block 32: matches the composed output within 1e-4 relative: true
+--- leg 2: what keeps the scalar fold ---
+a query count not a multiple of the SIMD width: no Tile_mma emitted: true
+a query count not a multiple of the SIMD width: matches the composed output within 1e-4 relative: true
+a key tail (the block does not divide the key count): no Tile_mma emitted: true
+a key tail (the block does not divide the key count): matches the composed output within 1e-4 relative: true
+--- leg 3: the training step, the fold forward under the fused backward ---
+the step's fold renders both contractions as intrinsics: true
+a parameter gradient agrees with the composed step within 1e-4 relative: true
+a parameter gradient agrees with the composed step within 1e-4 relative: true
+a parameter gradient agrees with the composed step within 1e-4 relative: true
+a parameter gradient agrees with the composed step within 1e-4 relative: true
