@@ -2525,7 +2525,11 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   compile-inclusive; and without `dune clean`, `--force` does not re-run the tests at all.
   `tools/test-test-run.sh` fakes the topology (`OCANNL_TOOL_KFD_TOPOLOGY`), the device
   (`OCANNL_TOOL_NVIDIA_DEVICE`) and the fleet's name for the box (`FLEET_LOCAL_BOX`,
-  `FLEET_HOSTNAME_MAP`) as it fakes the bridge.
+  `FLEET_HOSTNAME_MAP`) as it fakes the bridge. All three device probes default, harness-wide,
+  to paths that do not exist (`hermetic_probes`, as `tools/test-mutation-run.sh` does); a leg
+  opts in to a device and goes back through that function, never `unset` — an unset or empty
+  probe falls back to the real device, and on minix the lifecycle and repeat legs' runs then
+  took `-j 4` while still passing (gh-ocannl-1108). Leg 70 runs last to catch such a leak.
 - **`tools/test-run.sh run`/`start` takes the fleet's run-time correctness slot itself**
   (gh-ocannl-1004), as `fleet-worker.sh execution slot --cpu|--gpu`, on any box whose deployed
   `fleet-worker.sh execution slot --probe` answers (lukstafi/ludics-lite's issue-wave skill; the
