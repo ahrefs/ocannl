@@ -27,10 +27,12 @@
 #                 two passes forward/reversed): composed, two-pass-bwd (online forward, fused
 #                 backward: treatment D) and fold-B-bwd (the fold forward under the fused backward:
 #                 treatment F). Needs the gh-ocannl-1002 measurement's runner fix and workloads.
-#     summary     OUT/summary.md from the numbered passes' result lines (not the dry cells): median p50 per cell, the p50 of each
-#                 repeat, the widest p90/p10 of the cell's repeats, the ratio to the same fixture's
-#                 composed cell and to its two-pass cell, the shipped mma census, and the losses'
-#                 agreement with the composed cell.
+#     summary     OUT/summary.md from the numbered passes' result lines (not the dry cells): median
+#                 p50 per cell, the p50 of each repeat, the widest p90/p10 of the cell's repeats, the
+#                 ratio to the same fixture's composed cell and to its two-pass cell, the shipped mma
+#                 census where the runner reports one (only a tuned cell carries `tune.shipped_mma`;
+#                 the untuned matrix's per-contraction status is the seg step's census), and the
+#                 losses' agreement with the composed cell.
 #   A measurement step needs `build` and `provenance` earlier in the same invocation: _build/ is
 #   ignored by git, so the clean-tree check cannot vouch for binaries an earlier checkout left
 #   there, and a measurement is only evidence beside the identity it was taken on.

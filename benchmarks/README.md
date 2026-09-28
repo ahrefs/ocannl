@@ -84,7 +84,10 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   batch 1: with `gpt2_mini_train_s1024` they are a sequence sweep at fixed batch, which separates
   quadratic buffers from linear saved state (the constant-token fixtures above conflate batch and
   sequence scaling). `gh1002_cells.py` runs the gh-ocannl-1002 matrix over all of them
-  ([report-gh1002-fused-backward.md](report-gh1002-fused-backward.md)).
+  ([report-gh1002-fused-backward.md](report-gh1002-fused-backward.md)). `gh1003_fold_cells.sh` runs the
+  gh-ocannl-1003 block-fold matrix (the composed, two-pass and fold-B attention forms on the
+  inference fixtures, per-segment attribution, cc, and the two training fixtures under the fused
+  backward; [report-gh1003-block-fold.md](report-gh1003-block-fold.md)).
 
 ## Layout
 

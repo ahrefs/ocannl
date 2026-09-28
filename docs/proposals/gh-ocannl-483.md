@@ -100,8 +100,11 @@ loop nest — schedulable, and the shape a fused backward recomputes from `(m, l
   the normalizer scan and the hoisted value pass become one scan per row over key blocks, with
   the block's scores and the row's output numerator in minted tiles the scan body updates in
   place, so the scores are read once and no `[seq, seq]` buffer is needed at any recompute cap.
-  It is the scalar form; putting its two contractions on matrix units is a scheduling-side
-  cooperative rendering (the record's step 2 onward), which that record tracks.
+  On a GPU whose matrix units take f32 the default schedule renders the fold cooperatively
+  (`Schedule.Fold_mma`, lanes as query rows, both contractions one block `Tile_mma` each), cc
+  keeps the scalar form; measured in
+  [report-gh1003-block-fold.md](../../benchmarks/report-gh1003-block-fold.md) (Metal: 0.82x of
+  composed at seq 128, 0.48x at seq 1024; `approximate` takes `online_softmax_block=16`).
 - **Dropout between the probabilities and the value reduction** is handled (the chain from `l` to
   the reduction's operand may pass through any elementwise nests); a mask applied *after* the
   normalization is not recognized as such and simply leaves the shape alone.
