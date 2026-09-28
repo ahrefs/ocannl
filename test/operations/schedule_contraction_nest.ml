@@ -305,7 +305,8 @@ let leg ~tag ~ko_extents ~nk ?(companion = false) ~build () =
    (unstaged, staged, batch-grid) under the 5% tolerance schedule_batched_mma uses for gfx1151's
    not-exactly-rounded WMMA, and checking that the emitted source reaches the backend's intrinsic
    rather than the scalar fallback. Where the device advertises no such tile (cc; an f32-only
-   capability) the leg is reported skipped.
+   capability) the leg is reported skipped; where it does, a shape the site fails to seed fails the
+   shape's claims (gh-ocannl-1115) -- the gate is the capability, never the seeds under test.
 
    No pipelined-staged shape here: depth twins are seeded only for staged operands of at least 4
    bytes -- the async arms' element floor ([Autotune.sketch_params.sk_depth]) -- so a bf16 site
@@ -325,10 +326,10 @@ let bf16_leg ~tag ~build =
       ("batch-grid", fun q -> q.Autotune.sk_batch_grid && q.Autotune.sk_depth = 1);
     ]
   in
-  let skip_shape what =
-    skipped (tag ^ " bf16: the " ^ what ^ " candidate compiles and runs");
-    skipped (tag ^ " bf16: the " ^ what ^ " candidate agrees with the serial twin");
-    skipped (tag ^ " bf16: the " ^ what ^ " candidate renders the tensor-core intrinsic")
+  let shape_claims what =
+    List.map
+      [ "compiles and runs"; "agrees with the serial twin"; "renders the tensor-core intrinsic" ]
+      ~f:(fun c -> tag ^ " bf16: the " ^ what ^ " candidate " ^ c)
   in
   if not (on_gpu && has_uniform_bf16_tile) then begin
     Stdio.eprintf
@@ -336,7 +337,7 @@ let bf16_leg ~tag ~build =
       backend_name;
     skipped (tag ^ " bf16: the multi-axis site seeds the backend's advertised tile");
     skipped (tag ^ " bf16: no pipelined twin is seeded below the async arms' 4-byte element floor");
-    List.iter shapes ~f:(fun (what, _) -> skip_shape what)
+    List.iter shapes ~f:(fun (what, _) -> List.iter (shape_claims what) ~f:skipped)
   end
   else begin
     let close a b = Float.(abs (a - b) <= 0.05 * max 1. (abs b)) in
@@ -361,8 +362,13 @@ let bf16_leg ~tag ~build =
     List.iter shapes ~f:(fun (what, pick) ->
         match List.find seeds ~f:pick with
         | None ->
-            Stdio.eprintf "%s: no %s tensorized seed for this site on %s\n" tag what backend_name;
-            skip_shape what
+            (* The gate above is the advertised capability, not this seed list (gh-ocannl-1115):
+               under it the site seeds every one of these shapes, so a missing one is a seeding
+               regression and fails its claims rather than skipping them. *)
+            Stdio.eprintf
+              "%s: no %s tensorized seed for this site on %s, which advertises the tile\n" tag what
+              backend_name;
+            List.iter (shape_claims what) ~f:(fun c -> p c false)
         | Some q ->
             let tensorized = ref false in
             let n_ran, n_match =
@@ -373,11 +379,9 @@ let bf16_leg ~tag ~build =
                       Ir.C_syntax.Tensorized)
                 ~tag ~routine ~fwd ~outs:[ cand ] ~wants:[ want ] ~close [ q ]
             in
-            p (tag ^ " bf16: the " ^ what ^ " candidate compiles and runs") (n_ran = 1);
-            p (tag ^ " bf16: the " ^ what ^ " candidate agrees with the serial twin") (n_match = 1);
-            p
-              (tag ^ " bf16: the " ^ what ^ " candidate renders the tensor-core intrinsic")
-              (n_ran = 1 && !tensorized))
+            List.iter2_exn (shape_claims what)
+              [ n_ran = 1; n_match = 1; n_ran = 1 && !tensorized ]
+              ~f:p)
   end
 
 (* The pipelined-staged tensorized shape (gh-ocannl-487) through the real mma hook, on the f32 out

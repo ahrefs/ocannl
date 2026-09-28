@@ -821,3 +821,43 @@ let read_before_write (o : LL.optimized) tn =
 
 (** Whether [tn] carries no assignment in this routine. *)
 let read_only (o : LL.optimized) tn = (Hashtbl.find_exn o.LL.traced_store tn).LL.read_only
+
+(** {1 Tensorized-seed capability gates} *)
+
+(** Whether the backend advertises a tensorized pipeline for a matmul site whose operands are [a]
+    and [b] and whose destination is [d] (gh-ocannl-1115) — the gate a test puts on the PRESENCE of
+    tensorized seeds, so that where the capability holds an absent seed is a failed claim, never a
+    vacuous skip. A gate read off the seed list under test cannot fail on the seeding regression it
+    exists to catch.
+
+    On a GPU backend the capability is the device's mma descriptor carrying a format tile for the
+    nodes' storage precisions, resolved by the seeder's own {!Autotune.mma_tile_for_precisions}
+    (which also applies the tf32 policy). On a CPU backend it is the token capability the C backends
+    advertise for the register-tiled [Tile_mma] rendering ([limits.mma] present).
+
+    [`Withheld] carries the skip's aggregation, derived rather than keyed on a backend name: when
+    the tile appears once {!Ir.Numerics.t.tf32_matmuls} is on, the missing tile is the run's policy
+    choice ([`Environment], CUDA at the repository default), otherwise the backend's ([`Backend]:
+    HIP's rocWMMA has no f32-input shape at all, cc's token capability no GPU tile). *)
+let tensorized_matmul_capability ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits) ~a ~b
+    ~d =
+  let prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
+  let gpu_tile mma =
+    Option.is_some
+      (Autotune.mma_tile_for_precisions mma ~a_prec:(prec a) ~b_prec:(prec b) ~d_prec:(prec d))
+  in
+  match limits.Ir.Backend_intf.mma with
+  | Some _ when (not is_gpu) && is_cpu -> `Advertised
+  | Some mma when is_gpu && gpu_tile mma -> `Advertised
+  | Some mma when is_gpu ->
+      let saved = Ir.Numerics.get () in
+      let under_tf32 =
+        Exn.protect
+          ~finally:(fun () -> Ir.Numerics.set_policy saved)
+          ~f:(fun () ->
+            Ir.Numerics.set_policy { saved with Ir.Numerics.tf32_matmuls = true };
+            gpu_tile mma)
+      in
+      `Withheld
+        (if under_tf32 && not saved.Ir.Numerics.tf32_matmuls then `Environment else `Backend)
+  | Some _ | None -> `Withheld `Backend

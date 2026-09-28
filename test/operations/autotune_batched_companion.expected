@@ -1,4 +1,5 @@
 bc: scalar GPU seeds exist for the batched site: true
+bc: tensorized GPU seeds exist for the batched site where the backend advertises the tile: true
 bc: no seed declines on companion coverage: true
 bc: every constructed schedule Grid-blocks the minor output axis, never leaving it serial: true
 bc: the minor output axis carries block-level parallelism wherever the geometry allows: true

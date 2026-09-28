@@ -994,3 +994,14 @@ files.
   seed (base compile, analyses, the ~2 s baseline's timing window), then timing windows dominate
   compiles about 9:1 on second-scale candidates — so on cc a candidate's cost is its sample count
   times its step, not its compile. The format is the interface's (`Autotune.progressf`).
+- A test claims a tensorized seed's PRESENCE wherever the backend advertises the capability, and
+  gates on that capability, never on the seed list its claims are about (gh-ocannl-1115). Gated on
+  the seeds, a seeding regression — or a claim asking for a seed the seeder excludes by
+  construction, like the bf16 pipelined-staged shape below the 4-byte async floor — skips on every
+  backend, and skip coverage notices only once every backend skips.
+  `Ll_test.tensorized_matmul_capability` resolves the site nodes' storage precisions through the
+  seeder's own `Autotune.mma_tile_for_precisions` on GPU (the token capability on CPU) and derives a
+  withheld tile's skip aggregation (`Environment` when `tf32_matmuls` would supply it) instead of
+  keying on a backend name. For an f32 site that leaves Metal as the only GPU evaluating those
+  claims at default config (CUDA needs tf32, HIP has no f32 shape), and CI's macOS job runs cc, not
+  Metal.
