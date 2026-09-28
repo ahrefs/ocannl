@@ -4,7 +4,9 @@
 # measured correctness slots set -- sourced by tools/sweep.sh (whose
 # `unit_jobs` decides a sweep unit's width) and by tools/test-run.sh (which
 # injects the local one into a manual run that expressed no width at all, the
-# tightest any backend the batch can hold meets). Sourced, never executed.
+# tightest any backend the batch can hold meets) -- and evaluated on the far
+# side of tools/machine-verify.sh, whose trip without -j takes the local one
+# for its backend on the verified box (gh-ocannl-986). Sourced, never executed.
 #
 # Why one file rather than a constant in each: the cap was sweep policy, written
 # into `unit_jobs` and a bullet of

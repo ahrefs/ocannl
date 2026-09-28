@@ -1944,7 +1944,18 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   asserts `_build/default/test/config/ocannl_backend.txt`; an unrestricted test alias is reported
   only as passing under that configuration, since the alias may be backend-independent, while a
   runnable probe must print its own backend/device evidence. An `@check`-only trip says explicitly
-  that it compiled code and executed no backend. Golden mode prints the corrected `.actual`
+  that it compiled code and executed no backend. The usage header says the backend requirement
+  where the operations are listed, with a `--backend cc --test` example: written from a header
+  that listed `--test` as free-standing, a worker's first trip was refused before any ssh and cost
+  a reservation round-trip (gh-ocannl-986). The dune width defaults to BOX's own, not a flat 4
+  (gh-ocannl-986): the per-slot cap `tools/test-run.sh` injects into a batch there (bullets
+  below), so a GPU leg a worker runs without `-j` stays within the width the box's correctness
+  slots were measured at. It is decided on the far side, where the devices are, by the CALLER's
+  `tools/box-jobs.sh` -- passed as an argument like the supervisor source, so a verified commit
+  older than the table cannot change it -- evaluated in a bash child (the table is bash; the
+  procedure is POSIX sh) after the ambient `OCANNL_*` clearing, so it probes the real devices.
+  Where the table names no cap (a CPU backend off rog, metal, an `@check`-only trip) the width is
+  4; an explicit `-j` always wins; the provenance's `dune jobs:` line says which it was. Golden mode prints the corrected `.actual`
   contents and an apply-ready patch, then re-runs the alias before accepting it so a second failing
   dependency cannot hide behind a promotable diff. Before reset, source status (with untracked-file
   reporting forced independently of Git configuration) must name exactly the listed golden
@@ -1963,7 +1974,11 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   checkout/environment observations, failure reasons, timeout statuses, which transport carried the
   trip (observed at the fake ssh), placement refusals, cleanup ownership and golden restoration;
   source-assertion, commit-containment, namespace-clearing, golden-scope, local-address and
-  environment-clearing mutants must fail the same oracles.
+  environment-clearing mutants must fail the same oracles. The width legs run the subjects from a
+  scratch copy of `tools/` whose `box-jobs.sh` has one line appended, pointing the table's
+  `OCANNL_TOOL_*` device probes and `FLEET_LOCAL_BOX` at the case's control file (the far side
+  clears every ambient `OCANNL_*`, as it must); each observes every build's `-j` at the fake
+  dune, and a mutant restoring the flat default must fail them.
 - `tools/ci-compiler-test.sh` is the cheap local proxy for a compiler-sensitive Ubuntu CI failure
   (gh-ocannl-846): it downloads the GCC 13 packages with `apt-get download`, extracts them into a
   scratch prefix with `dpkg-deb -x`, and runs exactly one named `runtest-` alias in a fresh Dune

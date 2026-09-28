@@ -12,7 +12,7 @@
 # caller passes in, never timeout(1), which macOS does not ship.
 set -u
 
-[ $# -ge 12 ] || {
+[ $# -ge 13 ] || {
   echo "machine-verify-far.sh: run tools/machine-verify.sh, which supplies this procedure's arguments" >&2
   exit 2
 }
@@ -28,7 +28,8 @@ trip_cap=$9
 jobs=${10}
 transport=${11}
 capped_perl=${12}
-shift 12
+box_jobs_source=${13}
+shift 13
 
 # Non-login SSH shells on rog need both locations; harmless when the
 # directories do not exist (tools/sweep.sh uses the same prefix), as on macOS.
@@ -218,6 +219,32 @@ remaining_switch_ocannl_names=$(printf '%s\n' "$sanitized_switch_environment" |
   fail "opam switch OCANNL variables remain after sanitization: $remaining_switch_ocannl_names"
 echo "machine-verify: opam switch OCANNL configuration: stripped"
 
+# The dune width. An explicit -j is the caller's; otherwise it is this box's
+# own, from the caller's tools/box-jobs.sh (passed in, like the supervisor)
+# evaluated HERE, where the devices it probes are: the per-slot cap
+# tools/test-run.sh would inject into a batch of this backend on this box, so
+# a GPU leg run without -j no longer runs above it (gh-ocannl-986). The table
+# is bash, which this procedure is not, so a bash child evaluates it; the
+# ambient OCANNL_TOOL_* probe overrides are already cleared above, so it reads
+# the real devices. Where it names no cap, 4.
+if [ -n "$jobs" ]; then
+  jobs_story="$jobs (explicit -j)"
+else
+  width=$(capped bash -c '
+    eval "$1" || exit 1
+    hazard=$(box_jobs_local_hazard "$2")
+    printf "%s %s\n" "${hazard:-none}" "$(box_jobs_hazard_cap "$hazard")"
+  ' machine-verify-width "$box_jobs_source" "$backend") ||
+    fail "cannot resolve this box's dune width from tools/box-jobs.sh; pass -j N to name one"
+  hazard=${width%% *}
+  jobs=${width#* }
+  case $hazard:$jobs in
+    none:) jobs=4 jobs_story="4 (default; tools/box-jobs.sh names no cap for backend ${backend:-none} here)" ;;
+    *:*[!0-9]* | *:0* | *:) fail "tools/box-jobs.sh answered an unreadable width: $width" ;;
+    *) jobs_story="$jobs (this box's width for $backend: tools/box-jobs.sh hazard $hazard)" ;;
+  esac
+fi
+
 actual_box=$(hostname 2>/dev/null || uname -n)
 echo "=== machine-verify provenance ==="
 echo "requested box: $requested_box"
@@ -233,7 +260,7 @@ else
 fi
 echo "requested backend: ${backend:-none (@check compiles only)}"
 echo "expected optional library: ${expect_lib:-none}"
-echo "dune jobs:     $jobs"
+echo "dune jobs:     $jobs_story"
 echo "per-command cap: ${cap}s"
 echo "whole-trip cap: ${trip_cap}s"
 echo "PATH prefix:   /usr/local/cuda/bin:/usr/lib/wsl/lib"
