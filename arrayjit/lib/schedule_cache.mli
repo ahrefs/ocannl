@@ -208,6 +208,17 @@ val codegen_tag : limits:Backend_intf.hardware_limits -> unit -> string
     [limits] record, which describes the device candidates are generated, rendered and timed
     against; and, inside it, the backend's own {!Ir.Backend_intf.hardware_limits.codegen_tag}. *)
 
+type trajectory = {
+  search_shape : string;
+      (** The storing search's candidate-shaping settings the key does not carry (beam width,
+          rounds, keep fraction, split-reduce cap, seed block sizes, bound pruning), rendered by
+          [Autotune.tune]. A trajectory is an equal-depth record only for a search that times the
+          same candidates in the same order, so a replay under another shape reads it as absent. *)
+  steps : (int * float) list;
+}
+[@@deriving sexp]
+(** A search's timed record (gh-ocannl-1110), as a cache entry keeps it. *)
+
 type entry = {
   version : int;
   backend : string;
@@ -262,7 +273,7 @@ type entry = {
           what "the default pipeline" means without missing the cache. A replaying process compares
           fingerprints and drops a stale [default_ms] (the schedule itself stays valid — only this
           diagnostic is config-relative). *)
-  best_steps : (int * float) list option; [@sexp.option]
+  best_steps : trajectory option; [@sexp.option]
       (** The storing search's best-so-far as a step function of its admitted timings
           ([Autotune.report.best_steps], gh-ocannl-1110): a measurement of the program like
           [mma_best_ms], replayed for the same reason — the flip chain abandons a hopeless flip

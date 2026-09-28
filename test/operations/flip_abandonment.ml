@@ -145,13 +145,13 @@ let clean_cache dir =
    record a flip is abandoned against. Nothing is cached after a refused window, so on a box whose
    load refused one the claim is skipped rather than decided. *)
 let cache_replay comp =
-  let tune_once () =
+  let tune_once ?(beam_width = k) () =
     let report = ref None in
     let _ =
       with_clock
         (fun i -> if i <= 1 then 3.0 else 2.0)
         (fun () ->
-          Autotune.tune ~search:true ~beam_width:k ~rounds:0 ~repeats:1 ~timing:Autotune.Isolated
+          Autotune.tune ~search:true ~beam_width ~rounds:0 ~repeats:1 ~timing:Autotune.Isolated
             ~cache_dir:"autotune_cache_flip_abandonment"
             ~report:(fun r -> report := Some r)
             (Context.auto ()) comp Ir.Indexing.Empty)
@@ -161,6 +161,9 @@ let cache_replay comp =
   clean_cache "autotune_cache_flip_abandonment";
   let first = tune_once () in
   let second = tune_once () in
+  (* The cache key does not carry the beam width, so this replays the same entry; its trajectory was
+     timed in another candidate order, so it must not stand as an equal-depth record. *)
+  let other_shape = tune_once ~beam_width:(k + 1) () in
   clean_cache "autotune_cache_flip_abandonment";
   gated ~aggregation:`Environment
     ~when_:(first.Autotune.timings_contended = 0)
@@ -170,7 +173,14 @@ let cache_replay comp =
     && (not (List.is_empty first.Autotune.best_steps))
     && List.equal
          (fun (a, x) (b, y) -> a = b && Float.equal x y)
-         second.Autotune.best_steps first.Autotune.best_steps)
+         second.Autotune.best_steps first.Autotune.best_steps);
+  gated ~aggregation:`Environment
+    ~when_:(first.Autotune.timings_contended = 0)
+    ~on:"a contended timing window (nothing was cached)"
+    "a replay under another search shape abandons nothing, where the same shape's replay would"
+    (Poly.equal other_shape.Autotune.outcome Autotune.Cache_replay
+    && abandons second.Autotune.best_steps [ (1, 1e9) ]
+    && not (abandons other_shape.Autotune.best_steps [ (1, 1e9) ]))
 
 (* An [autotune-progress:] line's [key=value] fields; values are unquoted words here. *)
 let progress_fields line =
@@ -205,9 +215,21 @@ let with_stderr_captured f =
    flip's per [flip_script] (1-based within the flip's search). The searches are told apart by how
    many reports have been delivered when a window is admitted: A's search delivers the first, B's
    the second. *)
-let executed_chain comp t2 expected ~flip_script =
+exception Arm_a_dies
+
+let executed_chain ?fail_arm_a_at comp t2 expected ~flip_script =
   let arm_reports = ref [] and flip_reports = ref [] and shipped = ref [] in
   let delivered () = List.length !arm_reports + List.length !flip_reports in
+  (* [fail_arm_a_at]: arm A's search dies as its attempt of that ordinal starts, through the
+     containment tests' fault-injection seam — after it has timed something, so its report carries a
+     partial record. *)
+  let arm_a_attempts = ref 0 in
+  let old_attempt = !Autotune.on_candidate_attempt in
+  (Autotune.on_candidate_attempt :=
+     fun _ ->
+       if delivered () = 0 then (
+         Int.incr arm_a_attempts;
+         if Option.exists fail_arm_a_at ~f:(fun n -> !arm_a_attempts = n) then raise Arm_a_dies));
   let flip_window = ref 0 in
   let script _ =
     match delivered () with
@@ -219,22 +241,25 @@ let executed_chain comp t2 expected ~flip_script =
   in
   let (got, _), lines =
     with_stderr_captured (fun () ->
-        with_clock script (fun () ->
-            let ctx, routine =
-              Train.tune_placements ~beam_width:k ~rounds:1 ~repeats:1 ~cache_dir:""
-                ~report:(fun r -> arm_reports := r :: !arm_reports)
-                ~flip_report:(fun r -> flip_reports := r :: !flip_reports)
-                ~on_ship:(fun what -> shipped := what :: !shipped)
-                ~inline_flips:1 (Context.auto ()) t2 comp Ir.Indexing.Empty
-            in
-            let ctx = Context.run ctx routine in
-            Context.get_values ctx t2.Tensor.value))
+        Exn.protect
+          ~finally:(fun () -> Autotune.on_candidate_attempt := old_attempt)
+          ~f:(fun () ->
+            with_clock script (fun () ->
+                let ctx, routine =
+                  Train.tune_placements ~beam_width:k ~rounds:1 ~repeats:1 ~cache_dir:""
+                    ~report:(fun r -> arm_reports := r :: !arm_reports)
+                    ~flip_report:(fun r -> flip_reports := r :: !flip_reports)
+                    ~on_ship:(fun what -> shipped := what :: !shipped)
+                    ~inline_flips:1 (Context.auto ()) t2 comp Ir.Indexing.Empty
+                in
+                let ctx = Context.run ctx routine in
+                Context.get_values ctx t2.Tensor.value)))
   in
   p_all2 "the shipped routine computes the plain compile's values" got expected ~f:approx;
   let events name =
     List.filter lines ~f:(fun f -> Option.equal String.equal (field f "event") (Some name))
   in
-  (List.rev !flip_reports, !shipped, events)
+  (List.rev !arm_reports, List.rev !flip_reports, !shipped, events)
 
 let () =
   verdicts ();
@@ -259,7 +284,7 @@ let () =
   cache_replay comp;
   p "autotune_progress is on for this run" (Autotune.progress_enabled ());
   (* A hopeless flip: abandoned, reported, and the A/B winner ships. *)
-  let flips, shipped, events = executed_chain comp t2 expected ~flip_script:(fun _ -> 100.0) in
+  let _, flips, shipped, events = executed_chain comp t2 expected ~flip_script:(fun _ -> 100.0) in
   p "the hopeless flip's report is an abandonment after beam_width timed candidates"
     (match flips with
     | [ r ] -> (
@@ -287,7 +312,7 @@ let () =
     | _ -> false);
   (* The negative control: within the ratio at depth k, then faster than arm A — searched in full,
      and it ships. *)
-  let flips, shipped, events =
+  let _, flips, shipped, events =
     executed_chain comp t2 expected ~flip_script:(fun i -> if i <= k then 5.0 else 1.0)
   in
   p "a flip that becomes profitable is searched in full"
@@ -300,4 +325,19 @@ let () =
     | [ f ] ->
         Option.equal String.equal (field f "abandoned") (Some "0")
         && Option.equal String.equal (field f "improved") (Some "true")
-    | _ -> false)
+    | _ -> false);
+  (* A failed arm A abandons nothing: its partial record is no incumbent, and a flip from its
+     context may be what ships. The same hopeless flip is searched in full. *)
+  let arms, flips, shipped, _ =
+    executed_chain ~fail_arm_a_at:3 comp t2 expected ~flip_script:(fun _ -> 100.0)
+  in
+  p "arm A died after timing something"
+    (match arms with
+    | a :: _ ->
+        Option.is_some (Autotune.terminal_failure a) && not (List.is_empty a.Autotune.best_steps)
+    | [] -> false);
+  p "against a failed arm A the hopeless flip is searched in full"
+    (match flips with
+    | [ r ] -> Poly.equal r.Autotune.outcome Autotune.Searched && r.Autotune.candidates_timed > k
+    | _ -> false);
+  p "and arm B, the only better shippable result, ships" (List.equal String.equal shipped [ "B" ])

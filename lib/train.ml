@@ -820,7 +820,8 @@ let placement_outcome_digest ?name ?timing_ctx ctx loss comp bindings decision =
     {!Autotune.flip_abandon_ratio} is abandoned there ({!Autotune.tune}'s [?abandon]): its report
     reaches [flip_report] as {!Autotune.Abandoned}, it loses, and it counts as measured. The
     incumbent's record is its report's [best_steps], so an arm whose report has none (a cache entry
-    older than the field) leaves the flips to run in full.
+    older than the field, or stored under another search shape) leaves the flips to run in full, as
+    does an incumbent that failed: its partial record is no shippable routine's.
 
     gh-ocannl-638, [ship_arm] (config [tune_ship_arm], default [Measured_winner]): ship a chosen
     {!placement_arm} instead of the measured winner. It exists for measurement — a profile of arm
@@ -1587,7 +1588,12 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                 logf "flip refinement stopped: the shared lineage is poisoned"
             | (fc : LL.flip_candidate) :: rest ->
                 let tn = fc.LL.fc_tn in
-                let _, chain_ms, base_ctx, base_timing, chain_report = !chain in
+                let chain_result, chain_ms, base_ctx, base_timing, chain_report = !chain in
+                (* Only against a shippable incumbent: a failed arm A still starts the chain, with
+                   its partial record, and a flip may then be the only result that ships. *)
+                let abandon =
+                  match chain_result with Ok _ -> abandon_against chain_report | Error _ -> None
+                in
                 (* A group started is a group finished: the budget is checked between candidates,
                    not between a node's alternatives, or the comparison against the same incumbent
                    that the group exists for would be cut short by an exhausted budget. *)
@@ -1619,7 +1625,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                       let r, ms, rep =
                         tune_or_release ~to_report:flip_report
                           ~progress_note:(Printf.sprintf " flip=%d/%d" (!measured + 1) inline_flips)
-                          ?abandon:(abandon_against chain_report) arm ctx' timing'
+                          ?abandon arm ctx' timing'
                       in
                       record r;
                       (* An abandoned flip spent a budget slot: it was measured, briefly, and

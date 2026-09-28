@@ -979,8 +979,9 @@ type report = {
           says the search's best became [ms] at its [n]-th admitted timing (the dispatched baseline
           is the first), ascending in [n] and descending in [ms], so {!best_after} reads the best at
           any depth. What {!Train.tune_placements}' flip chain abandons a hopeless flip against. A
-          {!Cache_replay} carries the storing search's steps, like its times; empty when nothing was
-          timed, and for an entry older than the field. *)
+          {!Cache_replay} carries the storing search's steps, like its times, when that search had
+          this call's shape ({!Ir.Schedule_cache.trajectory}); empty when nothing was timed, for an
+          entry older than the field, and for one stored under another shape. *)
 }
 
 val no_search_report : timing:timing_mode -> report

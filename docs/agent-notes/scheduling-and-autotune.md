@@ -556,7 +556,8 @@ files.
   trails the incumbent's `report.best_steps` at that depth by more than the margin squared, raising
   `Search_abandoned`. On gh-719's cuda gpt2_mini cell arm A sat at 11.7x its final 6.862 ms for 207 of
   209 timed candidates (the recombination composites delivered the rest), so a final-best rule would
-  abandon every flip. `best_steps` is cached like `mma_best_ms`, so a replayed incumbent still has one.
+  abandon every flip. `best_steps` is cached like `mma_best_ms`, keyed by the search shape the cache
+  key lacks (`SC.trajectory`), so a replayed incumbent still has one; a failed one abandons nothing.
 - The action menu's loop enumeration is provenance-aimed **by action category**, not by loop
   (gh-ocannl-687). `Local_scope` has two producers — virtualization's inline at a read site, and the
   accumulator localization `Schedule`'s materializing `Unroll` / `Partition` and

@@ -3476,6 +3476,15 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
         (float_setting ~default:1.
         @@ Utils.get_global_arg ~arg_name:"autotune_keep_fraction" ~default:"1.")
   in
+  (* gh-ocannl-1110: the settings that shape which candidates this search times, and in what order,
+     and that the schedule cache's key does not carry. A cached [best_steps] replays only under the
+     same shape: the flip chain compares at equal depth, which presumes the same candidate order. *)
+  let search_shape =
+    Printf.sprintf "beam=%d rounds=%d keep=%h split_sites=%d blocks=%s bound_pruning=%b" beam_width
+      rounds keep_fraction max_split_reduce_sites
+      (String.concat ~sep:"," (List.map seed_block_sizes ~f:Int.to_string))
+      (Lazy.force bound_pruning_enabled)
+  in
   let static_indices = Idx.bound_symbols bindings in
   let backend = Context.backend_name ctx in
   let device = Context.ordinal ctx in
@@ -3916,8 +3925,13 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                     source_digest = base_digest;
                     (* Replayed for the same reason as [mma_best_ms]: a flip chain whose incumbent
                        replayed would otherwise have no timed record to abandon a hopeless flip
-                       against (gh-ocannl-1110). Empty for entries older than the field. *)
-                    best_steps = Option.value entry.SC.best_steps ~default:[];
+                       against (gh-ocannl-1110). Empty for entries older than the field, and when
+                       the storing search had another shape, whose candidate order an equal-depth
+                       comparison cannot assume. *)
+                    best_steps =
+                      (match entry.SC.best_steps with
+                      | Some t when String.equal t.SC.search_shape search_shape -> t.SC.steps
+                      | Some _ | None -> []);
                   };
                 Some (c.cctx, c.routine)
             | Error (Outcome.Classified classified) ->
@@ -5117,7 +5131,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                    default_fingerprint =
                      Option.map (default_ms ()) ~f:(fun _ ->
                          Sched.default_schedule_fingerprint ~backend_name:backend);
-                   best_steps = Some (List.rev !best_steps);
+                   best_steps = Some { SC.search_shape; steps = List.rev !best_steps };
                  });
           (* Diagnostic control (config [autotune_log]): compile and time the UNTUNED default
              pipeline in this very process, on the search context — discriminates a genuinely slow
