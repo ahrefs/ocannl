@@ -556,6 +556,11 @@
 # and one that is not numerics-neutral, since a materialized node rounds to its storage precision
 # where an inlined one does not. The `reproducible` profile pins it at 0; `performance` leaves it
 # alone, its cost being a full search per candidate; `approximate` sets it to 2.
+# gh-ocannl-1110: a tried flip is ABANDONED -- its search stopped, reported as `abandoned`, and
+# counted against the budget -- once its best after its first autotune_beam_width timed candidates
+# trails the refined incumbent's best after ITS first as many by more than tune_flip_profit_margin
+# squared. Equal depth, not the incumbent's final best: on gh-719's gpt2_mini cell the arm itself
+# sat 11.7x above its final time for 207 of its 209 timed candidates.
 #tune_inline_flips=0
 
 # gh-ocannl-638: which placement arm `Train.tune_placements` ships. `auto` (the default) ships the
@@ -619,8 +624,10 @@
 # ~12x, cuda ~2.3x, against hip's 1.0x where the family won), so no verdict there is knife-edge.
 # Raise it to keep promoting on a machine whose tensorized path is still being brought up;
 # tune_flip_ordering=enablement disables the term outright — and disables it in the strong sense:
-# under either unconditional ordering the evidence is never derived, so this key is never read and a
-# malformed value cannot fail a run pinned to a baseline.
+# under either unconditional ordering the evidence is never derived, so the ORDERING never reads this
+# key. The flip chain's abandonment rule does (gh-ocannl-1110, see tune_inline_flips): squared, it is
+# how far a flip may trail the incumbent at equal search depth before its search is stopped, so any
+# chain with tune_inline_flips positive reads it, and a malformed value fails that chain.
 #tune_flip_profit_margin=1.25
 
 # If true, an exception crossing a candidate transform/codegen/compile/link boundary is fatal unless

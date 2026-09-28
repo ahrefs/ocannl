@@ -192,7 +192,9 @@ let () =
   p "one arm_start and one arm_done per report"
     (List.length arm_starts = List.length reports && List.length arm_dones = List.length reports);
   p_all "every arm_done says whether its arm succeeded" arm_dones ~f:(fun (_, f) ->
-      List.mem [ "ok"; "failed" ] (Option.value (field f "result") ~default:"") ~equal:String.equal);
+      List.mem [ "ok"; "failed"; "abandoned" ]
+        (Option.value (field f "result") ~default:"")
+        ~equal:String.equal);
   let flip_arms = List.filter arm_starts ~f:(fun (_, f) -> Option.is_some (field f "flip")) in
   p "the flip surface's lowering is named before the refinement starts"
     (let rec before = function

@@ -551,6 +551,18 @@ let codegen_tag ~(limits : Backend_intf.hardware_limits) () =
   in
   String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string (String.concat ~sep:"\000" parts))) 8
 
+type trajectory = {
+  search_shape : string;
+      (** The storing search's candidate-shaping inputs the key does not carry, rendered by
+          [Autotune.tune]: every [Search_shaping] configuration key that some source sets
+          ([Utils.config_class_fingerprint]) and the arguments overriding the ones it reads. A
+          trajectory is an equal-depth record only for a search that times the same candidates in
+          the same order, so a replay under another shape reads it as absent. *)
+  steps : (int * float) list;
+}
+[@@deriving sexp]
+(** A search's timed record (gh-ocannl-1110), as a cache entry keeps it. *)
+
 type entry = {
   version : int;
   backend : string;
@@ -598,6 +610,13 @@ type entry = {
           what "the default pipeline" means without missing the cache. A replaying process compares
           fingerprints and drops a stale [default_ms] (the schedule itself stays valid — only this
           diagnostic is config-relative). *)
+  best_steps : trajectory option; [@sexp.option]
+      (** The storing search's best-so-far as a step function of its admitted timings
+          ([Autotune.report.best_steps], gh-ocannl-1110): a measurement of the program like
+          [mma_best_ms], replayed for the same reason — the flip chain abandons a hopeless flip
+          against the incumbent's timed record, so without it an incumbent that replayed would leave
+          every flip to run its full search. Absent for entries written before the field, which
+          replay as "no record". *)
 }
 [@@deriving sexp]
 

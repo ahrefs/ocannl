@@ -38,6 +38,7 @@ let entry backend : SC.entry =
     default_ms = None;
     mma_best_ms = None;
     default_fingerprint = None;
+    best_steps = None;
   }
 
 let stamp_file = Stdlib.Filename.concat cache_dir SC.regime_stamp_filename

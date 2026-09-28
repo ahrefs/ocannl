@@ -206,6 +206,7 @@ let () =
       (* Also pre-gh-579: no stored tensorized best, so a replay of it reports none. *)
       mma_best_ms = None;
       default_fingerprint = None;
+      best_steps = None;
     };
   let report = ref None in
   let ctx = Context.auto () in

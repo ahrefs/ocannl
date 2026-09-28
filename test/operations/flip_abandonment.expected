@@ -1,0 +1,35 @@
+the default trailing ratio is the default margin squared: true
+gh-719's flips trail arm A at equal depth by more than the ratio, and are abandoned: true
+arm B, the other direction a flip can take, does not trail arm A by the ratio: true
+against arm A's FINAL best, arm A itself would have looked hopeless at that depth: true
+trailing by exactly the ratio keeps searching: true
+trailing by one ulp more is abandoned: true
+the verdict reads the best after k timings, not the first one: true
+an incumbent that timed fewer than k compares at its final best: true
+an incumbent with no timed record abandons nothing: true
+a hopeless search is abandoned after exactly beam_width timed candidates: true
+its report is the abandonment, carrying the verdict's numbers: true
+an abandonment is not a terminal failure: true
+a flip within the ratio at depth k is searched in full and finds its better time: true
+the search the hopeless one was cut from had more to time: true
+the completed search records its steps: true
+a flip far behind the incumbent's final best but not at equal depth is not abandoned: true
+the trajectory's identity carries a set Search_shaping key and no other class's: true
+a replayed incumbent carries the storing search's timed record: true
+a replay under another beam width abandons nothing, where the same shape's replay would: true
+a replay under other repeats abandons nothing, where the same shape's replay would: true
+autotune_progress is on for this run: true
+the shipped routine computes the plain compile's values: true
+the hopeless flip's report is an abandonment after beam_width timed candidates: true
+the A/B winner ships: true
+the progress record closes the flip's search as abandoned: true
+the flip's arm_done says abandoned, after beam_width timings, against the incumbent's 4 ms: true
+flips_done counts the abandonment among the measured flips: true
+the shipped routine computes the plain compile's values: true
+a flip that becomes profitable is searched in full: true
+and the refined placement ships: true
+flips_done reports no abandonment and an improvement: true
+the shipped routine computes the plain compile's values: true
+arm A died after timing something: true
+against a failed arm A the hopeless flip is searched in full: true
+and arm B, the only better shippable result, ships: true

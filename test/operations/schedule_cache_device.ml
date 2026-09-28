@@ -33,6 +33,7 @@ let schedule_entry canon backend =
     default_ms = None;
     mma_best_ms = None;
     default_fingerprint = None;
+    best_steps = None;
   }
 
 let () =

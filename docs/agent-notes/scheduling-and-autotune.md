@@ -553,13 +553,22 @@ files.
   is strictly better evidence anyway); and pricing the *displaced* flip instead of the promoted one
   (its gain is unknown until measured, which is exactly the budget the promotion consumes).
   `model_default`'s placement walk hands over no evidence, so it gets the prior and is unchanged —
-  and the derivation happens inside `placement_surface`, on the `profitable` path only, so a run
-  pinned to `cost` or `enablement` never reads `tune_flip_profit_margin` (`ps_profit` is `None`
-  there, which is what the log line reports instead of a verdict nothing consulted). A malformed
+  and the derivation happens inside `placement_surface`, on the `profitable` path only, so the
+  ordering of a run pinned to `cost` or `enablement` never reads `tune_flip_profit_margin`
+  (`ps_profit` is `None` there, which is what the log line reports instead of a verdict nothing
+  consulted; the flip chain's abandonment rule, next entry, does read it). A malformed
   margin is a `Utils.User_error` and must reach the caller: `tune_placements`' containment around the
   decision-surface lowering names the classes it does NOT absorb, because swallowing that one skips
   the refinement the configuration asked for and ships the A/B winner as though the setting had been
   honored.
+- **A hopeless flip is abandoned at EQUAL search depth, never against the incumbent's final best**
+  (gh-ocannl-1110): `Autotune.tune ?abandon` stops once its best after `beam_width` admitted timings
+  trails the incumbent's `report.best_steps` at that depth by more than the margin squared, raising
+  `Search_abandoned`. On gh-719's cuda gpt2_mini cell arm A sat at 11.7x its final 6.862 ms for 207 of
+  209 timed candidates (the recombination composites delivered the rest), so a final-best rule would
+  abandon every flip. `best_steps` is cached like `mma_best_ms`, keyed by every `Search_shaping`
+  key's value (`Utils.config_class_fingerprint`, `SC.trajectory`), so a replayed incumbent still
+  has one; a failed one abandons nothing.
 - The action menu's loop enumeration is provenance-aimed **by action category**, not by loop
   (gh-ocannl-687). `Local_scope` has two producers — virtualization's inline at a read site, and the
   accumulator localization `Schedule`'s materializing `Unroll` / `Partition` and
@@ -741,7 +750,13 @@ files.
   consumers (the benchmark JSON's per-arm `timings_unbatched`, `gh834_cells.sh`) keep treating it
   as an incomplete measurement; one that repeats on an idle rerun is the threshold. A sampled
   shallower crossing is refitted against the batch above it and never settles past that batch: a
-  fixed-dominated refit projects far deeper, unmeasured, where a queue cost may jump. Do not replace
+  fixed-dominated refit projects far deeper, unmeasured, where a queue cost may jump. Every other
+  settle is capped at `Autotune.queue_depth_projection_factor` (2) times the deepest batch probed
+  (gh-ocannl-1100), one chokepoint after the branches rather than a fix per exit: the last
+  validation's affine projection, a linear scale from a below-target confirmation and a fit wanting
+  the cap all used to settle unmeasured (a pair (2, 12.25) / (3, 12.5) wants depth 40). A bound in
+  depth, not wall, spending no probe; ultra-fast kernels whose fit wanted the cap now batch shorter
+  than the target. Do not replace
   this with a bound
   extrapolated through a per-launch cost (least `wall / depth`): the readings that leave the fits
   unresolved cannot tell a host stall from a cost that jumps past a queue threshold, and two review

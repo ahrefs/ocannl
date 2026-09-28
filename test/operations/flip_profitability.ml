@@ -154,6 +154,7 @@ let () =
       mma_best_ms;
       default_ms = None;
       default_fingerprint = None;
+      best_steps = None;
     }
   in
   p "a stored tensorized best survives the entry round-trip"
