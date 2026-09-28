@@ -16,7 +16,7 @@
 # It tests the WORKING-TREE copy: `group_alive` is extracted from the shared
 # scripts/process-group.sh; `ps_token`, `proc_identity_matches`, `proc_alive`
 # come from tools/test-run.sh; the dxg legs read the shipping tools/box-jobs.sh
-# and extract tools/sweep.sh's `unit_jobs`. The `stop` legs drive that same tool as a
+# and extract tools/sweep.sh's `unit_jobs` and `lab_dest_of`. The `stop` legs drive that same tool as a
 # subprocess. Each extraction is asserted structurally before use, so a sed
 # that matched nothing cannot leave every leg passing without testing anything.
 #
@@ -2569,11 +2569,16 @@ grep -q 'box_jobs_sweep_cap' "$TMP/unit-jobs.sh" ||
 # must hand unit_jobs the unit's RESOLVED destination -- the `@<box>`
 # placeholder is replaced in UNITS before any unit runs -- since a call that
 # dropped it would silently give a native boot the WSL cap. And the
-# destinations are not restated here: they come from sweep.sh's own
-# lab_dest_of, the table every resolved destination is a member of, so an
-# alias renamed there cannot leave box-jobs.sh classifying a name the sweep no
-# longer uses.
-sed -n '/^lab_dest_of() {/,/^}/p' "$SWEEP_SRC" >"$TMP/lab-dest-of.sh"
+# destinations are resolved by sweep.sh's own lab_dest_of (with the lab_row it
+# reads), over the lab's endpoint map as `wake-lab.sh endpoint-map` printed it
+# on 2026-09-27 -- a FIXTURE, never the live map, which is site data outside the
+# repository and the sweep's only table of aliases (gh-ocannl-1121). So what is
+# pinned is the relationship: whatever alias the sweep picks for a boot,
+# box-jobs.sh classifies it as that boot.
+sed -n -e '/^lab_row() {/,/^}/p' -e '/^lab_dest_of() {/,/^}/p' "$SWEEP_SRC" >"$TMP/lab-dest-of.sh"
+LAB_MAP='rog rog-nv-linux rog-nv-win rog-nv-wsl rog-lan
+minix minix-amd-linux minix-amd-win minix-amd-wsl minix-lan
+tuf tuf-amd-linux tuf-amd-win tuf-amd-wsl'
 if [ -z "$dxg_detail" ]; then
   unit_jobs_calls=$(grep -c 'unit_jobs "' "$SWEEP_SRC")
   unit_jobs_dest_calls=$(grep -c 'unit_jobs "$machine" "$backend" "$host"' "$SWEEP_SRC")
@@ -2581,8 +2586,9 @@ if [ -z "$dxg_detail" ]; then
     dxg_detail="sweep.sh calls unit_jobs $unit_jobs_calls times, $unit_jobs_dest_calls with the unit's destination"
   fi
 fi
-[ -n "$dxg_detail" ] || grep -q "minix:wsl" "$TMP/lab-dest-of.sh" ||
-  dxg_detail="lab_dest_of did not extract from sweep.sh: $(cat "$TMP/lab-dest-of.sh")"
+[ -n "$dxg_detail" ] || { grep -q '^lab_row() {' "$TMP/lab-dest-of.sh" &&
+  grep -q '^lab_dest_of() {' "$TMP/lab-dest-of.sh" && grep -q 'lab_row "\$1"' "$TMP/lab-dest-of.sh"; } ||
+  dxg_detail="lab_row and lab_dest_of did not extract from sweep.sh: $(cat "$TMP/lab-dest-of.sh")"
 if [ -z "$dxg_detail" ]; then
   # The values themselves, from the shipping table, in one shell: the sweep's
   # hip unit over each of minix's boots (and with no destination, or one the

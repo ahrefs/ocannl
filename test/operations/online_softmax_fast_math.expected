@@ -53,6 +53,7 @@ the same reduction with a cell-wise zeroing is accepted: the scan writes what th
 composed: a NaN score ahead of a masked one poisons the normalizer: true
 rewritten: the all-masked step after the NaN keeps the poison: true
 a genuinely all-masked prefix leaves both normalizers finite and equal within 1e-6 relative: true
+an all-masked prefix at f64 leaves both normalizers finite and equal within 1e-12 relative: true
 an f16 chain: the f32-carried normalizer agrees with the per-step-rounded one within 2e-3: true
 a row of scores at the format's lowest finite value is a finite maximum in both forms, with the row length as normalizer: true
 a fully masked row leaves the composed normalizer NaN: true
@@ -75,3 +76,130 @@ the composed output is NaN in every row: every row has a NaN-filled position: tr
 the rewritten output is NaN exactly where the composed output is: true
 --- leg 8b: sibling lowerings of one rewritten program hit the analysis cache ---
 re-lowering the rewritten forward is an analysis-cache hit, not a miss: true
+--- leg 9: training with the fused backward ---
+the loss agrees within 1e-5 relative: true
+the same parameters carry gradients in both runs: true
+head width 8: w_q_attn0.grad agrees within 1e-05 relative: true
+head width 8: w_q_attn0.grad is not identically zero: true
+head width 8: w_k_attn0.grad agrees within 1e-05 relative: true
+head width 8: w_k_attn0.grad is not identically zero: true
+head width 8: w_v_attn0.grad agrees within 1e-05 relative: true
+head width 8: w_v_attn0.grad is not identically zero: true
+head width 8: w_o_attn0.grad agrees within 1e-05 relative: true
+head width 8: w_o_attn0.grad is not identically zero: true
+a second run of the fused step recomputes the same gradients: the zeroings it accumulates onto are kept: true
+the fused step has one per-row D, the forward-only step none: true
+the backward gate off leaves the composed backward, whose seq^2 buffers the step writes: true
+under the recompute cap the fused step writes no seq^2-sized node at all (masked key prefixes included): true
+no argument of the fused routine is seq^2-sized: true
+the pass fuses the raw training step: true
+q.grad: one fused nest, one channel loop after its scalars: true
+k.grad: one fused nest, one channel loop after its scalars: true
+v.grad: one fused nest, one channel loop after loop-free scalars: true
+the pass is idempotent on the fused step: true
+re-lowering the fused step is an analysis-cache hit, not a miss: true
+--- leg 9b: head width above the recompute cap -- the scores are the one seq^2 buffer ---
+the same parameters carry gradients in both runs: true
+head width 32: w_q_attn0.grad agrees within 1e-05 relative: true
+head width 32: w_q_attn0.grad is not identically zero: true
+head width 32: w_k_attn0.grad agrees within 1e-05 relative: true
+head width 32: w_k_attn0.grad is not identically zero: true
+head width 32: w_v_attn0.grad agrees within 1e-05 relative: true
+head width 32: w_v_attn0.grad is not identically zero: true
+head width 32: w_o_attn0.grad agrees within 1e-05 relative: true
+head width 32: w_o_attn0.grad is not identically zero: true
+seq^2 buffers in the training step: composed backward 4, fused backward 1
+the fused step writes one seq^2 buffer, the scores the forward-only step also stores: true
+no argument of the fused routine is seq^2-sized: the stored scores are routine scratch: true
+a cap admitting the head width recomputes the scores too: no seq^2 buffer at all: true
+the same parameters carry gradients in both runs: true
+recomputed scores: w_q_attn0.grad agrees within 1e-05 relative: true
+recomputed scores: w_q_attn0.grad is not identically zero: true
+recomputed scores: w_k_attn0.grad agrees within 1e-05 relative: true
+recomputed scores: w_k_attn0.grad is not identically zero: true
+recomputed scores: w_v_attn0.grad agrees within 1e-05 relative: true
+recomputed scores: w_v_attn0.grad is not identically zero: true
+recomputed scores: w_o_attn0.grad agrees within 1e-05 relative: true
+recomputed scores: w_o_attn0.grad is not identically zero: true
+--- leg 9c: four SGD steps in one routine -- the loss trajectories agree ---
+the step with the SGD update is fused too: true
+the loss moves across the steps: true
+every step's loss agrees within 1e-5 relative: true
+--- leg 9d: two stacked blocks -- one D each ---
+two per-row D reductions: true
+no seq^2-sized node is written: true
+the same parameters carry gradients in both runs: true
+two blocks: w_q_attn1.grad agrees within 1e-05 relative: true
+two blocks: w_q_attn1.grad is not identically zero: true
+two blocks: w_k_attn1.grad agrees within 1e-05 relative: true
+two blocks: w_k_attn1.grad is not identically zero: true
+two blocks: w_v_attn1.grad agrees within 1e-05 relative: true
+two blocks: w_v_attn1.grad is not identically zero: true
+two blocks: w_o_attn1.grad agrees within 1e-05 relative: true
+two blocks: w_o_attn1.grad is not identically zero: true
+two blocks: w_q_attn0.grad agrees within 1e-05 relative: true
+two blocks: w_q_attn0.grad is not identically zero: true
+two blocks: w_k_attn0.grad agrees within 1e-05 relative: true
+two blocks: w_k_attn0.grad is not identically zero: true
+two blocks: w_v_attn0.grad agrees within 1e-05 relative: true
+two blocks: w_v_attn0.grad is not identically zero: true
+two blocks: w_o_attn0.grad agrees within 1e-05 relative: true
+two blocks: w_o_attn0.grad is not identically zero: true
+--- leg 9e: a NaN mask fill poisons the fused gradients exactly where the composed ---
+the fused step fired: true
+the composed gradients carry NaNs: true
+w_q_attn0.grad is NaN exactly where the composed one is: true
+w_k_attn0.grad is NaN exactly where the composed one is: true
+w_v_attn0.grad is NaN exactly where the composed one is: true
+w_o_attn0.grad is NaN exactly where the composed one is: true
+--- leg 10: leaf queries, keys and values -- dQ, dK and dV themselves ---
+the fused backward fired on the leaf attention: true
+the composed leaf step writes seq^2-sized nodes, the fused one none: true
+the same parameters carry gradients in both runs: true
+leaf: q.grad agrees within 1e-05 relative: true
+leaf: q.grad is not identically zero: true
+leaf: k.grad agrees within 1e-05 relative: true
+leaf: k.grad is not identically zero: true
+leaf: v.grad agrees within 1e-05 relative: true
+leaf: v.grad is not identically zero: true
+keys derived from the queries: fused: true
+the same parameters carry gradients in both runs: true
+derived keys: q.grad agrees within 1e-05 relative: true
+derived keys: q.grad is not identically zero: true
+derived keys: v.grad agrees within 1e-05 relative: true
+derived keys: v.grad is not identically zero: true
+--- leg 10b: a finite mask fill keeps the masked probabilities and their dV ---
+the fused backward fired: true
+the same parameters carry gradients in both runs: true
+finite fill: q.grad agrees within 1e-05 relative: true
+finite fill: q.grad is not identically zero: true
+finite fill: k.grad agrees within 1e-05 relative: true
+finite fill: k.grad is not identically zero: true
+finite fill: v.grad agrees within 1e-05 relative: true
+finite fill: v.grad is not identically zero: true
+the key every query masks still gets a dV under the finite fill: fused: true
+and composed: true
+the fully masked query row's dQ is exactly zero: fused: true
+and composed: true
+--- leg 10c: f64 finite differences of the fused dQ, dK and dV ---
+the fused backward fired at f64: true
+dq: the fused gradient matches the f64 finite difference within 1e-6: true
+dk: the fused gradient matches the f64 finite difference within 1e-6: true
+dv: the fused gradient matches the f64 finite difference within 1e-6: true
+--- leg 11: the fused backward declines what it cannot prove ---
+the unedited step is fused: true
+a backward lowered without its forward is left as it is: true
+another reader of dP is declined: true
+staged code inside the backward's span is declined: true
+staged code after the span is no objection: true
+a dead channel loop in the query-gradient contraction is declined: true
+a reader of dP ahead of its producer is declined: true
+a partial definition is read as its node, not instantiated: true
+a backward with the composed max gradient is declined: true
+the same parameters carry gradients in both runs: true
+composed max gradient: q.grad agrees within 1e-05 relative: true
+composed max gradient: q.grad is not identically zero: true
+composed max gradient: k.grad agrees within 1e-05 relative: true
+composed max gradient: k.grad is not identically zero: true
+composed max gradient: v.grad agrees within 1e-05 relative: true
+composed max gradient: v.grad is not identically zero: true

@@ -311,7 +311,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `raw_entries`, on stderr (the golden keeps only the section header).
   `refusal_control_scan_cases.expected` holds the manifest equal to mechanical extraction, every entry present in the assigned live/case
   golden union, and the manifest's repo-relative source paths equal to `env_var_deps`' derived
-  scanner census. Rewording a refusal format moves its marker digest: when a row differs, that
+  scanner census; the audit's own stanza argument list assigns each source its goldens, and its
+  sources are held equal to the manifest's, a missing or extra one named on stderr (gh-ocannl-1088). Rewording a refusal format moves its marker digest: when a row differs, that
   audit writes the markers on each side and the whole replacement row on stderr, and its
   `raw_direct_evidence` claim names on stderr every `<source>:<md5>` key no current direct failure
   answers to -- re-key those from the row difference. The
@@ -1483,12 +1484,20 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   qualifier; `Codegen_text_scan.emitter_aliases` adds the value alias (`let write = CR.emit`) and
   the wrapper (`let write ~buf p llc = CR.emit ~buf p llc`, whose own parameter is where the
   caller's buffer arrives — by label, or by position among the unlabelled arguments); and
-  `module_alias_targets` resolves an `open` of an aliased emitter module — including one a FUNCTOR
+  `scope_of` resolves an `open` of an aliased emitter module — including one a FUNCTOR
   produced (`module Syntax = Ir.C_syntax.C_syntax (…)`, which is how every backend and every codegen
   test reaches `compile_proc`), by taking the functor's own name — which the rejection below would
   otherwise miss. Membership, taint, the buffer destinations and the pin walk all go through
   the one resolver: rules that know different routes are how a file stays listed while its pin
   disappears.
+- **Module aliases and literal `let`s resolve by lexical scope** (gh-ocannl-1079), over
+  `Lexical_scope`, the model `ll_test_scan` resolves over too: a qualifier or a fragment's name
+  reaches the binding in scope where it is spelled. File-wide lookup failed silently both ways:
+  gh-ocannl-1063's inventory recorded another leg's `let body_begin` text for a pin (a labelled
+  parameter of that name read as the literal), and staging#855 lost the pins of two same-named
+  bindings outright, equal values included. Taint, emitter value aliases and predicate names stay
+  file-wide on purpose, since there over-reach costs an inventory line rather than naming the
+  wrong fragment. `codegen_text_scan_cases` controls each spelling against the old resolution.
 - **What no file-local rule can follow now says so.** A buffer is where generated text lands with no
   name to carry it, and the ways to fill one do not end (a wrapper reaching its parameter through a
   local binding, PPrint's own `ToBuffer` renderers, a buffer in a record). So a substring test whose
@@ -1503,9 +1512,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   compiler-plan classifier is still reported as partial, and an annotated classifier beside a real
   generated-text assertion still reports the real fragment.
 - **An `open` (or `include`) that hides a route is refused, not approximated — over its own scope,
-  and never over a name the file binds.** A structure open governs the items after it, `let open M
-  in` its body, and a nested structure's opens die with it. A name the file binds anywhere is struck
-  from every refusal: `open Ir.Low_level` followed by a local `let to_doc` is valid code calling the
+  and never over a name bound where it is spelled.** A structure open governs the items after it,
+  `let open M in` its body, and a nested structure's opens die with it. A name the file binds is
+  struck from a refusal wherever that binding is in scope — only there, since gh-ocannl-1079:
+  `open Ir.Low_level` followed by a local `let to_doc` is valid code calling the
   local function, and refusing it would red the build for everyone, where a refusal not made is one
   more member of the residue the partial marker covers. Judging the file's opens against the file's unqualified uses cross-products the two, and a
   false refusal on valid code is a red build for everyone (Codex round 3 on staging#487). Every route is attributed by the
@@ -2251,7 +2261,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   gfx1151 is an iGPU whose device memory IS host memory, so a missing or misplaced host↔device
   transfer can read the right bytes there, and only tuf-amd-linux's discrete RX 7700S (gfx1102)
   exposes it (ludics-lite#320). `--only hip` selects both units; each is its own row, keyed by
-  machine, and `known_backends` lists hip once. tuf is a single-boot Wi-Fi laptop the caller cannot
+  machine, and `known_backends` lists hip once. tuf is a Wi-Fi laptop the caller cannot
   wake (its own `WakeSystem=true` timer does, from self-improve's Linux bootstrap, or a person), so
   its lane is **gated** (`lab_box_gated`): it asks `wake-lab.sh status tuf` (`OCANNL_TOOL_SWEEP_WAKE_LAB`
   moves the script) before reserving or dialling anything, and a box not at `linux=UP` — or one
@@ -2266,9 +2276,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   end the lane inside that trap. A cancelled top level does not order its exit after its lanes',
   so the lane's line saying so is best-effort and the log is the record. Its unit is uncapped:
   lukstafi/ludics-lite#344's ladder ran it green at dune's default (16) and at `-j 8`, 1046 s
-  against 1105 s, with no GPU kernel line (it had run at a placeholder `-j 2` until then). A single-boot box needs no
-  `kind_of`: `lab_dest` returns its one alias, so a site table that does not describe tuf refuses
-  nothing.
+  against 1105 s, with no GPU kernel line (it had run at a placeholder `-j 2` until then). Its boot kind comes from
+  the site table's `kind_of tuf` like every box's (wake-lab.sh requires one too): the lab's map lists
+  a `tuf-amd-wsl` the lane never dials.
 - **A native lane's work legs hold a logind sleep inhibitor** (gh-ocannl-1035). Every far-side leg
   that takes the worktree lock — preparation, the suite, the RTC context, the serial rerun — runs
   under the perl supervisor's `--hold <why>` on a `-linux` destination (`sleep_guard_why`), so
@@ -2289,13 +2299,17 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   and the fleet's execution registry (both lukstafi/ludics-lite). A remote lane holds the box's
   LANE lock (`$WAKE_LAB_LOCK_DIR/<box>.lock`, never `<box>.hold.lock`; the comment above
   `LAB_LOCK_DIR` in `tools/sweep.sh` says why each) for its whole length, so wake-lab's destroyers
-  (`restart-wsl`, `sleep`, the boot verbs) refuse the box under it. That contract is four facts
-  shared across two repositories, so every run checks it at startup against the wake-lab.sh it
-  will meet (gh-ocannl-1025): for each box a selected remote lane reserves, `wake-lab.sh
-  endpoint-map` must list every boot `lab_dest_of` can address on that box's row and `lab_box_of`
-  must map each back to it, and `wake-lab.sh lock-path <box>` must answer the file the lane opens.
-  A disagreement refuses the run (startup exit 2, no record) naming what moved; no wake-lab.sh, or
-  one without `endpoint-map`, prints `lab locks: NOT CHECKED` in the header and runs. ludics-lite's
+  (`restart-wsl`, `sleep`, the boot verbs) refuse the box under it. **The sweep keeps no table of
+  ssh aliases** (gh-ocannl-1121): a run with a selected remote unit reads `wake-lab.sh endpoint-map`
+  once at startup, and each unit's destination is the `-linux`/`-wsl` alias (wake-lab's own suffix
+  rule) on its box's row for today's `kind_of`, the box an alias reserves is the row that lists it,
+  and a lane's registry names are that whole row. No wake-lab.sh, no map, no row for the box, or no
+  alias for today's boot refuses the run (startup exit 2, no record); a local-only run asks
+  nothing. A renamed alias needs no sweep edit. The old hand-written `lab_dest_of`/`lab_box_of`
+  rows, their agreement check and the no-map fallback's stem rule cost three review rounds on one
+  class of finding (staging#868) — do not reintroduce a copy. What stays checked at startup against
+  the wake-lab.sh the run will meet (gh-ocannl-1025) is `wake-lab.sh lock-path <box>` answering the
+  file the lane opens; a disagreement refuses the run naming what moved. ludics-lite's
   `scripts/test-wake-lab.sh` checks the same contract from its side, against a staging checkout it
   never fetches. Separately, before EACH unit the lane reads the registry
   (`fleet-worker.sh execution list --active --compact`, through the fleet-worker.sh
@@ -2977,7 +2991,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   resolves to an IR value, is IR; each binding is classified on its own, a later definition
   replaces an included one's class. The rest (`cycle`, `weighted`, `blank`, ...) is printed in the
   golden, so a new helper's class shows in review. Both halves resolve names through one lexical
-  scope model (`Ll_test_scan.scoped`): every value binding form scopes its names (externals and
+  scope model (`Lexical_scope.scoped`, extracted from this scan for `codegen_text_scan` in
+  gh-ocannl-1079): every value binding form scopes its names (externals and
   instance variables included), module aliases (constrained ones too) are shadowed by later
   bindings, functor parameters and unpacks and die with their structure, and only an exact harness
   path is the harness. Its one deliberate gap: an `open` of a module the scan cannot read is not taken to shadow

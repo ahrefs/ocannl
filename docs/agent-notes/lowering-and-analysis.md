@@ -421,4 +421,12 @@ files.
   exact identity such as `l + (m - m)` to inject a NaN -- `simplify_llc` reassociates it into
   `(l + m) - m`, which cancels catastrophically (the generated C is the evidence; gh-ocannl-998
   is the issue).
+- **`Online_softmax`'s third shape fuses the attention backward** (gh-ocannl-1002, gate
+  `online_softmax_backward`; `find_backward`): it anchors on the normalizer found in the SAME pass
+  (a backward lowered alone declines), so it cannot be a later fixpoint round. Traps: (a) the visit
+  cap exempts a read in a `Set` at its own write position but counts one in a `Set_local`, so the
+  scan plus the fused nests reading one node materialize it -- the dQ, dK and dV nests read `e`,
+  `n` and the scores' reduction, one counted visit each; (b) a symbol bound by two sibling loops makes the routine
+  uncacheable (`analysis_digest`), so mint one per loop; (c) Base's `Float.max_value` is infinity
+  (`max_finite_value` is not): the forward's f64 floor was `-inf` until the f64 test here ran.
 

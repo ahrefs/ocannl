@@ -307,6 +307,33 @@ let () =
       {ocaml|module U = Utils
 let () = p "wrote" (Stdlib.Sys.file_exists (U.build_file "k.c"))|ocaml},
       "+direct" );
+    (* Lexical scope (gh-ocannl-1079): an alias is the module it names only where its binding is in
+       scope. Collected file-wide, an alias of the reader made a same-named module elsewhere the
+       reader too, and its fixture text a pin. *)
+    ( "a same-named alias in another scope is not the reader",
+      {ocaml|let fixture () =
+  let module G = struct
+    let read name = Stdio.In_channel.read_all name
+  end in
+  p "fixture" (String.is_substring (G.read "fixture.txt") ~substring:"(float)(0.0)")
+let kernel () =
+  let module G = Test_utils.Generated in
+  G.assert_emits ~routine:"r" ~contains:"__shared__" "shared"|ocaml},
+      {|"__shared__"|} );
+    ( "an alias shadowed by a later binding is no longer the reader",
+      {ocaml|module G = Test_utils.Generated
+let () = G.assert_emits ~routine:"r" ~contains:"__shared__" "shared"
+let fixture () =
+  let module G = Fixture_reader in
+  p "fixture" (String.is_substring (G.read "fixture.txt") ~substring:"(float)(0.0)")|ocaml},
+      {|"__shared__"|} );
+    ( "a functor parameter shadows an alias of the reader in the functor's body",
+      {ocaml|module G = Test_utils.Generated
+let () = G.assert_emits ~routine:"r" ~contains:"__shared__" "shared"
+module Check (G : READER) = struct
+  let () = p "fixture" (String.is_substring (G.read "fixture.txt") ~substring:"(float)(0.0)")
+end|ocaml},
+      {|"__shared__"|} );
     ( "an unqualified read is not the reader, which is what the qualifier is for",
       {ocaml|let read routine = Stdio.In_channel.read_all routine
 let () = p "loaded" (String.is_substring (read "fixture.txt") ~substring:"(float)(0.0)")|ocaml},
@@ -371,6 +398,46 @@ let () = p "lane" (has "_uniform_lane(" (Generated.read "r"))|ocaml},
   let statement = render (Ir.Low_level.to_doc () stmt) in
   p "arrow" (Option.is_some (String.substr_index statement ~pattern:arrow))|ocaml},
       {|" := " +rendered|} );
+    (* A fragment named through a binding is the binding the name reaches WHERE IT IS SPELLED
+       (gh-ocannl-1079). Keyed by name file-wide, two legs binding one name -- the shape of
+       schedule_mma_matmul's per-backend [body_begin] markers -- lost both pins even when the values
+       agreed (staging#855), and a parameter or a shadowing binding of the name read as some literal
+       elsewhere in the file (gh-ocannl-1063 recorded another leg's text that way). *)
+    ( "same-named literal lets in different scopes each pin their own text",
+      {ocaml|let metal_leg () =
+  let src = Generated.read "r_metal" in
+  let body_begin = "/* simdgroup fragment reduction body begins */" in
+  p "metal" (Option.is_some (String.substr_index src ~pattern:body_begin))
+let cuda_leg () =
+  let src = Generated.read "r_cuda" in
+  let body_begin = "/* mma.sync fragment reduction body begins */" in
+  p "cuda" (Option.is_some (String.substr_index src ~pattern:body_begin))|ocaml},
+      {|"/* mma.sync fragment reduction body begins */" "/* simdgroup fragment reduction body begins */"|}
+    );
+    ( "same-named literal lets pin their text even when the values agree",
+      {ocaml|let register_body_begin = "/* mma.sync fragment reduction body begins */"
+let bf16_leg () =
+  let src = Generated.read "r_bf16" in
+  p "bf16" (Option.is_some (String.substr_index src ~pattern:register_body_begin))
+let f16_leg () =
+  let src = Generated.read "r_f16" in
+  let register_body_begin = "/* mma.sync fragment reduction body begins */" in
+  p "f16" (Option.is_some (String.substr_index src ~pattern:register_body_begin))|ocaml},
+      {|"/* mma.sync fragment reduction body begins */"|} );
+    ( "a parameter is not a same-named literal let elsewhere in the file",
+      {ocaml|let resident src ~body_begin = Option.is_some (String.substr_index src ~pattern:body_begin)
+let () = p "resident" (resident (Generated.read "r") ~body_begin:"/* wmma body begins */")
+let metal_marker () =
+  let body_begin = "/* simdgroup fragment reduction body begins */" in
+  describe body_begin|ocaml},
+      "+partial" );
+    ( "a binding shadowing a literal let is not that literal",
+      {ocaml|let marker = "/* stale marker */"
+let () =
+  let src = Generated.read "r" in
+  let marker = current_marker () in
+  p "marker" (String.is_substring src ~substring:marker)|ocaml},
+      "+partial" );
     ( "a buffer-writing serializer is an emitter too",
       {ocaml|module CR = Ir.Low_level.Canonical_render
 let render llc =
@@ -552,12 +619,32 @@ let () =
   emit ~buf policy llc;
   p "free" (String.is_substring (Buffer.contents buf) ~substring:"s0")|ocaml},
       1 );
-    ( "a name the file binds for itself is never refused",
+    ( "a name the file binds for itself is not refused where that binding is in scope",
       {ocaml|open Ir.Low_level
 
 let to_doc x = local_render x
 let () = PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (to_doc value)|ocaml},
       0 );
+    (* And the other half of scope (gh-ocannl-1079): a binding of the name somewhere ELSE in the
+       file does not take the opened one out of reach, and an alias rebound in a later scope does
+       not change what an earlier open of it opened. Both were refusals not made -- the silent
+       direction. *)
+    ( "a name bound only in another scope does not shadow the opened one",
+      {ocaml|open Ir.Low_level
+
+let helper () =
+  let to_doc x = local_render x in
+  to_doc value
+let () = PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (to_doc llc)|ocaml},
+      1 );
+    ( "an alias rebound in a later scope does not change what an earlier open opened",
+      {ocaml|module CR = Ir.Low_level.Canonical_render
+open CR
+let () = emit ~buf policy llc
+let other () =
+  let module CR = Fixture in
+  CR.describe ()|ocaml},
+      1 );
     ( "an open governs its own scope, not the whole file",
       {ocaml|let render_row row =
   let open Ir.Low_level in
