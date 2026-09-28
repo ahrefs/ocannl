@@ -44,10 +44,11 @@ on_error() {
     dxg_many dxg_bounds dxg_no_trigger native_quiet_block native_red_a native_red_b \
     native_of_dxg dxg_of_native native_collection native_unit_linux native_unit_wsl \
     native_unit_cpu native_abort_run native_other_abort hold_lock_ok \
-    contract_alias contract_box contract_lock_path contract_scope contract_unchecked \
-    lane_lock_linux lane_lock_wsl res_measured res_windows res_windows_unmapped res_tuf_wsl res_local res_local_other res_between \
+    map_no_row map_no_boot map_none map_no_script dest_local_no_map map_renamed map_renamed_wsl \
+    map_renamed_override map_stale_override contract_lock_path contract_scope \
+    lane_lock_linux lane_lock_wsl res_measured res_windows res_renamed res_tuf_wsl res_local res_local_other res_between \
     res_unreadable res_garbled res_off res_absent \
-    tuf_asleep tuf_no_wake_lab tuf_up tuf_unreachable tuf_inhibited tuf_sleep_fails \
+    tuf_asleep tuf_up tuf_unreachable tuf_inhibited tuf_sleep_fails \
     tuf_unguarded tuf_unguarded_prep tuf_unguarded_wsl tuf_self_refusal tuf_cancelled \
     guard_held guard_refused guard_stalled \
     guard_absent \
@@ -324,11 +325,11 @@ chmod +x "$fake_bin/ssh"
 # still holding its reservation is refused by itself here, exactly as it would be in the lab. The
 # sleep's other outcomes are the real script's lines: done, refused by a block inhibitor, failed.
 #
-# It also answers the two verbs the sweep's startup contract check asks (gh-ocannl-1025), which
-# need no site table: `endpoint-map`, the lab's map as the real script prints it on 2026-09-27 --
-# SWEEP_TEST_ENDPOINT_MAP replaces it, and `none` is a wake-lab.sh from before the verb -- and
-# `lock-path <box>`, the real script's `<dir>/<box>.lock` over WAKE_LAB_LOCK_DIR, which
-# SWEEP_TEST_LOCK_PATH_DIR moves. Those two are logged apart, in `<calls>.contract`, so the power
+# It also answers the two verbs the sweep asks at startup, which need no site table:
+# `endpoint-map`, the lab's map as the real script prints it on 2026-09-27 and the ONLY table of
+# ssh aliases the sweep reads (gh-ocannl-1121) -- SWEEP_TEST_ENDPOINT_MAP replaces it, and `none` is
+# a wake-lab.sh from before the verb -- and `lock-path <box>`, the real script's `<dir>/<box>.lock`
+# over WAKE_LAB_LOCK_DIR, which SWEEP_TEST_LOCK_PATH_DIR moves (gh-ocannl-1025). Those two are logged apart, in `<calls>.contract`, so the power
 # verbs' log still holds exactly what a gated lane asked.
 cat >"$fake_bin/wake-lab.sh" <<'EOF'
 #!/bin/sh
@@ -449,7 +450,8 @@ chmod +x "$fake_bin/fleet-worker.sh"
 # the WSL guest (`wsl`) -- each GPU box's destination is. The nested sweep is pointed at one of
 # these through WAKE_LAB_HOSTS (run_sweep_args pins it), the native one by default because that is
 # the lab's boot today. Each defines the table's other functions too, so that only the property a
-# case names differs from a real table.
+# case names differs from a real table. tuf has a kind in each, as in the real one (wake-lab.sh asks
+# it of every box it acts on): Linux, the laptop's only boot the lab uses.
 write_hosts() { # path kind-of-body
   cat >"$1" <<HOSTS
 mac_of() { case "\$1" in rog|minix) echo 00:00:00:00:00:00 ;; *) return 1 ;; esac; }
@@ -459,8 +461,8 @@ echo 'a site table that prints while sourced'
 $2
 HOSTS
 }
-write_hosts "$tmp/hosts-linux.sh" 'kind_of() { case "$1" in rog|minix) echo linux ;; *) return 1 ;; esac; }'
-write_hosts "$tmp/hosts-wsl.sh" 'kind_of() { case "$1" in rog|minix) echo wsl ;; *) return 1 ;; esac; }'
+write_hosts "$tmp/hosts-linux.sh" 'kind_of() { case "$1" in rog|minix|tuf) echo linux ;; *) return 1 ;; esac; }'
+write_hosts "$tmp/hosts-wsl.sh" 'kind_of() { case "$1" in rog|minix) echo wsl ;; tuf) echo linux ;; *) return 1 ;; esac; }'
 # A kind wake-lab itself refuses, as a box booted into Windows would read if someone wrote it down.
 write_hosts "$tmp/hosts-bogus.sh" 'kind_of() { case "$1" in rog|minix) echo win ;; *) return 1 ;; esac; }'
 # A table from before kind_of existed.
@@ -1373,8 +1375,8 @@ absent -- '-wsl' "$ssh_calls"
 dest_wsl=$(SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh \
   run_sweep_args --only cuda --only hip --only multidev_cc --target dest-wsl-probe)
 grep -q '^destinations: rog-nv=rog-nv-wsl minix=minix-amd-wsl tuf=tuf-amd-linux$' <<<"$dest_wsl"
-# tuf is single-boot, so the WSL table leaves it where it is -- and asleep (the fake's default), it
-# is a gate that dials nothing, which is why no `-linux` alias reaches the recorder below.
+# The WSL table keeps tuf on its Linux -- and asleep (the fake's default), it is a gate that dials
+# nothing, which is why no `-linux` alias reaches the recorder below.
 grep -q '^  tuf/hip: gate (tuf not up: router-active=? os=-- linux=--)$' <<<"$dest_wsl"
 grep -q '^  rog-nv/cuda: skip (unreachable)$' <<<"$dest_wsl"
 grep -q '^  minix/hip: skip (unreachable)$' <<<"$dest_wsl"
@@ -1497,12 +1499,13 @@ dest_override_wins=$(SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh SWEEP_TEST_DEST_ROG=rog-
 grep -q '^destinations: rog-nv=rog-nv-linux minix=minix-amd-wsl tuf=tuf-amd-linux$' <<<"$dest_override_wins"
 absent ' rog-nv-wsl ' "$ssh_calls"
 absent ' minix-amd-linux ' "$ssh_calls"
-# An override must be one of ITS box's two canonical aliases, and anything else is refused: an
-# alias of another box (the lane would reserve the wrong lock and leave this one open to a
-# restart mid-unit), an option-shaped word, a `user@` or a second `@` (the lock is derived from
-# the same string ssh parses, and every `@` spelling makes those readings disagree), and a custom
-# alias, whose boot kind the `-wsl` PATH test downstream could not see.
-for dest_bad in minix-amd-linux -oProxyCommand=true alice@rog-nv-linux \
+# An override must be the `-linux` or `-wsl` alias on ITS box's row of the endpoint map, and
+# anything else is refused: an alias of another box (the lane would reserve the wrong lock and leave
+# this one open to a restart mid-unit), the box's own Windows sshd or LAN route (no Linux to run a
+# suite on), an option-shaped word, a `user@` or a second `@` (the lock is derived from the same
+# string ssh parses, and every `@` spelling makes those readings disagree), and a custom alias,
+# whose boot kind the `-wsl` PATH test downstream could not see.
+for dest_bad in minix-amd-linux rog-nv-win rog-lan -oProxyCommand=true alice@rog-nv-linux \
   a@rog-nv-linux@elsewhere rog-lab; do
   : >"$ssh_calls"
   set +e
@@ -1511,7 +1514,7 @@ for dest_bad in minix-amd-linux -oProxyCommand=true alice@rog-nv-linux \
   dest_bad_override_rc=$?
   set -e
   dest_refused "$dest_bad_override_rc" "$dest_bad_override" dest-bad-override-probe
-  grep -qF "sweep: OCANNL_TOOL_SWEEP_DEST_ROG='$dest_bad' is not one of rog's aliases (rog-nv-linux or rog-nv-wsl)" \
+  grep -qF "sweep: OCANNL_TOOL_SWEEP_DEST_ROG='$dest_bad' is not the -linux or -wsl alias on rog's row (rog-nv-linux rog-nv-win rog-nv-wsl rog-lan)" \
     <<<"$dest_bad_override"
 done
 
@@ -1960,58 +1963,115 @@ absent 'reserved by' <<<"$hold_lock_ok"
 [ -e "$hold_locks/minix.lock" ]
 exec 6>&- 5>&-
 
-# The lab lock contract, checked at startup against the wake-lab.sh the run will meet
-# (gh-ocannl-1025). Both sides' spellings are read from code -- the sweep's lab_dest_of/lab_box_of,
-# the fake's endpoint map, which is the real one's rows -- and a disagreement refuses the RUN before
-# any lane starts: the dest_refused shape, with a line naming what moved. Each case breaks ONE fact
-# the real wake-lab.sh holds today. The first breaks the boot this run does NOT address, rog's WSL
-# alias under the native table: every boot of the box is checked, not only today's, because the
-# next reboot into the other one must not find the contract already broken.
+# The endpoint map is the sweep's only table of ssh aliases (gh-ocannl-1121): each remote unit's
+# destination is the `-<kind>` alias on its box's row of `wake-lab.sh endpoint-map`, and the box an
+# alias reserves is the row that lists it. So a map that lacks what a run needs refuses the RUN
+# before any lane starts -- the dest_refused shape, with a line naming what is missing -- and a map
+# that renames an alias is followed with no edit to the sweep. First the refusals: a box with no
+# row at all (renamed on wake-lab's side, so its lock would now be `<new name>.lock`)...
 lab_map_row_minix='minix minix-amd-linux minix-amd-win minix-amd-wsl minix-lan'
 lab_map_row_tuf='tuf tuf-amd-linux tuf-amd-win tuf-amd-wsl'
 : >"$ssh_calls"
 set +e
-contract_alias=$(SWEEP_TEST_ENDPOINT_MAP="$(printf '%s\n' \
-  'rog rog-nv-linux rog-nv-win rognv-wsl rog-lan' "$lab_map_row_minix" "$lab_map_row_tuf")" \
-  run_sweep_args --only cuda --target contract-alias-probe 2>&1)
-contract_alias_rc=$?
-set -e
-dest_refused "$contract_alias_rc" "$contract_alias" contract-alias-probe
-grep -qF "sweep: the lab lock contract with $fake_bin/wake-lab.sh is broken: rog-nv-wsl is not an endpoint on rog's row (rog-nv-linux rog-nv-win rognv-wsl rog-lan); a lane would reserve a box no destroyer checks, so fix the side that moved" \
-  <<<"$contract_alias"
-# A box renamed on wake-lab's side: its lock is now `<new name>.lock`, and a lane would take the old.
-set +e
-contract_box=$(SWEEP_TEST_ENDPOINT_MAP="$(printf '%s\n' \
+map_no_row=$(SWEEP_TEST_ENDPOINT_MAP="$(printf '%s\n' \
   'rognv rog-nv-linux rog-nv-win rog-nv-wsl rog-lan' "$lab_map_row_minix" "$lab_map_row_tuf")" \
-  run_sweep_args --only cuda --target contract-box-probe 2>&1)
-contract_box_rc=$?
+  run_sweep_args --only cuda --target map-no-row-probe 2>&1)
+map_no_row_rc=$?
 set -e
-dest_refused "$contract_box_rc" "$contract_box" contract-box-probe
-grep -qF 'is broken: its endpoint map has no row for rog, the box a lane to rog-nv-linux reserves;' \
-  <<<"$contract_box"
-# A lock directory the two sides no longer share.
+dest_refused "$map_no_row_rc" "$map_no_row" map-no-row-probe
+grep -qF "sweep: $fake_bin/wake-lab.sh endpoint-map has no row for rog" <<<"$map_no_row"
+grep -q '^sweep: no ssh destination for rog-nv/cuda; refusing to guess one$' <<<"$map_no_row"
+# ...a row with no alias for the boot the site table says the box is in today (a Linux-only row,
+# valid by wake-lab's rules, under the WSL table)...
+set +e
+map_no_boot=$(SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh SWEEP_TEST_ENDPOINT_MAP="$(printf '%s\n' \
+  'rog rog-nv-linux' "$lab_map_row_minix" "$lab_map_row_tuf")" \
+  run_sweep_args --only cuda --target map-no-boot-probe 2>&1)
+map_no_boot_rc=$?
+set -e
+dest_refused "$map_no_boot_rc" "$map_no_boot" map-no-boot-probe
+grep -qF "sweep: $fake_bin/wake-lab.sh endpoint-map lists no -wsl alias for rog, whose boot kind is wsl (its row: rog-nv-linux)" \
+  <<<"$map_no_boot"
+# ...a wake-lab.sh with no endpoint map to give (one from before the verb), and no wake-lab.sh at
+# all: with no map there is no remote destination, and nothing to fall back on.
+set +e
+map_none=$(SWEEP_TEST_ENDPOINT_MAP=none run_sweep_args --only cuda --target map-none-probe 2>&1)
+map_none_rc=$?
+set -e
+dest_refused "$map_none_rc" "$map_none" map-none-probe
+grep -qF "sweep: $fake_bin/wake-lab.sh endpoint-map gave no map (a wake-lab.sh from before ludics-lite#395?), so no remote unit has an ssh alias" \
+  <<<"$map_none"
+: >"$wake_lab_calls"
+rm -f "$wake_lab_calls.contract"
+set +e
+map_no_script=$(SWEEP_TEST_WAKE_LAB=$tmp/no-such-wake-lab.sh run_sweep_args --only hip \
+  --target map-no-script-probe 2>&1)
+map_no_script_rc=$?
+set -e
+dest_refused "$map_no_script_rc" "$map_no_script" map-no-script-probe
+grep -qF "sweep: no wake-lab.sh at $tmp/no-such-wake-lab.sh, whose endpoint map names every remote unit's ssh aliases (set OCANNL_TOOL_SWEEP_WAKE_LAB)" \
+  <<<"$map_no_script"
+[ ! -s "$wake_lab_calls" ]
+[ ! -e "$wake_lab_calls.contract" ]
+# Only a SELECTED remote unit needs the map: a local-only run asks wake-lab.sh nothing, and a run
+# whose lanes never reach the box with no row is not refused over it; the header names the boxes
+# whose locks were checked.
+dest_local_no_map=$(SWEEP_TEST_WAKE_LAB=$tmp/no-such-wake-lab.sh \
+  run_sweep_args --target map-local-probe)
+grep -q '^  m4-max/cc: incremental-pass ' <<<"$dest_local_no_map"
+absent '^lab locks:' <<<"$dest_local_no_map"
+[ ! -e "$wake_lab_calls.contract" ]
+contract_scope=$(SWEEP_TEST_ENDPOINT_MAP="$(printf '%s\n' \
+  'rognv rog-nv-linux rog-nv-win rog-nv-wsl rog-lan' "$lab_map_row_minix" "$lab_map_row_tuf")" \
+  run_sweep_args --only hip --target contract-scope-probe)
+grep -qF "lab locks: agree with $fake_bin/wake-lab.sh for minix tuf" <<<"$contract_scope"
+grep -q '^  minix/hip: skip (unreachable)$' <<<"$contract_scope"
+# A renamed alias is honoured with no change to the sweep: rog's row now spells its boots
+# `rog-rtx-*`, and each table reaches the new alias of today's boot, reserves rog's lock under it,
+# and accepts it as an override. The stale spelling is refused as an override, since the map no
+# longer lists it.
+lab_map_renamed=$(printf '%s\n' 'rog rog-rtx-linux rog-rtx-win rog-rtx-wsl rog-lan' \
+  "$lab_map_row_minix" "$lab_map_row_tuf")
+: >"$ssh_calls"
+rm -f "$tmp/lab-locks/rog.lock"
+map_renamed=$(SWEEP_TEST_ENDPOINT_MAP=$lab_map_renamed \
+  run_sweep_args --only cuda --target map-renamed-probe)
+grep -q '^destinations: rog-nv=rog-rtx-linux$' <<<"$map_renamed"
+grep -qF "lab locks: agree with $fake_bin/wake-lab.sh for rog" <<<"$map_renamed"
+grep -q '^  rog-nv/cuda: skip (unreachable)$' <<<"$map_renamed"
+grep -q ' rog-rtx-linux ' "$ssh_calls"
+absent rog-nv- "$ssh_calls"
+grep -q '^ocannl sweep ' "$tmp/lab-locks/rog.lock"
+: >"$ssh_calls"
+map_renamed_wsl=$(SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh SWEEP_TEST_ENDPOINT_MAP=$lab_map_renamed \
+  run_sweep_args --only cuda --target map-renamed-wsl-probe)
+grep -q '^destinations: rog-nv=rog-rtx-wsl$' <<<"$map_renamed_wsl"
+grep -q ' rog-rtx-wsl ' "$ssh_calls"
+map_renamed_override=$(SWEEP_TEST_HOSTS=$tmp/no-such-hosts.sh SWEEP_TEST_DEST_ROG=rog-rtx-wsl \
+  SWEEP_TEST_ENDPOINT_MAP=$lab_map_renamed run_sweep_args --only cuda --target map-renamed-override-probe)
+grep -q '^destinations: rog-nv=rog-rtx-wsl$' <<<"$map_renamed_override"
+: >"$ssh_calls"
+set +e
+map_stale_override=$(SWEEP_TEST_DEST_ROG=rog-nv-linux SWEEP_TEST_ENDPOINT_MAP=$lab_map_renamed \
+  run_sweep_args --only cuda --target map-stale-override-probe 2>&1)
+map_stale_override_rc=$?
+set -e
+dest_refused "$map_stale_override_rc" "$map_stale_override" map-stale-override-probe
+grep -qF "sweep: OCANNL_TOOL_SWEEP_DEST_ROG='rog-nv-linux' is not the -linux or -wsl alias on rog's row (rog-rtx-linux rog-rtx-win rog-rtx-wsl rog-lan)" \
+  <<<"$map_stale_override"
+
+# The lab lock contract, checked at startup against the wake-lab.sh the run will meet
+# (gh-ocannl-1025): which box an alias reserves is the map's, so what is left to check is that
+# `wake-lab.sh lock-path <box>` answers the file a lane opens. A lock directory the two sides no
+# longer share refuses the RUN, naming what moved.
 set +e
 contract_lock_path=$(SWEEP_TEST_LOCK_PATH_DIR=$tmp/elsewhere-locks \
   run_sweep_args --only cuda --target contract-lock-path-probe 2>&1)
 contract_lock_path_rc=$?
 set -e
 dest_refused "$contract_lock_path_rc" "$contract_lock_path" contract-lock-path-probe
-grep -qF "is broken: lock-path rog answers '$tmp/elsewhere-locks/rog.lock' where a lane locks $tmp/lab-locks/rog.lock;" \
+grep -qF "sweep: the lab lock contract with $fake_bin/wake-lab.sh is broken: lock-path rog answers '$tmp/elsewhere-locks/rog.lock' where a lane locks $tmp/lab-locks/rog.lock; a lane would reserve a box no destroyer checks, so fix the side that moved" \
   <<<"$contract_lock_path"
-# Only the boxes a SELECTED lane reserves are checked: the same renamed rog does not refuse a run
-# that never reserves it, and the header names the boxes it did check.
-contract_scope=$(SWEEP_TEST_ENDPOINT_MAP="$(printf '%s\n' \
-  'rognv rog-nv-linux rog-nv-win rog-nv-wsl rog-lan' "$lab_map_row_minix" "$lab_map_row_tuf")" \
-  run_sweep_args --only hip --target contract-scope-probe)
-grep -qF "lab locks: agree with $fake_bin/wake-lab.sh for minix tuf" <<<"$contract_scope"
-grep -q '^  minix/hip: skip (unreachable)$' <<<"$contract_scope"
-# A wake-lab.sh with no endpoint map to give -- one from before the verb -- cannot be checked, and
-# says so in the header; the lanes still run, since the lane lock needs no wake-lab.sh to be taken.
-contract_unchecked=$(SWEEP_TEST_ENDPOINT_MAP=none \
-  run_sweep_args --only cuda --target contract-unchecked-probe)
-grep -qF "lab locks: NOT CHECKED -- $fake_bin/wake-lab.sh endpoint-map gave no map (a wake-lab.sh from before ludics-lite#395?)" \
-  <<<"$contract_unchecked"
-grep -q '^  rog-nv/cuda: skip (unreachable)$' <<<"$contract_unchecked"
 
 # The lane's call site, which the ludics-lite side cannot see (it calls take_lab_lock as a
 # function): under EITHER boot, the lane reserves the file `wake-lab.sh lock-path` answers for the
@@ -2083,19 +2143,21 @@ res_windows=$(SWEEP_TEST_HOSTS=$tmp/hosts-wsl.sh SWEEP_TEST_REGISTRY=$res_window
   run_sweep_args --only cuda --target reservation-windows-probe)
 grep -qF '  rog-nv/cuda: skip (box rog under an exclusive measurement: wave-3-rog-win-1 (launching on rog-nv-win))' \
   <<<"$res_windows"
-# ...and so it does when wake-lab.sh gave no endpoint map (the NOT CHECKED path, which still runs):
-# the Windows name is then derived by the stem rule wake-lab enforces on every row, not dropped.
-res_windows_unmapped=$(SWEEP_TEST_ENDPOINT_MAP=none SWEEP_TEST_REGISTRY=$res_windows_registry \
-  run_sweep_args --only cuda --target reservation-windows-unmapped-probe)
-grep -q '^lab locks: NOT CHECKED' <<<"$res_windows_unmapped"
-grep -qF '  rog-nv/cuda: skip (box rog under an exclusive measurement: wave-3-rog-win-1 (launching on rog-nv-win))' \
-  <<<"$res_windows_unmapped"
-# ...including a boot the sweep never addresses: tuf is single-boot in the sweep's table, but the
-# lab's map lists its `-win` and `-wsl` too, and a measurement booked on either holds the box.
+# ...under whatever spelling the map gives it: with rog's row renamed, a measurement booked on the
+# new Windows alias holds the box too, with no edit to the sweep (gh-ocannl-1121).
+res_renamed_registry=$tmp/registry-renamed.json
+printf '%s\n' '[{"request_id": "wave-7-rog-rtx-1", "state": "running",' \
+  ' "request": {"kind": "measurement", "execution_host": "rog-rtx-win"}}]' >"$res_renamed_registry"
+res_renamed=$(SWEEP_TEST_ENDPOINT_MAP=$lab_map_renamed SWEEP_TEST_REGISTRY=$res_renamed_registry \
+  run_sweep_args --only cuda --target reservation-renamed-probe)
+grep -qF '  rog-nv/cuda: skip (box rog under an exclusive measurement: wave-7-rog-rtx-1 (running on rog-rtx-win))' \
+  <<<"$res_renamed"
+# ...including a boot the sweep never addresses: tuf's lane dials its Linux, but the lab's map lists
+# its `-win` and `-wsl` too, and a measurement booked on either holds the box.
 res_tuf_wsl_registry=$tmp/registry-tuf-wsl.json
 printf '%s\n' '[{"request_id": "wave-6-tuf-1", "state": "running",' \
   ' "request": {"kind": "measurement", "execution_host": "tuf-amd-wsl"}}]' >"$res_tuf_wsl_registry"
-res_tuf_wsl=$(SWEEP_TEST_ENDPOINT_MAP=none SWEEP_TEST_TUF_STATUS=up \
+res_tuf_wsl=$(SWEEP_TEST_TUF_STATUS=up \
   SWEEP_TEST_REGISTRY=$res_tuf_wsl_registry run_sweep_args --only hip --target reservation-tuf-wsl-probe)
 grep -qF '  tuf/hip: skip (box tuf under an exclusive measurement: wave-6-tuf-1 (running on tuf-amd-wsl))' \
   <<<"$res_tuf_wsl"
@@ -2719,17 +2781,7 @@ tuf_asleep_record=$(sed -n 's/^run:  *//p' <<<"$tuf_asleep")
   "$tuf_asleep_record")" = 'hip:gate:-:-:discrete/gfx1102' ]
 [ "$(awk -F '\t' '$2 == "tuf" && $7 == "tuf-asleep-probe" { print $5 ":" $6 }' "$state/history.tsv")" = \
   'gate:0' ]
-# A host with no wake-lab.sh cannot ask, and says that instead of guessing the box is up.
-: >"$wake_lab_calls"
-tuf_no_wake_lab=$(SWEEP_TEST_WAKE_LAB=$tmp/no-such-wake-lab.sh run_sweep_args --only hip \
-  --target tuf-asleep-probe)
-grep -qF "  tuf/hip: gate (tuf not asked: no wake-lab.sh at $tmp/no-such-wake-lab.sh)" \
-  <<<"$tuf_no_wake_lab"
-grep -qF "lab locks: NOT CHECKED -- no wake-lab.sh at $tmp/no-such-wake-lab.sh, so nothing on this host consults the lane locks" \
-  <<<"$tuf_no_wake_lab"
-[ ! -s "$wake_lab_calls" ]
-
-# Up: the unit is dialled at tuf's only alias, its window is the native kind by that alias alone,
+# Up: the unit is dialled at tuf's Linux alias, its window is the native kind by that alias alone,
 # its record carries the memory model, every work leg carries the guard -- and when the lane is
 # done the box is put back to sleep, which the fake grants only once the lane has let go of its
 # own reservation.
