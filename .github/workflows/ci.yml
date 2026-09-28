@@ -375,6 +375,18 @@ jobs:
       env:
         OCANNL_LOG_LEVEL_CC_BACKEND: 3
       run: opam exec -- dune build "@check" "@test/operations/runtest-cc_backend_trace_name"
+    # cc_march_census's two aarch64 columns skip without an aarch64 cross gcc,
+    # and until gh-ocannl-1120 no runner had one: gh-ocannl-1112's bf16 spill reached
+    # master unseen. The script says why gcc 15 and not the runner's own
+    # gcc-aarch64-linux-gnu; exporting the path makes a column that does not
+    # compile a census failure rather than a skip.
+    - name: Stage the aarch64 cross gcc for cc_march_census
+      if: runner.os == 'Linux' && matrix.suite == 'main'
+      # A bare assignment, so the script's failure fails the step (an `echo`
+      # around the substitution would succeed and export an empty path).
+      run: |
+        gcc=$(tools/ci-aarch64-cross.sh "$RUNNER_TEMP/aarch64-cross")
+        echo "AARCH64_CROSS_GCC=$gcc" >> "$GITHUB_ENV"
     # One walk, not `dune build` then `dune runtest`: as two commands, the
     # `(test)` stanzas and inline-test runners only start after every file
     # target -- including the golden-rule test executions `@default` carries and

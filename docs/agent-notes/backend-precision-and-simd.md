@@ -1097,7 +1097,11 @@ files.
   update. The generated `.c` includes only libc headers, so the whole matrix needs a
   toolchain and nothing else; the ARM columns need a cross gcc, pointed at by `AARCH64_CROSS_GCC`
   and reported through `Verdict.skipped` when absent, so the golden does not depend on the box
-  having one. Two shapes are load-bearing and were each arrived at from their failure. The census
+  having one. A NAMED `AARCH64_CROSS_GCC` that does not compile fails instead of skipping: CI's
+  ubuntu leg names the gcc 15 cross `tools/ci-aarch64-cross.sh` stages from Ubuntu 26.04's archive
+  (gh-ocannl-1120), because the gcc 13 and 14 crosses ubuntu-24.04 can install fail four claims
+  (the w16 register tile spills at `-O2` too, the fp16 widening goes lane by lane) that gcc 15
+  passes. Two shapes are load-bearing and were each arrived at from their failure. The census
   ordinarily picks the SMALLEST-span loop carrying the construct, identified through the `.loc`
   line numbers `-g` leaves in the assembly rather than guessed from the instruction mix — an outer
   loop dilutes every ratio, and a surviving serial tail is a smaller loop mentioning the same array,
@@ -1205,7 +1209,7 @@ files.
   operand on x86: gcc omits the frame pointer at `-O2` and allocates `%ebp` as a register, and
   `movzwl (%r14), %ebp` in a bf16 k-loop had read as a 12-reference spill.
 - **aarch64 gcc spills the bf16 tile's A column at `-O3` only: the pre-RA scheduler, not the
-  widening.** Neither CI nor rog has an aarch64 cross gcc, so the census's aarch64 columns went
+  widening.** Neither CI nor rog then had an aarch64 cross gcc, so the census's aarch64 columns went
   uncompiled until minix got one; the first run found the 4x6 bf16 tile at 16 bytes spilling two
   accumulators (4 stack references per k step) on both aarch64 targets. The B bridge was already one
   `shll` per vector. The cause is `-fschedule-insns`, which aarch64 gcc 15 enables at `-O3` but not
