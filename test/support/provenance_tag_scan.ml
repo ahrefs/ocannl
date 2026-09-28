@@ -38,7 +38,8 @@
       declarations; the owner's constructor is assumed everywhere else, since opens and aliases
       reach it in ways a reader of one file cannot follow -- except behind a qualifier of two or
       more components, whose identity is not established: that is the owner's only when it ends in
-      the owner's module ([Ir.Tnode.Site]).
+      the owner's module ([Ir.Tnode.Site]), and a module alias of such a path is established the
+      same way.
     - A constructor carrying provenances only ([Refined]) composes and mints nothing; its case of
       the renderer -- a [let rec], in a source binding no [( ^ )] of its own -- must return a
       concatenation of string literals and recursive calls rendering each of its arguments exactly
@@ -61,12 +62,13 @@
       else binds the name -- matches that constructor into a carrier
       ([match instantiate_computations ... with Error i -> ... (Site i)]). A handler or caller body
       that rebinds the payload's name anywhere, or changes module scope ([let open], [let module]),
-      is not read, nor is a guarded case. A scope reaching no carrier mints nothing. That covers the
-      literal at a [raise], the one handed to a helper that raises it, and the one a handler records
-      directly; a string the exception itself is applied to that is no tag is refused. The function
-      such a tag is minted in is the innermost value binding enclosing the exception's declaration
-      -- a declaration anew inside the scope opens its own -- which is what decides its PHASE, so a
-      relayed tag minted in two functions is refused. A tag computed at run time is not read.
+      is not read, nor is a guarded case, nor a caller's [exception] case. A scope reaching no
+      carrier mints nothing. That covers the literal at a [raise], the one handed to a helper that
+      raises it, and the one a handler records directly; a string the exception itself is applied to
+      that is no tag is refused. The function such a tag is minted in is the innermost value binding
+      enclosing the exception's declaration -- a declaration anew inside the scope opens its own --
+      which is what decides its PHASE, so a relayed tag minted in two functions is refused. A tag
+      computed at run time is not read.
 
     The minter of a tag of the other families is the innermost value binding around the literal.
 
@@ -454,6 +456,7 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
   let mints = ref [] and malformed = ref [] and consumers = ref [] and closed = ref [] in
   let structure = parse content in
   let own_module = module_of_path source in
+  let unestablished = "?" in
   let owner_module = if String.is_empty (fst owner) then "Tnode" else module_of_path (fst owner) in
   (* The module bindings in scope, innermost first, each to the module it resolved to. *)
   let env = ref [] in
@@ -488,7 +491,14 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
     Option.iter name ~f:(fun name ->
         let target =
           match (peel_module me).pmod_desc with
-          | Pmod_ident { txt; _ } -> Option.value_map (last_name txt) ~default:name ~f:resolve
+          | Pmod_ident { txt = Lident m; _ } -> resolve m
+          (* A longer path's identity is not established here: the owner's when it ends in the
+             owner's module, otherwise unestablished, and nothing is read through it. *)
+          | Pmod_ident { txt; _ } when Option.equal String.equal (last_name txt) (Some owner_module)
+            ->
+              owner_module
+          | Pmod_ident { txt; _ } -> (
+              match last_name txt with Some m when is_foreign m -> m | _ -> unestablished ^ name)
           | Pmod_structure _ when foreign_module me ->
               let target = source ^ ":" ^ name in
               local_foreign := target :: !local_foreign;
@@ -504,7 +514,11 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
   let is_carrier (lid : longident) =
     match lid with
     | Lident c -> List.mem carriers c ~equal:String.equal && not !unqualified_foreign
-    | Ldot (Lident q, c) -> List.mem carriers c ~equal:String.equal && not (is_foreign (resolve q))
+    | Ldot (Lident q, c) ->
+        List.mem carriers c ~equal:String.equal
+        &&
+        let m = resolve q in
+        not (is_foreign m || String.is_prefix m ~prefix:unestablished)
     | Ldot (q, c) ->
         (* A longer path's identity is not established here: only one ending in the owner's module
            ([Ir.Tnode.Site]) is taken for the owner's. *)
@@ -581,13 +595,15 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
       in
       (!carriers_hit, wrapped)
   in
-  (* [(constructor, v)] for each [C v] a pattern catches, the constructor as written. *)
-  let rec caught (p : pattern) =
+  (* [(constructor, v)] for each [C v] a pattern catches, the constructor as written; under
+     [exception] only when [exceptions] -- a returned value never reaches an exception case. *)
+  let rec caught ?(exceptions = true) (p : pattern) =
     match p.ppat_desc with
     | Ppat_construct ({ txt; _ }, Some (_, { ppat_desc = Ppat_var { txt = v; _ }; _ })) ->
         [ (txt, v) ]
-    | Ppat_exception p | Ppat_alias (p, _) | Ppat_constraint (p, _) -> caught p
-    | Ppat_or (a, b) -> caught a @ caught b
+    | Ppat_exception p -> if exceptions then caught ~exceptions p else []
+    | Ppat_alias (p, _) | Ppat_constraint (p, _) -> caught ~exceptions p
+    | Ppat_or (a, b) -> caught ~exceptions a @ caught ~exceptions b
     | _ -> []
   in
   (* An unqualified call names the source's own top-level function only when nothing else in the
@@ -734,7 +750,7 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
             Option.iter callee ~f:(fun (m, f) ->
                 List.iter cases ~f:(fun (c : case) ->
                     List.iter
-                      (if Option.is_some c.pc_guard then [] else caught c.pc_lhs)
+                      (if Option.is_some c.pc_guard then [] else caught ~exceptions:false c.pc_lhs)
                       ~f:(fun (k, v) ->
                         Option.iter (last_name k) ~f:(fun k ->
                             List.iter

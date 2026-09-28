@@ -34,6 +34,7 @@ a caller qualifying through a longer path, whose identity is not established, re
 a result returned only from a guarded nested case relays nothing: true
 a producer inside a nested module is not the top-level function a caller names: true
 a caller of a local module named like the producer's file relays nothing: true
+an exception case of a caller's match is not a returned result: true
 a guarded caller case relays nothing: true
 an unqualified caller of a name the source also binds locally relays nothing: true
 a payload wrapped in a result that the handler discards relays nothing: true
@@ -78,6 +79,7 @@ an open or include of a foreign module makes the unqualified name foreign in its
 a declaration of its own carrier-named constructor takes effect from where it is declared: true
 the owner's own declaration, in the owner's file, keeps the name the owner's: true
 a top-level include is read, constrained or not, so a module re-exporting a foreign one can be found: true
+an alias of a longer path is the owner's only when it ends in the owner's module: true
 a longer qualifier is the owner's only when it ends in the owner's module: true
 a foreign constructor applied unqualified in its own module mints nothing: true
 a foreign constructor qualified through an alias mints nothing; the owner's still does: true

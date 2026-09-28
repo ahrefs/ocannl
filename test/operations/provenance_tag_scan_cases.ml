@@ -344,6 +344,11 @@ let () =
         ("module Fixture = struct let consume _ = Ok () end\n"
         ^ String.substr_replace_all qualified ~pattern:"F.consume" ~with_:"Fixture.consume"))
      ~f:is_consume;
+   p_none "an exception case of a caller's match is not a returned result"
+     (with_caller
+        "exception Error of string\n\
+         let c y = match Fixture.consume y with exception Error i -> record (Site i) | _ -> ()")
+     ~f:is_consume;
    p_none "a guarded caller case relays nothing"
      (with_caller
         "let c y = match Fixture.consume y with Ok () -> () | Error i when false -> record (Site \
@@ -579,6 +584,17 @@ let () =
      (strings
         (Scan.top_level_includes "include Test_utils.Key_scan\ninclude (Other : S)\nlet x = 1")
         [ "Key_scan"; "Other" ]);
+   p "an alias of a longer path is the owner's only when it ends in the owner's module"
+     (strings
+        (tags
+           (read ~source:"test/i.ml"
+              "module Outer = struct module Foreign = struct type t = Site of string end end\n\
+               module P = Outer.Foreign\n\
+               let b = P.Site \"12:fixture-key\"\n\
+               module Q = Ir.Tnode\n\
+               let a = Q.Site \"13:fixture-owned\"")
+             .mints)
+        [ "13:fixture-owned" ]);
    p "a longer qualifier is the owner's only when it ends in the owner's module"
      (strings
         (tags
