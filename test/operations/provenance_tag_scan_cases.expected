@@ -2,6 +2,8 @@ the type's constructors split into rendered, carrier, composite and unread: true
 a constructor of another shape is unread, and refused: true
 a nullary constructor mints the tag its renderer case returns: true
 the renderer must return a carrier's string unchanged: true
+a composite renders each of its provenances, in order, through the renderer: true
+a composite dropping or reordering a provenance is refused: true
 a nullary constructor with no rendering is refused: true
 a missing type is refused rather than read as no family: true
 a carrier applied to no literal anywhere is the reader gone blind: true
@@ -13,6 +15,8 @@ a tag in a comment is minted by no family: true
 an exception whose payload no handler hands to a carrier opens no family: true
 a helper inside a scope mints for the scope, and a scope declared anew inside it is its own: true
 a same-named scope whose own handler does not relay mints nothing: true
+a handler whose carrier receives some other value than the payload relays nothing: true
+the same handler shape relays when the carrier does receive the payload: true
 a payload wrapped in a result constructor is relayed by a caller matching it into a carrier: true
 a result constructor no caller hands to a carrier relays nothing: true
 a caller of a same-named function of another module relays nothing: true
@@ -30,6 +34,7 @@ an identifier ending in a spelling word is not that word: true
 the exception with no number, or with a variable, cites nothing: true
 a longer number is not a prefix match on a shorter code: true
 an exception spelling cites only its own family's numbers: true
+a family whose last code is retired still has its citations read, and refused: true
 a word-number of a number no tag has is stale: true
 a bare numeral is not read: true
 a tag-shaped token no source mints is a stale citation: a retired tag in prose: true
@@ -49,6 +54,7 @@ a carrier applied to a string that is no tag is recorded, and refused: true
 a module declaring its own string constructor of a carrier's name is foreign: true
 a foreign constructor reached through a chain of module bindings mints nothing: true
 a module name resolves to the binding in scope where it is used: true
+a local structure declaring its own carrier-named constructor is foreign, inside and out: true
 a foreign constructor applied unqualified in its own module mints nothing: true
 a foreign constructor qualified through an alias mints nothing; the owner's still does: true
 a constructor's rendering minted by any other family is refused: true

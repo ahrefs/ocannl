@@ -141,6 +141,21 @@ let () =
                     ~with_:"Site s -> \"site:\" ^ s"))
             ~shape:(Scan.type_shape ~type_name:"provenance" type_source)
             ~mints ()));
+  (let composed text =
+     Scan.composite_renderings ~renderer:"provenance_to_string"
+       (String.substr_replace_all type_source
+          ~pattern:"provenance_to_string a ^ \" -> \" ^ provenance_to_string b" ~with_:text)
+   in
+   p "a composite renders each of its provenances, in order, through the renderer"
+     (strings (composed "provenance_to_string a ^ \" -> \" ^ provenance_to_string b") [ "Refined" ]);
+   p_all "a composite dropping or reordering a provenance is refused"
+     [ "provenance_to_string a"; "provenance_to_string b ^ \" -> \" ^ provenance_to_string a" ]
+     ~f:(fun text ->
+       has ~substring:"does not render each of its provenances"
+         (Scan.family_violations ~identities:[ "Site" ] ~composed:(composed text)
+            ~type_source:"t.ml"
+            ~shape:(Scan.type_shape ~type_name:"provenance" type_source)
+            ~mints ())));
   p "a nullary constructor with no rendering is refused"
     (has ~substring:"constructor Cap_fixture has no tag rendering"
        (Scan.family_violations ~identities:[ "Site" ] ~type_source:"t.ml"
@@ -208,6 +223,21 @@ let () =
    in
    p "a same-named scope whose own handler does not relay mints nothing"
      (strings (tags (resolve [ read lone ])) [ "2:fixture-first" ]));
+  (let scope handler =
+     "let f () =\n  let exception " ^ nv ^ " of string in\n  try raise (" ^ nv
+     ^ " \"2:fixture-first\") with " ^ handler
+   in
+   p_all "a handler whose carrier receives some other value than the payload relays nothing"
+     [
+       nv ^ " i -> let i = \"x\" in record (Site i)";
+       nv ^ " i -> List.iter l ~f:(fun i -> record (Site i))";
+       nv ^ " i -> (match o with Some i -> record (Site i) | None -> ())";
+       "Other." ^ nv ^ " i -> record (Site i)";
+     ]
+     ~f:(fun handler -> List.is_empty (resolve [ read (scope handler) ]));
+   p_exists "the same handler shape relays when the carrier does receive the payload"
+     (resolve [ read (scope (nv ^ " i -> let j = i in ignore j; record (Site i)")) ])
+     ~f:(fun (m : Scan.mint) -> String.equal m.tag "2:fixture-first"));
   p "a payload wrapped in a result constructor is relayed by a caller matching it into a carrier"
     (Option.equal String.equal (minter_of "4:fixture-consume") (Some "consume"));
   (let unconsumed =
@@ -277,6 +307,10 @@ let () =
      ints (named text) [ 7 ] && strings (stale text) [ "`" ^ nv ^ " 77`" ]);
   p "an exception spelling cites only its own family's numbers"
     (strings (stale (nv ^ " 6")) [ "`" ^ nv ^ " 6`" ]);
+  p "a family whose last code is retired still has its citations read, and refused"
+    (strings
+       (Scan.mentions ~spellings:[ nv ] ~mints:(rendered @ applied) ~test_tags:[] (nv ^ " 7")).stale
+       [ "`" ^ nv ^ " 7`" ]);
   p "a word-number of a number no tag has is stale"
     (strings (stale "see provenance 3") [ "`provenance 3`" ]);
   p "a bare numeral is not read" (ints (named "refused as 7 first, then as 9:fixture-helper") [ 9 ]);
@@ -378,6 +412,15 @@ let () =
        strings
          (tags (read ~source:"test/d.ml" ~foreign:[ "Key_scan" ] text).mints)
          [ "13:fixture-owned" ]);
+   p "a local structure declaring its own carrier-named constructor is foreign, inside and out"
+     (strings
+        (tags
+           (read ~source:"test/e.ml"
+              "module Local = struct type t = Site of string let x = Site \"12:fixture-key\" end\n\
+               let y = Local.Site \"12:fixture-key\"\n\
+               let z = Site \"13:fixture-owned\"")
+             .mints)
+        [ "13:fixture-owned" ]);
    p_empty "a foreign constructor applied unqualified in its own module mints nothing" ~over:[ own ]
      (read ~source:"test/support/key_scan.ml" ~foreign:[ "Key_scan" ] own).mints;
    p "a foreign constructor qualified through an alias mints nothing; the owner's still does"

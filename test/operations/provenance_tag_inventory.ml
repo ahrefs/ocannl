@@ -146,7 +146,7 @@ let scan ~records ~pinned root generated =
         let content = read file in
         if in_record file.path || own file.path || String.contains content '\000' then None
         else
-          let mention = Scan.mentions ~mints ~test_tags content in
+          let mention = Scan.mentions ~spellings:[ phase_family ] ~mints ~test_tags content in
           if List.is_empty mention.named && List.is_empty mention.stale then None
           else Some (file.path, mention))
   in
@@ -161,6 +161,7 @@ let scan ~records ~pinned root generated =
          path ^ ": does not parse as OCaml, so the tags it mints are unread")
     @ Scan.family_violations
         ~identities:(Option.value_map type_text ~default:[] ~f:(Scan.identity_renderings ~renderer))
+        ~composed:(Option.value_map type_text ~default:[] ~f:(Scan.composite_renderings ~renderer))
         ~type_source ~shape ~mints ()
     @ Scan.violations ~malformed ~mints
         ~pinned:(List.map pinned ~f:(fun (n, tags, _) -> (n, tags)))
