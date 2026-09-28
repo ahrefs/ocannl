@@ -53,6 +53,7 @@ the same reduction with a cell-wise zeroing is accepted: the scan writes what th
 composed: a NaN score ahead of a masked one poisons the normalizer: true
 rewritten: the all-masked step after the NaN keeps the poison: true
 a genuinely all-masked prefix leaves both normalizers finite and equal within 1e-6 relative: true
+an all-masked prefix at f64 leaves both normalizers finite and equal within 1e-12 relative: true
 an f16 chain: the f32-carried normalizer agrees with the per-step-rounded one within 2e-3: true
 a row of scores at the format's lowest finite value is a finite maximum in both forms, with the row length as normalizer: true
 a fully masked row leaves the composed normalizer NaN: true

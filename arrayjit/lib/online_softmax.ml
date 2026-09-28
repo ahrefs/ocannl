@@ -429,8 +429,12 @@ let state_prec (tn : Tn.t) =
   match Lazy.force tn.Tn.storage_prec with Ops.Double_prec _ as p -> p | _ -> Ops.single
 
 (* The most negative finite value of a state precision: the floor the rescaling reads the running
-   max through, so that [-inf] never meets itself in a subtraction (see the recurrence below). *)
-let lowest_finite = function Ops.Double_prec _ -> -.Float.max_value | _ -> -3.4028234663852886e38
+   max through, so that [-inf] never meets itself in a subtraction (see the recurrence below). Not
+   [Float.max_value], which Base defines as [infinity]: that floor is [-inf] itself, and a masked
+   prefix at f64 made every such row NaN. *)
+let lowest_finite = function
+  | Ops.Double_prec _ -> -.Float.max_finite_value
+  | _ -> -3.4028234663852886e38
 
 let emit_normalizer (nz : normalizer) : LL.t =
   let open LL in

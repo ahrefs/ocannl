@@ -492,6 +492,21 @@ let () =
     c_fin o_fin;
   p "a genuinely all-masked prefix leaves both normalizers finite and equal within 1e-6 relative"
     (Float.is_finite c_fin && close ~tol:1e-6 o_fin c_fin);
+  (* The same prefix at f64: the floor is the largest finite double, not Base's [Float.max_value]
+     (which is infinity -- a floor of [-inf] made the masked prefix NaN). Metal has no doubles. *)
+  let f64 = not (String.equal (String.lowercase backend_name) "metal") in
+  let c64, o64 =
+    if f64 then both ~precs:(uniform Ir.Ops.double) "os_masked_f64" masked else (0., 0.)
+  in
+  if f64 then
+    eprintf
+      "normalizers for [-inf; -inf; 0; 1; 2] at f64: composed %.17g online %.17g (not part of the \
+       golden)\n\
+       %!"
+      c64 o64;
+  gated ~when_:f64 ~on:backend_name
+    "an all-masked prefix at f64 leaves both normalizers finite and equal within 1e-12 relative"
+    (Float.is_finite c64 && close ~tol:1e-12 o64 c64);
   (* Executed at a narrow uniform precision: the composed form rounds every intermediate to f16 per
      step while the carried pair lives at f32 -- the one difference beyond summation order, and it
      stays within f16's own resolution. *)
