@@ -459,13 +459,13 @@ test/operations/tile_mma_declines.ml
 test/operations/tile_mma_geometry.ml [also pins text this scan cannot name]
     "; column tail 3 in 1 vector; row tail 2)"
     "geometry from the schedule"
-    "h, 3, tmma_c_0_0__"
+    "ocannl_pv__ = {" ^ ...
     "tmma_acc__"
     "tmma_c_0_0__ = {" ^ ...
-    "tmma_c_0_0__ = {0};"
-    "u32, 3, tmma_c_0_0__"
+    ... ^ " = ocannl_pv__[2];"
     ... ^ " = tmma_c_0_0__[2];"
     ... ^ "};"
+    sprintf "%d, tmma_c_0_0__, (const %s *)&%s);"
 test/operations/tile_mma_narrow.ml [also pins text this scan cannot name]
     "HALF_T tile_"
     "OCANNL_VEC_NARROW_BFLOAT16"

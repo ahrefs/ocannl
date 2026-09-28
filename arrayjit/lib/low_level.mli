@@ -1304,7 +1304,19 @@ val code_hum_margin : int ref
 val function_header_doc :
   ?name:string -> ?static_indices:Indexing.static_symbol list -> unit -> PPrint.document
 
-val get_ident_within_code : ?no_dots:bool -> ?blacklist:string list -> t array -> Tnode.t -> string
+val get_ident_within_code :
+  ?no_dots:bool ->
+  ?blacklist:string list ->
+  ?reserved_prefixes:string list ->
+  t array ->
+  Tnode.t ->
+  string
+(** The code-name minter for the nodes [llcs] mention. A node whose label ident is in [blacklist],
+    or starts with one of [reserved_prefixes], is treated as a repeating ident: it takes the
+    disambiguated [n<id>_<label>] form rather than the bare label, so it cannot equal a name the
+    emitter declares. A prefix reserves a namespace whose members are minted on the fly -- the
+    C-family emitters' [ocannl_vec<lanes><suffix>] typedefs, one per lane count (gh-ocannl-1102) --
+    which no finite blacklist can list. *)
 
 val to_doc_cstyle :
   ?name:string -> ?static_indices:Indexing.static_symbol list -> unit -> t -> PPrint.document
