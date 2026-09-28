@@ -33,3 +33,6 @@ the shipped routine computes the plain compile's values: true
 arm A died after timing something: true
 against a failed arm A the hopeless flip is searched in full: true
 and arm B, the only better shippable result, ships: true
+a contended flip abandoned against a failed arm A would still fail the claim: true
+the shipped routine computes the plain compile's values: true
+a flip whose every window is refused is left undecided, not failed: true
