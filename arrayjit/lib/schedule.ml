@@ -2069,6 +2069,18 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
       zero_fringe = Set.add opt.zero_fringe tile;
     }
 
+(* A statement that only moves data into the schedule's own scratch — [Stage] copy nests, barriers,
+   comments — and so is not a statement of the source program: every write it makes is to a
+   [tile]-namespace node, and it declares or sets no scope local. *)
+let rec schedule_scratch (llc : Low_level.t) =
+  match llc with
+  | Low_level.Noop | Comment _ | Staged_compilation _ | Workgroup_barrier -> true
+  | Seq (a, b) -> schedule_scratch a && schedule_scratch b
+  | For_loop { body; _ } | If { body; _ } -> schedule_scratch body
+  | Set { tn; _ } | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } | Zero_out tn ->
+      String.equal tn.Tn.namespace tile_namespace
+  | Declare_local _ | Set_local _ | Scan_loop _ | Tile_mma _ -> false
+
 (** {2 [Privatize]: accumulator privatization}
 
     Virtualization already privatizes accumulators — that is what [Local_scope] is — but it is
@@ -2160,20 +2172,11 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
          run under the {e same} predicate, or stale lanes clobber the result. *)
       let accesses = ref [] in
       let has_write = ref false in
-      let updates = ref [] in
-      let source_siblings = ref false in
-      (* A write of a node other than [target] and the schedule's own scratch ([Stage] tiles,
-         earlier [Privatize] tiles) is a statement of the source program beside the accumulation. *)
-      let note_write tn =
-        if (not (Tn.equal tn target)) && not (String.equal tn.Tn.namespace tile_namespace) then
-          source_siblings := true
-      in
       let rec scan stack conds llc =
         match llc with
         | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier -> ()
         | Tile_mma _ -> invalid_arg "Schedule.Privatize: apply Privatize before Tensorize"
         | Zero_out tn ->
-            note_write tn;
             if Tn.equal tn target then
               invalid_arg "Schedule.Privatize: Zero_out of the target inside the accumulation loop"
         | Seq (a, b) ->
@@ -2184,20 +2187,16 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
         | Scan_loop _ ->
             invalid_arg "Schedule.Privatize: a Scan_loop inside the privatized loop is unsupported"
         | Set { tn; idcs; llsc; _ } ->
-            note_write tn;
             if Tn.equal tn target then (
               has_write := true;
-              updates := (idcs, llsc, stack, conds) :: !updates;
               accesses := (idcs, stack, conds) :: !accesses);
             scan_scalar stack conds llsc
         | Set_dynamic { tn; dyn_value = v, _; llsc; _ } ->
-            note_write tn;
             if Tn.equal tn target then
               invalid_arg "Schedule.Privatize: dynamically indexed target writes are unsupported";
             scan_scalar stack conds v;
             scan_scalar stack conds llsc
         | Set_from_vec { tn; arg = a, _; _ } ->
-            note_write tn;
             if Tn.equal tn target then
               invalid_arg "Schedule.Privatize: vector writes to the target are unsupported";
             scan_scalar stack conds a
@@ -2399,48 +2398,61 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
       in
       let scalar_acc = Array.is_empty tile_axes in
       let tile_dims = if scalar_acc then [| 1 |] else Array.map tile_axes ~f:snd in
-      (* Which width the tile takes (gh-ocannl-1116 review rounds 1-3, Codex P1s on staging PR
+      (* Which width the tile takes (gh-ocannl-1116 review rounds 1-4, Codex P1s on staging PR
          #880). A STORAGE-precision tile is rendered by code generation exactly as [target] would be
          — the same per-nest peel, the same declines — so it narrows wherever the unprivatized
-         schedule does. The residency is for the case a reordering schedule breaks: the source
-         program's reduction nest, which code generation peels and holds wide, laid out so that the
-         tile's cell varies under inner loops where no peel reaches it. So the question is code
-         generation's own, asked of that SOURCE-order nest: [over] and the reduction loops inside it
-         (those the cell does not mention — the output loops are the ones a schedule sinks inside),
-         around the update under its guards, peeled by [Low_level.peel_accum_nest] with the
-         routine's loop bounds and judged by [accum_update_widens]. It holds only for a single
-         update statement with no source statement beside it (schedule scratch — [Stage] tiles —
-         does not count): the peel refuses a level carrying siblings, whose separate stores are
-         their semantics. Everything else keeps storage: sibling statements, a guard the peel will
-         not cross, a non-reduction or mixed-operator recurrence, an RNG-bearing contribution,
-         routine logging, a scope-form base. *)
+         schedule does. The residency is for the case a reordering schedule breaks: a source
+         reduction nest code generation peels and holds wide, laid out so that the tile's cell
+         varies under inner loops where no peel reaches it. So the question is code generation's
+         own, asked of the SOURCE-order nest, reconstructed without re-deriving any part of the
+         peel: the privatized loop's subtree with the schedule's scratch statements dropped
+         ({!schedule_scratch}) must be one chain of loops and guards down to the single update of
+         [target] — any other statement beside it (a write of another node, a [Declare_local] /
+         [Set_local] computation, a second update) is kept, so the chain fails exactly where the
+         peel refuses a level carrying siblings. The loops the cell does not mention are the
+         reduction levels, kept in order with the guards; the output loops, which a schedule sinks
+         inside, are dropped. [Low_level.peel_accum_nest] then decides the nest with the routine's
+         loop bounds, and [accum_base_widens] its base — a raw update or a scope-form base a
+         previous materializing rewrite minted, which code generation hoists through the outer
+         reduction levels. Everything else keeps storage. *)
       let tile_prec =
         let storage = Lazy.force target.Tn.storage_prec in
-        match !updates with
-        | [ (idcs, llsc, stack, conds) ] when not !source_siblings -> (
-            let reduction_level (fl : floop) =
-              not
-                (Array.exists idcs ~f:(fun idx ->
-                     match terms_of_index idx with
-                     | Some (terms, _) ->
-                         List.exists terms ~f:(fun (_, s) -> Indexing.equal_symbol s fl.index)
-                     | None -> true))
-            in
-            let base =
-              List.fold conds
-                ~init:(Set { tn = target; idcs; llsc; debug = "" })
-                ~f:(fun body cond -> If { cond; body })
+        let rec chain (llc : t) =
+          match
+            List.filter (flat_lines [ llc ]) ~f:(fun st ->
+                code_touches_tn target st || not (schedule_scratch st))
+          with
+          | [ For_loop { index; from_; to_; body; axis } ] ->
+              Option.map (chain body) ~f:(fun (levels, st) ->
+                  (`Loop { index; from_; to_; body = Noop; axis } :: levels, st))
+          | [ If { cond; body } ] ->
+              Option.map (chain body) ~f:(fun (levels, st) -> (`Guard cond :: levels, st))
+          | [ (Set { tn; _ } as st) ] when Tn.equal tn target -> Some ([], st)
+          | _ -> None
+        in
+        match chain fc.body with
+        | Some (levels, (Set { idcs; _ } as st)) -> (
+            let mentioned sym =
+              Array.exists idcs ~f:(fun idx ->
+                  match terms_of_index idx with
+                  | Some (terms, _) ->
+                      List.exists terms ~f:(fun (_, s) -> Indexing.equal_symbol s sym)
+                  | None -> true)
             in
             let nest =
-              List.fold
-                (List.filter stack ~f:reduction_level @ [ fc ])
-                ~init:base
-                ~f:(fun body (fl : floop) ->
-                  For_loop
-                    { index = fl.index; from_ = fl.from_; to_ = fl.to_; body; axis = fl.axis })
+              List.fold_right
+                (`Loop { fc with body = Noop } :: levels)
+                ~init:st
+                ~f:(fun level body ->
+                  match level with
+                  | `Guard cond -> If { cond; body }
+                  | `Loop (fl : floop) when mentioned fl.index -> body
+                  | `Loop fl ->
+                      For_loop
+                        { index = fl.index; from_ = fl.from_; to_ = fl.to_; body; axis = fl.axis })
             in
             match peel_accum_nest ~loop_bounds:(loop_bounds opt.llc) ~free_of:[] nest with
-            | Some (_, _, `Update u, _, _) when accum_update_widens ~tn:target ~idcs u -> acc_prec
+            | Some (_, _, base, _, _) when accum_base_widens ~tn:target ~idcs base -> acc_prec
             | _ -> storage)
         | _ -> storage
       in
@@ -2512,6 +2524,35 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
       let remapped =
         remap_reads ~writes:true ~source:target ~from_idcs:idcs0 ~tile ~tile_idcs:tile_read_idcs
           fc.body
+      in
+      (* A scope-form base keeps [target]'s scope id after the remap, and code generation types a
+         scope local — and narrows its opening init — by its id's node: re-key the accumulating
+         scope to the widened tile, or every iteration of [over] would re-narrow the tile's value
+         through [target]'s storage on entry (the round-4 two-axis leg on CUDA read that). *)
+      let remapped =
+        if Ops.equal_prec tile_prec (Lazy.force target.Tn.storage_prec) then remapped
+        else
+          let rekey (id : scope_id) = if Tn.equal id.tn target then { id with tn = tile } else id in
+          let rec go (llc : t) : t =
+            match llc with
+            | Seq (a, b) -> Seq (go a, go b)
+            | For_loop fl -> For_loop { fl with body = go fl.body }
+            | If i -> If { i with body = go i.body }
+            | Set st -> Set { st with llsc = go_scalar st.llsc }
+            | Declare_local d -> Declare_local { d with id = rekey d.id }
+            | Set_local (id, v) -> Set_local (rekey id, go_scalar v)
+            | other -> other
+          and go_scalar (v : scalar_t) : scalar_t =
+            match v with
+            | Local_scope sc -> Local_scope { sc with id = rekey sc.id; body = go sc.body }
+            | Get_local id -> Get_local (rekey id)
+            | Binop (op, (a, pa), (b, pb)) -> Binop (op, (go_scalar a, pa), (go_scalar b, pb))
+            | Unop (op, (a, pa)) -> Unop (op, (go_scalar a, pa))
+            | Ternop (op, (a, pa), (b, pb), (c, pc)) ->
+                Ternop (op, (go_scalar a, pa), (go_scalar b, pb), (go_scalar c, pc))
+            | other -> other
+          in
+          go remapped
       in
       unflat_lines
         [

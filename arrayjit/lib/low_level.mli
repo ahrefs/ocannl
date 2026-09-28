@@ -439,6 +439,15 @@ val accum_update_widens : tn:Tnode.t -> idcs:Indexing.axis_index array -> scalar
     update, an RNG-bearing one — narrows to storage at every step in the serial rendering, and a
     [Schedule.Privatize] tile taking it over stays at storage precision too (gh-ocannl-1116). *)
 
+val accum_base_widens :
+  tn:Tnode.t ->
+  idcs:Indexing.axis_index array ->
+  [ `Update of scalar_t | `Scope of scope_id * t list ] ->
+  bool
+(** For a base {!peel_accum_nest} reached: whether code generation holds it at the accumulator
+    residency — {!accum_update_widens} for a raw update; for a scope-form base, routine logging off
+    and no RNG conversion in its scope local's assignments. *)
+
 val accum_local_update_parts : id:scope_id -> scalar_t -> (Ops.binop * scalar_t) option
 (** The reduce-shaped update of a scope LOCAL, [local = op(local, contrib)] (or its FMA form) with
     [contrib] free of the local — [subst_accum_read]'s output shape; returns [(op, contrib)]. The

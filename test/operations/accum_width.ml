@@ -163,6 +163,10 @@ let claim_2ax_inner =
   "materialized-unrolled INNER reduction axis equals the serial result (the scope hoists through \
    the outer reduction loop)"
 
+let claim_2ax_priv_outer =
+  "a Privatize over the outer reduction axis, around the inner axis's materialized scope, equals \
+   the serial result"
+
 let claim_2ax_outer = "materialized-unrolled OUTER reduction axis equals the serial result"
 let claim_2ax_annot = "Unroll-annotated both reduction axes equals the serial result"
 
@@ -500,6 +504,7 @@ let all_claims =
     claim_partition_compose;
     claim_2ax_ref;
     claim_2ax_inner;
+    claim_2ax_priv_outer;
     claim_2ax_outer;
     claim_2ax_annot;
     claim_2ax_both_mat;
@@ -677,6 +682,44 @@ let default_bf16_block () =
           Sched.Unroll { axis = r; materialize = true };
           Sched.Unroll { axis = s; materialize = false };
         ]);
+    (* A PRIVATIZED outer reduction axis over the scope form the inner unroll minted (gh-ocannl-1116
+       review round 4): swapping the output loop inside the outer reduction loop makes the tile's
+       cell vary under it, so no peel reaches the tile — a storage tile would narrow once per outer
+       iteration, while code generation hoists the scope-form base through the serial nest. The tile
+       must take the residency for a scope-form base too, and the scope must be re-keyed to the
+       tile: under [target]'s scope id its opening init re-narrows through bf16 on every outer
+       iteration wherever bf16 computes at storage width (CUDA read 14.5625 for 14.5 before the
+       re-key). *)
+    let accum_target (opt : LL.optimized) =
+      let rec go (llc : LL.t) =
+        match llc with
+        | LL.Set { tn; llsc; _ } when LL.scalar_touches_tn tn llsc -> Some tn
+        | LL.Set { llsc = LL.Local_scope _; tn; _ } -> Some tn
+        | LL.For_loop { body; _ } | LL.If { body; _ } -> go body
+        | LL.Seq (a, b) -> Option.first_some (go a) (go b)
+        | _ -> None
+      in
+      Option.value_exn (go opt.LL.llc)
+    in
+    let got_priv2 =
+      run2 ~name:"aw2_unroll_inner_priv_outer"
+        ~schedule:(fun opt ->
+          let target = accum_target opt in
+          two_axis_sched opt ~f:(fun ~r ~s ->
+              let i =
+                match List.find_exn (nest_paths opt.LL.llc) ~f:(fun p -> List.length p = 3) with
+                | i :: _ -> i
+                | [] -> assert false
+              in
+              [
+                Sched.Unroll { axis = s; materialize = true };
+                Sched.Swap { outer = i; inner = r };
+                Sched.privatize ~accum_prec:codegen_capabilities.Ir.Backend_intf.accum_prec ~target
+                  ~over:r;
+              ]))
+        ()
+    in
+    p_all2 claim_2ax_priv_outer got_priv2 got2 ~f:Float.equal;
     (* === a VECTORIZED inner reduction axis === *)
     (* The nest peel rides through the Vectorized level, and the SIMD reduction rendering folds
        its chains into the scope LOCAL (no storage round-trip): the whole nest keeps one wide
@@ -1345,7 +1388,8 @@ let () =
    sibling accumulation statements into one cell, whose separate stores are their semantics: each
    update alone would widen, but the peel refuses a level carrying two (256 +1 +1 twice is 260
    wide and stays 256), and a reduction beside a statement writing another node, which the peel
-   refuses the same way (256 + 1 + 1 stays 256; round 3). The positive control is one reduction statement the tile must widen with
+   refuses the same way (256 + 1 + 1 stays 256; round 3) — or beside a [Declare_local] /
+   [Set_local] computation, the shape online softmax's hoist emits (round 4). The positive control is one reduction statement the tile must widen with
    the serial rendering (256 + 1 + 1 reaches 258), so the declined legs' 256 is the gate and not a
    tile that never widened. All under [Bf16_wide], where the residency itself widens bf16 on every
    backend; the per-update gate is the shared [Low_level.accum_update_widens]. *)
@@ -1368,6 +1412,10 @@ let claim_priv_gate_other =
   "a privatized reduction beside another node's statement keeps per-step narrowing with the serial \
    rendering (256 + 1 + 1 stays 256)"
 
+let claim_priv_gate_local =
+  "a privatized reduction beside a scope-local computation keeps per-step narrowing with the \
+   serial rendering (256 + 1 + 1 stays 256)"
+
 let claim_priv_gate_mixed =
   "a privatized mixed-operator update keeps per-step narrowing with the serial rendering (max(256 \
    + 1, 0) twice stays 256)"
@@ -1376,17 +1424,36 @@ let () =
   let bf16 = Ir.Ops.bfloat16 in
   let node = Ll_test.node_factory ~prec:bf16 ~first_id:9900 ~dims:[| 1 |] () in
   let cell = [| Ll_test.fixed 0 |] in
-  let leg ?(siblings = 1) ?(other = false) ~label ~update () =
+  let leg ?(siblings = 1) ?(other = false) ?(local = false) ~label ~update () =
     let acc = node label in
     Ll_test.materialize acc;
     let other_node = node (label ^ "_other") in
     Ll_test.materialize other_node;
     let k = Ll_test.sym () in
-    let llsc = update (Ll_test.get acc cell) in
+    let loc_node = node (label ^ "_loc") in
+    Ll_test.virtualize loc_node;
+    let loc = LL.get_scope loc_node in
+    (* The local-computation leg's update is a recognized reduction whose contribution reads the
+       scope local, so the per-update gate alone would widen it: only the sibling statements
+       decline. *)
+    let llsc =
+      if local then
+        LL.Binop
+          ( Ir.Ops.Add,
+            (Ll_test.get acc cell, bf16),
+            (LL.Binop (Ir.Ops.Add, (LL.Get_local loc, bf16), (LL.Constant 1.0, bf16)), bf16) )
+      else update (Ll_test.get acc cell)
+    in
     let raw () =
       Ll_test.loop_n k 2
         (LL.unflat_lines
-           (List.init siblings ~f:(fun _ -> Ll_test.set acc cell llsc)
+           ((if local then
+               [
+                 LL.Declare_local { id = loc; needs_init = false };
+                 LL.Set_local (loc, LL.Constant 0.0);
+               ]
+             else [])
+           @ List.init siblings ~f:(fun _ -> Ll_test.set acc cell llsc)
            @ if other then [ Ll_test.set other_node cell (LL.Constant 7.0) ] else []))
     in
     let exec ~name o =
@@ -1421,6 +1488,9 @@ let () =
       let _, s_oth, p_oth =
         leg ~other:true ~label:"aw_pg_oth" ~update:(fun a -> bin Ir.Ops.Add a (LL.Constant 1.0)) ()
       in
+      let _, s_loc, p_loc =
+        leg ~local:true ~label:"aw_pg_loc" ~update:(fun a -> bin Ir.Ops.Add a (LL.Constant 1.0)) ()
+      in
       let w_sub, s_sub, p_sub =
         leg ~label:"aw_pg_sub" ~update:(fun a -> bin Ir.Ops.Sub a (LL.Constant 0.5)) ()
       in
@@ -1431,12 +1501,13 @@ let () =
       in
       Stdio.eprintf
         "accum_width: privatize gate legs serial/privatized: add %g/%g, siblings %g/%g, \
-         beside-other %g/%g, sub %g/%g, mixed %g/%g (not part of the golden)\n\
+         beside-other %g/%g, beside-local %g/%g, sub %g/%g, mixed %g/%g (not part of the golden)\n\
          %!"
-        s_add p_add s_sib p_sib s_oth p_oth s_sub p_sub s_mix p_mix;
+        s_add p_add s_sib p_sib s_oth p_oth s_loc p_loc s_sub p_sub s_mix p_mix;
       p claim_priv_gate (w_add && w_sib && (not w_sub) && not w_mix);
       p claim_priv_gate_sib (Float.equal s_sib 256.0 && Float.equal p_sib 256.0);
       p claim_priv_gate_other (Float.equal s_oth 256.0 && Float.equal p_oth 256.0);
+      p claim_priv_gate_local (Float.equal s_loc 256.0 && Float.equal p_loc 256.0);
       p claim_priv_gate_add (Float.equal s_add 258.0 && Float.equal p_add 258.0);
       p claim_priv_gate_sub (Float.equal s_sub 256.0 && Float.equal p_sub 256.0);
       p claim_priv_gate_mixed (Float.equal s_mix 256.0 && Float.equal p_mix 256.0))
