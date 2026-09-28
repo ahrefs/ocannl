@@ -1297,7 +1297,11 @@
 # says. It reassociates the value contraction as well (`(sum p * v) / l` for `sum (p / l) * v`),
 # within the same numerics gate. A key count not a multiple of B leaves a guarded tail; a pattern
 # the fold cannot prove (active dropout between the probabilities and the value contraction, a
-# score that is not a contraction of two reads) keeps the two-pass form.
+# score that is not a contraction of two reads) keeps the two-pass form. On a GPU whose matrix
+# units take f32 (Metal's simdgroup_matrix), the default schedule computes the block's score and
+# value contractions on them, one lane per query row, when the query count is a multiple of the
+# SIMD width, B divides the key count and the intrinsic tile divides B and the head widths;
+# otherwise, and on cc, the fold runs as scalar code.
 # Programmatic override: `Ir.Online_softmax.set_block`.
 #online_softmax_block=0
 

@@ -39,6 +39,8 @@ type mint_role =
   | Split_reduce_block
   | Split_reduce_inner
   | Split_reduce_combine of int  (** The [i]-th combine symbol of a [Split_reduce]. *)
+  | Fold_mma_lane
+  | Fold_mma_block
 [@@deriving sexp, compare, equal]
 
 (** A process-independent name for a symbol occurring in a schedule. [Base i] is the [i]-th
@@ -96,6 +98,7 @@ type saved_optop =
     }
   | Fuse_epilogue of { target : int; shared : bool }
   | Split_reduce of { axis : sym_ref; target : int; num_blocks : int }
+  | Fold_mma of { query : sym_ref; width : int }
 [@@deriving sexp, compare, equal]
 
 type saved_schedule = saved_optop list [@@deriving sexp, compare, equal]

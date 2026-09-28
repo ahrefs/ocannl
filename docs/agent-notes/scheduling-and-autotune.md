@@ -22,6 +22,18 @@ files.
   (each lane recomputes it: the recomputed-scores form's inlined `q . k` cost 1.5x at seq 1024 on
   Metal under lanes) and must precede exactly ONE loop: a nest with two sibling channel loops under
   one preamble (a fused dK+dV) is not reached. `test/operations/gpu_serial_lanes`; measured in `benchmarks/report-gh1003-stage1.md`.
+- **A contraction inside a scan body is tensorized by rewriting the whole scan's owner, not by
+  `Tensorize`** (gh-ocannl-1003, `Schedule.Fold_mma`): `rewrite_loop` does not enter a scan, and
+  a lane loop minted inside the body would take a second `Workgroup` slot under the row loop. The
+  online-softmax fold's shape is lane = query row: the row loop around the scan becomes the
+  `Workgroup` lane loop, each lane runs its row's scan in lockstep (carried state stays per-lane
+  scalars), and each contraction becomes one block `Tile_mma` whose `lane` is that outer loop,
+  between explicit barriers (a `Tile_mma`'s leading bracket is form-dependent, see below).
+  `validate_parallel` and the renderer take this unchanged; what they refuse is a guard around a
+  barrier, so query and key tails keep the scalar form. It is GPU-only: a `Workgroup` loop
+  enclosing barriers has no serial rendering (cc would finish lane 0's scan before lane 1 starts).
+  Read the per-statement census (`Context.routine.mma` renderings), not the aggregate, to show both
+  contractions tensorized (`test/operations/online_softmax_block_mma`).
 - A GPU schedule must cover EVERY materialized-writing nest of the routine, not only the one the
   pipeline builds. Launch dimensions are kernel-global, so `Low_level.validate_parallel` rejects any
   companion write (a bias/relu tail; the elementwise statements an aligned-merged fission segment

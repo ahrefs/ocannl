@@ -198,7 +198,7 @@ let is_loop_rewrite (op : Sched.optop) =
     ->
       true
   | Sched.Split_reduce _ | Sched.Tensorize _ | Sched.Stage _ | Sched.Privatize _
-  | Sched.Expand_zero _ | Sched.Fuse_epilogue _ ->
+  | Sched.Expand_zero _ | Sched.Fuse_epilogue _ | Sched.Fold_mma _ ->
       false
 
 (* One root context for the whole run: [Context.compile] forks the lineage per compile, so members
@@ -1619,6 +1619,11 @@ let optop_coverage (op : Sched.optop) : coverage =
       Out_of_scope
         "splices a consumer AFTER the reduction's closing store, so the form it follows is \
          whichever one this table already pins"
+  | Sched.Fold_mma _ ->
+      Out_of_scope
+        "rewrites the online-softmax block fold whole: its two contractions become Tile_mma \
+         statements, whose form tile-mma-fallback pins, and its per-row reductions keep the form \
+         the rewrite emitted (test/operations/online_softmax_block pins the fold)"
 
 let axis_coverage (ty : LL.axis_type) : coverage =
   match ty with

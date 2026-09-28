@@ -6384,3 +6384,18 @@
   (diff
    online_softmax_block_fast_math.expected
    online_softmax_block_fast_math.actual)))
+
+; gh-ocannl-1003: the block fold's contractions on matrix units (Schedule.Fold_mma). Picks its
+; backend from the environment; reads generated code through Test_utils.Generated.
+
+(test
+ (name online_softmax_block_mma)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BUILD_FILES_PREFIX)
+  (env_var OCANNL_BACKEND))
+ (modules online_softmax_block_mma)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
