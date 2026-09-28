@@ -41,7 +41,7 @@ In OCANNL, we call a tensor that is prohibited from propagating gradients, does 
 - `%op` assumes that any extension point will be in the scope of a module `TDSL` that provides at least the functionality of `Operation.TDSL`.
 - Both extensions assume `Tensor` (from the `Ocannl` wrapper) is in scope.
 
-Functions inside `Operation.NTDSL` use `~grad_spec:Prohibit_grad` when calling into `Tensor`, making the resulting tensors non-differentiable. Functions inside `Operation.TDSL` use `~grad_spec:If_needed`, which will make the tensors non-differentiable when the gradient is not needed -- except for `TDSL.param`, which makes the final parameter tensor differentiable after evaluating its initializer as forward-only code.
+Functions inside `Operation.NTDSL` use `~grad_spec:Prohibit_grad` when calling into `Tensor`, making the resulting tensors non-differentiable. Functions inside `Operation.TDSL` use `~grad_spec:If_needed`, which will make the tensors non-differentiable when the gradient is not needed -- except for `TDSL.param`, which makes the final parameter tensor differentiable after evaluating its initializer as forward-only code. A `Prohibit_grad` operation cuts the gradient at that operation whatever its operands are: `Tensor.op` builds no gradient node and composes no backpropagation code for it, so applying an `NTDSL` operation to a differentiable operand -- `NTDSL.O.(x @^^ spec)` inside a `%op` body, as `Nn_blocks.softmax` does for its row max -- detaches the result without a copy. `Operation.stop_gradient` is the identity instance of the same mechanism.
 
 The extension points open `NTDSL.O`, resp. `TDSL.O`, for the scope of the extension point, to expose the corresponding operators.
 

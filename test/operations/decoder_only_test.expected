@@ -5,13 +5,13 @@ Output shape:
    (dims
     ((Dim ((d 2) (basis default) (proj_id ((Proj_id 1)))))
      (Dim ((d 4) (basis default) (proj_id ((Proj_id 2)))))))
-   (bcast Broadcastable) (prov (((sh_id 367) (kind Batch))))))
+   (bcast Broadcastable) (prov (((sh_id 363) (kind Batch))))))
  (input
   ((beg_dims ()) (dims ()) (bcast Broadcastable)
-   (prov (((sh_id 367) (kind Input))))))
+   (prov (((sh_id 363) (kind Input))))))
  (output
   ((beg_dims ())
    (dims ((Dim ((d 16) (basis default) (proj_id ((Proj_id 3)))))))
-   (bcast Broadcastable) (prov (((sh_id 367) (kind Output))))))
+   (bcast Broadcastable) (prov (((sh_id 363) (kind Output))))))
  (batch_padding ()) (input_padding ()) (output_padding ()) (padding_elem ())
- (id 367) (debug_name layer_norm))
+ (id 363) (debug_name layer_norm))
