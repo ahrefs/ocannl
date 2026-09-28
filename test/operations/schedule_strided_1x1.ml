@@ -205,7 +205,7 @@ let fission ~arity_cuts ~preset opt =
 
 (* The keyed segments of one segmentation, on a hermetic copy of the lowering; [None] when the
    routine does not fission (the tuner then runs no per-segment flavor). *)
-let segment_seeds ~seeds_of ~arity_cuts (opt : LL.optimized) =
+let segment_seeds ?(matmul_only = true) ~seeds_of ~arity_cuts (opt : LL.optimized) =
   let scratch =
     {
       opt with
@@ -218,10 +218,11 @@ let segment_seeds ~seeds_of ~arity_cuts (opt : LL.optimized) =
   | tuples ->
       Some
         (List.filter_map tuples ~f:(fun (kind, pre, _, _) ->
-             (* Matmul segments only: a segment of the block's 3x3 convs seeds the conv family, for
-                another site (schedule_conv_gemm's). *)
+             (* Matmul segments only, by default: a segment of the block's 3x3 convs seeds the conv
+                family, for another site (schedule_conv_gemm's). *)
              match kind with
-             | `Normal when Option.is_some (Autotune.detect_matmul pre.LL.llc) -> (
+             | `Normal when (not matmul_only) || Option.is_some (Autotune.detect_matmul pre.LL.llc)
+               -> (
                  match seeds_of pre with [] -> None | seeds -> Some (seg_key pre, seeds))
              | _ -> None))
 
@@ -344,6 +345,9 @@ type probed = {
   whole : Autotune.sketch_params list;
   segs : (bool * string * Autotune.sketch_params list) list option;
       (** [(arity_cuts, key, seeds)] per keyed segment; [None] when the routine does not fission. *)
+  any_segment_seeds : int;
+      (** Seeds of every [`Normal] segment, whatever family — for the boundary claim that nothing
+          seeds a site. *)
   device_seeds : int * int;
       (** Whole-routine and per-segment seed counts under the device's own limits alone — what
           [Autotune.tune] proposes; on the C backends the lists above also carry the pinned
@@ -364,12 +368,12 @@ let probe ~tag s =
            Autotune.sketch_seed_params ~is_gpu ~is_cpu ~limits opt))
   in
   let device_seeds_of opt = Autotune.sketch_seed_params ~is_gpu ~is_cpu ~limits:device_limits opt in
-  let keyed ~seeds_of opt =
-    Option.map (segment_seeds ~seeds_of ~arity_cuts:false opt) ~f:(fun coarse ->
+  let keyed ?matmul_only ~seeds_of opt =
+    Option.map (segment_seeds ?matmul_only ~seeds_of ~arity_cuts:false opt) ~f:(fun coarse ->
         let fine =
           if on_cpu then []
           else
-            Option.value ~default:[] (segment_seeds ~seeds_of ~arity_cuts:true opt)
+            Option.value ~default:[] (segment_seeds ?matmul_only ~seeds_of ~arity_cuts:true opt)
             |> List.filter ~f:(fun (k, _) ->
                 not (List.exists coarse ~f:(fun (c, _) -> String.equal c k)))
         in
@@ -396,6 +400,7 @@ let probe ~tag s =
                out_map;
                whole = seeds_of opt;
                segs = keyed ~seeds_of opt;
+               any_segment_seeds = count_segs (keyed ~matmul_only:false ~seeds_of opt);
                device_seeds =
                  ( List.length (device_seeds_of opt),
                    count_segs (keyed ~seeds_of:device_seeds_of opt) );
@@ -564,8 +569,7 @@ let () =
        { prec = f32; b = 1; h = 16; w = 32; ic = 16; oc = 16; stride = 2; build = `Einsum padded }
    in
    p "batch of one: not a matmul or conv site, and no sketch family seeds it"
-     (Option.is_none o.site && (not o.conv) && List.is_empty o.whole
-     && Option.for_all o.segs ~f:List.is_empty);
+     (Option.is_none o.site && (not o.conv) && List.is_empty o.whole && o.any_segment_seeds = 0);
    p_empty "batch of one: because the input is read at no unit-stride output axis"
      ~over:(Array.to_list o.in_map)
      (unit_out_syms ~in_map:o.in_map ~out_map:o.out_map));
