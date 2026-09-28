@@ -103,6 +103,10 @@ let print_floats ?(prec = 6) ?(sep = " ") vs =
     corrupting the comparison. *)
 let set_binary_stdout () = Out_channel.set_binary_mode stdout true
 
+module Lexical_scope = Lexical_scope
+(** The lexical scope model the source scans resolve names over: which binding an identifier reaches
+    where it is spelled, parameterised over what a name denotes (gh-ocannl-1079). *)
+
 module Ll_test_scan = Ll_test_scan
 
 module Operand_key_scan = Operand_key_scan

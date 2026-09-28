@@ -47,6 +47,9 @@ ok: source -- a module alias of the reader is the reader
 ok: source -- an alias of an alias is an alias
 ok: source -- an alias bound in expression position counts too
 ok: source -- an alias of Utils is a direct artifact read
+ok: source -- a same-named alias in another scope is not the reader
+ok: source -- an alias shadowed by a later binding is no longer the reader
+ok: source -- a functor parameter shadows an alias of the reader in the functor's body
 ok: source -- an unqualified read is not the reader, which is what the qualifier is for
 ok: source -- rendering the emitter's document is reaching generated text
 ok: source -- a dump printer is an emitter too, under whatever alias
@@ -57,6 +60,10 @@ ok: source -- an inline build_files read in the haystack still pins its fragment
 ok: source -- a helper that hard-codes the fragment pins it, taking the source as its parameter
 ok: source -- a helper that slices on a banner and tests its own parameter pins both
 ok: source -- a fragment named through a binding is still that fragment
+ok: source -- same-named literal lets in different scopes each pin their own text
+ok: source -- same-named literal lets pin their text even when the values agree
+ok: source -- a parameter is not a same-named literal let elsewhere in the file
+ok: source -- a binding shadowing a literal let is not that literal
 ok: source -- a buffer-writing serializer is an emitter too
 ok: source -- the buffer a serializer writes into carries the text, across bindings
 ok: source -- an emitter bound to a local name is still the emitter
@@ -80,7 +87,9 @@ ok: rejection -- opening an ALIAS of the emitter's module hides it under a name 
 ok: rejection -- opening a module a FUNCTOR produced hides the emitter too
 ok: rejection -- opening a functor application directly hides the emitter as surely
 ok: rejection -- an include hides the emitter as an open does
-ok: rejection -- a name the file binds for itself is never refused
+ok: rejection -- a name the file binds for itself is not refused where that binding is in scope
+ok: rejection -- a name bound only in another scope does not shadow the opened one
+ok: rejection -- an alias rebound in a later scope does not change what an earlier open opened
 ok: rejection -- an open governs its own scope, not the whole file
 ok: rejection -- a structure-level open governs the items after it
 ok: rejection -- an open inside a nested module dies with it
