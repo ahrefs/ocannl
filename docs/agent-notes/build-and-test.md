@@ -1106,7 +1106,10 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   Verdict's uncaught-exception handler prints `STOPPED EARLY` and the exception (status 2).
   `Verdict.case label f` turns a raise into `<label>: the case ran to completion (raised …): false`
   and runs the next case, printing nothing when `f` returns, so wrapping is golden-neutral
-  (`footprint_materialization` is the exemplar; `verdict_teardown` pins every ending).
+  (`footprint_materialization` is the exemplar; `verdict_teardown` pins every ending). The
+  hand-built-IR `virtual_*` tests run their `case_*` rows through it too (gh-ocannl-1084); a new
+  multi-case test does the same. No scan holds it: the `case_` prefix is a local habit, and the
+  wider population of `test_*` drivers often catches its own exceptions to print them.
 - One claim surface, opened rather than copied. Every test that decides a verdict reaches the claim
   names through `open Verdict.Claims`; nothing in the tree rebinds them per file any more
   (gh-ocannl-815). The aliases the population used to carry were a maintenance defect with a

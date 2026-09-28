@@ -150,8 +150,10 @@ let case_interior_guard () =
   p "interior guard: only the masked-in cells carry the write" (same got [ expected ]);
   p "interior guard: agrees with the materialized arm" (same got mat)
 
+(* Each row runs through [case], so a row that raises is a failed claim naming it, and the rows
+   after it still run (gh-ocannl-1084; [footprint_materialization] is the exemplar). *)
 let () =
-  case_guarded_rmw ();
-  case_guarded_reset ();
-  case_interior_guard ();
+  case "guarded RMW" case_guarded_rmw;
+  case "guarded reset" case_guarded_reset;
+  case "interior guard" case_interior_guard;
   Stdio.printf "%!"
