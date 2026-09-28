@@ -116,13 +116,15 @@
 #      width; hip and cc beside a small pool on rog take the tighter.
 #  52. the native widths derive from one place: each hip cap is its measured
 #      budget over its slot count, and the numbers are the measured ones.
-#  64-65 sit between legs 51 and 52: `plan`, and the planning window
-#      (gh-ocannl-1066).
+#  64-65 sit between legs 51 and 52: `plan`, and the run's first phase, in
+#      which the supervisor's child resolves the backends (gh-ocannl-1066,
+#      gh-ocannl-1106).
 #  64. `plan` prints the resolved backends, the width (a caller's too) and
 #      the slot, runs no dune, leaves no run, and is refused under a held lock.
-#  65. a `stop` while the launcher resolves the backends (under the lock,
-#      before publication) withdraws the launch: exit 143, nothing run or
-#      published, the worktree idle; a hung reader is cut off by the cap.
+#  65. a `stop`, or a signal to the launcher alone, while the backends
+#      resolve (the published run's first phase) cancels the run: exit 143,
+#      dune never started and the log says so, the worktree idle; a hung
+#      reader is cut off by the cap, a reader's leftover reaped with the run.
 #  53-58 sit at the end: the fleet's run-time slot, taken by the runner
 #      (gh-ocannl-1004), against a fake fleet-worker.sh and the fake readers
 #      every leg runs with.
@@ -2773,7 +2775,7 @@ if [ -z "$native_detail" ]; then
   plan_term_pid=$!
   plan_term_marker=
   for _ in $(seq 1 100); do
-    plan_term_marker=$(ls "$plan_term_runs"/2*/planning 2>/dev/null | head -n 1)
+    plan_term_marker=$(ls "$plan_term_runs"/2*/pid 2>/dev/null | head -n 1)
     [ -z "$plan_term_marker" ] || break
     sleep 0.1
   done
@@ -2791,12 +2793,12 @@ else
   report 1 "plan: prints the resolved backends, the width and the slot, and runs nothing" "$native_detail"
 fi
 
-# Leg 65: the planning window. The backends resolve under the worktree lock
-# before the run is published, with no supervisor on record yet, so a `stop`
-# of the run the lock's owner pointer names must still withdraw it: the
-# launcher and the reader it waits on are reaped, the launch exits 143 with
-# nothing run and nothing published, and the worktree is idle again. A reader
-# held asleep stands for a slow build.
+# Leg 65: the run's first phase. The backends resolve in the supervisor's
+# child, after the run is published (gh-ocannl-1106), so a `stop` of the run
+# reaches its supervisor as for any run: the child and the reader it waits on
+# are reaped, the launch exits 143 with the verdict recorded, dune never
+# started and the log says so, and the worktree is idle again. A reader held
+# asleep stands for a slow build.
 plan_stop_runs=$TMP/argv-runs-plan-stop
 plan_stop_detail=
 mkdir -p "$plan_stop_runs"
@@ -2812,26 +2814,28 @@ OCANNL_TOOL_KFD_TOPOLOGY=$kfd_absent OCANNL_TOOL_NVIDIA_DEVICE=$nv_absent PATH=$
 plan_stop_pid=$!
 plan_stop_marker=
 for _ in $(seq 1 100); do
-  plan_stop_marker=$(ls "$plan_stop_runs"/2*/planning 2>/dev/null | head -n 1)
+  plan_stop_marker=$(ls "$plan_stop_runs"/2*/pid 2>/dev/null | head -n 1)
   [ -z "$plan_stop_marker" ] || break
   sleep 0.1
 done
 if [ -z "$plan_stop_marker" ]; then
-  plan_stop_detail="the launch never marked its planning window: $(cat "$TMP/plan-stop.err")"
+  plan_stop_detail="the launch never recorded its supervisor: $(cat "$TMP/plan-stop.err")"
   kill -TERM "$plan_stop_pid" 2>/dev/null
   wait "$plan_stop_pid" 2>/dev/null
 else
+  sleep 0.5
   plan_stop_run=$(dirname "$plan_stop_marker")
   plan_stop_out=$(OCANNL_TOOL_TEST_RUNS=$plan_stop_runs "$repeat_root/tools/test-run.sh" stop "$plan_stop_run" 2>&1)
   wait "$plan_stop_pid"
   plan_stop_rc=$?
   [ "$plan_stop_rc" = 143 ] || plan_stop_detail="the launch exited $plan_stop_rc (want 143): $(cat "$TMP/plan-stop.err")"
   [ -n "$plan_stop_detail" ] || case $plan_stop_out in
-    *"resolving the batch's backends"*"withdraws the launch"*) ;;
+    *"sent TERM; confirm with"*) ;;
     *) plan_stop_detail="stop said: $plan_stop_out" ;;
   esac
-  [ -n "$plan_stop_detail" ] || [ ! -e "$plan_stop_run" ] ||
-    plan_stop_detail="the withdrawn run's directory is still there: $plan_stop_run"
+  [ -n "$plan_stop_detail" ] || { [ "$(cat "$plan_stop_run/exit" 2>/dev/null)" = 143 ] &&
+    grep -q "cancelled while the launch resolved the batch's backends; dune was not started" "$plan_stop_run/log"; } ||
+    plan_stop_detail="the cancelled run's verdict or log does not say so: $(cat "$plan_stop_run/log" 2>/dev/null)"
   [ -n "$plan_stop_detail" ] || [ ! -s "$TMP/plan-stop.calls" ] ||
     plan_stop_detail="dune ran: $(cat "$TMP/plan-stop.calls")"
   [ -n "$plan_stop_detail" ] ||
@@ -2855,13 +2859,13 @@ if [ -z "$plan_stop_detail" ]; then
   [ -n "$plan_stop_detail" ] || { [ "$argv_rc" = 142 ] && [ -z "$argv_calls" ] &&
     grep -q "verdict: TIMEOUT" <<<"$argv_out"; } ||
     plan_stop_detail="a hung reader spending the cap: exit $argv_rc (want 142); calls: ${argv_calls:-<none>}; stdout: $argv_out"
-  [ -n "$plan_stop_detail" ] || { grep -q "its backends are unread" "$argv_dir/log" &&
-    grep -q "dune was not started" "$argv_dir/log" && [ "$(cat "$argv_dir/exit" 2>/dev/null)" = 142 ]; } ||
+  [ -n "$plan_stop_detail" ] || { grep -q "the cap expired while the launch resolved the batch's backends; dune was not started" "$argv_dir/log" &&
+    [ "$(cat "$argv_dir/exit" 2>/dev/null)" = 142 ]; } ||
     plan_stop_detail="a hung reader: the log or the verdict does not say so: $(cat "$argv_dir/log" 2>/dev/null)"
 fi
 # A reader that exits leaving a background descendant behind does not leave it
-# holding the worktree lock: the runner reaps the reader's whole group
-# (Codex review round 5 on PR #832).
+# holding the worktree lock: it is in the run's process group, which the
+# supervisor reaps with dune's (Codex review round 5 on PR #832).
 if [ -z "$plan_stop_detail" ]; then
   export FAKE_REACH_LEAVE=30
   argv_runs=$TMP/argv-runs-plan-leave dxg_probe plan-leave "$dxg_present" cuda run build @cheap
@@ -2872,10 +2876,10 @@ if [ -z "$plan_stop_detail" ]; then
     plan_stop_detail="a reader's leftover descendant: exit $argv_rc; calls: ${argv_calls:-<none>}; or the worktree is not idle after the run"
 fi
 # A signal to the launcher alone -- not the terminal's group, not a stop --
-# ends the resolution at once: the reader is waited on in the background, so
-# the trap runs and ends it (Codex review round 2 on PR #832).
-# A reader that ignores TERM gets a grace and then KILL, so it cannot keep
-# the worktree locked after the launch withdrew (Codex review round 3).
+# ends the resolution at once: the launcher relays it to the supervisor, as it
+# does while dune runs (Codex review round 2 on PR #832). A reader that
+# ignores TERM gets the supervisor's grace and then KILL, so it cannot keep
+# the worktree locked after the run was cancelled (Codex review round 3).
 for plan_sig_kind in plain stubborn; do
   [ -z "$plan_stop_detail" ] || break
   plan_sig_ignore=
@@ -2895,12 +2899,12 @@ for plan_sig_kind in plain stubborn; do
   plan_sig_pid=$!
   plan_sig_marker=
   for _ in $(seq 1 100); do
-    plan_sig_marker=$(ls "$plan_sig_runs"/2*/planning 2>/dev/null | head -n 1)
+    plan_sig_marker=$(ls "$plan_sig_runs"/2*/pid 2>/dev/null | head -n 1)
     [ -z "$plan_sig_marker" ] || break
     sleep 0.1
   done
   if [ -z "$plan_sig_marker" ]; then
-    plan_stop_detail="the signalled launch never marked its planning window: $(cat "$TMP/plan-sig.err")"
+    plan_stop_detail="the signalled launch never recorded its supervisor: $(cat "$TMP/plan-sig.err")"
     kill -TERM "$plan_sig_pid" 2>/dev/null
     wait "$plan_sig_pid" 2>/dev/null
   else
@@ -2910,15 +2914,16 @@ for plan_sig_kind in plain stubborn; do
     plan_sig_rc=$?
     plan_sig_took=$((SECONDS - plan_sig_start))
     { [ "$plan_sig_rc" = 143 ] && [ "$plan_sig_took" -lt 15 ] && [ ! -s "$TMP/plan-sig.calls" ] &&
-      [ ! -e "$(dirname "$plan_sig_marker")" ] &&
+      [ "$(cat "$(dirname "$plan_sig_marker")/exit" 2>/dev/null)" = 143 ] &&
+      grep -q "dune was not started" "$(dirname "$plan_sig_marker")/log" &&
       OCANNL_TOOL_TEST_RUNS=$plan_sig_runs "$repeat_root/tools/test-run.sh" idle 2>/dev/null; } ||
       plan_stop_detail="a TERM to the launcher alone ($plan_sig_kind reader): not idle, or exit $plan_sig_rc (want 143) after ${plan_sig_took}s; calls: $(cat "$TMP/plan-sig.calls"); stderr: $(cat "$TMP/plan-sig.err")"
   fi
 done
 if [ -z "$plan_stop_detail" ]; then
-  report 0 "plan: a stop in the planning window withdraws the launch, and the worktree is idle"
+  report 0 "plan: a stop or a signal while the backends resolve cancels the run before dune, and the worktree is idle"
 else
-  report 1 "plan: a stop in the planning window withdraws the launch, and the worktree is idle" "$plan_stop_detail"
+  report 1 "plan: a stop or a signal while the backends resolve cancels the run before dune, and the worktree is idle" "$plan_stop_detail"
 fi
 
 # Leg 52: one place for the numbers. A hip cap is not a literal of its own
