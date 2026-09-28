@@ -1425,6 +1425,10 @@ let claim_priv_gate_staged =
 let claim_priv_gate_hw =
   "a Privatize whose loop encloses a hardware-typed reduction level is refused"
 
+let claim_priv_gate_two =
+  "two accumulators privatized one after the other keep their per-step narrowing with the serial \
+   rendering (256 + 1 + 1 stays 256 for each)"
+
 let claim_priv_gate_mixed =
   "a privatized mixed-operator update keeps per-step narrowing with the serial rendering (max(256 \
    + 1, 0) twice stays 256)"
@@ -1546,6 +1550,48 @@ let () =
                  o))
       in
       p claim_priv_gate_hw hw_refused;
+      (* Two accumulators updated side by side, privatized one after the other (round 6): the first
+         Privatize turns its update into a tile read-modify-write, which is still a sibling
+         statement of the second's update — not staging scratch — so neither tile widens, as the
+         serial rendering keeps both per-step (256 + 1 + 1 stays 256 for each). *)
+      let two_targets =
+        let a = node "aw_pg_two_a" and b = node "aw_pg_two_b" in
+        Ll_test.materialize a;
+        Ll_test.materialize b;
+        let k = Ll_test.sym () in
+        let raw () =
+          Ll_test.loop_n k 2
+            (LL.unflat_lines
+               [
+                 Ll_test.set a cell (bin Ir.Ops.Add (Ll_test.get a cell) (LL.Constant 1.0));
+                 Ll_test.set b cell (bin Ir.Ops.Add (Ll_test.get b cell) (LL.Constant 1.0));
+               ])
+        in
+        let exec ~name o =
+          List.map
+            (Ll_test.execute ~name o ~seed:[ (a, [| 256.0 |]); (b, [| 256.0 |]) ] ~read:[ a; b ])
+            ~f:(fun v -> v.(0))
+        in
+        let serial =
+          exec ~name:"aw_pg_two_serial"
+            (Ll_test.optimize ~materialized:[ a; b ] ~name:"aw_pg_two_serial" (raw ()))
+        in
+        let priv =
+          let o = Ll_test.optimize ~materialized:[ a; b ] ~name:"aw_pg_two_priv" (raw ()) in
+          let pz target =
+            Sched.privatize ~accum_prec:codegen_capabilities.Ir.Backend_intf.accum_prec ~target
+              ~over:k
+          in
+          exec ~name:"aw_pg_two_priv" (Sched.apply [ pz a; pz b ] o)
+        in
+        Stdio.eprintf
+          "accum_width: two privatized accumulators serial %s privatized %s (not part of the golden)\n\
+           %!"
+          (String.concat ~sep:"," (List.map serial ~f:Float.to_string))
+          (String.concat ~sep:"," (List.map priv ~f:Float.to_string));
+        List.equal Float.equal serial [ 256.0; 256.0 ] && List.equal Float.equal priv serial
+      in
+      p claim_priv_gate_two two_targets;
       p claim_priv_gate (w_add && w_sib && (not w_sub) && not w_mix);
       p claim_priv_gate_sib (Float.equal s_sib 256.0 && Float.equal p_sib 256.0);
       p claim_priv_gate_other (Float.equal s_oth 256.0 && Float.equal p_oth 256.0);
