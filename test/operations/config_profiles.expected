@@ -40,6 +40,7 @@ Profile "reproducible" sets:
   bf16_arithmetic=auto
   narrow_compute_f32=true
   online_softmax=false
+  online_softmax_backward=false
 
 Profile "performance" sets:
   autotune_search=true
@@ -61,6 +62,7 @@ Profile "approximate" sets:
   tf32_matmuls=true
   bf16_arithmetic=true
   online_softmax=true
+  online_softmax_backward=true
   cc_backend_fast_math=true
   cc_backend_fp_contract=fast
   tune_inline_flips=2

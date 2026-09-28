@@ -26,22 +26,22 @@
       [seq^2] buffer is gone, and the virtualizer inlines their whole chain into that one read.
 
     - The composed backward of that attention, in a routine that also holds the rewritten forward
-      (the training step of [Train.grad_update]), gated separately ({!backward_enabled}, default
-      off; gh-ocannl-1002). Anchored on the normalizer and the value pass the first two shapes
-      matched -- [O] and [v]; [dO] from the reduction [dP += dO * v]; the chain from [dP] through
-      [e.grad], [l.grad] and [n.grad = e.grad * e] to the score gradient [dS] the two contractions
-      against the scores' operands [q] and [k] read -- it replaces every [seq, seq] gradient buffer
-      with a per-row [D = sum (dO * O)] into a minted node and two nests recomputing each pair's
-      [p], [dp] and [ds = chain (p * (dp - D))] into scope locals (the recovered elementwise chain
-      -- the mask's [where], the scale -- applies to [ds] only, so a finite mask fill keeps its
-      probabilities and their [dV]): one over the query rows accumulating [q.grad], one over the
-      keys accumulating [k.grad] and [v.grad], each owning what it writes. The per-cell summation
-      orders of the three gradients are the composed ones; [ds] reassociates the composed
-      [(dP / l + dl) * e], hence the numerics gate. It declines whole -- the backward stays composed
-      -- on anything it cannot prove: no normalizer in the routine, a composed max gradient, another
-      reader of a consumed gradient node, a requested (materialized) intermediate, code the census
-      cannot see in the span, a dead or partial loop, mixed precisions along either chain, or an
-      elementwise step between [e / l] and the value pass (active dropout).
+      (the training step of [Train.grad_update]), gated separately by [online_softmax_backward]
+      (default off, on in [approximate]; gh-ocannl-1002). Anchored on the normalizer and the value
+      pass the first two shapes matched -- [O] and [v]; [dO] from the reduction [dP += dO * v]; the
+      chain from [dP] through [e.grad], [l.grad] and [n.grad = e.grad * e] to the score gradient
+      [dS] the two contractions against the scores' operands [q] and [k] read -- it replaces every
+      [seq, seq] gradient buffer with a per-row [D = sum (dO * O)] into a minted node and two nests
+      recomputing each pair's [p], [dp] and [ds = chain (p * (dp - D))] into scope locals (the
+      recovered elementwise chain -- the mask's [where], the scale -- applies to [ds] only, so a
+      finite mask fill keeps its probabilities and their [dV]): one over the query rows accumulating
+      [q.grad], one over the keys accumulating [k.grad] and [v.grad], each owning what it writes.
+      The per-cell summation orders of the three gradients are the composed ones; [ds] reassociates
+      the composed [(dP / l + dl) * e], hence the numerics gate. It declines whole -- the backward
+      stays composed -- on anything it cannot prove: no normalizer in the routine, a composed max
+      gradient, another reader of a consumed gradient node, a requested (materialized) intermediate,
+      code the census cannot see in the span, a dead or partial loop, mixed precisions along either
+      chain, or an elementwise step between [e / l] and the value pass (active dropout).
 
     What stays as it was: the score reduction [q * k^T] keeps its own placement decision -- the
     recompute cap [virtualize_max_inline_reduction] decides whether it is replayed at its two read
@@ -67,10 +67,10 @@ val set_enabled : bool option -> unit
 
 val backward_enabled : unit -> bool
 (** Whether the fused backward applies, where the rewrite does: the programmatic override if one is
-    set, else off. Inert while {!enabled} is false. *)
+    set, else the config key [online_softmax_backward]. Inert while {!enabled} is false. *)
 
 val set_backward_enabled : bool option -> unit
-(** Programmatic override of the fused backward's gate, like {!set_enabled}. *)
+(** Programmatic override of [online_softmax_backward], like {!set_enabled}. *)
 
 val reset : unit -> unit
 (** Drops the memoized scope-local nodes (the tier's session-reset hook; also run ahead of an

@@ -633,7 +633,12 @@ let hoist r ~ls (n : nest) : LL.t option =
 
 let backward_override : bool option ref = ref None
 let set_backward_enabled b = backward_override := b
-let backward_enabled () = match !backward_override with Some b -> b | None -> false
+
+let backward_enabled () =
+  match !backward_override with
+  | Some b -> b
+  | None -> Utils.get_global_flag ~default:false ~arg_name:"online_softmax_backward"
+
 let backward_provenance = Tn.Site "1002:fused-backward-row-dot"
 
 (* The per-row [D]: a node of [m]'s shape the backward's two nests both read, so it is stored --
