@@ -80,6 +80,25 @@ ok: bullets -- an underline below a line whose inert first column looks like a h
 ok: bullets -- a third nesting level
 ok: bullets -- prose at column zero between lists
 ok: bullets -- a heading closes the list above it
+ok: bullets -- a heading carrying a link
+ok: bullets -- a heading carrying an image
+ok: bullets -- a heading carrying a reference link
+ok: bullets -- a heading carrying inline HTML
+ok: bullets -- a heading carrying an autolink
+ok: bullets -- a heading carrying an HTML comment
+ok: bullets -- a heading carrying an entity
+ok: bullets -- a heading carrying a numeric entity
+ok: bullets -- a heading carrying underscore emphasis
+ok: bullets -- a heading carrying underscore strong emphasis
+ok: bullets -- a heading carrying a padded code span
+ok: bullets -- a heading carrying a non-ASCII letter
+ok: bullets -- a heading carrying a non-ASCII letter inside a code span
+ok: bullets -- an identifier heading
+ok: bullets -- markup characters inside a heading's code spans
+ok: bullets -- escaped markup characters in a heading
+ok: bullets -- punctuation that is not markup in a heading
+ok: bullets -- an unpadded code span in a heading
+ok: bullets -- a link on a heading-looking line inside a code span is no heading
 ok: tables -- a well-formed table
 ok: tables -- a row wrapped across two physical lines
 ok: tables -- the wrapped tail below a table that itself closes
@@ -149,6 +168,7 @@ ok: index -- an anchor the file has a heading for
 ok: index -- an anchor on the second of two same-titled headings
 ok: index -- an anchor past a heading whose own title holds the suffix
 ok: index -- an anchor past the last suffix allocated
+ok: index -- an anchor at a heading carrying a link
 ok: index -- an anchor the file has no heading for
 ok: index -- a wrapped row takes the rest of the index out of the table
 ok: index -- an anchor on an identifier heading, which GitHub keeps underscored
@@ -221,6 +241,8 @@ ok: script -- a comment pointing at a heading its note has
 ok: script -- a comment pointing at a heading its note lacks
 ok: script -- a printed message pointing at a heading its note lacks
 ok: script -- a path outside the notes is not a pointer into them
+ok: script -- a name opening with a shell variable is not a pointer into the notes
+ok: script -- a shell variable inside a name still cuts it
 ok: unnamed rule -- a finding the list does not name survives the report, last
 ok: unnamed rule -- the census reports it, and not the named one beside it
 ok: unnamed rule -- a named finding leaves the census empty

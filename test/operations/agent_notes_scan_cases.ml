@@ -335,6 +335,62 @@ let structure_cases =
     ( "a heading closes the list above it",
       "# Title\n\n- A fact.\n\n## Section\n\n- Another fact.\n",
       [] );
+    (* A heading's id is slugged from its source, GitHub's from what it renders, so a heading whose
+       text renders differently is outside the dialect and reported, one construct per case
+       (gh-ocannl-1068). A comment in a heading is reported twice: as a heading outside the dialect,
+       and as the comment every HTML comment is. *)
+    ( "a heading carrying a link",
+      "# Title\n\n## [Windows CI](details)\n",
+      [ "bullet-integrity @ f.md:3" ] );
+    ( "a heading carrying an image",
+      "# Title\n\n## ![logo](x.png) Setup\n",
+      [ "bullet-integrity @ f.md:3" ] );
+    ( "a heading carrying a reference link",
+      "# Title\n\n## [Setup][ref]\n\n[ref]: https://example.com\n",
+      [ "bullet-integrity @ f.md:3" ] );
+    ( "a heading carrying inline HTML",
+      "# Title\n\n## Setup <em>now</em>\n",
+      [ "bullet-integrity @ f.md:3" ] );
+    ( "a heading carrying an autolink",
+      "# Title\n\n## See <https://example.com>\n",
+      [ "bullet-integrity @ f.md:3" ] );
+    ( "a heading carrying an HTML comment",
+      "# Title\n\n## Setup <!-- draft -->\n",
+      [ "bullet-integrity @ f.md:3"; "bullet-integrity @ f.md:3" ] );
+    ("a heading carrying an entity", "# Title\n\n## Q&amp;A\n", [ "bullet-integrity @ f.md:3" ]);
+    ( "a heading carrying a numeric entity",
+      "# Title\n\n## Step &#35;1\n",
+      [ "bullet-integrity @ f.md:3" ] );
+    ( "a heading carrying underscore emphasis",
+      "# Title\n\n## _Draft_ notes\n",
+      [ "bullet-integrity @ f.md:3" ] );
+    ( "a heading carrying underscore strong emphasis",
+      "# Title\n\n## __init__\n",
+      [ "bullet-integrity @ f.md:3" ] );
+    ( "a heading carrying a padded code span",
+      "# Title\n\n## ` x ` usage\n",
+      [ "bullet-integrity @ f.md:3" ] );
+    ( "a heading carrying a non-ASCII letter",
+      "# Title\n\n## Setup \xe8\xae\xad\xe7\xbb\x83\n",
+      [ "bullet-integrity @ f.md:3" ] );
+    ( "a heading carrying a non-ASCII letter inside a code span",
+      "# Title\n\n## The `\xc3\xa9` flag\n",
+      [ "bullet-integrity @ f.md:3" ] );
+    (* The nearest legitimate headings: what renders as written. An identifier's inner underscores
+       are not emphasis, a code span renders its content literally, an escape renders the character
+       it escapes, and punctuation that is not markup is dropped by both slugs alike. *)
+    ("an identifier heading", "# Title\n\n## ident_blacklist and foo__bar\n", []);
+    ( "markup characters inside a heading's code spans",
+      "# Title\n\n## `[%expect]`, `<that target>`, `&amp;` and `_x_`\n",
+      [] );
+    ("escaped markup characters in a heading", "# Title\n\n## A \\[draft\\] \\<b\\> \\_x\\_\n", []);
+    ( "punctuation that is not markup in a heading",
+      "# Title\n\n## Syntax extensions (%op / %cd): Q&A, costs, C#\n",
+      [] );
+    ("an unpadded code span in a heading", "# Title\n\n## The `x` flag and ``a`b``\n", []);
+    ( "a link on a heading-looking line inside a code span is no heading",
+      "# Title\n\n- A fact showing `\n  ## [x](y)` in passing.\n",
+      [] );
   ]
 
 (* ------------------------------------------------------------------ *)
@@ -500,6 +556,13 @@ let index_cases =
           file "## Foo\n\n- The `Widget` seam.\n\n## Foo-1\n\n- One.\n\n## Foo\n\n- Two.\n" );
       ],
       [ "index-agreement @ agent-notes.md:7" ] );
+    (* The failure gh-ocannl-1068 names, end to end: GitHub's id for this heading is [#windows-ci],
+       which the anchor spells correctly, and the slug of its source is not. The heading's own
+       finding is what says why the anchor reads as dead. *)
+    ( "an anchor at a heading carrying a link",
+      index [ "| [a.md](agent-notes/a.md#windows-ci) | the `Widget` seam |" ],
+      [ ("agent-notes/a.md", file "## [Windows CI](details)\n\n- A fact about `Widget`.\n") ],
+      [ "bullet-integrity @ agent-notes/a.md:5"; "index-agreement @ agent-notes.md:7" ] );
     ( "an anchor the file has no heading for",
       index [ "| [a.md](agent-notes/a.md#the-gadget-seam) | the `Widget` seam |" ],
       [ ("agent-notes/a.md", file "## The Widget seam\n\n- A fact about `Widget`.\n") ],
@@ -822,12 +885,7 @@ let index_cases =
 let guide_notes =
   [
     ("agent-notes/a.md", file "## The Widget seam\n\n- A fact about `Widget`.\n");
-    ( "agent-notes/b.md",
-      file
-        "## The Gadget seam\n\n\
-         - A fact about `Gadget`.\n\n\
-         ## \xe8\xae\xad\xe7\xbb\x83\n\n\
-         - A fact about training.\n" );
+    ("agent-notes/b.md", file "## The Gadget seam\n\n- A fact about `Gadget`.\n");
     ( "agent-notes/c.md",
       file
         "## The Widget seam\n\n\
@@ -901,8 +959,9 @@ let guide_cases =
          \"a.md#the-sprocket-seam\"; a.md#the-sprocket-seam!",
       List.init 5 ~f:(fun _ -> "guide-anchors @ AGENTS.md:3") );
     (* The notes are ASCII, and a pointer touching non-ASCII text is refused rather than read cut
-       short -- a Unicode slug (whether or not a Unicode heading exists), a Unicode file name, a
-       cased letter GitHub would fold. *)
+       short -- a Unicode slug, a Unicode file name, a cased letter GitHub would fold. No note can
+       carry the Unicode heading such a slug would name, since the structural rule reports one
+       (gh-ocannl-1068); the refusal here does not lean on that. *)
     ( "a Unicode slug is refused",
       guide "- A rule; the mechanism: b.md#\xe8\xae\xad\xe7\xbb\x83.",
       [ "guide-anchors @ AGENTS.md:3" ] );
@@ -971,6 +1030,16 @@ let script_cases =
       "#!/usr/bin/env bash\n\
        # See docs/syntax_extensions.md#operators and ./CHANGES.md#unreleased.\n",
       [] );
+    (* A name a shell variable computes names no file the scan could check, like [$DIR/x.md#y]
+       (gh-ocannl-1068). Only a name OPENING with [$] is one: a [$] inside a name still cuts it, and
+       the cut is refused. *)
+    ( "a name opening with a shell variable is not a pointer into the notes",
+      "#!/usr/bin/env bash\n\
+       echo \"see $note.md#the-sprocket-seam, ${note}.md#setup and $DIR/a.md#nope\" >&2\n",
+      [] );
+    ( "a shell variable inside a name still cuts it",
+      "#!/usr/bin/env bash\n\necho \"see a$b.md#the-widget-seam\" >&2\n",
+      [ "guide-anchors @ tools/x.sh:3" ] );
   ]
 
 (* The LEXICAL layer, tested directly rather than only through the rules above it.
