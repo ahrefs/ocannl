@@ -1389,7 +1389,9 @@ let () =
    update alone would widen, but the peel refuses a level carrying two (256 +1 +1 twice is 260
    wide and stays 256), and a reduction beside a statement writing another node, which the peel
    refuses the same way (256 + 1 + 1 stays 256; round 3) — or beside a [Declare_local] /
-   [Set_local] computation, the shape online softmax's hoist emits (round 4). The positive control is one reduction statement the tile must widen with
+   [Set_local] computation, the shape online softmax's hoist emits (round 4), or beside a
+   [Staged_compilation] statement, which is source and not schedule scratch (round 5). The positive
+   control is one reduction statement the tile must widen with
    the serial rendering (256 + 1 + 1 reaches 258), so the declined legs' 256 is the gate and not a
    tile that never widened. All under [Bf16_wide], where the residency itself widens bf16 on every
    backend; the per-update gate is the shared [Low_level.accum_update_widens]. *)
@@ -1416,6 +1418,13 @@ let claim_priv_gate_local =
   "a privatized reduction beside a scope-local computation keeps per-step narrowing with the \
    serial rendering (256 + 1 + 1 stays 256)"
 
+let claim_priv_gate_staged =
+  "a privatized reduction beside a staged-compilation statement keeps per-step narrowing with the \
+   serial rendering (256 + 1 + 1 stays 256)"
+
+let claim_priv_gate_hw =
+  "a Privatize whose loop encloses a hardware-typed reduction level is refused"
+
 let claim_priv_gate_mixed =
   "a privatized mixed-operator update keeps per-step narrowing with the serial rendering (max(256 \
    + 1, 0) twice stays 256)"
@@ -1424,7 +1433,7 @@ let () =
   let bf16 = Ir.Ops.bfloat16 in
   let node = Ll_test.node_factory ~prec:bf16 ~first_id:9900 ~dims:[| 1 |] () in
   let cell = [| Ll_test.fixed 0 |] in
-  let leg ?(siblings = 1) ?(other = false) ?(local = false) ~label ~update () =
+  let leg ?(siblings = 1) ?(other = false) ?(local = false) ?(staged = false) ~label ~update () =
     let acc = node label in
     Ll_test.materialize acc;
     let other_node = node (label ^ "_other") in
@@ -1454,7 +1463,10 @@ let () =
                ]
              else [])
            @ List.init siblings ~f:(fun _ -> Ll_test.set acc cell llsc)
-           @ if other then [ Ll_test.set other_node cell (LL.Constant 7.0) ] else []))
+           @ (if other then [ Ll_test.set other_node cell (LL.Constant 7.0) ] else [])
+           @
+           if staged then [ LL.Staged_compilation (fun () -> PPrint.string "/* staged */") ] else []
+           ))
     in
     let exec ~name o =
       (List.hd_exn (Ll_test.execute ~name o ~seed:[ (acc, [| 256.0 |]) ] ~read:[ acc ])).(0)
@@ -1491,6 +1503,9 @@ let () =
       let _, s_loc, p_loc =
         leg ~local:true ~label:"aw_pg_loc" ~update:(fun a -> bin Ir.Ops.Add a (LL.Constant 1.0)) ()
       in
+      let _, s_stg, p_stg =
+        leg ~staged:true ~label:"aw_pg_stg" ~update:(fun a -> bin Ir.Ops.Add a (LL.Constant 1.0)) ()
+      in
       let w_sub, s_sub, p_sub =
         leg ~label:"aw_pg_sub" ~update:(fun a -> bin Ir.Ops.Sub a (LL.Constant 0.5)) ()
       in
@@ -1501,13 +1516,41 @@ let () =
       in
       Stdio.eprintf
         "accum_width: privatize gate legs serial/privatized: add %g/%g, siblings %g/%g, \
-         beside-other %g/%g, beside-local %g/%g, sub %g/%g, mixed %g/%g (not part of the golden)\n\
+         beside-other %g/%g, beside-local %g/%g, beside-staged %g/%g, sub %g/%g, mixed %g/%g (not \
+         part of the golden)\n\
          %!"
-        s_add p_add s_sib p_sib s_oth p_oth s_loc p_loc s_sub p_sub s_mix p_mix;
+        s_add p_add s_sib p_sib s_oth p_oth s_loc p_loc s_stg p_stg s_sub p_sub s_mix p_mix;
+      (* A hardware reduction level inside the privatized loop is refused outright (round 5): a
+         per-thread tile would fold only its own lanes, and whether a backend serializes the level
+         is not the transform's to know. *)
+      let hw_refused =
+        let acc = node "aw_pg_hw" in
+        Ll_test.materialize acc;
+        let xs = Ll_test.node_factory ~prec:bf16 ~first_id:9990 ~dims:[| 4 |] () "aw_pg_hw_x" in
+        Ll_test.materialize xs;
+        let k = Ll_test.sym () and w = Ll_test.sym () in
+        let raw =
+          Ll_test.loop_n k 2
+            (Ll_test.loop_n ~axis:LL.Workgroup_reduce w 4
+               (Ll_test.set acc cell
+                  (bin Ir.Ops.Add (Ll_test.get acc cell) (Ll_test.get xs [| Ll_test.iter w |]))))
+        in
+        let o = Ll_test.optimize ~materialized:[ acc; xs ] ~name:"aw_pg_hw" raw in
+        Result.is_error
+          (Result.try_with (fun () ->
+               Sched.apply
+                 [
+                   Sched.privatize ~accum_prec:codegen_capabilities.Ir.Backend_intf.accum_prec
+                     ~target:acc ~over:k;
+                 ]
+                 o))
+      in
+      p claim_priv_gate_hw hw_refused;
       p claim_priv_gate (w_add && w_sib && (not w_sub) && not w_mix);
       p claim_priv_gate_sib (Float.equal s_sib 256.0 && Float.equal p_sib 256.0);
       p claim_priv_gate_other (Float.equal s_oth 256.0 && Float.equal p_oth 256.0);
       p claim_priv_gate_local (Float.equal s_loc 256.0 && Float.equal p_loc 256.0);
+      p claim_priv_gate_staged (Float.equal s_stg 256.0 && Float.equal p_stg 256.0);
       p claim_priv_gate_add (Float.equal s_add 258.0 && Float.equal p_add 258.0);
       p claim_priv_gate_sub (Float.equal s_sub 256.0 && Float.equal p_sub 256.0);
       p claim_priv_gate_mixed (Float.equal s_mix 256.0 && Float.equal p_mix 256.0))

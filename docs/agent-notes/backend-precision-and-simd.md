@@ -367,17 +367,20 @@ files.
   `extend_with_privatize` take `~accum_prec` as a REQUIRED argument, so no seeding site can default
   to storage. Like the backend's own residency, `acc_prec` applies only to what codegen widens,
   and `apply_privatize` asks codegen's own question of the SOURCE-order nest: the privatized
-  loop's subtree minus schedule scratch (`Schedule.schedule_scratch`: writes to `tile`-namespace
-  nodes, barriers) must be ONE chain of loops and guards down to the single target update — any
+  loop's subtree minus schedule-provenance scratch (`Schedule.schedule_scratch`: writes to
+  `tile`-namespace nodes, barriers; a `Staged_compilation` is source) must be ONE chain of loops and guards down to the single target update — any
   other statement (another node's write, a `Declare_local`/`Set_local` computation, a second update)
   breaks it exactly where the peel refuses siblings — and that chain minus the output loops (those
   the cell mentions, which a schedule sinks inside) goes through `Low_level.peel_accum_nest`, whose
-  base `Low_level.accum_base_widens` judges (raw updates and scope-form bases alike). Anything else
+  base `Low_level.accum_base_widens` judges (raw updates and scope-form bases alike; a widened
+  scope base, and only it, is re-keyed to the tile, since codegen types a scope local by its id's
+  node). A hardware-typed reduction level inside the privatized loop is refused outright, since
+  whether a backend serializes it is codegen's knowledge, not the transform's. Anything else
   gets a storage tile, which codegen renders exactly as it would the target, so its narrowing
-  points do not move. Four review rounds found the gate one member at a time (per-update declines,
-  sibling updates, non-target and scope-local siblings, scope-form bases): re-deriving a subset of
-  the peel always leaves members out, so reconstruct its input and call it (Codex P1s, rounds 1-4
-  of staging#880). `Low_level.mentions_rng_conversion` moved there from `C_syntax` for that
+  points do not move. Five review rounds found the gate one member at a time (per-update
+  declines, sibling updates, non-target, scope-local and staged siblings, scope-form bases, hardware
+  levels): re-deriving a subset of the peel always leaves members out, so reconstruct its input and
+  call it (Codex, rounds 1-5 of staging#880). `Low_level.mentions_rng_conversion` moved there from `C_syntax` for that
   sharing. It escaped gh-664's sweep because `reduction_forms` filed `Privatize` out of scope as "a
   parallelism decision about a different node": an out-of-scope verdict is a claim too. Pinned by
   `accum_width`'s Privatize legs (the first unfused scalar seed against the serial rendering, and a
