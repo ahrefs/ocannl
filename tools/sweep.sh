@@ -430,9 +430,14 @@ lab_contract_check() { # -- sets LAB_MAP and LAB_CONTRACT; refuses the run on a 
 # OPEN and loud: the unit runs, under a WARNING line. An outage must not cost a day of the only
 # coverage five backends have; a measurement overlapped by a sweep can be run again, and the
 # fleet's measurement guidance already has its owner check the box's activity before timing.
-FLEET_FW=         # the fleet-worker.sh that answered the probe, empty for none
-FLEET_LOCAL_BOX=  # this host's name in the fleet, as that probe gave it
-FLEET_STATUS=     # the header's line
+#
+# The names are the sweep's own, outside the fleet's FLEET_* namespace: a fleet host's environment
+# EXPORTS FLEET_LOCAL_BOX (and FLEET_BOXES, FLEET_ANCHOR), and an assignment keeps the export, so a
+# global of that name cleared here reaches the probed fleet-worker.sh as an empty box name and the
+# probe dies -- the registry silently NOT CONSULTED on the very host that runs the sweep.
+SWEEP_FLEET_FW=     # the fleet-worker.sh that answered the probe, empty for none
+SWEEP_FLEET_BOX=    # this host's name in the fleet, as that probe gave it
+SWEEP_FLEET_STATUS= # the header's line
 fleet_probe() {
   local fw probe tag box tokens
   while IFS= read -r fw; do
@@ -440,16 +445,16 @@ fleet_probe() {
     ask_capped probe 30 "$fw" execution slot --probe || continue
     read -r tag _ _ box _ tokens _ <<<"$probe"
     if [ "$tag" = EXECUTION ] && [ -n "$box" ] && [ -n "$tokens" ]; then
-      FLEET_FW=$fw
-      FLEET_LOCAL_BOX=$box
-      FLEET_STATUS="consulted before each unit through $fw (this host is $box)"
+      SWEEP_FLEET_FW=$fw
+      SWEEP_FLEET_BOX=$box
+      SWEEP_FLEET_STATUS="consulted before each unit through $fw (this host is $box)"
       return 0
     fi
   done < <(fleet_worker_candidates)
   if [ "${OCANNL_TOOL_FLEET_WORKER-}" = none ]; then
-    FLEET_STATUS="NOT CONSULTED -- OCANNL_TOOL_FLEET_WORKER=none"
+    SWEEP_FLEET_STATUS="NOT CONSULTED -- OCANNL_TOOL_FLEET_WORKER=none"
   else
-    FLEET_STATUS="NOT CONSULTED -- no fleet-worker.sh answered 'execution slot --probe' ($(fleet_worker_candidates | tr '\n' ' ' | sed 's/ $//'))"
+    SWEEP_FLEET_STATUS="NOT CONSULTED -- no fleet-worker.sh answered 'execution slot --probe' ($(fleet_worker_candidates | tr '\n' ' ' | sed 's/ $//'))"
   fi
 }
 
@@ -457,7 +462,7 @@ fleet_probe() {
 lane_fleet_names() { # ssh-destination (empty for the local lane)
   local dest=$1 box row pair kind alias names=
   if [ -z "$dest" ]; then
-    printf '%s' "$FLEET_LOCAL_BOX"
+    printf '%s' "$SWEEP_FLEET_BOX"
     return
   fi
   box=$(lab_box_of "$dest")
@@ -484,7 +489,7 @@ unit_under_measurement() { # names...
     REGISTRY_REASON="cannot create a scratch file under $LANE_DIR"
     return 2
   }
-  run_capped 120 "$FLEET_FW" execution list --active --compact >"$out" 2>"$out.err" </dev/null
+  run_capped 120 "$SWEEP_FLEET_FW" execution list --active --compact >"$out" 2>"$out.err" </dev/null
   rc=$?
   if [ "$rc" -ne 0 ]; then
     REGISTRY_REASON="execution list exited $rc: $(tail -1 "$out.err" 2>/dev/null | tr -d '\000-\037' | cut -c1-200)"
@@ -2986,7 +2991,7 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
   # The fleet's execution registry is asked before every unit, under the lane's reservation: a unit
   # an exclusive measurement holds the box against is skipped, not run (see unit_under_measurement).
   lane_names=
-  [ -z "$FLEET_FW" ] || lane_names=$(lane_fleet_names "$lane_host")
+  [ -z "$SWEEP_FLEET_FW" ] || lane_names=$(lane_fleet_names "$lane_host")
   for unit in "${UNITS[@]}"; do
     IFS=: read -r machine backend host <<<"$unit"
     [ "$machine" = "$lane" ] || continue
@@ -2998,7 +3003,7 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
       unit_under_measurement $lane_names
       case $? in
         0)
-          say "  $machine/$backend: skip (box ${lab_box:-$FLEET_LOCAL_BOX} under an exclusive measurement: $MEASUREMENT_HOLDERS)"
+          say "  $machine/$backend: skip (box ${lab_box:-$SWEEP_FLEET_BOX} under an exclusive measurement: $MEASUREMENT_HOLDERS)"
           record "$machine" "$backend" skip 0
           update_unit_state "$machine" "$backend" skip
           flush_lane_output || die "cannot publish the $machine/$backend summary to stdout"
@@ -3073,7 +3078,7 @@ echo "lanes:$lanes_summary"
 # Only when a remote unit is selected: which boot of each GPU box this run addresses.
 [ -z "$LAB_DESTS" ] || echo "destinations:$LAB_DESTS"
 [ -z "$LAB_CONTRACT" ] || echo "lab locks: $LAB_CONTRACT"
-echo "reservations: $FLEET_STATUS"
+echo "reservations: $SWEEP_FLEET_STATUS"
 echo
 
 # Registration is atomic with respect to the relay: a signal arriving between a

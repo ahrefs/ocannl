@@ -400,7 +400,11 @@ EOF
 chmod +x "$fake_bin/wake-lab.sh"
 
 # The fleet's registry reader, as the sweep uses it (gh-ocannl-1097): `execution slot --probe`,
-# answered as a fleet box answers it (SWEEP_TEST_FLEET_BOX names this host, mac-studio by default),
+# answered as a fleet box answers it: the box name comes from FLEET_LOCAL_BOX with the real
+# script's `${FLEET_LOCAL_BOX-...}` expansion and its exit 2 on an empty name. run_sweep_args
+# EXPORTS FLEET_LOCAL_BOX (SWEEP_TEST_FLEET_BOX, mac-studio by default), as a fleet host's
+# environment does, so every case would see an unconsulted registry if the sweep cleared a global of
+# that name (gh-ocannl-1097's first sweep did);
 # and `execution list --active --compact`, answered with the registry file SWEEP_TEST_REGISTRY names
 # -- unset is an empty registry, and `unreadable` an anchor that did not answer, with the real
 # script's exit 4. With SWEEP_TEST_REGISTRY_FROM=<n>, reads before the n-th of the run find the
@@ -410,7 +414,14 @@ cat >"$fake_bin/fleet-worker.sh" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SWEEP_TEST_FLEET_CALLS"
 case $* in
-  'execution slot --probe') echo "EXECUTION SLOT PROBE ${SWEEP_TEST_FLEET_BOX:-mac-studio} 6 6" ;;
+  'execution slot --probe')
+    box=${FLEET_LOCAL_BOX-mac-studio}
+    if [ -z "$box" ]; then
+      echo 'fake fleet-worker.sh: this host has no fleet name; set FLEET_LOCAL_BOX' >&2
+      exit 2
+    fi
+    echo "EXECUTION SLOT PROBE $box 6 6"
+    ;;
   'execution list --active --compact')
     reads=$(grep -c '^execution list' "$SWEEP_TEST_FLEET_CALLS")
     case ${SWEEP_TEST_REGISTRY:-} in
@@ -507,7 +518,7 @@ run_sweep_args() {
     "OCANNL_TOOL_SWEEP_LAB_LOCK_WAIT=${SWEEP_TEST_LAB_LOCK_WAIT:-300}" \
     "OCANNL_TOOL_FLEET_WORKER=${SWEEP_TEST_FLEET_WORKER-$fake_bin/fleet-worker.sh}" \
     "SWEEP_TEST_FLEET_CALLS=$fleet_calls" \
-    "SWEEP_TEST_FLEET_BOX=${SWEEP_TEST_FLEET_BOX:-mac-studio}" \
+    "FLEET_LOCAL_BOX=${SWEEP_TEST_FLEET_BOX:-mac-studio}" \
     "SWEEP_TEST_REGISTRY=${SWEEP_TEST_REGISTRY:-}" \
     "SWEEP_TEST_REGISTRY_FROM=${SWEEP_TEST_REGISTRY_FROM:-1}" \
     "SWEEP_TEST_ENDPOINT_MAP=${SWEEP_TEST_ENDPOINT_MAP:-}" \
