@@ -61,6 +61,12 @@ let () =
       bf16_arithmetic = Ir.Numerics.Bf16_auto;
     }
 
+(* The block's parameters take the default precision, which [default_prec] would otherwise set from
+   the environment or a config file and so reach the operand precisions the seeding reads. *)
+let () =
+  Tensor.default_value_prec := Ir.Ops.single;
+  Tensor.default_grad_prec := Ir.Ops.single
+
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
@@ -338,6 +344,10 @@ type probed = {
   whole : Autotune.sketch_params list;
   segs : (bool * string * Autotune.sketch_params list) list option;
       (** [(arity_cuts, key, seeds)] per keyed segment; [None] when the routine does not fission. *)
+  device_seeds : int * int;
+      (** Whole-routine and per-segment seed counts under the device's own limits alone — what
+          [Autotune.tune] proposes; on the C backends the lists above also carry the pinned
+          16-byte-vector population. *)
 }
 
 (* The probe: the site and whole-routine seeds on the optimized routine, and the keyed per-segment
@@ -353,6 +363,22 @@ let probe ~tag s =
       (List.concat_map seed_limits ~f:(fun limits ->
            Autotune.sketch_seed_params ~is_gpu ~is_cpu ~limits opt))
   in
+  let device_seeds_of opt = Autotune.sketch_seed_params ~is_gpu ~is_cpu ~limits:device_limits opt in
+  let keyed ~seeds_of opt =
+    Option.map (segment_seeds ~seeds_of ~arity_cuts:false opt) ~f:(fun coarse ->
+        let fine =
+          if on_cpu then []
+          else
+            Option.value ~default:[] (segment_seeds ~seeds_of ~arity_cuts:true opt)
+            |> List.filter ~f:(fun (k, _) ->
+                not (List.exists coarse ~f:(fun (c, _) -> String.equal c k)))
+        in
+        List.map coarse ~f:(fun (k, q) -> (false, k, q))
+        @ List.map fine ~f:(fun (k, q) -> (true, k, q)))
+  in
+  let count_segs =
+    Option.value_map ~default:0 ~f:(List.sum (module Int) ~f:(fun (_, _, q) -> List.length q))
+  in
   let found = ref None in
   (let x, y = make s (tag ^ "_probe") in
    let init = init_params (Context.auto ()) s y in
@@ -361,18 +387,6 @@ let probe ~tag s =
        ~lowered_transform:(fun opt ->
          let site = Autotune.detect_matmul opt.LL.llc in
          let in_map, out_map = maps ?site x.Tensor.value opt.LL.llc in
-         let segs =
-           Option.map (segment_seeds ~seeds_of ~arity_cuts:false opt) ~f:(fun coarse ->
-               let fine =
-                 if on_cpu then []
-                 else
-                   Option.value ~default:[] (segment_seeds ~seeds_of ~arity_cuts:true opt)
-                   |> List.filter ~f:(fun (k, _) ->
-                       not (List.exists coarse ~f:(fun (c, _) -> String.equal c k)))
-               in
-               List.map coarse ~f:(fun (k, q) -> (false, k, q))
-               @ List.map fine ~f:(fun (k, q) -> (true, k, q)))
-         in
          found :=
            Some
              {
@@ -381,7 +395,10 @@ let probe ~tag s =
                in_map;
                out_map;
                whole = seeds_of opt;
-               segs;
+               segs = keyed ~seeds_of opt;
+               device_seeds =
+                 ( List.length (device_seeds_of opt),
+                   count_segs (keyed ~seeds_of:device_seeds_of opt) );
              };
          [ opt ])
        init
@@ -420,7 +437,7 @@ let stride_on_batch_loops o =
            (unit_out_syms ~in_map:o.in_map ~out_map:o.out_map)
            m.Autotune.m_i ~equal:Idx.equal_symbol
 
-let leg ?(want_mma = false) ?(declines = false) ~what ~tag s =
+let leg ?mma ?(declines = false) ~what ~tag s =
   let o = probe ~tag s in
   let unscheduled = run_plain (tag ^ "_ref") s in
   (match s.build with
@@ -447,11 +464,27 @@ let leg ?(want_mma = false) ?(declines = false) ~what ~tag s =
         List.concat_map l ~f:(fun (arity_cuts, key, qs) ->
             List.map qs ~f:(fun q -> (arity_cuts, key, q))))
   in
-  if want_mma then (
-    p_exists (what ^ ": the whole-routine seeds include tensorized ones") o.whole ~f:(fun q ->
-        q.Autotune.sk_mma);
-    p_exists (what ^ ": the per-segment seeds include tensorized ones") seg_seeds
-      ~f:(fun (_, _, q) -> q.Autotune.sk_mma));
+  (* The tuner's own seeding must propose, whatever the pinned-width population adds on cc. *)
+  (let whole_n, seg_n = o.device_seeds in
+   if declines then
+     p_all
+       (what ^ ": the device's own limits seed at least one flavor")
+       [ whole_n + seg_n ]
+       ~f:(fun n -> n > 0)
+   else
+     p_all (what ^ ": the device's own limits seed both flavors") [ whole_n; seg_n ] ~f:(fun n ->
+         n > 0));
+  (match mma with
+  | None -> ()
+  | Some `Required ->
+      p_exists (what ^ ": the whole-routine seeds include tensorized ones") o.whole ~f:(fun q ->
+          q.Autotune.sk_mma);
+      p_exists (what ^ ": the per-segment seeds include tensorized ones") seg_seeds
+        ~f:(fun (_, _, q) -> q.Autotune.sk_mma)
+  | Some `Unavailable ->
+      Stdio.eprintf "%s: the device advertises no f16 tile-MMA format\n%!" tag;
+      skipped (what ^ ": the whole-routine seeds include tensorized ones");
+      skipped (what ^ ": the per-segment seeds include tensorized ones"));
   (* Declined candidates (see {!candidate}) yield [None]. *)
   let whole_runs =
     List.mapi o.whole ~f:(fun i q -> run_whole_candidate (Printf.sprintf "%s_w%d" tag i) s q)
@@ -536,17 +569,21 @@ let () =
    p_empty "batch of one: because the input is read at no unit-stride output axis"
      ~over:(Array.to_list o.in_map)
      (unit_out_syms ~in_map:o.in_map ~out_map:o.out_map));
-  (* The tensor-unit leg: f16 operands reach the tensorized (Stage + Tensorize) pipelines on the GPU
-     backends advertising f16 fragments (HIP's rocWMMA, CUDA, Metal); the C backends' seeding
+  (* The f16 leg: every GPU runs it — the block-tile seeds do not depend on an MMA capability — and
+     only the tensorized-seed claims wait on an advertised f16 fragment format (HIP's rocWMMA, CUDA,
+     Metal), where the operands reach the Stage + Tensorize pipelines. The C backends' seeding
      pre-filters to uniform f32/f64. *)
   let what = "downsample einsum f16" in
-  if
-    (not on_cpu)
-    && List.exists [ Ir.Backend_intf.Mma_f32; Ir.Backend_intf.Mma_f16 ] ~f:(fun d ->
-        Ir.Backend_intf.advertises_mma_format device_limits ~a:Ir.Backend_intf.Mma_f16
-          ~b:Ir.Backend_intf.Mma_f16 ~d)
-  then
-    leg ~want_mma:true ~what ~tag:"s11h"
+  if not on_cpu then
+    leg
+      ~mma:
+        (if
+           List.exists [ Ir.Backend_intf.Mma_f32; Ir.Backend_intf.Mma_f16 ] ~f:(fun d ->
+               Ir.Backend_intf.advertises_mma_format device_limits ~a:Ir.Backend_intf.Mma_f16
+                 ~b:Ir.Backend_intf.Mma_f16 ~d)
+         then `Required
+         else `Unavailable)
+      ~what ~tag:"s11h"
       {
         prec = Ir.Ops.half;
         b = 2;
@@ -564,6 +601,7 @@ let () =
         "the unscheduled form matches the host oracle";
         "a matmul site whose stride-2 axes are its interior batch loops, the row read at unit \
          stride";
+        "the device's own limits seed both flavors";
         "the whole-routine seeds include tensorized ones";
         "the per-segment seeds include tensorized ones";
         "every whole-routine seed runs and matches the unscheduled form";
