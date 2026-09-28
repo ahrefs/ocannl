@@ -418,7 +418,8 @@ let tune_arms () =
     third case instead of recovering it from two counters that are both zero. *)
 let collect_search t (r : Autotune.report) =
   match r.Autotune.outcome with
-  | Autotune.Searched | Autotune.Search_died _ -> t.searches <- t.searches + 1
+  | Autotune.Searched | Autotune.Search_died _ | Autotune.Abandoned _ ->
+      t.searches <- t.searches + 1
   | Autotune.Cache_replay -> t.replays <- t.replays + 1
   | Autotune.Search_disabled | Autotune.Pre_search_failure _ -> t.no_searches <- t.no_searches + 1
 
@@ -509,7 +510,7 @@ let tune_json t =
       let arm (name, (r : Autotune.report)) =
         let searched, cache_hit =
           match r.Autotune.outcome with
-          | Autotune.Searched | Autotune.Search_died _ -> (true, false)
+          | Autotune.Searched | Autotune.Search_died _ | Autotune.Abandoned _ -> (true, false)
           | Autotune.Cache_replay -> (false, true)
           | Autotune.Search_disabled | Autotune.Pre_search_failure _ -> (false, false)
         in

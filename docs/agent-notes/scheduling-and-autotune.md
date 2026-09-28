@@ -543,13 +543,20 @@ files.
   is strictly better evidence anyway); and pricing the *displaced* flip instead of the promoted one
   (its gain is unknown until measured, which is exactly the budget the promotion consumes).
   `model_default`'s placement walk hands over no evidence, so it gets the prior and is unchanged —
-  and the derivation happens inside `placement_surface`, on the `profitable` path only, so a run
-  pinned to `cost` or `enablement` never reads `tune_flip_profit_margin` (`ps_profit` is `None`
-  there, which is what the log line reports instead of a verdict nothing consulted). A malformed
+  and the derivation happens inside `placement_surface`, on the `profitable` path only, so the
+  ordering of a run pinned to `cost` or `enablement` never reads `tune_flip_profit_margin`
+  (`ps_profit` is `None` there, which is what the log line reports instead of a verdict nothing
+  consulted; the flip chain's abandonment rule, next entry, does read it). A malformed
   margin is a `Utils.User_error` and must reach the caller: `tune_placements`' containment around the
   decision-surface lowering names the classes it does NOT absorb, because swallowing that one skips
   the refinement the configuration asked for and ships the A/B winner as though the setting had been
   honored.
+- **A hopeless flip is abandoned at EQUAL search depth, never against the incumbent's final best**
+  (gh-ocannl-1110): `Autotune.tune ?abandon` stops once its best after `beam_width` admitted timings
+  trails the incumbent's `report.best_steps` at that depth by more than the margin squared, raising
+  `Search_abandoned`. On gh-719's cuda gpt2_mini cell arm A sat at 11.7x its final 6.862 ms for 207 of
+  209 timed candidates (the recombination composites delivered the rest), so a final-best rule would
+  abandon every flip. `best_steps` is cached like `mma_best_ms`, so a replayed incumbent still has one.
 - The action menu's loop enumeration is provenance-aimed **by action category**, not by loop
   (gh-ocannl-687). `Local_scope` has two producers — virtualization's inline at a read site, and the
   accumulator localization `Schedule`'s materializing `Unroll` / `Partition` and

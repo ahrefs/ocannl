@@ -262,6 +262,13 @@ type entry = {
           what "the default pipeline" means without missing the cache. A replaying process compares
           fingerprints and drops a stale [default_ms] (the schedule itself stays valid — only this
           diagnostic is config-relative). *)
+  best_steps : (int * float) list option; [@sexp.option]
+      (** The storing search's best-so-far as a step function of its admitted timings
+          ([Autotune.report.best_steps], gh-ocannl-1110): a measurement of the program like
+          [mma_best_ms], replayed for the same reason — the flip chain abandons a hopeless flip
+          against the incumbent's timed record, so without it an incumbent that replayed would leave
+          every flip to run its full search. Absent for entries written before the field, which
+          replay as "no record". *)
 }
 [@@deriving sexp]
 
