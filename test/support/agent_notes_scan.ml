@@ -603,14 +603,6 @@ let looks_like_heading line =
   in
   String.is_prefix s ~prefix:"#" && not is_citation
 
-(** The headings a reader actually sees: a heading-looking line inside a multiline code span or an
-    HTML comment is an example, and an index anchor naming its slug points at nothing (Codex P2,
-    round 5). *)
-let headings contents =
-  let map = (inert_by_line contents).ranges in
-  List.filter_map (lines contents) ~f:(fun (lineno, line) ->
-      if marker_is_text ~spans:(spans_at map lineno) line then atx_heading line else None)
-
 (** {2 Heading text}
 
     A heading's anchor id is {!slug} over its SOURCE text, while GitHub makes it from the text it
@@ -681,6 +673,21 @@ let heading_markup line =
       if List.exists code ~f:padded then
         Some "a code span padded with spaces, which GitHub strips from the heading's id"
       else None
+
+(** The headings a reader actually sees, and that an anchor can be checked against: a
+    heading-looking line inside a multiline code span or an HTML comment is an example, and an index
+    anchor naming its slug points at nothing (Codex P2, round 5). A heading outside the dialect
+    ({!heading_markup}) is left out too. Its source slug is not the id GitHub gives it, so keeping
+    it let an anchor spelling that slug pass beside the heading's own finding, and it went dead only
+    when the heading was fixed (Codex P2, round 1 on lukstafi/ocannl-staging#899). Its real id is
+    not known here, so a later same-titled heading's suffix may be off by one. That can only happen
+    in a file that already fails. *)
+let headings contents =
+  let map = (inert_by_line contents).ranges in
+  List.filter_map (lines contents) ~f:(fun (lineno, line) ->
+      if marker_is_text ~spans:(spans_at map lineno) line && Option.is_none (heading_markup line)
+      then atx_heading line
+      else None)
 
 (** {2 The closed dialect}
 

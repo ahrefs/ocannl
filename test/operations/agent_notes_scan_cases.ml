@@ -563,6 +563,12 @@ let index_cases =
       index [ "| [a.md](agent-notes/a.md#windows-ci) | the `Widget` seam |" ],
       [ ("agent-notes/a.md", file "## [Windows CI](details)\n\n- A fact about `Widget`.\n") ],
       [ "bullet-integrity @ agent-notes/a.md:5"; "index-agreement @ agent-notes.md:7" ] );
+    (* And the anchor spelling the heading's SOURCE slug is dead too, since that is not the id
+       GitHub gives it: a refused heading has no id here at all. *)
+    ( "an anchor at the source slug of a heading carrying a link",
+      index [ "| [a.md](agent-notes/a.md#windows-cidetails) | the `Widget` seam |" ],
+      [ ("agent-notes/a.md", file "## [Windows CI](details)\n\n- A fact about `Widget`.\n") ],
+      [ "bullet-integrity @ agent-notes/a.md:5"; "index-agreement @ agent-notes.md:7" ] );
     ( "an anchor the file has no heading for",
       index [ "| [a.md](agent-notes/a.md#the-gadget-seam) | the `Widget` seam |" ],
       [ ("agent-notes/a.md", file "## The Widget seam\n\n- A fact about `Widget`.\n") ],

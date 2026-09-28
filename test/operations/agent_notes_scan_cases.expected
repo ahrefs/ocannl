@@ -169,6 +169,7 @@ ok: index -- an anchor on the second of two same-titled headings
 ok: index -- an anchor past a heading whose own title holds the suffix
 ok: index -- an anchor past the last suffix allocated
 ok: index -- an anchor at a heading carrying a link
+ok: index -- an anchor at the source slug of a heading carrying a link
 ok: index -- an anchor the file has no heading for
 ok: index -- a wrapped row takes the rest of the index out of the table
 ok: index -- an anchor on an identifier heading, which GitHub keeps underscored
