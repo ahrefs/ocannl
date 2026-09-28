@@ -103,7 +103,10 @@ let () =
   let fixture_backed = Hash_set.create (module Int) in
   let wrap_param ~l ?i ~o nd =
     let t = TDSL.wrap_param ~l ?i ~o nd () in
+    (* Under a reduced-precision leg the parameter postprocessor returns a cast twin of the f32
+       master; the master is the parameter [inject] visits, so record it through [params]. *)
     Hash_set.add fixture_backed t.Tensor.value.Ir.Tnode.id;
+    Set.iter t.Tensor.params ~f:(fun p -> Hash_set.add fixture_backed p.Tensor.value.Ir.Tnode.id);
     t
   in
   let wrap name ~i ~o =

@@ -47,6 +47,8 @@ missing torch reference or an incomplete kernel table (`--partial` lists missing
 
 import argparse
 import datetime
+import hashlib
+import math
 import json
 import os
 import re
@@ -84,6 +86,11 @@ SWEEP_SEQS = [("gpt2_mini_train_b1_s128", 128), ("gpt2_mini_train_b1_s256", 256)
 ORIGIN = "m4-max"
 PHASES = ["preflight", "metal", "metal-sweep", "cc", "cc-sweep", "artifacts"]
 CELL_TIMEOUT_S = 1800
+# Treatment A against the torch CPU runner, six SGD steps in f32 (measured 2e-7 to 1.3e-6): the
+# cross-framework envelope, generous by an order of magnitude over what the run shows.
+TORCH_PARITY = 1e-5
+# Treatments against A on the same backend and repeat (measured at most 2.1e-7).
+TREATMENT_PARITY = 1e-4
 # [--limit N]: stop after running N cells (a dry run of the mechanics; never for a published run).
 LIMIT = [None]
 
@@ -117,12 +124,18 @@ def cell_path(out, backend, fixture, treatment, r):
 
 
 def result_line(path):
+    """The cell's result, only if its process exited 0 and its loss trajectory is complete and
+    finite: a result line followed by a failed teardown or a signal is not a measurement."""
     try:
+        if open(str(path) + ".status").read().strip() != "0":
+            return None
         for line in open(str(path) + ".out"):
             line = line.strip()
             if line.startswith("{"):
-                return json.loads(line)
-    except (OSError, ValueError):
+                res = json.loads(line)
+                fixture = Path(str(path)).name.split("__")[1]
+                return res if valid_losses(res.get("losses"), fixture) else None
+    except (OSError, ValueError, IndexError):
         pass
     return None
 
@@ -191,6 +204,14 @@ def run_in_own_group(argv, **kw):
         status = proc.wait(timeout=CELL_TIMEOUT_S)
     except subprocess.TimeoutExpired:
         status = "timeout"
+    finally:
+        # Also on SIGTERM/KeyboardInterrupt: the group is not the driver's, so nothing else would
+        # reap it.
+        reap_group(proc, argv)
+    return status
+
+
+def reap_group(proc, argv):
     for _ in range(50):
         if not group_alive(proc.pid):
             break
@@ -205,7 +226,6 @@ def run_in_own_group(argv, **kw):
     if group_alive(proc.pid):
         sys.exit(f"process group {proc.pid} of {argv[0]} survived SIGKILL; stopping the matrix "
                  "rather than timing the next cells beside it")
-    return status
 
 
 def identity():
@@ -218,6 +238,17 @@ def identity():
                          text=True).stdout.strip()
     dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT,
                            capture_output=True, text=True).stdout.strip()
+    # A dirty tree has no identity a later resume could compare (re-editing a modified file leaves
+    # the status unchanged), so it is refused outright rather than recorded.
+    if dirty:
+        sys.exit(f"tracked files are modified; commit them first -- a measurement names a "
+                 f"revision:\n{dirty}")
+    # The executable measured is the one built from that revision: build it here, and bind its
+    # digest into the identity, so a stale _build cannot run under the recorded revision.
+    if subprocess.run(["dune", "build", "benchmarks/runners/ocannl/bench_gpt.exe"],
+                      cwd=ROOT).returncode != 0:
+        sys.exit("dune build benchmarks/runners/ocannl/bench_gpt.exe failed")
+    exe = hashlib.sha256(BENCH_GPT.read_bytes()).hexdigest()
     entries = fixture_digest.read_digests(HERE / "fixtures" / fixture_digest.DIGEST_FILE)
     ids = {}
     for fx in MAIN + SWEEP:
@@ -231,7 +262,7 @@ def identity():
                      "disk against record); regenerating is a coordinated cross-box event, not a "
                      "fix for this refusal")
         ids[fx] = sha
-    return {"revision": rev, "dirty_tracked_files": dirty, "fixtures": ids}
+    return {"revision": rev, "bench_gpt_sha256": exe, "fixtures": ids}
 
 
 def check_identity(out, ident):
@@ -241,7 +272,7 @@ def check_identity(out, ident):
     if not pf.exists():
         return False
     recorded = json.loads(pf.read_text())
-    for key in ("revision", "dirty_tracked_files", "fixtures"):
+    for key in ("revision", "bench_gpt_sha256", "fixtures"):
         if recorded.get(key) != ident[key]:
             sys.exit(f"{out}: its cells were measured with a different {key} "
                      f"({recorded.get(key)!r} vs now {ident[key]!r}); use a fresh --out")
@@ -254,16 +285,14 @@ def preflight(out):
         meta = dict(ident, host=os.uname().nodename,
                     started=datetime.datetime.now(datetime.timezone.utc).isoformat())
         (out / "preflight.json").write_text(json.dumps(meta, indent=2) + "\n")
-    rev, dirty = ident["revision"], ident["dirty_tracked_files"]
-    log(f"revision {rev}{' (DIRTY)' if dirty else ''}; fixtures match {ORIGIN}")
-    if not BENCH_GPT.exists():
-        sys.exit(f"{BENCH_GPT} is not built: dune build benchmarks/runners/ocannl/bench_gpt.exe")
+    log(f"revision {ident['revision']}, bench_gpt {ident['bench_gpt_sha256'][:16]}; "
+        f"fixtures match {ORIGIN}")
     import bench_venv
 
     venv = bench_venv.venv_python(HERE)  # BENCH_VENV_PY is read here, before clean_env drops it
     for fx in MAIN + SWEEP:
         dst = out / "torch" / f"{fx}.out"
-        if dst.exists() and dst.read_text().strip():
+        if torch_losses(out, fx) is not None:
             continue
         dst.parent.mkdir(parents=True, exist_ok=True)
         log(f"torch cpu parity reference {fx}")
@@ -280,6 +309,16 @@ def preflight(out):
                      f"{out / 'torch' / (fx + '.err')}")
 
 
+def parity_steps(fx):
+    return json.loads((HERE / "workloads" / f"{fx}.json").read_text())["parity_steps"]
+
+
+def valid_losses(losses, fx):
+    """A loss trajectory is the fixture's full parity window of finite numbers, or nothing."""
+    return (isinstance(losses, list) and len(losses) == parity_steps(fx)
+            and all(isinstance(x, (int, float)) and math.isfinite(x) for x in losses))
+
+
 def torch_losses(out, fx):
     tf = out / "torch" / f"{fx}.out"
     try:
@@ -287,14 +326,21 @@ def torch_losses(out, fx):
         losses = json.loads(lines[-1])["losses"] if lines else None
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    return losses if isinstance(losses, list) and losses else None
+    return losses if valid_losses(losses, fx) else None
 
 
 def run(args):
+    # SIGTERM unwinds like Ctrl-C, so the running cell's group is reaped by its `finally`.
+    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     backends = args.backends.split(",")
-    phases = args.phases.split(",") if args.phases else PHASES
+    requested = args.phases.split(",") if args.phases else PHASES
+    for phase in requested:
+        if phase not in PHASES:
+            sys.exit(f"unknown phase {phase}")
+    # Canonical order whatever the argument's: preflight always precedes every cell.
+    phases = [p for p in PHASES if p in requested]
     if "preflight" not in phases and not check_identity(out, identity()):
         sys.exit(f"{out}: no preflight.json -- run the preflight phase first")
     for phase in phases:
@@ -424,7 +470,9 @@ def summarize(args):
     # repeat -- or its ratios are over a partial set (and a missing A or B makes them nan).
     for backend, fixtures, n_reps in (("metal", MAIN, 3), ("metal", SWEEP, 2), ("cc", MAIN, 2),
                                       ("cc", SWEEP, 1)):
-        if not any(timed(backend, fx, t) for fx in fixtures for t in NAMES):
+        # Without --partial every matrix must be there: the command reproduces the whole report,
+        # and a directory with no cells at all is no reproduction of it.
+        if args.partial and not any(timed(backend, fx, t) for fx in fixtures for t in NAMES):
             continue
         for fx in fixtures:
             for t in NAMES:
@@ -488,10 +536,15 @@ def summarize(args):
                              for r in reps if r in a_reps]
                     vs_torch = ""
                     if t == "A" and ref_losses and a_reps:
-                        vs_torch = f"{max(rel_losses(v[0]['losses'], ref_losses) for v in a_reps.values()):.2e}"
+                        worst_ref = max(rel_losses(v[0]["losses"], ref_losses)
+                                        for v in a_reps.values())
+                        if worst_ref > TORCH_PARITY:
+                            problems.append(f"{backend} {fx} A: losses differ from torch cpu by "
+                                            f"{worst_ref:.2e} (> {TORCH_PARITY:g})")
+                        vs_torch = f"{worst_ref:.2e}"
                     if diffs:
                         worst = max(diffs)
-                        if worst > 1e-4:
+                        if worst > TREATMENT_PARITY:
                             problems.append(f"{backend} {fx} {t}: losses differ from A by {worst:.2e}")
                         print(f"| `{fx}` | {t} | {worst:.2e} | {vs_torch} |")
 

@@ -3517,8 +3517,11 @@
 ; value pass, executed against exact references and pinned in the emitted kernel.
 
 (test
+ ; Leg 6 runs training steps: it takes the training lock, so its OpenMP pool never overlaps
+ ; another training action's.
  (name gpu_serial_lanes)
  (package neural_nets_lib)
+ (locks ocannl_training_test)
  (deps
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
