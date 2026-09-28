@@ -316,7 +316,7 @@ When validation fails, `check_and_store_virtual` (or `inline_computation`) raise
 and the handler commits the tensor to `Never_virtual i` (the provenance `i` records *why*), so a
 refusal is self-describing wherever it is printed. What a provenance is, and how provenances
 compose, is under Memory Mode Management below. Which function mints each code is derived rather
-than described: `test/operations/nonvirtual_code_inventory.expected` groups the codes by the
+than described: `test/operations/provenance_tag_inventory.expected` groups the codes by the
 function raising them, and lists every file that names one — the checklist for a change to pipeline
 order, which is what decides whether a code can fire. The exit codes:
 

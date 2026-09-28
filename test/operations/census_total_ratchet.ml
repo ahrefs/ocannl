@@ -105,14 +105,19 @@ let allowed =
         "a per-root source floor or a per-file exemption cap, hand-written constants of the scan";
     };
     {
-      golden = Golden "test/operations/nonvirtual_code_inventory.expected";
-      pattern = {|^  [0-9]+:[a-z0-9-]+$|};
-      reason = "a rejection code's tag as the library mints it; its digits name the code";
+      golden = Golden "test/operations/provenance_tag_inventory.expected";
+      pattern = {|^  [0-9]+:[a-z0-9-]+\( ([A-Za-z_]+)\)?$|};
+      reason = "a provenance tag as a source mints it; its digits name the tag";
     };
     {
-      golden = Golden "test/operations/nonvirtual_code_inventory.expected";
+      golden = Golden "test/operations/provenance_tag_inventory.expected";
+      pattern = {|^  [0-9]+:[a-z0-9-]+\( [0-9]+:[a-z0-9-]+\)+ -- |};
+      reason = "the tags of a pinned number collision, each an identifier rather than a quantity";
+    };
+    {
+      golden = Golden "test/operations/provenance_tag_inventory.expected";
       pattern = {|^[^ ]+ --\( [0-9]+\)+$|};
-      reason = "the codes a listed file names, each an identifier rather than a quantity";
+      reason = "the tag numbers a listed file cites, each an identifier rather than a quantity";
     };
     {
       golden = Golden "test/operations/operand_key_ratchet.expected";

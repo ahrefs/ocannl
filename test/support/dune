@@ -44,7 +44,7 @@
   lexical_scope
   ll_test_scan
   operand_key_scan
-  nonvirtual_code_scan
+  provenance_tag_scan
   scan_argv
   scan_floors
   dune_stanza_scan

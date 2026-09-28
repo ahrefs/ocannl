@@ -341,7 +341,7 @@ let drift ~dims = cycle ~dims ~modulus:13 ~offset:20. ~stride:0.015625
     right for every nest whose indices are all loop indices. *)
 let optimize_in ?(materialized = []) ?(static_indices = []) (ctx : LL.optimize_ctx) ~name llc :
     LL.optimized =
-  LL.decide_materialized ~provenance:(Tn.Site "589:ll-test-materialize") ctx materialized;
+  LL.decide_materialized ~provenance:(Tn.Site "589:test-ll-materialize") ctx materialized;
   LL.optimize ctx ~unoptim_ll_source:None ~ll_source:None ~name static_indices llc
 
 (** [optimize ~name llc] is {!optimize_in} in a fresh lineage. *)

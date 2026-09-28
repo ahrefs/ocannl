@@ -141,8 +141,8 @@
   (alias runtest-refusal_control_scan_cases)
   (alias runtest-optional_arg_inventory)
   (alias runtest-optional_arg_inventory_control)
-  (alias runtest-nonvirtual_code_inventory)
-  (alias runtest-nonvirtual_code_scan_cases)))
+  (alias runtest-provenance_tag_inventory)
+  (alias runtest-provenance_tag_scan_cases)))
 
 ; Two focused aggregates beyond `scans` (gh-ocannl-783). Same arrangement and same completeness
 ; check, a different question: `scans` collects the tests that read the REPOSITORY, these collect
@@ -259,7 +259,7 @@
   (alias runtest-ocamlformat_ignore_scan)
   (alias runtest-ll_test_ratchet)
   (alias runtest-operand_key_ratchet)
-  (alias runtest-nonvirtual_code_inventory)
+  (alias runtest-provenance_tag_inventory)
   (alias runtest-census_total_ratchet)
   (alias runtest-workflow_job_timeouts)
   (alias runtest-shell_scripts_parse)
@@ -2375,9 +2375,9 @@
   operand_key_ratchet.ml
   operand_key_ratchet.expected
   operand_key_scan_cases.expected
-  nonvirtual_code_inventory.ml
-  nonvirtual_code_inventory.expected
-  nonvirtual_code_scan_cases.expected
+  provenance_tag_inventory.ml
+  provenance_tag_inventory.expected
+  provenance_tag_scan_cases.expected
   ocamlformat_ignore_scan.ml
   ocamlformat_ignore_scan.expected
   optional_arg_inventory.ml
@@ -2427,8 +2427,8 @@
    ll_test_ratchet.expected,ll_test_scan_cases.expected
    operand_key_ratchet.ml
    operand_key_ratchet.expected,operand_key_scan_cases.expected
-   nonvirtual_code_inventory.ml
-   nonvirtual_code_inventory.expected,nonvirtual_code_scan_cases.expected
+   provenance_tag_inventory.ml
+   provenance_tag_inventory.expected,provenance_tag_scan_cases.expected
    ocamlformat_ignore_scan.ml
    ocamlformat_ignore_scan.expected
    optional_arg_inventory.ml
@@ -6229,13 +6229,13 @@
 ; Same arrangement as ll_test_ratchet.
 
 (executable
- (name nonvirtual_code_inventory)
- (modules nonvirtual_code_inventory)
+ (name provenance_tag_inventory)
+ (modules provenance_tag_inventory)
  (libraries base stdio test_utils arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- reads library sources, docs and tests without running a backend.
- (target nonvirtual_code_inventory.actual)
+ (target provenance_tag_inventory.actual)
  (package neural_nets_lib)
  (deps
   ocannl_config
@@ -6245,29 +6245,29 @@
   (with-stdout-to
    %{target}
    (run
-    %{dep:nonvirtual_code_inventory.exe}
+    %{dep:provenance_tag_inventory.exe}
     %{workspace_root}
-    %{dep:nonvirtual_code_inventory.exe}
+    %{dep:provenance_tag_inventory.exe}
     %{target}
     %{dep:ocannl_config}))))
 
 (rule
- (alias runtest-nonvirtual_code_inventory)
+ (alias runtest-provenance_tag_inventory)
  (package neural_nets_lib)
  (deps
   (alias runtest-env_spelling_gate))
  (action
-  (diff nonvirtual_code_inventory.expected nonvirtual_code_inventory.actual)))
+  (diff provenance_tag_inventory.expected provenance_tag_inventory.actual)))
 
 (test
  ; ocannl-backend: none -- synthetic source cases and child scanner invocations.
- (name nonvirtual_code_scan_cases)
+ (name provenance_tag_scan_cases)
  (package neural_nets_lib)
- (modules nonvirtual_code_scan_cases)
+ (modules provenance_tag_scan_cases)
  (libraries base stdio unix test_utils arrayjit.verdict)
- (deps ocannl_config nonvirtual_code_inventory.exe)
+ (deps ocannl_config provenance_tag_inventory.exe)
  (action
-  (run %{test} %{dep:nonvirtual_code_inventory.exe})))
+  (run %{test} %{dep:provenance_tag_inventory.exe})))
 
 (test
  ; ocannl-backend: none -- synthetic source/Dune cases and child scanner invocations.

@@ -1540,13 +1540,15 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   schedule test's all-`true` golden stays out while its source stays in.
 - `codegen_text_inventory` is one of a family of **checklist inventories**: a scan whose golden
   lists every file a given kind of change must revisit, derived rather than hand-kept.
-  `nonvirtual_code_inventory` (gh-ocannl-1015, staging#836) is the other, listing every file that
-  names a `Non_virtual` rejection code, for a change to pipeline order. The trap they share: a text
-  inventory reads the whole tree, its own cases file and golden included, so a fixture spelling
-  the very text it matches becomes a member (or a refusal) of the real run. Spell fixtures in
-  pieces, as `nonvirtual_code_scan_cases` spells the constructor, and exclude the scan's own
-  golden, as `codegen_text_inventory`'s `excluded` list does — else a promote takes two rounds to
-  converge.
+  `provenance_tag_inventory` (gh-ocannl-1015, staging#836; every family since gh-ocannl-1081) is
+  the other, listing every file that cites a placement-provenance tag, for a change to a tag or to
+  pipeline order. The trap they share: a text inventory reads the whole tree, its own cases file
+  and golden included, so a fixture spelling the very text it matches becomes a member (or a
+  refusal) of the real run. Spell fixtures in pieces (`provenance_tag_scan_cases` still spells
+  its constructor so), and exclude the scan's own golden, as `codegen_text_inventory`'s `excluded` list does — else a
+  promote takes two rounds to converge. Where EVERY token of a shape is read, as the provenance
+  inventory reads every tag-shaped token so that a retired one is refused, pieces cannot hide an
+  invented fixture tag: that scan excludes its cases file and golden by name instead.
 
 ## Aliases and goldens
 

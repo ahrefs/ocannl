@@ -113,7 +113,7 @@ module Operand_key_scan = Operand_key_scan
 (** Finding operand fixtures that mint values from a hand-rolled modulus of a multi-axis key instead
     of going through [Ll_test.cycle]'s blind-axis guard (gh-ocannl-1018). *)
 
-module Nonvirtual_code_scan = Nonvirtual_code_scan
+module Provenance_tag_scan = Provenance_tag_scan
 (** Where the virtualizer's rejection codes are minted, which files name them, and the boundary
     test's phase table checked against the minting functions (gh-ocannl-1015). *)
 
