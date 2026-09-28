@@ -1622,6 +1622,9 @@ let find_fold r (nz : normalizer) ~block : fold option =
   let span_lo = List.fold consumed0 ~init:lo ~f:Int.min in
   let contract =
     List.for_all [ sr; qa; kb; vp.v_tn; vp.o_tn ] ~f:float_node
+    (* The scores are computed into a tile at the chain's state precision: the composed reduction
+       rounds each score to its own node, so it must be at the chain's precision too. *)
+    && Ops.equal_prec (Lazy.force sr.Tn.storage_prec) (Lazy.force nz.x.Tn.storage_prec)
     && List.for_all inputs ~f:(fun tn -> untouched_from (first_read tn) tn)
     && (not (List.mem inputs vp.o_tn ~equal:Tn.equal))
     && (not (List.exists inputs ~f:(List.mem state ~equal:Tn.equal)))
@@ -1638,12 +1641,14 @@ let find_fold r (nz : normalizer) ~block : fold option =
   let bk = Int.min block sk in
   let nkb = (sk + bk - 1) / bk in
   let mp = state_prec nz.m in
+  (* The numerator accumulates [p * v] into [O]'s values: at the wider of the two state precisions.
+     The score tile stays at the scores' own. *)
   let prec =
     match (mp, state_prec vp.o_tn) with
     | (Ops.Double_prec _ as p), _ | _, (Ops.Double_prec _ as p) -> p
     | p, _ -> p
   in
-  let s_tile = tile_node ~label:"block_scores" ~like:nz.x ~dims:[| bk |] prec in
+  let s_tile = tile_node ~label:"block_scores" ~like:nz.x ~dims:[| bk |] mp in
   let u_tile = tile_node ~label:"block_numerator" ~like:vp.o_tn ~dims:[| dv |] prec in
   let m_st = scalar_node ~label:"block_max" ~like:nz.m mp in
   let l_st = scalar_node ~label:"block_sum" ~like:nz.l mp in

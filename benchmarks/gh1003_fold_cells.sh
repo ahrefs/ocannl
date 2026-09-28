@@ -54,6 +54,11 @@ shift 2
 case $cap in '' | *[!0-9]* | 0*) echo "gh1003: CAP must be a positive decimal integer, got '$cap'" >&2; exit 2 ;; esac
 repeats=${REPEATS:-3}
 fold_blocks=${FOLD_BLOCKS:-"8 16 32"}
+case $repeats in '' | *[!0-9]* | 0*) echo "gh1003: REPEATS must be a positive decimal integer, got '$repeats'" >&2; exit 2 ;; esac
+for b in $fold_blocks; do
+  case $b in '' | *[!0-9]* | 0*) echo "gh1003: FOLD_BLOCKS must list positive decimal integers, got '$b'" >&2; exit 2 ;; esac
+done
+[ -n "$fold_blocks" ] || { echo "gh1003: FOLD_BLOCKS is empty" >&2; exit 2; }
 if [ -e "$out" ] && [ -n "$(ls -A "$out" 2>/dev/null)" ]; then
   echo "gh1003: OUT $out is not empty; give each invocation a fresh directory" >&2
   exit 2
@@ -93,10 +98,14 @@ capped() {
   shift
   echo "=== cell $cell start $(date -u +%T): $*"
   t0=$(date +%s)
-  # perl's alarm: macOS has no timeout(1). setpgrp so the cap terminates the whole group.
-  perl -e 'setpgrp(0, 0); $SIG{ALRM} = sub { kill "TERM", -$$; sleep 2; kill "KILL", -$$; exit 124 };
-           alarm shift @ARGV; my $pid = fork; if ($pid == 0) { exec @ARGV } waitpid $pid, 0;
-           exit($? >> 8)' "$cap" "$@" >"$out/$cell.out" 2>>"$out/$cell.err"
+  # perl's alarm: macOS has no timeout(1). The cell runs in a process group of its own, which the
+  # supervisor (outside it) terminates whole and then kills, so a cell ignoring TERM cannot outlive
+  # its cap into the next cell's timing.
+  perl -e 'my $cap = shift @ARGV; my $pid = fork; die "fork: $!" unless defined $pid;
+           if ($pid == 0) { setpgrp(0, 0); exec @ARGV or exit 127 }
+           $SIG{ALRM} = sub { kill "TERM", -$pid; sleep 2; kill "KILL", -$pid; waitpid $pid, 0; exit 124 };
+           alarm $cap; waitpid $pid, 0; exit($? & 127 ? 128 + ($? & 127) : $? >> 8)' \
+    "$cap" "$@" >"$out/$cell.out" 2>>"$out/$cell.err"
   st=$?
   t1=$(date +%s)
   echo "=== cell $cell exit $st wall $((t1 - t0))s"
@@ -122,7 +131,8 @@ cell() {
 pass_cells() {
   local pass=$1 list="" f t
   for f in $2; do for t in $treatments; do list="$list $f:$t"; done; done
-  if [ $((pass % 2)) -eq 0 ]; then echo "$list" | tr ' ' '\n' | sed '/^$/d' | tail -r
+  # Reversed with awk: BSD tail -r does not exist on GNU hosts.
+  if [ $((pass % 2)) -eq 0 ]; then echo "$list" | tr ' ' '\n' | sed '/^$/d' | awk '{ l[NR] = $0 } END { for (i = NR; i > 0; i--) print l[i] }'
   else echo "$list" | tr ' ' '\n' | sed '/^$/d'; fi
 }
 
