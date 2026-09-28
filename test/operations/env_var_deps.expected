@@ -42,16 +42,22 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   cpu_schedule_min_parallel
   debug_log_from_routines
   default_prec
+  enable_device_only
   exit_stream_teardown_timeout
   fp16_arithmetic
   gpu_schedule_block_size
   gpu_schedule_min_parallel
+  inline_complex_computations
+  inline_scalar_constexprs
+  inline_simple_computations
+  ll_ident_style
   log_config_sourcing
   log_level
   memory_budget
   model_default_schedule
   narrow_compute_f32
   no_config_file
+  output_prec_in_ll_files
   profile
   schedule_fission
   schedule_log_launches
@@ -59,6 +65,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   tf32_matmuls
   tune_inline_flips
   virtualize_footprint_materialization
+  virtualize_max_inline_fanin
   virtualize_max_inline_reduction
   virtualize_max_visits
 

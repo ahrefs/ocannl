@@ -4322,6 +4322,18 @@
   (env_var OCANNL_CC_GRID_PRIVATE_BYTES_CAP)
   (env_var OCANNL_CC_PARALLEL_CHUNKS)
   (env_var OCANNL_CC_PARALLEL_GRID)
+  ; And every key low_level.ml reads: its inlining and virtualization decide whether the block's
+  ; shortcut is a materialized site at all.
+  (env_var OCANNL_ENABLE_DEVICE_ONLY)
+  (env_var OCANNL_INLINE_COMPLEX_COMPUTATIONS)
+  (env_var OCANNL_INLINE_SCALAR_CONSTEXPRS)
+  (env_var OCANNL_INLINE_SIMPLE_COMPUTATIONS)
+  (env_var OCANNL_LL_IDENT_STYLE)
+  (env_var OCANNL_OUTPUT_PREC_IN_LL_FILES)
+  (env_var OCANNL_VIRTUALIZE_FOOTPRINT_MATERIALIZATION)
+  (env_var OCANNL_VIRTUALIZE_MAX_INLINE_FANIN)
+  (env_var OCANNL_VIRTUALIZE_MAX_INLINE_REDUCTION)
+  (env_var OCANNL_VIRTUALIZE_MAX_VISITS)
   (env_var OCANNL_BACKEND))
  (modules schedule_strided_1x1)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
