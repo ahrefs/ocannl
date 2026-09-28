@@ -14,13 +14,17 @@ let minus xs ys =
       before @ Option.value (List.tl after) ~default:[])
 
 (* gh-ocannl-1088: the stanza's argument list decides which goldens answer for a source, but
-   [Manifest.sources] owns which sources there are. Compared as sorted multisets, so a source the
-   argument list lacks, one it adds, and one it names twice are each a mismatch: the first list is
-   the manifest's uncatalogued sources, the second the catalogue's sources outside the manifest. *)
+   [Manifest.sources] owns which sources there are. The catalogue is compared as a sorted multiset
+   against the manifest's distinct sources, so a source the argument list lacks, one it adds, and
+   one it names twice are each a mismatch -- and a manifest row repeated is one of its own, which a
+   catalogue repeating it too would otherwise match. The lists: the manifest's uncatalogued sources,
+   the catalogue's sources outside the manifest or beyond its first, and the manifest's repeats. *)
 let catalogue_mismatch ~manifest ~catalogued =
-  let manifest = List.sort manifest ~compare:String.compare
+  let distinct = List.dedup_and_sort manifest ~compare:String.compare
   and catalogued = List.sort catalogued ~compare:String.compare in
-  (minus manifest catalogued, minus catalogued manifest)
+  ( minus distinct catalogued,
+    minus catalogued distinct,
+    minus (List.sort manifest ~compare:String.compare) distinct )
 
 let () =
   let source =
@@ -87,17 +91,22 @@ let dynamic reason = Verdict.fail reason
             Manifest.claim_exercises remaining valid)));
   let manifest = [ "b.ml"; "a.ml"; "c.ml" ] in
   Verdict.p "a manifest source missing from the argument list is named as uncatalogued"
-    (Poly.equal (catalogue_mismatch ~manifest ~catalogued:[ "c.ml"; "a.ml" ]) ([ "b.ml" ], []));
+    (Poly.equal (catalogue_mismatch ~manifest ~catalogued:[ "c.ml"; "a.ml" ]) ([ "b.ml" ], [], []));
   Verdict.p "an argument-list source outside the manifest is named as extra"
     (Poly.equal
        (catalogue_mismatch ~manifest ~catalogued:[ "a.ml"; "d.ml"; "b.ml"; "c.ml" ])
-       ([], [ "d.ml" ]));
+       ([], [ "d.ml" ], []));
   Verdict.p "a source catalogued twice is a mismatch, not a match"
     (Poly.equal
        (catalogue_mismatch ~manifest ~catalogued:[ "a.ml"; "b.ml"; "c.ml"; "a.ml" ])
-       ([], [ "a.ml" ]));
+       ([], [ "a.ml" ], []));
+  Verdict.p "a manifest row repeated is a mismatch even where the argument list repeats it too"
+    (Poly.equal
+       (catalogue_mismatch ~manifest:("a.ml" :: manifest)
+          ~catalogued:[ "a.ml"; "b.ml"; "c.ml"; "a.ml" ])
+       ([], [ "a.ml" ], [ "a.ml" ]));
   Verdict.p "the same sources in another order match"
-    (Poly.equal (catalogue_mismatch ~manifest ~catalogued:[ "c.ml"; "a.ml"; "b.ml" ]) ([], []));
+    (Poly.equal (catalogue_mismatch ~manifest ~catalogued:[ "c.ml"; "a.ml"; "b.ml" ]) ([], [], []));
   let arguments = Array.to_list (Array.subo Stdlib.Sys.argv ~pos:1) in
   let rec pairs = function
     | source :: control :: rest -> (source, control) :: pairs rest
@@ -107,7 +116,7 @@ let dynamic reason = Verdict.fail reason
         []
   in
   let pairs = pairs arguments in
-  let uncatalogued, extra =
+  let uncatalogued, extra, repeated =
     catalogue_mismatch ~manifest:Manifest.sources
       ~catalogued:(List.map pairs ~f:(fun (source, _) -> "test/operations/" ^ source))
   in
@@ -123,9 +132,15 @@ let dynamic reason = Verdict.fail reason
         source
         (if List.mem Manifest.sources source ~equal:String.equal then "more than once"
          else "but absent from Refusal_control_manifest.sources"));
+  List.iter repeated ~f:(fun source ->
+      eprintf
+        "%s: has more than one row in `raw_entries` in test/support/refusal_control_manifest.ml \
+         (not part of the golden)\n"
+        source);
   Verdict.p_empty
     "the stanza's scanner sources are exactly Refusal_control_manifest.sources, each once"
-    ~over:Manifest.sources (uncatalogued @ extra);
+    ~over:Manifest.sources
+    (uncatalogued @ extra @ repeated);
   printf "\nScanner refusal formats and the permanent control suite assigned to their source:\n";
   let catalogued = Hashtbl.create (module String) in
   pairs

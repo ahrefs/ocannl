@@ -10,6 +10,7 @@ a second identical diagnostic cannot reuse the consumed claim execution: true
 a manifest source missing from the argument list is named as uncatalogued: true
 an argument-list source outside the manifest is named as extra: true
 a source catalogued twice is a mismatch, not a match: true
+a manifest row repeated is a mismatch even where the argument list repeats it too: true
 the same sources in another order match: true
 the stanza's scanner sources are exactly Refusal_control_manifest.sources, each once: true
 
