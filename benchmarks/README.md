@@ -83,7 +83,8 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   backward keeps. **gpt2_mini_train_b1_s128** / **_b1_s256** / **_b1_s512** are the same recipe at
   batch 1: with `gpt2_mini_train_s1024` they are a sequence sweep at fixed batch, which separates
   quadratic buffers from linear saved state (the constant-token fixtures above conflate batch and
-  sequence scaling). `gh1002_cells.py` runs the gh-ocannl-1002 matrix over all of them.
+  sequence scaling). `gh1002_cells.py` runs the gh-ocannl-1002 matrix over all of them
+  ([report-gh1002-fused-backward.md](report-gh1002-fused-backward.md)).
 
 ## Layout
 
