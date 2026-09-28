@@ -65,12 +65,18 @@ let mask ~prefix =
     ()
 
 (* [layers] attention blocks over a ramp input, residually stacked; the output keeps the model width
-   through the residual. *)
+   through the residual. The ramp is scaled into [0, 1): the raw 0..223 ramp gives scores in the
+   thousands, a one-hot softmax, and parameter gradients through the scores of order 1e-19 -- a
+   parity claim on them is vacuous, and under a C compiler's fast-math licence the composed
+   backward's cancellation ([dP / l + dl], two terms of order 1e5 whose difference is the gradient)
+   leaves rounding garbage of order 10 where the exact value is 0. A non-saturated softmax makes
+   every parity claim below a claim about the values. *)
 let model ?mask_fill ~layers ~d_k ~prefix () =
   let x =
     TDSL.range_of_shape ~label:[ "x" ] ~batch_dims:[ batch; seq ] ~input_dims:[]
       ~output_dims:[ d_model ] ()
   in
+  let%op x = x /. 224. in
   let mask = mask ~prefix in
   let blocks =
     List.init layers ~f:(fun i ->
@@ -218,6 +224,13 @@ let () =
   p "the same parameters carry gradients in both runs"
     (List.equal String.equal (List.map grads_f ~f:fst) (List.map grads_c ~f:fst));
   List.iter2_exn grads_f grads_c ~f:(fun (name, gf) (_, gc) ->
+      let worst =
+        Array.fold2_exn gf gc ~init:0. ~f:(fun acc a b ->
+            Float.max acc (Float.abs (a -. b) /. Float.max 1. (Float.abs b)))
+      in
+      let scale = Array.fold gc ~init:0. ~f:(fun acc b -> Float.max acc (Float.abs b)) in
+      eprintf "%s.grad: worst relative difference %.3g at scale %.3g (not part of the golden)\n%!"
+        name worst scale;
       p_all2 (name ^ ".grad agrees within 1e-4 relative") gf gc ~f:(close ~tol:1e-4);
       p (name ^ ".grad is not identically zero") (Array.exists gc ~f:(fun v -> Float.(v <> 0.))))
 
