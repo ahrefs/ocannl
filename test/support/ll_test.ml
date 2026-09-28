@@ -834,8 +834,10 @@ let read_only (o : LL.optimized) tn = (Hashtbl.find_exn o.LL.traced_store tn).LL
     nodes' storage precisions, resolved by the seeder's own {!Autotune.mma_tile_for_precisions}
     (which also applies the tf32 policy). On a CPU backend it is the token capability the C backends
     advertise for the register-tiled [Tile_mma] rendering ([limits.mma] present). Under routine
-    logging ([Utils.debug_log_from_routines]) a GPU capability is withheld whatever the tiles: the
-    mma emission renders the scalar fallback there, so the seeder refutes the tensorized family.
+    logging ([Utils.debug_log_from_routines]) the capability is withheld on both: the mma emission
+    and the register tiling both render the scalar fallback there, so the seeder refutes the
+    tensorized family. A test gated here declares [OCANNL_DEBUG_LOG_FROM_ROUTINES] and
+    [OCANNL_LOG_LEVEL] beside [OCANNL_BACKEND], so a logging rerun is not served a cached verdict.
 
     [`Withheld] carries the skip's aggregation, derived rather than keyed on a backend name: when
     the tile appears once {!Ir.Numerics.t.tf32_matmuls} is on, the missing tile is the run's policy
@@ -849,11 +851,12 @@ let tensorized_matmul_capability ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hard
       (Autotune.mma_tile_for_precisions mma ~a_prec:(prec a) ~b_prec:(prec b) ~d_prec:(prec d))
   in
   match limits.Ir.Backend_intf.mma with
-  | Some _ when (not is_gpu) && is_cpu -> `Advertised
-  | Some _ when is_gpu && Utils.debug_log_from_routines () ->
-      (* The seeder refutes every GPU tensorized leaf under routine logging, the predicate the
-         emission consults to render the scalar fallback: a configuration's choice. *)
+  | Some _ when (is_gpu || is_cpu) && Utils.debug_log_from_routines () ->
+      (* The seeder refutes every tensorized leaf under routine logging, GPU and CPU alike: the
+         predicate both the mma emission and [C_syntax.try_register_tile] consult to render the
+         scalar fallback. A configuration's choice. *)
       `Withheld `Environment
+  | Some _ when (not is_gpu) && is_cpu -> `Advertised
   | Some mma when is_gpu && gpu_tile mma -> `Advertised
   | Some mma when is_gpu ->
       let saved = Ir.Numerics.get () in

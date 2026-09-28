@@ -3658,7 +3658,9 @@
   ocannl_config
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LOG_LEVEL))
  ; Keep execution off @default as well as @runtest; @check still compiles the source.
  (action
   (no-infer
@@ -3708,7 +3710,9 @@
   (alias slow-env_spelling_gate)
   autotune_batched_companion.expected
   ocannl_config
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LOG_LEVEL))
  ; Keep execution off @default as well as @runtest; @check still compiles the source.
  (action
   (no-infer
@@ -4800,7 +4804,9 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LOG_LEVEL))
  (modules epilogue_fusion_mma_seeds)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -5344,7 +5350,9 @@
  (deps
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LOG_LEVEL))
  (modules schedule_contraction_nest)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
