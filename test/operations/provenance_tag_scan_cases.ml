@@ -595,6 +595,23 @@ let () =
                let a = Q.Site \"13:fixture-owned\"")
              .mints)
         [ "13:fixture-owned" ]);
+   p_all "an exception named like a carrier shadows it where it is in scope"
+     [
+       "let b = let exception Site of string in Site \"12:fixture-key\"\n\
+        let a = Site \"13:fixture-owned\"";
+       "let a = Site \"13:fixture-owned\"\n\
+        exception Site of string\n\
+        let b = Site \"12:fixture-key\"";
+     ] ~f:(fun text -> strings (tags (read ~source:"test/j.ml" text).mints) [ "13:fixture-owned" ]);
+   p "a structure re-exporting a foreign module through its own alias is foreign"
+     (strings
+        (tags
+           (read ~source:"test/k.ml" ~foreign:[ "Key_scan" ]
+              "module Local = struct module K = Key_scan include K end\n\
+               let b = Local.Site \"12:fixture-key\"\n\
+               let a = Site \"13:fixture-owned\"")
+             .mints)
+        [ "13:fixture-owned" ]);
    p "a longer qualifier is the owner's only when it ends in the owner's module"
      (strings
         (tags

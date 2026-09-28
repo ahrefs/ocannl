@@ -80,6 +80,8 @@ a declaration of its own carrier-named constructor takes effect from where it is
 the owner's own declaration, in the owner's file, keeps the name the owner's: true
 a top-level include is read, constrained or not, so a module re-exporting a foreign one can be found: true
 an alias of a longer path is the owner's only when it ends in the owner's module: true
+an exception named like a carrier shadows it where it is in scope: true
+a structure re-exporting a foreign module through its own alias is foreign: true
 a longer qualifier is the owner's only when it ends in the owner's module: true
 a foreign constructor applied unqualified in its own module mints nothing: true
 a foreign constructor qualified through an alias mints nothing; the owner's still does: true

@@ -32,14 +32,14 @@
       qualified by that module -- directly or through module bindings, resolved where they are in
       scope -- unqualified inside it, or unqualified where an [open] or [include] of it is in scope,
       it mints nothing; the same goes for a module the source itself declares with such a
-      constructor, or includes a module that does, and a declaration of one takes effect from where
-      it stands (the owner's own type, in its own file, excepted). Those modules -- and, to a
-      fixpoint, the sources re-exporting one through a top-level [include] -- are derived from their
-      declarations; the owner's constructor is assumed everywhere else, since opens and aliases
-      reach it in ways a reader of one file cannot follow -- except behind a qualifier of two or
-      more components, whose identity is not established: that is the owner's only when it ends in
-      the owner's module ([Ir.Tnode.Site]), and a module alias of such a path is established the
-      same way.
+      constructor, or includes a module that does, and a declaration of one (a type, or an exception
+      named like the carrier) takes effect from where it stands (the owner's own type, in its own
+      file, excepted). Those modules -- and, to a fixpoint, the sources re-exporting one through a
+      top-level [include] -- are derived from their declarations; the owner's constructor is assumed
+      everywhere else, since opens and aliases reach it in ways a reader of one file cannot follow
+      -- except behind a qualifier of two or more components, whose identity is not established:
+      that is the owner's only when it ends in the owner's module ([Ir.Tnode.Site]), and a module
+      alias of such a path is established the same way.
     - A constructor carrying provenances only ([Refined]) composes and mints nothing; its case of
       the renderer -- a [let rec], in a source binding no [( ^ )] of its own -- must return a
       concatenation of string literals and recursive calls rendering each of its arguments exactly
@@ -475,16 +475,28 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
   in
   (* Whether the module [me] exports a foreign carrier constructor: it is a foreign module (or an
      alias of one in scope), or a structure declaring one or including a module that does. *)
-  let rec foreign_module (me : module_expr) =
+  (* [local] is the structure's own module bindings seen so far, each with whether it is foreign:
+     a structure's includes resolve through them, in declaration order, before the outer scope. *)
+  let rec foreign_module ?(local = []) (me : module_expr) =
     match (peel_module me).pmod_desc with
-    | Pmod_ident { txt; _ } ->
-        Option.value_map (last_name txt) ~default:false ~f:(fun m -> is_foreign (resolve m))
+    | Pmod_ident { txt = Lident m; _ } -> (
+        match List.Assoc.find local m ~equal:String.equal with
+        | Some foreign -> foreign
+        | None -> is_foreign (resolve m))
+    | Pmod_ident { txt; _ } -> Option.value_map (last_name txt) ~default:false ~f:is_foreign
     | Pmod_structure items ->
         declares_carrier items
-        || List.exists items ~f:(fun item ->
-            match item.pstr_desc with
-            | Pstr_include { pincl_mod; _ } -> foreign_module pincl_mod
-            | _ -> false)
+        ||
+        let rec go local = function
+          | [] -> false
+          | item :: rest -> (
+              match item.pstr_desc with
+              | Pstr_include { pincl_mod; _ } -> foreign_module ~local pincl_mod || go local rest
+              | Pstr_module { pmb_name = { txt = Some n; _ }; pmb_expr; _ } ->
+                  go ((n, foreign_module ~local pmb_expr) :: local) rest
+              | _ -> go local rest)
+        in
+        go [] items
     | _ -> false
   in
   let bind name (me : module_expr) =
@@ -677,6 +689,11 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
                declaration's -- unless it is the owner's own type, in the owner's own file. *)
             super#structure_item item;
             unqualified_foreign := true
+        | Pstr_exception { ptyexn_constructor = { pext_name = { txt; _ }; _ }; _ }
+          when List.mem carriers txt ~equal:String.equal ->
+            (* An exception named like a carrier shadows it for the rest of the structure. *)
+            super#structure_item item;
+            unqualified_foreign := true
         | Pstr_include { pincl_mod = me; _ } | Pstr_open { popen_expr = me; _ } ->
             super#structure_item item;
             (* For the rest of the enclosing structure, which restores the flag on exit. *)
@@ -721,7 +738,11 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
                 }
             in
             scopes <- sc :: List.filter scopes ~f:(fun o -> not (String.equal !o.exn txt));
+            (* An exception named like a carrier shadows it in its body. *)
+            let saved_foreign = !unqualified_foreign in
+            if List.mem carriers txt ~equal:String.equal then unqualified_foreign := true;
             self#expression body;
+            unqualified_foreign := saved_foreign;
             closed := !sc :: !closed;
             scopes <- saved
         | Pexp_open (({ popen_expr = me; _ } as od), body) when opens_foreign me ->
