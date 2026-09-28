@@ -55,8 +55,8 @@ let type_source =
 
 let resolve reads = Scan.merge (fst (Scan.resolve reads))
 
-let read ?(source = "lib/fixture.ml") ?foreign text =
-  Scan.read_source ~carriers ?foreign ~source text
+let read ?(source = "lib/fixture.ml") ?foreign ?owner text =
+  Scan.read_source ~carriers ?foreign ?owner ~source text
 
 let rendered = Scan.renderings ~renderer:"provenance_to_string" ~source:"lib/tnode.ml" type_source
 let mints = Scan.merge (rendered @ resolve [ read library ])
@@ -171,6 +171,11 @@ let () =
         (Scan.composite_renderings ~renderer:"provenance_to_string"
            (String.substr_replace_all type_source
               ~pattern:"provenance_to_string a ^ \" -> \" ^ provenance_to_string b" ~with_:text)));
+  p_empty "a composite rendering in a non-recursive renderer calls something else"
+    ~over:[ type_source ]
+    (Scan.composite_renderings ~renderer:"provenance_to_string"
+       (String.substr_replace_all type_source ~pattern:"let rec provenance_to_string"
+          ~with_:"let provenance_to_string"));
   p_empty "a guarded or repeated carrier case is not an identity rendering" ~over:[ type_source ]
     (Scan.identity_renderings ~renderer:"provenance_to_string"
        (String.substr_replace_all type_source ~pattern:"| Site s -> s"
@@ -307,6 +312,30 @@ let () =
      (with_caller
         (String.substr_replace_all qualified ~pattern:"F.consume" ~with_:"Other.Fixture.consume"))
      ~f:is_consume;
+   p_none "a result returned only from a guarded nested case relays nothing"
+     (resolve
+        [
+          read
+            (String.substr_replace_all library
+               ~pattern:("with " ^ nv ^ " i -> Error i")
+               ~with_:("with " ^ nv ^ " i -> (match x with A when false -> Error i | _ -> Ok ())"));
+        ])
+     ~f:is_consume;
+   p_none "a producer inside a nested module is not the top-level function a caller names"
+     (resolve
+        [
+          read
+            ("module Nested = struct\n  let consume y =\n    let exception " ^ nv
+           ^ " of string in\n    try if y then raise (" ^ nv
+           ^ " \"4:fixture-consume\"); Ok () with " ^ nv
+           ^ " i -> Error i\n\
+              end\n\
+              let consume _ = Ok ()\n\
+              let e () = record (Site \"6:fixture-elsewhere\")");
+          read ~source:"lib/other.ml"
+            "let c y = match Fixture.consume y with Ok () -> () | Error i -> record (Site i)";
+        ])
+     ~f:is_consume;
    p_none "a guarded caller case relays nothing"
      (with_caller
         "let c y = match Fixture.consume y with Ok () -> () | Error i when false -> record (Site \
@@ -414,6 +443,8 @@ let () =
           ]));
   p "a table with an element of another shape is unread, not guessed at"
     (Option.is_none (Scan.phase_table "let phase_table = [ (\"7:fixture-store\", phase) ]"));
+  p "a table bound twice is unread: which binding the test reads is a question of order"
+    (Option.is_none (Scan.phase_table (table ^ "let phase_table = []\n")));
   p "a source with no table binding has no table"
     (Option.is_none (Scan.phase_table "let other_table = []"));
   p_empty "a table agreeing with the minting functions is accepted" ~over:mints
@@ -515,6 +546,24 @@ let () =
        strings
          (tags (read ~source:"test/f.ml" ~foreign:[ "Key_scan" ] text).mints)
          [ "13:fixture-owned" ]);
+   p "a declaration of its own carrier-named constructor takes effect from where it is declared"
+     (strings
+        (tags
+           (read ~source:"test/g.ml"
+              "let a = Site \"13:fixture-owned\"\n\
+               type t = Site of string\n\
+               let b = Site \"12:fixture-key\"")
+             .mints)
+        [ "13:fixture-owned" ]);
+   p "the owner's own declaration, in the owner's file, keeps the name the owner's"
+     (strings
+        (tags
+           (read ~source:"lib/tnode.ml" ~owner:("lib/tnode.ml", "provenance")
+              (type_source ^ "\nlet x = Site \"13:fixture-owned\""))
+             .mints)
+        [ "13:fixture-owned" ]);
+   p "a top-level include is read, so a module re-exporting a foreign one can be found"
+     (strings (Scan.top_level_includes "include Test_utils.Key_scan\nlet x = 1") [ "Key_scan" ]);
    p_empty "a foreign constructor applied unqualified in its own module mints nothing" ~over:[ own ]
      (read ~source:"test/support/key_scan.ml" ~foreign:[ "Key_scan" ] own).mints;
    p "a foreign constructor qualified through an alias mints nothing; the owner's still does"
@@ -674,6 +723,15 @@ let () =
    check "shipping inventory refuses a phase function moved to another source" ~exit:1
      ~message:"but it is minted in arrayjit/lib/inliner.ml instantiate_computations" moved);
   Unix.unlink (Stdlib.Filename.concat root "arrayjit/lib/inliner.ml");
+  write "arrayjit/lib/low_level.ml" low_level;
+  write boundary table;
+  write "arrayjit/lib/key_scan.ml" "type t = Site of string | File\nlet e = Site \"not a tag\"";
+  write "arrayjit/lib/wrapper.ml" "include Key_scan";
+  write "arrayjit/lib/user.ml" "let x = Wrapper.Site \"not a tag either\"";
+  check "shipping inventory treats a module re-exporting a foreign carrier as foreign" ~exit:0
+    ~message:"Read, not part of the checklist:" (run ());
+  List.iter [ "key_scan.ml"; "wrapper.ml"; "user.ml" ] ~f:(fun f ->
+      Unix.unlink (Stdlib.Filename.concat root ("arrayjit/lib/" ^ f)));
   write "arrayjit/lib/low_level.ml" low_level;
   write boundary "let phase_table = [ (\"4:fixture-consume\", Store) ]\n";
   check "shipping inventory refuses a phase table placing a code in the wrong phase" ~exit:1

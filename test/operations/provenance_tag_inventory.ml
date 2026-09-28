@@ -96,18 +96,18 @@ let scan ~records ~pinned root generated =
     Option.value_map type_text ~default:[] ~f:(Scan.renderings ~renderer ~source:type_source)
   in
   let unparsed = ref [] in
-  let candidates =
+  let sources =
     Inventory.select inventory ~f:(fun path ->
         String.is_suffix path ~suffix:".ml" && not (own path))
-    |> List.filter_map ~f:(fun file ->
-        let content = read file in
-        (* A source reaches a carrier by spelling it, or relays one through a local exception whose
-           payload a caller elsewhere hands on. *)
-        Option.some_if
-          (List.exists (Scan.exception_keyword :: carriers) ~f:(fun substring ->
-               String.is_substring content ~substring))
-          (file.path, content))
+    |> List.map ~f:(fun (file : Inventory.file) -> (file.path, read file))
   in
+  let containing substrings =
+    List.filter sources ~f:(fun (_, content) ->
+        List.exists substrings ~f:(fun substring -> String.is_substring content ~substring))
+  in
+  (* A source reaches a carrier by spelling it, or relays one through a local exception whose
+     payload a caller elsewhere hands on. *)
+  let candidates = containing (Scan.exception_keyword :: carriers) in
   let parses f (path, content) =
     match f content with
     | x -> Some x
@@ -115,20 +115,43 @@ let scan ~records ~pinned root generated =
         unparsed := path :: !unparsed;
         None
   in
-  (* The modules declaring a constructor of a carrier's name that is not the owner's. *)
+  (* The modules declaring a constructor of a carrier's name that is not the owner's, and -- to a
+     fixpoint -- the modules re-exporting one of those through a top-level [include]. *)
   let foreign =
-    List.filter_map candidates ~f:(fun ((path, _) as candidate) ->
-        if String.equal path type_source then None
-        else
-          match parses (Scan.declares_own_carrier ~carriers) candidate with
-          | Some true -> Some (Scan.module_of_path path)
-          | _ -> None)
+    let declaring =
+      List.filter_map candidates ~f:(fun ((path, _) as candidate) ->
+          if String.equal path type_source then None
+          else
+            match parses (Scan.declares_own_carrier ~carriers) candidate with
+            | Some true -> Some (Scan.module_of_path path)
+            | _ -> None)
+    in
+    let includers =
+      List.filter_map (containing [ "include" ]) ~f:(fun ((path, _) as candidate) ->
+          Option.map (parses Scan.top_level_includes candidate) ~f:(fun included ->
+              (Scan.module_of_path path, included)))
+    in
+    let rec close known =
+      let more =
+        List.filter_map includers ~f:(fun (m, included) ->
+            Option.some_if
+              ((not (List.mem known m ~equal:String.equal))
+              && List.exists included ~f:(List.mem known ~equal:String.equal))
+              m)
+      in
+      if List.is_empty more then known else close (more @ known)
+    in
+    close declaring
   in
-  let unparsed_once = !unparsed in
+  let unparsed_once = List.dedup_and_sort !unparsed ~compare:String.compare in
+  unparsed := unparsed_once;
   let reads =
     List.filter_map candidates ~f:(fun ((path, _) as candidate) ->
         if List.mem unparsed_once path ~equal:String.equal then None
-        else parses (Scan.read_source ~carriers ~foreign ~source:path) candidate)
+        else
+          parses
+            (Scan.read_source ~carriers ~foreign ~owner:(type_source, type_name) ~source:path)
+            candidate)
   in
   let resolved, malformed = Scan.resolve reads in
   let mints = Scan.merge (rendered @ resolved) in
