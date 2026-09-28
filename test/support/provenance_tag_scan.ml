@@ -14,37 +14,50 @@
 
     The families are read off [Tnode.provenance] itself, never listed: its declaration and its
     renderer are the owner of what a tag can be.
+
+    This is a SYNTACTIC reader of OCaml, and it holds one rule throughout: it accepts the canonical
+    shapes and reads anything else as "does not hold", on the side where the answer is loud. A
+    renderer case it cannot read leaves its constructor unrendered, which the inventory refuses; a
+    relay it cannot follow mints nothing, so the scope's tags vanish and every citation of them and
+    the phase table refuse. What it never does is guess a relay or a rendering into existence.
+
     - A constructor with no argument ([Visit_cap], ...) mints ONE tag: the string literal its case
       of [provenance_to_string] returns, and no other constructor or family may mint that text, or a
       printed provenance could not say which decision it records.
     - A constructor carrying a [string] ([Site]) is open: it mints every string literal it is
-      applied to ([Tn.Site], [Ir.Tnode.Site], or unqualified), and a literal that is not a tag is
-      refused rather than skipped. A constructor of the same name that another module declares with
+      applied to ([Tn.Site], [Ir.Tnode.Site], or unqualified, a type constraint on the argument
+      peeled), and a literal that is not a tag is refused rather than skipped. The renderer must
+      return its string unchanged. A constructor of the same name that another module declares with
       a [string] argument ([Operand_key_scan]'s [Site of string]) is not a provenance: applied
-      qualified by that module, directly or through a module binding of the source, or unqualified
-      inside it, it mints nothing; the same goes for a module the source itself declares with such a
+      qualified by that module -- directly or through module bindings, resolved where they are in
+      scope -- unqualified inside it, or unqualified where an [open] or [include] of it is in scope,
+      it mints nothing; the same goes for a module the source itself declares with such a
       constructor. Those modules are derived from their declarations; the owner's constructor is
       assumed everywhere else, since opens and aliases reach it in ways a reader of one file cannot
       follow.
     - A constructor carrying provenances only ([Refined]) composes and mints nothing; its case of
-      the renderer must render each of them, in order, through a recursive call, or a printed
-      provenance could drop or reorder a recorded tag. Any other shape is refused as unread.
+      the renderer must return a concatenation of string literals and recursive calls rendering each
+      of its arguments exactly once, in order, or a printed provenance could drop or reorder a
+      recorded tag. Any other shape is refused as unread.
+    - Each of those renderer checks reads a constructor's ONE unguarded case of the renderer's
+      defining match; several cases, a guard or an or-pattern leave it unread.
     - A string constructor applied to a VARIABLE opens a relayed family when that variable is the
       payload a handler caught: [with Non_virtual i -> ... (Site i)] makes every tag literal in the
       scope of that local [let exception Non_virtual of string] a tag of the family "Site via
       Non_virtual". The relay belongs to the SCOPE whose handler it is -- local exceptions are
       generative, so a same-named exception elsewhere proves nothing, and a handler names the local
-      exception unqualified -- and the carrier must receive the payload itself, not a value a binder
-      in between gives the same name. It may take one hop through a result: a handler wrapping the
-      payload in a constructor ([Non_virtual i -> Error i]) relays when a caller of the declaring
-      function matches that constructor into a carrier
-      ([match instantiate_computations ... with Error i -> ... (Site i)]). A scope reaching no
-      carrier either way mints nothing. That covers the literal at a [raise], the one handed to a
-      helper that raises it, and the one a handler records directly; a string the exception itself
-      is applied to that is no tag is refused. The function such a tag is minted in is the innermost
-      value binding enclosing the exception's declaration -- a declaration anew inside the scope
-      opens its own -- which is what decides its PHASE, so a relayed tag minted in two functions is
-      refused. A tag computed at run time is not read.
+      exception unqualified. It may take one hop through a result: a handler returning the payload
+      wrapped in a constructor ([Non_virtual i -> Error i]) relays when a caller of the declaring
+      function -- qualified by its module, or unqualified in its own source where nothing else binds
+      the name -- matches that constructor into a carrier
+      ([match instantiate_computations ... with Error i -> ... (Site i)]). A handler or caller body
+      that rebinds the payload's name anywhere is not read. A scope reaching no carrier mints
+      nothing. That covers the literal at a [raise], the one handed to a helper that raises it, and
+      the one a handler records directly; a string the exception itself is applied to that is no tag
+      is refused. The function such a tag is minted in is the innermost value binding enclosing the
+      exception's declaration -- a declaration anew inside the scope opens its own -- which is what
+      decides its PHASE, so a relayed tag minted in two functions is refused. A tag computed at run
+      time is not read.
 
     The minter of a tag of the other families is the innermost value binding around the literal.
 
@@ -197,65 +210,81 @@ let renderer_cases ~renderer content =
               | _ -> [])
       | _ -> [])
 
+(* Each constructor's ONE case of the renderer's defining match, as [(constructor, case)]: a
+   constructor matched by more than one case, by a guarded case, or inside an or-pattern has no
+   entry. What such a constructor prints cannot be read off one case, so every check below finds no
+   rendering for it and refuses -- the reader accepts the canonical shapes and nothing it would have
+   to guess at. *)
+let canonical_cases ~renderer content =
+  let cases = renderer_cases ~renderer content in
+  let rec heads (p : pattern) =
+    match p.ppat_desc with
+    | Ppat_construct ({ txt; _ }, _) -> Option.to_list (last_name txt)
+    | Ppat_or (a, b) -> heads a @ heads b
+    | Ppat_alias (p, _) | Ppat_constraint (p, _) -> heads p
+    | _ -> []
+  in
+  let count c =
+    List.count cases ~f:(fun case -> List.mem (heads case.pc_lhs) c ~equal:String.equal)
+  in
+  List.filter_map cases ~f:(fun case ->
+      match (case.pc_lhs.ppat_desc, case.pc_guard) with
+      | Ppat_construct ({ txt; _ }, _), None -> (
+          match last_name txt with Some c when count c = 1 -> Some (c, case) | _ -> None)
+      | _ -> None)
+
 (** [(constructor, tag)] for each case [C -> "tag"] of the renderer's defining match. *)
 let renderings ~renderer ~source content =
-  List.filter_map (renderer_cases ~renderer content) ~f:(fun c ->
+  List.filter_map (canonical_cases ~renderer content) ~f:(fun (constructor, c) ->
       match (c.pc_lhs.ppat_desc, c.pc_rhs.pexp_desc) with
-      | Ppat_construct ({ txt; _ }, None), Pexp_constant (Pconst_string (s, _, _)) -> (
-          match (last_name txt, tag_number s) with
-          | Some constructor, Some number ->
-              Some { number; tag = s; family = Rendered constructor; source; minter = renderer }
-          | _ -> None)
+      | Ppat_construct (_, None), Pexp_constant (Pconst_string (s, _, _)) ->
+          Option.map (tag_number s) ~f:(fun number ->
+              { number; tag = s; family = Rendered constructor; source; minter = renderer })
       | _ -> None)
 
 (** The constructors whose case of the renderer's defining match returns their argument unchanged
     ([Site s -> s]): only for those is the literal a carrier is applied to the text a printed
     provenance shows. *)
 let identity_renderings ~renderer content =
-  List.filter_map (renderer_cases ~renderer content) ~f:(fun c ->
+  List.filter_map (canonical_cases ~renderer content) ~f:(fun (constructor, c) ->
       match (c.pc_lhs.ppat_desc, c.pc_rhs.pexp_desc) with
-      | ( Ppat_construct ({ txt; _ }, Some (_, { ppat_desc = Ppat_var { txt = v; _ }; _ })),
+      | ( Ppat_construct (_, Some (_, { ppat_desc = Ppat_var { txt = v; _ }; _ })),
           Pexp_ident { txt = Lident v'; _ } )
         when String.equal v v' ->
-          last_name txt
+          Some constructor
       | _ -> None)
 
 (** The constructors whose case of the renderer's defining match binds each argument to a variable
-    and renders every one of them, in order, through a recursive call
+    and returns a concatenation ([^]) of string literals and recursive calls on those variables,
+    each variable rendered exactly once and in order
     ([Refined (a, b) -> renderer a ^ " -> " ^ renderer b]). *)
 let composite_renderings ~renderer content =
-  let calls e =
-    let seen = ref [] in
-    let finder =
-      object
-        inherit Ast_traverse.iter as super
-
-        method! expression e =
-          (match e.pexp_desc with
-          | Pexp_apply
-              ( { pexp_desc = Pexp_ident { txt = Lident f; _ }; _ },
-                [ (Nolabel, { pexp_desc = Pexp_ident { txt = Lident x; _ }; _ }) ] )
-            when String.equal f renderer ->
-              seen := x :: !seen
-          | _ -> ());
-          super#expression e
-      end
-    in
-    finder#expression e;
-    List.rev !seen
+  (* The variables a concatenation renders, in order; [None] for any other expression. *)
+  let rec rendered (e : expression) =
+    match e.pexp_desc with
+    | Pexp_apply
+        ({ pexp_desc = Pexp_ident { txt = Lident "^"; _ }; _ }, [ (Nolabel, l); (Nolabel, r) ]) ->
+        Option.map2 (rendered l) (rendered r) ~f:( @ )
+    | Pexp_constant (Pconst_string _) -> Some []
+    | Pexp_apply
+        ( { pexp_desc = Pexp_ident { txt = Lident f; _ }; _ },
+          [ (Nolabel, { pexp_desc = Pexp_ident { txt = Lident x; _ }; _ }) ] )
+      when String.equal f renderer ->
+        Some [ x ]
+    | _ -> None
   in
   let var (p : pattern) = match p.ppat_desc with Ppat_var { txt; _ } -> Some txt | _ -> None in
-  List.filter_map (renderer_cases ~renderer content) ~f:(fun c ->
+  List.filter_map (canonical_cases ~renderer content) ~f:(fun (constructor, c) ->
       match c.pc_lhs.ppat_desc with
-      | Ppat_construct ({ txt; _ }, Some (_, arg)) -> (
+      | Ppat_construct (_, Some (_, arg)) -> (
           let vars =
             match arg.ppat_desc with
             | Ppat_tuple ps -> Option.all (List.map ps ~f:var)
             | _ -> Option.map (var arg) ~f:List.return
           in
-          match vars with
-          | Some (_ :: _ as vars) when List.equal String.equal (calls c.pc_rhs) vars ->
-              last_name txt
+          match (vars, rendered c.pc_rhs) with
+          | Some (_ :: _ as vars), Some calls when List.equal String.equal calls vars ->
+              Some constructor
           | _ -> None)
       | _ -> None)
 
@@ -388,40 +417,69 @@ let read_source ~carriers ?(foreign = []) ~source content =
         && not (Option.value_map (last_name q) ~default:false ~f:(fun q -> is_foreign (resolve q)))
     | Lapply _ -> false
   in
-  (* The constructors applied to the variable [v] anywhere in [e], split into carriers and
-     others. *)
+  (* What a handler or consumer body [e] does with the variable [v]: the carriers applied to it
+     anywhere -- applying one is what records a provenance -- and the constructors wrapping it in a
+     position [e] returns, the only place a wrapped payload reaches the caller. A body that rebinds
+     [v] ANYWHERE -- [let], [let*], a parameter, a case, a loop index -- is not read at all: which
+     occurrence is the payload is a question of scope this reader does not answer, and relaying
+     nothing is the loud answer (the scope's tags vanish, and every citation of them fails). *)
   let wrappers_of_var v e =
-    let carriers_hit = ref [] and others = ref [] in
-    (* Beneath a binder of [v], [v] is another value: the walk does not descend there. *)
-    let finder =
-      object (self)
+    let rebinds = ref false in
+    let binders =
+      object
         inherit Ast_traverse.iter as super
-        method! case c = if not (pattern_binds v c.pc_lhs) then super#case c
 
-        method! expression e =
-          match e.pexp_desc with
-          | Pexp_construct ({ txt; _ }, Some { pexp_desc = Pexp_ident { txt = Lident x; _ }; _ })
-            when String.equal x v ->
-              Option.iter (last_name txt) ~f:(fun c ->
-                  if is_carrier txt then carriers_hit := c :: !carriers_hit
-                  else others := c :: !others)
-          | Pexp_let (rec_flag, vbs, body) ->
-              let shadows = List.exists vbs ~f:(fun vb -> pattern_binds v vb.pvb_pat) in
-              (match rec_flag with
-              | Recursive when shadows -> ()
-              | _ -> List.iter vbs ~f:(fun vb -> self#expression vb.pvb_expr));
-              if not shadows then self#expression body
-          | Pexp_function (params, _, _)
-            when List.exists params ~f:(fun param ->
-                     match param.pparam_desc with
-                     | Pparam_val (_, _, pat) -> pattern_binds v pat
-                     | Pparam_newtype _ -> false) ->
-              ()
-          | _ -> super#expression e
+        method! pattern p =
+          if pattern_binds v p then rebinds := true;
+          super#pattern p
       end
     in
-    finder#expression e;
-    (!carriers_hit, !others)
+    binders#expression e;
+    if !rebinds then ([], [])
+    else
+      let applied_to_v (e : expression) =
+        match e.pexp_desc with
+        | Pexp_construct ({ txt; _ }, Some { pexp_desc = Pexp_ident { txt = Lident x; _ }; _ })
+          when String.equal x v ->
+            Some txt
+        | _ -> None
+      in
+      let carriers_hit = ref [] in
+      let finder =
+        object
+          inherit Ast_traverse.iter as super
+
+          method! expression e =
+            (match applied_to_v e with
+            | Some txt when is_carrier txt ->
+                Option.iter (last_name txt) ~f:(fun c -> carriers_hit := c :: !carriers_hit)
+            | _ -> ());
+            super#expression e
+        end
+      in
+      finder#expression e;
+      let rec returned (e : expression) =
+        match e.pexp_desc with
+        | Pexp_sequence (_, e)
+        | Pexp_let (_, _, e)
+        | Pexp_letmodule (_, _, e)
+        | Pexp_letexception (_, e)
+        | Pexp_open (_, e)
+        | Pexp_constraint (e, _) ->
+            returned e
+        | Pexp_ifthenelse (_, a, b) -> returned a @ Option.value_map b ~default:[] ~f:returned
+        | Pexp_match (_, cases) -> List.concat_map cases ~f:(fun c -> returned c.pc_rhs)
+        | Pexp_try (body, cases) ->
+            returned body @ List.concat_map cases ~f:(fun c -> returned c.pc_rhs)
+        | _ -> [ e ]
+      in
+      let wrapped =
+        List.filter_map (returned e) ~f:(fun e ->
+            match applied_to_v e with
+            | Some txt when not (is_carrier txt) -> last_name txt
+            | _ -> None)
+      in
+      (!carriers_hit, wrapped)
   in
   (* [(constructor, v)] for each [C v] a pattern catches, the constructor as written. *)
   let rec caught (p : pattern) =
@@ -431,6 +489,43 @@ let read_source ~carriers ?(foreign = []) ~source content =
     | Ppat_exception p | Ppat_alias (p, _) | Ppat_constraint (p, _) -> caught p
     | Ppat_or (a, b) -> caught a @ caught b
     | _ -> []
+  in
+  (* An unqualified call names the source's own top-level function only when nothing else in the
+     source binds that name: a local or nested-module definition of it could be what is called. *)
+  let own_function =
+    let bound = Hashtbl.create (module String) in
+    let counter =
+      object
+        inherit Ast_traverse.iter as super
+
+        method! pattern p =
+          (match p.ppat_desc with
+          | Ppat_var { txt; _ } | Ppat_alias (_, { txt; _ }) -> Hashtbl.incr bound txt
+          | _ -> ());
+          super#pattern p
+      end
+    in
+    counter#structure structure;
+    let top_level =
+      List.concat_map structure ~f:(fun item ->
+          match item.pstr_desc with
+          | Pstr_value (_, vbs) -> List.filter_map vbs ~f:binding_name
+          | _ -> [])
+    in
+    fun f ->
+      List.mem top_level f ~equal:String.equal
+      && Option.equal Int.equal (Hashtbl.find bound f) (Some 1)
+  in
+  (* Whether an [open] or [include] of [me] brings a foreign carrier constructor into scope. *)
+  let opens_foreign (me : module_expr) =
+    let rec peel (me : module_expr) =
+      match me.pmod_desc with Pmod_constraint (me, _) -> peel me | _ -> me
+    in
+    match (peel me).pmod_desc with
+    | Pmod_ident { txt; _ } ->
+        Option.value_map (last_name txt) ~default:false ~f:(fun m -> is_foreign (resolve m))
+    | Pmod_structure items -> declares_carrier items
+    | _ -> false
   in
   let walker =
     object (self)
@@ -467,6 +562,10 @@ let read_source ~carriers ?(foreign = []) ~source content =
         | Pstr_recmodule mbs ->
             List.iter mbs ~f:(fun mb -> bind mb.pmb_name.txt mb.pmb_expr);
             List.iter mbs ~f:self#module_binding
+        | Pstr_include { pincl_mod = me; _ } | Pstr_open { popen_expr = me; _ } ->
+            super#structure_item item;
+            (* For the rest of the enclosing structure, which restores the flag on exit. *)
+            if opens_foreign me then unqualified_foreign := true
         | _ -> super#structure_item item
 
       method! case c =
@@ -506,6 +605,14 @@ let read_source ~carriers ?(foreign = []) ~source content =
             self#expression body;
             closed := !sc :: !closed;
             scopes <- saved
+        | Pexp_open (({ popen_expr = me; _ } as od), body) when opens_foreign me ->
+            self#open_declaration od;
+            let saved = !unqualified_foreign in
+            unqualified_foreign := true;
+            self#expression body;
+            unqualified_foreign := saved
+        | Pexp_construct (lid, Some { pexp_desc = Pexp_constraint (arg, _); _ }) ->
+            self#expression { e with pexp_desc = Pexp_construct (lid, Some arg) }
         | Pexp_letmodule ({ txt; _ }, me, body) ->
             self#module_expr me;
             let saved = !env in
@@ -518,8 +625,8 @@ let read_source ~carriers ?(foreign = []) ~source content =
             let callee =
               match f with
               | Ldot (q, name) -> Option.map (last_name q) ~f:(fun q -> (resolve q, name))
-              | Lident name -> Some (own_module, name)
-              | Lapply _ -> None
+              | Lident name when own_function name -> Some (own_module, name)
+              | Lident _ | Lapply _ -> None
             in
             Option.iter callee ~f:(fun (m, f) ->
                 List.iter cases ~f:(fun (c : case) ->

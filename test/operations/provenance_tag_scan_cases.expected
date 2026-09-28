@@ -5,6 +5,8 @@ the renderer must return a carrier's string unchanged: true
 a composite renders each of its provenances, in order, through the renderer: true
 a composite dropping or reordering a provenance is refused: true
 a carrier case transforming its string is not rescued by a nested identity case: true
+a composite whose result does not concatenate every provenance, in order, is unread: true
+a guarded or repeated carrier case is not an identity rendering: true
 a nullary constructor with no rendering is refused: true
 a missing type is refused rather than read as no family: true
 a carrier applied to no literal anywhere is the reader gone blind: true
@@ -22,6 +24,8 @@ a payload wrapped in a result constructor is relayed by a caller matching it int
 a result constructor no caller hands to a carrier relays nothing: true
 a caller of a same-named function of another module relays nothing: true
 a caller qualifying the declaring module through a binding relays: true
+an unqualified caller of a name the source also binds locally relays nothing: true
+a payload wrapped in a result that the handler discards relays nothing: true
 a caller qualifying the declaring module directly relays: true
 the relaying exception applied to a string that is no tag is refused, not skipped: true
 a string raised through an exception that relays nothing is no provenance: true
@@ -51,11 +55,13 @@ a table entry naming a phase with no minter is refused: true
 an unreadable table is refused rather than skipped: true
 a phase whose function mints nothing is stale: true
 a fixture library citing its own tags is accepted: true
+a carrier's argument under a type constraint is read like a bare literal: true
 a carrier applied to a string that is no tag is recorded, and refused: true
 a module declaring its own string constructor of a carrier's name is foreign: true
 a foreign constructor reached through a chain of module bindings mints nothing: true
 a module name resolves to the binding in scope where it is used: true
 a local structure declaring its own carrier-named constructor is foreign, inside and out: true
+an open or include of a foreign module makes the unqualified name foreign in its scope: true
 a foreign constructor applied unqualified in its own module mints nothing: true
 a foreign constructor qualified through an alias mints nothing; the owner's still does: true
 a constructor's rendering minted by any other family is refused: true

@@ -162,6 +162,19 @@ let () =
     (Scan.identity_renderings ~renderer:"provenance_to_string"
        (String.substr_replace_all type_source ~pattern:"Site s -> s"
           ~with_:"Site s -> (match other with Site x -> x | _ -> \"site:\" ^ s)"));
+  p_all "a composite whose result does not concatenate every provenance, in order, is unread"
+    [
+      "let _ = provenance_to_string a in provenance_to_string b";
+      "if true then provenance_to_string a ^ \" -> \" ^ provenance_to_string b else \"\"";
+    ] ~f:(fun text ->
+      List.is_empty
+        (Scan.composite_renderings ~renderer:"provenance_to_string"
+           (String.substr_replace_all type_source
+              ~pattern:"provenance_to_string a ^ \" -> \" ^ provenance_to_string b" ~with_:text)));
+  p_empty "a guarded or repeated carrier case is not an identity rendering" ~over:[ type_source ]
+    (Scan.identity_renderings ~renderer:"provenance_to_string"
+       (String.substr_replace_all type_source ~pattern:"| Site s -> s"
+          ~with_:"| Site s when false -> s\n  | Site s -> \"site:\" ^ s"));
   p "a nullary constructor with no rendering is refused"
     (has ~substring:"constructor Cap_fixture has no tag rendering"
        (Scan.family_violations ~identities:[ "Site" ] ~type_source:"t.ml"
@@ -239,6 +252,7 @@ let () =
        nv ^ " i -> List.iter l ~f:(fun i -> record (Site i))";
        nv ^ " i -> (match o with Some i -> record (Site i) | None -> ())";
        "Other." ^ nv ^ " i -> record (Site i)";
+       nv ^ " i -> let* i = next in record (Site i)";
      ]
      ~f:(fun handler -> List.is_empty (resolve [ read (scope handler) ]));
    p_exists "the same handler shape relays when the carrier does receive the payload"
@@ -265,6 +279,25 @@ let () =
      (with_caller same_name) ~f:is_consume;
    p_exists "a caller qualifying the declaring module through a binding relays"
      (with_caller ("module F = Fixture\n" ^ qualified))
+     ~f:is_consume;
+   p_none "an unqualified caller of a name the source also binds locally relays nothing"
+     (resolve
+        [
+          read
+            (unconsumed
+           ^ "\n\
+              let other y = let consume = fun _ -> Ok () in\n\
+              match consume y with Ok () -> () | Error i -> record (Site i)");
+        ])
+     ~f:is_consume;
+   p_none "a payload wrapped in a result that the handler discards relays nothing"
+     (resolve
+        [
+          read
+            (String.substr_replace_all library
+               ~pattern:("with " ^ nv ^ " i -> Error i")
+               ~with_:("with " ^ nv ^ " i -> ignore (Error i); Error \"unrelated\""));
+        ])
      ~f:is_consume;
    p_exists "a caller qualifying the declaring module directly relays"
      (with_caller
@@ -379,6 +412,13 @@ let () =
           ()));
   (* The refusals, and the clean case they must leave alone. *)
   p_empty "a fixture library citing its own tags is accepted" ~over:mints (violations ());
+  p "a carrier's argument under a type constraint is read like a bare literal"
+    (let r =
+       read
+         "let t () = record (Site (\"12:fixture-typed\" : string)); record (Site (\"nope\" : \
+          string))"
+     in
+     strings (tags r.mints) [ "12:fixture-typed" ] && strings r.malformed [ "nope" ]);
   p "a carrier applied to a string that is no tag is recorded, and refused"
     (let r = read "let bad () = record (Site \"not-a-tag\"); record (Tn.Site \"12:Bad-tag\")" in
      strings r.malformed [ "not-a-tag"; "12:Bad-tag" ]
@@ -428,6 +468,17 @@ let () =
                  let y = Local.Site \"12:fixture-key\"\n\
                  let z = Site \"13:fixture-owned\""))
               .mints)
+         [ "13:fixture-owned" ]);
+   p_all "an open or include of a foreign module makes the unqualified name foreign in its scope"
+     [
+       "module Local = struct include Test_utils.Key_scan let b = Site \"12:fixture-key\" end\n\
+        let a = Site \"13:fixture-owned\"";
+       "let a = Site \"13:fixture-owned\"\nopen Key_scan\nlet b = Site \"12:fixture-key\"";
+       "let b = Key_scan.(Site \"12:fixture-key\")\nlet a = Site \"13:fixture-owned\"";
+       "let b = let open Key_scan in Site \"12:fixture-key\"\nlet a = Site \"13:fixture-owned\"";
+     ] ~f:(fun text ->
+       strings
+         (tags (read ~source:"test/f.ml" ~foreign:[ "Key_scan" ] text).mints)
          [ "13:fixture-owned" ]);
    p_empty "a foreign constructor applied unqualified in its own module mints nothing" ~over:[ own ]
      (read ~source:"test/support/key_scan.ml" ~foreign:[ "Key_scan" ] own).mints;
