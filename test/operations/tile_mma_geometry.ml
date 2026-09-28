@@ -191,25 +191,8 @@ type leg = Serial | Tensorized of RT.t option
 let whole_triple ~tile ~simd_width ~(out : Tn.t) (opt : LL.optimized) : Sched.schedule =
   let ez, zsyms = Sched.expand_zero ~tn:out in
   let zj = match zsyms with [ _; zj ] -> zj | _ -> assert false in
-  let rec path (llc : LL.t) =
-    match llc with
-    | LL.For_loop { index; body; _ } -> (
-        match
-          List.filter (LL.flat_lines [ body ]) ~f:(function
-            | LL.Noop | LL.Comment _ -> false
-            | _ -> true)
-        with
-        | [ single ] -> index :: path single
-        | _ -> [ index ])
-    | LL.If { body; _ } -> path body
-    | _ -> []
-  in
   let i, j, k =
-    match
-      List.find_exn
-        (List.map (LL.flat_lines [ opt.LL.llc ]) ~f:path)
-        ~f:(fun p -> List.length p = 3)
-    with
+    match List.find_exn (Ll_test.nest_paths opt.LL.llc) ~f:(fun p -> List.length p = 3) with
     | [ i; j; k ] -> (i, j, k)
     | _ -> assert false
   in

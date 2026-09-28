@@ -811,6 +811,29 @@ let first_binding ?in_scopes sym llc =
     (find_loop ?in_scopes ~f:(fun s -> Idx.equal_symbol s.ls_index sym) llc)
     ~f:(fun s -> s.ls_stmt)
 
+(** The loop chain of each top-level statement of [llc], outermost first: the symbols of a
+    [For_loop] and of each loop that is the {e only} statement of the body above it ([Noop]s and
+    [Comment]s aside), seen through [If] guards. A body holding anything else ends the chain, and
+    statements that open no loop contribute no chain. Each [Seq]-flattened top-level statement is
+    its own nest, the shape a lowered routine has (gh-ocannl-1091).
+
+    This is the question "which symbols bind the axes of the matmul nest" that schedule tests ask
+    before writing a [Tile]/[Privatize] schedule: select the chain by its length
+    ([List.length p = 3]). Unlike {!loop_sites} it answers only for perfect nests — an
+    initialization loop sharing the nest's extent is a chain of its own, never an ancestor — and it
+    does not descend into [Local_scope] bodies or a [Tile_mma]'s fallback. *)
+let nest_paths (llc : LL.t) : Idx.symbol list list =
+  let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
+  let rec path (llc : LL.t) : Idx.symbol list =
+    match llc with
+    | LL.For_loop { index; body; _ } ->
+        index :: (match strip (LL.flat_lines [ body ]) with [ single ] -> path single | _ -> [])
+    | LL.If { body; _ } -> path body
+    | _ -> []
+  in
+  List.filter_map (LL.flat_lines [ llc ]) ~f:(fun stmt ->
+      match path stmt with [] -> None | p -> Some p)
+
 (** The [is_complex] fact recorded for [tn] by the structural facts pass. *)
 let is_complex (o : LL.optimized) tn = (Hashtbl.find_exn o.LL.traced_store tn).LL.is_complex
 

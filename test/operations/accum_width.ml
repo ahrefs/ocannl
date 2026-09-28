@@ -88,19 +88,9 @@ let () = Generated.init ~backend_name
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
-(* The single-child chain of loops from the top of each top-level nest (tile_mma_narrow's helper):
-   used to address the reduction axis for the unroll legs. *)
-let nest_paths (llc : LL.t) : Ir.Indexing.symbol list list =
-  let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
-  let rec path (llc : LL.t) : Ir.Indexing.symbol list =
-    match llc with
-    | LL.For_loop { index; body; _ } ->
-        index :: (match strip (LL.flat_lines [ body ]) with [ single ] -> path single | _ -> [])
-    | LL.If { body; _ } -> path body
-    | _ -> []
-  in
-  List.filter_map (LL.flat_lines [ llc ]) ~f:(fun stmt ->
-      match path stmt with [] -> None | p -> Some p)
+(* The single-child chain of loops from the top of each top-level nest ([Ll_test.nest_paths]): used
+   to address the reduction axis for the unroll legs. *)
+let nest_paths = Ll_test.nest_paths
 
 (* [Sched.Unroll] over the k axis of the matmul's i/j/k nest, in either representation. *)
 let unroll_k ~materialize (opt : LL.optimized) : Sched.schedule =

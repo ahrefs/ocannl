@@ -79,18 +79,6 @@ module Generated = Test_utils.Generated
 
 let () = Generated.init ~backend_name
 
-let nest_paths (llc : LL.t) : Ir.Indexing.symbol list list =
-  let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
-  let rec path (llc : LL.t) : Ir.Indexing.symbol list =
-    match llc with
-    | LL.For_loop { index; body; _ } ->
-        index :: (match strip (LL.flat_lines [ body ]) with [ single ] -> path single | _ -> [])
-    | LL.If { body; _ } -> path body
-    | _ -> []
-  in
-  List.filter_map (LL.flat_lines [ llc ]) ~f:(fun stmt ->
-      match path stmt with [] -> None | p -> Some p)
-
 (* Deterministic operands so sibling graphs compute identical values (forward code is consumed by
    compilation, so each leg builds its own graph). *)
 let make_x tag =
@@ -244,7 +232,7 @@ let () =
   in
   let run_sched name (x, kern, y) ~tensorized =
     let transform (opt : LL.optimized) =
-      let paths = nest_paths opt.LL.llc in
+      let paths = Ll_test.nest_paths opt.LL.llc in
       let _b, _oh, ow, oc, ic, kh, kw =
         match List.find_exn paths ~f:(fun q -> List.length q = 7) with
         | [ b; oh; ow; oc; ic; kh; kw ] -> (b, oh, ow, oc, ic, kh, kw)
@@ -339,7 +327,7 @@ let () =
      rather than silently packing a dilated tile. *)
   (let x, _kern, y = make_conv_s2v "cvg2_h" in
    let transform (opt : LL.optimized) =
-     let paths = nest_paths opt.LL.llc in
+     let paths = Ll_test.nest_paths opt.LL.llc in
      let ow, ic =
        match List.find_exn paths ~f:(fun q -> List.length q = 7) with
        | [ _b; _oh; ow; _oc; ic; _kh; _kw ] -> (ow, ic)
@@ -492,7 +480,7 @@ let () =
     let run_tail_sched name (x, kern, pr, y) ~fused =
       let n_real = ref (-1) in
       let transform (opt : LL.optimized) =
-        let paths = nest_paths opt.LL.llc in
+        let paths = Ll_test.nest_paths opt.LL.llc in
         let _b, _oh, ow, oc, ic, kh, kw =
           match List.find_exn paths ~f:(fun q -> List.length q = 7) with
           | [ b; oh; ow; oc; ic; kh; kw ] -> (b, oh, ow, oc, ic, kh, kw)
