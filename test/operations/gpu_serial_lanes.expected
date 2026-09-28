@@ -26,3 +26,16 @@ attention, recomputed scores: the lowering carries the hoisted value pass: true
 attention, recomputed scores: the CPU preset schedules no lanes: true
 attention, recomputed scores: no GPU segment takes lanes (every lane would recompute the dot product): true
 attention, recomputed scores: the rewritten forward agrees with the composed one: true
+--- leg 6: the attention backward of a training step carries hardware geometry ---
+fused D: the GPU pipeline emits its nest: true
+fused D: every nest writing it runs under a Grid or Workgroup loop: true
+fused dQ: the GPU pipeline emits its nest: true
+fused dQ: every nest writing it runs under a Grid or Workgroup loop: true
+fused dK: the GPU pipeline emits its nest: true
+fused dK: every nest writing it runs under a Grid or Workgroup loop: true
+fused dV: the GPU pipeline emits its nest: true
+fused dV: every nest writing it runs under a Grid or Workgroup loop: true
+composed dP: the GPU pipeline emits its nest: true
+composed dP: every nest writing it runs under a Grid or Workgroup loop: true
+the fused step's parameter gradients are not identically zero: true
+the fused step's parameter gradients agree with the composed ones within 1e-4 relative: true
