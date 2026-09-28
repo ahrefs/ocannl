@@ -184,7 +184,7 @@ files.
   (`Visit_cap` / uncovered read, `Inline_reduction_cap`, `Inline_fanin_cap`) BEFORE any legality
   question, so a shape capped there may be perfectly inlineable; `check_and_store_virtual` rejects
   at store time and `inline_computation` at consumption time — which codes each one mints is
-  derived, not listed: `test/operations/nonvirtual_code_inventory.expected` groups them by function,
+  derived, not listed: `test/operations/provenance_tag_inventory.expected` groups them by function,
   and refuses a tag minted in two (the consumption-time backstop behind `148:scan-recurrence` is
   `149:scan-at-inline`, so the provenance says which phase spoke) — which is why two setters with
   different index maps as separate statements store fine as components and only fail once a read
@@ -218,10 +218,11 @@ files.
   Pipeline order is what falsified 19's "cannot fire", and nothing tied the claim's copies
   together. So before moving a pass across `virtual_llc`, or adding one ahead of
   `Low_level.optimize`, read the golden of `dune build
-  @test/operations/runtest-nonvirtual_code_inventory`: it lists every file that names a code — the
+  @test/operations/runtest-provenance_tag_inventory`: it lists every file that names a code — the
   raise-site comments, `docs/lowering_and_inlining.md`, this note, the tests — which is the
-  checklist that change lacked (gh-ocannl-1015). Cite a code as `Non_virtual N` or by its tag, the
-  two spellings the inventory reads. `Non_virtual 52` is enforced earlier still (`trace_node_facts`
+  checklist that change lacked (gh-ocannl-1015). Cite a code as `Non_virtual N` or by its tag, and
+  any provenance by its tag or as `provenance N` — the spellings the inventory reads, and refuses
+  when no source mints what they name (gh-ocannl-1081). `Non_virtual 52` is enforced earlier still (`trace_node_facts`
   raises `invalid_arg` on a `Concat` write index, so the virtualizer's arm never sees one). The
   tags themselves, and how they compose, are the TAG entry below.
 - **A placement provenance is a TAG, and which kind it is tells you whether code reads it**
@@ -236,7 +237,10 @@ files.
   new tag: `Site` unless something matches on it.
   - The code is the integer the provenance used to be, so older issues and comments citing
     `Non_virtual 13` or "provenance 39" still resolve. Codes are NOT unique: `176`/`178` each name
-    two different schedule sites, told apart by their reasons.
+    two different schedule sites, told apart by their reasons — collisions that predate
+    `provenance_tag_inventory`, which pins them and refuses a new one (gh-ocannl-1081). A new tag
+    takes a number its golden does not list; a test's own tag is spelled `N:test-<reason>`, the
+    one spelling allowed to reuse a library number.
   - They compose STRUCTURALLY: `default_to_most_local` records
     `Refined (Inline_reduction_cap, Site "432:is-local-materialized-query")`, rendered
     `39:inline-reduction-cap -> 432:is-local-materialized-query` where the retired arithmetic wrote

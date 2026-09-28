@@ -1,0 +1,111 @@
+the type's constructors split into rendered, carrier, composite and unread: true
+a constructor of another shape is unread, and refused: true
+a nullary constructor mints the tag its renderer case returns: true
+the renderer must return a carrier's string unchanged: true
+a composite renders each of its provenances, in order, through the renderer: true
+a composite dropping or reordering a provenance is refused: true
+a carrier case transforming its string is not rescued by a nested identity case: true
+a composite whose result does not concatenate every provenance, in order, is unread: true
+a composite rendering in a non-recursive renderer calls something else: true
+a composite rendering beside a source's own ( ^ ) is unread: true
+a guarded or repeated carrier case is not an identity rendering: true
+a renderer matching on its own parameter is read like a function: true
+a renderer matching on anything but its parameter is unread: true
+a renderer bound twice is read from neither binding: true
+a renderer bound twice is refused by name: true
+a nullary constructor with no rendering is refused: true
+a missing type is refused rather than read as no family: true
+a carrier applied to no literal anywhere is the reader gone blind: true
+every tag literal in a relaying exception's scope is a code, a helper's argument included: true
+a code belongs to the function declaring its exception: true
+the relaying family is named after its exception and its carrier: true
+a carrier applied to a literal mints it, qualified or not, inside a scope or outside: true
+a tag in a comment is minted by no family: true
+an exception whose payload no handler hands to a carrier opens no family: true
+a helper inside a scope mints for the scope, and a scope declared anew inside it is its own: true
+a same-named scope whose own handler does not relay mints nothing: true
+a handler whose carrier receives some other value than the payload relays nothing: true
+the same handler shape relays when the carrier does receive the payload: true
+a payload wrapped in a result constructor is relayed by a caller matching it into a carrier: true
+a result constructor no caller hands to a carrier relays nothing: true
+a caller of a same-named function of another module relays nothing: true
+a caller qualifying the declaring module through a binding relays: true
+a caller qualifying through a longer path, whose identity is not established, relays nothing: true
+a result returned only from a guarded nested case relays nothing: true
+a producer inside a nested module is not the top-level function a caller names: true
+a caller of a local module named like the producer's file relays nothing: true
+an exception case of a caller's match is not a returned result: true
+a guarded caller case relays nothing: true
+an unqualified caller of a name the source also binds locally relays nothing: true
+a payload wrapped in a result that the handler discards relays nothing: true
+a caller qualifying the declaring module directly relays: true
+the relaying exception applied to a string that is no tag is refused, not skipped: true
+a string raised through an exception that relays nothing is no provenance: true
+a function declaring no exception adds no code to a source that does: true
+the exception with the number cites the code: true
+a citation wrapped at the line break still cites it: true
+the tag itself cites it, in prose or in a string: true
+the word provenance with a number, emphasized or not, cites any family's tag: true
+a tag continued by another tag character, or by a longer number, is a different tag: true
+an identifier ending in a spelling word is not that word: true
+the exception with no number, or with a variable, cites nothing: true
+a longer number is not a prefix match on a shorter code: true
+an exception spelling cites only its own family's numbers: true
+a family whose last code is retired still has its citations read, and refused: true
+a word-number of a number no tag has is stale: true
+a bare numeral is not read: true
+a tag-shaped token no source mints is a stale citation: a retired tag in prose: true
+a test's own tag is a known citation, not a stale one: true
+colon-joined text that is not a tag is not read: true
+the table reads as its literal pairs: true
+a table with an element of another shape is unread, not guessed at: true
+a table bound twice is unread: which binding the test reads is a question of order: true
+a table shadowed by a local binding of the name is unread: true
+a source with no table binding has no table: true
+a table agreeing with the minting functions is accepted: true
+a table entry placed in the other function's phase is refused: true
+a table entry no raise site mints is refused, a tag of another family included: true
+a table entry naming a phase with no minter is refused: true
+an unreadable table is refused rather than skipped: true
+a phase whose function mints nothing is stale: true
+a fixture library citing its own tags is accepted: true
+a carrier's argument under a type constraint is read like a bare literal: true
+a carrier applied to a string that is no tag is recorded, and refused: true
+a module declaring its own string constructor of a carrier's name is foreign: true
+a foreign constructor reached through a chain of module bindings mints nothing: true
+a module name resolves to the binding in scope where it is used: true
+a local structure declaring its own carrier-named constructor is foreign, inside and out: true
+an open or include of a foreign module makes the unqualified name foreign in its scope: true
+a declaration of its own carrier-named constructor takes effect from where it is declared: true
+the owner's own declaration, in the owner's file, keeps the name the owner's: true
+a top-level include is read, constrained or not, so a module re-exporting a foreign one can be found: true
+an alias of a longer path is the owner's only when it ends in the owner's module: true
+an exception named like a carrier shadows it where it is in scope: true
+a structure re-exporting a foreign module through its own alias is foreign: true
+a longer qualifier is the owner's only when it ends in the owner's module: true
+a foreign constructor applied unqualified in its own module mints nothing: true
+a foreign constructor qualified through an alias mints nothing; the owner's still does: true
+a constructor's rendering minted by any other family is refused: true
+a new number minted under two tags is refused: true
+a pinned collision is accepted: true
+a third tag on a pinned number is refused: true
+a pin that no longer collides is stale: true
+a test's tag may reuse a library number: true
+a test constructing a tag no library source mints, not spelled as a test tag, is refused: true
+a test citing a library tag through the carrier is no mint of its own: true
+a library tag spelled as a test tag is refused: true
+a minted tag with a one-word reason is refused: true
+a code minted in two functions is refused: its provenance cannot name the phase: true
+a stale citation is refused with its file: true
+a minting source whose tags the citation reader misses is the reader gone blind: true
+an excluded prefix no file lives under is stale: true
+shipping inventory lists a page citing tags all three ways: true
+shipping inventory derives the families from the type: true
+shipping inventory groups the codes under the function minting them: true
+shipping inventory refuses a citation of a code no raise site mints: true
+shipping inventory refuses a prose citation of a retired tag: true
+shipping inventory refuses a new number collision: true
+shipping inventory reads a relaying source that never spells the carrier: true
+shipping inventory refuses a phase function moved to another source: true
+shipping inventory treats a module re-exporting a foreign carrier as foreign: true
+shipping inventory refuses a phase table placing a code in the wrong phase: true

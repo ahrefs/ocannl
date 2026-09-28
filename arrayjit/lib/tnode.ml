@@ -51,7 +51,9 @@ type memory_mode =
     rendering: the numeric code is the integer this used to be, kept so that issues, comments and
     goldens citing e.g. [Non_virtual 13] or "provenance 39" still resolve. Codes are not unique --
     two sites that were the same integer stay the same integer and are told apart by their reasons.
-*)
+    Those collisions are pinned by [test/operations/provenance_tag_inventory], which derives every
+    tag from this type and its minting sites and refuses a new collision: a new tag takes a number
+    that inventory's golden does not list. *)
 type provenance =
   | Visit_cap
       (** Per-cell visits above [virtualize_max_visits], or an uncovered read. One of the three

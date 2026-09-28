@@ -30,7 +30,7 @@
    them are unreachable through [Assignments], which gives each assignment its own loop nest.
 
    Codes with no minimal shape here, and why — each of these was tried, not assumed. They are cited
-   by tag, which is a spelling test/operations/nonvirtual_code_inventory reads, so a change to where
+   by tag, which is a spelling test/operations/provenance_tag_inventory reads, so a change to where
    one can fire finds this list on its checklist.
 
    - [5:index-not-groundable] (a symbol no call site can ground) is preempted: a single-symbol
@@ -77,7 +77,7 @@ type verdict = Rejected of phase * Ir.Tnode.provenance | Accepted
 (* The phase table: where each tag a row exercises is decided. Written down here because the phase
    has no exported owner a test could ask -- the store- and consumption-time tags are [Site]
    literals at their raise sites, in two functions of [low_level.ml] -- and held to those raise
-   sites from outside: test/operations/nonvirtual_code_inventory reads this binding and refuses an
+   sites from outside: test/operations/provenance_tag_inventory reads this binding and refuses an
    entry whose phase's function does not mint its tag (Store is [check_and_store_virtual],
    Consumption is [instantiate_computations], [inline_computation]'s core), as it refuses a tag
    minted in both. Keep it a list of literal pairs, which is what that reader accepts.

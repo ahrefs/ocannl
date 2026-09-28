@@ -1,0 +1,184 @@
+Families, derived from the constructors of `provenance` in arrayjit/lib/tnode.ml:
+  Visit_cap -- one tag, its case of provenance_to_string
+  Inline_reduction_cap -- one tag, its case of provenance_to_string
+  Inline_fanin_cap -- one tag, its case of provenance_to_string
+  Read_before_write -- one tag, its case of provenance_to_string
+  Scope_local -- one tag, its case of provenance_to_string
+  Surviving_read -- one tag, its case of provenance_to_string
+  Site -- every tag literal it is applied to
+  Site via Non_virtual -- every tag literal in the scope of a local `Non_virtual` exception whose handler hands its payload to Site, directly or through a caller
+  Refined -- composes provenances, mints none
+Library tags, by family and by the function minting them:
+Constructors -- arrayjit/lib/tnode.ml, provenance_to_string:
+  1:visit-cap (Visit_cap)
+  16:scope-local (Scope_local)
+  17:surviving-read (Surviving_read)
+  36:read-before-write (Read_before_write)
+  39:inline-reduction-cap (Inline_reduction_cap)
+  41:inline-fanin-cap (Inline_fanin_cap)
+Site -- arrayjit/lib/assignments.ml, mark_aliases:
+  27:slice-alias-parent
+Site -- arrayjit/lib/assignments.ml, one:
+  34:context-nodes
+Site -- arrayjit/lib/backends.ml, partition_layout_groups:
+  43:layout-group
+Site -- arrayjit/lib/backends.ml, plan_alias_spans:
+  45:export-span
+Site -- arrayjit/lib/backends.ml, verify_prior_context:
+  42:prior-context-check
+Site -- arrayjit/lib/c_syntax.ml, async_copy_doc:
+  487:async-copy-source
+Site -- arrayjit/lib/c_syntax.ml, is_local:
+  431:is-local-virtual-query
+  432:is-local-materialized-query
+Site -- arrayjit/lib/c_syntax.ml, local_decls:
+  333:local-decl-virtual-query
+  336:local-decl-materialized-query
+Site -- arrayjit/lib/c_syntax.ml, pp_device_read_ptr:
+  820:volatile-accumulation-read
+Site -- arrayjit/lib/c_syntax.ml, ptr_params:
+  46:kernel-param-in-context
+  334:kernel-param-virtual-query
+  335:kernel-param-global
+Site -- arrayjit/lib/c_syntax.ml, rmw_volatile_reads:
+  433:rmw-volatile-pointer
+Site -- arrayjit/lib/c_syntax.ml, thread_storage:
+  959:thread-storage-class
+Site -- arrayjit/lib/c_syntax.ml, zero_out_loop_redundant:
+  337:zero-out-loop-redundant
+Site -- arrayjit/lib/low_level.ml, check_covered_write:
+  160:parallel-validation
+Site -- arrayjit/lib/low_level.ml, check_writes:
+  160:parallel-validation
+Site -- arrayjit/lib/low_level.ml, ctr_read:
+  146:lane-extract-counter
+Site -- arrayjit/lib/low_level.ml, decide_materialized:
+  31:decide-materialized
+Site -- arrayjit/lib/low_level.ml, decide_placements:
+  35:read-only-shared
+  37:read-only-input
+  40:scalar-constexpr
+Site -- arrayjit/lib/low_level.ml, footprint_prologue:
+  153:footprint-scratch
+Site -- arrayjit/lib/low_level.ml, instantiate_at_synthetic_read:
+  1011:synthetic-read
+Site -- arrayjit/lib/low_level.ml, loop_proc:
+  151:cleanup-dropped-zero-out
+  152:cleanup-dropped-set
+Site -- arrayjit/lib/low_level.ml, loop_scalar:
+  18:inlined-scope
+Site -- arrayjit/lib/low_level.ml, materialized:
+  50:routine-interface
+Site -- arrayjit/lib/online_softmax.ml, backward_provenance:
+  1002:fused-backward-row-dot
+Site -- arrayjit/lib/online_softmax.ml, provenance:
+  483:online-softmax-state
+Site -- arrayjit/lib/schedule.ml, apply_fuse_epilogue:
+  486:epilogue-workgroup-shared
+Site -- arrayjit/lib/schedule.ml, apply_privatize:
+  176:tensorize-acc-tile
+Site -- arrayjit/lib/schedule.ml, apply_stage:
+  175:stage-shared-tile
+  176:stage-packed-tile
+Site -- arrayjit/lib/schedule.ml, contract_around:
+  178:mma-fragment
+Site -- arrayjit/lib/schedule.ml, mint_partials:
+  184:split-reduce-partials
+Site -- arrayjit/lib/schedule.ml, promote_crossing:
+  177:fission-multi-segment
+Site -- arrayjit/lib/schedule.ml, promote_statement_crossing_locals:
+  178:fission-live-range-crossing
+Site -- arrayjit/lib/tnode.ml, tn:
+  49:ndarray-backed
+Site -- lib/train.ml, set_materialized:
+  28:set-materialized
+Site -- lib/train.ml, set_virtual:
+  29:set-virtual
+Site -- tensor/tensor.ml, bits:
+  24:literal-constant
+Site -- tensor/tensor.ml, ndarray:
+  24:literal-constant
+Site -- tensor/tensor.ml, number:
+  24:literal-constant
+Site -- tensor/tensor.ml, param:
+  241:param-value
+Site via Non_virtual -- arrayjit/lib/low_level.ml, check_and_store_virtual:
+  4:lhs-idcs-differ
+  5:index-not-groundable
+  7:sibling-escaping-write-index
+  8:staged-compilation
+  9:sibling-escaping-read-index
+  10:escaping-index-symbol
+  11:already-non-virtual
+  12:no-setter
+  19:declare-local
+  51:affine-not-injective
+  52:concat-index
+  141:workgroup-barrier
+  142:guarded-computation
+  143:tile-mma
+  144:dynamic-write
+  147:enclosing-repetition-loop
+  148:scan-recurrence
+Site via Non_virtual -- arrayjit/lib/low_level.ml, instantiate_computations:
+  13:call-site-index-mismatch
+  14:empty-inlined-body
+  140:vector-setter-unsupported
+  145:lane-extract-layout
+  146:lane-extract-counter
+  149:scan-at-inline
+Numbers minted under more than one library tag -- pinned; a new one is refused:
+  176:stage-packed-tile 176:tensorize-acc-tile -- two schedule tile placements that were one integer before gh-ocannl-609
+  178:fission-live-range-crossing 178:mma-fragment -- a fission promotion and a tensor-core fragment placement that were one integer before gh-ocannl-609
+Test tags, spelled `N:test-<reason>` and outside the library's number space:
+  49:test-setup
+  99:test-setup
+  589:test-ll-materialize
+  769:test-setup
+  991:test-setup
+  992:test-setup
+  993:test-setup
+  994:test-setup
+  996:test-setup
+  997:test-setup
+  998:test-setup
+  999:test-setup
+The phase table in test/operations/virtual_rejection_boundary.ml is held to those functions:
+  Store -- arrayjit/lib/low_level.ml, check_and_store_virtual
+  Consumption -- arrayjit/lib/low_level.ml, instantiate_computations
+Files citing a library tag -- as the tag, `Non_virtual N`, `provenance N` -- the checklist for a change to one:
+arrayjit/lib/assignments.ml -- 27 34
+arrayjit/lib/backends.ml -- 42 43 45
+arrayjit/lib/c_syntax.ml -- 46 333 334 335 336 337 431 432 433 487 820 959
+arrayjit/lib/low_level.ml -- 1 4 5 7 8 9 10 11 12 13 14 17 18 19 31 35 36 37 40 41 50 51 52 140 141 142 143 144 145 146 147 148 149 151 152 153 160 1011
+arrayjit/lib/low_level.mli -- 9 13 148
+arrayjit/lib/online_softmax.ml -- 148 483 1002
+arrayjit/lib/online_softmax.mli -- 148 483 1002
+arrayjit/lib/schedule.ml -- 175 176 177 178 184 486
+arrayjit/lib/tnode.ml -- 1 13 16 17 36 39 41 49 432
+benchmarks/report-gh612-hip.md -- 41
+docs/agent-notes/virtualization-and-inlining.md -- 1 8 9 13 19 39 41 52 141 142 143 144 147 148 149 432
+docs/lowering_and_inlining.md -- 4 5 7 8 9 10 11 12 13 14 16 18 19 39 41 51 52 140 141 142 143 144 145 146 147 148 149 151 152 432
+lib/train.ml -- 28 29
+tensor/tensor.ml -- 24 49 241
+test/operations/cost_model_template.expected -- 9 13
+test/operations/footprint_materialization.ml -- 13
+test/operations/gather_table_placement.ml -- 17 152
+test/operations/local_host_access.ml -- 39
+test/operations/model_default_placements.expected -- 9
+test/operations/provenance_tag_inventory.ml -- 176 178
+test/operations/scan_loop.expected -- 148
+test/operations/scan_loop.ml -- 148
+test/operations/scope_over_materialized.ml -- 1 13 142
+test/operations/splice_semantics.ml -- 51
+test/operations/virtual_chain_fanin.ml -- 13 41
+test/operations/virtual_diagonal.ml -- 13 52
+test/operations/virtual_guarded_setter.ml -- 142
+test/operations/virtual_rejection_boundary.expected -- 1 4 7 9 10 13 19 51 142 147 148
+test/operations/virtual_rejection_boundary.ml -- 1 4 5 7 8 9 10 11 12 13 14 17 19 39 41 51 52 140 141 142 143 144 145 146 147 148 149
+test/operations/virtual_uncaptured_loop.expected -- 147
+test/operations/virtual_uncaptured_loop.ml -- 9 147
+test/support/provenance_tag_scan.ml -- 13 41
+Read, not part of the checklist:
+  docs/proposals/ -- design proposals, each describing the code as it stood when written
+  docs/in-progress/ -- links into docs/proposals/, the proposals currently being worked on
