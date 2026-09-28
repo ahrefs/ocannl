@@ -97,6 +97,7 @@ exec "$@"
 SH
 cat >"$TMP/bin/dune" <<'SH'
 #!/usr/bin/env bash
+if [ "$1" = --version ]; then echo "$FIXTURE_DUNE_VERSION"; exit 0; fi
 # This is an independent observation of the environment and actual checkout
 # received by the fake compiler, not a restatement of verifier log messages.
 [ -z "${OCANNL_PROFILE:-}" ] && [ -z "${OCANNL_PRINT_DECIMALS_PRECISION:-}" ] || {
@@ -252,7 +253,7 @@ chmod +x "$TMP/bin/fake-read-config" "$TMP/bin/fake-slot-kind" || exit 2
 # case expects; the devices BOX shows and its fleet name. A case overrides them
 # with a prefix assignment on its call.
 ENDPOINT=192.0.2.1 ENDPOINT_PORT=22 ENDPOINT_PROXY= TRANSPORT=ssh BACKEND=cc HIP_TREE=hip-complete
-DXG=absent KFD=absent NVIDIA=absent FLEET_BOX=fixture-box READERS=stand-in NAMES=
+DXG=absent KFD=absent NVIDIA=absent FLEET_BOX=fixture-box READERS=stand-in NAMES= DUNE_VERSION=3.24.2
 # The BRANCH operand, and the commit the fake dune requires the worktree at.
 REF=fixture WANT_SHA=$SHA
 
@@ -299,7 +300,8 @@ run_case() { # SUBJECT NAME MODE [verifier args]
     OCANNL_TOOL_KFD_TOPOLOGY="$(fixture_device "$KFD")" \
     OCANNL_TOOL_NVIDIA_DEVICE="$(fixture_device "$NVIDIA")" FLEET_LOCAL_BOX="$FLEET_BOX" \
     OCANNL_TOOL_READ_CONFIG="$(fixture_reader fake-read-config)" \
-    OCANNL_TOOL_SLOT_KIND="$(fixture_reader fake-slot-kind)" FIXTURE_NAMES="$NAMES"; do
+    OCANNL_TOOL_SLOT_KIND="$(fixture_reader fake-slot-kind)" FIXTURE_NAMES="$NAMES" \
+    FIXTURE_DUNE_VERSION="$DUNE_VERSION"; do
     printf 'export %s=%q\n' "${var%%=*}" "${var#*=}"
   done >"$TMP/fixture.env"
   # OPAMSWITCH and DUNE_BUILD_DIR stand for the caller's session: an SSH
@@ -537,8 +539,15 @@ BACKEND=cc NVIDIA=present width_case width-probe 8 \
   "\(.*for cuda, .*its backends are unread \(a --run probe may pick its own backend\).*hazard nvidia\)$" \
   --run 'printf "probe width: %s\n" "${DUNE_JOBS:-unset}"'
 # The probe's own dune invocations inherit the width (round 2 on PR #902).
-grep -qx 'probe width: 8' "$TMP/runs/width-probe/stdout"
+grep -qx 'probe width: 8' "$TMP/runs/width-probe/stdout" &&
+  grep -q '^machine-verify: probe (cc, DUNE_JOBS=8): ' "$TMP/runs/width-probe/stdout"
 report $? 'width-probe: the probe runs with DUNE_JOBS at the trip width' "$TMP/runs/width-probe"
+# A dune older than 3.22 ignores DUNE_JOBS, and the probe line says so.
+BACKEND=cc NVIDIA=present DUNE_VERSION=3.21.0 width_case width-probe-old-dune 8 "\(.*for cuda, .*\)$" \
+  --run true
+grep -q "^machine-verify: probe (cc, DUNE_JOBS=8, which dune 3.21.0 ignores (it reads DUNE_JOBS from 3.22): a bare dune in the probe runs at dune's default width): true$" \
+  "$TMP/runs/width-probe-old-dune/stdout"
+report $? 'width-probe-old-dune: an ignored DUNE_JOBS is named, not certified' "$TMP/runs/width-probe-old-dune"
 BACKEND=cc NVIDIA=present NAMES=fail width_case width-unread 8 "\(.*for cuda, .*its backends are unread .*hazard nvidia\)$"
 # No stand-ins: the pushed tree's readers are built there (a fixture tree has
 # none, so the answer is unread and every backend counts).

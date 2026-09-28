@@ -597,8 +597,16 @@ while [ $# -gt 0 ]; do
       # The trip's width reaches the probe's own dune invocations through
       # DUNE_JOBS, which a -j on their command line still overrides: a probe
       # that builds is as much a GPU leg as a --test (Codex review round 2 on
-      # PR #902).
-      echo "machine-verify: probe ($backend, DUNE_JOBS=$jobs): $value"
+      # PR #902). Dune reads DUNE_JOBS from 3.22.0 (its CHANGES.md), and the
+      # project's floor is 3.20, so an older dune is named rather than
+      # certified (round 3; `DUNE_CONFIG__JOBS`, suggested there, is ignored
+      # by 3.24.2).
+      probe_dune=$(opam_exec dune --version </dev/null 2>/dev/null) || probe_dune=unknown
+      case $probe_dune in
+        3.2[2-9]* | 3.[3-9][0-9]* | [4-9].* | [1-9][0-9]*.*) probe_width="DUNE_JOBS=$jobs" ;;
+        *) probe_width="DUNE_JOBS=$jobs, which dune $probe_dune ignores (it reads DUNE_JOBS from 3.22): a bare dune in the probe runs at dune's default width" ;;
+      esac
+      echo "machine-verify: probe ($backend, $probe_width): $value"
       opam_exec env "OCANNL_BACKEND=$backend" "DUNE_JOBS=$jobs" sh -c "$value" </dev/null || exit $?
       assert_backend
       echo "machine-verify: probe: PASS with resolved backend configuration $backend"

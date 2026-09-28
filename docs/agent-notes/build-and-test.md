@@ -1961,7 +1961,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   Where no backend meets a cap (CPU backends off rog, metal, a box without a GPU) nothing is built
   and the width is 4; an explicit `-j` always wins; the provenance's `dune jobs:` line and its
   `machine-verify: batch:` lines say which it was and why. A `--run` probe gets the width as
-  `DUNE_JOBS`, so a bare `dune` inside it is capped too, while a `-j` of its own still wins. Golden mode prints the corrected `.actual`
+  `DUNE_JOBS`, so a bare `dune` inside it is capped too, while a `-j` of its own still wins.
+  Dune reads `DUNE_JOBS` only from 3.22.0 (below the project's 3.20 floor the probe line says the
+  variable is ignored), and `DUNE_CONFIG__JOBS` is not a setting at all: timed on 3.24.2, two
+  2-second rules took 4.1 s under `DUNE_JOBS=1` and 2.05 s under `DUNE_CONFIG__JOBS=1`. Golden mode prints the corrected `.actual`
   contents and an apply-ready patch, then re-runs the alias before accepting it so a second failing
   dependency cannot hide behind a promotable diff. Before reset, source status (with untracked-file
   reporting forced independently of Git configuration) must name exactly the listed golden
