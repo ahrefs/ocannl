@@ -108,12 +108,22 @@ let () =
   p "bc: scalar GPU seeds exist for the batched site"
     (List.exists seeds ~f:(fun p -> not p.Autotune.sk_mma));
   (* The production census declined the tensorized seeds in the same proportion as the scalar ones
-     (10 and 10) — both flavors route through [companion_geometry]. Tensorized seeds only exist
-     where the backend advertises an mma format for f32 (Metal locally; CUDA/HIP need the tf32 arm),
-     so this line is informational rather than golden-pinned. *)
-  if not (List.exists seeds ~f:(fun p -> p.Autotune.sk_mma)) then
-    Stdio.eprintf "bc: no tensorized seed for this site on %s — mma legs below are vacuous\n"
-      backend_name;
+     (10 and 10) — both flavors route through [companion_geometry], so the claims below cover the
+     tensorized seeds wherever they exist. They exist where the backend advertises an mma format for
+     this f32 site (Metal; CUDA and HIP need the tf32 arm, which HIP's rocWMMA lacks altogether),
+     and their presence is claimed exactly there (gh-ocannl-1115): the gate is the advertised
+     capability, never the seed list, so a seeding regression on a capable backend is red rather
+     than a quietly narrower census. cc advertises no GPU tile, so the claim skips there. *)
+  (match
+     Ll_test.tensorized_matmul_capability ~is_gpu:true ~is_cpu:false ~limits ~a:x.Tensor.value
+       ~b:w.Tensor.value ~d:z.Tensor.value
+   with
+  | `Advertised ->
+      p "bc: tensorized GPU seeds exist for the batched site where the backend advertises the tile"
+        (List.exists seeds ~f:(fun p -> p.Autotune.sk_mma))
+  | `Withheld aggregation ->
+      Verdict.skipped ~aggregation ~backend:backend_name
+        "bc: tensorized GPU seeds exist for the batched site where the backend advertises the tile");
   let constructed =
     List.map seeds ~f:(fun sp ->
         match Autotune.sketch_schedule ~p:sp opt with

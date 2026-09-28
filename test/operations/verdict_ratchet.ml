@@ -259,9 +259,6 @@ let exempt_quantified_helpers =
     ( "test/operations/autotune_routine_name.ml:contributed",
       "a contended search may legitimately contribute no rows; its report counters separately \
        prove whether that absence came from refused timings rather than a lost result" );
-    ( "test/operations/epilogue_fusion_mma_seeds.ml:vacuous",
-      "an empty GPU mma family deliberately selects the environment-gated vacuity path; the \
-       non-vacuous path separately requires and executes the epilogue twins" );
     ( "test/operations/fission_schedule.ml:annotated",
       "the merge-back case deliberately requires the consumer segment to have no hardware axes; \
        the same claim also requires the producer segment to be annotated" );
