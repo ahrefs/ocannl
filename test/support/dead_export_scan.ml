@@ -14,25 +14,25 @@
     over-approximated to the whole source. An [include M] is not a use of anything (gh-ocannl-1085):
     it makes the including module another receiver of [M]'s values, so [N.v] after
     [module N = struct include M end] -- or [Utils.insert] after [utils.ml]'s [include Datatypes] --
-    counts, transitively and through aliases, as does a bare [v] where [N] is opened or below the
-    include itself; a value the include re-exports but nobody spells reads dead. Receivers match by
-    their last qualifier, and an includer that shadows an included value still credits it. These
-    choices can hide a dead export through a false positive, but cannot falsely reject an ordinary
-    use, save through an include this reader does not follow: of a functor application, or inside a
-    functor body or an anonymous structure. Values generated for top-level types by [of_sexp],
-    [compare], and [equal] derivings are included (a standalone [of_sexp] deriving as much as the
-    [of_sexp] half of [sexp]); their expression extensions count as references without needing to
-    spell the generated value. The [sexp_of] converters -- derived or hand-written, recognized by
-    the [sexp_of_] name prefix -- are excluded by policy: they are the entry point for debugging and
-    observability, and consumed as often through [ppx_minidebug]'s typed log annotations, which
-    expand to converter calls this source-level census cannot see, as through spelled references. A
-    [sexp_of] with no caller costs nothing and cannot drift from its type, while removing it to
-    satisfy a ratchet only takes the converter away from the next debugging session. Values
-    introduced by other PPX expansions or by an [include] of another module inside the defining
-    module remain outside this source-level census. A bare [include struct ... end] declares into
-    the module and is read like top-level items; a constrained [include (struct ... end : S)]
-    carries its own interface, which publishes deliberately, so like a module with an [.mli] it is
-    not censused. *)
+    counts, transitively and through a module alias declared in any source, as does a bare [v] where
+    [N] is opened or below the include itself; a value the include re-exports but nobody spells
+    reads dead. Receivers match by their last qualifier, and an includer that shadows an included
+    value still credits it. These choices can hide a dead export through a false positive, but
+    cannot falsely reject an ordinary use, save through an include this reader does not follow: of a
+    functor application, or inside a functor body or an anonymous structure. Values generated for
+    top-level types by [of_sexp], [compare], and [equal] derivings are included (a standalone
+    [of_sexp] deriving as much as the [of_sexp] half of [sexp]); their expression extensions count
+    as references without needing to spell the generated value. The [sexp_of] converters -- derived
+    or hand-written, recognized by the [sexp_of_] name prefix -- are excluded by policy: they are
+    the entry point for debugging and observability, and consumed as often through [ppx_minidebug]'s
+    typed log annotations, which expand to converter calls this source-level census cannot see, as
+    through spelled references. A [sexp_of] with no caller costs nothing and cannot drift from its
+    type, while removing it to satisfy a ratchet only takes the converter away from the next
+    debugging session. Values introduced by other PPX expansions or by an [include] of another
+    module inside the defining module remain outside this source-level census. A bare
+    [include struct ... end] declares into the module and is read like top-level items; a
+    constrained [include (struct ... end : S)] carries its own interface, which publishes
+    deliberately, so like a module with an [.mli] it is not censused. *)
 
 open Base
 open Ppxlib.Parsetree
@@ -236,13 +236,15 @@ let includer_name_of_source source =
   | Some (stem, _) when valid_module_stem stem -> Some (String.capitalize stem)
   | Some _ | None -> None
 
-(** Every [include] of a named module in [structure], as [(included, includer)] pairs: the last
-    component of the included path, and the name under which the including module is reached -- the
-    source's own module at top level, the innermost [module N = struct ... end] around a nested one,
-    or the [let module N = struct ... end in] around a local one, wherever that sits. An
-    [include struct ... end] declares into the module it sits in; an included functor application,
-    or an include in a functor body or an anonymous structure, is not followed. *)
-let includes_of ~top structure =
+(** The [(reached, receiver)] edges of [structure]: a module named [receiver] reaches every value
+    the module named [reached] does. Both are last path components. An [include M] is an edge from
+    [M] to the including module -- the source's own module at top level, the innermost
+    [module N = struct ... end] around a nested one, or the [let module N = struct ... end in]
+    around a local one, wherever that sits. A module alias [module A = M], at any level or local, is
+    an edge from [M] to [A]. An [include struct ... end] declares into the module it sits in; an
+    included functor application, or an include in a functor body or an anonymous structure, is not
+    followed. *)
+let receiver_edges ~top structure =
   let found = ref [] in
   let rec items includer structure = List.iter structure ~f:(item includer)
   and item includer structure_item =
@@ -262,6 +264,11 @@ let includes_of ~top structure =
     match module_expr.pmod_desc with
     | Pmod_structure nested -> items name nested
     | Pmod_constraint (inner, _) -> named_module name inner
+    | Pmod_ident _ -> (
+        (* An alias reaches everything its target does, from wherever it is spelled. *)
+        match (name, module_expr_name module_expr) with
+        | Some alias, Some target -> found := (target, alias) :: !found
+        | _ -> ())
     | _ -> ()
   in
   items top structure;
@@ -282,29 +289,19 @@ let includes_of ~top structure =
   !found
 
 (** For each of [modules], the names its values are reached under in [parsed] sources: itself, and
-    every module that includes it or one of those, through a local alias as much as by name. A name,
-    like every receiver here, is matched as the last qualifier of a path, so a same-named module
-    elsewhere credits too -- the over-reading direction. *)
+    everything {!receiver_edges} reaches from it, across sources -- an includer, an alias of either
+    declared anywhere, and so on. A name, like every receiver here, is matched as the last qualifier
+    of a path, so a same-named module elsewhere credits too -- the over-reading direction. *)
 let receiver_names ~modules ~parsed =
-  let includes =
-    List.filter_map parsed ~f:(fun (source, structure) ->
-        match includes_of ~top:(includer_name_of_source source) structure with
-        | [] -> None
-        | includes -> Some (structure, includes))
+  let edges =
+    List.concat_map parsed ~f:(fun (source, structure) ->
+        receiver_edges ~top:(includer_name_of_source source) structure)
   in
   List.map modules ~f:(fun module_name ->
       let rec close names =
         let grown =
-          List.fold includes ~init:names ~f:(fun names (structure, includes) ->
-              let local =
-                Set.fold names ~init:names ~f:(fun local name ->
-                    let aliases, _opened, _ranges =
-                      Read.module_bindings_of structure ~wanted:name
-                    in
-                    Set.union local (Set.of_list (module String) aliases))
-              in
-              List.fold includes ~init:names ~f:(fun names (included, includer) ->
-                  if Set.mem local included then Set.add names includer else names))
+          List.fold edges ~init:names ~f:(fun names (reached, receiver) ->
+              if Set.mem names reached then Set.add names receiver else names)
         in
         if Set.length grown = Set.length names then names else close grown
       in

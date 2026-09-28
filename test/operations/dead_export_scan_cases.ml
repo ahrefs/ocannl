@@ -280,8 +280,11 @@ let () =
         ("selected.cudajit.ml", "include Sample\n");
         ("inside.ml", "include Sample\nlet own = alias\n");
         ("local.ml", "let a = let module L = struct include Sample end in L.included\n");
+        ("exported.ml", "module Alias = Included\nmodule Direct = Sample\n");
         ( "user.ml",
           "let a = Twice.x\n\
+           let g = Exported.Alias.outer\n\
+           let h = Exported.Direct.poly_of_sexp\n\
            let b = Wrapper.Inner.pair\n\
            let c = Selected.extended\n\
            let d = Rec.public_pair\n\
@@ -292,8 +295,19 @@ let () =
   in
   Verdict.p_all
     "includers are receivers transitively, nested, through aliases and select alternatives, \
-     opened, below the include itself, and local to an expression"
-    [ "x"; "pair"; "extended"; "public_pair"; "primitive"; "equal_named"; "alias"; "included" ]
+     opened, below the include itself, local to an expression, and aliased in another source"
+    [
+      "x";
+      "pair";
+      "extended";
+      "public_pair";
+      "primitive";
+      "equal_named";
+      "alias";
+      "included";
+      "outer";
+      "poly_of_sexp";
+    ]
     ~f:(referenced through_includers);
   let unrelated =
     refs

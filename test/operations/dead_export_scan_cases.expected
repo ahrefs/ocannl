@@ -26,7 +26,7 @@ a functor-application type path is accepted without guessed credit: true
 an include alone references nothing it re-exports: true
 a value used only through the includer is live: true
 a value the includer re-exports but nobody uses stays dead: true
-includers are receivers transitively, nested, through aliases and select alternatives, opened, below the include itself, and local to an expression: true
+includers are receivers transitively, nested, through aliases and select alternatives, opened, below the include itself, local to an expression, and aliased in another source: true
 an include of another module, or a functor application, makes no receiver: true
 a synthetic zero-reference export is detected: true
 a synthetic zero-reference derived export is detected: true

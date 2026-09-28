@@ -547,7 +547,7 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   value of `M` there hid `Datatypes.mutable_list` behind `utils.ml`'s `include Datatypes` for years.
   The including module — a file, or the `module N = struct … end` or `let module N = … in` around
   a nested include — becomes a further receiver of `M`'s values instead, transitively and through
-  local aliases, so `Utils.insert` counts for `Datatypes.insert` and so does a bare `insert` under
+  a module alias of either declared in any source, so `Utils.insert` counts for `Datatypes.insert` and so does a bare `insert` under
   `open Utils` or below the include. Includes of a functor application, or inside a functor body or
   an anonymous structure, are not followed, so a use through one reads dead — the loud direction;
   the other choices admit false positives rather than refusing valid code. Values created
