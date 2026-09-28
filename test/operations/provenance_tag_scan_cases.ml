@@ -175,6 +175,26 @@ let () =
     (Scan.identity_renderings ~renderer:"provenance_to_string"
        (String.substr_replace_all type_source ~pattern:"| Site s -> s"
           ~with_:"| Site s when false -> s\n  | Site s -> \"site:\" ^ s"));
+  (let explicit =
+     String.substr_replace_all type_source ~pattern:"let rec provenance_to_string = function"
+       ~with_:"let rec provenance_to_string p = match p with"
+   in
+   p "a renderer matching on its own parameter is read like a function"
+     (strings
+        (tags (Scan.renderings ~renderer:"provenance_to_string" ~source:"t.ml" explicit))
+        [ "1:cap-fixture" ]);
+   p_empty "a renderer matching on anything but its parameter is unread" ~over:[ explicit ]
+     (Scan.renderings ~renderer:"provenance_to_string" ~source:"t.ml"
+        (String.substr_replace_all explicit ~pattern:"match p with" ~with_:"match fallback with")));
+  (let twice = type_source ^ "\nlet provenance_to_string _ = \"redacted\"" in
+   p_empty "a renderer bound twice is read from neither binding" ~over:[ twice ]
+     (Scan.renderings ~renderer:"provenance_to_string" ~source:"t.ml" twice);
+   p "a renderer bound twice is refused by name"
+     (has ~substring:"the renderer is bound 2 times"
+        (Scan.family_violations ~renderer_bindings:2 ~identities:[ "Site" ] ~composed:[ "Refined" ]
+           ~type_source:"t.ml"
+           ~shape:(Scan.type_shape ~type_name:"provenance" type_source)
+           ~mints ())));
   p "a nullary constructor with no rendering is refused"
     (has ~substring:"constructor Cap_fixture has no tag rendering"
        (Scan.family_violations ~identities:[ "Site" ] ~type_source:"t.ml"
@@ -253,6 +273,7 @@ let () =
        nv ^ " i -> (match o with Some i -> record (Site i) | None -> ())";
        "Other." ^ nv ^ " i -> record (Site i)";
        nv ^ " i -> let* i = next in record (Site i)";
+       nv ^ " i -> let open Key_scan in record (Site i)";
      ]
      ~f:(fun handler -> List.is_empty (resolve [ read (scope handler) ]));
    p_exists "the same handler shape relays when the carrier does receive the payload"
@@ -279,6 +300,11 @@ let () =
      (with_caller same_name) ~f:is_consume;
    p_exists "a caller qualifying the declaring module through a binding relays"
      (with_caller ("module F = Fixture\n" ^ qualified))
+     ~f:is_consume;
+   p_none
+     "a caller qualifying through a longer path, whose identity is not established, relays nothing"
+     (with_caller
+        (String.substr_replace_all qualified ~pattern:"F.consume" ~with_:"Other.Fixture.consume"))
      ~f:is_consume;
    p_none "an unqualified caller of a name the source also binds locally relays nothing"
      (resolve

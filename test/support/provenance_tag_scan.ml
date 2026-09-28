@@ -40,7 +40,9 @@
       of its arguments exactly once, in order, or a printed provenance could drop or reorder a
       recorded tag. Any other shape is refused as unread.
     - Each of those renderer checks reads a constructor's ONE unguarded case of the renderer's
-      defining match; several cases, a guard or an or-pattern leave it unread.
+      defining match -- [function | ...], or a [match] on its one parameter, of its one top-level
+      binding (a renderer bound twice is refused); several cases, a guard or an or-pattern leave the
+      constructor unread.
     - A string constructor applied to a VARIABLE opens a relayed family when that variable is the
       payload a handler caught: [with Non_virtual i -> ... (Site i)] makes every tag literal in the
       scope of that local [let exception Non_virtual of string] a tag of the family "Site via
@@ -48,16 +50,16 @@
       generative, so a same-named exception elsewhere proves nothing, and a handler names the local
       exception unqualified. It may take one hop through a result: a handler returning the payload
       wrapped in a constructor ([Non_virtual i -> Error i]) relays when a caller of the declaring
-      function -- qualified by its module, or unqualified in its own source where nothing else binds
-      the name -- matches that constructor into a carrier
-      ([match instantiate_computations ... with Error i -> ... (Site i)]). A handler or caller body
-      that rebinds the payload's name anywhere is not read. A scope reaching no carrier mints
-      nothing. That covers the literal at a [raise], the one handed to a helper that raises it, and
-      the one a handler records directly; a string the exception itself is applied to that is no tag
-      is refused. The function such a tag is minted in is the innermost value binding enclosing the
-      exception's declaration -- a declaration anew inside the scope opens its own -- which is what
-      decides its PHASE, so a relayed tag minted in two functions is refused. A tag computed at run
-      time is not read.
+      function -- qualified by its module in one component ([Low_level.f], or an alias of it), or
+      unqualified in its own source where nothing else binds the name -- matches that constructor
+      into a carrier ([match instantiate_computations ... with Error i -> ... (Site i)]). A handler
+      or caller body that rebinds the payload's name anywhere, or changes module scope ([let open],
+      [let module]), is not read. A scope reaching no carrier mints nothing. That covers the literal
+      at a [raise], the one handed to a helper that raises it, and the one a handler records
+      directly; a string the exception itself is applied to that is no tag is refused. The function
+      such a tag is minted in is the innermost value binding enclosing the exception's declaration
+      -- a declaration anew inside the scope opens its own -- which is what decides its PHASE, so a
+      relayed tag minted in two functions is refused. A tag computed at run time is not read.
 
     The minter of a tag of the other families is the innermost value binding around the literal.
 
@@ -192,23 +194,43 @@ let type_shape ~type_name content =
 (* The cases of the top-level [renderer] binding's defining match -- [function | ...], or a function
    whose body is a [match] -- and none nested beneath them: a case inside a case's right-hand side
    renders something else. *)
-let renderer_cases ~renderer content =
-  let rec defining (e : expression) =
-    match e.pexp_desc with
-    | Pexp_function ([], _, Pfunction_cases (cases, _, _)) -> cases
-    | Pexp_function (_ :: _, _, Pfunction_body body) -> defining body
-    | Pexp_match (_, cases) -> cases
-    | Pexp_constraint (e, _) | Pexp_newtype (_, e) -> defining e
-    | _ -> []
-  in
+let renderer_bindings ~renderer content =
   List.concat_map (parse content) ~f:(fun item ->
       match item.pstr_desc with
       | Pstr_value (_, vbs) ->
-          List.concat_map vbs ~f:(fun vb ->
-              match binding_name vb with
-              | Some name when String.equal name renderer -> defining vb.pvb_expr
-              | _ -> [])
+          List.filter vbs ~f:(fun vb -> Option.equal String.equal (binding_name vb) (Some renderer))
       | _ -> [])
+
+let renderer_cases ~renderer content =
+  (* [function | ...], or [fun p -> match p with ...] scrutinizing the parameter itself. *)
+  let rec defining (e : expression) =
+    match e.pexp_desc with
+    | Pexp_function ([], _, Pfunction_cases (cases, _, _)) -> cases
+    | Pexp_function
+        ( [
+            {
+              pparam_desc = Pparam_val (Nolabel, None, { ppat_desc = Ppat_var { txt = p; _ }; _ });
+              _;
+            };
+          ],
+          _,
+          Pfunction_body body ) ->
+        scrutinizing p body
+    | Pexp_constraint (e, _) | Pexp_newtype (_, e) -> defining e
+    | _ -> []
+  and scrutinizing p (e : expression) =
+    match e.pexp_desc with
+    | Pexp_match ({ pexp_desc = Pexp_ident { txt = Lident x; _ }; _ }, cases) when String.equal x p
+      ->
+        cases
+    | Pexp_constraint (e, _) -> scrutinizing p e
+    | _ -> []
+  in
+  (* A renderer bound more than once is read from none of its bindings: which one callers reach is a
+     question of order and scope this reader does not answer. *)
+  match renderer_bindings ~renderer content with
+  | [ vb ] -> defining vb.pvb_expr
+  | _ -> []
 
 (* Each constructor's ONE case of the renderer's defining match, as [(constructor, case)]: a
    constructor matched by more than one case, by a guarded case, or inside an or-pattern has no
@@ -432,6 +454,11 @@ let read_source ~carriers ?(foreign = []) ~source content =
         method! pattern p =
           if pattern_binds v p then rebinds := true;
           super#pattern p
+
+        (* A body that changes module scope could change what a carrier name refers to. *)
+        method! expression e =
+          (match e.pexp_desc with Pexp_open _ | Pexp_letmodule _ -> rebinds := true | _ -> ());
+          super#expression e
       end
     in
     binders#expression e;
@@ -624,9 +651,9 @@ let read_source ~carriers ?(foreign = []) ~source content =
           ->
             let callee =
               match f with
-              | Ldot (q, name) -> Option.map (last_name q) ~f:(fun q -> (resolve q, name))
+              | Ldot (Lident q, name) -> Some (resolve q, name)
               | Lident name when own_function name -> Some (own_module, name)
-              | Lident _ | Lapply _ -> None
+              | Ldot _ | Lident _ | Lapply _ -> None
             in
             Option.iter callee ~f:(fun (m, f) ->
                 List.iter cases ~f:(fun (c : case) ->
@@ -873,8 +900,8 @@ let collisions (mints : mint list) =
 
 (** What the families themselves refuse: an unread constructor, a rendering missing or doubled, an
     open family minting nothing. *)
-let family_violations ?(identities = []) ?(composed = []) ~type_source ~shape ~(mints : mint list)
-    () =
+let family_violations ?(identities = []) ?(composed = []) ?(renderer_bindings = 1) ~type_source
+    ~shape ~(mints : mint list) () =
   match shape with
   | None ->
       [
@@ -882,7 +909,15 @@ let family_violations ?(identities = []) ?(composed = []) ~type_source ~shape ~(
           type_source;
       ]
   | Some shape ->
-      List.map shape.unread ~f:(fun c ->
+      (if renderer_bindings = 1 then []
+       else
+         [
+           Printf.sprintf
+             "%s: the renderer is bound %d times, and is read only from its one binding: no \
+              rendering can be derived"
+             type_source renderer_bindings;
+         ])
+      @ List.map shape.unread ~f:(fun c ->
           Printf.sprintf
             "%s: constructor %s carries neither nothing, one string, nor provenances only: the \
              reader cannot say what it mints"

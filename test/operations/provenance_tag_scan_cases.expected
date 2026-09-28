@@ -7,6 +7,10 @@ a composite dropping or reordering a provenance is refused: true
 a carrier case transforming its string is not rescued by a nested identity case: true
 a composite whose result does not concatenate every provenance, in order, is unread: true
 a guarded or repeated carrier case is not an identity rendering: true
+a renderer matching on its own parameter is read like a function: true
+a renderer matching on anything but its parameter is unread: true
+a renderer bound twice is read from neither binding: true
+a renderer bound twice is refused by name: true
 a nullary constructor with no rendering is refused: true
 a missing type is refused rather than read as no family: true
 a carrier applied to no literal anywhere is the reader gone blind: true
@@ -24,6 +28,7 @@ a payload wrapped in a result constructor is relayed by a caller matching it int
 a result constructor no caller hands to a carrier relays nothing: true
 a caller of a same-named function of another module relays nothing: true
 a caller qualifying the declaring module through a binding relays: true
+a caller qualifying through a longer path, whose identity is not established, relays nothing: true
 an unqualified caller of a name the source also binds locally relays nothing: true
 a payload wrapped in a result that the handler discards relays nothing: true
 a caller qualifying the declaring module directly relays: true

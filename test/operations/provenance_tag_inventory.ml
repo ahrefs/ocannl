@@ -166,6 +166,9 @@ let scan ~records ~pinned root generated =
     @ Scan.family_violations
         ~identities:(Option.value_map type_text ~default:[] ~f:(Scan.identity_renderings ~renderer))
         ~composed:(Option.value_map type_text ~default:[] ~f:(Scan.composite_renderings ~renderer))
+        ~renderer_bindings:
+          (Option.value_map type_text ~default:0 ~f:(fun text ->
+               List.length (Scan.renderer_bindings ~renderer text)))
         ~type_source ~shape ~mints ()
     @ Scan.violations ~malformed ~mints
         ~pinned:(List.map pinned ~f:(fun (n, tags, _) -> (n, tags)))
