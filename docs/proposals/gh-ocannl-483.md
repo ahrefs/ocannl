@@ -82,10 +82,17 @@ loop nest — schedulable, and the shape a fused backward recomputes from `(m, l
   force it virtual: a lineage decision binds every later routine, and the composed backward reads
   the scores at several sites with value-width multiplicity, so a forced-virtual score chain would
   be replayed `d_v`-fold there. The test pins both readings.
-- **A fused backward.** The composed backward reads the forward's intermediates through
-  cross-routine splicing (parameter gradients agree, pinned), but its own `[seq, seq]` gradient
-  buffers stay. Flash attention's backward recomputes `p = exp(s - (m + log l))` per block from
-  exactly the `(m, l)` this forward saves.
+- **The fused backward** now exists as the pass's third shape, behind its own gate
+  `online_softmax_backward` ([gh-ocannl-1002](gh-ocannl-1002-1003.md), whose record holds the
+  algebra, the recognition and the declines). In the training step that holds both the rewritten
+  forward and the composed backward (`Train.grad_update`), the backward's `[seq, seq]` buffers --
+  the probabilities `P` (stored in training only because the backward read them), their gradient
+  `dP` and the score gradient `dS` -- give way to a per-row `D = sum (dO * O)` and two nests that
+  recompute each pair's `p = e / l`, `dp` and `ds = chain (p * (dp - D))` into scope locals, one
+  over the query rows for `dQ`, one over the keys for `dK` and `dV`. It reuses the `(m, l)` this
+  forward saves rather than a log-sum-exp. A backward compiled without its forward declines (there
+  is no normalizer to anchor on), as does one with the composed max gradient, an extra reader of a
+  consumed gradient, a requested intermediate, or active dropout between `P` and the value pass.
 - **Block tiling with tensor cores.** The scan is opaque to the schedule ops (gh-ocannl-696), so
   the rewritten attention runs one row per thread with a serial key loop: memory-optimal, not
   compute-optimal. Blocking the key axis and materializing a probability tile for `Tile_mma` is
