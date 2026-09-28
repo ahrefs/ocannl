@@ -1475,12 +1475,20 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   qualifier; `Codegen_text_scan.emitter_aliases` adds the value alias (`let write = CR.emit`) and
   the wrapper (`let write ~buf p llc = CR.emit ~buf p llc`, whose own parameter is where the
   caller's buffer arrives — by label, or by position among the unlabelled arguments); and
-  `module_alias_targets` resolves an `open` of an aliased emitter module — including one a FUNCTOR
+  `scope_of` resolves an `open` of an aliased emitter module — including one a FUNCTOR
   produced (`module Syntax = Ir.C_syntax.C_syntax (…)`, which is how every backend and every codegen
   test reaches `compile_proc`), by taking the functor's own name — which the rejection below would
   otherwise miss. Membership, taint, the buffer destinations and the pin walk all go through
   the one resolver: rules that know different routes are how a file stays listed while its pin
   disappears.
+- **Module aliases and literal `let`s resolve by lexical scope** (gh-ocannl-1079), over
+  `Lexical_scope`, the model `ll_test_scan` resolves over too: a qualifier or a fragment's name
+  reaches the binding in scope where it is spelled. File-wide lookup failed silently both ways:
+  gh-ocannl-1063's inventory recorded another leg's `let body_begin` text for a pin (a labelled
+  parameter of that name read as the literal), and staging#855 lost the pins of two same-named
+  bindings outright, equal values included. Taint, emitter value aliases and predicate names stay
+  file-wide on purpose, since there over-reach costs an inventory line rather than naming the
+  wrong fragment. `codegen_text_scan_cases` controls each spelling against the old resolution.
 - **What no file-local rule can follow now says so.** A buffer is where generated text lands with no
   name to carry it, and the ways to fill one do not end (a wrapper reaching its parameter through a
   local binding, PPrint's own `ToBuffer` renderers, a buffer in a record). So a substring test whose
@@ -1495,9 +1503,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   compiler-plan classifier is still reported as partial, and an annotated classifier beside a real
   generated-text assertion still reports the real fragment.
 - **An `open` (or `include`) that hides a route is refused, not approximated — over its own scope,
-  and never over a name the file binds.** A structure open governs the items after it, `let open M
-  in` its body, and a nested structure's opens die with it. A name the file binds anywhere is struck
-  from every refusal: `open Ir.Low_level` followed by a local `let to_doc` is valid code calling the
+  and never over a name bound where it is spelled.** A structure open governs the items after it,
+  `let open M in` its body, and a nested structure's opens die with it. A name the file binds is
+  struck from a refusal wherever that binding is in scope — only there, since gh-ocannl-1079:
+  `open Ir.Low_level` followed by a local `let to_doc` is valid code calling the
   local function, and refusing it would red the build for everyone, where a refusal not made is one
   more member of the residue the partial marker covers. Judging the file's opens against the file's unqualified uses cross-products the two, and a
   false refusal on valid code is a red build for everyone (Codex round 3 on staging#487). Every route is attributed by the
