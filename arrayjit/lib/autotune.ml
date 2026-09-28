@@ -491,6 +491,18 @@ let queue_calibration_wall_ms = 8. *. Float.of_int queue_batch_probe_runs *. que
    keeps rather than a reading of its control flow. *)
 let queue_calibration_max_probes = 9
 
+(* How far past its deepest batch probe a CUDA/HIP calibration may settle, as a multiple of that
+   depth (gh-ocannl-1100): one doubling, the step the calibration's own unresolved retries take into
+   unmeasured depth. Several exits settle on a depth no probe measured -- the last validation's
+   affine projection, a linear scale from a confirmation that read below the target, a fit that
+   wants the cap -- and a fixed-dominated or non-monotone pair projects far past every measured
+   batch (a pair (2, 12.25 ms) / (3, 12.5 ms) wants depth 40), where a queue cost can jump and
+   neither the wall budget nor the fallback would ever look. The timed window would then run at a
+   per-launch cost the calibration never saw, and its 2x contention rule would judge a wall it did
+   not measure. A bound in depth, not in wall: a jump inside the factor is the bet it states, and no
+   probe is spent confirming it. *)
+let queue_depth_projection_factor = 2
+
 (* The calibration policy itself, as a function of the estimate, so a test can pin it without a
    device: what [Queued] measures depends on it, and its two boundaries are the ones a regression
    would silently cross -- a depth stuck at 1 turns a queued search back into an isolated one, and
@@ -784,6 +796,11 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
      charged: a clock that resolved nothing spends no measurable wall, and must not end a probe on a
      NaN comparison. *)
   let probe_wall_ms = ref 0. and probes_started = ref 0 in
+  (* The deepest batch any probe dispatched, the synchronized singles as depth 1: what
+     [queue_depth_projection_factor] multiplies. Every probe counts, whatever it read: a clock that
+     resolved nothing still dispatched its provisional probe at the cap, which the bound must not
+     shorten. *)
+  let deepest_probed = ref 1 in
   (* The last of [queue_calibration_max_probes] is kept for the rescue, which checks no budget. *)
   let probe_budget_spent () =
     Float.(!probe_wall_ms >= queue_calibration_wall_ms)
@@ -791,6 +808,7 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
   in
   let probe_batch ~role depth =
     Int.incr probes_started;
+    deepest_probed := Int.max !deepest_probed depth;
     let best_ms = ref Float.infinity and runs = ref 0 and wall_ms = ref 0. in
     while
       !runs < queue_batch_probe_runs
@@ -1020,6 +1038,20 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
               else
                 validate_depth max_depth_validation_probes calibration_dispatches probe_depth
                   probe.ms depth estimated_batch_wall_ms
+            in
+            (* Every exit above, bounded at once rather than branch by branch (gh-ocannl-1100): no
+               settle goes past [queue_depth_projection_factor] times the deepest probe. The wall
+               estimate keeps its per-launch share; an unresolved one stays unresolved, for the
+               stricter fallback below. *)
+            let depth, estimated_batch_wall_ms =
+              let bound = queue_depth_projection_factor * !deepest_probed in
+              if depth <= bound then (depth, estimated_batch_wall_ms)
+              else (
+                logf
+                  "queued batch depth %d projected past the deepest calibration probe (%d): \
+                   settled at %d"
+                  depth !deepest_probed bound;
+                (bound, estimated_batch_wall_ms *. Float.of_int bound /. Float.of_int depth))
             in
             (* An unresolved outcome is the only one whose depth no measured wall or fit supports;
                every resolved one carries its own wall estimate. *)

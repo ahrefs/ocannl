@@ -1327,6 +1327,13 @@ val queue_calibration_max_probes : int
     Enforced alongside {!queue_calibration_wall_ms}: once all but the last have started, only the
     rescue may follow. Exposed so {!time_routine}'s dispatch maximum is stated against it. *)
 
+val queue_depth_projection_factor : int
+(** How far past the deepest batch it probed a CUDA/HIP queued calibration may settle, as a multiple
+    of that depth (2, one doubling; gh-ocannl-1100). An affine projection or a linear scale can land
+    far past every measured batch, where a queue cost may jump unseen; the settled depth is capped
+    here instead of spending a probe on it. Exposed so a test states the bound against the policy's
+    own factor. *)
+
 val queue_depth_cap_for_backend : string -> int
 (** Queue-memory bound selected by canonical backend name: 2048 for CUDA/HIP, and the historical 200
     for cc/Metal. Exposed with the neighboring pure calibration seams so the backend scoping of
@@ -1465,17 +1472,19 @@ val time_routine :
     target, its marginal slope selects a depth carrying ~10 ms of launch work instead of accepting a
     shallow stalled window or jumping to the cap. After four noisy but resolved underestimates,
     calibration keeps the latest affine projection rather than jumping to a 20--30 ms cap batch that
-    would blunt the 2x contention threshold. A CUDA/HIP routine slower than the target is confirmed
-    by a depth-2 probe, stays at depth 1, and is measured identically in both modes. Whenever a
-    queued call settles at depth 1 its timed window resumes the calibration's synchronized singles
-    ({!sample_window}'s [prior]) rather than timing a fresh one (gh-ocannl-1074): at depth 1 they
-    are samples of the very quantity the window measures, taken under the same stopping rule, so the
-    loop dispatches only what the caller's [repeats] floor asks beyond the calibration's sixteen.
-    The calibration always yields a depth; the result of the timed loop reports when most of ITS
-    samples were stalled, and the tuner refuses such a candidate measurement rather than ranking and
-    caching it (gh-ocannl-888). Since the budget is per-launch rather than batch wall, queued timing
-    can spend up to [max 64 repeats] batches on a fast candidate; [max_timing_runs] bounds the
-    top-up beyond the caller's requested floor.
+    would blunt the 2x contention threshold. None of these projections settles deeper than
+    {!queue_depth_projection_factor} times the deepest batch the calibration probed
+    (gh-ocannl-1100): past it a queue cost can jump where nothing measured. A CUDA/HIP routine
+    slower than the target is confirmed by a depth-2 probe, stays at depth 1, and is measured
+    identically in both modes. Whenever a queued call settles at depth 1 its timed window resumes
+    the calibration's synchronized singles ({!sample_window}'s [prior]) rather than timing a fresh
+    one (gh-ocannl-1074): at depth 1 they are samples of the very quantity the window measures,
+    taken under the same stopping rule, so the loop dispatches only what the caller's [repeats]
+    floor asks beyond the calibration's sixteen. The calibration always yields a depth; the result
+    of the timed loop reports when most of ITS samples were stalled, and the tuner refuses such a
+    candidate measurement rather than ranking and caching it (gh-ocannl-888). Since the budget is
+    per-launch rather than batch wall, queued timing can spend up to [max 64 repeats] batches on a
+    fast candidate; [max_timing_runs] bounds the top-up beyond the caller's requested floor.
 
     With [~tag_failures:true] the pre-dispatch validation, the launches and the synchronization are
     wrapped in their {!Ir.Schedule_outcome} phases, which is what lets a caller's
