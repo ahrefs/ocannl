@@ -1280,6 +1280,26 @@ files.
   residual count for instructions matched by no vector, scalar-FP, libm, or stack classifier; it is
   descriptive because loop control belongs there, but an unknown mnemonic can no longer vanish into
   passing-looking zeroes (gh-ocannl-844).
+- **clang is an x86 census column of its own; its first red rows were OCANNL's, one later one
+  clang's** (gh-ocannl-1103). `cc_march_census` runs `clang/x86-64-v3`, `clang/x86-64-v4` and
+  `clang/sapphirerapids` beside the host compiler's columns (`X86_CLANG` picks the clang). Three
+  readings were `Asm_census` misreading clang: `N(%rbp)` counts as stack only in a function that ran
+  `movq %rsp, %rbp` (clang keeps a tile's B pointer in `%rbp`); a scalar move from memory is a load
+  (clang's `vmovsd` of four fp16 lanes is gcc's `vmovq`); and clang's `label: # @label` defeated the
+  bridge probes' own label match, so every fp16 bridge read as per-lane. The fourth was emission:
+  under clang's 256-bit preference (`x86-64-v4`, Intel AVX-512 tunings) a 64-byte GNU C vector in the
+  function BODY is split into `ymm` halves unless the function carries `min_vector_width(512)`, which
+  `C_syntax.compile_proc` now emits as `OCANNL_WIDE_VECTOR_KERNEL` on a kernel whose renderings
+  declared a vector wider than 32 bytes (keyed on the rendering, not on `cc_vector_bytes`, so kernels
+  that vectorize nothing keep one text on every host). It reaches OpenMP-outlined bodies too.
+  CI's clang 18 (ubuntu-latest; this box has 21) then scalarized the fp16-storage `Max`/`Min` rows
+  at `x86-64-v3`/`v4`: it folds the blend's NaN test `v != v` back through `vcvtph2ps` onto the fp16
+  lanes and tests each lane alone (`vpextrw`, `vucomiss`, `cmovp`). That one is clang's, pinned as
+  a class keyed on `__clang__` AND a probe of the widen-then-blend (`C_syntax.vec_minmax_blend`),
+  with a claim that the census agrees wherever the probe excuses a row. Reproduce CI's clang
+  without root: `apt-get download clang-18 libclang-cpp18 libllvm18 libclang-common-18-dev`,
+  `dpkg-deb -x` each into one prefix, and point `X86_CLANG` at a wrapper exporting
+  `LD_LIBRARY_PATH` for `usr/lib/x86_64-linux-gnu` and `usr/lib/llvm-18/lib` under it.
 - **`Max`/`Min` SIMD reductions were a libm call per lane, on every x86 target** (gh-ocannl-649,
   fixed). The `Vectorized` accumulation loop rendered them as a fixed-trip per-lane loop calling the
   scalar `fmaxf`/`fminf`, on the reasoning that the packed-max builtins have the wrong NaN semantics

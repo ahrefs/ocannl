@@ -12,6 +12,9 @@ x86-64-v2: the -march column compiles clean and its loops are censused: true
 x86-64-v3: the -march column compiles clean and its loops are censused: true
 x86-64-v4: the -march column compiles clean and its loops are censused: true
 sapphirerapids: the -march column compiles clean and its loops are censused: true
+clang/x86-64-v3: the -march column compiles clean and its loops are censused: true
+clang/x86-64-v4: the -march column compiles clean and its loops are censused: true
+clang/sapphirerapids: the -march column compiles clean and its loops are censused: true
 aarch64/armv8-a: the -march column compiles clean and its loops are censused: true
 aarch64/armv8.2-a+fp16: the -march column compiles clean and its loops are censused: true
 every emitted kernel compiles clean at -O2 and -O3 under every accepted -march: true
@@ -20,7 +23,8 @@ every accumulator loop is found by the census: true
 no Max/Min accumulator loop calls libm: true
 no FMA accumulator loop calls libm where the ISA has a fused multiply-add: true
 no accumulator loop is rendered wholly scalar where a named target's ISA has the operation: true
-no accumulator loop is scalarized where a named target's ISA has the operation: true
+no accumulator loop is scalarized where a named target's ISA has the operation, outside the known clang defect (per-lane fp16 NaN test): true
+the known clang defect (per-lane fp16 NaN test) scalarizes every row whose clang's probe reproduces it: true
 the emitted fp16 narrowing bridge is one packed conversion per vector where a named target converts fp16 packed: true
 every register-tiled Tile_mma k-loop does more vector than scalar work where the ISA has a fused multiply-add: true
 every register-tile accumulator update is one whole-width vector FMA per k step where the ISA has a fused multiply-add: true

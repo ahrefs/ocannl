@@ -426,6 +426,13 @@ let fma_probe () =
    listing below holds each x86 form once -- a store and a reload through [%rsp], a frame-pointer
    load, a [push] -- beside two look-alikes, a register [%ebp] and a [popcnt].
 
+   And a memory operand through [%rbp] is a stack reference only where the function made [%rbp] its
+   frame pointer: clang at [-O2] keeps a register tile's B-row pointer there, and its loads read as
+   spills on every clang x86 tile row until the census asked (gh-ocannl-1103). Three functions in
+   one listing tell the cases apart, the frame of the first ending with its [.cfi_endproc]; the
+   third sets its frame up the way clang does for mingw, at an offset ([leaq 128(%rsp), %rbp] and
+   [.seh_setframe]), whose [%rbp] stores are spills too.
+
    And a register tile's C-tile load and store are straight-line code, read by attributing
    instructions to source lines ({!Census.attributed_in}) rather than by finding a loop: the
    instruction under a [.loc] belongs to that line until the next [.loc], labels between them
@@ -438,6 +445,7 @@ let stack_probe () =
     "a memory operand through the stack or frame pointer is a stack reference, a register is not"
     (stack
        [
+         "\tmovq %rsp, %rbp";
          "\tvmovdqa %xmm0, (%rsp)";
          "\tmovzwl 4(%rsp), %eax";
          "\tmovq -8(%rbp), %rax";
@@ -447,6 +455,36 @@ let stack_probe () =
          "\tpopcntq %rax, %rbx";
        ]
     = 4);
+  let frames =
+    Census.profile_all Census.Fma
+      ~asm:
+        (String.concat ~sep:"\n"
+           [
+             "\t.cfi_startproc";
+             "\tpushq %rbp";
+             "\tmovq %rsp, %rbp";
+             "\tvmovaps %zmm0, -64(%rbp)";
+             "\tvmovups -128(%rbp), %zmm1";
+             "\tpopq %rbp";
+             "\t.cfi_endproc";
+             "\t.cfi_startproc";
+             "\tvmovups -460(%rbp), %ymm14";
+             "\tvpmovzxwd (%rbp), %ymm1";
+             "\tvmovaps %ymm2, 32(%rbp)";
+             "\t.cfi_endproc";
+             "\t.seh_proc g";
+             "\tpushq %rbp";
+             "\t.seh_pushreg %rbp";
+             "\tleaq 128(%rsp), %rbp";
+             "\t.seh_setframe %rbp, 128";
+             "\tvmovaps %ymm0, -32(%rbp)";
+             "\t.seh_endproc";
+           ])
+  in
+  Verdict.p
+    "a memory operand through %rbp is a stack reference only in a function that made %rbp its \
+     frame pointer"
+    (Poly.equal (frames.stack_refs, frames.stack_writes) (7, 4));
   let source = "void f(void) {\n  LOAD;\n  LOOP;\n  STORE;\n}\n" in
   let listing =
     String.concat ~sep:"\n"
@@ -511,9 +549,39 @@ let stack_probe () =
     && Poly.equal (edge [ "STORE" ]) (2, 0)
     && Poly.equal (edge [ "LOAD"; "STORE" ]) (4, 2))
 
+(* {2 A load is not scalar FP work (gh-ocannl-1103)}
+
+   clang loads the four fp16 lanes of a 4-lane f32 bridge with [vmovsd] from memory where gcc spells
+   the same 8-byte load [vmovq], and the scalar-double suffix read clang's packed [Max]/[Min] fp16
+   reductions as scalarized. A scalar move from memory is a load; a scalar STORE is what a
+   scalarized loop writes its lanes back with, and scalar arithmetic is what it does to them, so
+   both still count. AVX512-FP16 spells its packed conversions with a trailing [x], and AT&T adds an
+   operand-width letter after it for a memory source ([vcvtps2phxy]). *)
+let scalar_load_probe () =
+  let c =
+    Census.profile_all Census.Max_min
+      ~asm:
+        (String.concat ~sep:"\n"
+           [
+             "\tvmovsd 32(%r8,%r14,2), %xmm5";
+             "\tmovss (%rax), %xmm1";
+             "\tvmovss %xmm0, 4(%rdi)";
+             "\tvmaxss %xmm1, %xmm0, %xmm0";
+             "\tvcvtph2psx %xmm5, %xmm9";
+             "\tvcvtps2phxx (%rax), %xmm1";
+             "\tvcvtps2phxy (%rax), %xmm1";
+             "\tvcvtsh2ss %xmm1, %xmm1, %xmm1";
+           ])
+  in
+  Verdict.p
+    "a scalar move from memory is a load, not scalar FP work, and an x-suffixed AVX512-FP16 \
+     conversion is packed"
+    (Poly.equal (c.vector_ops, c.scalar_fp_ops) (3, 3))
+
 let () =
   dialect_probes ();
   anchor_precedence_probe ();
   residual_probe ();
   fma_probe ();
-  stack_probe ()
+  stack_probe ();
+  scalar_load_probe ()
