@@ -411,8 +411,9 @@ let () =
     (* The narrow legs leave the geometry to the renderer (the lane count follows the COMPUTE
        precision, f32 for bf16 and — under the default policy — for half too). The partial column's
        storage bits are staged in a whole vector, three lanes in and three lanes out, and the bridge
-       macro converts it at the full lane count. *)
-    let narrow_partial ~bridged has =
+       macro converts it at the full lane count -- for half, bit-cast to a vector of [HALF_T] first,
+       so the macro's per-lane fallback reads [HALF_T]s. *)
+    let narrow_partial ~bridged ~via has =
       let bits ~qual l =
         Printf.sprintf "((%socannl_u16_alias *)&tmma_d__[(tmma_i__ + 0) * %d + 16 + 0])[%d]" qual nt
           l
@@ -420,12 +421,13 @@ let () =
       has ("ocannl_pv__ = {" ^ bits ~qual:"const " 0)
       && has (bits ~qual:"const " 2 ^ "};")
       && has (bits ~qual:"" 2 ^ " = ocannl_pv__[2];")
-      && has (Printf.sprintf "%d, tmma_c_0_0__, (const %s *)&ocannl_pv__);" lanes bridged)
+      && has (Printf.sprintf "%d, tmma_c_0_0__, (const %s *)&%s);" lanes bridged via)
       && not (has (bits ~qual:"const " 3) || has (bits ~qual:"" 3))
     in
     leg ~tag:"bf16" ~prec:Ir.Ops.bfloat16 ~tile:None
-      ~partial:(narrow_partial ~bridged:"unsigned short");
-    leg ~tag:"half" ~prec:Ir.Ops.half ~tile:None ~partial:(narrow_partial ~bridged:"HALF_T")
+      ~partial:(narrow_partial ~bridged:"unsigned short" ~via:"ocannl_pv__");
+    leg ~tag:"half" ~prec:Ir.Ops.half ~tile:None
+      ~partial:(narrow_partial ~bridged:"HALF_T" ~via:"ocannl_pc__")
   end
 
 (* === The seeding === *)

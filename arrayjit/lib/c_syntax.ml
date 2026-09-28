@@ -1408,6 +1408,9 @@ let c_keywords =
     (* Scaffolding names emitted by generated code that must not clash with variable names *)
     "log_file";
     "log_file_name";
+    (* The register tile's partial-column staging typedef (gh-ocannl-1102), declared in the tile's
+       block ahead of the operand pointers a kernel parameter of that name would initialize. *)
+    "ocannl_u16_alias";
     "uint32_t";
     "uint64_t";
   ]
@@ -2935,10 +2938,15 @@ module C_syntax (B : C_syntax_config) = struct
          that whole vector: a copy between two whole vectors is a register move. The staging lanes
          are 16-bit integers whatever the storage type is, reached through a [may_alias] pointer:
          where [HALF_T] is [_Float16], gcc moved each extracted [_Float16] lane through a stack slot
-         of its own at [-march=sapphirerapids]. Each staging vector lives in a block of its own, so
-         any number of them share one name. *)
+         of its own at [-march=sapphirerapids]. The bridge itself is handed a vector of the storage
+         type ([conv], where that is not the staging type), bit-cast from or to the staging one as a
+         whole, so a fallback arm that reads or writes it element by element accesses [HALF_T]s as
+         [HALF_T]s. Each staging vector lives in a block of its own, so any number of them share one
+         name. *)
       let elt = B.typ_of_prec store_prec in
-      let staging () =
+      let staging ?conv () =
+        Option.iter conv ~f:(fun c ->
+            need_typedef c (vec_typedef_doc ~ctyp:elt ~name:c ~bytes:(lanes * 2)));
         let u16 = Printf.sprintf "ocannl_vec%du16" lanes in
         need_typedef u16 (vec_typedef_doc ~ctyp:"unsigned short" ~name:u16 ~bytes:(lanes * 2));
         need_typedef "ocannl_u16_alias"
@@ -2949,37 +2957,47 @@ module C_syntax (B : C_syntax_config) = struct
         parens (string (Printf.sprintf "(%socannl_u16_alias *)" qual) ^^ base mem)
         ^^ string (Printf.sprintf "[%d]" l)
       in
-      let bridge ~widen ~narrow =
+      let block stmts =
+        lbrace ^^ nest 2 (hardline ^^ separate hardline stmts) ^^ hardline ^^ rbrace
+      in
+      let bridge ?conv ~widen ~narrow () =
+        let bridged ~qual =
+          string
+            (Printf.sprintf "(%s%s *)&%s" qual elt
+               (if Option.is_some conv then "ocannl_pc__" else "ocannl_pv__"))
+        in
         ( (fun ~width ~dst ~mem ->
             if width < lanes then
-              let u16 = staging () in
-              declare ~width:lanes dst ^^ hardline ^^ lbrace
-              ^^ nest 2
-                   (hardline
-                   ^^ string (u16 ^ " ocannl_pv__ = {")
-                   ^^ nest 2
-                        (flow
-                           (comma ^^ break 1)
-                           (List.init width ~f:(bits_lane ~qual:"const " ~mem)))
-                   ^^ string "};" ^^ hardline
-                   ^^ widen ~dst (string (Printf.sprintf "(const %s *)&ocannl_pv__" elt)))
-              ^^ hardline ^^ rbrace
+              let u16 = staging ?conv () in
+              declare ~width:lanes dst ^^ hardline
+              ^^ block
+                   ((string (u16 ^ " ocannl_pv__ = {")
+                    ^^ nest 2
+                         (flow
+                            (comma ^^ break 1)
+                            (List.init width ~f:(bits_lane ~qual:"const " ~mem)))
+                    ^^ string "};")
+                    :: Option.to_list
+                         (Option.map conv ~f:(fun c ->
+                              string (Printf.sprintf "%s ocannl_pc__ = (%s)ocannl_pv__;" c c)))
+                   @ [ widen ~dst (bridged ~qual:"const ") ])
             else declare ~width dst ^^ hardline ^^ widen ~dst (base mem)),
           fun ~width ~src ~mem ->
             if width < lanes then
-              let u16 = staging () in
-              lbrace
-              ^^ nest 2
-                   (hardline
-                   ^^ string (u16 ^ " ocannl_pv__;")
-                   ^^ hardline
-                   ^^ narrow ~src (string (Printf.sprintf "(%s *)&ocannl_pv__" elt))
-                   ^^ hardline
-                   ^^ separate hardline
-                        (List.init width ~f:(fun l ->
-                             bits_lane ~qual:"" ~mem l
-                             ^^ string (Printf.sprintf " = ocannl_pv__[%d];" l))))
-              ^^ hardline ^^ rbrace
+              let u16 = staging ?conv () in
+              let lanes_out =
+                List.init width ~f:(fun l ->
+                    bits_lane ~qual:"" ~mem l ^^ string (Printf.sprintf " = ocannl_pv__[%d];" l))
+              in
+              block
+                (match conv with
+                | None ->
+                    string (u16 ^ " ocannl_pv__;") :: narrow ~src (bridged ~qual:"") :: lanes_out
+                | Some c ->
+                    string (c ^ " ocannl_pc__;")
+                    :: narrow ~src (bridged ~qual:"")
+                    :: string (Printf.sprintf "%s ocannl_pv__ = (%s)ocannl_pc__;" u16 u16)
+                    :: lanes_out)
             else narrow ~src (base mem) )
       in
       match store_prec with
@@ -2989,6 +3007,7 @@ module C_syntax (B : C_syntax_config) = struct
           bridge
             ~widen:(fun ~dst src -> call (widen_macro ()) (args @ [ string dst; src ]))
             ~narrow:(fun ~src dst -> call (narrow_macro ()) (args @ [ dst; string src ]))
+            ()
       | Ops.Half_prec _ ->
           let h = Printf.sprintf "ocannl_vec%dh" lanes in
           (* [_Float16] exists only where the C preprocessor says so, and this typedef is the one
@@ -2997,11 +3016,14 @@ module C_syntax (B : C_syntax_config) = struct
             (string "#if HAS_NATIVE_FLOAT16" ^^ hardline
             ^^ vec_typedef_doc ~ctyp:"_Float16" ~name:h ~bytes:(lanes * 2)
             ^^ hardline ^^ string "#endif");
+          (* The storage-typed vector a partial column's bits are bit-cast to and from. *)
           bridge
+            ~conv:(Printf.sprintf "ocannl_vec%dhs" lanes)
             ~widen:(fun ~dst src ->
               call (widen_macro ()) [ string vtyp; string h; OCaml.int lanes; string dst; src ])
             ~narrow:(fun ~src dst ->
               call (narrow_macro ()) [ string h; OCaml.int lanes; dst; string src ])
+            ()
       | _ ->
           (* fp8 and any other narrow format: the arithmetic still vectorizes, only the conversion
              is per lane -- through the scalar path's own conversion, so parity is by

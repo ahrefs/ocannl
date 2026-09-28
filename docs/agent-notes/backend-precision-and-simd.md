@@ -1130,7 +1130,10 @@ files.
   (lane initializer in, per-lane extracts out, each staging vector in its own block) and the
   bridge converts that at the full lane count. The lanes are `unsigned short` read and written
   through a `may_alias` pointer even for fp16: staged as `_Float16`, gcc at `sapphirerapids` moved
-  an extracted lane through a 2-byte stack slot (`vmovw %xmm1, -2(%rsp)`). The store is outside
+  an extracted lane through a 2-byte stack slot (`vmovw %xmm1, -2(%rsp)`). The fp16 bridge is
+  then handed a `HALF_T` vector bit-cast from the staging one as a whole (a GNU C vector cast), not
+  a `HALF_T *` into the `unsigned short` vector: the macro's per-lane fallback arm would otherwise
+  access `_Float16`s through the wrong type. The store is outside
   every loop, so `Asm_census.attributed_in` reads it by DWARF line attribution: the instructions
   under the `.loc` lines naming the partial column's C-tile elements, which the census holds to
   zero stack references where the pass fits. The same PR made `is_stack_ref` ask for a MEMORY
