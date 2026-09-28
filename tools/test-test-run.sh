@@ -153,19 +153,6 @@
 #      file is recorded and the run launches as before.
 #  63. a commit landing between the HEAD read and the status is re-read: the
 #      record never pairs the older HEAD with the newer tree's status.
-#  64-65 sit after leg 36: promotion is offered only on a diff dune printed
-#      (gh-ocannl-1055).
-#  64. a rule whose action failed, its quoted stanza naming a `.corrected`
-#      file, digests as `action failed (no diff)` with its fingerprint, and is
-#      never sent to `dune promote`.
-#  65. a real diff hunk, plain or colored, still offers promotion; a green run
-#      offers neither. A run that chose its own diff command (patdiff's
-#      doubled headers still count; `-`, on the command line or in
-#      DUNE_DIFF_COMMAND, prints none) is told promotion is possible, never
-#      "no diff" -- unless the option sits past dune's own `--` -- whatever
-#      its log names (an inline-expect rule's names only its `.ml`). A log
-#      longer than the digest's scan window is never "nothing to promote",
-#      and a repeat set red on drift alone is not called a failed action.
 #  66 sits after leg 63: the digest's `source:` line reads the record -- the
 #      commit and `(clean)`, or `+ N uncommitted paths`; nothing unrecorded.
 #  67 sits after leg 8 (Linux only): a lock whose acquirer exited, held
@@ -173,6 +160,23 @@
 #      reaped, though /proc/locks names only the dead acquirer, or nobody
 #      (gh-ocannl-1107); the negative control, the census trusting that
 #      name, leaves the holder running (skipped where nothing is named).
+#  68-69 sit after leg 36: promotion is offered only on a diff dune printed
+#      (gh-ocannl-1055).
+#  68. a rule whose action failed, its quoted stanza naming a `.corrected`
+#      file, digests as `action failed (no diff)` with its fingerprint, and is
+#      never sent to `dune promote`.
+#  69. a real diff hunk, plain or colored, still offers promotion; a green run
+#      offers neither. A run that chose its own diff command (patdiff's
+#      doubled headers still count; `-`, on the command line or in
+#      DUNE_DIFF_COMMAND, prints none) is told promotion is possible, never
+#      "no diff" -- unless the option sits past dune's own `--` -- whatever
+#      its log names (an inline-expect rule's names only its `.ml`). A log
+#      longer than the digest's scan window is never "nothing to promote",
+#      and a repeat set red on drift alone is not called a failed action.
+#  70 sits at the very end, after every leg that fakes a device: a leg that
+#      names no device probe still reads the harness's absent defaults, the
+#      width-cap probes answer "no device" through the shipping readers, and
+#      a hip run is neither capped nor told anything (gh-ocannl-1108).
 
 set -u
 
@@ -188,6 +192,12 @@ export OCANNL_TOOL_FLEET_WORKER=none
 # environment is recorded by every launch and changes what the digest may
 # conclude from a log (gh-ocannl-1055); the legs that want one set it.
 unset DUNE_DIFF_COMMAND
+# Hermetic against the caller's backend from the first leg, not from
+# dxg_probe's first `unset`: a worker's shell pinned to hip or cuda outranks
+# the fixture configurations every backend leg resolves (gh-ocannl-1108); the
+# legs that want one export it. The box's own devices are masked as soon as
+# the scratch directory exists (hermetic_probes, below).
+unset OCANNL_BACKEND
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC="$HERE/test-run.sh"
@@ -263,6 +273,25 @@ inherit_holder="" # leg 67's holder of the inherited lock
 escape_pid="" # leg 24's session-escaped descendant
 escape_release=""
 harness_scratch "test-test-run"
+# Hermetic against the box's devices (gh-ocannl-1108), as
+# tools/test-mutation-run.sh is: the three probes the width cap reads (the dxg
+# bridge, the KFD topology, the NVIDIA control device) name paths that do not
+# exist, so on a WSL, minix, tuf or rog boot every leg sees the Mac's answer --
+# a leg that is not about the cap would otherwise gain one (a lifecycle run on
+# minix is capped at -j 4), and a cap leg's negative control would read the
+# box instead of its fixture. A leg opts in to a device by exporting a fixture
+# path (dxg_probe, native_probe) or prefixing one, and goes back through
+# hermetic_probes, never `unset`: an unset (or empty) probe falls back to the
+# real device. Leg 70 pins this from the end of the file.
+probe_dxg_default=$TMP/no-such-dxg
+probe_kfd_default=$TMP/no-such-kfd
+probe_nvidia_default=$TMP/no-such-nvidia
+hermetic_probes() {
+  export OCANNL_TOOL_DXG_DEVICE=$probe_dxg_default \
+    OCANNL_TOOL_KFD_TOPOLOGY=$probe_kfd_default \
+    OCANNL_TOOL_NVIDIA_DEVICE=$probe_nvidia_default
+}
+hermetic_probes
 cleanup_fixture() {
   if declare -F lifecycle_cleanup >/dev/null; then lifecycle_cleanup; fi
   # Leg 4's zombie maker STOPS ITSELF and is resumed at the end of the leg.
@@ -1893,11 +1922,8 @@ if await_fixture_ready "$TMP/repeat-never-ready" 1; then
   echo "repeat fixture readiness accepted an absent marker" >&2
   exit 2
 fi
-# The three width-cap probes (the dxg device, the KFD topology, the NVIDIA
-# control device) point at paths that do not exist unless a leg sets them, so
-# a run of this suite on a WSL, minix or rog boot sees the Mac's answer: every
-# leg that is not about the cap would otherwise gain an announcement, and the
-# cap legs' negative controls would read the box instead of their fixture.
+# The three width-cap probes read what the leg exported, which is the
+# harness-wide absent defaults (hermetic_probes) unless the leg opted in.
 fixture_probe() { # tag mode runs subcommand [argv...]
   local tag=$1 mode=$2 runs=$3
   shift 3
@@ -1914,9 +1940,6 @@ fixture_probe() { # tag mode runs subcommand [argv...]
   REPEAT_TEST_DIFF_WAIT_PREFIX= \
   REPEAT_TEST_REAL_DIFF="$(command -v diff)" \
   OCANNL_TOOL_TEST_RUNS=$runs \
-  OCANNL_TOOL_DXG_DEVICE="${OCANNL_TOOL_DXG_DEVICE:-$TMP/no-such-dxg}" \
-  OCANNL_TOOL_KFD_TOPOLOGY="${OCANNL_TOOL_KFD_TOPOLOGY:-$TMP/no-such-kfd}" \
-  OCANNL_TOOL_NVIDIA_DEVICE="${OCANNL_TOOL_NVIDIA_DEVICE:-$TMP/no-such-nvidia}" \
   PATH=$repeat_bin:$PATH \
     "$repeat_root/tools/test-run.sh" "$@" >"$TMP/$tag.out" 2>"$TMP/$tag.err"
   fixture_rc=$?
@@ -2415,7 +2438,8 @@ dxg_probe() { # tag device backend subcommand [argv...]
   export OCANNL_TOOL_DXG_DEVICE=$device
   if [ -n "$backend" ]; then export OCANNL_BACKEND=$backend; else unset OCANNL_BACKEND; fi
   argv_probe "$tag" "$@"
-  unset OCANNL_TOOL_DXG_DEVICE OCANNL_BACKEND
+  unset OCANNL_BACKEND
+  hermetic_probes
 }
 
 # The injection, in all four places it has to appear: dune's argv, the RECORDED
@@ -2707,7 +2731,8 @@ native_probe() { # tag dxg kfd nvidia backend subcommand [argv...]
   if [ -n "$native_map" ]; then export FLEET_HOSTNAME_MAP=$native_map; else unset FLEET_HOSTNAME_MAP; fi
   if [ -n "$backend" ]; then export OCANNL_BACKEND=$backend; else unset OCANNL_BACKEND; fi
   argv_probe "$tag" "$@"
-  unset OCANNL_TOOL_DXG_DEVICE OCANNL_TOOL_KFD_TOPOLOGY OCANNL_TOOL_NVIDIA_DEVICE OCANNL_BACKEND FLEET_LOCAL_BOX FLEET_HOSTNAME_MAP
+  unset OCANNL_BACKEND FLEET_LOCAL_BOX FLEET_HOSTNAME_MAP
+  hermetic_probes
 }
 
 # Leg 48: the injection on each native hazard, in the four places the dxg leg
@@ -3290,7 +3315,7 @@ else
   report 1 "$red_label" "$red_detail"
 fi
 
-# Legs 64-65 (gh-ocannl-1055): promotion is offered only on a diff dune printed.
+# Legs 68-69 (gh-ocannl-1055): promotion is offered only on a diff dune printed.
 # A rule whose action failed names its `.corrected` file in the quoted stanza,
 # and the digest used to send that reader to `dune promote`; it must instead say
 # the action failed with no diff, and still show the fingerprint. The other
@@ -4178,6 +4203,73 @@ if [ -z "$slot_detail" ]; then
   report 0 "batch: the readers batch-backends.sh builds are test/config's, answering --read=backend and Slot_kind in its grammar"
 else
   report 1 "batch: the readers batch-backends.sh builds are test/config's, answering --read=backend and Slot_kind in its grammar" "$slot_detail"
+fi
+
+# ---------------------------------------------------------------------------
+# Leg 70: a leg that names no device still reads the fake (gh-ocannl-1108)
+# ---------------------------------------------------------------------------
+# Every leg above that faked a device went back through hermetic_probes. One
+# that `unset` a probe instead would hand every later leg the box's real
+# /dev/dxg, KFD topology or /dev/nvidiactl -- a leak no Mac or CI runner can
+# show, having none of them, and on minix a lifecycle run took -j 4. So
+# this leg runs last and names no probe. The shipping readers, sourced fresh,
+# must name the absent defaults (the path, not merely its absence, so the
+# check means the same on a box without the device) and answer "no device";
+# and a GPU run through the real launch path must be neither capped nor told.
+# The controls: the path check refuses a probe unset in a subshell, which is
+# the leak; and an exported fixture pool caps the same hip run, so a probe
+# that never reached the width code cannot pass the uncapped half.
+herm_label="a leg that names no device probe reads the harness's absent defaults: no device, no cap, no word"
+herm_detail=
+herm_view() { # the shipping readers' answers: paths, then dxg:nvidia:pool
+  (
+    . "$JOBS_SRC"
+    printf '%s|%s|%s|' "$(box_jobs_dxg_device)" "$(box_jobs_kfd_topology)" "$(box_jobs_nvidia_device)"
+    box_jobs_dxg_host && printf 'dxg' || printf 'no-dxg'
+    box_jobs_native_nvidia_host && printf ':nvidia' || printf ':no-nvidia'
+    printf ':pool=%s\n' "$(box_jobs_sdma_pool)"
+  )
+}
+herm_want="$probe_dxg_default|$probe_kfd_default|$probe_nvidia_default|no-dxg:no-nvidia:pool="
+for p in "$probe_dxg_default" "$probe_kfd_default" "$probe_nvidia_default"; do
+  [ ! -e "$p" ] || { herm_detail="the absent default $p exists"; break; }
+done
+if [ -z "$herm_detail" ]; then
+  herm_seen=$(herm_view)
+  [ "$herm_seen" = "$herm_want" ] ||
+    herm_detail="the shipping readers answer '$herm_seen', not '$herm_want'"
+fi
+for backend in hip cuda; do
+  [ -z "$herm_detail" ] || break
+  export OCANNL_BACKEND=$backend
+  argv_probe "herm-$backend" run build @cheap
+  unset OCANNL_BACKEND
+  if [ "$argv_rc" != 0 ] || [ "$argv_calls" != "build @cheap" ] ||
+     grep -qi 'cap\|sdma\|nvidia\|dxg' <<<"$argv_err"; then
+    herm_detail="$backend: exit $argv_rc; calls: ${argv_calls:-<none>}; stderr: ${argv_err:-<none>}"
+  fi
+done
+# Control: the leak itself -- a probe unset -- is what the path check refuses.
+if [ -z "$herm_detail" ]; then
+  herm_leak=$(unset OCANNL_TOOL_KFD_TOPOLOGY; herm_view)
+  [ "$herm_leak" != "$herm_want" ] ||
+    herm_detail="control: with the KFD probe unset the readers still answer '$herm_leak', so the path check cannot see a leak"
+fi
+# Control: the probe the uncapped half relied on does reach the width -- a
+# fixture pool exported the way a leg opts in caps the same hip run.
+if [ -z "$herm_detail" ]; then
+  export OCANNL_TOOL_KFD_TOPOLOGY=$kfd_small OCANNL_BACKEND=hip
+  argv_probe herm-optin run build @cheap
+  unset OCANNL_BACKEND
+  hermetic_probes
+  herm_cap=$(. "$JOBS_SRC"; printf '%s' "$BOX_JOBS_SDMA_SLOT_CAP")
+  [ -n "$herm_cap" ] && [ "$argv_calls" = "build -j $herm_cap @cheap" ] ||
+    herm_detail="control: hip on an exported small pool was not capped at -j ${herm_cap:-?}: calls: ${argv_calls:-<none>}; stderr: ${argv_err:-<none>}"
+fi
+if [ -z "$herm_detail" ]; then
+  report 0 "$herm_label"
+else
+  report 1 "$herm_label" "$herm_detail"
 fi
 
 finish
